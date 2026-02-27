@@ -85,17 +85,17 @@ AGENT_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {
+                "keyword": {
                     "type": "string",
-                    "description": "Search query"
+                    "description": "Search keyword"
                 },
-                "num_results": {
+                "limit": {
                     "type": "integer",
                     "description": "Number of results to return",
                     "default": 5
                 }
             },
-            "required": ["query"]
+            "required": ["keyword"]
         }
     },
     {
