@@ -644,10 +644,19 @@ Use tools efficiently to complete tasks. Always think through the task before ac
         """
         import base64
         import tempfile
+        from datetime import datetime
         
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
         
-        enhanced_input = user_input
+        # Add timestamp context to help LLM understand current time
+        current_time = datetime.now()
+        timestamp_context = (
+            f"[当前时间: {current_time.strftime('%Y年%m月%d日 %H:%M:%S')}, "
+            f"{current_time.strftime('%A')}, "
+            f"今年是{current_time.year}年]\n\n"
+        )
+        
+        enhanced_input = timestamp_context + user_input
         auto_loaded_skill = None
         uploaded_files_info = []
         session_workspace = None
@@ -699,7 +708,7 @@ Use tools efficiently to complete tasks. Always think through the task before ac
                         logger.error(f"Failed to save file {att_name}: {e}")
             
             if attachment_info:
-                enhanced_input = f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info)
+                enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info)
         
         self.memory.add(session_id, "user", enhanced_input)
         
