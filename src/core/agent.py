@@ -33,27 +33,27 @@ from src.core.sandbox import SandboxManager
 AGENT_TOOLS = [
     {
         "name": "email_send",
-        "description": "Send an email to recipient(s)",
+        "description": "发送邮件给收件人",
         "input_schema": {
             "type": "object",
             "properties": {
                 "to": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of recipient email addresses"
+                    "description": "收件人邮箱地址列表"
                 },
                 "subject": {
                     "type": "string",
-                    "description": "Email subject"
+                    "description": "邮件主题"
                 },
                 "body": {
                     "type": "string",
-                    "description": "Email body content"
+                    "description": "邮件正文内容"
                 },
                 "cc": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "CC recipients (optional)"
+                    "description": "抄送收件人（可选）"
                 }
             },
             "required": ["to", "subject", "body"]
@@ -61,23 +61,23 @@ AGENT_TOOLS = [
     },
     {
         "name": "email_read",
-        "description": "Read emails from inbox",
+        "description": "读取收件箱中的邮件",
         "input_schema": {
             "type": "object",
             "properties": {
                 "folder": {
                     "type": "string",
-                    "description": "Folder to read (inbox, sent, etc.)",
+                    "description": "要读取的文件夹（inbox、sent等）",
                     "default": "inbox"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Number of emails to retrieve",
+                    "description": "要获取的邮件数量",
                     "default": 10
                 },
                 "unread_only": {
                     "type": "boolean",
-                    "description": "Only retrieve unread emails",
+                    "description": "是否只获取未读邮件",
                     "default": False
                 }
             },
@@ -86,17 +86,17 @@ AGENT_TOOLS = [
     },
     {
         "name": "web_search",
-        "description": "Search the web for information",
+        "description": "在网络上搜索信息。重要：搜索关键词必须与用户提问的语言保持一致（用户用中文提问则用中文关键词搜索）",
         "input_schema": {
             "type": "object",
             "properties": {
                 "keyword": {
                     "type": "string",
-                    "description": "Search keyword"
+                    "description": "搜索关键词，必须与用户提问语言一致"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Number of results to return",
+                    "description": "返回结果数量",
                     "default": 5
                 }
             },
@@ -105,17 +105,17 @@ AGENT_TOOLS = [
     },
     {
         "name": "ocr_image",
-        "description": "Extract text from an image using OCR",
+        "description": "使用OCR从图片中提取文字",
         "input_schema": {
             "type": "object",
             "properties": {
                 "image_path": {
                     "type": "string",
-                    "description": "Path to the image file"
+                    "description": "图片文件路径"
                 },
                 "language": {
                     "type": "string",
-                    "description": "Language for OCR (e.g., ch, en)",
+                    "description": "OCR识别语言（如：ch表示中文，en表示英文）",
                     "default": "ch"
                 }
             },
@@ -124,17 +124,17 @@ AGENT_TOOLS = [
     },
     {
         "name": "doc_summarize",
-        "description": "Summarize a document",
+        "description": "总结文档内容",
         "input_schema": {
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "Document content to summarize"
+                    "description": "要总结的文档内容"
                 },
                 "max_length": {
                     "type": "integer",
-                    "description": "Maximum summary length",
+                    "description": "摘要最大长度",
                     "default": 500
                 }
             },
@@ -143,17 +143,17 @@ AGENT_TOOLS = [
     },
     {
         "name": "doc_translate",
-        "description": "Translate text to another language",
+        "description": "将文本翻译为其他语言",
         "input_schema": {
             "type": "object",
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "Text to translate"
+                    "description": "要翻译的文本"
                 },
                 "target_lang": {
                     "type": "string",
-                    "description": "Target language (e.g., en, ja, ko)"
+                    "description": "目标语言（如：en表示英文，ja表示日文，ko表示韩文）"
                 }
             },
             "required": ["text", "target_lang"]
@@ -161,18 +161,18 @@ AGENT_TOOLS = [
     },
     {
         "name": "clarify",
-        "description": "Ask user for clarification when information is missing",
+        "description": "当信息缺失时向用户询问澄清",
         "input_schema": {
             "type": "object",
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "Question to ask the user"
+                    "description": "向用户提出的问题"
                 },
                 "missing_info": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of missing information items"
+                    "description": "缺失的信息项列表"
                 }
             },
             "required": ["question"]
@@ -180,13 +180,13 @@ AGENT_TOOLS = [
     },
     {
         "name": "create_plan",
-        "description": "Create an execution plan for complex tasks. Use this BEFORE executing tools when the task requires multiple steps.",
+        "description": "为复杂任务创建执行计划。当任务需要多个步骤时，在执行工具前先使用此功能",
         "input_schema": {
             "type": "object",
             "properties": {
                 "goal": {
                     "type": "string",
-                    "description": "The overall goal of the task"
+                    "description": "任务的整体目标"
                 },
                 "steps": {
                     "type": "array",
@@ -195,33 +195,33 @@ AGENT_TOOLS = [
                         "properties": {
                             "step_number": {
                                 "type": "integer",
-                                "description": "Step number in the plan"
+                                "description": "计划中的步骤编号"
                             },
                             "description": {
                                 "type": "string",
-                                "description": "Description of what this step does"
+                                "description": "该步骤的描述"
                             },
                             "tool": {
                                 "type": "string",
-                                "description": "Tool to use for this step (if applicable)"
+                                "description": "该步骤要使用的工具（如适用）"
                             },
                             "parameters": {
                                 "type": "object",
-                                "description": "Parameters for the tool"
+                                "description": "工具的参数"
                             },
                             "expected_output": {
                                 "type": "string",
-                                "description": "Expected output of this step"
+                                "description": "该步骤的预期输出"
                             }
                         },
                         "required": ["step_number", "description"]
                     },
-                    "description": "List of steps to execute"
+                    "description": "要执行的步骤列表"
                 },
                 "execution_mode": {
                     "type": "string",
                     "enum": ["sequential", "parallel"],
-                    "description": "How to execute the steps",
+                    "description": "如何执行步骤",
                     "default": "sequential"
                 }
             },
@@ -230,21 +230,21 @@ AGENT_TOOLS = [
     },
     {
         "name": "skill_execute",
-        "description": "Execute a command in a skill's sandbox environment. Use this after loading a skill to run commands like pdftotext, python scripts, etc. IMPORTANT: Use simple commands, For Python, prefer simple one-liners or use pypdf/pdfplumber directly.",
+        "description": "在技能的沙箱环境中执行命令。加载技能后使用此功能运行pdftotext、python脚本等命令。重要：使用简单命令，对于Python优先使用简单的一行命令或直接使用pypdf/pdfplumber",
         "input_schema": {
             "type": "object",
             "properties": {
                 "skill": {
                     "type": "string",
-                    "description": "Name of the skill context to use"
+                    "description": "要使用的技能上下文名称"
                 },
                 "command": {
                     "type": "string",
-                    "description": "Command to execute. Use simple format. For Python: python -c \"from pypdf import PdfReader; r = PdfReader('file.pdf'); print(r.pages[0].extract_text())\""
+                    "description": "要执行的命令。使用简单格式。例如：python -c \"from pypdf import PdfReader; r = PdfReader('file.pdf'); print(r.pages[0].extract_text())\""
                 },
                 "files": {
                     "type": "object",
-                    "description": "Optional files to make available in the sandbox (filename -> base64 content)",
+                    "description": "可选的文件，使其在沙箱中可用（文件名 -> base64内容）",
                     "additionalProperties": {
                         "type": "string"
                     }
@@ -314,121 +314,128 @@ class MasterAgent:
     def _build_system_prompt(self, user: Optional[User] = None) -> str:
         """Build system prompt for the agent"""
         
-        skill_descriptions = self.skill_registry.get_descriptions() if self.skill_registry else "(no skills available)"
+        skill_descriptions = self.skill_registry.get_descriptions() if self.skill_registry else "(暂无可用技能)"
         
-        prompt = f"""You are an intelligent work assistant. Your role is to help users complete various work tasks.
+        prompt = f"""你是一个智能工作助手。你的任务是帮助用户完成各种工作任务。
 
-## Capabilities
+## 重要语言规则
 
-You can help with:
-- Email management (send, read, search emails)
-- Document processing (summarize, translate)
-- Web search (find information online)
-- OCR (extract text from images/PDFs)
-- PDF processing (read, extract, merge, split PDFs)
+**你必须始终使用与用户提问相同的语言进行回复和工具调用！**
+- 用户用中文提问 → 你用中文回复，工具参数使用中文
+- 用户用英文提问 → 你用英文回复，工具参数使用英文
+- 搜索关键词必须与用户提问语言保持一致！
 
-## Skills
+## 能力范围
 
-Skills are specialized knowledge modules that you can load on-demand. When a task matches a skill description, load the skill FIRST to get detailed instructions.
+你可以帮助用户：
+- 邮件管理（发送、读取、搜索邮件）
+- 文档处理（摘要、翻译）
+- 网络搜索（查找网络信息）
+- OCR识别（从图片/PDF中提取文字）
+- PDF处理（读取、提取、合并、拆分PDF）
 
-Available skills:
+## 技能系统
+
+技能是可按需加载的专业知识模块。当任务匹配技能描述时，请先加载技能以获取详细指导。
+
+可用技能：
 {skill_descriptions}
 
-**IMPORTANT**: Use the `use_skill` tool when the task matches a skill's domain or expertise:
+**重要提示**：当任务匹配技能领域时，首先调用 `use_skill` 工具：
 
-**File Processing Skills:**
-- User uploads a file that matches a skill (e.g., .pdf file → use_skill "pdf")
-- User mentions working with a specific file type
-- Tasks involving file manipulation (merge, split, convert, extract)
+**文件处理技能：**
+- 用户上传的文件匹配技能（如 .pdf 文件 → 使用 "pdf" 技能）
+- 用户提到处理特定文件类型
+- 涉及文件操作的任务（合并、拆分、转换、提取）
 
-**Domain-Specific Skills:**
-- User asks about a specialized topic covered by a skill
-- Tasks requiring domain-specific knowledge or methods
-- Requests that match the skill's description or keywords
+**领域特定技能：**
+- 用户询问技能覆盖的专业主题
+- 需要领域特定知识或方法的任务
+- 与技能描述或关键词匹配的请求
 
-**General Rule**: Always check if a skill's description aligns with the user's task. If it does, load the skill FIRST to get expert guidance and proper tools.
+**通用规则**：始终检查技能描述是否与用户任务匹配。如果匹配，首先加载技能以获取专家指导和适当的工具。
 
-## Working with Skills
+## 技能使用流程
 
-**Skill Loading Workflow:**
+**技能加载工作流：**
 
-1. **Identify Skill Need**: Check if user's task matches any available skill
-2. **Load Skill**: Call `use_skill` with the skill name to get detailed instructions
-3. **Follow Guidance**: Read the skill content for expert methods, tools, and best practices
-4. **Execute**: Use appropriate tools (like `skill_execute` for file processing skills)
-5. **Return Results**: Present results to the user
+1. **识别技能需求**：检查用户任务是否匹配任何可用技能
+2. **加载技能**：调用 `use_skill` 并传入技能名称以获取详细指导
+3. **遵循指导**：阅读技能内容中的专家方法、工具和最佳实践
+4. **执行**：使用适当的工具（如文件处理技能使用 `skill_execute`）
+5. **返回结果**：向用户展示结果
 
-**Example Workflows:**
+**示例工作流：**
 
-*File Processing (PDF example):*
-- User uploads "report.pdf" and asks "extract all tables"
-- You call `use_skill "pdf"` to load PDF processing knowledge
-- Skill provides methods like `pdfplumber.extract_tables()`
-- You call `skill_execute` with appropriate command
-- Return extracted tables to user
+*文件处理（PDF示例）：*
+- 用户上传 "report.pdf" 并要求"提取所有表格"
+- 你调用 `use_skill "pdf"` 加载PDF处理知识
+- 技能提供 `pdfplumber.extract_tables()` 等方法
+- 你调用 `skill_execute` 执行相应命令
+- 向用户返回提取的表格
 
-*Domain-Specific (Data Analysis example):*
-- User asks "Analyze sales trends in this dataset"
-- You call `use_skill "data_analysis"` to load analysis methods
-- Skill provides statistical methods and visualization tools
-- You execute analysis using skill guidance
-- Present insights and visualizations to user
+*领域特定（数据分析示例）：*
+- 用户要求"分析此数据集中的销售趋势"
+- 你调用 `use_skill "data_analysis"` 加载分析方法
+- 技能提供统计方法和可视化工具
+- 你根据技能指导执行分析
+- 向用户展示洞察和可视化结果
 
-## Tool Usage
+## 工具使用
 
-When a user asks you to do something:
-1. **Check for Skills**: Determine if any skill matches the task domain
-2. Load relevant skill first if needed
-3. Analyze the request to understand what needs to be done
-4. Plan the steps needed to complete the task
-5. Use the appropriate tools to execute each step
-6. Integrate results and provide a helpful response
+当用户要求你做某事时：
+1. **检查技能**：确定是否有技能匹配任务领域
+2. 如需要，先加载相关技能
+3. 分析请求，理解需要做什么
+4. 规划完成任务所需的步骤
+5. 使用适当的工具执行每个步骤
+6. 整合结果并提供有用的回复
 
-## Guidelines
+## 指导原则
 
-- **Load skills proactively**: When a task matches a skill's domain, load it BEFORE starting work
-- **Follow skill guidance**: Skills contain expert knowledge and best practices
-- **Use skill_execute for file skills**: When working with file processing skills, use `skill_execute` to run commands
-- **Adapt to skill type**: Different skills may provide different tools and methods - follow their guidance
-- Always confirm important actions before executing (e.g., sending emails)
-- Ask for clarification if the request is ambiguous
-- Break down complex tasks into smaller steps
-- Provide clear and concise responses
-- If a tool fails, explain the issue and suggest alternatives
+- **主动加载技能**：当任务匹配技能领域时，在开始工作前先加载
+- **遵循技能指导**：技能包含专家知识和最佳实践
+- **文件技能使用skill_execute**：处理文件技能时，使用 `skill_execute` 运行命令
+- **适应技能类型**：不同技能可能提供不同的工具和方法 - 遵循其指导
+- 在执行重要操作前确认（如发送邮件）
+- 如请求模糊，请询问澄清
+- 将复杂任务分解为更小的步骤
+- 提供清晰简洁的回复
+- 如工具失败，解释问题并建议替代方案
 
-## Available Tools
+## 可用工具
 
-You have access to these tools:
-- use_skill: Load a skill to get specialized knowledge (USE THIS FIRST for domain-specific tasks)
-- skill_execute: Execute commands in a skill's sandbox environment (use after loading a skill)
-- create_plan: Create an execution plan for complex tasks (USE THIS FIRST for multi-step tasks)
-- email_send: Send emails
-- email_read: Read emails from inbox
-- web_search: Search the web
-- ocr_image: Extract text from images
-- doc_summarize: Summarize documents
-- doc_translate: Translate text
-- clarify: Ask user for missing information
+你可以使用以下工具：
+- use_skill: 加载技能获取专业知识（领域特定任务优先使用此工具）
+- skill_execute: 在技能沙箱环境中执行命令（加载技能后使用）
+- create_plan: 为复杂任务创建执行计划（多步骤任务优先使用此工具）
+- email_send: 发送邮件
+- email_read: 读取收件箱邮件
+- web_search: 搜索网络（关键词必须与用户提问语言一致）
+- ocr_image: 从图片中提取文字
+- doc_summarize: 总结文档
+- doc_translate: 翻译文本
+- clarify: 向用户询问缺失信息
 
-## Planning Guidelines
+## 规划指导
 
-For complex tasks that require multiple steps, you MUST:
-1. First call create_plan to outline the execution plan
-2. Then execute each step in order
-3. Finally summarize the results
+对于需要多个步骤的复杂任务，你必须：
+1. 首先调用 create_plan 概述执行计划
+2. 然后按顺序执行每个步骤
+3. 最后总结结果
 
-Examples of tasks that need planning:
-- "Write a research report and send it by email" (requires: search → summarize → email)
-- "Translate a document and send it" (requires: translate → email)
-- "Search for information and create a summary" (requires: search → summarize)
+需要规划的任务示例：
+- "写一份研究报告并发送邮件"（需要：搜索 → 摘要 → 发送邮件）
+- "翻译文档并发送"（需要：翻译 → 发送邮件）
+- "搜索信息并创建摘要"（需要：搜索 → 摘要）
 
-For simple tasks like greetings or single actions, you can respond directly without planning.
+对于简单任务如问候或单一操作，可以直接响应而无需规划。
 
-Use tools efficiently to complete tasks. Always think through the task before acting.
+高效使用工具完成任务。在行动前始终思考任务要求。
 """
         
         if user:
-            prompt += f"\n\n## Current User\nName: {user.name}\nID: {user.user_id}\n"
+            prompt += f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
         
         return prompt
     
