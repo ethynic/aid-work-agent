@@ -191,6 +191,56 @@ AGENT_TOOLS = [
             },
             "required": ["message"]
         }
+    },
+    {
+        "name": "create_plan",
+        "description": "Create an execution plan for complex tasks. Use this BEFORE executing tools when the task requires multiple steps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "The overall goal of the task"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "step_number": {
+                                "type": "integer",
+                                "description": "Step number in the plan"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "Description of what this step does"
+                            },
+                            "tool": {
+                                "type": "string",
+                                "description": "Tool to use for this step (if applicable)"
+                            },
+                            "parameters": {
+                                "type": "object",
+                                "description": "Parameters for the tool"
+                            },
+                            "expected_output": {
+                                "type": "string",
+                                "description": "Expected output of this step"
+                            }
+                        },
+                        "required": ["step_number", "description"]
+                    },
+                    "description": "List of steps to execute"
+                },
+                "execution_mode": {
+                    "type": "string",
+                    "enum": ["sequential", "parallel"],
+                    "description": "How to execute the steps",
+                    "default": "sequential"
+                }
+            },
+            "required": ["goal", "steps"]
+        }
     }
 ]
 
@@ -267,6 +317,7 @@ When a user asks you to do something:
 ## Available Tools
 
 You have access to these tools:
+- create_plan: Create an execution plan for complex tasks (USE THIS FIRST for multi-step tasks)
 - email_send: Send emails
 - email_read: Read emails from inbox
 - web_search: Search the web
@@ -275,6 +326,20 @@ You have access to these tools:
 - doc_translate: Translate text
 - clarify: Ask user for missing information
 - respond: Send response to user
+
+## Planning Guidelines
+
+For complex tasks that require multiple steps, you MUST:
+1. First call create_plan to outline the execution plan
+2. Then execute each step in order
+3. Finally summarize the results
+
+Examples of tasks that need planning:
+- "Write a research report and send it by email" (requires: search → summarize → email)
+- "Translate a document and send it" (requires: translate → email)
+- "Search for information and create a summary" (requires: search → summarize)
+
+For simple tasks like greetings or single actions, you can respond directly without planning.
 
 Use tools efficiently to complete tasks. Always think through the task before acting.
 """
@@ -308,6 +373,66 @@ Use tools efficiently to complete tasks. Always think through the task before ac
         })
         
         return messages
+    
+    def _handle_create_plan(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle create_plan tool call - print and return the plan
+        
+        Args:
+            args: Plan arguments containing goal, steps, and execution_mode
+        
+        Returns:
+            Plan result dictionary
+        """
+        goal = args.get("goal", "")
+        steps = args.get("steps", [])
+        execution_mode = args.get("execution_mode", "sequential")
+        
+        # Build plan output
+        plan_output = []
+        plan_output.append("=" * 60)
+        plan_output.append("📋 执行计划 (Execution Plan)")
+        plan_output.append("=" * 60)
+        plan_output.append(f"🎯 目标 (Goal): {goal}")
+        plan_output.append(f"🔄 执行模式 (Mode): {execution_mode}")
+        plan_output.append("-" * 60)
+        plan_output.append("📝 步骤 (Steps):")
+        
+        for step in steps:
+            step_num = step.get("step_number", "?")
+            description = step.get("description", "")
+            tool = step.get("tool", "N/A")
+            params = step.get("parameters", {})
+            expected = step.get("expected_output", "")
+            
+            plan_output.append(f"\n  步骤 {step_num}: {description}")
+            if tool != "N/A":
+                plan_output.append(f"    🔧 工具: {tool}")
+                if params:
+                    plan_output.append(f"    📊 参数: {json.dumps(params, ensure_ascii=False)}")
+                if expected:
+                    plan_output.append(f"    📤 预期输出: {expected}")
+        
+        plan_output.append("-" * 60)
+        plan_output.append("✅ 计划创建完成，开始执行...")
+        plan_output.append("=" * 60)
+        
+        # Print to log
+        plan_str = "\n".join(plan_output)
+        logger.info(f"\n{plan_str}")
+        
+        # Also print to console for visibility
+        print(plan_str)
+        
+        return {
+            "success": True,
+            "plan": {
+                "goal": goal,
+                "steps": steps,
+                "execution_mode": execution_mode
+            },
+            "message": "Plan created successfully. Please execute the steps in order."
+        }
     
     async def process_message(
         self,
@@ -411,6 +536,15 @@ Use tools efficiently to complete tasks. Always think through the task before ac
                 tool_id = tc["id"]
                 
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
+                
+                # Handle create_plan specially - print the plan and return success
+                if tool_name == "create_plan":
+                    plan_result = self._handle_create_plan(tool_args)
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "content": plan_result
+                    })
+                    continue
                 
                 # Execute the tool
                 try:
