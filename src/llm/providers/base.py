@@ -111,8 +111,24 @@ class BaseLLMProvider(ABC):
             role = msg.get("role", "user")
             content = msg.get("content", "")
             
-            # 处理多模态内容
-            if isinstance(content, list):
+            # 处理不同类型的消息
+            if role == "tool":
+                # 工具结果消息 - 必须包含tool_call_id
+                formatted.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "content": str(content) if not isinstance(content, str) else content,
+                })
+            elif role == "assistant" and "tool_calls" in msg:
+                # 包含工具调用的assistant消息
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": str(content) if not isinstance(content, str) else content,
+                    "tool_calls": msg.get("tool_calls", [])
+                }
+                formatted.append(assistant_msg)
+            elif isinstance(content, list):
+                # 处理多模态内容
                 formatted.append({"role": role, "content": content})
             else:
                 formatted.append({"role": role, "content": str(content)})

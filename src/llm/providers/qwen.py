@@ -206,18 +206,34 @@ class QwenProvider(BaseLLMProvider):
             content = msg.get("content", "")
             
             # 通义千问使用 system/user/assistant 角色
-            if role in ["system", "user", "assistant"]:
+            if role == "system":
                 formatted.append({
                     "role": role,
                     "content": str(content) if not isinstance(content, str) else content,
                 })
-            elif role == "tool":
-                # 工具响应消息
+            elif role == "user":
                 formatted.append({
+                    "role": role,
+                    "content": str(content) if not isinstance(content, str) else content,
+                })
+            elif role == "assistant":
+                # Assistant消息可能包含tool_calls
+                assistant_msg = {
+                    "role": role,
+                    "content": str(content) if not isinstance(content, str) else content,
+                }
+                # 如果有tool_calls，也要包含
+                if "tool_calls" in msg:
+                    assistant_msg["tool_calls"] = msg["tool_calls"]
+                formatted.append(assistant_msg)
+            elif role == "tool":
+                # 工具响应消息 - 必须包含tool_call_id
+                tool_msg = {
                     "role": "tool",
                     "content": str(content),
-                    "name": msg.get("name", ""),
-                })
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                }
+                formatted.append(tool_msg)
         
         return formatted
     

@@ -420,10 +420,29 @@ Use tools efficiently to complete tasks. Always think through the task before ac
         
         history = self.memory.get_context(session_id)
         for msg in history:
-            messages.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
-            })
+            # 处理不同类型的消息
+            role = msg.get("role", "user")
+            
+            if role == "tool":
+                # 工具结果消息
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "content": msg.get("content", "")
+                })
+            elif role == "assistant" and "tool_calls" in msg:
+                # 包含工具调用的assistant消息
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.get("content", ""),
+                    "tool_calls": msg.get("tool_calls", [])
+                })
+            else:
+                # 普通消息
+                messages.append({
+                    "role": role,
+                    "content": msg.get("content", "")
+                })
         
         return messages
     
@@ -820,11 +839,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 break
             
             # Add assistant message with tool calls to history
-            messages.append({
+            assistant_message = {
                 "role": "assistant",
                 "content": content,
                 "tool_calls": tool_calls
-            })
+            }
+            messages.append(assistant_message)
+            
+            # Save assistant message with tool calls to memory
+            self.memory.add_message(session_id, assistant_message)
             
             # Execute each tool call
             tool_results = []
@@ -906,11 +929,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         "is_error": True
                     })
             
-            # Add tool results to messages
-            messages.append({
-                "role": "user",
-                "content": tool_results
-            })
+            # Add tool results to messages and memory
+            # Each tool result should be a separate message with role "tool"
+            for tool_result in tool_results:
+                tool_message = {
+                    "role": "tool",
+                    "tool_call_id": tool_result["tool_call_id"],
+                    "content": tool_result["content"]
+                }
+                messages.append(tool_message)
+                # Save tool result to memory
+                self.memory.add_message(session_id, tool_message)
         
         if iteration >= max_iterations:
             logger.warning(f"Reached max iterations ({max_iterations})")
