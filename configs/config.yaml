@@ -41,8 +41,10 @@ tools:
     baidu_api_key: ${BAIDU_OCR_API_KEY}
     baidu_secret_key: ${BAIDU_OCR_SECRET_KEY}
   search:
-    provider: bing
-    bing_api_key: ${BING_API_KEY}
+    tavily_api_key: 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
+    max_results: 5
+    include_answer: true
+    search_depth: basic
 
 # 记忆配置
 memory:

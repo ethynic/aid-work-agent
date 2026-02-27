@@ -34,3 +34,6 @@ RestrictedPython>=6.0  # Sandboxed Python execution (optional)
 # LLM Providers
 zhipuai>=2.0.0  # Zhipu AI SDK
 dashscope>=1.14.0  # Qwen SDK
+
+# Web Search
+tavily-python>=0.3.0  # Tavily AI Search API

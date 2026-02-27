@@ -62,8 +62,10 @@ class OCRToolConfig(BaseModel):
 
 class SearchToolConfig(BaseModel):
     """搜索工具配置"""
-    provider: str = "bing"
-    bing_api_key: str = ""
+    tavily_api_key: str = ""
+    max_results: int = 5  # 控制上下文长度
+    include_answer: bool = True  # 返回 AI 生成的答案摘要
+    search_depth: str = "basic"  # basic | advanced
 
 
 class ToolsConfig(BaseModel):
@@ -168,7 +170,11 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True
-    
+
+    # 搜索工具配置
+    if os.getenv("TAVILY_API_KEY"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
+
     return Settings(**yaml_config)
 
 
