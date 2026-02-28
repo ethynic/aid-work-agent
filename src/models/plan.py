@@ -27,8 +27,10 @@ class Task(BaseModel):
     """
     task_id: str = Field(..., description="任务唯一ID")
     tool_name: str = Field(..., description="工具名称")
+    description: str = Field(default="", description="任务描述")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="任务参数")
     dependencies: List[str] = Field(default_factory=list, description="依赖任务ID列表")
+    expected_output: str = Field(default="", description="预期输出")
     status: TaskStatus = Field(default=TaskStatus.PENDING, description="任务状态")
     result: Optional[Dict[str, Any]] = Field(None, description="执行结果")
     error: Optional[str] = Field(None, description="错误信息")

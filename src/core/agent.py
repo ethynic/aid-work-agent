@@ -24,9 +24,11 @@ from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
 from src.models.message import UnifiedMessage
 from src.models.user import User
+from src.models.plan import TaskStatus
 from src.core.skill_registry import SkillRegistry
 from src.core.skill_executor import SkillExecutor
 from src.core.sandbox import SandboxManager
+from src.core.plan_manager import PlanManager
 
 
 # Tool definitions for LLM function calling
@@ -280,6 +282,10 @@ class MasterAgent:
         self.sandbox_manager = SandboxManager(prefer_docker=False)
         self.skill_executor = SkillExecutor(self.skill_registry, self.sandbox_manager)
         
+        # 初始化计划管理器
+        plans_dir = Path(__file__).parent.parent.parent / "plans"
+        self.plan_manager = PlanManager(plans_dir)
+        
         self._register_builtin_tools()
         
         logger.info(f"Master Agent initialized with {len(self.skill_registry)} skills")
@@ -315,8 +321,44 @@ class MasterAgent:
         """Build system prompt for the agent"""
         
         skill_descriptions = self.skill_registry.get_descriptions() if self.skill_registry else "(暂无可用技能)"
+        available_tools = [t["name"] for t in AGENT_TOOLS]
+        available_skills = self.skill_registry.list_skills() if self.skill_registry else []
         
         prompt = f"""你是一个智能工作助手。你的任务是帮助用户完成各种工作任务。
+
+## 🚨 核心工作流程（必须严格遵守）
+
+**每个用户请求都必须遵循以下流程：**
+
+### 第一步：分析需求
+1. 理解用户想要什么
+2. 判断是否需要使用工具
+3. 确定需要哪些工具/技能
+
+### 第二步：创建执行计划
+**重要：除简单问候外，所有任务都必须先调用 `create_plan` 创建计划！**
+
+调用 `create_plan` 时需要提供：
+- goal: 任务目标（用户需求的总结）
+- steps: 执行步骤列表，每个步骤包含：
+  - step_number: 步骤编号
+  - description: 步骤描述
+  - tool: 使用的工具名称
+  - parameters: 工具参数
+  - expected_output: 预期输出
+- execution_mode: "sequential"（顺序）或 "parallel"（并行）
+
+### 第三步：执行计划
+1. 按计划顺序执行每个步骤
+2. 调用相应的工具
+3. 收集并整合结果
+
+### 第四步：汇报结果
+1. 总结执行结果
+2. 展示关键信息
+3. 如有失败，说明原因和建议
+
+---
 
 ## 重要语言规则
 
@@ -325,111 +367,87 @@ class MasterAgent:
 - 用户用英文提问 → 你用英文回复，工具参数使用英文
 - 搜索关键词必须与用户提问语言保持一致！
 
-## 能力范围
+---
 
-你可以帮助用户：
-- 邮件管理（发送、读取、搜索邮件）
-- 文档处理（摘要、翻译）
-- 网络搜索（查找网络信息）
-- OCR识别（从图片/PDF中提取文字）
-- PDF处理（读取、提取、合并、拆分PDF）
+## 能力范围与限制
 
-## 技能系统
+### 可用工具
+{', '.join([f'`{t}`' for t in available_tools])}
 
-技能是可按需加载的专业知识模块。当任务匹配技能描述时，请先加载技能以获取详细指导。
-
-可用技能：
+### 可用技能
 {skill_descriptions}
 
-**重要提示**：当任务匹配技能领域时，首先调用 `use_skill` 工具：
+### 超出能力的处理
+当用户的请求超出你的能力范围时：
+1. **明确告知用户**：说明这个任务无法完成
+2. **解释原因**：说明缺少什么能力或工具
+3. **提供替代方案**：
+   - 推荐用户可以使用的其他工具或服务
+   - 建议如何分步骤完成任务
+   - 指出完成该任务需要的条件
 
-**文件处理技能：**
-- 用户上传的文件匹配技能（如 .pdf 文件 → 使用 "pdf" 技能）
-- 用户提到处理特定文件类型
-- 涉及文件操作的任务（合并、拆分、转换、提取）
+**示例回应：**
+> "抱歉，我目前无法直接执行XXX操作。完成这个任务需要：
+> 1. XXX工具/权限
+> 2. 或者您可以尝试使用YYY服务
+> 3. 或者您可以先ZZZ，然后我可以帮助您..."
 
-**领域特定技能：**
-- 用户询问技能覆盖的专业主题
-- 需要领域特定知识或方法的任务
-- 与技能描述或关键词匹配的请求
+---
 
-**通用规则**：始终检查技能描述是否与用户任务匹配。如果匹配，首先加载技能以获取专家指导和适当的工具。
+## 工具使用指南
 
-## 技能使用流程
+### create_plan（必须首先使用）
+**所有非问候类请求都必须先创建计划！**
 
-**技能加载工作流：**
+```
+create_plan(
+    goal="用户的目标",
+    steps=[
+        {{"step_number": 1, "description": "步骤描述", "tool": "工具名", "parameters": {{}}, "expected_output": "预期输出"}},
+        ...
+    ],
+    execution_mode="sequential"
+)
+```
 
-1. **识别技能需求**：检查用户任务是否匹配任何可用技能
-2. **加载技能**：调用 `use_skill` 并传入技能名称以获取详细指导
-3. **遵循指导**：阅读技能内容中的专家方法、工具和最佳实践
-4. **执行**：使用适当的工具（如文件处理技能使用 `skill_execute`）
-5. **返回结果**：向用户展示结果
+### web_search
+- 关键词必须与用户语言一致
+- 用于查询实时信息、新闻、数据等
 
-**示例工作流：**
+### use_skill
+- 当任务匹配技能描述时使用
+- 加载后按技能指导执行
 
-*文件处理（PDF示例）：*
-- 用户上传 "report.pdf" 并要求"提取所有表格"
-- 你调用 `use_skill "pdf"` 加载PDF处理知识
-- 技能提供 `pdfplumber.extract_tables()` 等方法
-- 你调用 `skill_execute` 执行相应命令
-- 向用户返回提取的表格
+### skill_execute
+- 用于执行技能中的命令
+- 处理文件、运行脚本等
 
-*领域特定（数据分析示例）：*
-- 用户要求"分析此数据集中的销售趋势"
-- 你调用 `use_skill "data_analysis"` 加载分析方法
-- 技能提供统计方法和可视化工具
-- 你根据技能指导执行分析
-- 向用户展示洞察和可视化结果
+### clarify
+- 当信息不足时向用户询问
 
-## 工具使用
+---
 
-当用户要求你做某事时：
-1. **检查技能**：确定是否有技能匹配任务领域
-2. 如需要，先加载相关技能
-3. 分析请求，理解需要做什么
-4. 规划完成任务所需的步骤
-5. 使用适当的工具执行每个步骤
-6. 整合结果并提供有用的回复
+## 工作示例
+
+**示例1：搜索信息**
+用户: "今年春节贺岁档有哪些电影"
+1. 调用 create_plan(goal="查找春节电影信息", steps=[...], execution_mode="sequential")
+2. 调用 web_search(keyword="2026年春节贺岁档电影")
+3. 整理结果并回复用户
+
+**示例2：超能力范围**
+用户: "帮我订一张机票"
+回复: "抱歉，我目前无法直接预订机票。建议您使用携程、去哪儿等平台，或者我可以帮您搜索航班信息。"
+
+---
 
 ## 指导原则
 
-- **主动加载技能**：当任务匹配技能领域时，在开始工作前先加载
-- **遵循技能指导**：技能包含专家知识和最佳实践
-- **文件技能使用skill_execute**：处理文件技能时，使用 `skill_execute` 运行命令
-- **适应技能类型**：不同技能可能提供不同的工具和方法 - 遵循其指导
-- 在执行重要操作前确认（如发送邮件）
-- 如请求模糊，请询问澄清
-- 将复杂任务分解为更小的步骤
-- 提供清晰简洁的回复
-- 如工具失败，解释问题并建议替代方案
-
-## 可用工具
-
-你可以使用以下工具：
-- use_skill: 加载技能获取专业知识（领域特定任务优先使用此工具）
-- skill_execute: 在技能沙箱环境中执行命令（加载技能后使用）
-- create_plan: 为复杂任务创建执行计划（多步骤任务优先使用此工具）
-- email_send: 发送邮件
-- email_read: 读取收件箱邮件
-- web_search: 搜索网络（关键词必须与用户提问语言一致）
-- ocr_image: 从图片中提取文字
-- doc_summarize: 总结文档
-- doc_translate: 翻译文本
-- clarify: 向用户询问缺失信息
-
-## 规划指导
-
-对于需要多个步骤的复杂任务，你必须：
-1. 首先调用 create_plan 概述执行计划
-2. 然后按顺序执行每个步骤
-3. 最后总结结果
-
-需要规划的任务示例：
-- "写一份研究报告并发送邮件"（需要：搜索 → 摘要 → 发送邮件）
-- "翻译文档并发送"（需要：翻译 → 发送邮件）
-- "搜索信息并创建摘要"（需要：搜索 → 摘要）
-
-对于简单任务如问候或单一操作，可以直接响应而无需规划。
+- **先规划后执行**：除简单问候外，必须先创建执行计划
+- **透明化**：让用户知道你在做什么，展示计划
+- **诚实**：超出能力时明确告知，不要虚假承诺
+- **有帮助**：即使无法完成，也要提供有用的建议
+- **跟踪进度**：计划会被记录，用户可以查看进度
 
 高效使用工具完成任务。在行动前始终思考任务要求。
 """
@@ -474,38 +492,67 @@ class MasterAgent:
         
         return messages
     
-    def _handle_create_plan(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_create_plan(
+        self,
+        args: Dict[str, Any],
+        session_id: str,
+        user_query: str,
+    ) -> Dict[str, Any]:
         """
-        Handle create_plan tool call - print and return the plan
+        Handle create_plan tool call - create real ExecutionPlan and save to MD file
         
         Args:
             args: Plan arguments containing goal, steps, and execution_mode
+            session_id: Session identifier
+            user_query: Original user query
         
         Returns:
-            Plan result dictionary
+            Plan result dictionary with plan summary
         """
-        goal = args.get("goal", "")
+        goal = args.get("goal", user_query)
         steps = args.get("steps", [])
         execution_mode = args.get("execution_mode", "sequential")
         
-        # Build plan output
+        # 检查步骤是否使用了不可用的工具
+        available_tools = [t["name"] for t in AGENT_TOOLS]
+        available_skills = self.skill_registry.list_skills() if self.skill_registry else []
+        
+        unavailable_tools = []
+        for step in steps:
+            tool = step.get("tool", "")
+            if tool and tool not in available_tools and tool not in available_skills:
+                if not tool.startswith("skill_"):  # skill_execute 是特殊的
+                    unavailable_tools.append(tool)
+        
+        # 创建真实的执行计划
+        plan = self.plan_manager.create_plan(
+            session_id=session_id,
+            user_query=user_query,
+            steps=steps,
+            execution_mode=execution_mode,
+            available_tools=available_tools,
+            available_skills=available_skills,
+        )
+        
+        # 构建计划展示输出
         plan_output = []
         plan_output.append("=" * 60)
         plan_output.append("📋 执行计划 (Execution Plan)")
         plan_output.append("=" * 60)
-        plan_output.append(f"🎯 目标 (Goal): {goal}")
-        plan_output.append(f"🔄 执行模式 (Mode): {execution_mode}")
+        plan_output.append(f"🎯 目标: {goal}")
+        plan_output.append(f"🆔 计划ID: {plan.plan_id}")
+        plan_output.append(f"🔄 执行模式: {execution_mode}")
+        plan_output.append(f"📝 步骤数: {len(steps)}")
         plan_output.append("-" * 60)
-        plan_output.append("📝 步骤 (Steps):")
+        plan_output.append("📝 步骤详情:")
         
-        for step in steps:
-            step_num = step.get("step_number", "?")
+        for i, step in enumerate(steps, 1):
             description = step.get("description", "")
             tool = step.get("tool", "N/A")
             params = step.get("parameters", {})
             expected = step.get("expected_output", "")
             
-            plan_output.append(f"\n  步骤 {step_num}: {description}")
+            plan_output.append(f"\n  步骤 {i}: {description}")
             if tool != "N/A":
                 plan_output.append(f"    🔧 工具: {tool}")
                 if params:
@@ -514,8 +561,21 @@ class MasterAgent:
                     plan_output.append(f"    📤 预期输出: {expected}")
         
         plan_output.append("-" * 60)
-        plan_output.append("✅ 计划创建完成，开始执行...")
+        
+        # 如果是简单任务（只有一个步骤），提示可以直接执行
+        if len(steps) == 1:
+            plan_output.append("✅ 单步任务，直接执行...")
+        else:
+            plan_output.append("✅ 计划创建完成，开始按步骤执行...")
+        
         plan_output.append("=" * 60)
+        
+        # 如果有不可用的工具，添加警告
+        if unavailable_tools:
+            plan_output.append("\n⚠️ 注意: 以下工具不可用:")
+            for tool in unavailable_tools:
+                plan_output.append(f"  - {tool}")
+            plan_output.append("\n建议: 这些能力可能需要其他方式实现，请参考可用工具和技能列表。")
         
         # Print to log
         plan_str = "\n".join(plan_output)
@@ -524,15 +584,26 @@ class MasterAgent:
         # Also print to console for visibility
         print(plan_str)
         
-        return {
+        # 返回结果
+        result = {
             "success": True,
+            "plan_id": plan.plan_id,
             "plan": {
                 "goal": goal,
                 "steps": steps,
                 "execution_mode": execution_mode
             },
-            "message": "Plan created successfully. Please execute the steps in order."
+            "message": f"计划创建成功，共{len(steps)}个步骤。计划已保存到: plans/{session_id}.md",
+            "is_simple_task": len(steps) == 1,
         }
+        
+        if unavailable_tools:
+            result["warnings"] = {
+                "unavailable_tools": unavailable_tools,
+                "suggestion": "部分工具不可用，请检查或寻找替代方案"
+            }
+        
+        return result
     
     def _handle_use_skill(self, skill_name: str) -> Dict[str, Any]:
         """
@@ -886,9 +957,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
                 
-                # Handle create_plan specially - print the plan and return success
+                # Handle create_plan specially - create real plan and save to MD
                 if tool_name == "create_plan":
-                    plan_result = self._handle_create_plan(tool_args)
+                    plan_result = self._handle_create_plan(
+                        args=tool_args,
+                        session_id=session_id,
+                        user_query=user_input,
+                    )
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": plan_result
@@ -926,6 +1001,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     command = tool_args.get("command", "")
                     files = tool_args.get("files", {})
                     
+                    # 标记任务开始（如果计划中存在）
+                    plan = self.plan_manager.get_plan(session_id)
+                    skill_task_id = None
+                    if plan:
+                        task = self.plan_manager.get_next_pending_task(session_id)
+                        if task and task.tool_name == "skill_execute":
+                            skill_task_id = task.task_id
+                            self.plan_manager.mark_task_running(session_id, skill_task_id)
+                    
                     skill_exec_result = await self._handle_skill_execute(
                         skill_name=skill_name,
                         command=command,
@@ -933,11 +1017,33 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         session_id=session_id,
                         workdir=session_workspace
                     )
+                    
+                    # 标记任务完成（使用保存的task_id）
+                    if skill_task_id:
+                        if skill_exec_result.get("success"):
+                            self.plan_manager.mark_task_completed(
+                                session_id, skill_task_id, skill_exec_result
+                            )
+                        else:
+                            self.plan_manager.mark_task_failed(
+                                session_id, skill_task_id, 
+                                skill_exec_result.get("error", "Unknown error")
+                            )
+                    
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": skill_exec_result
                     })
                     continue
+                
+                # 获取当前计划中的任务（用于状态跟踪）
+                plan = self.plan_manager.get_plan(session_id)
+                current_task_id = None
+                if plan:
+                    current_task = self.plan_manager.get_next_pending_task(session_id)
+                    if current_task:
+                        current_task_id = current_task.task_id
+                        self.plan_manager.mark_task_running(session_id, current_task_id)
                 
                 # Execute the tool
                 try:
@@ -948,6 +1054,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     })
                     result_preview = str(result)[:200] if result else "None"
                     logger.debug(f"Tool result: {result_preview}...")
+                    
+                    # 标记任务完成（使用保存的task_id）
+                    if current_task_id:
+                        if result.get("success", True):
+                            self.plan_manager.mark_task_completed(
+                                session_id, current_task_id, result
+                            )
+                        else:
+                            self.plan_manager.mark_task_failed(
+                                session_id, current_task_id,
+                                result.get("error", "Tool execution failed")
+                            )
+                        
                 except Exception as e:
                     error_msg = f"Tool execution failed: {str(e)}"
                     logger.error(error_msg)
@@ -956,6 +1075,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         "content": error_msg,
                         "is_error": True
                     })
+                    
+                    # 标记任务失败
+                    if current_task_id:
+                        self.plan_manager.mark_task_failed(
+                            session_id, current_task_id, error_msg
+                        )
             
             # Add tool results to messages and memory
             # Each tool result should be a separate message with role "tool"
