@@ -133,18 +133,28 @@ class EmailSendTool(BaseTool):
             # 创建邮件
             msg = MIMEMultipart()
             msg["From"] = self.user_email.email_address
-            msg["To"] = to
             msg["Subject"] = subject
 
+            # 处理收件人（支持字符串或列表）
+            if isinstance(to, list):
+                to_str = ", ".join(to)
+                recipients = [addr.strip() for addr in to]
+            else:
+                to_str = to
+                recipients = [addr.strip() for addr in to.split(",")]
+            msg["To"] = to_str
+
+            # 处理抄送人（支持字符串或列表）
             if cc:
-                msg["Cc"] = cc
+                if isinstance(cc, list):
+                    cc_str = ", ".join(cc)
+                    recipients.extend([addr.strip() for addr in cc])
+                else:
+                    cc_str = cc
+                    recipients.extend([addr.strip() for addr in cc.split(",")])
+                msg["Cc"] = cc_str if isinstance(cc, list) else cc
 
             msg.attach(MIMEText(body, "plain", "utf-8"))
-
-            # 构建收件人列表
-            recipients = [addr.strip() for addr in to.split(",")]
-            if cc:
-                recipients.extend([addr.strip() for addr in cc.split(",")])
 
             # 根据加密协议发送邮件
             if self.user_email.smtp_encryption == "ssl":

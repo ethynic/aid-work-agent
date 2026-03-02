@@ -40,9 +40,8 @@ AGENT_TOOLS = [
             "type": "object",
             "properties": {
                 "to": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "收件人邮箱地址列表"
+                    "type": "string",
+                    "description": "收件人邮箱地址，多个地址用逗号分隔"
                 },
                 "subject": {
                     "type": "string",
@@ -53,9 +52,8 @@ AGENT_TOOLS = [
                     "description": "邮件正文内容"
                 },
                 "cc": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "抄送收件人（可选）"
+                    "type": "string",
+                    "description": "抄送人邮箱地址，多个地址用逗号分隔（可选）"
                 }
             },
             "required": ["to", "subject", "body"]
@@ -63,26 +61,43 @@ AGENT_TOOLS = [
     },
     {
         "name": "email_read",
-        "description": "读取收件箱中的邮件",
+        "description": "收取用户邮箱中的邮件",
         "input_schema": {
             "type": "object",
             "properties": {
                 "folder": {
                     "type": "string",
-                    "description": "要读取的文件夹（inbox、sent等）",
-                    "default": "inbox"
+                    "description": "邮件文件夹，默认INBOX",
+                    "default": "INBOX"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "要获取的邮件数量",
+                    "description": "收取邮件数量，默认10封",
                     "default": 10
                 },
-                "unread_only": {
+                "unseen_only": {
                     "type": "boolean",
-                    "description": "是否只获取未读邮件",
+                    "description": "是否只收取未读邮件，默认False",
                     "default": False
+                },
+                "from_filter": {
+                    "type": "string",
+                    "description": "发件人过滤条件（可选）"
+                },
+                "subject_filter": {
+                    "type": "string",
+                    "description": "主题过滤条件（可选）"
                 }
             },
+            "required": []
+        }
+    },
+    {
+        "name": "email_list_folders",
+        "description": "列出邮箱中的所有文件夹及其邮件统计",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
             "required": []
         }
     },
@@ -356,13 +371,28 @@ class Agent:
     
     def _register_builtin_tools(self):
         """Register built-in tools"""
-        from src.tools.email.email_tool import EmailSendTool, EmailReadTool
+        from src.tools.email.email_tool import EmailSendTool, EmailReadTool, EmailListFoldersTool
         from src.tools.ocr.ocr_tool import OCRImageTool, OCRPdfTool
         from src.tools.document.doc_tool import DocSummarizeTool, DocTranslateTool
         from src.tools.search.search_tool import WebSearchTool
+        from src.models.user import UserEmail, EncryptionType
         
-        self.tool_registry.register(EmailSendTool())
-        self.tool_registry.register(EmailReadTool())
+        # 创建默认用户邮箱配置
+        default_user_email = UserEmail(
+            email_address="luwei@tulin.cn",
+            smtp_server="smtp.ym.163.com",
+            smtp_port=994,
+            smtp_user="luwei@tulin.cn",
+            smtp_password="p@$$w0rd",
+            smtp_encryption=EncryptionType.SSL,
+            imap_server="imap.ym.163.com",
+            imap_port=993,
+            imap_encryption=EncryptionType.SSL,
+        )
+        
+        self.tool_registry.register(EmailSendTool(default_user_email))
+        self.tool_registry.register(EmailReadTool(default_user_email))
+        self.tool_registry.register(EmailListFoldersTool(default_user_email))
         self.tool_registry.register(OCRImageTool())
         self.tool_registry.register(OCRPdfTool())
         self.tool_registry.register(DocSummarizeTool())
