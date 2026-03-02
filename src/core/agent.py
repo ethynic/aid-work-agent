@@ -182,7 +182,7 @@ AGENT_TOOLS = [
     },
     {
         "name": "create_plan",
-        "description": "为复杂任务创建执行计划。当任务需要多个步骤时，在执行工具前先使用此功能",
+        "description": "为复杂任务创建执行计划。重要：如果任务属于专业领域（如招聘、代码审查、PDF处理），应该优先将步骤的tool设为delegate_to_subagent，而不是自己处理",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -205,11 +205,11 @@ AGENT_TOOLS = [
                             },
                             "tool": {
                                 "type": "string",
-                                "description": "该步骤要使用的工具（如适用）"
+                                "description": "该步骤要使用的工具。如果任务需要专业领域能力，应该使用delegate_to_subagent并指定subagent_name参数"
                             },
                             "parameters": {
                                 "type": "object",
-                                "description": "工具的参数"
+                                "description": "工具的参数。委派子智能体时，参数格式为{\"subagent_name\": \"子智能体名称\", \"task_description\": \"任务描述\"}"
                             },
                             "expected_output": {
                                 "type": "string",
@@ -286,9 +286,26 @@ class MasterAgent:
         plans_dir = Path(__file__).parent.parent.parent / "plans"
         self.plan_manager = PlanManager(plans_dir)
         
+        # 初始化子智能体注册表
+        subagents_dir = Path(__file__).parent.parent.parent / "subagents"
+        from src.subagents.registry import SubagentRegistry
+        from src.subagents.executor import SubagentExecutor
+        self.subagent_registry = SubagentRegistry(subagents_dir)
+        # 注意：SubagentExecutor需要在_register_builtin_tools之后初始化，以便传递工具注册表
+        # 所以这里先创建注册表，执行器在后面创建
+        self.subagent_executor = None  # 延迟初始化
+        
         self._register_builtin_tools()
         
-        logger.info(f"Master Agent initialized with {len(self.skill_registry)} skills")
+        # 初始化子智能体执行器（需要先注册工具）
+        self.subagent_executor = SubagentExecutor(
+            self.memory, 
+            self.subagent_registry,
+            self.tool_registry,  # 传递工具注册表
+            self.skill_registry  # 传递技能注册表
+        )
+        
+        logger.info(f"Master Agent initialized with {len(self.skill_registry)} skills, {len(self.subagent_registry)} subagents")
     
     def _register_builtin_tools(self):
         """Register built-in tools"""
@@ -308,12 +325,18 @@ class MasterAgent:
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
     
     def _get_tools(self) -> List[Dict[str, Any]]:
-        """Get tool definitions including skill tool"""
+        """Get tool definitions including skill tool and delegation tool"""
         tools = list(AGENT_TOOLS)
         
         if self.skill_registry:
             skill_tool = self.skill_registry.get_skill_tool_definition()
             tools.append(skill_tool)
+        
+        # 添加子智能体委派工具
+        if self.subagent_registry and len(self.subagent_registry) > 0:
+            delegation_tool = self.subagent_registry.get_delegation_tool_definition()
+            if delegation_tool:
+                tools.append(delegation_tool)
         
         return tools
     
@@ -324,16 +347,60 @@ class MasterAgent:
         available_tools = [t["name"] for t in AGENT_TOOLS]
         available_skills = self.skill_registry.list_skills() if self.skill_registry else []
         
+        # 子智能体信息
+        subagent_descriptions = self.subagent_registry.get_descriptions() if self.subagent_registry else "(暂无可用子智能体)"
+        available_subagents = self.subagent_registry.list_subagents() if self.subagent_registry else []
+        
+        # 委派工具说明
+        delegation_guide = ""
+        if available_subagents:
+            delegation_guide = f"""
+### delegate_to_subagent（委派给专业子智能体）
+当任务需要专业领域能力时，可以委派给子智能体：
+
+**可用子智能体：**
+{subagent_descriptions}
+
+**使用场景：**
+- 代码审查任务 → 委派给 `code-reviewer`
+- HR相关任务 → 委派给 `hr-expert`
+- PDF文档处理 → 委派给 `pdf-expert`
+
+**调用示例：**
+```
+delegate_to_subagent(
+    subagent_name="code-reviewer",
+    task_description="审查这段Python代码的安全性和性能"
+)
+```
+"""
+        
+        # 构建子智能体快速匹配提示
+        subagent_matching_hint = ""
+        if available_subagents:
+            subagent_matching_hint = f"""
+**⚡ 关键：优先判断是否需要委派子智能体**
+在分析需求时，首先检查任务是否属于以下专业领域：
+{subagent_descriptions}
+
+如果任务匹配某个子智能体的能力描述，**应该优先委派**，而不是自己处理。
+例如：
+- 招聘、薪酬、员工管理相关 → 委派给 `hr-expert`
+- 代码审查、安全审计 → 委派给 `code-reviewer`
+- PDF文档处理 → 委派给 `pdf-expert`
+"""
+
         prompt = f"""你是一个智能工作助手。你的任务是帮助用户完成各种工作任务。
 
 ## 🚨 核心工作流程（必须严格遵守）
 
 **每个用户请求都必须遵循以下流程：**
-
+{subagent_matching_hint}
 ### 第一步：分析需求
 1. 理解用户想要什么
-2. 判断是否需要使用工具
-3. 确定需要哪些工具/技能
+2. **首先判断是否匹配专业子智能体**（如招聘任务匹配hr-expert）
+3. 判断是否需要使用工具
+4. 确定需要哪些工具/技能/子智能体
 
 ### 第二步：创建执行计划
 **重要：除简单问候外，所有任务都必须先调用 `create_plan` 创建计划！**
@@ -343,14 +410,14 @@ class MasterAgent:
 - steps: 执行步骤列表，每个步骤包含：
   - step_number: 步骤编号
   - description: 步骤描述
-  - tool: 使用的工具名称
-  - parameters: 工具参数
+  - tool: 使用的工具名称（如果需要委派子智能体，工具填写 `delegate_to_subagent`）
+  - parameters: 工具参数（委派时参数为 `{{"subagent_name": "子智能体名称", "task_description": "任务描述"}}`）
   - expected_output: 预期输出
 - execution_mode: "sequential"（顺序）或 "parallel"（并行）
 
 ### 第三步：执行计划
 1. 按计划顺序执行每个步骤
-2. 调用相应的工具
+2. 调用相应的工具或委派给子智能体
 3. 收集并整合结果
 
 ### 第四步：汇报结果
@@ -376,6 +443,9 @@ class MasterAgent:
 
 ### 可用技能
 {skill_descriptions}
+
+### 可用子智能体
+{subagent_descriptions}
 
 ### 超出能力的处理
 当用户的请求超出你的能力范围时：
@@ -424,7 +494,7 @@ create_plan(
 
 ### clarify
 - 当信息不足时向用户询问
-
+{delegation_guide}
 ---
 
 ## 工作示例
@@ -435,7 +505,40 @@ create_plan(
 2. 调用 web_search(keyword="2026年春节贺岁档电影")
 3. 整理结果并回复用户
 
-**示例2：超能力范围**
+**示例2：HR招聘任务（必须委派给hr-expert）**
+用户: "我要招聘一名AI产品经理"
+1. 分析：这是招聘任务，匹配hr-expert子智能体的能力
+2. 调用 create_plan(
+     goal="协助招聘AI产品经理",
+     steps=[{{"step_number": 1, "description": "委派给HR专家处理招聘任务", "tool": "delegate_to_subagent", "parameters": {{"subagent_name": "hr-expert", "task_description": "协助招聘AI产品经理，包括JD编写、薪酬调研、面试设计"}}, "expected_output": "招聘方案"}}],
+     execution_mode="sequential"
+   )
+3. 调用 delegate_to_subagent(subagent_name="hr-expert", task_description="协助招聘AI产品经理...")
+4. 整合子智能体的结果并回复用户
+
+**示例3：代码审查任务（必须委派给code-reviewer）**
+用户: "帮我审查这段代码的安全性"
+1. 分析：这是代码审查任务，匹配code-reviewer子智能体的能力
+2. 调用 create_plan(
+     goal="代码安全审查",
+     steps=[{{"step_number": 1, "description": "委派给代码审查专家", "tool": "delegate_to_subagent", "parameters": {{"subagent_name": "code-reviewer", "task_description": "审查代码安全性"}}, "expected_output": "审查报告"}}],
+     execution_mode="sequential"
+   )
+3. 调用 delegate_to_subagent(subagent_name="code-reviewer", task_description="审查代码安全性")
+4. 整合子智能体的审查结果并回复用户
+
+**示例4：PDF文档处理（必须委派给pdf-expert）**
+用户: "帮我提取这个PDF中的表格数据"
+1. 分析：这是PDF处理任务，匹配pdf-expert子智能体的能力
+2. 调用 create_plan(
+     goal="提取PDF表格数据",
+     steps=[{{"step_number": 1, "description": "委派给PDF专家处理", "tool": "delegate_to_subagent", "parameters": {{"subagent_name": "pdf-expert", "task_description": "提取PDF中的表格数据"}}, "expected_output": "表格数据"}}],
+     execution_mode="sequential"
+   )
+3. 调用 delegate_to_subagent(subagent_name="pdf-expert", task_description="提取PDF表格数据")
+4. 整合结果并回复用户
+
+**示例5：超能力范围**
 用户: "帮我订一张机票"
 回复: "抱歉，我目前无法直接预订机票。建议您使用携程、去哪儿等平台，或者我可以帮您搜索航班信息。"
 
@@ -448,6 +551,7 @@ create_plan(
 - **诚实**：超出能力时明确告知，不要虚假承诺
 - **有帮助**：即使无法完成，也要提供有用的建议
 - **跟踪进度**：计划会被记录，用户可以查看进度
+- **善用专家**：专业任务委派给专业子智能体
 
 高效使用工具完成任务。在行动前始终思考任务要求。
 """
@@ -516,13 +620,17 @@ create_plan(
         # 检查步骤是否使用了不可用的工具
         available_tools = [t["name"] for t in AGENT_TOOLS]
         available_skills = self.skill_registry.list_skills() if self.skill_registry else []
+        available_subagents = self.subagent_registry.list_subagents() if self.subagent_registry else []
         
         unavailable_tools = []
         for step in steps:
             tool = step.get("tool", "")
             if tool and tool not in available_tools and tool not in available_skills:
-                if not tool.startswith("skill_"):  # skill_execute 是特殊的
-                    unavailable_tools.append(tool)
+                # skill_execute 和 delegate_to_subagent 是特殊工具
+                if not tool.startswith("skill_") and tool != "delegate_to_subagent":
+                    # 检查是否是可用的子智能体
+                    if tool not in available_subagents:
+                        unavailable_tools.append(tool)
         
         # 创建真实的执行计划
         plan = self.plan_manager.create_plan(
@@ -725,6 +833,94 @@ create_plan(
             
         except Exception as e:
             logger.error(f"Skill execute failed: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def _handle_delegate_to_subagent(
+        self,
+        subagent_name: str,
+        task_description: str,
+        context_needed: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Handle delegate_to_subagent tool call - delegate task to a subagent
+        
+        Args:
+            subagent_name: Name of the subagent to delegate to
+            task_description: Description of the task
+            context_needed: Keywords for context filtering (optional)
+            session_id: Session ID for memory access
+            
+        Returns:
+            Delegation result dictionary
+        """
+        if not subagent_name:
+            return {
+                "success": False,
+                "error": "No subagent name provided"
+            }
+        
+        if not task_description:
+            return {
+                "success": False,
+                "error": "No task description provided"
+            }
+        
+        # Check if subagent exists
+        config = self.subagent_registry.get(subagent_name)
+        if not config:
+            return {
+                "success": False,
+                "error": f"Subagent '{subagent_name}' not found",
+                "available_subagents": self.subagent_registry.list_subagents()
+            }
+        
+        try:
+            # Generate task ID
+            import uuid
+            task_id = f"delegate_{uuid.uuid4().hex[:8]}"
+            
+            # Delegate to subagent
+            response = await self.subagent_executor.delegate(
+                task_id=task_id,
+                subagent_name=subagent_name,
+                task_description=task_description,
+                session_id=session_id or "default",
+            )
+            
+            if not response.success:
+                return {
+                    "success": False,
+                    "error": response.error or "Delegation failed"
+                }
+            
+            # Wait for result
+            record = await self.subagent_executor.wait_for_result(
+                response.execution_id,
+                timeout=300  # 5 minutes timeout
+            )
+            
+            if record:
+                return {
+                    "success": record.status == "completed",
+                    "subagent_name": subagent_name,
+                    "execution_id": response.execution_id,
+                    "result": record.result,
+                    "summary": record.summary,
+                    "error": record.error,
+                    "token_usage": record.token_usage
+                }
+            
+            return {
+                "success": False,
+                "error": "Delegation timed out"
+            }
+            
+        except Exception as e:
+            logger.error(f"Delegation failed: {e}")
             return {
                 "success": False,
                 "error": str(e)
@@ -1033,6 +1229,49 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": skill_exec_result
+                    })
+                    continue
+                
+                # Handle delegate_to_subagent - delegate task to subagent
+                if tool_name == "delegate_to_subagent":
+                    subagent_name = tool_args.get("subagent_name", "")
+                    task_description = tool_args.get("task_description", "")
+                    context_needed = tool_args.get("context_needed", [])
+                    
+                    logger.info(f"Delegating to subagent: {subagent_name}, task: {task_description[:50]}...")
+                    
+                    # 标记任务开始（如果计划中存在）
+                    plan = self.plan_manager.get_plan(session_id)
+                    delegate_task_id = None
+                    if plan:
+                        task = self.plan_manager.get_next_pending_task(session_id)
+                        if task:
+                            delegate_task_id = task.task_id
+                            self.plan_manager.mark_task_running(session_id, delegate_task_id)
+                    
+                    # 执行委派
+                    delegation_result = await self._handle_delegate_to_subagent(
+                        subagent_name=subagent_name,
+                        task_description=task_description,
+                        context_needed=context_needed,
+                        session_id=session_id,
+                    )
+                    
+                    # 标记任务完成
+                    if delegate_task_id:
+                        if delegation_result.get("success"):
+                            self.plan_manager.mark_task_completed(
+                                session_id, delegate_task_id, delegation_result
+                            )
+                        else:
+                            self.plan_manager.mark_task_failed(
+                                session_id, delegate_task_id,
+                                delegation_result.get("error", "Unknown error")
+                            )
+                    
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "content": delegation_result
                     })
                     continue
                 

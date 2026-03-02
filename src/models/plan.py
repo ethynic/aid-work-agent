@@ -37,6 +37,10 @@ class Task(BaseModel):
     started_at: Optional[datetime] = Field(None, description="开始时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
     
+    # 子智能体委派支持
+    assigned_agent: Optional[str] = Field(None, description="指定执行的子智能体名称")
+    execution_id: Optional[str] = Field(None, description="子智能体执行ID")
+    
     class Config:
         use_enum_values = True
     

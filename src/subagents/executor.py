@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Subagent Executor - 子智能体执行管理器
+
+负责在子线程中启动和管理子智能体的执行，处理任务状态同步。
+"""
+
+import asyncio
+import time
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+from loguru import logger
+
+from src.models.subagent import SubagentConfig, DelegationResponse
+from src.subagents.protocol import SubagentTaskRecord, get_task_record_key
+
+if TYPE_CHECKING:
+    from src.memory.short_term import ShortTermMemory
+    from src.subagents.registry import SubagentRegistry
+    from src.subagents.instance import SubagentInstance
+
+
+class SubagentExecutor:
+    """
+    子智能体执行管理器
+    
+    负责:
+    1. 在子线程中启动子智能体执行
+    2. 管理任务状态同步到共享memory
+    3. 处理澄清请求
+    4. 超时和取消管理
+    
+    使用示例:
+        executor = SubagentExecutor(session_memory, registry)
+        
+        # 委托任务
+        response = await executor.delegate(
+            task_id="task_001",
+            subagent_name="code-reviewer",
+            task_description="审查代码安全性",
+            session_id="session_001"
+        )
+        
+        # 等待结果
+        record = await executor.wait_for_result(execution_id, timeout=300)
+    """
+    
+    def __init__(
+        self,
+        session_memory: 'ShortTermMemory',
+        registry: 'SubagentRegistry',
+        tool_registry: Optional['ToolRegistry'] = None,
+        skill_registry: Optional['SkillRegistry'] = None,
+    ):
+        """
+        初始化执行管理器
+        
+        Args:
+            session_memory: 共享的session记忆实例
+            registry: Subagent注册表
+            tool_registry: 主智能体的工具注册表（用于继承）
+            skill_registry: 主智能体的技能注册表（用于继承）
+        """
+        self.memory = session_memory
+        self.registry = registry
+        self.tool_registry = tool_registry
+        self.skill_registry = skill_registry
+        self._active_executions: Dict[str, asyncio.Task] = {}
+        self._instances: Dict[str, 'SubagentInstance'] = {}
+    
+    def _create_execution_id(self) -> str:
+        """生成唯一的执行ID"""
+        return f"exec_{uuid.uuid4().hex[:12]}"
+    
+    def _create_task_record(
+        self,
+        task_id: str,
+        execution_id: str,
+        subagent_name: str,
+        task_description: str,
+        task_parameters: Optional[Dict[str, Any]] = None,
+    ) -> SubagentTaskRecord:
+        """
+        创建任务记录并存储到memory
+        
+        Args:
+            task_id: 任务ID
+            execution_id: 执行ID
+            subagent_name: 子智能体名称
+            task_description: 任务描述
+            task_parameters: 任务参数
+            
+        Returns:
+            任务记录
+        """
+        record = SubagentTaskRecord.create(
+            task_id=task_id,
+            execution_id=execution_id,
+            subagent_name=subagent_name,
+            task_description=task_description,
+            task_parameters=task_parameters,
+        )
+        
+        # 存储到memory
+        key = get_task_record_key(execution_id)
+        self.memory.add_message(self.memory._cache.keys().__iter__().__next__(), {
+            "type": "subagent_task_record",
+            "key": key,
+            "record": record.model_dump(),
+        })
+        
+        return record
+    
+    def _get_task_record(self, execution_id: str) -> Optional[SubagentTaskRecord]:
+        """
+        从memory获取任务记录
+        
+        Args:
+            execution_id: 执行ID
+            
+        Returns:
+            任务记录，不存在返回None
+        """
+        key = get_task_record_key(execution_id)
+        # 从memory中获取记录
+        # 这里需要根据实际的memory实现来调整
+        # 暂时使用简单的字典存储
+        return getattr(self, '_task_records', {}).get(execution_id)
+    
+    def _update_task_record(self, record: SubagentTaskRecord) -> None:
+        """
+        更新memory中的任务记录
+        
+        Args:
+            record: 任务记录
+        """
+        # 存储到memory
+        key = get_task_record_key(record.execution_id)
+        
+        # 确保task_records字典存在
+        if not hasattr(self, '_task_records'):
+            self._task_records: Dict[str, SubagentTaskRecord] = {}
+        self._task_records[record.execution_id] = record
+    
+    async def delegate(
+        self,
+        task_id: str,
+        subagent_name: str,
+        task_description: str,
+        session_id: str,
+        task_parameters: Optional[Dict[str, Any]] = None,
+        timeout: int = 300,
+    ) -> DelegationResponse:
+        """
+        委托任务给子智能体
+        
+        Args:
+            task_id: 任务ID
+            subagent_name: 子智能体名称
+            task_description: 任务描述
+            session_id: Session ID
+            task_parameters: 任务参数
+            timeout: 超时时间（秒）
+            
+        Returns:
+            委托响应
+        """
+        logger.info(f"\n{'='*60}\n[SUBAGENT] Delegate called\n{'='*60}")
+        logger.info(f"[SUBAGENT] task_id: {task_id}")
+        logger.info(f"[SUBAGENT] subagent_name: {subagent_name}")
+        logger.info(f"[SUBAGENT] task_description: {task_description}")
+        logger.info(f"[SUBAGENT] session_id: {session_id}")
+        
+        # 获取配置
+        config = self.registry.get(subagent_name)
+        if not config:
+            logger.error(f"[SUBAGENT] Subagent not found: {subagent_name}")
+            return DelegationResponse(
+                success=False,
+                error=f"Subagent not found: {subagent_name}"
+            )
+        
+        logger.info(f"[SUBAGENT] Config found: {config.name}")
+        logger.info(f"[SUBAGENT] Config capabilities: {config.capabilities}")
+        logger.info(f"[SUBAGENT] Config tools: {config.tools}")
+        
+        # 生成执行ID
+        execution_id = self._create_execution_id()
+        logger.info(f"[SUBAGENT] Generated execution_id: {execution_id}")
+        
+        # 创建任务记录
+        record = self._create_task_record(
+            task_id=task_id,
+            execution_id=execution_id,
+            subagent_name=subagent_name,
+            task_description=task_description,
+            task_parameters=task_parameters,
+        )
+        logger.info(f"[SUBAGENT] Task record created: {record.task_id}")
+        
+        # 延迟导入避免循环依赖
+        from src.subagents.instance import SubagentInstance
+        
+        # 创建实例
+        logger.info(f"[SUBAGENT] Creating SubagentInstance...")
+        logger.info(f"[SUBAGENT] Passing tool_registry: {self.tool_registry is not None}")
+        logger.info(f"[SUBAGENT] Passing skill_registry: {self.skill_registry is not None}")
+        instance = SubagentInstance(
+            config=config,
+            session_memory=self.memory,
+            session_id=session_id,
+            execution_id=execution_id,
+            tool_registry=self.tool_registry,
+            skill_registry=self.skill_registry,
+        )
+        self._instances[execution_id] = instance
+        logger.info(f"[SUBAGENT] SubagentInstance created")
+        
+        # 在子线程启动执行
+        async_task = asyncio.create_task(
+            self._run_instance(instance, record, timeout),
+            name=f"subagent_{subagent_name}_{execution_id}"
+        )
+        self._active_executions[execution_id] = async_task
+        
+        logger.info(f"[SUBAGENT] Started async task: subagent_{subagent_name}_{execution_id}")
+        logger.info(f"[SUBAGENT] Active executions: {list(self._active_executions.keys())}")
+        
+        return DelegationResponse(
+            success=True,
+            execution_id=execution_id,
+            subagent_name=subagent_name,
+        )
+    
+    async def _run_instance(
+        self,
+        instance: 'SubagentInstance',
+        record: SubagentTaskRecord,
+        timeout: int,
+    ) -> None:
+        """
+        运行子智能体实例
+        
+        Args:
+            instance: 子智能体实例
+            record: 任务记录
+            timeout: 超时时间
+        """
+        logger.info(f"\n{'='*60}\n[SUBAGENT] _run_instance started\n{'='*60}")
+        logger.info(f"[SUBAGENT] instance.config.name: {instance.config.name}")
+        logger.info(f"[SUBAGENT] record.execution_id: {record.execution_id}")
+        logger.info(f"[SUBAGENT] record.task_description: {record.task_description}")
+        
+        try:
+            # 更新状态为运行中
+            record.start()
+            self._update_task_record(record)
+            logger.info(f"[SUBAGENT] Record status updated to: {record.status}")
+            
+            # 执行任务（带超时）
+            logger.info(f"[SUBAGENT] Calling instance.run() with timeout={timeout}s...")
+            result = await asyncio.wait_for(
+                instance.run(record),
+                timeout=timeout
+            )
+            
+            logger.info(f"[SUBAGENT] instance.run() returned: {result}")
+            
+            # 更新结果
+            if result:
+                record.complete(
+                    result=result.get("result"),
+                    summary=result.get("summary", "")
+                )
+                if result.get("token_usage"):
+                    record.token_usage = result["token_usage"]
+                logger.info(f"[SUBAGENT] Record completed with summary: {record.summary[:200] if record.summary else 'N/A'}")
+            else:
+                record.complete(result={}, summary="Task completed")
+                logger.info(f"[SUBAGENT] Record completed with empty result")
+            
+        except asyncio.TimeoutError:
+            logger.error(f"[SUBAGENT] Execution timed out: {record.execution_id}")
+            record.fail(f"Execution timed out after {timeout} seconds")
+            
+        except asyncio.CancelledError:
+            logger.warning(f"[SUBAGENT] Execution cancelled: {record.execution_id}")
+            record.cancel()
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"[SUBAGENT] Execution failed: {record.execution_id}, error: {e}")
+            logger.error(f"[SUBAGENT] Traceback:\n{traceback.format_exc()}")
+            record.fail(str(e))
+            
+        finally:
+            self._update_task_record(record)
+            logger.info(f"[SUBAGENT] Final record status: {record.status}")
+            # 清理
+            self._active_executions.pop(record.execution_id, None)
+            self._instances.pop(record.execution_id, None)
+            logger.info(f"[SUBAGENT] Execution cleanup done")
+    
+    async def wait_for_result(
+        self,
+        execution_id: str,
+        timeout: float = 300,
+        poll_interval: float = 0.5,
+    ) -> Optional[SubagentTaskRecord]:
+        """
+        等待子智能体执行完成
+        
+        Args:
+            execution_id: 执行ID
+            timeout: 超时时间
+            poll_interval: 轮询间隔
+            
+        Returns:
+            任务记录，超时返回None
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            record = self._get_task_record(execution_id)
+            if record and record.is_terminal():
+                return record
+            await asyncio.sleep(poll_interval)
+        
+        logger.warning(f"Wait for result timed out: {execution_id}")
+        return None
+    
+    async def get_progress(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取执行进度
+        
+        Args:
+            execution_id: 执行ID
+            
+        Returns:
+            进度信息
+        """
+        record = self._get_task_record(execution_id)
+        if not record:
+            return None
+        
+        return {
+            "execution_id": execution_id,
+            "status": record.status,
+            "progress_percent": record.progress_percent,
+            "current_step": record.current_step,
+            "is_terminal": record.is_terminal(),
+        }
+    
+    async def handle_clarification(
+        self,
+        execution_id: str,
+        answer: str,
+    ) -> bool:
+        """
+        处理澄清请求
+        
+        Args:
+            execution_id: 执行ID
+            answer: 澄清答案
+            
+        Returns:
+            是否成功
+        """
+        record = self._get_task_record(execution_id)
+        if not record or not record.is_clarifying():
+            return False
+        
+        record.answer_clarification(answer)
+        self._update_task_record(record)
+        
+        # 通知实例继续执行
+        instance = self._instances.get(execution_id)
+        if instance:
+            await instance.resume_from_clarification(answer)
+        
+        return True
+    
+    async def cancel(self, execution_id: str) -> bool:
+        """
+        取消执行
+        
+        Args:
+            execution_id: 执行ID
+            
+        Returns:
+            是否成功
+        """
+        async_task = self._active_executions.get(execution_id)
+        if async_task:
+            async_task.cancel()
+            logger.info(f"Cancelled subagent execution: {execution_id}")
+            return True
+        
+        return False
+    
+    def get_active_executions(self) -> List[str]:
+        """获取所有活跃的执行ID列表"""
+        return list(self._active_executions.keys())
+    
+    async def cancel_all(self) -> None:
+        """取消所有活跃的执行"""
+        for execution_id in list(self._active_executions.keys()):
+            await self.cancel(execution_id)
