@@ -18,6 +18,48 @@ class UserRole(str, Enum):
     ADMIN = "admin"
 
 
+class EncryptionType(str, Enum):
+    """加密协议类型"""
+    SSL = "ssl"        # SSL/TLS 加密（端口通常为465）
+    TLS = "tls"        # STARTTLS 加密（端口通常为587）
+    NONE = "none"      # 无加密（不推荐，端口通常为25）
+
+
+class UserEmail(BaseModel):
+    """
+    用户邮箱配置
+    
+    包含SMTP和IMAP邮件服务所需的所有信息
+    """
+    # 邮箱地址
+    email_address: str = Field(..., description="用户邮箱地址")
+    
+    # SMTP配置（发送邮件）
+    smtp_server: str = Field(..., description="SMTP服务器地址")
+    smtp_port: int = Field(default=465, description="SMTP端口，默认465(SSL)")
+    smtp_user: str = Field(..., description="SMTP登录用户名")
+    smtp_password: str = Field(..., description="SMTP登录密码/授权码")
+    smtp_encryption: EncryptionType = Field(
+        default=EncryptionType.SSL, 
+        description="SMTP加密协议: ssl/tls/none"
+    )
+    
+    # IMAP配置（接收邮件）
+    imap_server: str = Field(..., description="IMAP服务器地址")
+    imap_port: int = Field(default=993, description="IMAP端口，默认993(SSL)")
+    imap_encryption: EncryptionType = Field(
+        default=EncryptionType.SSL, 
+        description="IMAP加密协议: ssl/tls/none"
+    )
+    use_smtp_auth: bool = Field(default=True, description="IMAP是否使用SMTP相同的认证信息")
+
+    def get_imap_credentials(self) -> tuple:
+        """获取IMAP认证信息"""
+        if self.use_smtp_auth:
+            return (self.smtp_user, self.smtp_password)
+        return (self.smtp_user, self.smtp_password)  # 可扩展为独立IMAP认证
+
+
 class User(BaseModel):
     """
     用户模型
