@@ -8,8 +8,9 @@ Subagent模块
 - SubagentLoader: 配置加载器
 - SubagentRegistry: 注册表
 - SubagentExecutor: 执行管理器
-- SubagentInstance: 运行实例
 - AgentFactory: 智能体工厂
+
+注意: 所有智能体（主/子）现在统一使用 Agent 类，不再需要单独的 SubagentInstance
 """
 
 from .config import SubagentConfig
@@ -17,7 +18,6 @@ from .loader import SubagentLoader
 from .registry import SubagentRegistry
 from .protocol import SubagentTaskRecord
 from .executor import SubagentExecutor
-from .instance import SubagentInstance
 from .factory import AgentFactory
 
 __all__ = [
@@ -30,7 +30,6 @@ __all__ = [
     "SubagentTaskRecord",
     # 执行
     "SubagentExecutor",
-    "SubagentInstance",
     # 工厂
     "AgentFactory",
 ]

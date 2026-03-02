@@ -12,22 +12,19 @@ Agent Factory - 智能体工厂
     agent = factory.create_standalone_agent("hr-expert", memory)
     
     # 创建子智能体
-    subagent = factory.create_subagent("code-reviewer", memory, execution_ctx)
+    subagent = factory.create_subagent("code-reviewer", memory, session_id, execution_id)
 """
 
 from typing import Optional, TYPE_CHECKING
 
 from loguru import logger
 
-from src.models.subagent import SubagentConfig, SubagentExecutionContext
-from src.subagents.instance import SubagentInstance
+from src.models.subagent import SubagentConfig
 
 if TYPE_CHECKING:
     from src.memory.short_term import ShortTermMemory
     from src.subagents.registry import SubagentRegistry
-    from src.llm.gateway import LLMGateway
-    from src.tools.registry import ToolRegistry
-    from src.core.skill_registry import SkillRegistry
+    from src.core.agent import Agent
 
 
 class AgentFactory:
@@ -35,6 +32,8 @@ class AgentFactory:
     智能体工厂
     
     统一创建独立主智能体和委托子智能体实例。
+    
+    所有智能体都是 Agent 类的实例，通过参数区分主/子模式。
     
     使用示例:
         from src.subagents import SubagentRegistry, AgentFactory
@@ -47,41 +46,29 @@ class AgentFactory:
         # 创建工厂
         factory = AgentFactory(registry)
         
-        # 创建HR智能体（独立模式）
+        # 创建HR智能体（独立主智能体模式）
         memory = ShortTermMemory()
         hr_agent = factory.create_standalone_agent("hr-expert", memory)
         
         # 运行
-        await hr_agent.run_standalone()
+        await hr_agent.process_message(...)
     """
     
-    def __init__(
-        self,
-        registry: 'SubagentRegistry',
-        llm: Optional['LLMGateway'] = None,
-        tool_registry: Optional['ToolRegistry'] = None,
-        skill_registry: Optional['SkillRegistry'] = None,
-    ):
+    def __init__(self, registry: 'SubagentRegistry'):
         """
         初始化智能体工厂
         
         Args:
             registry: Subagent注册表
-            llm: LLM网关（可选，默认使用全局）
-            tool_registry: 工具注册表（可选，用于继承）
-            skill_registry: 技能注册表（可选，用于继承）
         """
         self.registry = registry
-        self.llm = llm
-        self.tool_registry = tool_registry
-        self.skill_registry = skill_registry
     
     def create_standalone_agent(
         self,
         agent_name: str,
         session_memory: 'ShortTermMemory',
         session_id: Optional[str] = None,
-    ) -> SubagentInstance:
+    ) -> 'Agent':
         """
         创建独立主智能体
         
@@ -95,31 +82,32 @@ class AgentFactory:
             session_id: Session ID（可选，自动生成）
             
         Returns:
-            智能体实例
+            Agent实例（is_master=True）
             
         Raises:
             ValueError: 智能体不存在
         """
+        from src.core.agent import Agent
+        import uuid
+        
         config = self.registry.get(agent_name)
         if not config:
             raise ValueError(f"Agent not found: {agent_name}")
         
         if session_id is None:
-            import uuid
             session_id = f"standalone_{agent_name}_{uuid.uuid4().hex[:8]}"
         
-        instance = SubagentInstance(
-            config=config,
-            session_memory=session_memory,
+        # 创建主智能体实例
+        agent = Agent(
+            is_master=True,
             session_id=session_id,
-            execution_id=None,  # 独立模式
-            llm=self.llm,
-            tool_registry=self.tool_registry,
-            skill_registry=self.skill_registry,
         )
         
-        logger.info(f"Created standalone agent: {agent_name} (session: {session_id})")
-        return instance
+        # 共享memory
+        agent.memory = session_memory
+        
+        logger.info(f"Created standalone master agent: {agent_name} (session: {session_id})")
+        return agent
     
     def create_subagent(
         self,
@@ -127,44 +115,49 @@ class AgentFactory:
         session_memory: 'ShortTermMemory',
         session_id: str,
         execution_id: str,
-        execution_context: Optional[SubagentExecutionContext] = None,
-    ) -> SubagentInstance:
+        parent_plan_manager=None,
+    ) -> 'Agent':
         """
         创建委托子智能体
         
         子智能体用于：
         1. 执行主智能体委托的任务
         2. 共享session memory与主智能体通信
+        3. 将执行记录同步到主智能体的计划管理器
         
         Args:
             agent_name: 智能体名称
             session_memory: 共享的Session记忆
             session_id: Session ID（与主智能体共享）
             execution_id: 执行ID
-            execution_context: 执行上下文（可选）
+            parent_plan_manager: 主智能体的计划管理器
             
         Returns:
-            智能体实例
+            Agent实例（is_master=False）
             
         Raises:
             ValueError: 智能体不存在
         """
+        from src.core.agent import Agent
+        
         config = self.registry.get(agent_name)
         if not config:
             raise ValueError(f"Agent not found: {agent_name}")
         
-        instance = SubagentInstance(
-            config=config,
-            session_memory=session_memory,
+        # 创建子智能体实例
+        agent = Agent(
+            is_master=False,
+            subagent_config=config,
             session_id=session_id,
             execution_id=execution_id,
-            llm=self.llm,
-            tool_registry=self.tool_registry,
-            skill_registry=self.skill_registry,
+            parent_plan_manager=parent_plan_manager,
         )
         
+        # 共享memory
+        agent.memory = session_memory
+        
         logger.info(f"Created subagent: {agent_name} (execution: {execution_id})")
-        return instance
+        return agent
     
     def list_available_agents(self) -> list:
         """
@@ -220,7 +213,7 @@ def create_agent(
     agent_name: str,
     subagents_dir: str = "subagents",
     **kwargs
-) -> SubagentInstance:
+) -> 'Agent':
     """
     便捷函数：创建独立智能体
     
@@ -230,7 +223,7 @@ def create_agent(
         **kwargs: 其他参数传递给create_standalone_agent
         
     Returns:
-        智能体实例
+        Agent实例（主智能体模式）
     """
     from pathlib import Path
     from src.subagents.registry import SubagentRegistry

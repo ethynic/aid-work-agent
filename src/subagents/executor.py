@@ -20,7 +20,7 @@ from src.subagents.protocol import SubagentTaskRecord, get_task_record_key
 if TYPE_CHECKING:
     from src.memory.short_term import ShortTermMemory
     from src.subagents.registry import SubagentRegistry
-    from src.subagents.instance import SubagentInstance
+    from src.core.agent import Agent
 
 
 class SubagentExecutor:
@@ -28,13 +28,13 @@ class SubagentExecutor:
     子智能体执行管理器
     
     负责:
-    1. 在子线程中启动子智能体执行
+    1. 在子线程中创建和启动子智能体(Agent实例)
     2. 管理任务状态同步到共享memory
-    3. 处理澄清请求
+    3. 将子智能体的执行记录同步到主智能体的计划管理器
     4. 超时和取消管理
     
     使用示例:
-        executor = SubagentExecutor(session_memory, registry)
+        executor = SubagentExecutor(session_memory, registry, parent_plan_manager)
         
         # 委托任务
         response = await executor.delegate(
@@ -54,6 +54,8 @@ class SubagentExecutor:
         registry: 'SubagentRegistry',
         tool_registry: Optional['ToolRegistry'] = None,
         skill_registry: Optional['SkillRegistry'] = None,
+        build_base_prompt_func: Optional[callable] = None,
+        parent_plan_manager: Optional['PlanManager'] = None,
     ):
         """
         初始化执行管理器
@@ -61,15 +63,19 @@ class SubagentExecutor:
         Args:
             session_memory: 共享的session记忆实例
             registry: Subagent注册表
-            tool_registry: 主智能体的工具注册表（用于继承）
-            skill_registry: 主智能体的技能注册表（用于继承）
+            tool_registry: 主智能体的工具注册表（不再使用，保留向后兼容）
+            skill_registry: 主智能体的技能注册表（不再使用，保留向后兼容）
+            build_base_prompt_func: 构建基础系统提示词的函数（不再使用，保留向后兼容）
+            parent_plan_manager: 主智能体的计划管理器（用于记录子智能体执行过程）
         """
         self.memory = session_memory
         self.registry = registry
         self.tool_registry = tool_registry
         self.skill_registry = skill_registry
+        self.build_base_prompt_func = build_base_prompt_func
+        self.parent_plan_manager = parent_plan_manager
         self._active_executions: Dict[str, asyncio.Task] = {}
-        self._instances: Dict[str, 'SubagentInstance'] = {}
+        self._subagent_instances: Dict[str, 'Agent'] = {}
     
     def _create_execution_id(self) -> str:
         """生成唯一的执行ID"""
@@ -185,7 +191,6 @@ class SubagentExecutor:
         
         logger.info(f"[SUBAGENT] Config found: {config.name}")
         logger.info(f"[SUBAGENT] Config capabilities: {config.capabilities}")
-        logger.info(f"[SUBAGENT] Config tools: {config.tools}")
         
         # 生成执行ID
         execution_id = self._create_execution_id()
@@ -201,27 +206,24 @@ class SubagentExecutor:
         )
         logger.info(f"[SUBAGENT] Task record created: {record.task_id}")
         
-        # 延迟导入避免循环依赖
-        from src.subagents.instance import SubagentInstance
+        # 导入Agent类（避免循环导入）
+        from src.core.agent import Agent
         
-        # 创建实例
-        logger.info(f"[SUBAGENT] Creating SubagentInstance...")
-        logger.info(f"[SUBAGENT] Passing tool_registry: {self.tool_registry is not None}")
-        logger.info(f"[SUBAGENT] Passing skill_registry: {self.skill_registry is not None}")
-        instance = SubagentInstance(
-            config=config,
-            session_memory=self.memory,
+        # 创建子智能体实例
+        logger.info(f"[SUBAGENT] Creating subagent Agent instance...")
+        subagent_instance = Agent(
+            is_master=False,
+            subagent_config=config,
             session_id=session_id,
             execution_id=execution_id,
-            tool_registry=self.tool_registry,
-            skill_registry=self.skill_registry,
+            parent_plan_manager=self.parent_plan_manager,
         )
-        self._instances[execution_id] = instance
-        logger.info(f"[SUBAGENT] SubagentInstance created")
+        self._subagent_instances[execution_id] = subagent_instance
+        logger.info(f"[SUBAGENT] Subagent Agent instance created")
         
         # 在子线程启动执行
         async_task = asyncio.create_task(
-            self._run_instance(instance, record, timeout),
+            self._run_instance(subagent_instance, record, timeout, task_description, session_id),
             name=f"subagent_{subagent_name}_{execution_id}"
         )
         self._active_executions[execution_id] = async_task
@@ -237,20 +239,25 @@ class SubagentExecutor:
     
     async def _run_instance(
         self,
-        instance: 'SubagentInstance',
+        instance: 'Agent',
         record: SubagentTaskRecord,
         timeout: int,
+        task_description: str,
+        session_id: str,
     ) -> None:
         """
         运行子智能体实例
         
         Args:
-            instance: 子智能体实例
+            instance: 子智能体实例（Agent）
             record: 任务记录
             timeout: 超时时间
+            task_description: 任务描述
+            session_id: session ID
         """
         logger.info(f"\n{'='*60}\n[SUBAGENT] _run_instance started\n{'='*60}")
-        logger.info(f"[SUBAGENT] instance.config.name: {instance.config.name}")
+        logger.info(f"[SUBAGENT] instance.is_master: {instance.is_master}")
+        logger.info(f"[SUBAGENT] instance.subagent_config.name: {instance.subagent_config.name}")
         logger.info(f"[SUBAGENT] record.execution_id: {record.execution_id}")
         logger.info(f"[SUBAGENT] record.task_description: {record.task_description}")
         
@@ -261,13 +268,17 @@ class SubagentExecutor:
             logger.info(f"[SUBAGENT] Record status updated to: {record.status}")
             
             # 执行任务（带超时）
-            logger.info(f"[SUBAGENT] Calling instance.run() with timeout={timeout}s...")
+            logger.info(f"[SUBAGENT] Calling instance.execute_as_subagent() with timeout={timeout}s...")
             result = await asyncio.wait_for(
-                instance.run(record),
+                instance.execute_as_subagent(
+                    task_description=task_description,
+                    parent_session_id=session_id,
+                    task_record=record,
+                ),
                 timeout=timeout
             )
             
-            logger.info(f"[SUBAGENT] instance.run() returned: {result}")
+            logger.info(f"[SUBAGENT] instance.execute_as_subagent() returned: {result}")
             
             # 更新结果
             if result:
@@ -301,7 +312,7 @@ class SubagentExecutor:
             logger.info(f"[SUBAGENT] Final record status: {record.status}")
             # 清理
             self._active_executions.pop(record.execution_id, None)
-            self._instances.pop(record.execution_id, None)
+            self._subagent_instances.pop(record.execution_id, None)
             logger.info(f"[SUBAGENT] Execution cleanup done")
     
     async def wait_for_result(
@@ -377,7 +388,7 @@ class SubagentExecutor:
         self._update_task_record(record)
         
         # 通知实例继续执行
-        instance = self._instances.get(execution_id)
+        instance = self._subagent_instances.get(execution_id)
         if instance:
             await instance.resume_from_clarification(answer)
         

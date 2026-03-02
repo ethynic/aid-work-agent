@@ -13,44 +13,44 @@ from src.llm.gateway import llm_gateway
 
 
 class DocSummarizeTool(BaseTool):
-    """文档摘要工具"""
-    
+    """内容摘要工具"""
+
     name = "doc_summarize"
-    description = "对文档内容进行摘要总结"
+    description = "对文本内容进行摘要总结"
     category = "document"
     parameters_schema = {
         "type": "object",
         "properties": {
-            "document": {
+            "content": {
                 "type": "string",
-                "description": "文档内容",
+                "description": "需要总结的文本内容",
             },
             "length": {
                 "type": "string",
                 "description": "摘要长度：short（简短）、medium（中等）、long（详细）",
             },
         },
-        "required": ["document"],
+        "required": ["content"],
     }
-    
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
-        执行文档摘要
-        
+        执行内容摘要
+
         Args:
-            document: 文档内容
+            content: 需要总结的文本内容
             length: 摘要长度
-        
+
         Returns:
             摘要结果
         """
-        document = kwargs.get("document", "")
+        content = kwargs.get("content", "")
         length = kwargs.get("length", "medium")
-        
-        if not document:
+
+        if not content:
             return {
                 "success": False,
-                "error": "请提供文档内容",
+                "error": "请提供需要总结的文本内容",
             }
         
         # 根据长度设置提示词
@@ -65,30 +65,30 @@ class DocSummarizeTool(BaseTool):
         try:
             # 使用LLM生成摘要
             messages = [
-                {"role": "system", "content": "你是一个专业的文档摘要助手，擅长提取关键信息并生成简洁的摘要。"},
-                {"role": "user", "content": f"{prompt}\n\n{document}"},
+                {"role": "system", "content": "你是一个专业的内容摘要助手，擅长提取关键信息并生成简洁的摘要。"},
+                {"role": "user", "content": f"{prompt}\n\n{content}"},
             ]
-            
+
             response = await llm_gateway.chat(
                 messages=messages,
                 temperature=0.3,
                 max_tokens=500,
             )
-            
+
             summary = response.get("content", "")
-            
-            logger.info(f"文档摘要成功，原文长度: {len(document)}, 摘要长度: {len(summary)}")
-            
+
+            logger.info(f"内容摘要成功，原文长度: {len(content)}, 摘要长度: {len(summary)}")
+
             return {
                 "success": True,
                 "summary": summary,
-                "original_length": len(document),
+                "original_length": len(content),
                 "summary_length": len(summary),
                 "message": "摘要生成成功",
             }
-        
+
         except Exception as e:
-            logger.error(f"文档摘要失败: {e}")
+            logger.error(f"内容摘要失败: {e}")
             return {
                 "success": False,
                 "error": f"摘要生成失败: {str(e)}",

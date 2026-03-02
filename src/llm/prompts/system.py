@@ -50,7 +50,7 @@ INTENT_PROMPT = """你是一个意图识别助手。请分析用户输入，识�
 - email_search: 搜索邮件，需要搜索关键词
 
 ### 文档处理
-- doc_summarize: 文档摘要，需要文档内容或文件
+- doc_summarize: 内容摘要，需要文本内容
 - doc_translate: 文档翻译，需要源语言和目标语言
 
 ### OCR识别
