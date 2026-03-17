@@ -40,3 +40,6 @@ tavily-python>=0.3.0  # Tavily AI Search API
 # Browser Automation
 playwright>=1.40.0  # Browser automation framework
 markdownify>=0.11.6  # HTML to Markdown conversion
+
+# Gradio UI
+gradio>=4.0.0  # Modern web UI framework
