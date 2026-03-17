@@ -26,6 +26,7 @@ Skill Executor - Skill执行器
 """
 
 import asyncio
+import os
 import re
 import shutil
 import subprocess
@@ -35,6 +36,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from loguru import logger
+
+# 确保 .env 文件被加载
+from dotenv import load_dotenv
+load_dotenv()
 
 from src.core.skill_loader import Skill, SkillDependency
 from src.core.skill_registry import SkillRegistry
@@ -343,11 +348,15 @@ Follow the instructions in the skill above to complete the user's task."""
         start_time = time.time()
         
         try:
+            # 获取当前进程的环境变量，确保子进程继承所有环境变量（包括 .env 加载的）
+            env = os.environ.copy()
+            
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workdir),
+                env=env,  # 显式传递环境变量
             )
             
             try:
@@ -662,9 +671,70 @@ Follow the instructions in the skill above to complete the user's task."""
         finally:
             context.cleanup()
     
+    def _resolve_file_path(self, file_path: str) -> Optional[str]:
+        """
+        解析文件路径，自动查找文件的实际位置
+        
+        支持以下路径格式：
+        1. 绝对路径 - 直接返回
+        2. 相对路径 - 在多个目录中查找文件
+        
+        查找顺序：
+        1. 原路径
+        2. test_uploads/ 目录
+        3. 项目根目录
+        4. uploads/ 目录
+        
+        Args:
+            file_path: 文件路径（可能是相对或绝对路径）
+            
+        Returns:
+            解析后的绝对路径（使用正斜杠），如果找不到返回None
+        """
+        path = Path(file_path)
+        
+        # 如果是绝对路径且存在，直接返回（使用正斜杠）
+        if path.is_absolute() and path.exists():
+            return path.as_posix()
+        
+        # 如果是相对路径，在多个目录中查找
+        search_dirs = [
+            Path.cwd(),  # 当前工作目录
+            Path.cwd() / "test_uploads",  # test_uploads 目录
+            Path.cwd() / "uploads",  # uploads 目录
+            self.workspace,  # 执行器工作空间
+        ]
+        
+        # 首先尝试原路径
+        if path.exists():
+            return path.absolute().as_posix()
+        
+        # 在各个目录中查找
+        for search_dir in search_dirs:
+            candidate = search_dir / path
+            if candidate.exists():
+                logger.info(f"Resolved file path: {file_path} -> {candidate}")
+                return candidate.absolute().as_posix()
+        
+        # 如果还是找不到，尝试在 test_uploads 中按文件名查找
+        if not path.is_absolute():
+            filename = path.name
+            for search_dir in search_dirs:
+                if search_dir.name == "test_uploads":
+                    continue
+                test_uploads_dir = search_dir / "test_uploads"
+                if test_uploads_dir.exists():
+                    candidate = test_uploads_dir / filename
+                    if candidate.exists():
+                        logger.info(f"Resolved file path: {file_path} -> {candidate}")
+                        return candidate.absolute().as_posix()
+        
+        logger.warning(f"Could not resolve file path: {file_path}")
+        return None
+    
     def _process_command(self, command: str, context: SkillExecutionContext) -> str:
         """
-        处理命令中的变量替换和脚本路径
+        处理命令中的变量替换、脚本路径和文件路径
         
         Args:
             command: 原始命令
@@ -676,33 +746,97 @@ Follow the instructions in the skill above to complete the user's task."""
         # 获取Skill信息
         skill = self.skill_registry.get(context.skill_name)
         
-        # 替换脚本路径
+        # 替换脚本路径（使用正斜杠避免Windows转义问题）
         if skill:
-            # 将 scripts/xxx.py 替换为绝对路径
             for script_path in skill.scripts:
                 script_name = script_path.name
+                # 使用正斜杠路径（Python在Windows上支持正斜杠）
+                script_abs_path = script_path.absolute().as_posix()
+                
                 # 替换 scripts/script_name 格式
-                command = command.replace(
-                    f"scripts/{script_name}",
-                    str(script_path.absolute())
-                )
+                if f"scripts/{script_name}" in command:
+                    command = command.replace(
+                        f"scripts/{script_name}",
+                        script_abs_path
+                    )
                 # 替换 ./scripts/script_name 格式
-                command = command.replace(
-                    f"./scripts/{script_name}",
-                    str(script_path.absolute())
-                )
+                if f"./scripts/{script_name}" in command:
+                    command = command.replace(
+                        f"./scripts/{script_name}",
+                        script_abs_path
+                    )
         
         # 替换文件变量
         for filename in context.files.keys():
             placeholder = f"${{{filename}}}"
             filepath = context.workdir / filename
-            command = command.replace(placeholder, str(filepath))
-            command = command.replace(f"${filename}", str(filepath))
+            command = command.replace(placeholder, filepath.as_posix())
+            command = command.replace(f"${filename}", filepath.as_posix())
         
         # 替换自定义变量
         for key, value in context.variables.items():
             placeholder = f"${{{key}}}"
             command = command.replace(placeholder, str(value))
+        
+        # 解析命令中的文件路径（针对 --file-path 等参数）
+        command = self._resolve_file_paths_in_command(command)
+        
+        return command
+    
+    def _resolve_file_paths_in_command(self, command: str) -> str:
+        """
+        解析命令中的文件路径参数
+        
+        识别常见的文件路径参数格式并自动解析：
+        - --file-path "xxx"
+        - --file-path=xxx
+        - --input "xxx"
+        - -f "xxx"
+        
+        Args:
+            command: 原始命令
+            
+        Returns:
+            解析后的命令
+        """
+        import re
+        
+        # 常见的文件路径参数
+        file_params = [
+            '--file-path',
+            '--input',
+            '--file',
+            '--source',
+            '--document',
+        ]
+        
+        # 处理 --param=value 格式
+        for param in file_params:
+            pattern = rf'({param})=([^\s]+)'
+            def replace_equals(match):
+                param_name = match.group(1)
+                value = match.group(2)
+                resolved_path = self._resolve_file_path(value)
+                if resolved_path:
+                    return f"{param_name}={resolved_path}"
+                return match.group(0)
+            
+            command = re.sub(pattern, replace_equals, command)
+        
+        # 处理 --param "value" 或 --param value 格式
+        for param in file_params:
+            # 匹配 --param "value" 或 --param value
+            pattern = rf'({param})\s+["\']?([^\s"\']+)["\']?'
+            
+            def replace_param(match):
+                param_name = match.group(1)
+                value = match.group(2)
+                resolved_path = self._resolve_file_path(value)
+                if resolved_path:
+                    return f'{param_name} "{resolved_path}"'
+                return match.group(0)
+            
+            command = re.sub(pattern, replace_param, command)
         
         return command
     
