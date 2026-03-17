@@ -422,6 +422,62 @@ AGENT_TOOLS = [
             },
             "required": []
         }
+    },
+    {
+        "name": "file_read",
+        "description": "读取文本文件的内容，支持自动检测文件编码（UTF-8、GBK、GB2312等），适用于各种文本文件格式",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "要读取的文件路径，可以是绝对路径或相对路径"
+                },
+                "encoding": {
+                    "type": "string",
+                    "description": "文件编码（可选），如果不指定则自动检测。常用编码：utf-8, gbk, gb2312, ascii等"
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "起始行号（可选），从第几行开始读取，默认为1"
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "结束行号（可选），读到第几行，默认读取到文件末尾"
+                },
+                "max_size": {
+                    "type": "integer",
+                    "description": "最大读取字节数（可选），默认为10MB，防止读取超大文件"
+                }
+            },
+            "required": ["file_path"]
+        }
+    },
+    {
+        "name": "file_list",
+        "description": "列出指定目录下的文件和子目录，支持过滤和递归遍历",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "要列出的目录路径，默认为当前目录"
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "文件名匹配模式（可选），支持通配符，如 *.py, *.txt 等"
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "是否递归遍历子目录，默认False"
+                },
+                "show_hidden": {
+                    "type": "boolean",
+                    "description": "是否显示隐藏文件（以.开头的文件），默认False"
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -536,6 +592,7 @@ class Agent:
             BrowserCloseTool,
             BrowserScreenshotTool,
         )
+        from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
         from src.models.user import UserEmail, EncryptionType
         
         # 创建默认用户邮箱配置
@@ -568,6 +625,10 @@ class Agent:
         self.tool_registry.register(BrowserNavigateTool())
         self.tool_registry.register(BrowserCloseTool())
         self.tool_registry.register(BrowserScreenshotTool())
+        
+        # 注册文件工具
+        self.tool_registry.register(FileReaderTool())
+        self.tool_registry.register(FileListTool())
         
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
     
