@@ -37,3 +37,6 @@ dashscope>=1.14.0  # Qwen SDK
 
 # Web Search
 tavily-python>=0.3.0  # Tavily AI Search API
+
+# Browser Automation
+playwright>=1.40.0  # Browser automation framework

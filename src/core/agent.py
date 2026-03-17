@@ -269,6 +269,160 @@ AGENT_TOOLS = [
             },
             "required": ["skill", "command"]
         }
+    },
+    {
+        "name": "browser_open",
+        "description": "打开指定网址的网页，等待页面加载完成",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "要打开的网页URL，必须以http://或https://开头"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，用于管理多个会话，默认为'default'"
+                },
+                "headless": {
+                    "type": "boolean",
+                    "description": "是否无头模式运行，true为不显示浏览器窗口，false为显示窗口，默认false",
+                    "default": False
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "browser_click",
+        "description": "点击网页中的指定元素（按钮、链接等）",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS选择器，如 '.submit-btn', '#submit', 'button[type=\"submit\"]'"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "等待元素出现的超时时间（毫秒），默认10000",
+                    "default": 10000
+                }
+            },
+            "required": ["selector"]
+        }
+    },
+    {
+        "name": "browser_fill",
+        "description": "填写网页表单中的输入框、文本域等元素",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS选择器，如 'input[name=\"username\"]', '#password'"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "要填写的值"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "等待元素出现的超时时间（毫秒），默认10000",
+                    "default": 10000
+                }
+            },
+            "required": ["selector", "value"]
+        }
+    },
+    {
+        "name": "browser_get_content",
+        "description": "获取网页的文本内容、HTML结构或特定元素的内容",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS选择器，如果为空则获取整个页面的内容"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["text", "html", "markdown"],
+                    "description": "返回格式，text为纯文本，html为HTML源码，markdown为Markdown格式，默认text",
+                    "default": "text"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "browser_navigate",
+        "description": "在当前页面进行导航操作：前进、后退、刷新",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["back", "forward", "reload"],
+                    "description": "导航动作：back后退，forward前进，reload刷新"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "browser_close",
+        "description": "关闭浏览器或特定会话",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "要关闭的会话ID，如果为空则关闭所有会话"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "browser_screenshot",
+        "description": "对当前网页进行截图并保存",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "截图保存路径，如 './screenshot.png'，默认为 './screenshot.png'",
+                    "default": "./screenshot.png"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "description": "是否截取整个页面，默认false只截取当前可视区域",
+                    "default": False
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -375,6 +529,15 @@ class Agent:
         from src.tools.ocr.ocr_tool import OCRImageTool, OCRPdfTool
         from src.tools.document.doc_tool import DocSummarizeTool, DocTranslateTool
         from src.tools.search.search_tool import WebSearchTool
+        from src.tools.browser.browser_tool import (
+            BrowserOpenTool,
+            BrowserClickTool,
+            BrowserFillTool,
+            BrowserGetContentTool,
+            BrowserNavigateTool,
+            BrowserCloseTool,
+            BrowserScreenshotTool,
+        )
         from src.models.user import UserEmail, EncryptionType
         
         # 创建默认用户邮箱配置
@@ -398,6 +561,15 @@ class Agent:
         self.tool_registry.register(DocSummarizeTool())
         self.tool_registry.register(DocTranslateTool())
         self.tool_registry.register(WebSearchTool())
+        
+        # 注册浏览器工具
+        self.tool_registry.register(BrowserOpenTool())
+        self.tool_registry.register(BrowserClickTool())
+        self.tool_registry.register(BrowserFillTool())
+        self.tool_registry.register(BrowserGetContentTool())
+        self.tool_registry.register(BrowserNavigateTool())
+        self.tool_registry.register(BrowserCloseTool())
+        self.tool_registry.register(BrowserScreenshotTool())
         
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
     

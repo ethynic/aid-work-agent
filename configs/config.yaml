@@ -45,6 +45,11 @@ tools:
     max_results: 5
     include_answer: true
     search_depth: basic
+  browser:
+    headless: false  # 测试时使用有头模式，实际部署时可改为true
+    timeout: 30000  # 默认超时时间（毫秒）
+    viewport_width: 1920
+    viewport_height: 1080
 
 # 记忆配置
 memory:

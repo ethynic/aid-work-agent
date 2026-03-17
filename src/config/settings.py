@@ -68,11 +68,20 @@ class SearchToolConfig(BaseModel):
     search_depth: str = "basic"  # basic | advanced
 
 
+class BrowserToolConfig(BaseModel):
+    """浏览器工具配置"""
+    headless: bool = True  # 是否无头模式
+    timeout: int = 30000  # 默认超时时间（毫秒）
+    viewport_width: int = 1920  # 视口宽度
+    viewport_height: int = 1080  # 视口高度
+
+
 class ToolsConfig(BaseModel):
     """工具配置"""
     email: EmailToolConfig = Field(default_factory=EmailToolConfig)
     ocr: OCRToolConfig = Field(default_factory=OCRToolConfig)
     search: SearchToolConfig = Field(default_factory=SearchToolConfig)
+    browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
 
 
 class ShortTermMemoryConfig(BaseModel):
