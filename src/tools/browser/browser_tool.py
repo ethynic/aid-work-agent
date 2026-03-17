@@ -394,7 +394,7 @@ class BrowserGetContentTool(BaseTool):
     """获取页面内容工具"""
 
     name = "browser_get_content"
-    description = "获取网页的文本内容、HTML结构或特定元素的内容"
+    description = "获取网页的内容，支持多种格式输出（默认Markdown格式）。可获取整个页面或特定元素的内容，并返回最终URL"
     category = "browser"
     parameters_schema = {
         "type": "object",
@@ -406,11 +406,15 @@ class BrowserGetContentTool(BaseTool):
             "format": {
                 "type": "string",
                 "enum": ["text", "html", "markdown"],
-                "description": "返回格式，text为纯文本，html为HTML源码，markdown为Markdown格式，默认text",
+                "description": "返回格式：markdown（默认）为Markdown格式，text为纯文本，html为HTML源码",
             },
             "session_id": {
                 "type": "string",
                 "description": "浏览器会话ID，默认为'default'",
+            },
+            "clean_content": {
+                "type": "boolean",
+                "description": "是否清理内容（移除导航、广告等非正文内容），仅在format为markdown时有效，默认true",
             },
         },
         "required": [],
@@ -421,15 +425,17 @@ class BrowserGetContentTool(BaseTool):
 
         Args:
             selector: CSS选择器（可选）
-            format: 返回格式
+            format: 返回格式，默认markdown
             session_id: 会话ID
+            clean_content: 是否清理内容（仅markdown格式）
 
         Returns:
-            执行结果
+            执行结果，包含最终URL和内容
         """
         selector = kwargs.get("selector", "")
-        format_type = kwargs.get("format", "text")
+        format_type = kwargs.get("format", "markdown")  # 默认改为markdown
         session_id = kwargs.get("session_id", "default")
+        clean_content = kwargs.get("clean_content", True)
 
         try:
             # 获取浏览器会话
@@ -455,7 +461,6 @@ class BrowserGetContentTool(BaseTool):
                 elif format_type == "html":
                     content = await session.page.inner_html(selector)
                 else:  # markdown
-                    # 简单的HTML转Markdown
                     html = await session.page.inner_html(selector)
                     content = self._html_to_markdown(html)
             else:
@@ -465,7 +470,11 @@ class BrowserGetContentTool(BaseTool):
                 elif format_type == "html":
                     content = await session.page.content()
                 else:  # markdown
-                    html = await session.page.content()
+                    # 如果启用清理，尝试提取主要内容
+                    if clean_content:
+                        html = await self._extract_main_content(session.page)
+                    else:
+                        html = await session.page.content()
                     content = self._html_to_markdown(html)
 
             # 获取页面标题和URL
@@ -474,17 +483,26 @@ class BrowserGetContentTool(BaseTool):
 
             logger.info(f"成功获取页面内容，格式: {format_type}")
 
-            return {
+            # 根据格式类型调整返回字段
+            result = {
                 "success": True,
                 "message": "成功获取页面内容",
                 "session_id": session_id,
-                "url": url,
+                "url": url,  # 最终URL
                 "title": title,
                 "format": format_type,
-                "content": content[:10000] if len(content) > 10000 else content,  # 限制内容长度
                 "content_length": len(content),
-                "truncated": len(content) > 10000,
+                "truncated": len(content) > 50000,
             }
+            
+            # 统一使用content字段，如果是markdown也同时提供markdown字段
+            if format_type == "markdown":
+                result["content"] = content[:50000] if len(content) > 50000 else content
+                result["markdown"] = result["content"]  # 兼容性
+            else:
+                result["content"] = content[:10000] if len(content) > 10000 else content
+            
+            return result
 
         except Exception as e:
             logger.error(f"获取内容失败: {e}")
@@ -493,8 +511,89 @@ class BrowserGetContentTool(BaseTool):
                 "error": f"获取内容失败: {str(e)}",
             }
 
+    async def _extract_main_content(self, page) -> str:
+        """提取页面的主要内容
+
+        尝试识别并提取页面的正文内容，移除导航、广告等
+
+        Args:
+            page: Playwright页面对象
+
+        Returns:
+            主要内容的HTML
+        """
+        # 常见的内容容器选择器（按优先级）
+        content_selectors = [
+            'article',
+            '[role="main"]',
+            'main',
+            '.post-content',
+            '.article-content',
+            '.entry-content',
+            '.content',
+            '#content',
+            '.post',
+            '.article',
+        ]
+
+        for selector in content_selectors:
+            try:
+                element = await page.query_selector(selector)
+                if element:
+                    html = await element.inner_html()
+                    if len(html) > 200:  # 确保内容足够长
+                        logger.debug(f"使用内容选择器: {selector}")
+                        return html
+            except Exception:
+                continue
+
+        # 如果没有找到主要内容区域，返回整个body
+        return await page.inner_html('body')
+
     def _html_to_markdown(self, html: str) -> str:
-        """简单的HTML转Markdown
+        """将HTML转换为Markdown格式
+
+        优先使用markdownify库，如果不可用则使用简单的正则转换
+
+        Args:
+            html: HTML内容
+
+        Returns:
+            Markdown内容
+        """
+        try:
+            # 尝试使用markdownify库进行专业转换
+            from markdownify import markdownify as md
+
+            # 配置转换选项
+            markdown_content = md(
+                html,
+                heading_style="atx",  # 使用 # 风格的标题
+                bullets="-",  # 使用 - 作为列表符号
+                strip=['script', 'style', 'nav', 'footer', 'header', 'aside'],  # 移除这些标签
+                escape_asterisks=False,
+                escape_underscores=False
+            )
+
+            # 清理多余的空行
+            import re
+            markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
+
+            # 限制内容长度
+            if len(markdown_content) > 50000:
+                markdown_content = markdown_content[:50000] + "\n\n... [内容已截断]"
+
+            return markdown_content.strip()
+
+        except ImportError:
+            logger.warning("markdownify库未安装，使用简单的正则转换")
+            return self._simple_html_to_markdown(html)
+        except Exception as e:
+            logger.warning(f"使用markdownify转换失败，回退到简单转换: {e}")
+            return self._simple_html_to_markdown(html)
+
+    def _simple_html_to_markdown(self, html: str) -> str:
+        """简单的HTML转Markdown（备用方案）
 
         Args:
             html: HTML内容
@@ -508,11 +607,17 @@ class BrowserGetContentTool(BaseTool):
             # 移除script和style标签
             html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
             html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<nav[^>]*>.*?</nav>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<footer[^>]*>.*?</footer>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<aside[^>]*>.*?</aside>', '', html, flags=re.DOTALL | re.IGNORECASE)
 
             # 标题转换
             html = re.sub(r'<h1[^>]*>(.*?)</h1>', r'\n# \1\n', html, flags=re.DOTALL | re.IGNORECASE)
             html = re.sub(r'<h2[^>]*>(.*?)</h2>', r'\n## \1\n', html, flags=re.DOTALL | re.IGNORECASE)
             html = re.sub(r'<h3[^>]*>(.*?)</h3>', r'\n### \1\n', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<h4[^>]*>(.*?)</h4>', r'\n#### \1\n', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<h5[^>]*>(.*?)</h5>', r'\n##### \1\n', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<h6[^>]*>(.*?)</h6>', r'\n###### \1\n', html, flags=re.DOTALL | re.IGNORECASE)
 
             # 链接转换
             html = re.sub(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', r'[\2](\1)', html, flags=re.DOTALL | re.IGNORECASE)
@@ -526,8 +631,15 @@ class BrowserGetContentTool(BaseTool):
             # 列表
             html = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1', html, flags=re.DOTALL | re.IGNORECASE)
 
+            # 代码块
+            html = re.sub(r'<pre[^>]*><code[^>]*>(.*?)</code></pre>', r'\n```\n\1\n```\n', html, flags=re.DOTALL | re.IGNORECASE)
+            html = re.sub(r'<code[^>]*>(.*?)</code>', r'`\1`', html, flags=re.DOTALL | re.IGNORECASE)
+
             # 段落
             html = re.sub(r'<p[^>]*>(.*?)</p>', r'\n\1\n', html, flags=re.DOTALL | re.IGNORECASE)
+
+            # 换行
+            html = re.sub(r'<br\s*/?>', r'\n', html, flags=re.IGNORECASE)
 
             # 移除所有其他HTML标签
             html = re.sub(r'<[^>]+>', '', html)
@@ -535,11 +647,15 @@ class BrowserGetContentTool(BaseTool):
             # 清理多余的换行
             html = re.sub(r'\n{3,}', '\n\n', html)
 
+            # 限制内容长度
+            if len(html) > 50000:
+                html = html[:50000] + "\n\n... [内容已截断]"
+
             return html.strip()
 
         except Exception as e:
-            logger.warning(f"HTML转Markdown失败: {e}")
-            return html
+            logger.warning(f"简单HTML转Markdown失败: {e}")
+            return html[:50000] if len(html) > 50000 else html
 
 
 class BrowserNavigateTool(BaseTool):
@@ -694,6 +810,8 @@ class BrowserCloseTool(BaseTool):
                 "success": False,
                 "error": f"关闭浏览器失败: {str(e)}",
             }
+
+
 
 
 class BrowserScreenshotTool(BaseTool):
