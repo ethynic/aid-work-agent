@@ -6,9 +6,8 @@ Skill System Test Script
 测试Skill系统的核心功能:
 1. Skill加载器
 2. Skill注册表
-3. 沙盒执行环境
-4. Skill执行器
-5. 与MasterAgent集成
+3. Skill执行器
+4. 与MasterAgent集成
 """
 
 import asyncio
@@ -46,8 +45,6 @@ def test_skill_loader():
         print(f"  Version: {skill.version}")
         print(f"  Dependencies: {[d.name for d in skill.dependencies]}")
         print(f"  Triggers: {[t.pattern for t in skill.triggers]}")
-        print(f"  Sandbox enabled: {skill.sandbox_config.enabled}")
-        print(f"  Timeout: {skill.sandbox_config.timeout}s")
     
     # Test skill matching
     print("\n--- Skill Matching ---")
@@ -80,65 +77,16 @@ def test_skill_registry():
     return registry
 
 
-async def test_sandbox():
-    """测试沙盒执行环境"""
-    print_sep("Test 3: Sandbox Environment")
-    
-    from src.core.sandbox import SandboxManager, SubprocessSandbox
-    from src.core.skill_loader import SkillSandboxConfig
-    
-    sandbox = SandboxManager()
-    
-    # Check available sandboxes
-    available = sandbox.get_available_sandboxes()
-    print(f"Available sandboxes: {available}")
-    
-    config = SkillSandboxConfig(
-        enabled=True,
-        timeout=30,
-        memory_limit=256,
-    )
-    
-    # Test simple command
-    print("\n--- Test: Echo command ---")
-    result = await sandbox.execute_command("echo 'Hello from sandbox!'", config)
-    print(f"  Success: {result.success}")
-    print(f"  Output: {result.stdout.strip()}")
-    print(f"  Duration: {result.duration:.3f}s")
-    
-    # Test Python command
-    print("\n--- Test: Python command ---")
-    result = await sandbox.execute_command("python --version", config)
-    print(f"  Success: {result.success}")
-    print(f"  Output: {result.stdout.strip() or result.stderr.strip()}")
-    
-    # Test Python code execution
-    print("\n--- Test: Python code execution ---")
-    code = """
-import sys
-print(f"Python version: {sys.version}")
-result = 2 + 2
-print(f"2 + 2 = {result}")
-"""
-    result = await sandbox.execute_python(code, config)
-    print(f"  Success: {result.success}")
-    print(f"  Output: {result.stdout.strip()}")
-    
-    return sandbox
-
-
 async def test_skill_executor():
     """测试Skill执行器"""
-    print_sep("Test 4: Skill Executor")
+    print_sep("Test 3: Skill Executor")
     
     from src.core.skill_registry import SkillRegistry
     from src.core.skill_executor import SkillExecutor
-    from src.core.sandbox import SandboxManager
     
     skills_dir = Path(__file__).parent / "skills"
     registry = SkillRegistry(skills_dir)
-    sandbox = SandboxManager()
-    executor = SkillExecutor(registry, sandbox)
+    executor = SkillExecutor(registry)
     
     # Test skill loading
     print("\n--- Test: Load Skill Content ---")
@@ -156,12 +104,21 @@ async def test_skill_executor():
         matched = executor.match_skill_by_file(filename)
         print(f"  {filename} -> {matched or 'No match'}")
     
+    # Test command execution
+    print("\n--- Test: Command Execution ---")
+    result = await executor.execute_skill_command(
+        skill_name="pdf",
+        command="python --version",
+    )
+    print(f"  Success: {result.success}")
+    print(f"  Output: {result.stdout.strip() or result.stderr.strip()}")
+    
     return executor
 
 
 def test_agent_integration():
     """测试与MasterAgent集成"""
-    print_sep("Test 5: Agent Integration")
+    print_sep("Test 4: Agent Integration")
     
     try:
         from src.core.agent import master_agent
@@ -176,9 +133,9 @@ def test_agent_integration():
         print(f"  Tool names: {tool_names}")
         
         if "use_skill" in tool_names:
-            print("  ✓ use_skill tool is available")
+            print("  [OK] use_skill tool is available")
         if "skill_execute" in tool_names:
-            print("  ✓ skill_execute tool is available")
+            print("  [OK] skill_execute tool is available")
         
         return True
     except Exception as e:
@@ -201,22 +158,18 @@ async def main():
         # Test 2: Skill Registry
         registry = test_skill_registry()
         
-        # Test 3: Sandbox
-        sandbox = await test_sandbox()
-        
-        # Test 4: Skill Executor
+        # Test 3: Skill Executor
         executor = await test_skill_executor()
         
-        # Test 5: Agent Integration
+        # Test 4: Agent Integration
         agent_ok = test_agent_integration()
         
         # Summary
         print_sep("Test Summary")
-        print("✓ Skill Loader: OK")
-        print("✓ Skill Registry: OK")
-        print("✓ Sandbox: OK")
-        print("✓ Skill Executor: OK")
-        print(f"{'✓' if agent_ok else '✗'} Agent Integration: {'OK' if agent_ok else 'FAILED'}")
+        print("[OK] Skill Loader: OK")
+        print("[OK] Skill Registry: OK")
+        print("[OK] Skill Executor: OK")
+        print(f"{'[OK]' if agent_ok else '[FAIL]'} Agent Integration: {'OK' if agent_ok else 'FAILED'}")
         
         print("\n" + "=" * 60)
         print(" All tests completed!")

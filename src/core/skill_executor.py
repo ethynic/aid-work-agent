@@ -3,16 +3,16 @@
 """
 Skill Executor - Skill执行器
 
-负责执行Skill中的命令和脚本，协调Skill加载、沙盒执行和结果处理。
+负责执行Skill中的命令和脚本，直接在当前运行时环境中执行。
 
 主要功能:
 1. 加载Skill内容并注入到对话中
-2. 在沙盒环境中执行Skill命令
+2. 直接执行Skill命令
 3. 处理Skill依赖
 4. 管理Skill工作目录和文件
 
 使用示例:
-    executor = SkillExecutor(skill_registry, sandbox_manager)
+    executor = SkillExecutor(skill_registry)
     
     # 加载Skill内容
     content = await executor.load_skill("pdf")
@@ -25,17 +25,31 @@ Skill Executor - Skill执行器
     )
 """
 
+import asyncio
 import re
 import shutil
+import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from loguru import logger
 
-from src.core.skill_loader import Skill, SkillDependency, SkillSandboxConfig
+from src.core.skill_loader import Skill, SkillDependency
 from src.core.skill_registry import SkillRegistry
-from src.core.sandbox import SandboxManager, ExecutionResult
+
+
+@dataclass
+class ExecutionResult:
+    """执行结果"""
+    success: bool
+    stdout: str
+    stderr: str
+    exit_code: int
+    duration: float
+    timed_out: bool = False
+    error: Optional[str] = None
 
 
 class SkillExecutionContext:
@@ -84,20 +98,19 @@ class SkillExecutor:
     """
     Skill执行器
     
-    负责执行Skill中的命令和脚本。
+    负责执行Skill中的命令和脚本，直接在当前运行时环境中执行。
     
     执行流程:
     1. 加载Skill定义
     2. 创建执行上下文
     3. 准备依赖环境
-    4. 在沙盒中执行命令
+    4. 执行命令
     5. 收集结果并清理
     """
     
     def __init__(
         self,
         skill_registry: SkillRegistry,
-        sandbox_manager: Optional[SandboxManager] = None,
         workspace: Optional[Path] = None,
     ):
         """
@@ -105,11 +118,9 @@ class SkillExecutor:
         
         Args:
             skill_registry: Skill注册表
-            sandbox_manager: 沙盒管理器
             workspace: 工作空间路径
         """
         self.skill_registry = skill_registry
-        self.sandbox_manager = sandbox_manager or SandboxManager()
         self.workspace = workspace or Path(tempfile.gettempdir()) / "skill_executor"
         self.workspace.mkdir(parents=True, exist_ok=True)
         
@@ -214,10 +225,10 @@ Follow the instructions in the skill above to complete the user's task."""
         for dep in skill.dependencies:
             if dep.type == "pip":
                 # 检查Python包
-                check_result = await self.sandbox_manager.execute_command(
+                check_result = await self._execute_command(
                     f"python -c 'import {dep.name}'",
-                    skill.sandbox_config,
                     context.workdir,
+                    timeout=30
                 )
                 
                 if check_result.success:
@@ -226,10 +237,10 @@ Follow the instructions in the skill above to complete the user's task."""
                 
                 # 安装Python包
                 version_spec = f"=={dep.version}" if dep.version else ""
-                install_result = await self.sandbox_manager.execute_command(
+                install_result = await self._execute_command(
                     f"pip install {dep.name}{version_spec}",
-                    skill.sandbox_config,
                     context.workdir,
+                    timeout=300
                 )
                 results[dep.name] = install_result.success
                 
@@ -240,10 +251,10 @@ Follow the instructions in the skill above to complete the user's task."""
             
             elif dep.type == "apt":
                 # 检查系统包
-                check_result = await self.sandbox_manager.execute_command(
+                check_result = await self._execute_command(
                     f"dpkg -l {dep.name}",
-                    skill.sandbox_config,
                     context.workdir,
+                    timeout=30
                 )
                 
                 if check_result.success:
@@ -251,19 +262,19 @@ Follow the instructions in the skill above to complete the user's task."""
                     continue
                 
                 # 安装系统包（需要sudo权限）
-                install_result = await self.sandbox_manager.execute_command(
+                install_result = await self._execute_command(
                     f"apt-get update && apt-get install -y {dep.name}",
-                    skill.sandbox_config,
                     context.workdir,
+                    timeout=300
                 )
                 results[dep.name] = install_result.success
             
             elif dep.type == "npm":
                 # 检查npm包
-                check_result = await self.sandbox_manager.execute_command(
+                check_result = await self._execute_command(
                     f"npm list {dep.name}",
-                    skill.sandbox_config,
                     context.workdir,
+                    timeout=30
                 )
                 
                 if check_result.success:
@@ -271,10 +282,10 @@ Follow the instructions in the skill above to complete the user's task."""
                     continue
                 
                 # 安装npm包
-                install_result = await self.sandbox_manager.execute_command(
+                install_result = await self._execute_command(
                     f"npm install {dep.name}",
-                    skill.sandbox_config,
                     context.workdir,
+                    timeout=300
                 )
                 results[dep.name] = install_result.success
         
@@ -312,6 +323,73 @@ Follow the instructions in the skill above to complete the user's task."""
         
         return commands
     
+    async def _execute_command(
+        self,
+        command: str,
+        workdir: Path,
+        timeout: int = 300,
+    ) -> ExecutionResult:
+        """
+        执行命令
+        
+        Args:
+            command: 要执行的命令
+            workdir: 工作目录
+            timeout: 超时时间（秒）
+            
+        Returns:
+            执行结果
+        """
+        start_time = time.time()
+        
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(workdir),
+            )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout
+                )
+                duration = time.time() - start_time
+                
+                return ExecutionResult(
+                    success=process.returncode == 0,
+                    stdout=stdout.decode('utf-8', errors='replace'),
+                    stderr=stderr.decode('utf-8', errors='replace'),
+                    exit_code=process.returncode or 0,
+                    duration=duration,
+                    timed_out=False,
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                duration = time.time() - start_time
+                
+                return ExecutionResult(
+                    success=False,
+                    stdout="",
+                    stderr=f"Command timed out after {timeout} seconds",
+                    exit_code=-1,
+                    duration=duration,
+                    timed_out=True,
+                    error="Timeout",
+                )
+        except Exception as e:
+            duration = time.time() - start_time
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr=str(e),
+                exit_code=-1,
+                duration=duration,
+                error=str(e),
+            )
+
     async def execute_skill_command(
         self,
         skill_name: str,
@@ -384,11 +462,11 @@ Follow the instructions in the skill above to complete the user's task."""
             # 替换命令中的变量
             processed_command = self._process_command(command, context)
             
-            # 执行命令
-            result = await self.sandbox_manager.execute_command(
+            # 执行命令 - 直接执行，不使用沙盒
+            result = await self._execute_command(
                 processed_command,
-                skill.sandbox_config,
                 context.workdir,
+                timeout=300  # 默认5分钟超时
             )
             
             return result
@@ -470,12 +548,11 @@ Follow the instructions in the skill above to complete the user's task."""
             if skill.dependencies:
                 await self.prepare_dependencies(skill, context)
             
-            # 执行脚本
-            result = await self.sandbox_manager.execute_script(
-                script_path,
-                skill.sandbox_config,
+            # 执行脚本 - 直接执行，不使用沙盒
+            result = await self._execute_command(
+                f"python {script_path}",
                 context.workdir,
-                args,
+                timeout=300
             )
             
             return result
@@ -536,22 +613,58 @@ Follow the instructions in the skill above to complete the user's task."""
             if skill.dependencies:
                 await self.prepare_dependencies(skill, context)
             
-            # 执行Python代码
-            result = await self.sandbox_manager.execute_python(
-                code,
-                skill.sandbox_config,
-                context.workdir,
-                globals_dict,
-            )
+            # 执行Python代码 - 直接执行
+            import io
+            import sys
             
-            return result
+            # 重定向stdout和stderr
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
             
+            start_time = time.time()
+            
+            try:
+                # 准备执行环境
+                exec_globals = globals_dict or {}
+                exec_globals.update({
+                    "__builtins__": __builtins__,
+                    "workdir": context.workdir,
+                })
+                
+                exec(code, exec_globals)
+                
+                stdout = sys.stdout.getvalue()
+                stderr = sys.stderr.getvalue()
+                duration = time.time() - start_time
+                
+                return ExecutionResult(
+                    success=True,
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=0,
+                    duration=duration,
+                )
+            except Exception as e:
+                duration = time.time() - start_time
+                return ExecutionResult(
+                    success=False,
+                    stdout=sys.stdout.getvalue(),
+                    stderr=f"{sys.stderr.getvalue()}\n{str(e)}",
+                    exit_code=1,
+                    duration=duration,
+                    error=str(e),
+                )
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
         finally:
             context.cleanup()
     
     def _process_command(self, command: str, context: SkillExecutionContext) -> str:
         """
-        处理命令中的变量替换
+        处理命令中的变量替换和脚本路径
         
         Args:
             command: 原始命令
@@ -560,6 +673,25 @@ Follow the instructions in the skill above to complete the user's task."""
         Returns:
             处理后的命令
         """
+        # 获取Skill信息
+        skill = self.skill_registry.get(context.skill_name)
+        
+        # 替换脚本路径
+        if skill:
+            # 将 scripts/xxx.py 替换为绝对路径
+            for script_path in skill.scripts:
+                script_name = script_path.name
+                # 替换 scripts/script_name 格式
+                command = command.replace(
+                    f"scripts/{script_name}",
+                    str(script_path.absolute())
+                )
+                # 替换 ./scripts/script_name 格式
+                command = command.replace(
+                    f"./scripts/{script_name}",
+                    str(script_path.absolute())
+                )
+        
         # 替换文件变量
         for filename in context.files.keys():
             placeholder = f"${{{filename}}}"

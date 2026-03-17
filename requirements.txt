@@ -29,7 +29,6 @@ pytest-asyncio>=0.21.0
 # Skill System Dependencies
 PyMuPDF>=1.23.0  # PDF processing
 pdfplumber>=0.10.0  # PDF table extraction
-RestrictedPython>=6.0  # Sandboxed Python execution (optional)
 
 # LLM Providers
 zhipuai>=2.0.0  # Zhipu AI SDK

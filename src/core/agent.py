@@ -8,7 +8,7 @@ The agent uses LLM for:
 2. Task planning and decomposition
 3. Deciding which tool/agent/skill to call
 4. Executing tools and integrating results
-5. Loading and executing Skills in sandbox environment
+5. Loading and executing Skills
 """
 
 import json
@@ -27,7 +27,6 @@ from src.models.user import User
 from src.models.plan import TaskStatus
 from src.core.skill_registry import SkillRegistry
 from src.core.skill_executor import SkillExecutor
-from src.core.sandbox import SandboxManager
 from src.core.plan_manager import PlanManager
 
 
@@ -247,7 +246,7 @@ AGENT_TOOLS = [
     },
     {
         "name": "skill_execute",
-        "description": "在技能的沙箱环境中执行命令。加载技能后使用此功能运行pdftotext、python脚本等命令。重要：使用简单命令，对于Python优先使用简单的一行命令或直接使用pypdf/pdfplumber",
+        "description": "在技能上下文中执行命令。加载技能后使用此功能运行pdftotext、python脚本等命令。重要：使用简单命令，对于Python优先使用简单的一行命令或直接使用pypdf/pdfplumber",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -261,7 +260,7 @@ AGENT_TOOLS = [
                 },
                 "files": {
                     "type": "object",
-                    "description": "可选的文件，使其在沙箱中可用（文件名 -> base64内容）",
+                    "description": "可选的文件，使其在执行环境中可用（文件名 -> base64内容）",
                     "additionalProperties": {
                         "type": "string"
                     }
@@ -484,8 +483,7 @@ class Agent:
         # 技能系统
         skills_dir = Path(__file__).parent.parent / "skills"
         self.skill_registry = SkillRegistry(skills_dir)
-        self.sandbox_manager = SandboxManager(prefer_docker=False)
-        self.skill_executor = SkillExecutor(self.skill_registry, self.sandbox_manager)
+        self.skill_executor = SkillExecutor(self.skill_registry)
         
         # 计划管理器
         plans_dir = Path(__file__).parent.parent.parent / "plans"
@@ -1161,7 +1159,7 @@ create_plan(
         workdir: Optional[Path] = None
     ) -> Dict[str, Any]:
         """
-        Handle skill_execute tool call - execute command in sandbox
+        Handle skill_execute tool call - execute command directly in runtime environment
         
         Args:
             skill_name: Name of the skill
@@ -1195,6 +1193,22 @@ create_plan(
                 "available_skills": self.skill_registry.list_skills()
             }
         
+        # 处理脚本路径 - 将相对路径转换为绝对路径
+        processed_command = command
+        if skill.scripts:
+            for script_path in skill.scripts:
+                script_name = script_path.name
+                # 替换 scripts/script_name 格式
+                processed_command = processed_command.replace(
+                    f"scripts/{script_name}",
+                    str(script_path.absolute())
+                )
+                # 替换 ./scripts/script_name 格式
+                processed_command = processed_command.replace(
+                    f"./scripts/{script_name}",
+                    str(script_path.absolute())
+                )
+        
         decoded_files = {}
         if files:
             for filename, content_b64 in files.items():
@@ -1205,15 +1219,16 @@ create_plan(
         
         try:
             if workdir and workdir.exists():
-                result = await self.sandbox_manager.execute_command(
-                    command,
-                    skill.sandbox_config,
-                    workdir
+                result = await self.skill_executor.execute_skill_command(
+                    skill_name=skill_name,
+                    command=processed_command,
+                    files=decoded_files if decoded_files else None,
+                    session_id=session_id
                 )
             else:
                 result = await self.skill_executor.execute_skill_command(
                     skill_name=skill_name,
-                    command=command,
+                    command=processed_command,
                     files=decoded_files if decoded_files else None,
                     session_id=session_id
                 )
@@ -1433,8 +1448,10 @@ create_plan(
                 if uploaded_files_info:
                     files_context = "\n\n**Uploaded files available for processing:**\n"
                     for f in uploaded_files_info:
-                        files_context += f"- `{f['name']}` at path: `{f['path']}` ({f['size']} bytes)\n"
-                    files_context += "\nUse the `skill_execute` tool to run commands on these files.\n"
+                        files_context += f"- File: `{f['name']}`\n"
+                        files_context += f"  Full path: `{f['path']}`\n"
+                        files_context += f"  Size: {f['size']} bytes\n"
+                    files_context += "\n**IMPORTANT: When using skill_execute, use the FULL PATH above, NOT just the filename!**\n"
                     files_context += f"Session workspace: `{session_workspace}`\n"
                 
                 skill_injection = f"""<skill-auto-loaded name="{auto_loaded_skill}">
@@ -1588,7 +1605,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     })
                     continue
                 
-                # Handle skill_execute - execute command in sandbox
+                # Handle skill_execute - execute command directly
                 if tool_name == "skill_execute":
                     skill_name = tool_args.get("skill", "")
                     command = tool_args.get("command", "")

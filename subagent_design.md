@@ -691,7 +691,6 @@ class AgentFactory:
 | `ShortTermMemory` | 主/子智能体共享同一session的memory实例 |
 | `SkillRegistry` | Subagent 可访问受限的 skill 子集 |
 | `ToolRegistry` | Subagent 使用工具白名单子集 |
-| `SandboxManager` | Subagent 继承沙盒能力 |
 
 ### 6.1 Task模型扩展
 

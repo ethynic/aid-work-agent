@@ -69,19 +69,6 @@ class SkillTrigger:
 
 
 @dataclass
-class SkillSandboxConfig:
-    """Skill沙盒配置"""
-    enabled: bool = True
-    timeout: int = 60  # 秒
-    memory_limit: int = 512  # MB
-    cpu_limit: float = 1.0  # CPU核心数
-    network: bool = False  # 是否允许网络访问
-    read_paths: List[str] = field(default_factory=list)  # 允许读取的路径
-    write_paths: List[str] = field(default_factory=list)  # 允许写入的路径
-    env_vars: Dict[str, str] = field(default_factory=dict)  # 环境变量
-
-
-@dataclass
 class Skill:
     """Skill定义"""
     name: str
@@ -99,9 +86,6 @@ class Skill:
     
     # 触发器
     triggers: List[SkillTrigger] = field(default_factory=list)
-    
-    # 沙盒配置
-    sandbox_config: SkillSandboxConfig = field(default_factory=SkillSandboxConfig)
     
     # 资源文件
     scripts: List[Path] = field(default_factory=list)
@@ -125,16 +109,6 @@ class Skill:
                 {"type": t.type, "pattern": t.pattern, "case_sensitive": t.case_sensitive}
                 for t in self.triggers
             ],
-            "sandbox_config": {
-                "enabled": self.sandbox_config.enabled,
-                "timeout": self.sandbox_config.timeout,
-                "memory_limit": self.sandbox_config.memory_limit,
-                "cpu_limit": self.sandbox_config.cpu_limit,
-                "network": self.sandbox_config.network,
-                "read_paths": self.sandbox_config.read_paths,
-                "write_paths": self.sandbox_config.write_paths,
-                "env_vars": self.sandbox_config.env_vars,
-            },
             "scripts": [str(p) for p in self.scripts],
             "references": [str(p) for p in self.references],
             "assets": [str(p) for p in self.assets],
@@ -251,18 +225,8 @@ class SkillLoader:
                     case_sensitive=trigger.get("case_sensitive", False),
                 ))
         
-        # 解析沙盒配置
-        sandbox_data = frontmatter.get("sandbox", {})
-        sandbox_config = SkillSandboxConfig(
-            enabled=sandbox_data.get("enabled", True),
-            timeout=sandbox_data.get("timeout", 60),
-            memory_limit=sandbox_data.get("memory_limit", 512),
-            cpu_limit=sandbox_data.get("cpu_limit", 1.0),
-            network=sandbox_data.get("network", False),
-            read_paths=sandbox_data.get("read_paths", []),
-            write_paths=sandbox_data.get("write_paths", []),
-            env_vars=sandbox_data.get("env_vars", {}),
-        )
+        # 解析沙盒配置 (已移除，保留向后兼容性忽略sandbox字段)
+        # sandbox配置不再使用，直接在运行时环境执行
         
         skill = Skill(
             name=frontmatter["name"],
@@ -274,7 +238,6 @@ class SkillLoader:
             author=frontmatter.get("author", "unknown"),
             dependencies=dependencies,
             triggers=triggers,
-            sandbox_config=sandbox_config,
         )
         
         # 扫描资源文件
