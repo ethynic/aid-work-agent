@@ -1399,7 +1399,7 @@ create_plan(
             # Wait for result
             record = await self.subagent_executor.wait_for_result(
                 response.execution_id,
-                timeout=300  # 5 minutes timeout
+                timeout=7200  # 2 hours timeout
             )
             
             if record:
@@ -1940,6 +1940,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     progress = min(90.0, iteration * 5.0)
                     task_record.update_progress(progress, f"Processing iteration {iteration}")
                 
+                # 打印LLM调用信息（与主智能体一致）
+                logger.debug(f"\n{'='*60}\n"
+                            f"[DEBUG] Subagent Iteration {iteration} - Full Prompt\n"
+                            f"{'='*60}\n"
+                            f"[System Prompt]:\n{system_prompt}\n"
+                            f"{'-'*60}\n"
+                            f"[Messages]:\n{json.dumps(messages, ensure_ascii=False, indent=2)}\n"
+                            f"{'-'*60}\n"
+                            f"[Tools]: {json.dumps([t.get('name', t.get('function', {}).get('name', 'unknown')) for t in tools], ensure_ascii=False)}\n"
+                            f"{'='*60}")
+                
                 # 调用LLM
                 response = await self.llm.chat_with_tools(
                     system_prompt=system_prompt,
@@ -1949,6 +1960,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 
                 content = response.get("content", "")
                 tool_calls = response.get("tool_calls", [])
+                
+                # 打印LLM响应信息
+                logger.debug(f"\n{'='*60}\n"
+                            f"[DEBUG] Subagent LLM Response - Iteration {iteration}\n"
+                            f"{'='*60}\n"
+                            f"[Content]:\n{content if content else '(None)'}\n"
+                            f"{'-'*60}\n"
+                            f"[Tool Calls]: {len(tool_calls)} call(s)\n"
+                            f"{json.dumps(tool_calls, ensure_ascii=False, indent=2) if tool_calls else '(None)'}\n"
+                            f"{'='*60}")
                 
                 # 如果没有工具调用，任务完成
                 if not tool_calls:
@@ -1969,7 +1990,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         tool_name = tc["function"].get("name", "")
                         args_raw = tc["function"].get("arguments", "{}")
                         if isinstance(args_raw, str):
-                            import json
                             try:
                                 tool_args = json.loads(args_raw) if args_raw else {}
                             except json.JSONDecodeError:
