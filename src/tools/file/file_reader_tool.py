@@ -11,24 +11,31 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.tools.base import BaseTool
+from src.tools.file.word_reader import WordReader, is_word_document
+from src.tools.file.excel_reader import ExcelReader, is_excel_document
 
 
 class FileReaderTool(BaseTool):
     """文件读取工具"""
 
     name = "file_read"
-    description = "读取文本文件的内容，支持自动检测文件编码（UTF-8、GBK、GB2312等），适用于各种文本文件格式"
+    description = """读取各种文件的内容，支持以下格式：
+1. 文本文件：自动检测文件编码（UTF-8、GBK、GB2312等），适用于.txt、.py、.md、.json、.csv等文本文件
+2. Word文档：读取.docx文件，提取文本段落、表格内容和文档元信息（标题、作者等）
+3. Excel文档：读取.xlsx文件，提取工作表数据、单元格内容和文档元信息
+4. 支持行号范围读取，可指定start_line和end_line参数读取指定行
+5. 默认最大文件大小限制为10MB，可通过max_size参数调整"""
     category = "file"
     parameters_schema = {
         "type": "object",
         "properties": {
             "file_path": {
                 "type": "string",
-                "description": "要读取的文件路径，可以是绝对路径或相对路径"
+                "description": "要读取的文件路径，可以是绝对路径或相对路径。支持.txt、.py、.md、.json、.csv、.docx、.xlsx等多种格式"
             },
             "encoding": {
                 "type": "string",
-                "description": "文件编码（可选），如果不指定则自动检测。常用编码：utf-8, gbk, gb2312, ascii等"
+                "description": "文件编码（可选，仅对文本文件有效），如果不指定则自动检测。常用编码：utf-8, gbk, gb2312, ascii等。对于.docx和.xlsx文件此参数无效"
             },
             "start_line": {
                 "type": "integer",
@@ -43,7 +50,23 @@ class FileReaderTool(BaseTool):
                 "description": "最大读取字节数（可选），默认为10MB，防止读取超大文件"
             }
         },
-        "required": ["file_path"]
+        "required": ["file_path"],
+        "examples": [
+            {
+                "file_path": "document.docx"
+            },
+            {
+                "file_path": "data.xlsx"
+            },
+            {
+                "file_path": "config.json"
+            },
+            {
+                "file_path": "data.txt",
+                "start_line": 1,
+                "end_line": 100
+            }
+        ]
     }
 
     def __init__(self):
@@ -61,6 +84,10 @@ class FileReaderTool(BaseTool):
             'latin-1',
             'cp1252',
         ]
+        # Word文档读取器
+        self.word_reader = WordReader()
+        # Excel文档读取器
+        self.excel_reader = ExcelReader()
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -121,6 +148,14 @@ class FileReaderTool(BaseTool):
                     "success": False,
                     "error": f"文件过大 ({file_size} 字节)，超过最大限制 {max_size} 字节"
                 }
+
+            # 检查是否为Word文档
+            if is_word_document(str(path)):
+                return self._read_word_document(path, start_line, end_line)
+
+            # 检查是否为Excel文档
+            if is_excel_document(str(path)):
+                return self._read_excel_document(path, start_line, end_line)
 
             # 读取文件内容
             if encoding:
@@ -309,6 +344,134 @@ class FileReaderTool(BaseTool):
             return 'gbk'
         
         return encoding.lower()
+
+    def _read_word_document(self, path: Path, start_line: int = 1, end_line: Optional[int] = None) -> Dict[str, Any]:
+        """
+        读取Word文档
+
+        Args:
+            path: Word文档路径
+            start_line: 起始行号（可选）
+            end_line: 结束行号（可选）
+
+        Returns:
+            执行结果
+        """
+        try:
+            # 使用WordReader读取文档
+            result = self.word_reader.read_word_document(str(path))
+
+            if not result.get("success"):
+                return result
+
+            # 提取内容并应用行号范围
+            full_content = result["content"]
+            lines = full_content.splitlines()
+            total_lines = len(lines)
+
+            # 应用行号范围
+            if start_line < 1:
+                start_line = 1
+            if end_line is None:
+                end_line = total_lines
+            elif end_line > total_lines:
+                end_line = total_lines
+
+            # 提取指定范围的行
+            selected_lines = lines[start_line - 1:end_line]
+            content = '\n'.join(selected_lines)
+
+            logger.info(f"成功读取Word文档: {path} (行数: {len(selected_lines)}/{total_lines})")
+
+            return {
+                "success": True,
+                "message": f"成功读取Word文档内容",
+                "file_path": str(path),
+                "file_type": "docx",
+                "encoding": "utf-8",
+                "total_lines": total_lines,
+                "read_lines": len(selected_lines),
+                "start_line": start_line,
+                "end_line": end_line,
+                "file_size": path.stat().st_size,
+                "content": content,
+                "paragraphs": result.get("paragraphs", []),
+                "paragraph_count": result.get("paragraph_count", 0),
+                "tables": result.get("tables", []),
+                "table_count": result.get("table_count", 0),
+                "document_info": result.get("document_info", {})
+            }
+
+        except Exception as e:
+            logger.error(f"读取Word文档失败: {e}")
+            return {
+                "success": False,
+                "error": f"读取Word文档失败: {str(e)}"
+            }
+
+    def _read_excel_document(self, path: Path, start_line: int = 1, end_line: Optional[int] = None) -> Dict[str, Any]:
+        """
+        读取Excel文档
+
+        Args:
+            path: Excel文档路径
+            start_line: 起始行号（可选）
+            end_line: 结束行号（可选）
+
+        Returns:
+            执行结果
+        """
+        try:
+            # 使用ExcelReader读取文档
+            result = self.excel_reader.read_excel_document(str(path))
+
+            if not result.get("success"):
+                return result
+
+            # 提取内容并应用行号范围
+            full_content = result["content"]
+            lines = full_content.splitlines()
+            total_lines = len(lines)
+
+            # 应用行号范围
+            if start_line < 1:
+                start_line = 1
+            if end_line is None:
+                end_line = total_lines
+            elif end_line > total_lines:
+                end_line = total_lines
+
+            # 提取指定范围的行
+            selected_lines = lines[start_line - 1:end_line]
+            content = '\n'.join(selected_lines)
+
+            logger.info(f"成功读取Excel文档: {path} (行数: {len(selected_lines)}/{total_lines})")
+
+            return {
+                "success": True,
+                "message": f"成功读取Excel文档内容",
+                "file_path": str(path),
+                "file_type": "xlsx",
+                "encoding": "utf-8",
+                "total_lines": total_lines,
+                "read_lines": len(selected_lines),
+                "start_line": start_line,
+                "end_line": end_line,
+                "file_size": path.stat().st_size,
+                "content": content,
+                "sheet_count": result.get("sheet_count", 0),
+                "sheet_names": result.get("sheet_names", []),
+                "current_sheet": result.get("current_sheet", ""),
+                "sheet_data": result.get("sheet_data", {}),
+                "document_info": result.get("document_info", {})
+            }
+
+        except Exception as e:
+            logger.error(f"读取Excel文档失败: {e}")
+            return {
+                "success": False,
+                "error": f"读取Excel文档失败: {str(e)}"
+            }
 
 
 class FileListTool(BaseTool):
