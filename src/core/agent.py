@@ -101,6 +101,28 @@ AGENT_TOOLS = [
         }
     },
     {
+        "name": "content_generate",
+        "description": "调用大模型生成内容，用于生成客户列表、撰写多语言邮件等。智能体需要提供详细的提示词来指导大模型生成所需内容。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "生成内容的提示词，由智能体组织。提示词应包含：1)角色/身份 2)任务描述 3)输入信息 4)输出格式要求 5)语言要求等"
+                },
+                "language": {
+                    "type": "string",
+                    "description": "生成内容的语言，如：zh（中文）、en（英语）、ru（俄语）、de（德语）、ja（日语）、ko（韩语）等"
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "内容类型，用于选择合适的提示词模板。可选值：customer_list（客户列表）、email（邮件）、market_report（市场报告）等"
+                }
+            },
+            "required": ["prompt"]
+        }
+    },
+    {
         "name": "web_search",
         "description": "在网络上搜索信息。重要：搜索关键词必须与用户提问的语言保持一致（用户用中文提问则用中文关键词搜索）",
         "input_schema": {
@@ -593,6 +615,7 @@ class Agent:
             BrowserScreenshotTool,
         )
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
+        from src.tools.llm.content_generate_tool import ContentGenerateTool
         from src.models.user import UserEmail, EncryptionType
         
         # 创建默认用户邮箱配置
@@ -629,6 +652,9 @@ class Agent:
         # 注册文件工具
         self.tool_registry.register(FileReaderTool())
         self.tool_registry.register(FileListTool())
+        
+        # 注册LLM内容生成工具
+        self.tool_registry.register(ContentGenerateTool())
         
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
     
@@ -1732,6 +1758,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         session_id=session_id,
                     )
                     
+                    # 如果子智能体生成了内容（content_generate），实时展示给用户
+                    if delegation_result.get("generated_contents"):
+                        for content in delegation_result["generated_contents"]:
+                            yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
+                    
                     # 标记任务完成
                     if delegate_task_id:
                         if delegation_result.get("success"):
@@ -1762,6 +1793,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # Execute the tool
                 try:
                     result = await self.tool_executor.execute(tool_name, tool_args)
+                    logger.info(f"[TOOL_RESULT] {tool_name}: type={type(result).__name__}")
+                    
+                    # 对于 content_generate 工具，将结果格式化为可展示的内容并立即输出
+                    if tool_name == "content_generate":
+                        if isinstance(result, dict):
+                            success = result.get("success")
+                            content = result.get("content", "")
+                            logger.info(f"[CONTENT_GEN] success={success}, content_len={len(content) if content else 0}")
+                            if success and content:
+                                yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
+                        else:
+                            logger.warning(f"[CONTENT_GEN] Unexpected result type: {type(result)}")
+                    
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": result
@@ -1885,6 +1929,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             final_result = None
             final_summary = ""
             subagent_plan_created = False
+            generated_content_list = []  # 存储所有生成的内容
             
             while iteration < max_iterations:
                 iteration += 1
@@ -1995,6 +2040,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             result = await self.tool_executor.execute(tool_name, tool_args)
                             tool_result = result
                             
+                            # 对于 content_generate 工具，保存生成的内容
+                            if tool_name == "content_generate" and isinstance(result, dict):
+                                generated_content = result.get("content", "")
+                                if generated_content:
+                                    generated_content_list.append(generated_content)
+                                    logger.info(f"[SUBAGENT] content_generate: saved content length={len(generated_content)}")
+                            
                             # 同步到父智能体的计划管理器
                             if self.parent_plan_manager and subagent_plan_created:
                                 # 获取当前计划中的任务
@@ -2034,9 +2086,23 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             logger.info(f"[SUBAGENT] Task completed with summary: {final_summary[:200]}")
             
+            # 如果有生成的内容，合并到结果中
+            if generated_content_list and final_result:
+                combined_content = "\n\n".join(generated_content_list)
+                if isinstance(final_result, dict):
+                    final_result["generated_contents"] = generated_content_list
+                    final_result["combined_content"] = combined_content
+                else:
+                    final_result = {
+                        "content": str(final_result),
+                        "generated_contents": generated_content_list,
+                        "combined_content": combined_content
+                    }
+            
             return {
                 "result": final_result,
                 "summary": final_summary,
+                "generated_contents": generated_content_list,  # 包含所有生成的内容
                 "token_usage": {"input": 0, "output": 0}  # TODO: 实际统计
             }
             
