@@ -5,20 +5,108 @@ V1.0 MVP version - LLM-driven agent architecture
 """
 
 import asyncio
+import json
 import os
 import uuid
+import queue
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from src.config.settings import settings
 from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
+
+
+# ============== SSE Session Management ==============
+
+class SSEConnectionManager:
+    """管理SSE连接和会话"""
+    
+    def __init__(self):
+        # session_id -> {"history": [], "sse_queues": []}
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.sse_connections: Dict[str, List[queue.Queue]] = {}
+        self.lock = threading.Lock()
+    
+    def get_or_create_session(self, session_id: str = None) -> str:
+        with self.lock:
+            if session_id is None:
+                session_id = str(uuid.uuid4())
+            if session_id not in self.sessions:
+                self.sessions[session_id] = {
+                    "history": [],
+                    "files": []
+                }
+                self.sse_connections[session_id] = []
+                logger.info(f"Created SSE session: {session_id}")
+            return session_id
+    
+    def add_sse_client(self, session_id: str) -> queue.Queue:
+        client_queue = queue.Queue(maxsize=100)
+        with self.lock:
+            if session_id not in self.sse_connections:
+                self.sse_connections[session_id] = []
+            self.sse_connections[session_id].append(client_queue)
+        return client_queue
+    
+    def remove_sse_client(self, session_id: str, client_queue: queue.Queue):
+        with self.lock:
+            if session_id in self.sse_connections:
+                try:
+                    self.sse_connections[session_id].remove(client_queue)
+                except ValueError:
+                    pass
+    
+    def broadcast(self, session_id: str, event: Dict[str, Any]):
+        with self.lock:
+            queues = self.sse_connections.get(session_id, []).copy()
+        for q in queues:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                pass
+    
+    def add_to_history(self, session_id: str, role: str, content: str):
+        with self.lock:
+            if session_id in self.sessions:
+                self.sessions[session_id]["history"].append({
+                    "role": role,
+                    "content": content
+                })
+    
+    def get_history(self, session_id: str) -> List[Dict[str, str]]:
+        with self.lock:
+            if session_id in self.sessions:
+                return self.sessions[session_id]["history"]
+        return []
+
+
+# 全局SSE连接管理器
+sse_manager = SSEConnectionManager()
+
+
+# ============== Pydantic Models ==============
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    files: Optional[List[Dict[str, Any]]] = None
+
+
+class ChatResponse(BaseModel):
+    session_id: str
+    success: bool
+    message: Optional[str] = None
 
 
 # Initialize logging
@@ -225,6 +313,141 @@ async def list_tools():
         "tools": tools,
         "count": len(tools),
     })
+
+
+# ==================== SSE Chat API ====================
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    SSE流式聊天接口
+    
+    前端通过EventSource连接此接口，接收实时的进度和响应消息
+    
+    请求体:
+    {
+        "message": "用户消息",
+        "session_id": "会话ID（可选）",
+        "files": [] // 可选的文件列表
+    }
+    
+    响应: Server-Sent Events 流
+    """
+    session_id = sse_manager.get_or_create_session(request.session_id)
+    
+    # 处理附件
+    attachments = None
+    if request.files:
+        attachments = []
+        for f in request.files:
+            att = {
+                "type": f.get("type", "file"),
+                "name": f.get("name", "unknown"),
+                "mime_type": f.get("mime_type", ""),
+            }
+            if "content" in f:
+                att["content"] = f["content"]
+            attachments.append(att)
+    
+    # 添加SSE客户端
+    client_queue = sse_manager.add_sse_client(session_id)
+    
+    # 添加用户消息到历史
+    sse_manager.add_to_history(session_id, "user", request.message)
+    
+    async def event_generator():
+        """SSE事件生成器"""
+        try:
+            # 发送初始连接成功消息
+            yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+            
+            # 创建一个进度回调，在agent运行时发送进度
+            async def progress_callback(session_id: str, message: str):
+                event = {
+                    "type": "progress",
+                    "data": message,
+                    "timestamp": int(datetime.now().timestamp() * 1000)
+                }
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            
+            # 在新线程中运行async agent（因为FastAPI不支持在event_generator中直接await太久）
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            response_chunks = []
+            
+            async def run_agent():
+                nonlocal response_chunks
+                async for chunk in master_agent.process_message(
+                    user_input=request.message,
+                    session_id=session_id,
+                    attachments=attachments,
+                    progress_callback=lambda msg: sse_manager.broadcast(
+                        session_id, 
+                        {"type": "progress", "data": msg, "timestamp": int(datetime.now().timestamp() * 1000)}
+                    )
+                ):
+                    response_chunks.append(chunk)
+                    # 发送响应chunk
+                    event = {
+                        "type": "response",
+                        "data": chunk,
+                        "timestamp": int(datetime.now().timestamp() * 1000)
+                    }
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            
+            # 执行agent并yield事件
+            try:
+                async for event in run_agent():
+                    yield event
+            finally:
+                loop.close()
+            
+            # 保存完整响应到历史
+            full_response = "".join(response_chunks)
+            sse_manager.add_to_history(session_id, "assistant", full_response)
+            
+            # 发送完成消息
+            yield f"data: {json.dumps({'type': 'complete', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"SSE chat error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+        finally:
+            sse_manager.remove_sse_client(session_id, client_queue)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.get("/api/chat/history/{session_id}")
+async def get_chat_history(session_id: str):
+    """获取聊天历史"""
+    history = sse_manager.get_history(session_id)
+    if not history:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return JSONResponse({
+        "session_id": session_id,
+        "history": history
+    })
+
+
+@app.delete("/api/chat/session/{session_id}")
+async def delete_chat_session(session_id: str):
+    """删除会话"""
+    with sse_manager.lock:
+        if session_id in sse_manager.sessions:
+            del sse_manager.sessions[session_id]
+        if session_id in sse_manager.sse_connections:
+            del sse_manager.sse_connections[session_id]
+    return JSONResponse({"status": "deleted", "session_id": session_id})
 
 
 # ==================== CLI Interface ====================

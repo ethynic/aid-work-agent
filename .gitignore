@@ -78,3 +78,15 @@ Thumbs.db
 *.tmp
 *.temp
 *.bak
+
+# Frontend (Vue3 + TypeScript)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.output/
+frontend/*.local
+
+# Frontend env
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
