@@ -361,50 +361,94 @@ async def chat_stream(request: ChatRequest):
             # 发送初始连接成功消息
             yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
             
-            # 创建一个进度回调，在agent运行时发送进度
-            async def progress_callback(session_id: str, message: str):
-                event = {
-                    "type": "progress",
-                    "data": message,
-                    "timestamp": int(datetime.now().timestamp() * 1000)
-                }
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            # 使用线程方式运行agent，避免阻塞事件循环
+            import threading
+            from concurrent.futures import ThreadPoolExecutor
             
-            # 在新线程中运行async agent（因为FastAPI不支持在event_generator中直接await太久）
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            results = {
+                'chunks': [],
+                'progress': [],
+                'error': None
+            }
+            completed = threading.Event()
             
-            response_chunks = []
+            def run_agent():
+                """在线程中运行agent"""
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # 进度回调：同步函数
+                    def sync_progress_callback(message: str):
+                        results['progress'].append(message)
+                    
+                    # 包装成async回调
+                    async def async_progress_callback(message: str):
+                        sync_progress_callback(message)
+                    
+                    # 运行agent
+                    async def consume_generator():
+                        """创建协程来迭代async generator"""
+                        async for chunk in master_agent.process_message(
+                            user_input=request.message,
+                            session_id=session_id,
+                            attachments=attachments,
+                            progress_callback=async_progress_callback
+                        ):
+                            results['chunks'].append(chunk)
+                    
+                    loop.run_until_complete(consume_generator())
+                    loop.close()
+                except Exception as e:
+                    results['error'] = str(e)
+                    logger.error(f"Agent thread error: {e}")
+                finally:
+                    completed.set()
             
-            async def run_agent():
-                nonlocal response_chunks
-                async for chunk in master_agent.process_message(
-                    user_input=request.message,
-                    session_id=session_id,
-                    attachments=attachments,
-                    progress_callback=lambda msg: sse_manager.broadcast(
-                        session_id, 
-                        {"type": "progress", "data": msg, "timestamp": int(datetime.now().timestamp() * 1000)}
-                    )
-                ):
-                    response_chunks.append(chunk)
-                    # 发送响应chunk
-                    event = {
-                        "type": "response",
-                        "data": chunk,
-                        "timestamp": int(datetime.now().timestamp() * 1000)
-                    }
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            # 启动线程运行agent
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_agent)
+                
+                # 主循环：定期检查并yield结果
+                import time
+                last_progress_count = 0
+                
+                while not completed.is_set() or len(results['chunks']) > 0 or len(results['progress']) > last_progress_count:
+                    # Yield 新的进度消息
+                    while len(results['progress']) > last_progress_count:
+                        msg = results['progress'][last_progress_count]
+                        event = {
+                            "type": "progress",
+                            "data": msg,
+                            "timestamp": int(datetime.now().timestamp() * 1000)
+                        }
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        last_progress_count += 1
+                    
+                    # Yield 新的响应chunk
+                    while len(results['chunks']) > 0:
+                        chunk = results['chunks'].pop(0)
+                        event = {
+                            "type": "response",
+                            "data": chunk,
+                            "timestamp": int(datetime.now().timestamp() * 1000)
+                        }
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    
+                    if completed.is_set():
+                        break
+                    
+                    time.sleep(0.05)  # 50ms轮询间隔
+                
+                # 确保线程完成
+                future.result()
             
-            # 执行agent并yield事件
-            try:
-                async for event in run_agent():
-                    yield event
-            finally:
-                loop.close()
+            # 检查错误
+            if results['error']:
+                yield f"data: {json.dumps({'type': 'error', 'data': results['error'], 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
             
             # 保存完整响应到历史
-            full_response = "".join(response_chunks)
+            full_response = "".join(results['chunks'])
             sse_manager.add_to_history(session_id, "assistant", full_response)
             
             # 发送完成消息
@@ -412,6 +456,8 @@ async def chat_stream(request: ChatRequest):
             
         except Exception as e:
             logger.error(f"SSE chat error: {e}")
+            import traceback
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
         finally:
             sse_manager.remove_sse_client(session_id, client_queue)

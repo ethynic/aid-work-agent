@@ -1,78 +1,12 @@
-import axios from 'axios'
-import type { SendMessageRequest, SendMessageResponse, MessageStreamEvent } from '@/types'
-
-const api = axios.create({
-  baseURL: '/api',
-  timeout: 300000 // 5分钟超时，Agent任务可能很长
-})
-
-export const agentApi = {
-  /**
-   * 发送消息并通过SSE接收流式响应
-   */
-  sendMessage(request: SendMessageRequest): EventSource {
-    const params = new URLSearchParams({
-      message: request.message,
-      session_id: request.session_id
-    })
-    
-    // 注意：实际部署时需要配置代理将SSE请求转发到后端
-    const eventSource = new EventSource(`/api/chat/stream?${params.toString()}`)
-    
-    return eventSource
-  },
-
-  /**
-   * 发送消息（非流式，用于测试）
-   */
-  async sendMessageSync(request: SendMessageRequest): Promise<SendMessageResponse> {
-    const formData = new FormData()
-    formData.append('message', request.message)
-    formData.append('session_id', request.session_id)
-    
-    if (request.files) {
-      request.files.forEach(file => {
-        formData.append('files', file)
-      })
-    }
-
-    const response = await api.post<SendMessageResponse>('/chat', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    })
-    
-    return response.data
-  },
-
-  /**
-   * 获取会话历史
-   */
-  async getHistory(sessionId: string): Promise<{ history: Array<{ role: string; content: string }> }> {
-    const response = await api.get(`/chat/history/${sessionId}`)
-    return response.data
-  },
-
-  /**
-   * 清除会话
-   */
-  async clearSession(sessionId: string): Promise<void> {
-    await api.delete(`/chat/session/${sessionId}`)
-  }
-}
+import type { MessageStreamEvent } from '@/types'
 
 /**
- * 创建自定义的SSE连接处理类
- * 适用于后端不完全支持标准SSE的情况
+ * SSE连接管理器
+ * 处理Server-Sent Events的解析和事件分发
  */
 export class SSEManager {
-  private controller: ReadableStreamDefaultController | null = null
-  private reader: ReadableStreamDefaultReader | null = null
   private abortController: AbortController | null = null
 
-  /**
-   * 使用fetch创建SSE连接（更现代的方式）
-   */
   async connect(
     message: string,
     sessionId: string,
@@ -89,7 +23,10 @@ export class SSEManager {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message, session_id: sessionId }),
+        body: JSON.stringify({ 
+          message, 
+          session_id: sessionId 
+        }),
         signal: this.abortController.signal,
       })
 
@@ -97,12 +34,11 @@ export class SSEManager {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error('Response body is not readable')
+      if (!response.body) {
+        throw new Error('Response body is null')
       }
 
-      this.reader = reader
+      const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -110,45 +46,23 @@ export class SSEManager {
         const { done, value } = await reader.read()
         
         if (done) {
+          // 处理缓冲区中剩余的数据
+          if (buffer.trim()) {
+            this.parseSSELine(buffer, { onProgress, onResponse, onError })
+          }
           onComplete()
           break
         }
 
         buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
+        
+        // 按 SSE 格式分割：每条消息以空行分隔
+        // 完整事件格式: "data: {...}\n\n"
+        const messages = buffer.split(/\n\n/)
+        buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6)
-            
-            if (data === '[DONE]') {
-              onComplete()
-              return
-            }
-
-            try {
-              const event = JSON.parse(data) as MessageStreamEvent
-              
-              switch (event.type) {
-                case 'progress':
-                  onProgress(event.data)
-                  break
-                case 'response':
-                  onResponse(event.data)
-                  break
-                case 'complete':
-                  onComplete()
-                  break
-                case 'error':
-                  onError(new Error(event.data))
-                  break
-              }
-            } catch {
-              // 如果不是JSON，当作纯文本处理
-              onResponse(data)
-            }
-          }
+        for (const msg of messages) {
+          this.parseSSELine(msg, { onProgress, onResponse, onError })
         }
       }
     } catch (error) {
@@ -161,13 +75,61 @@ export class SSEManager {
   }
 
   /**
-   * 断开连接
+   * 解析单条 SSE 行
    */
+  private parseSSELine(
+    line: string,
+    callbacks: {
+      onProgress: (data: string) => void
+      onResponse: (data: string) => void
+      onError: (error: Error) => void
+    }
+  ) {
+    // 处理多行数据
+    const dataLines = line.split('\n')
+    
+    for (const l of dataLines) {
+      if (!l.startsWith('data: ')) continue
+      
+      const data = l.slice(6).trim()
+      
+      if (data === '[DONE]') {
+        callbacks.onComplete?.()
+        return
+      }
+
+      try {
+        const event = JSON.parse(data) as MessageStreamEvent
+        
+        switch (event.type) {
+          case 'connected':
+            // 连接成功，不需要特殊处理
+            break
+          case 'progress':
+            callbacks.onProgress(event.data)
+            break
+          case 'response':
+            callbacks.onResponse(event.data)
+            break
+          case 'complete':
+            // 由外层循环处理
+            break
+          case 'error':
+            callbacks.onError(new Error(event.data))
+            break
+        }
+      } catch {
+        // 非JSON数据，当作响应处理
+        if (data) {
+          callbacks.onResponse(data)
+        }
+      }
+    }
+  }
+
   disconnect(): void {
     this.abortController?.abort()
-    this.reader?.cancel()
-    this.controller?.close()
   }
 }
 
-export default agentApi
+export default SSEManager

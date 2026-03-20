@@ -5,7 +5,7 @@ export interface ChatMessage {
 }
 
 export interface ProgressMessage {
-  type: 'progress' | 'complete' | 'error'
+  type: 'progress' | 'complete' | 'error' | 'thinking'
   content: string
   timestamp: number
 }
@@ -18,9 +18,12 @@ export interface SendMessageRequest {
 
 export interface SendMessageResponse {
   session_id: string
+  success: boolean
+  message?: string
 }
 
 export type MessageStreamEvent = 
+  | { type: 'connected'; session_id: string; timestamp: number }
   | { type: 'progress'; data: string; timestamp: number }
   | { type: 'response'; data: string; timestamp: number }
   | { type: 'complete'; timestamp: number }

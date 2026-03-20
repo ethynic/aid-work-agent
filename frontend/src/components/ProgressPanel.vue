@@ -15,7 +15,7 @@
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
-          <span>执行进度</span>
+          <span>执行详情</span>
           <span class="px-2 py-0.5 bg-slate-700 rounded-full text-xs">
             {{ messages.length }} 条
           </span>
@@ -27,20 +27,25 @@
       </button>
 
       <!-- Content -->
-      <div v-show="isExpanded" class="px-4 pb-3 max-h-48 overflow-y-auto">
-        <div class="space-y-1.5">
+      <div v-show="isExpanded" class="px-4 pb-3 max-h-64 overflow-y-auto">
+        <div class="space-y-1">
           <div 
             v-for="(msg, index) in messages" 
             :key="index"
             :class="[
-              'text-sm py-1.5 px-3 rounded-lg transition-colors',
-              msg.type === 'error' ? 'bg-red-500/10 text-red-300 border-l-2 border-red-500' :
-              msg.type === 'complete' ? 'bg-green-500/10 text-green-300 border-l-2 border-green-500' :
-              'bg-slate-700/30 text-slate-300 border-l-2 border-cyan-500'
+              'text-sm py-1.5 px-3 rounded-lg transition-all',
+              getClassByType(msg.type)
             ]"
           >
-            <span class="mr-2">{{ getIcon(msg.type) }}</span>
-            <span>{{ msg.content }}</span>
+            <div class="flex items-start gap-2">
+              <span class="flex-shrink-0 mt-0.5">{{ getIconByType(msg.type) }}</span>
+              <div class="flex-1 min-w-0">
+                <p class="whitespace-pre-wrap break-words">{{ msg.content }}</p>
+                <p v-if="msg.timestamp" class="text-xs opacity-60 mt-1">
+                  {{ formatTime(msg.timestamp) }}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -60,11 +65,33 @@ interface Props {
 const props = defineProps<Props>()
 const isExpanded = ref(true)
 
-function getIcon(type: ProgressMessage['type']): string {
+function getClassByType(type: ProgressMessage['type']): string {
+  switch (type) {
+    case 'error':
+      return 'bg-red-500/10 text-red-300 border-l-2 border-red-500'
+    case 'complete':
+      return 'bg-green-500/10 text-green-300 border-l-2 border-green-500'
+    case 'thinking':
+      return 'bg-purple-500/10 text-purple-300 border-l-2 border-purple-500'
+    default:
+      return 'bg-slate-700/30 text-slate-300 border-l-2 border-cyan-500'
+  }
+}
+
+function getIconByType(type: ProgressMessage['type']): string {
   switch (type) {
     case 'error': return '❌'
     case 'complete': return '✅'
-    default: return '•'
+    case 'thinking': return '🤔'
+    default: return '🔄'
   }
+}
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', { 
+    hour: '2-digit', 
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 </script>

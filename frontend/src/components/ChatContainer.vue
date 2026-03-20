@@ -43,9 +43,9 @@
           />
         </div>
 
-        <!-- Progress Panel (collapsible) -->
+        <!-- Progress Panel (show during processing or if has messages) -->
         <ProgressPanel 
-          v-if="progressMessages.length > 0"
+          v-if="isProcessing || progressMessages.length > 0"
           :messages="progressMessages"
           :is-processing="isProcessing"
         />

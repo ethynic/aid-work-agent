@@ -1,4 +1,4 @@
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import type { ChatMessage, ProgressMessage } from '@/types'
 import { SSEManager } from '@/api/agent'
 
@@ -15,10 +15,6 @@ export function useAgent() {
   function generateSessionId(): string {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
   }
-
-  const canSend = computed(() => {
-    return !isProcessing.value
-  })
 
   async function sendMessage(content: string) {
     if (!content.trim() || isProcessing.value) return
@@ -51,11 +47,11 @@ export function useAgent() {
       await sseManager.connect(
         content,
         sessionId.value,
-        // onProgress
+        // onProgress - 工具执行进度
         (data) => {
           addProgress(data, 'progress')
         },
-        // onResponse
+        // onResponse - AI响应内容
         (data) => {
           currentResponse.value += data
           if (assistantMessageIndex < messages.value.length) {
@@ -76,7 +72,7 @@ export function useAgent() {
       )
     } catch (err) {
       error.value = (err as Error).message
-      addProgress(`❌ 错误: ${(err as Error).message}`, 'error')
+      addProgress(`❌ 连接错误: ${(err as Error).message}`, 'error')
       isProcessing.value = false
     }
   }
@@ -113,7 +109,6 @@ export function useAgent() {
     currentResponse,
     error,
     sessionId,
-    canSend,
     sendMessage,
     clearMessages,
     clearSession
