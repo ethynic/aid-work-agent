@@ -42,38 +42,55 @@ class SkillRegistry:
     def __init__(self, skills_dir: Optional[Path] = None):
         """
         初始化Skill注册表
-        
+
         Args:
             skills_dir: Skill目录路径，如果提供则自动加载
         """
         self._skills: Dict[str, Skill] = {}
         self._loader: Optional[SkillLoader] = None
-        
+        self._allowed: Optional[Set[str]] = None  # allow 名单
+
         # 文件扩展名索引
         self._extension_index: Dict[str, str] = {}
         # 关键词索引
         self._keyword_index: Dict[str, Set[str]] = {}
-        
+
         if skills_dir:
             self.load_from_directory(skills_dir)
-    
-    def load_from_directory(self, skills_dir: Path) -> int:
+
+    def load_from_directory(
+        self,
+        skills_dir: Path,
+        allowed: Optional[List[str]] = None,
+    ) -> int:
         """
-        从目录加载所有Skill
-        
+        从目录加载 Skill
+
         Args:
-            skills_dir: Skill目录路径
-            
+            skills_dir: Skill 目录路径
+            allowed: 允许加载的 skill 名称列表，None 或空列表表示不限制
+
         Returns:
             加载的Skill数量
         """
         self._loader = SkillLoader(skills_dir)
-        self._skills = self._loader.skills
-        
+        self._allowed = set(allowed) if allowed else None
+
+        # 只加载允许的 skills
+        all_skills = self._loader.skills
+        if self._allowed is not None:
+            self._skills = {
+                name: skill
+                for name, skill in all_skills.items()
+                if name in self._allowed
+            }
+            logger.info(f"SkillRegistry loaded {len(self._skills)} skills (filtered by allowed list: {self._allowed})")
+        else:
+            self._skills = all_skills
+            logger.info(f"SkillRegistry loaded {len(self._skills)} skills from {skills_dir}")
+
         # 构建索引
         self._build_indices()
-        
-        logger.info(f"SkillRegistry loaded {len(self._skills)} skills from {skills_dir}")
         return len(self._skills)
     
     def _build_indices(self):
@@ -288,30 +305,61 @@ class SkillRegistry:
                 return matched[0]
         
         return None
-    
+
+    def is_allowed(self, skill_name: str) -> bool:
+        """检查 skill 是否在允许列表中"""
+        if self._allowed is None:
+            return True  # 无限制时都允许
+        return skill_name in self._allowed
+
+    def get_allowed_list(self) -> Optional[List[str]]:
+        """获取允许的 skills 列表"""
+        return list(self._allowed) if self._allowed is not None else None
+
     def get_skill_tool_definition(self) -> Dict:
         """
-        获取Skill工具定义
-        
+        获取Skill工具定义（仅包含允许的 skills）
+
         用于LLM function calling。
-        
+
         Returns:
             工具定义字典
         """
-        descriptions = self.get_descriptions()
-        
+        if not self._skills:
+            return {
+                "name": "use_skill",
+                "description": "暂无可用技能",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "skill": {
+                            "type": "string",
+                            "description": "要加载的技能名称"
+                        }
+                    },
+                    "required": ["skill"],
+                },
+            }
+
+        # 只生成允许的 skills 描述
+        skill_list = "\n".join(
+            f"- {name}: {skill.description}"
+            for name, skill in self._skills.items()
+        )
+
         return {
             "name": "use_skill",
-            "description": f"""加载一个技能以获取专门知识来完成任务。
+            "description": f"""当任务需要特定技能支持时使用此工具。
 
-可用技能:
-{descriptions}
+适用场景：
+- 处理文件（PDF/Word/Excel）时
+- 需要翻译、总结、OCR 等能力时
+- 需要发送邮件、搜索信息时
 
-何时使用:
-- 当用户任务匹配技能描述时立即使用
-- 在尝试领域特定工作之前（PDF、MCP等）
+可用技能：
+{skill_list}
 
-技能内容将被注入到对话中，为你提供详细指令和资源访问。""",
+请描述你的任务，系统会自动为你匹配合适的技能。""",
             "input_schema": {
                 "type": "object",
                 "properties": {

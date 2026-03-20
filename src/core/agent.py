@@ -560,7 +560,26 @@ class Agent:
         
         # 技能系统
         skills_dir = Path(__file__).parent.parent / "skills"
-        self.skill_registry = SkillRegistry(skills_dir)
+
+        # 读取配置的 allowed 列表
+        from src.config.settings import settings
+        if is_master:
+            # 主智能体：从配置读取 allowed 列表
+            allowed_skills = settings.skills.master_agent.allowed if settings.skills.master_agent.allowed else None
+            self.skill_registry = SkillRegistry()
+            self.skill_registry.load_from_directory(skills_dir, allowed=allowed_skills)
+            logger.info(f"Master Agent loaded {len(self.skill_registry)} skills (allowed={allowed_skills})")
+        else:
+            # 子智能体：从 SUBAGENT.md 读取 allowed 列表
+            allowed_skills = None
+            if subagent_config and hasattr(subagent_config, 'get_allowed_skills'):
+                subagent_allowed = subagent_config.get_allowed_skills()
+                if subagent_allowed:
+                    allowed_skills = subagent_allowed
+            self.skill_registry = SkillRegistry()
+            self.skill_registry.load_from_directory(skills_dir, allowed=allowed_skills)
+            logger.info(f"Subagent '{subagent_config.name if subagent_config else 'unknown'}' loaded {len(self.skill_registry)} skills (allowed={allowed_skills})")
+
         self.skill_executor = SkillExecutor(self.skill_registry)
         
         # 计划管理器
@@ -1260,14 +1279,14 @@ create_plan(
             }
         
         return result
-    
+
     def _handle_use_skill(self, skill_name: str) -> Dict[str, Any]:
         """
         Handle use_skill tool call - load skill content and return it
-        
+
         Args:
             skill_name: Name of the skill to load
-        
+
         Returns:
             Skill content dictionary
         """
@@ -1277,15 +1296,25 @@ create_plan(
                 "error": "No skill name provided",
                 "available_skills": self.skill_registry.list_skills() if self.skill_registry else []
             }
-        
+
         if not self.skill_registry:
             return {
                 "success": False,
                 "error": "Skill registry not initialized"
             }
-        
+
+        # 检查 skill 是否在允许列表中
+        if hasattr(self.skill_registry, 'is_allowed') and not self.skill_registry.is_allowed(skill_name):
+            allowed = self.skill_registry.get_allowed_list()
+            return {
+                "success": False,
+                "error": f"Skill '{skill_name}' not allowed. Available: {allowed or 'all'}",
+                "available_skills": allowed
+            }
+
+        skill = self.skill_registry.get(skill_name)
         skill_content = self.skill_registry.get_content(skill_name)
-        
+
         if skill_content is None:
             available = self.skill_registry.list_skills()
             return {
@@ -1293,14 +1322,17 @@ create_plan(
                 "error": f"Skill '{skill_name}' not found",
                 "available_skills": available
             }
-        
+
         logger.info(f"Loaded skill: {skill_name}")
-        
+
+        # 获取 skill 描述用于摘要
+        skill_desc = skill.description if skill else ""
+
         return {
             "success": True,
             "skill_name": skill_name,
             "content": skill_content,
-            "message": f"Skill '{skill_name}' loaded successfully. Follow the instructions in the skill content to complete the task."
+            "message": f"✅ Skill '{skill_name}' loaded. {skill_desc}"
         }
     
     async def _handle_skill_execute(

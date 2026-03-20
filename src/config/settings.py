@@ -6,7 +6,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -101,6 +101,22 @@ class AuthConfig(BaseModel):
     default_role: str = "employee"
 
 
+class MasterAgentSkillsConfig(BaseModel):
+    """主智能体 Skill 配置"""
+    allowed: List[str] = Field(default_factory=list)  # 允许的 skills 列表，空列表表示允许所有
+
+
+class SubagentSkillsConfig(BaseModel):
+    """子智能体 Skill 配置"""
+    default_allowed: List[str] = Field(default_factory=list)  # 默认允许列表
+
+
+class SkillsConfig(BaseModel):
+    """Skill 全局配置"""
+    master_agent: MasterAgentSkillsConfig = Field(default_factory=MasterAgentSkillsConfig)
+    subagent: SubagentSkillsConfig = Field(default_factory=SubagentSkillsConfig)
+
+
 class AppConfig(BaseModel):
     """应用配置"""
     name: str = "aid-work-agent"
@@ -118,6 +134,7 @@ class Settings(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
 
     class Config:
         extra = "allow"

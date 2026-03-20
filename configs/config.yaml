@@ -61,3 +61,15 @@ memory:
 auth:
   enabled: true
   default_role: employee
+
+# Skill 配置
+skills:
+  # 主智能体允许使用的 skills 列表
+  # 如果为空列表，则允许使用所有 skills
+  master_agent:
+    allowed:
+      - paddleocr-doc-parsing
+  # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
+  subagent:
+    default_allowed:
+      - paddleocr-doc-parsing
