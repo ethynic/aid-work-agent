@@ -14,7 +14,7 @@ The agent uses LLM for:
 import json
 import uuid
 from pathlib import Path
-from typing import Optional, List, Dict, Any, AsyncGenerator
+from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Coroutine, Any
 from loguru import logger
 
 from src.config.settings import settings
@@ -704,7 +704,73 @@ class Agent:
                 tools.append(delegation_tool)
         
         return tools
-    
+
+    def _get_tool_display_name(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        """
+        将工具名称转换为用户友好的显示名称
+
+        Args:
+            tool_name: 原始工具名称
+            tool_args: 工具参数
+
+        Returns:
+            用户友好的显示名称
+        """
+        # 特殊工具的特殊显示
+        if tool_name == "web_search":
+            keyword = tool_args.get("keyword", "")
+            return f"网络搜索「{keyword[:20]}...」"
+        elif tool_name == "email_send":
+            to = tool_args.get("to", "")
+            return f"发送邮件至「{to}」"
+        elif tool_name == "email_read":
+            folder = tool_args.get("folder", "INBOX")
+            limit = tool_args.get("limit", 10)
+            return f"读取邮件（{folder}，{limit}封）"
+        elif tool_name == "content_generate":
+            content_type = tool_args.get("content_type", "")
+            return f"生成内容（{content_type}）"
+        elif tool_name == "browser_open":
+            url = tool_args.get("url", "")
+            return f"打开网页「{url[:30]}...」"
+        elif tool_name == "delegate_to_subagent":
+            subagent_name = tool_args.get("subagent_name", "")
+            return f"调用{subagent_name}子智能体"
+        elif tool_name == "skill_execute":
+            skill = tool_args.get("skill", "")
+            return f"执行技能「{skill}」"
+        elif tool_name == "use_skill":
+            skill = tool_args.get("skill", "")
+            return f"加载技能「{skill}」"
+        elif tool_name == "file_read":
+            file_path = tool_args.get("file_path", "")
+            return f"读取文件「{file_path}」"
+        elif tool_name == "doc_summarize":
+            return "总结文档"
+        elif tool_name == "doc_translate":
+            target = tool_args.get("target_lang", "")
+            return f"翻译文档为{target}"
+        elif tool_name == "ocr_image":
+            path = tool_args.get("image_path", "")
+            return f"识别图片文字「{path}」"
+        elif tool_name == "ocr_pdf":
+            return "识别PDF文字"
+        elif tool_name == "create_plan":
+            return "创建执行计划"
+        else:
+            # 通用工具显示
+            display_names = {
+                "email_list_folders": "获取邮件夹列表",
+                "browser_click": "点击网页元素",
+                "browser_fill": "填写网页表单",
+                "browser_get_content": "获取网页内容",
+                "browser_navigate": "网页导航",
+                "browser_close": "关闭浏览器",
+                "browser_screenshot": "网页截图",
+                "file_list": "列出文件",
+            }
+            return display_names.get(tool_name, tool_name)
+
     def _build_base_system_prompt(
         self,
         include_delegation: bool = True,
@@ -1343,16 +1409,18 @@ create_plan(
         task_description: str,
         context_needed: Optional[List[str]] = None,
         session_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None,
     ) -> Dict[str, Any]:
         """
         Handle delegate_to_subagent tool call - delegate task to a subagent
-        
+
         Args:
             subagent_name: Name of the subagent to delegate to
             task_description: Description of the task
             context_needed: Keywords for context filtering (optional)
             session_id: Session ID for memory access
-            
+            progress_callback: 进度回调函数，用于实时传递子智能体执行进度
+
         Returns:
             Delegation result dictionary
         """
@@ -1388,6 +1456,7 @@ create_plan(
                 subagent_name=subagent_name,
                 task_description=task_description,
                 session_id=session_id or "default",
+                progress_callback=progress_callback,
             )
             
             if not response.success:
@@ -1430,7 +1499,8 @@ create_plan(
         user_input: str,
         session_id: str,
         user: Optional[User] = None,
-        attachments: Optional[List[Dict[str, Any]]] = None
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        progress_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message and yield response chunks
@@ -1458,6 +1528,11 @@ create_plan(
         import base64
         import tempfile
         from datetime import datetime
+        
+        # 进度消息辅助函数
+        async def send_progress(message: str):
+            if progress_callback:
+                await progress_callback(message)
         
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
         
@@ -1628,7 +1703,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             if not valid_tool_calls:
                 # Store assistant response in memory
                 self.memory.add(session_id, "assistant", content)
-                
+
+                # 发送最终回复进度
+                await send_progress("✅ 任务完成，正在生成回复...")
+
                 # Yield the final response
                 if content:
                     yield content
@@ -1651,9 +1729,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 tool_name = tc["name"]
                 tool_args = tc["arguments"]
                 tool_id = tc["id"]
-                
+
+                # 获取工具的用户友好名称
+                tool_display_name = self._get_tool_display_name(tool_name, tool_args)
+                await send_progress(f"🔧 正在执行 {tool_display_name}...")
+
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
-                
+
                 # Handle create_plan specially - create real plan and save to MD
                 if tool_name == "create_plan":
                     plan_result = self._handle_create_plan(
@@ -1661,17 +1743,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         session_id=session_id,
                         user_query=user_input,
                     )
+                    await send_progress(f"📋 执行计划已创建")
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": plan_result
                     })
                     continue
-                
+
                 # Handle clarify - ask user for clarification (no external tool needed)
                 if tool_name == "clarify":
                     question = tool_args.get("question", "")
                     missing_info = tool_args.get("missing_info", [])
                     logger.info(f"Clarify tool called: question={question[:50]}...")
+                    await send_progress(f"❓ 需要澄清: {question[:50]}...")
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": {
@@ -1681,23 +1765,24 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         }
                     })
                     continue
-                
+
                 # Handle use_skill - load skill content and inject into conversation
                 if tool_name == "use_skill":
                     skill_name = tool_args.get("skill", "")
                     skill_result = self._handle_use_skill(skill_name)
+                    await send_progress(f"📦 已加载技能: {skill_name}")
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": skill_result
                     })
                     continue
-                
+
                 # Handle skill_execute - execute command directly
                 if tool_name == "skill_execute":
                     skill_name = tool_args.get("skill", "")
                     command = tool_args.get("command", "")
                     files = tool_args.get("files", {})
-                    
+
                     # 标记任务开始（如果计划中存在）
                     plan = self.plan_manager.get_plan(session_id)
                     skill_task_id = None
@@ -1706,7 +1791,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         if task and task.tool_name == "skill_execute":
                             skill_task_id = task.task_id
                             self.plan_manager.mark_task_running(session_id, skill_task_id)
-                    
+
                     skill_exec_result = await self._handle_skill_execute(
                         skill_name=skill_name,
                         command=command,
@@ -1714,7 +1799,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         session_id=session_id,
                         workdir=session_workspace
                     )
-                    
+
+                    # 发送技能执行完成进度
+                    if skill_exec_result.get("success"):
+                        stdout = skill_exec_result.get("stdout", "")
+                        preview = stdout[:100] if stdout else ""
+                        await send_progress(f"✅ 技能「{skill_name}」执行完成: {preview}...")
+                    else:
+                        error = skill_exec_result.get("error", "未知错误")
+                        await send_progress(f"❌ 技能「{skill_name}」执行失败: {error}")
+
                     # 标记任务完成（使用保存的task_id）
                     if skill_task_id:
                         if skill_exec_result.get("success"):
@@ -1723,10 +1817,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             )
                         else:
                             self.plan_manager.mark_task_failed(
-                                session_id, skill_task_id, 
+                                session_id, skill_task_id,
                                 skill_exec_result.get("error", "Unknown error")
                             )
-                    
+
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": skill_exec_result
@@ -1738,9 +1832,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     subagent_name = tool_args.get("subagent_name", "")
                     task_description = tool_args.get("task_description", "")
                     context_needed = tool_args.get("context_needed", [])
-                    
+
                     logger.info(f"Delegating to subagent: {subagent_name}, task: {task_description[:50]}...")
-                    
+                    await send_progress(f"🚀 正在调用{subagent_name}子智能体处理任务...")
+
                     # 标记任务开始（如果计划中存在）
                     plan = self.plan_manager.get_plan(session_id)
                     delegate_task_id = None
@@ -1749,20 +1844,30 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         if task:
                             delegate_task_id = task.task_id
                             self.plan_manager.mark_task_running(session_id, delegate_task_id)
-                    
+
                     # 执行委派
                     delegation_result = await self._handle_delegate_to_subagent(
                         subagent_name=subagent_name,
                         task_description=task_description,
                         context_needed=context_needed,
                         session_id=session_id,
+                        progress_callback=send_progress,
                     )
-                    
+
+                    # 子智能体执行完成进度
+                    if delegation_result.get("success"):
+                        summary = delegation_result.get("summary", "")
+                        preview = summary[:100] if summary else ""
+                        await send_progress(f"✅ {subagent_name}子智能体任务完成: {preview}...")
+                    else:
+                        error = delegation_result.get("error", "未知错误")
+                        await send_progress(f"❌ {subagent_name}子智能体执行失败: {error}")
+
                     # 如果子智能体生成了内容（content_generate），实时展示给用户
                     if delegation_result.get("generated_contents"):
                         for content in delegation_result["generated_contents"]:
                             yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
-                    
+
                     # 标记任务完成
                     if delegate_task_id:
                         if delegation_result.get("success"):
@@ -1774,7 +1879,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                 session_id, delegate_task_id,
                                 delegation_result.get("error", "Unknown error")
                             )
-                    
+
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": delegation_result
@@ -1789,12 +1894,41 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     if current_task:
                         current_task_id = current_task.task_id
                         self.plan_manager.mark_task_running(session_id, current_task_id)
-                
+
                 # Execute the tool
                 try:
                     result = await self.tool_executor.execute(tool_name, tool_args)
                     logger.info(f"[TOOL_RESULT] {tool_name}: type={type(result).__name__}")
-                    
+
+                    # 发送工具执行完成进度
+                    tool_display_name = self._get_tool_display_name(tool_name, tool_args)
+                    if isinstance(result, dict):
+                        success = result.get("success", True)
+                        if success:
+                            # 根据不同工具显示不同结果预览
+                            if tool_name == "content_generate":
+                                content = result.get("content", "")
+                                preview = content[:80] + "..." if len(content) > 80 else content
+                                await send_progress(f"✅ {tool_display_name}完成\n📝 {preview}")
+                            elif tool_name == "web_search":
+                                results = result.get("results", [])
+                                await send_progress(f"✅ {tool_display_name}完成，找到{len(results)}条结果")
+                            elif tool_name == "email_send":
+                                await send_progress(f"✅ {tool_display_name}成功")
+                            elif tool_name == "file_read":
+                                content = result.get("content", "")
+                                preview = content[:80] + "..." if len(content) > 80 else content
+                                await send_progress(f"✅ {tool_display_name}完成\n📄 {preview}")
+                            elif tool_name == "browser_open":
+                                await send_progress(f"✅ {tool_display_name}成功")
+                            else:
+                                await send_progress(f"✅ {tool_display_name}执行完成")
+                        else:
+                            error = result.get("error", "未知错误")
+                            await send_progress(f"❌ {tool_display_name}失败: {error}")
+                    else:
+                        await send_progress(f"✅ {tool_display_name}执行完成")
+
                     # 对于 content_generate 工具，将结果格式化为可展示的内容并立即输出
                     if tool_name == "content_generate":
                         if isinstance(result, dict):
@@ -1805,14 +1939,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                 yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
                         else:
                             logger.warning(f"[CONTENT_GEN] Unexpected result type: {type(result)}")
-                    
+
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": result
                     })
                     result_preview = str(result)[:200] if result else "None"
                     logger.debug(f"Tool result: {result_preview}...")
-                    
+
                     # 标记任务完成（使用保存的task_id）
                     if current_task_id:
                         if result.get("success", True):
@@ -1824,10 +1958,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                 session_id, current_task_id,
                                 result.get("error", "Tool execution failed")
                             )
-                        
+
                 except Exception as e:
                     error_msg = f"Tool execution failed: {str(e)}"
                     logger.error(error_msg)
+                    await send_progress(f"❌ {self._get_tool_display_name(tool_name, tool_args)}执行出错: {str(e)}")
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": error_msg,
@@ -1874,26 +2009,32 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         task_description: str,
         parent_session_id: str,
         task_record=None,
+        progress_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None,
     ) -> Dict[str, Any]:
         """
         作为子智能体执行任务
-        
+
         流程：
-        1. 创建独立的执行计划（plan）
-        2. 执行计划中的任务
+          2. 执行计划中的任务
         3. 将执行记录同步到主智能体的计划管理器
-        
+
         Args:
             task_description: 任务描述
             parent_session_id: 父智能体的session ID
             task_record: 任务记录（用于状态更新）
-            
+            progress_callback: 进度回调函数，用于实时传递执行进度到主界面
+
         Returns:
             执行结果
         """
         if self.is_master:
             raise RuntimeError("execute_as_subagent() is only for subagent mode")
-        
+
+        # 进度消息辅助函数
+        async def send_progress(message: str):
+            if progress_callback:
+                await progress_callback(message)
+
         logger.info(f"\n{'='*60}\n[SUBAGENT] execute_as_subagent started\n{'='*60}")
         logger.info(f"[SUBAGENT] config.name: {self.subagent_config.name}")
         logger.info(f"[SUBAGENT] session_id: {self.session_id}")
@@ -1934,7 +2075,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             while iteration < max_iterations:
                 iteration += 1
                 logger.info(f"[SUBAGENT] Iteration {iteration}")
-                
+
+                # 发送迭代进度
+                await send_progress(f"🔄 [{self.subagent_config.name}] 第{iteration}轮思考中...")
+
                 # 更新进度
                 if task_record:
                     progress = min(90.0, iteration * 5.0)
@@ -2002,9 +2146,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     
                     if not tool_name:
                         continue
-                    
+
                     logger.info(f"[SUBAGENT] Executing tool: {tool_name}")
-                    
+
+                    # 发送工具执行进度
+                    tool_display_name = self._get_tool_display_name(tool_name, tool_args)
+                    await send_progress(f"🔧 [{self.subagent_config.name}] 正在执行 {tool_display_name}...")
+
                     # 处理 create_plan（子智能体创建自己的计划）
                     if tool_name == "create_plan":
                         plan_result = self._handle_create_plan(
@@ -2059,7 +2207,18 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         try:
                             result = await self.tool_executor.execute(tool_name, tool_args)
                             tool_result = result
-                            
+
+                            # 发送工具执行完成进度
+                            if isinstance(result, dict):
+                                success = result.get("success", True)
+                                if success:
+                                    await send_progress(f"✅ [{self.subagent_config.name}] {tool_display_name}执行完成")
+                                else:
+                                    error = result.get("error", "未知错误")
+                                    await send_progress(f"❌ [{self.subagent_config.name}] {tool_display_name}失败: {error}")
+                            else:
+                                await send_progress(f"✅ [{self.subagent_config.name}] {tool_display_name}执行完成")
+
                             # 对于 content_generate 工具，保存生成的内容
                             if tool_name == "content_generate" and isinstance(result, dict):
                                 generated_content = result.get("content", "")
@@ -2103,7 +2262,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         "tool_call_id": tc.get("id", ""),
                         "content": str(tool_result)
                     })
-            
+
+            # 发送子任务完成消息
+            await send_progress(f"✅ [{self.subagent_config.name}] 任务完成，正在整合结果...")
+
             logger.info(f"[SUBAGENT] Task completed with summary: {final_summary[:200]}")
             
             # 如果有生成的内容，合并到结果中

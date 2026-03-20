@@ -159,10 +159,11 @@ class SubagentExecutor:
         session_id: str,
         task_parameters: Optional[Dict[str, Any]] = None,
         timeout: int = 300,
+        progress_callback: Optional[callable] = None,
     ) -> DelegationResponse:
         """
         委托任务给子智能体
-        
+
         Args:
             task_id: 任务ID
             subagent_name: 子智能体名称
@@ -170,7 +171,8 @@ class SubagentExecutor:
             session_id: Session ID
             task_parameters: 任务参数
             timeout: 超时时间（秒）
-            
+            progress_callback: 进度回调函数，用于实时传递子智能体执行进度
+
         Returns:
             委托响应
         """
@@ -223,7 +225,7 @@ class SubagentExecutor:
         
         # 在子线程启动执行
         async_task = asyncio.create_task(
-            self._run_instance(subagent_instance, record, timeout, task_description, session_id),
+            self._run_instance(subagent_instance, record, timeout, task_description, session_id, progress_callback),
             name=f"subagent_{subagent_name}_{execution_id}"
         )
         self._active_executions[execution_id] = async_task
@@ -244,29 +246,31 @@ class SubagentExecutor:
         timeout: int,
         task_description: str,
         session_id: str,
+        progress_callback: Optional[callable] = None,
     ) -> None:
         """
         运行子智能体实例
-        
+
         Args:
             instance: 子智能体实例（Agent）
             record: 任务记录
             timeout: 超时时间
             task_description: 任务描述
             session_id: session ID
+            progress_callback: 进度回调函数
         """
         logger.info(f"\n{'='*60}\n[SUBAGENT] _run_instance started\n{'='*60}")
         logger.info(f"[SUBAGENT] instance.is_master: {instance.is_master}")
         logger.info(f"[SUBAGENT] instance.subagent_config.name: {instance.subagent_config.name}")
         logger.info(f"[SUBAGENT] record.execution_id: {record.execution_id}")
         logger.info(f"[SUBAGENT] record.task_description: {record.task_description}")
-        
+
         try:
             # 更新状态为运行中
             record.start()
             self._update_task_record(record)
             logger.info(f"[SUBAGENT] Record status updated to: {record.status}")
-            
+
             # 执行任务（带超时）
             logger.info(f"[SUBAGENT] Calling instance.execute_as_subagent() with timeout={timeout}s...")
             result = await asyncio.wait_for(
@@ -274,6 +278,7 @@ class SubagentExecutor:
                     task_description=task_description,
                     parent_session_id=session_id,
                     task_record=record,
+                    progress_callback=progress_callback,
                 ),
                 timeout=timeout
             )

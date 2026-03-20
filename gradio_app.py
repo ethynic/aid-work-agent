@@ -8,14 +8,17 @@ AID Work Agent Gradio UI
 - 文件上传（自动匹配技能处理）
 - 流式输出
 - 会话历史
+- 执行过程实时显示
 """
 
 import asyncio
 import base64
 import os
 import uuid
+import threading
+import queue
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 import gradio as gr
 from loguru import logger
@@ -36,6 +39,11 @@ setup_logging(log_level="INFO", log_dir="logs")
 # session_id -> {"history": [ChatMessage, ...], "files": [file_info, ...]}
 chat_sessions = {}
 
+# 会话级别的进度消息队列
+# session_id -> queue.Queue
+session_progress_queues: Dict[str, queue.Queue] = {}
+session_progress_lock = threading.Lock()
+
 
 def get_or_create_session(session_id: str = None) -> str:
     """获取或创建会话ID"""
@@ -43,16 +51,59 @@ def get_or_create_session(session_id: str = None) -> str:
         session_id = str(uuid.uuid4())
         chat_sessions[session_id] = {
             "history": [],
-            "files": []
+            "files": [],
+            "processing": False  # 标记当前是否有任务在后台执行
         }
+        # 初始化进度队列
+        with session_progress_lock:
+            session_progress_queues[session_id] = queue.Queue()
         logger.info(f"Created new chat session: {session_id}")
     return session_id
+
+
+def get_progress_queue(session_id: str) -> Optional[queue.Queue]:
+    """获取会话的进度队列"""
+    with session_progress_lock:
+        return session_progress_queues.get(session_id)
+
+
+def add_progress_message(session_id: str, message: str):
+    """添加进度消息到队列"""
+    with session_progress_lock:
+        if session_id in session_progress_queues:
+            session_progress_queues[session_id].put(message)
+            logger.info(f"[PROGRESS] {message}")
+
+
+def get_and_clear_progress(session_id: str) -> List[str]:
+    """获取并清除所有进度消息"""
+    messages = []
+    with session_progress_lock:
+        if session_id in session_progress_queues:
+            q = session_progress_queues[session_id]
+            while not q.empty():
+                try:
+                    messages.append(q.get_nowait())
+                except queue.Empty:
+                    break
+    return messages
+
+
+def clear_progress(session_id: str):
+    """清除进度队列"""
+    with session_progress_lock:
+        if session_id in session_progress_queues:
+            q = session_progress_queues[session_id]
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
 
 
 def add_message_to_history(session_id: str, user_msg: str, assistant_msg: str):
     """添加消息到会话历史 - 使用 Gradio 6.0 格式"""
     if session_id in chat_sessions:
-        # Gradio 6.0 格式: 字典列表
         chat_sessions[session_id]["history"].append(
             {"role": "user", "content": user_msg}
         )
@@ -68,13 +119,22 @@ def format_chat_history(session_id: str) -> List[Dict[str, str]]:
     return []
 
 
+async def progress_callback(session_id: str, message: str):
+    """
+    进度回调函数 - 由 agent 调用，接收实时进度消息
+    """
+    add_progress_message(session_id, message)
+    # 让出控制权，允许其他协程执行
+    await asyncio.sleep(0)
+
+
 async def process_message_async(
     user_message: str,
     session_id: str,
     files: List[str] = None
 ) -> Tuple[str, str]:
     """
-    处理用户消息
+    处理用户消息（支持进度回调）
 
     Returns:
         (完整回复, session_id)
@@ -100,14 +160,15 @@ async def process_message_async(
                 except Exception as e:
                     logger.error(f"Failed to attach file {file_path}: {e}")
 
-    # 处理消息（异步生成器）
+    # 处理消息（异步生成器），传递进度回调
     response_chunks = []
 
     try:
         async for chunk in master_agent.process_message(
             user_input=user_message,
             session_id=session_id,
-            attachments=attachments if attachments else None
+            attachments=attachments if attachments else None,
+            progress_callback=lambda msg: progress_callback(session_id, msg)
         ):
             response_chunks.append(chunk)
 
@@ -120,7 +181,34 @@ async def process_message_async(
     # 保存到历史记录
     add_message_to_history(session_id, user_message, full_response)
 
+    # 处理完成，清除processing标志
+    if session_id in chat_sessions:
+        chat_sessions[session_id]["processing"] = False
+    # 添加完成标记到进度队列
+    add_progress_message(session_id, "✅ 任务完成")
+
     return full_response, session_id
+
+
+def process_in_thread(
+    user_message: str,
+    session_id: str,
+    files: List[str] = None
+):
+    """
+    在后台线程中处理消息，避免阻塞主线程
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(process_message_async(user_message, session_id, files))
+    except Exception as e:
+        logger.error(f"Error in background processing: {e}")
+    finally:
+        try:
+            loop.close()
+        except:
+            pass
 
 
 def chat(
@@ -128,7 +216,7 @@ def chat(
     session_id: str,
     files: List[str] = None,
     chatbot: List[Dict[str, str]] = None
-) -> Tuple[List[Dict[str, str]], str, str]:
+) -> Tuple[List[Dict[str, str]], str, str, str]:
     """
     Gradio 聊天处理函数
 
@@ -139,13 +227,16 @@ def chat(
         chatbot: Chatbot 组件状态
 
     Returns:
-        (chatbot更新, 新的session_id, "")
+        (chatbot更新, 新的session_id, "", 进度HTML)
     """
     if not user_message and not files:
-        return chatbot or [], session_id, ""
+        return chatbot or [], session_id, "", ""
 
     # 确保会话存在
     session_id = get_or_create_session(session_id)
+
+    # 清除之前的进度
+    clear_progress(session_id)
 
     # 获取当前历史
     history = format_chat_history(session_id)
@@ -153,44 +244,48 @@ def chat(
     # 添加用户消息到显示（等待助手回复）
     if user_message:
         history.append({"role": "user", "content": user_message})
-        history.append({"role": "assistant", "content": "处理中..."})
+        history.append({"role": "assistant", "content": "🚀 正在思考，请稍候..."})
 
-    # 同步执行异步处理
-    try:
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        if loop.is_running():
-            # 如果已经在运行，创建一个新任务
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run,
-                    process_message_async(user_message, session_id, files)
-                )
-                full_response, session_id = future.result()
-        else:
-            full_response, session_id = loop.run_until_complete(
-                process_message_async(user_message, session_id, files)
-            )
-    except Exception as e:
-        logger.error(f"Error in chat: {e}")
-        full_response = f"处理出错: {str(e)}"
-
-    # 更新最后一条助手消息
-    if history:
-        for i in range(len(history) - 1, -1, -1):
-            if history[i].get("role") == "assistant":
-                history[i] = {"role": "assistant", "content": full_response}
-                break
-
-    # 同步到全局会话存储
+    # 立即返回当前状态，启动后台线程处理
     chat_sessions[session_id]["history"] = history
+    chat_sessions[session_id]["processing"] = True  # 标记开始处理
 
-    return history, session_id, ""
+    # 在后台线程中处理消息
+    thread = threading.Thread(
+        target=process_in_thread,
+        args=(user_message, session_id, files),
+        daemon=True
+    )
+    thread.start()
+    logger.info(f"Started background processing for session {session_id}")
+
+    # 返回初始状态
+    return history, session_id, "", ""
+
+
+def poll_progress(
+    session_id: str,
+) -> str:
+    """
+    轮询获取最新进度消息
+
+    Returns:
+        进度HTML
+    """
+    if not session_id:
+        return '<div class="progress-container"><div class="progress-item">等待任务开始...</div></div>'
+
+    messages = get_and_clear_progress(session_id)
+
+    if not messages:
+        return ""
+
+    html_parts = ['<div class="progress-container">']
+    for msg in messages:
+        html_parts.append(f'<div class="progress-item">{msg}</div>')
+    html_parts.append('</div>')
+
+    return '\n'.join(html_parts)
 
 
 def clear_chat(session_id: str) -> Tuple[str, List, str]:
@@ -198,6 +293,8 @@ def clear_chat(session_id: str) -> Tuple[str, List, str]:
     session_id = get_or_create_session(session_id)
     chat_sessions[session_id]["history"] = []
     chat_sessions[session_id]["files"] = []
+    chat_sessions[session_id]["processing"] = False
+    clear_progress(session_id)
     return "", [], session_id
 
 
@@ -228,7 +325,7 @@ def get_mime_type(filename: str) -> str:
 # 自定义 CSS 样式
 CUSTOM_CSS = """
 .gradio-container {
-    max-width: 1200px !important;
+    max-width: 1400px !important;
     margin: auto !important;
 }
 
@@ -254,6 +351,31 @@ CUSTOM_CSS = """
     font-size: 12px;
     color: #666;
 }
+
+/* 进度显示区域样式 */
+.progress-container {
+    background: #fafafa;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 10px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.8;
+}
+
+.progress-item {
+    padding: 6px 10px;
+    margin: 4px 0;
+    border-radius: 4px;
+    background: #fff;
+    border-left: 3px solid #2196F3;
+    color: #333;
+}
+
+.progress-item:empty {
+    display: none;
+}
 """
 
 
@@ -262,11 +384,11 @@ def create_gradio_app():
 
     with gr.Blocks(
         title="AID Work Agent",
-        css=CUSTOM_CSS
     ) as demo:
 
         # 状态存储
         session_state = gr.State("")
+        progress_state = gr.State("")
 
         # 标题
         gr.HTML("""
@@ -274,15 +396,23 @@ def create_gradio_app():
             🤖 AID Work Agent
         </div>
         <div class="sub-title">
-            智能工作助手 - 支持对话和文件处理
+            智能工作助手 - 支持对话、文件处理和实时进度显示
         </div>
         """)
 
         # 状态栏
         with gr.Row():
             status_text = gr.HTML(
-                '<div class="status-bar">🟢 在线 | 已加载工具: 邮件、浏览器、文件、OCR、搜索等</div>',
+                '<div class="status-bar">🟢 在线 | 已加载工具: 邮件、浏览器、文件、OCR、搜索、内容生成等</div>',
                 visible=True
+            )
+
+        # 进度显示区域
+        with gr.Row():
+            progress_html = gr.HTML(
+                value='<div class="progress-container"><div class="progress-item">发送消息开始任务...</div></div>',
+                label="执行进度",
+                elem_id="progress-display",
             )
 
         # 主聊天区域
@@ -290,7 +420,7 @@ def create_gradio_app():
             with gr.Column(scale=4):
                 chatbot = gr.Chatbot(
                     label="对话历史",
-                    height=500,
+                    height=400,
                 )
             with gr.Column(scale=1):
                 # 文件上传
@@ -319,22 +449,28 @@ def create_gradio_app():
                 # 按钮行
                 submit_btn = gr.Button("🚀 发送", variant="primary")
                 clear_btn = gr.Button("🗑️ 清除", variant="secondary")
+                refresh_btn = gr.Button("🔄 刷新进度", variant="secondary")
 
         # 事件处理
-        # 发送消息
+        # 发送消息（立即返回，后台处理）
         submit_btn.click(
             fn=chat,
             inputs=[msg_input, session_state, file_output, chatbot],
-            outputs=[chatbot, session_state, msg_input],
-            api_name="chat"
+            outputs=[chatbot, session_state, msg_input, progress_html],
         )
 
         # 回车发送
         msg_input.submit(
             fn=chat,
             inputs=[msg_input, session_state, file_output, chatbot],
-            outputs=[chatbot, session_state, msg_input],
-            api_name="chat"
+            outputs=[chatbot, session_state, msg_input, progress_html],
+        )
+
+        # 刷新进度按钮
+        refresh_btn.click(
+            fn=poll_progress,
+            inputs=[session_state],
+            outputs=[progress_html],
         )
 
         # 清除聊天
@@ -342,7 +478,70 @@ def create_gradio_app():
             fn=clear_chat,
             inputs=[session_state],
             outputs=[msg_input, chatbot, session_state],
-            api_name="clear"
+        ).then(
+            fn=lambda: '<div class="progress-container"><div class="progress-item">发送消息开始任务...</div></div>',
+            inputs=None,
+            outputs=[progress_html],
+        )
+
+        # 定时刷新进度（使用 Timer 组件）
+        timer = gr.Timer(value=1)  # 每秒刷新
+
+        def timer_update(session_id):
+            """
+            定时更新进度，同时更新 Chatbot 和进度 HTML
+            将进度信息追加到 Chatbot 最后一条 assistant 消息中
+            """
+            if not session_id:
+                empty_progress = '<div class="progress-container"><div class="progress-item">等待任务开始...</div></div>'
+                return ([], empty_progress)
+
+            # 检查是否在处理中
+            is_processing = chat_sessions.get(session_id, {}).get("processing", False)
+
+            # 获取并清除进度消息
+            messages = get_and_clear_progress(session_id)
+
+            # 获取当前历史
+            history = format_chat_history(session_id)
+
+            # 构建进度 HTML
+            progress_html = ""
+
+            if messages:
+                # 构建新进度文本
+                new_progress = "\n".join([f"• {msg}" for msg in messages])
+
+                # 更新最后一条消息（如果是 assistant 消息）
+                if history and history[-1].get("role") == "assistant":
+                    current_content = history[-1].get("content", "")
+                    # 检查是否是初始占位消息
+                    if "正在思考，请稍候" in current_content:
+                        history[-1]["content"] = new_progress
+                    else:
+                        history[-1]["content"] = current_content + "\n\n" + new_progress
+                else:
+                    history.append({"role": "assistant", "content": new_progress})
+
+                # 构建进度 HTML
+                html_parts = ['<div class="progress-container">']
+                for msg in messages:
+                    html_parts.append(f'<div class="progress-item">{msg}</div>')
+                html_parts.append('</div>')
+                progress_html = '\n'.join(html_parts)
+            elif not is_processing:
+                # 任务已完成且没有新消息，确保显示完成状态
+                if history and history[-1].get("role") == "assistant":
+                    content = history[-1].get("content", "")
+                    if "正在思考，请稍候" in content:
+                        history[-1]["content"] = "✅ 任务完成"
+
+            return (history, progress_html)
+
+        timer.tick(
+            fn=timer_update,
+            inputs=[session_state],
+            outputs=[chatbot, progress_html],
         )
 
         # 初始化会话
@@ -371,12 +570,14 @@ def main():
 
     demo = create_gradio_app()
 
+    # Gradio 6.0: css 参数移到 launch() 方法
     demo.launch(
         server_name=args.host,
         server_port=args.port,
         share=args.share,
         debug=args.debug,
-        show_error=True
+        show_error=True,
+        css=CUSTOM_CSS,
     )
 
 
