@@ -15,13 +15,24 @@
               <p class="text-sm text-slate-400">智能工作助手</p>
             </div>
           </div>
-          
+
           <div class="flex items-center gap-4">
+            <!-- User Info / Login Button -->
+            <div v-if="isLoggedIn" class="flex items-center gap-3">
+              <span class="text-sm text-slate-300">{{ user?.username }}</span>
+              <button
+                @click="handleLogout"
+                class="px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                退出
+              </button>
+            </div>
+
             <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-700/50 text-sm">
               <span :class="isOnline ? 'bg-green-500' : 'bg-slate-500'" class="w-2 h-2 rounded-full"></span>
               <span class="text-slate-300">{{ isOnline ? '在线' : '离线' }}</span>
             </div>
-            <button 
+            <button
               @click="handleClearSession"
               class="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
             >
@@ -37,14 +48,14 @@
       <div class="flex-1 flex flex-col max-w-7xl mx-auto w-full">
         <!-- Messages Area -->
         <div class="flex-1 overflow-hidden">
-          <MessageList 
-            :messages="messages" 
+          <MessageList
+            :messages="messages"
             :is-processing="isProcessing"
           />
         </div>
 
         <!-- Progress Panel (show during processing or if has messages) -->
-        <ProgressPanel 
+        <ProgressPanel
           v-if="isProcessing || progressMessages.length > 0"
           :messages="progressMessages"
           :is-processing="isProcessing"
@@ -52,7 +63,7 @@
 
         <!-- Input Area -->
         <div class="flex-shrink-0 border-t border-slate-700 bg-slate-800/50 p-4">
-          <ChatInput 
+          <ChatInput
             @send="handleSend"
             :disabled="isProcessing"
             :is-processing="isProcessing"
@@ -60,15 +71,24 @@
         </div>
       </div>
     </main>
+
+    <!-- Login Modal -->
+    <LoginModal
+      :visible="showLoginModal"
+      @close="showLoginModal = false"
+      @success="handleLoginSuccess"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import MessageList from './MessageList.vue'
 import ProgressPanel from './ProgressPanel.vue'
 import ChatInput from './ChatInput.vue'
+import LoginModal from './LoginModal.vue'
 import { useAgent } from '@/composables/useAgent'
+import { useAuth } from '@/composables/useAuth'
 
 const {
   messages,
@@ -79,17 +99,25 @@ const {
   clearSession
 } = useAgent()
 
+const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
+
 const isOnline = ref(true)
+const showLoginModal = ref(false)
 
 // 模拟在线状态检测
 let heartbeatInterval: number | null = null
 
-onMounted(() => {
+onMounted(async () => {
+  // 初始化认证状态
+  await initAuth()
+
+  // 检查登录状态
+  if (!isLoggedIn.value) {
+    showLoginModal.value = true
+  }
+
   // 简化版：假设一直在线
   isOnline.value = true
-  
-  // 可以在这里添加心跳检测
-  // heartbeatInterval = window.setInterval(checkHeartbeat, 30000)
 })
 
 onUnmounted(() => {
@@ -99,10 +127,30 @@ onUnmounted(() => {
 })
 
 async function handleSend(content: string) {
+  if (!isLoggedIn.value) {
+    showLoginModal.value = true
+    return
+  }
   await sendMessage(content)
 }
 
 function handleClearSession() {
   clearSession()
 }
+
+async function handleLogout() {
+  await doLogout()
+  showLoginModal.value = true
+}
+
+function handleLoginSuccess() {
+  showLoginModal.value = false
+}
+
+// 监听登录状态变化
+watch(isLoggedIn, (loggedIn) => {
+  if (!loggedIn) {
+    showLoginModal.value = true
+  }
+})
 </script>

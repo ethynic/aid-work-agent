@@ -25,6 +25,8 @@ from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
+from src.db.database import init_database
+from src.api import auth, session as session_api
 
 
 # ============== SSE Session Management ==============
@@ -126,6 +128,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app.name} v{settings.app.version}")
     logger.info(f"LLM Provider: {settings.llm.provider}")
     logger.info(f"Registered tools: {master_agent.tool_registry.list_tools()}")
+    
+    # Initialize database
+    init_database()
+    logger.info("Database initialized")
     
     # Initialize WeCom adapter
     global wecom_adapter
@@ -494,6 +500,12 @@ async def delete_chat_session(session_id: str):
         if session_id in sse_manager.sse_connections:
             del sse_manager.sse_connections[session_id]
     return JSONResponse({"status": "deleted", "session_id": session_id})
+
+
+# ==================== Auth & Session API ====================
+
+app.include_router(auth.router)
+app.include_router(session_api.router)
 
 
 # ==================== CLI Interface ====================
