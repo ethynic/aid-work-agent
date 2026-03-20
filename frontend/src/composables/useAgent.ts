@@ -47,14 +47,10 @@ export function useAgent() {
       await sseManager.connect(
         content,
         sessionId.value,
-        // onProgress - 工具执行进度，同时追加到助手消息内容
+        // onProgress - 工具执行进度，仅添加到执行详情
         (data) => {
           addProgress(data, 'progress')
-          // 将进度追加到助手消息内容
-          currentResponse.value += `\n${data}`
-          if (assistantMessageIndex < messages.value.length) {
-            messages.value[assistantMessageIndex].content = currentResponse.value
-          }
+          // 不再将进度追加到助手消息内容
         },
         // onResponse - AI响应内容
         (data) => {

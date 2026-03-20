@@ -31,6 +31,7 @@ class LLMConfig(BaseModel):
 
 class WecomConfig(BaseModel):
     """企业微信配置"""
+    enabled: bool = False
     corp_id: str = ""
     agent_id: str = ""
     secret: str = ""
@@ -38,9 +39,29 @@ class WecomConfig(BaseModel):
     encoding_aes_key: str = ""
 
 
+class DingtalkConfig(BaseModel):
+    """钉钉配置"""
+    enabled: bool = False
+    app_key: str = ""
+    app_secret: str = ""
+    token: str = ""
+    encoding_aes_key: str = ""
+
+
+class FeishuConfig(BaseModel):
+    """飞书配置"""
+    enabled: bool = False
+    app_id: str = ""
+    app_secret: str = ""
+    verification_token: str = ""
+    encrypt_key: str = ""
+
+
 class ChannelsConfig(BaseModel):
     """渠道配置"""
     wecom: WecomConfig = Field(default_factory=WecomConfig)
+    dingtalk: DingtalkConfig = Field(default_factory=DingtalkConfig)
+    feishu: FeishuConfig = Field(default_factory=FeishuConfig)
 
 
 class EmailToolConfig(BaseModel):
@@ -193,7 +214,41 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     
     if os.getenv("WECOM_SECRET"):
         yaml_config.setdefault("channels", {}).setdefault("wecom", {})["secret"] = os.getenv("WECOM_SECRET")
-    
+
+    if os.getenv("DINGTALK_APP_KEY"):
+        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["app_key"] = os.getenv("DINGTALK_APP_KEY")
+
+    if os.getenv("DINGTALK_APP_SECRET"):
+        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["app_secret"] = os.getenv("DINGTALK_APP_SECRET")
+
+    if os.getenv("DINGTALK_TOKEN"):
+        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["token"] = os.getenv("DINGTALK_TOKEN")
+
+    if os.getenv("DINGTALK_ENCODING_AES_KEY"):
+        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["encoding_aes_key"] = os.getenv("DINGTALK_ENCODING_AES_KEY")
+
+    if os.getenv("FEISHU_APP_ID"):
+        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["app_id"] = os.getenv("FEISHU_APP_ID")
+
+    if os.getenv("FEISHU_APP_SECRET"):
+        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["app_secret"] = os.getenv("FEISHU_APP_SECRET")
+
+    if os.getenv("FEISHU_VERIFICATION_TOKEN"):
+        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["verification_token"] = os.getenv("FEISHU_VERIFICATION_TOKEN")
+
+    if os.getenv("FEISHU_ENCRYPT_KEY"):
+        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["encrypt_key"] = os.getenv("FEISHU_ENCRYPT_KEY")
+
+    # 启用渠道
+    if os.getenv("WECOM_ENABLED", "").lower() in ("true", "1", "yes"):
+        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["enabled"] = True
+
+    if os.getenv("DINGTALK_ENABLED", "").lower() in ("true", "1", "yes"):
+        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["enabled"] = True
+
+    if os.getenv("FEISHU_ENABLED", "").lower() in ("true", "1", "yes"):
+        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["enabled"] = True
+
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True
 

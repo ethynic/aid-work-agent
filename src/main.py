@@ -25,8 +25,10 @@ from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
+from src.channels.manager import channel_manager
 from src.db.database import init_database
 from src.api import auth, session as session_api
+from src.channels import callback as channels_api
 
 
 # ============== SSE Session Management ==============
@@ -135,9 +137,24 @@ async def lifespan(app: FastAPI):
     
     # Initialize WeCom adapter
     global wecom_adapter
-    if settings.channels.wecom.corp_id:
+    if settings.channels.wecom.enabled and settings.channels.wecom.corp_id:
         wecom_adapter = WeComAdapter()
+        channel_manager.register(wecom_adapter)
         logger.info("WeCom adapter initialized")
+    
+    # Initialize Dingtalk adapter
+    if settings.channels.dingtalk.enabled and settings.channels.dingtalk.app_key:
+        from src.channels.dingtalk.adapter import DingtalkAdapter
+        dingtalk_adapter = DingtalkAdapter()
+        channel_manager.register(dingtalk_adapter)
+        logger.info("Dingtalk adapter initialized")
+    
+    # Initialize Feishu adapter
+    if settings.channels.feishu.enabled and settings.channels.feishu.app_id:
+        from src.channels.feishu.adapter import FeishuAdapter
+        feishu_adapter = FeishuAdapter()
+        channel_manager.register(feishu_adapter)
+        logger.info("Feishu adapter initialized")
     
     yield
     
@@ -183,85 +200,6 @@ async def root():
         "version": settings.app.version,
         "status": "running",
     }
-
-
-# ==================== WeCom Callback ====================
-
-@app.get("/wecom/callback")
-async def wecom_callback_get(
-    msg_signature: str,
-    timestamp: str,
-    nonce: str,
-    echostr: str,
-):
-    """
-    WeCom callback verification endpoint
-    
-    WeCom sends a GET request to verify URL validity when configuring callback
-    """
-    if not wecom_adapter:
-        return PlainTextResponse("WeCom adapter not configured", status_code=500)
-    
-    # Verify signature
-    if not await wecom_adapter.verify_signature(msg_signature, timestamp, nonce, echostr):
-        logger.warning("WeCom signature verification failed")
-        return PlainTextResponse("Invalid signature", status_code=403)
-    
-    # Decrypt echostr and return
-    return PlainTextResponse(echostr)
-
-
-@app.post("/wecom/callback")
-async def wecom_callback_post(
-    request: Request,
-    msg_signature: str = "",
-    timestamp: str = "",
-    nonce: str = "",
-):
-    """
-    WeCom message callback endpoint
-    
-    Receives messages pushed by WeCom
-    """
-    if not wecom_adapter:
-        return PlainTextResponse("WeCom adapter not configured", status_code=500)
-    
-    # Get request body
-    body = await request.body()
-    
-    # Verify signature
-    if not await wecom_adapter.verify_signature(msg_signature, timestamp, nonce, body.decode()):
-        logger.warning("WeCom signature verification failed")
-        return PlainTextResponse("Invalid signature", status_code=403)
-    
-    try:
-        # Parse message
-        raw_message = {
-            "body": body.decode(),
-        }
-        message = await wecom_adapter.parse_message(raw_message)
-        
-        logger.info(f"Received WeCom message: {message.user_id}, content: {message.text}")
-        
-        # Process message using master agent
-        session_id = f"wecom_{message.user_id}"
-        response_text = await master_agent.process_message_sync(
-            user_input=message.text,
-            session_id=session_id,
-        )
-        
-        # Send response
-        if wecom_adapter:
-            await wecom_adapter.send_message({
-                "user_id": message.user_id,
-                "message": response_text,
-            })
-        
-        return PlainTextResponse("success")
-    
-    except Exception as e:
-        logger.error(f"Failed to process WeCom message: {e}")
-        return PlainTextResponse("error", status_code=500)
 
 
 # ==================== Web Chat API ====================
@@ -506,6 +444,7 @@ async def delete_chat_session(session_id: str):
 
 app.include_router(auth.router)
 app.include_router(session_api.router)
+app.include_router(channels_api.router)
 
 
 # ==================== CLI Interface ====================
