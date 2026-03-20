@@ -158,7 +158,7 @@ class SubagentExecutor:
         task_description: str,
         session_id: str,
         task_parameters: Optional[Dict[str, Any]] = None,
-        timeout: int = 300,
+        timeout: int = 7200,
         progress_callback: Optional[callable] = None,
     ) -> DelegationResponse:
         """
