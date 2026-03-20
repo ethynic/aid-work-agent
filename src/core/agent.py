@@ -1631,7 +1631,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 })
                 logger.info(f"Auto-injected skill '{auto_loaded_skill}' into conversation with {len(uploaded_files_info)} files")
         
-        max_iterations = 10  # Prevent infinite loops
+        max_iterations = 20  # Prevent infinite loops
         iteration = 0
         
         while iteration < max_iterations:
