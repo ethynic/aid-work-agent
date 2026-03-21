@@ -1,0 +1,55 @@
+---
+description: FastAPI 异步/同步代码规范
+alwaysApply: true
+enabled: true
+---
+
+# 异步/同步开发规范
+
+**核心问题**：避免 `await` 调用同步方法导致的 `TypeError`
+
+## 区分原则
+
+| 类型 | 定义 | 调用 |
+|------|------|------|
+| 同步 | `def method()` | `obj.method()` |
+| 异步 | `async def method()` | `await obj.method()` |
+
+## 路由层调用规范
+
+**异步路由**调用**同步服务**时，使用 `asyncio.to_thread()`：
+
+```python
+import asyncio
+
+@router.get("/data")
+async def get_data():
+    service = MyService()
+    result = await asyncio.to_thread(service.sync_method)  # ✅ 正确
+    return result
+```
+
+**常见错误**：
+```python
+await db_service.list_connections()  # ❌ 同步方法不能用 await
+await asyncio.to_thread(service.method())  # ❌ 不要加括号
+```
+
+## 推荐方案
+
+**方案 1**：统一使用 `asyncio.to_thread()`（推荐）
+- 服务层保持同步（便于测试复用）
+- 路由层异步，使用 `to_thread` 包装
+
+**方案 2**：路由根据情况选择
+```python
+# 简单操作：同步路由
+@router.get("/simple")
+def get_simple():
+    return service.get_data()
+
+# 耗时操作：异步路由 + to_thread
+@router.post("/complex")
+async def post_complex():
+    return await asyncio.to_thread(service.process_data)
+```

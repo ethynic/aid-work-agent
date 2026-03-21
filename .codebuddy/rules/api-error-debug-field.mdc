@@ -1,0 +1,416 @@
+---
+description: 后端接口错误处理规范 - 在响应中返回 debug 字段
+alwaysApply: true
+enabled: true
+---
+
+# 后端接口错误处理规范
+
+**核心原则**：所有后端接口在发生报错时，除了记录日志外，必须在响应中返回 `debug` 字段输出详细错误信息。
+
+## 规范要求
+
+### 1. 错误响应格式
+
+所有 API 错误响应必须包含以下字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `success` | boolean | 是 | 固定为 `false` |
+| `error` | string | 是 | 用户友好的错误描述 |
+| `debug` | string | 是 | 详细的技术错误信息（已过滤敏感信息） |
+
+**重要：敏感信息过滤**
+
+在返回 `debug` 字段之前，必须过滤以下敏感信息：
+
+| 敏感关键词 | 替换为 |
+|-----------|--------|
+| `password` | `***` |
+| `passwd` | `***` |
+| `secret` | `***` |
+| `token` | `***` |
+| `api_key` | `***` |
+| `apikey` | `***` |
+| `access_key` | `***` |
+| `private_key` | `***` |
+| `auth_token` | `***` |
+
+**正确示例**：
+```python
+# 后端代码
+import re
+
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤敏感信息"""
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'passwd["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'access[_-]?key["\s:=]+\S+',
+        r'private[_-]?key["\s:=]+\S+',
+        r'auth[_-]?token["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+try:
+    result = some_operation()
+    return {"success": True, "data": result}
+except Exception as e:
+    error_msg = str(e)
+    logger.error(f"操作失败: {error_msg}", exc_info=True)
+    return {
+        "success": False,
+        "error": "操作失败，请稍后重试",
+        "debug": sanitize_error_info(error_msg)  # 过滤敏感信息后的错误信息
+    }
+```
+
+**前端接收**：
+```json
+{
+  "success": false,
+  "error": "操作失败，请稍后重试",
+  "debug": "ValueError: Database connection failed with password=***"
+}
+```
+
+### 2. 流式输出中的错误处理
+
+对于流式输出的接口，`error` 类型的消息必须包含 `debug` 字段，且必须过滤敏感信息：
+
+```python
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤敏感信息"""
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+try:
+    # 流式处理逻辑
+    for chunk in stream_generator():
+        yield json.dumps({"type": "data", "data": chunk}, ensure_ascii=False)
+except Exception as e:
+    error_msg = str(e)
+    logger.error(f"流式处理失败: {error_msg}", exc_info=True)
+    yield json.dumps({
+        "type": "error",
+        "message": "处理失败，请稍后重试",
+        "debug": sanitize_error_info(error_msg)  # 过滤敏感信息
+    }, ensure_ascii=False)
+```
+
+### 3. Summary 类型输出中的错误信息
+
+对于任务执行后的 `summary` 类型输出，如果部分任务失败，必须包含 `debug` 字段，且必须过滤敏感信息：
+
+```python
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤敏感信息"""
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+# 收集 debug 信息
+debug_info = []
+for i, result in enumerate(execution_results):
+    if not result.get("success"):
+        error_msg = result.get("error", "") or result.get("message", "")
+        if error_msg:
+            task_name = subtasks[i].get("name", f"任务{i+1}") if i < len(subtasks) else f"任务{i+1}"
+            # 过滤敏感信息后添加到 debug_info
+            debug_info.append(f"{task_name}: {sanitize_error_info(error_msg)}")
+
+# 返回 summary
+summary_data = {
+    "type": "summary",
+    "message": summary,
+    "results": execution_results
+}
+if debug_info:
+    summary_data["debug"] = "\n".join(debug_info)
+
+yield json.dumps(summary_data, ensure_ascii=False)
+```
+
+### 4. 路由层异常处理
+
+使用 `try-except` 捕获所有异常，确保返回 `debug` 字段：
+
+```python
+from fastapi import APIRouter, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+@router.post("/api/v1/tasks")
+async def create_task(request: dict):
+    try:
+        # 业务逻辑
+        result = process_task(request)
+        return {"success": True, "data": result}
+    except HTTPException as e:
+        logger.error(f"HTTP 异常: {e.detail}")
+        raise  # HTTPException 会自动处理
+    except Exception as e:
+        logger.error(f"处理任务失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": "处理失败，请稍后重试",
+            "debug": str(e)
+        }
+```
+
+### 5. 全局异常处理器
+
+在 FastAPI 应用中添加全局异常处理器，并过滤敏感信息：
+
+```python
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤敏感信息"""
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"未处理的异常: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "内部服务器错误",
+            "debug": sanitize_error_info(str(exc))  # 过滤敏感信息
+        }
+    )
+```
+
+## 常见错误示例
+
+### ❌ 错误示例 1：缺少 debug 字段
+
+```python
+except Exception as e:
+    logger.error(f"操作失败: {e}")
+    return {"success": False, "error": "操作失败"}  # ❌ 缺少 debug
+```
+
+### ❌ 错误示例 2：debug 字段内容为空
+
+```python
+except Exception as e:
+    logger.error(f"操作失败: {e}")
+    return {
+        "success": False,
+        "error": "操作失败",
+        "debug": ""  # ❌ debug 为空
+    }
+```
+
+### ❌ 错误示例 3：直接抛出异常而不记录
+
+```python
+if not user_id:
+    raise ValueError("用户ID不能为空")  # ❌ 没有日志记录和 debug 字段
+```
+
+### ✅ 正确示例：完整的错误处理（含敏感信息过滤）
+
+```python
+import re
+
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤敏感信息"""
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'passwd["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'access[_-]?key["\s:=]+\S+',
+        r'private[_-]?key["\s:=]+\S+',
+        r'auth[_-]?token["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+if not user_id:
+    logger.error("用户ID不能为空")
+    return {
+        "success": False,
+        "error": "用户ID不能为空",
+        "debug": sanitize_error_info("ValueError: 用户ID不能为空")
+    }
+```
+
+## 日志记录要求
+
+### 1. 日志级别
+
+| 场景 | 日志级别 | 说明 |
+|------|----------|------|
+| 正常业务流程 | `INFO` | 记录关键步骤 |
+| 业务逻辑错误（预期内） | `WARNING` | 如参数验证失败 |
+| 系统异常（非预期） | `ERROR` | 必须记录堆栈 `exc_info=True` |
+
+### 2. 日志格式
+
+```python
+# 后端日志：记录详细的上下文信息
+logger.error(
+    '后端日志：数据库连接失败',
+    exc_info=True,
+    extra={
+        'user_id': user_id,
+        'operation': 'create_task',
+        'error_type': type(e).__name__
+    }
+)
+```
+
+## 快速检查
+
+```bash
+# 查找缺少 debug 字段的错误返回
+grep -rn '"success": false' app/api/ --include="*.py" -A 3 | grep -v 'debug'
+
+# 查找 yield error 不带 debug 的流式输出
+grep -rn 'yield.*type.*error' app/services/ --include="*.py" -A 2 | grep -v 'debug'
+```
+
+## 实施检查清单
+
+- [ ] 所有 `except` 块都包含 `debug` 字段
+- [ ] 所有流式输出的 `error` 类型都包含 `debug` 字段
+- [ ] 所有 `summary` 类型的失败输出都包含 `debug` 字段
+- [ ] **所有 `debug` 字段在返回前都经过敏感信息过滤**
+- [ ] 日志记录使用适当的级别（INFO/WARNING/ERROR）
+- [ ] ERROR 级别日志记录时使用 `exc_info=True`
+- [ ] 全局异常处理器已配置并包含 `debug` 字段
+
+## 安全注意事项
+
+### 敏感信息过滤规则
+
+**必须过滤的敏感字段**：
+- 密码：`password`, `passwd`
+- 密钥：`secret`, `private_key`, `access_key`
+- 令牌：`token`, `auth_token`, `api_key`, `apikey`
+
+**过滤方式**：
+1. 使用正则表达式匹配敏感字段
+2. 将敏感值替换为 `***`
+3. 日志中的敏感信息也需要过滤
+
+**示例对比**：
+
+**❌ 不安全的返回**：
+```json
+{
+  "success": false,
+  "error": "数据库连接失败",
+  "debug": "OperationalError: Access denied for user 'admin'@'localhost' (using password: mySecretPassword123)"
+}
+```
+
+**✅ 安全的返回**：
+```json
+{
+  "success": false,
+  "error": "数据库连接失败",
+  "debug": "OperationalError: Access denied for user 'admin'@'localhost' (using password: ***)"
+}
+```
+
+### 实用工具函数
+
+建议在项目中创建统一的工具函数：
+
+```python
+# app/utils/error_utils.py
+import re
+from typing import List
+
+SENSITIVE_PATTERNS = [
+    r'password["\s:=]+\S+',
+    r'passwd["\s:=]+\S+',
+    r'secret["\s:=]+\S+',
+    r'token["\s:=]+\S+',
+    r'api[_-]?key["\s:=]+\S+',
+    r'access[_-]?key["\s:=]+\S+',
+    r'private[_-]?key["\s:=]+\S+',
+    r'auth[_-]?token["\s:=]+\S+',
+]
+
+def sanitize_error_info(error_msg: str, additional_patterns: List[str] = None) -> str:
+    """过滤错误信息中的敏感信息
+
+    Args:
+        error_msg: 原始错误信息
+        additional_patterns: 额外的敏感信息匹配模式
+
+    Returns:
+        过滤后的错误信息
+    """
+    if not error_msg:
+        return error_msg
+
+    patterns = SENSITIVE_PATTERNS + (additional_patterns or [])
+    sanitized = error_msg
+
+    for pattern in patterns:
+        sanitized = re.sub(
+            pattern,
+            lambda m: m.group(0).split('=')[0] + '=***',
+            sanitized,
+            flags=re.IGNORECASE
+        )
+
+    return sanitized
+```
+
+使用方式：
+```python
+from app.utils.error_utils import sanitize_error_info
+
+try:
+    # 业务逻辑
+    result = process_task(request)
+    return {"success": True, "data": result}
+except Exception as e:
+    logger.error(f"操作失败: {e}", exc_info=True)
+    return {
+        "success": False,
+        "error": "操作失败，请稍后重试",
+        "debug": sanitize_error_info(str(e))
+    }
+```

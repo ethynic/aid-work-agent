@@ -1,0 +1,85 @@
+---
+description: 测试驱动开发规范
+alwaysApply: true
+enabled: true
+---
+
+# TDD 开发流程
+
+```
+需求分析 → 编写测试 → 审核通过 → 运行测试(红灯) → 实现代码 → 测试通过(绿灯) → 重构 → 重复
+```
+
+## 步骤
+
+1. **分析需求**：明确输入、输出和异常情况
+2. **编写测试**：使用 `unittest`，覆盖正常路径、边界条件、异常路径
+3. **运行测试**：确认失败（红灯）
+4. **实现代码**：最小功能代码使测试通过（绿灯）
+5. **重构代码**：优化结构、添加类型提示
+6. **重复过程**：迭代开发
+
+## 测试规范
+
+| 项目 | 要求 |
+|------|------|
+| 命名 | `test_<场景>_<预期结果>` |
+| 夹具 | 使用 `setUp`/`tearDown` |
+| 覆盖率 | 目标 100% |
+| 覆盖范围 | 正常路径、边界条件、异常路径 |
+
+## 测试代码存放位置
+
+所有测试代码必须存放在指定的测试目录中，不得随意放置：
+
+- **后端测试**：`tests/` 目录
+  - 例如：`tests/test_user_service.py`
+  - 例如：`tests/api/test_auth_api.py`
+
+- **前端测试**：`frontend/tests/` 目录
+  - 例如：`frontend/tests/test_chat_component.js`
+  - 例如：`frontend/tests/unit/test_api_utils.js`
+
+**目录结构示例**：
+
+```
+
+  tests/
+    api/           # API 接口测试
+    services/      # 服务层测试
+    utils/         # 工具函数测试
+    test_*.py      # 其他测试文件
+
+frontend/
+  tests/
+    unit/          # 单元测试
+    integration/   # 集成测试
+    e2e/           # 端到端测试
+    test_*.js      # 其他测试文件
+```
+
+## 示例
+
+```python
+import unittest
+
+class TestUserService(unittest.TestCase):
+    def setUp(self):
+        self.service = UserService()
+    
+    def test_create_user_valid_data_returns_user(self):
+        """正常路径：有效数据创建用户成功"""
+        user = self.service.create_user("张三", "zhangsan@example.com")
+        self.assertEqual(user.name, "张三")
+    
+    def test_create_user_empty_name_raises_error(self):
+        """异常路径：空姓名抛出异常"""
+        with self.assertRaises(ValueError):
+            self.service.create_user("", "test@example.com")
+    
+    def test_create_user_max_name_length_succeeds(self):
+        """边界条件：最大姓名长度成功"""
+        max_name = "张" * 50
+        user = self.service.create_user(max_name, "test@example.com")
+        self.assertEqual(user.name, max_name)
+```

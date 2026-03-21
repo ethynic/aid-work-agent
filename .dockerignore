@@ -1,0 +1,70 @@
+# Docker 构建排除文件
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 测试
+tests/
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 文档
+docs/
+*.md
+!requirements.txt
+
+# 开发文件
+*.log
+*.pid
+
+# Docker 相关（避免循环复制）
+Dockerfile
+docker-compose*.yml
+.docker/
+
+# 本地配置
+.env.local
+.env.development
+.env.test
+.env.production
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# CodeBuddy
+.codebuddy/
+
+# 前端（如果有独立构建）
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# 大型数据文件
+*.pdf
+*.zip
+test_uploads/

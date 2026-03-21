@@ -1,0 +1,46 @@
+---
+description: 
+alwaysApply: false
+enabled: true
+updatedAt: 2026-03-19T08:00:00.000Z
+provider: 
+---
+
+# 前端开发注意事项
+
+## 缓存使用原则
+
+**核心原则**：非必要，不使用缓存。复杂的缓存更新逻辑会增加维护成本和 bug 排查难度。
+
+### 规范要求
+
+1. **优先使用直接请求**：除非有明确的性能优化需求（如频繁访问的静态配置），否则 API 调用应直接使用 `api.get`/`api.post`，而不是 `cachedRequest`
+
+2. **避免使用 `cachedRequest`**：缓存机制会导致以下问题：
+   - 数据更新后需要额外的缓存清除逻辑
+   - 缓存过期时间难以确定，可能导致数据不一致
+   - 问题排查时难以判断是缓存问题还是接口问题
+
+3. **如确需缓存，必须提供清除机制**：如果某个 API 必须使用缓存（如下拉选项等静态数据），必须同时提供手动清除缓存的方式
+
+### 正确示例
+
+```javascript
+// ✅ 推荐：直接使用 api 请求
+export const knowledgeAPI = {
+  list: (params) => api.get('/knowledge/', { params }),
+  create: (data) => api.post('/knowledge/', data),
+}
+
+// ❌ 不推荐：使用缓存（除非必要）
+export const someAPI = {
+  list: (params) => cachedRequest('get', '/some-data/', { params }),
+}
+```
+
+### 快速检查
+
+```bash
+# 检查是否在 API 定义中使用了 cachedRequest
+grep -rn "cachedRequest" frontend/src/services/api.js
+```
