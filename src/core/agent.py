@@ -1481,14 +1481,31 @@ create_plan(
             # Generate task ID
             import uuid
             task_id = f"delegate_{uuid.uuid4().hex[:8]}"
-            
+
+            # 创建子智能体专用的回调包装器
+            # 子智能体期望 progress_callback 接收字符串，
+            # 但主智能体的 progress_callback 期望接收字典
+            async def subagent_progress_wrapper(event):
+                """将子智能体的事件转发给上层 progress_callback
+
+                Args:
+                    event: 子智能体传递的事件，可能是字符串或字典
+                """
+                if progress_callback:
+                    if isinstance(event, str):
+                        await progress_callback({"type": "progress", "data": event})
+                    elif isinstance(event, dict):
+                        await progress_callback(event)
+                    else:
+                        await progress_callback(str(event))
+
             # Delegate to subagent
             response = await self.subagent_executor.delegate(
                 task_id=task_id,
                 subagent_name=subagent_name,
                 task_description=task_description,
                 session_id=session_id or "default",
-                progress_callback=progress_callback,
+                progress_callback=subagent_progress_wrapper,
             )
             
             if not response.success:
