@@ -1,16 +1,11 @@
 import axios from 'axios'
 import { useApiStore, useGlobalStore } from '@/stores'
 
-//前端网址如有端口号，将端口号替换为8002，然后拼接 /api/v1, 例如前端网址为 http://localhost:8082/ ，那么后端接口网址为 http://localhost:8002/api/v1
-//前端网址如没有端口号，直接拼接 /api/v1，例如前端网址为 https://aicompany.aidingyi.cn/ ，那么后端接口网址为 https://aicompany.aidingyi.cn/api/v1
-const API_BASE_URL = window.location.port
-  ? `${window.location.protocol}//${window.location.hostname}:8002/api/v1`
-  : `${window.location.protocol}//${window.location.hostname}/api/v1`;
+// 本项目后端 API 基础路径（同源）
+const API_BASE_URL = '/api'
 
-// 导出基础URL（不含 /api/v1 后缀）
-export const API_BASE = window.location.port
-  ? `${window.location.protocol}//${window.location.hostname}:8002`
-  : `${window.location.protocol}//${window.location.hostname}`;
+// 导出基础URL（不含 /api 后缀）
+export const API_BASE = window.location.origin
 
 export { API_BASE_URL }
 const globalStore = useGlobalStore()
@@ -25,7 +20,7 @@ const createApiInstance = () => {
       'Content-Type': 'application/json'
     }
   })
-  
+
   // 请求拦截器
   api.interceptors.request.use(
     (config) => {
@@ -34,10 +29,10 @@ const createApiInstance = () => {
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
       }
-      
+
       // 添加请求ID
       config.headers['X-Request-ID'] = crypto.randomUUID()
-      
+
       return config
     },
     (error) => {
@@ -45,7 +40,7 @@ const createApiInstance = () => {
       return Promise.reject(error)
     }
   )
-  
+
   // 响应拦截器
   api.interceptors.response.use(
     (response) => {
@@ -53,7 +48,7 @@ const createApiInstance = () => {
       if (response.config.responseType === 'text') {
         return response
       }
-      
+
       // 缓存成功响应
       if (response.config.method === 'get') {
         const endpoint = response.config.url.replace(API_BASE_URL, '')
@@ -68,12 +63,12 @@ const createApiInstance = () => {
         globalStore.logout()
         window.location.href = '/login'
       }
-      
+
       globalStore.setError(error)
       return Promise.reject(error)
     }
   )
-  
+
   return api
 }
 
@@ -88,19 +83,19 @@ const cachedRequest = async (method, url, config = {}) => {
       return cached
     }
   }
-  
+
   // 检查是否有相同请求正在进行
   const requestKey = `${url}_${JSON.stringify(config.params || {})}`
   if (apiStore.isRequestInProgress(url, config.params)) {
     return apiStore.getRequest(url, config.params)
   }
-  
+
   // 创建新请求
   let request = api[method](url, config)
-  
+
   // 添加到请求队列
   apiStore.addRequestToQueue(url, config.params, request)
-  
+
   try {
     return await request
   } finally {
@@ -122,215 +117,107 @@ const retryRequest = async (fn, retries = 3, delay = 1000) => {
   }
 }
 
+// ==================== 认证 API ====================
 export const authAPI = {
-  login: (username, password) =>
-    retryRequest(() => api.post('/auth/token', new URLSearchParams({
-      username,
-      password
-    }), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    })),
+  // 手机号密码登录
+  login: (phone, password) =>
+    retryRequest(() => api.post('/auth/phone/login', { phone, password })),
 
-  register: (data) => api.post('/auth/register', data),
+  // 手机号验证码登录
+  phoneCodeLogin: (phone, code) =>
+    retryRequest(() => api.post('/auth/phone/code-login', { phone, code })),
 
-  get_profile: () => cachedRequest('get', '/auth/me'),
+  // 发送短信验证码
+  sendCode: (phone) =>
+    api.post('/auth/phone/send-code', { phone }),
 
-  refresh_token: (token) => api.post('/auth/refresh', { token }),
+  // 用户注册
+  register: (phone, password, code) =>
+    api.post('/auth/register', { phone, password, code }),
 
-  change_password: (oldPassword, newPassword) =>
-    api.post('/auth/change_password', { old_password: oldPassword, new_password: newPassword })
+  // 获取当前用户信息
+  getProfile: () => cachedRequest('get', '/auth/me'),
+
+  // 登出
+  logout: () => api.post('/auth/logout'),
+
+  // 绑定手机号
+  bindPhone: (userId, phone, code) =>
+    api.post('/auth/bind-phone', { user_id: userId, phone, code })
 }
 
-export const llmAPI = {
-  get_providers: () => cachedRequest('get', '/llm/providers'),
+// ==================== 聊天 API ====================
+export const chatAPI = {
+  // 普通聊天
+  chat: (message, sessionId, userId = 'web_user') => {
+    return api.post('/chat', {
+      message,
+      session_id: sessionId,
+      user_id: userId
+    })
+  },
 
-  chat: (data) => api.post('/llm/chat', data),
-
-  chat_stream: (data) => {
-    return fetch(`${API_BASE_URL}/llm/chat_stream`, {
+  // 流式聊天（SSE）
+  chatStream: (message, sessionId, files = null) => {
+    const requestData = {
+      message,
+      session_id: sessionId
+    }
+    if (files) {
+      requestData.files = files
+    }
+    return fetch(`${API_BASE_URL}/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${globalStore.token}`
       },
-      body: JSON.stringify(data)
+      body: JSON.stringify(requestData)
     })
   },
 
-  config: (data) => api.post('/llm/config', data),
+  // 获取聊天历史
+  getHistory: (sessionId) => cachedRequest('get', `/chat/history/${sessionId}`),
 
-  get_config: () => cachedRequest('get', '/llm/config'),
-
-  delete_config: (modelName) => api.delete(`/llm/config/${modelName}`),
-
-  analyze: (query, dataContext, model) =>
-    api.post('/llm/analyze', { query, data_context: dataContext, model }),
-
-  // 智能体相关API
-  agents_chat: (data) => api.post('/llm/agents_chat', data),
-
-  agent_chat_stream: (data) => {
-    return fetch(`${API_BASE_URL}/llm/agent_chat_stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${globalStore.token}`
-      },
-      body: JSON.stringify(data)
-    })
-  },
-
-  agent_learn_interface: (interfaceInfo) => api.post('/llm/agent/learn/interface', interfaceInfo),
-
-  agent_learn_tool: (toolInfo) => api.post('/llm/agent/learn/tool', toolInfo)
+  // 删除会话
+  deleteSession: (sessionId) => api.delete(`/chat/session/${sessionId}`)
 }
 
-export const mcpAPI = {
-  list_tools: (category) => cachedRequest('get', '/mcp/tools', { params: { category } }),
-
-  get_tool_info: (toolName) => cachedRequest('get', `/mcp/tools/${toolName}`),
-
-  register_tool: (data) => api.post('/mcp/tools', data),
-
-  unregister_tool: (toolName) => api.delete(`/mcp/tools/${toolName}`),
-
-  call_tool: (data) => api.post('/mcp/call', data),
-
-  list_servers: () => cachedRequest('get', '/mcp/servers'),
-
-  configure_server: (data) => api.post('/mcp/servers', data),
-
-  start_server: (serverName) => api.post(`/mcp/servers/${serverName}/start`),
-
-  stop_server: (serverName) => api.post(`/mcp/servers/${serverName}/stop`),
-
-  generate_image: (prompt, tool, options) =>
-    api.post('/mcp/image/generate', { prompt, tool_name: tool, options }),
-
-  generate_video: (prompt, tool, options) =>
-    api.post('/mcp/video/generate', { prompt, tool_name: tool, options }),
-
-  health_check: () => cachedRequest('get', '/mcp/health')
+// ==================== 工具 API ====================
+export const toolsAPI = {
+  // 获取可用工具列表
+  listTools: () => cachedRequest('get', '/tools')
 }
 
-export const databaseAPI = {
-  list_connections: () => cachedRequest('get', '/database/connections'),
+// ==================== 会话 API ====================
+export const sessionAPI = {
+  // 获取会话列表
+  listSessions: () => cachedRequest('get', '/sessions'),
 
-  add_connection: (data) => api.post('/database/connections', data),
+  // 创建会话
+  createSession: (data) => api.post('/sessions', data),
 
-  remove_connection: (name) => api.delete(`/database/connections/${name}`),
+  // 获取会话详情
+  getSession: (sessionId) => cachedRequest('get', `/sessions/${sessionId}`),
 
-  test_connection: (name) => api.post(`/database/connections/${name}/test`),
+  // 更新会话
+  updateSession: (sessionId, data) => api.patch(`/sessions/${sessionId}`, data),
 
-  list_tables: (connectionName) => cachedRequest('get', `/database/${connectionName}/tables`),
+  // 删除会话
+  deleteSession: (sessionId) => api.delete(`/sessions/${sessionId}`),
 
-  get_table_info: (connectionName, tableName) =>
-    cachedRequest('get', `/database/${connectionName}/tables/${tableName}`),
+  // 获取会话消息
+  getMessages: (sessionId) => cachedRequest('get', `/sessions/${sessionId}/messages`),
 
-  get_columns: (connectionName, tableName) =>
-    cachedRequest('get', `/database/${connectionName}/tables/${tableName}/columns`),
+  // 添加消息
+  addMessage: (sessionId, role, content, metadata) =>
+    api.post(`/sessions/${sessionId}/messages`, { role, content, metadata }),
 
-  get_schema: (connectionName) => cachedRequest('get', `/database/${connectionName}/schema`),
-
-  get_relationships: (connectionName) =>
-    cachedRequest('get', `/database/${connectionName}/relationships`),
-
-  execute_query: (connectionName, data) =>
-    api.post(`/database/${connectionName}/query`, data),
-
-  generate_sql: (connectionName, data) =>
-    api.post(`/database/${connectionName}/generate_sql`, data),
-
-  analyze_database: (connectionName) => cachedRequest('get', `/database/${connectionName}/analyze`),
-
-  get_sample_data: (connectionName, tableName, limit) =>
-    cachedRequest('get', `/database/${connectionName}/tables/${tableName}/sample`, { params: { limit } }),
-
-  generate_erd: (connectionName) => cachedRequest('get', `/database/${connectionName}/erd`),
-
-  get_metadata: (connectionName) => cachedRequest('get', `/database/${connectionName}/metadata`)
+  // 获取会话上下文
+  getContext: (sessionId) => cachedRequest('get', `/sessions/${sessionId}/context`)
 }
 
-export const taskAPI = {
-  list_tasks: (status, limit) => cachedRequest('get', '/tasks/', { params: { status, limit } }),
-
-  get_task: (taskId) => cachedRequest('get', `/tasks/${taskId}`),
-
-  create_task: (data) => api.post('/tasks/', data),
-
-  cancel_task: (taskId) => api.post(`/tasks/${taskId}/cancel`),
-
-  retry_task: (taskId) => api.post(`/tasks/${taskId}/retry`),
-
-  delete_task: (taskId) => api.delete(`/tasks/${taskId}`),
-
-  get_task_result: (taskId) => cachedRequest('get', `/tasks/${taskId}/result`),
-
-  create_batch_tasks: (tasks) => api.post('/tasks/batch', tasks),
-
-  get_queue_status: () => cachedRequest('get', '/tasks/queues'),
-
-  get_worker_status: () => cachedRequest('get', '/tasks/workers'),
-
-  create_workflow: (name, tasks) => api.post('/tasks/workflow', { name, tasks }),
-
-  list_workflows: () => cachedRequest('get', '/tasks/workflows'),
-
-  get_workflow: (workflowId) => cachedRequest('get', `/tasks/workflows/${workflowId}`),
-
-  schedule_task: (taskDef, cronExpression) =>
-    api.post('/tasks/schedule', { ...taskDef, cron_expression: cronExpression }),
-
-  list_scheduled_jobs: () => cachedRequest('get', '/tasks/scheduled'),
-
-  remove_scheduled_job: (jobId) => api.delete(`/tasks/scheduled/${jobId}`),
-
-  get_statistics: () => cachedRequest('get', '/tasks/statistics')
-}
-
-// 导出工具函数
-export const apiUtils = {
-  // 批量请求
-  batchRequest: async (requests) => {
-    try {
-      const results = await Promise.allSettled(requests)
-      return results.map(result => 
-        result.status === 'fulfilled' ? result.value : null
-      )
-    } catch (error) {
-      globalStore.setError(error)
-      return []
-    }
-  },
-  
-  // 延迟请求
-  debouncedRequest: (fn, delay = 300) => {
-    let timeout
-    return (...args) => {
-      clearTimeout(timeout)
-      return new Promise((resolve) => {
-        timeout = setTimeout(async () => {
-          const result = await fn(...args)
-          resolve(result)
-        }, delay)
-      })
-    }
-  },
-  
-  // 限流请求
-  throttledRequest: (fn, limit = 1000) => {
-    let lastCall = 0
-    return (...args) => {
-      const now = Date.now()
-      if (now - lastCall < limit) {
-        return Promise.resolve(null)
-      }
-      lastCall = now
-      return fn(...args)
-    }
-  }
-}
-
+// ==================== 文件上传 ====================
 export const uploadAPI = {
   upload_file: (file) => {
     const formData = new FormData()
@@ -355,56 +242,88 @@ export const uploadAPI = {
   }
 }
 
+// ==================== 以下为兼容旧版本的API ====================
+// 保留原有API名称以便现有代码兼容
+
+export const llmAPI = {
+  // 使用 chatAPI 进行流式聊天
+  chat_stream: chatAPI.chatStream,
+  agent_chat_stream: chatAPI.chatStream,
+
+  // 获取工具列表
+  get_providers: toolsAPI.listTools
+}
+
 export const employeeAPI = {
-  get_employees: () => cachedRequest('get', '/llm/agents'),
+  // 本项目使用主智能体，暂不提供多智能体管理接口
+  get_employees: () => Promise.resolve({ agents: [] }),
+  get_employee: () => Promise.resolve(null),
+  get_skill_library: () => Promise.resolve({ skills: [] }),
+  get_mcp_library: () => Promise.resolve({ mcps: [] })
+}
 
-  get_employee: (agentId) => cachedRequest('get', `/llm/agents/${agentId}`),
+// ==================== 工具函数 ====================
+export const apiUtils = {
+  // 批量请求
+  batchRequest: async (requests) => {
+    try {
+      const results = await Promise.allSettled(requests)
+      return results.map(result =>
+        result.status === 'fulfilled' ? result.value : null
+      )
+    } catch (error) {
+      globalStore.setError(error)
+      return []
+    }
+  },
 
-  create_employee: (data) => api.post('/llm/agents', data),
+  // 延迟请求
+  debouncedRequest: (fn, delay = 300) => {
+    let timeout
+    return (...args) => {
+      clearTimeout(timeout)
+      return new Promise((resolve) => {
+        timeout = setTimeout(async () => {
+          const result = await fn(...args)
+          resolve(result)
+        }, delay)
+      })
+    }
+  },
 
-  update_employee: (agentId, data) => api.put(`/llm/agents/${agentId}`, data),
+  // 限流请求
+  throttledRequest: (fn, limit = 1000) => {
+    let lastCall = 0
+    return (...args) => {
+      const now = Date.now()
+      if (now - lastCall < limit) {
+        return Promise.resolve(null)
+      }
+      lastCall = now
+      return fn(...args)
+    }
+  }
+}
 
-  delete_employee: (agentId) => api.delete(`/llm/agents/${agentId}`),
+// 保留旧API导出（兼容现有代码）
+export const mcpAPI = {
+  list_tools: () => Promise.resolve({ tools: [] })
+}
 
-  get_skill_library: () => cachedRequest('get', '/llm/skills'),
+export const databaseAPI = {
+  list_connections: () => Promise.resolve({ connections: [] })
+}
 
-  get_mcp_library: () => cachedRequest('get', '/llm/mcps')
+export const taskAPI = {
+  list_tasks: () => Promise.resolve({ tasks: [] })
 }
 
 export const imAPI = {
-  get_apps: () => cachedRequest('get', '/im/apps'),
-
-  get_app: (configId) => cachedRequest('get', `/im/apps/${configId}`),
-
-  create_app: (data) => api.post('/im/apps', data),
-
-  update_app: (configId, data) => api.put(`/im/apps/${configId}`, data),
-
-  delete_app: (configId) => api.delete(`/im/apps/${configId}`),
-
-  reload_apps: () => api.post('/im/apps/reload')
+  get_apps: () => Promise.resolve({ apps: [] })
 }
 
 export const knowledgeAPI = {
-  list: (params) => api.get('/knowledge/', {
-    params: {
-      page: params.page,
-      page_size: params.page_size,
-      keyword: params.keyword
-    }
-  }),
-
-  get: (id) => api.get(`/knowledge/${id}`),
-
-  create: (data) => api.post('/knowledge/', data),
-
-  update: (id, data) => api.put(`/knowledge/${id}`, data),
-
-  delete: (id) => api.delete(`/knowledge/${id}`),
-
-  search: (query, limit) => api.get('/knowledge/search/results', {
-    params: { q: query, limit }
-  })
+  list: () => Promise.resolve({ list: [] })
 }
 
 export default api

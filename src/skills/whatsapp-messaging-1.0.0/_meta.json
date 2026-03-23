@@ -1,0 +1,105 @@
+{
+  "name": "whatsapp-messaging",
+  "version": "1.0.0",
+  "description": "发送WhatsApp消息，支持文本、图片、视频、文档、模板、交互式等多种消息类型",
+  "author": "AID Work Agent Team",
+  "license": "MIT",
+  "homepage": "https://developers.facebook.com/docs/whatsapp",
+  "repository": "",
+  "keywords": [
+    "whatsapp",
+    "messaging",
+    "notification",
+    "communication",
+    "business-api"
+  ],
+  "engines": {
+    "python": ">=3.8"
+  },
+  "dependencies": {
+    "requests": ">=2.28.0",
+    "python-dotenv": ">=1.0.0"
+  },
+  "scripts": {
+    "main": "scripts/whatsapp_sender.py",
+    "test": "scripts/test_api.py"
+  },
+  "configuration": {
+    "env": [
+      {
+        "name": "WHATSAPP_ACCESS_TOKEN",
+        "required": true,
+        "description": "WhatsApp Business API Access Token"
+      },
+      {
+        "name": "WHATSAPP_PHONE_NUMBER_ID",
+        "required": true,
+        "description": "WhatsApp Business Phone Number ID"
+      },
+      {
+        "name": "WHATSAPP_BUSINESS_ACCOUNT_ID",
+        "required": false,
+        "description": "WhatsApp Business Account ID (optional)"
+      }
+    ]
+  },
+  "capabilities": [
+    "send-text-message",
+    "send-image-message",
+    "send-video-message",
+    "send-audio-message",
+    "send-document-message",
+    "send-sticker-message",
+    "send-template-message",
+    "send-interactive-buttons",
+    "send-interactive-list",
+    "send-location-message",
+    "send-contacts-message",
+    "upload-media",
+    "mark-message-as-read"
+  ],
+  "triggers": [
+    {
+      "type": "keyword",
+      "pattern": "whatsapp"
+    },
+    {
+      "type": "keyword",
+      "pattern": "发送消息"
+    },
+    {
+      "type": "keyword",
+      "pattern": "通知"
+    },
+    {
+      "type": "keyword",
+      "pattern": "消息推送"
+    },
+    {
+      "type": "keyword",
+      "pattern": "客户通知"
+    },
+    {
+      "type": "keyword",
+      "pattern": "订单通知"
+    },
+    {
+      "type": "keyword",
+      "pattern": "验证码"
+    }
+  ],
+  "examples": [
+    {
+      "description": "发送文本消息",
+      "command": "python scripts/whatsapp_sender.py --to \"8613800138000\" --message \"订单已确认\""
+    },
+    {
+      "description": "发送图片消息",
+      "command": "python scripts/whatsapp_sender.py --to \"8613800138000\" --type image --image \"https://example.com/img.jpg\" --caption \"产品图片\""
+    },
+    {
+      "description": "发送模板消息",
+      "command": "python scripts/whatsapp_sender.py --to \"8613800138000\" --type template --template-name \"order_confirmation\" --template-language \"zh_CN\""
+    }
+  ]
+}

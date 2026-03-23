@@ -397,7 +397,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { Plus, ChatLineRound, MoreFilled, Refresh, Setting, Picture, Connection, Position, Document, Loading, Upload, Delete, ZoomIn, Edit, Message, Warning, ChatLineSquare, Microphone, VideoPause } from '@element-plus/icons-vue'
 import { ElMessage, ElImageViewer, ElMessageBox } from 'element-plus'
-import { llmAPI, mcpAPI, uploadAPI, employeeAPI, API_BASE } from '@/services/api'
+import { chatAPI, uploadAPI, toolsAPI, API_BASE } from '@/services/api'
 import { useGlobalStore } from '@/stores'
 import dayjs from 'dayjs'
 import DatabaseQueryPanel from '@/components/DatabaseQueryPanel.vue'
@@ -769,23 +769,13 @@ const sendMessage = async () => {
           platform: 'web'
         }
 
-        // 如果有当前智能体或URL参数中有agentId，添加到请求中
-        const agentId = currentAgent.value?.agent_id || route.query.agentId
-        if (agentId) {
-          requestData.agent_id = agentId
-        }
-
+        // 使用流式聊天接口
         let streamResponse
-        if (agentId) {
-          // 有智能体ID，使用智能体流式接口
-          streamResponse = await llmAPI.agent_chat_stream(requestData)
-        } else {
-          // 没有智能体ID，使用普通流式聊天接口
-          streamResponse = await llmAPI.chat_stream({
-            messages: apiMessages,
-            model: selectedModel.value
-          })
-        }
+        streamResponse = await chatAPI.chatStream(
+          messageContent,
+          sessionId,
+          formattedAttachments.length > 0 ? formattedAttachments : null
+        )
 
         // 检查响应状态
         if (!streamResponse || !streamResponse.ok) {
@@ -1134,27 +1124,13 @@ const handleOptionSelect = async (message, option, index) => {
   messages.value.push(userMessage)
   await scrollToBottom()
 
-  // 构建请求对象，符合要求的格式
-  const request = {
-    query: option,
-    messages: messages.value.map(m => ({
-      role: m.role,
-      content: m.content
-    })),
-    model: selectedModel.value,
-    agent_id: currentAgent.value?.agent_id || route.query.agentId,
-    user_id: globalStore.user?.id || globalStore.user?.user_id || 'anonymous',
-    session_id: sessionId,
-    platform: 'web'
-  }
-
   // 清空输入框
   userInput.value = ''
   isLoading.value = true
 
   try {
-    // 调用智能体流式接口
-    const streamResponse = await llmAPI.agent_chat_stream(request)
+    // 调用流式聊天接口
+    const streamResponse = await chatAPI.chatStream(option, sessionId)
 
     if (streamResponse.body && typeof streamResponse.body.getReader === 'function') {
       const reader = streamResponse.body.getReader()
@@ -1502,36 +1478,10 @@ const stopMediaRecording = () => {
   }
 }
 
-const uploadAudioForTranscription = async (audioBlob) => {
-  try {
-    const formData = new FormData()
-    formData.append('audio', audioBlob, 'recording.webm')
 
-    const response = await fetch(`${API_BASE_URL}/llm/transcribe`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${globalStore.token}`
-      },
-      body: formData
-    })
-    
-    if (!response.ok) {
-      throw new Error(`上传失败: ${response.status}`)
-    }
-    
-    const result = await response.json()
-    
-    if (result.success && result.text) {
-      userInput.value += result.text
-      ElMessage.success('语音识别完成')
-    } else {
-      ElMessage.warning('未能识别出文字，请重试')
-    }
-    
-  } catch (error) {
-    console.error('语音识别上传失败:', error)
-    ElMessage.error(`语音识别失败: ${error.message}`)
-  }
+const uploadAudioForTranscription = async (audioBlob) => {
+  // 本项目暂不支持语音识别功能
+  ElMessage.info('语音识别功能开发中，请直接输入文字')
 }
 
 const toggleVoiceRecording = async () => {
@@ -1544,88 +1494,44 @@ const toggleVoiceRecording = async () => {
 
 // 加载智能体信息
 const loadAgentInfo = async () => {
-  const agentId = route.query.agentId
-  if (!agentId) return
-
-  try {
-    const response = await employeeAPI.get_employee(agentId)
-    currentAgent.value = response
-  } catch (error) {
-    console.error('加载智能体信息失败:', error)
-    ElMessage.error('加载智能体信息失败')
-
-    // 重新获取智能体列表
-    try {
-      const employeesResponse = await employeeAPI.get_employees()
-      const employees = employeesResponse.agents
-
-      // 检查是否有差旅智能体
-      const travelAgent = employees.find(agent => agent.name.includes('差旅'))
-      if (travelAgent) {
-        // 重定向到差旅智能体的聊天页面
-        router.push({
-          path: '/chat',
-          query: {
-            agentId: travelAgent.agent_id,
-            agentName: travelAgent.name,
-            agentDisplayName: travelAgent.display_name
-          }
-        })
-      }
-    } catch (error) {
-      console.error('重新获取智能体列表失败:', error)
-    }
+  // 本项目使用主智能体，设置默认智能体信息
+  currentAgent.value = {
+    name: 'master',
+    display_name: '企业智能助手',
+    description: '我是您的企业智能助手，可以帮助您完成多种任务。',
+    skills: [],
+    mcps: []
   }
 }
 
 // 加载可用的技能和MCP
 const loadAvailableSkillsAndMCPs = async () => {
   try {
-    // 加载技能库
-    const skillsResponse = await employeeAPI.get_skill_library()
-    availableSkills.value = skillsResponse.skills
-
-    // 加载MCP库
-    const mcpsResponse = await employeeAPI.get_mcp_library()
-    availableMCPs.value = mcpsResponse.mcps
+    // 加载工具列表
+    const toolsResponse = await toolsAPI.listTools()
+    if (toolsResponse && toolsResponse.tools) {
+      // 将工具转换为技能格式显示
+      availableSkills.value = toolsResponse.tools.map(tool => ({
+        skill_id: tool,
+        name: tool,
+        description: `工具: ${tool}`
+      }))
+    }
   } catch (error) {
     console.error('加载技能和MCP失败:', error)
-    ElMessage.error('加载技能和MCP失败')
+    // 不显示错误，使用空列表
+    availableSkills.value = []
   }
 }
 
-// 显示编辑智能体对话框
+// 显示编辑智能体对话框 - 本项目暂不支持
 const openEditAgentDialog = () => {
-  if (!currentAgent.value) return
-
-  // 填充表单数据
-  agentForm.value.name = currentAgent.value.name
-  agentForm.value.description = currentAgent.value.description
-  agentForm.value.skills = currentAgent.value.skills.map(skill => skill.skill_id)
-  agentForm.value.mcps = currentAgent.value.mcps.map(mcp => mcp.mcp_id)
-
-  editAgentDialogVisible.value = true
+  ElMessage.info('暂不支持编辑智能体')
 }
 
-// 保存智能体编辑
+// 保存智能体编辑 - 本项目暂不支持
 const saveAgentEdit = async () => {
-  if (!currentAgent.value) return
-
-  try {
-    await employeeAPI.update_employee(currentAgent.value.agent_id, {
-      name: agentForm.value.name,
-      description: agentForm.value.description,
-      skills: agentForm.value.skills,
-      mcps: agentForm.value.mcps
-    })
-
-    ElMessage.success('更新智能体成功')
-    await loadAgentInfo()
-    editAgentDialogVisible.value = false
-  } catch (error) {
-    console.error('更新智能体失败:', error)
-    ElMessage.error('更新智能体失败')
-  }
+  ElMessage.info('暂不支持编辑智能体')
 }
 
 
@@ -1642,54 +1548,30 @@ watch(
 
 // 初始化
 onMounted(async () => {
-  await loadAgentsList()
-  loadSelectedAgentFromStorage()
   await loadAgentInfo()
   await loadAvailableSkillsAndMCPs()
 })
 
-// 加载智能体列表
+// 加载智能体列表 - 本项目使用单一主智能体
 const loadAgentsList = async () => {
-  loadingAgents.value = true
-  try {
-    const response = await employeeAPI.get_employees()
-    // cachedRequest 已经返回了 response.data，所以直接访问 response.agents
-    if (response && response.agents) {
-      availableAgents.value = response.agents
-    }
-  } catch (error) {
-    console.error('加载智能体列表失败:', error)
-    ElMessage.error('加载智能体列表失败')
-  } finally {
-    loadingAgents.value = false
-  }
+  // 本项目只有一个主智能体
+  availableAgents.value = [{
+    agent_id: 'master',
+    name: 'master',
+    display_name: '企业智能助手',
+    description: '我是您的企业智能助手，可以帮助您完成多种任务。'
+  }]
+  loadingAgents.value = false
 }
 
 // 从 localStorage 加载选中的智能体
 const loadSelectedAgentFromStorage = () => {
-  try {
-    const savedAgentId = localStorage.getItem('selectedAgentId')
-    if (savedAgentId) {
-      const agentId = savedAgentId
-      // 验证智能体是否在可用列表中
-      const exists = availableAgents.value.find(a => a.agent_id === agentId)
-      if (exists) {
-        currentAgentId.value = agentId
-        currentAgent.value = exists
-      }
-    }
-  } catch (error) {
-    console.error('从 localStorage 加载智能体失败:', error)
-  }
+  // 本项目使用主智能体，无需加载
 }
 
 // 保存选中的智能体到 localStorage
 const saveSelectedAgentToStorage = (agent) => {
-  try {
-    localStorage.setItem('selectedAgentId', agent.agent_id)
-  } catch (error) {
-    console.error('保存智能体到 localStorage 失败:', error)
-  }
+  // 本项目使用主智能体，无需保存
 }
 
 // 处理智能体选择变更

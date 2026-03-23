@@ -15,12 +15,9 @@ export const useGlobalStore = defineStore('global', () => {
   const isAuthenticated = computed(() => !!token.value)
   
   // 应用配置
-  //前端网址如有端口号，将端口号替换为8002，然后拼接 /api/v1, 例如前端网址为 http://localhost:8082/ ，那么后端接口网址为 http://localhost:8002/api/v1
-  //前端网址如没有端口号，直接拼接 /api/v1，例如前端网址为 https://aicompany.aidingyi.cn/ ，那么后端接口网址为 https://aicompany.aidingyi.cn/api/v1
+  // 本项目后端 API 基础路径（同源 /api）
   const config = ref({
-    apiBaseUrl: window.location.port
-      ? `${window.location.protocol}//${window.location.hostname}:8002/api/v1`
-      : `${window.location.protocol}//${window.location.hostname}/api/v1`,
+    apiBaseUrl: '/api',
     timeout: 300000,  // 5分钟超时，足够智能体处理文件分析
     theme: 'light'
   })

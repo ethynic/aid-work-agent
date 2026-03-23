@@ -65,8 +65,7 @@ dmypy.json
 .pyre/
 
 # Project Specific
-skills/
-memory/
+
 !skills/.gitkeep
 !memory/.gitkeep
 
