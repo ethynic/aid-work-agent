@@ -1,10 +1,10 @@
 #!/bin/bash
-#
-# AID Work Agent 部署脚本
-# 支持 Docker 和直接部署两种方式
-#
 
-set -e
+# ============================================
+# AID Work Agent 一键部署脚本
+# ============================================
+
+set -e  # 遇到错误立即退出
 
 # 颜色定义
 RED='\033[0;31m'
@@ -13,291 +13,172 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 默认配置
-DEPLOY_MODE="docker"  # docker | native
-APP_NAME="aid-agent"
-API_PORT=8000
-GRADIO_PORT=7860
+# 项目根目录
+PROJECT_DIR="/var/www/agent"
+DEPLOY_DIR="$PROJECT_DIR/deploy"
 
-# 打印函数
-print_info() {
+# 日志函数
+log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-print_success() {
+log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-print_warning() {
+log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-print_error() {
+log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 帮助信息
-show_help() {
-    cat << EOF
-AID Work Agent 部署脚本
-
-用法: $0 [选项]
-
-选项:
-    -m, --mode MODE        部署模式: docker (默认) | native
-    -p, --port PORT        API 端口 (默认: 8000)
-    -g, --gradio-port PORT Gradio 端口 (默认: 7860)
-    -o, --only-api         仅启动 API 服务
-    -u, --with-ui          同时启动 Gradio UI
-    -d, --down             停止并移除容器
-    -r, --restart          重启服务
-    -l, --logs             查看日志
-    -s, --status           查看服务状态
-    -b, --build            构建 Docker 镜像
-    -h, --help             显示帮助信息
-
-示例:
-    $0 -m docker -p 8000           # Docker 模式，API 端口 8000
-    $0 --with-ui                   # 启动 API + Gradio UI
-    $0 -d                          # 停止服务
-    $0 -l                          # 查看日志
-    $0 -m native                   # 直接部署模式
-
-EOF
+# 检查命令是否存在
+check_command() {
+    if ! command -v $1 &> /dev/null; then
+        log_error "$1 未安装，请先安装 $1"
+        exit 1
+    fi
 }
 
-# 检查依赖
-check_dependencies() {
-    print_info "检查依赖..."
+# 主部署流程
+main() {
+    echo "========================================"
+    echo "  AID Work Agent 生产环境部署"
+    echo "========================================"
+    echo ""
 
-    if [ "$DEPLOY_MODE" = "docker" ]; then
-        if ! command -v docker &> /dev/null; then
-            print_error "Docker 未安装，请先安装 Docker"
+    # 1. 环境检查
+    log_info "步骤 1/7: 检查系统环境..."
+    check_command docker
+    check_command docker-compose
+    check_command nginx
+    log_success "环境检查通过"
+
+    # 2. 检查项目目录
+    log_info "步骤 2/7: 检查项目目录..."
+    if [ ! -d "$PROJECT_DIR" ]; then
+        log_error "项目目录不存在: $PROJECT_DIR"
+        exit 1
+    fi
+    cd $PROJECT_DIR
+    log_success "项目目录检查通过"
+
+    # 3. 检查环境变量配置
+    log_info "步骤 3/7: 检查环境变量配置..."
+    if [ ! -f ".env" ]; then
+        if [ -f "$DEPLOY_DIR/.env.production.example" ]; then
+            log_warning ".env 文件不存在，正在从模板创建..."
+            cp $DEPLOY_DIR/.env.production.example .env
+            log_error "请编辑 .env 文件配置必要的环境变量后再运行部署脚本"
+            log_info "编辑命令: vim $PROJECT_DIR/.env"
+            exit 1
+        else
+            log_error ".env 文件和模板文件都不存在"
             exit 1
         fi
-        print_success "Docker 已安装: $(docker --version)"
+    fi
+    log_success "环境变量配置文件存在"
 
-        if ! command -v docker compose &> /dev/null; then
-            if docker compose version &> /dev/null; then
-                DOCKER_COMPOSE="docker compose"
+    # 4. 创建必要的目录
+    log_info "步骤 4/7: 创建必要的目录..."
+    mkdir -p logs
+    mkdir -p /var/www/qb3_upload/agent_uploads
+    mkdir -p /var/www/qb3_upload/agent_memories
+    sudo chown -R www-data:www-data /var/www/qb3_upload
+    log_success "目录创建完成"
+
+    # 5. 构建前端
+    log_info "步骤 5/7: 构建前端..."
+    if [ -d "frontend" ]; then
+        cd frontend
+        if [ -f "package.json" ]; then
+            if [ ! -d "node_modules" ]; then
+                log_info "安装前端依赖..."
+                npm install
+            fi
+            log_info "构建前端生产版本..."
+            npm run build
+            if [ -d "dist" ]; then
+                log_success "前端构建完成"
             else
-                print_error "Docker Compose 未安装"
+                log_error "前端构建失败：dist 目录不存在"
                 exit 1
             fi
         else
-            DOCKER_COMPOSE="docker compose"
+            log_warning "前端 package.json 不存在，跳过前端构建"
         fi
-        print_success "Docker Compose 已安装: $($DOCKER_COMPOSE --version)"
+        cd ..
     else
-        # 检查 Python
-        if ! command -v python3 &> /dev/null; then
-            print_error "Python3 未安装"
+        log_warning "frontend 目录不存在，跳过前端构建"
+    fi
+
+    # 6. 启动 Docker 容器
+    log_info "步骤 6/7: 启动 Docker 容器..."
+    if [ -f "docker-compose.prod.yml" ]; then
+        # 停止旧容器
+        docker-compose -f docker-compose.prod.yml down 2>/dev/null || true
+        
+        # 构建并启动新容器
+        docker-compose -f docker-compose.prod.yml up -d --build
+        
+        # 等待容器启动
+        log_info "等待容器启动..."
+        sleep 10
+        
+        # 检查容器状态
+        if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+            log_success "容器启动成功"
+        else
+            log_error "容器启动失败"
+            docker-compose -f docker-compose.prod.yml logs
             exit 1
         fi
-        print_success "Python 已安装: $(python3 --version)"
+    else
+        log_error "docker-compose.prod.yml 文件不存在"
+        exit 1
+    fi
 
-        # 检查 pip
-        if ! command -v pip3 &> /dev/null && ! python3 -m pip --version &> /dev/null; then
-            print_warning "pip3 未安装，尝试安装依赖..."
-            python3 -m ensurepip --default-pip || true
+    # 7. 配置 Nginx
+    log_info "步骤 7/7: 配置 Nginx..."
+    NGINX_CONF="deploy/agent.aidingyi.cn.conf"
+    if [ -f "$NGINX_CONF" ]; then
+        # 复制配置文件
+        sudo cp $NGINX_CONF /etc/nginx/sites-available/
+        
+        # 创建软链接
+        sudo ln -sf /etc/nginx/sites-available/agent.aidingyi.cn.conf /etc/nginx/sites-enabled/
+        
+        # 测试配置
+        if sudo nginx -t; then
+            # 重载 Nginx
+            sudo systemctl reload nginx
+            log_success "Nginx 配置完成"
+        else
+            log_error "Nginx 配置测试失败"
+            exit 1
         fi
-    fi
-}
-
-# 加载环境变量
-load_env() {
-    if [ -f "deploy/.env" ]; then
-        print_info "加载环境变量: deploy/.env"
-        export $(grep -v '^#' deploy/.env | xargs)
-    fi
-}
-
-# 构建 Docker 镜像
-build_image() {
-    print_info "构建 Docker 镜像..."
-    docker build -t ${APP_NAME}:latest .
-    print_success "镜像构建完成"
-}
-
-# 启动服务 (Docker 模式)
-start_docker() {
-    print_info "启动 Docker 服务..."
-
-    if [ "$WITH_UI" = true ]; then
-        print_info "启动 API + Gradio UI..."
-        $DOCKER_COMPOSE --profile ui up -d
     else
-        print_info "启动 API 服务..."
-        $DOCKER_COMPOSE up -d aid-agent-api
+        log_warning "Nginx 配置文件不存在，跳过 Nginx 配置"
     fi
 
-    print_success "服务启动完成"
+    # 部署完成
     echo ""
     echo "========================================"
-    echo " 服务地址:"
-    echo "   API:      http://localhost:${API_PORT}"
-    if [ "$WITH_UI" = true ]; then
-        echo "   Gradio UI: http://localhost:${GRADIO_PORT}"
-    fi
+    log_success "部署完成！"
     echo "========================================"
     echo ""
-}
-
-# 停止服务 (Docker 模式)
-stop_docker() {
-    print_info "停止 Docker 服务..."
-    $DOCKER_COMPOSE down
-    print_success "服务已停止"
-}
-
-# 重启服务
-restart_docker() {
-    print_info "重启 Docker 服务..."
-    $DOCKER_COMPOSE restart
-    print_success "服务已重启"
-}
-
-# 查看状态
-status_docker() {
-    $DOCKER_COMPOSE ps
-}
-
-# 查看日志
-logs_docker() {
-    if [ "$WITH_UI" = true ]; then
-        $DOCKER_COMPOSE logs -f aid-agent-api aid-agent-ui
-    else
-        $DOCKER_COMPOSE logs -f aid-agent-api
-    fi
-}
-
-# 启动服务 (原生模式)
-start_native() {
-    print_info "检查 Python 依赖..."
-    if [ -f "requirements.txt" ]; then
-        pip3 install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-    fi
-
-    print_info "启动服务..."
-
-    if [ "$WITH_UI" = true ]; then
-        print_warning "原生模式暂不支持同时启动 Gradio UI"
-        print_info "启动 API 服务..."
-    fi
-
-    export SERVER_PORT=$API_PORT
-    python3 -m uvicorn src.main:app --host 0.0.0.0 --port $API_PORT &
-    PID=$!
-
-    print_success "服务启动完成 (PID: $PID)"
+    echo "访问地址:"
+    echo "  - 前端: https://agent.aidingyi.cn"
+    echo "  - 后端API: https://agent.aidingyi.cn/api"
     echo ""
-    echo "========================================"
-    echo " 服务地址:"
-    echo "   API:      http://localhost:${API_PORT}"
-    echo "   Gradio UI: 使用 Docker 部署以支持 Gradio UI"
-    echo "========================================"
+    echo "常用命令:"
+    echo "  - 查看容器状态: docker-compose -f docker-compose.prod.yml ps"
+    echo "  - 查看日志: docker-compose -f docker-compose.prod.yml logs -f"
+    echo "  - 重启服务: docker-compose -f docker-compose.prod.yml restart"
+    echo "  - 检查部署: $DEPLOY_DIR/check_deployment.sh"
     echo ""
-    echo "按 Ctrl+C 停止服务"
-
-    # 等待信号
-    trap "print_info '正在停止服务...'; kill $PID 2>/dev/null; exit 0" SIGINT SIGTERM
-    wait $PID
-}
-
-# 主函数
-main() {
-    # 解析参数
-    WITH_UI=false
-    ACTION="start"
-
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -m|--mode)
-                DEPLOY_MODE="$2"
-                shift 2
-                ;;
-            -p|--port)
-                API_PORT="$2"
-                shift 2
-                ;;
-            -g|--gradio-port)
-                GRADIO_PORT="$2"
-                shift 2
-                ;;
-            -o|--only-api)
-                WITH_UI=false
-                shift
-                ;;
-            -u|--with-ui)
-                WITH_UI=true
-                shift
-                ;;
-            -d|--down)
-                ACTION="down"
-                shift
-                ;;
-            -r|--restart)
-                ACTION="restart"
-                shift
-                ;;
-            -l|--logs)
-                ACTION="logs"
-                shift
-                ;;
-            -s|--status)
-                ACTION="status"
-                shift
-                ;;
-            -b|--build)
-                ACTION="build"
-                shift
-                ;;
-            -h|--help)
-                show_help
-                exit 0
-                ;;
-            *)
-                print_error "未知参数: $1"
-                show_help
-                exit 1
-                ;;
-        esac
-    done
-
-    # 执行操作
-    case $ACTION in
-        build)
-            check_dependencies
-            load_env
-            build_image
-            ;;
-        start)
-            check_dependencies
-            load_env
-            if [ "$DEPLOY_MODE" = "docker" ]; then
-                start_docker
-            else
-                start_native
-            fi
-            ;;
-        down)
-            check_dependencies
-            stop_docker
-            ;;
-        restart)
-            check_dependencies
-            load_env
-            restart_docker
-            ;;
-        logs)
-            check_dependencies
-            logs_docker
-            ;;
-        status)
-            check_dependencies
-            status_docker
-            ;;
-    esac
 }
 
 # 运行主函数
