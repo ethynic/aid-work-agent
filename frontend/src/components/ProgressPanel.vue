@@ -27,7 +27,7 @@
       </button>
 
       <!-- Content -->
-      <div v-show="isExpanded" class="px-4 pb-3 max-h-64 overflow-y-auto">
+      <div v-show="isExpanded" ref="scrollContainer" class="px-4 pb-3 max-h-[80vh] overflow-y-auto">
         <div class="space-y-1">
           <div 
             v-for="(msg, index) in messages" 
@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import type { ProgressMessage } from '@/types'
 
 interface Props {
@@ -64,6 +64,26 @@ interface Props {
 
 const props = defineProps<Props>()
 const isExpanded = ref(true)
+const scrollContainer = ref<HTMLElement | null>(null)
+
+// 自动滚动到最新内容
+const scrollToBottom = () => {
+  nextTick(() => {
+    if (scrollContainer.value) {
+      scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight
+    }
+  })
+}
+
+// 监听消息变化，自动滚动到底部
+watch(
+  () => props.messages.length,
+  () => {
+    if (isExpanded.value) {
+      scrollToBottom()
+    }
+  }
+)
 
 function getClassByType(type: ProgressMessage['type']): string {
   switch (type) {
