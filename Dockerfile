@@ -24,8 +24,8 @@ COPY requirements.txt .
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# 安装依赖，使用国内镜像加速
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 安装依赖，使用国内镜像加速（腾讯云）
+RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple
 
 # ============== 阶段2：运行阶段 ==============
 FROM python:3.11-slim
