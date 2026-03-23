@@ -97,7 +97,6 @@ const {
   messages,
   progressMessages,
   isProcessing,
-  sessionId,
   currentFiles,
   sendMessage,
   clearSession,

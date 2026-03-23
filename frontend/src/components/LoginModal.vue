@@ -203,7 +203,6 @@ const wxQrcodeUrl = ref('')
 const wxSceneStr = ref('')
 const wxStatus = ref<'waiting' | 'scanned' | 'confirmed' | 'expired'>('waiting')
 let wxPollingInterval: number | null = null
-let wxCooldownInterval: number | null = null
 
 // Cooldown timer for SMS
 let cooldownTimer: number | null = null

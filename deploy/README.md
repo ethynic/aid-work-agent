@@ -1,367 +1,295 @@
-# AID Work Agent 部署指南
+# AID Work Agent 部署脚本说明
 
-## 目录
+本目录包含生产环境部署所需的所有脚本和配置文件。
 
-- [快速开始](#快速开始)
-- [部署方式](#部署方式)
-  - [方式一：Docker Compose 部署](#方式一docker-compose-部署)
-  - [方式二：Docker 手动部署](#方式二docker-手动部署)
-  - [方式三：直接部署（无 Docker）](#方式三直接部署无-docker)
-- [配置说明](#配置说明)
-- [环境变量](#环境变量)
-- [验证部署](#验证部署)
-- [常见问题](#常见问题)
+## 📁 文件清单
 
----
+### 部署脚本
 
-## 快速开始
-
-### 前置要求
-
-- Docker 20.10+
-- Docker Compose 2.0+ (可选，但推荐)
-- 至少 2GB 内存
-
-### 快速启动（使用 Docker Compose）
-
-```bash
-# 1. 克隆项目
-git clone <repository_url>
-cd aid-work-agent
-
-# 2. 创建环境变量文件
-cp deploy/.env.example deploy/.env
-
-# 3. 编辑环境变量，填入你的 API Key
-vim deploy/.env
-
-# 4. 启动服务
-docker compose up -d
-
-# 5. 查看服务状态
-docker compose ps
-
-# 6. 查看日志
-docker compose logs -f
-```
-
----
-
-## 部署方式
-
-### 方式一：Docker Compose 部署
-
-#### 1. 仅启动 API 服务
-
-```bash
-docker compose up -d aid-agent-api
-```
-
-API 服务将在 http://localhost:8000 启动。
-
-#### 2. 同时启动 API 和 Gradio UI
-
-```bash
-docker compose --profile ui up -d
-```
-
-- API 服务：http://localhost:8000
-- Gradio UI：http://localhost:7860
-
-#### 3. 使用自定义端口
-
-编辑 `deploy/.env` 文件：
-
-```bash
-API_PORT=9000
-GRADIO_PORT=7861
-```
-
-#### 4. 停止服务
-
-```bash
-docker compose down
-
-# 如果需要删除数据卷
-docker compose down -v
-```
-
----
-
-### 方式二：Docker 手动部署
-
-#### 1. 构建镜像
-
-```bash
-docker build -t aid-agent:latest .
-```
-
-#### 2. 运行容器
-
-**启动 FastAPI 服务：**
-
-```bash
-docker run -d \
-  --name aid-agent-api \
-  -p 8000:8000 \
-  -e SERVER_MODE=fastapi \
-  -e LLM_PROVIDER=qwen \
-  -e QWEN_API_KEY=your_api_key \
-  -v $(pwd)/logs:/app/logs \
-  aid-agent:latest
-```
-
-**启动 Gradio UI：**
-
-```bash
-docker run -d \
-  --name aid-agent-ui \
-  -p 7860:7860 \
-  -e SERVER_MODE=gradio \
-  -e LLM_PROVIDER=qwen \
-  -e QWEN_API_KEY=your_api_key \
-  -v $(pwd)/logs:/app/logs \
-  aid-agent:latest
-```
-
----
-
-### 方式三：直接部署（无 Docker）
-
-#### 1. 安装依赖
-
-```bash
-# 使用虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或
-.\venv\Scripts\activate  # Windows
-
-# 安装依赖
-pip install -r requirements.txt
-```
-
-#### 2. 配置环境变量
-
-```bash
-# Linux/Mac
-export LLM_PROVIDER=qwen
-export QWEN_API_KEY=your_api_key
-
-# Windows PowerShell
-$env:LLM_PROVIDER="qwen"
-$env:QWEN_API_KEY="your_api_key"
-```
-
-#### 3. 启动服务
-
-**FastAPI 服务：**
-
-```bash
-python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
-```
-
-**Gradio UI：**
-
-```bash
-python gradio_app.py --host 0.0.0.0 --port 7860
-```
-
----
-
-## 配置说明
+| 文件名 | 用途 | 使用方法 |
+|--------|------|---------|
+| `deploy.sh` | 一键部署脚本 | `./deploy.sh` |
+| `update_code.sh` | 代码更新脚本 | `./update_code.sh` |
+| `check_deployment.sh` | 部署检查脚本 | `./check_deployment.sh` |
+| `backup.sh` | 数据备份脚本 | `./backup.sh` |
 
 ### 配置文件
 
-主配置文件位于 `configs/config.yaml`，支持通过环境变量覆盖。
-
-### 配置优先级
-
-环境变量 > config.yaml 默认值
-
----
-
-## 环境变量
-
-### 必需变量
-
-| 变量名 | 说明 | 示例 |
+| 文件名 | 用途 | 说明 |
 |--------|------|------|
-| `LLM_PROVIDER` | LLM 提供商 | `qwen` 或 `zhipu` |
-| `QWEN_API_KEY` | 阿里云 Qwen API Key | `sk-xxxxxxxx` |
-| `ZHIPU_API_KEY` | 智谱 GLM API Key | `xxxxxxxx` |
+| `agent.aidingyi.cn.conf` | Nginx 配置文件 | 需复制到 `/etc/nginx/sites-available/` |
+| `.env.production.example` | 环境变量模板 | 复制为 `.env` 并填写实际配置 |
+| `docker-compose.prod.yml` | 生产环境 Docker Compose | 位于项目根目录 |
 
-### 可选变量
+### 文档
 
-#### 应用配置
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `DEBUG` | `false` | 调试模式 |
-| `API_PORT` | `8000` | API 服务端口 |
-| `GRADIO_PORT` | `7860` | Gradio UI 端口 |
-
-#### 企业微信配置
-
-| 变量名 | 说明 |
+| 文件名 | 用途 |
 |--------|------|
-| `WECOM_ENABLED` | 启用企业微信 (`true`/`false`) |
-| `WECOM_CORP_ID` | 企业 ID |
-| `WECOM_AGENT_ID` | 应用 AgentID |
-| `WECOM_SECRET` | 应用 Secret |
-| `WECOM_TOKEN` | Token |
-| `WECOM_ENCODING_AES_KEY` | EncodingAESKey |
+| `DEPLOYMENT.md` | 完整部署文档 |
+| `README.md` | 本文件 |
 
-#### 钉钉配置
+## 🚀 快速开始
 
-| 变量名 | 说明 |
-|--------|------|
-| `DINGTALK_ENABLED` | 启用钉钉 (`true`/`false`) |
-| `DINGTALK_APP_KEY` | App Key |
-| `DINGTALK_APP_SECRET` | App Secret |
-| `DINGTALK_TOKEN` | Token |
-| `DINGTALK_ENCODING_AES_KEY` | EncodingAESKey |
-
-#### 飞书配置
-
-| 变量名 | 说明 |
-|--------|------|
-| `FEISHU_ENABLED` | 启用飞书 (`true`/`false`) |
-| `FEISHU_APP_ID` | App ID |
-| `FEISHU_APP_SECRET` | App Secret |
-| `FEISHU_VERIFICATION_TOKEN` | Verification Token |
-| `FEISHU_ENCRYPT_KEY` | Encrypt Key |
-
-#### 邮件工具配置
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `SMTP_SERVER` | - | SMTP 服务器 |
-| `SMTP_PORT` | `465` | SMTP 端口 |
-| `SMTP_USER` | - | SMTP 用户名 |
-| `SMTP_PASSWORD` | - | SMTP 密码 |
-| `IMAP_SERVER` | - | IMAP 服务器 |
-| `IMAP_PORT` | `993` | IMAP 端口 |
-
-#### 其他工具配置
-
-| 变量名 | 说明 |
-|--------|------|
-| `TAVILY_API_KEY` | Tavily 搜索 API Key |
-| `BAIDU_OCR_API_KEY` | 百度 OCR API Key |
-| `BAIDU_OCR_SECRET_KEY` | 百度 OCR Secret Key |
-
----
-
-## 验证部署
-
-### 健康检查
+### 1. 首次部署
 
 ```bash
-# 检查 API 健康状态
+# 1. 上传项目到服务器
+# 通过 FTP 将整个项目上传到 /var/www/agent/
+
+# 2. 进入部署目录
+cd /var/www/agent/deploy
+
+# 3. 配置环境变量
+cp .env.production.example ../.env
+vim ../.env
+
+# 4. 执行部署
+chmod +x *.sh
+./deploy.sh
+
+# 5. 检查部署状态
+./check_deployment.sh
+```
+
+### 2. 代码更新
+
+```bash
+cd /var/www/agent/deploy
+./update_code.sh
+```
+
+### 3. 数据备份
+
+```bash
+cd /var/www/agent/deploy
+./backup.sh
+
+# 建议添加到 crontab 实现自动备份
+# 0 2 * * * /var/www/agent/deploy/backup.sh >> /var/log/agent_backup.log 2>&1
+```
+
+## 📝 脚本详细说明
+
+### deploy.sh - 一键部署脚本
+
+自动化执行以下步骤：
+
+1. ✅ 检查系统环境（Docker、Nginx）
+2. ✅ 检查项目目录
+3. ✅ 检查环境变量配置
+4. ✅ 创建必要的目录
+5. ✅ 构建前端
+6. ✅ 启动 Docker 容器
+7. ✅ 配置 Nginx
+
+**前提条件**：
+- 已安装 Docker 和 Docker Compose
+- 已安装 Nginx
+- 已配置 SSL 证书
+- 项目代码已上传到 `/var/www/agent/`
+
+### update_code.sh - 代码更新脚本
+
+自动化执行以下步骤：
+
+1. ✅ 备份当前配置
+2. ✅ 更新前端代码
+3. ✅ 重启服务（可选）
+4. ✅ 健康检查
+
+**适用场景**：
+- 前端代码更新
+- 后端代码更新（通过 volume 挂载自动生效）
+- 配置文件更新
+
+### check_deployment.sh - 部署检查脚本
+
+检查以下项目：
+
+- [x] 项目目录存在
+- [x] 配置文件存在
+- [x] 前端构建文件存在
+- [x] Docker 容器运行状态
+- [x] 容器健康状态
+- [x] 后端 API 健康检查
+- [x] 端口监听状态
+- [x] Nginx 配置正确
+- [x] Nginx 运行状态
+- [x] 上传目录权限
+- [x] 记忆目录权限
+- [x] HTTPS 访问
+- [x] 日志目录权限
+- [x] 磁盘空间
+- [x] 容器资源使用
+
+### backup.sh - 数据备份脚本
+
+备份以下内容：
+
+- ✅ 环境配置文件 (`.env`)
+- ✅ 上传文件目录 (`agent_uploads/`)
+- ✅ 记忆文件目录 (`agent_memories/`)
+- ✅ 日志文件目录 (`logs/`)
+
+**备份策略**：
+- 备份文件存储在 `/var/backups/agent/`
+- 自动清理超过 7 天的旧备份
+- 备份文件命名格式：`YYYYMMDD_HHMMSS.tar.gz`
+
+## 🔧 常用命令
+
+### Docker 管理
+
+```bash
+# 查看容器状态
+docker-compose -f docker-compose.prod.yml ps
+
+# 查看日志
+docker-compose -f docker-compose.prod.yml logs -f
+
+# 重启服务
+docker-compose -f docker-compose.prod.yml restart
+
+# 停止服务
+docker-compose -f docker-compose.prod.yml down
+
+# 重新构建
+docker-compose -f docker-compose.prod.yml up -d --build
+```
+
+### Nginx 管理
+
+```bash
+# 测试配置
+sudo nginx -t
+
+# 重载配置
+sudo systemctl reload nginx
+
+# 重启 Nginx
+sudo systemctl restart nginx
+
+# 查看状态
+sudo systemctl status nginx
+
+# 查看日志
+sudo tail -f /var/log/nginx/error.log
+sudo tail -f /var/log/nginx/access.log
+```
+
+## 📞 故障排查
+
+### 常见问题
+
+#### 1. 容器无法启动
+
+```bash
+# 查看容器日志
+docker logs aid-agent-api --tail 100
+
+# 常见原因：
+# - 环境变量未配置：检查 .env 文件
+# - 端口冲突：修改 docker-compose.prod.yml 中的端口
+# - 依赖问题：重新构建镜像
+```
+
+#### 2. Nginx 502 错误
+
+```bash
+# 检查后端容器是否运行
+docker ps | grep aid-agent-api
+
+# 检查端口连通性
 curl http://localhost:8000/health
 
-# 预期响应
-{
-  "status": "healthy",
-  "version": "1.0.0",
-  "provider": "qwen"
-}
+# 检查 Nginx 错误日志
+sudo tail -f /var/log/nginx/error.log
 ```
 
-### 测试聊天接口
+#### 3. 前端页面空白
 
 ```bash
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "你好"}'
+# 检查前端构建文件
+ls -la /var/www/agent/frontend/dist/
+
+# 检查文件权限
+sudo chown -R www-data:www-data /var/www/agent/frontend/dist/
+
+# 清理浏览器缓存
 ```
 
----
-
-## 常见问题
-
-### Q1: 容器启动失败，提示 "port is already allocated"
-
-端口被占用，修改端口：
+#### 4. 文件上传失败
 
 ```bash
-# 方法1：使用 .env 文件修改端口
-echo "API_PORT=9000" >> deploy/.env
+# 检查目录权限
+ls -la /var/www/qb3_upload/
 
-# 方法2：直接指定端口运行
-docker run -p 9000:8000 aid-agent:latest
+# 修复权限
+sudo chown -R www-data:www-data /var/www/qb3_upload/
+sudo chmod -R 755 /var/www/qb3_upload/
 ```
 
-### Q2: 容器内存不足
+## 🛡️ 安全建议
 
-增加 Docker 内存限制，或添加 SWAP：
+1. **定期更新系统**
+   ```bash
+   sudo apt-get update && sudo apt-get upgrade -y
+   ```
 
-```bash
-docker run -d --memory=4g ...
+2. **配置防火墙**
+   ```bash
+   sudo ufw allow ssh
+   sudo ufw allow 80/tcp
+   sudo ufw allow 443/tcp
+   sudo ufw enable
+   ```
+
+3. **定期备份数据**
+   ```bash
+   # 添加到 crontab
+   crontab -e
+   # 每天凌晨 2 点备份
+   0 2 * * * /var/www/agent/deploy/backup.sh
+   ```
+
+4. **监控日志**
+   ```bash
+   # 定期检查错误日志
+   sudo tail -f /var/log/nginx/error.log
+   docker logs aid-agent-api --tail 100 -f
+   ```
+
+## 📊 性能优化
+
+### Docker 资源限制
+
+编辑 `docker-compose.prod.yml`，调整资源限制：
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '2'
+      memory: 2G
 ```
 
-### Q3: 找不到配置文件
+### Nginx 优化
 
-确保在项目根目录运行容器，配置文件挂载：
+编辑 `/etc/nginx/nginx.conf`：
 
-```bash
-docker run -v $(pwd)/configs:/app/configs ...
+```nginx
+worker_processes auto;
+worker_connections 1024;
+keepalive_timeout 65;
 ```
 
-### Q4: Playwright 浏览器启动失败
+## 📝 更新日志
 
-容器已预装 Playwright 浏览器，如有问题，检查系统依赖：
+- **2026-03-23**: 初始版本，包含完整部署脚本和文档
 
-```bash
-# 重新安装浏览器
-docker exec <container_id> playwright install chromium --with-deps
-```
+## 📞 联系支持
 
-### Q5: 如何查看实时日志
-
-```bash
-# Docker Compose
-docker compose logs -f
-
-# Docker 手动
-docker logs -f <container_id>
-```
-
-### Q6: 如何进入容器调试
-
-```bash
-docker exec -it <container_id> /bin/bash
-```
-
----
-
-## 生产环境建议
-
-1. **使用反向代理**：如 Nginx、Traefik
-2. **启用 HTTPS**：配置 SSL 证书
-3. **限制端口访问**：使用防火墙规则
-4. **定期备份配置**：备份 `config.yaml` 和环境变量
-5. **监控部署**：使用 Prometheus + Grafana
-6. **日志管理**：配置日志轮转，避免磁盘满
-
----
-
-## 目录结构
-
-```
-aid-work-agent/
-├── Dockerfile              # Docker 镜像构建文件
-├── docker-compose.yml      # Docker Compose 配置
-├── .dockerignore           # Docker 构建排除文件
-├── requirements.txt        # Python 依赖
-├── configs/
-│   └── config.yaml         # 主配置文件
-├── src/                    # 源代码
-├── gradio_app.py           # Gradio UI 入口
-├── deploy/
-│   ├── README.md           # 本文档
-│   ├── deploy.sh           # 部署脚本
-│   └── .env.example        # 环境变量示例
-└── logs/                   # 日志目录（运行时创建）
-```
+如遇问题，请查看：
+1. 完整部署文档：`DEPLOYMENT.md`
+2. 项目文档：`/var/www/agent/docs/`
+3. 日志文件：`/var/www/agent/logs/`

@@ -151,3 +151,14 @@ export async function logout(): Promise<void> {
   localStorage.removeItem('auth_token')
   localStorage.removeItem('user_info')
 }
+
+/**
+ * 获取认证请求头
+ */
+export function getAuthHeader(): Record<string, string> {
+  const token = localStorage.getItem('auth_token')
+  if (token) {
+    return { 'Authorization': `Bearer ${token}` }
+  }
+  return {}
+}
