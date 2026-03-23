@@ -13,6 +13,7 @@ from loguru import logger
 from src.tools.base import BaseTool
 from src.tools.file.word_reader import WordReader, is_word_document
 from src.tools.file.excel_reader import ExcelReader, is_excel_document
+from src.tools.file.ppt_reader import PPTReader, is_ppt_document
 
 
 class FileReaderTool(BaseTool):
@@ -23,8 +24,9 @@ class FileReaderTool(BaseTool):
 1. 文本文件：自动检测文件编码（UTF-8、GBK、GB2312等），适用于.txt、.py、.md、.json、.csv等文本文件
 2. Word文档：读取.docx文件，提取文本段落、表格内容和文档元信息（标题、作者等）
 3. Excel文档：读取.xlsx文件，提取工作表数据、单元格内容和文档元信息
-4. 支持行号范围读取，可指定start_line和end_line参数读取指定行
-5. 默认最大文件大小限制为10MB，可通过max_size参数调整"""
+4. PPT文档：读取.pptx文件，提取每页的标题、正文和表格内容，按页返回数据
+5. 支持行号范围读取，可指定start_line和end_line参数读取指定行
+6. 默认最大文件大小限制为10MB，可通过max_size参数调整"""
     category = "file"
     parameters_schema = {
         "type": "object",
@@ -88,6 +90,8 @@ class FileReaderTool(BaseTool):
         self.word_reader = WordReader()
         # Excel文档读取器
         self.excel_reader = ExcelReader()
+        # PPT文档读取器
+        self.ppt_reader = PPTReader()
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -156,6 +160,10 @@ class FileReaderTool(BaseTool):
             # 检查是否为Excel文档
             if is_excel_document(str(path)):
                 return self._read_excel_document(path, start_line, end_line)
+
+            # 检查是否为PPT文档
+            if is_ppt_document(str(path)):
+                return self._read_ppt_document(path)
 
             # 读取文件内容
             if encoding:
@@ -471,6 +479,47 @@ class FileReaderTool(BaseTool):
             return {
                 "success": False,
                 "error": f"读取Excel文档失败: {str(e)}"
+            }
+
+    def _read_ppt_document(self, path: Path) -> Dict[str, Any]:
+        """
+        读取PPT文档
+
+        Args:
+            path: PPT文档路径
+
+        Returns:
+            执行结果
+        """
+        try:
+            # 使用PPTReader读取文档
+            result = self.ppt_reader.read_ppt_document(str(path))
+
+            if not result.get("success"):
+                return result
+
+            # 返回结果（PPT不需要行号范围）
+            logger.info(f"成功读取PPT文档: {path} (页数: {result.get('page_count', 0)})")
+
+            return {
+                "success": True,
+                "message": f"成功读取PPT文档内容",
+                "file_path": str(path),
+                "file_type": "pptx",
+                "encoding": "utf-8",
+                "total_lines": result.get("total_lines", 0),
+                "file_size": path.stat().st_size,
+                "content": result.get("content", ""),
+                "pages": result.get("pages", []),
+                "page_count": result.get("page_count", 0),
+                "document_info": result.get("document_info", {})
+            }
+
+        except Exception as e:
+            logger.error(f"读取PPT文档失败: {e}")
+            return {
+                "success": False,
+                "error": f"读取PPT文档失败: {str(e)}"
             }
 
 

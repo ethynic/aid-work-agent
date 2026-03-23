@@ -49,3 +49,6 @@ python-docx>=1.0.0  # Word document reading and processing
 
 # Excel Document Processing
 openpyxl>=3.1.0  # Excel document reading and processing
+
+# PPT Document Processing
+python-pptx>=1.0.0  # PPT document reading and processing
