@@ -355,7 +355,6 @@ async def chat_stream(request: ChatRequest):
                 future = executor.submit(run_agent)
                 
                 # 主循环：定期检查并yield结果
-                import time
                 last_progress_count = 0
 
                 while not completed.is_set() or len(results['chunks']) > 0 or len(results['progress']) > last_progress_count:
@@ -394,7 +393,7 @@ async def chat_stream(request: ChatRequest):
                     if completed.is_set():
                         break
 
-                    time.sleep(0.05)  # 50ms轮询间隔
+                    await asyncio.sleep(0.05)  # 50ms轮询间隔，不阻塞事件循环
                 
                 # 确保线程完成
                 future.result()
