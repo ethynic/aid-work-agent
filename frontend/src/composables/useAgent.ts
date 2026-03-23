@@ -1,6 +1,6 @@
 import { ref, onUnmounted } from 'vue'
 import type { ChatMessage, ProgressMessage } from '@/types'
-import { SSEManager } from '@/api/agent'
+import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 
 export function useAgent() {
   const messages = ref<ChatMessage[]>([])
@@ -10,19 +10,52 @@ export function useAgent() {
   const error = ref<string | null>(null)
   const sessionId = ref<string>(generateSessionId())
 
+  // 当前附件列表
+  const currentFiles = ref<UploadedFile[]>([])
+
   const sseManager = new SSEManager()
 
   function generateSessionId(): string {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
   }
 
+  /**
+   * 上传单个文件
+   */
+  async function uploadAttachment(file: File): Promise<UploadedFile> {
+    const uploaded = await uploadFile(file)
+    currentFiles.value.push(uploaded)
+    return uploaded
+  }
+
+  /**
+   * 移除已上传的附件
+   */
+  function removeAttachment(file_id: string) {
+    currentFiles.value = currentFiles.value.filter(f => f.file_id !== file_id)
+  }
+
+  /**
+   * 清空所有附件
+   */
+  function clearAttachments() {
+    currentFiles.value = []
+  }
+
   async function sendMessage(content: string) {
     if (!content.trim() || isProcessing.value) return
+
+    // 构建用户消息内容（含附件信息）
+    let userContent = content.trim()
+    if (currentFiles.value.length > 0) {
+      const fileNames = currentFiles.value.map(f => f.name).join(', ')
+      userContent += `\n\n[附件: ${fileNames}]`
+    }
 
     // 添加用户消息
     messages.value.push({
       role: 'user',
-      content: content.trim(),
+      content: userContent,
       timestamp: Date.now()
     })
 
@@ -47,6 +80,7 @@ export function useAgent() {
       await sseManager.connect(
         content,
         sessionId.value,
+        currentFiles.value.length > 0 ? [...currentFiles.value] : undefined,
         // onProgress - 工具执行进度，仅添加到执行详情
         (data) => {
           addProgress(data, 'progress')
@@ -201,8 +235,12 @@ export function useAgent() {
     currentResponse,
     error,
     sessionId,
+    currentFiles,
     sendMessage,
     clearMessages,
-    clearSession
+    clearSession,
+    uploadAttachment,
+    removeAttachment,
+    clearAttachments
   }
 }

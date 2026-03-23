@@ -1,8 +1,54 @@
 <template>
   <div class="max-w-4xl mx-auto">
     <div class="relative">
+      <!-- 附件预览区 -->
+      <div v-if="files.length > 0" class="mb-3 flex flex-wrap gap-2">
+        <div
+          v-for="file in files"
+          :key="file.file_id"
+          class="flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg border border-slate-600"
+        >
+          <svg v-if="file.type === 'image'" class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <svg v-else class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <span class="text-sm text-slate-300 max-w-32 truncate">{{ file.name }}</span>
+          <button
+            @click="emit('remove', file.file_id)"
+            class="text-slate-500 hover:text-red-400 transition-colors"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
       <!-- Text Input -->
       <div class="flex items-end gap-3">
+        <!-- 上传按钮 -->
+        <button
+          @click="triggerFileInput"
+          :disabled="disabled || isProcessing"
+          class="flex-shrink-0 p-3 rounded-xl bg-slate-700/50 border border-slate-600 text-slate-400 hover:text-cyan-400 hover:border-cyan-500/50 transition-all disabled:opacity-50"
+          title="添加附件"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+          </svg>
+        </button>
+
+        <!-- 隐藏的文件输入 -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          class="hidden"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif"
+          @change="handleFileChange"
+        />
+
         <div class="flex-1 relative">
           <textarea
             ref="inputRef"
@@ -15,10 +61,10 @@
             class="w-full px-4 py-3 bg-slate-700/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all disabled:opacity-50"
             :class="[isProcessing ? 'pr-20' : '']"
           ></textarea>
-          
+
           <!-- Processing indicator -->
-          <div 
-            v-if="isProcessing" 
+          <div
+            v-if="isProcessing"
             class="absolute right-3 bottom-3 flex items-center gap-2 text-cyan-400"
           >
             <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -32,10 +78,10 @@
         <!-- Send Button -->
         <button
           @click="handleSend"
-          :disabled="!canSend || !inputText.trim()"
+          :disabled="!canSend || (!inputText.trim() && files.length === 0)"
           :class="[
             'px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2',
-            canSend && inputText.trim()
+            canSend && (inputText.trim() || files.length > 0)
               ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-400 hover:to-blue-500 shadow-lg shadow-cyan-500/25'
               : 'bg-slate-700 text-slate-400 cursor-not-allowed'
           ]"
@@ -63,30 +109,38 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import type { UploadedFile } from '@/api/agent'
 
 interface Props {
   disabled: boolean
   isProcessing: boolean
+  files: UploadedFile[]
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'send', content: string): void
+  (e: 'upload', file: File): void
+  (e: 'remove', file_id: string): void
 }>()
 
 const inputText = ref('')
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const canSend = computed(() => {
   return !props.disabled && !props.isProcessing
 })
 
 function handleSend() {
-  if (!canSend.value || !inputText.value.trim()) return
-  
+  if (!canSend.value) return
+
+  // 有文字内容或有附件时都可以发送
+  if (!inputText.value.trim() && props.files.length === 0) return
+
   emit('send', inputText.value.trim())
   inputText.value = ''
-  
+
   // Reset textarea height
   if (inputRef.value) {
     inputRef.value.style.height = 'auto'
@@ -96,5 +150,19 @@ function handleSend() {
 function newLine() {
   // Allow default behavior for Shift+Enter
   // Auto-resize textarea is handled by CSS
+}
+
+function triggerFileInput() {
+  fileInputRef.value?.click()
+}
+
+function handleFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files && input.files.length > 0) {
+    const file = input.files[0]
+    emit('upload', file)
+    // 清空input以允许重复选择同一文件
+    input.value = ''
+  }
 }
 </script>

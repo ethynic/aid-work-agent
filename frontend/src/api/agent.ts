@@ -1,5 +1,51 @@
 import type { MessageStreamEvent } from '@/types'
 
+// 上传文件接口
+export interface UploadedFile {
+  file_id: string
+  name: string
+  size: number
+  mime_type: string
+  type: 'image' | 'file'
+}
+
+/**
+ * 上传文件到服务器
+ */
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    throw new Error(`上传失败: ${response.status}`)
+  }
+
+  const result = await response.json()
+  if (!result.success) {
+    throw new Error(result.error || '上传失败')
+  }
+
+  return result
+}
+
+/**
+ * 删除已上传的文件
+ */
+export async function deleteFile(file_id: string): Promise<void> {
+  const response = await fetch(`/api/upload/${file_id}`, {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) {
+    throw new Error(`删除失败: ${response.status}`)
+  }
+}
+
 /**
  * SSE连接管理器
  * 处理Server-Sent Events的解析和事件分发
@@ -10,6 +56,7 @@ export class SSEManager {
   async connect(
     message: string,
     sessionId: string,
+    files: UploadedFile[] | undefined,
     onProgress: (data: string) => void,
     onResponse: (data: string) => void,
     onComplete: () => void,
@@ -28,7 +75,14 @@ export class SSEManager {
         },
         body: JSON.stringify({
           message,
-          session_id: sessionId
+          session_id: sessionId,
+          files: files?.map(f => ({
+            type: f.type,
+            name: f.name,
+            file_id: f.file_id,
+            mime_type: f.mime_type,
+            size: f.size,
+          })),
         }),
         signal: this.abortController.signal,
       })
@@ -51,7 +105,7 @@ export class SSEManager {
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onError, onToolStart, onToolResult, onThinking })
+            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking })
           }
           onComplete()
           break
@@ -65,7 +119,7 @@ export class SSEManager {
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onError, onToolStart, onToolResult, onThinking })
+          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking })
         }
       }
     } catch (error) {
@@ -85,6 +139,7 @@ export class SSEManager {
     callbacks: {
       onProgress: (data: string) => void
       onResponse: (data: string) => void
+      onComplete: () => void
       onError: (error: Error) => void
       onToolStart?: (toolName: string, toolArgs: object) => void
       onToolResult?: (toolName: string, result: any, success: boolean) => void

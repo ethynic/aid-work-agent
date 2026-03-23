@@ -162,6 +162,18 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutting down")
 
 
+# ============== File Upload Configuration ==============
+import shutil
+from pathlib import Path
+
+# 上传文件存储目录
+UPLOAD_DIR = Path("./uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+# 已上传的文件存储 {file_id: file_info}
+uploaded_files: Dict[str, Dict[str, Any]] = {}
+
+
 # Create FastAPI app
 app = FastAPI(
     title=settings.app.name,
@@ -259,6 +271,132 @@ async def list_tools():
     })
 
 
+# ==================== File Upload API ====================
+
+from fastapi import UploadFile, File
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """
+    上传文件接口
+
+    上传文件并返回文件ID，供后续聊天使用
+
+    返回:
+    {
+        "success": true,
+        "file_id": "file_xxx",
+        "name": "文件名",
+        "size": 12345,
+        "mime_type": "application/pdf"
+    }
+    """
+    try:
+        # 生成唯一文件ID
+        file_id = f"file_{uuid.uuid4().hex[:12]}"
+
+        # 获取文件扩展名
+        suffix = Path(file.filename or "unknown").suffix.lower()
+
+        # 保存文件
+        file_path = UPLOAD_DIR / f"{file_id}{suffix}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # 获取文件信息
+        file_size = file_path.stat().st_size
+
+        # 根据扩展名判断文件类型
+        mime_type_map = {
+            '.pdf': 'application/pdf',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.txt': 'text/plain',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.mp3': 'audio/mpeg',
+            '.mp4': 'video/mp4',
+        }
+        mime_type = mime_type_map.get(suffix, 'application/octet-stream')
+
+        # 保存文件信息
+        uploaded_files[file_id] = {
+            "file_id": file_id,
+            "name": file.filename or "unknown",
+            "path": str(file_path.absolute()),
+            "size": file_size,
+            "mime_type": mime_type,
+            "type": "image" if mime_type.startswith("image/") else "file"
+        }
+
+        logger.info(f"文件上传成功: {file.filename}, file_id: {file_id}, size: {file_size}")
+
+        return JSONResponse({
+            "success": True,
+            "file_id": file_id,
+            "name": file.filename,
+            "size": file_size,
+            "mime_type": mime_type,
+            "type": uploaded_files[file_id]["type"]
+        })
+
+    except Exception as e:
+        logger.error(f"文件上传失败: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": "文件上传失败",
+            "debug": str(e)
+        }, status_code=500)
+
+
+@app.get("/api/upload/{file_id}")
+async def get_uploaded_file(file_id: str):
+    """
+    获取已上传文件的信息
+
+    返回文件的元信息（不返回文件内容）
+    """
+    if file_id not in uploaded_files:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    return JSONResponse({
+        "success": True,
+        **uploaded_files[file_id]
+    })
+
+
+@app.delete("/api/upload/{file_id}")
+async def delete_uploaded_file(file_id: str):
+    """
+    删除已上传的文件
+    """
+    if file_id not in uploaded_files:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    try:
+        file_path = Path(uploaded_files[file_id]["path"])
+        if file_path.exists():
+            file_path.unlink()
+        del uploaded_files[file_id]
+
+        return JSONResponse({
+            "success": True,
+            "message": "文件已删除"
+        })
+    except Exception as e:
+        logger.error(f"删除文件失败: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": "删除文件失败",
+            "debug": str(e)
+        }, status_code=500)
+
+
 # ==================== SSE Chat API ====================
 
 @app.post("/api/chat/stream")
@@ -278,7 +416,7 @@ async def chat_stream(request: ChatRequest):
     响应: Server-Sent Events 流
     """
     session_id = sse_manager.get_or_create_session(request.session_id)
-    
+
     # 处理附件
     attachments = None
     if request.files:
@@ -289,15 +427,37 @@ async def chat_stream(request: ChatRequest):
                 "name": f.get("name", "unknown"),
                 "mime_type": f.get("mime_type", ""),
             }
+
+            # 如果提供了 file_id，使用 uploaded_files 中的实际路径
+            file_id = f.get("file_id")
+            if file_id and file_id in uploaded_files:
+                att["path"] = uploaded_files[file_id]["path"]
+                att["file_id"] = file_id
+
             if "content" in f:
                 att["content"] = f["content"]
             attachments.append(att)
-    
+
     # 添加SSE客户端
     client_queue = sse_manager.add_sse_client(session_id)
-    
-    # 添加用户消息到历史
-    sse_manager.add_to_history(session_id, "user", request.message)
+
+    # 构建带文件路径的上下文消息
+    file_context = ""
+    if attachments:
+        file_paths = []
+        for att in attachments:
+            path = att.get("path", "")
+            name = att.get("name", "")
+            if path:
+                file_paths.append(f"  - {name}: {path}")
+            else:
+                file_paths.append(f"  - {name}")
+        if file_paths:
+            file_context = f"\n\n【已上传文件路径】\n" + "\n".join(file_paths) + "\n请使用上述路径读取文件内容。"
+
+    # 添加用户消息到历史（包含文件路径上下文）
+    full_message = request.message + file_context
+    sse_manager.add_to_history(session_id, "user", full_message)
     
     async def event_generator():
         """SSE事件生成器"""
@@ -335,7 +495,7 @@ async def chat_stream(request: ChatRequest):
                     async def consume_generator():
                         """创建协程来迭代async generator"""
                         async for chunk in master_agent.process_message(
-                            user_input=request.message,
+                            user_input=full_message,
                             session_id=session_id,
                             attachments=attachments,
                             progress_callback=async_progress_callback

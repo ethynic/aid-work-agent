@@ -65,8 +65,11 @@
         <div class="flex-shrink-0 border-t border-slate-700 bg-slate-800/50 p-4">
           <ChatInput
             @send="handleSend"
+            @upload="handleUpload"
+            @remove="handleRemoveFile"
             :disabled="isProcessing"
             :is-processing="isProcessing"
+            :files="currentFiles"
           />
         </div>
       </div>
@@ -95,8 +98,12 @@ const {
   progressMessages,
   isProcessing,
   sessionId,
+  currentFiles,
   sendMessage,
-  clearSession
+  clearSession,
+  uploadAttachment,
+  removeAttachment,
+  clearAttachments
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
@@ -132,10 +139,25 @@ async function handleSend(content: string) {
     return
   }
   await sendMessage(content)
+  // 发送成功后清空附件
+  clearAttachments()
+}
+
+async function handleUpload(file: File) {
+  try {
+    await uploadAttachment(file)
+  } catch (error) {
+    console.error('文件上传失败:', error)
+  }
+}
+
+function handleRemoveFile(file_id: string) {
+  removeAttachment(file_id)
 }
 
 function handleClearSession() {
   clearSession()
+  clearAttachments()
 }
 
 async function handleLogout() {
