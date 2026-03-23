@@ -25,8 +25,21 @@ provider:
 修改 `frontend/vite.config.ts` 中的 `VERSION` 常量为当前时间（年月日时分）：
 
 ```bash
-python -c "from datetime import datetime as dt; t=dt.now().strftime('%Y%m%d%H%M'); import re; c=open('frontend/vite.config.ts').read(); open('frontend/vite.config.ts','w').write(re.sub(r\"VERSION\s*=\s*'[^']*'\", \"VERSION = '%s'\" % t, c))"
+python scripts/update_version.py
 ```
+
+> **辅助脚本说明**：如 `scripts/update_version.py` 不存在，需先创建：
+> ```python
+> from datetime import datetime as dt
+> import re
+> t = dt.now().strftime('%Y%m%d%H%M')
+> with open('frontend/vite.config.ts', 'r') as f:
+>     content = f.read()
+> content = re.sub(r"VERSION\s*=\s*'[^']*'", "VERSION = '%s'" % t, content)
+> with open('frontend/vite.config.ts', 'w') as f:
+>     f.write(content)
+> print(t)
+> ```
 
 #### 步骤 2：提交代码到 Git 仓库
 使用 `commit.py` 提交代码（支持中文和空格）：
