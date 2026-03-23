@@ -13,7 +13,10 @@ export class SSEManager {
     onProgress: (data: string) => void,
     onResponse: (data: string) => void,
     onComplete: () => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
+    onToolStart?: (toolName: string, toolArgs: object) => void,
+    onToolResult?: (toolName: string, result: any, success: boolean) => void,
+    onThinking?: (data: string) => void
   ): Promise<void> {
     this.abortController = new AbortController()
 
@@ -23,9 +26,9 @@ export class SSEManager {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          message, 
-          session_id: sessionId 
+        body: JSON.stringify({
+          message,
+          session_id: sessionId
         }),
         signal: this.abortController.signal,
       })
@@ -44,25 +47,25 @@ export class SSEManager {
 
       while (true) {
         const { done, value } = await reader.read()
-        
+
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onError })
+            this.parseSSELine(buffer, { onProgress, onResponse, onError, onToolStart, onToolResult, onThinking })
           }
           onComplete()
           break
         }
 
         buffer += decoder.decode(value, { stream: true })
-        
+
         // 按 SSE 格式分割：每条消息以空行分隔
         // 完整事件格式: "data: {...}\n\n"
         const messages = buffer.split(/\n\n/)
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onError })
+          this.parseSSELine(msg, { onProgress, onResponse, onError, onToolStart, onToolResult, onThinking })
         }
       }
     } catch (error) {
@@ -83,16 +86,19 @@ export class SSEManager {
       onProgress: (data: string) => void
       onResponse: (data: string) => void
       onError: (error: Error) => void
+      onToolStart?: (toolName: string, toolArgs: object) => void
+      onToolResult?: (toolName: string, result: any, success: boolean) => void
+      onThinking?: (data: string) => void
     }
   ) {
     // 处理多行数据
     const dataLines = line.split('\n')
-    
+
     for (const l of dataLines) {
       if (!l.startsWith('data: ')) continue
-      
+
       const data = l.slice(6).trim()
-      
+
       if (data === '[DONE]') {
         callbacks.onComplete?.()
         return
@@ -100,7 +106,7 @@ export class SSEManager {
 
       try {
         const event = JSON.parse(data) as MessageStreamEvent
-        
+
         switch (event.type) {
           case 'connected':
             // 连接成功，不需要特殊处理
@@ -116,6 +122,15 @@ export class SSEManager {
             break
           case 'error':
             callbacks.onError(new Error(event.data))
+            break
+          case 'tool_start':
+            callbacks.onToolStart?.(event.toolName, event.toolArgs)
+            break
+          case 'tool_result':
+            callbacks.onToolResult?.(event.toolName, event.result, event.success)
+            break
+          case 'thinking':
+            callbacks.onThinking?.(event.data)
             break
         }
       } catch {

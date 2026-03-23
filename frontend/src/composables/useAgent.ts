@@ -69,6 +69,43 @@ export function useAgent() {
           error.value = err.message
           addProgress(`❌ 错误: ${err.message}`, 'error')
           isProcessing.value = false
+        },
+        // onToolStart - 工具开始执行
+        (toolName, toolArgs) => {
+          const toolDisplayName = getToolDisplayName(toolName, toolArgs)
+          addProgress(`🔧 开始执行 ${toolDisplayName}...`, 'tool_start', toolName, toolArgs)
+        },
+        // onToolResult - 工具执行结果
+        (toolName, result, success) => {
+          const toolDisplayName = getToolDisplayName(toolName, {})
+          if (success) {
+            // 根据不同工具显示不同结果预览
+            if (toolName === 'web_search') {
+              const results = result?.results || []
+              addProgress(`✅ ${toolDisplayName}完成，找到${results.length}条结果`, 'tool_result', toolName, undefined, result)
+            } else if (toolName === 'email_send') {
+              addProgress(`✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
+            } else if (toolName === 'content_generate') {
+              const content = result?.content || ''
+              const preview = content.length > 100 ? content.slice(0, 100) + '...' : content
+              addProgress(`✅ ${toolDisplayName}完成\n📝 ${preview}`, 'tool_result', toolName, undefined, result)
+            } else if (toolName === 'file_read') {
+              const content = result?.content || ''
+              const preview = content.length > 100 ? content.slice(0, 100) + '...' : content
+              addProgress(`✅ ${toolDisplayName}完成\n📄 ${preview}`, 'tool_result', toolName, undefined, result)
+            } else if (toolName === 'browser_open') {
+              addProgress(`✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
+            } else {
+              addProgress(`✅ ${toolDisplayName}执行完成`, 'tool_result', toolName, undefined, result)
+            }
+          } else {
+            const errorMsg = result?.error || '未知错误'
+            addProgress(`❌ ${toolDisplayName}失败: ${errorMsg}`, 'tool_result', toolName, undefined, result)
+          }
+        },
+        // onThinking - LLM思考中
+        (data) => {
+          addProgress(`🤔 ${data}`, 'thinking')
         }
       )
     } catch (err) {
@@ -78,11 +115,65 @@ export function useAgent() {
     }
   }
 
-  function addProgress(content: string, type: ProgressMessage['type']) {
+  function getToolDisplayName(toolName: string, toolArgs: object): string {
+    switch (toolName) {
+      case 'web_search':
+        const keyword = (toolArgs as any)?.keyword || ''
+        return `网络搜索「${keyword.slice(0, 20)}...」`
+      case 'email_send':
+        const to = (toolArgs as any)?.to || ''
+        return `发送邮件至「${to}」`
+      case 'email_read':
+        const folder = (toolArgs as any)?.folder || 'INBOX'
+        const limit = (toolArgs as any)?.limit || 10
+        return `读取邮件（${folder}，${limit}封）`
+      case 'content_generate':
+        const contentType = (toolArgs as any)?.content_type || ''
+        return `生成内容（${contentType}）`
+      case 'browser_open':
+        const url = (toolArgs as any)?.url || ''
+        return `打开网页「${url.slice(0, 30)}...」`
+      case 'delegate_to_subagent':
+        const subagentName = (toolArgs as any)?.subagent_name || ''
+        return `调用${subagentName}子智能体`
+      case 'skill_execute':
+        const skill = (toolArgs as any)?.skill || ''
+        return `执行技能「${skill}」`
+      case 'use_skill':
+        const skillName = (toolArgs as any)?.skill || ''
+        return `加载技能「${skillName}」`
+      case 'file_read':
+        const filePath = (toolArgs as any)?.file_path || ''
+        return `读取文件「${filePath}」`
+      case 'doc_summarize':
+        return '总结文档'
+      case 'doc_translate':
+        const target = (toolArgs as any)?.target_lang || ''
+        return `翻译文档为${target}`
+      case 'ocr_image':
+        const imagePath = (toolArgs as any)?.image_path || ''
+        return `识别图片文字「${imagePath}」`
+      case 'create_plan':
+        return '创建执行计划'
+      default:
+        return toolName
+    }
+  }
+
+  function addProgress(
+    content: string,
+    type: ProgressMessage['type'],
+    toolName?: string,
+    toolArgs?: object,
+    result?: any
+  ) {
     progressMessages.value.push({
       type,
       content,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      toolName,
+      toolArgs,
+      result
     })
   }
 

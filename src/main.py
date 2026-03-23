@@ -321,14 +321,15 @@ async def chat_stream(request: ChatRequest):
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    
-                    # 进度回调：同步函数
-                    def sync_progress_callback(message: str):
-                        results['progress'].append(message)
-                    
+
+                    # 进度回调：同步函数，支持多种事件类型
+                    # event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
+                    def sync_progress_callback(event):
+                        results['progress'].append(event)
+
                     # 包装成async回调
                     async def async_progress_callback(message: str):
-                        sync_progress_callback(message)
+                        sync_progress_callback({"type": "progress", "data": message})
                     
                     # 运行agent
                     async def consume_generator():
@@ -356,19 +357,30 @@ async def chat_stream(request: ChatRequest):
                 # 主循环：定期检查并yield结果
                 import time
                 last_progress_count = 0
-                
+
                 while not completed.is_set() or len(results['chunks']) > 0 or len(results['progress']) > last_progress_count:
                     # Yield 新的进度消息
                     while len(results['progress']) > last_progress_count:
-                        msg = results['progress'][last_progress_count]
+                        progress_event = results['progress'][last_progress_count]
+                        # progress_event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
                         event = {
-                            "type": "progress",
-                            "data": msg,
+                            "type": progress_event.get("type", "progress"),
                             "timestamp": int(datetime.now().timestamp() * 1000)
                         }
+                        # 根据事件类型添加相应字段
+                        if event["type"] == "tool_start":
+                            event["toolName"] = progress_event.get("toolName", "")
+                            event["toolArgs"] = progress_event.get("toolArgs", {})
+                        elif event["type"] == "tool_result":
+                            event["toolName"] = progress_event.get("toolName", "")
+                            event["result"] = progress_event.get("result", {})
+                            event["success"] = progress_event.get("success", True)
+                        else:
+                            event["data"] = progress_event.get("data", progress_event.get("message", ""))
+
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         last_progress_count += 1
-                    
+
                     # Yield 新的响应chunk
                     while len(results['chunks']) > 0:
                         chunk = results['chunks'].pop(0)
@@ -378,10 +390,10 @@ async def chat_stream(request: ChatRequest):
                             "timestamp": int(datetime.now().timestamp() * 1000)
                         }
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    
+
                     if completed.is_set():
                         break
-                    
+
                     time.sleep(0.05)  # 50ms轮询间隔
                 
                 # 确保线程完成

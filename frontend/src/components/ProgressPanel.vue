@@ -73,6 +73,11 @@ function getClassByType(type: ProgressMessage['type']): string {
       return 'bg-green-500/10 text-green-300 border-l-2 border-green-500'
     case 'thinking':
       return 'bg-purple-500/10 text-purple-300 border-l-2 border-purple-500'
+    case 'tool_start':
+      return 'bg-cyan-500/10 text-cyan-300 border-l-2 border-cyan-500'
+    case 'tool_result':
+      // 根据成功失败状态返回不同样式
+      return 'bg-cyan-500/10 text-cyan-300 border-l-2 border-cyan-500'
     default:
       return 'bg-slate-700/30 text-slate-300 border-l-2 border-cyan-500'
   }
@@ -83,6 +88,8 @@ function getIconByType(type: ProgressMessage['type']): string {
     case 'error': return '❌'
     case 'complete': return '✅'
     case 'thinking': return '🤔'
+    case 'tool_start': return '🔧'
+    case 'tool_result': return '📤'
     default: return '🔄'
   }
 }
