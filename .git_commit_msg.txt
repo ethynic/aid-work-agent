@@ -1,1 +1,0 @@
-fix: pass correct progress callback to subagent to enable tool events
