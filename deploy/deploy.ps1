@@ -99,13 +99,14 @@ Write-Host "----------------------------------------"
 # 递归获取所有文件（排除指定目录和 .md 文件）
 $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     $fullPath = $_.FullName
-    # 排除目录：.git, .codebuddy, .workbuddy, deploy, docs, frontend\src, logs, plans, test_uploads
+    # 排除目录：.git, .codebuddy, .workbuddy, deploy, docs, frontend\src, frontend\node_modules, logs, plans, test_uploads
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).git*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).codebuddy*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).workbuddy*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)deploy*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)docs*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)src*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)node_modules*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)logs*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)plans*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)test_uploads*") -and
