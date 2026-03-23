@@ -25,8 +25,7 @@ provider:
 修改 `frontend/vite.config.ts` 中的 `VERSION` 常量为当前时间（年月日时分）：
 
 ```bash
-$timestamp = Get-Date -Format "yyyyMMddHHmm"
-(Get-Content frontend/vite.config.ts) -replace 'VERSION\s*=\s*"[^"]*"', "VERSION = `"$timestamp`"" | Set-Content frontend/vite.config.ts
+python -c "from datetime import datetime as dt; t=dt.now().strftime('%Y%m%d%H%M'); import re; c=open('frontend/vite.config.ts').read(); open('frontend/vite.config.ts','w').write(re.sub(r\"VERSION\s*=\s*'[^']*'\", \"VERSION = '%s'\" % t, c))"
 ```
 
 #### 步骤 2：提交代码到 Git 仓库
