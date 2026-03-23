@@ -142,22 +142,25 @@ AGENT_TOOLS = [
         }
     },
     {
-        "name": "ocr_image",
-        "description": "使用OCR从图片中提取文字",
+        "name": "paddleocr_doc_parsing",
+        "description": "使用PaddleOCR解析PDF或图片文档，返回每页的markdown文本内容",
         "input_schema": {
             "type": "object",
             "properties": {
-                "image_path": {
+                "file_url": {
                     "type": "string",
-                    "description": "图片文件路径"
+                    "description": "文档URL地址，支持PDF或图片"
                 },
-                "language": {
+                "file_path": {
                     "type": "string",
-                    "description": "OCR识别语言（如：ch表示中文，en表示英文）",
-                    "default": "ch"
+                    "description": "本地文件路径"
+                },
+                "file_type": {
+                    "type": "integer",
+                    "description": "文件类型：0=PDF，1=图片。不填则自动检测"
                 }
             },
-            "required": ["image_path"]
+            "required": []
         }
     },
     {
@@ -621,7 +624,7 @@ class Agent:
     def _register_builtin_tools(self):
         """Register built-in tools"""
         from src.tools.email.email_tool import EmailSendTool, EmailReadTool, EmailListFoldersTool
-        from src.tools.ocr.ocr_tool import OCRImageTool, OCRPdfTool
+        from src.tools.ocr import PaddleOCRDocParsingTool
         from src.tools.document.doc_tool import DocSummarizeTool, DocTranslateTool
         from src.tools.search.search_tool import WebSearchTool
         from src.tools.browser.browser_tool import (
@@ -653,8 +656,7 @@ class Agent:
         self.tool_registry.register(EmailSendTool(default_user_email))
         self.tool_registry.register(EmailReadTool(default_user_email))
         self.tool_registry.register(EmailListFoldersTool(default_user_email))
-        self.tool_registry.register(OCRImageTool())
-        self.tool_registry.register(OCRPdfTool())
+        self.tool_registry.register(PaddleOCRDocParsingTool())
         self.tool_registry.register(DocSummarizeTool())
         self.tool_registry.register(DocTranslateTool())
         self.tool_registry.register(WebSearchTool())
@@ -769,11 +771,11 @@ class Agent:
         elif tool_name == "doc_translate":
             target = tool_args.get("target_lang", "")
             return f"翻译文档为{target}"
-        elif tool_name == "ocr_image":
-            path = tool_args.get("image_path", "")
-            return f"识别图片文字「{path}」"
-        elif tool_name == "ocr_pdf":
-            return "识别PDF文字"
+        elif tool_name == "paddleocr_doc_parsing":
+            file_path = tool_args.get("file_path", "")
+            file_url = tool_args.get("file_url", "")
+            source = file_path if file_path else file_url
+            return f"解析文档「{source}」"
         elif tool_name == "create_plan":
             return "创建执行计划"
         else:

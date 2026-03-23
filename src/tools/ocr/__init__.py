@@ -1,5 +1,5 @@
 """OCR工具模块"""
 
-from .ocr_tool import OCRImageTool, OCRPdfTool
+from .ocr_tool import PaddleOCRDocParsingTool
 
-__all__ = ["OCRImageTool", "OCRPdfTool"]
+__all__ = ["PaddleOCRDocParsingTool"]
