@@ -10,8 +10,13 @@ import {
   updateSession,
   getSessionMessages,
   addSessionMessage,
+  getLatestSession,
+  getSessionRecords,
+  getSessionTokenUsage,
   type ChatSession,
-  type ChatMessage
+  type ChatMessage,
+  type ChatRecord,
+  type TokenUsage
 } from '@/api/session'
 import { useAuth } from './useAuth'
 
@@ -133,6 +138,55 @@ export function useSession() {
     currentSessionId.value = null
   }
 
+  /**
+   * 加载并自动选择最近会话
+   */
+  async function loadLatestSession(): Promise<boolean> {
+    if (!isLoggedIn.value) return false
+
+    try {
+      const result = await getLatestSession()
+      if (result.session) {
+        currentSessionId.value = result.session.session_id
+        // 确保sessions列表中包含该会话
+        const exists = sessions.value.find(s => s.session_id === result.session!.session_id)
+        if (!exists) {
+          sessions.value.unshift(result.session)
+        }
+        return true
+      }
+      return false
+    } catch (e) {
+      console.error('Failed to load latest session:', e)
+      return false
+    }
+  }
+
+  /**
+   * 获取会话的所有记录
+   */
+  async function loadSessionRecords(sessionId: string): Promise<ChatRecord[]> {
+    try {
+      const result = await getSessionRecords(sessionId)
+      return result.records || []
+    } catch (e) {
+      console.error('Failed to load records:', e)
+      return []
+    }
+  }
+
+  /**
+   * 获取会话的Token消耗
+   */
+  async function loadSessionTokenUsage(sessionId: string): Promise<TokenUsage | null> {
+    try {
+      return await getSessionTokenUsage(sessionId)
+    } catch (e) {
+      console.error('Failed to load token usage:', e)
+      return null
+    }
+  }
+
   return {
     sessions,
     currentSessionId,
@@ -144,6 +198,9 @@ export function useSession() {
     selectSession,
     loadSessionMessages,
     saveMessage,
-    clearCurrentSession
+    clearCurrentSession,
+    loadLatestSession,
+    loadSessionRecords,
+    loadSessionTokenUsage
   }
 }

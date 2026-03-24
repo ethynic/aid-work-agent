@@ -322,6 +322,150 @@ class MessageDB:
             return cursor.rowcount > 0
 
 
+# ============== 会话记录数据库访问 ==============
+
+def generate_record_id() -> str:
+    """生成唯一记录ID"""
+    return f"rec_{uuid.uuid4().hex[:12]}"
+
+
+class ChatRecordDB:
+    """会话记录数据库访问类 - 记录每次和AI的对话"""
+
+    @staticmethod
+    def create(
+        session_id: str,
+        user_id: str,
+        user_message: str,
+        assistant_message: str = None,
+        total_token_count: int = 0,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        model: str = None,
+        execution_details: dict = None,
+        status: str = "completed",
+        error_message: str = None,
+        duration_ms: int = 0
+    ) -> Optional[Dict[str, Any]]:
+        """创建新的会话记录"""
+        record_id = generate_record_id()
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    INSERT INTO chat_records 
+                    (record_id, session_id, user_id, user_message, assistant_message,
+                     total_token_count, prompt_tokens, completion_tokens, model,
+                     execution_details, status, error_message, duration_ms)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record_id, session_id, user_id, user_message, assistant_message,
+                    total_token_count, prompt_tokens, completion_tokens, model,
+                    json.dumps(execution_details) if execution_details else None,
+                    status, error_message, duration_ms
+                ))
+                conn.commit()
+
+                logger.info(f"Chat record created: {record_id} for session: {session_id}")
+                return ChatRecordDB.get_by_id(record_id)
+            except Exception as e:
+                logger.error(f"Failed to create chat record: {e}")
+                return None
+
+    @staticmethod
+    def get_by_id(record_id: str) -> Optional[Dict[str, Any]]:
+        """根据记录ID获取会话记录"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM chat_records WHERE record_id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                result = dict(row)
+                if result.get("execution_details"):
+                    result["execution_details"] = json.loads(result["execution_details"])
+                return result
+            return None
+
+    @staticmethod
+    def list_by_session(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取会话的所有记录"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM chat_records
+                WHERE session_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+            """, (session_id, limit))
+            records = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get("execution_details"):
+                    result["execution_details"] = json.loads(result["execution_details"])
+                records.append(result)
+            return records
+
+    @staticmethod
+    def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """获取用户的所有会话记录"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM chat_records
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (user_id, limit))
+            records = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get("execution_details"):
+                    result["execution_details"] = json.loads(result["execution_details"])
+                records.append(result)
+            return records
+
+    @staticmethod
+    def get_total_token_by_session(session_id: str) -> Dict[str, int]:
+        """获取会话的总token消耗"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    COALESCE(SUM(total_token_count), 0) as total,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt,
+                    COALESCE(SUM(completion_tokens), 0) as completion
+                FROM chat_records
+                WHERE session_id = ?
+            """, (session_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "total_tokens": row["total"],
+                    "prompt_tokens": row["prompt"],
+                    "completion_tokens": row["completion"]
+                }
+            return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
+
+    @staticmethod
+    def delete(record_id: str) -> bool:
+        """删除会话记录"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM chat_records WHERE record_id = ?", (record_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def delete_by_session(session_id: str) -> bool:
+        """删除会话的所有记录"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM chat_records WHERE session_id = ?", (session_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
 # ============== 短信验证码 ==============
 
 def send_sms_code(phone: str) -> bool:

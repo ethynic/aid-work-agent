@@ -29,6 +29,7 @@ from src.channels.manager import channel_manager
 from src.db.database import init_database
 from src.api import auth, session as session_api
 from src.channels import callback as channels_api
+from src.services.session_record import SessionRecordManager
 
 
 # ============== SSE Session Management ==============
@@ -105,6 +106,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     files: Optional[List[Dict[str, Any]]] = None
+    user_id: Optional[str] = None  # 用于会话记录
 
 
 class ChatResponse(BaseModel):
@@ -400,7 +402,7 @@ async def delete_uploaded_file(file_id: str):
 # ==================== SSE Chat API ====================
 
 @app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(http_request: Request, request: ChatRequest):
     """
     SSE流式聊天接口
     
@@ -486,6 +488,24 @@ async def chat_stream(request: ChatRequest):
                     # event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
                     def sync_progress_callback(event):
                         results['progress'].append(event)
+                        # 同时将事件传递给会话记录服务（同步版本）
+                        record_service.handle_progress_event(event)
+
+                    # 从请求头解析用户身份（优先使用真实用户）
+                    # 如果请求头中没有有效的认证信息，才使用请求体中的user_id
+                    current_user = auth.get_current_user(http_request)
+                    if current_user:
+                        user_id = current_user["user_id"]
+                        logger.info(f"后端日志：从请求头解析用户身份 user_id={user_id}")
+                    else:
+                        user_id = request.user_id or "anonymous"
+                        logger.info(f"后端日志：使用匿名用户或请求体user_id user_id={user_id}")
+                    record_service = SessionRecordManager.start_record(
+                        session_id=session_id,
+                        user_id=user_id,
+                        user_message=full_message
+                    )
+                    record_service.set_model(master_agent.llm.get_model_name())
 
                     # 包装成async回调
                     async def async_progress_callback(message: str):
@@ -504,9 +524,21 @@ async def chat_stream(request: ChatRequest):
                     
                     loop.run_until_complete(consume_generator())
                     loop.close()
+                    
+                    # 保存会话记录
+                    full_response = "".join(results['chunks'])
+                    record_service.complete(full_response)
+                    if results.get('error'):
+                        record_service.mark_error(results['error'])
+                    SessionRecordManager.end_record()
+                    
                 except Exception as e:
                     results['error'] = str(e)
                     logger.error(f"Agent thread error: {e}")
+                    # 记录错误
+                    if SessionRecordManager.get_current_record():
+                        SessionRecordManager.get_current_record().mark_error(str(e))
+                        SessionRecordManager.end_record()
                 finally:
                     completed.set()
             

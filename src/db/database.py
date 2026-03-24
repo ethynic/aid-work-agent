@@ -133,6 +133,39 @@ def init_database():
             )
         """)
         
+        # 会话记录表（每次和AI的对话）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_message TEXT NOT NULL,
+                assistant_message TEXT,
+                total_token_count INTEGER DEFAULT 0,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                model TEXT,
+                execution_details TEXT,
+                status TEXT DEFAULT 'completed',
+                error_message TEXT,
+                duration_ms INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+        
+        # 索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chat_records_session
+            ON chat_records(session_id, created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chat_records_user
+            ON chat_records(user_id, created_at DESC)
+        """)
+        
         # 验证码表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sms_codes (

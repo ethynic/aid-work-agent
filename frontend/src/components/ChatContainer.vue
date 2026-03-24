@@ -125,7 +125,7 @@ const {
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
-const { currentSessionId, createNewSession, loadSessions, saveMessage } = useSession()
+const { currentSessionId, createNewSession, loadSessions, loadLatestSession, saveMessage } = useSession()
 
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
@@ -208,8 +208,10 @@ async function handleLogout() {
 
 function handleLoginSuccess() {
   showLoginModal.value = false
-  // 登录成功后加载会话列表
-  loadSessions()
+  // 登录成功后加载会话列表并自动打开最近会话
+  loadSessions().then(() => {
+    loadLatestSession()
+  })
 }
 
 // 监听登录状态变化

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from loguru import logger
 
 from src.api.auth import get_current_user
-from src.db.models import SessionDB, MessageDB
+from src.db.models import SessionDB, MessageDB, ChatRecordDB
 
 router = APIRouter(prefix="/api/sessions", tags=["会话管理"])
 
@@ -211,3 +211,84 @@ async def get_session_context(request: Request, session_id: str):
         },
         "messages": messages
     }
+
+
+# ============== 会话记录相关API ==============
+
+@router.get("/latest")
+async def get_latest_session(request: Request):
+    """获取当前用户的最近会话"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    sessions = SessionDB.list_by_user(user["user_id"], limit=1)
+    if not sessions:
+        return {"session": None}
+
+    return {"session": sessions[0]}
+
+
+@router.get("/{session_id}/records")
+async def list_session_records(request: Request, session_id: str, limit: int = 100):
+    """获取会话的所有记录（每次对话的详情）"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    session = SessionDB.get_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if session["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    records = ChatRecordDB.list_by_session(session_id, limit)
+    return {"records": records}
+
+
+@router.get("/{session_id}/token-usage")
+async def get_session_token_usage(request: Request, session_id: str):
+    """获取会话的总token消耗"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    session = SessionDB.get_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if session["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    token_usage = ChatRecordDB.get_total_token_by_session(session_id)
+    return {
+        "session_id": session_id,
+        "total_tokens": token_usage["total_tokens"],
+        "prompt_tokens": token_usage["prompt_tokens"],
+        "completion_tokens": token_usage["completion_tokens"]
+    }
+
+
+@router.get("/{session_id}/records/{record_id}")
+async def get_session_record(request: Request, session_id: str, record_id: str):
+    """获取指定的会话记录详情"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    session = SessionDB.get_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if session["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    record = ChatRecordDB.get_by_id(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+
+    if record["session_id"] != session_id:
+        raise HTTPException(status_code=404, detail="记录不存在于该会话")
+
+    return record

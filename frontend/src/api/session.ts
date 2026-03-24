@@ -145,3 +145,75 @@ export async function getSessionContext(sessionId: string): Promise<SessionConte
   if (!res.ok) throw new Error('Failed to fetch context')
   return res.json()
 }
+
+// ============== 会话记录相关 ==============
+
+export interface ChatRecord {
+  record_id: string
+  session_id: string
+  user_id: string
+  user_message: string
+  assistant_message: string
+  total_token_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  model: string
+  execution_details: {
+    tool_executions: Array<{
+      tool_name: string
+      tool_args: Record<string, any>
+      result: string
+      success: boolean
+      error: string
+      duration_ms: number
+    }>
+    total_iterations: number
+    subagent_calls: Array<any>
+    plan_id: string
+    plan_steps: Array<any>
+  }
+  status: 'completed' | 'failed'
+  error_message: string
+  duration_ms: number
+  created_at: string
+}
+
+export interface TokenUsage {
+  session_id: string
+  total_tokens: number
+  prompt_tokens: number
+  completion_tokens: number
+}
+
+/**
+ * 获取当前用户的最近会话
+ */
+export async function getLatestSession(): Promise<{ session: ChatSession | null }> {
+  const res = await fetch(`${API_BASE}/latest`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('Failed to fetch latest session')
+  return res.json()
+}
+
+/**
+ * 获取会话的所有记录
+ */
+export async function getSessionRecords(sessionId: string, limit: number = 100): Promise<{ records: ChatRecord[] }> {
+  const res = await fetch(`${API_BASE}/${sessionId}/records?limit=${limit}`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('Failed to fetch records')
+  return res.json()
+}
+
+/**
+ * 获取会话的Token消耗统计
+ */
+export async function getSessionTokenUsage(sessionId: string): Promise<TokenUsage> {
+  const res = await fetch(`${API_BASE}/${sessionId}/token-usage`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('Failed to fetch token usage')
+  return res.json()
+}
