@@ -52,3 +52,8 @@ openpyxl>=3.1.0  # Excel document reading and processing
 
 # PPT Document Processing
 python-pptx>=1.0.0  # PPT document reading and processing
+
+# SMB/FTP File Transfer
+pysmb>=1.2.9  # SMB protocol support
+cryptography>=41.0.0  # Password encryption
+

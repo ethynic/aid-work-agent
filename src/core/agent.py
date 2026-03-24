@@ -503,6 +503,33 @@ AGENT_TOOLS = [
             },
             "required": []
         }
+    },
+    {
+        "name": "upload_to_remote",
+        "description": "将文件上传到 SMB 或 FTP 服务器。如果目标路径的凭据未配置，工具会返回凭据配置链接，用户完成配置后可继续上传。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "要上传的本地文件路径（可以是绝对路径或上传目录下的文件名）"
+                },
+                "remote_path": {
+                    "type": "string",
+                    "description": "远程服务器路径，格式示例: /share/folder (SMB) 或 /var/www/uploads (FTP)"
+                },
+                "connection_type": {
+                    "type": "string",
+                    "enum": ["smb", "ftp"],
+                    "description": "连接类型: smb 或 ftp"
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "上传后的文件名（可选，默认使用原文件名）"
+                }
+            },
+            "required": ["file_path", "remote_path", "connection_type"]
+        }
     }
 ]
 
@@ -637,6 +664,7 @@ class Agent:
             BrowserScreenshotTool,
         )
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
+        from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
         from src.models.user import UserEmail, EncryptionType
         
@@ -673,6 +701,7 @@ class Agent:
         # 注册文件工具
         self.tool_registry.register(FileReaderTool())
         self.tool_registry.register(FileListTool())
+        self.tool_registry.register(UploadToRemoteTool())
         
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())

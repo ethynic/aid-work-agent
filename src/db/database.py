@@ -177,7 +177,39 @@ def init_database():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
+        # 远程连接凭据表 (SMB/FTP)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS remote_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                credential_id TEXT UNIQUE NOT NULL,
+                user_id TEXT NOT NULL,
+                connection_type TEXT NOT NULL,
+                server_host TEXT NOT NULL,
+                server_port INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                remote_path TEXT NOT NULL,
+                domain TEXT,
+                name TEXT,
+                description TEXT,
+                status INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # 远程凭据索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_remote_credentials_user
+            ON remote_credentials(user_id, status, created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_remote_credentials_path
+            ON remote_credentials(user_id, remote_path, status)
+        """)
+
         conn.commit()
         logger.info(f"Database initialized at {get_sqlite_path()}")
 

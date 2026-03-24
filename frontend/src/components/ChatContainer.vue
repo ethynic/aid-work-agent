@@ -49,6 +49,12 @@
             >
               新会话
             </button>
+            <button
+              @click="showCredentialManager = true"
+              class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+            >
+              凭据管理
+            </button>
           </div>
         </div>
       </div>
@@ -98,6 +104,12 @@
       @close="showLoginModal = false"
       @success="handleLoginSuccess"
     />
+
+    <!-- Credential Manager -->
+    <CredentialManager
+      v-if="showCredentialManager"
+      @close="showCredentialManager = false"
+    />
   </div>
 </template>
 
@@ -108,6 +120,7 @@ import ProgressPanel from './ProgressPanel.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
 import SessionSidebar from './SessionSidebar.vue'
+import CredentialManager from './CredentialManager.vue'
 import { useAgent } from '@/composables/useAgent'
 import { useAuth } from '@/composables/useAuth'
 import { useSession } from '@/composables/useSession'
@@ -131,6 +144,7 @@ const { currentSessionId, createNewSession, loadSessions, loadLatestSession, sav
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
 const showLoginModal = ref(false)
+const showCredentialManager = ref(false)
 
 // 模拟在线状态检测
 let heartbeatInterval: number | null = null
