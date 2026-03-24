@@ -41,9 +41,21 @@ python scripts/commit.py "提交信息" --push
 #### 步骤 2：前端编译
 执行前端构建：
 
-```bash
-cd frontend && npm run build
+**Windows PowerShell 环境（推荐）**：
+```powershell
+Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; npm run build
 ```
+
+**Windows CMD 环境**：
+```cmd
+cd /d d:\workbase\projects\aid-work-agent\frontend && npm run build
+```
+
+**经验总结**：
+- 当前环境为 Windows + Command Prompt (cmd.exe)，但系统可能调用 PowerShell 执行
+- **PowerShell 不支持 `cd /d` 语法**（这是 CMD 特有的）
+- 在 PowerShell 中应使用 `Set-Location` 或 `cd`（不带 `/d`）
+- 如果命令混淆了 Shell 类型，优先使用 PowerShell 语法
 
 #### 步骤 3：FTP上传代码
 使用 `deploy.ps1` 通过FTP上传代码：

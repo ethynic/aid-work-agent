@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from loguru import logger
 
 from src.db.database import get_db_connection
-from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code
+from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -235,20 +235,67 @@ async def send_code(request: SendCodeRequest):
 
 @router.post("/phone/login")
 async def phone_login(request: PhoneLoginRequest):
-    """手机号密码登录"""
-    user = UserDB.verify_login(request.phone, request.password)
+    """手机号密码登录
+
+    扩展功能：888888 作为 Mock 固定密码
+    - 如果手机号存在账号，密码为空，输入 888888 可以登录
+    - 如果手机号不存在账号，创建账号并允许登录
+    - 如果手机号存在账号，但密码不为空且不是 888888，报错"手机号或密码有误"
+    """
+    MOCK_PASSWORD = "888888"
+
+    user = UserDB.get_by_phone(request.phone)
+
     if user:
-        token = generate_token(user["user_id"])
-        return LoginResponse(
-            success=True,
-            token=token,
-            user={
-                "user_id": user["user_id"],
-                "username": user["username"],
-                "phone": user["phone"]
-            }
-        )
-    return LoginResponse(success=False, message="手机号或密码错误")
+        # 用户已存在
+        password_hash = user.get("password_hash")
+
+        if not password_hash:
+            # 密码为空，输入 888888 可以登录
+            if request.password == MOCK_PASSWORD:
+                token = generate_token(user["user_id"])
+                return LoginResponse(
+                    success=True,
+                    token=token,
+                    user={
+                        "user_id": user["user_id"],
+                        "username": user["username"],
+                        "phone": user["phone"]
+                    }
+                )
+            else:
+                return LoginResponse(success=False, message="手机号或密码有误")
+        else:
+            # 密码已设置，验证密码或 888888
+            if request.password == MOCK_PASSWORD or password_hash == hash_password(request.password):
+                token = generate_token(user["user_id"])
+                return LoginResponse(
+                    success=True,
+                    token=token,
+                    user={
+                        "user_id": user["user_id"],
+                        "username": user["username"],
+                        "phone": user["phone"]
+                    }
+                )
+            else:
+                return LoginResponse(success=False, message="手机号或密码有误")
+    else:
+        # 用户不存在，创建新账号
+        user = UserDB.create(phone=request.phone)
+        if user:
+            token = generate_token(user["user_id"])
+            return LoginResponse(
+                success=True,
+                token=token,
+                user={
+                    "user_id": user["user_id"],
+                    "username": user["username"],
+                    "phone": user["phone"]
+                },
+                message="账号已自动创建"
+            )
+        return LoginResponse(success=False, message="登录失败")
 
 
 @router.post("/phone/code-login")
