@@ -18,7 +18,7 @@ class ShortTermMemory:
     
     def __init__(
         self,
-        max_messages: int = 10,
+        max_messages: int = 100,
         ttl: int = 3600,
     ):
         """

@@ -1117,7 +1117,11 @@ create_plan(
         messages = []
         
         history = self.memory.get_context(session_id)
-        for msg in history:
+        
+        # 追踪待处理的 tool_call_ids
+        pending_tool_calls = set()
+        
+        for i, msg in enumerate(history):
             # 处理不同类型的消息
             role = msg.get("role", "user")
             
@@ -1128,13 +1132,42 @@ create_plan(
                     "tool_call_id": msg.get("tool_call_id", ""),
                     "content": msg.get("content", "")
                 })
-            elif role == "assistant" and "tool_calls" in msg:
-                # 包含工具调用的assistant消息
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.get("content", ""),
-                    "tool_calls": msg.get("tool_calls", [])
-                })
+                # 移除已处理的 tool_call_id
+                tc_id = msg.get("tool_call_id", "")
+                if tc_id in pending_tool_calls:
+                    pending_tool_calls.discard(tc_id)
+            elif role == "assistant":
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    # 检查是否所有待处理的 tool_calls 都有对应的 tool response
+                    # 如果有未匹配的 tool_calls，将其作为普通 assistant message 处理
+                    has_pending = bool(pending_tool_calls)
+                    if has_pending:
+                        # 有未处理的 tool_calls，先清理之前的 assistant message
+                        # 这通常表示之前的对话有消息丢失，跳过 tool_calls
+                        logger.warning(f"发现未匹配的 tool_calls，清除并作为普通消息处理")
+                        messages.append({
+                            "role": "assistant",
+                            "content": msg.get("content", "")
+                        })
+                    else:
+                        # 正常情况：添加带 tool_calls 的 assistant message
+                        messages.append({
+                            "role": "assistant",
+                            "content": msg.get("content", ""),
+                            "tool_calls": tool_calls
+                        })
+                        # 记录待处理的 tool_call_ids
+                        for tc in tool_calls:
+                            tc_id = tc.get("id", "")
+                            if tc_id:
+                                pending_tool_calls.add(tc_id)
+                else:
+                    # 普通 assistant message
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg.get("content", "")
+                    })
             else:
                 # 普通消息
                 messages.append({
