@@ -2,9 +2,6 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
-// 版本号 - 每次发版时自动更新
-const VERSION = '202603232158'
-
 export default defineConfig({
   plugins: [vue()],
   resolve: {
