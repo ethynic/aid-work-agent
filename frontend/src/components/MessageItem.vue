@@ -66,7 +66,7 @@
         <div
           :class="[
             'mt-1 overflow-hidden transition-all',
-            isExpanded ? 'max-h-[500px]' : 'max-h-[96px]'
+            isExpanded ? 'max-h-none' : 'max-h-[96px]'
           ]"
         >
           <div class="space-y-0.5">
