@@ -121,11 +121,12 @@ const {
   clearSession,
   uploadAttachment,
   removeAttachment,
-  clearAttachments
+  clearAttachments,
+  sessionId: agentSessionId
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
-const { currentSessionId, createNewSession, loadSessions, loadLatestSession, saveMessage } = useSession()
+const { currentSessionId, createNewSession, loadSessions, loadLatestSession, saveMessage, selectSession } = useSession()
 
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
@@ -192,6 +193,9 @@ async function handleNewSession() {
   }
   const newSession = await createNewSession()
   if (newSession) {
+    // 选中新会话并同步到useAgent
+    selectSession(newSession.session_id)
+    agentSessionId.value = newSession.session_id
     // 创建新会话后，清空当前消息，开始新对话
     clearSession()
     clearAttachments()
@@ -209,8 +213,12 @@ async function handleLogout() {
 function handleLoginSuccess() {
   showLoginModal.value = false
   // 登录成功后加载会话列表并自动打开最近会话
-  loadSessions().then(() => {
-    loadLatestSession()
+  loadSessions().then(async () => {
+    const hasSession = await loadLatestSession()
+    if (hasSession && currentSessionId.value) {
+      // 同步会话ID到useAgent
+      agentSessionId.value = currentSessionId.value
+    }
   })
 }
 
@@ -223,9 +231,12 @@ watch(isLoggedIn, async (loggedIn) => {
   }
 })
 
-// 监听当前会话变化，加载会话历史
+// 监听当前会话变化，加载会话历史并同步到useAgent
 watch(currentSessionId, async (sessionId) => {
   if (sessionId) {
+    // 同步会话ID到useAgent，这样发送消息时会发送到正确的会话
+    agentSessionId.value = sessionId
+
     // 加载会话消息
     const { getSessionMessages } = await import('@/api/session')
     const result = await getSessionMessages(sessionId)

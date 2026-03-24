@@ -424,16 +424,20 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
+        # 从用户第一条消息提取前20个字作为会话标题
+        first_message = request.message.strip()
+        title = first_message[:20] + ("..." if len(first_message) > 20 else "")
+
         # 从请求头获取用户身份后创建会话
         if current_user:
             session = SessionDB.create(
                 user_id=user_id,
-                title="新会话",
+                title=title,
                 context_data={"user_info": {"user_id": user_id, "username": current_user.get("username")}}
             )
             if session:
                 session_id = session["session_id"]
-                logger.info(f"后端日志：创建新会话 session_id={session_id} user_id={user_id}")
+                logger.info(f"后端日志：创建新会话 session_id={session_id} user_id={user_id} title={title}")
             else:
                 session_id = sse_manager.get_or_create_session(None)
         else:
