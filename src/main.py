@@ -28,6 +28,7 @@ from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
 from src.db.database import init_database
 from src.api import auth, session as session_api
+from src.db.models import SessionDB
 from src.channels import callback as channels_api
 from src.services.session_record import SessionRecordManager
 
@@ -417,7 +418,30 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     
     响应: Server-Sent Events 流
     """
-    session_id = sse_manager.get_or_create_session(request.session_id)
+    # 从请求头解析用户身份
+    current_user = auth.get_current_user(http_request)
+    user_id = current_user["user_id"] if current_user else "anonymous"
+
+    # 如果没有传入 session_id，创建一个新的会话记录到数据库
+    if not request.session_id:
+        # 从请求头获取用户身份后创建会话
+        if current_user:
+            session = SessionDB.create(
+                user_id=user_id,
+                title="新会话",
+                context_data={"user_info": {"user_id": user_id, "username": current_user.get("username")}}
+            )
+            if session:
+                session_id = session["session_id"]
+                logger.info(f"后端日志：创建新会话 session_id={session_id} user_id={user_id}")
+            else:
+                session_id = sse_manager.get_or_create_session(None)
+        else:
+            # 没有登录的用户，使用内存中的 session
+            session_id = sse_manager.get_or_create_session(None)
+            logger.info(f"后端日志：匿名用户使用内存会话 session_id={session_id}")
+    else:
+        session_id = sse_manager.get_or_create_session(request.session_id)
 
     # 处理附件
     attachments = None
