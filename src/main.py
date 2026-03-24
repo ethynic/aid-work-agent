@@ -28,7 +28,7 @@ from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
 from src.db.database import init_database
 from src.api import auth, session as session_api
-from src.db.models import SessionDB
+from src.db.models import SessionDB, MessageDB
 from src.channels import callback as channels_api
 from src.services.session_record import SessionRecordManager
 
@@ -559,6 +559,21 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     if results.get('error'):
                         record_service.mark_error(results['error'])
                     SessionRecordManager.end_record()
+
+                    # 同时保存消息到 chat_messages 表（用于前端显示历史消息）
+                    # 保存用户消息
+                    MessageDB.create(
+                        session_id=session_id,
+                        role="user",
+                        content=full_message
+                    )
+                    # 保存AI回复
+                    if full_response:
+                        MessageDB.create(
+                            session_id=session_id,
+                            role="assistant",
+                            content=full_response
+                        )
                     
                 except Exception as e:
                     results['error'] = str(e)
