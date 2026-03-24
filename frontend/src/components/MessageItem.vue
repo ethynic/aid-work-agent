@@ -3,8 +3,8 @@
     :class="[
       'flex gap-3 p-4 rounded-2xl transition-all',
       message.role === 'user' 
-        ? 'bg-cyan-600/20 border border-cyan-500/30 ml-12' 
-        : 'bg-slate-800/50 border border-slate-700/50'
+        ? 'bg-cyan-50 border border-cyan-200 ml-12' 
+        : 'bg-white border border-slate-200'
     ]"
   >
     <!-- Avatar -->
@@ -12,8 +12,8 @@
       :class="[
         'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
         message.role === 'user' 
-          ? 'bg-gradient-to-br from-cyan-500 to-cyan-600' 
-          : 'bg-gradient-to-br from-slate-600 to-slate-700'
+          ? 'bg-gradient-to-br from-cyan-400 to-cyan-500' 
+          : 'bg-gradient-to-br from-slate-400 to-slate-500'
       ]"
     >
       <svg v-if="message.role === 'user'" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27,10 +27,10 @@
     <!-- Content -->
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2 mb-1">
-        <span class="text-sm font-medium text-slate-200">
+        <span class="text-sm font-medium text-slate-700">
           {{ message.role === 'user' ? '你' : 'AI助手' }}
         </span>
-        <span v-if="timestamp" class="text-xs text-slate-500">
+        <span v-if="timestamp" class="text-xs text-slate-400">
           {{ formatTime(timestamp) }}
         </span>
         <span v-if="isProcessing" class="text-xs text-cyan-400 animate-pulse">
@@ -40,7 +40,7 @@
       
       <!-- Message Content (Markdown) -->
       <div 
-        class="text-slate-300 leading-relaxed markdown-content"
+        class="text-slate-700 leading-relaxed markdown-content"
         v-html="renderedContent"
       ></div>
     </div>

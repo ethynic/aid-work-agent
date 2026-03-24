@@ -1,17 +1,17 @@
 <template>
   <aside
     :class="[
-      'h-full bg-slate-800/50 border-r border-slate-700 flex flex-col transition-all duration-300',
+      'h-full bg-white border-r border-slate-200 flex flex-col transition-all duration-300',
       isCollapsed ? 'w-0 overflow-hidden' : 'w-72'
     ]"
   >
     <!-- Header -->
-    <div class="flex-shrink-0 p-4 border-b border-slate-700">
+    <div class="flex-shrink-0 p-4 border-b border-slate-200">
       <div class="flex items-center justify-between mb-3">
-        <h2 class="text-lg font-semibold text-white">会话列表</h2>
+        <h2 class="text-lg font-semibold text-slate-800">会话列表</h2>
         <button
           @click="$emit('collapse')"
-          class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+          class="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
           title="收起侧边栏"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -39,7 +39,7 @@
 
     <!-- Session List -->
     <div class="flex-1 overflow-y-auto">
-      <div v-if="isLoading" class="p-4 text-center text-slate-400">
+      <div v-if="isLoading" class="p-4 text-center text-slate-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -47,7 +47,7 @@
         <p class="mt-2 text-sm">加载中...</p>
       </div>
 
-      <div v-else-if="sessions.length === 0" class="p-4 text-center text-slate-400">
+      <div v-else-if="sessions.length === 0" class="p-4 text-center text-slate-500">
         <svg class="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
         </svg>
@@ -62,18 +62,18 @@
           :class="[
             'group relative p-3 rounded-lg cursor-pointer transition-colors',
             currentSessionId === session.session_id
-              ? 'bg-cyan-600/30 border border-cyan-500/50'
-              : 'hover:bg-slate-700/50'
+              ? 'bg-cyan-100 border border-cyan-200'
+              : 'hover:bg-slate-100'
           ]"
           @click="handleSelectSession(session.session_id)"
         >
           <!-- Session Title -->
           <div class="flex items-start gap-2">
-            <svg class="w-4 h-4 mt-0.5 flex-shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 mt-0.5 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
             <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-white truncate">
+              <p class="text-sm font-medium text-slate-800 truncate">
                 {{ session.title || '新会话' }}
               </p>
               <p class="text-xs text-slate-400 mt-0.5">
@@ -86,7 +86,7 @@
           <div class="absolute right-2 top-2 hidden group-hover:flex items-center gap-1">
             <button
               @click.stop="handleRenameSession(session)"
-              class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-600 rounded transition-colors"
+              class="p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors"
               title="重命名"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -95,7 +95,7 @@
             </button>
             <button
               @click.stop="handleDeleteSession(session.session_id)"
-              class="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+              class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-slate-100 rounded transition-colors"
               title="删除"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -110,22 +110,22 @@
     <!-- Rename Modal -->
     <div
       v-if="showRenameModal"
-      class="absolute inset-0 bg-black/50 flex items-center justify-center z-10"
+      class="absolute inset-0 bg-black/30 flex items-center justify-center z-10"
       @click.self="showRenameModal = false"
     >
-      <div class="bg-slate-800 rounded-lg p-4 w-64 border border-slate-700">
-        <h3 class="text-lg font-medium text-white mb-3">重命名会话</h3>
+      <div class="bg-white rounded-lg p-4 w-64 border border-slate-200 shadow-xl">
+        <h3 class="text-lg font-medium text-slate-800 mb-3">重命名会话</h3>
         <input
           v-model="renameInput"
           @keyup.enter="confirmRename"
           type="text"
-          class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:border-cyan-500"
+          class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-cyan-500"
           placeholder="输入会话标题"
         />
         <div class="flex justify-end gap-2 mt-3">
           <button
             @click="showRenameModal = false"
-            class="px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+            class="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
           >
             取消
           </button>

@@ -1,10 +1,10 @@
 <template>
-  <div class="flex-shrink-0 border-t border-slate-700 bg-slate-800/30">
+  <div class="flex-shrink-0 border-t border-slate-200 bg-white">
     <div class="max-w-4xl mx-auto">
       <!-- Header -->
       <button 
         @click="isExpanded = !isExpanded"
-        class="w-full px-4 py-2 flex items-center justify-between text-sm text-slate-400 hover:text-slate-300 transition-colors"
+        class="w-full px-4 py-2 flex items-center justify-between text-sm text-slate-500 hover:text-slate-700 transition-colors"
       >
         <div class="flex items-center gap-2">
           <svg 
@@ -16,7 +16,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
           <span>执行详情</span>
-          <span class="px-2 py-0.5 bg-slate-700 rounded-full text-xs">
+          <span class="px-2 py-0.5 bg-slate-200 rounded-full text-xs">
             {{ visibleMessages.length }} 条
           </span>
         </div>
@@ -94,18 +94,18 @@ watch(
 function getClassByType(type: ProgressMessage['type']): string {
   switch (type) {
     case 'error':
-      return 'bg-red-500/10 text-red-300 border-l-2 border-red-500'
+      return 'bg-red-50 text-red-700 border-l-2 border-red-500'
     case 'complete':
-      return 'bg-green-500/10 text-green-300 border-l-2 border-green-500'
+      return 'bg-green-50 text-green-700 border-l-2 border-green-500'
     case 'thinking':
-      return 'bg-purple-500/10 text-purple-300 border-l-2 border-purple-500'
+      return 'bg-purple-50 text-purple-700 border-l-2 border-purple-500'
     case 'tool_start':
-      return 'bg-cyan-500/10 text-cyan-300 border-l-2 border-cyan-500'
+      return 'bg-cyan-50 text-cyan-700 border-l-2 border-cyan-500'
     case 'tool_result':
       // 根据成功失败状态返回不同样式
-      return 'bg-cyan-500/10 text-cyan-300 border-l-2 border-cyan-500'
+      return 'bg-cyan-50 text-cyan-700 border-l-2 border-cyan-500'
     default:
-      return 'bg-slate-700/30 text-slate-300 border-l-2 border-cyan-500'
+      return 'bg-slate-100 text-slate-700 border-l-2 border-cyan-500'
   }
 }
 

@@ -1,14 +1,14 @@
 <template>
-  <div class="h-screen flex flex-col bg-slate-900">
+  <div class="h-screen flex flex-col bg-slate-50">
     <!-- Header -->
-    <header class="flex-shrink-0 border-b border-slate-700 bg-slate-800/50 backdrop-blur-sm">
+    <header class="flex-shrink-0 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
       <div class="max-w-7xl mx-auto px-4 py-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <!-- Toggle Sidebar Button -->
             <button
               @click="isSidebarCollapsed = !isSidebarCollapsed"
-              class="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+              class="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
               title="切换侧边栏"
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -22,30 +22,30 @@
               </svg>
             </div>
             <div>
-              <h1 class="text-xl font-semibold text-white">AID Work Agent</h1>
-              <p class="text-sm text-slate-400">智能工作助手</p>
+              <h1 class="text-xl font-semibold text-slate-800">AID Work Agent</h1>
+              <p class="text-sm text-slate-500">智能工作助手</p>
             </div>
           </div>
 
           <div class="flex items-center gap-4">
             <!-- User Info / Login Button -->
             <div v-if="isLoggedIn" class="flex items-center gap-3">
-              <span class="text-sm text-slate-300">{{ user?.username }}</span>
+              <span class="text-sm text-slate-600">{{ user?.username }}</span>
               <button
                 @click="handleLogout"
-                class="px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                class="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
               >
                 退出
               </button>
             </div>
 
-            <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-700/50 text-sm">
-              <span :class="isOnline ? 'bg-green-500' : 'bg-slate-500'" class="w-2 h-2 rounded-full"></span>
-              <span class="text-slate-300">{{ isOnline ? '在线' : '离线' }}</span>
+            <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-200/50 text-sm">
+              <span :class="isOnline ? 'bg-green-500' : 'bg-slate-400'" class="w-2 h-2 rounded-full"></span>
+              <span class="text-slate-600">{{ isOnline ? '在线' : '离线' }}</span>
             </div>
             <button
               @click="handleNewSession"
-              class="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+              class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
             >
               新会话
             </button>
@@ -79,7 +79,7 @@
         />
 
         <!-- Input Area -->
-        <div class="flex-shrink-0 border-t border-slate-700 bg-slate-800/50 p-4">
+        <div class="flex-shrink-0 border-t border-slate-200 bg-white p-4">
           <ChatInput
             @send="handleSend"
             @upload="handleUpload"
