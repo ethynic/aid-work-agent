@@ -132,10 +132,36 @@ function formatTime(timestamp: number): string {
  * 格式化消息内容，如果是 type 为 progress 的对象或 JSON，只显示 data 部分
  */
 function formatContent(content: string | Record<string, any>): string {
-  // 如果是对象（已通过 shouldShowMessage 过滤，只有 progress 类型会到这里）
+  // 如果是对象
   if (content && typeof content === 'object') {
-    if (content.type === 'progress' && content.data && typeof content.data === 'string') {
-      return content.data
+    if (content.type === 'progress' && content.data) {
+      const data = content.data
+
+      // 如果 data 是对象，特殊处理 tool_start 等类型
+      if (typeof data === 'object') {
+        if (data.type === 'tool_start' && data.toolName) {
+          return `即将调用【${data.toolName}】工具`
+        }
+        if (data.type === 'tool_result' && data.toolName) {
+          const resultContent = data.result?.content
+          if (resultContent && typeof resultContent === 'string') {
+            const preview = resultContent.length > 100 ? resultContent.slice(0, 100) + '...' : resultContent
+            return `${data.toolName} 调用完成,结果：${preview}`
+          }
+          return `${data.toolName} 调用完成`
+        }
+        // 递归处理嵌套的 progress
+        if (data.type === 'progress') {
+          return formatContent(data as Record<string, any>)
+        }
+        // 其他对象类型，转为字符串
+        return JSON.stringify(data)
+      }
+
+      // 如果 data 是字符串，直接返回
+      if (typeof data === 'string') {
+        return data
+      }
     }
     return JSON.stringify(content)
   }
@@ -146,8 +172,34 @@ function formatContent(content: string | Record<string, any>): string {
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
       const obj = JSON.parse(trimmed)
-      if (obj.type === 'progress' && obj.data && typeof obj.data === 'string') {
-        return obj.data
+      if (obj.type === 'progress' && obj.data) {
+        const data = obj.data
+
+        // 如果 data 是对象，特殊处理 tool_start 等类型
+        if (typeof data === 'object') {
+          if (data.type === 'tool_start' && data.toolName) {
+            return `即将调用【${data.toolName}】工具`
+          }
+          if (data.type === 'tool_result' && data.toolName) {
+            const resultContent = data.result?.content
+            if (resultContent && typeof resultContent === 'string') {
+              const preview = resultContent.length > 100 ? resultContent.slice(0, 100) + '...' : resultContent
+              return `${data.toolName} 调用完成,结果：${preview}`
+            }
+            return `${data.toolName} 调用完成`
+          }
+          // 递归处理嵌套的 progress
+          if (data.type === 'progress') {
+            return formatContent(data as Record<string, any>)
+          }
+          // 其他对象类型，转为字符串
+          return JSON.stringify(data)
+        }
+
+        // 如果 data 是字符串，直接返回
+        if (typeof data === 'string') {
+          return data
+        }
       }
     } catch {
       // 解析失败，返回原始内容
