@@ -89,6 +89,20 @@ async def create_session(request: Request, body: CreateSessionRequest = None):
     raise HTTPException(status_code=500, detail="创建会话失败")
 
 
+@router.get("/latest")
+async def get_latest_session(request: Request):
+    """获取当前用户的最近会话"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    sessions = SessionDB.list_by_user(user["user_id"], limit=1)
+    if not sessions:
+        return {"session": None}
+
+    return {"session": sessions[0]}
+
+
 @router.get("/{session_id}")
 async def get_session(request: Request, session_id: str):
     """获取会话详情"""
@@ -214,20 +228,6 @@ async def get_session_context(request: Request, session_id: str):
 
 
 # ============== 会话记录相关API ==============
-
-@router.get("/latest")
-async def get_latest_session(request: Request):
-    """获取当前用户的最近会话"""
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="未登录")
-
-    sessions = SessionDB.list_by_user(user["user_id"], limit=1)
-    if not sessions:
-        return {"session": None}
-
-    return {"session": sessions[0]}
-
 
 @router.get("/{session_id}/records")
 async def list_session_records(request: Request, session_id: str, limit: int = 100):
