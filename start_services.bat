@@ -38,7 +38,7 @@ if not exist "node_modules" (
     call npm install
 )
 echo [OK] 正在启动前端开发服务器...
-start "AID Frontend" cmd /k "npm run dev"
+start "AID Frontend" cmd /k "npm run dev -- --port 5173"
 cd /d "%~dp0"
 echo [OK] 前端服务启动中 (http://localhost:5173)
 echo.
