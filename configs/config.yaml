@@ -10,7 +10,7 @@ app:
 
 # LLM配置
 llm:
-  provider: qwen  # qwen | zhipu
+  provider: zhipu  # qwen | zhipu
   qwen:
     api_key: ${QWEN_API_KEY}
     model: qwen-plus

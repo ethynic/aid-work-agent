@@ -37,7 +37,8 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
  * 删除已上传的文件
  */
 export async function deleteFile(file_id: string): Promise<void> {
-  const response = await fetch(`/api/upload/${file_id}`, {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+  const response = await fetch(`${apiBase}/upload/${file_id}`, {
     method: 'DELETE',
   })
 
@@ -57,6 +58,7 @@ export class SSEManager {
     message: string,
     sessionId: string,
     files: UploadedFile[] | undefined,
+    authHeaders: Record<string, string>,
     onProgress: (data: string) => void,
     onResponse: (data: string) => void,
     onComplete: () => void,
@@ -68,10 +70,12 @@ export class SSEManager {
     this.abortController = new AbortController()
 
     try {
-      const response = await fetch('/api/chat/stream', {
+      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+      const response = await fetch(`${apiBase}/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders
         },
         body: JSON.stringify({
           message,

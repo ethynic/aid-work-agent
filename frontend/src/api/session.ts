@@ -4,7 +4,7 @@
 
 import { getAuthHeader } from './auth'
 
-const API_BASE = '/api/sessions'
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/sessions`
 
 export interface ChatSession {
   session_id: string
