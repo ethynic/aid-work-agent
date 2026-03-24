@@ -2,7 +2,7 @@
 description: 
 alwaysApply: true
 enabled: true
-updatedAt: 2026-03-11T02:22:42.728Z
+updatedAt: 2026-03-24T08:50:00.000Z
 provider: 
 ---
 
@@ -10,7 +10,10 @@ provider:
 
 **核心原则**：使用 `scripts/commit.py` 工具提交代码，支持中文和空格，避免终端解析问题。
 
-**重要**：commit 后必须 push，确保代码同步到远程仓库。
+**重要**：
+- **不要自动提交或推送，所有提交操作由用户手动执行**
+- 用户会自己运行 `python scripts/commit.py "提交信息" --push` 或类似命令
+- AI 不要在完成任务后自动执行 git 提交或推送
 
 ## 推荐方式：使用 commit.py
 

@@ -565,14 +565,16 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     MessageDB.create(
                         session_id=session_id,
                         role="user",
-                        content=full_message
+                        content=full_message,
+                        metadata={"progressMessages": []}  # 用户消息没有执行详情
                     )
-                    # 保存AI回复
+                    # 保存AI回复（包含执行详情，但不作为模型上下文）
                     if full_response:
                         MessageDB.create(
                             session_id=session_id,
                             role="assistant",
-                            content=full_response
+                            content=full_response,
+                            metadata={"progressMessages": results.get('progress', [])}  # 执行详情仅用于显示
                         )
                     
                 except Exception as e:

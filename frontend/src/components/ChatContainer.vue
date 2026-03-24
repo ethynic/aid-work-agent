@@ -240,11 +240,12 @@ watch(currentSessionId, async (sessionId) => {
     // 加载会话消息
     const { getSessionMessages } = await import('@/api/session')
     const result = await getSessionMessages(sessionId)
-    // 将历史消息填充到 messages
+    // 将历史消息填充到 messages（包含执行详情）
     messages.value = result.messages?.map(m => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
-      timestamp: new Date(m.created_at).getTime()
+      timestamp: new Date(m.created_at).getTime(),
+      progressMessages: m.metadata?.progressMessages || []  // 从 metadata 中提取执行详情
     })) || []
   } else {
     // 没有选中会话，清空消息

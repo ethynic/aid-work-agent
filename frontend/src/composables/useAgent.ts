@@ -67,16 +67,18 @@ export function useAgent() {
     currentResponse.value = ''
     progressMessages.value = []
 
-    // 添加初始进度消息
-    addProgress('🚀 正在发送请求...', 'progress')
-
     // 添加空的助手消息占位
     const assistantMessageIndex = messages.value.length
-    messages.value.push({
+    const assistantMessage = {
       role: 'assistant',
       content: '',
-      timestamp: Date.now()
-    })
+      timestamp: Date.now(),
+      progressMessages: [] as ProgressMessage[]  // 初始化空数组
+    }
+    messages.value.push(assistantMessage)
+
+    // 添加初始进度消息（在 AI 消息创建之后）
+    addProgress('🚀 正在发送请求...', 'progress')
 
     try {
       await sseManager.connect(
@@ -204,14 +206,21 @@ export function useAgent() {
     toolArgs?: object,
     result?: any
   ) {
-    progressMessages.value.push({
+    const newMsg: ProgressMessage = {
       type,
       content,
       timestamp: Date.now(),
       toolName,
       toolArgs,
       result
-    })
+    }
+    progressMessages.value.push(newMsg)
+
+    // 同时更新 AI 消息占位中的 progressMessages（用于 MessageItem 显示）
+    const lastMsg = messages.value[messages.value.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.progressMessages) {
+      lastMsg.progressMessages.push(newMsg)
+    }
   }
 
   function clearMessages() {

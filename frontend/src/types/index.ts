@@ -2,6 +2,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
+  progressMessages?: ProgressMessage[]  // 执行详情（不传给模型，只用于显示）
 }
 
 export interface ProgressMessage {

@@ -308,7 +308,13 @@ class MessageDB:
             for row in cursor.fetchall():
                 result = dict(row)
                 if result.get("metadata"):
-                    result["metadata"] = json.loads(result["metadata"])
+                    metadata = json.loads(result["metadata"])
+                    # 将 progressMessages 中的 data 字段转换为 content 字段（与前端和实时数据格式一致）
+                    if metadata.get("progressMessages") and isinstance(metadata["progressMessages"], list):
+                        for pm in metadata["progressMessages"]:
+                            if "data" in pm:
+                                pm["content"] = pm.pop("data")
+                    result["metadata"] = metadata
                 messages.append(result)
             return messages
 

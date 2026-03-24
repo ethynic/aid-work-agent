@@ -1,18 +1,18 @@
 <template>
-  <div 
+  <div
     :class="[
       'flex gap-3 p-4 rounded-2xl transition-all',
-      message.role === 'user' 
-        ? 'bg-cyan-50 border border-cyan-200 ml-12' 
+      message.role === 'user'
+        ? 'bg-cyan-50 border border-cyan-200 ml-12'
         : 'bg-white border border-slate-200'
     ]"
   >
     <!-- Avatar -->
-    <div 
+    <div
       :class="[
         'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
-        message.role === 'user' 
-          ? 'bg-gradient-to-br from-cyan-400 to-cyan-500' 
+        message.role === 'user'
+          ? 'bg-gradient-to-br from-cyan-400 to-cyan-500'
           : 'bg-gradient-to-br from-slate-400 to-slate-500'
       ]"
     >
@@ -37,19 +37,61 @@
           生成中...
         </span>
       </div>
-      
+
       <!-- Message Content (Markdown) -->
-      <div 
+      <div
         class="text-slate-700 leading-relaxed markdown-content"
         v-html="renderedContent"
       ></div>
+
+      <!-- 执行详情（仅 AI 回复显示） -->
+      <div v-if="message.role === 'assistant' && hasProgress" class="mt-2">
+        <!-- 展开/折叠按钮 -->
+        <button
+          @click="toggleExpanded"
+          class="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+        >
+          <svg
+            :class="['w-3 h-3 transition-transform', isExpanded ? 'rotate-90' : '']"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span>{{ isExpanded ? '收起' : '展开' }}执行详情 {{ totalCount }}条</span>
+        </button>
+
+        <!-- 执行详情内容 -->
+        <div
+          :class="[
+            'mt-1 overflow-hidden transition-all',
+            isExpanded ? 'max-h-[500px]' : 'max-h-[96px]'
+          ]"
+        >
+          <div class="space-y-0.5">
+            <div
+              v-for="(msg, index) in displayMessages"
+              :key="index"
+              :class="[
+                'text-xs py-1 px-2 rounded text-slate-500',
+                getProgressClass(msg.type)
+              ]"
+            >
+            <div v-if="false">{{ msg }}</div>
+              <span class="mr-1">{{ getProgressIcon(msg.type) }}</span>
+              <span class="opacity-80">{{ formatProgressContent(msg) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { ChatMessage } from '@/types'
+import { ref, computed } from 'vue'
+import type { ChatMessage, ProgressMessage } from '@/types'
 
 interface Props {
   message: ChatMessage
@@ -60,34 +102,131 @@ const props = withDefaults(defineProps<Props>(), {
   isProcessing: false
 })
 
+const isExpanded = ref(false)
+
 const timestamp = computed(() => props.message.timestamp)
+const hasProgress = computed(() => {
+  return props.message.progressMessages && props.message.progressMessages.length > 0
+})
+const totalCount = computed(() => props.message.progressMessages?.length || 0)
+const collapsedCount = computed(() => {
+  if (isExpanded.value) return totalCount.value
+  // 默认显示 5-6 行
+  return Math.min(totalCount.value, 5)
+})
+const displayMessages = computed(() => {
+  if (!props.message.progressMessages) return []
+  if (isExpanded.value) return props.message.progressMessages
+  return props.message.progressMessages.slice(0, 5)
+})
+
+function toggleExpanded() {
+  isExpanded.value = !isExpanded.value
+}
+
+function getProgressClass(type: string): string {
+  switch (type) {
+    case 'error': return 'bg-red-50 text-red-600'
+    case 'complete': return 'bg-green-50 text-green-600'
+    case 'thinking': return 'bg-purple-50 text-purple-600'
+    case 'tool_start': return 'bg-cyan-50 text-cyan-600'
+    case 'tool_result': return 'bg-blue-50 text-blue-600'
+    default: return 'bg-slate-100 text-slate-500'
+  }
+}
+
+function getProgressIcon(type: string): string {
+  switch (type) {
+    case 'error': return '❌'
+    case 'complete': return '✅'
+    case 'thinking': return '🤔'
+    case 'tool_start': return '🔧'
+    case 'tool_result': return '📤'
+    default: return '🔄'
+  }
+}
+
+function formatProgressContent(msg: string | Record<string, any>): string {
+  // 实时消息格式: { type: "progress", content: string|object, timestamp: number }
+  // content 类型:
+  //   - string: 直接显示
+  //   - { type: "tool_start", toolName, toolArgs }: 显示调用工具名称
+  //   - { type: "tool_result", data }: 显示 data
+  //   - { type: "progress", data }: 显示 data
+
+  if (!msg || typeof msg !== 'object') {
+    return String(msg ?? '')
+  }
+
+  const content = msg.content
+
+  // content 是字符串：直接显示
+  if (typeof content === 'string') {
+    // 移除 emoji，截断过长的内容
+    const cleaned = content.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
+    return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned
+  }
+
+  // content 是对象：根据 type 处理
+  if (typeof content === 'object' && content !== null) {
+    const c = content as Record<string, any>
+
+    // type 为 tool_start：显示调用工具名称
+    if (c.type === 'tool_start' && c.toolName) {
+      return `🔧 正在执行 ${c.toolName}`
+    }
+
+    // type 为 tool_result：显示 data
+    if (c.type === 'tool_result' && c.data !== undefined) {
+      const data = c.data
+      if (typeof data === 'string') {
+        return data.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
+      }
+      return JSON.stringify(data).slice(0, 100)
+    }
+
+    // type 为 progress：显示 data
+    if (c.type === 'progress' && c.data !== undefined) {
+      const data = c.data
+      if (typeof data === 'string') {
+        return data.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
+      }
+      return JSON.stringify(data).slice(0, 100)
+    }
+
+    // 其他情况，JSON 化
+    return JSON.stringify(c).slice(0, 100)
+  }
+
+  return String(content ?? '')
+}
 
 const renderedContent = computed(() => {
   // 简单的Markdown渲染
   let content = escapeHtml(props.message.content)
-  
+
   // 代码块
   content = content.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-  
+
   // 行内代码
   content = content.replace(/`([^`]+)`/g, '<code>$1</code>')
-  
+
   // 粗体
   content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-  
+
   // 斜体
   content = content.replace(/\*([^*]+)\*/g, '<em>$1</em>')
-  
+
   // 链接
   content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-  
+
   // 列表
   content = content.replace(/^- (.+)$/gm, '<li>$1</li>')
   content = content.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-  
+
   // 换行
   content = content.replace(/\n/g, '<br>')
-  
+
   return content
 })
 
