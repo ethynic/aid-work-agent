@@ -217,7 +217,7 @@ function shouldShowMessage(msg: ProgressMessage): boolean {
   const content = msg.content
   if (content && typeof content === 'object') {
     // 非 progress 类型的对象不显示
-    return content.type === 'progress'
+    return (content as any).type === 'progress'
   }
   return true
 }
