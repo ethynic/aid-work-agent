@@ -210,15 +210,9 @@ function formatContent(content: string | Record<string, any>): string {
 
 /**
  * 判断消息是否应该显示
- * 非 progress 类型的对象内容不显示
+ * content 为空时不显示
  */
 function shouldShowMessage(msg: ProgressMessage): boolean {
-  if (!msg || !msg.content) return false
-  const content = msg.content
-  if (content && typeof content === 'object') {
-    // 非 progress 类型的对象不显示
-    return content.type === 'progress'
-  }
-  return true
+  return !!msg?.content
 }
 </script>
