@@ -21,7 +21,27 @@ provider:
 
 ### 2. 执行部署
 
-#### 步骤 1：提交代码到 Git 仓库
+#### 步骤 1：更新前端版本号
+修改 `frontend/vite.config.ts` 中的 `VERSION` 常量为当前时间（年月日时分）：
+
+```bash
+python scripts/update_version.py
+```
+
+> **辅助脚本说明**：如 `scripts/update_version.py` 不存在，需先创建：
+> ```python
+> from datetime import datetime as dt
+> import re
+> t = dt.now().strftime('%Y%m%d%H%M')
+> with open('frontend/vite.config.ts', 'r') as f:
+>     content = f.read()
+> content = re.sub(r"VERSION\s*=\s*'[^']*'", "VERSION = '%s'" % t, content)
+> with open('frontend/vite.config.ts', 'w') as f:
+>     f.write(content)
+> print(t)
+> ```
+
+#### 步骤 2：提交代码到 Git 仓库
 使用 `commit.py` 提交代码（支持中文和空格）：
 
 ```bash
@@ -38,36 +58,19 @@ python scripts/commit.py "提交信息" --push
 2. 提交更改（`git commit -m "提交信息"`）
 3. 推送到远程仓库（`git push`）
 
-#### 步骤 2：触发服务器更新
-使用 `deploy.ps1` 触发生产服务器更新：
+#### 步骤 3：前端编译
+执行前端构建：
 
 ```bash
-powershell.exe -ExecutionPolicy Bypass -File scripts/deploy.ps1
+cd frontend && npm run build
 ```
 
-**服务器操作**：
-- 从 Git 仓库拉取最新代码
-- 安装依赖（如有更新）
-- 构建前端项目（如有更改）
-- 重启后端服务（如有更改）
+#### 步骤 4：FTP上传代码
+使用 `deploy.ps1` 通过FTP上传代码：
 
-### 3. 部署流程说明
-完整流程：
-1. **检查 Git 状态** - 查看当前更改
-2. **添加所有更改** - `git add -A`
-3. **提交更改** - `git commit -m "提交信息"`
-4. **推送到远程** - `git push`
-5. **触发服务器部署** - 调用生产服务器部署钩子
-
-### 4. 处理结果
-- **成功**：告知用户部署已完成，显示：
-  - Git 提交 hash
-  - 推送状态
-  - 服务器部署结果（构建时间、状态等）
-- **失败**：显示错误信息，建议检查：
-  - Git 状态和冲突
-  - 网络连接
-  - 服务器部署钩子状态
+```bash
+powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1
+```
 
 ## 使用示例
 
@@ -75,7 +78,7 @@ powershell.exe -ExecutionPolicy Bypass -File scripts/deploy.ps1
 **助手**：
 - 自动分析代码更改并生成提交信息
 - 执行 `commit.py --push` 提交代码
-- 执行 `deploy.ps1` 触发服务器更新
+- 执行 `deploy.ps1` FTP上传代码
 - 报告部署结果
 
 **用户**："发布代码，提交信息：feat: 添加用户管理功能"
@@ -109,5 +112,5 @@ powershell.exe -ExecutionPolicy Bypass -File scripts/deploy.ps1
 
 ## 相关文件
 - 提交脚本：`scripts/commit.py`
-- 部署脚本：`scripts/deploy.ps1`
+- 部署脚本：`deploy/deploy.ps1`
 - Git 规范：`.codebuddy/rules/git-commit-convention.mdc`

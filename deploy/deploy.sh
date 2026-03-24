@@ -89,50 +89,37 @@ main() {
     sudo chown -R www-data:www-data /var/www/qb3_upload
     log_success "目录创建完成"
 
-    # 5. 构建前端
-    log_info "步骤 5/7: 构建前端..."
-    if [ -d "frontend" ]; then
-        cd frontend
-        if [ -f "package.json" ]; then
-            if [ ! -d "node_modules" ]; then
-                log_info "安装前端依赖..."
-                npm install
-            fi
-            log_info "构建前端生产版本..."
-            npm run build
-            if [ -d "dist" ]; then
-                log_success "前端构建完成"
-            else
-                log_error "前端构建失败：dist 目录不存在"
-                exit 1
-            fi
-        else
-            log_warning "前端 package.json 不存在，跳过前端构建"
-        fi
-        cd ..
-    else
-        log_warning "frontend 目录不存在，跳过前端构建"
-    fi
+    # 把 gaofang 用户加入 docker 组
+    sudo usermod -aG docker gaofang
+
+    # 修复 .docker 目录权限
+    sudo chown -R gaofang:gaofang /home/gaofang/.docker
+
+    # 重新登录使组成员资格生效（或执行以下命令）
+    newgrp docker
+
+    # 验证（不用 sudo 也能用 docker compose 了）
+    docker compose version
 
     # 6. 启动 Docker 容器
     log_info "步骤 6/7: 启动 Docker 容器..."
     if [ -f "docker-compose.prod.yml" ]; then
         # 停止旧容器
-        docker-compose -f docker-compose.prod.yml down 2>/dev/null || true
+        docker compose -f docker-compose.prod.yml down 2>/dev/null || true
         
         # 构建并启动新容器
-        docker-compose -f docker-compose.prod.yml up -d --build
+        docker compose -f docker-compose.prod.yml up -d --build
         
         # 等待容器启动
         log_info "等待容器启动..."
         sleep 10
         
         # 检查容器状态
-        if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+        if docker compose -f docker-compose.prod.yml ps | grep -q "Up"; then
             log_success "容器启动成功"
         else
             log_error "容器启动失败"
-            docker-compose -f docker-compose.prod.yml logs
+            docker compose -f docker-compose.prod.yml logs
             exit 1
         fi
     else
@@ -140,29 +127,7 @@ main() {
         exit 1
     fi
 
-    # 7. 配置 Nginx
-    log_info "步骤 7/7: 配置 Nginx..."
-    NGINX_CONF="deploy/agent.aidingyi.cn.conf"
-    if [ -f "$NGINX_CONF" ]; then
-        # 复制配置文件
-        sudo cp $NGINX_CONF /etc/nginx/sites-available/
-        
-        # 创建软链接
-        sudo ln -sf /etc/nginx/sites-available/agent.aidingyi.cn.conf /etc/nginx/sites-enabled/
-        
-        # 测试配置
-        if sudo nginx -t; then
-            # 重载 Nginx
-            sudo systemctl reload nginx
-            log_success "Nginx 配置完成"
-        else
-            log_error "Nginx 配置测试失败"
-            exit 1
-        fi
-    else
-        log_warning "Nginx 配置文件不存在，跳过 Nginx 配置"
-    fi
-
+    
     # 部署完成
     echo ""
     echo "========================================"
@@ -174,9 +139,9 @@ main() {
     echo "  - 后端API: https://agent.aidingyi.cn/api"
     echo ""
     echo "常用命令:"
-    echo "  - 查看容器状态: docker-compose -f docker-compose.prod.yml ps"
-    echo "  - 查看日志: docker-compose -f docker-compose.prod.yml logs -f"
-    echo "  - 重启服务: docker-compose -f docker-compose.prod.yml restart"
+    echo "  - 查看容器状态: docker compose -f docker-compose.prod.yml ps"
+    echo "  - 查看日志: docker compose -f docker-compose.prod.yml logs -f"
+    echo "  - 重启服务: docker compose -f docker-compose.prod.yml restart"
     echo "  - 检查部署: $DEPLOY_DIR/check_deployment.sh"
     echo ""
 }
