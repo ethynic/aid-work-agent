@@ -839,16 +839,23 @@ class Agent:
 **🚨 重要：直接委派，不需要先创建计划！**
 如果任务只需要委派给一个子智能体就能完成（不需要其他工具或步骤），**直接调用`delegate_to_subagent`工具**，不需要先调用`create_plan`。子智能体会自己创建和执行计划。
 
+**⚠️ task_description 必须包含完整信息！**
+如果用户上传了文件（图片、文档等），必须在 task_description 中包含以下信息：
+- 文件的完整路径（已在消息中提供，格式如 "Full path: `/path/to/file.jpg`"）
+- 文件名称和大小
+- 例如：`task_description="处理产品图片，文件路径：/tmp/skill_ws_xxx/product.jpg"`
+
 **使用场景：**
 - 代码审查任务 → 直接调用 `delegate_to_subagent(subagent_name="code-reviewer", task_description="...")`
 - HR相关任务 → 直接调用 `delegate_to_subagent(subagent_name="hr-expert", task_description="...")`
+- 外贸获客任务 → 直接调用 `delegate_to_subagent(subagent_name="foreign-trade-ai", task_description="...")`
 - PDF文档处理 → 直接调用 `delegate_to_subagent(subagent_name="pdf-expert", task_description="...")`
 
 **调用示例：**
 ```
 delegate_to_subagent(
-    subagent_name="hr-expert",
-    task_description="协助招聘AI产品经理，包括JD编写、薪酬调研、面试设计"
+    subagent_name="foreign-trade-ai",
+    task_description="帮我在中亚地区匹配LED灯客户。已上传产品图片：Full path: `/tmp/skill_ws_xxx/led_light.jpg`，请从中提取产品信息进行客户匹配"
 )
 ```
 """
@@ -1704,7 +1711,17 @@ create_plan(
                         logger.error(f"Failed to save file {att_name}: {e}")
             
             if attachment_info:
-                enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info)
+                # 构建文件路径信息（无论是否有 auto_loaded_skill 都添加）
+                files_context = ""
+                if uploaded_files_info:
+                    files_context = "\n\n**📎 Uploaded files available:**\n"
+                    for f in uploaded_files_info:
+                        files_context += f"- File: `{f['name']}`\n"
+                        files_context += f"  Full path: `{f['path']}`\n"
+                        files_context += f"  Size: {f['size']} bytes\n"
+                    files_context += "\n**IMPORTANT: When delegating to subagent, include the file paths above in task_description!**\n"
+                
+                enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
         
         self.memory.add(session_id, "user", enhanced_input)
         
@@ -1714,16 +1731,6 @@ create_plan(
         if auto_loaded_skill:
             skill_content = self.skill_registry.get_content(auto_loaded_skill)
             if skill_content:
-                files_context = ""
-                if uploaded_files_info:
-                    files_context = "\n\n**Uploaded files available for processing:**\n"
-                    for f in uploaded_files_info:
-                        files_context += f"- File: `{f['name']}`\n"
-                        files_context += f"  Full path: `{f['path']}`\n"
-                        files_context += f"  Size: {f['size']} bytes\n"
-                    files_context += "\n**IMPORTANT: When using skill_execute, use the FULL PATH above, NOT just the filename!**\n"
-                    files_context += f"Session workspace: `{session_workspace}`\n"
-                
                 skill_injection = f"""<skill-auto-loaded name="{auto_loaded_skill}">
 {skill_content}
 </skill-auto-loaded>
