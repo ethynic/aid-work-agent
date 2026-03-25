@@ -36,4 +36,4 @@
 - 运行参数统一在 `deploy/gunicorn.conf.py` 中管理（workers、timeout、bind、loglevel 等）
 - 支持通过环境变量覆盖：`WORKERS`（**服务器4核，默认9**）、`WORKER_TIMEOUT`（默认 120s）、`SERVER_PORT`（默认 8000）、`LOG_LEVEL`
 - `docker-compose.prod.yml` 新增 `WORKERS`、`WORKER_TIMEOUT` 及 Key 池变量（`ZHIPU_API_KEYS`、`QWEN_API_KEYS`）
-- 部署流程：服务器修改 `.env` 设置 `WORKERS=N`，然后 `docker-compose -f docker-compose.prod.yml up -d --build`
+- 部署流程：服务器修改 `.env` 设置 `WORKERS=N`，然后 `docker compose -f docker-compose.prod.yml up -d --build`
