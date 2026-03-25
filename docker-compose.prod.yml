@@ -23,10 +23,17 @@ services:
       - SERVER_MODE=fastapi
       - SERVER_PORT=8000
       
+      # Gunicorn 配置
+      # 当前服务器 4 核，workers = 2×4+1 = 9
+      - WORKERS=${WORKERS:-9}
+      - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
+      
       # LLM 配置
       - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
       - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
       - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_KEYS=${QWEN_API_KEYS}
       
       # 调试模式（生产环境必须为 false）
       - DEBUG=${DEBUG:-false}

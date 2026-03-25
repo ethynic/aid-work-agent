@@ -4,6 +4,7 @@
 # Web Framework
 fastapi>=0.104.0
 uvicorn>=0.24.0
+gunicorn>=21.2.0  # Production WSGI server (used with uvicorn workers)
 
 # HTTP Client
 httpx>=0.25.0

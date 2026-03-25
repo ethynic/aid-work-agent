@@ -19,8 +19,21 @@
 - 临时调试日志已验证通过，acquire/release 日志已从 INFO 改回 DEBUG
 - 如需重新开启，将 `key_pool.py` 中 `[KeyPool]` 相关的 `logger.debug` 改为 `logger.info` 即可
 
+## 服务器环境说明
+- 服务器：Ubuntu 16.04，4 核
+- 不支持独立的 `docker-compose`（带中划线）命令
+- 使用 Docker 内置插件命令：`docker compose`（空格，无中划线）
+
 ## 生产部署建议（100 用户规模）
 - 单容器：Gunicorn + `(2×CPU核数)+1` 个 Uvicorn Workers
 - Key 池：3~5 个 Key，每 Key 并发 2，总并发 6~10
 - Nginx 前置限流（`/api/chat` 接口限每 IP 10 req/min）
 - 不需要每个 Agent 独占容器（过度工程，100 用户不满足拆分条件）
+
+## Gunicorn+Uvicorn 架构（2026-03-25 实施）
+- `requirements.txt` 新增 `gunicorn>=21.2.0`
+- `Dockerfile` ENTRYPOINT 已改为 `gunicorn -c deploy/gunicorn.conf.py src.main:app`
+- 运行参数统一在 `deploy/gunicorn.conf.py` 中管理（workers、timeout、bind、loglevel 等）
+- 支持通过环境变量覆盖：`WORKERS`（**服务器4核，默认9**）、`WORKER_TIMEOUT`（默认 120s）、`SERVER_PORT`（默认 8000）、`LOG_LEVEL`
+- `docker-compose.prod.yml` 新增 `WORKERS`、`WORKER_TIMEOUT` 及 Key 池变量（`ZHIPU_API_KEYS`、`QWEN_API_KEYS`）
+- 部署流程：服务器修改 `.env` 设置 `WORKERS=N`，然后 `docker-compose -f docker-compose.prod.yml up -d --build`
