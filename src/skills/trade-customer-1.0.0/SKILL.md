@@ -41,9 +41,9 @@ metadata:
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| customer_id | TEXT | 客户唯一ID |
-| user_id | TEXT | 所属用户ID |
-| session_id | TEXT | 所属会话ID |
+| customer_id | TEXT | 客户唯一ID（自动生成） |
+| user_id | TEXT | 所属用户ID（自动填充） |
+| session_id | TEXT | 所属会话ID（自动填充） |
 | company_name | TEXT | 公司名称 |
 | contact_name | TEXT | 联系人姓名 |
 | email | TEXT | 邮箱地址 |
@@ -53,8 +53,13 @@ metadata:
 | import_category | TEXT | 进口品类 |
 | company_size | TEXT | 公司规模 |
 | match_reason | TEXT | 匹配原因/说明 |
-| match_date | TEXT | 匹配日期 |
-| created_at | TEXT | 创建时间 |
+| match_date | TEXT | 匹配日期（自动生成） |
+| created_at | TEXT | 创建时间（自动生成） |
+
+**字段兼容性**：
+- `contact_name` 也支持 `contact_person`
+- `import_category` 也支持 `import_products`
+- 如果缺少某些可选字段，将使用空字符串填充
 
 ### 2. 客户邮件表 (customer_emails)
 
@@ -78,23 +83,76 @@ metadata:
 
 ## 如何使用此技能
 
-### 1. 保存匹配的客户
+### 1. 保存匹配的客户（推荐：逐个保存）
 
-当外贸智能体通过 `content_generate` 生成客户列表后，使用此技能保存客户信息：
+**推荐方式**：使用 `save-customer` 命令**每次只保存一个客户**，这样更容易生成完整的 JSON 对象，保存多次即可保存多个客户。
+
+```bash
+# 保存单个客户（推荐，JSON 更容易完整）
+python scripts/customer_manager.py save-customer \
+  --user-id "user_xxx" \
+  --session-id "session_xxx" \
+  --customer '{"company_name":"ABC Corp","contact_person":"John Smith","email":"luwei@aidingyi.cn","country":"USA","industry":"Electronics"}'
+```
+
+**【重要】customer JSON 对象格式规范**：
+
+```json
+{
+  "company_name": "公司名称（必需）",
+  "contact_person": "联系人姓名",
+  "email": "邮箱地址（建议使用 luwei@aidingyi.cn）",
+  "country": "国家/地区",
+  "industry": "行业",
+  "import_products": "进口产品（可选，支持此字段或 import_category）"
+}
+```
+
+✅ **JSON 格式要求**：
+- **单个客户 JSON 对象**，不是数组，更简单
+- 字符串必须使用**双引号** `"`，不能使用单引号 `'`
+- JSON 中不能有未转义的特殊字符
+- `contact_person` 字段名也支持 `contact_name`
+- `import_products` 字段名也支持 `import_category`
+
+**参数说明**：
+- `--user-id`: 用户ID（必需，系统会自动替换 {user_id} 占位符）
+- `--session-id`: 会话ID（必需，系统会自动替换 {session_id} 占位符）
+- `--customer`: 单个客户信息 JSON 对象
+
+**使用示例**：
+```bash
+# 保存第一个客户
+python scripts/customer_manager.py save-customer \
+  --user-id "user_xxx" \
+  --session-id "session_xxx" \
+  --customer '{"company_name":"ABC Corp","contact_person":"John","email":"john@abc.com","country":"USA","industry":"Electronics"}'
+
+# 保存第二个客户（可以多次调用）
+python scripts/customer_manager.py save-customer \
+  --user-id "user_xxx" \
+  --session-id "session_xxx" \
+  --customer '{"company_name":"XYZ Inc","contact_person":"Mary","email":"mary@xyz.com","country":"UK","industry":"Lighting"}'
+```
+
+---
+
+### 2. 批量保存客户（备选方案）
+
+如果需要一次性保存多个客户，可以使用 `save-customers` 命令：
 
 ```bash
 python scripts/customer_manager.py save-customers \
   --user-id "user_xxx" \
   --session-id "session_xxx" \
-  --customers '[{"company_name":"ABC Corp","contact_name":"John Smith","email":"luwei@aidingyi.cn","country":"USA","language":"en","industry":"Electronics","import_category":"LED Lights","company_size":"500","match_reason":"High match - Electronics industry"}]'
+  --customers '[{"company_name":"ABC Corp","contact_person":"John","email":"john@abc.com","country":"USA"}]'
 ```
 
 **参数说明**：
-- `--user-id`: 用户ID（必需）
-- `--session-id`: 会话ID（必需）
-- `--customers`: 客户信息JSON数组（必需）
+- `--customers`: 客户信息 JSON 数组
+- `--customers-file`: 客户信息 JSON 文件路径（从文件读取，推荐用于大量客户）
 
-### 2. 查询客户列表
+### 3. 查询客户列表
 
 查看某个用户或会话的客户列表：
 
@@ -109,7 +167,7 @@ python scripts/customer_manager.py list-customers \
   --session-id "session_xxx"
 ```
 
-### 3. 查询客户详情
+### 4. 查询客户详情
 
 查看特定客户的详细信息：
 
@@ -118,19 +176,18 @@ python scripts/customer_manager.py get-customer \
   --customer-id "cust_xxx"
 ```
 
-### 4. 记录邮件发送
+### 5. 记录邮件发送
 
 当使用 `email_send` 发送邮件后，记录邮件发送信息：
 
 ```bash
 python scripts/customer_manager.py record-email \
   --customer-id "cust_xxx" \
-  --user-id "user_xxx" \
-  --session-id "session_xxx" \
-  --subject "LED Lights Product Promotion" \
-  --body "Dear Mr. Smith, we are pleased to..." \
-  --language "en" \
-  --status "success"
+  --user-id "{user-id}" \
+  --session-id "{session-id}" \
+  --subject "{subject}" \
+  --body "{body}" \
+  --status "{status:success | fail}"
 ```
 
 **参数说明**：
@@ -142,7 +199,7 @@ python scripts/customer_manager.py record-email \
 - `--language`: 邮件语言，默认 en
 - `--status`: 发送状态 success/failed/pending，默认 success
 
-### 5. 查询客户邮件历史
+### 6. 查询客户邮件历史
 
 查看某个客户的邮件发送历史：
 
@@ -151,7 +208,7 @@ python scripts/customer_manager.py list-emails \
   --customer-id "cust_xxx"
 ```
 
-### 6. 查询用户的邮件历史
+### 7. 查询用户的邮件历史
 
 查看某个用户发送的所有邮件：
 
@@ -161,7 +218,7 @@ python scripts/customer_manager.py list-emails \
   --limit 50
 ```
 
-### 7. 获取客户统计
+### 8. 获取客户统计
 
 获取用户的客户统计信息：
 
@@ -181,8 +238,8 @@ python scripts/customer_manager.py stats \
          ↓
 外贸智能体：使用 content_generate 生成客户列表
          ↓
-【调用 skill_execute 保存客户】
-python scripts/customer_manager.py save-customers ...
+【调用 skill_execute 保存客户（逐个保存）】
+python scripts/customer_manager.py save-customer ...
          ↓
 外贸智能体：使用 content_generate 生成邮件内容
          ↓

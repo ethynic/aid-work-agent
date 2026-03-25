@@ -6,7 +6,13 @@
 用于保存外贸获客过程中匹配到的客户信息，跟踪邮件发送记录
 
 用法:
+    # 单个客户保存（推荐，每次生成一个客户）
+    python customer_manager.py save-customer --user-id USER --session-id SESSION --customer JSON
+
+    # 批量保存客户（一次保存多个）
     python customer_manager.py save-customers --user-id USER --session-id SESSION --customers JSON
+
+    # 其他操作
     python customer_manager.py list-customers --user-id USER [--session-id SESSION]
     python customer_manager.py get-customer --customer-id ID
     python customer_manager.py record-email --customer-id ID --user-id USER --session-id SESSION --subject SUBJECT --body BODY [--language LANG] [--status STATUS]
@@ -16,13 +22,22 @@
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-# 添加项目根目录到路径
-sys.path.insert(0, str(__file__).rsplit('/src/', 1)[0] if '/src/' in __file__ else '.')
+# 添加项目根目录到路径（兼容 Windows 和 Linux）
+script_path = Path(__file__).resolve()
+# 向上查找 src 目录
+if 'src' in script_path.parts:
+    src_index = script_path.parts.index('src')
+    project_root = Path(*script_path.parts[:src_index])
+else:
+    project_root = script_path.parent
+sys.path.insert(0, str(project_root))
 
 from loguru import logger
 
@@ -35,6 +50,75 @@ def generate_customer_id() -> str:
 def generate_email_id() -> str:
     """生成唯一邮件ID"""
     return f"email_{uuid.uuid4().hex[:12]}"
+
+
+def save_execution_log(command: str, args: Dict[str, Any], result: Dict[str, Any]) -> str:
+    """保存执行结果到日志文件
+
+    Args:
+        command: 命令名称
+        args: 命令参数
+        result: 执行结果
+
+    Returns:
+        日志文件路径
+    """
+    # 获取日志目录
+    script_dir = Path(__file__).parent
+    skill_dir = script_dir.parent
+    log_dir = skill_dir / "logs"
+    log_dir.mkdir(exist_ok=True)
+
+    # 生成日志文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"{command}_{timestamp}.json"
+
+    # 构建日志内容
+    log_content = {
+        "timestamp": datetime.now().isoformat(),
+        "command": command,
+        "args": args,
+        "result": result
+    }
+
+    # 保存到文件
+    with open(log_file, "w", encoding="utf-8") as f:
+        json.dump(log_content, f, ensure_ascii=False, indent=2)
+
+    return str(log_file)
+
+
+def parse_json_safe(json_str: str) -> Any:
+    """安全解析 JSON，支持单引号和双引号
+
+    Args:
+        json_str: JSON 字符串
+
+    Returns:
+        解析后的对象
+    """
+    # 先尝试直接解析（标准 JSON，双引号）
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+
+    # 尝试将单引号替换为双引号（兼容性处理）
+    try:
+        # 使用正则表达式安全替换，避免破坏已有转义字符
+        import re
+        # 匹配不在转义序列中的单引号
+        fixed = re.sub(r"(?<!\\)'", '"', json_str)
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # 最后尝试 ast.literal_eval（更宽容但不安全，仅用于调试）
+    try:
+        import ast
+        return ast.literal_eval(json_str)
+    except Exception:
+        raise json.JSONDecodeError(f"无法解析 JSON: {json_str}", json_str, 0)
 
 
 def get_db_connection():
@@ -110,8 +194,80 @@ def init_tables():
         logger.info("客户管理表初始化完成")
 
 
+def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Dict[str, Any]:
+    """保存单个客户信息（推荐方式）
+
+    每次只保存一个客户，降低大模型生成完整JSON的难度。
+
+    Args:
+        user_id: 用户ID
+        session_id: 会话ID
+        customer: 单个客户信息字典
+
+    Returns:
+        保存结果
+    """
+    if not user_id or not session_id:
+        return {"success": False, "error": "user_id 和 session_id 是必需参数"}
+
+    if not customer:
+        return {"success": False, "error": "客户信息不能为空"}
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            customer_id = generate_customer_id()
+            match_date = datetime.now().strftime("%Y-%m-%d")
+
+            # 字段映射：兼容不同格式的字段名
+            contact_name = customer.get("contact_name") or customer.get("contact_person", "")
+            import_category = customer.get("import_category") or customer.get("import_products", "")
+
+            cursor.execute("""
+                INSERT INTO matched_customers
+                (customer_id, user_id, session_id, company_name, contact_name,
+                 email, country, language, industry, import_category,
+                 company_size, match_reason, match_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                customer_id,
+                user_id,
+                session_id,
+                customer.get("company_name", ""),
+                contact_name,
+                customer.get("email", ""),
+                customer.get("country", ""),
+                customer.get("language", ""),
+                customer.get("industry", ""),
+                import_category,
+                customer.get("company_size", ""),
+                customer.get("match_reason", ""),
+                match_date
+            ))
+
+            conn.commit()
+            logger.info(f"后端日志：保存单个客户 {customer_id} - {customer.get('company_name', '')}")
+
+            return {
+                "success": True,
+                "data": {
+                    "customer_id": customer_id,
+                    "company_name": customer.get("company_name", ""),
+                    "contact_name": contact_name,
+                    "email": customer.get("email", "")
+                }
+            }
+    except Exception as e:
+        logger.error(f"后端日志：保存单个客户失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": "保存客户信息失败",
+            "debug": str(e)
+        }
+
+
 def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """保存客户信息"""
+    """保存客户信息（批量方式）"""
     if not user_id or not session_id:
         return {"success": False, "error": "user_id 和 session_id 是必需参数"}
 
@@ -127,6 +283,10 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
                 customer_id = generate_customer_id()
                 match_date = datetime.now().strftime("%Y-%m-%d")
 
+                # 字段映射：兼容不同格式的字段名
+                contact_name = customer.get("contact_name") or customer.get("contact_person", "")
+                import_category = customer.get("import_category") or customer.get("import_products", "")
+
                 cursor.execute("""
                     INSERT INTO matched_customers
                     (customer_id, user_id, session_id, company_name, contact_name,
@@ -138,12 +298,12 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
                     user_id,
                     session_id,
                     customer.get("company_name", ""),
-                    customer.get("contact_name", ""),
+                    contact_name,
                     customer.get("email", ""),
                     customer.get("country", ""),
                     customer.get("language", ""),
                     customer.get("industry", ""),
-                    customer.get("import_category", ""),
+                    import_category,
                     customer.get("company_size", ""),
                     customer.get("match_reason", ""),
                     match_date
@@ -152,7 +312,7 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
                 saved_customers.append({
                     "customer_id": customer_id,
                     "company_name": customer.get("company_name", ""),
-                    "contact_name": customer.get("contact_name", ""),
+                    "contact_name": contact_name,
                     "email": customer.get("email", "")
                 })
 
@@ -478,11 +638,18 @@ def main():
     parser = argparse.ArgumentParser(description="外贸客户信息管理")
     subparsers = parser.add_subparsers(dest="command", help="子命令")
 
-    # 保存客户
-    save_parser = subparsers.add_parser("save-customers", help="保存客户信息")
+    # 保存单个客户（推荐方式）
+    save_single_parser = subparsers.add_parser("save-customer", help="保存单个客户信息（推荐）")
+    save_single_parser.add_argument("--user-id", required=True, help="用户ID")
+    save_single_parser.add_argument("--session-id", required=True, help="会话ID")
+    save_single_parser.add_argument("--customer", help="单个客户信息JSON对象")
+
+    # 保存客户（批量方式）
+    save_parser = subparsers.add_parser("save-customers", help="批量保存客户信息")
     save_parser.add_argument("--user-id", required=True, help="用户ID")
     save_parser.add_argument("--session-id", required=True, help="会话ID")
-    save_parser.add_argument("--customers", required=True, help="客户信息JSON数组")
+    save_parser.add_argument("--customers", help="客户信息JSON数组（直接传递）")
+    save_parser.add_argument("--customers-file", help="客户信息JSON文件路径（从文件读取，推荐用于大量客户）")
 
     # 列出客户
     list_parser = subparsers.add_parser("list-customers", help="查询客户列表")
@@ -525,13 +692,36 @@ def main():
 
     result = None
 
-    if args.command == "save-customers":
+    if args.command == "save-customer":
         try:
-            customers = json.loads(args.customers)
-        except json.JSONDecodeError as e:
+            if getattr(args, 'customer', None):
+                customer = parse_json_safe(args.customer)
+            else:
+                result = {"success": False, "error": "必须指定 --customer"}
+        except (json.JSONDecodeError, ValueError) as e:
             result = {"success": False, "error": "JSON格式错误", "debug": str(e)}
         else:
-            result = save_customers(args.user_id, args.session_id, customers)
+            if result is None:
+                result = save_customer(args.user_id, args.session_id, customer)
+
+    elif args.command == "save-customers":
+        try:
+            # 优先从文件读取，其次从命令行参数
+            if getattr(args, 'customers_file', None):
+                customers_file = Path(args.customers_file)
+                if not customers_file.exists():
+                    result = {"success": False, "error": f"客户文件不存在: {args.customers_file}"}
+                else:
+                    customers = parse_json_safe(customers_file.read_text(encoding="utf-8"))
+            elif getattr(args, 'customers', None):
+                customers = parse_json_safe(args.customers)
+            else:
+                result = {"success": False, "error": "必须指定 --customers 或 --customers-file"}
+        except (json.JSONDecodeError, ValueError) as e:
+            result = {"success": False, "error": "JSON格式错误", "debug": str(e)}
+        else:
+            if result is None:
+                result = save_customers(args.user_id, args.session_id, customers)
 
     elif args.command == "list-customers":
         result = list_customers(args.user_id, args.session_id)
@@ -562,6 +752,11 @@ def main():
 
     # 输出结果
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    # 保存执行日志到文件
+    log_args = vars(args) if hasattr(args, '__dict__') else {}
+    log_file = save_execution_log(args.command, log_args, result)
+    print(f"\n[日志已保存] {log_file}")
 
 
 if __name__ == "__main__":

@@ -116,7 +116,8 @@ system_prompt: |
   - `prompt` 参数：由你组织详细的提示词，包含角色、任务、输入信息、输出格式、语言要求
   - `language` 参数：根据客户所在国家填写对应语言代码（zh/en/ru/de/ja/ko/es等）
   - `content_type` 参数：customer_list（客户列表）或 email（邮件）
-  
+  - **重要**：生成的 JSON 必须完整有效，不能有截断或语法错误
+
   ### ⚠️ 重要：所有客户邮箱使用 demo 邮箱
   **生成的客户列表中，所有客户的邮箱都必须使用：`luwei@aidingyi.cn`**
 
@@ -159,6 +160,7 @@ system_prompt: |
   ⚠️ **重要**：
   - 使用 `content_generate` 生成实际内容，不要用占位符（如"正在生成..."）
   - 只有步骤6才调用 `email_send` 发送！
+  - **【关键】skill_execute 命令中的 `{user_id}` 和 `{session_id}` 是占位符，系统会自动替换为真实值，禁止自己编造 user_id！**
   - **步骤3 必须调用 skill_execute 保存客户**，获取到 customer_id 后才能进行步骤7
   - **步骤7 必须为每封发送的邮件调用 skill_execute 记录发送信息**
   - 同种语言客户的邮件必须独立生成，语言必须匹配客户所在国家
@@ -394,13 +396,13 @@ content_generate(
 - 产品特点：节能、长寿命、环保
 
 要求：
-1. 生成3-5个客户
+1. 生成3个客户（不要多！确保JSON完整）
 2. **所有客户的邮箱都必须使用：luwei@aidingyi.cn**
-3. 至少包含一个中亚国家客户（哈萨克斯坦、乌兹别克斯坦等）
+3. 至少包含一个中亚国家客户（哈萨克斯坦）
 4. 客户应与LED产品或照明设备相关
-5. 每个客户包含：公司名称、联系人、邮箱、国家、行业、规模
+5. 每个客户包含：company_name（公司名称）、contact_person（联系人）、email（邮箱）、country（国家）、industry（行业）
 
-请以结构化格式输出客户列表。""",
+重要：输出必须是完整有效的JSON数组，不要有截断或语法错误！""",
     language="zh",
     content_type="customer_list"
 )
