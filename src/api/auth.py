@@ -65,31 +65,67 @@ class UserInfo(BaseModel):
     avatar_url: Optional[str] = None
 
 
-# ============== 简单的Token管理（生产环境应使用JWT）==============
-
-_active_tokens = {}  # token -> user_id
+# ============== Token管理（数据库存储，支持多进程）==============
 
 
 def generate_token(user_id: str) -> str:
-    """生成简单的访问令牌"""
+    """生成简单的访问令牌（存储到数据库）"""
     token = secrets.token_urlsafe(32)
-    _active_tokens[token] = {
-        "user_id": user_id,
-        "created_at": datetime.now()
-    }
+    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tokens (token, user_id, expires_at)
+            VALUES (?, ?, ?)
+        """, (token, user_id, expires_at))
+        conn.commit()
+
+    logger.info(f"Token generated for user: {user_id}")
     return token
 
 
 def verify_token(token: str) -> Optional[str]:
     """验证令牌并返回user_id"""
-    token_data = _active_tokens.get(token)
-    if token_data:
-        # 检查是否过期（7天）
-        if datetime.now() - token_data["created_at"] < timedelta(days=7):
-            return token_data["user_id"]
-        else:
-            del _active_tokens[token]
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT user_id, expires_at FROM tokens
+            WHERE token = ? AND expires_at > ?
+        """, (token, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        row = cursor.fetchone()
+
+        if row:
+            return row["user_id"]
+
+        # 清理过期 token
+        cursor.execute("DELETE FROM tokens WHERE expires_at < ?",
+                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        conn.commit()
+
     return None
+
+
+def delete_token(token: str) -> bool:
+    """删除指定的 token"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def cleanup_expired_tokens() -> int:
+    """清理所有过期的 token，返回清理数量"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tokens WHERE expires_at < ?",
+                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        conn.commit()
+        count = cursor.rowcount
+        if count > 0:
+            logger.info(f"Cleaned up {count} expired tokens")
+        return count
 
 
 def get_current_user(request: Request) -> Optional[dict]:
@@ -424,6 +460,5 @@ async def logout(request: Request):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        if token in _active_tokens:
-            del _active_tokens[token]
+        delete_token(token)
     return {"success": True}
