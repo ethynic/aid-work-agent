@@ -12,7 +12,7 @@ from loguru import logger
 
 def setup_logging(
     log_level: str = "INFO",
-    log_dir: str = "logs",
+    log_dir: str = "log/agent",
     rotation: str = "10 MB",
     retention: str = "7 days",
     json_format: bool = False,
