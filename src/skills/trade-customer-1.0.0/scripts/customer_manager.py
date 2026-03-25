@@ -89,7 +89,13 @@ def save_execution_log(command: str, args: Dict[str, Any], result: Dict[str, Any
 
 
 def parse_json_safe(json_str: str) -> Any:
-    """安全解析 JSON，支持单引号和双引号
+    """安全解析 JSON，支持多种格式
+
+    支持格式：
+    - 标准 JSON（双引号）
+    - 单引号 JSON
+    - JavaScript 风格裸键格式，如 [{key:value,key2:value2}]
+    - 带单引号包裹的 JSON 字符串
 
     Args:
         json_str: JSON 字符串
@@ -97,6 +103,16 @@ def parse_json_safe(json_str: str) -> Any:
     Returns:
         解析后的对象
     """
+    if not json_str:
+        return None
+
+    # 去除首尾空白
+    json_str = json_str.strip()
+
+    # 去除首尾多余的单引号（处理 "'[...]'" 这种情况）
+    if json_str.startswith("'") and json_str.endswith("'"):
+        json_str = json_str[1:-1].strip()
+
     # 先尝试直接解析（标准 JSON，双引号）
     try:
         return json.loads(json_str)
@@ -105,7 +121,6 @@ def parse_json_safe(json_str: str) -> Any:
 
     # 尝试将单引号替换为双引号（兼容性处理）
     try:
-        # 使用正则表达式安全替换，避免破坏已有转义字符
         import re
         # 匹配不在转义序列中的单引号
         fixed = re.sub(r"(?<!\\)'", '"', json_str)
@@ -113,7 +128,101 @@ def parse_json_safe(json_str: str) -> Any:
     except json.JSONDecodeError:
         pass
 
-    # 最后尝试 ast.literal_eval（更宽容但不安全，仅用于调试）
+    # 处理 JavaScript 风格的裸键格式
+    # 例如: [{company_name:値,contact_person:値}] -> [{"company_name":"値","contact_person":"値"}]
+    try:
+        import re
+
+        # 检测是否是裸键格式（键没有引号）
+        if re.search(r'[a-zA-Z_][a-zA-Z0-9_]*\s*:', json_str):
+            # 判断是数组还是对象
+            is_array = json_str.startswith('[')
+
+            # 去除数组括号
+            content = json_str.strip('[]')
+
+            # 分割 items - 按逗号分割，但跳过引号内的逗号
+            items = []
+            depth = 0
+            current = []
+            in_string = False
+            escape_next = False
+
+            i = 0
+            while i < len(content):
+                char = content[i]
+
+                if escape_next:
+                    current.append(char)
+                    escape_next = False
+                    i += 1
+                    continue
+
+                if char == '\\':
+                    escape_next = True
+                    current.append(char)
+                    i += 1
+                    continue
+
+                if char == '"':
+                    in_string = not in_string
+                    current.append(char)
+                    i += 1
+                    continue
+
+                if not in_string:
+                    if char in ('{', '['):
+                        depth += 1
+                        current.append(char)
+                    elif char in (']', '}'):
+                        depth -= 1
+                        current.append(char)
+                    elif char == ',' and depth == 0:
+                        items.append(''.join(current))
+                        current = []
+                        i += 1
+                        continue
+
+                current.append(char)
+                i += 1
+
+            if current:
+                items.append(''.join(current))
+
+            # 解析每个 item
+            results = []
+            for item in items:
+                item = item.strip()
+                if not item:
+                    continue
+
+                # 去除首尾的花括号
+                item = item.strip()
+                if item.startswith('{'):
+                    item = item[1:]
+                if item.endswith('}'):
+                    item = item[:-1]
+
+                # 使用正则匹配 key:value
+                pairs = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\}]+))', item)
+
+                obj = {}
+                for match in pairs:
+                    key = match[0]
+                    value = match[1] if match[1] else (match[2] if match[2] else match[3])
+                    if value:
+                        value = value.strip()
+                        value = value.replace('"', '\\"')
+                        obj[key] = value
+
+                if obj:
+                    results.append(obj)
+
+            return results if is_array else (results[0] if results else {})
+    except Exception:
+        pass
+
+    # 最后尝试 ast.literal_eval（更宽容）
     try:
         import ast
         return ast.literal_eval(json_str)
