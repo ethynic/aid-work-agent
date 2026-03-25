@@ -37,7 +37,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # 默认使用 FastAPI 服务器
     SERVER_MODE=fastapi \
     # 时区配置
-    TZ=Asia/Shanghai
+    TZ=Asia/Shanghai \
+    # Gunicorn worker 数量（4核服务器 = 2×4+1 = 9）
+    WORKERS=9 \
+    # Gunicorn worker 超时（秒）
+    WORKER_TIMEOUT=120
 
 # 安装运行时依赖（字体、浏览器等）
 # 使用清华镜像加速 Debian 包下载
@@ -104,6 +108,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # 启动命令
-# 默认启动 FastAPI 服务
-# 可通过环境变量 SERVER_MODE=gradio 切换到 Gradio UI
-ENTRYPOINT ["sh", "-c", "python -m uvicorn src.main:app --host 0.0.0.0 --port ${SERVER_PORT:-8000}"]
+# 生产模式：Gunicorn 管理多个 UvicornWorker 进程
+# 运行参数统一在 deploy/gunicorn.conf.py 中管理
+# 可通过环境变量覆盖：WORKERS、WORKER_TIMEOUT、SERVER_PORT、LOG_LEVEL
+ENTRYPOINT ["sh", "-c", "gunicorn -c deploy/gunicorn.conf.py src.main:app"]
