@@ -86,8 +86,31 @@ main() {
     mkdir -p logs
     mkdir -p /var/www/qb3_upload/agent_uploads
     mkdir -p /var/www/qb3_upload/agent_memories
+    
+    # 设置正确的权限（允许容器内的 appuser 写入，同时在宿主机可查看）
+    # 获取当前用户（通常是部署用户，如 gaofang）
+    CURRENT_USER=$(whoami)
+    CURRENT_GROUP=$(id -gn)
+    
+    # 设置日志目录权限
+    chown -R ${CURRENT_USER}:${CURRENT_GROUP} logs
+    chmod -R 775 logs
+    
+    # 设置数据库文件权限（如果已存在）
+    if [ -f "aid_work_agent.db" ]; then
+        chmod 777 aid_work_agent.db
+        log_info "数据库文件权限已设置为 777"
+    else
+        log_warning "数据库文件不存在，将在首次启动时自动创建"
+        log_warning "首次启动后请执行: chmod 777 aid_work_agent.db"
+    fi
+    
+    # 设置上传目录权限
     sudo chown -R www-data:www-data /var/www/qb3_upload
+    
     log_success "目录创建完成"
+    log_info "数据库文件位置: $PROJECT_DIR/aid_work_agent.db"
+    log_info "日志文件位置: $PROJECT_DIR/logs/"
 
     # 把 gaofang 用户加入 docker 组
     sudo usermod -aG docker gaofang
