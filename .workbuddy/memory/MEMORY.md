@@ -37,3 +37,19 @@
 - 支持通过环境变量覆盖：`WORKERS`（**服务器4核，默认9**）、`WORKER_TIMEOUT`（默认 120s）、`SERVER_PORT`（默认 8000）、`LOG_LEVEL`
 - `docker-compose.prod.yml` 新增 `WORKERS`、`WORKER_TIMEOUT` 及 Key 池变量（`ZHIPU_API_KEYS`、`QWEN_API_KEYS`）
 - 部署流程：服务器修改 `.env` 设置 `WORKERS=N`，然后 `docker compose -f docker-compose.prod.yml up -d --build`
+
+## 代码审核结果（2026-03-25，docs/CODE_REVIEW.md）
+- 🔴 严重问题 4 个：auth.py 函数名遮蔽、微信登录孤儿代码语法破坏、core/executor.py 与 tools/executor.py 同名类双重定义、SessionDB.delete() 级联删除遗漏 chat_records 表
+- 🟡 中等问题 4 个：前端 ChatMessage 类型命名冲突（types/index.ts vs api/session.ts）、verify_token 过期清理逻辑位置不当、SubAgent 线程池无上限、/api/chat 同步接口潜在阻塞
+- 🟢 可清理冗余 5 个：dialog_manager.py（344行）、intent_engine.py（456行）、planner.py（421行，区别于 plan_manager.py）、memory/manager.py（312行）、core/executor.py（324行）
+- 完整报告见 `docs/CODE_REVIEW.md`，用户要求只记录不修改
+
+## 前端专项审核补充（2026-03-25，docs/CODE_REVIEW.md § 前端专项）
+- 🔴 F-1 `api/customer.ts`：API_BASE fallback 写成 `/api/customer` 导致请求路径翻倍，所有客户接口 404
+- 🔴 F-2 `api/credentials.ts`：`listCredentials` 用 `new URL(相对路径)` 在默认配置下直接抛 TypeError 崩溃
+- 🟡 F-3 `useAgent.ts` + `ChatContainer.vue`：sessionId 双轨制（前端生成 vs 后端 DB id）存在竞态，消息可能存入孤立 session
+- 🟡 F-4 `ChatContainer.vue`：AI 回复从未调用 `saveMessage` 持久化，刷新后 AI 消息全消失
+- 🟡 F-5 `useAuth.ts`：User 接口与 `types/index.ts` 重复定义
+- 🟡 F-6 `MessageItem.vue`：`formatProgressContent` 参数类型签名错误
+- 🟡 F-7 `api/credentials.ts`：所有凭据接口无 Authorization Header（后端需要鉴权）
+- 🟢 F-8/F-9/F-10：测试密码硬编码、files 类型错误、switch-case 缺块级作用域
