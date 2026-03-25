@@ -12,11 +12,23 @@ app:
 llm:
   provider: zhipu  # qwen | zhipu
   qwen:
+    # 单 Key 配置（开发/测试）
     api_key: ${QWEN_API_KEY}
+    # 多 Key 配置（生产推荐）：在 .env 中设置 QWEN_API_KEYS=key1,key2,key3
+    # api_keys 非空时优先于 api_key
+    api_keys: ${QWEN_API_KEYS}
     model: qwen-plus
+    max_concurrent_per_key: 2   # 每个 Key 最大并发数
+    queue_timeout: 30            # 等待可用 Key 的超时秒数
   zhipu:
+    # 单 Key 配置（开发/测试）
     api_key: ${ZHIPU_API_KEY}
+    # 多 Key 配置（生产推荐）：在 .env 中设置 ZHIPU_API_KEYS=key1,key2,key3
+    # api_keys 非空时优先于 api_key
+    api_keys: ${ZHIPU_API_KEYS}
     model: glm-4
+    max_concurrent_per_key: 2   # 每个 Key 最大并发数
+    queue_timeout: 30            # 等待可用 Key 的超时秒数
 
 # 渠道配置
 channels:

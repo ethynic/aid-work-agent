@@ -46,6 +46,9 @@ echo.
 
 echo Step 4/4: Start backend Docker container
 echo ----------------------------------------
+echo [INFO] Clearing backend log file...
+type nul > logs\aid-work-agent.log
+echo [OK] Log file cleared
 docker start aid-agent-api
 if %errorlevel% equ 0 (
     echo [OK] Backend container started successfully
