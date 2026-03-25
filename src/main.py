@@ -27,7 +27,7 @@ from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
 from src.db.database import init_database
-from src.api import auth, session as session_api, credentials
+from src.api import auth, session as session_api, credentials, customer
 from src.db.models import SessionDB, MessageDB
 from src.channels import callback as channels_api
 from src.services.session_record import SessionRecordManager
@@ -694,6 +694,7 @@ app.include_router(auth.router)
 app.include_router(session_api.router)
 app.include_router(channels_api.router)
 app.include_router(credentials.router)
+app.include_router(customer.router)
 
 
 

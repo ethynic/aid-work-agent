@@ -70,7 +70,7 @@ export function useAgent() {
     // 添加空的助手消息占位
     const assistantMessageIndex = messages.value.length
     const assistantMessage = {
-      role: 'assistant',
+      role: 'assistant' as const,
       content: '',
       timestamp: Date.now(),
       progressMessages: [] as ProgressMessage[]  // 初始化空数组

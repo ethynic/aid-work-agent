@@ -1,7 +1,6 @@
 <template>
-  <ChatContainer />
+  <router-view />
 </template>
 
 <script setup lang="ts">
-import ChatContainer from './components/ChatContainer.vue'
 </script>

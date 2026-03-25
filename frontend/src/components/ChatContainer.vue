@@ -43,18 +43,60 @@
               <span :class="isOnline ? 'bg-green-500' : 'bg-slate-400'" class="w-2 h-2 rounded-full"></span>
               <span class="text-slate-600">{{ isOnline ? '在线' : '离线' }}</span>
             </div>
-            <button
-              @click="handleNewSession"
-              class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
-            >
-              新会话
-            </button>
-            <button
-              @click="showCredentialManager = true"
-              class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
-            >
-              凭据管理
-            </button>
+
+            <!-- 汉堡菜单 -->
+            <div class="relative">
+              <button
+                @click="showMenuDropdown = !showMenuDropdown"
+                class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-1"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" />
+                </svg>
+                更多
+              </button>
+
+              <!-- 下拉菜单 -->
+              <div
+                v-if="showMenuDropdown"
+                class="absolute right-0 top-full mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-50"
+              >
+                <button
+                  @click="handleNewSession(); showMenuDropdown = false"
+                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                  新会话
+                </button>
+                <button
+                  @click="openCustomerInfo"
+                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  我的客户
+                </button>
+                <button
+                  @click="showCredentialManager = true; showMenuDropdown = false"
+                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                  </svg>
+                  凭据管理
+                </button>
+              </div>
+            </div>
+
+            <!-- 点击空白处关闭菜单 -->
+            <div
+              v-if="showMenuDropdown"
+              class="fixed inset-0 z-40"
+              @click="showMenuDropdown = false"
+            ></div>
           </div>
         </div>
       </div>
@@ -115,6 +157,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import MessageList from './MessageList.vue'
 import ProgressPanel from './ProgressPanel.vue'
 import ChatInput from './ChatInput.vue'
@@ -124,6 +167,8 @@ import CredentialManager from './CredentialManager.vue'
 import { useAgent } from '@/composables/useAgent'
 import { useAuth } from '@/composables/useAuth'
 import { useSession } from '@/composables/useSession'
+
+const router = useRouter()
 
 const {
   messages,
@@ -145,6 +190,27 @@ const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
 const showLoginModal = ref(false)
 const showCredentialManager = ref(false)
+const showMenuDropdown = ref(false)
+
+// 跳转到客户信息页面
+function openCustomerInfo() {
+  showMenuDropdown.value = false
+  // 使用 user_id 和 currentSessionId 构建 URL
+  const userId = user.value?.user_id
+  const sessionId = currentSessionId.value
+  if (userId) {
+    const params = new URLSearchParams()
+    params.append('user_id', userId)
+    if (sessionId) {
+      params.append('session_id', sessionId)
+    }
+    router.push(`/customer-info?${params.toString()}`)
+  } else {
+    // 如果没有用户信息，提示登录
+    alert('请先登录')
+    showLoginModal.value = true
+  }
+}
 
 // 模拟在线状态检测
 let heartbeatInterval: number | null = null

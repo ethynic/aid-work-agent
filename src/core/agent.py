@@ -1474,19 +1474,30 @@ create_plan(
                     logger.warning(f"Failed to decode file {filename}: {e}")
         
         try:
+            # 获取 user_id（从 session 中获取）
+            user_id = None
+            if session_id:
+                from src.db.models import SessionDB
+                session_info = SessionDB.get_by_id(session_id)
+                if session_info:
+                    user_id = session_info.get("user_id")
+                    logger.info(f"后端日志：skill_execute 获取到 user_id={user_id} from session_id={session_id}")
+
             if workdir and workdir.exists():
                 result = await self.skill_executor.execute_skill_command(
                     skill_name=skill_name,
                     command=processed_command,
                     files=decoded_files if decoded_files else None,
-                    session_id=session_id
+                    session_id=session_id,
+                    user_id=user_id
                 )
             else:
                 result = await self.skill_executor.execute_skill_command(
                     skill_name=skill_name,
                     command=processed_command,
                     files=decoded_files if decoded_files else None,
-                    session_id=session_id
+                    session_id=session_id,
+                    user_id=user_id
                 )
             
             return {

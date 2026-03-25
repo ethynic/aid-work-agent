@@ -452,7 +452,13 @@ Follow the instructions in the skill above to complete the user's task."""
         # 添加变量
         if variables:
             context.variables.update(variables)
-        
+
+        # 添加 user_id 到变量（供命令替换使用）
+        if context.user_id:
+            context.variables["user_id"] = context.user_id
+        if context.session_id:
+            context.variables["session_id"] = context.session_id
+
         # 保存文件到工作目录
         context.save_files()
         

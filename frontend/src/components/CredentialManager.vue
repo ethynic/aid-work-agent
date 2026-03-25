@@ -36,7 +36,7 @@
               <button @click="editCredential(cred)" class="btn-icon" title="编辑">
                 ✏️
               </button>
-              <button @click="deleteCredential(cred.credential_id)" class="btn-icon btn-danger" title="删除">
+              <button @click="handleDeleteCredential(cred.credential_id)" class="btn-icon btn-danger" title="删除">
                 🗑️
               </button>
             </div>
@@ -197,7 +197,7 @@ import {
   listCredentials,
   createCredential,
   updateCredential,
-  deleteCredential,
+  deleteCredential as apiDeleteCredential,
   type RemoteCredential,
   type CreateCredentialRequest,
   type UpdateCredentialRequest
@@ -289,12 +289,12 @@ async function submitForm() {
   }
 }
 
-async function deleteCredential(credentialId: string) {
+async function handleDeleteCredential(credentialId: string) {
   if (!confirm('确定要删除此凭据吗？')) {
     return
   }
   try {
-    const result = await deleteCredential(credentialId)
+    const result = await apiDeleteCredential(credentialId)
     if (result.success) {
       alert('删除成功')
       await loadCredentials()

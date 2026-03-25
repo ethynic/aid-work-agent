@@ -94,7 +94,7 @@ import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
-import type { ChatMessage, ProgressMessage } from '@/types'
+import type { ChatMessage } from '@/types'
 
 // 配置 marked 使用 highlight.js 进行代码高亮
 marked.use(markedHighlight({

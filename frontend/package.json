@@ -15,7 +15,8 @@
     "highlight.js": "^11.11.1",
     "marked": "^17.0.5",
     "marked-highlight": "^2.2.3",
-    "vue": "^3.4.21"
+    "vue": "^3.4.21",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
