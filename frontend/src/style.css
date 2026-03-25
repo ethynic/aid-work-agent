@@ -1,3 +1,6 @@
+/* highlight.js 代码高亮样式 */
+@import 'highlight.js/styles/github-dark.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -119,4 +122,98 @@ body {
 .markdown-content a {
   color: #0284c7;
   text-decoration: underline;
+}
+
+/* Markdown 增强样式 */
+
+/* 标题样式 */
+.markdown-content h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1e293b;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+  margin-top: 1.5rem;
+}
+
+.markdown-content h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #334155;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.25rem;
+  margin-bottom: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.markdown-content h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 0.5rem;
+  margin-top: 1rem;
+}
+
+.markdown-content h4, .markdown-content h5, .markdown-content h6 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* 表格样式 - 网格线 */
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.markdown-content thead tr {
+  background-color: #f1f5f9;
+}
+
+.markdown-content th {
+  border: 1px solid #cbd5e1;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: #334155;
+}
+
+.markdown-content td {
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem 0.75rem;
+  color: #475569;
+}
+
+.markdown-content tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.markdown-content tbody tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+/* 引用块样式 */
+.markdown-content blockquote {
+  border-left: 4px solid #38bdf8;
+  background-color: #f0f9ff;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  border-radius: 0 0.5rem 0.5rem 0;
+  color: #475569;
+}
+
+.markdown-content blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* 水平线样式 */
+.markdown-content hr {
+  border: none;
+  border-top: 2px solid #e2e8f0;
+  margin: 1.5rem 0;
 }

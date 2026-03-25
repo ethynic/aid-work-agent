@@ -40,7 +40,7 @@
 
       <!-- Message Content (Markdown) -->
       <div
-        class="text-slate-700 leading-relaxed markdown-content"
+        class="text-slate-700 leading-relaxed markdown-content prose prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
 
@@ -91,7 +91,19 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { marked } from 'marked'
+import { markedHighlight } from 'marked-highlight'
+import hljs from 'highlight.js'
 import type { ChatMessage, ProgressMessage } from '@/types'
+
+// 配置 marked 使用 highlight.js 进行代码高亮
+marked.use(markedHighlight({
+  langPrefix: 'hljs language-',
+  highlight(code: string, lang: string) {
+    const language = hljs.getLanguage(lang) ? lang : 'plaintext'
+    return hljs.highlight(code, { language }).value
+  }
+}))
 
 interface Props {
   message: ChatMessage
@@ -109,11 +121,6 @@ const hasProgress = computed(() => {
   return props.message.progressMessages && props.message.progressMessages.length > 0
 })
 const totalCount = computed(() => props.message.progressMessages?.length || 0)
-const collapsedCount = computed(() => {
-  if (isExpanded.value) return totalCount.value
-  // 默认显示 5-6 行
-  return Math.min(totalCount.value, 5)
-})
 const displayMessages = computed(() => {
   if (!props.message.progressMessages) return []
   if (isExpanded.value) return props.message.progressMessages
@@ -202,39 +209,9 @@ function formatProgressContent(msg: string | Record<string, any>): string {
 }
 
 const renderedContent = computed(() => {
-  // 简单的Markdown渲染
-  let content = escapeHtml(props.message.content)
-
-  // 代码块
-  content = content.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-
-  // 行内代码
-  content = content.replace(/`([^`]+)`/g, '<code>$1</code>')
-
-  // 粗体
-  content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-
-  // 斜体
-  content = content.replace(/\*([^*]+)\*/g, '<em>$1</em>')
-
-  // 链接
-  content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-
-  // 列表
-  content = content.replace(/^- (.+)$/gm, '<li>$1</li>')
-  content = content.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-
-  // 换行
-  content = content.replace(/\n/g, '<br>')
-
-  return content
+  // 使用 marked 渲染 Markdown，支持标题、表格、粗体、斜体、代码块、列表等
+  return marked(props.message.content)
 })
-
-function escapeHtml(text: string): string {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
-}
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)

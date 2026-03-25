@@ -9,17 +9,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.4.21",
+    "@tailwindcss/typography": "^0.5.19",
+    "@vueuse/core": "^10.9.0",
     "axios": "^1.6.7",
-    "@vueuse/core": "^10.9.0"
+    "highlight.js": "^11.11.1",
+    "marked": "^17.0.5",
+    "marked-highlight": "^2.2.3",
+    "vue": "^3.4.21"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
+    "autoprefixer": "^10.4.18",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
     "typescript": "^5.4.2",
     "vite": "^5.1.6",
-    "vue-tsc": "^2.0.6",
-    "tailwindcss": "^3.4.1",
-    "postcss": "^8.4.35",
-    "autoprefixer": "^10.4.18"
+    "vue-tsc": "^2.0.6"
   }
 }

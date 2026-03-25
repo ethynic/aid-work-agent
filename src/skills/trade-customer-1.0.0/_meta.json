@@ -1,0 +1,19 @@
+{
+  "name": "trade-customer",
+  "version": "1.0.0",
+  "description": "外贸客户信息管理技能，用于保存外贸获客过程中匹配到的客户信息，跟踪邮件发送记录",
+  "author": "system",
+  "created_at": "2026-03-25",
+  "scripts": [
+    "customer_manager.py"
+  ],
+  "dependencies": [],
+  "metadata": {
+    "openclaw": {
+      "emoji": "📋",
+      "requires": {
+        "bins": ["python"]
+      }
+    }
+  }
+}
