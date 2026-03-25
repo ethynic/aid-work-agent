@@ -22,45 +22,45 @@ export interface SendCodeResponse {
   expires_in?: number
 }
 
-export interface WxQrcodeResponse {
-  qrcode_url: string
-  scene_str: string
-  expire_seconds: number
-}
+// export interface WxQrcodeResponse {
+//   qrcode_url: string
+//   scene_str: string
+//   expire_seconds: number
+// }
 
-export interface WxStatusResponse {
-  status: 'waiting' | 'scanned' | 'confirmed' | 'expired'
-  openid?: string
-  unionid?: string
-}
+// export interface WxStatusResponse {
+//   status: 'waiting' | 'scanned' | 'confirmed' | 'expired'
+//   openid?: string
+//   unionid?: string
+// }
 
-/**
- * 获取微信登录二维码
- */
-export async function getWxQrcode(): Promise<WxQrcodeResponse> {
-  const res = await fetch(`${API_BASE}/wx/qrcode`)
-  return res.json()
-}
+// /**
+//  * 获取微信登录二维码
+//  */
+// export async function getWxQrcode(): Promise<WxQrcodeResponse> {
+//   const res = await fetch(`${API_BASE}/wx/qrcode`)
+//   return res.json()
+// }
 
-/**
- * 检查微信扫码状态
- */
-export async function checkWxQrcodeStatus(sceneStr: string): Promise<WxStatusResponse> {
-  const res = await fetch(`${API_BASE}/wx/qrcode/${sceneStr}/status`)
-  return res.json()
-}
+// /**
+//  * 检查微信扫码状态
+//  */
+// export async function checkWxQrcodeStatus(sceneStr: string): Promise<WxStatusResponse> {
+//   const res = await fetch(`${API_BASE}/wx/qrcode/${sceneStr}/status`)
+//   return res.json()
+// }
 
-/**
- * 微信登录
- */
-export async function wxLogin(wxOpenid: string, wxUnionid?: string): Promise<LoginResponse> {
-  const res = await fetch(`${API_BASE}/wx/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ wx_openid: wxOpenid, wx_unionid: wxUnionid })
-  })
-  return res.json()
-}
+// /**
+//  * 微信登录
+//  */
+// export async function wxLogin(wxOpenid: string, wxUnionid?: string): Promise<LoginResponse> {
+//   const res = await fetch(`${API_BASE}/wx/login`, {
+//     method: 'POST',
+//     headers: { 'Content-Type': 'application/json' },
+//     body: JSON.stringify({ wx_openid: wxOpenid, wx_unionid: wxUnionid })
+//   })
+//   return res.json()
+// }
 
 /**
  * 发送短信验证码
@@ -111,7 +111,7 @@ export async function register(phone: string, password: string, code: string): P
 }
 
 /**
- * 绑定手机号（微信用户绑定手机）
+ * 绑定手机号
  */
 export async function bindPhone(userId: string, phone: string, code: string): Promise<{ success: boolean, message?: string }> {
   const res = await fetch(`${API_BASE}/bind-phone`, {

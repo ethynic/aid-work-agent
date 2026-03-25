@@ -60,7 +60,7 @@ class UserDB:
                     INSERT INTO users (user_id, phone, password_hash, wx_openid, username)
                     VALUES (?, ?, ?, ?, ?)
                 """, (user_id, phone, hash_password(password) if password else None,
-                      wx_openid, username or f"用户{user_id[-4:]}"))
+                      wx_openid, username or (f"用户{phone[-4:]}" if phone else f"用户{user_id[-4:]}")))
                 conn.commit()
 
                 logger.info(f"User created: {user_id}")

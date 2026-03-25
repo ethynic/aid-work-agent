@@ -40,9 +40,9 @@ class RegisterRequest(BaseModel):
     code: str
 
 
-class WechatLoginRequest(BaseModel):
-    wx_openid: str
-    wx_unionid: Optional[str] = None
+# class WechatLoginRequest(BaseModel):
+#     wx_openid: str
+#     wx_unionid: Optional[str] = None
 
 
 class BindPhoneRequest(BaseModel):
@@ -154,8 +154,8 @@ def verify_sms_code(phone: str, code: str) -> bool:
 
 # ============== API 端点 ==============
 
-@router.get("/wx/qrcode")
-async def get_wx_qrcode():
+# @router.get("/wx/qrcode")
+# async def get_wx_qrcode():
     """
     获取微信登录二维码
     返回一个模拟的二维码URL和scene_str
@@ -170,8 +170,8 @@ async def get_wx_qrcode():
     }
 
 
-@router.get("/wx/qrcode/{scene_str}/status")
-async def check_wx_qrcode_status(scene_str: str):
+# @router.get("/wx/qrcode/{scene_str}/status")
+# async def check_wx_qrcode_status(scene_str: str):
     """
     检查微信扫码状态
     实际需要对接微信开放平台API实现回调
@@ -185,8 +185,8 @@ async def check_wx_qrcode_status(scene_str: str):
     }
 
 
-@router.post("/wx/login")
-async def wechat_login(request: WechatLoginRequest):
+# @router.post("/wx/login")
+# async def wechat_login(request: WechatLoginRequest):
     """微信登录/绑定"""
     # 查找是否已存在该微信用户
     user = UserDB.get_by_wx_openid(request.wx_openid)

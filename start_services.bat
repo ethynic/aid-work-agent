@@ -38,6 +38,8 @@ if not exist "node_modules" (
 )
 echo [OK] Starting frontend dev server...
 start "AID Frontend" cmd /k "npm run dev -- --port 5173"
+timeout /t 3 /nobreak >nul
+start http://localhost:5173
 cd /d "%~dp0"
 echo [OK] Frontend starting at http://localhost:5173
 echo.
