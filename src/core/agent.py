@@ -1035,8 +1035,10 @@ create_plan(
 - 加载后按技能指导执行
 
 ### skill_execute
-- 用于执行技能中的命令
-- 处理文件、运行脚本等
+- **重要**：执行技能命令的唯一工具！
+- 用于执行技能文档中描述的命令（如 python scripts/xxx.py）
+- **必须**在 use_skill 之后调用，用于实际执行技能中的命令
+- 格式：skill_execute(skill="技能名", command="实际命令")
 
 ### clarify
 - 当信息不足时向用户询问
@@ -1394,10 +1396,15 @@ create_plan(
                 "available_skills": available
             }
 
-        logger.info(f"Loaded skill: {skill_name}")
+        logger.info(f"后端日志：_handle_use_skill 加载技能", extra={
+            "skill_name": skill_name,
+            "skill_content_length": len(skill_content) if skill_content else 0
+        })
 
         # 获取 skill 描述用于摘要
         skill_desc = skill.description if skill else ""
+
+        logger.info(f"后端日志：_handle_use_skill 返回技能内容，LLM需要决定是否调用skill_execute")
 
         return {
             "success": True,
@@ -1416,7 +1423,7 @@ create_plan(
     ) -> Dict[str, Any]:
         """
         Handle skill_execute tool call - execute command directly in runtime environment
-        
+
         Args:
             skill_name: Name of the skill
             command: Command to execute
@@ -1464,6 +1471,43 @@ create_plan(
                     f"./scripts/{script_name}",
                     str(script_path.absolute())
                 )
+
+        # 自动替换 {user_id} 和 {session_id} 占位符
+        # LLM 可能自己编造 user_id，这里强制使用 session 中的真实值
+        real_user_id = None
+        real_session_id = None
+        if session_id:
+            from src.db.models import SessionDB
+            session_info = SessionDB.get_by_id(session_id)
+            if session_info:
+                real_user_id = session_info.get("user_id")
+                real_session_id = session_id
+                logger.info(f"后端日志：skill_execute 获取真实 user_id={real_user_id}")
+
+        # 替换占位符
+        if "{user_id}" in processed_command and real_user_id:
+            processed_command = processed_command.replace("{user_id}", real_user_id)
+            logger.info(f"后端日志：已替换 {{user_id}} 占位符")
+        if "{session_id}" in processed_command and real_session_id:
+            processed_command = processed_command.replace("{session_id}", real_session_id)
+            logger.info(f"后端日志：已替换 {{session_id}} 占位符")
+
+        # 如果命令中仍然包含 --user-id 且值看起来像 LLM 编造的（包含日期等），强制替换
+        # LLM 编造的典型格式：user_20260325, user_123, test_user 等
+        import re
+        # 匹配 --user-id "xxx" 或 --user-id 'xxx' 或 --user-id xxx
+        user_id_pattern = r'--user-id["\s]+["\']?([^"\'\s]+)["\']?'
+        matches = re.findall(user_id_pattern, processed_command)
+        for old_user_id in matches:
+            # 检查是否像 LLM 编造的（简单判断：包含数字或 test_ 开头）
+            if old_user_id != real_user_id and real_user_id:
+                # 强制替换为真实值
+                processed_command = re.sub(
+                    rf'--user-id["\s]+["\']?{re.escape(old_user_id)}["\']?',
+                    f'--user-id "{real_user_id}"',
+                    processed_command
+                )
+                logger.info(f"后端日志：强制替换 LLM 编造的 user_id '{old_user_id}' -> '{real_user_id}'")
         
         decoded_files = {}
         if files:
@@ -1472,32 +1516,25 @@ create_plan(
                     decoded_files[filename] = base64.b64decode(content_b64)
                 except Exception as e:
                     logger.warning(f"Failed to decode file {filename}: {e}")
-        
-        try:
-            # 获取 user_id（从 session 中获取）
-            user_id = None
-            if session_id:
-                from src.db.models import SessionDB
-                session_info = SessionDB.get_by_id(session_id)
-                if session_info:
-                    user_id = session_info.get("user_id")
-                    logger.info(f"后端日志：skill_execute 获取到 user_id={user_id} from session_id={session_id}")
 
+        try:
+            # 注意：user_id 和 session_id 已经在上面替换命令占位符时获取过了
+            # processed_command 中的 user_id 已经被替换为真实值
             if workdir and workdir.exists():
                 result = await self.skill_executor.execute_skill_command(
                     skill_name=skill_name,
                     command=processed_command,
                     files=decoded_files if decoded_files else None,
-                    session_id=session_id,
-                    user_id=user_id
+                    session_id=real_session_id,
+                    user_id=real_user_id
                 )
             else:
                 result = await self.skill_executor.execute_skill_command(
                     skill_name=skill_name,
                     command=processed_command,
                     files=decoded_files if decoded_files else None,
-                    session_id=session_id,
-                    user_id=user_id
+                    session_id=real_session_id,
+                    user_id=real_user_id
                 )
             
             return {
