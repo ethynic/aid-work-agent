@@ -84,6 +84,12 @@ services:
       
       # Skills 目录（独立挂载，便于添加新技能）
       - ./skills:/app/skills
+
+      # 上传附件目录
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+
+      # 记忆文件目录
+      - /var/www/qb3_upload/agent_memories:/app/memories
     
     # 网络配置
     networks:
