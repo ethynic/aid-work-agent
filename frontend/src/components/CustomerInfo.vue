@@ -33,20 +33,6 @@
       </div>
     </div>
 
-    <!-- 国家分布 -->
-    <div v-if="stats?.country_distribution?.length" class="country-section">
-      <h3>🌍 客户国家分布</h3>
-      <div class="country-tags">
-        <span
-          v-for="item in stats.country_distribution"
-          :key="item.country"
-          class="country-tag"
-        >
-          {{ item.country }}: {{ item.count }}
-        </span>
-      </div>
-    </div>
-
     <!-- 加载状态 -->
     <div v-if="loading" class="loading">
       <div class="spinner"></div>
@@ -59,90 +45,116 @@
       <p v-if="debug" class="debug-info">{{ debug }}</p>
     </div>
 
-    <!-- 客户列表 -->
-    <div v-else-if="customers.length > 0" class="customer-list">
-      <div class="list-header">
+    <!-- 客户列表 - 表格形式 -->
+    <div v-else-if="customers.length > 0" class="customer-table-section">
+      <div class="table-header">
         <h2>📋 匹配客户列表 ({{ customers.length }})</h2>
       </div>
 
-      <div
-        v-for="customer in customers"
-        :key="customer.customer_id"
-        class="customer-card"
-        @click="toggleCustomerDetail(customer.customer_id)"
-      >
-        <div class="customer-header">
-          <div class="customer-main">
-            <h3>{{ customer.company_name }}</h3>
-            <p class="contact">
-              <span class="contact-name">{{ customer.contact_name }}</span>
-              <span class="email">{{ customer.email }}</span>
-            </p>
-          </div>
-          <div class="customer-meta">
-            <span class="country-badge">{{ customer.country }}</span>
-            <span class="language-badge">{{ customer.language }}</span>
-          </div>
-        </div>
-
-        <div class="customer-info-row">
-          <span class="info-item">📅 匹配日期: {{ formatDate(customer.match_date) }}</span>
-          <span class="info-item">🏭 行业: {{ customer.industry }}</span>
-          <span class="info-item">📦 进口品类: {{ customer.import_category }}</span>
-          <span class="info-item">👥 规模: {{ customer.company_size }}</span>
-        </div>
-
-        <div v-if="customer.match_reason" class="match-reason">
-          💡 {{ customer.match_reason }}
-        </div>
-
-        <!-- 邮件状态 -->
-        <div class="email-status-section">
-          <div class="email-status-header">
-            <span v-if="getCustomerEmailCount(customer.customer_id) > 0">
-              ✉️ 已发送 {{ getCustomerEmailCount(customer.customer_id) }} 封邮件
-            </span>
-            <span v-else class="no-email">
-              ✉️ 暂无邮件发送记录
-            </span>
-          </div>
-
-          <!-- 展开的邮件列表 -->
-          <div v-if="expandedCustomerId === customer.customer_id && getCustomerEmails(customer.customer_id).length > 0" class="email-list">
-            <div
-              v-for="email in getCustomerEmails(customer.customer_id)"
-              :key="email.email_id"
-              class="email-item"
-            >
-              <div class="email-header">
-                <span class="email-subject">{{ email.email_subject }}</span>
-                <span :class="['email-status', email.send_status]">
-                  {{ email.send_status === 'success' ? '✅' : email.send_status === 'failed' ? '❌' : '⏳' }}
+      <div class="table-wrapper">
+        <table class="customer-table">
+          <thead>
+            <tr>
+              <th>公司名称</th>
+              <th>联系人</th>
+              <th>邮箱</th>
+              <th>国家</th>
+              <th>语言</th>
+              <th>匹配日期</th>
+              <th>行业</th>
+              <th>进口品类</th>
+              <th>公司规模</th>
+              <th>匹配原因</th>
+              <th>邮件状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="customer in customers" :key="customer.customer_id">
+              <td class="company-name">{{ customer.company_name || '-' }}</td>
+              <td>{{ customer.contact_name || '-' }}</td>
+              <td class="email-cell">{{ customer.email || '-' }}</td>
+              <td>
+                <span class="country-badge">{{ customer.country || '-' }}</span>
+              </td>
+              <td>
+                <span class="language-badge">{{ customer.language || '-' }}</span>
+              </td>
+              <td>{{ formatDate(customer.match_date) }}</td>
+              <td>{{ customer.industry || '-' }}</td>
+              <td>{{ customer.import_category || '-' }}</td>
+              <td>{{ customer.company_size || '-' }}</td>
+              <td class="match-reason-cell" :title="customer.match_reason">
+                {{ customer.match_reason || '-' }}
+              </td>
+              <td>
+                <span v-if="getCustomerEmailCount(customer.customer_id) > 0" class="email-badge success">
+                  ✉️ 已发 {{ getCustomerEmailCount(customer.customer_id) }} 封
                 </span>
-              </div>
-              <div class="email-meta">
-                <span>{{ email.email_language }}</span>
-                <span>{{ formatDate(email.send_time) }}</span>
-              </div>
-              <div v-if="expandedEmailId === email.email_id" class="email-body">
-                <pre>{{ email.email_body }}</pre>
-              </div>
-              <button
-                v-if="expandedEmailId !== email.email_id"
-                class="expand-email-btn"
-                @click.stop="toggleEmailDetail(email.email_id)"
-              >
-                查看邮件内容
-              </button>
-              <button
-                v-else
-                class="collapse-email-btn"
-                @click.stop="toggleEmailDetail(null)"
-              >
-                收起
-              </button>
-            </div>
+                <span v-else class="email-badge no-email">
+                  ✉️ 未发邮件
+                </span>
+              </td>
+              <td>
+                <button class="detail-btn" @click="toggleCustomerDetail(customer.customer_id)">
+                  {{ expandedCustomerId === customer.customer_id ? '收起' : '详情' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <!-- 邮件详情弹窗 -->
+    <div v-if="expandedCustomerId" class="modal-overlay" @click.self="expandedCustomerId = null">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>邮件详情 - {{ getExpandedCustomerName() }}</h3>
+          <button class="close-btn" @click="expandedCustomerId = null">×</button>
+        </div>
+
+        <!-- 邮件列表 -->
+        <div v-if="getCustomerEmails(expandedCustomerId).length > 0" class="modal-body">
+          <table class="email-table">
+            <thead>
+              <tr>
+                <th>邮件主题</th>
+                <th>语言</th>
+                <th>发送时间</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="email in getCustomerEmails(expandedCustomerId)" :key="email.email_id">
+                <td>{{ email.email_subject || '-' }}</td>
+                <td>{{ email.email_language || '-' }}</td>
+                <td>{{ formatDate(email.send_time) }}</td>
+                <td>
+                  <span :class="['status-badge', email.send_status]">
+                    {{ email.send_status === 'success' ? '✅ 成功' : email.send_status === 'failed' ? '❌ 失败' : '⏳ 进行中' }}
+                  </span>
+                </td>
+                <td>
+                  <button class="text-btn" @click="toggleEmailDetail(email.email_id)">
+                    {{ expandedEmailId === email.email_id ? '收起' : '查看内容' }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 展开的邮件内容 -->
+          <div v-if="expandedEmailId" class="email-body-section">
+            <h4>邮件内容</h4>
+            <pre class="email-body-content">{{ getExpandedEmailBody() }}</pre>
           </div>
+        </div>
+
+        <div v-else class="no-emails">
+          <p>暂无邮件发送记录</p>
         </div>
       </div>
     </div>
@@ -183,9 +195,6 @@ const expandedEmailId = ref<string | null>(null)
 const userId = computed(() => route.query.user_id as string)
 const sessionId = computed(() => route.query.session_id as string)
 
-// 调试信息
-console.log('前端日志：URL参数', { userId: userId.value, sessionId: sessionId.value })
-
 // 加载数据
 async function loadData() {
   console.log('前端日志：loadData开始', { userId: userId.value, sessionId: sessionId.value })
@@ -200,9 +209,10 @@ async function loadData() {
 
   try {
     // 并行加载客户列表和统计
+    // 注意：不传 sessionId 以获取用户的所有客户（包括所有 session）
     console.log('前端日志：开始请求API', { userId: userId.value })
     const [customerRes, statsRes] = await Promise.all([
-      listCustomers(userId.value, sessionId.value || undefined),
+      listCustomers(userId.value),
       getStats(userId.value)
     ])
     console.log('前端日志：API响应', { customerRes, statsRes })
@@ -252,11 +262,28 @@ function getCustomerEmails(customerId: string): CustomerEmail[] {
 // 展开/收起客户详情
 function toggleCustomerDetail(customerId: string) {
   expandedCustomerId.value = expandedCustomerId.value === customerId ? null : customerId
+  // 收起时也要收起邮件详情
+  if (expandedCustomerId.value === null) {
+    expandedEmailId.value = null
+  }
 }
 
 // 展开/收起邮件详情
-function toggleEmailDetail(emailId: string | null) {
+function toggleEmailDetail(emailId: string) {
   expandedEmailId.value = expandedEmailId.value === emailId ? null : emailId
+}
+
+// 获取展开客户的名称
+function getExpandedCustomerName(): string {
+  const customer = customers.value.find(c => c.customer_id === expandedCustomerId.value)
+  return customer?.company_name || '-'
+}
+
+// 获取展开邮件的内容
+function getExpandedEmailBody(): string {
+  const emails = getCustomerEmails(expandedCustomerId.value || '')
+  const email = emails.find(e => e.email_id === expandedEmailId.value)
+  return email?.email_body || '-'
 }
 
 // 格式化日期
@@ -267,9 +294,7 @@ function formatDate(dateStr: string): string {
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
+    day: '2-digit'
   })
 }
 
@@ -281,7 +306,7 @@ onMounted(() => {
 
 <style scoped>
 .customer-info-container {
-  max-width: 1200px;
+  max-width: 1800px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -363,30 +388,6 @@ onMounted(() => {
   margin-top: 4px;
 }
 
-/* 国家分布 */
-.country-section {
-  margin-bottom: 24px;
-}
-
-.country-section h3 {
-  margin: 0 0 12px 0;
-  font-size: 16px;
-}
-
-.country-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.country-tag {
-  background: #dbeafe;
-  color: #1e40af;
-  padding: 4px 12px;
-  border-radius: 16px;
-  font-size: 13px;
-}
-
 /* 加载状态 */
 .loading {
   text-align: center;
@@ -423,71 +424,81 @@ onMounted(() => {
   margin-top: 8px;
 }
 
-/* 客户列表 */
-.customer-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.list-header {
-  margin-bottom: 8px;
-}
-
-.list-header h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.customer-card {
+/* 表格区域 */
+.customer-table-section {
   background: white;
-  border: 1px solid #e5e7eb;
   border-radius: 12px;
-  padding: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
 }
 
-.customer-card:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+.table-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
-.customer-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 12px;
-}
-
-.customer-main h3 {
-  margin: 0 0 8px 0;
+.table-header h2 {
+  margin: 0;
   font-size: 18px;
 }
 
-.contact {
-  margin: 0;
+.table-wrapper {
+  overflow-x: auto;
+}
+
+/* 客户表格 */
+.customer-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 14px;
+}
+
+.customer-table th {
+  background: #f9fafb;
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 2px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.customer-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
   color: #6b7280;
 }
 
-.contact-name {
-  margin-right: 12px;
+.customer-table tbody tr:hover {
+  background: #f9fafb;
 }
 
-.email {
-  color: #3b82f6;
+.customer-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
-.customer-meta {
-  display: flex;
-  gap: 8px;
+.company-name {
+  font-weight: 600;
+  color: #111827 !important;
 }
 
+.email-cell {
+  color: #3b82f6 !important;
+}
+
+.match-reason-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表格徽章 */
 .country-badge,
 .language-badge {
-  padding: 4px 10px;
-  border-radius: 16px;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
   font-size: 12px;
   font-weight: 500;
 }
@@ -502,115 +513,205 @@ onMounted(() => {
   color: #7c3aed;
 }
 
-.customer-info-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  font-size: 13px;
-  color: #6b7280;
-  margin-bottom: 12px;
-}
-
-.info-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.match-reason {
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  color: #166534;
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-
-/* 邮件状态 */
-.email-status-section {
-  border-top: 1px solid #e5e7eb;
-  padding-top: 12px;
-  margin-top: 12px;
-}
-
-.email-status-header {
-  font-size: 14px;
+.email-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
   font-weight: 500;
 }
 
-.no-email {
+.email-badge.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.email-badge.no-email {
+  background: #f3f4f6;
   color: #9ca3af;
 }
 
-.email-list {
-  margin-top: 12px;
+/* 操作列 */
+.customer-table th:last-child,
+.customer-table td:last-child {
+  width: 80px;
+  text-align: center;
+}
+
+/* 操作按钮 */
+.detail-btn {
+  padding: 6px 16px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.detail-btn:hover {
+  background: #2563eb;
+}
+
+/* 模态框 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 900px;
+  max-height: 80vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
-.email-item {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 12px;
-}
-
-.email-header {
+.modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
 }
 
-.email-subject {
-  font-weight: 500;
-  color: #374151;
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
 }
 
-.email-status {
-  font-size: 18px;
-}
-
-.email-meta {
+.close-btn {
+  width: 32px;
+  height: 32px;
+  background: #e5e7eb;
+  border: none;
+  border-radius: 4px;
+  font-size: 20px;
+  cursor: pointer;
   display: flex;
-  gap: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  background: #d1d5db;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* 邮件表格 */
+.email-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.email-table th {
+  background: #f3f4f6;
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.email-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #6b7280;
+}
+
+.email-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
   font-size: 12px;
-  color: #9ca3af;
-  margin-bottom: 8px;
 }
 
-.email-body {
+.status-badge.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-badge.failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.text-btn {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.text-btn:hover {
+  text-decoration: underline;
+}
+
+/* 邮件内容 */
+.email-body-section {
+  margin-top: 16px;
+  padding: 16px;
   background: white;
+  border-radius: 8px;
   border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  padding: 12px;
-  margin-bottom: 8px;
 }
 
-.email-body pre {
+.email-body-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+}
+
+.email-body-content {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
   font-size: 13px;
   font-family: inherit;
+  color: #374151;
+  background: #f9fafb;
+  padding: 12px;
+  border-radius: 6px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
-.expand-email-btn,
-.collapse-email-btn {
-  background: none;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  padding: 4px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  color: #3b82f6;
+/* 无邮件 */
+.no-emails {
+  text-align: center;
+  padding: 40px;
+  color: #9ca3af;
 }
 
-.expand-email-btn:hover,
-.collapse-email-btn:hover {
-  background: #f3f4f6;
+.no-emails p {
+  margin: 0;
 }
 
 /* 空状态 */
