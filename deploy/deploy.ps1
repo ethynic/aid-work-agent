@@ -222,6 +222,8 @@ $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)memories*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)plans*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)test_uploads*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)venv*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)__pycache__*") -and
     -not ($_.Extension -eq ".md") -and
     -not ($_.Extension -eq ".bat") -and
     -not ($_.Extension -eq ".log") -and
