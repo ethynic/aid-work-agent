@@ -2,7 +2,7 @@
   <div class="customer-info-container">
     <!-- 头部 -->
     <div class="header">
-      <button class="back-btn" @click="goBack">
+      <button v-if="false" class="back-btn" @click="goBack">
         <span>←</span> 返回
       </button>
       <h1>📋 外贸客户信息</h1>

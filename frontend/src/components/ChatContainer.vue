@@ -119,12 +119,12 @@
           />
         </div>
 
-        <!-- Progress Panel (show during processing or if has messages) -->
-        <ProgressPanel
+        <!-- Progress Panel (hidden temporarily) -->
+        <!-- <ProgressPanel
           v-if="isProcessing || progressMessages.length > 0"
           :messages="progressMessages"
           :is-processing="isProcessing"
-        />
+        /> -->
 
         <!-- Input Area -->
         <div class="flex-shrink-0 border-t border-slate-200 bg-white p-4">
@@ -157,9 +157,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import MessageList from './MessageList.vue'
-import ProgressPanel from './ProgressPanel.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
 import SessionSidebar from './SessionSidebar.vue'
@@ -168,11 +166,8 @@ import { useAgent } from '@/composables/useAgent'
 import { useAuth } from '@/composables/useAuth'
 import { useSession } from '@/composables/useSession'
 
-const router = useRouter()
-
 const {
   messages,
-  progressMessages,
   isProcessing,
   currentFiles,
   sendMessage,
@@ -184,7 +179,7 @@ const {
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
-const { currentSessionId, createNewSession, loadSessions, loadLatestSession, saveMessage, selectSession } = useSession()
+const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, saveMessage, selectSession, renameSession } = useSession()
 
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
@@ -204,7 +199,7 @@ function openCustomerInfo() {
     if (sessionId) {
       params.append('session_id', sessionId)
     }
-    router.push(`/customer-info?${params.toString()}`)
+    window.open(`/customer-info?${params.toString()}`, '_blank')
   } else {
     // 如果没有用户信息，提示登录
     alert('请先登录')
@@ -243,10 +238,27 @@ async function handleSend(content: string) {
     return
   }
 
-  // 如果有当前会话，保存用户消息
-  if (currentSessionId.value) {
-    await saveMessage(currentSessionId.value, 'user', content)
+  // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新）
+  if (!currentSessionId.value) {
+    const newSession = await createNewSession()
+    if (newSession) {
+      selectSession(newSession.session_id)
+      agentSessionId.value = newSession.session_id
+    }
   }
+
+  const sid = currentSessionId.value
+  if (!sid) return
+
+  // 如果是当前会话的首条用户消息（标题还是默认的"新会话"），自动用前10个字更新标题
+  const session = sessions.value.find(s => s.session_id === sid)
+  if (session && (!session.title || session.title === '新会话')) {
+    const title = content.slice(0, 10).trim() || '新会话'
+    await renameSession(sid, title)
+  }
+
+  // 保存用户消息到后端（同时更新会话时间）
+  await saveMessage(sid, 'user', content)
 
   await sendMessage(content)
 

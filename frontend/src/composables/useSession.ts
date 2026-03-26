@@ -121,10 +121,11 @@ export function useSession() {
   async function saveMessage(sessionId: string, role: string, content: string) {
     try {
       await addSessionMessage(sessionId, role, content)
-      // 更新会话的更新时间
+      // 同步更新会话的 updated_at 时间到后端
       const index = sessions.value.findIndex(s => s.session_id === sessionId)
       if (index !== -1) {
         sessions.value[index].updated_at = new Date().toISOString()
+        await updateSession(sessionId, {})
       }
     } catch (e) {
       console.error('Failed to save message:', e)

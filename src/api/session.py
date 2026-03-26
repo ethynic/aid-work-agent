@@ -140,6 +140,9 @@ async def update_session(request: Request, session_id: str, body: UpdateSessionR
     if body.context_data:
         SessionDB.update_context(session_id, body.context_data)
 
+    # 每次更新时都刷新 updated_at 时间戳
+    SessionDB.touch(session_id)
+
     return SessionDB.get_by_id(session_id)
 
 
