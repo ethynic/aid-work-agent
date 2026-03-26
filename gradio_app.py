@@ -33,7 +33,7 @@ from src.core.agent import master_agent
 
 
 # 初始化日志
-setup_logging(log_level="INFO", log_dir="logs")
+setup_logging(log_level="INFO", log_dir="log/agent")
 
 # Gradio 会话存储
 # session_id -> {"history": [ChatMessage, ...], "files": [file_info, ...]}

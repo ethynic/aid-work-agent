@@ -12,12 +12,14 @@ The agent uses LLM for:
 """
 
 import json
+import time
 import uuid
 from pathlib import Path
 from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Coroutine, Any
 from loguru import logger
 
 from src.config.settings import settings
+from src.core.agent_logger import log_agent_iteration
 from src.llm.gateway import llm_gateway
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
@@ -987,6 +989,10 @@ delegate_to_subagent(
 
 ### 可用技能
 {skill_descriptions}
+
+**⚠️ 重要：技能不是工具！不能直接将技能名作为函数调用。**
+技能必须通过 `use_skill(skill="技能名")` 加载后，再通过 `skill_execute` 执行具体命令。
+例如要查天气，不能直接调用 weather，必须：use_skill(skill="weather") → skill_execute(skill="weather", command="curl -s 'wttr.in/City?format=3'")
 {f'''
 ### 可用子智能体
 {subagent_descriptions}''' if include_delegation else ''}
@@ -1031,8 +1037,10 @@ create_plan(
 - 用于查询实时信息、新闻、数据等
 
 ### use_skill
-- 当任务匹配技能描述时使用
-- 加载后按技能指导执行
+- **⚠️ 技能不是工具！绝不能直接调用技能名（如 weather），必须通过此工具加载！**
+- 使用方式：use_skill(skill="技能名")
+- 加载后会获得技能的详细指令，然后通过 skill_execute 执行
+- 常见错误：直接调用 weather/get_weather 等不存在的工具 ❌ → 正确做法是 use_skill(skill="weather") ✅
 
 ### skill_execute
 - **重要**：执行技能命令的唯一工具！
@@ -1851,6 +1859,21 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             tool_calls = response.get("tool_calls", [])
             content = response.get("content", "")
             
+            # 后端日志：记录Agent迭代信息（关联LLM request_id）
+            log_agent_iteration(
+                iteration=iteration,
+                request_id=response.get("request_id", ""),
+                user_id=user.user_id if user else "",
+                session_id=session_id,
+                model=self.llm.get_model_name(),
+                provider=self.llm.get_provider_name(),
+                has_tool_calls=bool(tool_calls),
+                tool_calls_count=len(tool_calls),
+                tool_names=[tc.get("function", {}).get("name", tc.get("name", "")) for tc in tool_calls] if tool_calls else [],
+                content_length=len(content) if content else 0,
+                usage=response.get("usage"),
+            )
+            
             logger.debug(f"\n{'='*60}\n"
                         f"[DEBUG] LLM Response - Iteration {iteration}\n"
                         f"{'='*60}\n"
@@ -2338,6 +2361,21 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 
                 content = response.get("content", "")
                 tool_calls = response.get("tool_calls", [])
+                
+                # 后端日志：记录子智能体迭代信息（关联LLM request_id）
+                log_agent_iteration(
+                    iteration=iteration,
+                    request_id=response.get("request_id", ""),
+                    user_id="",
+                    session_id=self.session_id or "",
+                    model=self.llm.get_model_name(),
+                    provider=self.llm.get_provider_name(),
+                    has_tool_calls=bool(tool_calls),
+                    tool_calls_count=len(tool_calls),
+                    tool_names=[tc.get("function", {}).get("name", tc.get("name", "")) for tc in tool_calls] if tool_calls else [],
+                    content_length=len(content) if content else 0,
+                    usage=response.get("usage"),
+                )
                 
                 # 打印LLM响应信息
                 logger.debug(f"\n{'='*60}\n"

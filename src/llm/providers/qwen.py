@@ -5,12 +5,14 @@
 """
 
 import json
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 from loguru import logger
 
 from .base import BaseLLMProvider
+from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 
 class QwenProvider(BaseLLMProvider):
@@ -99,6 +101,10 @@ class QwenProvider(BaseLLMProvider):
         # 合并额外参数
         request_body["parameters"].update(kwargs)
         
+        invoke_id = generate_request_id()
+        start_time = time.perf_counter()
+        parsed = None
+        
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
@@ -109,12 +115,44 @@ class QwenProvider(BaseLLMProvider):
                 response.raise_for_status()
                 result = response.json()
             
-            return self._parse_response(result)
+            parsed = self._parse_response(result)
+
+            # 后端日志：记录LLM调用
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            log_llm_invoke(
+                request_id=result.get("request_id", invoke_id),
+                provider="qwen",
+                model=self.model,
+                request_params=request_body,
+                response_data=result,
+                usage=parsed.get("usage"),
+                duration_ms=round(duration_ms, 2),
+            )
+            
+            return parsed
         
         except httpx.HTTPStatusError as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            log_llm_invoke(
+                request_id=invoke_id,
+                provider="qwen",
+                model=self.model,
+                request_params=request_body,
+                error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
+                duration_ms=round(duration_ms, 2),
+            )
             logger.error(f"通义千问API请求失败: {e}")
             raise RuntimeError(f"通义千问API请求失败: {e.response.text}")
         except Exception as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            log_llm_invoke(
+                request_id=invoke_id,
+                provider="qwen",
+                model=self.model,
+                request_params=request_body,
+                error=str(e),
+                duration_ms=round(duration_ms, 2),
+            )
             logger.error(f"通义千问调用异常: {e}")
             raise
     
@@ -159,6 +197,10 @@ class QwenProvider(BaseLLMProvider):
         
         request_body["parameters"].update(kwargs)
         
+        invoke_id = generate_request_id()
+        start_time = time.perf_counter()
+        full_content = ""
+        
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
@@ -176,14 +218,44 @@ class QwenProvider(BaseLLMProvider):
                                     chunk = json.loads(data)
                                     content = self._extract_stream_content(chunk)
                                     if content:
+                                        full_content += content
                                         yield content
                                 except json.JSONDecodeError:
                                     continue
+            
+            # 后端日志：记录流式LLM调用成功
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            log_llm_invoke(
+                request_id=invoke_id,
+                provider="qwen",
+                model=self.model,
+                request_params=request_body,
+                response_data={"content": full_content, "stream": True},
+                duration_ms=round(duration_ms, 2),
+            )
         
         except httpx.HTTPStatusError as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            log_llm_invoke(
+                request_id=invoke_id,
+                provider="qwen",
+                model=self.model,
+                request_params=request_body,
+                error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
+                duration_ms=round(duration_ms, 2),
+            )
             logger.error(f"通义千问流式API请求失败: {e}")
             raise RuntimeError(f"通义千问流式API请求失败: {e.response.text}")
         except Exception as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            log_llm_invoke(
+                request_id=invoke_id,
+                provider="qwen",
+                model=self.model,
+                request_params=request_body,
+                error=str(e),
+                duration_ms=round(duration_ms, 2),
+            )
             logger.error(f"通义千问流式调用异常: {e}")
             raise
     
@@ -303,6 +375,7 @@ class QwenProvider(BaseLLMProvider):
                 "completion_tokens": usage.get("output_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
             },
+            "request_id": response.get("request_id", ""),
         }
         
         # 处理工具调用

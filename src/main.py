@@ -119,7 +119,7 @@ class ChatResponse(BaseModel):
 # Initialize logging
 setup_logging(
     log_level="DEBUG" if settings.app.debug else "INFO",
-    log_dir="logs",
+    log_dir="log/agent",
 )
 
 # WeCom adapter

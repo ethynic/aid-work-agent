@@ -351,10 +351,13 @@ class SkillRegistry:
             "name": "use_skill",
             "description": f"""当任务需要特定技能支持时使用此工具。
 
+⚠️ 技能不是工具！绝不能直接将技能名作为函数调用。必须通过此工具加载技能后，再通过 skill_execute 执行命令。
+
 适用场景：
 - 处理文件（PDF/Word/Excel）时
 - 需要翻译、总结、OCR 等能力时
 - 需要发送邮件、搜索信息时
+- 需要查询天气等实时信息时
 
 可用技能：
 {skill_list}

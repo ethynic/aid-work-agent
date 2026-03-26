@@ -118,15 +118,8 @@ function uploadFile($file, $session, $remoteDirectory, $transferOptions, [ref]$u
         # 检查上传结果
         if ($transferResult.IsSuccess) {
             $uploadCount.Value++  # 增加计数器
-            # 上传成功后，重新获取远程文件信息以显示时间
-            $finalRemoteInfo = $null
-            try {
-                $finalRemoteInfo = $session.GetFileInfo($normalizedPath)
-            }
-            catch {
-                $finalRemoteInfo = $null
-            }
-            $remoteTimeStr = if ($finalRemoteInfo) { $finalRemoteInfo.LastWriteTime } else { "无" }
+            # 使用上传前的远程文件时间进行对比显示
+            $remoteTimeStr = if ($remoteFileInfo) { $remoteFileInfo.LastWriteTime } else { "无" }
             Write-Host "上传成功 [$($uploadCount.Value)]: $($relativePath.PadRight(40)) 本地时间 $($file.LastWriteTime) > 远程时间 $remoteTimeStr"
         } else {
             # 检查是否是目录不存在的错误
@@ -146,29 +139,15 @@ function uploadFile($file, $session, $remoteDirectory, $transferOptions, [ref]$u
                     $transferResult = $session.PutFiles($file.FullName, $normalizedPath, $False, $transferOptions)
                     if ($transferResult.IsSuccess) {
                         $uploadCount.Value++  # 增加计数器
-                        # 重试成功后，重新获取远程文件信息
-                        $finalRemoteInfo = $null
-                        try {
-                            $finalRemoteInfo = $session.GetFileInfo($normalizedPath)
-                        }
-                        catch {
-                            $finalRemoteInfo = $null
-                        }
-                        $remoteTimeStr = if ($finalRemoteInfo) { $finalRemoteInfo.LastWriteTime } else { "无" }
+                        # 使用上传前的远程文件时间进行对比显示
+                        $remoteTimeStr = if ($remoteFileInfo) { $remoteFileInfo.LastWriteTime } else { "无" }
                         Write-Host "上传成功(重试) [$($uploadCount.Value)]: $($relativePath.PadRight(40)) 本地时间 $($file.LastWriteTime) > 远程时间 $remoteTimeStr"
                     } else {
                         foreach ($error in $transferResult.Failures) {
                             if ($error.Message -like "*was successful*") {
                                 $uploadCount.Value++
-                                $finalRemoteInfo = $null
-                                try {
-                                    $normalizedPath = $remoteFilePath -replace '\\', '/' -replace '//', '/'
-                                    $finalRemoteInfo = $session.GetFileInfo($normalizedPath)
-                                }
-                                catch {
-                                    $finalRemoteInfo = $null
-                                }
-                                $remoteTimeStr = if ($finalRemoteInfo) { $finalRemoteInfo.LastWriteTime } else { "无" }
+                                # 使用上传前的远程文件时间进行对比显示
+                                $remoteTimeStr = if ($remoteFileInfo) { $remoteFileInfo.LastWriteTime } else { "无" }
                                 Write-Host "上传成功(重试) [$($uploadCount.Value)]: $($relativePath.PadRight(40)) 本地时间 $($file.LastWriteTime) > 远程时间 $remoteTimeStr"
                             } else {
                                 Write-Host "上传失败(重试): $($relativePath) 错误: $($error.Message)"

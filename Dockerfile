@@ -85,6 +85,9 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# 修复虚拟环境所有权（builder 阶段是 root，运行阶段是 appuser）
+RUN chown -R appuser:appgroup /opt/venv
+
 # 复制应用代码
 COPY --chown=appuser:appgroup . .
 
