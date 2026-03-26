@@ -584,6 +584,11 @@ class Agent:
         self.execution_id = execution_id
         self.parent_plan_manager = parent_plan_manager
         
+        # 子智能体澄清相关状态
+        self._clarification_missing_info = []
+        # 主智能体的 pending clarifications: {session_id: {subagent_name, execution_id, task_description, question}}
+        self._pending_clarifications: Dict[str, Dict[str, Any]] = {}
+        
         # 共享组件
         self.llm = llm_gateway
         self.tool_registry = ToolRegistry()
@@ -1674,6 +1679,31 @@ create_plan(
             )
             
             if record:
+                # 检查是否为 CLARIFYING 状态（子智能体需要用户补充信息）
+                if record.is_clarifying():
+                    question = record.clarification_request or "需要补充信息"
+                    logger.info(f"[AGENT] Subagent '{subagent_name}' requesting clarification: {question[:100]}...")
+                    
+                    # 保存 pending clarification 上下文，供用户回复后使用
+                    if not hasattr(self, '_pending_clarifications'):
+                        self._pending_clarifications = {}  # session_id -> clarification context
+                    self._pending_clarifications[session_id or "default"] = {
+                        "subagent_name": subagent_name,
+                        "execution_id": response.execution_id,
+                        "task_description": task_description,
+                        "question": question,
+                        "missing_info": record.clarification_answer,  # 暂时存空，后续用 answer_clarification 更新
+                    }
+                    
+                    return {
+                        "success": False,
+                        "subagent_name": subagent_name,
+                        "execution_id": response.execution_id,
+                        "status": "clarifying",
+                        "question": question,
+                        "error": f"子智能体 '{subagent_name}' 需要补充信息：{question}",
+                    }
+                
                 return {
                     "success": record.status == "completed",
                     "subagent_name": subagent_name,
@@ -1759,6 +1789,90 @@ create_plan(
         async def send_thinking(message: str):
             if progress_callback:
                 await progress_callback({"type": "thinking", "data": message})
+
+        # 澄清事件回调
+        async def send_clarification(subagent_name: str, question: str):
+            if progress_callback:
+                await progress_callback({
+                    "type": "clarification",
+                    "subagent_name": subagent_name,
+                    "question": question,
+                })
+
+        # 后端日志：检查是否有待处理的澄清请求
+        pending_clarification = self._pending_clarifications.get(session_id)
+        if pending_clarification and self.is_master:
+            # 用户正在回复子智能体的澄清请求
+            clarification = pending_clarification
+            subagent_name = clarification["subagent_name"]
+            original_task = clarification["task_description"]
+            original_question = clarification["question"]
+            
+            logger.info(f"[AGENT] User replying to clarification from '{subagent_name}': {user_input[:100]}...")
+            
+            # 清除 pending 状态
+            self._pending_clarifications.pop(session_id, None)
+            
+            # 构建增强的任务描述：原始任务 + 澄清问题和用户回答
+            enhanced_task = (
+                f"{original_task}\n\n"
+                f"[补充信息]\n"
+                f"在执行过程中需要确认以下问题：{original_question}\n"
+                f"用户补充回答：{user_input}"
+            )
+            
+            await send_progress(f"🔄 正在将补充信息提交给 {subagent_name}，继续执行任务...")
+            
+            # 重新委派给子智能体（携带补充信息）
+            redelegate_result = await self._handle_delegate_to_subagent(
+                subagent_name=subagent_name,
+                task_description=enhanced_task,
+                context_needed=None,
+                session_id=session_id,
+                progress_callback=progress_callback,
+            )
+            
+            # 发送重新委派的结果
+            await send_tool_result(
+                "delegate_to_subagent",
+                redelegate_result,
+                redelegate_result.get("success", False),
+            )
+            
+            if redelegate_result.get("success"):
+                summary = redelegate_result.get("summary", "")
+                preview = summary[:100] if summary else ""
+                await send_progress(f"✅ {subagent_name}任务完成（补充信息后）: {preview}...")
+                
+                # 输出子智能体的结果
+                final_result = redelegate_result.get("result")
+                if final_result:
+                    if isinstance(final_result, str) and final_result.strip():
+                        yield final_result.strip()
+                    elif isinstance(final_result, dict):
+                        content = final_result.get("content", "")
+                        if content and isinstance(content, str):
+                            yield content.strip()
+            elif redelegate_result.get("status") == "clarifying":
+                # 如果 re-delegate 后又需要澄清，再次保存 pending 状态
+                new_question = redelegate_result.get("question", "需要补充信息")
+                logger.info(f"[AGENT] Subagent '{subagent_name}' requesting clarification again: {new_question[:100]}...")
+                self._pending_clarifications[session_id] = {
+                    "subagent_name": subagent_name,
+                    "execution_id": redelegate_result.get("execution_id", ""),
+                    "task_description": enhanced_task,
+                    "question": new_question,
+                }
+                await send_clarification(subagent_name, new_question)
+                yield f"\n❓ **{subagent_name}** 需要进一步补充信息：{new_question}\n请提供以上信息以继续执行任务。"
+            else:
+                error = redelegate_result.get("error", "重新执行失败")
+                await send_progress(f"❌ {subagent_name}重新执行失败: {error}")
+                yield f"\n❌ 重新执行任务失败：{error}"
+            
+            # 将补充信息保存到记忆中
+            self.memory.add(session_id, "user", f"[补充信息回复] {user_input}")
+            return
 
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
         
@@ -2127,8 +2241,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     # 发送工具执行结果
                     await send_tool_result(tool_name, delegation_result, delegation_result.get("success", True))
 
-                    # 子智能体执行完成进度
-                    if delegation_result.get("success"):
+                    # 检查子智能体是否需要澄清（需要用户补充信息）
+                    if delegation_result.get("status") == "clarifying":
+                        question = delegation_result.get("question", "需要补充信息")
+                        await send_progress(f"❓ {subagent_name}需要补充信息: {question[:50]}...")
+                        await send_clarification(subagent_name, question)
+                        yield f"\n❓ **{subagent_name}** 需要补充信息：{question}\n请提供以上信息，系统将自动继续执行任务。"
+                    elif delegation_result.get("success"):
+                        # 子智能体执行完成进度
                         summary = delegation_result.get("summary", "")
                         preview = summary[:100] if summary else ""
                         await send_progress(f"✅ {subagent_name}子智能体任务完成: {preview}...")
@@ -2152,13 +2272,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             if content and isinstance(content, str):
                                 yield content.strip()
 
-                    # 标记任务完成
+                    # 标记任务完成（澄清状态不标记为失败）
                     if delegate_task_id:
                         if delegation_result.get("success"):
                             self.plan_manager.mark_task_completed(
                                 session_id, delegate_task_id, delegation_result
                             )
-                        else:
+                        elif delegation_result.get("status") != "clarifying":
+                            # 只有非澄清状态的失败才标记为失败
                             self.plan_manager.mark_task_failed(
                                 session_id, delegate_task_id,
                                 delegation_result.get("error", "Unknown error")
@@ -2294,6 +2415,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         async for chunk in self.process_message(user_input, session_id, user, attachments):
             response_parts.append(chunk)
         return "".join(response_parts)
+    
+    def _update_task_record(self, record) -> None:
+        """
+        子智能体内部方法：更新任务记录到内部存储。
+        
+        由于子智能体不直接持有 executor 引用，task_record 在
+        execute_as_subagent 中通过参数传入，此方法预留用于未来
+        扩展（如需要通过事件回调同步状态时使用）。
+        """
+        logger.debug(f"[SUBAGENT] Task record updated: {record.execution_id}, status={record.status}")
     
     async def execute_as_subagent(
         self,
@@ -2501,6 +2632,42 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     # 发送工具开始执行事件
                     await send_tool_start(tool_name, tool_args)
                     await send_progress(f"🔧 [{self.subagent_config.name}] 正在执行 {tool_display_name}...")
+
+                    # 处理 clarify - 子智能体需要向用户询问补充信息
+                    # 与主智能体不同，子智能体的 clarify 不会直接对话用户，
+                    # 而是设置 CLARIFYING 状态并返回，由主智能体中转给用户
+                    if tool_name == "clarify":
+                        question = tool_args.get("question", "")
+                        missing_info = tool_args.get("missing_info", [])
+                        logger.info(f"[SUBAGENT] Clarify requested: question={question[:100]}...")
+
+                        if task_record:
+                            task_record.request_clarification(question)
+                            self._clarification_missing_info = missing_info
+                            self._update_task_record(task_record)
+
+                        await send_progress(f"❓ [{self.subagent_config.name}] 需要补充信息: {question[:50]}...")
+                        await send_tool_result(tool_name, {"success": True, "question": question, "missing_info": missing_info}, True)
+
+                        # 添加工具结果到消息
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": str({"success": True, "question": question, "status": "clarifying"})
+                        })
+
+                        # 返回特殊结果，告知主智能体需要澄清
+                        return {
+                            "result": {
+                                "content": question,
+                                "status": "clarifying",
+                                "question": question,
+                                "missing_info": missing_info,
+                            },
+                            "summary": f"需要补充信息: {question}",
+                            "status": "clarifying",
+                            "token_usage": {"input": 0, "output": 0}
+                        }
 
                     # 处理 create_plan（子智能体创建自己的计划）
                     if tool_name == "create_plan":

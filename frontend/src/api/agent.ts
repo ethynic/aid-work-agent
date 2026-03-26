@@ -65,7 +65,8 @@ export class SSEManager {
     onError: (error: Error) => void,
     onToolStart?: (toolName: string, toolArgs: object) => void,
     onToolResult?: (toolName: string, result: any, success: boolean) => void,
-    onThinking?: (data: string) => void
+    onThinking?: (data: string) => void,
+    onClarification?: (subagentName: string, question: string) => void
   ): Promise<void> {
     this.abortController = new AbortController()
 
@@ -109,7 +110,7 @@ export class SSEManager {
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking })
+            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification })
           }
           onComplete()
           break
@@ -123,7 +124,7 @@ export class SSEManager {
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking })
+          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification })
         }
       }
     } catch (error) {
@@ -148,6 +149,7 @@ export class SSEManager {
       onToolStart?: (toolName: string, toolArgs: object) => void
       onToolResult?: (toolName: string, result: any, success: boolean) => void
       onThinking?: (data: string) => void
+      onClarification?: (subagentName: string, question: string) => void
     }
   ) {
     // 处理多行数据
@@ -190,6 +192,9 @@ export class SSEManager {
             break
           case 'thinking':
             callbacks.onThinking?.(event.data)
+            break
+          case 'clarification':
+            callbacks.onClarification?.(event.subagentName, event.question)
             break
         }
       } catch {

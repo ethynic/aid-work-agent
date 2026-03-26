@@ -36,6 +36,7 @@ export type MessageStreamEvent =
   | { type: 'tool_start'; toolName: string; toolArgs: object; timestamp: number }
   | { type: 'tool_result'; toolName: string; result: any; success: boolean; timestamp: number }
   | { type: 'thinking'; data: string; timestamp: number }
+  | { type: 'clarification'; subagentName: string; question: string; timestamp: number }
 
 // 用户相关类型
 export interface User {

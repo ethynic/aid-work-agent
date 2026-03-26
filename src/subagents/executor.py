@@ -306,13 +306,19 @@ class SubagentExecutor:
             
             # 更新结果
             if result:
-                record.complete(
-                    result=result.get("result"),
-                    summary=result.get("summary", "")
-                )
-                if result.get("token_usage"):
-                    record.token_usage = result["token_usage"]
-                logger.info(f"[SUBAGENT] Record completed with summary: {record.summary[:200] if record.summary else 'N/A'}")
+                # 检查是否为 clarifying 状态（子智能体需要用户补充信息）
+                if result.get("status") == "clarifying":
+                    # CLARIFYING 状态由 execute_as_subagent 内部设置，
+                    # 这里只需要记录日志，不需要再调用 record.request_clarification()
+                    logger.info(f"[SUBAGENT] Subagent returned clarifying status for execution_id={record.execution_id}")
+                else:
+                    record.complete(
+                        result=result.get("result"),
+                        summary=result.get("summary", "")
+                    )
+                    if result.get("token_usage"):
+                        record.token_usage = result["token_usage"]
+                    logger.info(f"[SUBAGENT] Record completed with summary: {record.summary[:200] if record.summary else 'N/A'}")
             else:
                 record.complete(result={}, summary="Task completed")
                 logger.info(f"[SUBAGENT] Record completed with empty result")
@@ -426,10 +432,13 @@ class SubagentExecutor:
         answer: str,
     ) -> bool:
         """
-        处理澄清请求
+        处理澄清请求（re-delegate 模式）
+        
+        在 re-delegate 模式下，此方法仅更新记录状态（标记已回答）。
+        实际的继续执行由主智能体发起新的 delegate 调用完成。
         
         Args:
-            execution_id: 执行ID
+            execution_id: 原始执行ID
             answer: 澄清答案
             
         Returns:
@@ -441,13 +450,24 @@ class SubagentExecutor:
         
         record.answer_clarification(answer)
         self._update_task_record(record)
-        
-        # 通知实例继续执行
-        instance = self._subagent_instances.get(execution_id)
-        if instance:
-            await instance.resume_from_clarification(answer)
+        logger.info(f"[SUBAGENT] Clarification answered for execution_id={execution_id}")
         
         return True
+    
+    def get_pending_clarification(self, execution_id: str) -> Optional[SubagentTaskRecord]:
+        """
+        获取待澄清的任务记录
+        
+        Args:
+            execution_id: 执行ID
+            
+        Returns:
+            任务记录，如果不在澄清状态则返回None
+        """
+        record = self._get_task_record(execution_id)
+        if record and record.is_clarifying():
+            return record
+        return None
     
     async def cancel(self, execution_id: str) -> bool:
         """

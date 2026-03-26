@@ -183,6 +183,10 @@ export function useAgent() {
         // onThinking - LLM思考中
         (data) => {
           addProgress(`🤔 ${data}`, 'thinking')
+        },
+        // onClarification - 子智能体需要用户补充信息
+        (subagentName, question) => {
+          addProgress(`❓ ${subagentName}需要补充信息: ${question}`, 'tool_start', 'clarification')
         }
       )
     } catch (err) {

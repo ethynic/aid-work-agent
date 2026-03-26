@@ -643,6 +643,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                                 event["toolName"] = progress_event.get("toolName", "")
                                 event["result"] = progress_event.get("result", {})
                                 event["success"] = progress_event.get("success", True)
+                            elif event["type"] == "clarification":
+                                event["subagentName"] = progress_event.get("subagent_name", "")
+                                event["question"] = progress_event.get("question", "")
                             else:
                                 event["data"] = progress_event.get("data", progress_event.get("message", ""))
 

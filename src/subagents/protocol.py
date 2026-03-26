@@ -161,11 +161,12 @@ class SubagentTaskRecord(BaseModel):
         self.updated_at = datetime.now()
     
     def is_terminal(self) -> bool:
-        """检查是否为终态"""
+        """检查是否为终态（包括 CLARIFYING，因为澄清时子智能体执行已暂停）"""
         return self.status in [
             SubagentTaskStatus.COMPLETED,
             SubagentTaskStatus.FAILED,
-            SubagentTaskStatus.CANCELLED
+            SubagentTaskStatus.CANCELLED,
+            SubagentTaskStatus.CLARIFYING,
         ]
     
     def is_clarifying(self) -> bool:
