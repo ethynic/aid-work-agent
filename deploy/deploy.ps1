@@ -202,19 +202,6 @@ $uploadCount = 0
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $localBasePath = Split-Path -Parent $scriptDir
 
-# ============================================================
-# 更新版本号时间戳
-# 作用：每次发布时自动更新版本号，HTML 页面会根据此时间戳刷新浏览器缓存
-# 原理：HTML 中的内联脚本会读取此文件，为 js/css 引用添加 ?v=时间戳 参数
-# ============================================================
-$versionFile = Join-Path $localBasePath "version.json"
-if (Test-Path $versionFile) {
-    $timestamp = Get-Date -Format "yyyyMMddHHmm"
-    $versionContent = "{`"timestamp`": `"$timestamp`",`"说明`":`"用于解决浏览器缓存问题。每次发布时，deploy.ps1 会自动更新此时间戳，HTML 页面会自动在 js/css 引用后加上 ?v=时间戳，强制浏览器加载最新资源`"}"
-    Set-Content -Path $versionFile -Value $versionContent -Encoding UTF8
-    Write-Host "已更新版本号: $timestamp"
-}
-
 Write-Host "本地源目录: $localBasePath"
 Write-Host "远程目标目录: $remoteDirectory"
 Write-Host "----------------------------------------"
