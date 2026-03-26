@@ -154,18 +154,28 @@ function getProgressIcon(type: string): string {
 }
 
 function formatProgressContent(msg: string | Record<string, any>): string {
-  // 实时消息格式: { type: "progress", content: string|object, timestamp: number }
-  // content 类型:
-  //   - string: 直接显示
-  //   - { type: "tool_start", toolName, toolArgs }: 显示调用工具名称
-  //   - { type: "tool_result", data }: 显示 data
-  //   - { type: "progress", data }: 显示 data
+  // 消息有两种格式：
+  // 1. 实时消息: { type: "progress", content: string|object, timestamp: number }
+  // 2. 历史消息（扁平）: { type: "tool_start", toolName, toolArgs, timestamp: number }
+  // 3. 历史消息（扁平）: { type: "tool_result", toolName, result, success, timestamp: number }
 
   if (!msg || typeof msg !== 'object') {
     return String(msg ?? '')
   }
 
-  const content = msg.content
+  const m = msg as Record<string, any>
+
+  // 扁平格式：顶层 type 就是 tool_start/tool_result
+  if (m.type === 'tool_start' && m.toolName) {
+    return `🔧 需要调用工具【${m.toolName}】`
+  }
+  if (m.type === 'tool_result' && m.toolName) {
+    const success = m.success !== false
+    return success ? `✅ ${m.toolName}执行完成` : `❌ ${m.toolName}执行失败`
+  }
+
+  // 嵌套格式：{ type: "progress", content: ... }
+  const content = m.content
 
   // content 是字符串：直接显示
   if (typeof content === 'string') {
@@ -180,7 +190,7 @@ function formatProgressContent(msg: string | Record<string, any>): string {
 
     // type 为 tool_start：显示调用工具名称
     if (c.type === 'tool_start' && c.toolName) {
-      return `🔧 需要调用工具【 ${c.toolName}】`
+      return `🔧 需要调用工具【${c.toolName}】`
     }
 
     // type 为 tool_result：显示 data
