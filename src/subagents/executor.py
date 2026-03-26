@@ -272,18 +272,37 @@ class SubagentExecutor:
             logger.info(f"[SUBAGENT] Record status updated to: {record.status}")
 
             # 执行任务（带超时）
-            logger.info(f"[SUBAGENT] Calling instance.execute_as_subagent() with timeout={timeout}s...")
-            result = await asyncio.wait_for(
-                instance.execute_as_subagent(
-                    task_description=task_description,
-                    parent_session_id=session_id,
-                    task_record=record,
-                    progress_callback=progress_callback,
-                ),
-                timeout=timeout
-            )
+            import time
+            exec_start_time = time.time()
+            logger.info(f"[SUBAGENT] Calling instance.execute_as_subagent() with timeout={timeout}s, execution_id={record.execution_id}...")
             
-            logger.info(f"[SUBAGENT] instance.execute_as_subagent() returned: {result}")
+            try:
+                result = await asyncio.wait_for(
+                    instance.execute_as_subagent(
+                        task_description=task_description,
+                        parent_session_id=session_id,
+                        task_record=record,
+                        progress_callback=progress_callback,
+                    ),
+                    timeout=timeout
+                )
+                
+                exec_duration = time.time() - exec_start_time
+                logger.info(f"[SUBAGENT] instance.execute_as_subagent() completed, execution_id={record.execution_id}, duration={exec_duration:.2f}s")
+                logger.info(f"[SUBAGENT] Result preview: {str(result)[:200] if result else 'None'}...")
+                
+            except asyncio.TimeoutError as e:
+                exec_duration = time.time() - exec_start_time
+                logger.error(f"[SUBAGENT] execute_as_subagent TIMEOUT, execution_id={record.execution_id}, duration={exec_duration:.2f}s, timeout={timeout}s")
+                raise
+            except asyncio.CancelledError as e:
+                exec_duration = time.time() - exec_start_time
+                logger.warning(f"[SUBAGENT] execute_as_subagent CANCELLED, execution_id={record.execution_id}, duration={exec_duration:.2f}s")
+                raise
+            except Exception as e:
+                exec_duration = time.time() - exec_start_time
+                logger.error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}", exc_info=True)
+                raise
             
             # 更新结果
             if result:
@@ -308,8 +327,9 @@ class SubagentExecutor:
             
         except Exception as e:
             import traceback
+            error_trace = traceback.format_exc()
             logger.error(f"[SUBAGENT] Execution failed: {record.execution_id}, error: {e}")
-            logger.error(f"[SUBAGENT] Traceback:\n{traceback.format_exc()}")
+            logger.error(f"[SUBAGENT] Traceback:\n{error_trace}")
             record.fail(str(e))
             
         finally:
@@ -337,15 +357,45 @@ class SubagentExecutor:
         Returns:
             任务记录，超时返回None
         """
-        start_time = time.time()
+        import time
+        wait_start = time.time()
+        logger.info(f"[SUBAGENT] wait_for_result started, execution_id={execution_id}, timeout={timeout}s")
         
-        while time.time() - start_time < timeout:
-            record = self._get_task_record(execution_id)
-            if record and record.is_terminal():
-                return record
-            await asyncio.sleep(poll_interval)
+        try:
+            poll_count = 0
+            while time.time() - wait_start < timeout:
+                poll_count += 1
+                record = self._get_task_record(execution_id)
+                
+                if record:
+                    current_status = record.status
+                    # 每10次轮询记录一次状态（约每5秒）
+                    if poll_count % 10 == 0:
+                        elapsed = time.time() - wait_start
+                        logger.debug(f"[SUBAGENT] wait_for_result polling, execution_id={execution_id}, status={current_status}, elapsed={elapsed:.1f}s")
+                    
+                    if record.is_terminal():
+                        wait_duration = time.time() - wait_start
+                        logger.info(f"[SUBAGENT] wait_for_result completed, execution_id={execution_id}, status={current_status}, duration={wait_duration:.2f}s")
+                        return record
+                else:
+                    # 记录未找到
+                    if poll_count % 10 == 0:
+                        elapsed = time.time() - wait_start
+                        logger.warning(f"[SUBAGENT] wait_for_result: record not found, execution_id={execution_id}, elapsed={elapsed:.1f}s")
+                
+                await asyncio.sleep(poll_interval)
+            
+            # 超时
+            wait_duration = time.time() - wait_start
+            logger.error(f"[SUBAGENT] wait_for_result TIMEOUT, execution_id={execution_id}, duration={wait_duration:.2f}s, timeout={timeout}s")
+            
+        except Exception as e:
+            wait_duration = time.time() - wait_start
+            logger.error(f"[SUBAGENT] wait_for_result ERROR, execution_id={execution_id}, duration={wait_duration:.2f}s, error: {e}", exc_info=True)
+            raise
         
-        logger.warning(f"Wait for result timed out: {execution_id}")
+        logger.warning(f"[SUBAGENT] Wait for result timed out: {execution_id}")
         return None
     
     async def get_progress(self, execution_id: str) -> Optional[Dict[str, Any]]:
