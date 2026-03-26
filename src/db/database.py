@@ -210,6 +210,28 @@ def init_database():
             ON remote_credentials(user_id, remote_path, status)
         """)
 
+        # Token 表（用于多进程共享 session）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT UNIQUE NOT NULL,
+                user_id TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # Token 索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tokens_token
+            ON tokens(token)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tokens_user
+            ON tokens(user_id, expires_at)
+        """)
+
         conn.commit()
         logger.info(f"Database initialized at {get_sqlite_path()}")
 
