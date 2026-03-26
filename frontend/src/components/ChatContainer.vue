@@ -179,7 +179,7 @@ const {
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
-const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, saveMessage, selectSession, renameSession } = useSession()
+const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
 
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
@@ -256,9 +256,6 @@ async function handleSend(content: string) {
     const title = content.slice(0, 10).trim() || '新会话'
     await renameSession(sid, title)
   }
-
-  // 保存用户消息到后端（同时更新会话时间）
-  await saveMessage(sid, 'user', content)
 
   await sendMessage(content)
 

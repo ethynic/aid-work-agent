@@ -659,9 +659,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                             last_progress_count += 1
                             continue
                     
-                    if completed.is_set():
-                        break
-
                     # Yield 新的响应chunk
                     while len(results['chunks']) > 0:
                         try:
@@ -681,9 +678,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         except Exception as e:
                             logger.error(f"[SSE] Error yielding chunk, session_id={session_id}, error: {e}", exc_info=True)
                             continue
-
-                    if completed.is_set():
-                        break
 
                     await asyncio.sleep(0.05)  # 50ms轮询间隔，不阻塞事件循环
                 
