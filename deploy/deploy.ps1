@@ -230,13 +230,14 @@ $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)docs*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)src*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)node_modules*") -and
-    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)logs*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)log*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)uploads*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)memories*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)plans*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)test_uploads*") -and
     -not ($_.Extension -eq ".md") -and
     -not ($_.Extension -eq ".bat") -and
+    -not ($_.Extension -eq ".log") -and
     -not ($_.Extension -eq ".env") -and
     -not ($_.Extension -eq ".example") -and
     -not ($_.Extension -eq ".dockerignore ") -and
