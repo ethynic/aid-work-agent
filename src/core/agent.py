@@ -879,13 +879,13 @@ class Agent:
 **使用场景：**
 - 代码审查任务 → 直接调用 `delegate_to_subagent(subagent_name="code-reviewer", task_description="...")`
 - HR相关任务 → 直接调用 `delegate_to_subagent(subagent_name="hr-expert", task_description="...")`
-- 外贸获客任务 → 直接调用 `delegate_to_subagent(subagent_name="foreign-trade-ai", task_description="...")`
+- 外贸获客任务 → 直接调用 `delegate_to_subagent(subagent_name="外贸获客智能体", task_description="...")`
 - PDF文档处理 → 直接调用 `delegate_to_subagent(subagent_name="pdf-expert", task_description="...")`
 
 **调用示例：**
 ```
 delegate_to_subagent(
-    subagent_name="foreign-trade-ai",
+    subagent_name="外贸获客智能体",
     task_description="帮我在中亚地区匹配LED灯客户。已上传产品图片：Full path: `/tmp/skill_ws_xxx/led_light.jpg`，请从中提取产品信息进行客户匹配"
 )
 ```
@@ -2140,6 +2140,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     if delegation_result.get("generated_contents"):
                         for content in delegation_result["generated_contents"]:
                             yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
+
+                    # 如果子智能体有最终回复内容，yield 给用户
+                    final_result = delegation_result.get("result")
+                    if final_result:
+                        if isinstance(final_result, str) and final_result.strip():
+                            yield final_result.strip()
+                        elif isinstance(final_result, dict):
+                            # 如果是字典，尝试提取 content 字段
+                            content = final_result.get("content", "")
+                            if content and isinstance(content, str):
+                                yield content.strip()
 
                     # 标记任务完成
                     if delegate_task_id:
