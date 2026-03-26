@@ -181,9 +181,13 @@ watch(isLoggedIn, async (loggedIn) => {
   }
 }, { immediate: true })
 
-// 格式化时间
+// 格式化时间（后端 CURRENT_TIMESTAMP 为 UTC，需补 Z 标记确保正确解析）
 function formatTime(isoString: string): string {
-  const date = new Date(isoString)
+  // 后端 SQLite CURRENT_TIMESTAMP 返回 "2026-03-26 05:00:00" 格式（UTC，无时区标识）
+  // JavaScript new Date() 会将其当作本地时间解析，导致差8小时
+  // 补上 Z 后缀让 JS 正确识别为 UTC 时间
+  const dateStr = isoString.endsWith('Z') ? isoString : isoString + 'Z'
+  const date = new Date(dateStr)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
 
@@ -201,8 +205,10 @@ function formatTime(isoString: string): string {
     const hours = Math.floor(diff / (60 * 60 * 1000))
     return `${hours}小时前`
   }
-  // 超过24小时显示日期
-  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  // 超过24小时显示日期（使用本地时区即北京时间）
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  return `${month}月${day}日`
 }
 
 // 新建会话
