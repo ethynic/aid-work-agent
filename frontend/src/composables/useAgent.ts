@@ -112,7 +112,7 @@ export function useAgent() {
         // onToolStart - 工具开始执行
         (toolName, toolArgs) => {
           const toolDisplayName = getToolDisplayName(toolName, toolArgs)
-          addProgress(`🔧 开始执行 ${toolDisplayName}...`, 'tool_start', toolName, toolArgs)
+          addProgress(`🔧 需要调用工具【${toolDisplayName}】`, 'tool_start', toolName, toolArgs)
         },
         // onToolResult - 工具执行结果
         (toolName, result, success) => {
