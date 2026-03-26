@@ -17,8 +17,46 @@ export function useAgent() {
 
   const sseManager = new SSEManager()
 
+  // Per-session 消息缓存：切换会话时保存当前会话的实时消息快照
+  const sessionMessagesCache = new Map<string, ChatMessage[]>()
+
   function generateSessionId(): string {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+  }
+
+  /**
+   * 切换会话：保存当前会话的消息快照到缓存，恢复目标会话的消息
+   */
+  async function switchSession(newSessionId: string): Promise<void> {
+    // 保存当前会话的消息到缓存（仅当有消息且正在处理时，避免覆盖已完成的干净状态）
+    const currentSid = sessionId.value
+    if (currentSid && messages.value.length > 0) {
+      sessionMessagesCache.set(currentSid, JSON.parse(JSON.stringify(messages.value)))
+    }
+
+    // 同步会话ID
+    sessionId.value = newSessionId
+
+    // 清空当前状态
+    currentResponse.value = ''
+    error.value = null
+    progressMessages.value = []
+    isProcessing.value = false
+
+    // 优先使用缓存（包含实时消息和进行中的内容），否则从数据库加载
+    const cached = sessionMessagesCache.get(newSessionId)
+    if (cached) {
+      messages.value = cached
+    } else {
+      const { getSessionMessages } = await import('@/api/session')
+      const result = await getSessionMessages(newSessionId)
+      messages.value = result.messages?.map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        timestamp: new Date(m.created_at).getTime(),
+        progressMessages: m.metadata?.progressMessages || []
+      })) || []
+    }
   }
 
   /**
@@ -235,6 +273,16 @@ export function useAgent() {
     clearMessages()
   }
 
+  /**
+   * 清除指定会话的缓存（在 SSE 完成后由 watcher 调用，确保下次切回加载最新数据）
+   */
+  function clearSessionCache(sid?: string) {
+    const targetSid = sid || sessionId.value
+    if (targetSid) {
+      sessionMessagesCache.delete(targetSid)
+    }
+  }
+
   // 组件卸载时断开连接
   onUnmounted(() => {
     sseManager.disconnect()
@@ -251,6 +299,8 @@ export function useAgent() {
     sendMessage,
     clearMessages,
     clearSession,
+    switchSession,
+    clearSessionCache,
     uploadAttachment,
     removeAttachment,
     clearAttachments

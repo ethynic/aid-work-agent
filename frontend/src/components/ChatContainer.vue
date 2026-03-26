@@ -172,6 +172,8 @@ const {
   currentFiles,
   sendMessage,
   clearSession,
+  switchSession,
+  clearSessionCache,
   uploadAttachment,
   removeAttachment,
   clearAttachments,
@@ -320,25 +322,19 @@ watch(isLoggedIn, async (loggedIn) => {
   }
 })
 
-// 监听当前会话变化，加载会话历史并同步到useAgent
-watch(currentSessionId, async (sessionId) => {
-  if (sessionId) {
-    // 同步会话ID到useAgent，这样发送消息时会发送到正确的会话
-    agentSessionId.value = sessionId
-
-    // 加载会话消息
-    const { getSessionMessages } = await import('@/api/session')
-    const result = await getSessionMessages(sessionId)
-    // 将历史消息填充到 messages（包含执行详情）
-    messages.value = result.messages?.map(m => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      timestamp: new Date(m.created_at).getTime(),
-      progressMessages: m.metadata?.progressMessages || []  // 从 metadata 中提取执行详情
-    })) || []
+// 监听当前会话变化，通过 switchSession 保存/恢复消息
+watch(currentSessionId, async (newSessionId) => {
+  if (newSessionId) {
+    await switchSession(newSessionId)
   } else {
-    // 没有选中会话，清空消息
     messages.value = []
+  }
+})
+
+// SSE 完成后清除该会话的内存缓存，确保下次切回时从数据库加载最新数据
+watch(isProcessing, (processing, wasProcessing) => {
+  if (wasProcessing && !processing) {
+    clearSessionCache()
   }
 })
 </script>
