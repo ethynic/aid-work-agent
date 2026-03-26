@@ -491,9 +491,18 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     
     async def event_generator():
         """SSE事件生成器"""
+        sse_start_time = datetime.now()
+        logger.info(f"[SSE] event_generator started, session_id={session_id}")
+        
         try:
             # 发送初始连接成功消息
-            yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+            try:
+                init_msg = f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+                yield init_msg
+                logger.info(f"[SSE] Initial connected message sent, session_id={session_id}")
+            except Exception as e:
+                logger.error(f"[SSE] Failed to send initial message: {e}", exc_info=True)
+                return
             
             # 使用线程方式运行agent，避免阻塞事件循环
             import threading
@@ -505,12 +514,17 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 'error': None
             }
             completed = threading.Event()
+            logger.info(f"[SSE] ThreadPoolExecutor initialized, session_id={session_id}")
             
             def run_agent():
                 """在线程中运行agent"""
+                thread_start_time = datetime.now()
+                logger.info(f"[SSE-Thread] run_agent started, session_id={session_id}")
+                
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
+                    logger.info(f"[SSE-Thread] Event loop created, session_id={session_id}")
 
                     # 进度回调：同步函数，支持多种事件类型
                     # event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
@@ -578,54 +592,88 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         )
                     
                 except Exception as e:
+                    import traceback
+                    error_trace = traceback.format_exc()
                     results['error'] = str(e)
-                    logger.error(f"Agent thread error: {e}")
+                    logger.error(f"[SSE-Thread] Agent thread error, session_id={session_id}, error: {e}")
+                    logger.error(f"[SSE-Thread] Traceback:\n{error_trace}")
                     # 记录错误
                     if SessionRecordManager.get_current_record():
                         SessionRecordManager.get_current_record().mark_error(str(e))
                         SessionRecordManager.end_record()
                 finally:
                     completed.set()
+                    thread_duration = (datetime.now() - thread_start_time).total_seconds()
+                    logger.info(f"[SSE-Thread] run_agent finished, session_id={session_id}, duration={thread_duration:.2f}s, chunks={len(results['chunks'])}, progress={len(results['progress'])}")
             
             # 启动线程运行agent
+            logger.info(f"[SSE] Starting ThreadPoolExecutor, session_id={session_id}")
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(run_agent)
+                logger.info(f"[SSE] Agent thread submitted, session_id={session_id}")
                 
                 # 主循环：定期检查并yield结果
                 last_progress_count = 0
+                iteration_count = 0
 
                 while not completed.is_set() or len(results['chunks']) > 0 or len(results['progress']) > last_progress_count:
+                    iteration_count += 1
+                    
                     # Yield 新的进度消息
                     while len(results['progress']) > last_progress_count:
-                        progress_event = results['progress'][last_progress_count]
-                        # progress_event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
-                        event = {
-                            "type": progress_event.get("type", "progress"),
-                            "timestamp": int(datetime.now().timestamp() * 1000)
-                        }
-                        # 根据事件类型添加相应字段
-                        if event["type"] == "tool_start":
-                            event["toolName"] = progress_event.get("toolName", "")
-                            event["toolArgs"] = progress_event.get("toolArgs", {})
-                        elif event["type"] == "tool_result":
-                            event["toolName"] = progress_event.get("toolName", "")
-                            event["result"] = progress_event.get("result", {})
-                            event["success"] = progress_event.get("success", True)
-                        else:
-                            event["data"] = progress_event.get("data", progress_event.get("message", ""))
+                        try:
+                            progress_event = results['progress'][last_progress_count]
+                            # progress_event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
+                            event = {
+                                "type": progress_event.get("type", "progress"),
+                                "timestamp": int(datetime.now().timestamp() * 1000)
+                            }
+                            # 根据事件类型添加相应字段
+                            if event["type"] == "tool_start":
+                                event["toolName"] = progress_event.get("toolName", "")
+                                event["toolArgs"] = progress_event.get("toolArgs", {})
+                            elif event["type"] == "tool_result":
+                                event["toolName"] = progress_event.get("toolName", "")
+                                event["result"] = progress_event.get("result", {})
+                                event["success"] = progress_event.get("success", True)
+                            else:
+                                event["data"] = progress_event.get("data", progress_event.get("message", ""))
 
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        last_progress_count += 1
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                            last_progress_count += 1
+                            
+                        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                            # 客户端已断开，优雅退出
+                            logger.warning(f"[SSE] Client disconnected during progress yield, session_id={session_id}, error: {e}")
+                            completed.set()
+                            break
+                        except Exception as e:
+                            logger.error(f"[SSE] Error yielding progress event, session_id={session_id}, error: {e}", exc_info=True)
+                            last_progress_count += 1
+                            continue
+                    
+                    if completed.is_set():
+                        break
 
                     # Yield 新的响应chunk
                     while len(results['chunks']) > 0:
-                        chunk = results['chunks'].pop(0)
-                        event = {
-                            "type": "response",
-                            "data": chunk,
-                            "timestamp": int(datetime.now().timestamp() * 1000)
-                        }
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        try:
+                            chunk = results['chunks'].pop(0)
+                            event = {
+                                "type": "response",
+                                "data": chunk,
+                                "timestamp": int(datetime.now().timestamp() * 1000)
+                            }
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                            
+                        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                            # 客户端已断开，优雅退出
+                            logger.warning(f"[SSE] Client disconnected during chunk yield, session_id={session_id}, error: {e}")
+                            completed.set()
+                            break
+                        except Exception as e:
+                            logger.error(f"[SSE] Error yielding chunk, session_id={session_id}, error: {e}", exc_info=True)
+                            continue
 
                     if completed.is_set():
                         break
@@ -633,26 +681,44 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     await asyncio.sleep(0.05)  # 50ms轮询间隔，不阻塞事件循环
                 
                 # 确保线程完成
-                future.result()
+                try:
+                    future.result()
+                    logger.info(f"[SSE] Agent thread completed successfully, session_id={session_id}")
+                except Exception as e:
+                    logger.error(f"[SSE] Agent thread raised exception, session_id={session_id}, error: {e}", exc_info=True)
             
             # 检查错误
             if results['error']:
-                yield f"data: {json.dumps({'type': 'error', 'data': results['error'], 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+                logger.error(f"[SSE] Agent returned error, session_id={session_id}, error: {results['error']}")
+                try:
+                    yield f"data: {json.dumps({'type': 'error', 'data': results['error'], 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+                except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                    logger.warning(f"[SSE] Client disconnected before error message sent, session_id={session_id}, error: {e}")
             
             # 保存完整响应到历史
             full_response = "".join(results['chunks'])
             sse_manager.add_to_history(session_id, "assistant", full_response)
             
             # 发送完成消息
-            yield f"data: {json.dumps({'type': 'complete', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+            try:
+                yield f"data: {json.dumps({'type': 'complete', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+                sse_duration = (datetime.now() - sse_start_time).total_seconds()
+                logger.info(f"[SSE] Stream completed successfully, session_id={session_id}, duration={sse_duration:.2f}s, chunks={len(results['chunks'])}, progress={len(results['progress'])}")
+            except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                logger.warning(f"[SSE] Client disconnected before complete message sent, session_id={session_id}, error: {e}")
             
         except Exception as e:
-            logger.error(f"SSE chat error: {e}")
             import traceback
-            traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+            error_trace = traceback.format_exc()
+            logger.error(f"[SSE] SSE chat error, session_id={session_id}, error: {e}")
+            logger.error(f"[SSE] Traceback:\n{error_trace}")
+            try:
+                yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                logger.warning(f"[SSE] Cannot send error message to client, already disconnected, session_id={session_id}")
         finally:
             sse_manager.remove_sse_client(session_id, client_queue)
+            logger.info(f"[SSE] SSE cleanup completed, session_id={session_id}")
     
     return StreamingResponse(
         event_generator(),

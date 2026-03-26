@@ -1850,11 +1850,29 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         f"[Tools]: {json.dumps([t.get('name', t.get('function', {}).get('name', 'unknown')) for t in tools], ensure_ascii=False)}\n"
                         f"{'='*60}")
             
-            response = await self.llm.chat_with_tools(
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=tools
-            )
+            # 后端日志：LLM调用开始
+            import time
+            llm_call_start = time.time()
+            logger.info(f"[AGENT] LLM call starting, session_id={session_id}, iteration={iteration}, is_master={self.is_master}")
+            
+            try:
+                response = await self.llm.chat_with_tools(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tools=tools
+                )
+                
+                llm_call_duration = time.time() - llm_call_start
+                logger.info(f"[AGENT] LLM call completed, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
+                
+            except asyncio.TimeoutError as e:
+                llm_call_duration = time.time() - llm_call_start
+                logger.error(f"[AGENT] LLM call TIMEOUT, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
+                raise
+            except Exception as e:
+                llm_call_duration = time.time() - llm_call_start
+                logger.error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {e}", exc_info=True)
+                raise
             
             tool_calls = response.get("tool_calls", [])
             content = response.get("content", "")
@@ -2191,8 +2209,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             )
 
                 except Exception as e:
+                    import traceback
+                    error_trace = traceback.format_exc()
                     error_msg = f"Tool execution failed: {str(e)}"
-                    logger.error(error_msg)
+                    logger.error(f"[AGENT] Tool execution error, session_id={session_id}, tool={tool_name}, error: {e}")
+                    logger.error(f"[AGENT] Tool execution traceback:\n{error_trace}")
                     # 发送工具执行结果（失败）
                     await send_tool_result(tool_name, {"error": error_msg}, False)
                     await send_progress(f"❌ {self._get_tool_display_name(tool_name, tool_args)}执行出错: {str(e)}")
@@ -2353,11 +2374,28 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             f"{'='*60}")
                 
                 # 调用LLM
-                response = await self.llm.chat_with_tools(
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    tools=tools
-                )
+                import time
+                llm_call_start = time.time()
+                logger.info(f"[SUBAGENT] LLM call starting, execution_id={self.execution_id}, iteration={iteration}")
+                
+                try:
+                    response = await self.llm.chat_with_tools(
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        tools=tools
+                    )
+                    
+                    llm_call_duration = time.time() - llm_call_start
+                    logger.info(f"[SUBAGENT] LLM call completed, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
+                    
+                except asyncio.TimeoutError as e:
+                    llm_call_duration = time.time() - llm_call_start
+                    logger.error(f"[SUBAGENT] LLM call TIMEOUT, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
+                    raise
+                except Exception as e:
+                    llm_call_duration = time.time() - llm_call_start
+                    logger.error(f"[SUBAGENT] LLM call FAILED, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {e}", exc_info=True)
+                    raise
                 
                 content = response.get("content", "")
                 tool_calls = response.get("tool_calls", [])
