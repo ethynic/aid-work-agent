@@ -9,6 +9,13 @@ metadata: {"clawdbot":{"emoji":"🌤️","requires":{"bins":["curl"]}}}
 
 Two free services, no API keys needed.
 
+## ⚠️ 重要：命令格式要求
+
+- curl 中的 URL **必须使用双引号** `"..."` 包裹，**禁止使用单引号** `'...'`
+- 错误示例：`curl -s 'wttr.in/Shanghai?format=3'` ❌（Windows 下单引号不会被 shell 解析为引号）
+- 正确示例：`curl -s "wttr.in/Shanghai?format=3"` ✅
+- 城市名中的空格用 `+` 连接，如 `wttr.in/New+York`
+
 ## wttr.in (primary)
 
 Quick one-liner:

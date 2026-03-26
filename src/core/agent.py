@@ -989,6 +989,10 @@ delegate_to_subagent(
 
 ### 可用技能
 {skill_descriptions}
+
+**⚠️ 重要：技能不是工具！不能直接将技能名作为函数调用。**
+技能必须通过 `use_skill(skill="技能名")` 加载后，再通过 `skill_execute` 执行具体命令。
+例如要查天气，不能直接调用 weather，必须：use_skill(skill="weather") → skill_execute(skill="weather", command="curl -s 'wttr.in/City?format=3'")
 {f'''
 ### 可用子智能体
 {subagent_descriptions}''' if include_delegation else ''}
@@ -1033,8 +1037,10 @@ create_plan(
 - 用于查询实时信息、新闻、数据等
 
 ### use_skill
-- 当任务匹配技能描述时使用
-- 加载后按技能指导执行
+- **⚠️ 技能不是工具！绝不能直接调用技能名（如 weather），必须通过此工具加载！**
+- 使用方式：use_skill(skill="技能名")
+- 加载后会获得技能的详细指令，然后通过 skill_execute 执行
+- 常见错误：直接调用 weather/get_weather 等不存在的工具 ❌ → 正确做法是 use_skill(skill="weather") ✅
 
 ### skill_execute
 - **重要**：执行技能命令的唯一工具！
