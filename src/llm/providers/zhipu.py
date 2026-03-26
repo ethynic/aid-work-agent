@@ -315,6 +315,7 @@ class ZhipuProvider(BaseLLMProvider):
                 "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
             },
+            "request_id": response.get("id", ""),
         }
         
         # 处理工具调用
