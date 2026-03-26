@@ -2360,7 +2360,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 logger.info(f"[SUBAGENT] Iteration {iteration}")
 
                 # 发送迭代进度
-                await send_progress(f"🔄 [{self.subagent_config.name}] 第{iteration}轮思考中...")
+                # await send_progress(f"🔄 [{self.subagent_config.name}] 第{iteration}轮思考中...")
 
                 # 更新进度
                 if task_record:
