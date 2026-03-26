@@ -1610,21 +1610,47 @@ create_plan(
             task_id = f"delegate_{uuid.uuid4().hex[:8]}"
 
             # 创建子智能体专用的回调包装器
-            # 子智能体期望 progress_callback 接收字符串，
-            # 但主智能体的 progress_callback 期望接收字典
+            # 子智能体的 send_progress/send_tool_start/send_tool_result 已经将消息包装为 dict，
+            # 而主智能体的 progress_callback (send_progress) 会再包装一层 {"type": "progress", "data": ...}
+            # 这里需要提取子智能体事件中的实际内容，作为字符串传给上层，避免重复包装
             async def subagent_progress_wrapper(event):
-                """将子智能体的事件转发给上层 progress_callback
+                """将子智能体的事件转发给上层 progress_callback，避免嵌套包装
 
                 Args:
                     event: 子智能体传递的事件，可能是字符串或字典
                 """
-                if progress_callback:
-                    if isinstance(event, str):
-                        await progress_callback({"type": "progress", "data": event})
-                    elif isinstance(event, dict):
-                        await progress_callback(event)
+                if not progress_callback:
+                    return
+                if isinstance(event, str):
+                    # 字符串直接传给上层，由 send_progress 包装一次
+                    await progress_callback(event)
+                elif isinstance(event, dict):
+                    event_type = event.get("type", "")
+                    event_data = event.get("data", "")
+                    if event_type == "progress":
+                        # progress 事件：提取 data 字符串，由上层 send_progress 包装一次
+                        await progress_callback(event_data if isinstance(event_data, str) else str(event_data))
+                    elif event_type in ("tool_start", "tool_result"):
+                        # tool_start/tool_result 事件已经是完整格式，直接传给上层
+                        # 上层 main.py 的 sync_progress_callback 会原样保存到 progress 列表
+                        # 但由于 progress_callback 是 send_progress（只接受字符串），这里需要特殊处理
+                        # 暂时将 tool 事件转为 progress 字符串传递，避免嵌套
+                        tool_name = event.get("toolName", event.get("tool_name", ""))
+                        if event_type == "tool_start":
+                            await progress_callback(f"🔧 正在执行 {tool_name}...")
+                        elif event_type == "tool_result":
+                            success = event.get("success", True)
+                            if success:
+                                await progress_callback(f"✅ {tool_name} 执行完成")
+                            else:
+                                error = event.get("result", {}).get("error", "未知错误") if isinstance(event.get("result"), dict) else str(event.get("result", ""))
+                                await progress_callback(f"❌ {tool_name} 执行失败: {error}")
+                    elif event_type == "thinking":
+                        await progress_callback(event_data if isinstance(event_data, str) else str(event_data))
                     else:
                         await progress_callback(str(event))
+                else:
+                    await progress_callback(str(event))
 
             # Delegate to subagent
             response = await self.subagent_executor.delegate(

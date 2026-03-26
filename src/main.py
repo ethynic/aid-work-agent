@@ -536,8 +536,15 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     record_service.set_model(master_agent.llm.get_model_name())
 
                     # 包装成async回调
-                    async def async_progress_callback(message: str):
-                        sync_progress_callback({"type": "progress", "data": message})
+                    # 支持直接接收 dict 事件（子智能体的 tool_start/tool_result 等完整事件）
+                    # 或字符串消息（主智能体的 progress 消息）
+                    async def async_progress_callback(message):
+                        if isinstance(message, dict):
+                            # 已经是完整的事件格式，直接传递
+                            sync_progress_callback(message)
+                        else:
+                            # 字符串消息，包装为 progress 事件
+                            sync_progress_callback({"type": "progress", "data": message})
                     
                     # 运行agent
                     async def consume_generator():

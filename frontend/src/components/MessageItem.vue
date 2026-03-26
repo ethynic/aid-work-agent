@@ -180,12 +180,12 @@ function formatProgressContent(msg: string | Record<string, any>): string {
 
     // type 为 tool_start：显示调用工具名称
     if (c.type === 'tool_start' && c.toolName) {
-      return `🔧 正在执行 ${c.toolName}`
+      return `🔧 需要调用工具【 ${c.toolName}】`
     }
 
     // type 为 tool_result：显示 data
-    if (c.type === 'tool_result' && c.data !== undefined) {
-      const data = c.data
+    if (c.type === 'tool_result' && c.result !== undefined) {
+      const data = c.result
       if (typeof data === 'string') {
         return data.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
       }
