@@ -2261,16 +2261,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         for content in delegation_result["generated_contents"]:
                             yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
 
-                    # 如果子智能体有最终回复内容，yield 给用户
-                    final_result = delegation_result.get("result")
-                    if final_result:
-                        if isinstance(final_result, str) and final_result.strip():
-                            yield final_result.strip()
-                        elif isinstance(final_result, dict):
-                            # 如果是字典，尝试提取 content 字段
-                            content = final_result.get("content", "")
-                            if content and isinstance(content, str):
-                                yield content.strip()
 
                     # 标记任务完成（澄清状态不标记为失败）
                     if delegate_task_id:
