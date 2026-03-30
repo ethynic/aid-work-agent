@@ -188,6 +188,8 @@ const isSidebarCollapsed = ref(false)
 const showLoginModal = ref(false)
 const showCredentialManager = ref(false)
 const showMenuDropdown = ref(false)
+// 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
+const skipNextSwitch = ref(false)
 
 // 跳转到客户信息页面
 function openCustomerInfo() {
@@ -220,8 +222,12 @@ onMounted(async () => {
   if (!isLoggedIn.value) {
     showLoginModal.value = true
   } else {
-    // 已登录，加载会话列表
+    // 已登录，加载会话列表并恢复最近会话
     await loadSessions()
+    const hasSession = await loadLatestSession()
+    if (hasSession && currentSessionId.value) {
+      agentSessionId.value = currentSessionId.value
+    }
   }
 
   // 简化版：假设一直在线
@@ -244,8 +250,11 @@ async function handleSend(content: string) {
   if (!currentSessionId.value) {
     const newSession = await createNewSession()
     if (newSession) {
+      skipNextSwitch.value = true
       selectSession(newSession.session_id)
       agentSessionId.value = newSession.session_id
+      // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
+      await switchSession(newSession.session_id)
     }
   }
 
@@ -324,6 +333,10 @@ watch(isLoggedIn, async (loggedIn) => {
 
 // 监听当前会话变化，通过 switchSession 保存/恢复消息
 watch(currentSessionId, async (newSessionId) => {
+  if (skipNextSwitch.value) {
+    skipNextSwitch.value = false
+    return
+  }
   if (newSessionId) {
     await switchSession(newSessionId)
   } else {
