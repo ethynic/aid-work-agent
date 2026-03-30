@@ -1204,81 +1204,158 @@ create_plan(
         self,
         session_id: str
     ) -> List[Dict[str, Any]]:
-        """Build message list for LLM from memory"""
+        """
+        Build message list for LLM from memory.
+
+        健壮性保障：
+        1. 跳过空 content 的 user/assistant 消息（防止空 user 导致 API 报错）
+        2. assistant(tool_calls) 后必须紧跟对应的 tool 消息，否则清理断裂的 tool_calls
+        3. system 消息转为 user 消息（部分 LLM API 不允许在对话序列中插入 system）
+        4. 孤立的 tool 消息（无 pending tool_call_id）会被跳过
+        """
         messages = []
         
         history = self.memory.get_context(session_id)
         
         # 追踪待处理的 tool_call_ids
         pending_tool_calls = set()
+        # 追踪每条带 tool_calls 的 assistant 消息在 messages 中的索引
+        assistant_tc_indices = []
         
         for i, msg in enumerate(history):
-            # 处理不同类型的消息
             role = msg.get("role", "user")
+            content = msg.get("content", "")
             
             if role == "tool":
-                # 工具结果消息
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                    "content": msg.get("content", "")
-                })
-                # 移除已处理的 tool_call_id
+                # 工具结果消息：只添加属于 pending_tool_calls 的
                 tc_id = msg.get("tool_call_id", "")
                 if tc_id in pending_tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": content
+                    })
                     pending_tool_calls.discard(tc_id)
+                else:
+                    # 孤立的 tool 消息，跳过
+                    logger.debug(f"后端日志：_build_messages 跳过孤立 tool 消息, tool_call_id={tc_id}")
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls", [])
                 if tool_calls:
-                    # 检查是否所有待处理的 tool_calls 都有对应的 tool response
-                    # 如果有未匹配的 tool_calls，将其作为普通 assistant message 处理
-                    has_pending = bool(pending_tool_calls)
-                    if has_pending:
-                        # 有未处理的 tool_calls，先清理之前的 assistant message
-                        # 这通常表示之前的对话有消息丢失，跳过 tool_calls
-                        logger.warning(f"发现未匹配的 tool_calls，清除并作为普通消息处理")
-                        messages.append({
-                            "role": "assistant",
-                            "content": msg.get("content", "")
-                        })
-                    else:
-                        # 正常情况：添加带 tool_calls 的 assistant message
-                        messages.append({
-                            "role": "assistant",
-                            "content": msg.get("content", ""),
-                            "tool_calls": tool_calls
-                        })
-                        # 记录待处理的 tool_call_ids
-                        for tc in tool_calls:
-                            tc_id = tc.get("id", "")
-                            if tc_id:
-                                pending_tool_calls.add(tc_id)
-                else:
-                    # 普通 assistant message
+                    # 有待处理的 tool_calls 说明之前的 assistant(tool_calls) 缺少 tool 响应
+                    # 清理之前未配对的 tool_calls
+                    if pending_tool_calls:
+                        logger.warning(
+                            f"后端日志：_build_messages 发现 {len(pending_tool_calls)} 个未配对 tool_calls，"
+                            f"移除前一条 assistant 的 tool_calls"
+                        )
+                        if assistant_tc_indices:
+                            prev_idx = assistant_tc_indices[-1]
+                            orphaned_ids = list(pending_tool_calls)
+                            # 从前一条 assistant 中移除未配对的 tool_calls
+                            prev_tc = messages[prev_idx].get("tool_calls", [])
+                            remaining_tc = [tc for tc in prev_tc if tc.get("id", "") not in pending_tool_calls]
+                            if remaining_tc:
+                                messages[prev_idx]["tool_calls"] = remaining_tc
+                            else:
+                                # 所有 tool_calls 都未配对，降级为普通 assistant
+                                messages[prev_idx].pop("tool_calls", None)
+                            logger.warning(f"后端日志：已清理未配对 tool_call_ids: {orphaned_ids}")
+                            pending_tool_calls.clear()
+                            assistant_tc_indices.pop()
+                    
+                    # 记录待处理的 tool_call_ids
+                    tc_ids = set()
+                    for tc in tool_calls:
+                        tc_id = tc.get("id", "")
+                        if tc_id:
+                            tc_ids.add(tc_id)
+                    
+                    # 添加带 tool_calls 的 assistant 消息
                     messages.append({
                         "role": "assistant",
-                        "content": msg.get("content", "")
+                        "content": content,
+                        "tool_calls": tool_calls
                     })
+                    assistant_tc_indices.append(len(messages) - 1)
+                    pending_tool_calls = tc_ids
+                else:
+                    # 普通 assistant message，跳过空 content
+                    if content:
+                        messages.append({
+                            "role": "assistant",
+                            "content": content
+                        })
             else:
-                # 普通消息
-                messages.append({
-                    "role": role,
-                    "content": msg.get("content", "")
-                })
+                # system 消息转为 user 消息（LLM API 不允许对话序列中插入 system）
+                # 跳过空 content 的消息
+                if content:
+                    messages.append({
+                        "role": "user",
+                        "content": content
+                    })
         
-        # 后端日志：检查末尾是否有未响应的 tool_calls（如 Skill 压缩导致的 tool_call_id 丢失）
+        # 后端日志：检查末尾是否有未响应的 tool_calls
         if pending_tool_calls:
             logger.warning(
-                f"后端日志：消息列表末尾存在 {len(pending_tool_calls)} 个未响应的 tool_call_ids: {pending_tool_calls}，"
-                f"将从最后一条 assistant 消息中移除 tool_calls 字段"
+                f"后端日志：_build_messages 末尾存在 {len(pending_tool_calls)} 个未响应的 tool_call_ids: "
+                f"{pending_tool_calls}，将清理对应的 tool_calls"
             )
-            # 从后向前找到最后一条包含 tool_calls 的 assistant 消息，移除其 tool_calls
-            for msg in reversed(messages):
-                if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                    msg.pop("tool_calls", None)
-                    break
+            if assistant_tc_indices:
+                last_idx = assistant_tc_indices[-1]
+                prev_tc = messages[last_idx].get("tool_calls", [])
+                remaining_tc = [tc for tc in prev_tc if tc.get("id", "") not in pending_tool_calls]
+                if remaining_tc:
+                    messages[last_idx]["tool_calls"] = remaining_tc
+                else:
+                    messages[last_idx].pop("tool_calls", None)
+        
+        # 最终清理：确保 messages 列表中不存在相邻的 assistant(tool_calls) + 非 tool 消息
+        # 如果仍有断裂，移除断裂的 tool_calls
+        self._repair_message_sequence(messages)
         
         return messages
+    
+    def _repair_message_sequence(self, messages: List[Dict[str, Any]]) -> None:
+        """
+        修复消息序列：确保 assistant(tool_calls) 后面紧跟 tool 消息。
+        如果 assistant(tool_calls) 后面是非 tool 消息，移除其 tool_calls。
+        """
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                # 检查下一条消息是否是 tool
+                if i + 1 >= len(messages) or messages[i + 1].get("role") != "tool":
+                    # 下一条不是 tool，需要检查这个 assistant 的 tool_calls
+                    # 是否有对应的 tool 在后续消息中
+                    tc_ids = {tc.get("id", "") for tc in msg["tool_calls"] if tc.get("id")}
+                    # 向后查找所有 tool 消息
+                    found_tool_ids = set()
+                    for j in range(i + 1, len(messages)):
+                        if messages[j].get("role") == "tool":
+                            tc_id = messages[j].get("tool_call_id", "")
+                            if tc_id in tc_ids:
+                                found_tool_ids.add(tc_id)
+                    
+                    if not found_tool_ids:
+                        # 完全没有对应的 tool 消息，移除 tool_calls
+                        logger.warning(
+                            f"后端日志：_repair_message_sequence 移除断裂的 tool_calls "
+                            f"at index {i}, tc_ids={tc_ids}"
+                        )
+                        msg.pop("tool_calls", None)
+                    else:
+                        # 部分匹配，保留匹配的 tool_calls
+                        remaining = [tc for tc in msg["tool_calls"] if tc.get("id", "") in found_tool_ids]
+                        if remaining != msg["tool_calls"]:
+                            removed = [tc.get("id") for tc in msg["tool_calls"] if tc.get("id", "") not in found_tool_ids]
+                            logger.warning(
+                                f"后端日志：_repair_message_sequence 部分移除断裂的 tool_calls "
+                                f"at index {i}, removed={removed}"
+                            )
+                            msg["tool_calls"] = remaining
+            i += 1
     
     def _handle_create_plan(
         self,
