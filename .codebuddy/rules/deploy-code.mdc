@@ -12,16 +12,49 @@ provider:
 
 ## 工作流程
 
-### 1. 自动决策部署信息
-**无需询问用户，自动执行以下决策**：
-- **提交信息**：根据代码更改内容自动生成合适的提交信息
-  - 优先分析代码更改，生成语义化的提交信息（如 `feat:`, `fix:`, `refactor:` 等）
-  - 如果无法确定具体类型，使用默认：`update: 代码更新`
-- **部署确认**：始终执行完整部署流程（ 前端编译 + 提交 + 推送 + 服务器部署）
+### 1. 完整部署流程
+- 部署前检查
+- 前端编译 
+- Git提交 + 推送 
+- FTP上传代码到服务器
 
 ### 2. 执行部署
 
-#### 步骤 1：提交代码到 Git 仓库
+#### 步骤 1：部署前检查
+- 检查有无未解决的冲突，执行 `git status` 检查工作区状态
+- 如有未解决的冲突：
+  - 提示用户："检测到未解决的冲突，请先解决冲突后再部署"
+  - 中止部署流程
+
+#### 步骤 2：前端编译
+清空 \frontend\dist 目录，并重新执行前端构建，无需询问用户是否同意。
+
+**Windows PowerShell 环境（推荐）**：
+```powershell
+Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; Remove-Item -Recurse -Force -Path "dist" -ErrorAction SilentlyContinue; npm run build
+```
+
+**Windows CMD 环境**：
+```cmd
+cd /d d:\workbase\projects\aid-work-agent\frontend && if exist dist rmdir /s /q dist && npm run build
+```
+
+**经验总结**：
+- 当前环境为 Windows + Command Prompt (cmd.exe)，但系统可能调用 PowerShell 执行
+- **PowerShell 不支持 `cd /d` 语法**（这是 CMD 特有的）
+- 在 PowerShell 中应使用 `Set-Location` 或 `cd`（不带 `/d`）
+- 如果命令混淆了 Shell 类型，优先使用 PowerShell 语法
+
+**错误处理**：
+- 如果构建失败：
+  - 提示用户："前端构建失败，请检查错误信息"
+  - 中止部署流程
+  
+**构建验证**：
+- 检查构建产物目录 `frontend/dist/` 是否存在
+- 确认关键文件（如 `index.html`）已生成
+
+#### 步骤 3：提交代码到 Git 仓库
 使用 `commit.py` 提交代码（支持中文和空格）：
 
 ```bash
@@ -37,72 +70,52 @@ python scripts/commit.py "提交信息" --push
 1. 添加所有更改到暂存区（`git add -A`）
 2. 提交更改（`git commit -m "提交信息"`）
 3. 推送到远程仓库（`git push`）
+4. scripts/commit.py 如果不存在，则报错并中止部署流程
 
-#### 步骤 2：前端编译
-执行前端构建：
+**提交信息**：
+- 无需询问用户，根据代码更改内容自动生成合适的提交信息
+- 优先分析代码更改，生成语义化的提交信息（如 `feat:`, `fix:`, `refactor:` 等）
+- 如果无法确定具体类型，使用默认：`update: 代码更新`
 
-**Windows PowerShell 环境（推荐）**：
-```powershell
-Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; npm run build
-```
-
-**Windows CMD 环境**：
-```cmd
-cd /d d:\workbase\projects\aid-work-agent\frontend && npm run build
-```
-
-**经验总结**：
-- 当前环境为 Windows + Command Prompt (cmd.exe)，但系统可能调用 PowerShell 执行
-- **PowerShell 不支持 `cd /d` 语法**（这是 CMD 特有的）
-- 在 PowerShell 中应使用 `Set-Location` 或 `cd`（不带 `/d`）
-- 如果命令混淆了 Shell 类型，优先使用 PowerShell 语法
-
-#### 步骤 3：FTP上传代码
-使用 `deploy.ps1` 通过FTP上传代码：
+#### 步骤 4：FTP上传代码到服务器
+使用 `deploy.ps1` 通过FTP上传代码， `deploy.ps1` 代码中已包含：
+- FTP 各项配置，包括服务器地址、端口、用户名、密码、本地目录、上传目录
+- 前端代码的上传，frontend/dist/ 目录上传到服务器对应目录。服务器 nginx 已经配置了 index.html 的 no-cache 规则，所以前端代码上传即生效。
+- 后端代码的上传，后端代码上传到服务器对应目录。服务器 docker 容器已配置 reload=True ，所以大部分后端代码上传即生效；但以下代码需要重启容器才能生效，需要提示用户：
+  - **配置文件修改**：`configs/config.yaml` 中的配置项修改（如 LLM 提供商切换、数据库连接、渠道开关等）
+  - **依赖包变更**：`requirements.txt` 中添加或删除了依赖包，提示用户需要在容器中执行 pip install -r requirements.txt
+  - **环境变量修改**：`.env` 文件或 Docker 环境变量的修改
+  - **新增 Skill/SubAgent**：新增的 Skill（`src/skills/`）或 SubAgent（`subagents/`）需要重启才能被加载
+  - **Docker 相关文件**：`Dockerfile`、`docker-compose.yml` 或启动脚本的修改
+  - **模块级初始化代码**：模块级别的全局变量、单例模式、启动时执行的初始化逻辑
 
 ```bash
 powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1
 ```
 
+**错误处理**：
+上传失败时：
+- 提示用户："FTP 上传失败"，并给出具体错误
+- 不自动回滚，需人工介入
+
 ## 使用示例
 
 **用户**："发布代码"
 **助手**：
-- 自动分析代码更改并生成提交信息
+- 前端编译
 - 执行 `commit.py --push` 提交代码
 - 执行 `deploy.ps1` FTP上传代码
 - 报告部署结果
 
-**用户**："发布代码，提交信息：feat: 添加用户管理功能"
-**助手**：
-- 使用用户指定的提交信息
-- 执行部署流程
-- 报告结果
-
-## 注意事项
-
-1. **提交信息规范**：建议遵循 Git Commit 规范
-   - `feat:` 新功能
-   - `fix:` 修复 bug
-   - `refactor:` 重构
-   - `docs:` 文档更新
-   - `config:` 配置更改
-   - `update:` 通用更新
-
-2. **部署前检查**：
-   - 确保所有测试通过
-   - 检查是否有未解决的冲突
-   - 确认要发布的内容
-
-3. **回滚准备**：
-   - 记录当前版本号
-   - 准备回滚方案
-
-4. **编码支持**：
-   - `commit.py` 已处理 Windows 终端 UTF-8 编码问题
-   - 支持中文提交信息和空格
-
 ## 相关文件
 - 提交脚本：`scripts/commit.py`
 - 部署脚本：`deploy/deploy.ps1`
-- Git 规范：`.codebuddy/rules/git-commit-convention.mdc`
+
+## 错误处理原则
+
+- **任一步骤失败，立即中止部署**，不继续执行后续步骤
+- 部署失败时，向用户报告：
+  - 失败的步骤
+  - 具体的错误信息
+  - 建议的解决方法
+- **不自动回滚**（避免覆盖生产环境），由用户决定是否回滚

@@ -195,6 +195,9 @@ if (-not $session.Opened) {
 }
 $transferOptions = New-Object WinSCP.TransferOptions
 $transferOptions.TransferMode = [WinSCP.TransferMode]::Binary
+# 为 .py 文件设置执行权限 (755: rwxr-xr-x)
+$transferOptions.FilePermissions = New-Object WinSCP.FilePermissions
+$transferOptions.FilePermissions.Octal = "0755"
 
 $uploadCount = 0
 
