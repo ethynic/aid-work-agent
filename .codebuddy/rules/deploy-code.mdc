@@ -27,7 +27,7 @@ provider:
   - 中止部署流程
 
 #### 步骤 2：前端编译
-清空 \frontend\dist 目录，并重新执行前端构建：
+清空 \frontend\dist 目录，并重新执行前端构建，无需询问用户是否同意。
 
 **Windows PowerShell 环境（推荐）**：
 ```powershell
@@ -81,9 +81,9 @@ python scripts/commit.py "提交信息" --push
 使用 `deploy.ps1` 通过FTP上传代码， `deploy.ps1` 代码中已包含：
 - FTP 各项配置，包括服务器地址、端口、用户名、密码、本地目录、上传目录
 - 前端代码的上传，frontend/dist/ 目录上传到服务器对应目录。服务器 nginx 已经配置了 index.html 的 no-cache 规则，所以前端代码上传即生效。
-- 后端代码的上传，后端代码上传到服务器对应目录。服务器 docker 容器已配置 reload=True ，所以大部分后端代码上传即生效，但以下代码需要重启容器才能生效，需要提示用户：
+- 后端代码的上传，后端代码上传到服务器对应目录。服务器 docker 容器已配置 reload=True ，所以大部分后端代码上传即生效；但以下代码需要重启容器才能生效，需要提示用户：
   - **配置文件修改**：`configs/config.yaml` 中的配置项修改（如 LLM 提供商切换、数据库连接、渠道开关等）
-  - **依赖包变更**：`requirements.txt` 中添加或删除了依赖包
+  - **依赖包变更**：`requirements.txt` 中添加或删除了依赖包，提示用户需要在容器中执行 pip install -r requirements.txt
   - **环境变量修改**：`.env` 文件或 Docker 环境变量的修改
   - **新增 Skill/SubAgent**：新增的 Skill（`src/skills/`）或 SubAgent（`subagents/`）需要重启才能被加载
   - **Docker 相关文件**：`Dockerfile`、`docker-compose.yml` 或启动脚本的修改
