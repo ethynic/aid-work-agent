@@ -121,19 +121,6 @@ function uploadFile($file, $session, $remoteDirectory, $transferOptions, [ref]$u
             # 使用上传前的远程文件时间进行对比显示
             $remoteTimeStr = if ($remoteFileInfo) { $remoteFileInfo.LastWriteTime } else { "无" }
             Write-Host "上传成功 [$($uploadCount.Value)]: $($relativePath.PadRight(40)) 本地时间 $($file.LastWriteTime) > 远程时间 $remoteTimeStr"
-            
-            # 为 .py 文件设置执行权限 (755: rwxr-xr-x)
-            if ($file.Extension -eq ".py") {
-                try {
-                    $permissions = New-Object WinSCP.FilePermissions
-                    $permissions.Octal = "0755"
-                    $session.ChangePermissions($normalizedPath, $permissions)
-                    Write-Host "  已设置执行权限: $($relativePath)"
-                }
-                catch {
-                    Write-Host "  警告: 设置执行权限失败 - $($_.Exception.Message)"
-                }
-            }
         } else {
             # 检查是否是目录不存在的错误
             $shouldRetry = $false
@@ -155,19 +142,6 @@ function uploadFile($file, $session, $remoteDirectory, $transferOptions, [ref]$u
                         # 使用上传前的远程文件时间进行对比显示
                         $remoteTimeStr = if ($remoteFileInfo) { $remoteFileInfo.LastWriteTime } else { "无" }
                         Write-Host "上传成功(重试) [$($uploadCount.Value)]: $($relativePath.PadRight(40)) 本地时间 $($file.LastWriteTime) > 远程时间 $remoteTimeStr"
-                        
-                        # 为 .py 文件设置执行权限 (755: rwxr-xr-x)
-                        if ($file.Extension -eq ".py") {
-                            try {
-                                $permissions = New-Object WinSCP.FilePermissions
-                                $permissions.Octal = "0755"
-                                $session.ChangePermissions($normalizedPath, $permissions)
-                                Write-Host "  已设置执行权限: $($relativePath)"
-                            }
-                            catch {
-                                Write-Host "  警告: 设置执行权限失败 - $($_.Exception.Message)"
-                            }
-                        }
                     } else {
                         foreach ($error in $transferResult.Failures) {
                             if ($error.Message -like "*was successful*") {
@@ -190,19 +164,6 @@ function uploadFile($file, $session, $remoteDirectory, $transferOptions, [ref]$u
                         $uploadCount.Value++  # 仍然增加计数器
                         $remoteTimeStr = if ($remoteFileInfo) { $remoteFileInfo.LastWriteTime } else { "无" }
                         Write-Host "上传成功 [$($uploadCount.Value)]: $($relativePath.PadRight(40)) 本地时间 $($file.LastWriteTime) > 远程时间 $remoteTimeStr"
-                        
-                        # 为 .py 文件设置执行权限 (755: rwxr-xr-x)
-                        if ($file.Extension -eq ".py") {
-                            try {
-                                $permissions = New-Object WinSCP.FilePermissions
-                                $permissions.Octal = "0755"
-                                $session.ChangePermissions($normalizedPath, $permissions)
-                                Write-Host "  已设置执行权限: $($relativePath)"
-                            }
-                            catch {
-                                Write-Host "  警告: 设置执行权限失败 - $($_.Exception.Message)"
-                            }
-                        }
                     } else {
                         Write-Host "上传失败: $($relativePath) 错误: $($error.Message)"
                     }
@@ -234,6 +195,9 @@ if (-not $session.Opened) {
 }
 $transferOptions = New-Object WinSCP.TransferOptions
 $transferOptions.TransferMode = [WinSCP.TransferMode]::Binary
+# 为 .py 文件设置执行权限 (755: rwxr-xr-x)
+$transferOptions.FilePermissions = New-Object WinSCP.FilePermissions
+$transferOptions.FilePermissions.Octal = "0755"
 
 $uploadCount = 0
 
