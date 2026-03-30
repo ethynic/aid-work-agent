@@ -15,6 +15,7 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -49,9 +50,24 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
     echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
-    # Playwright 浏览器依赖
+    # 常用工具
+    curl \
     wget \
-    gnupg \
+    vim \
+    less \
+    procps \
+    iputils-ping \
+    net-tools \
+    dnsutils \
+    zip \
+    unzip \
+    tar \
+    grep \
+    htop \
+    file \
+    jq \
+    lsof \
+    tree \
     # 字体支持（用于 PDF 等处理）
     fonts-noto-cjk \
     # 其他运行时依赖

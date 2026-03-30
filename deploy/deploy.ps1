@@ -209,7 +209,7 @@ Write-Host "本地源目录: $localBasePath"
 Write-Host "远程目标目录: $remoteDirectory"
 Write-Host "----------------------------------------"
 
-# 递归获取所有文件（排除指定目录和 .md 文件，以及 aid_work_agent.db 数据库文件）
+# 递归获取所有文件（排除指定目录 和 指定文件，以及 aid_work_agent.db 数据库文件）
 $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     $fullPath = $_.FullName
     # 排除目录：.git, .codebuddy, .workbuddy, deploy, docs, frontend\src, frontend\node_modules, logs, plans, test_uploads
