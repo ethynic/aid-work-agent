@@ -41,6 +41,18 @@ def _get_log_file() -> Path:
     return _LOG_DIR / f"agent_session_logs_{date_str}.jsonl"
 
 
+def _get_skill_execute_log_file() -> Path:
+    """
+    获取当天的 skill_execute 日志文件路径。
+
+    Returns:
+        当天日志文件路径，格式：log/agent/skill_execute_YYYYMMDD.jsonl
+    """
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now().strftime("%Y%m%d")
+    return _LOG_DIR / f"skill_execute_{date_str}.jsonl"
+
+
 def log_agent_iteration(
     iteration: int,
     request_id: str = "",
@@ -90,6 +102,59 @@ def log_agent_iteration(
         }
 
         log_file = _get_log_file()
+        with open(log_file, "a", encoding="utf-8") as f:
+            if f.tell() > 0:
+                f.write("\n")
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    except Exception:
+        # 日志记录失败不影响主流程
+        pass
+
+
+def log_skill_execute(
+    skill_name: str,
+    command: str,
+    session_id: str = "",
+    user_id: str = "",
+    success: bool = False,
+    exit_code: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+    error: str = "",
+    duration: float = 0,
+) -> None:
+    """
+    记录 skill_execute 的执行结果。
+
+    Args:
+        skill_name: 技能名称
+        command: 执行的命令
+        session_id: 会话ID
+        user_id: 用户ID
+        success: 是否成功
+        exit_code: 退出码
+        stdout: 标准输出（超出 2000 字符会截断）
+        stderr: 标准错误（超出 2000 字符会截断）
+        error: 错误信息
+        duration: 执行耗时（秒）
+    """
+    try:
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "skill_name": skill_name,
+            "command": command[:500] if command else "",
+            "session_id": session_id,
+            "user_id": user_id,
+            "success": success,
+            "exit_code": exit_code,
+            "stdout": stdout[:2000] if stdout else "",
+            "stderr": stderr[:2000] if stderr else "",
+            "error": error[:500] if error else "",
+            "duration": round(duration, 3) if duration else 0,
+        }
+
+        log_file = _get_skill_execute_log_file()
         with open(log_file, "a", encoding="utf-8") as f:
             if f.tell() > 0:
                 f.write("\n")
