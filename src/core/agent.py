@@ -19,7 +19,7 @@ from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Coroutin
 from loguru import logger
 
 from src.config.settings import settings
-from src.core.agent_logger import log_agent_iteration
+from src.core.agent_logger import log_agent_iteration, log_skill_execute
 from src.llm.gateway import llm_gateway
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
@@ -30,6 +30,7 @@ from src.models.plan import TaskStatus
 from src.core.skill_registry import SkillRegistry
 from src.core.skill_executor import SkillExecutor
 from src.core.plan_manager import PlanManager
+from src.core.skill_session import SkillSession
 
 
 # Tool definitions for LLM function calling
@@ -273,7 +274,7 @@ AGENT_TOOLS = [
     },
     {
         "name": "skill_execute",
-        "description": "在技能上下文中执行命令。加载技能后使用此功能运行pdftotext、python脚本等命令。重要：使用简单命令，对于Python优先使用简单的一行命令或直接使用pypdf/pdfplumber",
+        "description": "在技能上下文中执行命令。加载技能后使用此功能运行pdftotext、python脚本等命令。重要：使用简单命令，对于Python优先使用简单的一行命令或直接使用pypdf/pdfplumber。注意：对于引导式技能（无脚本的技能），可能不需要执行命令。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -283,7 +284,7 @@ AGENT_TOOLS = [
                 },
                 "command": {
                     "type": "string",
-                    "description": "要执行的命令。使用简单格式。例如：python -c \"from pypdf import PdfReader; r = PdfReader('file.pdf'); print(r.pages[0].extract_text())\""
+                    "description": "要执行的命令（可选）。对于引导式技能可能不需要执行命令。"
                 },
                 "files": {
                     "type": "object",
@@ -293,7 +294,29 @@ AGENT_TOOLS = [
                     }
                 }
             },
-            "required": ["skill", "command"]
+            "required": ["skill"]
+        }
+    },
+    {
+        "name": "skill_complete",
+        "description": (
+            "标记当前技能执行完成。当技能指南中的所有步骤都已执行完毕时调用此工具。"
+            "调用后系统会自动清理技能过程中的中间消息，仅保留最终结果摘要。"
+            "⚠️ 必须在 use_skill 之后、技能所有步骤完成后才能调用。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "type": "string",
+                    "description": "已完成执行的技能名称"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "技能执行的最终结果摘要（1-3句话），将替代所有中间过程存入对话历史"
+                }
+            },
+            "required": ["skill", "summary"]
         }
     },
     {
@@ -594,6 +617,9 @@ class Agent:
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
         self.memory = ShortTermMemory()
+        
+        # Skill 会话管理 - 跟踪活跃的 Skill 执行
+        self._active_skill_sessions: Dict[str, SkillSession] = {}
         
         # 技能系统
         skills_dir = Path(__file__).parent.parent / "skills"
@@ -995,9 +1021,16 @@ delegate_to_subagent(
 ### 可用技能
 {skill_descriptions}
 
-**⚠️ 重要：技能不是工具！不能直接将技能名作为函数调用。**
-技能必须通过 `use_skill(skill="技能名")` 加载后，再通过 `skill_execute` 执行具体命令。
-例如要查天气，不能直接调用 weather，必须：use_skill(skill="weather") → skill_execute(skill="weather", command="curl -s 'wttr.in/City?format=3'")
+**技能使用规则：**
+1. 使用 `use_skill(skill="技能名")` 加载技能，获取完整操作指南
+2. 加载后，根据技能说明书中的指引决定下一步：
+   - 如果说明书要求执行命令/脚本 → 调用 `skill_execute`
+   - 如果说明书要求生成内容 → 调用 `content_generate`
+   - 如果说明书要求搜索信息 → 调用 `web_search`
+   - 如果说明书给出了多步骤工作流 → 按步骤逐步调用相应工具
+3. 不要跳过步骤，严格按照技能说明书中的流程执行
+4. 所有步骤完成后，调用 `skill_complete(skill="技能名", summary="结果摘要")` 标记完成
+5. 调用 `skill_complete` 后系统会自动清理中间过程，仅保留摘要
 {f'''
 ### 可用子智能体
 {subagent_descriptions}''' if include_delegation else ''}
@@ -1042,16 +1075,23 @@ create_plan(
 - 用于查询实时信息、新闻、数据等
 
 ### use_skill
-- **⚠️ 技能不是工具！绝不能直接调用技能名（如 weather），必须通过此工具加载！**
-- 使用方式：use_skill(skill="技能名")
-- 加载后会获得技能的详细指令，然后通过 skill_execute 执行
-- 常见错误：直接调用 weather/get_weather 等不存在的工具 ❌ → 正确做法是 use_skill(skill="weather") ✅
+- 加载技能，获取完整的操作指南（SKILL.md 正文）
+- 技能本质是给 LLM 的操作手册，加载后根据手册指引决定下一步操作
+- 不同技能行为由其操作指南决定：
+  - 脚本执行类：手册会要求调用 `skill_execute` 执行命令
+  - 引导式技能：手册会引导你调用 `content_generate`、`web_search` 等工具组合完成任务
+- 使用流程：use_skill → 阅读指南 → 按指南执行 → skill_complete 标记完成
 
 ### skill_execute
-- **重要**：执行技能命令的唯一工具！
-- 用于执行技能文档中描述的命令（如 python scripts/xxx.py）
-- **必须**在 use_skill 之后调用，用于实际执行技能中的命令
+- 在技能上下文中执行命令（仅当操作指南要求时才使用）
+- 用于执行操作指南中描述的命令（如 python scripts/xxx.py）
+- 引导式技能（无脚本的技能）通常不需要调用此工具
 - 格式：skill_execute(skill="技能名", command="实际命令")
+
+### skill_complete
+- 标记技能执行完成（必须在所有步骤完成后调用）
+- `summary` 参数应是一句简洁的结果描述（1-3句话）
+- 调用后系统会自动清理中间过程，仅保留摘要到对话历史
 
 ### clarify
 - 当信息不足时向用户询问
@@ -1225,6 +1265,18 @@ create_plan(
                     "role": role,
                     "content": msg.get("content", "")
                 })
+        
+        # 后端日志：检查末尾是否有未响应的 tool_calls（如 Skill 压缩导致的 tool_call_id 丢失）
+        if pending_tool_calls:
+            logger.warning(
+                f"后端日志：消息列表末尾存在 {len(pending_tool_calls)} 个未响应的 tool_call_ids: {pending_tool_calls}，"
+                f"将从最后一条 assistant 消息中移除 tool_calls 字段"
+            )
+            # 从后向前找到最后一条包含 tool_calls 的 assistant 消息，移除其 tool_calls
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    msg.pop("tool_calls", None)
+                    break
         
         return messages
     
@@ -1414,22 +1466,96 @@ create_plan(
             "skill_content_length": len(skill_content) if skill_content else 0
         })
 
-        # 获取 skill 描述用于摘要
-        skill_desc = skill.description if skill else ""
+        # 增强引导：在技能内容后附加执行指引
+        guidance_suffix = f"""
 
-        logger.info(f"后端日志：_handle_use_skill 返回技能内容，LLM需要决定是否调用skill_execute")
+---
+**⚠️ 以上是技能「{skill_name}」的完整操作指南。请严格按照指南中的步骤执行：**
+- 如果指南中有命令/脚本要执行 → 调用 `skill_execute`
+- 如果指南中要求生成内容 → 调用 `content_generate`
+- 如果指南中要求搜索信息 → 调用 `web_search`
+- 如果指南中有多个步骤 → 逐步执行，不要跳过
+- 所有步骤完成后，调用 `skill_complete(skill="{skill_name}", summary="结果摘要")` 标记完成
+- 不要直接回复用户"正在执行"，而是立即开始执行第一步"""
+
+        enhanced_content = skill_content + guidance_suffix
 
         return {
             "success": True,
             "skill_name": skill_name,
-            "content": skill_content,
-            "message": f"✅ Skill '{skill_name}' loaded. {skill_desc}"
+            "content": enhanced_content,
+            "message": f"✅ Skill '{skill_name}' loaded."
         }
+    
+    def _compress_skill_context(
+        self,
+        session_id: str,
+        skill_name: str,
+        summary: str
+    ) -> None:
+        """
+        压缩 Skill 执行过程中的中间消息，仅保留摘要。
+        
+        替换前: [user, assistant(use_skill), tool(SKILL.md), assistant(content_gen),
+                 tool(大纲), ..., assistant(skill_complete), tool(complete_result)]
+        替换后: [user, summary("[技能执行记录] ...")]
+        
+        注意：在调用此方法之前，skill_complete 的 tool 消息必须已写入 memory，
+        以确保当前迭代的 messages 列表中 tool_call_id 配对完整。
+        压缩只影响 memory._cache（后续迭代的历史），不影响当前 messages。
+        
+        Args:
+            session_id: 会话 ID
+            skill_name: 技能名称
+            summary: 技能执行结果摘要
+        """
+        session = self._active_skill_sessions.get(skill_name)
+        if not session:
+            logger.warning(f"后端日志：_compress_skill_context 未找到活跃的 SkillSession: {skill_name}")
+            return
+        
+        messages = self.memory._cache.get(session_id)
+        if not messages:
+            return
+        
+        original_count = len(messages)
+        
+        # 保留 Skill 开始之前的消息
+        before_skill = list(messages)[:session.message_count_before]
+        
+        # 构建精简摘要消息
+        from datetime import datetime
+        summary_message = {
+            "role": "system",
+            "content": f"[技能执行记录] 使用技能「{skill_name}」完成任务。结果：{summary}",
+            "timestamp": datetime.now().isoformat(),
+            "_skill_summary": True
+        }
+        
+        # 重建消息列表：Skill 开始前的消息 + 摘要（不保留中间过程的 tool 消息）
+        self.memory._cache[session_id] = list(before_skill + [summary_message])
+        
+        # 清理 Skill Session
+        if skill_name in self._active_skill_sessions:
+            del self._active_skill_sessions[skill_name]
+        
+        logger.info(f"后端日志：Skill 上下文已压缩", extra={
+            "skill_name": skill_name,
+            "session_id": session_id,
+            "original_messages": original_count,
+            "compressed_messages": len(before_skill) + 1,
+            "saved_messages": original_count - len(before_skill) - 1
+        })
+    
+    @property
+    def has_active_skill_session(self) -> bool:
+        """是否有活跃的 Skill Session"""
+        return bool(self._active_skill_sessions)
     
     async def _handle_skill_execute(
         self,
         skill_name: str,
-        command: str,
+        command: Optional[str] = None,
         files: Optional[Dict[str, str]] = None,
         session_id: Optional[str] = None,
         workdir: Optional[Path] = None
@@ -1439,7 +1565,7 @@ create_plan(
 
         Args:
             skill_name: Name of the skill
-            command: Command to execute
+            command: Command to execute (optional for workflow-type skills)
             files: Optional files dict (filename -> base64 content)
             session_id: Session ID for context isolation
             workdir: Working directory for command execution
@@ -1456,9 +1582,11 @@ create_plan(
             }
         
         if not command:
+            # 对于引导式技能（无脚本），不执行命令，直接返回提示
             return {
-                "success": False,
-                "error": "No command provided"
+                "success": True,
+                "message": f"技能 '{skill_name}' 是引导式技能，无需执行命令。请按照技能指南中的步骤，使用 content_generate 等工具完成任务。",
+                "skill_name": skill_name
             }
         
         skill = self.skill_registry.get(skill_name)
@@ -1469,21 +1597,8 @@ create_plan(
                 "available_skills": self.skill_registry.list_skills()
             }
         
-        # 处理脚本路径 - 将相对路径转换为绝对路径
+        # 脚本路径替换统一由 skill_executor._process_command 处理，这里不再重复替换
         processed_command = command
-        if skill.scripts:
-            for script_path in skill.scripts:
-                script_name = script_path.name
-                # 替换 scripts/script_name 格式
-                processed_command = processed_command.replace(
-                    f"scripts/{script_name}",
-                    str(script_path.absolute())
-                )
-                # 替换 ./scripts/script_name 格式
-                processed_command = processed_command.replace(
-                    f"./scripts/{script_name}",
-                    str(script_path.absolute())
-                )
 
         # 自动替换 {user_id} 和 {session_id} 占位符
         # LLM 可能自己编造 user_id，这里强制使用 session 中的真实值
@@ -1550,6 +1665,9 @@ create_plan(
                     user_id=real_user_id
                 )
             
+            # 构建 error 字段：优先使用 result.error，fallback 到 stderr
+            exec_error = result.error or result.stderr or f"exit_code={result.exit_code}"
+            
             return {
                 "success": result.success,
                 "stdout": result.stdout,
@@ -1557,7 +1675,7 @@ create_plan(
                 "exit_code": result.exit_code,
                 "duration": result.duration,
                 "timed_out": result.timed_out,
-                "error": result.error
+                "error": exec_error
             }
             
         except Exception as e:
@@ -2074,6 +2192,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
+                # 兜底：自动完成所有活跃的 Skill Session
+                if self.has_active_skill_session:
+                    for active_skill_name, session in list(self._active_skill_sessions.items()):
+                        auto_summary = f"使用技能「{active_skill_name}」执行了相关任务"
+                        self._compress_skill_context(session_id, active_skill_name, auto_summary)
+                
                 # Store assistant response in memory
                 self.memory.add(session_id, "assistant", content)
 
@@ -2098,6 +2222,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # Execute each tool call
             tool_results = []
+            # 收集需要延迟执行的 Skill 压缩操作（在 tool_message 写入 memory 后再压缩）
+            pending_skill_compressions = []
             for tc in valid_tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc["arguments"]
@@ -2150,6 +2276,18 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 if tool_name == "use_skill":
                     skill_name = tool_args.get("skill", "")
                     skill_result = self._handle_use_skill(skill_name)
+                    # 创建 Skill Session，记录当前 memory 消息数量
+                    if skill_result.get("success") and skill_name not in self._active_skill_sessions:
+                        msg_count = len(self.memory._cache.get(session_id, []))
+                        self._active_skill_sessions[skill_name] = SkillSession(
+                            skill_name=skill_name,
+                            start_index=msg_count,
+                            message_count_before=msg_count,
+                        )
+                        logger.info(f"后端日志：创建 SkillSession", extra={
+                            "skill_name": skill_name,
+                            "message_count_before": msg_count
+                        })
                     # 发送工具执行结果
                     await send_tool_result(tool_name, skill_result, skill_result.get("success", True))
                     await send_progress(f"📦 已加载技能: {skill_name}")
@@ -2159,10 +2297,29 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     })
                     continue
 
+                # Handle skill_complete - compress skill context
+                if tool_name == "skill_complete":
+                    skill_name = tool_args.get("skill", "")
+                    summary = tool_args.get("summary", "")
+                    if skill_name in self._active_skill_sessions:
+                        # 延迟压缩：先记录压缩信息，等 tool_message 写入 memory 后再执行
+                        pending_skill_compressions.append((session_id, skill_name, summary))
+                        await send_progress(f"✅ 技能「{skill_name}」执行完成")
+                        tool_results.append({
+                            "tool_call_id": tool_id,
+                            "content": {"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}
+                        })
+                    else:
+                        tool_results.append({
+                            "tool_call_id": tool_id,
+                            "content": {"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}
+                        })
+                    continue
+
                 # Handle skill_execute - execute command directly
                 if tool_name == "skill_execute":
                     skill_name = tool_args.get("skill", "")
-                    command = tool_args.get("command", "")
+                    command = tool_args.get("command", "") or None  # 空字符串转为 None
                     files = tool_args.get("files", {})
 
                     # 标记任务开始（如果计划中存在）
@@ -2182,6 +2339,20 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         workdir=session_workspace
                     )
 
+                    # 后端日志：记录 skill_execute 执行结果
+                    log_skill_execute(
+                        skill_name=skill_name,
+                        command=command or "",
+                        session_id=session_id,
+                        user_id=user.user_id if user else "",
+                        success=skill_exec_result.get("success", False),
+                        exit_code=skill_exec_result.get("exit_code", 0),
+                        stdout=skill_exec_result.get("stdout", ""),
+                        stderr=skill_exec_result.get("stderr", ""),
+                        error=skill_exec_result.get("error", ""),
+                        duration=skill_exec_result.get("duration", 0),
+                    )
+
                     # 发送技能执行完成进度
                     # 发送工具执行结果
                     await send_tool_result(tool_name, skill_exec_result, skill_exec_result.get("success", True))
@@ -2190,8 +2361,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         preview = stdout[:100] if stdout else ""
                         await send_progress(f"✅ 技能「{skill_name}」执行完成: {preview}...")
                     else:
-                        error = skill_exec_result.get("error", "未知错误")
-                        await send_progress(f"❌ 技能「{skill_name}」执行失败: {error}")
+                        error = skill_exec_result.get("error") or "未知错误"
+                        stderr = skill_exec_result.get("stderr", "")
+                        exit_code = skill_exec_result.get("exit_code", -1)
+                        detail = error
+                        if stderr:
+                            # 取 stderr 末尾 300 字符作为错误详情
+                            detail = stderr[-300:] if len(stderr) > 300 else stderr
+                        elif exit_code:
+                            detail = f"exit_code={exit_code}"
+                        await send_progress(f"❌ 技能「{skill_name}」执行失败: {detail}")
 
                     # 标记任务完成（使用保存的task_id）
                     if skill_task_id:
@@ -2388,6 +2567,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 messages.append(tool_message)
                 # Save tool result to memory
                 self.memory.add_message(session_id, tool_message)
+            
+            # 延迟执行 Skill 上下文压缩（在 tool_message 写入 memory 之后）
+            for comp_session_id, comp_skill_name, comp_summary in pending_skill_compressions:
+                self._compress_skill_context(comp_session_id, comp_skill_name, comp_summary)
         
         if iteration >= max_iterations:
             logger.warning(f"Reached max iterations ({max_iterations})")
@@ -2585,6 +2768,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 
                 # 如果没有工具调用，任务完成
                 if not tool_calls:
+                    # 兜底：自动完成所有活跃的 Skill Session
+                    if self.has_active_skill_session:
+                        for active_skill_name, session in list(self._active_skill_sessions.items()):
+                            auto_summary = f"使用技能「{active_skill_name}」执行了相关任务"
+                            self._compress_skill_context(self.session_id, active_skill_name, auto_summary)
+                    
                     final_result = {"content": content}
                     final_summary = content[:500] if content else "Task completed"
                     break
@@ -2597,6 +2786,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 })
                 
                 # 执行工具调用
+                pending_skill_compressions = []  # 收集需要延迟执行的 Skill 压缩
                 for tc in tool_calls:
                     if "function" in tc:
                         tool_name = tc["function"].get("name", "")
@@ -2681,11 +2871,30 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         skill_name = tool_args.get("skill", "")
                         skill_result = self._handle_use_skill(skill_name)
                         tool_result = skill_result
+                        # 创建 Skill Session
+                        if skill_result.get("success") and skill_name not in self._active_skill_sessions:
+                            msg_count = len(self.memory._cache.get(self.session_id, []))
+                            self._active_skill_sessions[skill_name] = SkillSession(
+                                skill_name=skill_name,
+                                start_index=msg_count,
+                                message_count_before=msg_count,
+                            )
                         # 发送工具执行结果
                         await send_tool_result(tool_name, skill_result, skill_result.get("success", True))
+                    elif tool_name == "skill_complete":
+                        skill_name = tool_args.get("skill", "")
+                        summary = tool_args.get("summary", "")
+                        if skill_name in self._active_skill_sessions:
+                            # 延迟压缩：等 tool_message 写入 messages 后再压缩
+                            pending_skill_compressions.append((self.session_id, skill_name, summary))
+                            tool_result = {"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}
+                            await send_progress(f"✅ [{self.subagent_config.name}] 技能「{skill_name}」执行完成")
+                        else:
+                            tool_result = {"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}
+                        await send_tool_result(tool_name, tool_result, tool_result.get("success", True))
                     elif tool_name == "skill_execute":
                         skill_name = tool_args.get("skill", "")
-                        command = tool_args.get("command", "")
+                        command = tool_args.get("command", "") or None  # 空字符串转为 None
                         files = tool_args.get("files", {})
                         skill_exec_result = await self._handle_skill_execute(
                             skill_name=skill_name,
@@ -2694,8 +2903,26 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             session_id=self.session_id,
                         )
                         tool_result = skill_exec_result
+                        # 后端日志：记录 skill_execute 执行结果
+                        log_skill_execute(
+                            skill_name=skill_name,
+                            command=command or "",
+                            session_id=self.session_id,
+                            success=skill_exec_result.get("success", False),
+                            exit_code=skill_exec_result.get("exit_code", 0),
+                            stdout=skill_exec_result.get("stdout", ""),
+                            stderr=skill_exec_result.get("stderr", ""),
+                            error=skill_exec_result.get("error", ""),
+                            duration=skill_exec_result.get("duration", 0),
+                        )
                         # 发送工具执行结果
                         await send_tool_result(tool_name, skill_exec_result, skill_exec_result.get("success", True))
+                        if not skill_exec_result.get("success"):
+                            error = skill_exec_result.get("error") or "未知错误"
+                            stderr = skill_exec_result.get("stderr", "")
+                            exit_code = skill_exec_result.get("exit_code", -1)
+                            detail = stderr[-300:] if stderr else (f"exit_code={exit_code}" if exit_code else error)
+                            await send_progress(f"❌ [{self.subagent_config.name}] 技能「{skill_name}」执行失败: {detail}")
 
                         # 同步到父智能体的计划管理器
                         if self.parent_plan_manager and subagent_plan_created:
@@ -2779,6 +3006,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         "tool_call_id": tc.get("id", ""),
                         "content": str(tool_result)
                     })
+                
+                # 延迟执行 Skill 上下文压缩（在 tool_message 写入 messages 之后）
+                for comp_session_id, comp_skill_name, comp_summary in pending_skill_compressions:
+                    self._compress_skill_context(comp_session_id, comp_skill_name, comp_summary)
 
             # 发送子任务完成消息
             await send_progress(f"✅ [{self.subagent_config.name}] 任务完成，正在整合结果...")

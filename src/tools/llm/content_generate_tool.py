@@ -38,7 +38,7 @@ class ContentGenerateTool(BaseTool):
             },
             "content_type": {
                 "type": "string",
-                "description": "内容类型，用于选择合适的提示词模板。可选值：customer_list（客户列表）、email（邮件）、market_report（市场报告）等"
+                "description": "内容类型，用于选择合适的提示词模板。可选值：customer_list（客户列表）、email（邮件）、market_report（市场报告）、outline（大纲）、article（文章）、report（报告）、polish（润色）等。也可以使用自定义类型名称。"
             }
         },
         "required": ["prompt"]
@@ -129,7 +129,11 @@ class ContentGenerateTool(BaseTool):
         type_guidance = {
             "customer_list": "你是一个专业的外贸客户开发专家。请生成符合外贸业务需求的客户信息列表，包括公司名称、联系人、邮箱、国家、行业等信息。",
             "email": "你是一个专业的外贸邮件营销专家。请撰写专业的商务邮件，内容要真实、自然，避免明显的模板感。",
-            "market_report": "你是一个专业的市场分析师。请生成专业的市场分析报告。"
+            "market_report": "你是一个专业的市场分析师。请生成专业的市场分析报告。",
+            "outline": "你是一个专业的内容策划师。请根据主题生成结构清晰的文章大纲，包含主要章节和子要点。",
+            "article": "你是一个资深的内容创作者。请根据大纲或主题撰写高质量的章节内容，语言专业但不晦涩。",
+            "report": "你是一个专业的报告撰写专家。请撰写结构清晰、数据详实的专业报告。",
+            "polish": "你是一个专业的内容编辑。请对文章进行润色优化，确保逻辑连贯、语言流畅、表达准确。",
         }
 
         if content_type in type_guidance:
