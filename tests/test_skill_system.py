@@ -1,185 +1,382 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Skill System Test Script
+Skill 系统优化 - 单元测试
 
-测试Skill系统的核心功能:
-1. Skill加载器
-2. Skill注册表
-3. Skill执行器
-4. 与MasterAgent集成
+测试覆盖：
+1. SkillSession 生命周期
+2. _compress_skill_context 记忆压缩
+3. _handle_skill_execute command 可选化
+4. SkillLoader AgentSkills 兼容字段解析
+5. ShortTermMemory to_llm_messages Skill 摘要支持
+6. content_generate 新增预设类型
 """
 
-import asyncio
-import sys
 import os
+import sys
+import tempfile
+import unittest
 from pathlib import Path
+from collections import deque
+from datetime import datetime
 
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-
-def print_sep(title):
-    print("\n" + "=" * 60)
-    print(f" {title}")
-    print("=" * 60)
+# 添加项目根目录到 sys.path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-def test_skill_loader():
-    """测试Skill加载器"""
-    print_sep("Test 1: Skill Loader")
-    
-    from src.core.skill_loader import SkillLoader
-    
-    skills_dir = Path(__file__).parent / "skills"
-    loader = SkillLoader(skills_dir)
-    
-    print(f"Skills directory: {skills_dir}")
-    print(f"Loaded skills: {loader.list_skills()}")
-    
-    for skill_name in loader.list_skills():
-        skill = loader.get_skill(skill_name)
-        print(f"\n--- Skill: {skill_name} ---")
-        print(f"  Name: {skill.name}")
-        print(f"  Description: {skill.description}")
-        print(f"  Version: {skill.version}")
-        print(f"  Dependencies: {[d.name for d in skill.dependencies]}")
-        print(f"  Triggers: {[t.pattern for t in skill.triggers]}")
-    
-    # Test skill matching
-    print("\n--- Skill Matching ---")
-    test_files = ["document.pdf", "report.PDF", "image.png"]
-    for filename in test_files:
-        matched = loader.match_skill_by_file(filename)
-        print(f"  {filename} -> {matched or 'No match'}")
-    
-    return loader
+class TestSkillSession(unittest.TestCase):
+    """SkillSession 数据类测试"""
+
+    def test_skill_session_creation(self):
+        """正常创建 SkillSession"""
+        from src.core.skill_session import SkillSession
+
+        session = SkillSession(
+            skill_name="test-skill",
+            start_index=5,
+            message_count_before=5
+        )
+        self.assertEqual(session.skill_name, "test-skill")
+        self.assertEqual(session.start_index, 5)
+        self.assertEqual(session.message_count_before, 5)
+        self.assertFalse(session.is_complete)
+
+    def test_skill_session_default_complete(self):
+        """SkillSession 默认 is_complete 为 False"""
+        from src.core.skill_session import SkillSession
+
+        session = SkillSession(skill_name="x", start_index=0, message_count_before=0)
+        self.assertFalse(session.is_complete)
 
 
-def test_skill_registry():
-    """测试Skill注册表"""
-    print_sep("Test 2: Skill Registry")
-    
-    from src.core.skill_registry import SkillRegistry
-    
-    skills_dir = Path(__file__).parent / "skills"
-    registry = SkillRegistry(skills_dir)
-    
-    print(f"Registered skills: {registry.list_skills()}")
-    print(f"\nSkill descriptions:")
-    print(registry.get_descriptions())
-    
-    # Test tool definition
-    tool_def = registry.get_skill_tool_definition()
-    print(f"\nTool definition name: {tool_def['name']}")
-    print(f"Tool description preview: {tool_def['description'][:100]}...")
-    
-    return registry
+class TestSkillLoaderCompatibility(unittest.TestCase):
+    """SkillLoader AgentSkills 兼容字段解析测试"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_skill_md(self, content: str, filename: str = "SKILL.md") -> Path:
+        """创建临时 SKILL.md 文件"""
+        skill_dir = Path(self.temp_dir) / "test-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_md = skill_dir / filename
+        skill_md.write_text(content, encoding="utf-8")
+        return skill_md
+
+    def test_parse_standard_fields(self):
+        """标准字段解析"""
+        from src.core.skill_loader import SkillLoader
+
+        content = """---
+name: test-skill
+description: 测试技能
+version: 2.0.0
+author: tester
+---
+# 测试技能
+这是正文。
+"""
+        path = self._create_skill_md(content)
+        loader = SkillLoader(Path(self.temp_dir))
+        skill = loader.parse_skill_md(path)
+
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.name, "test-skill")
+        self.assertEqual(skill.description, "测试技能")
+        self.assertEqual(skill.version, "2.0.0")
+        self.assertEqual(skill.author, "tester")
+        self.assertEqual(skill.body.strip(), "# 测试技能\n这是正文。")
+
+    def test_parse_agent_skills_fields(self):
+        """AgentSkills 兼容字段解析"""
+        from src.core.skill_loader import SkillLoader
+
+        content = """---
+name: pdf-processing
+description: 处理PDF文件。
+license: Apache-2.0
+compatibility: 需要 Python 3.10+
+metadata:
+  author: example-org
+  version: "1.0"
+  custom_field: custom_value
+allowed-tools: Read Bash Grep
+user-invocable: false
+disable-model-invocation: true
+---
+# PDF处理
+正文内容。
+"""
+        path = self._create_skill_md(content)
+        loader = SkillLoader(Path(self.temp_dir))
+        skill = loader.parse_skill_md(path)
+
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.license, "Apache-2.0")
+        self.assertEqual(skill.compatibility, "需要 Python 3.10+")
+        self.assertEqual(skill.metadata["author"], "example-org")
+        self.assertEqual(skill.metadata["version"], "1.0")
+        self.assertEqual(skill.metadata["custom_field"], "custom_value")
+        self.assertEqual(skill.allowed_tools, ["Read", "Bash", "Grep"])
+        self.assertFalse(skill.user_invocable)
+        self.assertTrue(skill.disable_model_invocation)
+
+    def test_parse_metadata_triggers(self):
+        """metadata.triggers 触发器解析"""
+        from src.core.skill_loader import SkillLoader
+
+        content = """---
+name: test-skill
+description: 测试技能
+metadata:
+  triggers:
+    - .pdf
+    - pdf
+---
+# 测试
+正文。
+"""
+        path = self._create_skill_md(content)
+        loader = SkillLoader(Path(self.temp_dir))
+        skill = loader.parse_skill_md(path)
+
+        self.assertIsNotNone(skill)
+        self.assertEqual(len(skill.triggers), 2)
+        self.assertEqual(skill.triggers[0].type, "file_extension")
+        self.assertEqual(skill.triggers[0].pattern, ".pdf")
+        self.assertEqual(skill.triggers[1].type, "keyword")
+        self.assertEqual(skill.triggers[1].pattern, "pdf")
+
+    def test_parse_top_level_triggers_backward_compat(self):
+        """顶层 triggers 向后兼容"""
+        from src.core.skill_loader import SkillLoader
+
+        content = """---
+name: test-skill
+description: 测试技能
+triggers:
+  - .pdf
+  - pdf
+  - ^test.*
+---
+# 测试
+正文。
+"""
+        path = self._create_skill_md(content)
+        loader = SkillLoader(Path(self.temp_dir))
+        skill = loader.parse_skill_md(path)
+
+        self.assertIsNotNone(skill)
+        self.assertEqual(len(skill.triggers), 3)
+        self.assertEqual(skill.triggers[0].type, "file_extension")
+        self.assertEqual(skill.triggers[1].type, "keyword")
+        self.assertEqual(skill.triggers[2].type, "regex")
+
+    def test_parse_metadata_and_top_level_triggers_merged(self):
+        """metadata.triggers 和顶层 triggers 合并（去重）"""
+        from src.core.skill_loader import SkillLoader
+
+        content = """---
+name: test-skill
+description: 测试技能
+triggers:
+  - .pdf
+  - pdf
+metadata:
+  triggers:
+    - pdf
+    - document
+---
+# 测试
+正文。
+"""
+        path = self._create_skill_md(content)
+        loader = SkillLoader(Path(self.temp_dir))
+        skill = loader.parse_skill_md(path)
+
+        self.assertIsNotNone(skill)
+        # pdf 应该去重，metadata 优先所以 pdf 在前
+        # 总共 3 个唯一触发器
+        patterns = [t.pattern for t in skill.triggers]
+        self.assertIn(".pdf", patterns)
+        self.assertIn("pdf", patterns)
+        self.assertIn("document", patterns)
+        self.assertEqual(len(patterns), 3)
+
+    def test_parse_minimal_skill(self):
+        """最小化 Skill（仅 name + description）"""
+        from src.core.skill_loader import SkillLoader
+
+        content = """---
+name: minimal
+description: 最小技能
+---
+正文。
+"""
+        path = self._create_skill_md(content)
+        loader = SkillLoader(Path(self.temp_dir))
+        skill = loader.parse_skill_md(path)
+
+        self.assertIsNotNone(skill)
+        self.assertEqual(skill.license, None)
+        self.assertEqual(skill.compatibility, None)
+        self.assertEqual(skill.metadata, None)
+        self.assertEqual(skill.allowed_tools, None)
+        self.assertTrue(skill.user_invocable)
+        self.assertFalse(skill.disable_model_invocation)
 
 
-async def test_skill_executor():
-    """测试Skill执行器"""
-    print_sep("Test 3: Skill Executor")
-    
-    from src.core.skill_registry import SkillRegistry
-    from src.core.skill_executor import SkillExecutor
-    
-    skills_dir = Path(__file__).parent / "skills"
-    registry = SkillRegistry(skills_dir)
-    executor = SkillExecutor(registry)
-    
-    # Test skill loading
-    print("\n--- Test: Load Skill Content ---")
-    content = await executor.load_skill("pdf")
-    if content:
-        print(f"  Loaded successfully, content length: {len(content)} chars")
-        print(f"  Content preview: {content[:200]}...")
-    else:
-        print("  Failed to load skill")
-    
-    # Test skill matching
-    print("\n--- Test: Skill Matching ---")
-    test_files = ["report.pdf", "document.docx"]
-    for filename in test_files:
-        matched = executor.match_skill_by_file(filename)
-        print(f"  {filename} -> {matched or 'No match'}")
-    
-    # Test command execution
-    print("\n--- Test: Command Execution ---")
-    result = await executor.execute_skill_command(
-        skill_name="pdf",
-        command="python --version",
-    )
-    print(f"  Success: {result.success}")
-    print(f"  Output: {result.stdout.strip() or result.stderr.strip()}")
-    
-    return executor
+class TestShortTermMemorySkillSummary(unittest.TestCase):
+    """ShortTermMemory to_llm_messages Skill 摘要支持测试"""
+
+    def test_skill_summary_included_as_user_message(self):
+        """Skill 摘要消息应作为 user 角色消息保留"""
+        from src.memory.short_term import ShortTermMemory
+
+        memory = ShortTermMemory()
+        session_id = "test-session"
+
+        memory.add(session_id, "user", "你好")
+        memory.add_message(session_id, {
+            "role": "system",
+            "content": "[技能执行记录] 使用技能「article-writing」完成任务。结果：已生成文章",
+            "_skill_summary": True,
+        })
+
+        messages = memory.to_llm_messages(session_id)
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["role"], "user")
+        self.assertEqual(messages[0]["content"], "你好")
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertIn("技能执行记录", messages[1]["content"])
+
+    def test_normal_system_message_excluded(self):
+        """普通 system 消息应被过滤（不是 Skill 摘要的）"""
+        from src.memory.short_term import ShortTermMemory
+
+        memory = ShortTermMemory()
+        session_id = "test-session"
+
+        memory.add(session_id, "user", "你好")
+        memory.add_message(session_id, {
+            "role": "system",
+            "content": "你是一个助手",
+        })
+
+        messages = memory.to_llm_messages(session_id)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["content"], "你好")
+
+    def test_compress_skill_context_integration(self):
+        """集成测试：模拟 _compress_skill_context 后的消息结构"""
+        from src.memory.short_term import ShortTermMemory
+
+        memory = ShortTermMemory()
+        session_id = "test-session"
+
+        # 模拟 Skill 开始前有一条消息
+        memory.add(session_id, "user", "帮我写一篇文章")
+
+        # 模拟 _compress_skill_context 的行为
+        messages_before = list(memory._cache.get(session_id, []))
+        summary_message = {
+            "role": "system",
+            "content": "[技能执行记录] 使用技能「article-writing」完成任务。结果：已生成1000字文章",
+            "timestamp": datetime.now().isoformat(),
+            "_skill_summary": True
+        }
+        memory._cache[session_id] = list(messages_before + [summary_message])
+
+        # 验证 to_llm_messages 只返回 2 条消息
+        messages = memory.to_llm_messages(session_id)
+        self.assertEqual(len(messages), 2)
+        self.assertIn("帮我写一篇文章", messages[0]["content"])
+        self.assertIn("技能执行记录", messages[1]["content"])
+        self.assertEqual(messages[1]["role"], "user")
 
 
-def test_agent_integration():
-    """测试与MasterAgent集成"""
-    print_sep("Test 4: Agent Integration")
-    
-    try:
-        from src.core.agent import master_agent
-        
-        print(f"Agent initialized successfully")
-        print(f"  Skills loaded: {master_agent.skill_registry.list_skills()}")
-        print(f"  Tools available: {len(master_agent._get_tools())}")
-        
-        # Check skill tool is included
-        tools = master_agent._get_tools()
-        tool_names = [t["name"] for t in tools]
-        print(f"  Tool names: {tool_names}")
-        
-        if "use_skill" in tool_names:
-            print("  [OK] use_skill tool is available")
-        if "skill_execute" in tool_names:
-            print("  [OK] skill_execute tool is available")
-        
-        return True
-    except Exception as e:
-        print(f"  Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+class TestContentGenerateNewTypes(unittest.TestCase):
+    """content_generate 新增预设类型测试"""
+
+    def test_new_content_types_in_guidance(self):
+        """验证新增的 content_type 预设有对应提示词"""
+        from src.tools.llm.content_generate_tool import ContentGenerateTool
+
+        tool = ContentGenerateTool()
+
+        # 测试所有新增类型都有对应的 system prompt
+        new_types = ["outline", "article", "report", "polish"]
+        for content_type in new_types:
+            prompt = tool._get_system_prompt("zh", content_type)
+            self.assertTrue(len(prompt) > 0)
+            self.assertNotEqual(
+                prompt,
+                "你是一个专业的内容生成助手。请根据用户提供的提示词生成高质量的内容。",
+                f"content_type={content_type} 没有匹配到特定提示词"
+            )
+
+    def test_existing_content_types_still_work(self):
+        """验证原有 content_type 仍然正常"""
+        from src.tools.llm.content_generate_tool import ContentGenerateTool
+
+        tool = ContentGenerateTool()
+
+        existing_types = ["customer_list", "email", "market_report", ""]
+        for content_type in existing_types:
+            prompt = tool._get_system_prompt("zh", content_type)
+            self.assertTrue(len(prompt) > 0)
+
+    def test_custom_content_type_falls_back(self):
+        """自定义 content_type 回退到默认提示词"""
+        from src.tools.llm.content_generate_tool import ContentGenerateTool
+
+        tool = ContentGenerateTool()
+        prompt = tool._get_system_prompt("zh", "custom_unknown_type")
+
+        self.assertEqual(
+            prompt,
+            "你是一个专业的内容生成助手。请根据用户提供的提示词生成高质量的内容。 请使用简体中文回复。"
+        )
 
 
-async def main():
-    print("\n" + "=" * 60)
-    print(" AID Work Agent - Skill System Test")
-    print("=" * 60)
-    
-    # Run tests
-    try:
-        # Test 1: Skill Loader
-        loader = test_skill_loader()
-        
-        # Test 2: Skill Registry
-        registry = test_skill_registry()
-        
-        # Test 3: Skill Executor
-        executor = await test_skill_executor()
-        
-        # Test 4: Agent Integration
-        agent_ok = test_agent_integration()
-        
-        # Summary
-        print_sep("Test Summary")
-        print("[OK] Skill Loader: OK")
-        print("[OK] Skill Registry: OK")
-        print("[OK] Skill Executor: OK")
-        print(f"{'[OK]' if agent_ok else '[FAIL]'} Agent Integration: {'OK' if agent_ok else 'FAILED'}")
-        
-        print("\n" + "=" * 60)
-        print(" All tests completed!")
-        print("=" * 60)
-        
-    except Exception as e:
-        print(f"\nTest failed with error: {e}")
-        import traceback
-        traceback.print_exc()
+class TestAgentSkillCompleteTool(unittest.TestCase):
+    """验证 skill_complete 工具在 AGENT_TOOLS 中正确定义"""
+
+    def test_skill_complete_in_agent_tools(self):
+        """skill_complete 工具存在于 AGENT_TOOLS 列表中"""
+        from src.core.agent import AGENT_TOOLS
+
+        tool_names = [t["name"] for t in AGENT_TOOLS]
+        self.assertIn("skill_complete", tool_names)
+
+    def test_skill_complete_schema(self):
+        """skill_complete 工具的 schema 定义正确"""
+        from src.core.agent import AGENT_TOOLS
+
+        tool = next(t for t in AGENT_TOOLS if t["name"] == "skill_complete")
+        schema = tool["input_schema"]
+        required = schema.get("required", [])
+        properties = schema.get("properties", {})
+
+        self.assertIn("skill", required)
+        self.assertIn("summary", required)
+        self.assertIn("skill", properties)
+        self.assertIn("summary", properties)
+
+    def test_skill_execute_command_not_required(self):
+        """skill_execute 的 command 不再是 required"""
+        from src.core.agent import AGENT_TOOLS
+
+        tool = next(t for t in AGENT_TOOLS if t["name"] == "skill_execute")
+        required = tool["input_schema"].get("required", [])
+
+        self.assertIn("skill", required)
+        self.assertNotIn("command", required)
+        # command 应该仍然在 properties 中
+        self.assertIn("command", tool["input_schema"]["properties"])
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    unittest.main()

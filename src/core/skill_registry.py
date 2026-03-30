@@ -349,20 +349,21 @@ class SkillRegistry:
 
         return {
             "name": "use_skill",
-            "description": f"""当任务需要特定技能支持时使用此工具。
+            "description": f"""加载技能，获取完整的操作指南（SKILL.md 正文）。技能本质是给 LLM 的操作手册，加载后根据手册指引决定下一步操作。
 
-⚠️ 技能不是工具！绝不能直接将技能名作为函数调用。必须通过此工具加载技能后，再通过 skill_execute 执行命令。
+**使用流程：**
+1. 调用 use_skill(skill="技能名") 加载技能，获取操作指南
+2. 仔细阅读返回的操作指南，根据其中的指引执行下一步：
+   - 手册要求执行脚本/命令 → 调用 skill_execute
+   - 手册要求生成内容 → 调用 content_generate
+   - 手册要求搜索信息 → 调用 web_search
+   - 手册给出多步骤工作流 → 按步骤逐步执行
+3. 所有步骤完成后，调用 skill_complete(skill="技能名", summary="结果摘要") 标记完成
 
-适用场景：
-- 处理文件（PDF/Word/Excel）时
-- 需要翻译、总结、OCR 等能力时
-- 需要发送邮件、搜索信息时
-- 需要查询天气等实时信息时
+**注意：** 不要跳过步骤，严格按操作指南执行。不同技能的行为完全由其操作指南决定（有些需要执行脚本，有些是纯引导式的工作流）。
 
 可用技能：
-{skill_list}
-
-请描述你的任务，系统会自动为你匹配合适的技能。""",
+{skill_list}""",
             "input_schema": {
                 "type": "object",
                 "properties": {

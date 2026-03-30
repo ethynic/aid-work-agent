@@ -246,7 +246,13 @@ class ShortTermMemory:
         for msg in context:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            if role in ["user", "assistant"]:
+            if role == "system" and msg.get("_skill_summary"):
+                # Skill 执行摘要：作为轻量用户消息保留，让后续对话能感知 Skill 执行结果
+                messages.append({
+                    "role": "user",
+                    "content": f"[系统提醒] {content}"
+                })
+            elif role in ["user", "assistant"]:
                 messages.append({
                     "role": role,
                     "content": content,

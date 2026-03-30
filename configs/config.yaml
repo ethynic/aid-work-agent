@@ -100,6 +100,7 @@ skills:
     allowed:
       - paddleocr-doc-parsing
       - weather
+      - article-writing
   # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
   subagent:
     default_allowed:

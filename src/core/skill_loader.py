@@ -70,7 +70,7 @@ class SkillTrigger:
 
 @dataclass
 class Skill:
-    """Skill定义"""
+    """Skill定义 - 兼容 AgentSkills 规范 (agentskills.io)"""
     name: str
     description: str
     body: str  # SKILL.md正文内容
@@ -80,6 +80,16 @@ class Skill:
     # 可选元数据
     version: str = "1.0.0"
     author: str = "unknown"
+    
+    # AgentSkills 规范兼容字段
+    license: Optional[str] = None
+    compatibility: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    allowed_tools: Optional[List[str]] = None
+    
+    # Claude Code / OpenClaw 扩展字段
+    user_invocable: bool = True
+    disable_model_invocation: bool = False
     
     # 依赖项
     dependencies: List[SkillDependency] = field(default_factory=list)
@@ -198,35 +208,49 @@ class SkillLoader:
                     version=dep.get("version"),
                 ))
         
-        # 解析触发器
+        # 初始化触发器列表
         triggers = []
-        for trigger in frontmatter.get("triggers", []):
-            if isinstance(trigger, str):
-                # 自动判断触发器类型
-                if trigger.startswith("."):
-                    triggers.append(SkillTrigger(
-                        type="file_extension",
-                        pattern=trigger,
-                    ))
-                elif trigger.startswith("^") or trigger.endswith("$"):
-                    triggers.append(SkillTrigger(
-                        type="regex",
-                        pattern=trigger,
-                    ))
-                else:
-                    triggers.append(SkillTrigger(
-                        type="keyword",
-                        pattern=trigger,
-                    ))
-            elif isinstance(trigger, dict):
-                triggers.append(SkillTrigger(
-                    type=trigger.get("type", "keyword"),
-                    pattern=trigger.get("pattern", ""),
-                    case_sensitive=trigger.get("case_sensitive", False),
-                ))
         
-        # 解析沙盒配置 (已移除，保留向后兼容性忽略sandbox字段)
-        # sandbox配置不再使用，直接在运行时环境执行
+        # 解析 metadata（兼容 AgentSkills / OpenClaw）
+        metadata = frontmatter.get("metadata")
+        if isinstance(metadata, str):
+            try:
+                import json
+                metadata = json.loads(metadata)
+            except (json.JSONDecodeError, ValueError):
+                metadata = None
+        if metadata is None:
+            metadata = {}
+        
+        # 从 metadata.triggers 合并触发器（metadata 优先）
+        metadata_triggers = metadata.get("triggers", []) if isinstance(metadata, dict) else []
+        all_trigger_sources = metadata_triggers + frontmatter.get("triggers", [])
+        # 去重（按 pattern）
+        seen_patterns = set()
+        for trigger in all_trigger_sources:
+            if isinstance(trigger, str):
+                if trigger not in seen_patterns:
+                    seen_patterns.add(trigger)
+                    # 自动判断触发器类型
+                    if trigger.startswith("."):
+                        triggers.append(SkillTrigger(type="file_extension", pattern=trigger))
+                    elif trigger.startswith("^") or trigger.endswith("$"):
+                        triggers.append(SkillTrigger(type="regex", pattern=trigger))
+                    else:
+                        triggers.append(SkillTrigger(type="keyword", pattern=trigger))
+            elif isinstance(trigger, dict):
+                pattern = trigger.get("pattern", "")
+                if pattern and pattern not in seen_patterns:
+                    seen_patterns.add(pattern)
+                    triggers.append(SkillTrigger(
+                        type=trigger.get("type", "keyword"),
+                        pattern=pattern,
+                        case_sensitive=trigger.get("case_sensitive", False),
+                    ))
+        
+        # 解析 allowed-tools（AgentSkills 实验性字段）
+        allowed_tools_raw = frontmatter.get("allowed-tools", "")
+        allowed_tools = allowed_tools_raw.split() if isinstance(allowed_tools_raw, str) and allowed_tools_raw else []
         
         skill = Skill(
             name=frontmatter["name"],
@@ -236,6 +260,12 @@ class SkillLoader:
             dir=path.parent,
             version=frontmatter.get("version", "1.0.0"),
             author=frontmatter.get("author", "unknown"),
+            license=frontmatter.get("license"),
+            compatibility=frontmatter.get("compatibility"),
+            metadata=metadata if metadata else None,
+            allowed_tools=allowed_tools if allowed_tools else None,
+            user_invocable=frontmatter.get("user-invocable", True),
+            disable_model_invocation=frontmatter.get("disable-model-invocation", False),
             dependencies=dependencies,
             triggers=triggers,
         )
