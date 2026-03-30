@@ -27,16 +27,16 @@ provider:
   - 中止部署流程
 
 #### 步骤 2：前端编译
-执行前端构建：
+清空 \frontend\dist 目录，并重新执行前端构建：
 
 **Windows PowerShell 环境（推荐）**：
 ```powershell
-Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; npm run build
+Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; Remove-Item -Recurse -Force -Path "dist" -ErrorAction SilentlyContinue; npm run build
 ```
 
 **Windows CMD 环境**：
 ```cmd
-cd /d d:\workbase\projects\aid-work-agent\frontend && npm run build
+cd /d d:\workbase\projects\aid-work-agent\frontend && if exist dist rmdir /s /q dist && npm run build
 ```
 
 **经验总结**：
