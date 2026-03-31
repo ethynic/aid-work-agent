@@ -27,7 +27,7 @@ from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
 from src.db.database import init_database
-from src.api import auth, session as session_api, credentials, customer
+from src.api import auth, session as session_api, credentials, customer, scheduled_task
 from src.db.models import SessionDB, MessageDB
 from src.channels import callback as channels_api
 from src.services.session_record import SessionRecordManager
@@ -137,6 +137,14 @@ async def lifespan(app: FastAPI):
     # Initialize database
     init_database()
     logger.info("Database initialized")
+
+    # Initialize scheduled task scheduler
+    try:
+        from src.scheduler.manager import scheduled_task_manager
+        scheduled_task_manager.start()
+        logger.info("Scheduled task scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start scheduled task scheduler: {e}", exc_info=True)
     
     # Initialize WeCom adapter
     global wecom_adapter
@@ -163,6 +171,12 @@ async def lifespan(app: FastAPI):
     
     # On shutdown
     logger.info("Application shutting down")
+    try:
+        from src.scheduler.manager import scheduled_task_manager
+        scheduled_task_manager.shutdown()
+        logger.info("Scheduled task scheduler stopped")
+    except Exception:
+        pass
 
 
 # ============== File Upload Configuration ==============
@@ -765,6 +779,7 @@ app.include_router(session_api.router)
 app.include_router(channels_api.router)
 app.include_router(credentials.router)
 app.include_router(customer.router)
+app.include_router(scheduled_task.router)
 
 
 

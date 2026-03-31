@@ -105,3 +105,13 @@ skills:
   subagent:
     default_allowed:
       - paddleocr-doc-parsing
+
+# 定时任务配置
+scheduler:
+  enabled: true
+  timezone: "Asia/Shanghai"
+  max_tasks_per_user: 5
+  default_max_retries: 3
+  execution_timeout: 300
+  coalesce_missed: true
+  misfire_grace_time: 300

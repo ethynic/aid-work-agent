@@ -6,6 +6,9 @@ import './style.css'
 // 客户信息页面
 import CustomerInfo from './components/CustomerInfo.vue'
 
+// 定时任务管理页面
+import ScheduledTasks from './components/ScheduledTasks.vue'
+
 // 创建路由
 const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +22,11 @@ const router = createRouter({
       path: '/customer-info',
       name: 'customer-info',
       component: CustomerInfo
+    },
+    {
+      path: '/scheduled-tasks',
+      name: 'scheduled-tasks',
+      component: ScheduledTasks
     }
   ]
 })

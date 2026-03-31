@@ -232,6 +232,75 @@ def init_database():
             ON tokens(user_id, expires_at)
         """)
 
+        # 定时任务表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT UNIQUE NOT NULL,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                task_prompt TEXT NOT NULL,
+                schedule_type TEXT NOT NULL,
+                cron_expression TEXT,
+                interval_seconds INTEGER,
+                session_id TEXT,
+                status TEXT DEFAULT 'active',
+                max_retries INTEGER DEFAULT 3,
+                retry_count INTEGER DEFAULT 0,
+                last_run_at TIMESTAMP,
+                next_run_at TIMESTAMP,
+                total_runs INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                fail_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user
+            ON scheduled_tasks(user_id, status, created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
+            ON scheduled_tasks(next_run_at, status)
+        """)
+
+        # 定时任务执行日志表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_task_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                log_id TEXT UNIQUE NOT NULL,
+                task_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                session_id TEXT,
+                status TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                result_summary TEXT,
+                result_detail TEXT,
+                error_message TEXT,
+                error_trace TEXT,
+                duration_ms INTEGER DEFAULT 0,
+                token_usage INTEGER DEFAULT 0,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES scheduled_tasks(task_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task
+            ON scheduled_task_logs(task_id, created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user
+            ON scheduled_task_logs(user_id, created_at DESC)
+        """)
+
         conn.commit()
         logger.info(f"Database initialized at {get_sqlite_path()}")
 

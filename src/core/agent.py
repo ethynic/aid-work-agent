@@ -555,7 +555,7 @@ AGENT_TOOLS = [
             },
             "required": ["file_path", "remote_path", "connection_type"]
         }
-    }
+    },
 ]
 
 
@@ -649,6 +649,10 @@ class Agent:
         plans_dir = Path(__file__).parent.parent.parent / "plans"
         self.plan_manager = PlanManager(plans_dir)
         
+        # 定时任务工具实例（在 _register_builtin_tools 中赋值）
+        self._create_scheduled_task_tool = None
+        self._manage_scheduled_task_tool = None
+        
         # 主智能体特有：子智能体注册表和执行器
         if is_master:
             # 初始化子智能体注册表
@@ -738,6 +742,13 @@ class Agent:
         
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
+        
+        # 注册定时任务工具
+        from src.tools.scheduler.scheduled_task_tool import CreateScheduledTaskTool, ManageScheduledTaskTool
+        self._create_scheduled_task_tool = CreateScheduledTaskTool()
+        self._manage_scheduled_task_tool = ManageScheduledTaskTool()
+        self.tool_registry.register(self._create_scheduled_task_tool)
+        self.tool_registry.register(self._manage_scheduled_task_tool)
         
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
     
@@ -1034,6 +1045,33 @@ delegate_to_subagent(
 {f'''
 ### 可用子智能体
 {subagent_descriptions}''' if include_delegation else ''}
+
+### 定时任务能力
+
+你具备为用户创建定时执行任务的能力。当用户的需求包含以下特征时，应考虑创建定时任务：
+- "每天/每周/每月" + 某个操作
+- "定期/定时" + 某个操作
+- "每隔X小时" + 某个操作
+- "在XX时间" + 某个操作
+
+**创建定时任务时，你必须：**
+1. 使用 `create_scheduled_task` 工具
+2. 生成一个 **独立可执行的提示词（task_prompt）**，该提示词必须：
+   - 不依赖当前对话上下文
+   - 包含所有必要的信息（收件人、文件路径、操作步骤等）
+   - 描述清晰，让 Agent 可以仅凭此提示词完成任务
+   - 可以包含委派子智能体的指令（如需要领域专业能力）
+3. 系统会先验证执行一次，成功后才会创建定时任务
+4. 如果用户询问已创建的定时任务，使用 `manage_scheduled_task` 工具查看
+
+**task_prompt 示例：**
+```
+请执行以下任务：
+1. 使用 email_read 工具读取未读邮件（folder=INBOX, unseen_only=True, limit=20）
+2. 如果有未读邮件，将邮件列表汇总为文本
+3. 使用 email_send 工具发送汇总到 zhangsan@company.com，主题为"每日未读邮件汇总"
+4. 如果没有未读邮件，则发送一封简短通知"今日暂无未读邮件"
+```
 
 ### 超出能力的处理
 当用户的请求超出你的能力范围时：
@@ -2313,6 +2351,36 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 await send_progress(f"🔧 正在执行 {tool_display_name}...")
 
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
+
+                # Handle create_scheduled_task - 创建定时任务（通过独立 tool 执行）
+                if tool_name == "create_scheduled_task":
+                    self._create_scheduled_task_tool.set_context(user, session_id, send_progress)
+                    task_result = await self._create_scheduled_task_tool.execute(**tool_args)
+                    success = task_result.get("success", False)
+                    await send_tool_result(tool_name, task_result, success)
+                    if success:
+                        name = task_result.get("name", "")
+                        schedule_desc = task_result.get("schedule_description", "")
+                        await send_progress(f"✅ 定时任务已创建: {name} ({schedule_desc})")
+                    else:
+                        await send_progress(f"❌ 定时任务创建失败")
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "content": task_result
+                    })
+                    continue
+
+                # Handle manage_scheduled_task - 管理定时任务（通过独立 tool 执行）
+                if tool_name == "manage_scheduled_task":
+                    self._manage_scheduled_task_tool.set_context(user)
+                    task_result = await self._manage_scheduled_task_tool.execute(**tool_args)
+                    success = task_result.get("success", False)
+                    await send_tool_result(tool_name, task_result, success)
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "content": task_result
+                    })
+                    continue
 
                 # Handle create_plan specially - create real plan and save to MD
                 if tool_name == "create_plan":
