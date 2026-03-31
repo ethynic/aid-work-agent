@@ -130,6 +130,16 @@ export async function triggerTask(taskId: string): Promise<ApiResponse> {
   return res.json()
 }
 
+export async function updateTaskSchedule(taskId: string, scheduleType: string, timeConfig: Record<string, any>): Promise<ApiResponse> {
+  const res = await fetch(`${API_BASE}/${taskId}/schedule`, {
+    method: 'PUT',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ schedule_type: scheduleType, time_config: timeConfig })
+  })
+  if (!res.ok) throw new Error('Failed to update task schedule')
+  return res.json()
+}
+
 export async function getTaskLogs(taskId: string, limit: number = 20): Promise<ApiResponse<{ logs: TaskLog[]; total: number }>> {
   const res = await fetch(`${API_BASE}/${taskId}/logs?limit=${limit}`, { headers: { ...getAuthHeader() } })
   if (!res.ok) throw new Error('Failed to fetch task logs')

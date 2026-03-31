@@ -104,6 +104,22 @@ class ScheduledTaskDB:
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
+    def update_schedule(task_id: str, cron_expression: str = None,
+                        interval_seconds: int = None) -> bool:
+        """更新任务调度配置"""
+        from src.tools.scheduler.scheduled_task_tool import generate_cron_expression
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks
+                SET cron_expression = ?, interval_seconds = ?, updated_at = ?
+                WHERE task_id = ?
+            """, (cron_expression, interval_seconds, now, task_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
     def update_status(task_id: str, status: str) -> bool:
         """更新任务状态"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

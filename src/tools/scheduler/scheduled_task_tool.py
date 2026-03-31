@@ -69,6 +69,8 @@ class CreateScheduledTaskTool(BaseTool):
         "支持每天、每周、每月、间隔执行、一次性等模式。"
         "task_prompt 必须是不依赖对话上下文的独立可执行提示词，"
         "如果任务需要专业领域能力，可在 task_prompt 中指示委派给子智能体。"
+        "【重要】必须从用户话语中解析出具体的调度时间。所有时间默认为北京时间(Asia/Shanghai)。"
+        "如果用户没有给出具体时间，必须先向用户确认时间后再调用此工具，禁止自行猜测默认时间。"
     )
     category = "scheduler"
     parameters_schema = {
@@ -97,11 +99,15 @@ class CreateScheduledTaskTool(BaseTool):
             "time_config": {
                 "type": "object",
                 "description": (
-                    "时间配置JSON。daily: {\"hour\": 9, \"minute\": 0}; "
-                    "weekly: {\"day_of_week\": \"mon\", \"hour\": 9, \"minute\": 0}; "
-                    "monthly: {\"day\": 1, \"hour\": 9, \"minute\": 0}; "
-                    "interval: {\"interval_hours\": 2}; "
-                    "once: {\"run_at\": \"2026-04-01 09:00:00\"}"
+                    "【必填】时间配置，必须从用户话语中解析，所有时间为北京时间。"
+                    "daily: {\"hour\": 14, \"minute\": 0} 表示每天14:00；"
+                    "weekly: {\"day_of_week\": \"mon\", \"hour\": 9, \"minute\": 0} 表示每周一09:00，"
+                    "day_of_week 取值: mon/tue/wed/thu/fri/sat/sun；"
+                    "monthly: {\"day\": 1, \"hour\": 9, \"minute\": 0} 表示每月1日09:00；"
+                    "interval: {\"interval_hours\": 2} 表示每2小时执行一次；"
+                    "once: {\"run_at\": \"2026-04-01 09:00:00\"} 表示一次性在指定时间执行。"
+                    "用户说'下午两点'对应 {\"hour\": 14, \"minute\": 0}，'上午九点半'对应 {\"hour\": 9, \"minute\": 30}。"
+                    "注意：不允许使用默认时间，必须明确解析用户意图。"
                 )
             }
         },
@@ -129,14 +135,21 @@ class CreateScheduledTaskTool(BaseTool):
         name = kwargs.get("name", "")
         task_prompt = kwargs.get("task_prompt", "")
         schedule_type = kwargs.get("schedule_type", "daily")
-        time_config = kwargs.get("time_config", {})
+        time_config = kwargs.get("time_config") or {}
         description = kwargs.get("description", "")
 
-        user_id = self._user.user_id if self._user else "unknown"
+        user_id = self._user.user_id if self._user else None
+
+        # 必须有用户信息才能创建定时任务
+        if not user_id:
+            return {"success": False, "error": "用户未登录，无法创建定时任务", "debug": "user is None, cannot determine user_id"}
 
         # 参数校验
         if not name or not task_prompt:
             return {"success": False, "error": "缺少必要参数（name 或 task_prompt）", "debug": "参数校验失败"}
+
+        if not time_config:
+            return {"success": False, "error": "缺少时间配置（time_config），请明确指定调度时间", "debug": "time_config is empty"}
 
         if len(task_prompt) > 2000:
             return {"success": False, "error": "task_prompt 长度超过限制（最大2000字符）", "debug": f"task_prompt 长度: {len(task_prompt)}"}
@@ -267,7 +280,10 @@ class ManageScheduledTaskTool(BaseTool):
 
         action = kwargs.get("action", "list")
         task_id = kwargs.get("task_id")
-        user_id = self._user.user_id if self._user else "unknown"
+        user_id = self._user.user_id if self._user else None
+
+        if not user_id:
+            return {"success": False, "error": "用户未登录，无法操作定时任务", "debug": "user is None, cannot determine user_id"}
 
         try:
             if action == "list":

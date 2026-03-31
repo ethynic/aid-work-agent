@@ -86,6 +86,9 @@
           <button class="action-btn logs" @click="toggleLogs(task.task_id)">
             &#x1F4CB; 日志
           </button>
+          <button v-if="task.status !== 'cancelled'" class="action-btn edit" @click="openEditSchedule(task)">
+            &#x1F565; 修改时间
+          </button>
           <button v-if="task.status !== 'cancelled'" class="action-btn cancel" @click="handleCancel(task.task_id)">
             &#x1F5D1; 取消
           </button>
@@ -115,11 +118,128 @@
       <p>&#x1F4ED; 暂无定时任务</p>
       <p class="hint">在对话中告诉智能体你想定时执行的任务即可创建</p>
     </div>
+
+    <!-- 编辑调度时间弹窗 -->
+    <div v-if="editModal.show" class="modal-overlay" @click.self="closeEditSchedule">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>&#x1F565; 修改调度时间</h3>
+          <button class="modal-close" @click="closeEditSchedule">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>任务名称</label>
+            <input type="text" :value="editModal.taskName" disabled class="form-input disabled" />
+          </div>
+          <div class="form-group">
+            <label>调度类型</label>
+            <select v-model="editModal.scheduleType" class="form-input">
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+              <option value="interval">间隔执行</option>
+            </select>
+          </div>
+
+          <!-- daily -->
+          <template v-if="editModal.scheduleType === 'daily'">
+            <div class="form-row">
+              <div class="form-group">
+                <label>小时</label>
+                <select v-model.number="editModal.timeConfig.hour" class="form-input">
+                  <option v-for="h in 24" :key="h-1" :value="h-1">{{ String(h-1).padStart(2, '0') }}时</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>分钟</label>
+                <select v-model.number="editModal.timeConfig.minute" class="form-input">
+                  <option v-for="m in 12" :key="(m-1)*5" :value="(m-1)*5">{{ String((m-1)*5).padStart(2, '0') }}分</option>
+                </select>
+              </div>
+            </div>
+          </template>
+
+          <!-- weekly -->
+          <template v-if="editModal.scheduleType === 'weekly'">
+            <div class="form-group">
+              <label>星期</label>
+              <select v-model="editModal.timeConfig.day_of_week" class="form-input">
+                <option value="mon">周一</option>
+                <option value="tue">周二</option>
+                <option value="wed">周三</option>
+                <option value="thu">周四</option>
+                <option value="fri">周五</option>
+                <option value="sat">周六</option>
+                <option value="sun">周日</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>小时</label>
+                <select v-model.number="editModal.timeConfig.hour" class="form-input">
+                  <option v-for="h in 24" :key="h-1" :value="h-1">{{ String(h-1).padStart(2, '0') }}时</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>分钟</label>
+                <select v-model.number="editModal.timeConfig.minute" class="form-input">
+                  <option v-for="m in 12" :key="(m-1)*5" :value="(m-1)*5">{{ String((m-1)*5).padStart(2, '0') }}分</option>
+                </select>
+              </div>
+            </div>
+          </template>
+
+          <!-- monthly -->
+          <template v-if="editModal.scheduleType === 'monthly'">
+            <div class="form-group">
+              <label>日期</label>
+              <select v-model.number="editModal.timeConfig.day" class="form-input">
+                <option v-for="d in 28" :key="d" :value="d">{{ d }}日</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>小时</label>
+                <select v-model.number="editModal.timeConfig.hour" class="form-input">
+                  <option v-for="h in 24" :key="h-1" :value="h-1">{{ String(h-1).padStart(2, '0') }}时</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>分钟</label>
+                <select v-model.number="editModal.timeConfig.minute" class="form-input">
+                  <option v-for="m in 12" :key="(m-1)*5" :value="(m-1)*5">{{ String((m-1)*5).padStart(2, '0') }}分</option>
+                </select>
+              </div>
+            </div>
+          </template>
+
+          <!-- interval -->
+          <template v-if="editModal.scheduleType === 'interval'">
+            <div class="form-group">
+              <label>间隔小时数</label>
+              <select v-model.number="editModal.timeConfig.interval_hours" class="form-input">
+                <option v-for="h in [1,2,3,4,6,8,12,24]" :key="h" :value="h">每 {{ h }} 小时</option>
+              </select>
+            </div>
+          </template>
+
+          <div class="schedule-preview">
+            &#x1F552; 预览：{{ previewScheduleText }}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-cancel" @click="closeEditSchedule">取消</button>
+          <button class="btn btn-confirm" @click="handleUpdateSchedule" :disabled="editModal.saving">
+            {{ editModal.saving ? '保存中...' : '确认修改' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   listScheduledTasks,
@@ -129,6 +249,7 @@ import {
   cancelTask,
   triggerTask,
   getTaskLogs,
+  updateTaskSchedule,
   type ScheduledTask,
   type TaskLog,
   type TaskUserStats
@@ -144,6 +265,80 @@ const tasks = ref<ScheduledTask[]>([])
 const stats = ref<TaskUserStats | null>(null)
 const expandedTaskId = ref<string | null>(null)
 const taskLogs = ref<TaskLog[]>([])
+
+// 编辑调度时间弹窗
+const editModal = reactive({
+  show: false,
+  taskId: '',
+  taskName: '',
+  scheduleType: 'daily',
+  timeConfig: { hour: 9, minute: 0, day_of_week: 'mon', day: 1, interval_hours: 1 },
+  saving: false,
+})
+
+function parseCronToTimeConfig(cron: string, scheduleType: string) {
+  const parts = cron?.split(' ') || []
+  const base: Record<string, any> = {}
+  if (scheduleType === 'daily') {
+    base.hour = parseInt(parts[1]) || 9
+    base.minute = parseInt(parts[0]) || 0
+  } else if (scheduleType === 'weekly') {
+    const dayMap: Record<string, string> = { '1': 'mon', '2': 'tue', '3': 'wed', '4': 'thu', '5': 'fri', '6': 'sat', '0': 'sun' }
+    base.day_of_week = dayMap[parts[4]] || 'mon'
+    base.hour = parseInt(parts[1]) || 9
+    base.minute = parseInt(parts[0]) || 0
+  } else if (scheduleType === 'monthly') {
+    base.day = parseInt(parts[2]) || 1
+    base.hour = parseInt(parts[1]) || 9
+    base.minute = parseInt(parts[0]) || 0
+  } else if (scheduleType === 'interval') {
+    base.interval_hours = 1
+  }
+  return base
+}
+
+const previewScheduleText = computed(() => {
+  const tc = editModal.timeConfig
+  const st = editModal.scheduleType
+  if (st === 'daily') return `每天 ${String(tc.hour).padStart(2, '0')}:${String(tc.minute).padStart(2, '0')}`
+  if (st === 'weekly') {
+    const dayNames: Record<string, string> = { mon: '周一', tue: '周二', wed: '周三', thu: '周四', fri: '周五', sat: '周六', sun: '周日' }
+    return `每${dayNames[tc.day_of_week] || '周一'} ${String(tc.hour).padStart(2, '0')}:${String(tc.minute).padStart(2, '0')}`
+  }
+  if (st === 'monthly') return `每月${tc.day}日 ${String(tc.hour).padStart(2, '0')}:${String(tc.minute).padStart(2, '0')}`
+  if (st === 'interval') return `每隔 ${tc.interval_hours} 小时`
+  return st
+})
+
+function openEditSchedule(task: ScheduledTask) {
+  editModal.taskId = task.task_id
+  editModal.taskName = task.name
+  editModal.scheduleType = task.schedule_type
+  editModal.timeConfig = parseCronToTimeConfig(task.cron_expression, task.schedule_type) as any
+  editModal.saving = false
+  editModal.show = true
+}
+
+function closeEditSchedule() {
+  editModal.show = false
+}
+
+async function handleUpdateSchedule() {
+  editModal.saving = true
+  try {
+    const res = await updateTaskSchedule(editModal.taskId, editModal.scheduleType, editModal.timeConfig)
+    if (res.success) {
+      editModal.show = false
+      await loadData()
+    } else {
+      alert(res.error || '修改失败')
+    }
+  } catch (e: any) {
+    alert('修改失败: ' + e.message)
+  } finally {
+    editModal.saving = false
+  }
+}
 
 function goBack() {
   router.back()
@@ -500,6 +695,8 @@ onMounted(() => {
 .action-btn.trigger:hover { background: #bfdbfe; }
 .action-btn.logs { background: #f3f4f6; color: #374151; }
 .action-btn.logs:hover { background: #e5e7eb; }
+.action-btn.edit { background: #e0e7ff; color: #3730a3; }
+.action-btn.edit:hover { background: #c7d2fe; }
 .action-btn.cancel { background: #fee2e2; color: #991b1b; }
 .action-btn.cancel:hover { background: #fecaca; }
 
@@ -548,4 +745,116 @@ onMounted(() => {
 
 .empty-state p { margin: 0; }
 .hint { font-size: 14px; margin-top: 8px; color: #9ca3af; }
+
+/* 编辑弹窗 */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 16px;
+  width: 440px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.modal-header h3 { margin: 0; font-size: 18px; }
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #9ca3af;
+  padding: 0 4px;
+}
+
+.modal-close:hover { color: #374151; }
+
+.modal-body { padding: 20px 24px; }
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #111827;
+  background: white;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.form-input:focus { border-color: #3b82f6; }
+.form-input.disabled { background: #f9fafb; color: #9ca3af; }
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-row .form-group { flex: 1; }
+
+.schedule-preview {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: #166534;
+  margin-top: 4px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-cancel { background: #f3f4f6; color: #374151; }
+.btn-cancel:hover { background: #e5e7eb; }
+.btn-confirm { background: #3b82f6; color: white; }
+.btn-confirm:hover:not(:disabled) { background: #2563eb; }
+.btn-confirm:disabled { background: #9ca3af; cursor: not-allowed; }
 </style>

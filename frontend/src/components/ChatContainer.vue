@@ -88,6 +88,15 @@
                   </svg>
                   凭据管理
                 </button>
+                <button
+                  @click="openScheduledTasks"
+                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  我的定时任务
+                </button>
               </div>
             </div>
 
@@ -209,6 +218,12 @@ function openCustomerInfo() {
     alert('请先登录')
     showLoginModal.value = true
   }
+}
+
+// 跳转到定时任务页面
+function openScheduledTasks() {
+  showMenuDropdown.value = false
+  window.open('/scheduled-tasks', '_blank')
 }
 
 // 模拟在线状态检测

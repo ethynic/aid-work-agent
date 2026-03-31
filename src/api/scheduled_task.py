@@ -222,6 +222,64 @@ async def trigger_task(request: Request, task_id: str):
         )
 
 
+class UpdateScheduleRequest(BaseModel):
+    schedule_type: str
+    time_config: dict
+
+
+@router.put("/{task_id}/schedule")
+async def update_task_schedule(request: Request, task_id: str, body: UpdateScheduleRequest):
+    """更新任务调度时间"""
+    from src.tools.scheduler.scheduled_task_tool import generate_cron_expression
+    try:
+        user_id = _get_user_id(request)
+        task = ScheduledTaskDB.get_by_id(task_id)
+        if not task or task["user_id"] != user_id:
+            return {"success": False, "error": "任务不存在或无权操作"}
+
+        time_config = body.time_config or {}
+        schedule_type = body.schedule_type or task["schedule_type"]
+
+        # time_config 为空时使用默认值
+        if not time_config:
+            default_configs = {
+                "daily": {"hour": 9, "minute": 0},
+                "weekly": {"day_of_week": "mon", "hour": 9, "minute": 0},
+                "monthly": {"day": 1, "hour": 9, "minute": 0},
+                "interval": {"interval_hours": 1},
+            }
+            time_config = default_configs.get(schedule_type, {})
+
+        cron_expression = generate_cron_expression(schedule_type, time_config)
+        interval_seconds = time_config.get("interval_hours", 1) * 3600 if schedule_type == "interval" else None
+
+        # 更新数据库
+        ScheduledTaskDB.update_schedule(task_id, cron_expression=cron_expression,
+                                        interval_seconds=interval_seconds)
+
+        # 重新注册到调度器
+        updated_task = ScheduledTaskDB.get_by_id(task_id)
+        if updated_task and updated_task["status"] == "active":
+            scheduled_task_manager.register_task(updated_task)
+
+        logger.info(f"后端日志：定时任务调度已更新 task_id={task_id}, cron={cron_expression}, "
+                    f"schedule_type={schedule_type}, time_config={time_config}")
+
+        return {"success": True, "message": "调度时间已更新", "data": {
+            "cron_expression": cron_expression,
+            "schedule_type": schedule_type,
+            "interval_seconds": interval_seconds,
+        }}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"后端日志：更新定时任务调度失败 task_id={task_id}, {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "更新调度时间失败", "debug": _sanitize_error(str(e))}
+        )
+
+
 # ==================== 执行日志 ====================
 
 @router.get("/{task_id}/logs")

@@ -252,6 +252,16 @@ async def chat(request: Request):
                 "error": "Message cannot be empty",
             })
         
+        # 从请求头解析用户身份
+        current_user = auth.get_current_user(request)
+        agent_user = None
+        if current_user:
+            from src.models.user import User
+            agent_user = User(
+                user_id=current_user["user_id"],
+                name=current_user.get("username", current_user.get("phone", "unknown")),
+            )
+
         # Generate session ID if not provided
         if not session_id:
             session_id = f"web_{user_id}_{uuid.uuid4().hex[:8]}"
@@ -260,6 +270,7 @@ async def chat(request: Request):
         response_text = await master_agent.process_message_sync(
             user_input=user_input,
             session_id=session_id,
+            user=agent_user,
         )
         
         return JSONResponse({
@@ -556,6 +567,15 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     else:
                         user_id = request.user_id or "anonymous"
                         logger.info(f"后端日志：使用匿名用户或请求体user_id user_id={user_id}")
+
+                    # 构建 User 对象传入 agent
+                    from src.models.user import User
+                    agent_user = None
+                    if current_user:
+                        agent_user = User(
+                            user_id=current_user["user_id"],
+                            name=current_user.get("username", current_user.get("phone", "unknown")),
+                        )
                     record_service = SessionRecordManager.start_record(
                         session_id=session_id,
                         user_id=user_id,
@@ -580,6 +600,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         async for chunk in master_agent.process_message(
                             user_input=full_message,
                             session_id=session_id,
+                            user=agent_user,
                             attachments=attachments,
                             progress_callback=async_progress_callback
                         ):
