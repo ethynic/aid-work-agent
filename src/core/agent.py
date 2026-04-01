@@ -556,6 +556,25 @@ AGENT_TOOLS = [
             "required": ["file_path", "remote_path", "connection_type"]
         }
     },
+    {
+        "name": "knowledge_base_search",
+        "description": "从企业知识库中检索相关信息，回答用户问题。当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "用户问题或查询关键词"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返回的相关段落数量，默认 10",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
 ]
 
 
@@ -749,7 +768,11 @@ class Agent:
         self._manage_scheduled_task_tool = ManageScheduledTaskTool()
         self.tool_registry.register(self._create_scheduled_task_tool)
         self.tool_registry.register(self._manage_scheduled_task_tool)
-        
+
+        # 注册知识库工具
+        from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
+        self.tool_registry.register(KnowledgeBaseTool())
+
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
     
     def _filter_tools_by_config(self):

@@ -37,6 +37,21 @@
       </button>
     </div>
 
+    <!-- Menu Section (模仿扣子) -->
+    <div class="flex-shrink-0 border-b border-slate-200">
+      <div class="p-2 space-y-1">
+        <button
+          @click="goToKnowledgeBase"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+          </svg>
+          <span class="text-sm font-medium">企业知识库</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Session List -->
     <div class="flex-1 overflow-y-auto">
       <div v-if="isLoading" class="p-4 text-center text-slate-500">
@@ -143,6 +158,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useAuth } from '@/composables/useAuth'
 
@@ -155,6 +171,8 @@ defineEmits<{
   collapse: []
 }>()
 
+const router = useRouter()
+const route = useRoute()
 const { isLoggedIn } = useAuth()
 const {
   sessions,
@@ -171,6 +189,11 @@ const isCreating = ref(false)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
+
+// 跳转到知识库
+function goToKnowledgeBase() {
+  router.push('/knowledge-base')
+}
 
 // 监听登录状态，登录后加载会话
 watch(isLoggedIn, async (loggedIn) => {

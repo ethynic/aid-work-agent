@@ -93,7 +93,7 @@
 sqlite-vec>=0.1.6
 
 # 文本处理
-tiktoken>=0.7.0  # token 计数/分块
+# tiktoken>=0.7.0  # Token 计数/分块（暂不使用，改用字符数估算）
 
 # PDF 解析
 pypdf>=4.0.0
@@ -101,11 +101,11 @@ pypdf>=4.0.0
 # 图片处理
 Pillow>=10.0.0  # 缩略图生成、EXIF 提取
 
-# 视频处理
-ffmpeg-python>=0.2.0  # 视频转码、关键帧提取
-opencv-python>=4.8.0  # 视频帧处理
+# 视频处理（TODO：后续阶段实现）
+# ffmpeg-python>=0.2.0  # 视频转码、关键帧提取
+# opencv-python>=4.8.0  # 视频帧处理
 
-# 网页抓取
+# 网页抓取（TODO：后续阶段实现）
 playwright>=1.40.0  # JavaScript 渲染页面抓取
 beautifulsoup4>=4.12.0  # HTML 解析
 requests>=2.31.0  # HTTP 请求
@@ -253,7 +253,7 @@ CREATE VIRTUAL TABLE chunks_vec USING vec0(
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     text,                  -- 全文检索字段
     content_rowid = chunks.id,  -- 关联 chunks.id
-    tokenize = 'simple'
+    tokenize = 'unicode61'  -- 支持 Unicode（含中文）分词
 );
 
 -- 触发器：自动同步 FTS5
@@ -459,47 +459,23 @@ class ImageParser(ImageParser):
         )
 ```
 
-##### 视频解析器实现要点
+##### 视频解析器（TODO：后续阶段实现）
 
 ```python
 # src/knowledge/parsers/video_parser.py
-class VideoParser(VideoParser):
-    """视频解析器"""
-
-    def __init__(self, llm_client=None, whisper_client=None):
-        self.llm_client = llm_client      # 多模态 LLM 客户端
-        self.whisper_client = whisper_client  # 语音转文字客户端
-
-    async def parse(self, file_path: str) -> ParseResult:
-        # 1. 提取视频元数据（时长、分辨率、帧率）
-        metadata = await self.get_metadata(file_path)
-
-        # 2. 生成视频缩略图（取中间帧）
-        thumbnail_path = await self._generate_thumbnail(file_path)
-
-        # 3. 提取关键帧（每秒 1 帧，共最多 30 帧）
-        key_frames = await self._extract_key_frames(file_path, max_frames=30)
-
-        # 4. 语音转文字（使用 Whisper）
-        audio_text = await self._transcribe_audio(file_path)
-
-        # 5. 关键帧描述（每帧调用多模态 LLM）
-        frame_descriptions = []
-        for frame in key_frames:
-            desc = await self._describe_frame(frame)
-            frame_descriptions.append(desc)
-
-        # 6. 组合文本
-        text = (
-            f"视频语音转文字：\n{audio_text}\n\n"
-            f"关键帧描述：\n" + "\n".join(frame_descriptions)
-        )
-
-        return ParseResult(
-            text=text,
-            metadata=metadata,
-            thumbnail_path=thumbnail_path
-        )
+# TODO: 后续阶段实现视频解析
+# 实现要点：
+# 1. 语音转文字：使用 Whisper（需引入 openai-whisper + PyTorch，体积 ~2GB）
+# 2. 关键帧提取：使用 OpenCV 按固定间隔提取视频帧
+# 3. 关键帧描述：使用多模态 LLM 生成每个关键帧的描述
+# 4. 文本组合：语音转文字 + 关键帧描述
+# 5. 缩略图生成：提取视频中间帧作为缩略图
+#
+# 注意事项：
+# - 视频处理耗时长，建议异步处理
+# - 需要服务器安装 ffmpeg
+# - 视频文件较大，上传可能受带宽限制
+# - 建议限制视频最大时长（如 10 分钟）
 ```
 
 ##### 网址解析器实现要点
@@ -598,16 +574,22 @@ class TextChunker:
 
     def __init__(
         self,
-        chunk_size: int = 512,      # 每块 Token 数
-        overlap: int = 64            # 重叠 Token 数
+        chunk_size: int = 512,      # 每块字符数
+        overlap: int = 64            # 重叠字符数
     ):
         self.chunk_size = chunk_size
         self.overlap = overlap
-        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+
+    def _estimate_tokens(self, text: str) -> int:
+        """估算 Token 数量（中文约 1.5 字/Token，英文约 4 字/Token）"""
+        # 简单估算：中文每字约 1 Token，英文每 4 字符约 1 Token
+        chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        other_chars = len(text) - chinese_chars
+        return chinese_chars + other_chars // 4
 
     def chunk(self, text: str) -> List[Dict[str, any]]:
         """
-        将文本切分成块
+        将文本切分成块（按字符数分割，估算 Token）
 
         Returns:
             List[{"text": str, "tokens": int, "index": int}]
@@ -618,34 +600,34 @@ class TextChunker:
         # 2. 合并段落直到达到 chunk_size
         chunks = []
         current_chunk = ""
-        current_tokens = 0
+        current_chars = 0
         chunk_index = 0
 
         for para in paragraphs:
-            para_tokens = len(self.tokenizer.encode(para))
+            para_chars = len(para)
 
-            if current_tokens + para_tokens > self.chunk_size:
+            if current_chars + para_chars > self.chunk_size:
                 if current_chunk:
                     chunks.append({
                         "text": current_chunk.strip(),
-                        "tokens": current_tokens,
+                        "tokens": self._estimate_tokens(current_chunk),
                         "index": chunk_index
                     })
                     chunk_index += 1
 
                 # 保留重叠部分
-                overlap_text = current_chunk.split("\n\n")[-self.overlap:]
-                current_chunk = "\n\n".join(overlap_text) + "\n\n" + para
-                current_tokens = len(self.tokenizer.encode(current_chunk))
+                overlap_text = current_chunk[-self.overlap:]
+                current_chunk = overlap_text + "\n\n" + para
+                current_chars = len(current_chunk)
             else:
                 current_chunk += "\n\n" + para if current_chunk else para
-                current_tokens += para_tokens
+                current_chars += para_chars
 
         # 最后一块
         if current_chunk:
             chunks.append({
                 "text": current_chunk.strip(),
-                "tokens": current_tokens,
+                "tokens": self._estimate_tokens(current_chunk),
                 "index": chunk_index
             })
 
@@ -684,8 +666,12 @@ class TextEmbeddingV3Client:
         Raises:
             Exception: API 调用失败
         """
+        import asyncio
+
         try:
-            resp = TextEmbedding.call(
+            # TextEmbedding.call 是同步 SDK，使用 to_thread 包装
+            resp = await asyncio.to_thread(
+                TextEmbedding.call,
                 model=self.model,
                 input=texts,
                 text_type="document"  # document 类型，适合知识库
@@ -1494,31 +1480,28 @@ const handleUrlSubmit = async () => {
 
 ## 8. 实现步骤
 
-### 阶段一：后端核心（优先）
+### 阶段一：MVP - 文档解析 + 向量化 + 检索（优先）
 
 1. **新增依赖**
    - 修改 `requirements.txt`，添加：
-     - `sqlite-vec>=0.1.6`、`tiktoken>=0.7.0`、`pypdf>=4.0.0`
+     - `sqlite-vec>=0.1.6`、`pypdf>=4.0.0`
      - 图片处理：`Pillow>=10.0.0`
-     - 视频处理：`ffmpeg-python>=0.2.0`、`opencv-python>=4.8.0`
-     - 网页抓取：`playwright>=1.40.0`、`beautifulsoup4>=4.12.0`、`lxml>=4.9.0`
 
 2. **数据库初始化**
    - 创建 `src/knowledge/__init__.py`
    - 创建 `src/knowledge/vector_db/vector_db.py`
    - 创建数据库迁移脚本，创建 documents、chunks、chunks_vec、chunks_fts 表
-   - 更新 documents 表 Schema（增加多媒体元数据字段）
 
-3. **文档解析器**
-   - 创建 `src/knowledge/parsers/base.py`（更新 ParseResult 结构）
+3. **文档解析器（MVP：仅 Word/Excel/PPT/PDF）**
+   - 创建 `src/knowledge/parsers/base.py`
    - 创建 `src/knowledge/parsers/word_parser.py`
    - 创建 `src/knowledge/parsers/excel_parser.py`
    - 创建 `src/knowledge/parsers/ppt_parser.py`
    - 创建 `src/knowledge/parsers/pdf_parser.py`
-   - 创建 `src/knowledge/parsers/image_parser.py`（新增）
-   - 创建 `src/knowledge/parsers/video_parser.py`（新增）
-   - 创建 `src/knowledge/parsers/url_parser.py`（新增）
    - 创建 `src/knowledge/parsers/parser_factory.py`
+   - 创建 `src/knowledge/parsers/image_parser.py`（TODO 占位）
+   - 创建 `src/knowledge/parsers/video_parser.py`（TODO 占位）
+   - 创建 `src/knowledge/parsers/url_parser.py`（TODO 占位）
 
 4. **文本分块器**
    - 创建 `src/knowledge/chunker.py`
@@ -1540,7 +1523,6 @@ const handleUrlSubmit = async () => {
 8. **知识库 API**
    - 创建 `src/api/knowledge.py`
    - 实现文档上传、列表、删除、检索接口
-   - 实现网址上传接口（`/api/knowledge/upload-url`）
    - 在 `src/main.py` 中注册路由
 
 ### 阶段三：前端
@@ -1550,32 +1532,32 @@ const handleUrlSubmit = async () => {
 
 10. **知识库页面**
     - 创建 `frontend/src/views/KnowledgeView.vue`
-    - 更新 `frontend/src/components/DocumentUpload.vue`（支持图片/视频/网址）
+    - 创建 `frontend/src/components/DocumentUpload.vue`
     - 创建 `frontend/src/components/DocumentList.vue`
     - 在路由中注册
 
-11. **样式调整**
-    - 使用 TailwindCSS 调整样式，符合现有设计规范
+### 阶段四：测试
 
-### 阶段四：集成测试
-
-12. **单元测试**
+11. **单元测试**
     - 测试文档解析器
-    - 测试图片解析器（OCR、描述生成）
-    - 测试视频解析器（关键帧、语音转文字）
-    - 测试网址解析器（网页抓取）
     - 测试分块器
     - 测试 Embedding 客户端
     - 测试检索器
 
-13. **集成测试**
-    - 测试完整上传流程（文件 + 网址）
+12. **集成测试**
+    - 测试完整上传流程
     - 测试检索准确性
 
-14. **性能测试**
-    - 测试 30,000 向量检索延迟
-    - 测试并发上传
-    - 测试大图片/视频处理性能
+### 阶段五：后续扩展（TODO）
+
+- 图片解析（OCR + 多模态描述）
+- 视频解析（关键帧 + 语音转文字）
+- 网址解析（网页抓取）
+- 网址上传 API
+- 文档处理进度反馈（SSE 推送）
+- 用户级别权限过滤
+- 文档更新（增量更新向量）
+- 批量导入
 
 ---
 

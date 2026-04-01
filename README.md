@@ -86,8 +86,8 @@ CLI_MODE=true python -m src.main
 
 | 模型 | 提供商 | 配置项 |
 |------|--------|--------|
-| 通义千问 | 阿里云 | `QWEN_API_KEY` |
-| 智谱GLM | 智谱AI | `ZHIPU_API_KEY` |
+| 通义千问 | 阿里云 | `QWEN_API_KEYS` |
+| 智谱GLM | 智谱AI | `ZHIPU_API_KEYS` |
 
 ### 企业微信配置
 

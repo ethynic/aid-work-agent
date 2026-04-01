@@ -54,6 +54,11 @@ openpyxl>=3.1.0  # Excel document reading and processing
 # PPT Document Processing
 python-pptx>=1.0.0  # PPT document reading and processing
 
+# Knowledge Base Dependencies
+sqlite-vec>=0.1.6  # Vector database for embeddings
+pypdf>=4.0.0  # PDF parsing
+Pillow>=10.0.0  # Image processing
+
 # SMB/FTP File Transfer
 pysmb>=1.2.9  # SMB protocol support
 cryptography>=41.0.0  # Password encryption

@@ -293,8 +293,8 @@ Vue 3 + TypeScript + Vite + TailwindCSS 构建的单页应用。通过 SSE（Eve
 
 | 变量名 | 说明 |
 |--------|------|
-| `QWEN_API_KEY` | 通义千问 API Key |
-| `ZHIPU_API_KEY` | 智谱 GLM API Key |
+| `QWEN_API_KEYS` | 通义千问 API Key |
+| `ZHIPU_API_KEYS` | 智谱 GLM API Key |
 | `DATABASE_URL` | 数据库连接字符串，默认 `sqlite:///./aid_work_agent.db` |
 | `WECOM_CORP_ID` / `WECOM_SECRET` 等 | 企业微信配置 |
 | `DINGTALK_APP_KEY` 等 | 钉钉配置 |

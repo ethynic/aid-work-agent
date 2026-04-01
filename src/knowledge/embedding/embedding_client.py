@@ -1,0 +1,89 @@
+"""
+通义 text-embedding-v3 Embedding 客户端
+"""
+
+import asyncio
+import re
+from typing import List
+import logging
+
+from dashscope import TextEmbedding
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤错误信息中的敏感信息"""
+    if not error_msg:
+        return error_msg
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'passwd["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'access[_-]?key["\s:=]+\S+',
+        r'private[_-]?key["\s:=]+\S+',
+        r'auth[_-]?token["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(
+            pattern,
+            lambda m: m.group(0).split('=')[0] + '=***',
+            sanitized,
+            flags=re.IGNORECASE
+        )
+    return sanitized
+
+
+class TextEmbeddingV3Client:
+    """通义 text-embedding-v3 客户端"""
+
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("Embedding API key 未配置，请检查 QWEN_API_KEY 环境变量")
+        import dashscope
+        dashscope.api_key = api_key
+        self.model = "text-embedding-v3"
+        self.dimension = 1536
+
+    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        批量向量化
+
+        Args:
+            texts: 文本列表
+
+        Returns:
+            向量列表，每个向量维度为 1536
+        """
+        try:
+            # TextEmbedding.call 是同步 SDK，使用 to_thread 包装
+            resp = await asyncio.to_thread(
+                TextEmbedding.call,
+                model=self.model,
+                input=texts,
+                text_type="document"
+            )
+
+            if resp.status_code != 200:
+                sanitized_msg = sanitize_error_info(resp.message)
+                raise Exception(f"Embedding API 失败: {sanitized_msg}")
+
+            embeddings = [item["embedding"] for item in resp.output["embeddings"]]
+            logger.info(f"后端日志：Embedding 批量调用成功，数量={len(texts)}")
+            return embeddings
+
+        except Exception as e:
+            error_str = str(e)
+            # 避免重复过滤
+            if "=***" not in error_str:
+                error_str = sanitize_error_info(error_str)
+            logger.error(f"后端日志：Embedding 批量调用失败: {error_str}", exc_info=True)
+            raise
+
+    async def embed(self, text: str) -> List[float]:
+        """单文本向量化"""
+        embeddings = await self.embed_batch([text])
+        return embeddings[0]

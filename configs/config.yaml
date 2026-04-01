@@ -12,8 +12,6 @@ app:
 llm:
   provider: zhipu  # qwen | zhipu
   qwen:
-    # 单 Key 配置（开发/测试）
-    api_key: ${QWEN_API_KEY}
     # 多 Key 配置（生产推荐）：在 .env 中设置 QWEN_API_KEYS=key1,key2,key3
     # api_keys 非空时优先于 api_key
     api_keys: ${QWEN_API_KEYS}

@@ -263,7 +263,7 @@ async def main():
     if settings.llm.provider == "zhipu" and settings.llm.zhipu.api_key:
         has_api_key = True
         print(f"\n[OK] Zhipu API key configured")
-    elif settings.llm.provider == "qwen" and settings.llm.qwen.api_key:
+    elif settings.llm.provider == "qwen" and settings.llm.qwen.get_effective_keys():
         has_api_key = True
         print(f"\n[OK] Qwen API key configured")
     

@@ -134,14 +134,13 @@ vim .env
 # ========== LLM 配置 ==========
 # 通义千问（推荐）
 LLM_PROVIDER=qwen
-QWEN_API_KEY=your_qwen_api_key_here
+QWEN_API_KEYS=your_qwen_api_key_here
 
 # 多 Key 池（可选，多个 key 用逗号分隔，有效利用免费额度）
 # QWEN_API_KEYS=key1,key2,key3
 
 # 智谱GLM（备选）
-# LLM_PROVIDER=zhipu
-# ZHIPU_API_KEY=your_zhipu_api_key_here
+# LLM_PROVIDER=zhipu\
 # ZHIPU_API_KEYS=key1,key2,key3
 
 # ========== Gunicorn 配置 ==========

@@ -30,9 +30,7 @@ services:
       
       # LLM 配置
       - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
-      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
       - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
-      - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_KEYS=${QWEN_API_KEYS}
       
       # 调试模式（生产环境必须为 false）
