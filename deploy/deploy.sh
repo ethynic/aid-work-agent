@@ -83,7 +83,7 @@ main() {
 
     # 4. 创建必要的目录
     log_info "步骤 4/7: 创建必要的目录..."
-    mkdir -p logs
+    mkdir -p log
     mkdir -p /var/www/qb3_upload/agent_uploads
     mkdir -p /var/www/qb3_upload/agent_memories
     
@@ -93,8 +93,8 @@ main() {
     CURRENT_GROUP=$(id -gn)
     
     # 设置日志目录权限
-    chown -R ${CURRENT_USER}:${CURRENT_GROUP} logs
-    chmod -R 775 logs
+    chown -R ${CURRENT_USER}:${CURRENT_GROUP} log
+    chmod -R 775 log
     
     # 设置数据库文件权限（如果已存在）
     if [ -f "aid_work_agent.db" ]; then
@@ -110,7 +110,7 @@ main() {
     
     log_success "目录创建完成"
     log_info "数据库文件位置: $PROJECT_DIR/aid_work_agent.db"
-    log_info "日志文件位置: $PROJECT_DIR/logs/"
+    log_info "日志文件位置: $PROJECT_DIR/log/"
 
     # 把 gaofang 用户加入 docker 组
     sudo usermod -aG docker gaofang

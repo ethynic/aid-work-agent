@@ -269,8 +269,8 @@ docker logs aid-agent-api --tail 100
 docker logs aid-agent-api -f
 
 # 查看应用日志文件
-tail -f /var/www/agent/logs/aid-work-agent.log
-tail -f /var/www/agent/logs/error.log
+tail -f /var/www/agent/log/aid-work-agent.log
+tail -f /var/www/agent/log/error.log
 
 # 查看 Nginx 访问日志
 sudo tail -f /var/log/nginx/access.log
@@ -544,7 +544,7 @@ QWEN_API_KEYS=key1,key2,key3
 
 如遇问题，请查看：
 1. 项目文档：`/var/www/agent/docs/`
-2. 应用日志：`/var/www/agent/logs/`
+2. 应用日志：`/var/www/agent/log/`
 3. 容器日志：`docker logs aid-agent-api`
 4. 技术支持：联系项目负责人
 

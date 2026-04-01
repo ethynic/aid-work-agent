@@ -54,7 +54,7 @@ services:
       # 挂载项目根目录到容器，实现代码热更新
       - .:/app
       # 挂载日志目录
-      - ./logs:/app/logs
+      - ./log:/app/log
     networks:
       - aid-network
     healthcheck:
@@ -113,7 +113,7 @@ services:
       # 挂载项目根目录到容器，实现代码热更新
       - .:/app
       # 挂载日志目录
-      - ./logs:/app/logs
+      - ./log:/app/log
     networks:
       - aid-network
     profiles:

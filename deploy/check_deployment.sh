@@ -212,8 +212,8 @@ TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
 
 # 13. 检查日志目录
 log_info "检查日志目录..."
-if [ -d "$PROJECT_DIR/logs" ]; then
-    if [ -w "$PROJECT_DIR/logs" ]; then
+if [ -d "$PROJECT_DIR/log" ]; then
+    if [ -w "$PROJECT_DIR/log" ]; then
         log_success "日志目录存在且可写"
         PASSED_CHECKS=$((PASSED_CHECKS + 1))
     else

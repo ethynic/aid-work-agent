@@ -84,7 +84,7 @@ services:
       - .:/app
       
       # 日志目录（独立挂载，便于查看）
-      - ./logs:/app/logs
+      - ./log:/app/log
       
       # 配置文件（独立挂载，便于修改）
       - ./configs:/app/configs
