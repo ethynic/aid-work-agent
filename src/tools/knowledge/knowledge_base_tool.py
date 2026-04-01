@@ -52,7 +52,7 @@ class KnowledgeBaseTool(BaseTool):
         from src.config.settings import settings
         qwen_keys = settings.llm.qwen.get_effective_keys()
         qwen_api_key = qwen_keys[0] if qwen_keys else ""
-        vector_db = VectorDBSQLite(db_path=db_path, dimension=1536)
+        vector_db = VectorDBSQLite(db_path=db_path, dimension=1024, conn=conn)
         embedding_client = TextEmbeddingV3Client(api_key=qwen_api_key)
 
         return HybridRetriever(

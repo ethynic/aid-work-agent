@@ -42,11 +42,12 @@ class TextEmbeddingV3Client:
 
     def __init__(self, api_key: str):
         if not api_key:
-            raise ValueError("Embedding API key 未配置，请检查 QWEN_API_KEY 环境变量")
+            raise ValueError("Embedding API key 未配置，请检查 QWEN_API_KEYS 环境变量")
         import dashscope
         dashscope.api_key = api_key
+        self._api_key = api_key  # 保存 key 用于日志
         self.model = "text-embedding-v3"
-        self.dimension = 1536
+        self.dimension = 1024
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
@@ -64,7 +65,10 @@ class TextEmbeddingV3Client:
                 TextEmbedding.call,
                 model=self.model,
                 input=texts,
-                text_type="document"
+                parameters={
+                    "text_type": "document",
+                    "dimension": self.dimension
+                }
             )
 
             if resp.status_code != 200:
@@ -76,6 +80,11 @@ class TextEmbeddingV3Client:
             return embeddings
 
         except Exception as e:
+            # 打印 API key 的前几位和后几位，便于排查问题
+            key = getattr(self, '_api_key', None)
+            if key:
+                key_preview = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "***"
+                logger.error(f"后端日志：Embedding 批量调用失败，使用的 key: {key_preview}", exc_info=True)
             error_str = str(e)
             # 避免重复过滤
             if "=***" not in error_str:

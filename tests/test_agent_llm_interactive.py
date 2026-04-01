@@ -248,9 +248,9 @@ async def interactive_mode():
             error_str = str(e).lower()
             if "api_key" in error_str or "authentication" in error_str or "unauthorized" in error_str:
                 print("\n[Hint] Please check your API key configuration in .env file:")
-                print("  ZHIPU_API_KEY=your_key_here")
+                print("  ZHIPU_API_KEYS=your_key_here")
                 print("  or")
-                print("  QWEN_API_KEY=your_key_here")
+                print("  QWEN_API_KEYS=your_key_here")
 
 
 async def main():
@@ -270,9 +270,9 @@ async def main():
     if not has_api_key:
         print("\n[Warning] No API key configured!")
         print("Please set up your API key in .env file:")
-        print("  ZHIPU_API_KEY=your_key_here")
+        print("  ZHIPU_API_KEYS=your_key_here")
         print("  or")
-        print("  QWEN_API_KEY=your_key_here")
+        print("  QWEN_API_KEYS=your_key_here")
         print("\nContinuing anyway (errors may occur)...")
     
     # Start interactive mode directly

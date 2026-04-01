@@ -2,6 +2,7 @@
 SQLite + sqlite-vec 向量数据库实现
 """
 
+import json
 import sqlite3
 from typing import List, Tuple, Optional
 import logging
@@ -37,24 +38,38 @@ class VectorDatabase:
 class VectorDBSQLite(VectorDatabase):
     """SQLite + sqlite-vec 实现"""
 
-    def __init__(self, db_path: str, dimension: int = 1536):
+    def __init__(self, db_path: str, dimension: int = 1024, conn: sqlite3.Connection = None):
         self.db_path = db_path
         self.dimension = dimension
-        self.conn: Optional[sqlite3.Connection] = None
-        self._connect()
+        if conn is not None:
+            self.conn = conn
+            self._external_conn = True
+            # 外部连接也需要加载 sqlite-vec 扩展
+            import sqlite_vec
+            sqlite_vec.load(self.conn)
+        else:
+            self._external_conn = False
+            self.conn: Optional[sqlite3.Connection] = None
+            self._connect()
+        self._ensure_table()
 
     def _connect(self):
         """建立数据库连接，加载 sqlite-vec 扩展"""
         import sqlite_vec
 
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(
+            self.db_path,
+            check_same_thread=False,
+            timeout=30.0  # 等待锁释放的最长时间（秒）
+        )
         self.conn.row_factory = sqlite3.Row
+
+        # 启用 WAL 模式，提高并发性能
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")  # 30秒 busy timeout
 
         # 加载 sqlite-vec 扩展
         sqlite_vec.load(self.conn)
-
-        # 确保 chunks_vec 虚拟表存在
-        self._ensure_table()
 
     def _ensure_table(self):
         """确保向量表存在"""
@@ -75,9 +90,9 @@ class VectorDBSQLite(VectorDatabase):
 
         cursor = self.conn.cursor()
 
-        # 将 embeddings 转换为可序列化的格式
+        # sqlite-vec 要求 embedding 为 JSON 数组字符串格式
         data = [
-            (chunk_id, list(embedding))
+            (chunk_id, json.dumps(embedding))
             for chunk_id, embedding in zip(chunk_ids, embeddings)
         ]
 
@@ -86,7 +101,9 @@ class VectorDBSQLite(VectorDatabase):
             data
         )
 
-        self.conn.commit()
+        # 外部连接由调用方统一提交，避免中间提交导致锁问题
+        if not self._external_conn:
+            self.conn.commit()
         logger.info(f"后端日志：插入了 {len(chunk_ids)} 个向量")
 
     async def search(
@@ -122,11 +139,13 @@ class VectorDBSQLite(VectorDatabase):
             )
         """, (doc_id,))
 
-        self.conn.commit()
+        # 外部连接由调用方统一提交，避免中间提交导致锁问题
+        if not self._external_conn:
+            self.conn.commit()
         logger.info(f"后端日志：删除了文档 {doc_id} 的所有向量")
 
     def close(self):
-        """关闭数据库连接"""
-        if self.conn:
+        """关闭数据库连接（仅关闭自行创建的连接）"""
+        if self.conn and not self._external_conn:
             self.conn.close()
             self.conn = None

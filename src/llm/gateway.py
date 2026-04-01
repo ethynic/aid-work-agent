@@ -25,11 +25,20 @@ def _build_key_pool(provider_name: str) -> KeyPool:
     else:
         raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
+    # 临时调试：打印所有相关的环境变量和配置值
+    import os
+    logger.info(
+        f"后端日志：_build_key_pool provider={provider_name}, "
+        f"QWEN_API_KEYS from env={os.environ.get('QWEN_API_KEYS', '')!r}, "
+        f"cfg.api_keys={cfg.api_keys!r}, "
+        f"cfg.get_effective_keys()={cfg.get_effective_keys()!r}"
+    )
+
     keys = cfg.get_effective_keys()
     if not keys:
         raise ValueError(
             f"LLM提供者 [{provider_name}] 未配置 API Key，"
-            "请在 .env 中设置 ZHIPU_API_KEYS 或 ZHIPU_API_KEY"
+            f"请在 .env 中设置 {provider_name.upper()}_API_KEYS"
         )
 
     return KeyPool(

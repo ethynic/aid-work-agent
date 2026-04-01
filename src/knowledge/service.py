@@ -28,6 +28,10 @@ class KnowledgeBaseService:
         self.upload_path = Path(getattr(settings, 'knowledge_upload_path', 'uploads/knowledge'))
         self.upload_path.mkdir(parents=True, exist_ok=True)
 
+        # 数据库路径
+        database_url = os.environ.get("DATABASE_URL", "sqlite:///./aid_work_agent.db")
+        self.db_path = database_url.replace("sqlite:///", "")
+
         self.chunker = TextChunker(
             chunk_size=self.chunk_size,
             overlap=self.chunk_overlap
@@ -35,9 +39,15 @@ class KnowledgeBaseService:
 
     def _get_db_connection(self) -> sqlite3.Connection:
         """获取数据库连接"""
-        db_path = settings.database_url.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn = sqlite3.connect(
+            self.db_path,
+            check_same_thread=False,
+            timeout=30.0  # 等待锁释放的最长时间（秒）
+        )
         conn.row_factory = sqlite3.Row
+        # 启用 WAL 模式，提高并发性能
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")  # 30秒 busy timeout
         return conn
 
     async def upload_document(
@@ -123,10 +133,11 @@ class KnowledgeBaseService:
                 ))
                 chunk_ids.append(cursor.lastrowid)
 
-            # 插入向量
+            # 插入向量（复用同一个数据库连接，避免锁冲突）
             vector_db = VectorDBSQLite(
-                db_path=settings.database_url.replace("sqlite:///", ""),
-                dimension=1536
+                db_path=self.db_path,
+                dimension=1536,
+                conn=conn
             )
             await vector_db.insert(chunk_ids, embeddings)
 
@@ -178,10 +189,11 @@ class KnowledgeBaseService:
 
             file_path = row["file_path"]
 
-            # 删除向量
+            # 删除向量（复用同一个数据库连接，避免锁冲突）
             vector_db = VectorDBSQLite(
-                db_path=settings.database_url.replace("sqlite:///", ""),
-                dimension=1536
+                db_path=self.db_path,
+                dimension=1024,
+                conn=conn
             )
             await vector_db.delete_by_doc(doc_id)
 
