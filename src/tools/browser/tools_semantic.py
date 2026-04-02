@@ -63,6 +63,36 @@ async def wait_for_page_stable(page, timeout: int = 5000):
     except Exception:
         pass
 
+    # 5. 等待动态插入的 iframe 加载完成
+    #    OA 系统常见模式：点击菜单 → JS 动态创建 iframe → iframe 加载内容
+    try:
+        await page.wait_for_function(
+            """() => {
+                const iframes = document.querySelectorAll('iframe');
+                for (const iframe of iframes) {
+                    if (iframe.offsetParent === null) continue;
+                    const src = iframe.getAttribute('src') || '';
+                    if (!src || src === 'about:blank') return false;
+                    try {
+                        const doc = iframe.contentDocument;
+                        if (doc && doc.readyState !== 'complete') return false;
+                    } catch (e) { }
+                }
+                return true;
+            }""",
+            timeout=5000,
+        )
+    except Exception:
+        pass
+
+    # 6. 额外等待 iframe 内容渲染
+    try:
+        iframe_count = await page.evaluate("() => document.querySelectorAll('iframe').length")
+        if iframe_count > 0:
+            await asyncio.sleep(0.5)
+    except Exception:
+        pass
+
     logger.debug(f"[wait_for_page_stable] 页面已稳定: {page.url}")
 
 
@@ -203,7 +233,14 @@ class BrowserClickTool(BaseTool):
             except Exception as click_err:
                 # force 点击失败，尝试用 JS 直接触发
                 logger.warning(f"element.click(force=True) 失败: {click_err}，尝试 JS 点击")
-                await session.page.evaluate(f"""(selector) => {{
+                # 确定在哪个上下文中执行 JS（主页面 or iframe）
+                js_context = session.page
+                elem_info = ref_mapper.get_by_ref(target_ref)
+                if elem_info and elem_info.frame_url:
+                    frame = ref_mapper._frame_map.get(elem_info.frame_url)
+                    if frame:
+                        js_context = frame
+                await js_context.evaluate(f"""(selector) => {{
                     const el = document.querySelector(selector);
                     if (el) el.click();
                 }}""", f'[data-ref="{target_ref}"]')
@@ -392,7 +429,14 @@ class BrowserFillTool(BaseTool):
             except Exception as fill_err:
                 # fill 失败，尝试用 JS 直接设置值
                 logger.warning(f"element.fill(force=True) 失败: {fill_err}，尝试 JS 填写")
-                await session.page.evaluate("""(args) => {
+                # 确定在哪个上下文中执行 JS（主页面 or iframe）
+                js_context = session.page
+                elem_info = ref_mapper.get_by_ref(target_ref)
+                if elem_info and elem_info.frame_url:
+                    frame = ref_mapper._frame_map.get(elem_info.frame_url)
+                    if frame:
+                        js_context = frame
+                await js_context.evaluate("""(args) => {
                     const el = document.querySelector(args.selector);
                     if (!el) return;
                     // 聚焦元素

@@ -49,8 +49,8 @@ class BrowserSnapshotTool(BaseTool):
             },
             "max_depth": {
                 "type": "integer",
-                "description": "DOM遍历最大深度，默认10",
-                "default": 10,
+                "description": "DOM遍历最大深度，默认30",
+                "default": 30,
             },
             "include_hidden": {
                 "type": "boolean",
@@ -75,7 +75,7 @@ class BrowserSnapshotTool(BaseTool):
         """
         session_id = kwargs.get("session_id", "default")
         mode = kwargs.get("mode", "interactive")
-        max_depth = kwargs.get("max_depth", 10)
+        max_depth = kwargs.get("max_depth", 30)
         include_hidden = kwargs.get("include_hidden", False)
 
         try:

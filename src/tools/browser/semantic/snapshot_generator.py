@@ -53,6 +53,168 @@ class SemanticSnapshotGenerator:
     将 Playwright 页面转换为 LLM 可理解的语义结构。
     """
 
+    # DOM 遍历 JS 代码（主页面和 iframe 共用）
+    _DOM_TRAVERSAL_JS = """(options) => {
+        const { maxDepth, includeHidden } = options;
+        const elements = [];
+        const diag = { visited: 0, buttonsSeen: 0, buttonsSkipped: 0, maxDepthReached: 0, recurseBlocked: 0 };
+
+        const INTERACTIVE_TAGS = new Set([
+            'a', 'button', 'input', 'select', 'textarea', 'details', 'summary',
+            'area', 'option', 'optgroup', 'dialog',
+        ]);
+        const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'meta', 'link', 'title', 'head', 'html', 'body', 'br', 'hr', 'wbr', 'svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse', 'g', 'defs', 'use', 'clippath', 'mask', 'symbol', 'marker', 'pattern', 'lineargradient', 'radialgradient', 'stop', 'filter', 'feblend', 'fecolormatrix', 'fecomponenttransfer', 'feflood', 'fegaussianblur', 'feimage', 'femerge', 'femergenode', 'feoffset', 'fepointlight', 'fespotlight', 'fetile', 'feturbulence', 'animate', 'animatetransform', 'animatemotion']);
+        const INTERACTIVE_ROLES = new Set([
+            'button', 'link', 'checkbox', 'radio', 'tab', 'tablist',
+            'switch', 'slider', 'spinbutton', 'combobox', 'menuitem',
+            'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem',
+            'textbox', 'searchbox', 'listbox', 'gridcell', 'grid',
+            'rowheader', 'columnheader', 'progressbar', 'scrollbar',
+            'separator', 'toolbar',
+        ]);
+
+        const isVisible = (el) => {
+            if (el.hidden) return false;
+            const style = window.getComputedStyle(el);
+            if (style.visibility === 'hidden') return false;
+            if (parseFloat(style.opacity) === 0) return false;
+            return true;
+        };
+        const isRendered = (el) => {
+            let current = el;
+            while (current && current !== document.body) {
+                const style = window.getComputedStyle(current);
+                if (style.display === 'none') return false;
+                current = current.parentElement;
+            }
+            return true;
+        };
+
+        const shouldSkip = (el) => {
+            const tag = el.tagName ? el.tagName.toLowerCase() : '';
+            if (INTERACTIVE_TAGS.has(tag) || INTERACTIVE_ROLES.has(el.getAttribute('role'))) {
+                if (!isVisible(el)) return true;
+                return !isRendered(el);
+            }
+            if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) {
+                if (!isVisible(el)) return true;
+                return !isRendered(el);
+            }
+            return true;
+        };
+
+        const shouldRecurse = (el) => {
+            const tag = el.tagName ? el.tagName.toLowerCase() : '';
+            if (SKIP_TAGS.has(tag)) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none') return false;
+            return true;
+        };
+
+        const getTextContent = (el) => {
+            if (el.tagName && el.tagName.toLowerCase() === 'input') {
+                const val = el.getAttribute('value');
+                if (val) return val;
+                return el.getAttribute('placeholder') || '';
+            }
+            if (el.children.length === 0) return el.textContent || '';
+            let text = '';
+            for (const node of el.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
+            }
+            if (!text.trim()) {
+                for (const child of el.children) {
+                    const ct = child.textContent || '';
+                    if (ct.trim()) { text = ct.trim().substring(0, 50); break; }
+                }
+            }
+            return text;
+        };
+
+        // addBtn 追踪：记录遍历到 addBtn 的哪个祖先时被阻断
+        const addBtn = document.getElementById('addBtn');
+        let addBtnReached = false;
+
+        const traverse = (root, depth) => {
+            if (depth > maxDepth) { diag.maxDepthReached++; return; }
+            const children = root.children;
+            for (let i = 0; i < children.length; i++) {
+                const el = children[i];
+                diag.visited++;
+                const tagName = el.tagName ? el.tagName.toLowerCase() : '';
+                if (SKIP_TAGS.has(tagName)) {
+                    // 检查 addBtn 是否在这个被跳过的元素内部
+                    if (addBtn && !addBtnReached && root.contains(addBtn) && el.contains(addBtn)) {
+                        diag._addBtnBlocked = 'SKIP_TAGS at depth=' + depth + ' tag=' + tagName + ' id=' + (el.id || '');
+                    }
+                    continue;
+                }
+                const attrs = {};
+                for (const attr of el.attributes) { attrs[attr.name] = attr.value; }
+
+                // 检查是否到达了 addBtn
+                if (addBtn && !addBtnReached && el === addBtn) {
+                    addBtnReached = true;
+                    diag._addBtnReached = true;
+                    diag._addBtnDepth = depth;
+                    const skipSelf = !includeHidden && shouldSkip(el);
+                    diag._addBtnSkipSelf = skipSelf;
+                    if (skipSelf) {
+                        diag._addBtnVisible = isVisible(el);
+                        diag._addBtnRendered = isRendered(el);
+                    }
+                }
+
+                const skipSelf = !includeHidden && shouldSkip(el);
+                if (!skipSelf) {
+                    if (tagName === 'input' && attrs['type'] === 'hidden') continue;
+                    if (tagName === 'button') diag.buttonsSeen++;
+                    const textContent = getTextContent(el);
+                    const role = el.getAttribute('role');
+                    const isInteractive = INTERACTIVE_TAGS.has(tagName) ||
+                        INTERACTIVE_ROLES.has(role) ||
+                        el.getAttribute('contenteditable') === 'true' ||
+                        el.isContentEditable || el.getAttribute('tabindex') === '0';
+                    const hasPopup = el.getAttribute('aria-haspopup') ||
+                        el.getAttribute('aria-expanded') !== null ||
+                        el.classList.contains('dropdown-toggle') ||
+                        el.classList.contains('dropdown') ||
+                        el.getAttribute('data-toggle') === 'dropdown' ||
+                        el.getAttribute('data-bs-toggle') === 'dropdown' ||
+                        (role === 'button' && el.getAttribute('data-target')) ||
+                        el.querySelector('[role="menu"], .dropdown-menu, .submenu');
+                    elements.push({
+                        tag: tagName, attrs: attrs, text: textContent.trim(),
+                        depth: depth, visible: isVisible(el), isInteractive: isInteractive,
+                        hasPopup: !!hasPopup, role: role,
+                        id: el.getAttribute('id'),
+                        className: typeof el.className === 'string' ? el.className : '',
+                    });
+                } else {
+                    if (tagName === 'button') diag.buttonsSkipped++;
+                }
+
+                // 递归进入子元素
+                if (el.children.length > 0 && depth < maxDepth && shouldRecurse(el)) {
+                    traverse(el, depth + 1);
+                } else if (addBtn && !addBtnReached && el.contains(addBtn) && el.children.length > 0) {
+                    // addBtn 在这个元素内部，但递归被阻断了，记录原因
+                    if (depth >= maxDepth) {
+                        diag._addBtnBlocked = 'depth >= maxDepth (' + depth + ') at tag=' + tagName + ' id=' + (el.id || '');
+                    } else if (!shouldRecurse(el)) {
+                        const style = window.getComputedStyle(el);
+                        diag._addBtnBlocked = 'shouldRecurse=false at depth=' + depth + ' tag=' + tagName + ' id=' + (el.id || '') + ' display=' + style.display;
+                    }
+                    diag.recurseBlocked++;
+                }
+            }
+        };
+        if (document.body) traverse(document.body, 1);
+
+        diag._addBtnReached = addBtnReached;
+        return { elements: elements, diag: diag };
+    }"""
+
     # 区域标签优先级
     REGION_LABELS = {
         "nav": ["导航", "菜单", "主导航", "顶部导航"],
@@ -208,7 +370,7 @@ class SemanticSnapshotGenerator:
         self,
         page,
         mode: str = "interactive",
-        max_depth: int = 10,
+        max_depth: int = 30,
         include_hidden: bool = False,
         use_cache: bool = True,
     ) -> SemanticSnapshot:
@@ -227,6 +389,8 @@ class SemanticSnapshotGenerator:
         try:
             # 设置 page 引用到 ref_mapper，以便后续通过 data-ref 定位元素
             self.ref_mapper._page = page
+            # 清空 iframe frame 映射
+            self.ref_mapper._frame_map.clear()
 
             # 获取页面基本信息
             url = page.url
@@ -241,31 +405,119 @@ class SemanticSnapshotGenerator:
                     cached.pop("from_cache", None)
                     return SemanticSnapshot(**cached)
 
-            # 遍历 DOM 树，收集元素
-            elements_data = await self._traverse_dom(
-                page, mode, max_depth, include_hidden
-            )
+            # 1. 遍历主页面 DOM 树
+            elements_data = await self._traverse_dom(page, max_depth, include_hidden)
 
-            # 构建交互元素列表
+            # 诊断：对比 DOM 中实际元素数量 vs 遍历收集到的数量
+            try:
+                dom_diag = await page.evaluate("""() => {
+                    const buttons = document.querySelectorAll('button');
+                    const result = {
+                        buttons_total: buttons.length,
+                        samples: [],
+                    };
+                    // 取前3个 button 做详细诊断
+                    for (let i = 0; i < Math.min(3, buttons.length); i++) {
+                        const btn = buttons[i];
+                        const style = window.getComputedStyle(btn);
+                        const rect = btn.getBoundingClientRect();
+                        // 计算从 body 到 button 的深度
+                        let depth = 0;
+                        let current = btn.parentElement;
+                        while (current && current !== document.body) {
+                            depth++;
+                            current = current.parentElement;
+                        }
+                        // 找祖先链中第一个 display:none 的元素
+                        let hiddenAncestor = null;
+                        current = btn.parentElement;
+                        while (current && current !== document.body) {
+                            const cs = window.getComputedStyle(current);
+                            if (cs.display === 'none') {
+                                hiddenAncestor = { tag: current.tagName.toLowerCase(), id: current.id || '', depth: depth };
+                                break;
+                            }
+                            current = current.parentElement;
+                        }
+                        // 检查 SKIP_TAGS 中是否有匹配
+                        const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'meta', 'link', 'title', 'head', 'html', 'body', 'br', 'hr', 'wbr', 'svg']);
+                        let skipAncestor = null;
+                        current = btn.parentElement;
+                        let ancDepth = 0;
+                        while (current && current !== document.body) {
+                            const tag = current.tagName ? current.tagName.toLowerCase() : '';
+                            if (SKIP_TAGS.has(tag)) {
+                                skipAncestor = { tag: tag, id: current.id || '', depth: ancDepth };
+                                break;
+                            }
+                            current = current.parentElement;
+                            ancDepth++;
+                        }
+                        result.samples.push({
+                            id: btn.id || '',
+                            text: (btn.textContent || '').trim().substring(0, 20),
+                            depth: depth,
+                            display: style.display,
+                            visibility: style.visibility,
+                            opacity: style.opacity,
+                            size: Math.round(rect.width) + 'x' + Math.round(rect.height),
+                            hidden: btn.hidden,
+                            hiddenAncestor: hiddenAncestor,
+                            skipAncestor: skipAncestor,
+                        });
+                    }
+                    return result;
+                }""")
+                traversed_buttons = sum(1 for e in elements_data if e.get("tag") == "button")
+                logger.info(f"[DOM诊断] 页面 buttons={dom_diag['buttons_total']}, 遍历收集 buttons={traversed_buttons}, 总计={len(elements_data)}")
+                for s in dom_diag.get("samples", []):
+                    ha = f" hidden_ancestor=<{s['hiddenAncestor']['tag']} id={s['hiddenAncestor']['id']} at_depth={s['hiddenAncestor']['depth']}>" if s.get("hiddenAncestor") else ""
+                    sa = f" skipAncestor=<{s['skipAncestor']['tag']} id={s['skipAncestor']['id']} at_depth={s['skipAncestor']['depth']}>" if s.get("skipAncestor") else ""
+                    logger.info(f"[DOM诊断] button id={s['id']} text=\"{s['text']}\" depth={s['depth']} display={s['display']} visibility={s['visibility']} opacity={s['opacity']} size={s['size']} hidden={s['hidden']}{ha}{sa}")
+            except Exception:
+                pass
+
+            # 2. 遍历同源 iframe 内的 DOM，将交互元素合并到 elements_data
+            iframe_frames = []  # 记录 frame 对象用于后续 data-ref 注入
+            await self._traverse_iframes(page, elements_data, iframe_frames, max_depth, include_hidden)
+
+            # 3. 构建交互元素列表（主页面 + iframe 统一编号）
             interactive_elements = self._build_interactive_elements(elements_data)
 
-            # 注入 data-ref 到 DOM 元素，以便后续操作时定位
-            await self._inject_data_refs(page, interactive_elements)
+            # 4. 注入 data-ref：主页面
+            main_elements = [e for e in interactive_elements if not e.get("_in_iframe")]
+            await self._inject_data_refs(page, main_elements)
 
-            # 构建区域结构
+            # 5. 注入 data-ref：各个 iframe
+            # 按 iframe 分组，在每个 frame 上分别注入
+            iframe_elements_by_frame = {}
+            for elem in interactive_elements:
+                frame_url = elem.get("_frame_url", "")
+                if frame_url:
+                    iframe_elements_by_frame.setdefault(frame_url, []).append(elem)
+
+            for frame in iframe_frames:
+                frame_url = frame.url
+                frame_elements = iframe_elements_by_frame.get(frame_url, [])
+                if frame_elements:
+                    await self._inject_data_refs(frame, frame_elements)
+                    logger.info(f"[iframe] 在 frame {frame_url} 中注入 {len(frame_elements)} 个 data-ref")
+
+            # 6. 构建区域结构
             regions = self._build_regions(elements_data, mode)
 
-            # 检测子菜单
+            # 7. 检测子菜单
             submenu_snapshots = await self._detect_submenus(
                 page, interactive_elements
             )
 
-            # 检测 iframe（Phase 3 新增）
+            # 8. 检测 iframe 元信息（用于展示）
             iframe_snapshots = await self._detect_iframes(page)
 
-            # 构建快照（排除内部使用的 attrs 字段）
+            # 构建快照（排除内部使用的 attrs 字段和标记字段）
             clean_elements = [
-                {k: v for k, v in elem.items() if k != "attrs"}
+                {k: v for k, v in elem.items()
+                 if k not in ("attrs", "_in_iframe", "_frame_url")}
                 for elem in interactive_elements
             ]
 
@@ -298,16 +550,14 @@ class SemanticSnapshotGenerator:
 
     async def _traverse_dom(
         self,
-        page,
-        mode: str,
+        page_or_frame,
         max_depth: int,
         include_hidden: bool,
     ) -> List[Dict[str, Any]]:
-        """遍历 DOM 树
+        """遍历 DOM 树（支持主页面和 iframe frame）
 
         Args:
-            page: Playwright 页面对象
-            mode: 遍历模式
+            page_or_frame: Playwright Page 或 Frame 对象
             max_depth: 最大深度
             include_hidden: 是否包含隐藏元素
 
@@ -315,236 +565,116 @@ class SemanticSnapshotGenerator:
             List[Dict[str, Any]]: 元素数据列表
         """
         try:
-            # 使用 JavaScript 遍历 DOM
-            elements_js = await page.evaluate("""
-                (options) => {
-                    const { maxDepth, includeHidden, mode } = options;
-                    const elements = [];
-                    const debugSkipped = [];
-
-                    // 可交互标签（完整列表）
-                    const INTERACTIVE_TAGS = new Set([
-                        'a', 'button', 'input', 'select', 'textarea', 'details', 'summary',
-                        'area', 'option', 'optgroup', 'dialog',
-                    ]);
-                    const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'meta', 'link', 'title', 'head', 'html', 'body', 'br', 'hr', 'wbr', 'svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse', 'g', 'defs', 'use', 'clippath', 'mask', 'symbol', 'marker', 'pattern', 'lineargradient', 'radialgradient', 'stop', 'filter', 'feblend', 'fecolormatrix', 'fecomponenttransfer', 'feflood', 'fegaussianblur', 'feimage', 'femerge', 'femergenode', 'feoffset', 'fepointlight', 'fespotlight', 'fetile', 'feturbulence', 'animate', 'animatetransform', 'animatemotion']);
-
-                    // 可交互 role 列表
-                    const INTERACTIVE_ROLES = new Set([
-                        'button', 'link', 'checkbox', 'radio', 'tab', 'tablist',
-                        'switch', 'slider', 'spinbutton', 'combobox', 'menuitem',
-                        'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem',
-                        'textbox', 'searchbox', 'listbox', 'gridcell', 'grid',
-                        'rowheader', 'columnheader', 'progressbar', 'scrollbar',
-                        'separator', 'toolbar',
-                    ]);
-
-                    const isVisible = (el) => {
-                        if (el.hidden) return false;
-                        const style = window.getComputedStyle(el);
-                        if (style.visibility === 'hidden') return false;
-                        if (parseFloat(style.opacity) === 0) return false;
-                        return true;
-                    };
-
-                    // 检查元素是否在可显示的容器中（display:none 的容器内元素不可见）
-                    const isRendered = (el) => {
-                        let current = el;
-                        while (current && current !== document.body) {
-                            const style = window.getComputedStyle(current);
-                            if (style.display === 'none') return false;
-                            current = current.parentElement;
-                        }
-                        return true;
-                    };
-
-                    // 容器元素标签（允许递归进入，即使自身尺寸为0）
-                    const CONTAINER_TAGS = new Set([
-                        'div', 'span', 'form', 'section', 'main', 'article',
-                        'aside', 'header', 'footer', 'nav', 'ul', 'ol', 'li',
-                        'table', 'tr', 'td', 'th', 'tbody', 'thead', 'tfoot',
-                        'fieldset', 'label', 'p', 'h1', 'h2', 'h3', 'h4',
-                        'h5', 'h6', 'details', 'summary', 'figure', 'figcaption',
-                        'dl', 'dd', 'dt', 'blockquote', 'pre', 'code',
-                        'dialog', 'menu', 'picture', 'video', 'audio',
-                        'source', 'track', 'map', 'datalist', 'output',
-                        'template', 'slot', 'blockquote', 'em', 'strong',
-                        'small', 'mark', 'abbr', 'cite', 'q', 'dfn',
-                        'var', 'samp', 'kbd', 'sub', 'sup', 'i', 'b',
-                        'u', 's', 'ruby', 'rt', 'rp', 'bdi', 'bdo',
-                        'wbr', 'data', 'time', 'ins', 'del',
-                    ]);
-
-                    const shouldSkip = (el) => {
-                        const tag = el.tagName ? el.tagName.toLowerCase() : '';
-
-                        // 交互元素：只检查 hidden/visibility/opacity + 是否在 display:none 容器中
-                        if (INTERACTIVE_TAGS.has(tag) || INTERACTIVE_ROLES.has(el.getAttribute('role'))) {
-                            if (!isVisible(el)) return true;
-                            return !isRendered(el);
-                        }
-                        // contenteditable
-                        if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) {
-                            if (!isVisible(el)) return true;
-                            return !isRendered(el);
-                        }
-                        // 容器元素：始终允许递归进入
-                        if (CONTAINER_TAGS.has(tag)) {
-                            return false;
-                        }
-                        // 其他元素：完整可见性检查
-                        if (!isVisible(el)) return true;
-                        const style = window.getComputedStyle(el);
-                        if (style.display === 'none') return true;
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width === 0 || rect.height === 0) return true;
-                        return false;
-                    };
-
-                    // 提取元素文本（获取自身直接文本 + 子元素的文本摘要）
-                    const getTextContent = (el) => {
-                        // input 特殊处理：用 value 属性
-                        if (el.tagName && el.tagName.toLowerCase() === 'input') {
-                            const val = el.getAttribute('value');
-                            if (val) return val;
-                            // placeholder 作为后备文本来源
-                            return el.getAttribute('placeholder') || '';
-                        }
-                        // 无子元素：直接取 textContent
-                        if (el.children.length === 0) {
-                            return el.textContent || '';
-                        }
-                        // 有子元素：取直接文本节点 + 第一个子元素的文本（覆盖按钮内的 span/img 场景）
-                        let text = '';
-                        for (const node of el.childNodes) {
-                            if (node.nodeType === Node.TEXT_NODE) {
-                                text += node.textContent;
-                            }
-                        }
-                        // 如果直接文本为空，尝试取第一个有文本的子元素
-                        if (!text.trim()) {
-                            for (const child of el.children) {
-                                const childText = child.textContent || '';
-                                if (childText.trim()) {
-                                    // 截取前50字符，避免过长
-                                    text = childText.trim().substring(0, 50);
-                                    break;
-                                }
-                            }
-                        }
-                        return text;
-                    };
-
-                    const traverse = (root, depth) => {
-                        if (depth > maxDepth) return;
-
-                        const children = root.children;
-                        for (let i = 0; i < children.length; i++) {
-                            const el = children[i];
-                            const tagName = el.tagName ? el.tagName.toLowerCase() : '';
-
-                            // 跳过不需要的标签
-                            if (SKIP_TAGS.has(tagName)) continue;
-
-                            // 获取属性
-                            const attrs = {};
-                            for (const attr of el.attributes) {
-                                attrs[attr.name] = attr.value;
-                            }
-
-                            // 检查可见性
-                            if (!includeHidden && shouldSkip(el)) {
-                                // 记录被跳过的交互元素用于调试
-                                const _role = el.getAttribute('role');
-                                if (INTERACTIVE_TAGS.has(tagName) || INTERACTIVE_ROLES.has(_role)) {
-                                    const style = window.getComputedStyle(el);
-                                    const rect = el.getBoundingClientRect();
-                                    debugSkipped.push({
-                                        tag: tagName,
-                                        text: (el.textContent || '').trim().substring(0, 30),
-                                        reason: 'shouldSkip=true',
-                                        hidden: el.hidden,
-                                        display: style.display,
-                                        visibility: style.visibility,
-                                        opacity: style.opacity,
-                                        rendered: isRendered(el),
-                                        w: rect.width,
-                                        h: rect.height,
-                                    });
-                                }
-                                continue;
-                            }
-
-                            // 跳过 type=hidden 的 input
-                            if (tagName === 'input' && attrs['type'] === 'hidden') continue;
-
-                            // 获取文本内容
-                            const textContent = getTextContent(el);
-
-                            // 判断是否可交互
-                            const role = el.getAttribute('role');
-                            const isInteractive = INTERACTIVE_TAGS.has(tagName) ||
-                                INTERACTIVE_ROLES.has(role) ||
-                                el.getAttribute('contenteditable') === 'true' ||
-                                el.isContentEditable ||
-                                el.getAttribute('tabindex') === '0';
-
-                            // 判断是否有子菜单（更全面的检测）
-                            const hasPopup = el.getAttribute('aria-haspopup') ||
-                                el.getAttribute('aria-expanded') !== null ||
-                                el.classList.contains('dropdown-toggle') ||
-                                el.classList.contains('dropdown') ||
-                                el.getAttribute('data-toggle') === 'dropdown' ||
-                                el.getAttribute('data-bs-toggle') === 'dropdown' ||
-                                (role === 'button' && el.getAttribute('data-target')) ||
-                                el.querySelector('[role="menu"], .dropdown-menu, .submenu');
-
-                            // 收集数据
-                            elements.push({
-                                tag: tagName,
-                                attrs: attrs,
-                                text: textContent.trim(),
-                                depth: depth,
-                                visible: isVisible(el),
-                                isInteractive: isInteractive,
-                                hasPopup: !!hasPopup,
-                                role: role,
-                                id: el.getAttribute('id'),
-                                className: typeof el.className === 'string' ? el.className : '',
-                            });
-
-                            // 递归遍历子元素
-                            if (el.children.length > 0 && depth < maxDepth) {
-                                traverse(el, depth + 1);
-                            }
-                        }
-                    };
-
-                    // 从 body 开始遍历
-                    traverse(document.body, 1);
-
-                    return { elements: elements, debugSkipped: debugSkipped };
-                }
-            """, {"maxDepth": max_depth, "includeHidden": include_hidden, "mode": mode})
-
-            # 解析返回结果
-            if isinstance(elements_js, dict):
-                elements_list = elements_js.get("elements", [])
-                skipped = elements_js.get("debugSkipped", [])
-                # 打印被跳过的交互元素
-                if skipped:
-                    logger.warning(f"[DOM遍历] {len(skipped)} 个交互元素被 shouldSkip 跳过:")
-                    for s in skipped[:20]:  # 最多打印20个
-                        logger.warning(f"  跳过: tag={s['tag']} text=\"{s['text']}\" display={s['display']} visibility={s['visibility']} opacity={s['opacity']} rendered={s['rendered']} size={s['w']}x{s['h']}")
-                    if len(skipped) > 20:
-                        logger.warning(f"  ... 还有 {len(skipped) - 20} 个")
+            result = await page_or_frame.evaluate(
+                self._DOM_TRAVERSAL_JS,
+                {"maxDepth": max_depth, "includeHidden": include_hidden},
+            )
+            if isinstance(result, dict):
+                elements_list = result.get("elements", [])
+                diag = result.get("diag", {})
+                logger.info(f"[DOM遍历] visited={diag.get('visited',0)} buttonsSeen={diag.get('buttonsSeen',0)} buttonsSkipped={diag.get('buttonsSkipped',0)} maxDepthReached={diag.get('maxDepthReached',0)} recurseBlocked={diag.get('recurseBlocked',0)} addBtnReached={diag.get('_addBtnReached',False)}")
+                if diag.get('_addBtnBlocked'):
+                    logger.warning(f"[DOM遍历] addBtn 被阻断: {diag['_addBtnBlocked']}")
+                if diag.get('_addBtnReached'):
+                    logger.info(f"[DOM遍历] addBtn 已到达 depth={diag.get('_addBtnDepth')} skipSelf={diag.get('_addBtnSkipSelf')} visible={diag.get('_addBtnVisible')} rendered={diag.get('_addBtnRendered')}")
                 return elements_list
+            elif isinstance(result, list):
+                return result
             else:
-                return elements_js
+                return []
 
         except Exception as e:
             logger.error(f"DOM 遍历失败: {e}")
             return []
+
+    async def _traverse_iframes(
+        self,
+        page,
+        elements_data: List[Dict[str, Any]],
+        iframe_frames: list,
+        max_depth: int,
+        include_hidden: bool,
+    ) -> None:
+        """遍历同源 iframe/frame 内的 DOM，将交互元素合并到 elements_data
+
+        支持两种 frame 类型：
+        - <iframe>：通过 DOM 查询 + content_frame 获取
+        - <frame>（传统 frameset）：通过 page.frames 获取
+
+        Args:
+            page: Playwright 主页面对象
+            elements_data: 主页面的元素数据列表（会被就地扩展）
+            iframe_frames: 用于收集 frame 对象的列表
+            max_depth: DOM 遍历最大深度
+            include_hidden: 是否包含隐藏元素
+        """
+        try:
+            # 获取所有 frame（包括 <frame> 和 <iframe>）
+            all_frames = page.frames
+            # 跳过主页面自身（第一个 frame 总是 main frame）
+            child_frames = [f for f in all_frames if f != page.main_frame]
+            logger.info(f"[iframe] page.frames 共 {len(all_frames)} 个 frame（含主页），子 frame {len(child_frames)} 个")
+
+            if not child_frames:
+                # page.frames 没有子 frame，再用 DOM 查询作为兜底
+                iframe_elements = await page.query_selector_all("iframe")
+                logger.info(f"[iframe] page.frames 无子 frame，DOM 查询到 {len(iframe_elements)} 个 iframe 标签")
+                for iframe_elem in iframe_elements:
+                    try:
+                        frame = await iframe_elem.content_frame()
+                        if frame:
+                            child_frames.append(frame)
+                    except Exception:
+                        pass
+
+            if not child_frames:
+                logger.info(f"[iframe] 未检测到任何子 frame")
+                return
+
+            for idx, frame in enumerate(child_frames):
+                try:
+                    iframe_url = frame.url
+                    frame_name = frame.name
+                    logger.info(f"[iframe] 检查第 {idx+1} 个 frame: name={frame_name} url={iframe_url[:80]}")
+
+                    # 跳过 about:blank 和空 URL
+                    if not iframe_url or iframe_url == "about:blank":
+                        logger.info(f"[iframe] 跳过空 frame: name={frame_name}")
+                        continue
+
+                    # 跳过主页面 URL（避免重复遍历）
+                    if iframe_url == page.url:
+                        continue
+
+                    # 在 frame 内执行 DOM 遍历
+                    logger.info(f"[iframe] 开始遍历 frame: {iframe_url}")
+
+                    iframe_elements_data = await self._traverse_dom(frame, max_depth, include_hidden)
+                    if not iframe_elements_data:
+                        logger.warning(f"[iframe] frame {iframe_url} 中未找到交互元素")
+                        continue
+
+                    # 标记这些元素来自 iframe，并记录 frame URL
+                    iframe_count = 0
+                    for elem in iframe_elements_data:
+                        elem["_in_iframe"] = True
+                        elem["_frame_url"] = iframe_url
+                        elements_data.append(elem)
+                        iframe_count += 1
+
+                    # 记录 frame 对象用于后续 data-ref 注入
+                    iframe_frames.append(frame)
+
+                    # 注册 frame 到 ref_mapper（后续 get_handle 需要通过 frame 查询）
+                    self.ref_mapper._frame_map[iframe_url] = frame
+
+                    logger.info(f"[iframe] 在 {iframe_url} 中发现 {iframe_count} 个交互元素")
+
+                except Exception as e:
+                    logger.warning(f"[iframe] 遍历 frame 失败: {e}")
+
+        except Exception as e:
+            logger.error(f"检测 frame 失败: {e}")
 
     def _build_interactive_elements(
         self,
@@ -597,6 +727,10 @@ class SemanticSnapshotGenerator:
             # 获取 has_popup
             has_popup = elem_data.get("hasPopup", False)
 
+            # 获取 iframe 标记
+            in_iframe = elem_data.get("_in_iframe", False)
+            frame_url = elem_data.get("_frame_url")
+
             # 构建元素数据
             elem_dict = {
                 "ref": ref,
@@ -610,6 +744,10 @@ class SemanticSnapshotGenerator:
                 "has_popup": has_popup,
                 "attrs": attrs,
             }
+            # iframe 标记（不输出到快照，但用于后续 data-ref 注入和 ref_mapper 查询）
+            if in_iframe:
+                elem_dict["_in_iframe"] = True
+                elem_dict["_frame_url"] = frame_url
 
             interactive_elements.append(elem_dict)
 
@@ -624,6 +762,7 @@ class SemanticSnapshotGenerator:
                 visible=elem_data.get("visible", True),
                 disabled=disabled,
                 has_popup=has_popup,
+                frame_url=frame_url,
             )
             self.ref_mapper.register_element(interactive_elem)
 

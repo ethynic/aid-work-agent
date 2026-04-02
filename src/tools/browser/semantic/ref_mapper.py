@@ -21,6 +21,7 @@ class InteractiveElement:
     disabled: bool = False
     has_popup: bool = False
     element_handle: Any = None  # Playwright ElementHandle
+    frame_url: Optional[str] = None  # iframe 的 URL（None 表示在主页面中）
 
 
 class RefMapper:
@@ -33,6 +34,8 @@ class RefMapper:
         self._submenu_map: Dict[str, InteractiveElement] = {}
         # Playwright page 引用，用于通过 data-ref 定位 DOM 元素
         self._page = page
+        # iframe frame_url -> Playwright Frame 对象（用于跨 frame 查询）
+        self._frame_map: Dict[str, Any] = {}
 
     def register_element(self, element: InteractiveElement) -> None:
         """注册一个可交互元素
@@ -78,6 +81,7 @@ class RefMapper:
         """通过 ref 获取 Playwright 元素句柄
 
         优先使用缓存的 element_handle，如果为空则通过 data-ref 属性重新定位。
+        支持 iframe 内元素的跨 frame 查询。
 
         Args:
             ref: 元素 ref
@@ -85,36 +89,47 @@ class RefMapper:
         Returns:
             Playwright ElementHandle 或 None
         """
+        from loguru import logger
+
         element = self.get_by_ref(ref)
         if element and element.element_handle:
-            from loguru import logger
             logger.debug(f"[RefMapper] ref={ref} 命中缓存的 element_handle")
             return element.element_handle
 
-        # 通过 data-ref 属性重新定位 DOM 元素
-        if self._page and ref:
-            try:
-                selector = f'[data-ref="{ref}"]'
-                handle = await self._page.query_selector(selector)
-                if handle:
-                    from loguru import logger
-                    logger.info(f"[RefMapper] ref={ref} 通过 data-ref CSS选择器定位成功")
-                    # 缓存句柄
-                    if element:
-                        element.element_handle = handle
-                    return handle
-                else:
-                    from loguru import logger
-                    logger.warning(f"[RefMapper] ref={ref} 通过 data-ref CSS选择器未找到元素 (selector={selector})")
-            except Exception as e:
-                from loguru import logger
-                logger.error(f"[RefMapper] ref={ref} 查询异常: {e}")
+        if not ref:
+            logger.warning(f"[RefMapper] ref 为空")
+            return None
+
+        # 确定在哪个上下文中查询（主页面 or iframe frame）
+        frame_url = element.frame_url if element else None
+        query_context = None
+
+        if frame_url and frame_url in self._frame_map:
+            # 元素在 iframe 中，使用对应的 frame 查询
+            query_context = self._frame_map[frame_url]
+        elif self._page:
+            # 元素在主页面中
+            query_context = self._page
         else:
-            from loguru import logger
-            if not self._page:
-                logger.warning(f"[RefMapper] ref={ref} 查询失败: _page 未设置")
-            if not ref:
-                logger.warning(f"[RefMapper] ref 为空")
+            logger.warning(f"[RefMapper] ref={ref} 查询失败: 无可用的 page 或 frame")
+            return None
+
+        # 通过 data-ref 属性定位 DOM 元素
+        try:
+            selector = f'[data-ref="{ref}"]'
+            handle = await query_context.query_selector(selector)
+            if handle:
+                location = f"frame({frame_url})" if frame_url else "主页面"
+                logger.info(f"[RefMapper] ref={ref} 通过 data-ref 在 {location} 中定位成功")
+                # 缓存句柄
+                if element:
+                    element.element_handle = handle
+                return handle
+            else:
+                location = f"frame({frame_url})" if frame_url else "主页面"
+                logger.warning(f"[RefMapper] ref={ref} 在 {location} 中未找到元素 (selector={selector})")
+        except Exception as e:
+            logger.error(f"[RefMapper] ref={ref} 查询异常: {e}")
 
         return None
 
