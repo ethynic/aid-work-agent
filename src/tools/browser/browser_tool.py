@@ -213,17 +213,30 @@ class BrowserOpenTool(BaseTool):
 
 
 class BrowserClickTool(BaseTool):
-    """点击元素工具"""
+    """点击元素工具（CSS选择器版本 - 已废弃）
+
+    @deprecated
+    请使用 semantic 版本的 BrowserClickTool（browser_click with description parameter）
+    """
 
     name = "browser_click"
-    description = "点击网页中的指定元素（按钮、链接等）"
+    description = """点击网页中的指定元素（CSS选择器版本 - 已废弃）
+
+    @deprecated
+    请使用语义版本：browser_click(description="按钮名称")
+
+    此版本使用 CSS 选择器，不推荐使用，因为：
+    1. CSS 选择器不稳定，页面变化后容易失效
+    2. 大模型难以准确生成正确的 CSS 选择器
+    3. 无法处理动态生成的类名或 ID
+    """
     category = "browser"
     parameters_schema = {
         "type": "object",
         "properties": {
             "selector": {
                 "type": "string",
-                "description": "CSS选择器，如 '.submit-btn', '#submit', 'button[type=\"submit\"]'",
+                "description": "CSS选择器，如 '.submit-btn', '#submit', 'button[type=\"submit\"]'（已废弃）",
             },
             "session_id": {
                 "type": "string",
@@ -238,7 +251,7 @@ class BrowserClickTool(BaseTool):
     }
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        """执行点击操作
+        """执行点击操作（已废弃）
 
         Args:
             selector: CSS选择器
@@ -248,6 +261,11 @@ class BrowserClickTool(BaseTool):
         Returns:
             执行结果
         """
+        logger.warning(
+            "使用了已废弃的 CSS 选择器版本 browser_click。"
+            "请使用语义版本：browser_click(description=\"按钮名称\")"
+        )
+
         selector = kwargs.get("selector", "")
         session_id = kwargs.get("session_id", "default")
         timeout = kwargs.get("timeout", 10000)
@@ -292,6 +310,8 @@ class BrowserClickTool(BaseTool):
                 "session_id": session_id,
                 "current_url": current_url,
                 "page_title": title,
+                "deprecated": True,
+                "deprecation_warning": "请使用语义版本：browser_click(description=\"按钮名称\")",
             }
 
         except Exception as e:
@@ -303,17 +323,30 @@ class BrowserClickTool(BaseTool):
 
 
 class BrowserFillTool(BaseTool):
-    """填写表单工具"""
+    """填写表单工具（CSS选择器版本 - 已废弃）
+
+    @deprecated
+    请使用 semantic 版本的 BrowserFillTool（browser_fill with field parameter）
+    """
 
     name = "browser_fill"
-    description = "填写网页表单中的输入框、文本域等元素"
+    description = """填写网页表单中的输入框、文本域等元素（CSS选择器版本 - 已废弃）
+
+    @deprecated
+    请使用语义版本：browser_fill(field="字段名称", value="值")
+
+    此版本使用 CSS 选择器，不推荐使用，因为：
+    1. CSS 选择器不稳定，页面变化后容易失效
+    2. 大模型难以准确生成正确的 CSS 选择器
+    3. 无法处理动态生成的类名或 ID
+    """
     category = "browser"
     parameters_schema = {
         "type": "object",
         "properties": {
             "selector": {
                 "type": "string",
-                "description": "CSS选择器，如 'input[name=\"username\"]', '#password'",
+                "description": "CSS选择器，如 'input[name=\"username\"]', '#password'（已废弃）",
             },
             "value": {
                 "type": "string",
@@ -332,7 +365,7 @@ class BrowserFillTool(BaseTool):
     }
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        """执行填写表单操作
+        """执行填写表单操作（已废弃）
 
         Args:
             selector: CSS选择器
@@ -343,6 +376,11 @@ class BrowserFillTool(BaseTool):
         Returns:
             执行结果
         """
+        logger.warning(
+            "使用了已废弃的 CSS 选择器版本 browser_fill。"
+            "请使用语义版本：browser_fill(field=\"字段名称\", value=\"值\")"
+        )
+
         selector = kwargs.get("selector", "")
         value = kwargs.get("value", "")
         session_id = kwargs.get("session_id", "default")
@@ -380,6 +418,8 @@ class BrowserFillTool(BaseTool):
                 "message": f"成功填写表单字段: {selector}",
                 "session_id": session_id,
                 "selector": selector,
+                "deprecated": True,
+                "deprecation_warning": "请使用语义版本：browser_fill(field=\"字段名称\", value=\"值\")",
             }
 
         except Exception as e:
@@ -897,13 +937,17 @@ def create_browser_tools() -> List[BaseTool]:
     """
     创建浏览器工具列表
 
+    注意：CSS 选择器版本的 browser_click 和 browser_fill 已废弃，
+    请使用 semantic 版本（通过自然语言描述操作元素）。
+
     Returns:
         浏览器工具列表
     """
     return [
         BrowserOpenTool(),
-        BrowserClickTool(),
-        BrowserFillTool(),
+        # 已废弃 CSS 选择器版本 - 请使用 semantic/tools_semantic.py 中的版本
+        # BrowserClickTool(),  # 已废弃
+        # BrowserFillTool(),  # 已废弃
         BrowserGetContentTool(),
         BrowserNavigateTool(),
         BrowserCloseTool(),

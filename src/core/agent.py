@@ -343,14 +343,34 @@ AGENT_TOOLS = [
         }
     },
     {
-        "name": "browser_click",
-        "description": "点击网页中的指定元素（按钮、链接等）",
+        "name": "browser_snapshot",
+        "description": "获取当前页面的语义快照，返回结构化的页面表示。必须先调用此工具获取快照，才能使用browser_click/fill/select等工具。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "selector": {
+                "session_id": {
                     "type": "string",
-                    "description": "CSS选择器，如 '.submit-btn', '#submit', 'button[type=\"submit\"]'"
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["standard", "interactive", "compact"],
+                    "description": "快照模式：standard标准模式，interactive交互模式（推荐），compact紧凑模式",
+                    "default": "interactive"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "browser_click",
+        "description": "点击页面元素（自然语言驱动）。必须先调用browser_snapshot获取快照！",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "要点击元素的自然语言描述，如'登录按钮'、'报销申请'"
                 },
                 "session_id": {
                     "type": "string",
@@ -358,22 +378,22 @@ AGENT_TOOLS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "等待元素出现的超时时间（毫秒），默认10000",
+                    "description": "超时时间（毫秒），默认10000",
                     "default": 10000
                 }
             },
-            "required": ["selector"]
+            "required": ["description"]
         }
     },
     {
         "name": "browser_fill",
-        "description": "填写网页表单中的输入框、文本域等元素",
+        "description": "填写表单字段（自然语言驱动）。必须先调用browser_snapshot获取快照！",
         "input_schema": {
             "type": "object",
             "properties": {
-                "selector": {
+                "field": {
                     "type": "string",
-                    "description": "CSS选择器，如 'input[name=\"username\"]', '#password'"
+                    "description": "要填写的字段描述，如'用户名'、'报销金额'"
                 },
                 "value": {
                     "type": "string",
@@ -385,11 +405,96 @@ AGENT_TOOLS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "等待元素出现的超时时间（毫秒），默认10000",
+                    "description": "超时时间（毫秒），默认10000",
                     "default": 10000
                 }
             },
-            "required": ["selector", "value"]
+            "required": ["field", "value"]
+        }
+    },
+    {
+        "name": "browser_select",
+        "description": "选择下拉选项（自然语言驱动）。必须先调用browser_snapshot获取快照！",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "description": "下拉选择框的描述，如'部门'、'报销类型'"
+                },
+                "option": {
+                    "type": "string",
+                    "description": "要选择的选项，如'技术研发部'"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                }
+            },
+            "required": ["field", "option"]
+        }
+    },
+    {
+        "name": "browser_find",
+        "description": "根据语义描述查找页面元素，返回匹配结果和备选列表。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "元素的语义描述，如'登录按钮'、'报销金额输入框'"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["viewport", "page"],
+                    "description": "搜索范围：viewport当前视口，page整页（默认page）",
+                    "default": "page"
+                }
+            },
+            "required": ["description"]
+        }
+    },
+    {
+        "name": "browser_get_path",
+        "description": "获取当前的浏览器操作路径历史。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "输出格式：text文本格式，json为JSON格式",
+                    "default": "text"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "browser_backtrack",
+        "description": "回溯到之前的页面状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "浏览器会话ID，默认为'default'"
+                },
+                "steps": {
+                    "type": "integer",
+                    "description": "回溯的步数，默认为1",
+                    "default": 1
+                }
+            },
+            "required": []
         }
     },
     {
@@ -691,14 +796,20 @@ class Agent:
         from src.tools.ocr import PaddleOCRDocParsingTool
         from src.tools.document.doc_tool import DocSummarizeTool, DocTranslateTool
         from src.tools.search.search_tool import WebSearchTool
-        from src.tools.browser.browser_tool import (
+        from src.tools.browser import (
             BrowserOpenTool,
-            BrowserClickTool,
-            BrowserFillTool,
             BrowserGetContentTool,
             BrowserNavigateTool,
             BrowserCloseTool,
             BrowserScreenshotTool,
+            # 语义快照驱动工具
+            BrowserSnapshotTool,
+            BrowserClickTool,
+            BrowserFillTool,
+            BrowserSelectTool,
+            BrowserFindTool,
+            BrowserGetPathTool,
+            BrowserBacktrackTool,
         )
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
         from src.tools.file.upload_to_remote import UploadToRemoteTool
@@ -728,8 +839,13 @@ class Agent:
         
         # 注册浏览器工具
         self.tool_registry.register(BrowserOpenTool())
-        self.tool_registry.register(BrowserClickTool())
-        self.tool_registry.register(BrowserFillTool())
+        self.tool_registry.register(BrowserSnapshotTool())  # 语义快照（必须首先调用）
+        self.tool_registry.register(BrowserClickTool())  # 语义驱动点击
+        self.tool_registry.register(BrowserFillTool())  # 语义驱动填写
+        self.tool_registry.register(BrowserSelectTool())  # 语义驱动选择
+        self.tool_registry.register(BrowserFindTool())  # 语义查找
+        self.tool_registry.register(BrowserGetPathTool())  # 路径追踪
+        self.tool_registry.register(BrowserBacktrackTool())  # 状态回溯
         self.tool_registry.register(BrowserGetContentTool())
         self.tool_registry.register(BrowserNavigateTool())
         self.tool_registry.register(BrowserCloseTool())

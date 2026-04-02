@@ -1,274 +1,300 @@
-# Browser 工具使用文档
+# Browser Tools 语义工具
 
-## 概述
+基于 Playwright 的新一代浏览器自动化工具，通过语义快照和自然语言驱动实现稳定的网页操作。
 
-Browser工具是基于Playwright实现的浏览器自动化工具集，允许智能体理解并操作网页，完成打开网页、点击元素、填写表单、收集信息等任务。
+## 核心特性
 
-## 安装依赖
+- **语义快照**：将网页 DOM 转换为 LLM 可理解的语义结构
+- **自然语言驱动**：通过描述性语言操作元素，无需 CSS 选择器
+- **智能匹配**：支持 Embedding 语义相似度匹配
+- **路径追踪**：记录操作历史，支持状态回溯
+- **iframe 支持**：处理页面嵌套的 iframe 内容
+- **动态子菜单检测**：使用 MutationObserver 实时检测子菜单
 
-```bash
-# 安装Playwright
-pip install playwright
+## 快速开始
 
-# 安装浏览器驱动
-python -m playwright install
+### 1. 打开网页
+
+```python
+from src.tools.browser import BrowserOpenTool
+
+tool = BrowserOpenTool()
+result = await tool.execute(url="https://www.example.com")
+session_id = result["session_id"]
+```
+
+### 2. 获取语义快照
+
+```python
+from src.tools.browser import BrowserSnapshotTool
+
+snapshot_tool = BrowserSnapshotTool()
+snapshot = await snapshot_tool.execute(
+    session_id=session_id,
+    mode="interactive"  # standard / interactive / compact
+)
+```
+
+返回示例：
+
+```json
+{
+  "success": true,
+  "url": "https://example.com",
+  "title": "示例页面",
+  "interactive_elements": [
+    {"ref": "e1", "label": "用户名", "tag": "input", "type": "text"},
+    {"ref": "e2", "label": "密码", "tag": "input", "type": "password"},
+    {"ref": "e3", "label": "登录", "tag": "button"}
+  ],
+  "submenu_snapshots": [
+    {
+      "trigger_ref": "e4",
+      "trigger_label": "财务管理",
+      "items": [
+        {"ref": "e4-1", "label": "报销申请", "action": "click"},
+        {"ref": "e4-2", "label": "付款申请", "action": "click"}
+      ]
+    }
+  ],
+  "iframe_snapshots": [
+    {"ref": "iframe1", "src": "https://embed.example.com", "sandboxed": false}
+  ]
+}
+```
+
+### 3. 语义操作
+
+```python
+# 点击元素
+from src.tools.browser import BrowserClickTool
+
+click_tool = BrowserClickTool()
+await click_tool.execute(
+    description="登录",
+    session_id=session_id
+)
+
+# 填写表单
+from src.tools.browser import BrowserFillTool
+
+fill_tool = BrowserFillTool()
+await fill_tool.execute(
+    field="用户名",
+    value="zhangsan",
+    session_id=session_id
+)
+
+# 选择选项
+from src.tools.browser import BrowserSelectTool
+
+select_tool = BrowserSelectTool()
+await select_tool.execute(
+    field="部门",
+    option="技术研发部",
+    session_id=session_id
+)
+```
+
+### 4. 完整工作流示例
+
+```python
+import asyncio
+from src.tools.browser import (
+    BrowserOpenTool,
+    BrowserSnapshotTool,
+    BrowserClickTool,
+    BrowserFillTool,
+)
+
+async def login_and_navigate():
+    session_id = "my_session"
+
+    # 1. 打开登录页
+    await BrowserOpenTool().execute(
+        url="https://erp.company.com",
+        session_id=session_id
+    )
+
+    # 2. 获取语义快照
+    snapshot = await BrowserSnapshotTool().execute(session_id=session_id)
+
+    # 3. 填写登录表单
+    await BrowserFillTool().execute(
+        field="用户名",
+        value="admin",
+        session_id=session_id
+    )
+    await BrowserFillTool().execute(
+        field="密码",
+        value="***",
+        session_id=session_id
+    )
+
+    # 4. 点击登录按钮
+    await BrowserClickTool().execute(
+        description="登录",
+        session_id=session_id
+    )
+
+    # 5. 获取新页面的快照
+    snapshot = await BrowserSnapshotTool().execute(session_id=session_id)
+
+    # 6. 点击子菜单中的选项
+    await BrowserClickTool().execute(
+        description="报销申请",
+        session_id=session_id
+    )
 ```
 
 ## 工具列表
 
-### 1. browser_open - 打开网页
+### 导航类工具
 
-**功能**: 打开指定URL的网页
+| 工具 | 说明 |
+|------|------|
+| `browser_open` | 打开网页 |
+| `browser_snapshot` | 获取语义快照（**必须首先调用**） |
+| `browser_navigate` | 前进/后退/刷新 |
+| `browser_close` | 关闭浏览器 |
 
-**参数**:
-- `url` (必需): 网页URL，必须以http://或https://开头
-- `session_id` (可选): 浏览器会话ID，用于管理多个会话，默认为'default'
-- `headless` (可选): 是否无头模式运行，默认true
-- `wait_for` (可选): 等待页面加载完成的策略，默认load
+### 操作类工具
 
-**示例**:
-```python
-await browser_open(
-    url="https://www.baidu.com",
-    session_id="my_session",
-    headless=False
-)
+| 工具 | 说明 | 依赖 |
+|------|------|------|
+| `browser_click` | 点击元素 | `browser_snapshot` |
+| `browser_fill` | 填写表单 | `browser_snapshot` |
+| `browser_select` | 选择选项 | `browser_snapshot` |
+| `browser_find` | 语义查找元素 | 可选 |
+
+### 调试类工具
+
+| 工具 | 说明 |
+|------|------|
+| `browser_get_content` | 获取页面原始内容 |
+| `browser_screenshot` | 截图 |
+| `browser_get_path` | 获取操作历史 |
+| `browser_backtrack` | 回溯状态 |
+
+## 重要规范
+
+### 必须遵循的流程
+
+1. **打开网页后**：必须立即调用 `browser_snapshot` 获取语义快照
+2. **页面变化后**：必须再次调用 `browser_snapshot`
+3. **操作元素时**：必须使用 `browser_click`、`browser_fill` 等语义工具
+
+### 禁止事项
+
+- ❌ 禁止使用 CSS 选择器（如 `selector="#submit-btn"`）
+- ❌ 禁止在 `browser_open` 后直接操作元素（必须先快照）
+- ❌ 禁止跳过 `browser_snapshot` 直接猜测 ref
+
+### 正确示例
+
+```
+browser_open(url="https://example.com")
+browser_snapshot()  ← 必须
+browser_click(description="登录按钮")  ← 使用自然语言描述
 ```
 
-### 2. browser_click - 点击元素
+### 错误示例
 
-**功能**: 点击网页中的指定元素（按钮、链接等）
-
-**参数**:
-- `selector` (必需): CSS选择器，如'.submit-btn', '#submit'
-- `session_id` (可选): 浏览器会话ID
-- `timeout` (可选): 等待元素出现的超时时间（毫秒），默认10000
-
-**示例**:
-```python
-await browser_click(
-    selector="button[type='submit']",
-    session_id="my_session"
-)
+```
+browser_open(url="https://example.com")
+browser_click(selector="#login")  ← 禁止使用 CSS 选择器
 ```
 
-### 3. browser_fill - 填写表单
+## 语义快照输出说明
 
-**功能**: 填写网页表单中的输入框、文本域等元素
+### interactive_elements
 
-**参数**:
-- `selector` (必需): CSS选择器
-- `value` (必需): 要填写的值
-- `session_id` (可选): 浏览器会话ID
-- `timeout` (可选): 超时时间（毫秒），默认10000
+页面上所有可交互元素的语义信息：
 
-**示例**:
-```python
-await browser_fill(
-    selector="input[name='username']",
-    value="my_username",
-    session_id="my_session"
-)
-```
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ref` | string | 元素唯一引用（用于后续操作） |
+| `label` | string | 语义标签（LLM 可理解） |
+| `tag` | string | HTML 标签名 |
+| `role` | string | ARIA 角色 |
+| `type` | string | input 类型（仅 input 元素） |
+| `visible` | bool | 是否可见 |
+| `disabled` | bool | 是否禁用 |
+| `has_popup` | bool | 是否有弹出菜单 |
 
-### 4. browser_get_content - 获取页面内容
+### submenu_snapshots
 
-**功能**: 获取网页的文本内容、HTML结构或特定元素的内容
+折叠菜单的隐藏内容（自动检测）：
 
-**参数**:
-- `selector` (可选): CSS选择器，如果为空则获取整个页面的内容
-- `format` (可选): 返回格式（text/html/markdown），默认text
-- `session_id` (可选): 浏览器会话ID
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `trigger_ref` | string | 触发元素 ref |
+| `trigger_label` | string | 触发元素标签 |
+| `items` | array | 子菜单项列表 |
 
-**示例**:
-```python
-# 获取整个页面的文本
-await browser_get_content(
-    format="text",
-    session_id="my_session"
-)
+### iframe_snapshots
 
-# 获取特定元素的HTML
-await browser_get_content(
-    selector="#main-content",
-    format="html",
-    session_id="my_session"
-)
-```
+页面中的 iframe 信息：
 
-### 5. browser_navigate - 页面导航
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ref` | string | iframe 引用 |
+| `src` | string | iframe src 属性 |
+| `title` | string | iframe title |
+| `visible` | bool | 是否可见 |
+| `sandboxed` | bool | 是否沙箱化（跨域） |
+| `element_count` | int | 同源 iframe 内部元素数量 |
+| `nested_iframes` | array | 嵌套的 iframe |
 
-**功能**: 在当前页面进行导航操作：前进、后退、刷新
+## 缓存机制
 
-**参数**:
-- `action` (必需): 导航动作（back/forward/reload）
-- `session_id` (可选): 浏览器会话ID
-
-**示例**:
-```python
-await browser_navigate(
-    action="back",
-    session_id="my_session"
-)
-```
-
-### 6. browser_close - 关闭浏览器
-
-**功能**: 关闭浏览器或特定会话
-
-**参数**:
-- `session_id` (可选): 要关闭的会话ID，如果为空则关闭所有会话
-
-**示例**:
-```python
-# 关闭指定会话
-await browser_close(session_id="my_session")
-
-# 关闭所有会话
-await browser_close()
-```
-
-### 7. browser_screenshot - 网页截图
-
-**功能**: 对当前网页进行截图并保存
-
-**参数**:
-- `path` (可选): 截图保存路径，默认'./screenshot.png'
-- `session_id` (可选): 浏览器会话ID
-- `full_page` (可选): 是否截取整个页面，默认false
-
-**示例**:
-```python
-await browser_screenshot(
-    path="./screenshot.png",
-    full_page=True,
-    session_id="my_session"
-)
-```
-
-## 使用场景
-
-### 场景1: 网页信息收集
+语义快照支持缓存，5分钟 TTL：
 
 ```python
-# 1. 打开网页
-await browser_open(url="https://news.ycombinator.com")
+# 启用缓存（默认）
+snapshot = await snapshot_tool.execute(session_id=session_id, use_cache=True)
 
-# 2. 获取页面内容
-result = await browser_get_content(format="text")
-content = result["content"]
-
-# 3. 解析并提取信息
-# 智能体可以根据需求处理content内容
-
-# 4. 关闭浏览器
-await browser_close()
+# 禁用缓存
+snapshot = await snapshot_tool.execute(session_id=session_id, use_cache=False)
 ```
 
-### 场景2: 网页表单填写
+## 路径追踪
+
+操作会自动记录到 PathTracker：
 
 ```python
-# 1. 打开登录页面
-await browser_open(url="https://example.com/login")
+# 获取操作路径
+from src.tools.browser import BrowserGetPathTool
 
-# 2. 填写用户名
-await browser_fill(
-    selector="input[name='username']",
-    value="my_username"
-)
+path_tool = BrowserGetPathTool()
+path_result = await path_tool.execute(session_id=session_id, format="text")
 
-# 3. 填写密码
-await browser_fill(
-    selector="input[name='password']",
-    value="my_password"
-)
+# 回溯状态
+from src.tools.browser import BrowserBacktrackTool
 
-# 4. 点击登录按钮
-await browser_click(selector="button[type='submit']")
-
-# 5. 等待并获取结果
-await asyncio.sleep(2)
-result = await browser_get_content(format="text")
+backtrack_tool = BrowserBacktrackTool()
+await backtrack_tool.execute(session_id=session_id, steps=2)
 ```
-
-### 场景3: 网页自动化任务
-
-```python
-# 1. 打开起始页面
-await browser_open(url="https://example.com")
-
-# 2. 点击导航到特定页面
-await browser_click(selector="a[href='/products']")
-
-# 3. 等待页面加载
-await asyncio.sleep(1)
-
-# 4. 截图保存当前状态
-await browser_screenshot(path="./products.png")
-
-# 5. 获取产品列表信息
-result = await browser_get_content(
-    selector=".product-list",
-    format="text"
-)
-```
-
-## CSS选择器技巧
-
-### 基本选择器
-- `#id`: 通过ID选择
-- `.class`: 通过类名选择
-- `tag`: 通过标签名选择
-
-### 属性选择器
-- `[attribute]`: 包含指定属性
-- `[attribute='value']`: 属性等于指定值
-- `input[type='text']`: 类型为text的输入框
-
-### 组合选择器
-- `div.container p`: 容器内的所有p标签
-- `div > p`: 直接子元素的p标签
-
-### 伪类选择器
-- `:first-child`: 第一个子元素
-- `:last-child`: 最后一个子元素
-- `:nth-child(n)`: 第n个子元素
-
-## 注意事项
-
-1. **会话管理**: 使用不同的session_id可以同时运行多个浏览器会话
-2. **等待策略**: 对于动态加载的网页，建议使用`wait_for="networkidle"`确保内容完全加载
-3. **超时设置**: 根据网页加载速度合理设置timeout参数
-4. **选择器准确性**: 使用浏览器开发者工具检查元素的选择器
-5. **错误处理**: 工具执行失败时会返回错误信息，需要适当处理
-6. **资源清理**: 完成任务后记得关闭浏览器释放资源
 
 ## 测试
 
-运行测试文件验证工具功能：
+运行语义工具测试：
 
 ```bash
-python test_browser_tool.py
+python -m tests.test_browser_semantic
 ```
 
-## 常见问题
+## 文件结构
 
-### Q: 如何处理需要登录的网页？
-A: 使用browser_fill填写用户名密码，然后使用browser_click点击登录按钮。
-
-### Q: 如何处理弹窗？
-A: Playwright会自动处理大部分弹窗。如果需要特殊处理，可以在browser_get_content中获取弹窗内容。
-
-### Q: 如何获取页面的所有链接？
-A: 使用browser_get_content获取HTML，然后解析提取所有`<a>`标签的href属性。
-
-### Q: 无头模式和有头模式有什么区别？
-A: 无头模式（headless=true）不显示浏览器窗口，适合服务器环境；有头模式可以看到浏览器操作过程，适合调试。
-
-## 未来扩展
-
-- 支持文件上传/下载
-- 支持JavaScript执行
-- 支持多标签页管理
-- 支持Cookie管理
-- 支持代理配置
+```
+src/tools/browser/
+├── semantic/
+│   ├── snapshot_generator.py   # 语义快照生成器
+│   ├── submenu_detector.py     # 子菜单检测器
+│   ├── natural_matcher.py      # 自然语言匹配器
+│   ├── iframe_handler.py       # iframe 处理器
+│   └── ...
+├── tools_snapshot.py           # browser_snapshot 工具
+├── tools_semantic.py           # browser_click/fill/select 工具
+└── ...
+```
