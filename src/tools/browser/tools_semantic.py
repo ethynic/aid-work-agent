@@ -3,6 +3,8 @@
 通过自然语言描述操作页面元素，无需 CSS 选择器。
 """
 
+import asyncio
+import inspect
 from typing import Any, Dict, Optional
 from loguru import logger
 
@@ -127,11 +129,20 @@ class BrowserClickTool(BaseTool):
                 logger.info(f"自然语言匹配成功: '{description}' -> ref={target_ref}, label={target_label}, confidence={match_result.confidence}")
 
             # 获取元素句柄
-            element = ref_mapper.get_handle(target_ref)
+            element = await ref_mapper.get_handle(target_ref)
             if not element:
                 return {
                     "success": False,
                     "error": f"无法定位元素 ref={target_ref}，可能页面已变化，请重新调用 browser_snapshot",
+                    "ref": target_ref,
+                }
+
+            # 防御性检查：确保拿到的是真正的 ElementHandle 而非 coroutine
+            if inspect.iscoroutine(element):
+                logger.error(f"[BUG] get_handle 返回了 coroutine 而非 ElementHandle，ref={target_ref}。请重启程序以确保加载最新代码。")
+                return {
+                    "success": False,
+                    "error": f"内部错误：元素句柄获取异常 (ref={target_ref})，请重启程序后重试",
                     "ref": target_ref,
                 }
 
@@ -294,7 +305,7 @@ class BrowserFillTool(BaseTool):
                 logger.info(f"自然语言匹配成功: '{field}' -> ref={target_ref}, label={target_label}, confidence={match_result.confidence}")
 
             # 获取元素句柄
-            element = ref_mapper.get_handle(target_ref)
+            element = await ref_mapper.get_handle(target_ref)
             if not element:
                 return {
                     "success": False,
@@ -302,17 +313,17 @@ class BrowserFillTool(BaseTool):
                     "ref": target_ref,
                 }
 
-            # 获取元素类型
-            tag_name = await element.tag_name
+            # 防御性检查
+            if inspect.iscoroutine(element):
+                logger.error(f"[BUG] get_handle 返回了 coroutine 而非 ElementHandle，ref={target_ref}。请重启程序以确保加载最新代码。")
+                return {
+                    "success": False,
+                    "error": f"内部错误：元素句柄获取异常 (ref={target_ref})，请重启程序后重试",
+                    "ref": target_ref,
+                }
 
-            # 执行填写
-            if tag_name.lower() == "textarea":
-                await element.fill(value, timeout=timeout)
-            elif tag_name.lower() == "input":
-                # 清空并填写
-                await element.fill(value, timeout=timeout)
-            else:
-                await element.fill(value, timeout=timeout)
+            # 执行填写（fill 对 input/textarea/contenteditable 等所有可编辑元素通用）
+            await element.fill(value, timeout=timeout)
 
             # 记录操作到 PathTracker
             record_browser_action(
@@ -465,11 +476,20 @@ class BrowserSelectTool(BaseTool):
                 logger.info(f"自然语言匹配成功: '{field}' -> ref={target_ref}, label={target_label}")
 
             # 获取元素句柄
-            element = ref_mapper.get_handle(target_ref)
+            element = await ref_mapper.get_handle(target_ref)
             if not element:
                 return {
                     "success": False,
                     "error": f"无法定位元素 ref={target_ref}，可能页面已变化，请重新调用 browser_snapshot",
+                    "ref": target_ref,
+                }
+
+            # 防御性检查
+            if inspect.iscoroutine(element):
+                logger.error(f"[BUG] get_handle 返回了 coroutine 而非 ElementHandle，ref={target_ref}。请重启程序以确保加载最新代码。")
+                return {
+                    "success": False,
+                    "error": f"内部错误：元素句柄获取异常 (ref={target_ref})，请重启程序后重试",
                     "ref": target_ref,
                 }
 

@@ -226,12 +226,15 @@ class NaturalMatcher:
         normalized_field = self._normalize(field)
         candidates = []
 
-        # 查找所有可输入元素
-        input_elements = (
-            self.ref_mapper.find_inputs() +
-            self.ref_mapper.find_by_tag("textarea") +
-            self.ref_mapper.find_by_tag("input")
-        )
+        # 查找所有可输入元素（input 已包含在 find_inputs 中，不需要重复）
+        input_elements = list(self.ref_mapper.find_inputs())
+        # 补充 textarea（find_inputs 已包含，确保去重）
+        seen_tags = set(e.ref for e in input_elements)
+        for elem in self.ref_mapper.find_by_tag("textarea"):
+            if elem.ref not in seen_tags:
+                input_elements.append(elem)
+                seen_tags.add(elem.ref)
+        # 补充 contenteditable 元素（[role="textbox"] 等已通过 role 注册）
 
         for elem in input_elements:
             confidence = self._calculate_fill_confidence(normalized_field, elem)
@@ -322,8 +325,55 @@ class NaturalMatcher:
         # 转小写
         text = text.lower()
 
-        # 移除常见标点和修饰词
-        text = re.sub(r"[的|了|一下|点击|按]", "", text)
+        # 移除常见前缀修饰词（从长到短匹配，避免部分匹配）
+        # 优先匹配长模式（"帮我点击" > "请点击" > "点击"）
+        prefix_patterns = [
+            r"^帮我点击\s*",
+            r"^请点击\s*",
+            r"^请\s*点击\s*",
+            r"^帮我\s*点击\s*",
+            r"^按一下\s*",
+            r"^点击\s*",
+            r"^click\s+",
+            r"^press\s+",
+            r"^请填写\s*",
+            r"^请输入\s*",
+            r"^请\s*",
+            r"^帮我\s+",
+            r"^去\s+",
+            r"^来进行\s+",
+            r"^执行\s+",
+            r"^触发\s+",
+        ]
+        for pattern in prefix_patterns:
+            new_text = re.sub(pattern, "", text)
+            if new_text != text:
+                text = new_text
+                break  # 只移除最外层的前缀
+
+        # 移除常见后缀修饰词
+        # 中文没有空格分隔，直接匹配后缀
+        suffix_patterns = [
+            r"按钮$",
+            r"元素$",
+            r"控件$",
+            r"输入框$",
+            r"表单$",
+            r"字段$",
+            r"链接$",
+        ]
+        # 英文需要空格分隔
+        en_suffix_patterns = [
+            r"\s+link$",
+            r"\s+button$",
+            r"\s+input$",
+            r"\s+field$",
+            r"\s+element$",
+        ]
+        for pattern in suffix_patterns:
+            text = re.sub(pattern, "", text)
+        for pattern in en_suffix_patterns:
+            text = re.sub(pattern, "", text)
 
         # 移除多余空白
         text = re.sub(r"\s+", " ", text)
@@ -359,7 +409,11 @@ class NaturalMatcher:
             return 0.7 + 0.2 * len_ratio
 
         # 3. 按钮关键词匹配
-        is_button = element.tag.lower() in ("button", "a") or element.role == "button"
+        is_button = (
+            element.tag.lower() in ("button", "a") or
+            element.role == "button" or
+            (element.tag.lower() == "input" and element.input_type in ("submit", "reset", "button", "image"))
+        )
         if is_button:
             button_score = self._keyword_match(description, label, self.BUTTON_KEYWORDS)
             if button_score > 0:

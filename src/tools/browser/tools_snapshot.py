@@ -49,8 +49,8 @@ class BrowserSnapshotTool(BaseTool):
             },
             "max_depth": {
                 "type": "integer",
-                "description": "DOM遍历最大深度，默认6",
-                "default": 6,
+                "description": "DOM遍历最大深度，默认10",
+                "default": 10,
             },
             "include_hidden": {
                 "type": "boolean",
@@ -75,7 +75,7 @@ class BrowserSnapshotTool(BaseTool):
         """
         session_id = kwargs.get("session_id", "default")
         mode = kwargs.get("mode", "interactive")
-        max_depth = kwargs.get("max_depth", 6)
+        max_depth = kwargs.get("max_depth", 10)
         include_hidden = kwargs.get("include_hidden", False)
 
         try:
@@ -113,6 +113,26 @@ class BrowserSnapshotTool(BaseTool):
 
             # 返回结果
             result = snapshot.to_dict()
+
+            # === 调试打印：输出所有找到的元素 ===
+            logger.info(f"\n{'='*60}")
+            logger.info(f"[browser_snapshot] 调试信息 - {snapshot.url}")
+            logger.info(f"  标题: {snapshot.title}")
+            logger.info(f"  模式: {mode}")
+            logger.info(f"  交互元素总数: {len(snapshot.interactive_elements)}")
+            for elem in snapshot.interactive_elements:
+                logger.info(f"    ref={elem.get('ref', '?'):>8}  tag={elem.get('tag', '?'):<10} label=\"{elem.get('label', '')}\"  visible={elem.get('visible', True)}")
+            if result.get("submenu_snapshots"):
+                logger.info(f"  子菜单快照: {len(result['submenu_snapshots'])} 个")
+                for sub in result["submenu_snapshots"]:
+                    logger.info(f"    触发: {sub.get('trigger_label', '?')} (ref={sub.get('trigger_ref', '?')})")
+                    for item in sub.get("items", []):
+                        logger.info(f"      ref={item.get('ref', '?'):>10}  label=\"{item.get('label', '')}\"")
+            if result.get("regions"):
+                logger.info(f"  区域: {len(result['regions'])} 个")
+                for region in result["regions"]:
+                    logger.info(f"    id={region.get('id', '?')}  type={region.get('type', '?')}  label=\"{region.get('label', '')}\"")
+            logger.info(f"{'='*60}\n")
 
             # 添加 ref_mapper 引用（存储在会话中供后续工具使用）
             self._store_ref_mapper(session_id, generator.get_ref_mapper())

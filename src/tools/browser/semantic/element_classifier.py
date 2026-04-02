@@ -37,6 +37,11 @@ class ElementClassifier:
         "details",
         "summary",
         "label",
+        "option",
+        "optgroup",
+        "area",
+        "dialog",
+        "menuitem",
     }
 
     # 导航相关标签

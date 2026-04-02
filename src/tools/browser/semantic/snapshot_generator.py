@@ -192,7 +192,7 @@ class SemanticSnapshotGenerator:
         self,
         page,
         mode: str = "interactive",
-        max_depth: int = 6,
+        max_depth: int = 10,
         include_hidden: bool = False,
         use_cache: bool = True,
     ) -> SemanticSnapshot:
@@ -209,6 +209,9 @@ class SemanticSnapshotGenerator:
             SemanticSnapshot: 语义快照
         """
         try:
+            # 设置 page 引用到 ref_mapper，以便后续通过 data-ref 定位元素
+            self.ref_mapper._page = page
+
             # 获取页面基本信息
             url = page.url
             title = await page.title()
@@ -219,7 +222,7 @@ class SemanticSnapshotGenerator:
                 cached = self._get_cached_snapshot(url)
                 if cached:
                     logger.info(f"使用缓存的语义快照: {url}")
-                    cached["from_cache"] = True
+                    cached.pop("from_cache", None)
                     return SemanticSnapshot(**cached)
 
             # 遍历 DOM 树，收集元素
@@ -229,6 +232,9 @@ class SemanticSnapshotGenerator:
 
             # 构建交互元素列表
             interactive_elements = self._build_interactive_elements(elements_data)
+
+            # 注入 data-ref 到 DOM 元素，以便后续操作时定位
+            await self._inject_data_refs(page, interactive_elements)
 
             # 构建区域结构
             regions = self._build_regions(elements_data, mode)
@@ -299,17 +305,117 @@ class SemanticSnapshotGenerator:
                     const { maxDepth, includeHidden, mode } = options;
                     const elements = [];
 
-                    const INTERACTIVE_TAGS = ['a', 'button', 'input', 'select', 'textarea', 'details'];
-                    const SKIP_TAGS = ['script', 'style', 'noscript', 'meta', 'link', 'title', 'head', 'html', 'body'];
+                    // 可交互标签（完整列表）
+                    const INTERACTIVE_TAGS = new Set([
+                        'a', 'button', 'input', 'select', 'textarea', 'details', 'summary',
+                        'area', 'option', 'optgroup', 'dialog',
+                    ]);
+                    const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'meta', 'link', 'title', 'head', 'html', 'body', 'br', 'hr', 'wbr', 'svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse', 'g', 'defs', 'use', 'clippath', 'mask', 'symbol', 'marker', 'pattern', 'lineargradient', 'radialgradient', 'stop', 'filter', 'feblend', 'fecolormatrix', 'fecomponenttransfer', 'feflood', 'fegaussianblur', 'feimage', 'femerge', 'femergenode', 'feoffset', 'fepointlight', 'fespotlight', 'fetile', 'feturbulence', 'animate', 'animatetransform', 'animatemotion']);
+
+                    // 可交互 role 列表
+                    const INTERACTIVE_ROLES = new Set([
+                        'button', 'link', 'checkbox', 'radio', 'tab', 'tablist',
+                        'switch', 'slider', 'spinbutton', 'combobox', 'menuitem',
+                        'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem',
+                        'textbox', 'searchbox', 'listbox', 'gridcell', 'grid',
+                        'rowheader', 'columnheader', 'progressbar', 'scrollbar',
+                        'separator', 'toolbar',
+                    ]);
 
                     const isVisible = (el) => {
                         if (el.hidden) return false;
                         const style = window.getComputedStyle(el);
-                        if (style.display === 'none') return false;
                         if (style.visibility === 'hidden') return false;
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width === 0 || rect.height === 0) return false;
+                        if (parseFloat(style.opacity) === 0) return false;
                         return true;
+                    };
+
+                    // 检查元素是否在可显示的容器中（display:none 的容器内元素不可见）
+                    const isRendered = (el) => {
+                        let current = el;
+                        while (current && current !== document.body) {
+                            const style = window.getComputedStyle(current);
+                            if (style.display === 'none') return false;
+                            current = current.parentElement;
+                        }
+                        return true;
+                    };
+
+                    // 容器元素标签（允许递归进入，即使自身尺寸为0）
+                    const CONTAINER_TAGS = new Set([
+                        'div', 'span', 'form', 'section', 'main', 'article',
+                        'aside', 'header', 'footer', 'nav', 'ul', 'ol', 'li',
+                        'table', 'tr', 'td', 'th', 'tbody', 'thead', 'tfoot',
+                        'fieldset', 'label', 'p', 'h1', 'h2', 'h3', 'h4',
+                        'h5', 'h6', 'details', 'summary', 'figure', 'figcaption',
+                        'dl', 'dd', 'dt', 'blockquote', 'pre', 'code',
+                        'dialog', 'menu', 'picture', 'video', 'audio',
+                        'source', 'track', 'map', 'datalist', 'output',
+                        'template', 'slot', 'blockquote', 'em', 'strong',
+                        'small', 'mark', 'abbr', 'cite', 'q', 'dfn',
+                        'var', 'samp', 'kbd', 'sub', 'sup', 'i', 'b',
+                        'u', 's', 'ruby', 'rt', 'rp', 'bdi', 'bdo',
+                        'wbr', 'data', 'time', 'ins', 'del',
+                    ]);
+
+                    const shouldSkip = (el) => {
+                        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+
+                        // 交互元素：只检查 hidden/visibility/opacity + 是否在 display:none 容器中
+                        if (INTERACTIVE_TAGS.has(tag) || INTERACTIVE_ROLES.has(el.getAttribute('role'))) {
+                            if (!isVisible(el)) return true;
+                            return !isRendered(el);
+                        }
+                        // contenteditable
+                        if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) {
+                            if (!isVisible(el)) return true;
+                            return !isRendered(el);
+                        }
+                        // 容器元素：始终允许递归进入
+                        if (CONTAINER_TAGS.has(tag)) {
+                            return false;
+                        }
+                        // 其他元素：完整可见性检查
+                        if (!isVisible(el)) return true;
+                        const style = window.getComputedStyle(el);
+                        if (style.display === 'none') return true;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 || rect.height === 0) return true;
+                        return false;
+                    };
+
+                    // 提取元素文本（获取自身直接文本 + 子元素的文本摘要）
+                    const getTextContent = (el) => {
+                        // input 特殊处理：用 value 属性
+                        if (el.tagName && el.tagName.toLowerCase() === 'input') {
+                            const val = el.getAttribute('value');
+                            if (val) return val;
+                            // placeholder 作为后备文本来源
+                            return el.getAttribute('placeholder') || '';
+                        }
+                        // 无子元素：直接取 textContent
+                        if (el.children.length === 0) {
+                            return el.textContent || '';
+                        }
+                        // 有子元素：取直接文本节点 + 第一个子元素的文本（覆盖按钮内的 span/img 场景）
+                        let text = '';
+                        for (const node of el.childNodes) {
+                            if (node.nodeType === Node.TEXT_NODE) {
+                                text += node.textContent;
+                            }
+                        }
+                        // 如果直接文本为空，尝试取第一个有文本的子元素
+                        if (!text.trim()) {
+                            for (const child of el.children) {
+                                const childText = child.textContent || '';
+                                if (childText.trim()) {
+                                    // 截取前50字符，避免过长
+                                    text = childText.trim().substring(0, 50);
+                                    break;
+                                }
+                            }
+                        }
+                        return text;
                     };
 
                     const traverse = (root, depth) => {
@@ -318,10 +424,10 @@ class SemanticSnapshotGenerator:
                         const children = root.children;
                         for (let i = 0; i < children.length; i++) {
                             const el = children[i];
-                            const tagName = el.tagName.toLowerCase();
+                            const tagName = el.tagName ? el.tagName.toLowerCase() : '';
 
                             // 跳过不需要的标签
-                            if (SKIP_TAGS.includes(tagName)) continue;
+                            if (SKIP_TAGS.has(tagName)) continue;
 
                             // 获取属性
                             const attrs = {};
@@ -330,32 +436,31 @@ class SemanticSnapshotGenerator:
                             }
 
                             // 检查可见性
-                            const visible = isVisible(el);
-                            if (!includeHidden && !visible) continue;
+                            if (!includeHidden && shouldSkip(el)) continue;
+
+                            // 跳过 type=hidden 的 input
+                            if (tagName === 'input' && attrs['type'] === 'hidden') continue;
 
                             // 获取文本内容
-                            let textContent = '';
-                            if (el.children.length === 0) {
-                                textContent = el.textContent || '';
-                            } else {
-                                // 只获取直接子文本节点
-                                for (const node of el.childNodes) {
-                                    if (node.nodeType === Node.TEXT_NODE) {
-                                        textContent += node.textContent;
-                                    }
-                                }
-                            }
+                            const textContent = getTextContent(el);
 
                             // 判断是否可交互
-                            const isInteractive = INTERACTIVE_TAGS.includes(tagName) ||
-                                el.getAttribute('role') === 'button' ||
-                                el.getAttribute('role') === 'link' ||
-                                el.getAttribute('contenteditable') === 'true';
+                            const role = el.getAttribute('role');
+                            const isInteractive = INTERACTIVE_TAGS.has(tagName) ||
+                                INTERACTIVE_ROLES.has(role) ||
+                                el.getAttribute('contenteditable') === 'true' ||
+                                el.isContentEditable ||
+                                el.getAttribute('tabindex') === '0';
 
-                            // 判断是否有子菜单
+                            // 判断是否有子菜单（更全面的检测）
                             const hasPopup = el.getAttribute('aria-haspopup') ||
+                                el.getAttribute('aria-expanded') !== null ||
                                 el.classList.contains('dropdown-toggle') ||
-                                el.classList.contains('dropdown');
+                                el.classList.contains('dropdown') ||
+                                el.getAttribute('data-toggle') === 'dropdown' ||
+                                el.getAttribute('data-bs-toggle') === 'dropdown' ||
+                                (role === 'button' && el.getAttribute('data-target')) ||
+                                el.querySelector('[role="menu"], .dropdown-menu, .submenu');
 
                             // 收集数据
                             elements.push({
@@ -363,12 +468,12 @@ class SemanticSnapshotGenerator:
                                 attrs: attrs,
                                 text: textContent.trim(),
                                 depth: depth,
-                                visible: visible,
+                                visible: isVisible(el),
                                 isInteractive: isInteractive,
-                                hasPopup: hasPopup,
-                                role: el.getAttribute('role'),
+                                hasPopup: !!hasPopup,
+                                role: role,
                                 id: el.getAttribute('id'),
-                                className: el.className,
+                                className: typeof el.className === 'string' ? el.className : '',
                             });
 
                             // 递归遍历子元素
@@ -473,6 +578,87 @@ class SemanticSnapshotGenerator:
             self.ref_mapper.register_element(interactive_elem)
 
         return interactive_elements
+
+    async def _inject_data_refs(
+        self,
+        page,
+        interactive_elements: List[Dict[str, Any]],
+    ) -> None:
+        """将 data-ref 属性注入到 DOM 元素上，以便后续通过 CSS 选择器定位
+
+        Args:
+            page: Playwright page
+            interactive_elements: 交互元素列表（需要包含 attrs 字段）
+        """
+        # 构建定位信息，用于在 JS 中精确匹配元素
+        locator_map = []
+        for elem in interactive_elements:
+            ref = elem.get("ref", "")
+            tag = elem.get("tag", "")
+            attrs = elem.get("attrs", {})
+            if not ref or not tag:
+                continue
+            locator_map.append({
+                "ref": ref,
+                "tag": tag,
+                "id": attrs.get("id", ""),
+                "name": attrs.get("name", ""),
+                "className": attrs.get("class", ""),
+                "type": attrs.get("type", ""),
+                "role": attrs.get("role", ""),
+            })
+
+        if not locator_map:
+            return
+
+        try:
+            injected_count = await page.evaluate("""(locatorMap) => {
+                let injected = 0;
+                for (const item of locatorMap) {
+                    // 优先用 ID 快速定位
+                    if (item.id) {
+                        const elById = document.getElementById(item.id);
+                        if (elById && elById.tagName.toLowerCase() === item.tag.toLowerCase()) {
+                            // 额外验证其他属性
+                            if (item.type && elById.getAttribute('type') !== item.type) {
+                                // ID 匹配但 type 不匹配，走通用流程
+                            } else {
+                                elById.setAttribute('data-ref', item.ref);
+                                injected++;
+                                continue;
+                            }
+                        }
+                    }
+                    // 通用流程：遍历同 tag 的所有元素
+                    let candidates = document.querySelectorAll(item.tag);
+                    for (const el of candidates) {
+                        // 匹配 id
+                        if (item.id && el.id !== item.id) continue;
+                        // 匹配 name
+                        if (item.name && el.getAttribute('name') !== item.name) continue;
+                        // 匹配 type
+                        if (item.type && el.getAttribute('type') !== item.type) continue;
+                        // 匹配 role
+                        if (item.role && el.getAttribute('role') !== item.role) continue;
+                        // 匹配 className（部分匹配，因为 class 可能组合多个）
+                        if (item.className) {
+                            const elClasses = el.className.split(/\\s+/);
+                            const requiredClasses = item.className.split(/\\s+/);
+                            if (!requiredClasses.every(c => elClasses.includes(c))) continue;
+                        }
+                        // 匹配成功，注入 data-ref
+                        el.setAttribute('data-ref', item.ref);
+                        injected++;
+                        break; // 每个 ref 只匹配第一个元素
+                    }
+                }
+                return injected;
+            }""", locator_map)
+            logger.info(f"[data-ref] 注入完成: {injected_count}/{len(locator_map)} 个元素已注入 data-ref")
+            if injected_count < len(locator_map):
+                logger.warning(f"[data-ref] {len(locator_map) - injected_count} 个元素未能匹配到 DOM")
+        except Exception as e:
+            logger.warning(f"注入 data-ref 失败: {e}")
 
     def _build_regions(
         self,

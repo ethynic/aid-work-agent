@@ -130,8 +130,8 @@ class IFrameHandler:
                 width = 0
                 height = 0
 
-            # 检查是否沙箱化（跨域）
-            sandboxed = "sandbox" in attrs or not attrs.get("src", "").startswith("http")
+            # 检查是否沙箱化（只有 sandbox 属性才真正表示沙箱限制）
+            sandboxed = "sandbox" in attrs
 
             # 生成 ref
             iframe_ref = self._generate_iframe_ref()
@@ -192,29 +192,51 @@ class IFrameHandler:
             if not frame:
                 return None
 
-            # 在 frame 中执行 DOM 遍历
+            # 在 frame 中执行 DOM 遍历（使用与主页面一致的策略）
             elements_data = await frame.evaluate("""
                 () => {
                     const elements = [];
-                    const INTERACTIVE_TAGS = ['a', 'button', 'input', 'select', 'textarea', 'details'];
+                    const INTERACTIVE_TAGS = new Set([
+                        'a', 'button', 'input', 'select', 'textarea', 'details', 'summary',
+                        'area', 'option', 'optgroup', 'dialog',
+                    ]);
+                    const INTERACTIVE_ROLES = new Set([
+                        'button', 'link', 'checkbox', 'radio', 'tab', 'switch',
+                        'slider', 'combobox', 'menuitem', 'textbox', 'searchbox',
+                        'listbox', 'gridcell', 'treeitem',
+                    ]);
+                    const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'meta', 'link', 'svg', 'path']);
 
                     const isVisible = (el) => {
                         if (el.hidden) return false;
                         const style = window.getComputedStyle(el);
-                        if (style.display === 'none') return false;
                         if (style.visibility === 'hidden') return false;
+                        if (parseFloat(style.opacity) === 0) return false;
+                        return true;
+                    };
+
+                    const isRendered = (el) => {
+                        let current = el;
+                        while (current && current !== document.body) {
+                            const style = window.getComputedStyle(current);
+                            if (style.display === 'none') return false;
+                            current = current.parentElement;
+                        }
                         return true;
                     };
 
                     const traverse = (root, depth, parentRef) => {
-                        if (depth > 6) return;
+                        if (depth > 10) return;
 
                         const children = root.children;
                         for (let i = 0; i < children.length; i++) {
                             const el = children[i];
-                            const tagName = el.tagName.toLowerCase();
+                            const tagName = el.tagName ? el.tagName.toLowerCase() : '';
 
-                            // 获取文本内容
+                            if (SKIP_TAGS.has(tagName)) continue;
+
+                            if (tagName === 'input' && el.getAttribute('type') === 'hidden') continue;
+
                             let textContent = '';
                             if (el.children.length === 0) {
                                 textContent = el.textContent || '';
@@ -224,29 +246,38 @@ class IFrameHandler:
                                         textContent += node.textContent;
                                     }
                                 }
+                                if (!textContent.trim()) {
+                                    for (const child of el.children) {
+                                        const ct = child.textContent || '';
+                                        if (ct.trim()) {
+                                            textContent = ct.trim().substring(0, 50);
+                                            break;
+                                        }
+                                    }
+                                }
                             }
 
-                            // 判断是否可交互
-                            const isInteractive = INTERACTIVE_TAGS.includes(tagName) ||
-                                el.getAttribute('role') === 'button' ||
-                                el.getAttribute('role') === 'link';
+                            const role = el.getAttribute('role');
+                            const isInteractive = INTERACTIVE_TAGS.has(tagName) ||
+                                INTERACTIVE_ROLES.has(role) ||
+                                el.getAttribute('contenteditable') === 'true' ||
+                                el.isContentEditable;
 
-                            // 收集数据
                             if (isInteractive || tagName === 'iframe') {
+                                const visible = isVisible(el) && isRendered(el);
                                 elements.push({
                                     ref: parentRef + '-e' + elements.length,
                                     tag: tagName,
                                     text: textContent.trim().substring(0, 100),
-                                    visible: isVisible(el),
-                                    role: el.getAttribute('role'),
+                                    visible: visible,
+                                    role: role,
                                     href: el.getAttribute('href'),
                                     type: el.getAttribute('type'),
                                     isIframe: tagName === 'iframe',
                                 });
                             }
 
-                            // 递归遍历
-                            if (el.children.length > 0 && depth < 6) {
+                            if (el.children.length > 0 && depth < 10) {
                                 traverse(el, depth + 1, parentRef);
                             }
                         }

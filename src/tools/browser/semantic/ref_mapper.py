@@ -26,11 +26,13 @@ class InteractiveElement:
 class RefMapper:
     """ref 映射器，管理元素引用和 Playwright 句柄的映射"""
 
-    def __init__(self):
+    def __init__(self, page=None):
         # ref -> InteractiveElement
         self._ref_map: Dict[str, InteractiveElement] = {}
         # submenu ref -> (parent_ref, InteractiveElement)
         self._submenu_map: Dict[str, InteractiveElement] = {}
+        # Playwright page 引用，用于通过 data-ref 定位 DOM 元素
+        self._page = page
 
     def register_element(self, element: InteractiveElement) -> None:
         """注册一个可交互元素
@@ -72,8 +74,10 @@ class RefMapper:
 
         return None
 
-    def get_handle(self, ref: str):
+    async def get_handle(self, ref: str):
         """通过 ref 获取 Playwright 元素句柄
+
+        优先使用缓存的 element_handle，如果为空则通过 data-ref 属性重新定位。
 
         Args:
             ref: 元素 ref
@@ -82,8 +86,36 @@ class RefMapper:
             Playwright ElementHandle 或 None
         """
         element = self.get_by_ref(ref)
-        if element:
+        if element and element.element_handle:
+            from loguru import logger
+            logger.debug(f"[RefMapper] ref={ref} 命中缓存的 element_handle")
             return element.element_handle
+
+        # 通过 data-ref 属性重新定位 DOM 元素
+        if self._page and ref:
+            try:
+                selector = f'[data-ref="{ref}"]'
+                handle = await self._page.query_selector(selector)
+                if handle:
+                    from loguru import logger
+                    logger.info(f"[RefMapper] ref={ref} 通过 data-ref CSS选择器定位成功")
+                    # 缓存句柄
+                    if element:
+                        element.element_handle = handle
+                    return handle
+                else:
+                    from loguru import logger
+                    logger.warning(f"[RefMapper] ref={ref} 通过 data-ref CSS选择器未找到元素 (selector={selector})")
+            except Exception as e:
+                from loguru import logger
+                logger.error(f"[RefMapper] ref={ref} 查询异常: {e}")
+        else:
+            from loguru import logger
+            if not self._page:
+                logger.warning(f"[RefMapper] ref={ref} 查询失败: _page 未设置")
+            if not ref:
+                logger.warning(f"[RefMapper] ref 为空")
+
         return None
 
     def find_by_label(self, label: str, exact: bool = False) -> List[InteractiveElement]:
@@ -147,6 +179,7 @@ class RefMapper:
             elem for elem in self._ref_map.values()
             if elem.tag.lower() in ("button", "a")
             or elem.role == "button"
+            or (elem.tag.lower() == "input" and elem.input_type in ("submit", "reset", "button", "image"))
         ]
 
     def find_inputs(self) -> List[InteractiveElement]:
