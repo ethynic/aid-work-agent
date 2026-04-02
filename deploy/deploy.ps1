@@ -209,10 +209,10 @@ Write-Host "本地源目录: $localBasePath"
 Write-Host "远程目标目录: $remoteDirectory"
 Write-Host "----------------------------------------"
 
-# 递归获取所有文件（排除指定目录 和 指定文件，以及 aid_work_agent.db 数据库文件）
+# 递归获取所有文件（排除指定目录 和 指定文件类型，以及数据库文件和缓存文件）
 $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     $fullPath = $_.FullName
-    # 排除目录：.git, .codebuddy, .workbuddy, deploy, docs, frontend\src, frontend\node_modules, log, plans, test_uploads
+    # 排除目录：.git, .codebuddy, .workbuddy, deploy, docs, frontend/src, frontend/node_modules, log, plans, test_uploads, venv, __pycache__, uploads, memories, .idea, .vscode, frontend/dist, frontend/.vite, frontend/.output
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).git*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).codebuddy*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).workbuddy*") -and
@@ -220,20 +220,51 @@ $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)docs*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)src*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)node_modules*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).idea*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).vscode*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)log*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)uploads*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)memories*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)plans*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)test_uploads*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)venv*") -and
-    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)__pycache__*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)ENV*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)env*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).__pycache__*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).pytest_cache*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).mypy_cache*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).pyre*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).DS_Store*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)Thumbs.db*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar).env*") -and
+    # 排除文件类型
     -not ($_.Extension -eq ".bat") -and
     -not ($_.Extension -eq ".log") -and
     -not ($_.Extension -eq ".env") -and
+    -not ($_.Extension -eq ".env.local") -and
+    -not ($_.Name -like "*.env.*.local") -and
     -not ($_.Extension -eq ".example") -and
-    -not ($_.Extension -eq ".dockerignore ") -and
+    -not ($_.Extension -eq ".dockerignore") -and
     -not ($_.Extension -eq ".gitignore") -and
-    -not ($_.Name -eq "aid_work_agent.db")  # 排除数据库文件
+    -not ($_.Extension -eq ".installed.cfg") -and
+    -not ($_.Extension -eq ".egg") -and
+    -not ($_.Extension -eq ".db") -and
+    -not ($_.Extension -eq ".sqlite3") -and
+    -not ($_.Extension -eq ".db-wal") -and
+    -not ($_.Extension -eq ".db-shm") -and
+    -not ($_.Extension -eq ".cache") -and
+    -not ($_.Extension -eq ".pyc") -and
+    -not ($_.Extension -eq ".pyo") -and
+    -not ($_.Extension -eq ".pyd") -and
+    -not ($_.Name -like "*$py.class") -and
+    -not ($_.Extension -eq ".so") -and
+    -not ($_.Extension -eq ".coverage") -and
+    -not ($_.Name -like "*.swp") -and
+    -not ($_.Name -like "*.swo") -and
+    -not ($_.Name -like "*~") -and
+    -not ($_.Name -like "*.tmp") -and
+    -not ($_.Name -like "*.temp") -and
+    -not ($_.Name -like "*.bak")
 }
 
 foreach ($file in $files) {
