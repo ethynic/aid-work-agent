@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import './style.css'
+import { useTheme } from './composables/useTheme'
 
 // 客户信息页面
 import CustomerInfo from './components/CustomerInfo.vue'
@@ -11,6 +12,10 @@ import ScheduledTasks from './components/ScheduledTasks.vue'
 
 // 知识库管理页面
 import KnowledgeBase from './components/KnowledgeBase.vue'
+
+// 初始化主题
+const { initTheme } = useTheme()
+initTheme()
 
 // 创建路由
 const router = createRouter({
