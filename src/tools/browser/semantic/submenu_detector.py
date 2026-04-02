@@ -235,14 +235,6 @@ class SubmenuDetector:
         element_ref: str,
         element_label: str,
     ) -> Optional[SubmenuSnapshot]:
-
-    async def detect_and_snapshot(
-        self,
-        page,
-        element,
-        element_ref: str,
-        element_label: str,
-    ) -> Optional[SubmenuSnapshot]:
         """检测元素是否有子菜单，如有则展开并获取快照
 
         Args:

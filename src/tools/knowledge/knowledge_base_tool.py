@@ -46,6 +46,7 @@ class KnowledgeBaseTool(BaseTool):
         database_url = os.getenv("DATABASE_URL", "sqlite:///./aid_work_agent.db")
         db_path = database_url.replace("sqlite:///", "")
         conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.enable_load_extension(True)
         conn.row_factory = sqlite3.Row
 
         # 从配置获取 Qwen API Key（支持 key 池）

@@ -119,6 +119,7 @@ class IFrameHandler:
             visible = await iframe_element.is_visible()
             if not visible:
                 # 可选：跳过不可见的 iframe
+                return None
 
             # 获取尺寸
             try:

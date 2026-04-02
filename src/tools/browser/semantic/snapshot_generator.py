@@ -27,7 +27,8 @@ class SnapshotCache:
     element_count: int
 
 
-class SemanticSnapshotGenerator:
+@dataclass
+class SemanticSnapshot:
     """语义快照数据类"""
 
     success: bool = True

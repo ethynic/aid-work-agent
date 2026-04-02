@@ -7,7 +7,7 @@ from .snapshot_generator import SemanticSnapshotGenerator, SemanticSnapshot
 from .element_classifier import ElementClassifier, ElementType
 from .semantic_tagger import SemanticTagger
 from .submenu_detector import SubmenuDetector, SubmenuSnapshot, MenuItem
-from .ref_mapper import RefMapper
+from .ref_mapper import RefMapper, InteractiveElement
 from .natural_matcher import NaturalMatcher, MatchResult
 from .iframe_handler import IFrameHandler, IFrameInfo, get_page_iframes
 
@@ -21,6 +21,7 @@ __all__ = [
     "SubmenuSnapshot",
     "MenuItem",
     "RefMapper",
+    "InteractiveElement",
     "NaturalMatcher",
     "MatchResult",
     "IFrameHandler",
