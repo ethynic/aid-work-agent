@@ -16,6 +16,9 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     build-essential \
     curl \
     wget \
+    # sqlite-vec C 扩展编译依赖
+    libsqlite3-dev \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -26,7 +29,8 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # 安装依赖，使用国内镜像加速（腾讯云）
-RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple
+# --ignore-installed 避免与系统已安装的包冲突
+RUN pip install --no-cache-dir --ignore-installed -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple
 
 # ============== 阶段2：运行阶段 ==============
 FROM python:3.11-slim
@@ -70,6 +74,8 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     tree \
     # 字体支持（用于 PDF 等处理）
     fonts-noto-cjk \
+    # sqlite-vec 运行时依赖
+    libsqlite3-0 \
     # 其他运行时依赖
     libglib2.0-0 \
     libnss3 \
@@ -91,8 +97,9 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# 创建非 root 用户
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+# 创建非 root 用户及 home 目录（Uvicorn control server 需要）
+RUN groupadd -r appgroup && useradd -r -g appgroup -m appuser
+ENV HOME=/home/appuser
 
 # 设置工作目录
 WORKDIR /app
@@ -108,7 +115,7 @@ RUN chown -R appuser:appgroup /opt/venv
 COPY --chown=appuser:appgroup . .
 
 # 创建必要的目录
-RUN mkdir -p logs && chown -R appuser:appgroup logs
+# RUN mkdir -p log && chown -R appuser:appgroup log
 
 # 安装 Playwright 浏览器（使用国内镜像）- 默认跳过，如需浏览器功能取消注释
 # RUN playwright install chromium --with-deps -i https://playwright.aimir.cn/simple || \

@@ -71,8 +71,8 @@ fi
 
 # 3. 备份日志文件
 log_info "备份日志文件..."
-if [ -d "$PROJECT_DIR/logs" ]; then
-    tar -czf $BACKUP_DIR/logs.tar.gz -C $PROJECT_DIR logs
+if [ -d "$PROJECT_DIR/log" ]; then
+    tar -czf $BACKUP_DIR/log.tar.gz -C $PROJECT_DIR log
     log_success "日志文件已备份"
 else
     log_error "日志目录不存在"
@@ -91,7 +91,7 @@ cat > $BACKUP_DIR/manifest.txt <<EOF
   - .env (配置文件)
   - uploads.tar.gz (上传文件)
   - memories.tar.gz (记忆文件)
-  - logs.tar.gz (日志文件)
+  - log.tar.gz (日志文件)
 
 文件列表:
 $(ls -lh $BACKUP_DIR)

@@ -6,18 +6,18 @@
         <div
           v-for="file in files"
           :key="file.file_id"
-          class="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200"
+          class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg border border-gray-200"
         >
-          <svg v-if="file.type === 'image'" class="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg v-if="file.type === 'image'" class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <svg v-else class="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg v-else class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          <span class="text-sm text-slate-600 max-w-32 truncate">{{ file.name }}</span>
+          <span class="text-sm text-gray-600 max-w-32 truncate">{{ file.name }}</span>
           <button
             @click="emit('remove', file.file_id)"
-            class="text-slate-400 hover:text-red-500 transition-colors"
+            class="text-gray-400 hover:text-danger-500 transition-colors"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -32,7 +32,7 @@
         <button
           @click="triggerFileInput"
           :disabled="disabled || isProcessing"
-          class="flex-shrink-0 p-3 rounded-xl bg-slate-100 border border-slate-200 text-slate-500 hover:text-cyan-500 hover:border-cyan-300 transition-all disabled:opacity-50"
+          class="flex-shrink-0 p-3 rounded-xl bg-gray-100 border border-gray-200 text-gray-500 hover:text-primary-500 hover:border-primary-300 transition-all disabled:opacity-50"
           title="添加附件"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -58,14 +58,14 @@
             :disabled="disabled"
             placeholder="输入您的问题或任务，按Enter发送..."
             rows="1"
-            class="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-slate-800 placeholder-slate-400 resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all disabled:opacity-50"
+            class="w-full px-4 py-3 bg-white border border-gray-300 rounded-xl text-gray-800 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 transition-all disabled:opacity-50"
             :class="[isProcessing ? 'pr-20' : '']"
           ></textarea>
 
           <!-- Processing indicator -->
           <div
             v-if="isProcessing"
-            class="absolute right-3 bottom-3 flex items-center gap-2 text-cyan-400"
+            class="absolute right-3 bottom-3 flex items-center gap-2 text-primary-500"
           >
             <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -82,8 +82,8 @@
           :class="[
             'px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2',
             canSend && (inputText.trim() || files.length > 0)
-              ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:from-cyan-400 hover:to-blue-400 shadow-lg shadow-cyan-500/25'
-              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              ? 'bg-gradient-to-r from-primary-500 to-primary-700 text-white hover:from-primary-400 hover:to-primary-600 shadow-lg shadow-primary-500/25'
+              : 'bg-gray-200 text-gray-400 cursor-not-allowed'
           ]"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -94,13 +94,13 @@
       </div>
 
       <!-- Hint -->
-      <div class="mt-2 text-xs text-slate-500 text-center">
+      <div class="mt-2 text-xs text-gray-500 text-center">
         <span>按</span>
-        <kbd class="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-slate-600 mx-1">Enter</kbd>
+        <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Enter</kbd>
         <span>发送</span>
         <span class="mx-2">|</span>
         <span>按</span>
-        <kbd class="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-slate-600 mx-1">Shift + Enter</kbd>
+        <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Shift + Enter</kbd>
         <span>换行</span>
       </div>
     </div>

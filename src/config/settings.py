@@ -17,7 +17,6 @@ load_dotenv()
 
 class LLMProviderConfig(BaseModel):
     """LLM提供者配置"""
-    api_key: str = ""            # 单 Key（向后兼容）
     api_keys: List[str] = Field(default_factory=list)  # 多 Key 池
     model: str = ""
     base_url: Optional[str] = None
@@ -26,34 +25,21 @@ class LLMProviderConfig(BaseModel):
     queue_timeout: float = 30.0       # 等待可用 Key 的超时秒数
 
     @validator("api_keys", pre=True, always=True)
-    def parse_api_keys(cls, v, values):
+    def parse_api_keys(cls, v):
         """
-        支持逗号分隔字符串或列表；若 api_keys 为空则回退到 api_key。
-        优先级：api_keys 环境变量 > api_keys 字段 > api_key 字段
+        支持逗号分隔字符串或列表。
         """
-        # 处理逗号分隔字符串
         if isinstance(v, str):
             parsed = [k.strip() for k in v.split(",") if k.strip()]
         elif isinstance(v, list):
             parsed = [k.strip() for k in v if k.strip()]
         else:
             parsed = []
-
-        # 若 api_keys 为空，回退到单 Key
-        if not parsed:
-            single = values.get("api_key", "")
-            if single:
-                parsed = [single]
-
         return parsed
 
     def get_effective_keys(self) -> List[str]:
         """获取有效的 Key 列表（已去重、去空）"""
-        if self.api_keys:
-            return self.api_keys
-        if self.api_key:
-            return [self.api_key]
-        return []
+        return self.api_keys
 
 
 class LLMConfig(BaseModel):
@@ -234,17 +220,13 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("LLM_PROVIDER"):
         yaml_config.setdefault("llm", {})["provider"] = os.getenv("LLM_PROVIDER")
     
-    # Qwen：优先读多 Key（QWEN_API_KEYS），回退到单 Key（QWEN_API_KEY）
+    # Qwen：只使用 QWEN_API_KEYS（逗号分隔的多 Key）
     if os.getenv("QWEN_API_KEYS"):
         yaml_config.setdefault("llm", {}).setdefault("qwen", {})["api_keys"] = os.getenv("QWEN_API_KEYS")
-    elif os.getenv("QWEN_API_KEY"):
-        yaml_config.setdefault("llm", {}).setdefault("qwen", {})["api_key"] = os.getenv("QWEN_API_KEY")
 
-    # Zhipu：优先读多 Key（ZHIPU_API_KEYS），回退到单 Key（ZHIPU_API_KEY）
+    # Zhipu：只使用 ZHIPU_API_KEYS（逗号分隔的多 Key）
     if os.getenv("ZHIPU_API_KEYS"):
         yaml_config.setdefault("llm", {}).setdefault("zhipu", {})["api_keys"] = os.getenv("ZHIPU_API_KEYS")
-    elif os.getenv("ZHIPU_API_KEY"):
-        yaml_config.setdefault("llm", {}).setdefault("zhipu", {})["api_key"] = os.getenv("ZHIPU_API_KEY")
     
     if os.getenv("WECOM_CORP_ID"):
         yaml_config.setdefault("channels", {}).setdefault("wecom", {})["corp_id"] = os.getenv("WECOM_CORP_ID")

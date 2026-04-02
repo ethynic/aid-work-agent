@@ -80,7 +80,7 @@ async def interactive_mode():
                 print("\n[Hint] Please check your API key configuration in .env file:")
                 print("  ZHIPU_API_KEY=your_key_here")
                 print("  or")
-                print("  QWEN_API_KEY=your_key_here")
+                print("  QWEN_API_KEYS=your_key_here")
 
 
 async def main():
@@ -93,7 +93,7 @@ async def main():
     if settings.llm.provider == "zhipu" and settings.llm.zhipu.api_key:
         has_api_key = True
         print(f"\n[OK] Zhipu API key configured")
-    elif settings.llm.provider == "qwen" and settings.llm.qwen.api_key:
+    elif settings.llm.provider == "qwen" and settings.llm.qwen.get_effective_keys():
         has_api_key = True
         print(f"\n[OK] Qwen API key configured")
     
@@ -102,7 +102,7 @@ async def main():
         print("Please set up your API key in .env file:")
         print("  ZHIPU_API_KEY=your_key_here")
         print("  or")
-        print("  QWEN_API_KEY=your_key_here")
+        print("  QWEN_API_KEYS=your_key_here")
         print("\nContinuing anyway (errors may occur)...")
     
     # Start interactive mode directly

@@ -17,8 +17,8 @@ services:
       - SERVER_PORT=8000
       # LLM 配置
       - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
-      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
-      - QWEN_API_KEY=${QWEN_API_KEY}
+      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
+      - QWEN_API_KEYS=${QWEN_API_KEYS}
       # 调试模式
       - DEBUG=${DEBUG:-false}
       # 渠道配置 - 企业微信
@@ -54,7 +54,7 @@ services:
       # 挂载项目根目录到容器，实现代码热更新
       - .:/app
       # 挂载日志目录
-      - ./logs:/app/logs
+      - ./log:/app/log
     networks:
       - aid-network
     healthcheck:
@@ -78,8 +78,8 @@ services:
       - SERVER_PORT=7860
       # LLM 配置
       - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
-      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
-      - QWEN_API_KEY=${QWEN_API_KEY}
+      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
+      - QWEN_API_KEYS=${QWEN_API_KEYS}
       # 调试模式
       - DEBUG=${DEBUG:-false}
       # 渠道配置（同上）
@@ -113,7 +113,7 @@ services:
       # 挂载项目根目录到容器，实现代码热更新
       - .:/app
       # 挂载日志目录
-      - ./logs:/app/logs
+      - ./log:/app/log
     networks:
       - aid-network
     profiles:

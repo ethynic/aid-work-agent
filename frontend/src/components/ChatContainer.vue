@@ -1,14 +1,22 @@
 <template>
-  <div class="h-screen flex flex-col bg-slate-50">
-    <!-- Header -->
-    <header class="flex-shrink-0 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
-      <div class="max-w-7xl mx-auto px-4 py-4">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
+  <div class="h-screen flex flex-col bg-gray-50">
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+      <!-- Session Sidebar -->
+      <SessionSidebar
+        :is-collapsed="isSidebarCollapsed"
+        @collapse="isSidebarCollapsed = true"
+      />
+
+      <!-- Right Content Area -->
+      <div class="flex-1 flex flex-col min-w-0">
+        <!-- Header Bar - 顶部标题行 -->
+        <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4">
+          <div class="flex-1 flex items-center gap-3 min-w-0">
             <!-- Toggle Sidebar Button -->
             <button
               @click="isSidebarCollapsed = !isSidebarCollapsed"
-              class="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+              class="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
               title="切换侧边栏"
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -16,54 +24,53 @@
               </svg>
             </button>
 
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
-              <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <div>
-              <h1 class="text-xl font-semibold text-slate-800">AID Work Agent</h1>
-              <p class="text-sm text-slate-500">智能工作助手</p>
+            <!-- Page Title - 页面标题 -->
+            <div class="flex items-center gap-2 min-w-0">
+              <h1 class="text-sm font-medium text-gray-800 truncate">
+                {{ pageTitle }}
+              </h1>
             </div>
           </div>
 
-          <div class="flex items-center gap-4">
-            <!-- User Info / Login Button -->
-            <div v-if="isLoggedIn" class="flex items-center gap-3">
-              <span class="text-sm text-slate-600">{{ user?.username }}</span>
+          <!-- Right Side - User Info & Actions -->
+          <div class="flex items-center gap-3 flex-shrink-0">
+            <!-- User Name -->
+            <div v-if="isLoggedIn" class="flex items-center gap-2">
+              <span class="text-sm text-gray-600">{{ user?.username }}</span>
               <button
                 @click="handleLogout"
-                class="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                class="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
               >
                 退出
               </button>
             </div>
 
-            <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-200/50 text-sm">
-              <span :class="isOnline ? 'bg-green-500' : 'bg-slate-400'" class="w-2 h-2 rounded-full"></span>
-              <span class="text-slate-600">{{ isOnline ? '在线' : '离线' }}</span>
+            <!-- Online Status -->
+            <div class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-gray-100">
+              <span :class="isOnline ? 'bg-success-500' : 'bg-gray-400'" class="w-1.5 h-1.5 rounded-full"></span>
+              <span class="text-xs text-gray-500">{{ isOnline ? '在线' : '离线' }}</span>
             </div>
 
-            <!-- 汉堡菜单 -->
+            <!-- More Menu -->
             <div class="relative">
               <button
                 @click="showMenuDropdown = !showMenuDropdown"
-                class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-1"
+                class="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                title="更多"
               >
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" />
                 </svg>
-                更多
               </button>
 
-              <!-- 下拉菜单 -->
+              <!-- Dropdown Menu -->
               <div
                 v-if="showMenuDropdown"
-                class="absolute right-0 top-full mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-50"
+                class="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50"
               >
                 <button
                   @click="handleNewSession(); showMenuDropdown = false"
-                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -72,7 +79,7 @@
                 </button>
                 <button
                   @click="openCustomerInfo"
-                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -81,7 +88,7 @@
                 </button>
                 <button
                   @click="showCredentialManager = true; showMenuDropdown = false"
-                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
@@ -90,7 +97,7 @@
                 </button>
                 <button
                   @click="openScheduledTasks"
-                  class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -100,26 +107,15 @@
               </div>
             </div>
 
-            <!-- 点击空白处关闭菜单 -->
+            <!-- Click outside to close menu -->
             <div
               v-if="showMenuDropdown"
               class="fixed inset-0 z-40"
               @click="showMenuDropdown = false"
             ></div>
           </div>
-        </div>
-      </div>
-    </header>
+        </header>
 
-    <!-- Main Content -->
-    <main class="flex-1 flex overflow-hidden">
-      <!-- Session Sidebar -->
-      <SessionSidebar
-        :is-collapsed="isSidebarCollapsed"
-        @collapse="isSidebarCollapsed = true"
-      />
-
-      <div class="flex-1 flex flex-col max-w-7xl mx-auto w-full">
         <!-- Messages Area -->
         <div class="flex-1 overflow-hidden">
           <MessageList
@@ -128,15 +124,8 @@
           />
         </div>
 
-        <!-- Progress Panel (hidden temporarily) -->
-        <!-- <ProgressPanel
-          v-if="isProcessing || progressMessages.length > 0"
-          :messages="progressMessages"
-          :is-processing="isProcessing"
-        /> -->
-
         <!-- Input Area -->
-        <div class="flex-shrink-0 border-t border-slate-200 bg-white p-4">
+        <div class="flex-shrink-0 border-t border-gray-200 bg-white p-4">
           <ChatInput
             @send="handleSend"
             @upload="handleUpload"
@@ -165,7 +154,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
@@ -199,6 +188,18 @@ const showCredentialManager = ref(false)
 const showMenuDropdown = ref(false)
 // 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
 const skipNextSwitch = ref(false)
+
+// 计算页面标题
+const pageTitle = computed(() => {
+  if (!currentSessionId.value) {
+    return '新会话'
+  }
+  const session = sessions.value.find(s => s.session_id === currentSessionId.value)
+  if (session?.title) {
+    return `历史会话：${session.title}`
+  }
+  return '新会话'
+})
 
 // 跳转到客户信息页面
 function openCustomerInfo() {

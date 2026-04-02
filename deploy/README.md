@@ -129,7 +129,7 @@ cd /var/www/agent/deploy
 - ✅ 环境配置文件 (`.env`)
 - ✅ 上传文件目录 (`agent_uploads/`)
 - ✅ 记忆文件目录 (`agent_memories/`)
-- ✅ 日志文件目录 (`logs/`)
+- ✅ 日志文件目录 (`log/`)
 
 **备份策略**：
 - 备份文件存储在 `/var/backups/agent/`
@@ -155,6 +155,7 @@ docker-compose -f docker-compose.prod.yml down
 
 # 重新构建
 docker-compose -f docker-compose.prod.yml up -d --build
+docker-compose -f docker-compose.prod.yml up -d --build --no-cache
 ```
 
 ### Nginx 管理
@@ -292,4 +293,4 @@ keepalive_timeout 65;
 如遇问题，请查看：
 1. 完整部署文档：`DEPLOYMENT.md`
 2. 项目文档：`/var/www/agent/docs/`
-3. 日志文件：`/var/www/agent/logs/`
+3. 日志文件：`/var/www/agent/log/`

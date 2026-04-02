@@ -134,14 +134,13 @@ vim .env
 # ========== LLM 配置 ==========
 # 通义千问（推荐）
 LLM_PROVIDER=qwen
-QWEN_API_KEY=your_qwen_api_key_here
+QWEN_API_KEYS=your_qwen_api_key_here
 
 # 多 Key 池（可选，多个 key 用逗号分隔，有效利用免费额度）
 # QWEN_API_KEYS=key1,key2,key3
 
 # 智谱GLM（备选）
-# LLM_PROVIDER=zhipu
-# ZHIPU_API_KEY=your_zhipu_api_key_here
+# LLM_PROVIDER=zhipu\
 # ZHIPU_API_KEYS=key1,key2,key3
 
 # ========== Gunicorn 配置 ==========
@@ -269,8 +268,8 @@ docker logs aid-agent-api --tail 100
 docker logs aid-agent-api -f
 
 # 查看应用日志文件
-tail -f /var/www/agent/logs/aid-work-agent.log
-tail -f /var/www/agent/logs/error.log
+tail -f /var/www/agent/log/aid-work-agent.log
+tail -f /var/www/agent/log/error.log
 
 # 查看 Nginx 访问日志
 sudo tail -f /var/log/nginx/access.log
@@ -544,7 +543,7 @@ QWEN_API_KEYS=key1,key2,key3
 
 如遇问题，请查看：
 1. 项目文档：`/var/www/agent/docs/`
-2. 应用日志：`/var/www/agent/logs/`
+2. 应用日志：`/var/www/agent/log/`
 3. 容器日志：`docker logs aid-agent-api`
 4. 技术支持：联系项目负责人
 

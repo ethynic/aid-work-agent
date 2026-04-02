@@ -3,8 +3,8 @@
     :class="[
       'flex gap-3 p-4 rounded-2xl transition-all',
       message.role === 'user'
-        ? 'bg-cyan-50 border border-cyan-200 ml-12'
-        : 'bg-white border border-slate-200'
+        ? 'bg-primary-50 border border-primary-200 ml-12'
+        : 'bg-white border border-gray-200'
     ]"
   >
     <!-- Avatar -->
@@ -12,8 +12,8 @@
       :class="[
         'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
         message.role === 'user'
-          ? 'bg-gradient-to-br from-cyan-400 to-cyan-500'
-          : 'bg-gradient-to-br from-slate-400 to-slate-500'
+          ? 'bg-gradient-to-br from-primary-400 to-primary-600'
+          : 'bg-gradient-to-br from-gray-400 to-gray-500'
       ]"
     >
       <svg v-if="message.role === 'user'" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27,20 +27,20 @@
     <!-- Content -->
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2 mb-1">
-        <span class="text-sm font-medium text-slate-700">
+        <span class="text-sm font-medium text-gray-700">
           {{ message.role === 'user' ? '你' : 'AI助手' }}
         </span>
-        <span v-if="timestamp" class="text-xs text-slate-400">
+        <span v-if="timestamp" class="text-xs text-gray-400">
           {{ formatTime(timestamp) }}
         </span>
-        <span v-if="isProcessing" class="text-xs text-cyan-400 animate-pulse">
+        <span v-if="isProcessing" class="text-xs text-primary-400 animate-pulse">
           生成中...
         </span>
       </div>
 
       <!-- Message Content (Markdown) -->
       <div
-        class="text-slate-700 leading-relaxed markdown-content prose prose-slate max-w-none"
+        class="text-gray-700 leading-relaxed markdown-content prose prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
 
@@ -49,7 +49,7 @@
         <!-- 展开/折叠按钮 -->
         <button
           @click="toggleExpanded"
-          class="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+          class="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
         >
           <svg
             :class="['w-3 h-3 transition-transform', isExpanded ? 'rotate-90' : '']"
@@ -74,7 +74,7 @@
               v-for="(msg, index) in displayMessages"
               :key="index"
               :class="[
-                'text-xs py-1 px-2 rounded text-slate-500',
+                'text-xs py-1 px-2 rounded text-gray-500',
                 getProgressClass(msg.type)
               ]"
             >
@@ -133,12 +133,12 @@ function toggleExpanded() {
 
 function getProgressClass(type: string): string {
   switch (type) {
-    case 'error': return 'bg-red-50 text-red-600'
-    case 'complete': return 'bg-green-50 text-green-600'
-    case 'thinking': return 'bg-purple-50 text-purple-600'
-    case 'tool_start': return 'bg-cyan-50 text-cyan-600'
-    case 'tool_result': return 'bg-blue-50 text-blue-600'
-    default: return 'bg-slate-100 text-slate-500'
+    case 'error': return 'bg-danger-50 text-danger-600'
+    case 'complete': return 'bg-success-50 text-success-600'
+    case 'thinking': return 'bg-primary-50 text-primary-600'
+    case 'tool_start': return 'bg-info-50 text-info-600'
+    case 'tool_result': return 'bg-primary-50 text-primary-600'
+    default: return 'bg-gray-100 text-gray-500'
   }
 }
 

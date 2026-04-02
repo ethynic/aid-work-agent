@@ -301,6 +301,100 @@ def init_database():
             ON scheduled_task_logs(user_id, created_at DESC)
         """)
 
+        # ============== Knowledge Base Tables ==============
+
+        # 文档表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                title TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER,
+                total_chunks INTEGER NOT NULL,
+                embedding_model TEXT NOT NULL,
+                thumbnail_path TEXT,
+                duration INTEGER,
+                width INTEGER,
+                height INTEGER,
+                mime_type TEXT,
+                raw_text TEXT,
+                metadata TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_user
+            ON documents(user_id)
+        """)
+
+        # 文本块表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id INTEGER NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                tokens INTEGER NOT NULL,
+                metadata TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_doc
+            ON chunks(doc_id)
+        """)
+
+        # 尝试创建向量表（sqlite-vec），失败则跳过
+        try:
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+                    chunk_id INTEGER PRIMARY KEY,
+                    embedding float[1536]
+                )
+            """)
+        except Exception as e:
+            logger.warning(f"无法创建向量表 (sqlite-vec 可能未安装): {e}")
+
+        # 尝试创建 FTS5 表，失败则跳过
+        try:
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                    text,
+                    content=chunks,
+                    content_rowid=id,
+                    tokenize = 'unicode61'
+                )
+            """)
+
+            # 创建触发器同步 FTS5
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+                END
+            """)
+
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+                    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.id, old.text);
+                END
+            """)
+
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+                    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.id, old.text);
+                    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+                END
+            """)
+        except Exception as e:
+            logger.warning(f"无法创建 FTS5 表: {e}")
+
         conn.commit()
         logger.info(f"Database initialized at {get_sqlite_path()}")
 
