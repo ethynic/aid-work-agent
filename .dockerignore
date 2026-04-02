@@ -19,6 +19,12 @@ dist/
 build/
 *.egg
 
+# 数据库
+*.db
+*.sqlite3
+*.db-wal
+*.db-shm
+
 # 虚拟环境
 venv/
 .venv/
