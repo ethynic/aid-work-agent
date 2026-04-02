@@ -145,10 +145,7 @@ class BrowserSnapshotTool(BaseTool):
             session_id: 会话ID
             ref_mapper: RefMapper 实例
         """
-        if not hasattr(_browser_sessions.get(session_id), 'ref_mapper'):
-            _browser_sessions[session_id].ref_mapper = ref_mapper
-        else:
-            _browser_sessions[session_id].ref_mapper = ref_mapper
+        _ref_mappers[session_id] = ref_mapper
 
 
 # 全局 ref_mapper 存储（用于工具间共享）

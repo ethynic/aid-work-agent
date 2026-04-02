@@ -445,15 +445,17 @@ class SubmenuDetector:
                 if panel:
                     return panel
 
-            # 方式4：查找相邻的菜单元素
-            panel = await page.evaluate(""" [element] => {
+            # 方式4：查找相邻的菜单元素（通过 JS 生成唯一选择器）
+            panel_selector = await page.evaluate(""" [element] => {
                 const trigger = element;
 
                 // 查找下一个兄弟元素
                 let sibling = trigger.nextElementSibling;
                 while (sibling) {
                     if (sibling.matches('[role="menu"], [role="menubar"], .dropdown-menu, .submenu, .nav-dropdown')) {
-                        return sibling;
+                        // 生成唯一选择器
+                        if (sibling.id) return '#' + CSS.escape(sibling.id);
+                        return sibling.tagName.toLowerCase() + '.' + [...sibling.classList].map(c => CSS.escape(c)).join('.');
                     }
                     sibling = sibling.nextElementSibling;
                 }
@@ -462,14 +464,17 @@ class SubmenuDetector:
                 const parent = trigger.closest('[role="menu"], .dropdown, .nav-item');
                 if (parent) {
                     const menu = parent.querySelector('[role="menu"], .dropdown-menu, .submenu');
-                    if (menu) return menu;
+                    if (menu) {
+                        if (menu.id) return '#' + CSS.escape(menu.id);
+                        return menu.tagName.toLowerCase() + '.' + [...menu.classList].map(c => CSS.escape(c)).join('.');
+                    }
                 }
 
                 return null;
             } """, trigger_element)
 
-            if panel:
-                return await page.query_selector(panel)
+            if panel_selector:
+                return await page.query_selector(panel_selector)
 
         except Exception:
             pass

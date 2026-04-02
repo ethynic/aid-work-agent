@@ -224,7 +224,6 @@ class RefMapper:
                     label=item_data.get("label", ""),
                     tag="a",  # 菜单项通常为链接
                     role="menuitem",
-                    action=item_data.get("action", "click"),
                     href=item_data.get("href"),
                 )
                 self.register_submenu_item(parent_ref, element)

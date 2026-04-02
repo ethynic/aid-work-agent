@@ -241,7 +241,12 @@ class SemanticSnapshotGenerator:
             # 检测 iframe（Phase 3 新增）
             iframe_snapshots = await self._detect_iframes(page)
 
-            # 构建快照
+            # 构建快照（排除内部使用的 attrs 字段）
+            clean_elements = [
+                {k: v for k, v in elem.items() if k != "attrs"}
+                for elem in interactive_elements
+            ]
+
             snapshot = SemanticSnapshot(
                 success=True,
                 session_id=self.session_id,
@@ -249,7 +254,7 @@ class SemanticSnapshotGenerator:
                 title=title,
                 mode=mode,
                 regions=regions,
-                interactive_elements=interactive_elements,
+                interactive_elements=clean_elements,
                 submenu_snapshots=[asdict(s) for s in submenu_snapshots],
                 iframe_snapshots=iframe_snapshots,
             )
@@ -448,6 +453,7 @@ class SemanticSnapshotGenerator:
                 "visible": elem_data.get("visible", True),
                 "disabled": disabled,
                 "has_popup": has_popup,
+                "attrs": attrs,
             }
 
             interactive_elements.append(elem_dict)
@@ -511,17 +517,14 @@ class SemanticSnapshotGenerator:
 
             # 收集交互元素
             if is_interactive:
-                # 生成 ref
-                ref = self._generate_ref()
-
-                # 获取 ref_mapper 中的 ref
-                mapper_refs = self.ref_mapper.get_all_refs()
-                if mapper_refs:
-                    ref = mapper_refs[-1] if mapper_refs else ref
+                # 使用 label 在 ref_mapper 中查找已有的 ref
+                label = self.semantic_tagger.generate_label(tag, attrs, elem_data.get("text", ""))
+                matched = self.ref_mapper.find_by_label(label)
+                ref = matched[0].ref if matched else ""
 
                 elem_dict = {
                     "type": "interactive",
-                    "label": self.semantic_tagger.generate_label(tag, attrs, elem_data.get("text", "")),
+                    "label": label,
                     "ref": ref,
                 }
 
@@ -629,11 +632,8 @@ class SemanticSnapshotGenerator:
                 ref = elem_dict.get("ref", "")
                 label = elem_dict.get("label", "")
 
-                # 获取元素句柄
-                element = await page.query_selector(f"[ref='{ref}']")
-                if not element:
-                    # 尝试其他方式定位
-                    element = await self._find_element_by_attrs(page, elem_dict)
+                # 获取元素句柄（通过属性定位，ref 是 Python 层面的，不是 DOM 属性）
+                element = await self._find_element_by_attrs(page, elem_dict)
 
                 if not element:
                     continue
