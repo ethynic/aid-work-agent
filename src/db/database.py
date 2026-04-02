@@ -71,12 +71,13 @@ def get_sqlite_path() -> str:
 def get_db_connection() -> Generator[sqlite3.Connection, None, None]:
     """获取SQLite连接的上下文管理器"""
     db_path = get_sqlite_path()
-    
-    # 确保目录存在
+
     os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
-    
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     try:
         yield conn
     finally:

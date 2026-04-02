@@ -47,7 +47,7 @@ class TextEmbeddingV3Client:
         dashscope.api_key = api_key
         self._api_key = api_key  # 保存 key 用于日志
         self.model = "text-embedding-v3"
-        self.dimension = 1024
+        self.dimension = 1536
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """

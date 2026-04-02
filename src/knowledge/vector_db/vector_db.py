@@ -38,7 +38,7 @@ class VectorDatabase:
 class VectorDBSQLite(VectorDatabase):
     """SQLite + sqlite-vec 实现"""
 
-    def __init__(self, db_path: str, dimension: int = 1024, conn: sqlite3.Connection = None):
+    def __init__(self, db_path: str, dimension: int = 1536, conn: sqlite3.Connection = None):
         self.db_path = db_path
         self.dimension = dimension
         if conn is not None:
@@ -60,15 +60,13 @@ class VectorDBSQLite(VectorDatabase):
         self.conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False,
-            timeout=30.0  # 等待锁释放的最长时间（秒）
+            timeout=10.0
         )
         self.conn.row_factory = sqlite3.Row
 
-        # 启用 WAL 模式，提高并发性能
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA busy_timeout=30000")  # 30秒 busy timeout
+        self.conn.execute("PRAGMA busy_timeout=10000")
 
-        # 加载 sqlite-vec 扩展
         sqlite_vec.load(self.conn)
 
     def _ensure_table(self):

@@ -42,12 +42,11 @@ class KnowledgeBaseService:
         conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False,
-            timeout=30.0  # 等待锁释放的最长时间（秒）
+            timeout=10.0
         )
         conn.row_factory = sqlite3.Row
-        # 启用 WAL 模式，提高并发性能
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")  # 30秒 busy timeout
+        conn.execute("PRAGMA busy_timeout=10000")
         return conn
 
     async def upload_document(
@@ -192,7 +191,7 @@ class KnowledgeBaseService:
             # 删除向量（复用同一个数据库连接，避免锁冲突）
             vector_db = VectorDBSQLite(
                 db_path=self.db_path,
-                dimension=1024,
+                dimension=1536,
                 conn=conn
             )
             await vector_db.delete_by_doc(doc_id)
