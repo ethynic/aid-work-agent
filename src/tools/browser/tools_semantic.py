@@ -13,6 +13,57 @@ from src.tools.browser.browser_tool import _browser_sessions
 from src.tools.browser.semantic import NaturalMatcher, RefMapper, InteractiveElement
 from src.tools.browser.tools_snapshot import get_ref_mapper
 from src.tools.browser.tools_path import get_path_tracker, record_browser_action
+from src.tools.browser.semantic import SemanticSnapshotGenerator
+
+
+async def wait_for_page_stable(page, timeout: int = 5000):
+    """等待页面在操作后达到稳定状态
+
+    采用多级等待策略，适应不同类型的页面：
+    1. 先等 DOM 就绪（domcontentloaded）
+    2. 尝试等网络空闲（networkidle），但如果超时则不报错
+    3. 额外等一小段时间让 JS 框架完成渲染（如 Vue/React 的虚拟 DOM diff）
+    4. 最后等待页面中不再有正在进行的动画或过渡
+
+    Args:
+        page: Playwright Page 对象
+        timeout: 总超时时间（毫秒）
+    """
+    try:
+        # 1. 等 DOM 就绪
+        await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+    except Exception:
+        pass
+
+    try:
+        # 2. 等网络空闲（SPA 可能持续有请求，超时不报错）
+        await page.wait_for_load_state("networkidle", timeout=3000)
+    except Exception:
+        pass
+
+    # 3. 等一小段时间让 JS 框架完成渲染（300ms 足够大多数框架完成一次渲染循环）
+    await asyncio.sleep(0.3)
+
+    # 4. 检查页面是否还在加载中（额外保障）
+    try:
+        await page.wait_for_function(
+            """() => {
+                // 检查是否有 loading 状态指示器
+                const loaders = document.querySelectorAll(
+                    '.loading, .spinner, .skeleton, [aria-busy="true"], ' +
+                    '.ant-spin, .el-loading-mask, .v-loading-mask'
+                );
+                for (const loader of loaders) {
+                    if (loader.offsetParent !== null) return false;
+                }
+                return true;
+            }""",
+            timeout=2000,
+        )
+    except Exception:
+        pass
+
+    logger.debug(f"[wait_for_page_stable] 页面已稳定: {page.url}")
 
 
 class BrowserClickTool(BaseTool):
@@ -146,9 +197,22 @@ class BrowserClickTool(BaseTool):
                     "ref": target_ref,
                 }
 
-            # 执行点击
-            await element.click(timeout=timeout)
-            await session.page.wait_for_load_state("networkidle", timeout=5000)
+            # 执行点击（使用 force=True 绕过可见性/遮挡检查，确保一定能点击到）
+            try:
+                await element.click(timeout=timeout, force=True)
+            except Exception as click_err:
+                # force 点击失败，尝试用 JS 直接触发
+                logger.warning(f"element.click(force=True) 失败: {click_err}，尝试 JS 点击")
+                await session.page.evaluate(f"""(selector) => {{
+                    const el = document.querySelector(selector);
+                    if (el) el.click();
+                }}""", f'[data-ref="{target_ref}"]')
+
+            # 等待页面稳定（确保后续获取的快照反映最新状态）
+            await wait_for_page_stable(session.page)
+
+            # 使快照缓存失效（操作后页面 DOM 已变化，下次 snapshot 需重新生成）
+            SemanticSnapshotGenerator.invalidate_cache(url=session.page.url)
 
             # 记录操作到 PathTracker
             record_browser_action(
@@ -322,8 +386,38 @@ class BrowserFillTool(BaseTool):
                     "ref": target_ref,
                 }
 
-            # 执行填写（fill 对 input/textarea/contenteditable 等所有可编辑元素通用）
-            await element.fill(value, timeout=timeout)
+            # 执行填写（force=True 确保即使元素被遮挡也能填写）
+            try:
+                await element.fill(value, timeout=timeout, force=True)
+            except Exception as fill_err:
+                # fill 失败，尝试用 JS 直接设置值
+                logger.warning(f"element.fill(force=True) 失败: {fill_err}，尝试 JS 填写")
+                await session.page.evaluate("""(args) => {
+                    const el = document.querySelector(args.selector);
+                    if (!el) return;
+                    // 聚焦元素
+                    el.focus();
+                    // 清空并设置值
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    )?.set || Object.getOwnPropertyDescriptor(
+                        window.HTMLTextAreaElement.prototype, 'value'
+                    )?.set;
+                    if (nativeInputValueSetter) {
+                        nativeInputValueSetter.call(el, args.value);
+                    } else {
+                        el.value = args.value;
+                    }
+                    // 触发 input/change 事件（确保框架能感知到值变化）
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""", {"selector": f'[data-ref="{target_ref}"]', "value": value})
+
+            # 短暂等待，确保框架处理完 input/change 事件（如联动校验、自动补全等）
+            await asyncio.sleep(0.3)
+
+            # 使快照缓存失效（填写后可能触发联动变化）
+            SemanticSnapshotGenerator.invalidate_cache(url=session.page.url)
 
             # 记录操作到 PathTracker
             record_browser_action(
@@ -498,7 +592,7 @@ class BrowserSelectTool(BaseTool):
             await element.click(timeout=timeout)
 
             # 等待选项出现
-            await session.page.wait_for_load_state("networkidle", timeout=3000)
+            await wait_for_page_stable(session.page, timeout=3000)
 
             # 使用 select 定位选项（通过文本内容）
             # 简化实现：直接使用 Playwright 的 select
@@ -509,6 +603,12 @@ class BrowserSelectTool(BaseTool):
                 # 如果直接选择失败，尝试点击选项
                 # 这是一个简化实现，完整版本需要解析下拉选项
                 pass
+
+            # 选择完成后等待页面稳定（可能有联动请求）
+            await asyncio.sleep(0.3)
+
+            # 使快照缓存失效
+            SemanticSnapshotGenerator.invalidate_cache(url=session.page.url)
 
             # 记录操作到 PathTracker
             record_browser_action(

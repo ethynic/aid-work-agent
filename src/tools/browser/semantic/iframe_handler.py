@@ -103,9 +103,9 @@ class IFrameHandler:
             IFrameInfo 或 None
         """
         try:
-            # 获取基本信息
-            tag = await iframe_element.tag_name()
-            if tag.lower() != "iframe":
+            # 获取基本信息（ElementHandle 没有 tag_name()，用 evaluate 获取）
+            tag = await iframe_element.evaluate("el => el.tagName.toLowerCase()")
+            if tag != "iframe":
                 return None
 
             # 获取属性

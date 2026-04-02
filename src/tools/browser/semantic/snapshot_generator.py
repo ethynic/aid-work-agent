@@ -86,6 +86,8 @@ class SemanticSnapshotGenerator:
     def _get_page_content_hash(self, page) -> str:
         """获取页面内容哈希（用于缓存失效检测）
 
+        综合 URL + 可见可交互元素数量 + body子元素数量来判断页面是否真正变化。
+
         Args:
             page: Playwright 页面对象
 
@@ -93,9 +95,19 @@ class SemanticSnapshotGenerator:
             str: 内容哈希
         """
         try:
-            # 获取关键元素的变化来判断页面是否变化
             content = page.url
-            # 简单哈希
+            try:
+                # 用 JS 快速获取页面状态指纹（不遍历整个 DOM，只取关键数量）
+                fingerprint = page.evaluate("""() => {
+                    const links = document.querySelectorAll('a[href]').length;
+                    const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"]').length;
+                    const inputs = document.querySelectorAll('input:not([type="hidden"])').length;
+                    const menus = document.querySelectorAll('.el-menu--inline, .dropdown-menu, .submenu, [role="menu"]:not([role="menuitem"])').length;
+                    return `${links}_${buttons}_${inputs}_${menus}`;
+                }""")
+                content += "|" + fingerprint
+            except Exception:
+                pass
             return hashlib.md5(content.encode()).hexdigest()[:16]
         except Exception:
             return ""
@@ -170,18 +182,22 @@ class SemanticSnapshotGenerator:
             return self._cache[cache_key].snapshot_data
         return None
 
-    def invalidate_cache(self, url: Optional[str] = None) -> None:
+    @classmethod
+    def invalidate_cache(cls, url: Optional[str] = None) -> None:
         """使缓存失效
 
         Args:
             url: 如果提供，只清理该 URL 的缓存；否则清理所有缓存
         """
+        if not hasattr(cls, '_cache'):
+            return
         if url:
-            cache_key = f"{self.session_id}:{url}"
-            if cache_key in self._cache:
-                del self._cache[cache_key]
+            # 清理所有 session 中匹配该 URL 的缓存
+            keys_to_delete = [k for k in cls._cache if k.endswith(f":{url}")]
+            for key in keys_to_delete:
+                del cls._cache[key]
         else:
-            self._cache.clear()
+            cls._cache.clear()
 
     def _generate_ref(self) -> str:
         """生成唯一的 ref"""
@@ -304,6 +320,7 @@ class SemanticSnapshotGenerator:
                 (options) => {
                     const { maxDepth, includeHidden, mode } = options;
                     const elements = [];
+                    const debugSkipped = [];
 
                     // 可交互标签（完整列表）
                     const INTERACTIVE_TAGS = new Set([
@@ -436,7 +453,27 @@ class SemanticSnapshotGenerator:
                             }
 
                             // 检查可见性
-                            if (!includeHidden && shouldSkip(el)) continue;
+                            if (!includeHidden && shouldSkip(el)) {
+                                // 记录被跳过的交互元素用于调试
+                                const _role = el.getAttribute('role');
+                                if (INTERACTIVE_TAGS.has(tagName) || INTERACTIVE_ROLES.has(_role)) {
+                                    const style = window.getComputedStyle(el);
+                                    const rect = el.getBoundingClientRect();
+                                    debugSkipped.push({
+                                        tag: tagName,
+                                        text: (el.textContent || '').trim().substring(0, 30),
+                                        reason: 'shouldSkip=true',
+                                        hidden: el.hidden,
+                                        display: style.display,
+                                        visibility: style.visibility,
+                                        opacity: style.opacity,
+                                        rendered: isRendered(el),
+                                        w: rect.width,
+                                        h: rect.height,
+                                    });
+                                }
+                                continue;
+                            }
 
                             // 跳过 type=hidden 的 input
                             if (tagName === 'input' && attrs['type'] === 'hidden') continue;
@@ -486,11 +523,24 @@ class SemanticSnapshotGenerator:
                     // 从 body 开始遍历
                     traverse(document.body, 1);
 
-                    return elements;
+                    return { elements: elements, debugSkipped: debugSkipped };
                 }
             """, {"maxDepth": max_depth, "includeHidden": include_hidden, "mode": mode})
 
-            return elements_js
+            # 解析返回结果
+            if isinstance(elements_js, dict):
+                elements_list = elements_js.get("elements", [])
+                skipped = elements_js.get("debugSkipped", [])
+                # 打印被跳过的交互元素
+                if skipped:
+                    logger.warning(f"[DOM遍历] {len(skipped)} 个交互元素被 shouldSkip 跳过:")
+                    for s in skipped[:20]:  # 最多打印20个
+                        logger.warning(f"  跳过: tag={s['tag']} text=\"{s['text']}\" display={s['display']} visibility={s['visibility']} opacity={s['opacity']} rendered={s['rendered']} size={s['w']}x{s['h']}")
+                    if len(skipped) > 20:
+                        logger.warning(f"  ... 还有 {len(skipped) - 20} 个")
+                return elements_list
+            else:
+                return elements_js
 
         except Exception as e:
             logger.error(f"DOM 遍历失败: {e}")
@@ -586,16 +636,25 @@ class SemanticSnapshotGenerator:
     ) -> None:
         """将 data-ref 属性注入到 DOM 元素上，以便后续通过 CSS 选择器定位
 
+        匹配策略（优先级从高到低）：
+        1. ID 精确匹配（最可靠）
+        2. ID + type 组合匹配（同 ID 不同 type 的 input）
+        3. name + type + tag 组合匹配
+        4. href 精确匹配（链接，包含文本二次确认）
+        5. tag + className 全量匹配 + text 匹配（避免同类名元素混淆）
+        6. tag + text 精确匹配（兜底策略，用于无唯一属性的元素）
+        7. tag + text 包含匹配（最终兜底，只取第一个包含该文本的未被注入的元素）
+
         Args:
             page: Playwright page
             interactive_elements: 交互元素列表（需要包含 attrs 字段）
         """
-        # 构建定位信息，用于在 JS 中精确匹配元素
         locator_map = []
         for elem in interactive_elements:
             ref = elem.get("ref", "")
             tag = elem.get("tag", "")
             attrs = elem.get("attrs", {})
+            text = elem.get("text", "").strip()
             if not ref or not tag:
                 continue
             locator_map.append({
@@ -606,57 +665,137 @@ class SemanticSnapshotGenerator:
                 "className": attrs.get("class", ""),
                 "type": attrs.get("type", ""),
                 "role": attrs.get("role", ""),
+                "href": attrs.get("href", ""),
+                "text": text[:80] if text else "",  # 文本前80字符用于匹配
             })
 
         if not locator_map:
             return
 
         try:
-            injected_count = await page.evaluate("""(locatorMap) => {
+            # 先清理页面上残留的 data-ref 属性（避免上次快照的 ref 干扰本次注入）
+            try:
+                await page.evaluate("""() => {
+                    const oldRefs = document.querySelectorAll('[data-ref]');
+                    oldRefs.forEach(el => el.removeAttribute('data-ref'));
+                }""")
+            except Exception:
+                pass
+
+            result = await page.evaluate("""(locatorMap) => {
                 let injected = 0;
+                const unmatched = [];
+
                 for (const item of locatorMap) {
-                    // 优先用 ID 快速定位
+                    let matched = false;
+
+                    // 策略1: ID 精确匹配
                     if (item.id) {
-                        const elById = document.getElementById(item.id);
-                        if (elById && elById.tagName.toLowerCase() === item.tag.toLowerCase()) {
-                            // 额外验证其他属性
-                            if (item.type && elById.getAttribute('type') !== item.type) {
-                                // ID 匹配但 type 不匹配，走通用流程
-                            } else {
-                                elById.setAttribute('data-ref', item.ref);
+                        const el = document.getElementById(item.id);
+                        if (el && el.tagName.toLowerCase() === item.tag.toLowerCase()) {
+                            if (!item.type || el.getAttribute('type') === item.type) {
+                                el.setAttribute('data-ref', item.ref);
                                 injected++;
+                                matched = true;
                                 continue;
                             }
                         }
                     }
-                    // 通用流程：遍历同 tag 的所有元素
-                    let candidates = document.querySelectorAll(item.tag);
-                    for (const el of candidates) {
-                        // 匹配 id
-                        if (item.id && el.id !== item.id) continue;
-                        // 匹配 name
-                        if (item.name && el.getAttribute('name') !== item.name) continue;
-                        // 匹配 type
-                        if (item.type && el.getAttribute('type') !== item.type) continue;
-                        // 匹配 role
-                        if (item.role && el.getAttribute('role') !== item.role) continue;
-                        // 匹配 className（部分匹配，因为 class 可能组合多个）
-                        if (item.className) {
-                            const elClasses = el.className.split(/\\s+/);
-                            const requiredClasses = item.className.split(/\\s+/);
-                            if (!requiredClasses.every(c => elClasses.includes(c))) continue;
+
+                    // 策略2: name + tag + type 组合匹配
+                    if (!matched && item.name) {
+                        const candidates = document.querySelectorAll(item.tag + '[name="' + CSS.escape(item.name) + '"]');
+                        for (const el of candidates) {
+                            if (el.hasAttribute('data-ref')) continue;
+                            if (item.type && el.getAttribute('type') !== item.type) continue;
+                            el.setAttribute('data-ref', item.ref);
+                            injected++;
+                            matched = true;
+                            break;
                         }
-                        // 匹配成功，注入 data-ref
-                        el.setAttribute('data-ref', item.ref);
-                        injected++;
-                        break; // 每个 ref 只匹配第一个元素
+                    }
+
+                    // 策略3: href 精确匹配（链接）—— 同时用文本内容做二次确认
+                    if (!matched && item.href) {
+                        const candidates = document.querySelectorAll(item.tag + '[href]');
+                        for (const el of candidates) {
+                            if (el.hasAttribute('data-ref')) continue;
+                            if (el.getAttribute('href') !== item.href) continue;
+                            // 有文本时做二次确认（防止同 href 的多个元素混淆）
+                            if (item.text) {
+                                const elText = (el.textContent || '').trim().substring(0, 80);
+                                if (elText !== item.text) continue;
+                            }
+                            el.setAttribute('data-ref', item.ref);
+                            injected++;
+                            matched = true;
+                            break;
+                        }
+                    }
+
+                    // 策略4: tag + className 全量匹配 + text 匹配
+                    // 用于有 className 的元素，要求所有 class 都匹配，且文本也匹配
+                    if (!matched && item.className) {
+                        const candidates = document.querySelectorAll(item.tag + '.' + item.className.trim().split(/\\s+/).map(c => CSS.escape(c)).join('.'));
+                        for (const el of candidates) {
+                            if (el.hasAttribute('data-ref')) continue;
+                            if (item.text) {
+                                const elText = (el.textContent || '').trim().substring(0, 80);
+                                if (elText !== item.text) continue;
+                            }
+                            el.setAttribute('data-ref', item.ref);
+                            injected++;
+                            matched = true;
+                            break;
+                        }
+                    }
+
+                    // 策略5: tag + text 精确匹配（无唯一属性时的兜底）
+                    if (!matched && item.text) {
+                        const candidates = document.querySelectorAll(item.tag);
+                        for (const el of candidates) {
+                            if (el.hasAttribute('data-ref')) continue;
+                            const elText = (el.textContent || '').trim().substring(0, 80);
+                            if (elText === item.text) {
+                                el.setAttribute('data-ref', item.ref);
+                                injected++;
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // 策略6: tag + text 包含匹配（最终兜底）
+                    if (!matched && item.text && item.text.length >= 2) {
+                        const candidates = document.querySelectorAll(item.tag);
+                        for (const el of candidates) {
+                            if (el.hasAttribute('data-ref')) continue;
+                            const elText = (el.textContent || '').trim();
+                            if (elText.includes(item.text) || item.text.includes(elText)) {
+                                el.setAttribute('data-ref', item.ref);
+                                injected++;
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!matched) {
+                        unmatched.push({ ref: item.ref, tag: item.tag, text: item.text, href: item.href, id: item.id, name: item.name });
                     }
                 }
-                return injected;
+                return { injected, unmatched };
             }""", locator_map)
+
+            injected_count = result.get("injected", 0)
+            unmatched = result.get("unmatched", [])
             logger.info(f"[data-ref] 注入完成: {injected_count}/{len(locator_map)} 个元素已注入 data-ref")
-            if injected_count < len(locator_map):
-                logger.warning(f"[data-ref] {len(locator_map) - injected_count} 个元素未能匹配到 DOM")
+            if unmatched:
+                logger.warning(f"[data-ref] {len(unmatched)} 个元素未能匹配到 DOM:")
+                for u in unmatched[:10]:
+                    logger.warning(f"  未匹配: ref={u['ref']} tag={u['tag']} text=\"{u['text']}\" id={u['id']} name={u['name']} href={u['href']}")
+                if len(unmatched) > 10:
+                    logger.warning(f"  ... 还有 {len(unmatched) - 10} 个")
         except Exception as e:
             logger.warning(f"注入 data-ref 失败: {e}")
 
