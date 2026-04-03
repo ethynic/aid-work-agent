@@ -1,0 +1,31 @@
+{
+  "name": "eas-contract-verify",
+  "version": "1.0.0",
+  "description": "全筑EAS合同核对技能，OCR解析合同扫描件后与EAS系统数据自动比对",
+  "author": "aid-work-agent",
+  "created_at": "2026-04-02",
+  "scripts": [
+    "eas_contract_verify.py"
+  ],
+  "dependencies": [
+    "httpx"
+  ],
+  "metadata": {
+    "openclaw": {
+      "emoji": "🔍",
+      "requires": {
+        "bins": ["python"]
+      }
+    }
+  },
+  "triggers": [
+    { "type": "keyword", "pattern": "合同核对" },
+    { "type": "keyword", "pattern": "合同比对" },
+    { "type": "keyword", "pattern": "EAS合同" },
+    { "type": "keyword", "pattern": "合同验证" },
+    { "type": "keyword", "pattern": "合同扫描件核对" },
+    { "type": "keyword", "pattern": "盖章合同核对" },
+    { "type": "keyword", "pattern": "合同归档核对" },
+    { "type": "keyword", "pattern": "全筑合同" }
+  ]
+}

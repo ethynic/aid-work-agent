@@ -1,0 +1,32 @@
+{
+  "name": "contract-approval",
+  "version": "1.0.0",
+  "description": "合同审批流程自动化技能，使用 Playwright 自动登录 OA 系统，搜索合同并执行审批操作",
+  "author": "aid-work-agent",
+  "created_at": "2026-04-02",
+  "scripts": [
+    "contract_approval.py"
+  ],
+  "dependencies": [],
+  "metadata": {
+    "openclaw": {
+      "emoji": "📋",
+      "requires": {
+        "bins": ["python"],
+        "env": [
+          "CONTRACT_OA_URL",
+          "CONTRACT_OA_USERNAME",
+          "CONTRACT_OA_PASSWORD"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    { "type": "keyword", "pattern": "合同审批" },
+    { "type": "keyword", "pattern": "审批合同" },
+    { "type": "keyword", "pattern": "OA审批" },
+    { "type": "keyword", "pattern": "待办处理" },
+    { "type": "keyword", "pattern": "审批通过" },
+    { "type": "keyword", "pattern": "审批驳回" }
+  ]
+}
