@@ -45,15 +45,17 @@ class KnowledgeBaseTool(BaseTool):
         # 从环境变量获取数据库路径，与 database.py 保持一致
         database_url = os.getenv("DATABASE_URL", "sqlite:///./aid_work_agent.db")
         db_path = database_url.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10.0)
         conn.enable_load_extension(True)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
 
         # 从配置获取 Qwen API Key（支持 key 池）
         from src.config.settings import settings
         qwen_keys = settings.llm.qwen.get_effective_keys()
         qwen_api_key = qwen_keys[0] if qwen_keys else ""
-        vector_db = VectorDBSQLite(db_path=db_path, dimension=1024, conn=conn)
+        vector_db = VectorDBSQLite(db_path=db_path, dimension=1536, conn=conn)
         embedding_client = TextEmbeddingV3Client(api_key=qwen_api_key)
 
         return HybridRetriever(
