@@ -1,0 +1,145 @@
+---
+description: API接口命名规范 - 接口名称与Python方法名保持一致，使用具体、有明确指向性的命名
+alwaysApply: true
+enabled: true
+---
+
+# API 接口命名规范
+
+**核心原则**：后端 API 接口名称应与 Python 方法名保持一致，使用具体、有明确指向性的命名，避免过于笼统的名称。
+
+## 规范要求
+
+### 1. 接口名称与 Python 方法名保持一致
+
+**要求**：FastAPI 路由的路径名称应与对应的 Python 方法名保持一致或高度相关。
+
+**示例对比**：
+
+❌ **错误示例**：
+```python
+@router.post("/search", response_model=SearchResponse)
+async def search_documents(request: SearchRequest):
+    """搜索文档"""
+    ...
+```
+
+✅ **正确示例**：
+```python
+@router.post("/search_documents", response_model=SearchResponse)
+async def search_documents(request: SearchRequest):
+    """搜索文档"""
+    ...
+```
+
+### 2. 使用具体、有明确指向性的命名
+
+**要求**：接口名称应能清晰表达其功能，避免使用过于笼统的通用词汇（如 `search`、`get`、`update`、`manage` 等）。
+
+**问题**：在项目中搜索 `search` 会匹配到大量无关结果，难以快速定位。
+
+**解决方案**：使用具体的命名，如：
+
+| 笼统名称 | 推荐的具体名称 |
+|---------|---------------|
+| `search` | `search_documents`、`search_knowledge_base`、`search_users` |
+| `get` | `get_document`、`get_user_profile`、`get_session_history` |
+| `update` | `update_document`、`update_user_settings`、`update_agent_config` |
+| `delete` | `delete_document`、`delete_session`、`delete_user` |
+| `create` | `create_document`、`create_session`、`create_agent` |
+| `list` | `list_documents`、`list_sessions`、`list_users` |
+| `manage` | `manage_knowledge_base`、`manage_agent_tools` |
+
+### 3. RESTful 路由命名参考
+
+遵循 RESTful 规范，但保持命名具体：
+
+| 操作 | 笼统命名 | 推荐命名 |
+|------|---------|---------|
+| 搜索文档 | `POST /search` | `POST /search_documents` |
+| 获取文档 | `GET /get/{id}` | `GET /documents/{id}` 或 `GET /get_document/{id}` |
+| 列出文档 | `GET /list` | `GET /list_documents` |
+| 上传文档 | `POST /upload` | `POST /upload_document` |
+| 删除文档 | `DELETE /delete/{id}` | `DELETE /documents/{id}` 或 `DELETE /delete_document/{id}` |
+
+### 4. 同一资源多操作时的命名
+
+当对同一资源有多个操作时，每个操作应有明确的后缀：
+
+```python
+# 文档相关操作
+@router.post("/create_document")
+async def create_document(...)
+
+@router.get("/get_document/{doc_id}")
+async def get_document(...)
+
+@router.post("/update_document/{doc_id}")
+async def update_document(...)
+
+@router.delete("/delete_document/{doc_id}")
+async def delete_document(...)
+
+@router.get("/list_documents")
+async def list_documents(...)
+
+@router.post("/search_documents")
+async def search_documents(...)
+```
+
+## 反面案例
+
+```python
+# ❌ 接口名和方法名不一致，且命名过于笼统
+@router.post("/search")
+async def search_documents(request: SearchRequest):
+    ...
+
+# ❌ 多个笼统名称共存，搜索时难以区分
+@router.post("/search")
+async def search_knowledge(request: SearchRequest):
+    ...
+
+@router.post("/search")
+async def search_users(request: SearchRequest):
+    ...
+
+# ❌ 使用通用词 "manage"，不明确
+@router.post("/manage")
+async def manage_resource(request: ManageRequest):
+    ...
+```
+
+## 正面案例
+
+```python
+# ✅ 接口名和方法名一致，且命名具体
+@router.post("/search_documents")
+async def search_documents(request: SearchRequest):
+    """根据内容搜索文档（混合检索）"""
+    ...
+
+# ✅ 每个操作的命名都具体明确
+@router.post("/search_knowledge_base")
+async def search_knowledge_base(request: SearchRequest):
+    """搜索知识库"""
+    ...
+
+@router.post("/search_users")
+async def search_users(request: SearchRequest):
+    """搜索用户"""
+    ...
+
+# ✅ 使用具体资源名 + 操作名
+@router.post("/manage_knowledge_base")
+async def manage_knowledge_base(request: ManageRequest):
+    """管理知识库配置"""
+    ...
+```
+
+## 检查清单
+
+- [ ] 所有 API 接口的路径名称与 Python 方法名保持一致或高度相关
+- [ ] 接口名称使用具体、有明确指向性的命名
+- [ ] 避免使用过于笼统的通用词汇（如单独使用 `search`、`get`、`update` 等）
+- [ ] 同一资源的多个操作有明确区分的后缀

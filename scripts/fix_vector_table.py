@@ -23,7 +23,7 @@ def get_db_path():
     return database_url.replace("sqlite:///", "")
 
 
-def fix_vector_table(db_path: str, dimension: int = 1536):
+def fix_vector_table(db_path: str, dimension: int = 1024):
     """修复向量表维度"""
     print(f"原始数据库路径: {db_path}")
 
@@ -99,7 +99,7 @@ def fix_vector_table(db_path: str, dimension: int = 1536):
 
 if __name__ == "__main__":
     db_path = get_db_path()
-    dimension = 1536
+    dimension = 1024
     if len(sys.argv) > 1:
         dimension = int(sys.argv[1])
 

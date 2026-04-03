@@ -8,6 +8,7 @@ export interface DocumentResponse {
   title: string
   source_type: string
   file_type: string
+  file_path: string | null
   file_size: number | null
   total_chunks: number
   created_at: string
@@ -19,6 +20,24 @@ export interface UploadResponse {
   total_chunks: number
   status: string
   message: string
+}
+
+export interface SearchResultItem {
+  doc_id: number
+  chunk_id: number
+  text: string
+  title: string
+  file_type: string
+  file_path: string | null
+  score: number
+}
+
+export interface SearchResponse {
+  success: boolean
+  results: SearchResultItem[]
+  count: number
+  error?: string
+  debug?: string
 }
 
 export interface ApiResponse<T = any> {
@@ -72,5 +91,30 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
  */
 export async function getDocumentChunks(docId: number): Promise<any> {
   const response = await fetch(`${API_BASE}/documents/${docId}/chunks`)
+  return response.json()
+}
+
+/**
+ * 获取文档下载/预览 URL
+ */
+export function getDocumentDownloadUrl(docId: number): string {
+  return `${API_BASE}/documents/${docId}/download`
+}
+
+/**
+ * 搜索知识库文档（混合检索：向量 + FTS5 + RRF）
+ */
+export async function searchDocuments(query: string, top_k = 10): Promise<SearchResponse> {
+  const response = await fetch(`${API_BASE}/search_documents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ query, top_k })
+  })
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || '搜索失败')
+  }
   return response.json()
 }

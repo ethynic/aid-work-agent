@@ -2,11 +2,6 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-echo ========================================
-echo   AID Work Agent Service Startup Script
-echo ========================================
-echo.
-
 echo Step 1/4: Stop backend Docker containers
 echo ----------------------------------------
 docker stop aid-agent-api 2>nul
@@ -29,22 +24,7 @@ for /f "tokens=2" %%a in ('netstat -ano ^| findstr ":5173"') do (
 echo [INFO] Frontend service check complete
 echo.
 
-echo Step 3/4: Start frontend service
-echo ----------------------------------------
-cd /d "%~dp0frontend"
-if not exist "node_modules" (
-    echo [INFO] Dependencies not found, installing...
-    call npm install
-)
-echo [OK] Starting frontend dev server...
-start "AID Frontend" cmd /k "npm run dev -- --port 5173"
-timeout /t 3 /nobreak >nul
-start http://localhost:5173
-cd /d "%~dp0"
-echo [OK] Frontend starting at http://localhost:5173
-echo.
-
-echo Step 4/4: Start backend Docker container
+echo Step 3/4: Start backend Docker container
 echo ----------------------------------------
 @REM echo [INFO] Clearing backend log file...
 @REM type nul > log\aid-work-agent.log
@@ -70,5 +50,20 @@ if %errorlevel% equ 0 (
     echo [INFO] Container may not exist, run: docker compose up -d
     exit /b 1
 )
+
+echo Step 4/4: Start frontend service
+echo ----------------------------------------
+cd /d "%~dp0frontend"
+if not exist "node_modules" (
+    echo [INFO] Dependencies not found, installing...
+    call npm install
+)
+echo [OK] Starting frontend dev server...
+start "AID Frontend" cmd /k "npm run dev -- --port 5173"
+timeout /t 3 /nobreak >nul
+start http://localhost:5173
+cd /d "%~dp0"
+echo [OK] Frontend starting at http://localhost:5173
+echo.
 
 endlocal

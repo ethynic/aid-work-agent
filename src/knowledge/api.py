@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from loguru import logger
 
@@ -35,9 +35,33 @@ class DocumentResponse(BaseModel):
     title: str
     source_type: str
     file_type: str
+    file_path: Optional[str] = None
     file_size: Optional[int]
     total_chunks: int
     created_at: str
+
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: Optional[int] = 10
+
+
+class SearchResultItem(BaseModel):
+    doc_id: int
+    chunk_id: int
+    text: str
+    title: str
+    file_type: str
+    file_path: Optional[str] = None
+    score: float
+
+
+class SearchResponse(BaseModel):
+    success: bool
+    results: List[SearchResultItem]
+    count: int
+    error: Optional[str] = None
+    debug: Optional[str] = None
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -146,6 +170,47 @@ async def list_documents(
     return [DocumentResponse(**doc) for doc in documents]
 
 
+@router.post("/search_documents", response_model=SearchResponse)
+async def search_documents(
+    request: SearchRequest,
+    http_request=None
+):
+    """
+    根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
+
+    - 支持关键词、语义搜索
+    - 返回相关文档片段
+    """
+    user_id = None
+    current_user = auth.get_current_user(http_request) if http_request else None
+    if current_user:
+        user_id = current_user.get("user_id")
+
+    result = await knowledge_service.search_documents(
+        query=request.query,
+        user_id=user_id,
+        top_k=request.top_k or 10
+    )
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": result.get("error", "搜索失败"),
+                "debug": result.get("debug", ""),
+                "results": [],
+                "count": 0
+            }
+        )
+
+    return SearchResponse(
+        success=True,
+        results=[SearchResultItem(**r) for r in result.get("results", [])],
+        count=result.get("count", 0)
+    )
+
+
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: int):
     """
@@ -186,3 +251,35 @@ async def get_document_chunks(doc_id: int):
         "chunks": chunks,
         "count": len(chunks)
     })
+
+
+@router.get("/documents/{doc_id}/download")
+async def download_document(doc_id: int):
+    """
+    下载/预览原始文档文件
+
+    - 新窗口打开或下载原文
+    """
+    import os
+
+    # 查询文档的 file_path
+    conn = knowledge_service._get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path, title FROM documents WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row or not row["file_path"]:
+        raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
+
+    file_path = row["file_path"]
+    title = row["title"] or f"document_{doc_id}"
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="文件不存在，可能已被删除")
+
+    return FileResponse(
+        path=file_path,
+        filename=title,
+        media_type='application/octet-stream'
+    )

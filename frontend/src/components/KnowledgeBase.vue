@@ -129,6 +129,7 @@
                 </svg>
                 <input
                   v-model="searchQuery"
+                  @input="handleSearchInput"
                   type="text"
                   placeholder="搜索文档..."
                   class="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-800 placeholder-gray-400 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition-all"
@@ -158,13 +159,80 @@
                 <span class="ml-3 text-gray-500">加载中...</span>
               </div>
 
-              <!-- Empty -->
-              <div v-else-if="filteredDocuments.length === 0 && !isLoading" class="flex flex-col items-center justify-center h-full">
+              <!-- Searching -->
+              <div v-else-if="isSearching" class="flex flex-col items-center justify-center h-full">
+                <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="ml-3 text-gray-500">搜索中...</span>
+              </div>
+
+              <!-- Search Error -->
+              <div v-else-if="searchError && isSearchMode" class="flex flex-col items-center justify-center h-full">
+                <svg class="w-16 h-16 text-danger-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <p class="text-danger-500 mb-2">搜索失败</p>
+                <p class="text-sm text-gray-400">{{ searchError }}</p>
+              </div>
+
+              <!-- Search Results Empty -->
+              <div v-else-if="isSearchMode && groupedSearchResults.length === 0 && !isLoading" class="flex flex-col items-center justify-center h-full">
+                <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p class="text-gray-500 mb-2">未找到匹配的文档</p>
+                <p class="text-sm text-gray-400">尝试其他关键词</p>
+              </div>
+
+              <!-- Document List Empty -->
+              <div v-else-if="filteredDocuments.length === 0 && !isSearchMode && !isLoading" class="flex flex-col items-center justify-center h-full">
                 <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p class="text-gray-500 mb-2">{{ searchQuery ? '未找到匹配的文档' : '暂无已上传的文档' }}</p>
-                <p class="text-sm text-gray-400">{{ searchQuery ? '尝试其他关键词' : '点击上方按钮上传文档' }}</p>
+                <p class="text-gray-500 mb-2">暂无已上传的文档</p>
+                <p class="text-sm text-gray-400">点击上方按钮上传文档</p>
+              </div>
+
+              <!-- Search Results -->
+              <div v-else-if="isSearchMode && groupedSearchResults.length > 0" class="h-full overflow-auto p-4">
+                <div class="space-y-4">
+                  <div
+                    v-for="group in groupedSearchResults"
+                    :key="group.chunks[0].doc_id"
+                    class="bg-gray-50 rounded-lg p-4"
+                  >
+                    <div class="flex items-center gap-3 mb-3">
+                      <div :class="getFileIconClass('.' + group.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </div>
+                      <div class="flex-1 min-w-0">
+                        <h3
+                          @click="openDocument(group.chunks[0].doc_id)"
+                          class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate"
+                          :title="'点击打开原文: ' + group.title"
+                        >{{ group.title }}</h3>
+                        <p class="text-xs text-gray-500">{{ group.chunks.length }} 个相关片段</p>
+                      </div>
+                    </div>
+                    <div class="space-y-2">
+                      <div
+                        v-for="(chunk, idx) in group.chunks.slice(0, 3)"
+                        :key="chunk.chunk_id"
+                        class="bg-white rounded p-3 text-sm text-gray-600 border border-gray-100"
+                      >
+                        <p class="line-clamp-3">{{ chunk.text }}</p>
+                        <p class="text-xs text-primary-500 mt-1">相关度: {{ (chunk.score * 100).toFixed(1) }}%</p>
+                      </div>
+                      <p v-if="group.chunks.length > 3" class="text-xs text-gray-400 text-center">
+                        还有 {{ group.chunks.length - 3 }} 个相关片段...
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- Table -->
@@ -194,7 +262,11 @@
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </div>
-                          <span class="text-sm font-medium text-gray-800 truncate max-w-xs">{{ doc.title }}</span>
+                          <span
+                            @click="openDocument(doc.id)"
+                            class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate max-w-xs"
+                            :title="'点击打开原文: ' + doc.title"
+                          >{{ doc.title }}</span>
                         </div>
                       </td>
                       <td class="px-6 py-4">
@@ -369,7 +441,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import SessionSidebar from './SessionSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
-import { listDocuments, deleteDocument, uploadDocument, type DocumentResponse } from '@/api/knowledge'
+import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem } from '@/api/knowledge'
 import { useAuth } from '@/composables/useAuth'
 
 const router = useRouter()
@@ -378,6 +450,9 @@ const { user, isLoggedIn, logout } = useAuth()
 const documents = ref<DocumentResponse[]>([])
 const isLoading = ref(false)
 const searchQuery = ref('')
+const searchResults = ref<SearchResultItem[]>([])
+const isSearching = ref(false)
+const searchError = ref('')
 const showUploadModal = ref(false)
 const selectedFile = ref<File | null>(null)
 const isDragging = ref(false)
@@ -399,10 +474,83 @@ const filteredDocuments = computed(() => {
   if (!searchQuery.value.trim()) {
     return documents.value
   }
-  const query = searchQuery.value.toLowerCase()
-  return documents.value.filter(doc =>
-    doc.title.toLowerCase().includes(query)
-  )
+  // 搜索模式下返回空（显示搜索结果）
+  return []
+})
+
+// 判断是否处于搜索模式
+const isSearchMode = computed(() => searchQuery.value.trim().length > 0)
+
+// 防抖定时器
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// 执行搜索
+async function performSearch(query: string) {
+  if (!query.trim()) {
+    searchResults.value = []
+    searchError.value = ''
+    return
+  }
+
+  isSearching.value = true
+  searchError.value = ''
+
+  try {
+    const result = await searchDocuments(query)
+    if (result.success) {
+      searchResults.value = result.results
+    } else {
+      searchError.value = result.error || '搜索失败'
+      searchResults.value = []
+    }
+  } catch (error: any) {
+    console.error('前端日志：搜索文档失败', error)
+    searchError.value = error.message || '搜索失败'
+    searchResults.value = []
+  } finally {
+    isSearching.value = false
+  }
+}
+
+// 监听搜索输入（防抖）
+function handleSearchInput() {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+  }
+  searchDebounceTimer = setTimeout(() => {
+    if (isSearchMode.value) {
+      performSearch(searchQuery.value)
+    } else {
+      searchResults.value = []
+    }
+  }, 300)
+}
+
+// 按文档分组搜索结果，按相关度从高到低排列
+const groupedSearchResults = computed(() => {
+  const groups: Record<number, { title: string; file_type: string; chunks: SearchResultItem[]; maxScore: number }> = {}
+  for (const result of searchResults.value) {
+    if (!groups[result.doc_id]) {
+      groups[result.doc_id] = {
+        title: result.title,
+        file_type: result.file_type,
+        chunks: [],
+        maxScore: 0
+      }
+    }
+    groups[result.doc_id].chunks.push(result)
+    // 跟踪该文档的最高分
+    if (result.score > groups[result.doc_id].maxScore) {
+      groups[result.doc_id].maxScore = result.score
+    }
+  }
+  // 按文档最高分从高到低排序，同文档内 chunks 也按分数降序排列
+  return Object.values(groups)
+    .map(group => ({
+      ...group,
+      chunks: group.chunks.sort((a, b) => b.score - a.score)
+    }))
+    .sort((a, b) => b.maxScore - a.maxScore)
 })
 
 // Load documents
@@ -510,6 +658,12 @@ function getFileIconClass(fileType: string): string {
   if (ext === '.xlsx' || ext === '.xls') return 'bg-success-500'
   if (ext === '.pptx' || ext === '.ppt') return 'bg-warning-500'
   return 'bg-gray-500'
+}
+
+// 打开原始文档（新窗口）
+function openDocument(docId: number) {
+  const url = getDocumentDownloadUrl(docId)
+  window.open(url, '_blank')
 }
 
 // Navigation functions

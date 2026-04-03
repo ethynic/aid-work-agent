@@ -74,8 +74,9 @@ class KnowledgeBaseService:
 
             parse_result = await parser.parse(file_path)
 
-            # 2. 分块
-            chunks = self.chunker.chunk(parse_result.text)
+            # 2. 分块（将文件名加入文本内容，便于搜索时匹配文件名）
+            text_with_filename = f"文档标题：{file_filename}\n\n{parse_result.text}"
+            chunks = self.chunker.chunk(text_with_filename)
             if not chunks:
                 raise ValueError("文档内容为空或无法提取文本")
 
@@ -135,7 +136,7 @@ class KnowledgeBaseService:
             # 插入向量（复用同一个数据库连接，避免锁冲突）
             vector_db = VectorDBSQLite(
                 db_path=self.db_path,
-                dimension=1536,
+                dimension=1024,
                 conn=conn
             )
             await vector_db.insert(chunk_ids, embeddings)
@@ -191,7 +192,7 @@ class KnowledgeBaseService:
             # 删除向量（复用同一个数据库连接，避免锁冲突）
             vector_db = VectorDBSQLite(
                 db_path=self.db_path,
-                dimension=1536,
+                dimension=1024,
                 conn=conn
             )
             await vector_db.delete_by_doc(doc_id)
@@ -229,7 +230,7 @@ class KnowledgeBaseService:
 
             if user_id:
                 cursor.execute("""
-                    SELECT id, title, source_type, file_type, file_size,
+                    SELECT id, title, source_type, file_type, file_path, file_size,
                            total_chunks, created_at
                     FROM documents
                     WHERE user_id = ?
@@ -238,7 +239,7 @@ class KnowledgeBaseService:
                 """, (user_id, limit, offset))
             else:
                 cursor.execute("""
-                    SELECT id, title, source_type, file_type, file_size,
+                    SELECT id, title, source_type, file_type, file_path, file_size,
                            total_chunks, created_at
                     FROM documents
                     ORDER BY created_at DESC
@@ -284,6 +285,101 @@ class KnowledgeBaseService:
         except Exception as e:
             logger.error(f"后端日志：获取文档分块失败: {e}", exc_info=True)
             return []
+
+    async def search_documents(
+        self,
+        query: str,
+        user_id: Optional[int] = None,
+        top_k: int = 10
+    ) -> Dict[str, Any]:
+        """
+        根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
+
+        Args:
+            query: 搜索关键词
+            user_id: 用户 ID（权限控制，暂未实现）
+            top_k: 返回结果数量
+
+        Returns:
+            搜索结果
+        """
+        try:
+            # 初始化 HybridRetriever
+            from src.knowledge.retriever.hybrid_retriever import HybridRetriever
+            from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
+            from src.knowledge.vector_db.vector_db import VectorDBSQLite
+
+            qwen_keys = settings.llm.qwen.get_effective_keys()
+            if not qwen_keys:
+                return {
+                    "success": False,
+                    "error": "QWEN API key 未配置",
+                    "results": [],
+                    "count": 0
+                }
+
+            conn = self._get_db_connection()
+            embedding_client = TextEmbeddingV3Client(api_key=qwen_keys[0])
+            vector_db = VectorDBSQLite(db_path=self.db_path, dimension=1024, conn=conn)
+
+            retriever = HybridRetriever(
+                vector_db=vector_db,
+                embedding_client=embedding_client,
+                conn=conn
+            )
+
+            # 执行混合检索
+            results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id)
+
+            # 提取文档标题
+            if results:
+                doc_ids = {r["doc_id"] for r in results}
+                placeholders = ','.join(['?'] * len(doc_ids))
+
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT id, title, file_type, file_path FROM documents WHERE id IN ({placeholders})
+                """, list(doc_ids))
+
+                doc_info = {row[0]: {"title": row[1], "file_type": row[2], "file_path": row[3]} for row in cursor.fetchall()}
+
+                # 格式化结果
+                formatted_results = [
+                    {
+                        "doc_id": r["doc_id"],
+                        "chunk_id": r["chunk_id"],
+                        "text": r["text"],
+                        "title": doc_info.get(r["doc_id"], {}).get("title", "未知文档"),
+                        "file_type": doc_info.get(r["doc_id"], {}).get("file_type", ""),
+                        "file_path": doc_info.get(r["doc_id"], {}).get("file_path", ""),
+                        "score": round(r["score"], 4)
+                    }
+                    for r in results
+                ]
+            else:
+                formatted_results = []
+
+            conn.close()
+
+            logger.info(f"后端日志：文档搜索完成，查询={query}, 结果数={len(formatted_results)}")
+            return {
+                "success": True,
+                "results": formatted_results,
+                "count": len(formatted_results)
+            }
+
+        except Exception as e:
+            error_str = str(e)
+            if "=***" not in error_str:
+                error_str = sanitize_error_info(error_str)
+            logger.error(f"后端日志：文档搜索失败: {error_str}", exc_info=True)
+            return {
+                "success": False,
+                "error": "搜索失败，请稍后重试",
+                "debug": error_str,
+                "results": [],
+                "count": 0
+            }
 
 
 # 全局单例
