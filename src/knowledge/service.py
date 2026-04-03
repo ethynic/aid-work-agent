@@ -217,6 +217,24 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：文档删除失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    def count_documents(self, user_id: Optional[int] = None) -> int:
+        """获取文档总数"""
+        try:
+            conn = self._get_db_connection()
+            cursor = conn.cursor()
+
+            if user_id:
+                cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = ?", (user_id,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM documents")
+
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
+        except Exception as e:
+            logger.error(f"后端日志：获取文档总数失败: {e}", exc_info=True)
+            return 0
+
     def list_documents(
         self,
         user_id: Optional[int] = None,

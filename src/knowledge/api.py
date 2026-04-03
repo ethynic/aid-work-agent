@@ -145,7 +145,7 @@ async def upload_document(
         )
 
 
-@router.get("/documents", response_model=List[DocumentResponse])
+@router.get("/documents")
 async def list_documents(
     limit: int = 100,
     offset: int = 0,
@@ -155,6 +155,7 @@ async def list_documents(
     获取知识库文档列表
 
     - 支持分页查询
+    - 返回 {items, total} 格式
     """
     user_id = None
     current_user = auth.get_current_user(http_request) if http_request else None
@@ -166,8 +167,12 @@ async def list_documents(
         limit=limit,
         offset=offset
     )
+    total = knowledge_service.count_documents(user_id=user_id)
 
-    return [DocumentResponse(**doc) for doc in documents]
+    return {
+        "items": [DocumentResponse(**doc) for doc in documents],
+        "total": total
+    }
 
 
 @router.post("/search_documents", response_model=SearchResponse)

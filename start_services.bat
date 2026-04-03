@@ -15,7 +15,7 @@ echo.
 
 echo Step 2/4: Stop frontend service (if running)
 echo ----------------------------------------
-for /f "tokens=2" %%a in ('netstat -ano ^| findstr ":5173"') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5173"') do (
     taskkill /F /PID %%a >nul 2>&1
     if !errorlevel! equ 0 (
         echo [OK] Frontend service stopped (PID: %%a)

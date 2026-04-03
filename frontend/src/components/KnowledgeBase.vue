@@ -120,6 +120,17 @@
         <!-- Main Content Area -->
         <div class="flex-1 overflow-hidden p-6">
           <div class="max-w-6xl mx-auto h-full flex flex-col">
+            <!-- Upload Success Banner -->
+            <div
+              v-if="uploadSuccessMessage"
+              class="mb-4 px-4 py-2.5 bg-success-50 border border-success-200 rounded-lg flex items-center gap-2 text-sm text-success-700"
+            >
+              <svg class="w-5 h-5 text-success-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              {{ uploadSuccessMessage }}
+            </div>
+
             <!-- Toolbar -->
             <div class="flex items-center justify-between mb-4">
               <!-- Search -->
@@ -236,7 +247,8 @@
               </div>
 
               <!-- Table -->
-              <div v-else class="h-full overflow-auto">
+              <div v-else class="h-full flex flex-col">
+                <div class="flex-1 overflow-auto">
                 <table class="w-full">
                   <thead class="sticky top-0 bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -291,6 +303,62 @@
                     </tr>
                   </tbody>
                 </table>
+                </div>
+
+                <!-- Pagination -->
+                <div v-if="totalDocuments > pageSize" class="flex-shrink-0 flex items-center justify-between px-6 py-3 border-t border-gray-200 bg-gray-50">
+                  <span class="text-sm text-gray-500">
+                    共 {{ totalDocuments }} 篇文档，第 {{ currentPage }}/{{ totalPages }} 页
+                  </span>
+                  <div class="flex items-center gap-1">
+                    <button
+                      @click="goToPage(1)"
+                      :disabled="currentPage === 1"
+                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      首页
+                    </button>
+                    <button
+                      @click="goToPage(currentPage - 1)"
+                      :disabled="currentPage === 1"
+                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                    <template v-for="page in totalPages" :key="page">
+                      <button
+                        v-if="shouldShowPage(page)"
+                        @click="goToPage(page)"
+                        :class="[
+                          'min-w-[32px] px-2 py-1.5 text-sm rounded transition-colors',
+                          page === currentPage
+                            ? 'bg-primary-600 text-white'
+                            : 'text-gray-600 hover:bg-gray-200'
+                        ]"
+                      >
+                        {{ page }}
+                      </button>
+                    </template>
+                    <button
+                      @click="goToPage(currentPage + 1)"
+                      :disabled="currentPage === totalPages"
+                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                    <button
+                      @click="goToPage(totalPages)"
+                      :disabled="currentPage === totalPages"
+                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      末页
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -463,11 +531,19 @@ const isDeleting = ref(false)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
+// Pagination state
+const currentPage = ref(1)
+const pageSize = ref(5)
+const totalDocuments = ref(0)
+
 // Layout state
 const isSidebarCollapsed = ref(false)
 const isOnline = ref(true)
 const showMenuDropdown = ref(false)
 const showCredentialManager = ref(false)
+
+// 分页总页数
+const totalPages = computed(() => Math.ceil(totalDocuments.value / pageSize.value) || 1)
 
 // Filtered documents based on search
 const filteredDocuments = computed(() => {
@@ -557,12 +633,29 @@ const groupedSearchResults = computed(() => {
 async function loadDocuments() {
   isLoading.value = true
   try {
-    documents.value = await listDocuments()
+    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value)
+    documents.value = result.items
+    totalDocuments.value = result.total
   } catch (error: any) {
     console.error('前端日志：加载文档列表失败', error)
   } finally {
     isLoading.value = false
   }
+}
+
+// 翻页
+function goToPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  currentPage.value = page
+  loadDocuments()
+}
+
+// 判断页码是否显示（总页数 <= 7 全部显示，否则只显示首尾和当前页附近的）
+function shouldShowPage(page: number): boolean {
+  if (totalPages.value <= 7) return true
+  if (page === 1 || page === totalPages.value) return true
+  if (Math.abs(page - currentPage.value) <= 1) return true
+  return false
 }
 
 // Handle file selection
@@ -590,6 +683,20 @@ function handleDrop(event: DragEvent) {
   }
 }
 
+// 上传成功提示
+const uploadSuccessMessage = ref('')
+let uploadSuccessTimer: ReturnType<typeof setTimeout> | null = null
+
+function showUploadSuccess(fileName: string) {
+  uploadSuccessMessage.value = `${fileName} 上传成功`
+  if (uploadSuccessTimer) {
+    clearTimeout(uploadSuccessTimer)
+  }
+  uploadSuccessTimer = setTimeout(() => {
+    uploadSuccessMessage.value = ''
+  }, 3000)
+}
+
 // Handle upload
 async function handleUpload() {
   if (!selectedFile.value) return
@@ -600,8 +707,20 @@ async function handleUpload() {
   try {
     await uploadDocument(selectedFile.value)
     showUploadModal.value = false
+    // 清除搜索状态，回到文档列表视图
+    searchQuery.value = ''
+    searchResults.value = []
+    searchError.value = ''
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer)
+      searchDebounceTimer = null
+    }
+    const fileName = selectedFile.value.name
     selectedFile.value = null
+    // 翻回第一页，刷新列表，最新文档在最上面
+    currentPage.value = 1
     await loadDocuments()
+    showUploadSuccess(fileName)
   } catch (error: any) {
     uploadError.value = error.response?.data?.error || error.message || '上传失败'
   } finally {
@@ -621,6 +740,10 @@ async function confirmDelete() {
   try {
     await deleteDocument(documentToDelete.value.id)
     documentToDelete.value = null
+    // 如果当前页已无数据且不是第一页，则回到上一页
+    if (documents.value.length === 1 && currentPage.value > 1) {
+      currentPage.value--
+    }
     await loadDocuments()
   } catch (error: any) {
     console.error('前端日志：删除文档失败', error)

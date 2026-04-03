@@ -38,35 +38,42 @@ console.log('临时调试：当前步骤', step);
 
 ## 后端代码 (Python)
 
-### 1. 复杂逻辑代码 - 长期保留日志
+**重要：本项目后端统一使用 `loguru` 作为日志库，禁止使用标准库 `logging`。**
 
-在复杂业务逻辑处使用 `logging` 模块记录日志，**必须**注明"后端日志"：
+### 1. 日志库选择
+
+- ✅ 使用 `from loguru import logger`
+- ❌ 禁止使用 `import logging` + `logging.getLogger(__name__)`
+
+原因：项目通过 `src/config/logging.py` 统一配置了 loguru 的 handler（控制台、文件、JSON），标准库 `logging` 的日志不会被 loguru 捕获，导致日志丢失。
+
+### 2. 复杂逻辑代码 - 长期保留日志
+
+在复杂业务逻辑处使用 `loguru` 记录日志，**必须**注明"后端日志"：
 
 ```python
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # 后端日志：用户登录流程
-logger.info('后端日志：开始验证用户凭证', extra={'username': username})
+logger.info('后端日志：开始验证用户凭证')
 
 # 后端日志：计算结果
-logger.info('后端日志：订单总价计算', extra={'items': items, 'total': total})
+logger.info(f'后端日志：订单总价计算，items={items}, total={total}')
 
 # 后端日志：异常捕获
-logger.error('后端日志：数据库连接失败', exc_info=True)
+logger.error(f'后端日志：数据库连接失败: {e}', exc_info=True)
 ```
 
-### 2. 临时调试日志
+### 3. 临时调试日志
 
 临时调试用的日志，**必须**注明"临时调试"，在 bug 修复后删除：
 
 ```python
 # 临时调试：检查请求参数
-logger.debug('临时调试：请求参数', extra={'params': params})
+logger.debug(f'临时调试：请求参数 {params}')
 
 # 临时调试：变量状态
-logger.debug('临时调试：当前步骤', extra={'step': step})
+logger.debug(f'临时调试：当前步骤 {step}')
 ```
 
 **重要**：临时调试日志仅在调试期间保留，bug 修复后立即删除。

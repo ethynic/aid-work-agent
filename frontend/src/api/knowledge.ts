@@ -47,10 +47,15 @@ export interface ApiResponse<T = any> {
   debug?: string
 }
 
+export interface DocumentListResponse {
+  items: DocumentResponse[]
+  total: number
+}
+
 /**
- * 获取知识库文档列表
+ * 获取知识库文档列表（分页）
  */
-export async function listDocuments(limit = 100, offset = 0): Promise<DocumentResponse[]> {
+export async function listDocuments(limit = 100, offset = 0): Promise<DocumentListResponse> {
   const response = await fetch(`${API_BASE}/documents?limit=${limit}&offset=${offset}`)
   if (!response.ok) {
     throw new Error(`获取文档列表失败: ${response.status}`)
