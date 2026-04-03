@@ -7,7 +7,7 @@ Subagent Registry - Subagent注册表
 
 主要功能:
 1. Subagent注册和注销
-2. 按名称、能力、关键词匹配Subagent
+2. 按名称、能力匹配Subagent
 3. 生成Subagent描述供LLM使用
 4. 管理Subagent生命周期
 """
@@ -52,8 +52,6 @@ class SubagentRegistry:
         
         # 能力索引
         self._capability_index: Dict[str, Set[str]] = {}
-        # 关键词索引
-        self._keyword_index: Dict[str, Set[str]] = {}
         # 文件模式索引
         self._file_pattern_index: Dict[str, str] = {}
         
@@ -82,9 +80,8 @@ class SubagentRegistry:
     def _build_indices(self):
         """构建加速查找的索引"""
         self._capability_index.clear()
-        self._keyword_index.clear()
         self._file_pattern_index.clear()
-        
+
         for name, config in self._configs.items():
             # 能力索引
             for capability in config.capabilities:
@@ -92,15 +89,7 @@ class SubagentRegistry:
                 if cap_lower not in self._capability_index:
                     self._capability_index[cap_lower] = set()
                 self._capability_index[cap_lower].add(name)
-            
-            # 关键词索引
-            keywords = config.triggers.get("keywords", [])
-            for keyword in keywords:
-                kw_lower = keyword.lower()
-                if kw_lower not in self._keyword_index:
-                    self._keyword_index[kw_lower] = set()
-                self._keyword_index[kw_lower].add(name)
-            
+
             # 文件模式索引
             patterns = config.triggers.get("file_patterns", [])
             for pattern in patterns:
@@ -121,21 +110,14 @@ class SubagentRegistry:
             return False
         
         self._configs[config.name] = config
-        
+
         # 更新索引
         for capability in config.capabilities:
             cap_lower = capability.lower()
             if cap_lower not in self._capability_index:
                 self._capability_index[cap_lower] = set()
             self._capability_index[cap_lower].add(config.name)
-        
-        keywords = config.triggers.get("keywords", [])
-        for keyword in keywords:
-            kw_lower = keyword.lower()
-            if kw_lower not in self._keyword_index:
-                self._keyword_index[kw_lower] = set()
-            self._keyword_index[kw_lower].add(config.name)
-        
+
         patterns = config.triggers.get("file_patterns", [])
         for pattern in patterns:
             self._file_pattern_index[pattern.lower()] = config.name
@@ -158,7 +140,7 @@ class SubagentRegistry:
             return False
         
         config = self._configs.pop(name)
-        
+
         # 更新索引
         for capability in config.capabilities:
             cap_lower = capability.lower()
@@ -166,15 +148,7 @@ class SubagentRegistry:
                 self._capability_index[cap_lower].discard(name)
                 if not self._capability_index[cap_lower]:
                     del self._capability_index[cap_lower]
-        
-        keywords = config.triggers.get("keywords", [])
-        for keyword in keywords:
-            kw_lower = keyword.lower()
-            if kw_lower in self._keyword_index:
-                self._keyword_index[kw_lower].discard(name)
-                if not self._keyword_index[kw_lower]:
-                    del self._keyword_index[kw_lower]
-        
+
         patterns = config.triggers.get("file_patterns", [])
         for pattern in patterns:
             self._file_pattern_index.pop(pattern.lower(), None)
@@ -238,12 +212,7 @@ class SubagentRegistry:
         for capability, names in self._capability_index.items():
             if capability in desc_lower:
                 matched.update(names)
-        
-        # 检查关键词索引
-        for keyword, names in self._keyword_index.items():
-            if keyword in desc_lower:
-                matched.update(names)
-        
+
         if matched:
             # 返回第一个匹配的
             return list(matched)[0]

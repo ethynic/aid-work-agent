@@ -40,7 +40,6 @@ class SubagentConfig(BaseModel):
     triggers: Dict[str, Any] = Field(default_factory=dict, description="触发条件配置")
     # triggers 结构:
     # {
-    #     "keywords": ["代码审查", "code review"],
     #     "file_patterns": ["*.py", "*.js"]
     # }
     
@@ -105,23 +104,6 @@ class SubagentConfig(BaseModel):
         if not self.skills:
             return []
         return self.skills.get("allowed", [])
-    
-    def matches_keyword(self, text: str) -> bool:
-        """
-        检查文本是否匹配触发关键词
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            是否匹配
-        """
-        keywords = self.triggers.get("keywords", [])
-        text_lower = text.lower()
-        for keyword in keywords:
-            if keyword.lower() in text_lower:
-                return True
-        return False
     
     def matches_file(self, filename: str) -> bool:
         """

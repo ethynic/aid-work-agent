@@ -25,9 +25,6 @@ SUBAGENT.md格式:
       - code_review
       - security_audit
     triggers:
-      keywords:
-        - 代码审查
-        - code review
       file_patterns:
         - "*.py"
         - "*.js"

@@ -45,13 +45,13 @@ def test_registry():
     
     # 测试匹配
     print("\n测试匹配功能:")
-    
+
     # 按能力匹配
     name = registry.match_by_capability("帮我审查这段代码的安全性")
-    print(f"  匹配 '审查代码安全性': {name}")
-    
+    print(f"  能力匹配 '审查代码安全性': {name}")
+
     name = registry.match_by_capability("处理这份PDF简历")
-    print(f"  匹配 '处理PDF简历': {name}")
+    print(f"  能力匹配 '处理PDF简历': {name}")
     
     # 按文件匹配
     name = registry.match_by_file("main.py")
