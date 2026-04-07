@@ -1,0 +1,124 @@
+# AID Work Agent Docker Compose 配置
+# 支持 FastAPI 和 Gradio 两种部署模式
+
+services:
+  # FastAPI 服务（默认）
+  aid-agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aid-agent-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # 服务模式：fastapi | gradio
+      - SERVER_MODE=fastapi
+      - SERVER_PORT=8000
+      # LLM 配置
+      - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
+      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
+      - QWEN_API_KEYS=${QWEN_API_KEYS}
+      # 调试模式
+      - DEBUG=${DEBUG:-false}
+      # 渠道配置 - 企业微信
+      - WECOM_ENABLED=${WECOM_ENABLED:-false}
+      - WECOM_CORP_ID=${WECOM_CORP_ID}
+      - WECOM_AGENT_ID=${WECOM_AGENT_ID}
+      - WECOM_SECRET=${WECOM_SECRET}
+      - WECOM_TOKEN=${WECOM_TOKEN}
+      - WECOM_ENCODING_AES_KEY=${WECOM_ENCODING_AES_KEY}
+      # 渠道配置 - 钉钉
+      - DINGTALK_ENABLED=${DINGTALK_ENABLED:-false}
+      - DINGTALK_APP_KEY=${DINGTALK_APP_KEY}
+      - DINGTALK_APP_SECRET=${DINGTALK_APP_SECRET}
+      - DINGTALK_TOKEN=${DINGTALK_TOKEN}
+      - DINGTALK_ENCODING_AES_KEY=${DINGTALK_ENCODING_AES_KEY}
+      # 渠道配置 - 飞书
+      - FEISHU_ENABLED=${FEISHU_ENABLED:-false}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
+      - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY}
+      # 工具配置
+      - SMTP_SERVER=${SMTP_SERVER}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - IMAP_SERVER=${IMAP_SERVER}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - BAIDU_OCR_API_KEY=${BAIDU_OCR_API_KEY}
+      - BAIDU_OCR_SECRET_KEY=${BAIDU_OCR_SECRET_KEY}
+    volumes:
+      # 挂载项目根目录到容器，实现代码热更新
+      - .:/app
+      # 挂载日志目录
+      - ./log:/app/log
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Gradio UI 服务（可选）
+  aid-agent-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aid-agent-ui
+    restart: unless-stopped
+    ports:
+      - "${GRADIO_PORT:-7860}:7860"
+    environment:
+      - SERVER_MODE=gradio
+      - SERVER_PORT=7860
+      # LLM 配置
+      - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
+      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
+      - QWEN_API_KEYS=${QWEN_API_KEYS}
+      # 调试模式
+      - DEBUG=${DEBUG:-false}
+      # 渠道配置（同上）
+      - WECOM_ENABLED=${WECOM_ENABLED:-false}
+      - WECOM_CORP_ID=${WECOM_CORP_ID}
+      - WECOM_AGENT_ID=${WECOM_AGENT_ID}
+      - WECOM_SECRET=${WECOM_SECRET}
+      - WECOM_TOKEN=${WECOM_TOKEN}
+      - WECOM_ENCODING_AES_KEY=${WECOM_ENCODING_AES_KEY}
+      - DINGTALK_ENABLED=${DINGTALK_ENABLED:-false}
+      - DINGTALK_APP_KEY=${DINGTALK_APP_KEY}
+      - DINGTALK_APP_SECRET=${DINGTALK_APP_SECRET}
+      - DINGTALK_TOKEN=${DINGTALK_TOKEN}
+      - DINGTALK_ENCODING_AES_KEY=${DINGTALK_ENCODING_AES_KEY}
+      - FEISHU_ENABLED=${FEISHU_ENABLED:-false}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
+      - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY}
+      # 工具配置
+      - SMTP_SERVER=${SMTP_SERVER}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - IMAP_SERVER=${IMAP_SERVER}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - BAIDU_OCR_API_KEY=${BAIDU_OCR_API_KEY}
+      - BAIDU_OCR_SECRET_KEY=${BAIDU_OCR_SECRET_KEY}
+    volumes:
+      # 挂载项目根目录到容器，实现代码热更新
+      - .:/app
+      # 挂载日志目录
+      - ./log:/app/log
+    networks:
+      - aid-network
+    profiles:
+      - ui  # 使用 docker compose --profile ui 启动
+
+networks:
+  aid-network:
+    driver: bridge
