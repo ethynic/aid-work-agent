@@ -396,6 +396,32 @@ def init_database():
         except Exception as e:
             logger.warning(f"无法创建 FTS5 表: {e}")
 
+        # 用户邮箱配置表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_email_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT UNIQUE NOT NULL,
+                email_address TEXT NOT NULL,
+                smtp_server TEXT NOT NULL,
+                smtp_port INTEGER NOT NULL,
+                smtp_user TEXT NOT NULL,
+                smtp_password TEXT NOT NULL,
+                smtp_encryption TEXT DEFAULT 'ssl',
+                imap_server TEXT NOT NULL,
+                imap_port INTEGER NOT NULL,
+                imap_encryption TEXT DEFAULT 'ssl',
+                status INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_email_settings_user
+            ON user_email_settings(user_id)
+        """)
+
         conn.commit()
         logger.info(f"Database initialized at {get_sqlite_path()}")
 

@@ -107,14 +107,28 @@ class EmailSendTool(BaseTool):
                 return f"发送邮件至「{to}」"
         return self.display_name
 
-    def __init__(self, user_email: UserEmail):
+    def __init__(self, user_email: Optional[UserEmail] = None):
         """
         初始化邮件发送工具
-        
+
         Args:
-            user_email: 用户邮箱配置
+            user_email: 用户邮箱配置（可选，不传则运行时从数据库读取）
         """
         self.user_email = user_email
+        self._user_id: Optional[str] = None
+
+    def set_user_id(self, user_id: str):
+        """设置当前用户ID，用于从数据库读取邮箱配置"""
+        self._user_id = user_id
+
+    def _resolve_user_email(self) -> Optional[UserEmail]:
+        """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
+        if self.user_email:
+            return self.user_email
+        if self._user_id:
+            from src.db.email_credential import EmailCredentialDB
+            return EmailCredentialDB.get_user_email_model(self._user_id)
+        return None
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -129,6 +143,10 @@ class EmailSendTool(BaseTool):
         Returns:
             执行结果
         """
+        user_email = self._resolve_user_email()
+        if not user_email:
+            return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
+
         to = kwargs.get("to", "")
         subject = kwargs.get("subject", "")
         body = kwargs.get("body", "")
@@ -143,7 +161,7 @@ class EmailSendTool(BaseTool):
         try:
             # 创建邮件
             msg = MIMEMultipart()
-            msg["From"] = self.user_email.email_address
+            msg["From"] = user_email.email_address
             msg["Subject"] = subject
 
             # 处理收件人（支持字符串或列表）
@@ -168,62 +186,62 @@ class EmailSendTool(BaseTool):
             msg.attach(MIMEText(body, "plain", "utf-8"))
 
             # 根据加密协议发送邮件
-            if self.user_email.smtp_encryption == "ssl":
+            if user_email.smtp_encryption == "ssl":
                 # SSL/TLS 加密连接
                 with smtplib.SMTP_SSL(
-                    self.user_email.smtp_server,
-                    self.user_email.smtp_port
+                    user_email.smtp_server,
+                    user_email.smtp_port
                 ) as server:
                     server.login(
-                        self.user_email.smtp_user,
-                        self.user_email.smtp_password
+                        user_email.smtp_user,
+                        user_email.smtp_password
                     )
                     server.sendmail(
-                        self.user_email.email_address,
+                        user_email.email_address,
                         recipients,
                         msg.as_string()
                     )
-            elif self.user_email.smtp_encryption == "tls":
+            elif user_email.smtp_encryption == "tls":
                 # STARTTLS 加密连接
                 with smtplib.SMTP(
-                    self.user_email.smtp_server,
-                    self.user_email.smtp_port
+                    user_email.smtp_server,
+                    user_email.smtp_port
                 ) as server:
                     server.ehlo()
                     server.starttls()
                     server.ehlo()
                     server.login(
-                        self.user_email.smtp_user,
-                        self.user_email.smtp_password
+                        user_email.smtp_user,
+                        user_email.smtp_password
                     )
                     server.sendmail(
-                        self.user_email.email_address,
+                        user_email.email_address,
                         recipients,
                         msg.as_string()
                     )
             else:
                 # 无加密连接（不推荐）
                 with smtplib.SMTP(
-                    self.user_email.smtp_server,
-                    self.user_email.smtp_port
+                    user_email.smtp_server,
+                    user_email.smtp_port
                 ) as server:
                     server.login(
-                        self.user_email.smtp_user,
-                        self.user_email.smtp_password
+                        user_email.smtp_user,
+                        user_email.smtp_password
                     )
                     server.sendmail(
-                        self.user_email.email_address,
+                        user_email.email_address,
                         recipients,
                         msg.as_string()
                     )
 
-            logger.info(f"邮件发送成功: from={self.user_email.email_address}, to={to}, encryption={self.user_email.smtp_encryption}")
+            logger.info(f"邮件发送成功: from={user_email.email_address}, to={to}, encryption={user_email.smtp_encryption}")
 
             return {
                 "success": True,
                 "message": f"邮件已成功发送给 {to}",
                 "details": {
-                    "from": self.user_email.email_address,
+                    "from": user_email.email_address,
                     "to": to,
                     "cc": cc,
                     "subject": subject,
@@ -255,14 +273,28 @@ class EmailReadTool(BaseTool):
             return f"读取邮件（{folder}，{limit}封）"
         return self.display_name
 
-    def __init__(self, user_email: UserEmail):
+    def __init__(self, user_email: Optional[UserEmail] = None):
         """
         初始化邮件收取工具
-        
+
         Args:
-            user_email: 用户邮箱配置
+            user_email: 用户邮箱配置（可选，不传则运行时从数据库读取）
         """
         self.user_email = user_email
+        self._user_id: Optional[str] = None
+
+    def set_user_id(self, user_id: str):
+        """设置当前用户ID，用于从数据库读取邮箱配置"""
+        self._user_id = user_id
+
+    def _resolve_user_email(self) -> Optional[UserEmail]:
+        """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
+        if self.user_email:
+            return self.user_email
+        if self._user_id:
+            from src.db.email_credential import EmailCredentialDB
+            return EmailCredentialDB.get_user_email_model(self._user_id)
+        return None
 
     def _list_folders(self, mail) -> List[Dict[str, Any]]:
         """列出所有邮件文件夹"""
@@ -299,6 +331,10 @@ class EmailReadTool(BaseTool):
         Returns:
             执行结果
         """
+        user_email = self._resolve_user_email()
+        if not user_email:
+            return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
+
         limit = kwargs.get("limit", 10)
         folder = kwargs.get("folder", "INBOX")
         unseen_only = kwargs.get("unseen_only", False)
@@ -307,27 +343,27 @@ class EmailReadTool(BaseTool):
 
         try:
             # 根据加密协议连接IMAP服务器
-            if self.user_email.imap_encryption == "ssl":
+            if user_email.imap_encryption == "ssl":
                 # SSL/TLS 加密连接
                 mail = imaplib.IMAP4_SSL(
-                    self.user_email.imap_server,
-                    self.user_email.imap_port
+                    user_email.imap_server,
+                    user_email.imap_port
                 )
-            elif self.user_email.imap_encryption == "tls":
+            elif user_email.imap_encryption == "tls":
                 # STARTTLS 加密连接
                 mail = imaplib.IMAP4(
-                    self.user_email.imap_server,
-                    self.user_email.imap_port
+                    user_email.imap_server,
+                    user_email.imap_port
                 )
                 mail.starttls()
             else:
                 # 无加密连接（不推荐）
                 mail = imaplib.IMAP4(
-                    self.user_email.imap_server,
-                    self.user_email.imap_port
+                    user_email.imap_server,
+                    user_email.imap_port
                 )
 
-            imap_user, imap_password = self.user_email.get_imap_credentials()
+            imap_user, imap_password = user_email.get_imap_credentials()
             mail.login(imap_user, imap_password)
             mail.select(folder)
 
@@ -508,31 +544,49 @@ class EmailListFoldersTool(BaseTool):
     category = "email"
     InputModel = EmailListFoldersInput
 
-    def __init__(self, user_email: UserEmail):
+    def __init__(self, user_email: Optional[UserEmail] = None):
         self.user_email = user_email
+        self._user_id: Optional[str] = None
+
+    def set_user_id(self, user_id: str):
+        """设置当前用户ID，用于从数据库读取邮箱配置"""
+        self._user_id = user_id
+
+    def _resolve_user_email(self) -> Optional[UserEmail]:
+        """获取用户邮箱配置：优先使用注入的配置，否则从DB读取"""
+        if self.user_email:
+            return self.user_email
+        if self._user_id:
+            from src.db.email_credential import EmailCredentialDB
+            return EmailCredentialDB.get_user_email_model(self._user_id)
+        return None
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """列出所有文件夹并统计邮件数量"""
+        user_email = self._resolve_user_email()
+        if not user_email:
+            return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
+
         try:
             # 连接IMAP服务器
-            if self.user_email.imap_encryption == "ssl":
+            if user_email.imap_encryption == "ssl":
                 mail = imaplib.IMAP4_SSL(
-                    self.user_email.imap_server,
-                    self.user_email.imap_port
+                    user_email.imap_server,
+                    user_email.imap_port
                 )
-            elif self.user_email.imap_encryption == "tls":
+            elif user_email.imap_encryption == "tls":
                 mail = imaplib.IMAP4(
-                    self.user_email.imap_server,
-                    self.user_email.imap_port
+                    user_email.imap_server,
+                    user_email.imap_port
                 )
                 mail.starttls()
             else:
                 mail = imaplib.IMAP4(
-                    self.user_email.imap_server,
-                    self.user_email.imap_port
+                    user_email.imap_server,
+                    user_email.imap_port
                 )
 
-            imap_user, imap_password = self.user_email.get_imap_credentials()
+            imap_user, imap_password = user_email.get_imap_credentials()
             mail.login(imap_user, imap_password)
 
             # 获取所有文件夹
@@ -583,13 +637,13 @@ class EmailListFoldersTool(BaseTool):
             return {"success": False, "error": f"列出文件夹失败: {str(e)}"}
 
 
-def create_email_tools(user_email: UserEmail) -> List[BaseTool]:
+def create_email_tools(user_email: Optional[UserEmail] = None) -> List[BaseTool]:
     """
     创建邮件工具实例
-    
+
     Args:
-        user_email: 用户邮箱配置
-    
+        user_email: 用户邮箱配置（可选）
+
     Returns:
         邮件工具列表
     """

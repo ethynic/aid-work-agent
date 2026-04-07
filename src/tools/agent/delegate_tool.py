@@ -41,6 +41,7 @@ class DelegateToSubagentTool(BaseTool):
             context_needed: 上下文关键词（可选）
             session_id: 会话ID（可选）
             progress_callback: 进度回调函数（可选）
+            user_id: 用户ID（可选，传递给子智能体用于读取邮箱配置等）
 
         Returns:
             委派结果字典
@@ -50,6 +51,7 @@ class DelegateToSubagentTool(BaseTool):
         context_needed = kwargs.get("context_needed")
         session_id = kwargs.get("session_id")
         progress_callback = kwargs.get("progress_callback")
+        user_id = kwargs.get("user_id")
 
         if not subagent_name:
             return {
@@ -113,6 +115,7 @@ class DelegateToSubagentTool(BaseTool):
                 task_description=task_description,
                 session_id=session_id or "default",
                 progress_callback=subagent_progress_wrapper,
+                user_id=user_id,
             )
 
             if not response.success:

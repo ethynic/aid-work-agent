@@ -11,7 +11,8 @@
       "Bash(powershell:*)",
       "Bash(findstr:*)",
       "Bash(npm run build)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(sqlite3 /c/repos/aid-work-agent/aid_work_agent.db \".schema\")"
     ]
   }
 }

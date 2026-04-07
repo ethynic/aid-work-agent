@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.db.database import get_db_connection
@@ -338,6 +338,45 @@ async def get_current_user_info(request: Request):
             "avatar_url": user.get("avatar_url")
         }
     raise HTTPException(status_code=401, detail="未登录")
+
+
+class UpdateProfileRequest(BaseModel):
+    """更新用户资料请求"""
+    username: Optional[str] = Field(None, description="显示名称")
+    avatar_url: Optional[str] = Field(None, description="头像 URL")
+
+
+@router.patch("/profile")
+async def update_profile(
+    request: Request,
+    body: UpdateProfileRequest,
+):
+    """更新当前用户资料（显示名称、头像）"""
+    current_user = get_current_user(request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    user_id = current_user["user_id"]
+    updates = body.dict(exclude_unset=True)
+
+    if not updates:
+        return {"success": False, "error": "没有需要更新的字段"}
+
+    success = UserDB.update_info(user_id, **updates)
+    if success:
+        # 返回更新后的用户信息
+        updated_user = UserDB.get_by_id(user_id)
+        return {
+            "success": True,
+            "message": "资料更新成功",
+            "user": {
+                "user_id": updated_user["user_id"],
+                "username": updated_user["username"],
+                "phone": updated_user["phone"],
+                "avatar_url": updated_user.get("avatar_url"),
+            },
+        }
+    return {"success": False, "error": "更新失败"}
 
 
 @router.post("/logout")

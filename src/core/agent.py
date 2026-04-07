@@ -215,24 +215,11 @@ class Agent:
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
         from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
-        from src.models.user import UserEmail, EncryptionType
-        
-        # 创建默认用户邮箱配置
-        default_user_email = UserEmail(
-            email_address="luwei@tulin.cn",
-            smtp_server="smtp.ym.163.com",
-            smtp_port=994,
-            smtp_user="luwei@tulin.cn",
-            smtp_password="p@$$w0rd",
-            smtp_encryption=EncryptionType.SSL,
-            imap_server="imap.ym.163.com",
-            imap_port=993,
-            imap_encryption=EncryptionType.SSL,
-        )
-        
-        self.tool_registry.register(EmailSendTool(default_user_email))
-        self.tool_registry.register(EmailReadTool(default_user_email))
-        self.tool_registry.register(EmailListFoldersTool(default_user_email))
+
+        # 注册邮件工具（不传配置，运行时通过 user_id 从数据库读取）
+        self.tool_registry.register(EmailSendTool())
+        self.tool_registry.register(EmailReadTool())
+        self.tool_registry.register(EmailListFoldersTool())
         self.tool_registry.register(PaddleOCRDocParsingTool())
         self.tool_registry.register(DocSummarizeTool())
         self.tool_registry.register(DocTranslateTool())
@@ -1250,6 +1237,7 @@ create_plan(
                 context_needed=None,
                 session_id=session_id,
                 progress_callback=progress_callback,
+                user_id=user.user_id if user else None,
             )
             
             # 发送重新委派的结果
@@ -1295,6 +1283,13 @@ create_plan(
             return
 
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
+
+        # 设置邮件工具的 user_id，使工具能从数据库读取用户邮箱配置
+        if user:
+            for tool_name in ("email_send", "email_read", "email_list_folders"):
+                tool = self.tool_registry.get_tool(tool_name)
+                if tool and hasattr(tool, 'set_user_id'):
+                    tool.set_user_id(user.user_id)
         
         # Add timestamp context to help LLM understand current time
         current_time = datetime.now()
@@ -1753,6 +1748,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         context_needed=context_needed,
                         session_id=session_id,
                         progress_callback=send_progress,
+                        user_id=user.user_id if user else None,
                     )
 
                     # 发送工具执行结果

@@ -160,6 +160,7 @@ class SubagentExecutor:
         task_parameters: Optional[Dict[str, Any]] = None,
         timeout: int = 7200,
         progress_callback: Optional[callable] = None,
+        user_id: Optional[str] = None,
     ) -> DelegationResponse:
         """
         委托任务给子智能体
@@ -172,6 +173,7 @@ class SubagentExecutor:
             task_parameters: 任务参数
             timeout: 超时时间（秒）
             progress_callback: 进度回调函数，用于实时传递子智能体执行进度
+            user_id: 用户ID（用于设置邮件等工具的用户上下文）
 
         Returns:
             委托响应
@@ -222,6 +224,13 @@ class SubagentExecutor:
         )
         self._subagent_instances[execution_id] = subagent_instance
         logger.info(f"[SUBAGENT] Subagent Agent instance created")
+
+        # 设置子智能体邮件工具的 user_id（使工具能从数据库读取用户邮箱配置）
+        if user_id:
+            for tool_name in ("email_send", "email_read", "email_list_folders"):
+                tool = subagent_instance.tool_registry.get_tool(tool_name)
+                if tool and hasattr(tool, 'set_user_id'):
+                    tool.set_user_id(user_id)
         
         # 在子线程启动执行
         async_task = asyncio.create_task(
