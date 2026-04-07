@@ -1,0 +1,136 @@
+# AID Work Agent 在线测试环境 Docker Compose 配置
+# 基于 docker-compose.prod.yml 修改，避免与生产环境端口和路径冲突
+
+version: '3.8'
+
+services:
+  # FastAPI 后端服务
+  aid-agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-agent-api2
+    restart: unless-stopped
+    
+    # 端口映射（使用 8001 避免与生产环境 8000 冲突）
+    ports:
+      - "${API_PORT:-8001}:8000"
+    
+    # 环境变量
+    environment:
+      # 服务模式
+      - SERVER_MODE=fastapi
+      - SERVER_PORT=8000
+      
+      # Gunicorn 配置
+      # 当前服务器 4 核，workers = 2×4+1 = 9
+      - WORKERS=${WORKERS:-9}
+      - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
+      
+      # LLM 配置
+      - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
+      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
+      - QWEN_API_KEYS=${QWEN_API_KEYS}
+      
+      # 调试模式（生产环境必须为 false）
+      - DEBUG=${DEBUG:-false}
+      
+      # 企业微信渠道
+      - WECOM_ENABLED=${WECOM_ENABLED:-false}
+      - WECOM_CORP_ID=${WECOM_CORP_ID}
+      - WECOM_AGENT_ID=${WECOM_AGENT_ID}
+      - WECOM_SECRET=${WECOM_SECRET}
+      - WECOM_TOKEN=${WECOM_TOKEN}
+      - WECOM_ENCODING_AES_KEY=${WECOM_ENCODING_AES_KEY}
+      
+      # 钉钉渠道
+      - DINGTALK_ENABLED=${DINGTALK_ENABLED:-false}
+      - DINGTALK_APP_KEY=${DINGTALK_APP_KEY}
+      - DINGTALK_APP_SECRET=${DINGTALK_APP_SECRET}
+      - DINGTALK_TOKEN=${DINGTALK_TOKEN}
+      - DINGTALK_ENCODING_AES_KEY=${DINGTALK_ENCODING_AES_KEY}
+      
+      # 飞书渠道
+      - FEISHU_ENABLED=${FEISHU_ENABLED:-false}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
+      - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY}
+      
+      # 邮件工具
+      - SMTP_SERVER=${SMTP_SERVER}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - IMAP_SERVER=${IMAP_SERVER}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      
+      # 搜索工具
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      
+      # OCR 工具
+      - BAIDU_OCR_API_KEY=${BAIDU_OCR_API_KEY}
+      - BAIDU_OCR_SECRET_KEY=${BAIDU_OCR_SECRET_KEY}
+      
+      # 其他配置
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    # Volume 挂载 - 实现代码热更新
+    volumes:
+      # 挂载整个项目目录到容器（关键：实现代码热更新）
+      - .:/app
+      
+      # 日志目录（独立挂载，便于查看）
+      - ./log:/app/log
+      
+      # 配置文件（独立挂载，便于修改）
+      - ./configs:/app/configs
+      
+      # Skills 目录（独立挂载，便于添加新技能）
+      - ./skills:/app/skills
+
+      # 上传附件目录（agent2 独立目录，避免与生产环境冲突）
+      - /var/www/qb3_upload/agent2_uploads:/app/uploads
+
+      # 记忆文件目录（agent2 独立目录，避免与生产环境冲突）
+      - /var/www/qb3_upload/agent2_memories:/app/memories
+    
+    # 网络配置（使用独立网络名称，避免与生产环境冲突）
+    networks:
+      - aid-network2
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # 资源限制（生产环境推荐配置）
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 网络配置（独立网络，避免与生产环境冲突）
+networks:
+  aid-network2:
+    driver: bridge
+
+# Volume 配置（可选，用于持久化数据）
+volumes:
+  app-logs:
+    driver: local
