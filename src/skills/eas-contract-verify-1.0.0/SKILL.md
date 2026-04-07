@@ -4,9 +4,10 @@ description: >
   全筑EAS合同核对技能。用户上传已盖章的合同扫描件（PDF）后，Agent 使用 OCR 工具解析扫描件中的
   合同编号、甲方、乙方、合同金额及盖章信息，然后调用 EAS 合同归档 API 查询对应合同编号在 EAS 系统中
   的登记信息，自动比对两者是否一致，输出结构化的比对结果。
-  使用场景：合同归档核对、合同扫描件验证、盖章合同与系统数据一致性检查。
+  支持一键合同归档自动化审核（解析 → 校验 → 比对 → 上传 → 审批）。
+  使用场景：合同归档核对、合同扫描件验证、盖章合同与系统数据一致性检查、合同归档自动化审核。
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: aid-work-agent
   openclaw:
     emoji: "🔍"
@@ -22,6 +23,7 @@ metadata:
 - 核对已盖章合同扫描件与 EAS 系统数据是否一致
 - 验证合同编号、甲方、乙方、合同金额等关键字段
 - 合同归档前的自动校验
+- 合同归档自动化审核（一键完成全流程）
 
 **关键词触发**：
 - 合同核对
@@ -32,119 +34,162 @@ metadata:
 - 盖章合同核对
 - 合同归档核对
 - 全筑合同
+- 合同归档审核
+- 合同归档自动化审核
 
 ---
 
 ## 完整工作流程
 
 ```
-用户上传已盖章的合同扫描件 PDF
+用户上传已盖章的合同扫描件 PDF + 提供合同编号
     ↓
-Agent 调用 OCR 工具（paddleocr_doc_parsing）解析扫描件
+调用 verify 命令，一键完成以下步骤：
     ↓
-从 OCR 结果中提取：合同编号、甲方、乙方、合同金额、盖章信息
+┌─────────────────────────────────────────────────────┐
+│ 1. PaddleOCR 解析合同PDF                             │
+│    - 每页文本、骑缝章检测、可疑图片检测              │
+│    - LLM分析：是否合同、审批单、甲乙方、金额、盖章   │
+│    - 全局骑缝章汇总（任一页有即判定为有）            │
+├─────────────────────────────────────────────────────┤
+│ 2. 基础校验                                         │
+│    - ✓ 是否为合同                                    │
+│    - ✓ 是否有审批单（第一页）                        │
+│    - ✓ 是否有骑缝章（全局）                          │
+│    - ✓ 甲乙双方是否都盖章                            │
+│    任何一项不通过 → 结果为 no                         │
+├─────────────────────────────────────────────────────┤
+│ 3. EAS系统数据比对                                   │
+│    - 比对甲方名称                                    │
+│    - 比对乙方名称                                    │
+│    - 比对合同金额                                    │
+│    不一致 → 结果为 no，说明差异原因                  │
+├─────────────────────────────────────────────────────┤
+│ 4. 上传附件到EAS系统                                 │
+│    - 比对一致 → 上传附件                             │
+│    - 调用 upload_contract_attachment                 │
+├─────────────────────────────────────────────────────┤
+│ 5. 合同审批（需配合 contract-approval 技能）          │
+│    - verify=yes 后调用 contract-approval 技能        │
+│    - 自动通过OA审批流程                              │
+└─────────────────────────────────────────────────────┘
     ↓
-加载本技能 use_skill(eas-contract-verify)
-    ↓
-调用 EAS API 查询合同信息
-python scripts/eas_contract_verify.py query --contract-code "<合同编号>"
-    ↓
-调用合同比对
-python scripts/eas_contract_verify.py compare --contract-code "<合同编号>" --ocr-data '<OCR JSON>'
-    ↓
-输出比对结果，告知用户是否一致及具体差异
+输出审核结果
 ```
 
 ---
 
 ## 操作步骤
 
-### 步骤 1：OCR 解析合同扫描件
+### 方式一：一键审核（推荐）
 
-用户上传 PDF 扫描件后，首先使用 PaddleOCR 工具解析文档：
+同时提供合同PDF和EAS合同编号，一次性完成全流程：
 
 ```bash
-python src/skills/paddleocr-doc-parsing-2.0.4/scripts/vl_caller.py --file-path "<上传文件路径>" --pretty
+python scripts/eas_contract_verify.py verify --contract-code "<合同编号>" --file-path "<PDF文件路径>"
 ```
 
-从 OCR 解析结果中，Agent 需要提取以下信息：
+加 `--debug` 可输出详细的OCR原始结果（数据量较大）：
 
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| `contract_code` | 合同编号 | `XZCG-2026-0001` |
-| `party_a` | 甲方名称 | `全筑控股集团有限公司` |
-| `party_b` | 乙方名称 | `上海某某建筑材料有限公司` |
-| `amount` | 合同金额 | `100000.00` |
-| `stamp_info` | 盖章信息（可选） | `甲方公章：全筑控股集团有限公司` |
+```bash
+python scripts/eas_contract_verify.py verify --contract-code "<合同编号>" --file-path "<PDF文件路径>" --debug
+```
 
-### 步骤 2：查询 EAS 合同信息
+**返回格式（审核通过）**：
+```json
+{
+  "result": "yes",
+  "message": "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过OA审批流程完成审批。",
+  "details": {
+    "contract_code": "XZCG-2026-0001",
+    "is_contract": true,
+    "has_approval_form": true,
+    "has_riding_seal": true,
+    "has_party_a_stamp": true,
+    "has_party_b_stamp": true,
+    "comparison": { "result": "yes", "message": "合同信息一致" },
+    "upload": { "success": true, "data": { ... } }
+  }
+}
+```
 
-使用从 OCR 提取到的合同编号，查询 EAS 系统中的合同数据：
+**返回格式（审核不通过）**：
+```json
+{
+  "result": "no",
+  "message": "合同基础校验不通过: 未检测到骑缝章; 未检测到甲方盖章",
+  "details": {
+    "contract_code": "XZCG-2026-0001",
+    "is_contract": true,
+    "has_approval_form": true,
+    "has_riding_seal": false,
+    "has_party_a_stamp": false,
+    "has_party_b_stamp": true
+  }
+}
+```
+
+### 方式二：分步操作
+
+#### 步骤 1：OCR 解析合同扫描件
+
+```bash
+python scripts/parse_contract_pdf.py --file-path "<上传文件路径>"
+```
+
+从解析结果中提取信息：
+- `has_riding_seal`: 全局骑缝章检测结果
+- `llm_analysis.is_contract`: 是否为合同
+- `llm_analysis.is_approval_form_first_page`: 是否有审批单
+- `llm_analysis.party_a` / `party_b`: 甲乙方名称
+- `llm_analysis.total_amount`: 合同金额
+- `llm_analysis.has_party_a_stamp` / `has_party_b_stamp`: 甲乙方盖章检测
+- `llm_analysis.contract_code`: 合同编号
+
+#### 步骤 2：查询 EAS 合同信息
 
 ```bash
 python scripts/eas_contract_verify.py query --contract-code "<合同编号>"
 ```
 
-**返回示例（成功）**：
-```json
-{
-  "success": true,
-  "data": {
-    "contract_code": "XZCG-2026-0001",
-    "party_a": "全筑控股集团有限公司",
-    "party_b": "上海某某建筑材料有限公司",
-    "amount": "100000.00",
-    "contract_name": "材料采购合同",
-    "raw_data": { ... },
-    "match_count": 1
-  }
-}
-```
-
-**返回示例（失败）**：
-```json
-{
-  "success": false,
-  "error": "EAS 查询失败: 合同编号不存在",
-  "debug": "{\"success\":false,\"msg\":\"合同编号不存在\"}"
-}
-```
-
-### 步骤 3：比对合同信息
-
-将 OCR 提取的数据与 EAS 系统数据进行比对：
+#### 步骤 3：比对合同信息
 
 ```bash
 python scripts/eas_contract_verify.py compare --contract-code "<合同编号>" --ocr-data '{"party_a":"全筑控股集团有限公司","party_b":"上海某某建筑材料有限公司","amount":"100000.00"}'
 ```
 
-**返回格式**（匹配成功）：
-```json
-{
-  "result": "yes",
-  "message": "合同信息一致",
-  "details": {
-    "ocr_data": { ... },
-    "eas_data": { ... }
-  }
-}
+#### 步骤 4：上传附件（比对通过后）
+
+```bash
+python scripts/eas_contract_verify.py upload --contract-code "<合同编号>" --file-path "<本地文件路径>" --file-desc "文件说明"
 ```
 
-**返回格式**（匹配失败）：
-```json
-{
-  "result": "no",
-  "message": "甲方不一致: 扫描件为\"全筑控股集团\", EAS为\"全筑控股集团有限公司\"; 合同金额不一致: 扫描件为\"100000.00\", EAS为\"200000.00\"",
-  "details": {
-    "ocr_data": { ... },
-    "eas_data": { ... },
-    "discrepancies": [
-      "甲方不一致: ...",
-      "合同金额不一致: ..."
-    ]
-  }
-}
+#### 步骤 5：合同审批（需配合 contract-approval 技能）
+
+审核通过后，调用 contract-approval 技能完成OA审批：
+
+```bash
+python src/skills/contract-approval-1.0.0/scripts/contract_approval.py --contract-no "<合同编号>" --approve
 ```
+
+---
+
+## 基础校验规则说明
+
+### 是否为合同
+- LLM根据全文内容判断文档是否为合同
+- 包含合同要素：甲乙方、合同金额、签署页等
+
+### 审批单检测
+- 检查第一页是否为合同审批单/用印审批单
+
+### 骑缝章检测
+- 全局汇总：检查所有页面，任一页检测到骑缝章即判定为有
+- 骑缝章判定：图片右边缘距页面右边缘不超过50像素
+
+### 甲乙双方盖章检测
+- LLM根据盖章页和文本内容判断甲乙方是否盖章
+- 必须双方都盖章才通过
 
 ---
 
@@ -161,7 +206,7 @@ python scripts/eas_contract_verify.py compare --contract-code "<合同编号>" -
 - 允许微小浮点误差（相对误差 < 1%）
 
 ### 合同编号比对
-- 合同编号必须从 OCR 结果中提取，用于查询 EAS
+- 合同编号必须由用户提供，用于查询 EAS
 - 编号本身不参与比对（作为查询条件）
 
 ---
@@ -186,12 +231,6 @@ python scripts/eas_contract_verify.py compare --contract-code "<合同编号>" -
 
 ## 文件上传（归档功能）
 
-如需将合同附件归档到 EAS 系统：
-
-```bash
-python scripts/eas_contract_verify.py upload --contract-code "<合同编号>" --file-path "<本地文件路径>" --file-desc "文件说明"
-```
-
 上传规则：
 - 共享路径：`\\192.168.200.10\AIUpload`
 - 文件按合同编号建目录存放
@@ -201,38 +240,35 @@ python scripts/eas_contract_verify.py upload --contract-code "<合同编号>" --
 
 ## 输出规范
 
-Agent 在完成核对后，应向用户输出清晰的比对结果：
+Agent 在完成审核后，应向用户输出清晰的结果：
 
-**一致时**：
+**审核通过时**：
 ```
-✅ 合同核对通过
+✅ 合同归档自动化审核通过
 
 合同编号：XZCG-2026-0001
-比对结果：一致
+- 文档类型：合同 ✓
+- 审批单：已检测 ✓
+- 骑缝章：已检测 ✓
+- 甲方盖章：已检测 ✓
+- 乙方盖章：已检测 ✓
 - 甲方：全筑控股集团有限公司 ✓
 - 乙方：上海某某建筑材料有限公司 ✓
 - 合同金额：100,000.00 元 ✓
+- 附件已上传至EAS系统 ✓
+
+下一步将通过OA审批流程完成合同审批。
 ```
 
-**不一致时**：
+**审核不通过时**：
 ```
-❌ 合同核对不通过
+❌ 合同归档自动化审核不通过
 
 合同编号：XZCG-2026-0001
-比对结果：不一致，发现以下差异：
+不通过原因：
 
-1. 甲方不一致
-   - 扫描件：全筑控股集团
-   - EAS系统：全筑控股集团有限公司
-
-2. 合同金额不一致
-   - 扫描件：100,000.00 元
-   - EAS系统：200,000.00 元
-```
-
-同时输出 JSON 格式的比对结果：
-```json
-{"result": "no", "message": "甲方不一致; 合同金额不一致"}
+1. 未检测到骑缝章
+2. 未检测到甲方盖章
 ```
 
 ---
@@ -241,12 +277,15 @@ Agent 在完成核对后，应向用户输出清晰的比对结果：
 
 | 错误情况 | 处理方式 |
 |---------|---------|
-| OCR 未能提取合同编号 | 提示用户提供合同编号 |
-| OCR 提取的合同编号有误 | 提示用户确认合同编号 |
+| PDF 解析失败 | 提示OCR解析失败原因 |
+| 文档非合同 | 明确告知非合同文档 |
+| 未检测到审批单 | 提示缺少审批单 |
+| 未检测到骑缝章 | 提示缺少骑缝章 |
+| 甲/乙方未盖章 | 提示缺少盖章 |
 | EAS 查询失败 | 显示错误信息，建议检查合同编号 |
 | EAS 中无此合同 | 告知用户该合同未在 EAS 系统中登记 |
+| 甲乙方/金额不一致 | 列出具体差异 |
 | 文件上传失败 | 提示检查共享路径权限 |
-| 金额无法解析 | 列出具体差异，标注"金额无法比对" |
 
 ---
 
@@ -254,5 +293,5 @@ Agent 在完成核对后，应向用户输出清晰的比对结果：
 
 1. **OCR 提取精度**：合同扫描件的 OCR 结果可能存在误差，Agent 应告知用户结果仅供参考
 2. **模糊匹配**：公司名称比对采用模糊匹配，允许一定程度的差异
-3. **盖章信息**：盖章信息作为附加参考，不参与自动比对
-4. **操作确认**：上传归档操作前应向用户确认
+3. **骑缝章检测**：采用全局汇总，任一页检测到即判定为有
+4. **debug 模式**：加 `--debug` 输出原始OCR结果，默认不输出以减少数据量

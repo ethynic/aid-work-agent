@@ -96,7 +96,36 @@ Key env vars: `LLM_PROVIDER` (qwen|zhipu), `QWEN_API_KEYS`, `ZHIPU_API_KEYS`, `D
 Create directory `src/skills/<name>-<version>/` with a `SKILL.md` file (see existing skills for format). Auto-loaded on restart.
 
 ### Adding a New SubAgent
-Create `subagents/<name>/SUBAGENT.md` with YAML frontmatter (name, description, capabilities, triggers.keywords, tools, skills.allowed, system_prompt) + Markdown body. Auto-loaded on restart.
+Create `subagents/<name>/SUBAGENT.md` with YAML frontmatter (name, description, capabilities, triggers, tools, skills.allowed) + Markdown body. Auto-loaded on restart.
+
+**SUBAGENT.md 格式规范**：
+```
+---
+name: 智能体中文名
+description: 一行描述
+version: 1.0.0
+author: system
+capabilities: [...]
+triggers:
+  file_patterns: [...]
+  keywords: [...]
+tools:
+  inherit: true
+skills:
+  allowed: [...]
+context:
+  max_input_tokens: 8000
+  max_output_tokens: 4000
+---
+
+（此处为 Markdown body，将作为 system_prompt 使用）
+```
+
+**关键陷阱 — system_prompt 必须放在 body 中，不能放在 YAML frontmatter 里**：
+- Loader 用正则 `^---\s*\n(.*?)\n---\s*\n(.*)$` 分割 frontmatter 和 body，要求第二个 `---` 必须**顶格**（无缩进）
+- 如果 `system_prompt: |` 写在 YAML 中且内容包含 `---` 水平线（Markdown 分隔符），即使这些 `---` 有缩进，也很容易导致 frontmatter 没有闭合的顶格 `---`，正则匹配失败，子智能体不会被加载（静默失败，fallback 到 master agent）
+- 正确做法：**不要在 frontmatter 中定义 system_prompt**，把系统提示词写在闭合 `---` 之后的 body 中。Loader 代码 `frontmatter.get("system_prompt", body.strip())` 会自动使用 body 作为 system_prompt
+- URL 路由匹配：`/chat/<目录名>` 通过 `dir_name` 字段匹配（例如 `/chat/contract-archive-review` 匹配 `subagents/contract-archive-review/`）
 
 ### Adding a New Channel
 Extend `src/channels/base.py` `ChannelAdapter`, implement `parse_message`/`send_message`/`verify_signature`, register in `src/main.py` lifespan.

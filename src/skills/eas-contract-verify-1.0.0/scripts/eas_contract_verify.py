@@ -5,11 +5,14 @@
 1. 调用 EAS 合同归档查询 API 获取合同信息
 2. 上传合同附件至共享路径
 3. 比对扫描件 OCR 信息与 EAS 系统数据
+4. 一键合同归档自动化审核（解析 → 校验 → 比对 → 上传）
 
 使用方式：
     python scripts/eas_contract_verify.py query --contract-code "HT-2024-001234"
     python scripts/eas_contract_verify.py upload --contract-code "HT-2024-001234" --file-path "/path/to/file.pdf"
     python scripts/eas_contract_verify.py compare --contract-code "HT-2024-001234" --ocr-data '{"party_a":"XX公司","party_b":"YY公司","amount":"100000"}'
+    python scripts/eas_contract_verify.py verify --contract-code "HT-2024-001234" --file-path "/path/to/contract.pdf"
+    python scripts/eas_contract_verify.py verify --contract-code "HT-2024-001234" --file-path "/path/to/contract.pdf" --debug
 """
 
 import argparse
@@ -529,6 +532,143 @@ def compare_contract(contract_code: str, ocr_data: Dict[str, Any]) -> Dict[str, 
         }
 
 
+# =============================================================================
+# 一键合同归档验证
+# =============================================================================
+
+def verify_and_archive_contract(
+    file_path: str,
+    contract_code: str,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """
+    合同归档自动化审核主流程
+
+    完整步骤：
+    1. 解析合同PDF（OCR + LLM分析）
+    2. 基础校验：是否为合同、是否有审批单、是否有骑缝章、是否有甲乙双方盖章
+    3. 通过EAS API比对甲方、乙方、金额
+    4. 比对一致则上传附件到EAS
+
+    Args:
+        file_path: 合同PDF文件路径
+        contract_code: EAS合同编号
+        debug: 是否输出调试信息
+
+    Returns:
+        {
+            "result": "yes" | "no",
+            "message": "...",
+            "details": {...}
+        }
+    """
+    from parse_contract_pdf import parse_contract_pdf
+
+    details: Dict[str, Any] = {"contract_code": contract_code, "file_path": file_path}
+
+    # ------------------------------------------------------------------
+    # 步骤 1：解析合同 PDF
+    # ------------------------------------------------------------------
+    parse_result = parse_contract_pdf(file_path, debug=debug)
+    if not parse_result.get("success"):
+        return {
+            "result": "no",
+            "message": f"合同PDF解析失败: {parse_result.get('error', '未知错误')}",
+            "details": details,
+        }
+
+    data = parse_result["data"]
+    llm = data.get("llm_analysis", {})
+    details["total_pages"] = data.get("total_pages", 0)
+    details["has_riding_seal"] = data.get("has_riding_seal", False)
+    details["llm_analysis"] = llm
+
+    # ------------------------------------------------------------------
+    # 步骤 2：基础校验
+    # ------------------------------------------------------------------
+    check_failures = []
+
+    # 2a. 是否为合同
+    if not llm.get("is_contract"):
+        check_failures.append("文档不是合同或未识别为合同")
+        details["is_contract"] = False
+    else:
+        details["is_contract"] = True
+
+    # 2b. 是否有审批单
+    if not llm.get("is_approval_form_first_page"):
+        check_failures.append("未检测到合同审批单（第一页非审批单）")
+        details["has_approval_form"] = False
+    else:
+        details["has_approval_form"] = True
+
+    # 2c. 是否有骑缝章（全局汇总）
+    if not data.get("has_riding_seal"):
+        check_failures.append("未检测到骑缝章")
+        details["has_riding_seal"] = False
+
+    # 2d. 是否有甲乙双方盖章
+    if not llm.get("has_party_a_stamp"):
+        check_failures.append("未检测到甲方盖章")
+        details["has_party_a_stamp"] = False
+    else:
+        details["has_party_a_stamp"] = True
+
+    if not llm.get("has_party_b_stamp"):
+        check_failures.append("未检测到乙方盖章")
+        details["has_party_b_stamp"] = False
+    else:
+        details["has_party_b_stamp"] = True
+
+    if check_failures:
+        return {
+            "result": "no",
+            "message": "合同基础校验不通过: " + "; ".join(check_failures),
+            "details": details,
+        }
+
+    # ------------------------------------------------------------------
+    # 步骤 3：与 EAS 系统数据比对
+    # ------------------------------------------------------------------
+    ocr_data = {
+        "party_a": llm.get("party_a", ""),
+        "party_b": llm.get("party_b", ""),
+        "amount": llm.get("total_amount", ""),
+    }
+    comparison = compare_contract(contract_code, ocr_data)
+    details["comparison"] = comparison
+
+    if comparison.get("result") != "yes":
+        return {
+            "result": "no",
+            "message": f"合同与EAS系统数据不一致: {comparison.get('message', '')}",
+            "details": details,
+        }
+
+    # ------------------------------------------------------------------
+    # 步骤 4：比对一致 → 上传附件
+    # ------------------------------------------------------------------
+    upload_result = upload_contract_attachment(
+        contract_code,
+        file_path,
+        file_desc=os.path.basename(file_path),
+    )
+    details["upload"] = upload_result
+
+    if not upload_result.get("success"):
+        return {
+            "result": "no",
+            "message": f"附件上传失败: {upload_result.get('error', '未知错误')}",
+            "details": details,
+        }
+
+    return {
+        "result": "yes",
+        "message": "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过OA审批流程完成审批。",
+        "details": details,
+    }
+
+
 def _normalize_text(text: str) -> str:
     """标准化文本：去除空白、标点，统一为小写"""
     if not text:
@@ -715,6 +855,12 @@ def main():
     compare_parser.add_argument("--contract-code", required=True, help="合同编号")
     compare_parser.add_argument("--ocr-data", required=True, help="OCR 解析的 JSON 数据")
 
+    # verify 命令（一键合同归档审核）
+    verify_parser = subparsers.add_parser("verify", help="一键合同归档自动化审核（解析+校验+比对+上传）")
+    verify_parser.add_argument("--contract-code", required=True, help="EAS合同编号")
+    verify_parser.add_argument("--file-path", required=True, help="合同PDF文件路径")
+    verify_parser.add_argument("--debug", action="store_true", help="输出调试信息")
+
     args = parser.parse_args()
 
     if args.command == "query":
@@ -732,6 +878,12 @@ def main():
             result = _make_result(False, error=f"OCR 数据 JSON 解析失败: {e}")
         else:
             result = compare_contract(args.contract_code, ocr_data)
+    elif args.command == "verify":
+        result = verify_and_archive_contract(
+            args.file_path,
+            args.contract_code,
+            debug=args.debug,
+        )
     else:
         parser.print_help()
         sys.exit(1)

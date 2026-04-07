@@ -10,6 +10,7 @@
 使用方式：
     python scripts/parse_contract_pdf.py --file-path "/path/to/contract.pdf"
     python scripts/parse_contract_pdf.py --file-path "/path/to/contract.pdf" --output-dir "./output"
+    python scripts/parse_contract_pdf.py --file-path "/path/to/contract.pdf" --debug
 """
 
 import argparse
@@ -297,7 +298,10 @@ CONTRACT_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的合同文档分析助�
   "party_a": "甲方全称",
   "party_b": "乙方全称",
   "total_amount": "纯数字金额",
-  "stamp_pages": [页码列表，如 [3, 5, 8]]
+  "stamp_pages": [页码列表，如 [3, 5, 8]],
+  "has_party_a_stamp": true/false,
+  "has_party_b_stamp": true/false,
+  "contract_code": "合同编号"
 }
 
 字段说明：
@@ -307,7 +311,10 @@ CONTRACT_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的合同文档分析助�
 - party_a: 甲方全称
 - party_b: 乙方全称
 - total_amount: 合同总金额，纯数字（如 150000.00），不带货币符号和中文
-- stamp_pages: 合同中需要双方盖章（签字/盖章页）的页码列表（1-based）"""
+- stamp_pages: 合同中需要双方盖章（签字/盖章页）的页码列表（1-based）
+- has_party_a_stamp: 甲方是否在合同中盖章（根据盖章页和文本内容判断）
+- has_party_b_stamp: 乙方是否在合同中盖章（根据盖章页和文本内容判断）
+- contract_code: 合同编号（如果文档中能识别到的话）"""
 
 
 def _call_llm_analyze(pages_text: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -435,6 +442,9 @@ def _parse_llm_json_response(content: str) -> Dict[str, Any]:
             "party_b": str(parsed.get("party_b", "")),
             "total_amount": str(parsed.get("total_amount", "")),
             "stamp_pages": [int(p) for p in parsed.get("stamp_pages", []) if isinstance(p, (int, float, str))],
+            "has_party_a_stamp": bool(parsed.get("has_party_a_stamp", False)),
+            "has_party_b_stamp": bool(parsed.get("has_party_b_stamp", False)),
+            "contract_code": str(parsed.get("contract_code", "")),
         }
     except (json.JSONDecodeError, ValueError, TypeError) as e:
         return {"parse_error": f"LLM 返回 JSON 解析失败: {e}", "raw_response": content}
@@ -444,21 +454,23 @@ def _parse_llm_json_response(content: str) -> Dict[str, Any]:
 # 主解析函数
 # =============================================================================
 
-def parse_contract_pdf(file_path: str) -> Dict[str, Any]:
+def parse_contract_pdf(file_path: str, debug: bool = False) -> Dict[str, Any]:
     """
     解析合同PDF文件
 
     步骤：
     1. 调用 PaddleOCR 解析 PDF
     2. 按页提取信息（页码、宽高、文本、骑缝章、可疑图片）
-    3. 将所有页面文本传给 LLM 分析合同信息
-    4. 合并 PaddleOCR 和 LLM 结果返回
+    3. 汇总全局骑缝章检测结果（任一页有骑缝章即判定为有）
+    4. 将所有页面文本传给 LLM 分析合同信息
+    5. 合并 PaddleOCR 和 LLM 结果返回
 
     Args:
         file_path: PDF文件路径
+        debug: 是否输出原始OCR结果（仅在调试时启用，输出较大）
 
     Returns:
-        {success: True, data: {pages: [...], llm_analysis: {...}, raw_ocr_result: {...}}}
+        {success: True, data: {pages: [...], has_riding_seal: bool, llm_analysis: {...}, ...}}
     """
     if not file_path or not os.path.isfile(file_path):
         return {"success": False, "error": f"文件不存在: {file_path}"}
@@ -515,14 +527,21 @@ def parse_contract_pdf(file_path: str) -> Dict[str, Any]:
         logger.error(f"后端日志：LLM分析失败: {e}", exc_info=True)
         llm_analysis = {"parse_error": f"LLM调用失败: {sanitize_error_info(str(e))}"}
 
-    # 5. 合并结果
+    # 5. 汇总全局骑缝章检测：任一页有骑缝章即为有
+    global_has_riding_seal = any(p.get("has_riding_seal", False) for p in pages)
+
+    # 6. 合并结果
     result_data: Dict[str, Any] = {
         "file_name": os.path.basename(file_path),
         "total_pages": len(pages),
+        "has_riding_seal": global_has_riding_seal,
         "pages": pages,
         "llm_analysis": llm_analysis,
-        "raw_ocr_result": ocr_result,
     }
+
+    # 仅在 debug 模式下包含原始 OCR 结果（数据量较大）
+    if debug:
+        result_data["raw_ocr_result"] = ocr_result
 
     return {"success": True, "data": result_data}
 
@@ -535,9 +554,10 @@ def main():
     parser = argparse.ArgumentParser(description="合同PDF OCR解析")
     parser.add_argument("--file-path", required=True, help="PDF文件路径")
     parser.add_argument("--output-dir", default=None, help="JSON输出目录，默认与PDF同目录")
+    parser.add_argument("--debug", action="store_true", help="输出原始OCR结果（数据量较大）")
     args = parser.parse_args()
 
-    result = parse_contract_pdf(args.file_path)
+    result = parse_contract_pdf(args.file_path, debug=args.debug)
 
     if not result.get("success"):
         print(json.dumps(result, ensure_ascii=False, indent=2))

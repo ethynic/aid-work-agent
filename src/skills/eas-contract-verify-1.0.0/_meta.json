@@ -1,11 +1,12 @@
 {
   "name": "eas-contract-verify",
-  "version": "1.0.0",
-  "description": "全筑EAS合同核对技能，OCR解析合同扫描件后与EAS系统数据自动比对",
+  "version": "1.1.0",
+  "description": "全筑EAS合同核对技能，OCR解析合同扫描件后与EAS系统数据自动比对，支持一键归档自动化审核",
   "author": "aid-work-agent",
   "created_at": "2026-04-02",
   "scripts": [
-    "eas_contract_verify.py"
+    "eas_contract_verify.py",
+    "parse_contract_pdf.py"
   ],
   "dependencies": [
     "httpx"
@@ -26,6 +27,8 @@
     { "type": "keyword", "pattern": "合同扫描件核对" },
     { "type": "keyword", "pattern": "盖章合同核对" },
     { "type": "keyword", "pattern": "合同归档核对" },
-    { "type": "keyword", "pattern": "全筑合同" }
+    { "type": "keyword", "pattern": "全筑合同" },
+    { "type": "keyword", "pattern": "合同归档审核" },
+    { "type": "keyword", "pattern": "合同归档自动化审核" }
   ]
 }
