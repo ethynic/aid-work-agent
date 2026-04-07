@@ -45,6 +45,11 @@ const router = createRouter({
       path: '/knowledge-base',
       name: 'knowledge-base',
       component: KnowledgeBase
+    },
+    {
+      path: '/admin/subagents',
+      name: 'admin-subagents',
+      component: () => import('./components/DigitalEmployeeManager.vue')
     }
   ]
 })

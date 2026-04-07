@@ -160,8 +160,9 @@ class Agent:
         elif self.mode == AgentMode.MASTER:
             # 主智能体模式
             subagents_dir = Path(__file__).parent.parent.parent / "subagents"
+            custom_dir = Path("./storage/subagents2")
             from src.subagents.registry import SubagentRegistry
-            self.subagent_registry = SubagentRegistry(subagents_dir)
+            self.subagent_registry = SubagentRegistry(subagents_dir, custom_dir=custom_dir)
 
             # 注册内置工具
             self._register_builtin_tools()
