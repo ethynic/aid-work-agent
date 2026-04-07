@@ -357,7 +357,7 @@ def init_database():
             cursor.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
                     chunk_id INTEGER PRIMARY KEY,
-                    embedding float[1536]
+                    embedding float[1024]
                 )
             """)
         except Exception as e:

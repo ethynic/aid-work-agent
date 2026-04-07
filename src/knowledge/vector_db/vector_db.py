@@ -38,7 +38,7 @@ class VectorDatabase:
 class VectorDBSQLite(VectorDatabase):
     """SQLite + sqlite-vec 实现"""
 
-    def __init__(self, db_path: str, dimension: int = 1536, conn: sqlite3.Connection = None):
+    def __init__(self, db_path: str, dimension: int = 1024, conn: sqlite3.Connection = None):
         self.db_path = db_path
         self.dimension = dimension
         if conn is not None:
@@ -109,22 +109,32 @@ class VectorDBSQLite(VectorDatabase):
         query_embedding: List[float],
         top_k: int = 10
     ) -> List[Tuple[int, float]]:
-        """向量相似度搜索（余弦相似度）"""
+        """向量相似度搜索"""
         cursor = self.conn.cursor()
 
         # sqlite-vec 使用 L2 距离，距离越小越相似
+        # 注意：embedding MATCH ? 需要 JSON 字符串格式，与 insert 时一致
         cursor.execute("""
             SELECT chunk_id, distance
             FROM chunks_vec
             WHERE embedding MATCH ?
             ORDER BY distance
             LIMIT ?
-        """, (query_embedding, top_k))
+        """, (json.dumps(query_embedding), top_k))
 
         results = cursor.fetchall()
 
-        # 将 L2 距离转换为相似度（距离取负，越大越相似）
-        return [(row["chunk_id"], -row["distance"]) for row in results]
+        # 将 L2 距离转换为余弦相似度
+        # 归一化向量下：cos_sim = 1 - L2^2 / 2
+        # 范围 [0, 1]，1 表示完全相同，0 表示正交/无关
+        cosine_results = []
+        for row in results:
+            l2_dist = row["distance"]
+            # 防止浮点误差导致超出 [0, 1] 范围
+            cos_sim = max(0.0, min(1.0, 1.0 - (l2_dist ** 2) / 2.0))
+            cosine_results.append((row["chunk_id"], cos_sim))
+
+        return cosine_results
 
     async def delete_by_doc(self, doc_id: int) -> None:
         """删除文档的所有向量"""

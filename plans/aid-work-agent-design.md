@@ -2084,7 +2084,7 @@ graph TB
 | memory_file | VARCHAR(255) | 对应的MD文件路径 |
 | chunk_index | INT | 文件切片索引 |
 | chunk_content | TEXT | 切片内容 |
-| embedding | VECTOR(1536) | 向量嵌入 |
+| embedding | VECTOR(1024) | 向量嵌入 |
 | memory_type | VARCHAR(20) | 记忆类型 |
 | importance | FLOAT | 重要性分数 |
 | access_count | INT | 访问次数 |

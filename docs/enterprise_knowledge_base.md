@@ -20,7 +20,7 @@
 | 文档数量 | 500 份 |
 | 每份文档字数 | ~30,000 字 |
 | 总向量数 | ~30,000 个 |
-| 存储体积（1536维）| ~175 MB |
+| 存储体积（1024维）| ~175 MB |
 
 ---
 
@@ -57,7 +57,7 @@
 #### 当前方案：通义 text-embedding-v3
 
 - **定价**：0.5 元 / 百万 Token（Batch 半价 0.25 元/百万）
-- **维度**：1536
+- **维度**：1024
 - **最大输入**：8192 tokens / 次
 - **中文效果**：⭐⭐⭐⭐
 - **理由**：与 Qwen 同源，账单合并，免费额度 50 万 Token（90 天）
@@ -246,7 +246,7 @@ CREATE INDEX idx_chunks_doc ON chunks(doc_id);
 -- 注意：sqlite-vec 需要动态加载，详见实现
 CREATE VIRTUAL TABLE chunks_vec USING vec0(
     chunk_id INTEGER PRIMARY KEY,
-    embedding float[1536]  -- 向量维度，与 text-embedding-v3 一致
+    embedding float[1024]  -- 向量维度，与 text-embedding-v3 一致
 );
 
 -- 全文检索表（FTS5）
@@ -651,7 +651,7 @@ class TextEmbeddingV3Client:
     def __init__(self, api_key: str):
         dashscope.api_key = api_key
         self.model = "text-embedding-v3"
-        self.dimension = 1536
+        self.dimension = 1024
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
@@ -661,7 +661,7 @@ class TextEmbeddingV3Client:
             texts: 文本列表
 
         Returns:
-            向量列表，每个向量维度为 1536
+            向量列表，每个向量维度为 1024
 
         Raises:
             Exception: API 调用失败
@@ -763,7 +763,7 @@ class VectorDatabase:
 class VectorDBSQLite(VectorDatabase):
     """SQLite + sqlite-vec 实现"""
 
-    def __init__(self, db_path: str, dimension: int = 1536):
+    def __init__(self, db_path: str, dimension: int = 1024):
         self.db_path = db_path
         self.dimension = dimension
         self.conn = None
@@ -1032,7 +1032,7 @@ class KnowledgeBaseTool(BaseTool):
 
         vector_db = VectorDBSQLite(
             db_path=settings.database_url.replace("sqlite:///", ""),
-            dimension=1536
+            dimension=1024
         )
         embedding_client = TextEmbeddingV3Client(api_key=settings.qwen_api_key)
 
@@ -1617,7 +1617,7 @@ knowledge:
   embedding:
     provider: qwen  # TODO: 后期支持 zhipu/bge3
     model: text-embedding-v3
-    dimension: 1536
+    dimension: 1024
 
   vector_db:
     type: sqlite  # TODO: 后期支持 lancedb/milvus/weaviate
@@ -1668,7 +1668,7 @@ knowledge:
 图片存储：100 × 平均 2 MB = 200 MB
 视频存储：20 × 平均 50 MB = 1 GB
 缩略图存储：120 × 50 KB = 6 MB
-向量存储：30,000 × 1536 × 4 字节 = 175 MB
+向量存储：30,000 × 1024 × 4 字节 = 175 MB
 总存储：~2.4 GB
 ```
 

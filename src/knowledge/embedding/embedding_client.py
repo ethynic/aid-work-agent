@@ -47,7 +47,7 @@ class TextEmbeddingV3Client:
         dashscope.api_key = api_key
         self._api_key = api_key  # 保存 key 用于日志
         self.model = "text-embedding-v3"
-        self.dimension = 1536
+        self.dimension = 1024
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
@@ -57,7 +57,7 @@ class TextEmbeddingV3Client:
             texts: 文本列表
 
         Returns:
-            向量列表，每个向量维度为 1536
+            向量列表，每个向量维度为 1024
         """
         try:
             # TextEmbedding.call 是同步 SDK，使用 to_thread 包装
