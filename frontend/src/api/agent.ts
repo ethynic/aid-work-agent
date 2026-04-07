@@ -48,6 +48,22 @@ export async function deleteFile(file_id: string): Promise<void> {
 }
 
 /**
+ * 获取文件内联预览 URL（用于图片、PDF 等浏览器可预览的文件）
+ */
+export function getFileUrl(fileId: string): string {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+  return `${apiBase}/files/${fileId}`
+}
+
+/**
+ * 获取文件下载 URL
+ */
+export function getFileDownloadUrl(fileId: string): string {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+  return `${apiBase}/files/${fileId}/download`
+}
+
+/**
  * SSE连接管理器
  * 处理Server-Sent Events的解析和事件分发
  */

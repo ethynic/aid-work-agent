@@ -44,6 +44,22 @@
         v-html="renderedContent"
       ></div>
 
+      <!-- 附件标签 -->
+      <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
+        <AttachmentChip
+          v-for="att in displayAttachments"
+          :key="att.file_id"
+          :attachment="att"
+          @preview="handlePreview(att)"
+        />
+        <AttachmentChip
+          v-for="(att, idx) in legacyAttachments"
+          :key="'legacy-' + idx"
+          :attachment="att"
+          :clickable="false"
+        />
+      </div>
+
       <!-- 执行详情（仅 AI 回复显示） -->
       <div v-if="message.role === 'assistant' && hasProgress" class="mt-2">
         <!-- 展开/折叠按钮 -->
@@ -94,7 +110,9 @@ import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
-import type { ChatMessage } from '@/types'
+import type { ChatMessage, AttachmentInfo } from '@/types'
+import AttachmentChip from './AttachmentChip.vue'
+import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
 // 配置 marked 使用 highlight.js 进行代码高亮
 marked.use(markedHighlight({
@@ -113,6 +131,8 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   isProcessing: false
 })
+
+const { openPreview } = useAttachmentPreview()
 
 const isExpanded = ref(false)
 
@@ -218,10 +238,40 @@ function formatProgressContent(msg: string | Record<string, any>): string {
   return String(content ?? '')
 }
 
+// 结构化附件列表（来自 attachments 字段）
+const displayAttachments = computed<AttachmentInfo[]>(() => {
+  if (props.message.attachments && props.message.attachments.length > 0) {
+    return props.message.attachments
+  }
+  return []
+})
+
+// 旧消息兼容：从内容中解析 [附件: ...] 文本
+const legacyAttachments = computed<{ name: string }[]>(() => {
+  if (displayAttachments.value.length > 0) return []
+  const match = props.message.content.match(/\[附件:\s*(.*?)\]/)
+  if (!match) return []
+  return match[1].split(',').map(name => ({ name: name.trim() })).filter(a => a.name)
+})
+
+// 用于渲染的内容（移除附件标注文本和文件路径上下文，避免重复显示）
+const displayContent = computed(() => {
+  let content = props.message.content
+  // 移除末尾的 [附件: ...] 标注
+  content = content.replace(/\n\n\[附件:.*?\]$/s, '')
+  // 移除后端追加的文件路径上下文（供 LLM 使用的，不需要展示给用户）
+  content = content.replace(/\n\n【已上传文件路径】[\s\S]*?请使用上述路径读取文件内容。/, '')
+  return content
+})
+
 const renderedContent = computed(() => {
   // 使用 marked 渲染 Markdown，支持标题、表格、粗体、斜体、代码块、列表等
-  return marked(props.message.content)
+  return marked(displayContent.value)
 })
+
+function handlePreview(attachment: AttachmentInfo) {
+  openPreview(attachment)
+}
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)

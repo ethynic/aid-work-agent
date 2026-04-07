@@ -16,7 +16,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, FileResponse
 from loguru import logger
 from pydantic import BaseModel
 
@@ -433,6 +433,90 @@ async def delete_uploaded_file(file_id: str):
         }, status_code=500)
 
 
+def _get_file_info(file_id: str) -> dict | None:
+    """
+    获取文件信息：优先从内存字典获取，若不存在则尝试从磁盘恢复。
+    服务重启后 uploaded_files 会清空，但文件仍在磁盘上。
+    """
+    if file_id in uploaded_files:
+        return uploaded_files[file_id]
+
+    # 尝试从磁盘目录扫描恢复
+    for f in UPLOAD_DIR.iterdir():
+        if f.is_file() and f.stem == file_id:
+            suffix = f.suffix.lower()
+            mime_type_map = {
+                '.pdf': 'application/pdf',
+                '.doc': 'application/msword',
+                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                '.xls': 'application/vnd.ms-excel',
+                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                '.txt': 'text/plain',
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+                '.mp3': 'audio/mpeg',
+                '.mp4': 'video/mp4',
+            }
+            mime_type = mime_type_map.get(suffix, 'application/octet-stream')
+            file_info = {
+                "file_id": file_id,
+                "name": f.name,
+                "path": str(f.absolute()),
+                "size": f.stat().st_size,
+                "mime_type": mime_type,
+                "type": "image" if mime_type.startswith("image/") else "file"
+            }
+            # 缓存回内存，避免重复磁盘扫描
+            uploaded_files[file_id] = file_info
+            return file_info
+
+    return None
+
+
+@app.get("/api/files/{file_id}")
+async def serve_file(file_id: str):
+    """
+    内联方式提供文件（用于浏览器预览图片/PDF等）
+    """
+    file_info = _get_file_info(file_id)
+    if not file_info:
+        raise HTTPException(status_code=404, detail="文件不存在或已过期")
+
+    file_path = Path(file_info["path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在或已过期")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=file_info["mime_type"],
+        filename=file_info["name"],
+        content_disposition_type="inline"
+    )
+
+
+@app.get("/api/files/{file_id}/download")
+async def download_file(file_id: str):
+    """
+    以附件方式下载文件
+    """
+    file_info = _get_file_info(file_id)
+    if not file_info:
+        raise HTTPException(status_code=404, detail="文件不存在或已过期")
+
+    file_path = Path(file_info["path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在或已过期")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=file_info["mime_type"],
+        filename=file_info["name"],
+        content_disposition_type="attachment"
+    )
+
+
 # ==================== SSE Chat API ====================
 
 @app.post("/api/chat/stream")
@@ -629,11 +713,15 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
                     # 同时保存消息到 chat_messages 表（用于前端显示历史消息）
                     # 保存用户消息
+                    user_metadata = {"progressMessages": []}
+                    # 将附件信息保存到 metadata，以便前端历史消息能显示附件
+                    if request.files:
+                        user_metadata["attachments"] = request.files
                     MessageDB.create(
                         session_id=session_id,
                         role="user",
                         content=full_message,
-                        metadata={"progressMessages": []}  # 用户消息没有执行详情
+                        metadata=user_metadata
                     )
                     # 保存AI回复（包含执行详情，但不作为模型上下文）
                     if full_response:

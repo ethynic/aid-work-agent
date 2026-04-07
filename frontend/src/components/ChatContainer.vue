@@ -9,85 +9,97 @@
       />
 
       <!-- Right Content Area -->
-      <div class="flex-1 flex flex-col min-w-0">
-        <!-- Header Bar -->
-        <AppHeader
-          :title="pageTitle"
-          :is-online="isOnline"
-          :is-logged-in="isLoggedIn"
-          :user="user"
-          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
-          @logout="handleLogout"
-        >
-          <template #menu-items="{ closeMenu }">
-            <button
-              @click="handleNewSession(); closeMenu()"
-              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-              新会话
-            </button>
-            <button
-              @click="openCustomerInfo"
-              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              我的客户
-            </button>
-            <button
-              @click="showCredentialManager = true; closeMenu()"
-              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-              </svg>
-              凭据管理
-            </button>
-            <button
-              @click="openScheduledTasks"
-              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              我的定时任务
-            </button>
-            <button
-              @click="showSettingsDialog = true; closeMenu()"
-              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              设置
-            </button>
-          </template>
-        </AppHeader>
+      <div class="flex-1 flex min-w-0">
+        <!-- Chat Area -->
+        <div class="flex-1 flex flex-col min-w-0">
+          <!-- Header Bar -->
+          <AppHeader
+            :title="pageTitle"
+            :is-online="isOnline"
+            :is-logged-in="isLoggedIn"
+            :user="user"
+            @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+            @logout="handleLogout"
+          >
+            <template #menu-items="{ closeMenu }">
+              <button
+                @click="handleNewSession(); closeMenu()"
+                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                </svg>
+                新会话
+              </button>
+              <button
+                @click="openCustomerInfo"
+                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                我的客户
+              </button>
+              <button
+                @click="showCredentialManager = true; closeMenu()"
+                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+                凭据管理
+              </button>
+              <button
+                @click="openScheduledTasks"
+                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                我的定时任务
+              </button>
+              <button
+                @click="showSettingsDialog = true; closeMenu()"
+                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                设置
+              </button>
+            </template>
+          </AppHeader>
 
-        <!-- Messages Area -->
-        <div class="flex-1 overflow-hidden">
-          <MessageList
-            :messages="messages"
-            :is-processing="isProcessing"
-          />
+          <!-- Messages Area -->
+          <div class="flex-1 overflow-hidden">
+            <MessageList
+              :messages="messages"
+              :is-processing="isProcessing"
+            />
+          </div>
+
+          <!-- Input Area -->
+          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-4">
+            <ChatInput
+              @send="handleSend"
+              @upload="handleUpload"
+              @remove="handleRemoveFile"
+              :disabled="isProcessing"
+              :is-processing="isProcessing"
+              :files="currentFiles"
+            />
+          </div>
         </div>
 
-        <!-- Input Area -->
-        <div class="flex-shrink-0 border-t border-gray-200 bg-white p-4">
-          <ChatInput
-            @send="handleSend"
-            @upload="handleUpload"
-            @remove="handleRemoveFile"
-            :disabled="isProcessing"
-            :is-processing="isProcessing"
-            :files="currentFiles"
+        <!-- Attachment Preview Panel -->
+        <Transition name="slide">
+          <AttachmentPreviewPanel
+            v-if="isPreviewOpen"
+            :attachment="previewAttachment"
+            @close="closePreview"
           />
-        </div>
+        </Transition>
       </div>
     </main>
 
@@ -122,9 +134,11 @@ import AppHeader from './AppHeader.vue'
 import SessionSidebar from './SessionSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import SettingsDialog from './SettingsDialog.vue'
+import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 import { useAgent } from '@/composables/useAgent'
 import { useAuth } from '@/composables/useAuth'
 import { useSession } from '@/composables/useSession'
+import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
 const {
   messages,
@@ -142,6 +156,7 @@ const {
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
 const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
+const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 
 const route = useRoute()
 const subagentName = computed<string | null>(() =>
@@ -344,3 +359,15 @@ watch(subagentName, () => {
   clearAttachments()
 })
 </script>
+
+<style scoped>
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.3s ease;
+}
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+</style>

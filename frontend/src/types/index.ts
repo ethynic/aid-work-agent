@@ -1,8 +1,17 @@
+export interface AttachmentInfo {
+  file_id: string
+  name: string
+  size: number
+  mime_type: string
+  type: 'image' | 'file'
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
   progressMessages?: ProgressMessage[]  // 执行详情（不传给模型，只用于显示）
+  attachments?: AttachmentInfo[]  // 附件列表
 }
 
 export interface ProgressMessage {

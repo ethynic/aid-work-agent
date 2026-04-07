@@ -54,7 +54,8 @@ export function useAgent() {
         role: m.role as 'user' | 'assistant',
         content: m.content,
         timestamp: new Date(m.created_at.endsWith('Z') ? m.created_at : m.created_at + 'Z').getTime(),
-        progressMessages: m.metadata?.progressMessages || []
+        progressMessages: m.metadata?.progressMessages || [],
+        attachments: m.metadata?.attachments || undefined
       })) || []
     }
   }
@@ -96,7 +97,8 @@ export function useAgent() {
     messages.value.push({
       role: 'user',
       content: userContent,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      attachments: currentFiles.value.length > 0 ? [...currentFiles.value] : undefined
     })
 
     // 重置状态
