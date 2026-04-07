@@ -231,7 +231,7 @@
                     </div>
                     <div class="space-y-2">
                       <div
-                        v-for="(chunk, idx) in group.chunks.slice(0, 3)"
+                        v-for="(chunk, _idx) in group.chunks.slice(0, 3)"
                         :key="chunk.chunk_id"
                         class="bg-white rounded p-3 text-sm text-gray-600 border border-gray-100"
                       >
