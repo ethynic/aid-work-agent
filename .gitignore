@@ -95,3 +95,4 @@ frontend/.env.*.local
 
 uploads/
 memories/
+storage/

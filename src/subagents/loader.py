@@ -230,3 +230,77 @@ class SubagentLoader:
         
         # 返回基本信息
         return f"# {config.name}\n\n{config.description}\n\n{config.system_prompt}"
+
+    @staticmethod
+    def serialize_to_subagent_md(config, body: str = "") -> str:
+        """
+        将 SubagentConfig 序列化为 SUBAGENT.md 格式
+
+        Args:
+            config: SubagentConfig 配置对象
+            body: Markdown 正文内容（system_prompt 的详细内容）
+
+        Returns:
+            SUBAGENT.md 格式的字符串
+        """
+        frontmatter = {
+            "name": config.name,
+            "description": config.description,
+            "version": config.version or "1.0.0",
+            "author": config.author or "admin",
+        }
+
+        if config.capabilities:
+            frontmatter["capabilities"] = config.capabilities
+        if config.triggers:
+            frontmatter["triggers"] = config.triggers
+        if config.tools:
+            frontmatter["tools"] = config.tools
+        if config.skills:
+            frontmatter["skills"] = config.skills
+        if config.context:
+            frontmatter["context"] = config.context
+
+        yaml_str = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        return f"---\n{yaml_str}---\n\n{body}"
+
+    @staticmethod
+    def save_subagent_md(subagents_dir: Path, agent_id: str, content: str) -> Path:
+        """
+        将 SUBAGENT.md 写入指定目录
+
+        Args:
+            subagents_dir: 根目录（如 storage/subagents2/）
+            agent_id: 子智能体 ID（目录名）
+            content: SUBAGENT.md 完整内容
+
+        Returns:
+            写入的文件路径
+        """
+        agent_dir = subagents_dir / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        md_path = agent_dir / SubagentLoader.CONFIG_FILE
+        md_path.write_text(content, encoding="utf-8")
+        logger.info(f"Saved SUBAGENT.md to {md_path}")
+        return md_path
+
+    @staticmethod
+    def delete_subagent_dir(subagents_dir: Path, agent_id: str) -> bool:
+        """
+        删除指定子智能体目录
+
+        Args:
+            subagents_dir: 根目录
+            agent_id: 子智能体 ID（目录名）
+
+        Returns:
+            是否删除成功
+        """
+        import shutil
+        agent_dir = subagents_dir / agent_id
+        if not agent_dir.exists():
+            logger.warning(f"Subagent directory not found: {agent_dir}")
+            return False
+        shutil.rmtree(agent_dir)
+        logger.info(f"Deleted subagent directory: {agent_dir}")
+        return True
