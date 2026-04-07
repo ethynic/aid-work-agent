@@ -23,6 +23,7 @@ from enum import Enum
 from src.config.settings import settings
 from src.core.agent_logger import log_agent_iteration, log_skill_execute
 from src.llm.gateway import llm_gateway
+from src.tools.schemas import AGENT_TOOLS
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
@@ -40,656 +41,6 @@ class AgentMode(Enum):
     MASTER = "master"              # 主智能体模式：拥有完整能力，可委派任务
     SUBAGENT = "subagent"         # 子智能体（被委派）模式：由主智能体创建，无委派能力
     STANDALONE = "standalone"      # 子智能体独立模式：从入口直接进入，有子智能体约束，无委派能力
-
-
-# Tool definitions for LLM function calling
-AGENT_TOOLS = [
-    {
-        "name": "email_send",
-        "description": "发送邮件给收件人",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "to": {
-                    "type": "string",
-                    "description": "收件人邮箱地址，多个地址用逗号分隔"
-                },
-                "subject": {
-                    "type": "string",
-                    "description": "邮件主题"
-                },
-                "body": {
-                    "type": "string",
-                    "description": "邮件正文内容"
-                },
-                "cc": {
-                    "type": "string",
-                    "description": "抄送人邮箱地址，多个地址用逗号分隔（可选）"
-                }
-            },
-            "required": ["to", "subject", "body"]
-        }
-    },
-    {
-        "name": "email_read",
-        "description": "收取用户邮箱中的邮件",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "folder": {
-                    "type": "string",
-                    "description": "邮件文件夹，默认INBOX",
-                    "default": "INBOX"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "收取邮件数量，默认10封",
-                    "default": 10
-                },
-                "unseen_only": {
-                    "type": "boolean",
-                    "description": "是否只收取未读邮件，默认False",
-                    "default": False
-                },
-                "from_filter": {
-                    "type": "string",
-                    "description": "发件人过滤条件（可选）"
-                },
-                "subject_filter": {
-                    "type": "string",
-                    "description": "主题过滤条件（可选）"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "email_list_folders",
-        "description": "列出邮箱中的所有文件夹及其邮件统计",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "content_generate",
-        "description": "调用大模型生成内容，用于生成客户列表、撰写多语言邮件等。智能体需要提供详细的提示词来指导大模型生成所需内容。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "生成内容的提示词，由智能体组织。提示词应包含：1)角色/身份 2)任务描述 3)输入信息 4)输出格式要求 5)语言要求等"
-                },
-                "language": {
-                    "type": "string",
-                    "description": "生成内容的语言，如：zh（中文）、en（英语）、ru（俄语）、de（德语）、ja（日语）、ko（韩语）等"
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "内容类型，用于选择合适的提示词模板。可选值：customer_list（客户列表）、email（邮件）、market_report（市场报告）等"
-                }
-            },
-            "required": ["prompt"]
-        }
-    },
-    {
-        "name": "web_search",
-        "description": "在网络上搜索信息。重要：搜索关键词必须与用户提问的语言保持一致（用户用中文提问则用中文关键词搜索）",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "keyword": {
-                    "type": "string",
-                    "description": "搜索关键词，必须与用户提问语言一致"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "返回结果数量",
-                    "default": 5
-                }
-            },
-            "required": ["keyword"]
-        }
-    },
-    {
-        "name": "paddleocr_doc_parsing",
-        "description": "使用PaddleOCR解析PDF或图片文档，返回每页的markdown文本内容",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_url": {
-                    "type": "string",
-                    "description": "文档URL地址，支持PDF或图片"
-                },
-                "file_path": {
-                    "type": "string",
-                    "description": "本地文件路径"
-                },
-                "file_type": {
-                    "type": "integer",
-                    "description": "文件类型：0=PDF，1=图片。不填则自动检测"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "doc_summarize",
-        "description": "对文本内容进行摘要总结",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "需要总结的文本内容"
-                },
-                "length": {
-                    "type": "string",
-                    "description": "摘要长度：short（简短）、medium（中等）、long（详细）",
-                    "default": "medium"
-                }
-            },
-            "required": ["content"]
-        }
-    },
-    {
-        "name": "doc_translate",
-        "description": "将文本翻译为其他语言",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "要翻译的文本"
-                },
-                "target_lang": {
-                    "type": "string",
-                    "description": "目标语言（如：en表示英文，ja表示日文，ko表示韩文）"
-                }
-            },
-            "required": ["text", "target_lang"]
-        }
-    },
-    {
-        "name": "clarify",
-        "description": "当信息缺失时向用户询问澄清",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "向用户提出的问题"
-                },
-                "missing_info": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "缺失的信息项列表"
-                }
-            },
-            "required": ["question"]
-        }
-    },
-    {
-        "name": "create_plan",
-        "description": "为复杂任务创建执行计划。⚠️ 注意：如果任务只需要调用一个工具或一个子智能体，不需要创建计划，直接调用该工具即可。只有需要多个步骤协调的任务才需要创建计划。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "goal": {
-                    "type": "string",
-                    "description": "任务的整体目标"
-                },
-                "steps": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "step_number": {
-                                "type": "integer",
-                                "description": "计划中的步骤编号"
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": "该步骤的描述"
-                            },
-                            "tool": {
-                                "type": "string",
-                                "description": "该步骤要使用的工具。如果任务需要专业领域能力，应该使用delegate_to_subagent并指定subagent_name参数"
-                            },
-                            "parameters": {
-                                "type": "object",
-                                "description": "工具的参数。委派子智能体时，参数格式为{\"subagent_name\": \"子智能体名称\", \"task_description\": \"任务描述\"}"
-                            },
-                            "expected_output": {
-                                "type": "string",
-                                "description": "该步骤的预期输出"
-                            }
-                        },
-                        "required": ["step_number", "description"]
-                    },
-                    "description": "要执行的步骤列表"
-                },
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["sequential", "parallel"],
-                    "description": "如何执行步骤",
-                    "default": "sequential"
-                }
-            },
-            "required": ["goal", "steps"]
-        }
-    },
-    {
-        "name": "skill_execute",
-        "description": "在技能上下文中执行命令。加载技能后使用此功能运行pdftotext、python脚本等命令。重要：使用简单命令，对于Python优先使用简单的一行命令或直接使用pypdf/pdfplumber。注意：对于引导式技能（无脚本的技能），可能不需要执行命令。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "skill": {
-                    "type": "string",
-                    "description": "要使用的技能上下文名称"
-                },
-                "command": {
-                    "type": "string",
-                    "description": "要执行的命令（可选）。对于引导式技能可能不需要执行命令。"
-                },
-                "files": {
-                    "type": "object",
-                    "description": "可选的文件，使其在执行环境中可用（文件名 -> base64内容）",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                }
-            },
-            "required": ["skill"]
-        }
-    },
-    {
-        "name": "skill_complete",
-        "description": (
-            "标记当前技能执行完成。当技能指南中的所有步骤都已执行完毕时调用此工具。"
-            "调用后系统会自动清理技能过程中的中间消息，仅保留最终结果摘要。"
-            "⚠️ 必须在 use_skill 之后、技能所有步骤完成后才能调用。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "skill": {
-                    "type": "string",
-                    "description": "已完成执行的技能名称"
-                },
-                "summary": {
-                    "type": "string",
-                    "description": "技能执行的最终结果摘要（1-3句话），将替代所有中间过程存入对话历史"
-                }
-            },
-            "required": ["skill", "summary"]
-        }
-    },
-    {
-        "name": "browser_open",
-        "description": "打开指定网址的网页，等待页面加载完成",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "要打开的网页URL，必须以http://或https://开头"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，用于管理多个会话，默认为'default'"
-                },
-                "headless": {
-                    "type": "boolean",
-                    "description": "是否无头模式运行，true为不显示浏览器窗口，false为显示窗口，默认false",
-                    "default": False
-                }
-            },
-            "required": ["url"]
-        }
-    },
-    {
-        "name": "browser_snapshot",
-        "description": "获取当前页面的语义快照，返回结构化的页面表示。必须先调用此工具获取快照，才能使用browser_click/fill/select等工具。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["standard", "interactive", "compact"],
-                    "description": "快照模式：standard标准模式，interactive交互模式（推荐），compact紧凑模式",
-                    "default": "interactive"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "browser_click",
-        "description": "点击页面元素（语义快照驱动）。通过自然语言描述要点击的元素，系统自动在快照中匹配。**必须先调用browser_snapshot获取语义快照！**示例：description=\"登录按钮\"",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "description": "要点击元素的自然语言描述，如'登录按钮'、'报销申请'"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": "超时时间（毫秒），默认10000",
-                    "default": 10000
-                }
-            },
-            "required": ["description"]
-        }
-    },
-    {
-        "name": "browser_fill",
-        "description": "填写表单字段（语义快照驱动）。通过自然语言描述字段，系统自动在快照中匹配。**必须先调用browser_snapshot获取语义快照！**示例：field=\"用户名\", value=\"张三\"",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "field": {
-                    "type": "string",
-                    "description": "要填写的字段描述，如'用户名'、'报销金额'"
-                },
-                "value": {
-                    "type": "string",
-                    "description": "要填写的值"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": "超时时间（毫秒），默认10000",
-                    "default": 10000
-                }
-            },
-            "required": ["field", "value"]
-        }
-    },
-    {
-        "name": "browser_select",
-        "description": "选择下拉选项（语义快照驱动）。通过自然语言描述下拉框和选项，系统自动在快照中匹配。**必须先调用browser_snapshot获取语义快照！**示例：field=\"部门\", option=\"技术研发部\"",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "field": {
-                    "type": "string",
-                    "description": "下拉选择框的描述，如'部门'、'报销类型'"
-                },
-                "option": {
-                    "type": "string",
-                    "description": "要选择的选项，如'技术研发部'"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                }
-            },
-            "required": ["field", "option"]
-        }
-    },
-    {
-        "name": "browser_find",
-        "description": "根据语义描述查找页面元素，返回匹配结果和备选列表。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "description": "元素的语义描述，如'登录按钮'、'报销金额输入框'"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "scope": {
-                    "type": "string",
-                    "enum": ["viewport", "page"],
-                    "description": "搜索范围：viewport当前视口，page整页（默认page）",
-                    "default": "page"
-                }
-            },
-            "required": ["description"]
-        }
-    },
-    {
-        "name": "browser_get_path",
-        "description": "获取当前的浏览器操作路径历史。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["text", "json"],
-                    "description": "输出格式：text文本格式，json为JSON格式",
-                    "default": "text"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "browser_backtrack",
-        "description": "回溯到之前的页面状态。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "steps": {
-                    "type": "integer",
-                    "description": "回溯的步数，默认为1",
-                    "default": 1
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "browser_get_content",
-        "description": "获取网页的文本内容、HTML结构或特定元素的内容",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS选择器，如果为空则获取整个页面的内容"
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["text", "html", "markdown"],
-                    "description": "返回格式，text为纯文本，html为HTML源码，markdown为Markdown格式，默认text",
-                    "default": "text"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "browser_navigate",
-        "description": "在当前页面进行导航操作：前进、后退、刷新",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["back", "forward", "reload"],
-                    "description": "导航动作：back后退，forward前进，reload刷新"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                }
-            },
-            "required": ["action"]
-        }
-    },
-    {
-        "name": "browser_close",
-        "description": "关闭浏览器或特定会话",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "要关闭的会话ID，如果为空则关闭所有会话"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "browser_screenshot",
-        "description": "对当前网页进行截图并保存",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "截图保存路径，如 './screenshot.png'，默认为 './screenshot.png'",
-                    "default": "./screenshot.png"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "浏览器会话ID，默认为'default'"
-                },
-                "full_page": {
-                    "type": "boolean",
-                    "description": "是否截取整个页面，默认false只截取当前可视区域",
-                    "default": False
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "file_read",
-        "description": "读取文本文件的内容，支持自动检测文件编码（UTF-8、GBK、GB2312等），适用于各种文本文件格式",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "要读取的文件路径，可以是绝对路径或相对路径"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "文件编码（可选），如果不指定则自动检测。常用编码：utf-8, gbk, gb2312, ascii等"
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "起始行号（可选），从第几行开始读取，默认为1"
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "结束行号（可选），读到第几行，默认读取到文件末尾"
-                },
-                "max_size": {
-                    "type": "integer",
-                    "description": "最大读取字节数（可选），默认为10MB，防止读取超大文件"
-                }
-            },
-            "required": ["file_path"]
-        }
-    },
-    {
-        "name": "file_list",
-        "description": "列出指定目录下的文件和子目录，支持过滤和递归遍历",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "directory": {
-                    "type": "string",
-                    "description": "要列出的目录路径，默认为当前目录"
-                },
-                "pattern": {
-                    "type": "string",
-                    "description": "文件名匹配模式（可选），支持通配符，如 *.py, *.txt 等"
-                },
-                "recursive": {
-                    "type": "boolean",
-                    "description": "是否递归遍历子目录，默认False"
-                },
-                "show_hidden": {
-                    "type": "boolean",
-                    "description": "是否显示隐藏文件（以.开头的文件），默认False"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "upload_to_remote",
-        "description": "将文件上传到 SMB 或 FTP 服务器。如果目标路径的凭据未配置，工具会返回凭据配置链接，用户完成配置后可继续上传。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "要上传的本地文件路径（可以是绝对路径或上传目录下的文件名）"
-                },
-                "remote_path": {
-                    "type": "string",
-                    "description": "远程服务器路径，格式示例: /share/folder (SMB) 或 /var/www/uploads (FTP)"
-                },
-                "connection_type": {
-                    "type": "string",
-                    "enum": ["smb", "ftp"],
-                    "description": "连接类型: smb 或 ftp"
-                },
-                "filename": {
-                    "type": "string",
-                    "description": "上传后的文件名（可选，默认使用原文件名）"
-                }
-            },
-            "required": ["file_path", "remote_path", "connection_type"]
-        }
-    },
-    {
-        "name": "knowledge_base_search",
-        "description": "从企业知识库中检索相关信息，回答用户问题。当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "用户问题或查询关键词"
-                },
-                "top_k": {
-                    "type": "integer",
-                    "description": "返回的相关段落数量，默认 10",
-                    "default": 10
-                }
-            },
-            "required": ["query"]
-        }
-    },
-]
 
 
 class Agent:
@@ -826,6 +177,9 @@ class Agent:
                 self._build_base_system_prompt,
             )
 
+            # 延迟初始化 delegate 工具（依赖 subagent_executor）
+            self._init_delegate_tool()
+
             logger.info(f"Master Agent initialized with {len(self.skill_registry)} skills, {len(self.subagent_registry)} subagents")
         else:
             # 子智能体模式（被委派）
@@ -918,7 +272,41 @@ class Agent:
         from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
         self.tool_registry.register(KnowledgeBaseTool())
 
+        # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
+        from src.tools.plan.create_plan_tool import CreatePlanTool
+        from src.tools.skill.use_skill_tool import UseSkillTool
+        from src.tools.skill.skill_execute_tool import SkillExecuteTool
+        from src.tools.skill.skill_complete_tool import SkillCompleteTool
+        from src.tools.agent.clarify_tool import ClarifyTool
+        from src.tools.agent.delegate_tool import DelegateToSubagentTool
+
+        self._create_plan_tool = CreatePlanTool(
+            plan_manager=self.plan_manager,
+            skill_registry=self.skill_registry,
+            subagent_registry=getattr(self, 'subagent_registry', None),
+        )
+        self._use_skill_tool = UseSkillTool(skill_registry=self.skill_registry)
+        self._skill_execute_tool = SkillExecuteTool(
+            skill_executor=self.skill_executor,
+            skill_registry=self.skill_registry,
+        )
+        self._skill_complete_tool = SkillCompleteTool()
+        self._clarify_tool = ClarifyTool()
+        # delegate_to_subagent 工具需要 subagent_registry 和 subagent_executor
+        # 对于 MASTER 模式延迟初始化（因为 subagent_executor 在此方法之后创建）
+        # 对于非 MASTER 模式设为 None
+        self._delegate_tool = None  # 将在 _init_delegate_tool 中初始化
+
         logger.info(f"Registered {len(self.tool_registry._tools)} tools")
+
+    def _init_delegate_tool(self):
+        """延迟初始化 delegate 工具（需要在 subagent_executor 创建后调用）"""
+        if self.mode == AgentMode.MASTER and self.subagent_registry and self.subagent_executor:
+            from src.tools.agent.delegate_tool import DelegateToSubagentTool
+            self._delegate_tool = DelegateToSubagentTool(
+                subagent_registry=self.subagent_registry,
+                subagent_executor=self.subagent_executor,
+            )
     
     def _filter_tools_by_config(self):
         """根据子智能体配置过滤可用工具"""
@@ -1056,6 +444,9 @@ class Agent:
         
         skill_descriptions = self.skill_registry.get_descriptions() if self.skill_registry else "(暂无可用技能)"
         available_tools = [t["name"] for t in AGENT_TOOLS]
+        # use_skill 是动态添加的工具，不在 AGENT_TOOLS 中，需要手动加入列表
+        if self.skill_registry and self.skill_registry.list_skills():
+            available_tools.append("use_skill")
         available_skills = self.skill_registry.list_skills() if self.skill_registry else []
         
         # 子智能体信息（仅主智能体使用）
@@ -1197,11 +588,11 @@ delegate_to_subagent(
 ### 可用工具
 {', '.join([f'`{t}`' for t in available_tools])}
 
-### 可用技能
+### 可用技能（⚠️ 技能不是工具！不能直接调用技能名称！必须先通过 use_skill 工具加载）
 {skill_descriptions}
 
 **技能使用规则：**
-1. 使用 `use_skill(skill="技能名")` 加载技能，获取完整操作指南
+1. ⚠️ 技能名称（如 weather）不是工具，不能直接调用！必须使用 `use_skill(skill="技能名")` 加载技能，获取完整操作指南
 2. 加载后，根据技能说明书中的指引决定下一步：
    - 如果说明书要求执行命令/脚本 → 调用 `skill_execute`
    - 如果说明书要求生成内容 → 调用 `content_generate`
@@ -1602,413 +993,28 @@ create_plan(
                             )
                             msg["tool_calls"] = remaining
             i += 1
-    
-    def _handle_create_plan(
-        self,
-        args: Dict[str, Any],
-        session_id: str,
-        user_query: str,
-    ) -> Dict[str, Any]:
-        """
-        Handle create_plan tool call - create real ExecutionPlan and save to MD file
-        
-        Args:
-            args: Plan arguments containing goal, steps, and execution_mode
-            session_id: Session identifier
-            user_query: Original user query
-        
-        Returns:
-            Plan result dictionary with plan summary
-        """
-        goal = args.get("goal", user_query)
-        steps = args.get("steps", [])
-        execution_mode = args.get("execution_mode", "sequential")
-        
-        # 检查步骤是否使用了不可用的工具
-        available_tools = [t["name"] for t in AGENT_TOOLS]
-        available_skills = self.skill_registry.list_skills() if self.skill_registry else []
-        available_subagents = self.subagent_registry.list_subagents() if self.subagent_registry else []
-        
-        unavailable_tools = []
-        for step in steps:
-            tool = step.get("tool", "")
-            if tool and tool not in available_tools and tool not in available_skills:
-                # skill_execute 和 delegate_to_subagent 是特殊工具
-                if not tool.startswith("skill_") and tool != "delegate_to_subagent":
-                    # 检查是否是可用的子智能体
-                    if tool not in available_subagents:
-                        unavailable_tools.append(tool)
-        
-        # 创建真实的执行计划
-        plan = self.plan_manager.create_plan(
-            session_id=session_id,
-            user_query=user_query,
-            steps=steps,
-            execution_mode=execution_mode,
-            available_tools=available_tools,
-            available_skills=available_skills,
-        )
-        
-        # 构建计划展示输出
-        plan_output = []
-        plan_output.append("=" * 60)
-        plan_output.append("📋 执行计划 (Execution Plan)")
-        plan_output.append("=" * 60)
-        plan_output.append(f"🎯 目标: {goal}")
-        plan_output.append(f"🆔 计划ID: {plan.plan_id}")
-        plan_output.append(f"🔄 执行模式: {execution_mode}")
-        plan_output.append(f"📝 步骤数: {len(steps)}")
-        plan_output.append("-" * 60)
-        plan_output.append("📝 步骤详情:")
-        
-        for i, step in enumerate(steps, 1):
-            description = step.get("description", "")
-            tool = step.get("tool", "N/A")
-            params = step.get("parameters", {})
-            expected = step.get("expected_output", "")
-            
-            plan_output.append(f"\n  步骤 {i}: {description}")
-            if tool != "N/A":
-                plan_output.append(f"    🔧 工具: {tool}")
-                if params:
-                    plan_output.append(f"    📊 参数: {json.dumps(params, ensure_ascii=False)}")
-                if expected:
-                    plan_output.append(f"    📤 预期输出: {expected}")
-        
-        plan_output.append("-" * 60)
-        
-        # 如果是简单任务（只有一个步骤），提示可以直接执行
-        if len(steps) == 1:
-            plan_output.append("✅ 单步任务，直接执行...")
-        else:
-            plan_output.append("✅ 计划创建完成，开始按步骤执行...")
-        
-        plan_output.append("=" * 60)
-        
-        # 如果有不可用的工具，添加警告
-        if unavailable_tools:
-            plan_output.append("\n⚠️ 注意: 以下工具不可用:")
-            for tool in unavailable_tools:
-                plan_output.append(f"  - {tool}")
-            plan_output.append("\n建议: 这些能力可能需要其他方式实现，请参考可用工具和技能列表。")
-        
-        # Print to log
-        plan_str = "\n".join(plan_output)
-        logger.info(f"\n{plan_str}")
-        
-        # Also print to console for visibility
-        print(plan_str)
-        
-        # 构建下一步执行提示
-        next_step_prompt = ""
-        if steps:
-            first_step = steps[0]
-            tool = first_step.get("tool", "")
-            params = first_step.get("parameters", {})
-            description = first_step.get("description", "")
-            
-            if tool:
-                next_step_prompt = f"\n\n**下一步操作：** 立即调用 `{tool}` 工具执行步骤1。"
-                if tool == "delegate_to_subagent" and "subagent_name" in params:
-                    subagent_name = params["subagent_name"]
-                    task_desc = params.get("task_description", description)
-                    next_step_prompt += f"\n\n请调用：\n```\n{tool}(\n  subagent_name=\"{subagent_name}\",\n  task_description=\"{task_desc}\"\n)\n```"
-        
-        # 返回结果
-        result = {
-            "success": True,
-            "plan_id": plan.plan_id,
-            "plan": {
-                "goal": goal,
-                "steps": steps,
-                "execution_mode": execution_mode
-            },
-            "message": f"计划创建成功，共{len(steps)}个步骤。计划已保存到: plans/{session_id}.md{next_step_prompt}",
-            "is_simple_task": len(steps) == 1,
-            "next_step": {
-                "step_number": 1,
-                "tool": steps[0].get("tool") if steps else None,
-                "parameters": steps[0].get("parameters") if steps else None,
-                "description": steps[0].get("description") if steps else None,
-            } if steps else None
-        }
-        
-        if unavailable_tools:
-            result["warnings"] = {
-                "unavailable_tools": unavailable_tools,
-                "suggestion": "部分工具不可用，请检查或寻找替代方案"
-            }
-        
-        return result
 
-    def _handle_use_skill(self, skill_name: str) -> Dict[str, Any]:
-        """
-        Handle use_skill tool call - load skill content and return it
+    # ─── 压缩 Skill 上下文（保留在 Agent 上，因为操作 Agent 内部状态） ───
 
-        Args:
-            skill_name: Name of the skill to load
-
-        Returns:
-            Skill content dictionary
-        """
-        if not skill_name:
-            return {
-                "success": False,
-                "error": "No skill name provided",
-                "available_skills": self.skill_registry.list_skills() if self.skill_registry else []
-            }
-
-        if not self.skill_registry:
-            return {
-                "success": False,
-                "error": "Skill registry not initialized"
-            }
-
-        # 检查 skill 是否在允许列表中
-        if hasattr(self.skill_registry, 'is_allowed') and not self.skill_registry.is_allowed(skill_name):
-            allowed = self.skill_registry.get_allowed_list()
-            return {
-                "success": False,
-                "error": f"Skill '{skill_name}' not allowed. Available: {allowed or 'all'}",
-                "available_skills": allowed
-            }
-
-        skill = self.skill_registry.get(skill_name)
-        skill_content = self.skill_registry.get_content(skill_name)
-
-        if skill_content is None:
-            available = self.skill_registry.list_skills()
-            return {
-                "success": False,
-                "error": f"Skill '{skill_name}' not found",
-                "available_skills": available
-            }
-
-        logger.info(f"后端日志：_handle_use_skill 加载技能", extra={
-            "skill_name": skill_name,
-            "skill_content_length": len(skill_content) if skill_content else 0
-        })
-
-        # 增强引导：在技能内容后附加执行指引
-        guidance_suffix = f"""
-
----
-**⚠️ 以上是技能「{skill_name}」的完整操作指南。请严格按照指南中的步骤执行：**
-- 如果指南中有命令/脚本要执行 → 调用 `skill_execute`
-- 如果指南中要求生成内容 → 调用 `content_generate`
-- 如果指南中要求搜索信息 → 调用 `web_search`
-- 如果指南中有多个步骤 → 逐步执行，不要跳过
-- 所有步骤完成后，调用 `skill_complete(skill="{skill_name}", summary="结果摘要")` 标记完成
-- 不要直接回复用户"正在执行"，而是立即开始执行第一步"""
-
-        enhanced_content = skill_content + guidance_suffix
-
-        return {
-            "success": True,
-            "skill_name": skill_name,
-            "content": enhanced_content,
-            "message": f"✅ Skill '{skill_name}' loaded."
-        }
-    
     def _compress_skill_context(
         self,
         session_id: str,
         skill_name: str,
         summary: str
     ) -> None:
-        """
-        压缩 Skill 执行过程中的中间消息，仅保留摘要。
-        
-        替换前: [user, assistant(use_skill), tool(SKILL.md), assistant(content_gen),
-                 tool(大纲), ..., assistant(skill_complete), tool(complete_result)]
-        替换后: [user, summary("[技能执行记录] ...")]
-        
-        注意：在调用此方法之前，skill_complete 的 tool 消息必须已写入 memory，
-        以确保当前迭代的 messages 列表中 tool_call_id 配对完整。
-        压缩只影响 memory._cache（后续迭代的历史），不影响当前 messages。
-        
-        Args:
-            session_id: 会话 ID
-            skill_name: 技能名称
-            summary: 技能执行结果摘要
-        """
-        session = self._active_skill_sessions.get(skill_name)
-        if not session:
-            logger.warning(f"后端日志：_compress_skill_context 未找到活跃的 SkillSession: {skill_name}")
-            return
-        
-        messages = self.memory._cache.get(session_id)
-        if not messages:
-            return
-        
-        original_count = len(messages)
-        
-        # 保留 Skill 开始之前的消息
-        before_skill = list(messages)[:session.message_count_before]
-        
-        # 构建精简摘要消息
-        from datetime import datetime
-        summary_message = {
-            "role": "system",
-            "content": f"[技能执行记录] 使用技能「{skill_name}」完成任务。结果：{summary}",
-            "timestamp": datetime.now().isoformat(),
-            "_skill_summary": True
-        }
-        
-        # 重建消息列表：Skill 开始前的消息 + 摘要（不保留中间过程的 tool 消息）
-        self.memory._cache[session_id] = list(before_skill + [summary_message])
-        
-        # 清理 Skill Session
-        if skill_name in self._active_skill_sessions:
-            del self._active_skill_sessions[skill_name]
-        
-        logger.info(f"后端日志：Skill 上下文已压缩", extra={
-            "skill_name": skill_name,
-            "session_id": session_id,
-            "original_messages": original_count,
-            "compressed_messages": len(before_skill) + 1,
-            "saved_messages": original_count - len(before_skill) - 1
-        })
-    
+        """压缩 Skill 执行过程中的中间消息，仅保留摘要。委托给 SkillCompleteTool。"""
+        self._skill_complete_tool.set_context(
+            active_sessions=self._active_skill_sessions,
+            memory_cache=self.memory._cache,
+        )
+        self._skill_complete_tool.compress(session_id, skill_name, summary)
+
     @property
     def has_active_skill_session(self) -> bool:
         """是否有活跃的 Skill Session"""
         return bool(self._active_skill_sessions)
-    
-    async def _handle_skill_execute(
-        self,
-        skill_name: str,
-        command: Optional[str] = None,
-        files: Optional[Dict[str, str]] = None,
-        session_id: Optional[str] = None,
-        workdir: Optional[Path] = None
-    ) -> Dict[str, Any]:
-        """
-        Handle skill_execute tool call - execute command directly in runtime environment
 
-        Args:
-            skill_name: Name of the skill
-            command: Command to execute (optional for workflow-type skills)
-            files: Optional files dict (filename -> base64 content)
-            session_id: Session ID for context isolation
-            workdir: Working directory for command execution
-            
-        Returns:
-            Execution result dictionary
-        """
-        import base64
-        
-        if not skill_name:
-            return {
-                "success": False,
-                "error": "No skill name provided"
-            }
-        
-        if not command:
-            # 对于引导式技能（无脚本），不执行命令，直接返回提示
-            return {
-                "success": True,
-                "message": f"技能 '{skill_name}' 是引导式技能，无需执行命令。请按照技能指南中的步骤，使用 content_generate 等工具完成任务。",
-                "skill_name": skill_name
-            }
-        
-        skill = self.skill_registry.get(skill_name)
-        if not skill:
-            return {
-                "success": False,
-                "error": f"Skill '{skill_name}' not found",
-                "available_skills": self.skill_registry.list_skills()
-            }
-        
-        # 脚本路径替换统一由 skill_executor._process_command 处理，这里不再重复替换
-        processed_command = command
-
-        # 自动替换 {user_id} 和 {session_id} 占位符
-        # LLM 可能自己编造 user_id，这里强制使用 session 中的真实值
-        real_user_id = None
-        real_session_id = None
-        if session_id:
-            from src.db.models import SessionDB
-            session_info = SessionDB.get_by_id(session_id)
-            if session_info:
-                real_user_id = session_info.get("user_id")
-                real_session_id = session_id
-                logger.info(f"后端日志：skill_execute 获取真实 user_id={real_user_id}")
-
-        # 替换占位符
-        if "{user_id}" in processed_command and real_user_id:
-            processed_command = processed_command.replace("{user_id}", real_user_id)
-            logger.info(f"后端日志：已替换 {{user_id}} 占位符")
-        if "{session_id}" in processed_command and real_session_id:
-            processed_command = processed_command.replace("{session_id}", real_session_id)
-            logger.info(f"后端日志：已替换 {{session_id}} 占位符")
-
-        # 如果命令中仍然包含 --user-id 且值看起来像 LLM 编造的（包含日期等），强制替换
-        # LLM 编造的典型格式：user_20260325, user_123, test_user 等
-        import re
-        # 匹配 --user-id "xxx" 或 --user-id 'xxx' 或 --user-id xxx
-        user_id_pattern = r'--user-id["\s]+["\']?([^"\'\s]+)["\']?'
-        matches = re.findall(user_id_pattern, processed_command)
-        for old_user_id in matches:
-            # 检查是否像 LLM 编造的（简单判断：包含数字或 test_ 开头）
-            if old_user_id != real_user_id and real_user_id:
-                # 强制替换为真实值
-                processed_command = re.sub(
-                    rf'--user-id["\s]+["\']?{re.escape(old_user_id)}["\']?',
-                    f'--user-id "{real_user_id}"',
-                    processed_command
-                )
-                logger.info(f"后端日志：强制替换 LLM 编造的 user_id '{old_user_id}' -> '{real_user_id}'")
-        
-        decoded_files = {}
-        if files:
-            for filename, content_b64 in files.items():
-                try:
-                    decoded_files[filename] = base64.b64decode(content_b64)
-                except Exception as e:
-                    logger.warning(f"Failed to decode file {filename}: {e}")
-
-        try:
-            # 注意：user_id 和 session_id 已经在上面替换命令占位符时获取过了
-            # processed_command 中的 user_id 已经被替换为真实值
-            if workdir and workdir.exists():
-                result = await self.skill_executor.execute_skill_command(
-                    skill_name=skill_name,
-                    command=processed_command,
-                    files=decoded_files if decoded_files else None,
-                    session_id=real_session_id,
-                    user_id=real_user_id
-                )
-            else:
-                result = await self.skill_executor.execute_skill_command(
-                    skill_name=skill_name,
-                    command=processed_command,
-                    files=decoded_files if decoded_files else None,
-                    session_id=real_session_id,
-                    user_id=real_user_id
-                )
-            
-            # 构建 error 字段：优先使用 result.error，fallback 到 stderr
-            exec_error = result.error or result.stderr or f"exit_code={result.exit_code}"
-            
-            return {
-                "success": result.success,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.exit_code,
-                "duration": result.duration,
-                "timed_out": result.timed_out,
-                "error": exec_error
-            }
-            
-        except Exception as e:
-            logger.error(f"Skill execute failed: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _handle_delegate_to_subagent(
+    async def process_message(
         self,
         subagent_name: str,
         task_description: str,
@@ -2265,7 +1271,7 @@ create_plan(
             await send_progress(f"🔄 正在将补充信息提交给 {subagent_name}，继续执行任务...")
             
             # 重新委派给子智能体（携带补充信息）
-            redelegate_result = await self._handle_delegate_to_subagent(
+            redelegate_result = await self._delegate_tool.execute(
                 subagent_name=subagent_name,
                 task_description=enhanced_task,
                 context_needed=None,
@@ -2560,6 +1566,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
 
+                # Fallback: 如果 LLM 调用了一个不在工具列表中但匹配 skill 名称的工具，
+                # 自动转为 use_skill 调用（LLM 有时会误把 skill 名称当成工具名直接调用）
+                known_tool_names = {t["name"] for t in self._get_tools()}
+                if tool_name not in known_tool_names and self.skill_registry:
+                    matched_skill = self.skill_registry.get(tool_name)
+                    if matched_skill:
+                        original_name = tool_name
+                        logger.info(f"[AGENT] Auto-mapping unknown tool '{original_name}' to use_skill(skill='{original_name}')")
+                        tool_name = "use_skill"
+                        tool_args = {"skill": original_name}
+                        # 更新显示名称
+                        tool_display_name = self._get_tool_display_name(tool_name, tool_args)
+
                 # Handle create_scheduled_task - 创建定时任务（通过独立 tool 执行）
                 if tool_name == "create_scheduled_task":
                     self._create_scheduled_task_tool.set_context(user, session_id, send_progress)
@@ -2592,8 +1611,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 # Handle create_plan specially - create real plan and save to MD
                 if tool_name == "create_plan":
-                    plan_result = self._handle_create_plan(
-                        args=tool_args,
+                    plan_result = await self._create_plan_tool.execute(
+                        **tool_args,
                         session_id=session_id,
                         user_query=user_input,
                     )
@@ -2608,17 +1627,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 # Handle clarify - ask user for clarification (no external tool needed)
                 if tool_name == "clarify":
-                    question = tool_args.get("question", "")
-                    missing_info = tool_args.get("missing_info", [])
-                    logger.info(f"Clarify tool called: question={question[:50]}...")
-                    clarify_result = {
-                        "success": True,
-                        "question": question,
-                        "missing_info": missing_info
-                    }
+                    clarify_result = await self._clarify_tool.execute(**tool_args)
                     # 发送工具执行结果
                     await send_tool_result(tool_name, clarify_result, True)
-                    await send_progress(f"❓ 需要澄清: {question[:50]}...")
+                    await send_progress(f"❓ 需要澄清: {clarify_result.get('question', '')[:50]}...")
                     tool_results.append({
                         "tool_call_id": tool_id,
                         "content": clarify_result
@@ -2628,7 +1640,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # Handle use_skill - load skill content and inject into conversation
                 if tool_name == "use_skill":
                     skill_name = tool_args.get("skill", "")
-                    skill_result = self._handle_use_skill(skill_name)
+                    skill_result = await self._use_skill_tool.execute(**tool_args)
                     # 创建 Skill Session，记录当前 memory 消息数量
                     if skill_result.get("success") and skill_name not in self._active_skill_sessions:
                         msg_count = len(self.memory._cache.get(session_id, []))
@@ -2684,8 +1696,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             skill_task_id = task.task_id
                             self.plan_manager.mark_task_running(session_id, skill_task_id)
 
-                    skill_exec_result = await self._handle_skill_execute(
-                        skill_name=skill_name,
+                    skill_exec_result = await self._skill_execute_tool.execute(
+                        skill=skill_name,
                         command=command,
                         files=files,
                         session_id=session_id,
@@ -2762,7 +1774,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             self.plan_manager.mark_task_running(session_id, delegate_task_id)
 
                     # 执行委派
-                    delegation_result = await self._handle_delegate_to_subagent(
+                    delegation_result = await self._delegate_tool.execute(
                         subagent_name=subagent_name,
                         task_description=task_description,
                         context_needed=context_needed,
@@ -3160,6 +2172,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                     logger.info(f"[SUBAGENT] Executing tool: {tool_name}")
 
+                    # Fallback: 如果 LLM 调用了一个不在工具列表中但匹配 skill 名称的工具，
+                    # 自动转为 use_skill 调用（LLM 有时会误把 skill 名称当成工具名直接调用）
+                    known_tool_names_sub = {t["name"] for t in self._get_tools()}
+                    if tool_name not in known_tool_names_sub and self.skill_registry:
+                        matched_skill = self.skill_registry.get(tool_name)
+                        if matched_skill:
+                            original_name_sub = tool_name
+                            logger.info(f"[SUBAGENT] Auto-mapping unknown tool '{original_name_sub}' to use_skill(skill='{original_name_sub}')")
+                            tool_name = "use_skill"
+                            tool_args = {"skill": original_name_sub}
+
                     # 发送工具执行进度
                     tool_display_name = self._get_tool_display_name(tool_name, tool_args)
                     # 发送工具开始执行事件
@@ -3204,8 +2227,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                     # 处理 create_plan（子智能体创建自己的计划）
                     if tool_name == "create_plan":
-                        plan_result = self._handle_create_plan(
-                            args=tool_args,
+                        plan_result = await self._create_plan_tool.execute(
+                            **tool_args,
                             session_id=self.session_id,
                             user_query=task_description,
                         )
@@ -3222,7 +2245,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     # 处理技能工具
                     elif tool_name == "use_skill":
                         skill_name = tool_args.get("skill", "")
-                        skill_result = self._handle_use_skill(skill_name)
+                        skill_result = await self._use_skill_tool.execute(**tool_args)
                         tool_result = skill_result
                         # 创建 Skill Session
                         if skill_result.get("success") and skill_name not in self._active_skill_sessions:
@@ -3249,8 +2272,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         skill_name = tool_args.get("skill", "")
                         command = tool_args.get("command", "") or None  # 空字符串转为 None
                         files = tool_args.get("files", {})
-                        skill_exec_result = await self._handle_skill_execute(
-                            skill_name=skill_name,
+                        skill_exec_result = await self._skill_execute_tool.execute(
+                            skill=skill_name,
                             command=command,
                             files=files,
                             session_id=self.session_id,

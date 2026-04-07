@@ -346,14 +346,14 @@ class TestAgentSkillCompleteTool(unittest.TestCase):
 
     def test_skill_complete_in_agent_tools(self):
         """skill_complete 工具存在于 AGENT_TOOLS 列表中"""
-        from src.core.agent import AGENT_TOOLS
+        from src.tools.schemas import AGENT_TOOLS
 
         tool_names = [t["name"] for t in AGENT_TOOLS]
         self.assertIn("skill_complete", tool_names)
 
     def test_skill_complete_schema(self):
         """skill_complete 工具的 schema 定义正确"""
-        from src.core.agent import AGENT_TOOLS
+        from src.tools.schemas import AGENT_TOOLS
 
         tool = next(t for t in AGENT_TOOLS if t["name"] == "skill_complete")
         schema = tool["input_schema"]
@@ -367,7 +367,7 @@ class TestAgentSkillCompleteTool(unittest.TestCase):
 
     def test_skill_execute_command_not_required(self):
         """skill_execute 的 command 不再是 required"""
-        from src.core.agent import AGENT_TOOLS
+        from src.tools.schemas import AGENT_TOOLS
 
         tool = next(t for t in AGENT_TOOLS if t["name"] == "skill_execute")
         required = tool["input_schema"].get("required", [])
