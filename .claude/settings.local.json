@@ -12,7 +12,12 @@
       "Bash(findstr:*)",
       "Bash(npm run build)",
       "Bash(python3 -c ':*)",
-      "Bash(sqlite3 /c/repos/aid-work-agent/aid_work_agent.db \".schema\")"
+      "Bash(sqlite3 /c/repos/aid-work-agent/aid_work_agent.db \".schema\")",
+      "Bash(grep -r \"pytest\" c:/repos/aid-work-agent/*.cfg c:/repos/aid-work-agent/*.ini c:/repos/aid-work-agent/pyproject.toml)",
+      "Bash(grep -E \"\\\\.\\(cfg|ini|toml\\)$\")",
+      "Bash(grep -r \"TODO\\\\|FIXME\\\\|XXX\" c:/repos/aid-work-agent/tests/*.py)",
+      "Bash(npm install:*)",
+      "Bash(npx vue-tsc:*)"
     ]
   }
 }
