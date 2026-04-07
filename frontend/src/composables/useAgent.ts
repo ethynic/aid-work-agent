@@ -82,7 +82,7 @@ export function useAgent() {
     currentFiles.value = []
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, subagent?: string | null) {
     if (!content.trim() || isProcessing.value) return
 
     // 构建用户消息内容（含附件信息）
@@ -187,7 +187,8 @@ export function useAgent() {
         // onClarification - 子智能体需要用户补充信息
         (subagentName, question) => {
           addProgress(`❓ ${subagentName}需要补充信息: ${question}`, 'tool_start', 'clarification')
-        }
+        },
+        subagent
       )
     } catch (err) {
       error.value = (err as Error).message

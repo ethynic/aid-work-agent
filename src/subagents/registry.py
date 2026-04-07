@@ -159,14 +159,23 @@ class SubagentRegistry:
     def get(self, name: str) -> Optional[SubagentConfig]:
         """
         获取Subagent配置
-        
+
+        支持按 name（YAML 中的 name 字段）或 dir_name（目录名）查找。
+
         Args:
-            name: Subagent名称
-            
+            name: Subagent名称或目录名
+
         Returns:
             配置对象，不存在返回None
         """
-        return self._configs.get(name)
+        config = self._configs.get(name)
+        if config:
+            return config
+        # 按目录名查找
+        for cfg in self._configs.values():
+            if cfg.dir_name == name:
+                return cfg
+        return None
     
     def get_content(self, name: str) -> Optional[str]:
         """

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from src.config.settings import settings
 from src.config.logging import setup_logging
 from src.core.agent import master_agent
+from src.core.agent_router import agent_router
 from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
@@ -109,6 +110,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     files: Optional[List[Dict[str, Any]]] = None
     user_id: Optional[str] = None  # 用于会话记录
+    subagent: Optional[str] = None  # 子智能体名称（由前端从路由参数提取后传入）
 
 
 class ChatResponse(BaseModel):
@@ -246,13 +248,14 @@ async def chat(request: Request):
         user_input = data.get("message", "")
         user_id = data.get("user_id", "web_user")
         session_id = data.get("session_id")
-        
+        subagent_name = data.get("subagent")
+
         if not user_input:
             return JSONResponse({
                 "success": False,
                 "error": "Message cannot be empty",
             })
-        
+
         # 从请求头解析用户身份
         current_user = auth.get_current_user(request)
         agent_user = None
@@ -266,18 +269,22 @@ async def chat(request: Request):
         # Generate session ID if not provided
         if not session_id:
             session_id = f"web_{user_id}_{uuid.uuid4().hex[:8]}"
-        
-        # Process message using master agent
-        response_text = await master_agent.process_message_sync(
+
+        # 通过 AgentRouter 获取对应的 Agent 实例
+        agent = agent_router.get_agent(subagent_name, session_id)
+
+        # Process message
+        response_text = await agent.process_message_sync(
             user_input=user_input,
             session_id=session_id,
             user=agent_user,
         )
-        
+
         return JSONResponse({
             "success": True,
             "response": response_text,
             "session_id": session_id,
+            "agent_type": agent.mode.value,
         })
     
     except Exception as e:
@@ -514,7 +521,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 添加用户消息到历史（包含文件路径上下文）
     full_message = request.message + file_context
     sse_manager.add_to_history(session_id, "user", full_message)
-    
+
+    # 通过 AgentRouter 获取对应的 Agent 实例
+    agent = agent_router.get_agent(request.subagent, session_id)
+
     async def event_generator():
         """SSE事件生成器"""
         sse_start_time = datetime.now()
@@ -523,7 +533,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         try:
             # 发送初始连接成功消息
             try:
-                init_msg = f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+                init_msg = f"data: {json.dumps({'type': 'connected', 'session_id': session_id, 'agent_type': agent.mode.value}, ensure_ascii=False)}\n\n"
                 yield init_msg
                 logger.info(f"[SSE] Initial connected message sent, session_id={session_id}")
             except Exception as e:
@@ -582,7 +592,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         user_id=user_id,
                         user_message=full_message
                     )
-                    record_service.set_model(master_agent.llm.get_model_name())
+                    record_service.set_model(agent.llm.get_model_name())
 
                     # 包装成async回调
                     # 支持直接接收 dict 事件（子智能体的 tool_start/tool_result 等完整事件）
@@ -598,7 +608,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     # 运行agent
                     async def consume_generator():
                         """创建协程来迭代async generator"""
-                        async for chunk in master_agent.process_message(
+                        async for chunk in agent.process_message(
                             user_input=full_message,
                             session_id=session_id,
                             user=agent_user,

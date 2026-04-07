@@ -7,11 +7,14 @@ Agent Factory - 智能体工厂
 
 使用示例:
     factory = AgentFactory(registry)
-    
+
     # 创建独立主智能体
     agent = factory.create_standalone_agent("hr-expert", memory)
-    
-    # 创建子智能体
+
+    # 创建子智能体独立模式（入口级绑定）
+    agent = AgentFactory.create_standalone_subagent("trade-specialist", session_id)
+
+    # 创建子智能体（被委派模式）
     subagent = factory.create_subagent("code-reviewer", memory, session_id, execution_id)
 """
 
@@ -30,34 +33,34 @@ if TYPE_CHECKING:
 class AgentFactory:
     """
     智能体工厂
-    
+
     统一创建独立主智能体和委托子智能体实例。
-    
+
     所有智能体都是 Agent 类的实例，通过参数区分主/子模式。
-    
+
     使用示例:
         from src.subagents import SubagentRegistry, AgentFactory
         from src.memory.short_term import ShortTermMemory
-        
+
         # 加载注册表
         registry = SubagentRegistry()
         registry.load_from_directory(Path("subagents"))
-        
+
         # 创建工厂
         factory = AgentFactory(registry)
-        
+
         # 创建HR智能体（独立主智能体模式）
         memory = ShortTermMemory()
         hr_agent = factory.create_standalone_agent("hr-expert", memory)
-        
+
         # 运行
         await hr_agent.process_message(...)
     """
-    
+
     def __init__(self, registry: 'SubagentRegistry'):
         """
         初始化智能体工厂
-        
+
         Args:
             registry: Subagent注册表
         """
@@ -159,6 +162,39 @@ class AgentFactory:
         logger.info(f"Created subagent: {agent_name} (execution: {execution_id})")
         return agent
     
+    @staticmethod
+    def create_standalone_subagent(
+        name: str,
+        session_id: str,
+    ) -> Optional['Agent']:
+        """
+        创建子智能体独立模式（入口级绑定，直接作为主智能体处理请求）
+
+        与 create_standalone_agent() 的区别：
+        - 使用 subagent_config（注入专业 system_prompt）
+        - 使用 AgentMode.STANDALONE（影响提示词和工具）
+        - 工具按 subagent_config.tools 过滤
+
+        Args:
+            name: 子智能体名称
+            session_id: 会话ID
+
+        Returns:
+            Agent 实例，如果子智能体不存在返回 None
+        """
+        from src.core.agent import Agent, AgentMode, master_agent
+
+        config = master_agent.subagent_registry.get(name) if master_agent.subagent_registry else None
+        if not config:
+            return None
+
+        return Agent(
+            is_master=True,
+            mode=AgentMode.STANDALONE,
+            subagent_config=config,
+            session_id=session_id,
+        )
+
     def list_available_agents(self) -> list:
         """
         列出所有可用的智能体

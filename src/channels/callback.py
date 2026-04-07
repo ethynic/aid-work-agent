@@ -14,18 +14,24 @@ from loguru import logger
 from src.channels.manager import channel_manager
 from src.channels.session import channel_session_manager
 from src.core.agent import master_agent
+from src.core.agent_router import agent_router
 from src.models.message import UnifiedResponse
 
 router = APIRouter(tags=["渠道回调"])
 
 
-async def process_channel_message(channel_type: str, message) -> str:
+async def process_channel_message(
+    channel_type: str,
+    message,
+    bound_agent: Optional[str] = None,
+) -> str:
     """
     处理渠道消息的统一逻辑
 
     Args:
         channel_type: 渠道类型
         message: 解析后的统一消息
+        bound_agent: 绑定的子智能体名称（None 表示使用主智能体）
 
     Returns:
         响应文本
@@ -68,8 +74,11 @@ async def process_channel_message(channel_type: str, message) -> str:
         # 获取对话上下文
         history = channel_session_manager.get_conversation_context(session_id, max_messages=20)
 
+        # 通过 AgentRouter 获取对应的 Agent 实例
+        agent = agent_router.get_agent(bound_agent, session_id)
+
         # 处理消息
-        response_text = await master_agent.process_message_sync(
+        response_text = await agent.process_message_sync(
             user_input=message.text,
             session_id=session_id,
             history=history,

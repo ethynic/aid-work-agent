@@ -1,6 +1,6 @@
 """Core engine module"""
 
-from .agent import Agent, master_agent
+from .agent import Agent, AgentMode, master_agent
 from .dialog_manager import DialogManager
 from .intent_engine import IntentEngine, intent_engine
 from .planner import Planner, planner
@@ -11,6 +11,7 @@ MasterAgent = Agent
 
 __all__ = [
     "Agent",
+    "AgentMode",
     "MasterAgent",  # 向后兼容
     "master_agent",
     "DialogManager",

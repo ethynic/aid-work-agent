@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Coroutine, Any
 from loguru import logger
 
+from enum import Enum
+
 from src.config.settings import settings
 from src.core.agent_logger import log_agent_iteration, log_skill_execute
 from src.llm.gateway import llm_gateway
@@ -31,6 +33,13 @@ from src.core.skill_registry import SkillRegistry
 from src.core.skill_executor import SkillExecutor
 from src.core.plan_manager import PlanManager
 from src.core.skill_session import SkillSession
+
+
+class AgentMode(Enum):
+    """智能体工作模式"""
+    MASTER = "master"              # 主智能体模式：拥有完整能力，可委派任务
+    SUBAGENT = "subagent"         # 子智能体（被委派）模式：由主智能体创建，无委派能力
+    STANDALONE = "standalone"      # 子智能体独立模式：从入口直接进入，有子智能体约束，无委派能力
 
 
 # Tool definitions for LLM function calling
@@ -685,19 +694,26 @@ AGENT_TOOLS = [
 
 class Agent:
     """
-    统一的智能体类 - 支持主智能体和子智能体模式
-    
-    主智能体模式 (is_master=True):
+    统一的智能体类 - 支持主智能体、子智能体和独立模式
+
+    主智能体模式 (mode=MASTER):
     - 有委派任务给子智能体的能力
     - system prompt 包含委派规则
     - 管理子智能体的创建和执行
-    
-    子智能体模式 (is_master=False):
+
+    子智能体模式 (mode=SUBAGENT):
     - 没有委派能力
     - system prompt 不包含委派规则
     - 由主智能体创建，在独立线程中运行
     - 有自己的 plan 和执行流程
-    
+
+    子智能体独立模式 (mode=STANDALONE):
+    - 从入口直接进入，不经过主智能体委派
+    - 使用子智能体的 system_prompt（专业约束）
+    - 工具按 subagent_config 过滤
+    - 禁止委派
+    - 有独立的 ShortTermMemory（有会话记忆）
+
     The agent loop:
     1. Receive user message
     2. LLM understands intent and plans tasks (主智能体必须plan，闲聊除外)
@@ -706,7 +722,7 @@ class Agent:
     5. LLM integrates results and responds
     6. Repeat until task complete
     """
-    
+
     def __init__(
         self,
         is_master: bool = True,
@@ -714,50 +730,56 @@ class Agent:
         session_id: Optional[str] = None,
         execution_id: Optional[str] = None,
         parent_plan_manager=None,
+        mode: AgentMode = AgentMode.MASTER,
     ):
         """
         初始化智能体
-        
+
         Args:
-            is_master: 是否为主智能体
+            is_master: 是否为主智能体（向后兼容，优先使用 mode）
             subagent_config: 子智能体配置（子智能体模式时必需）
             session_id: 会话ID（子智能体模式时使用）
             execution_id: 执行ID（子智能体模式时使用）
             parent_plan_manager: 父智能体的计划管理器（子智能体模式时使用，用于记录执行过程）
+            mode: 智能体工作模式 (MASTER / SUBAGENT / STANDALONE)
         """
-        self.is_master = is_master
+        self.mode = mode
         self.subagent_config = subagent_config
         self.session_id = session_id
         self.execution_id = execution_id
         self.parent_plan_manager = parent_plan_manager
-        
+
+        # 向后兼容：通过 is_master 推断 mode（仅当 mode 未显式指定时）
+        if mode == AgentMode.MASTER and not is_master:
+            self.mode = AgentMode.SUBAGENT
+        self.is_master = self.mode == AgentMode.MASTER
+
         # 子智能体澄清相关状态
         self._clarification_missing_info = []
         # 主智能体的 pending clarifications: {session_id: {subagent_name, execution_id, task_description, question}}
         self._pending_clarifications: Dict[str, Dict[str, Any]] = {}
-        
+
         # 共享组件
         self.llm = llm_gateway
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
         self.memory = ShortTermMemory()
-        
+
         # Skill 会话管理 - 跟踪活跃的 Skill 执行
         self._active_skill_sessions: Dict[str, SkillSession] = {}
-        
+
         # 技能系统
         skills_dir = Path(__file__).parent.parent / "skills"
 
         # 读取配置的 allowed 列表
-        from src.config.settings import settings
-        if is_master:
+        if self.mode == AgentMode.MASTER:
             # 主智能体：从配置读取 allowed 列表
             allowed_skills = settings.skills.master_agent.allowed if settings.skills.master_agent.allowed else None
             self.skill_registry = SkillRegistry()
             self.skill_registry.load_from_directory(skills_dir, allowed=allowed_skills)
             logger.info(f"Master Agent loaded {len(self.skill_registry)} skills (allowed={allowed_skills})")
         else:
-            # 子智能体：从 SUBAGENT.md 读取 allowed 列表
+            # 子智能体（SUBAGENT 和 STANDALONE）：从 SUBAGENT.md 读取 allowed 列表
             allowed_skills = None
             if subagent_config and hasattr(subagent_config, 'get_allowed_skills'):
                 subagent_allowed = subagent_config.get_allowed_skills()
@@ -765,48 +787,55 @@ class Agent:
                     allowed_skills = subagent_allowed
             self.skill_registry = SkillRegistry()
             self.skill_registry.load_from_directory(skills_dir, allowed=allowed_skills)
-            logger.info(f"Subagent '{subagent_config.name if subagent_config else 'unknown'}' loaded {len(self.skill_registry)} skills (allowed={allowed_skills})")
+            logger.info(f"{self.mode.value} agent '{subagent_config.name if subagent_config else 'unknown'}' loaded {len(self.skill_registry)} skills (allowed={allowed_skills})")
 
         self.skill_executor = SkillExecutor(self.skill_registry)
-        
+
         # 计划管理器
         plans_dir = Path(__file__).parent.parent.parent / "plans"
         self.plan_manager = PlanManager(plans_dir)
-        
+
         # 定时任务工具实例（在 _register_builtin_tools 中赋值）
         self._create_scheduled_task_tool = None
         self._manage_scheduled_task_tool = None
-        
-        # 主智能体特有：子智能体注册表和执行器
-        if is_master:
-            # 初始化子智能体注册表
+
+        if self.mode == AgentMode.STANDALONE:
+            # 独立模式：不创建子智能体注册表和执行器
+            self.subagent_registry = None
+            self.subagent_executor = None
+            self._register_builtin_tools()
+            if subagent_config:
+                self._filter_tools_by_config()
+            logger.info(f"Standalone agent initialized: {subagent_config.name if subagent_config else 'unknown'}")
+        elif self.mode == AgentMode.MASTER:
+            # 主智能体模式
             subagents_dir = Path(__file__).parent.parent.parent / "subagents"
             from src.subagents.registry import SubagentRegistry
             self.subagent_registry = SubagentRegistry(subagents_dir)
-            
+
             # 注册内置工具
             self._register_builtin_tools()
-            
+
             # 初始化子智能体执行器
             from src.subagents.executor import SubagentExecutor
             self.subagent_executor = SubagentExecutor(
-                self.memory, 
+                self.memory,
                 self.subagent_registry,
                 self.tool_registry,
                 self.skill_registry,
                 self._build_base_system_prompt,
             )
-            
+
             logger.info(f"Master Agent initialized with {len(self.skill_registry)} skills, {len(self.subagent_registry)} subagents")
         else:
-            # 子智能体：没有委派能力
+            # 子智能体模式（被委派）
             self.subagent_registry = None
             self.subagent_executor = None
-            
+
             # 注册受限的工具（根据子智能体配置）
             self._register_builtin_tools()
             self._filter_tools_by_config()
-            
+
             logger.info(f"Subagent initialized: {subagent_config.name if subagent_config else 'unknown'}")
     
     def _register_builtin_tools(self):
@@ -893,7 +922,7 @@ class Agent:
     
     def _filter_tools_by_config(self):
         """根据子智能体配置过滤可用工具"""
-        if self.is_master or not self.subagent_config:
+        if self.mode == AgentMode.MASTER or not self.subagent_config:
             return
         
         # 获取允许的工具列表
@@ -919,19 +948,19 @@ class Agent:
     def _get_tools(self) -> List[Dict[str, Any]]:
         """
         Get tool definitions including skill tool and delegation tool
-        
-        主智能体：包含委派工具
-        子智能体：不包含委派工具
+
+        MASTER：包含委派工具
+        SUBAGENT / STANDALONE：不包含委派工具
         """
         tools = list(AGENT_TOOLS)
-        
+
         # 添加技能工具
         if self.skill_registry:
             skill_tool = self.skill_registry.get_skill_tool_definition()
             tools.append(skill_tool)
-        
-        # 仅主智能体：添加子智能体委派工具
-        if self.is_master and self.subagent_registry and len(self.subagent_registry) > 0:
+
+        # 仅 MASTER 模式：添加子智能体委派工具
+        if self.mode == AgentMode.MASTER and self.subagent_registry and len(self.subagent_registry) > 0:
             delegation_tool = self.subagent_registry.get_delegation_tool_definition()
             if delegation_tool:
                 tools.append(delegation_tool)
@@ -1021,8 +1050,8 @@ class Agent:
         Returns:
             系统提示词
         """
-        # 如果是子智能体，强制不包含委派内容
-        if not self.is_master:
+        # 如果是子智能体或独立模式，强制不包含委派内容
+        if self.mode != AgentMode.MASTER:
             include_delegation = False
         
         skill_descriptions = self.skill_registry.get_descriptions() if self.skill_registry else "(暂无可用技能)"
@@ -1400,14 +1429,14 @@ create_plan(
     def _build_system_prompt(self, user: Optional[User] = None) -> str:
         """
         Build system prompt for the agent
-        
-        主智能体：包含委派能力
-        子智能体：不包含委派能力，使用子智能体配置的约束
+
+        MASTER：包含委派能力
+        SUBAGENT / STANDALONE：不包含委派能力，使用子智能体配置的约束
         """
-        if self.is_master:
+        if self.mode == AgentMode.MASTER:
             return self._build_base_system_prompt(include_delegation=True, user=user)
         else:
-            # 子智能体：使用配置中的系统提示词
+            # SUBAGENT 和 STANDALONE：使用配置中的系统提示词
             subagent_constraint = ""
             if self.subagent_config and self.subagent_config.system_prompt:
                 subagent_constraint = self.subagent_config.system_prompt
@@ -2946,7 +2975,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         Returns:
             执行结果
         """
-        if self.is_master:
+        if self.mode != AgentMode.SUBAGENT:
             raise RuntimeError("execute_as_subagent() is only for subagent mode")
 
         # 进度消息辅助函数

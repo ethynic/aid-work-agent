@@ -27,6 +27,11 @@ const router = createRouter({
       component: () => import('./components/ChatContainer.vue')
     },
     {
+      path: '/chat/:subagent',
+      name: 'chat-subagent',
+      component: () => import('./components/ChatContainer.vue')
+    },
+    {
       path: '/customer-info',
       name: 'customer-info',
       component: CustomerInfo

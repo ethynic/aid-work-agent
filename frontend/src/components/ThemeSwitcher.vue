@@ -65,7 +65,7 @@ import { ref } from 'vue'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
 
 const isOpen = ref(false)
-const { currentTheme, currentThemeConfig, setTheme, getAvailableThemes, colors } = useTheme()
+const { currentTheme, currentThemeConfig, setTheme, getAvailableThemes } = useTheme()
 
 const availableThemes = getAvailableThemes()
 

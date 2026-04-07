@@ -89,7 +89,7 @@
         <p class="mt-2 text-sm">加载中...</p>
       </div>
 
-      <div v-else-if="sessions.length === 0" class="p-4 text-center text-gray-500">
+      <div v-else-if="filteredSessions.length === 0" class="p-4 text-center text-gray-500">
         <svg class="w-10 h-10 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
         </svg>
@@ -98,7 +98,7 @@
 
       <div v-else class="space-y-1">
         <div
-          v-for="session in sessions"
+          v-for="session in filteredSessions"
           :key="session.session_id"
           :class="[
             'group relative p-2.5 rounded-lg cursor-pointer transition-colors',
@@ -198,8 +198,8 @@ interface Props {
   isCollapsed: boolean
 }
 
-const props = defineProps<Props>()
-const emit = defineEmits<{
+defineProps<Props>()
+defineEmits<{
   collapse: []
 }>()
 
@@ -221,6 +221,21 @@ const isCreating = ref(false)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
+
+// 当前子智能体（从路由参数获取）
+const currentSubagent = computed<string | null>(() =>
+  route.name === 'chat-subagent' ? (route.params.subagent as string) : null
+)
+
+// 按子智能体过滤会话列表
+const filteredSessions = computed(() => {
+  if (!currentSubagent.value) {
+    // 主智能体模式：过滤掉有 subagent 标记的会话
+    return sessions.value.filter(s => !s.context_data?.subagent)
+  }
+  // 子智能体模式：只显示同名会话
+  return sessions.value.filter(s => s.context_data?.subagent === currentSubagent.value)
+})
 
 // 判断当前是否在知识库页面
 const isKnowledgeBaseActive = computed(() => {
@@ -282,12 +297,13 @@ async function handleNewSession() {
 
   isCreating.value = true
   try {
-    const newSession = await createNewSession()
+    const newSession = await createNewSession(undefined, currentSubagent.value)
     if (newSession) {
       selectSession(newSession.session_id)
-      // 如果当前不在首页，导航到首页
-      if (route.path !== '/') {
-        router.push('/')
+      // 导航到对应路由
+      const targetPath = currentSubagent.value ? `/chat/${currentSubagent.value}` : '/'
+      if (route.path !== targetPath) {
+        router.push(targetPath)
       }
     }
   } finally {
@@ -298,9 +314,12 @@ async function handleNewSession() {
 // 选择会话
 function handleSelectSession(sessionId: string) {
   selectSession(sessionId)
-  // 如果当前不在首页，导航到首页
-  if (route.path !== '/') {
-    router.push('/')
+  // 根据会话的 subagent 标记导航到对应路由
+  const session = sessions.value.find(s => s.session_id === sessionId)
+  const subagent = session?.context_data?.subagent as string | undefined
+  const targetPath = subagent ? `/chat/${subagent}` : '/'
+  if (route.path !== targetPath) {
+    router.push(targetPath)
   }
 }
 

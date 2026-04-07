@@ -110,6 +110,7 @@ class SubagentLoader:
             
             config = self.parse_subagent_md(config_file)
             if config:
+                config.dir_name = subdir.name
                 self.configs[config.name] = config
                 logger.info(f"Loaded subagent: {config.name}")
         

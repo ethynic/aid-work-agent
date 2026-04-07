@@ -29,6 +29,7 @@ class SubagentConfig(BaseModel):
     """
     # 基本信息
     name: str = Field(..., description="智能体名称")
+    dir_name: str = Field(default="", description="目录名称（用于URL路由等场景）")
     description: str = Field(default="", description="智能体描述")
     version: str = Field(default="1.0.0", description="版本号")
     author: str = Field(default="unknown", description="作者")

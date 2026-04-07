@@ -155,6 +155,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
@@ -181,6 +182,11 @@ const {
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
 const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
 
+const route = useRoute()
+const subagentName = computed<string | null>(() =>
+  route.name === 'chat-subagent' ? (route.params.subagent as string) : null
+)
+
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
 const showLoginModal = ref(false)
@@ -191,14 +197,15 @@ const skipNextSwitch = ref(false)
 
 // 计算页面标题
 const pageTitle = computed(() => {
+  const prefix = subagentName.value ? `${subagentName.value} - ` : ''
   if (!currentSessionId.value) {
-    return '新会话'
+    return `${prefix}新会话`
   }
   const session = sessions.value.find(s => s.session_id === currentSessionId.value)
   if (session?.title) {
-    return `历史会话：${session.title}`
+    return `${prefix}历史会话：${session.title}`
   }
-  return '新会话'
+  return `${prefix}新会话`
 })
 
 // 跳转到客户信息页面
@@ -238,11 +245,14 @@ onMounted(async () => {
   if (!isLoggedIn.value) {
     showLoginModal.value = true
   } else {
-    // 已登录，加载会话列表并恢复最近会话
+    // 已登录，加载会话列表
     await loadSessions()
-    const hasSession = await loadLatestSession()
-    if (hasSession && currentSessionId.value) {
-      agentSessionId.value = currentSessionId.value
+    // 子智能体模式下不加载主智能体最近会话
+    if (!subagentName.value) {
+      const hasSession = await loadLatestSession()
+      if (hasSession && currentSessionId.value) {
+        agentSessionId.value = currentSessionId.value
+      }
     }
   }
 
@@ -264,7 +274,7 @@ async function handleSend(content: string) {
 
   // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新）
   if (!currentSessionId.value) {
-    const newSession = await createNewSession()
+    const newSession = await createNewSession(undefined, subagentName.value)
     if (newSession) {
       skipNextSwitch.value = true
       selectSession(newSession.session_id)
@@ -284,7 +294,7 @@ async function handleSend(content: string) {
     await renameSession(sid, title)
   }
 
-  await sendMessage(content)
+  await sendMessage(content, subagentName.value)
 
   // 发送成功后清空附件
   clearAttachments()
@@ -307,7 +317,7 @@ async function handleNewSession() {
     showLoginModal.value = true
     return
   }
-  const newSession = await createNewSession()
+  const newSession = await createNewSession(undefined, subagentName.value)
   if (newSession) {
     // 选中新会话并同步到useAgent
     selectSession(newSession.session_id)
@@ -365,5 +375,13 @@ watch(isProcessing, (processing, wasProcessing) => {
   if (wasProcessing && !processing) {
     clearSessionCache()
   }
+})
+
+// 切换子智能体时清空当前会话和消息
+watch(subagentName, () => {
+  selectSession(null)
+  messages.value = []
+  clearSession()
+  clearAttachments()
 })
 </script>

@@ -66,7 +66,8 @@ export class SSEManager {
     onToolStart?: (toolName: string, toolArgs: object) => void,
     onToolResult?: (toolName: string, result: any, success: boolean) => void,
     onThinking?: (data: string) => void,
-    onClarification?: (subagentName: string, question: string) => void
+    onClarification?: (subagentName: string, question: string) => void,
+    subagent?: string | null
   ): Promise<void> {
     this.abortController = new AbortController()
 
@@ -88,6 +89,7 @@ export class SSEManager {
             mime_type: f.mime_type,
             size: f.size,
           })),
+          ...(subagent ? { subagent } : {}),
         }),
         signal: this.abortController.signal,
       })

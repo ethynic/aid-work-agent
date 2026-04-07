@@ -8,7 +8,9 @@
       "Bash(cmd /c \"C:\\\\repos\\\\aid-work-agent\\\\venv\\\\Scripts\\\\activate && cd /d C:\\\\repos\\\\aid-work-agent && python -c \"\"from src.core.agent import Agent; print\\(''Agent OK''\\)\"\"\")",
       "Bash(cmd /c:*)",
       "Bash(powershell -Command \"& ''C:\\\\repos\\\\aid-work-agent\\\\venv\\\\Scripts\\\\python.exe'' -c ''from src.core.agent import Agent; print\\(chr\\(65\\)+chr\\(103\\)+chr\\(101\\)+chr\\(110\\)+chr\\(116\\)+chr\\(32\\)+chr\\(79\\)+chr\\(75\\)\\)''\")",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(findstr:*)",
+      "Bash(npm run build)"
     ]
   }
 }

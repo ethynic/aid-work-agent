@@ -51,11 +51,14 @@ export function useSession() {
   /**
    * 创建新会话
    */
-  async function createNewSession(title?: string): Promise<ChatSession | null> {
+  async function createNewSession(title?: string, subagent?: string | null): Promise<ChatSession | null> {
     if (!isLoggedIn.value) return null
 
     try {
-      const newSession = await createSession({ title })
+      const newSession = await createSession({
+        title,
+        ...(subagent ? { context_data: { subagent } } : {})
+      })
       sessions.value.unshift(newSession)
       return newSession
     } catch (e) {
