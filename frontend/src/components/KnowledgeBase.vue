@@ -10,112 +10,54 @@
 
       <!-- Right Content Area -->
       <div class="flex-1 flex flex-col min-w-0">
-        <!-- Header Bar - 顶部标题行 -->
-        <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4">
-          <div class="flex-1 flex items-center gap-3 min-w-0">
-            <!-- Toggle Sidebar Button -->
+        <!-- Header Bar -->
+        <AppHeader
+          title="企业知识库"
+          :is-online="isOnline"
+          :is-logged-in="isLoggedIn"
+          :user="user"
+          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+          @logout="handleLogout"
+        >
+          <template #menu-items="{ closeMenu }">
             <button
-              @click="isSidebarCollapsed = !isSidebarCollapsed"
-              class="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
-              title="切换侧边栏"
+              @click="goToChat(); closeMenu()"
+              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
             >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
+              返回对话
             </button>
-
-            <!-- Page Title - 页面标题 -->
-            <div class="flex items-center gap-2 min-w-0">
-              <svg class="w-5 h-5 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            <button
+              @click="openCustomerInfo"
+              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
-              <h1 class="text-sm font-medium text-gray-800">企业知识库</h1>
-            </div>
-          </div>
-
-          <!-- Right Side - User Info & Actions -->
-          <div class="flex items-center gap-3 flex-shrink-0">
-            <!-- User Name -->
-            <div v-if="isLoggedIn" class="flex items-center gap-2">
-              <span class="text-sm text-gray-600">{{ user?.username }}</span>
-              <button
-                @click="handleLogout"
-                class="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-              >
-                退出
-              </button>
-            </div>
-
-            <!-- Online Status -->
-            <div class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-gray-100">
-              <span :class="isOnline ? 'bg-success-500' : 'bg-gray-400'" class="w-1.5 h-1.5 rounded-full"></span>
-              <span class="text-xs text-gray-500">{{ isOnline ? '在线' : '离线' }}</span>
-            </div>
-
-            <!-- More Menu -->
-            <div class="relative">
-              <button
-                @click="showMenuDropdown = !showMenuDropdown"
-                class="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                title="更多"
-              >
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" />
-                </svg>
-              </button>
-
-              <!-- Dropdown Menu -->
-              <div
-                v-if="showMenuDropdown"
-                class="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50"
-              >
-                <button
-                  @click="goToChat(); showMenuDropdown = false"
-                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                  返回对话
-                </button>
-                <button
-                  @click="openCustomerInfo"
-                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  我的客户
-                </button>
-                <button
-                  @click="showCredentialManager = true; showMenuDropdown = false"
-                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                  </svg>
-                  凭据管理
-                </button>
-                <button
-                  @click="openScheduledTasks"
-                  class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  我的定时任务
-                </button>
-              </div>
-            </div>
-
-            <!-- Click outside to close menu -->
-            <div
-              v-if="showMenuDropdown"
-              class="fixed inset-0 z-40"
-              @click="showMenuDropdown = false"
-            ></div>
-          </div>
-        </header>
+              我的客户
+            </button>
+            <button
+              @click="showCredentialManager = true; closeMenu()"
+              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+              凭据管理
+            </button>
+            <button
+              @click="openScheduledTasks"
+              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              我的定时任务
+            </button>
+          </template>
+        </AppHeader>
 
         <!-- Main Content Area -->
         <div class="flex-1 overflow-hidden p-6">
@@ -507,6 +449,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import AppHeader from './AppHeader.vue'
 import SessionSidebar from './SessionSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem } from '@/api/knowledge'
@@ -539,7 +482,6 @@ const totalDocuments = ref(0)
 // Layout state
 const isSidebarCollapsed = ref(false)
 const isOnline = ref(true)
-const showMenuDropdown = ref(false)
 const showCredentialManager = ref(false)
 
 // 分页总页数
@@ -795,7 +737,6 @@ function goToChat() {
 }
 
 function openCustomerInfo() {
-  showMenuDropdown.value = false
   const userId = user.value?.user_id
   if (userId) {
     window.open(`/customer-info?user_id=${userId}`, '_blank')
@@ -805,7 +746,6 @@ function openCustomerInfo() {
 }
 
 function openScheduledTasks() {
-  showMenuDropdown.value = false
   window.open('/scheduled-tasks', '_blank')
 }
 
