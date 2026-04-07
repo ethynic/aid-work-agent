@@ -4,8 +4,10 @@
 
 import os
 import sqlite3
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
+
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.knowledge.vector_db.vector_db import VectorDBSQLite
@@ -15,27 +17,28 @@ from src.knowledge.retriever.hybrid_retriever import HybridRetriever
 logger = logging.getLogger(__name__)
 
 
+class KnowledgeBaseSearchInput(BaseModel):
+    """搜索知识库参数"""
+    query: str = Field(..., description="用户问题或查询关键词")
+    top_k: Optional[int] = Field(10, description="返回的相关段落数量，默认 10")
+
+
 class KnowledgeBaseTool(BaseTool):
     """知识库检索工具"""
 
     name = "knowledge_base_search"
     description = "从企业知识库中检索相关信息，回答用户问题。当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
+    display_name = "搜索知识库"
+    InputModel = KnowledgeBaseSearchInput
 
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "用户问题或查询关键词"
-            },
-            "top_k": {
-                "type": "integer",
-                "description": "返回的相关段落数量，默认 10",
-                "default": 10
-            }
-        },
-        "required": ["query"]
-    }
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示查询关键词"""
+        base = self.display_name
+        if tool_args:
+            query = tool_args.get("query", "")
+            if query:
+                return f"{base}「{query}」"
+        return base
 
     def __init__(self):
         self.retriever = self._init_retriever()

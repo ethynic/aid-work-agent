@@ -5,8 +5,9 @@
 
 import asyncio
 import inspect
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.tools.browser.browser_tool import _browser_sessions
@@ -14,6 +15,32 @@ from src.tools.browser.semantic import NaturalMatcher, RefMapper, InteractiveEle
 from src.tools.browser.tools_snapshot import get_ref_mapper
 from src.tools.browser.tools_path import get_path_tracker, record_browser_action
 from src.tools.browser.semantic import SemanticSnapshotGenerator
+
+
+class BrowserClickSemanticInput(BaseModel):
+    """点击元素参数"""
+    description: str = Field(..., description="要点击元素的自然语言描述")
+    ref: Optional[str] = Field(None, description="元素的 ref 引用（可选，直接指定 ref 可跳过匹配）")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    timeout: Optional[int] = Field(10000, description="超时时间（毫秒）")
+
+
+class BrowserFillSemanticInput(BaseModel):
+    """填写表单参数"""
+    field: str = Field(..., description="要填写的字段描述")
+    value: str = Field(..., description="要填写的值")
+    ref: Optional[str] = Field(None, description="元素的 ref 引用（可选，直接指定 ref 可跳过匹配）")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    timeout: Optional[int] = Field(10000, description="超时时间（毫秒）")
+
+
+class BrowserSelectSemanticInput(BaseModel):
+    """选择下拉选项参数"""
+    field: str = Field(..., description="下拉选择框的描述")
+    option: str = Field(..., description="要选择的选项")
+    ref: Optional[str] = Field(None, description="下拉框的 ref 引用（可选）")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    timeout: Optional[int] = Field(10000, description="超时时间（毫秒）")
 
 
 async def wait_for_page_stable(page, timeout: int = 5000):
@@ -116,30 +143,9 @@ class BrowserClickTool(BaseTool):
     - confidence: 匹配置信度
     - alternatives: 其他可能的匹配选项"""
 
+    display_name = "点击网页元素"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "description": {
-                "type": "string",
-                "description": "要点击元素的自然语言描述，如'登录按钮'、'报销申请'",
-            },
-            "ref": {
-                "type": "string",
-                "description": "元素的 ref 引用（可选，直接指定 ref 可跳过匹配）",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "timeout": {
-                "type": "integer",
-                "description": "超时时间(毫秒)，默认10000",
-                "default": 10000,
-            },
-        },
-        "required": ["description"],
-    }
+    InputModel = BrowserClickSemanticInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行点击操作
@@ -300,34 +306,9 @@ class BrowserFillTool(BaseTool):
     - label: 元素标签
     - confidence: 匹配置信度"""
 
+    display_name = "填写网页表单"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "field": {
-                "type": "string",
-                "description": "要填写的字段的自然语言描述，如'用户名'、'报销金额'",
-            },
-            "value": {
-                "type": "string",
-                "description": "要填写的值",
-            },
-            "ref": {
-                "type": "string",
-                "description": "元素的 ref 引用（可选，直接指定 ref 可跳过匹配）",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "timeout": {
-                "type": "integer",
-                "description": "超时时间(毫秒)，默认10000",
-                "default": 10000,
-            },
-        },
-        "required": ["field", "value"],
-    }
+    InputModel = BrowserFillSemanticInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行填写操作
@@ -508,34 +489,9 @@ class BrowserSelectTool(BaseTool):
     注意：需要先点击下拉框展开选项，然后再调用此工具选择。
     建议流程：browser_click(description="部门") -> browser_select(field="部门", option="技术研发部")"""
 
+    display_name = "选择下拉选项"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "field": {
-                "type": "string",
-                "description": "下拉选择框的描述，如'部门'、'报销类型'",
-            },
-            "option": {
-                "type": "string",
-                "description": "要选择的选项，如'技术研发部'、'差旅费'",
-            },
-            "ref": {
-                "type": "string",
-                "description": "下拉框的 ref 引用（可选）",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "timeout": {
-                "type": "integer",
-                "description": "超时时间(毫秒)，默认10000",
-                "default": 10000,
-            },
-        },
-        "required": ["field", "option"],
-    }
+    InputModel = BrowserSelectSemanticInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行选择操作

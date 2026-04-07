@@ -11,6 +11,7 @@ from urllib.parse import urlparse, unquote
 
 import httpx
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.config.settings import settings
@@ -307,30 +308,31 @@ def paddleocr_doc_parsing(
 # =============================================================================
 
 
+class PaddleOCRDocParsingInput(BaseModel):
+    """PaddleOCR文档解析参数"""
+    file_url: Optional[str] = Field(None, description="文档URL地址，支持PDF或图片")
+    file_path: Optional[str] = Field(None, description="本地文件路径")
+    file_type: Optional[int] = Field(None, description="文件类型：0=PDF，1=图片。不填则自动检测")
+
+
 class PaddleOCRDocParsingTool(BaseTool):
     """PaddleOCR文档解析工具"""
 
     name = "paddleocr_doc_parsing"
     description = "使用PaddleOCR解析PDF或图片文档，返回每页的markdown文本内容。支持文件路径或URL输入。"
+    display_name = "解析文档"
     category = "ocr"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "file_url": {
-                "type": "string",
-                "description": "文档URL地址，支持PDF或图片",
-            },
-            "file_path": {
-                "type": "string",
-                "description": "本地文件路径（可选）",
-            },
-            "file_type": {
-                "type": "integer",
-                "description": "文件类型：0=PDF，1=图片。不填则自动检测",
-            },
-        },
-        "required": [],
-    }
+    InputModel = PaddleOCRDocParsingInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示文件来源"""
+        if tool_args:
+            file_path = tool_args.get("file_path", "")
+            file_url = tool_args.get("file_url", "")
+            source = file_path if file_path else file_url
+            if source:
+                return f"解析文档「{source}」"
+        return self.display_name
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """

@@ -9,11 +9,29 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.tools.file.word_reader import WordReader, is_word_document
 from src.tools.file.excel_reader import ExcelReader, is_excel_document
 from src.tools.file.ppt_reader import PPTReader, is_ppt_document
+
+
+class FileReaderInput(BaseModel):
+    """读取文件参数"""
+    file_path: str = Field(..., description="要读取的文件路径，可以是绝对路径或相对路径")
+    encoding: Optional[str] = Field(None, description="文件编码（可选），如果不指定则自动检测")
+    start_line: Optional[int] = Field(None, description="起始行号（可选）")
+    end_line: Optional[int] = Field(None, description="结束行号（可选）")
+    max_size: Optional[int] = Field(None, description="最大读取字节数（可选），默认为10MB")
+
+
+class FileListInput(BaseModel):
+    """列出文件参数"""
+    directory: Optional[str] = Field(".", description="要列出的目录路径，默认为当前目录")
+    pattern: Optional[str] = Field("*", description="文件名匹配模式（可选），支持通配符")
+    recursive: Optional[bool] = Field(False, description="是否递归遍历子目录，默认False")
+    show_hidden: Optional[bool] = Field(False, description="是否显示隐藏文件，默认False")
 
 
 class FileReaderTool(BaseTool):
@@ -27,49 +45,21 @@ class FileReaderTool(BaseTool):
 4. PPT文档：读取.pptx文件，提取每页的标题、正文和表格内容，按页返回数据
 5. 支持行号范围读取，可指定start_line和end_line参数读取指定行
 6. 默认最大文件大小限制为10MB，可通过max_size参数调整"""
+    display_name = "读取文件"
     category = "file"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "file_path": {
-                "type": "string",
-                "description": "要读取的文件路径，可以是绝对路径或相对路径。支持.txt、.py、.md、.json、.csv、.docx、.xlsx等多种格式"
-            },
-            "encoding": {
-                "type": "string",
-                "description": "文件编码（可选，仅对文本文件有效），如果不指定则自动检测。常用编码：utf-8, gbk, gb2312, ascii等。对于.docx和.xlsx文件此参数无效"
-            },
-            "start_line": {
-                "type": "integer",
-                "description": "起始行号（可选），从第几行开始读取，默认为1"
-            },
-            "end_line": {
-                "type": "integer",
-                "description": "结束行号（可选），读到第几行，默认读取到文件末尾"
-            },
-            "max_size": {
-                "type": "integer",
-                "description": "最大读取字节数（可选），默认为10MB，防止读取超大文件"
-            }
-        },
-        "required": ["file_path"],
-        "examples": [
-            {
-                "file_path": "document.docx"
-            },
-            {
-                "file_path": "data.xlsx"
-            },
-            {
-                "file_path": "config.json"
-            },
-            {
-                "file_path": "data.txt",
-                "start_line": 1,
-                "end_line": 100
-            }
-        ]
-    }
+    InputModel = FileReaderInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示文件路径"""
+        base = self.display_name
+        if tool_args:
+            path = tool_args.get("file_path", "")
+            if path:
+                # 只显示文件名部分
+                import os as _os
+                filename = _os.path.basename(path)
+                return f"{base}「{filename}」"
+        return base
 
     def __init__(self):
         """初始化文件读取工具"""
@@ -528,29 +518,9 @@ class FileListTool(BaseTool):
 
     name = "file_list"
     description = "列出指定目录下的文件和子目录，支持过滤和递归遍历"
+    display_name = "列出文件"
     category = "file"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "directory": {
-                "type": "string",
-                "description": "要列出的目录路径，默认为当前目录"
-            },
-            "pattern": {
-                "type": "string",
-                "description": "文件名匹配模式（可选），支持通配符，如 *.py, *.txt 等"
-            },
-            "recursive": {
-                "type": "boolean",
-                "description": "是否递归遍历子目录，默认False"
-            },
-            "show_hidden": {
-                "type": "boolean",
-                "description": "是否显示隐藏文件（以.开头的文件），默认False"
-            }
-        },
-        "required": []
-    }
+    InputModel = FileListInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """

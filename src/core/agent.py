@@ -23,7 +23,6 @@ from enum import Enum
 from src.config.settings import settings
 from src.core.agent_logger import log_agent_iteration, log_skill_execute
 from src.llm.gateway import llm_gateway
-from src.tools.schemas import AGENT_TOOLS
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
@@ -284,6 +283,7 @@ class Agent:
             plan_manager=self.plan_manager,
             skill_registry=self.skill_registry,
             subagent_registry=getattr(self, 'subagent_registry', None),
+            tool_registry=self.tool_registry,
         )
         self._use_skill_tool = UseSkillTool(skill_registry=self.skill_registry)
         self._skill_execute_tool = SkillExecuteTool(
@@ -335,12 +335,14 @@ class Agent:
     
     def _get_tools(self) -> List[Dict[str, Any]]:
         """
-        Get tool definitions including skill tool and delegation tool
+        Get tool definitions from ToolRegistry + virtual tools + dynamic tools
 
+        Schema 来源：每个工具类通过 Pydantic InputModel 或 parameters_schema 定义。
         MASTER：包含委派工具
         SUBAGENT / STANDALONE：不包含委派工具
         """
-        tools = list(AGENT_TOOLS)
+        # 1. 从 ToolRegistry 获取所有已注册工具的 schema
+        tools = self.tool_registry.get_tool_definitions()
 
         # 添加技能工具
         if self.skill_registry:
@@ -359,6 +361,8 @@ class Agent:
         """
         将工具名称转换为用户友好的显示名称
 
+        优先从 ToolRegistry / 虚拟工具实例的 get_display_name() 获取。
+
         Args:
             tool_name: 原始工具名称
             tool_args: 工具参数
@@ -366,60 +370,32 @@ class Agent:
         Returns:
             用户友好的显示名称
         """
-        # 特殊工具的特殊显示
-        if tool_name == "web_search":
-            keyword = tool_args.get("keyword", "")
-            return f"网络搜索「{keyword[:20]}...」"
-        elif tool_name == "email_send":
-            to = tool_args.get("to", "")
-            return f"发送邮件至「{to}」"
-        elif tool_name == "email_read":
-            folder = tool_args.get("folder", "INBOX")
-            limit = tool_args.get("limit", 10)
-            return f"读取邮件（{folder}，{limit}封）"
-        elif tool_name == "content_generate":
-            content_type = tool_args.get("content_type", "")
-            return f"生成内容（{content_type}）"
-        elif tool_name == "browser_open":
-            url = tool_args.get("url", "")
-            return f"打开网页「{url[:30]}...」"
-        elif tool_name == "delegate_to_subagent":
-            subagent_name = tool_args.get("subagent_name", "")
-            return f"调用{subagent_name}子智能体"
-        elif tool_name == "skill_execute":
-            skill = tool_args.get("skill", "")
-            return f"执行技能「{skill}」"
-        elif tool_name == "use_skill":
+        # 1. 从 ToolRegistry 查找
+        tool = self.tool_registry.get_tool(tool_name)
+        if tool:
+            return tool.get_display_name(tool_args or {})
+
+        # 2. 虚拟工具查找
+        virtual_tool_map = {
+            "create_plan": self._create_plan_tool,
+            "clarify": self._clarify_tool,
+            "skill_execute": self._skill_execute_tool,
+            "skill_complete": self._skill_complete_tool,
+        }
+        vtool = virtual_tool_map.get(tool_name)
+        if vtool:
+            return vtool.get_display_name(tool_args or {})
+
+        # 3. 动态工具
+        if tool_name == "use_skill" and tool_args:
             skill = tool_args.get("skill", "")
             return f"加载技能「{skill}」"
-        elif tool_name == "file_read":
-            file_path = tool_args.get("file_path", "")
-            return f"读取文件「{file_path}」"
-        elif tool_name == "doc_summarize":
-            return "总结文档"
-        elif tool_name == "doc_translate":
-            target = tool_args.get("target_lang", "")
-            return f"翻译文档为{target}"
-        elif tool_name == "paddleocr_doc_parsing":
-            file_path = tool_args.get("file_path", "")
-            file_url = tool_args.get("file_url", "")
-            source = file_path if file_path else file_url
-            return f"解析文档「{source}」"
-        elif tool_name == "create_plan":
-            return "创建执行计划"
-        else:
-            # 通用工具显示
-            display_names = {
-                "email_list_folders": "获取邮件夹列表",
-                "browser_click": "点击网页元素",
-                "browser_fill": "填写网页表单",
-                "browser_get_content": "获取网页内容",
-                "browser_navigate": "网页导航",
-                "browser_close": "关闭浏览器",
-                "browser_screenshot": "网页截图",
-                "file_list": "列出文件",
-            }
-            return display_names.get(tool_name, tool_name)
+        if tool_name == "delegate_to_subagent" and tool_args:
+            subagent_name = tool_args.get("subagent_name", "")
+            return f"调用{subagent_name}子智能体"
+
+        # 4. Fallback
+        return tool_name
 
     def _build_base_system_prompt(
         self,
@@ -443,10 +419,7 @@ class Agent:
             include_delegation = False
         
         skill_descriptions = self.skill_registry.get_descriptions() if self.skill_registry else "(暂无可用技能)"
-        available_tools = [t["name"] for t in AGENT_TOOLS]
-        # use_skill 是动态添加的工具，不在 AGENT_TOOLS 中，需要手动加入列表
-        if self.skill_registry and self.skill_registry.list_skills():
-            available_tools.append("use_skill")
+        available_tools = [t["name"] for t in self._get_tools()]
         available_skills = self.skill_registry.list_skills() if self.skill_registry else []
         
         # 子智能体信息（仅主智能体使用）

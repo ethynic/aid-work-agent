@@ -342,40 +342,34 @@ class TestContentGenerateNewTypes(unittest.TestCase):
 
 
 class TestAgentSkillCompleteTool(unittest.TestCase):
-    """验证 skill_complete 工具在 AGENT_TOOLS 中正确定义"""
+    """验证 skill_complete 工具定义正确"""
 
-    def test_skill_complete_in_agent_tools(self):
-        """skill_complete 工具存在于 AGENT_TOOLS 列表中"""
-        from src.tools.schemas import AGENT_TOOLS
+    def test_skill_complete_tool_definition(self):
+        """skill_complete 工具定义正确"""
+        from src.tools.skill.skill_complete_tool import SkillCompleteTool
 
-        tool_names = [t["name"] for t in AGENT_TOOLS]
-        self.assertIn("skill_complete", tool_names)
-
-    def test_skill_complete_schema(self):
-        """skill_complete 工具的 schema 定义正确"""
-        from src.tools.schemas import AGENT_TOOLS
-
-        tool = next(t for t in AGENT_TOOLS if t["name"] == "skill_complete")
-        schema = tool["input_schema"]
+        tool = SkillCompleteTool()
+        self.assertEqual(tool.name, "skill_complete")
+        self.assertTrue(tool.display_name)
+        defn = tool.to_tool_definition()
+        self.assertEqual(defn["name"], "skill_complete")
+        schema = defn["input_schema"]
         required = schema.get("required", [])
         properties = schema.get("properties", {})
-
         self.assertIn("skill", required)
         self.assertIn("summary", required)
-        self.assertIn("skill", properties)
-        self.assertIn("summary", properties)
 
     def test_skill_execute_command_not_required(self):
         """skill_execute 的 command 不再是 required"""
-        from src.tools.schemas import AGENT_TOOLS
+        from src.tools.skill.skill_execute_tool import SkillExecuteTool
 
-        tool = next(t for t in AGENT_TOOLS if t["name"] == "skill_execute")
-        required = tool["input_schema"].get("required", [])
-
+        tool = SkillExecuteTool()
+        defn = tool.to_tool_definition()
+        required = defn["input_schema"].get("required", [])
         self.assertIn("skill", required)
         self.assertNotIn("command", required)
         # command 应该仍然在 properties 中
-        self.assertIn("command", tool["input_schema"]["properties"])
+        self.assertIn("command", defn["input_schema"]["properties"])
 
 
 if __name__ == "__main__":

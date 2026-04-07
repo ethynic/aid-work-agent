@@ -88,9 +88,14 @@ Key env vars: `LLM_PROVIDER` (qwen|zhipu), `QWEN_API_KEYS`, `ZHIPU_API_KEYS`, `D
 ## Extension Points
 
 ### Adding a New Tool
-1. Create tool class in `src/tools/<category>/`, inherit `BaseTool`, implement `async execute(args)`
-2. Add tool JSON Schema to `AGENT_TOOLS` list in `src/core/agent.py`
-3. Register the tool in `Agent._register_builtin_tools()`
+1. Create tool class in `src/tools/<category>/`, inherit `BaseTool`
+2. Define Pydantic `InputModel` for parameter validation (with Chinese Field descriptions)
+3. Set `name`, `description`, `display_name`, `InputModel` on the class
+4. Implement `async execute(self, **kwargs) -> Dict[str, Any]`
+5. Optionally override `get_display_name()` for dynamic display names
+6. Register in `Agent._register_builtin_tools()`
+
+**Schema 来源**：每个工具类通过 `InputModel`（Pydantic BaseModel）或 `parameters_schema` 定义参数 schema，`ToolRegistry.get_tool_definitions()` 自动收集。不再需要手动维护 `schemas.py`。
 
 ### Adding a New Skill
 Create directory `src/skills/<name>-<version>/` with a `SKILL.md` file (see existing skills for format). Auto-loaded on restart.

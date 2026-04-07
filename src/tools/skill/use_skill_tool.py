@@ -18,6 +18,7 @@ class UseSkillTool(BaseTool):
 
     name = "use_skill"
     description = "加载技能的操作指南"
+    display_name = "加载技能"
     category = "skill"
 
     def __init__(self, skill_registry):

@@ -14,9 +14,32 @@ from email.header import decode_header
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.models.user import UserEmail
+
+
+class EmailSendInput(BaseModel):
+    """发送邮件参数"""
+    to: str = Field(..., description="收件人邮箱地址，多个地址用逗号分隔")
+    subject: str = Field(..., description="邮件主题")
+    body: str = Field(..., description="邮件正文内容")
+    cc: Optional[str] = Field("", description="抄送人邮箱地址，多个地址用逗号分隔（可选）")
+
+
+class EmailReadInput(BaseModel):
+    """读取邮件参数"""
+    folder: Optional[str] = Field("INBOX", description="邮件文件夹，默认INBOX")
+    limit: Optional[int] = Field(10, description="收取邮件数量，默认10封")
+    unseen_only: Optional[bool] = Field(False, description="是否只收取未读邮件，默认False")
+    from_filter: Optional[str] = Field("", description="发件人过滤条件（可选）")
+    subject_filter: Optional[str] = Field("", description="主题过滤条件（可选）")
+
+
+class EmailListFoldersInput(BaseModel):
+    """获取邮件夹列表参数（无参数）"""
+    pass
 
 
 def decode_imap_folder_name(name: str) -> str:
@@ -72,29 +95,17 @@ class EmailSendTool(BaseTool):
 
     name = "email_send"
     description = "发送邮件给指定收件人"
+    display_name = "发送邮件"
     category = "email"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "to": {
-                "type": "string",
-                "description": "收件人邮箱地址，多个地址用逗号分隔",
-            },
-            "subject": {
-                "type": "string",
-                "description": "邮件主题",
-            },
-            "body": {
-                "type": "string",
-                "description": "邮件正文内容",
-            },
-            "cc": {
-                "type": "string",
-                "description": "抄送人邮箱地址，多个地址用逗号分隔（可选）",
-            },
-        },
-        "required": ["to", "subject", "body"],
-    }
+    InputModel = EmailSendInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示收件人"""
+        if tool_args:
+            to = tool_args.get("to", "")
+            if to:
+                return f"发送邮件至「{to}」"
+        return self.display_name
 
     def __init__(self, user_email: UserEmail):
         """
@@ -232,33 +243,17 @@ class EmailReadTool(BaseTool):
 
     name = "email_read"
     description = "收取用户邮箱中的邮件"
+    display_name = "读取邮件"
     category = "email"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "limit": {
-                "type": "integer",
-                "description": "收取邮件数量，默认10封",
-            },
-            "folder": {
-                "type": "string",
-                "description": "邮件文件夹，默认INBOX",
-            },
-            "unseen_only": {
-                "type": "boolean",
-                "description": "是否只收取未读邮件，默认False",
-            },
-            "from_filter": {
-                "type": "string",
-                "description": "发件人过滤条件（可选）",
-            },
-            "subject_filter": {
-                "type": "string",
-                "description": "主题过滤条件（可选）",
-            },
-        },
-        "required": [],
-    }
+    InputModel = EmailReadInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示文件夹和数量"""
+        if tool_args:
+            folder = tool_args.get("folder", "INBOX")
+            limit = tool_args.get("limit", 10)
+            return f"读取邮件（{folder}，{limit}封）"
+        return self.display_name
 
     def __init__(self, user_email: UserEmail):
         """
@@ -509,12 +504,9 @@ class EmailListFoldersTool(BaseTool):
 
     name = "email_list_folders"
     description = "列出邮箱中的所有文件夹及其邮件统计"
+    display_name = "获取邮件夹列表"
     category = "email"
-    parameters_schema = {
-        "type": "object",
-        "properties": {},
-        "required": [],
-    }
+    InputModel = EmailListFoldersInput
 
     def __init__(self, user_email: UserEmail):
         self.user_email = user_email

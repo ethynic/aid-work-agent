@@ -12,8 +12,19 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+
+
+class SkillExecuteInput(BaseModel):
+    """执行技能参数"""
+    skill: str = Field(..., description="技能名称")
+    command: Optional[str] = Field(None, description="要执行的命令（可选）")
+    files: Optional[Dict[str, str]] = Field(None, description="文件字典（文件名 -> base64 内容）")
+    session_id: Optional[str] = Field(None, description="会话ID")
+    user_id: Optional[str] = Field(None, description="用户ID（可选）")
+    workdir: Optional[str] = Field(None, description="工作目录（可选）")
 
 
 class SkillExecuteTool(BaseTool):
@@ -21,7 +32,9 @@ class SkillExecuteTool(BaseTool):
 
     name = "skill_execute"
     description = "在技能上下文中执行命令"
+    display_name = "执行技能"
     category = "skill"
+    InputModel = SkillExecuteInput
 
     def __init__(self, skill_executor, skill_registry):
         """

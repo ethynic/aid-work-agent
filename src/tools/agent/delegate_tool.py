@@ -19,6 +19,7 @@ class DelegateToSubagentTool(BaseTool):
 
     name = "delegate_to_subagent"
     description = "将任务委派给专业的子智能体执行"
+    display_name = "调用子智能体"
     category = "agent"
 
     def __init__(self, subagent_registry, subagent_executor):

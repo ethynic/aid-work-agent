@@ -4,12 +4,26 @@
 实现文档摘要和翻译功能
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.llm.gateway import llm_gateway
+
+
+class DocSummarizeInput(BaseModel):
+    """总结文档参数"""
+    content: str = Field(..., description="需要总结的文本内容")
+    length: Optional[str] = Field("medium", description="摘要长度：short（简短）、medium（中等）、long（详细）")
+
+
+class DocTranslateInput(BaseModel):
+    """翻译文档参数"""
+    text: str = Field(..., description="要翻译的文本")
+    target_lang: str = Field(..., description="目标语言（如：en表示英文，ja表示日文，ko表示韩文）")
+    source_lang: Optional[str] = Field(None, description="源语言（可选，默认自动检测）")
 
 
 class DocSummarizeTool(BaseTool):
@@ -17,21 +31,9 @@ class DocSummarizeTool(BaseTool):
 
     name = "doc_summarize"
     description = "对文本内容进行摘要总结"
+    display_name = "总结文档"
     category = "document"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "content": {
-                "type": "string",
-                "description": "需要总结的文本内容",
-            },
-            "length": {
-                "type": "string",
-                "description": "摘要长度：short（简短）、medium（中等）、long（详细）",
-            },
-        },
-        "required": ["content"],
-    }
+    InputModel = DocSummarizeInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -97,28 +99,21 @@ class DocSummarizeTool(BaseTool):
 
 class DocTranslateTool(BaseTool):
     """文档翻译工具"""
-    
+
     name = "doc_translate"
     description = "将文档内容翻译成指定语言"
+    display_name = "翻译文档"
     category = "document"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "document": {
-                "type": "string",
-                "description": "文档内容",
-            },
-            "target_language": {
-                "type": "string",
-                "description": "目标语言，如：英语、日语、法语等",
-            },
-            "source_language": {
-                "type": "string",
-                "description": "源语言（可选，默认自动检测）",
-            },
-        },
-        "required": ["document", "target_language"],
-    }
+    InputModel = DocTranslateInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示目标语言"""
+        base = self.display_name
+        if tool_args:
+            target_lang = tool_args.get("target_language") or tool_args.get("target_lang", "")
+            if target_lang:
+                return f"翻译文档为{target_lang}"
+        return base
     
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """

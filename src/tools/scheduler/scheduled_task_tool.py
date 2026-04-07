@@ -9,8 +9,24 @@
 from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+
+
+class CreateScheduledTaskInput(BaseModel):
+    """创建定时任务参数"""
+    name: str = Field(..., description="任务名称，简短描述（如：每日邮件检查）")
+    description: Optional[str] = Field("", description="任务的详细描述")
+    task_prompt: str = Field(..., description="独立可执行的提示词，不依赖对话上下文。应包含完整的任务指令、所有必要信息。")
+    schedule_type: str = Field(..., description="调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性")
+    time_config: Dict[str, Any] = Field(..., description="时间配置，必须从用户话语中解析，所有时间为北京时间")
+
+
+class ManageScheduledTaskInput(BaseModel):
+    """管理定时任务参数"""
+    action: str = Field(..., description="操作类型：list查看列表, pause暂停, resume恢复, cancel取消, view_logs查看执行日志")
+    task_id: Optional[str] = Field(None, description="任务ID（list 操作不需要）")
 
 
 def generate_cron_expression(schedule_type: str, time_config: dict) -> Optional[str]:
@@ -72,47 +88,9 @@ class CreateScheduledTaskTool(BaseTool):
         "【重要】必须从用户话语中解析出具体的调度时间。所有时间默认为北京时间(Asia/Shanghai)。"
         "如果用户没有给出具体时间，必须先向用户确认时间后再调用此工具，禁止自行猜测默认时间。"
     )
+    display_name = "创建定时任务"
     category = "scheduler"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": "string",
-                "description": "任务名称，简短描述（如：每日邮件检查）"
-            },
-            "description": {
-                "type": "string",
-                "description": "任务的详细描述"
-            },
-            "task_prompt": {
-                "type": "string",
-                "description": (
-                    "独立可执行的提示词，不依赖对话上下文。应包含完整的任务指令、所有必要信息。"
-                    "例如：'检查邮箱中未读邮件，如有未读邮件，汇总邮件列表并发送到 user@company.com'"
-                )
-            },
-            "schedule_type": {
-                "type": "string",
-                "enum": ["daily", "weekly", "monthly", "interval", "once"],
-                "description": "调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性"
-            },
-            "time_config": {
-                "type": "object",
-                "description": (
-                    "【必填】时间配置，必须从用户话语中解析，所有时间为北京时间。"
-                    "daily: {\"hour\": 14, \"minute\": 0} 表示每天14:00；"
-                    "weekly: {\"day_of_week\": \"mon\", \"hour\": 9, \"minute\": 0} 表示每周一09:00，"
-                    "day_of_week 取值: mon/tue/wed/thu/fri/sat/sun；"
-                    "monthly: {\"day\": 1, \"hour\": 9, \"minute\": 0} 表示每月1日09:00；"
-                    "interval: {\"interval_hours\": 2} 表示每2小时执行一次；"
-                    "once: {\"run_at\": \"2026-04-01 09:00:00\"} 表示一次性在指定时间执行。"
-                    "用户说'下午两点'对应 {\"hour\": 14, \"minute\": 0}，'上午九点半'对应 {\"hour\": 9, \"minute\": 30}。"
-                    "注意：不允许使用默认时间，必须明确解析用户意图。"
-                )
-            }
-        },
-        "required": ["name", "description", "task_prompt", "schedule_type", "time_config"]
-    }
+    InputModel = CreateScheduledTaskInput
 
     def __init__(self):
         """初始化工具，额外上下文（user, session_id, send_progress）通过 set_context 注入"""
@@ -248,22 +226,9 @@ class ManageScheduledTaskTool(BaseTool):
 
     name = "manage_scheduled_task"
     description = "管理用户的定时任务：查看列表、暂停、恢复、取消、查看执行日志。"
+    display_name = "管理定时任务"
     category = "scheduler"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["list", "pause", "resume", "cancel", "view_logs"],
-                "description": "操作类型：list查看列表, pause暂停, resume恢复, cancel取消, view_logs查看执行日志"
-            },
-            "task_id": {
-                "type": "string",
-                "description": "任务ID（list 操作不需要）"
-            }
-        },
-        "required": ["action"]
-    }
+    InputModel = ManageScheduledTaskInput
 
     def __init__(self):
         """初始化工具，额外上下文（user）通过 set_context 注入"""

@@ -10,9 +10,18 @@ import json
 from typing import Dict, Any, List, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
-from src.tools.schemas import AGENT_TOOLS
+
+
+class CreatePlanInput(BaseModel):
+    """创建执行计划参数"""
+    goal: str = Field(..., description="任务目标")
+    steps: List[Dict[str, Any]] = Field(..., description="步骤列表，每步包含 description、tool、parameters 等")
+    execution_mode: Optional[str] = Field("sequential", description="执行模式：sequential（顺序）、parallel（并行）")
+    session_id: Optional[str] = Field(None, description="会话ID")
+    user_query: Optional[str] = Field(None, description="用户原始查询")
 
 
 class CreatePlanTool(BaseTool):
@@ -20,18 +29,22 @@ class CreatePlanTool(BaseTool):
 
     name = "create_plan"
     description = "为复杂任务创建执行计划"
+    display_name = "创建执行计划"
     category = "plan"
+    InputModel = CreatePlanInput
 
-    def __init__(self, plan_manager, skill_registry, subagent_registry=None):
+    def __init__(self, plan_manager, skill_registry, subagent_registry=None, tool_registry=None):
         """
         Args:
             plan_manager: PlanManager 实例
             skill_registry: SkillRegistry 实例
             subagent_registry: SubagentRegistry 实例（可选，主智能体才有）
+            tool_registry: ToolRegistry 实例（可选，用于获取可用工具列表）
         """
         self.plan_manager = plan_manager
         self.skill_registry = skill_registry
         self.subagent_registry = subagent_registry
+        self.tool_registry = tool_registry
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -54,7 +67,11 @@ class CreatePlanTool(BaseTool):
         user_query = kwargs.get("user_query", goal)
 
         # 检查步骤是否使用了不可用的工具
-        available_tools = [t["name"] for t in AGENT_TOOLS]
+        if self.tool_registry:
+            available_tools = list(self.tool_registry.list_tools())
+        else:
+            # fallback: 从 _get_tools 生成
+            available_tools = []
         available_skills = self.skill_registry.list_skills() if self.skill_registry else []
         available_subagents = self.subagent_registry.list_subagents() if self.subagent_registry else []
 

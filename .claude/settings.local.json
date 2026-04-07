@@ -10,7 +10,8 @@
       "Bash(powershell -Command \"& ''C:\\\\repos\\\\aid-work-agent\\\\venv\\\\Scripts\\\\python.exe'' -c ''from src.core.agent import Agent; print\\(chr\\(65\\)+chr\\(103\\)+chr\\(101\\)+chr\\(110\\)+chr\\(116\\)+chr\\(32\\)+chr\\(79\\)+chr\\(75\\)\\)''\")",
       "Bash(powershell:*)",
       "Bash(findstr:*)",
-      "Bash(npm run build)"
+      "Bash(npm run build)",
+      "Bash(python3 -c ':*)"
     ]
   }
 }

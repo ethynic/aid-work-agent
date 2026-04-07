@@ -8,9 +8,44 @@ from typing import Any, Dict, Optional, List
 from pathlib import Path
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.config.settings import settings
+
+
+class BrowserOpenInput(BaseModel):
+    """打开网页参数"""
+    url: str = Field(..., description="要打开的网页URL，必须以http://或https://开头")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    headless: Optional[bool] = Field(None, description="是否无头模式运行")
+    wait_for: Optional[str] = Field("load", description="等待页面加载完成的策略，默认load")
+
+
+class BrowserGetContentInput(BaseModel):
+    """获取页面内容参数"""
+    selector: Optional[str] = Field(None, description="CSS选择器")
+    format: Optional[str] = Field("markdown", description="返回格式：text/html/markdown")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    clean_content: Optional[bool] = Field(True, description="是否清理内容，仅在format为markdown时有效，默认true")
+
+
+class BrowserNavigateInput(BaseModel):
+    """页面导航参数"""
+    action: str = Field(..., description="导航动作：back/forward/reload")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+
+
+class BrowserCloseInput(BaseModel):
+    """关闭浏览器参数"""
+    session_id: Optional[str] = Field(None, description="要关闭的会话ID")
+
+
+class BrowserScreenshotInput(BaseModel):
+    """网页截图参数"""
+    path: Optional[str] = Field("./screenshot.png", description="截图保存路径")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    full_page: Optional[bool] = Field(False, description="是否截取整个页面")
 
 
 class BrowserSession:
@@ -124,30 +159,20 @@ class BrowserOpenTool(BaseTool):
 
     name = "browser_open"
     description = "打开指定网址的网页，等待页面加载完成"
+    display_name = "打开网页"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-                "description": "要打开的网页URL，必须以http://或https://开头",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，用于管理多个会话，默认为'default'",
-            },
-            "headless": {
-                "type": "boolean",
-                "description": "是否无头模式运行，true为不显示浏览器窗口，false为显示窗口，默认false（从配置读取）",
-            },
-            "wait_for": {
-                "type": "string",
-                "enum": ["load", "domcontentloaded", "networkidle", "commit"],
-                "description": "等待页面加载完成的策略，默认load",
-            },
-        },
-        "required": ["url"],
-    }
+    InputModel = BrowserOpenInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示URL（截断过长URL）"""
+        base = self.display_name
+        if tool_args:
+            url = tool_args.get("url", "")
+            if url:
+                if len(url) > 30:
+                    return f"{base}「{url[:30]}...」"
+                return f"{base}「{url}」"
+        return base
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行打开网页操作
@@ -435,30 +460,9 @@ class BrowserGetContentTool(BaseTool):
 
     name = "browser_get_content"
     description = "获取网页的内容，支持多种格式输出（默认Markdown格式）。可获取整个页面或特定元素的内容，并返回最终URL"
+    display_name = "获取网页内容"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "selector": {
-                "type": "string",
-                "description": "CSS选择器，如果为空则获取整个页面的内容",
-            },
-            "format": {
-                "type": "string",
-                "enum": ["text", "html", "markdown"],
-                "description": "返回格式：markdown（默认）为Markdown格式，text为纯文本，html为HTML源码",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "clean_content": {
-                "type": "boolean",
-                "description": "是否清理内容（移除导航、广告等非正文内容），仅在format为markdown时有效，默认true",
-            },
-        },
-        "required": [],
-    }
+    InputModel = BrowserGetContentInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行获取内容操作
@@ -703,22 +707,9 @@ class BrowserNavigateTool(BaseTool):
 
     name = "browser_navigate"
     description = "在当前页面进行导航操作：前进、后退、刷新"
+    display_name = "网页导航"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["back", "forward", "reload"],
-                "description": "导航动作：back后退，forward前进，reload刷新",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-        },
-        "required": ["action"],
-    }
+    InputModel = BrowserNavigateInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行导航操作
@@ -798,17 +789,9 @@ class BrowserCloseTool(BaseTool):
 
     name = "browser_close"
     description = "关闭浏览器或特定会话"
+    display_name = "关闭浏览器"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "session_id": {
-                "type": "string",
-                "description": "要关闭的会话ID，如果为空则关闭所有会话",
-            },
-        },
-        "required": [],
-    }
+    InputModel = BrowserCloseInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行关闭操作
@@ -859,25 +842,9 @@ class BrowserScreenshotTool(BaseTool):
 
     name = "browser_screenshot"
     description = "对当前网页进行截图并保存"
+    display_name = "网页截图"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "截图保存路径，如 './screenshot.png'，默认为 './screenshot.png'",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "full_page": {
-                "type": "boolean",
-                "description": "是否截取整个页面，默认false只截取当前可视区域",
-            },
-        },
-        "required": [],
-    }
+    InputModel = BrowserScreenshotInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行截图操作

@@ -6,11 +6,20 @@
 import os
 import hashlib
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.db.remote_credential import RemoteCredentialDB
+
+
+class UploadToRemoteInput(BaseModel):
+    """上传文件到远程参数"""
+    file_path: str = Field(..., description="要上传的本地文件路径")
+    remote_path: str = Field(..., description="远程服务器路径")
+    connection_type: str = Field(..., description="连接类型: smb 或 ftp")
+    filename: Optional[str] = Field(None, description="上传后的文件名（可选，默认使用原文件名）")
 
 
 class SMBUploader:
@@ -215,30 +224,9 @@ class UploadToRemoteTool(BaseTool):
 
     name: str = "upload_to_remote"
     description: str = "将文件上传到 SMB 或 FTP 服务器。如果目标路径的凭据未配置，工具会返回凭据配置链接，用户完成配置后可继续上传。"
+    display_name: str = "上传文件到远程"
     category: str = "file"
-    parameters_schema: Dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "file_path": {
-                "type": "string",
-                "description": "要上传的本地文件路径（可以是绝对路径或上传目录下的文件名）"
-            },
-            "remote_path": {
-                "type": "string",
-                "description": "远程服务器路径，格式示例: /share/folder (SMB) 或 /var/www/uploads (FTP)"
-            },
-            "connection_type": {
-                "type": "string",
-                "enum": ["smb", "ftp"],
-                "description": "连接类型: smb 或 ftp"
-            },
-            "filename": {
-                "type": "string",
-                "description": "上传后的文件名（可选，默认使用原文件名）"
-            }
-        },
-        "required": ["file_path", "remote_path", "connection_type"]
-    }
+    InputModel = UploadToRemoteInput
 
     def __init__(self):
         super().__init__()

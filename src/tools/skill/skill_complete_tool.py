@@ -10,8 +10,16 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+
+
+class SkillCompleteInput(BaseModel):
+    """完成技能参数"""
+    skill: str = Field(..., description="技能名称")
+    summary: str = Field(..., description="结果摘要")
+    session_id: str = Field(..., description="会话ID")
 
 
 class SkillCompleteTool(BaseTool):
@@ -19,7 +27,9 @@ class SkillCompleteTool(BaseTool):
 
     name = "skill_complete"
     description = "标记当前技能执行完成"
+    display_name = "完成技能"
     category = "skill"
+    InputModel = SkillCompleteInput
 
     def __init__(self):
         """无外部依赖，通过 set_context 注入运行时状态"""

@@ -12,56 +12,42 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.config.settings import settings
 
 
+class WebSearchInput(BaseModel):
+    """网络搜索参数"""
+    keyword: str = Field(..., description="搜索关键词，必须与用户提问语言一致")
+    max_results: Optional[int] = Field(None, description="返回结果数量，默认5条（建议3-5条以保证质量）")
+    include_answer: Optional[bool] = Field(None, description="是否返回AI生成的答案摘要，默认true")
+    include_domains: Optional[List[str]] = Field(None, description="限定搜索的域名列表（如政府官网）")
+    exclude_domains: Optional[List[str]] = Field(None, description="排除的域名列表（如社交媒体）")
+    search_depth: Optional[str] = Field(None, description="搜索深度：basic快速返回，advanced深度抓取但耗时更长")
+    topic: Optional[str] = Field(None, description="搜索类型：general通用搜索，news新闻搜索（时效性强）")
+    limit: Optional[int] = Field(5, description="返回结果数量")
+
+
 class WebSearchTool(BaseTool):
     """网络搜索工具 - 基于 Tavily API"""
-    
+
     name = "web_search"
     description = "在网络上搜索实时信息，返回清洗后的内容和AI生成的答案摘要"
+    display_name = "网络搜索"
     category = "search"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "keyword": {
-                "type": "string",
-                "description": "搜索关键词或问题",
-            },
-            "max_results": {
-                "type": "integer",
-                "description": "返回结果数量，默认5条（建议3-5条以保证质量）",
-            },
-            "include_answer": {
-                "type": "boolean",
-                "description": "是否返回AI生成的答案摘要，默认true",
-            },
-            "include_domains": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "限定搜索的域名列表（如政府官网）",
-            },
-            "exclude_domains": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "排除的域名列表（如社交媒体）",
-            },
-            "search_depth": {
-                "type": "string",
-                "enum": ["basic", "advanced"],
-                "description": "搜索深度：basic快速返回，advanced深度抓取但耗时更长",
-            },
-            "topic": {
-                "type": "string",
-                "enum": ["general", "news"],
-                "description": "搜索类型：general通用搜索，news新闻搜索（时效性强）",
-            },
-        },
-        "required": ["keyword"],
-    }
-    
+    InputModel = WebSearchInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示搜索关键词"""
+        base = self.display_name
+        if tool_args:
+            keyword = tool_args.get("keyword", "")
+            if keyword:
+                return f"{base}「{keyword[:20]}...」" if len(keyword) > 20 else f"{base}「{keyword}」"
+        return base
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
         执行网络搜索

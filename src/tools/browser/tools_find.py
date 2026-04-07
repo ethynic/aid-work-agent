@@ -5,11 +5,27 @@
 
 from typing import Any, Dict, List, Optional
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.tools.browser.browser_tool import _browser_sessions
 from src.tools.browser.semantic import NaturalMatcher
 from src.tools.browser.tools_snapshot import get_ref_mapper
+
+
+class BrowserFindInput(BaseModel):
+    """查找元素参数"""
+    description: str = Field(..., description="元素的语义描述")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    scope: Optional[str] = Field("page", description="搜索范围：viewport当前视口，page整页")
+    type_filter: Optional[str] = Field("all", description="元素类型过滤：button按钮，input输入框，link链接，select下拉框，all全部")
+
+
+class BrowserFindAllInput(BaseModel):
+    """查找所有匹配元素参数"""
+    description: str = Field(..., description="元素的语义描述")
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    limit: Optional[int] = Field(10, description="返回元素数量限制，默认10")
 
 
 class BrowserFindTool(BaseTool):
@@ -35,33 +51,9 @@ class BrowserFindTool(BaseTool):
 
     注意：此工具只查找元素，不执行操作。需要配合 browser_click 等工具使用。"""
 
+    display_name = "查找网页元素"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "description": {
-                "type": "string",
-                "description": "元素的语义描述，如'登录按钮'、'报销金额输入框'、'财务管理菜单'",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "scope": {
-                "type": "string",
-                "enum": ["viewport", "page"],
-                "description": "搜索范围：viewport只在当前视口，page在整页搜索（默认page）",
-                "default": "page",
-            },
-            "type_filter": {
-                "type": "string",
-                "enum": ["button", "input", "link", "select", "all"],
-                "description": "元素类型过滤：button按钮，input输入框，link链接，select下拉框，all全部（默认all）",
-                "default": "all",
-            },
-        },
-        "required": ["description"],
-    }
+    InputModel = BrowserFindInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行查找操作
@@ -212,26 +204,9 @@ class BrowserFindAllTool(BaseTool):
 
     返回结果是一个元素列表。"""
 
+    display_name = "查找所有匹配元素"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "description": {
-                "type": "string",
-                "description": "元素的语义描述",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "返回元素数量限制，默认10",
-                "default": 10,
-            },
-        },
-        "required": ["description"],
-    }
+    InputModel = BrowserFindAllInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行查找操作

@@ -8,9 +8,22 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.tools.browser.browser_tool import _browser_sessions
+
+
+class BrowserGetPathInput(BaseModel):
+    """获取操作路径参数"""
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    format: Optional[str] = Field("text", description="输出格式：text文本格式，json为JSON格式")
+
+
+class BrowserBacktrackInput(BaseModel):
+    """回溯页面状态参数"""
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    steps: Optional[int] = Field(1, description="回溯的步数，默认为1")
 
 
 @dataclass
@@ -169,23 +182,9 @@ class BrowserGetPathTool(BaseTool):
 
     用于了解如何到达当前位置，或进行问题排查。"""
 
+    display_name = "获取操作路径"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "format": {
-                "type": "string",
-                "enum": ["text", "json"],
-                "description": "输出格式：text文本格式，json为JSON格式",
-                "default": "text",
-            },
-        },
-        "required": [],
-    }
+    InputModel = BrowserGetPathInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行获取路径操作
@@ -232,22 +231,9 @@ class BrowserBacktrackTool(BaseTool):
 
     返回需要重新访问的 URL 列表。"""
 
+    display_name = "回溯页面状态"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "steps": {
-                "type": "integer",
-                "description": "回溯的步数，默认为1",
-                "default": 1,
-            },
-        },
-        "required": [],
-    }
+    InputModel = BrowserBacktrackInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行回溯操作

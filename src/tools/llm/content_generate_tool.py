@@ -7,12 +7,20 @@
 - 生成市场分析报告等
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.llm.gateway import llm_gateway
+
+
+class ContentGenerateInput(BaseModel):
+    """生成内容参数"""
+    prompt: str = Field(..., description="生成内容的提示词，由智能体组织。提示词应包含：1)角色/身份 2)任务描述 3)输入信息 4)输出格式要求 5)语言要求等")
+    language: Optional[str] = Field("zh", description="生成内容的语言，如：zh、en、ru、de、ja、ko等")
+    content_type: Optional[str] = Field("", description="内容类型，用于选择合适的提示词模板。可选值：customer_list、email、market_report、outline、article、report、polish等")
 
 
 class ContentGenerateTool(BaseTool):
@@ -24,25 +32,18 @@ class ContentGenerateTool(BaseTool):
 
     name = "content_generate"
     description = "调用大模型生成内容，用于生成客户列表、撰写多语言邮件等。智能体需要提供详细的提示词来指导大模型生成所需内容。"
+    display_name = "生成内容"
     category = "llm"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "生成内容的提示词，由智能体组织。提示词应包含：1)角色/身份 2)任务描述 3)输入信息 4)输出格式要求 5)语言要求等"
-            },
-            "language": {
-                "type": "string",
-                "description": "生成内容的语言，如：zh（中文）、en（英语）、ru（俄语）、de（德语）、ja（日语）、ko（韩语）等"
-            },
-            "content_type": {
-                "type": "string",
-                "description": "内容类型，用于选择合适的提示词模板。可选值：customer_list（客户列表）、email（邮件）、market_report（市场报告）、outline（大纲）、article（文章）、report（报告）、polish（润色）等。也可以使用自定义类型名称。"
-            }
-        },
-        "required": ["prompt"]
-    }
+    InputModel = ContentGenerateInput
+
+    def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
+        """动态显示名，展示内容类型"""
+        base = self.display_name
+        if tool_args:
+            content_type = tool_args.get("content_type", "")
+            if content_type:
+                return f"{base}「{content_type}」"
+        return base
 
     def __init__(self):
         """初始化内容生成工具"""

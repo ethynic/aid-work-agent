@@ -5,11 +5,20 @@
 
 from typing import Any, Dict, Optional, List
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.tools.browser.browser_tool import _browser_sessions
 from src.tools.browser.semantic import SemanticSnapshotGenerator
 from src.tools.browser.tools_path import record_browser_action
+
+
+class BrowserSnapshotInput(BaseModel):
+    """获取页面快照参数"""
+    session_id: Optional[str] = Field("default", description="浏览器会话ID")
+    mode: Optional[str] = Field("interactive", description="快照模式：standard标准模式，interactive交互模式(仅显示可交互元素，推荐)，compact紧凑模式")
+    max_depth: Optional[int] = Field(30, description="DOM遍历最大深度，默认30")
+    include_hidden: Optional[bool] = Field(False, description="是否包含隐藏元素，默认false")
 
 
 class BrowserSnapshotTool(BaseTool):
@@ -33,33 +42,9 @@ class BrowserSnapshotTool(BaseTool):
     3. 分析快照中的 interactive_elements 和 submenu_snapshots
     4. 使用 browser_click/fill/select 等工具操作元素"""
 
+    display_name = "获取页面快照"
     category = "browser"
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "session_id": {
-                "type": "string",
-                "description": "浏览器会话ID，默认为'default'",
-            },
-            "mode": {
-                "type": "string",
-                "enum": ["standard", "interactive", "compact"],
-                "description": "快照模式：standard标准模式，interactive交互模式(仅显示可交互元素，推荐)，compact紧凑模式",
-                "default": "interactive",
-            },
-            "max_depth": {
-                "type": "integer",
-                "description": "DOM遍历最大深度，默认30",
-                "default": 30,
-            },
-            "include_hidden": {
-                "type": "boolean",
-                "description": "是否包含隐藏元素，默认false",
-                "default": False,
-            },
-        },
-        "required": [],
-    }
+    InputModel = BrowserSnapshotInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行获取语义快照操作
