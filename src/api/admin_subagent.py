@@ -79,15 +79,35 @@ def _require_admin(request: Request) -> Dict:
     return admin
 
 
+def _sanitize_error_info(error_msg: str) -> str:
+    """过滤错误信息中的敏感信息"""
+    if not error_msg:
+        return error_msg
+    import re
+    patterns = [
+        r'password["\s:=]+\S+',
+        r'passwd["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'access[_-]?key["\s:=]+\S+',
+        r'private[_-]?key["\s:=]+\S+',
+        r'auth[_-]?token["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
 def _error_response(error: str, debug: str, status_code: int = 500):
     """标准错误响应"""
-    from src.utils.error_utils import sanitize_error_info
     return JSONResponse(
         status_code=status_code,
         content={
             "success": False,
             "error": error,
-            "debug": sanitize_error_info(debug),
+            "debug": _sanitize_error_info(debug),
         },
     )
 
