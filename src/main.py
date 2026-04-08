@@ -170,11 +170,28 @@ async def lifespan(app: FastAPI):
         feishu_adapter = FeishuAdapter()
         channel_manager.register(feishu_adapter)
         logger.info("Feishu adapter initialized")
-    
+
+    # Initialize SaaS instance manager
+    if settings.saas.enabled:
+        try:
+            from src.saas.services.instance_manager import instance_manager
+            restored = instance_manager.restore_running_instances()
+            logger.info(f"SaaS instance manager initialized, restored {restored} instances")
+        except Exception as e:
+            logger.error(f"Failed to initialize SaaS instance manager: {e}", exc_info=True)
+
     yield
-    
+
     # On shutdown
     logger.info("Application shutting down")
+
+    # Cleanup SaaS instances
+    if settings.saas.enabled:
+        try:
+            from src.saas.services.instance_manager import instance_manager
+            instance_manager.cleanup()
+        except Exception:
+            pass
     try:
         from src.scheduler.manager import scheduled_task_manager
         scheduled_task_manager.shutdown()
@@ -277,8 +294,14 @@ async def chat(request: Request):
         if not session_id:
             session_id = f"web_{user_id}_{uuid.uuid4().hex[:8]}"
 
-        # 通过 AgentRouter 获取对应的 Agent 实例
-        agent = agent_router.get_agent(subagent_name, session_id)
+        # 通过租户实例管理器或默认路由获取 Agent
+        agent = None
+        instance_id = getattr(request.state, 'instance_id', None)
+        if instance_id and settings.saas.enabled:
+            from src.saas.services.instance_manager import instance_manager
+            agent = instance_manager.get_agent(instance_id, subagent_name, session_id)
+        if not agent:
+            agent = agent_router.get_agent(subagent_name, session_id)
 
         # Process message
         response_text = await agent.process_message_sync(
@@ -613,8 +636,14 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     full_message = request.message + file_context
     sse_manager.add_to_history(session_id, "user", full_message)
 
-    # 通过 AgentRouter 获取对应的 Agent 实例
-    agent = agent_router.get_agent(request.subagent, session_id)
+    # 通过租户实例管理器或默认路由获取 Agent
+    agent = None
+    _instance_id = getattr(http_request.state, 'instance_id', None) if settings.saas.enabled else None
+    if _instance_id:
+        from src.saas.services.instance_manager import instance_manager
+        agent = instance_manager.get_agent(_instance_id, request.subagent, session_id)
+    if not agent:
+        agent = agent_router.get_agent(request.subagent, session_id)
 
     async def event_generator():
         """SSE事件生成器"""
@@ -913,10 +942,11 @@ app.include_router(admin_subagent.router)
 
 # SaaS 多租户 API
 if settings.saas.enabled:
-    from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
+    from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
     app.include_router(tenant_auth.router)
     app.include_router(tenant_mgmt.router)
     app.include_router(subscriptions.router)
+    app.include_router(agent_instances.router)
 
 
 
