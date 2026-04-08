@@ -19,7 +19,13 @@
       "Bash(npm install:*)",
       "Bash(npx vue-tsc:*)",
       "Bash(npx vite:*)",
-      "Bash(ls -la uploads/file_*.docx)"
+      "Bash(ls -la uploads/file_*.docx)",
+      "Bash(PYTHONUTF8=1 python src/skills/excel-data-assistant/scripts/md_to_excel.py --input \"| Name | Age | Dept | |------|------|------| | Alice | 25 | Sales | | Bob | 30 | Tech | | Carol | 28 | Sales | | Dave | 35 | Marketing |\" --output-dir /tmp/excel_test --filename test.xlsx)",
+      "Bash(PYTHONUTF8=1 python c:/repos/aid-work-agent/src/skills/excel-data-assistant/scripts/md_to_excel.py --input /tmp/excel_test/test.md --output-dir /tmp/excel_test --filename test.xlsx)",
+      "Bash(PYTHONUTF8=1 python:*)",
+      "Bash(find \"c:\\\\repos\\\\aid-work-agent\\\\src\\\\skills\" -name \"SKILL.md\" -exec head -20 {} \\\\;)",
+      "WebSearch",
+      "Bash(ls:*)"
     ]
   }
 }
