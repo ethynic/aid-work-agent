@@ -212,6 +212,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add SaaS tenant context middleware (conditionally enabled)
+if settings.saas.enabled:
+    from src.saas.middleware import TenantContextMiddleware
+    app.add_middleware(TenantContextMiddleware)
+    logger.info("SaaS tenant context middleware enabled")
+
 
 # ==================== Health Check ====================
 

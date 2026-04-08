@@ -167,6 +167,14 @@ class AppConfig(BaseModel):
     port: int = 8000
 
 
+class SaasConfig(BaseModel):
+    """SaaS 多租户配置"""
+    enabled: bool = False
+    tenant_skills_dir: str = "storage/tenants"
+    default_max_instances: int = 5
+    default_max_users: int = 50
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -176,6 +184,7 @@ class Settings(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    saas: SaasConfig = Field(default_factory=SaasConfig)
 
     class Config:
         extra = "allow"

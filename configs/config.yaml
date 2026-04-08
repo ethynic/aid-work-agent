@@ -113,6 +113,13 @@ skills:
     default_allowed:
       - paddleocr-doc-parsing
 
+# SaaS 多租户配置
+saas:
+  enabled: false
+  tenant_skills_dir: "storage/tenants"
+  default_max_instances: 5
+  default_max_users: 50
+
 # 定时任务配置
 scheduler:
   enabled: true
