@@ -126,6 +126,10 @@ async def list_subagents(request: Request):
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
+        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
+
         items = registry.get_all_subagents_with_type()
         return {"success": True, "data": items}
 
@@ -145,6 +149,10 @@ async def get_subagent_detail(request: Request, agent_id: str):
         registry = master_agent.subagent_registry
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
+
+        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
 
         config = registry.get(agent_id)
         if not config:
@@ -184,6 +192,10 @@ async def get_subagent_content(request: Request, agent_id: str):
         registry = master_agent.subagent_registry
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
+
+        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
 
         content = registry.get_content(agent_id)
         if not content:
