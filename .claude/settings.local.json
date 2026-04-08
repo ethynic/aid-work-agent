@@ -17,7 +17,9 @@
       "Bash(grep -E \"\\\\.\\(cfg|ini|toml\\)$\")",
       "Bash(grep -r \"TODO\\\\|FIXME\\\\|XXX\" c:/repos/aid-work-agent/tests/*.py)",
       "Bash(npm install:*)",
-      "Bash(npx vue-tsc:*)"
+      "Bash(npx vue-tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(ls -la uploads/file_*.docx)"
     ]
   }
 }

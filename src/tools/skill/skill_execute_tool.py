@@ -21,7 +21,8 @@ class SkillExecuteInput(BaseModel):
     """执行技能参数"""
     skill: str = Field(..., description="技能名称")
     command: Optional[str] = Field(None, description="要执行的命令（可选）")
-    files: Optional[Dict[str, str]] = Field(None, description="文件字典（文件名 -> base64 内容）")
+    files: Optional[Dict[str, str]] = Field(None, description="文件字典（文件名 -> base64 内容，仅用于二进制文件）")
+    content: Optional[str] = Field(None, description="纯文本内容（如Markdown），将自动写入工作目录的 content.md 文件。创建Word文档时优先使用此参数传递Markdown内容，不要使用files参数做base64编码")
     session_id: Optional[str] = Field(None, description="会话ID")
     user_id: Optional[str] = Field(None, description="用户ID（可选）")
     workdir: Optional[str] = Field(None, description="工作目录（可选）")
@@ -132,13 +133,20 @@ class SkillExecuteTool(BaseTool):
                 except Exception as e:
                     logger.warning(f"Failed to decode file {filename}: {e}")
 
+        # 处理纯文本 content 参数：通过 stdin 直接传给子进程，不写中间文件
+        stdin_content = None
+        content_text = kwargs.get("content")
+        if content_text:
+            stdin_content = content_text.encode("utf-8")
+
         try:
             result = await self.skill_executor.execute_skill_command(
                 skill_name=skill_name,
                 command=processed_command,
                 files=decoded_files if decoded_files else None,
                 session_id=real_session_id,
-                user_id=real_user_id
+                user_id=real_user_id,
+                stdin_content=stdin_content,
             )
 
             # 构建 error 字段：优先使用 result.error，fallback 到 stderr

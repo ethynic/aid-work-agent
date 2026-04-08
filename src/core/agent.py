@@ -215,6 +215,7 @@ class Agent:
         )
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
         from src.tools.file.upload_to_remote import UploadToRemoteTool
+        from src.tools.file.register_download_tool import RegisterDownloadFileTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
 
         # 注册邮件工具（不传配置，运行时通过 user_id 从数据库读取）
@@ -244,6 +245,7 @@ class Agent:
         self.tool_registry.register(FileReaderTool())
         self.tool_registry.register(FileListTool())
         self.tool_registry.register(UploadToRemoteTool())
+        self.tool_registry.register(RegisterDownloadFileTool())
         
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
@@ -1469,7 +1471,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         try:
                             tool_args = json.loads(args_raw) if args_raw else {}
                         except json.JSONDecodeError:
-                            logger.warning(f"Failed to parse tool arguments: {args_raw}")
+                            logger.warning(f"Failed to parse tool arguments: {args_raw[:200]}...")
                             tool_args = {}
                     else:
                         tool_args = args_raw
@@ -1655,6 +1657,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     skill_name = tool_args.get("skill", "")
                     command = tool_args.get("command", "") or None  # 空字符串转为 None
                     files = tool_args.get("files", {})
+                    content = tool_args.get("content")
 
                     # 标记任务开始（如果计划中存在）
                     plan = self.plan_manager.get_plan(session_id)
@@ -1669,6 +1672,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         skill=skill_name,
                         command=command,
                         files=files,
+                        content=content,
                         session_id=session_id,
                         workdir=session_workspace
                     )
@@ -2130,6 +2134,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             try:
                                 tool_args = json.loads(args_raw) if args_raw else {}
                             except json.JSONDecodeError:
+                                logger.warning(f"[SUBAGENT] Failed to parse tool arguments: {args_raw[:200]}...")
                                 tool_args = {}
                         else:
                             tool_args = args_raw
@@ -2242,10 +2247,12 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         skill_name = tool_args.get("skill", "")
                         command = tool_args.get("command", "") or None  # 空字符串转为 None
                         files = tool_args.get("files", {})
+                        content = tool_args.get("content")
                         skill_exec_result = await self._skill_execute_tool.execute(
                             skill=skill_name,
                             command=command,
                             files=files,
+                            content=content,
                             session_id=self.session_id,
                         )
                         tool_result = skill_exec_result

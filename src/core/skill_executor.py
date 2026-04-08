@@ -333,35 +333,38 @@ Follow the instructions in the skill above to complete the user's task."""
         command: str,
         workdir: Path,
         timeout: int = 300,
+        stdin_content: Optional[bytes] = None,
     ) -> ExecutionResult:
         """
         执行命令
-        
+
         Args:
             command: 要执行的命令
             workdir: 工作目录
             timeout: 超时时间（秒）
-            
+            stdin_content: 通过 stdin 传递给子进程的内容（bytes）
+
         Returns:
             执行结果
         """
         start_time = time.time()
-        
+
         try:
             # 获取当前进程的环境变量，确保子进程继承所有环境变量（包括 .env 加载的）
             env = os.environ.copy()
-            
+
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.PIPE if stdin_content else None,
                 cwd=str(workdir),
                 env=env,  # 显式传递环境变量
             )
-            
+
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                    process.communicate(input=stdin_content),
                     timeout=timeout
                 )
                 duration = time.time() - start_time
@@ -407,10 +410,11 @@ Follow the instructions in the skill above to complete the user's task."""
         variables: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        stdin_content: Optional[bytes] = None,
     ) -> ExecutionResult:
         """
         执行Skill命令
-        
+
         Args:
             skill_name: Skill名称
             command: 要执行的命令
@@ -418,7 +422,8 @@ Follow the instructions in the skill above to complete the user's task."""
             variables: 变量字典
             session_id: 会话ID
             user_id: 用户ID
-            
+            stdin_content: 通过 stdin 传递给子进程的内容
+
         Returns:
             执行结果
         """
@@ -481,7 +486,8 @@ Follow the instructions in the skill above to complete the user's task."""
             result = await self._execute_command(
                 processed_command,
                 context.workdir,
-                timeout=300  # 默认5分钟超时
+                timeout=300,  # 默认5分钟超时
+                stdin_content=stdin_content,
             )
             
             return result
