@@ -9,7 +9,8 @@
     "parse_contract_pdf.py"
   ],
   "dependencies": [
-    "httpx"
+    "httpx",
+    "PyMuPDF"
   ],
   "metadata": {
     "openclaw": {

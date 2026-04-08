@@ -98,12 +98,17 @@ def _make_result(success: bool, data: Any = None, error: str = "", debug: str = 
 
 
 # =============================================================================
-# EAS API 调用
+# EAS API 调用日志（模块级，verify 流程收集后写入报告）
 # =============================================================================
+
+_eas_api_logs: list = []
 
 def _call_eas_api(params: Dict[str, str], timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
     """
     调用 EAS 合同归档 API
+
+    每次调用会自动将入参和响应记录到 _eas_api_logs 中，
+    供 verify_and_archive_contract 保存到审核报告。
 
     Args:
         params: API 参数字典
@@ -112,19 +117,31 @@ def _call_eas_api(params: Dict[str, str], timeout: int = DEFAULT_TIMEOUT) -> Dic
     Returns:
         API 返回的 JSON 数据
     """
+    from datetime import datetime
+
+    log_entry: Dict[str, Any] = {
+        "url": EAS_API_URL,
+        "params": {k: v for k, v in params.items()},
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
     try:
         with httpx.Client(timeout=timeout, verify=False) as client:
             resp = client.post(EAS_API_URL, data=params)
             resp.raise_for_status()
-            return resp.json()
-    except httpx.TimeoutException:
-        raise RuntimeError(f"EAS API 请求超时（{timeout}秒）")
-    except httpx.HTTPStatusError as e:
-        raise RuntimeError(f"EAS API HTTP 错误: {e.response.status_code} - {e.response.text[:200]}")
-    except httpx.RequestError as e:
-        raise RuntimeError(f"EAS API 网络错误: {sanitize_error_info(str(e))}")
-    except json.JSONDecodeError:
-        raise RuntimeError("EAS API 返回了无效的 JSON 响应")
+            result = resp.json()
+
+        log_entry["response"] = result
+        _eas_api_logs.append(log_entry)
+        return result
+    except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as e:
+        log_entry["error"] = sanitize_error_info(str(e))
+        _eas_api_logs.append(log_entry)
+        raise
+    except RuntimeError:
+        log_entry["error"] = "RuntimeError"
+        _eas_api_logs.append(log_entry)
+        raise
 
 
 def query_contract(contract_code: str) -> Dict[str, Any]:
@@ -301,13 +318,14 @@ def _extract_contract_fields(data: Any) -> Dict[str, Any]:
         item.get("seller") or item.get("supplyUnit") or ""
     )
 
-    amount = (
-        item.get("ofTax") or
-        item.get("amount") or item.get("contractAmount") or
-        item.get("contract_amount") or item.get("totalAmount") or
-        item.get("total_amount") or item.get("money") or
-        item.get("合同金额") or ""
-    )
+    # 金额字段：0 和 0.0 也是合法值，不能用 or 链（Python 中 0.0 is falsy）
+    amount = ""
+    for _key in ("ofTax", "amount", "contractAmount", "contract_amount",
+                 "totalAmount", "total_amount", "money", "合同金额"):
+        _val = item.get(_key)
+        if _val is not None and _val != "":
+            amount = _val
+            break
 
     contract_name = (
         item.get("contractName") or item.get("contract_name") or
@@ -536,6 +554,106 @@ def compare_contract(contract_code: str, ocr_data: Dict[str, Any]) -> Dict[str, 
 # 一键合同归档验证
 # =============================================================================
 
+def _save_verify_report(result: Dict[str, Any], file_path: str, contract_code: str) -> str:
+    """
+    将审核报告保存到 JSON 文件。
+
+    文件保存在与原始 PDF 相同的目录下，命名为 {合同编号}_verify_report.json。
+    无论审核成功或失败都会保存，记录已获取的数据和不通过原因。
+
+    Args:
+        result: verify_and_archive_contract 的返回值
+        file_path: 原始 PDF 文件路径
+        contract_code: 合同编号
+
+    Returns:
+        保存的报告文件路径
+    """
+    from datetime import datetime
+
+    try:
+        now = datetime.now()
+        status = "成功" if result.get("result") == "yes" else "失败"
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        report_filename = f"{contract_code}_{timestamp}_{status}.json"
+        pdf_dir = os.path.dirname(os.path.abspath(file_path))
+        report_path = os.path.join(pdf_dir, report_filename)
+
+        report = {
+            "contract_code": contract_code,
+            "source_file": os.path.basename(file_path),
+            "verify_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "result": result.get("result"),
+            "message": result.get("message", ""),
+        }
+
+        details = result.get("details", {})
+
+        # 记录 OCR 解析获取到的数据
+        llm = details.get("llm_analysis", {})
+        if llm:
+            report["ocr_data"] = {
+                "is_contract": llm.get("is_contract"),
+                "is_approval_form_first_page": llm.get("is_approval_form_first_page"),
+                "contract_name": llm.get("contract_name", ""),
+                "contract_code_from_ocr": llm.get("contract_code", ""),
+                "party_a": llm.get("party_a", ""),
+                "party_b": llm.get("party_b", ""),
+                "total_amount": llm.get("total_amount", ""),
+                "has_party_a_stamp": llm.get("has_party_a_stamp"),
+                "has_party_b_stamp": llm.get("has_party_b_stamp"),
+            }
+
+        # 记录骑缝章和页数
+        report["basic_checks"] = {
+            "total_pages": details.get("total_pages", 0),
+            "has_riding_seal": details.get("has_riding_seal"),
+            "is_contract": details.get("is_contract"),
+            "has_approval_form": details.get("has_approval_form"),
+            "has_party_a_stamp": details.get("has_party_a_stamp"),
+            "has_party_b_stamp": details.get("has_party_b_stamp"),
+        }
+
+        # 记录 EAS 比对数据（不论成功失败）
+        comparison = details.get("comparison")
+        if comparison:
+            report["eas_comparison"] = {
+                "result": comparison.get("result"),
+                "message": comparison.get("message", ""),
+                "details": comparison.get("details"),
+            }
+
+        # 记录上传结果
+        upload = details.get("upload")
+        if upload:
+            report["upload"] = {
+                "success": upload.get("success"),
+                "error": upload.get("error", ""),
+            }
+            if upload.get("success") and upload.get("data"):
+                report["upload"]["shared_path"] = upload["data"].get("shared_path", "")
+
+        # 完整 details 作为 debug 信息（可选）
+        if result.get("result") == "no":
+            report["full_details"] = details
+
+        # 记录所有 EAS API 调用的入参和响应
+        if _eas_api_logs:
+            report["eas_api_logs"] = list(_eas_api_logs)
+
+        os.makedirs(pdf_dir, exist_ok=True)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+
+        # 将报告路径附加到 result 中
+        result["report_file"] = report_path
+        logger.info(f"后端日志：审核报告已保存: {report_path}")
+        return report_path
+
+    except Exception as e:
+        logger.warning(f"后端日志：保存审核报告失败: {e}")
+        return ""
+
 def verify_and_archive_contract(
     file_path: str,
     contract_code: str,
@@ -550,6 +668,8 @@ def verify_and_archive_contract(
     3. 通过EAS API比对甲方、乙方、金额
     4. 比对一致则上传附件到EAS
 
+    无论成功或失败，都会将审核报告保存到与 PDF 同目录的 JSON 文件中。
+
     Args:
         file_path: 合同PDF文件路径
         contract_code: EAS合同编号
@@ -559,23 +679,30 @@ def verify_and_archive_contract(
         {
             "result": "yes" | "no",
             "message": "...",
-            "details": {...}
+            "details": {...},
+            "report_file": "保存的报告文件路径"
         }
     """
     from parse_contract_pdf import parse_contract_pdf
 
     details: Dict[str, Any] = {"contract_code": contract_code, "file_path": file_path}
 
+    # 清空 EAS API 调用日志，开始收集本次审核的所有调用
+    global _eas_api_logs
+    _eas_api_logs = []
+
     # ------------------------------------------------------------------
     # 步骤 1：解析合同 PDF
     # ------------------------------------------------------------------
     parse_result = parse_contract_pdf(file_path, debug=debug)
     if not parse_result.get("success"):
-        return {
+        result = {
             "result": "no",
             "message": f"合同PDF解析失败: {parse_result.get('error', '未知错误')}",
             "details": details,
         }
+        _save_verify_report(result, file_path, contract_code)
+        return result
 
     data = parse_result["data"]
     llm = data.get("llm_analysis", {})
@@ -602,10 +729,8 @@ def verify_and_archive_contract(
     else:
         details["has_approval_form"] = True
 
-    # 2c. 是否有骑缝章（全局汇总）
-    if not data.get("has_riding_seal"):
-        check_failures.append("未检测到骑缝章")
-        details["has_riding_seal"] = False
+    # 2c. 是否有骑缝章（全局汇总）— 仅记录，不作为不通过条件
+    details["has_riding_seal"] = data.get("has_riding_seal", False)
 
     # 2d. 是否有甲乙双方盖章
     if not llm.get("has_party_a_stamp"):
@@ -621,11 +746,13 @@ def verify_and_archive_contract(
         details["has_party_b_stamp"] = True
 
     if check_failures:
-        return {
+        result = {
             "result": "no",
             "message": "合同基础校验不通过: " + "; ".join(check_failures),
             "details": details,
         }
+        _save_verify_report(result, file_path, contract_code)
+        return result
 
     # ------------------------------------------------------------------
     # 步骤 3：与 EAS 系统数据比对
@@ -639,11 +766,13 @@ def verify_and_archive_contract(
     details["comparison"] = comparison
 
     if comparison.get("result") != "yes":
-        return {
+        result = {
             "result": "no",
             "message": f"合同与EAS系统数据不一致: {comparison.get('message', '')}",
             "details": details,
         }
+        _save_verify_report(result, file_path, contract_code)
+        return result
 
     # ------------------------------------------------------------------
     # 步骤 4：比对一致 → 上传附件
@@ -656,17 +785,21 @@ def verify_and_archive_contract(
     details["upload"] = upload_result
 
     if not upload_result.get("success"):
-        return {
+        result = {
             "result": "no",
             "message": f"附件上传失败: {upload_result.get('error', '未知错误')}",
             "details": details,
         }
+        _save_verify_report(result, file_path, contract_code)
+        return result
 
-    return {
+    result = {
         "result": "yes",
         "message": "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过OA审批流程完成审批。",
         "details": details,
     }
+    _save_verify_report(result, file_path, contract_code)
+    return result
 
 
 def _normalize_text(text: str) -> str:

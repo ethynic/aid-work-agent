@@ -20,10 +20,16 @@ import json
 import logging
 import os
 import re
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, unquote
 
 import httpx
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
 
 # 自动加载项目根目录 .env 文件中的环境变量，手动运行脚本时无需手动 export
 try:
@@ -71,6 +77,60 @@ def _load_file_as_base64(file_path: str) -> str:
         raise FileNotFoundError(f"文件不存在: {file_path}")
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("ascii")
+
+
+def _maybe_split_large_pdf(file_path: str, max_size_mb: int = 100, max_pages: int = 50) -> str:
+    """
+    如果 PDF 文件超过指定大小，提取前 max_pages 页到临时文件。
+
+    Args:
+        file_path: 原始 PDF 文件路径
+        max_size_mb: 触发拆分的文件大小阈值（MB），默认 100MB
+        max_pages: 提取的最大页数，默认 50 页
+
+    Returns:
+        如果文件较小，返回原始路径；如果文件较大，返回只包含前 max_pages 页的临时文件路径。
+        调用方负责在使用完毕后删除临时文件。
+    """
+    file_size = os.path.getsize(file_path)
+    threshold = max_size_mb * 1024 * 1024
+
+    if file_size <= threshold:
+        return file_path
+
+    if fitz is None:
+        logger.warning("后端日志：PyMuPDF 未安装，无法拆分大PDF，将使用原始文件")
+        return file_path
+
+    try:
+        doc = fitz.open(file_path)
+        total_pages = doc.page_count
+
+        if total_pages <= max_pages:
+            doc.close()
+            logger.info(f"后端日志：PDF 文件较大 ({file_size / 1024 / 1024:.1f}MB) 但页数 ({total_pages}) 未超过 {max_pages}，无需拆分")
+            return file_path
+
+        # 创建只包含前 max_pages 页的新 PDF
+        new_doc = fitz.open()
+        new_doc.insert_pdf(doc, from_page=0, to_page=max_pages - 1)
+        doc.close()
+
+        # 保存到临时文件
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix="_split_pages.pdf")
+        os.close(tmp_fd)
+        new_doc.save(tmp_path)
+        new_doc.close()
+
+        logger.info(
+            f"后端日志：大型 PDF ({file_size / 1024 / 1024:.1f}MB, {total_pages} 页) "
+            f"→ 提取前 {max_pages} 页到临时文件 ({os.path.getsize(tmp_path) / 1024 / 1024:.1f}MB)"
+        )
+        return tmp_path
+
+    except Exception as e:
+        logger.warning(f"后端日志：PDF 拆分失败，将使用原始文件: {e}")
+        return file_path
 
 
 def _call_paddleocr(file_base64: str, file_type: int = 0) -> Dict[str, Any]:
@@ -475,13 +535,24 @@ def parse_contract_pdf(file_path: str, debug: bool = False) -> Dict[str, Any]:
     if not file_path or not os.path.isfile(file_path):
         return {"success": False, "error": f"文件不存在: {file_path}"}
 
+    # 大文件处理：>100MB 时只取前50页
+    actual_file_path = _maybe_split_large_pdf(file_path)
+    is_split = actual_file_path != file_path
+
     # 1. 调用 PaddleOCR 解析
     try:
-        file_b64 = _load_file_as_base64(file_path)
+        file_b64 = _load_file_as_base64(actual_file_path)
         ocr_result = _call_paddleocr(file_b64, file_type=0)
     except (FileNotFoundError, RuntimeError) as e:
         logger.error(f"后端日志：OCR解析失败: {e}", exc_info=True)
         return {"success": False, "error": "OCR解析失败", "debug": sanitize_error_info(str(e))}
+    finally:
+        # 清理临时文件
+        if is_split and os.path.isfile(actual_file_path):
+            try:
+                os.unlink(actual_file_path)
+            except OSError:
+                pass
 
     # 2. 提取页面结果
     try:
