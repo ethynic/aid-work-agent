@@ -911,6 +911,12 @@ app.include_router(email_settings.router)
 app.include_router(knowledge_router)
 app.include_router(admin_subagent.router)
 
+# SaaS 多租户 API
+if settings.saas.enabled:
+    from src.saas.api import tenant_auth, tenant_mgmt
+    app.include_router(tenant_auth.router)
+    app.include_router(tenant_mgmt.router)
+
 
 
 # ==================== CLI Interface ====================
