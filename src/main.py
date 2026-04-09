@@ -943,10 +943,14 @@ app.include_router(admin_subagent.router)
 # SaaS 多租户 API
 if settings.saas.enabled:
     from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
+    from src.saas.api import channel_config, tenant_skills, channel_routes
     app.include_router(tenant_auth.router)
     app.include_router(tenant_mgmt.router)
     app.include_router(subscriptions.router)
     app.include_router(agent_instances.router)
+    app.include_router(channel_config.router)
+    app.include_router(tenant_skills.router)
+    app.include_router(channel_routes.router)
 
 
 
