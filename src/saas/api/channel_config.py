@@ -26,6 +26,30 @@ class ChannelConfigUpdateRequest(BaseModel):
     config: dict = Field(..., description="渠道凭证配置")
 
 
+# 各渠道类型必填字段
+_REQUIRED_FIELDS = {
+    "wecom": {
+        "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
+        "agent_id": "应用AgentId（在应用详情页获取）",
+        "secret": "应用Secret（在应用详情页获取）",
+        "token": "回调Token（设置API接收时配置）",
+        "encoding_aes_key": "回调EncodingAESKey（设置API接收时配置，43字符Base64）",
+    },
+    "dingtalk": {
+        "app_key": "应用AppKey",
+        "app_secret": "应用AppSecret",
+        "token": "回调Token",
+        "encoding_aes_key": "回调EncodingAESKey",
+    },
+    "feishu": {
+        "app_id": "应用App ID",
+        "app_secret": "应用App Secret",
+        "verification_token": "验证Token",
+        "encrypt_key": "加密密钥",
+    },
+}
+
+
 @router.get("")
 async def list_channels(request: Request):
     """列出当前租户的渠道配置"""
@@ -41,6 +65,15 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
 
     if body.channel_type not in ("wecom", "dingtalk", "feishu"):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
+
+    # 验证必填字段
+    required = _REQUIRED_FIELDS.get(body.channel_type, {})
+    missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"缺少必填字段: {', '.join(missing)}",
+        )
 
     config = ChannelConfigDB.create(
         tenant_id=admin["tenant_id"],

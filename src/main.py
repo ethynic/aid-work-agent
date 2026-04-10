@@ -199,6 +199,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # 关闭渠道适配器的 HTTP 连接池
+    if wecom_adapter:
+        try:
+            await wecom_adapter.close()
+        except Exception as e:
+            logger.error(f"关闭 WeCom 适配器失败: {e}")
+
 
 # ============== File Upload Configuration ==============
 import shutil

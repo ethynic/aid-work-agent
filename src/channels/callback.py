@@ -1,23 +1,33 @@
 """
 渠道回调路由
 
-处理来自各第三方平台的回调消息
+处理来自各第三方平台的回调消息，包括:
+- 企业微信: 加解密 + 异步后台处理
+- 钉钉: 消息回调
+- 飞书: 消息回调
 """
 
-import json
+import asyncio
+import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request, Query
 from fastapi.responses import PlainTextResponse, JSONResponse
 from loguru import logger
 
+from src.channels.idempotency import MessageDeduplicator
 from src.channels.manager import channel_manager
 from src.channels.session import channel_session_manager
 from src.core.agent import master_agent
 from src.core.agent_router import agent_router
 from src.models.message import UnifiedResponse
+from src.config.settings import settings
 
 router = APIRouter(tags=["渠道回调"])
+
+# 消息去重器（WeCom 回调重试保护）
+_wecom_dedup = MessageDeduplicator(ttl_seconds=300)
 
 
 async def process_channel_message(
@@ -37,7 +47,10 @@ async def process_channel_message(
         响应文本
     """
     try:
-        logger.info(f"Received {channel_type} message: {message.user_id}, content: {message.text[:100] if message.text else 'N/A'}...")
+        logger.info(
+            f"Received {channel_type} message: {message.user_id}, "
+            f"content: {message.text[:100] if message.text else 'N/A'}..."
+        )
 
         # 获取或创建会话
         adapter = channel_manager.get_adapter(channel_type)
@@ -114,24 +127,15 @@ async def process_channel_message(
 async def feishu_callback_get(
     challenge: str = Query(None, description="验证挑战"),
 ):
-    """
-    飞书回调验证endpoint
-
-    飞书在配置回调URL时会发送GET请求进行验证
-    """
+    """飞书回调验证 endpoint"""
     if challenge:
-        # 飞书URL验证
         return {"challenge": challenge}
     return {"status": "ok"}
 
 
 @router.post("/feishu/callback")
 async def feishu_callback_post(request: Request):
-    """
-    飞书消息回调endpoint
-
-    接收飞书推送的消息
-    """
+    """飞书消息回调 endpoint"""
     try:
         body = await request.json()
         logger.debug(f"Feishu callback body: {body}")
@@ -140,10 +144,8 @@ async def feishu_callback_post(request: Request):
         if not adapter:
             return JSONResponse({"code": 1, "msg": "Feishu adapter not configured"}, status_code=500)
 
-        # 解析消息
         message = await adapter.parse_message(body)
 
-        # 忽略非文本消息事件
         if message.message_type == "event":
             return JSONResponse({"code": 0, "msg": "ok"})
 
@@ -165,31 +167,21 @@ async def dingtalk_callback_get(
     nonce: str = Query(...),
     echostr: str = Query(...),
 ):
-    """
-    钉钉回调验证endpoint
-
-    钉钉在配置回调URL时会发送GET请求进行验证
-    """
+    """钉钉回调验证 endpoint"""
     adapter = channel_manager.get_adapter("dingtalk")
     if not adapter:
         return PlainTextResponse("Dingtalk adapter not configured", status_code=500)
 
-    # 验证签名
     if not await adapter.verify_signature(signature, timestamp, nonce, echostr):
         logger.warning("Dingtalk signature verification failed")
         return PlainTextResponse("Invalid signature", status_code=403)
 
-    # 返回解密后的echostr
     return PlainTextResponse(echostr)
 
 
 @router.post("/dingtalk/callback")
 async def dingtalk_callback_post(request: Request):
-    """
-    钉钉消息回调endpoint
-
-    接收钉钉推送的消息
-    """
+    """钉钉消息回调 endpoint"""
     try:
         body = await request.body()
         body_str = body.decode()
@@ -198,7 +190,6 @@ async def dingtalk_callback_post(request: Request):
         if not adapter:
             return PlainTextResponse("Dingtalk adapter not configured", status_code=500)
 
-        # 解析消息（钉钉使用XML格式）
         import xml.etree.ElementTree as ET
         root = ET.fromstring(body_str)
 
@@ -206,11 +197,9 @@ async def dingtalk_callback_post(request: Request):
         from_user = root.findtext("FromUserName", "")
         content = root.findtext("Content", "")
 
-        # 事件消息不回复
         if msg_type == "event":
             return PlainTextResponse("success")
 
-        # 创建统一消息
         from src.models.message import UnifiedMessage, MessageType, ChannelType
         from datetime import datetime
 
@@ -242,23 +231,50 @@ async def wecom_callback_get(
     echostr: str = Query(...),
 ):
     """
-    企业微信回调验证endpoint
+    企业微信回调验证 endpoint
+
+    WeCom 配置回调 URL 时发送 GET 请求验证。
+    当开启了消息加密时，需要:
+    1. 验证签名: SHA1(sort([token, timestamp, nonce, echostr]))
+    2. 解密 echostr
+    3. 返回解密后的明文
     """
     adapter = channel_manager.get_adapter("wecom")
     if not adapter:
         return PlainTextResponse("WeCom adapter not configured", status_code=500)
 
-    if not await adapter.verify_signature(msg_signature, timestamp, nonce, echostr):
+    if not adapter.crypto:
+        # 无加密模式: 简单验证
+        if not await adapter.verify_signature(msg_signature, timestamp, nonce, echostr):
+            logger.warning("WeCom signature verification failed")
+            return PlainTextResponse("Invalid signature", status_code=403)
+        return PlainTextResponse(echostr)
+
+    # 加密模式: 验签 + 解密
+    if not adapter.crypto.verify_signature(msg_signature, timestamp, nonce, echostr):
         logger.warning("WeCom signature verification failed")
         return PlainTextResponse("Invalid signature", status_code=403)
 
-    return PlainTextResponse(echostr)
+    try:
+        plaintext = adapter.crypto.decrypt(echostr)
+        logger.info("WeCom 回调 URL 验证成功")
+        return PlainTextResponse(plaintext)
+    except Exception as e:
+        logger.error(f"WeCom echostr 解密失败: {e}")
+        return PlainTextResponse("Decryption failed", status_code=400)
 
 
 @router.post("/wecom/callback")
 async def wecom_callback_post(request: Request):
     """
-    企业微信消息回调endpoint
+    企业微信消息回调 endpoint
+
+    处理流程:
+    1. 解析 XML 获取加密消息体
+    2. 验证签名 + 解密
+    3. 去重检查
+    4. 立即返回 "success"（5 秒内）
+    5. 后台异步处理消息 + 发送回复
     """
     try:
         body = await request.body()
@@ -268,26 +284,148 @@ async def wecom_callback_post(request: Request):
         if not adapter:
             return PlainTextResponse("WeCom adapter not configured", status_code=500)
 
-        import xml.etree.ElementTree as ET
+        # 解析 XML 获取加密内容
         root = ET.fromstring(body_str)
+        encrypt = root.findtext("Encrypt", "")
+        msg_signature = root.findtext("MsgSignature", "")
+        timestamp = root.findtext("TimeStamp", str(int(time.time())))
+        nonce = root.findtext("Nonce", "")
 
-        msg_type = root.findtext("MsgType", "text")
-        from_user = root.findtext("FromUserName", "")
+        # 获取查询参数中的签名（WeCom 可能在 query 或 XML 中传签名）
+        query_params = dict(request.query_params)
+        if not msg_signature:
+            msg_signature = query_params.get("msg_signature", "")
+        if not timestamp or timestamp == str(int(time.time())):
+            timestamp = query_params.get("timestamp", str(int(time.time())))
+        if not nonce:
+            nonce = query_params.get("nonce", "")
 
-        # 事件消息不回复
-        if msg_type == "event":
+        # 解密消息体
+        if encrypt and adapter.crypto:
+            # 验签
+            if not adapter.crypto.verify_signature(
+                msg_signature, timestamp, nonce, encrypt
+            ):
+                logger.warning("WeCom POST 签名验证失败")
+                return PlainTextResponse("Invalid signature", status_code=403)
+
+            # 解密
+            try:
+                decrypted_xml = adapter.crypto.decrypt(encrypt)
+            except Exception as e:
+                logger.error(f"WeCom 消息解密失败: {e}")
+                return PlainTextResponse("Decryption failed", status_code=400)
+        else:
+            # 无加密模式: 使用原始 body
+            decrypted_xml = body_str
+
+        # 解析解密后的消息
+        message = await adapter.parse_message({"body": decrypted_xml})
+
+        # 事件消息不处理（subscribe/unsubscribe 等）
+        if message.message_type == "event":
+            event_type = message.content.get("event", "")
+            logger.info(f"WeCom 事件: {event_type}, 用户: {message.user_id}")
             return PlainTextResponse("success")
 
-        # 解析消息
-        message = await adapter.parse_message({"body": body_str})
+        # 去重检查
+        if await _wecom_dedup.is_duplicate(message.message_id):
+            logger.debug(f"WeCom 重复消息，跳过: {message.message_id}")
+            return PlainTextResponse("success")
 
-        await process_channel_message("wecom", message)
+        # 时间戳验证（防重放）
+        msg_time = message.raw_message.get("timestamp")
+        if msg_time and isinstance(msg_time, (int, float)):
+            if abs(time.time() - msg_time) > 300:
+                logger.warning(f"WeCom 消息时间戳过期: {msg_time}")
+                return PlainTextResponse("success")
+
+        # 立即返回 "success"，后台异步处理
+        asyncio.create_task(
+            _process_wecom_message_background(message)
+        )
 
         return PlainTextResponse("success")
 
     except Exception as e:
         logger.error(f"Failed to process WeCom callback: {e}")
         return PlainTextResponse("error", status_code=500)
+
+
+async def _process_wecom_message_background(message) -> None:
+    """
+    WeCom 消息后台异步处理
+
+    在 asyncio.create_task 中执行，不阻塞回调响应。
+    """
+    try:
+        adapter = channel_manager.get_adapter("wecom")
+        if not adapter:
+            logger.error("WeCom adapter 不可用，无法处理后台消息")
+            return
+
+        # 获取用户信息
+        user_info = None
+        try:
+            user_info = await adapter.get_user_info(message.user_id)
+        except Exception as e:
+            logger.warning(f"获取用户信息失败: {e}")
+
+        # 创建/获取会话
+        session = channel_session_manager.get_or_create_session(
+            channel_type="wecom",
+            channel_user_id=message.user_id,
+            user_info=user_info,
+            metadata={"message_type": message.message_type},
+        )
+        session_id = session["session_id"]
+
+        # 记录用户消息
+        if message.text:
+            channel_session_manager.add_message(
+                session_id=session_id,
+                role="user",
+                content=message.text,
+                message_type=message.message_type,
+                metadata=message.raw_message,
+            )
+
+        # 获取对话上下文
+        history = channel_session_manager.get_conversation_context(
+            session_id, max_messages=20
+        )
+
+        # Agent 处理
+        agent = agent_router.get_agent(None, session_id)
+        response_text = await agent.process_message_sync(
+            user_input=message.text,
+            session_id=session_id,
+            history=history,
+        )
+
+        # 记录助手回复
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=response_text,
+            message_type="text",
+        )
+
+        # 发送回复（自动拆分长消息）
+        await adapter.send_long_message(response_text, message.user_id)
+
+    except Exception as e:
+        logger.error(f"WeCom 后台消息处理失败: {e}")
+        # 尝试发送错误提示
+        try:
+            adapter = channel_manager.get_adapter("wecom")
+            if adapter and message.user_id:
+                await adapter.send_text(
+                    "抱歉，处理您的消息时遇到了问题，请稍后重试。",
+                    message.user_id,
+                )
+        except Exception:
+            pass
 
 
 # ==================== 渠道会话管理 API ====================
@@ -298,14 +436,7 @@ async def list_channel_sessions(
     user_id: Optional[str] = None,
     limit: int = 50,
 ):
-    """
-    列出会话
-
-    Args:
-        channel_type: 渠道类型过滤
-        user_id: 用户ID过滤
-        limit: 限制条数
-    """
+    """列出会话"""
     sessions = channel_session_manager.list_sessions(
         channel_type=channel_type,
         user_id=user_id,
@@ -316,13 +447,7 @@ async def list_channel_sessions(
 
 @router.get("/api/channels/sessions/{channel_type}/{channel_user_id}")
 async def get_channel_session(channel_type: str, channel_user_id: str):
-    """
-    获取会话详情
-
-    Args:
-        channel_type: 渠道类型
-        channel_user_id: 渠道用户ID
-    """
+    """获取会话详情"""
     session = channel_session_manager.get_session(channel_type, channel_user_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
@@ -337,11 +462,6 @@ async def get_channel_session(channel_type: str, channel_user_id: str):
 
 @router.delete("/api/channels/sessions/{session_id}")
 async def delete_channel_session(session_id: str):
-    """
-    删除会话
-
-    Args:
-        session_id: 会话ID
-    """
+    """删除会话"""
     success = channel_session_manager.delete_session(session_id)
     return JSONResponse({"success": success})

@@ -6,7 +6,7 @@
         @click="openAddChannel"
         class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors"
       >
-        添加渠道
+        + 添加渠道
       </button>
     </div>
 
@@ -15,60 +15,172 @@
     <!-- 渠道列表 -->
     <div v-else-if="channels.length > 0" class="space-y-4">
       <div v-for="ch in channels" :key="ch.config_id" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-              {{ channelTypeLabel(ch.channel_type) }}
-            </span>
+            <span class="text-lg">{{ channelIcon(ch.channel_type) }}</span>
+            <span class="font-semibold text-slate-800">{{ channelTypeLabel(ch.channel_type) }}</span>
             <span
               class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
               :class="ch.verified ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'"
             >
               {{ ch.verified ? '已验证' : '未验证' }}
             </span>
-            <span class="text-sm text-slate-500">{{ ch.created_at }}</span>
           </div>
           <div class="flex items-center gap-2">
-            <button @click="handleVerify(ch.config_id)" class="text-xs px-2 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors">验证</button>
-            <button @click="editChannel(ch)" class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">编辑</button>
-            <button @click="handleDelete(ch.config_id)" class="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors">删除</button>
+            <button @click="showGuide(ch)" class="text-xs px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">配置指南</button>
+            <button @click="handleVerify(ch.config_id)" class="text-xs px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors">验证连接</button>
+            <button @click="editChannel(ch)" class="text-xs px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors">编辑</button>
+            <button @click="handleDelete(ch.config_id)" class="text-xs px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors">删除</button>
+          </div>
+        </div>
+        <!-- 回调地址展示 -->
+        <div v-if="tenant" class="bg-slate-50 rounded-lg p-3 text-sm">
+          <span class="text-slate-500">回调地址：</span>
+          <code class="text-cyan-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type) }}</code>
+          <button @click="copyUrl(getCallbackUrl(ch.channel_type))" class="ml-2 text-xs text-slate-400 hover:text-cyan-600 transition-colors">{{ copied ? '已复制' : '复制' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="text-center py-16 bg-white rounded-xl shadow-sm border border-slate-200">
+      <div class="text-4xl mb-4">🔗</div>
+      <p class="text-lg font-medium text-slate-700 mb-2">尚未配置任何渠道</p>
+      <p class="text-sm text-slate-500 mb-6">配置企业微信、钉钉或飞书后，员工即可在 IM 中与智能体对话</p>
+      <button @click="openAddChannel" class="px-6 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">添加第一个渠道</button>
+    </div>
+
+    <!-- ==================== 添加/编辑弹窗 ==================== -->
+    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showForm = false"></div>
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="p-6">
+          <h3 class="text-lg font-bold text-slate-800 mb-1">{{ editingId ? '编辑渠道' : '添加渠道' }}</h3>
+          <p v-if="!editingId" class="text-sm text-slate-500 mb-5">选择 IM 平台，然后填写应用凭证</p>
+
+          <!-- 渠道类型选择 -->
+          <div v-if="!editingId" class="grid grid-cols-3 gap-3 mb-6">
+            <button
+              v-for="ct in channelTypes" :key="ct.value"
+              @click="form.channel_type = ct.value"
+              class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all"
+              :class="form.channel_type === ct.value ? 'border-cyan-400 bg-cyan-50' : 'border-slate-200 hover:border-slate-300'"
+            >
+              <span class="text-2xl">{{ ct.icon }}</span>
+              <span class="text-sm font-medium" :class="form.channel_type === ct.value ? 'text-cyan-700' : 'text-slate-600'">{{ ct.label }}</span>
+            </button>
+          </div>
+
+          <!-- 配置指引摘要 -->
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-5 text-sm text-amber-800">
+            <p class="font-medium mb-2">{{ currentGuide.title }}</p>
+            <ol class="list-decimal list-inside space-y-1 text-amber-700">
+              <li v-for="(step, i) in currentGuide.steps" :key="i">{{ step }}</li>
+            </ol>
+            <a v-if="currentGuide.docUrl" :href="currentGuide.docUrl" target="_blank"
+              class="inline-block mt-2 text-cyan-600 hover:underline text-xs">
+              前往 {{ channelTypeLabel(form.channel_type) }} 管理后台 &rarr;
+            </a>
+          </div>
+
+          <!-- 表单字段 -->
+          <div class="space-y-4">
+            <div v-for="field in channelFields" :key="field.key">
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ field.label }}</label>
+              <input
+                v-model="form.config[field.key]"
+                type="text"
+                :placeholder="field.placeholder"
+                class="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-200"
+              />
+              <p v-if="field.hint" class="mt-1 text-xs text-slate-400">{{ field.hint }}</p>
+            </div>
+          </div>
+
+          <!-- 回调地址提示 -->
+          <div v-if="tenant" class="mt-5 bg-cyan-50 border border-cyan-200 rounded-lg p-4">
+            <p class="text-sm font-medium text-cyan-800 mb-1">回调地址</p>
+            <p class="text-xs text-cyan-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
+            <div class="flex items-center gap-2">
+              <code class="flex-1 bg-white px-3 py-2 rounded text-sm text-cyan-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
+              <button @click="copyUrl(getCallbackUrl(form.channel_type))" class="px-3 py-2 bg-cyan-100 text-cyan-700 rounded text-xs hover:bg-cyan-200 transition-colors whitespace-nowrap">{{ copied ? '已复制' : '复制' }}</button>
+            </div>
+          </div>
+
+          <div v-if="formError" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">{{ formError }}</div>
+
+          <div class="flex gap-3 mt-6">
+            <button @click="showForm = false" class="flex-1 py-2.5 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm">取消</button>
+            <button @click="handleSubmit" :disabled="submitting" class="flex-1 py-2.5 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors text-sm font-medium">
+              {{ submitting ? '保存中...' : '保存' }}
+            </button>
           </div>
         </div>
       </div>
     </div>
 
-    <div v-else class="text-center py-12 text-slate-500">
-      <p class="text-lg mb-2">暂无渠道配置</p>
-      <p class="text-sm">点击"添加渠道"配置 IM 渠道凭证</p>
-    </div>
+    <!-- ==================== 配置指南弹窗 ==================== -->
+    <div v-if="showGuideModal" class="fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showGuideModal = false"></div>
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-y-auto">
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-5">
+            <h3 class="text-lg font-bold text-slate-800">{{ channelTypeLabel(guideChannel) }} 接入指南</h3>
+            <button @click="showGuideModal = false" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+          </div>
 
-    <!-- 添加/编辑渠道弹窗 -->
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/50" @click="showForm = false"></div>
-      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
-        <h3 class="text-lg font-bold text-slate-800 mb-4">{{ editingId ? '编辑渠道' : '添加渠道' }}</h3>
-        <div class="space-y-4">
-          <div v-if="!editingId">
-            <label class="block text-sm text-slate-600 mb-1">渠道类型</label>
-            <select v-model="form.channel_type"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
-              <option value="wecom">企业微信</option>
-              <option value="dingtalk">钉钉</option>
-              <option value="feishu">飞书</option>
-            </select>
+          <!-- 步骤指引 -->
+          <div class="space-y-4">
+            <div v-for="(step, i) in fullGuide.steps" :key="i" class="flex gap-4">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-cyan-100 text-cyan-700 flex items-center justify-center text-sm font-bold">{{ i + 1 }}</div>
+              <div class="flex-1 pt-1">
+                <p class="font-medium text-slate-800">{{ step.title }}</p>
+                <p class="text-sm text-slate-500 mt-0.5">{{ step.desc }}</p>
+                <p v-if="step.location" class="text-xs text-cyan-600 mt-1">位置：{{ step.location }}</p>
+              </div>
+            </div>
           </div>
-          <div v-for="field in channelFields" :key="field.key">
-            <label class="block text-sm text-slate-600 mb-1">{{ field.label }}</label>
-            <input v-model="form.config[field.key]" type="text" :placeholder="field.placeholder"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+
+          <!-- 回调地址 -->
+          <div class="mt-6 bg-slate-50 border border-slate-200 rounded-xl p-5">
+            <p class="font-medium text-slate-700 mb-2">回调地址</p>
+            <p class="text-sm text-slate-500 mb-3">在 {{ channelTypeLabel(guideChannel) }} 后台配置接收消息时，URL 填入：</p>
+            <div class="flex items-center gap-2">
+              <code class="flex-1 bg-white px-4 py-3 rounded-lg text-cyan-700 font-mono text-sm select-all break-all border border-slate-200">{{ getCallbackUrl(guideChannel) }}</code>
+              <button @click="copyUrl(getCallbackUrl(guideChannel))" class="px-4 py-3 bg-cyan-500 text-white rounded-lg text-sm hover:bg-cyan-600 transition-colors whitespace-nowrap">{{ copied ? '已复制' : '复制' }}</button>
+            </div>
           </div>
-        </div>
-        <div v-if="formError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ formError }}</div>
-        <div class="flex gap-3 mt-6">
-          <button @click="showForm = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
-          <button @click="handleSubmit" :disabled="submitting" class="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors">
-            {{ submitting ? '保存中...' : '保存' }}
-          </button>
+
+          <!-- 凭证说明表 -->
+          <div class="mt-6">
+            <p class="font-medium text-slate-700 mb-3">凭证字段说明</p>
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-200">
+                  <th class="text-left py-2 text-slate-500 font-medium">字段</th>
+                  <th class="text-left py-2 text-slate-500 font-medium">说明</th>
+                  <th class="text-left py-2 text-slate-500 font-medium">获取位置</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="f in channelFieldMap[guideChannel] || []" :key="f.key" class="border-b border-slate-100">
+                  <td class="py-2 text-slate-800 font-mono text-xs">{{ f.key }}</td>
+                  <td class="py-2 text-slate-600">{{ f.label }}</td>
+                  <td class="py-2 text-slate-500 text-xs">{{ f.location || '-' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 常见问题 -->
+          <div v-if="fullGuide.faq" class="mt-6">
+            <p class="font-medium text-slate-700 mb-3">常见问题</p>
+            <div class="space-y-3">
+              <div v-for="(item, i) in fullGuide.faq" :key="i">
+                <p class="text-sm font-medium text-slate-700">Q: {{ item.q }}</p>
+                <p class="text-sm text-slate-500">A: {{ item.a }}</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -78,44 +190,173 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel } from '@/api/saasTenant'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
+const { tenant } = useTenantAuth()
 const loading = ref(true)
 const channels = ref<any[]>([])
 const showForm = ref(false)
 const submitting = ref(false)
 const formError = ref('')
 const editingId = ref<string | null>(null)
+const copied = ref(false)
+const showGuideModal = ref(false)
+const guideChannel = ref('wecom')
 
 const form = ref<{ channel_type: string; config: Record<string, string> }>({
   channel_type: 'wecom',
   config: {}
 })
 
-const channelFieldMap: Record<string, { key: string; label: string; placeholder: string }[]> = {
-  wecom: [
-    { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...' },
-    { key: 'agent_secret', label: '应用 Secret', placeholder: '' },
-    { key: 'token', label: 'Token', placeholder: '' },
-    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '' },
-  ],
-  dingtalk: [
-    { key: 'app_key', label: 'App Key', placeholder: '' },
-    { key: 'app_secret', label: 'App Secret', placeholder: '' },
-  ],
-  feishu: [
-    { key: 'app_id', label: 'App ID', placeholder: 'cli_' },
-    { key: 'app_secret', label: 'App Secret', placeholder: '' },
-    { key: 'verification_token', label: 'Verification Token', placeholder: '' },
-    { key: 'encrypt_key', label: 'Encrypt Key', placeholder: '' },
-  ],
-}
+// ==================== 渠道类型定义 ====================
 
-const channelFields = computed(() => channelFieldMap[form.value.channel_type] || [])
+const channelTypes = [
+  { value: 'wecom', label: '企业微信', icon: '💬' },
+  { value: 'dingtalk', label: '钉钉', icon: '📌' },
+  { value: 'feishu', label: '飞书', icon: '🐦' },
+]
 
 function channelTypeLabel(type: string) {
   const map: Record<string, string> = { wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书' }
   return map[type] || type
 }
+
+function channelIcon(type: string) {
+  const map: Record<string, string> = { wecom: '💬', dingtalk: '📌', feishu: '🐦' }
+  return map[type] || '🔗'
+}
+
+// ==================== 字段定义（含获取位置说明） ====================
+
+const channelFieldMap: Record<string, { key: string; label: string; placeholder: string; hint?: string; location: string }[]> = {
+  wecom: [
+    { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
+    { key: 'agent_id', label: '应用 AgentId', placeholder: '1000002', location: '「应用管理」→ 应用详情页' },
+    { key: 'secret', label: '应用 Secret', placeholder: '', hint: '点击「查看」获取', location: '「应用管理」→ 应用详情页' },
+    { key: 'token', label: '回调 Token', placeholder: '', hint: '设置 API 接收时自行设定或随机生成', location: '「接收消息」→「设置 API 接收」' },
+    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「接收消息」→「设置 API 接收」' },
+  ],
+  dingtalk: [
+    { key: 'app_key', label: 'App Key', placeholder: '', location: '「基础信息」页面' },
+    { key: 'app_secret', label: 'App Secret', placeholder: '', location: '「基础信息」页面' },
+    { key: 'token', label: '回调 Token', placeholder: '', hint: '设置回调时自行设定', location: '「事件与回调」' },
+    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」', location: '「事件与回调」' },
+  ],
+  feishu: [
+    { key: 'app_id', label: 'App ID', placeholder: 'cli_...', location: '「凭证与基础信息」页面' },
+    { key: 'app_secret', label: 'App Secret', placeholder: '', location: '「凭证与基础信息」页面' },
+    { key: 'verification_token', label: 'Verification Token', placeholder: '', location: '「事件与回调」' },
+    { key: 'encrypt_key', label: 'Encrypt Key', placeholder: '32 字符', location: '「事件与回调」' },
+  ],
+}
+
+const channelFields = computed(() => channelFieldMap[form.value.channel_type] || [])
+
+// ==================== 配置指引（简短版，弹窗内） ====================
+
+const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: string }> = {
+  wecom: {
+    title: '企业微信接入步骤',
+    steps: [
+      '前往企业微信管理后台 →「应用管理」→「创建应用」',
+      '记录 CorpID、AgentId、Secret',
+      '在应用详情页找到「接收消息」→ 点击「设置 API 接收」',
+      '将下方回调地址填入 URL 栏，生成 Token 和 EncodingAESKey',
+      '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
+    ],
+    docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
+  },
+  dingtalk: {
+    title: '钉钉接入步骤',
+    steps: [
+      '前往钉钉开放平台 →「开发者后台」→ 创建应用',
+      '启用「机器人」能力',
+      '在「事件与回调」中添加 im.message.receive_v1 事件',
+      '将下方回调地址填入 HTTP 回调配置',
+      '记录 AppKey、AppSecret、Token、EncodingAESKey',
+    ],
+    docUrl: 'https://open.dingtalk.com/',
+  },
+  feishu: {
+    title: '飞书接入步骤',
+    steps: [
+      '前往飞书开放平台 →「开发者后台」→ 创建企业自建应用',
+      '启用「机器人」能力',
+      '在「事件与回调」中添加 im.message.receive_v1 事件',
+      '将下方回调地址填入请求地址',
+      '记录 App ID、App Secret、Verification Token、Encrypt Key',
+    ],
+    docUrl: 'https://open.feishu.cn/',
+  },
+}
+
+const currentGuide = computed(() => quickGuideMap[form.value.channel_type] || { title: '', steps: [], docUrl: '' })
+
+// ==================== 完整配置指南（独立弹窗） ====================
+
+const fullGuideMap: Record<string, { steps: { title: string; desc: string; location?: string }[]; faq?: { q: string; a: string }[] }> = {
+  wecom: {
+    steps: [
+      { title: '创建自建应用', desc: '登录企业微信管理后台，进入「应用管理」→「自建」→ 点击「创建应用」。填写应用名称、描述、可见范围。', location: '应用管理 → 自建 → 创建应用' },
+      { title: '获取企业 ID', desc: '进入「我的企业」→「企业信息」，复制 CorpID（格式 ww 开头）。', location: '我的企业 → 企业信息' },
+      { title: '获取应用凭证', desc: '在应用详情页记录 AgentId 和 Secret（点击「查看」显示）。', location: '应用管理 → 应用详情' },
+      { title: '配置 API 接收消息', desc: '在应用详情页找到「接收消息」→ 点击「设置 API 接收」。将回调地址填入 URL，点击「随机获取」生成 Token 和 EncodingAESKey。', location: '应用详情 → 接收消息 → 设置 API 接收' },
+      { title: '配置可信 IP', desc: '在应用详情页找到「企业可信IP」，添加服务器公网 IP。', location: '应用详情 → 企业可信IP' },
+      { title: '申请通讯录权限', desc: '在应用权限中申请「获取成员详情」权限，管理员审批后生效。', location: '应用详情 → 权限' },
+      { title: '保存并验证', desc: '先在本页面保存凭证配置，然后回到企业微信后台点击「保存」。系统会自动验证回调地址。' },
+    ],
+    faq: [
+      { q: '回调 URL 验证失败？', a: '确保服务器已启动、凭证已在本页面保存、SSL 证书有效。先在本页面保存，再到企业微信后台点保存。' },
+      { q: '用户发消息没有回复？', a: '检查可信 IP 是否已配置、应用可见范围是否包含该用户、Agent 实例是否已启动并绑定企业微信渠道。' },
+    ],
+  },
+  dingtalk: {
+    steps: [
+      { title: '创建钉钉应用', desc: '登录钉钉开放平台，进入「开发者后台」→ 创建「企业内部开发」应用。', location: '开发者后台 → 创建应用' },
+      { title: '启用机器人能力', desc: '在应用详情页点击「添加应用能力」→ 启用「机器人」。', location: '应用详情 → 添加应用能力' },
+      { title: '获取应用凭证', desc: '在「基础信息」页面记录 AppKey 和 AppSecret。', location: '基础信息页面' },
+      { title: '配置消息回调', desc: '在「事件与回调」中配置回调 URL，生成 Token 和 EncodingAESKey。添加 im.message.receive_v1 事件。', location: '事件与回调' },
+      { title: '保存并验证', desc: '先在本页面保存凭证配置，再到钉钉后台完成回调验证。' },
+    ],
+    faq: [
+      { q: '收不到消息？', a: '确认已启用机器人能力、已添加消息接收事件、回调 URL 配置正确。' },
+    ],
+  },
+  feishu: {
+    steps: [
+      { title: '创建飞书应用', desc: '登录飞书开放平台，进入「开发者后台」→ 创建「企业自建应用」。', location: '开发者后台 → 创建应用' },
+      { title: '启用机器人能力', desc: '在应用详情页点击「添加应用能力」→ 启用「机器人」。', location: '应用详情 → 添加应用能力' },
+      { title: '获取应用凭证', desc: '在「凭证与基础信息」页面记录 App ID 和 App Secret。', location: '凭证与基础信息' },
+      { title: '配置消息回调', desc: '在「事件与回调」中添加 im.message.receive_v1 事件，将回调地址填入请求地址，记录 Verification Token 和 Encrypt Key。', location: '事件与回调' },
+      { title: '配置权限', desc: '在「权限管理」中申请「获取用户信息」和「发送消息」权限。', location: '权限管理' },
+      { title: '保存并验证', desc: '先在本页面保存凭证配置，再到飞书后台完成回调验证。' },
+    ],
+    faq: [
+      { q: '回调验证不通过？', a: '飞书使用 challenge 验证，系统会自动处理。确保 Encrypt Key 和 Verification Token 填写正确。' },
+    ],
+  },
+}
+
+const fullGuide = computed(() => fullGuideMap[guideChannel.value] || { steps: [] })
+
+// ==================== 回调地址 ====================
+
+function getCallbackUrl(channelType: string): string {
+  const base = window.location.origin
+  if (tenant.value) {
+    return `${base}/t/${tenant.value.tenant_id}/${channelType}/callback`
+  }
+  return `${base}/${channelType}/callback`
+}
+
+function copyUrl(url: string) {
+  navigator.clipboard.writeText(url).then(() => {
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+  })
+}
+
+// ==================== 操作 ====================
 
 function openAddChannel() {
   editingId.value = null
@@ -129,6 +370,11 @@ function editChannel(ch: any) {
   form.value = { channel_type: ch.channel_type, config: { ...ch.config } }
   formError.value = ''
   showForm.value = true
+}
+
+function showGuide(ch: any) {
+  guideChannel.value = ch.channel_type
+  showGuideModal.value = true
 }
 
 async function loadChannels() {
@@ -164,7 +410,11 @@ async function handleSubmit() {
 async function handleVerify(configId: string) {
   try {
     const res = await verifyChannel(configId)
-    alert(res.message || (res.verified ? '验证通过' : '验证失败'))
+    if (res.verified) {
+      alert('验证通过！渠道凭证有效。')
+    } else {
+      alert('验证失败: ' + (res.message || '请检查凭证配置是否正确'))
+    }
     await loadChannels()
   } catch (e: any) {
     alert(e.message || '验证失败')
@@ -172,7 +422,7 @@ async function handleVerify(configId: string) {
 }
 
 async function handleDelete(configId: string) {
-  if (!confirm('确定要删除此渠道配置吗？')) return
+  if (!confirm('确定要删除此渠道配置吗？删除后对应渠道将无法接收消息。')) return
   try {
     await deleteChannel(configId)
     await loadChannels()

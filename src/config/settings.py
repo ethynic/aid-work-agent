@@ -49,6 +49,31 @@ class LLMConfig(BaseModel):
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
 
 
+class WecomMessageConfig(BaseModel):
+    """企业微信消息配置"""
+    default_type: str = "markdown"  # text | markdown
+    max_bytes: int = 2048
+    split_on_paragraph: bool = True
+
+
+class WecomMediaConfig(BaseModel):
+    """企业微信媒体配置"""
+    upload_dir: str = "./uploads/wecom"
+    max_file_size: int = 20971520  # 20MB（WeCom 限制）
+
+
+class WecomRateLimitConfig(BaseModel):
+    """企业微信速率限制配置"""
+    enabled: bool = True
+    max_per_minute: int = 10
+
+
+class WecomRetryConfig(BaseModel):
+    """企业微信重试配置"""
+    max_attempts: int = 3
+    backoff_base: float = 1.0
+
+
 class WecomConfig(BaseModel):
     """企业微信配置"""
     enabled: bool = False
@@ -57,6 +82,10 @@ class WecomConfig(BaseModel):
     secret: str = ""
     token: str = ""
     encoding_aes_key: str = ""
+    message: WecomMessageConfig = Field(default_factory=WecomMessageConfig)
+    media: WecomMediaConfig = Field(default_factory=WecomMediaConfig)
+    rate_limit: WecomRateLimitConfig = Field(default_factory=WecomRateLimitConfig)
+    retry: WecomRetryConfig = Field(default_factory=WecomRetryConfig)
 
 
 class DingtalkConfig(BaseModel):
@@ -268,6 +297,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     
     if os.getenv("WECOM_SECRET"):
         yaml_config.setdefault("channels", {}).setdefault("wecom", {})["secret"] = os.getenv("WECOM_SECRET")
+
+    if os.getenv("WECOM_TOKEN"):
+        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["token"] = os.getenv("WECOM_TOKEN")
+
+    if os.getenv("WECOM_ENCODING_AES_KEY"):
+        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["encoding_aes_key"] = os.getenv("WECOM_ENCODING_AES_KEY")
 
     if os.getenv("DINGTALK_APP_KEY"):
         yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["app_key"] = os.getenv("DINGTALK_APP_KEY")
