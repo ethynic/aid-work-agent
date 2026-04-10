@@ -1537,6 +1537,28 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
 
+                # AgentSkills 标准的 allowed-tools 权限检查
+                # 如果当前有活跃的 skill session 且该 skill 设置了 allowed_tools，
+                # 则只允许执行允许列表中的工具（生命周期工具除外）
+                _LIFECYCLE_TOOLS = {"use_skill", "skill_complete", "skill_execute"}
+                if self._active_skill_sessions and tool_name not in _LIFECYCLE_TOOLS:
+                    for _active_skill_name, _ in self._active_skill_sessions.items():
+                        _active_skill_obj = self.skill_registry.get(_active_skill_name) if self.skill_registry else None
+                        if _active_skill_obj and _active_skill_obj.allowed_tools:
+                            allowed_upper = [t.upper() for t in _active_skill_obj.allowed_tools]
+                            if tool_name.upper() not in allowed_upper:
+                                logger.warning(f"Tool '{tool_name}' blocked by skill '{_active_skill_name}' allowed_tools: {_active_skill_obj.allowed_tools}")
+                                tool_results.append({
+                                    "tool_call_id": tool_id,
+                                    "content": {
+                                        "success": False,
+                                        "error": f"Tool '{tool_name}' is not allowed in skill '{_active_skill_name}'. Allowed: {_active_skill_obj.allowed_tools}"
+                                    }
+                                })
+                                await send_tool_result(tool_name, {"success": False, "error": f"Tool '{tool_name}' not allowed"}, False)
+                                continue
+                            break  # 找到匹配的活跃 skill 后停止检查
+
                 # Fallback: 如果 LLM 调用了一个不在工具列表中但匹配 skill 名称的工具，
                 # 自动转为 use_skill 调用（LLM 有时会误把 skill 名称当成工具名直接调用）
                 known_tool_names = {t["name"] for t in self._get_tools()}
@@ -1611,7 +1633,27 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # Handle use_skill - load skill content and inject into conversation
                 if tool_name == "use_skill":
                     skill_name = tool_args.get("skill", "")
-                    skill_result = await self._use_skill_tool.execute(**tool_args)
+
+                    # 构建 AgentSkills 标准字符串替换上下文
+                    skill_obj = self.skill_registry.get(skill_name) if self.skill_registry else None
+                    substitutions = {
+                        "session_id": session_id,
+                        "skill_dir": str(skill_obj.dir) if skill_obj else "",
+                        "user_id": user.user_id if user else "",
+                        "arguments": tool_args.get("arguments", ""),
+                    }
+                    skill_result = await self._use_skill_tool.execute(
+                        **tool_args,
+                        _substitutions=substitutions,
+                    )
+
+                    # 执行 onLoad hook（AgentSkills 标准）
+                    if skill_result.get("success") and skill_obj and skill_obj.hooks:
+                        from src.core.skill_hooks import SkillHooks
+                        hook_output = await SkillHooks.run_on_load(skill_obj.hooks, skill_obj.dir)
+                        if hook_output:
+                            skill_result["content"] = skill_result.get("content", "") + f"\n\n**Hook output:**\n{hook_output}"
+
                     # 创建 Skill Session，记录当前 memory 消息数量
                     if skill_result.get("success") and skill_name not in self._active_skill_sessions:
                         msg_count = len(self.memory._cache.get(session_id, []))
@@ -1638,6 +1680,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     skill_name = tool_args.get("skill", "")
                     summary = tool_args.get("summary", "")
                     if skill_name in self._active_skill_sessions:
+                        # 执行 onUnload hook（AgentSkills 标准）
+                        skill_obj = self.skill_registry.get(skill_name) if self.skill_registry else None
+                        if skill_obj and skill_obj.hooks:
+                            from src.core.skill_hooks import SkillHooks
+                            hook_output = await SkillHooks.run_on_unload(skill_obj.hooks, skill_obj.dir)
+                            if hook_output:
+                                summary = f"{summary}\n\n**Hook output:**\n{hook_output}"
+
                         # 延迟压缩：先记录压缩信息，等 tool_message 写入 memory 后再执行
                         pending_skill_compressions.append((session_id, skill_name, summary))
                         await send_progress(f"✅ 技能「{skill_name}」执行完成")

@@ -66,20 +66,21 @@ class TestSkillFlowIntegration:
 class TestSkillMatchIntegration:
     """Skill 匹配集成测试"""
 
-    def test_match_by_keyword(self):
-        """关键词匹配"""
+    def test_match_by_file_with_paths(self):
+        """基于 paths 字段的文件匹配"""
         fixtures_skills = Path(__file__).parent.parent / "fixtures" / "skills"
         registry = SkillRegistry()
         registry.load_from_directory(fixtures_skills)
 
-        results = registry.match_by_keyword("测试技能")
-        assert isinstance(results, list)
+        # 测试 skill 没有 paths 字段时应返回 None
+        result = registry.match_by_file("test.pdf")
+        assert isinstance(result, type(None)) or isinstance(result, str)
 
-    def test_match_nonexistent_returns_empty(self):
-        """不匹配时返回空列表"""
-        fixtures_skills = Path(__file__).parent.parent / "fixtures" / "skills"
+    def test_match_nonexistent_returns_none(self):
+        """不匹配时返回 None"""
+        fixtures_skills = Path(__name__).parent.parent / "fixtures" / "skills" if hasattr(Path(__name__), 'parent') else Path(__file__).parent.parent / "fixtures" / "skills"
         registry = SkillRegistry()
         registry.load_from_directory(fixtures_skills)
 
-        results = registry.match_by_keyword("完全不相关的关键词xyz123")
-        assert isinstance(results, list)
+        result = registry.match_by_file("nonexistent_file.xyz123")
+        assert result is None

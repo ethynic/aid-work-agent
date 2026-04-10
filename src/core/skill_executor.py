@@ -149,15 +149,16 @@ class SkillExecutor:
         workdir.mkdir(parents=True, exist_ok=True)
         return workdir
     
-    async def load_skill(self, skill_name: str) -> Optional[str]:
+    async def load_skill(self, skill_name: str, substitutions: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """
         加载Skill内容
-        
+
         这是Layer 2 - 完整的SKILL.md正文，用于注入到对话中。
-        
+
         Args:
             skill_name: Skill名称
-            
+            substitutions: 可选的替换上下文
+
         Returns:
             Skill内容字符串，如果未找到返回None
         """
@@ -165,8 +166,8 @@ class SkillExecutor:
         if not skill:
             available = ", ".join(self.skill_registry.list_skills()) or "none"
             return f"Error: Unknown skill '{skill_name}'. Available: {available}"
-        
-        content = self.skill_registry.get_content(skill_name)
+
+        content = self.skill_registry.get_content(skill_name, substitutions=substitutions)
         if content:
             # 包装在标签中，让模型知道这是Skill内容
             return f"""<skill-loaded name="{skill_name}">
@@ -174,42 +175,30 @@ class SkillExecutor:
 </skill-loaded>
 
 Follow the instructions in the skill above to complete the user's task."""
-        
+
         return None
     
     def get_skill_descriptions(self) -> str:
         """
         获取所有Skill描述
-        
+
         Returns:
             Skill描述字符串
         """
         return self.skill_registry.get_descriptions()
-    
+
     def match_skill_by_file(self, filename: str) -> Optional[str]:
         """
-        根据文件名匹配Skill
-        
+        根据文件名匹配Skill（基于 paths 字段）
+
         Args:
             filename: 文件名
-            
+
         Returns:
             匹配的Skill名称
         """
         return self.skill_registry.match_by_file(filename)
-    
-    def match_skill_by_keyword(self, text: str) -> List[str]:
-        """
-        根据关键词匹配Skill
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            匹配的Skill名称列表
-        """
-        return self.skill_registry.match_by_keyword(text)
-    
+
     async def prepare_dependencies(
         self,
         skill: Skill,
@@ -860,29 +849,29 @@ Follow the instructions in the skill above to complete the user's task."""
     ) -> Dict[str, Any]:
         """
         处理上传的文件
-        
-        自动匹配Skill并返回处理建议。
-        
+
+        基于 skill 的 paths 字段自动匹配并返回处理建议。
+
         Args:
             filename: 文件名
             content: 文件内容
             session_id: 会话ID
-            
+
         Returns:
             处理建议字典
         """
-        # 匹配Skill
+        # 基于 paths 字段匹配 Skill
         skill_name = self.match_skill_by_file(filename)
-        
+
         if not skill_name:
             return {
                 "success": False,
                 "message": f"No skill found for file: {filename}",
                 "skill": None,
             }
-        
+
         skill = self.skill_registry.get(skill_name)
-        
+
         return {
             "success": True,
             "message": f"Matched skill: {skill_name}",
