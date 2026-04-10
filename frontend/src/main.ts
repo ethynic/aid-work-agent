@@ -50,6 +50,26 @@ const router = createRouter({
       path: '/admin/subagents',
       name: 'admin-subagents',
       component: () => import('./components/DigitalEmployeeManager.vue')
+    },
+    // SaaS 租户管理 Portal
+    {
+      path: '/portal/login',
+      name: 'portal-login',
+      component: () => import('./components/saas/TenantLogin.vue')
+    },
+    {
+      path: '/portal',
+      component: () => import('./components/saas/PortalLayout.vue'),
+      children: [
+        { path: '', name: 'portal-dashboard', component: () => import('./components/saas/TenantDashboard.vue') },
+        { path: 'instances', name: 'portal-instances', component: () => import('./components/saas/InstanceManager.vue') },
+        { path: 'channels', name: 'portal-channels', component: () => import('./components/saas/ChannelConfig.vue') },
+        { path: 'users', name: 'portal-users', component: () => import('./components/saas/TenantUserManager.vue') },
+        { path: 'skills', name: 'portal-skills', component: () => import('./components/saas/SkillManager.vue') },
+        { path: 'reports', name: 'portal-reports', component: () => import('./components/saas/UsageReports.vue') },
+        { path: 'billing', name: 'portal-billing', component: () => import('./components/saas/BillingView.vue') },
+        { path: 'settings', name: 'portal-settings', component: () => import('./components/saas/TenantSettings.vue') },
+      ]
     }
   ]
 })
