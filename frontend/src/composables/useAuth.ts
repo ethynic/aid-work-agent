@@ -10,6 +10,7 @@ export interface User {
   username: string
   phone?: string
   avatar_url?: string
+  is_admin?: boolean
 }
 
 const user = ref<User | null>(null)
@@ -19,6 +20,7 @@ const isInitialized = ref(false)
 
 export function useAuth() {
   const isLoggedIn = computed(() => !!token.value && !!user.value)
+  const isAdmin = computed(() => !!user.value?.is_admin)
 
   /**
    * 初始化认证状态（从 localStorage 恢复）
@@ -94,6 +96,7 @@ export function useAuth() {
     user,
     token,
     isLoggedIn,
+    isAdmin,
     isLoading,
     isInitialized,
     init,

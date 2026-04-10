@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import './style.css'
 import { useTheme } from './composables/useTheme'
+import { useAuth } from './composables/useAuth'
 
 // 客户信息页面
 import CustomerInfo from './components/CustomerInfo.vue'
@@ -72,6 +73,14 @@ const router = createRouter({
       ]
     }
   ]
+})
+
+// 全局路由守卫：确保 auth 状态在任何页面刷新时都能初始化
+router.beforeEach(async () => {
+  const { init, isInitialized } = useAuth()
+  if (!isInitialized.value) {
+    await init()
+  }
 })
 
 createApp(App).use(router).mount('#app')

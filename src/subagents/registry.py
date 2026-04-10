@@ -70,7 +70,10 @@ class SubagentRegistry:
 
     def _load_custom(self, custom_dir: Path) -> int:
         """
-        从定制目录加载Subagent配置（与内置合并，不覆盖）
+        从定制目录加载Subagent配置（全量刷新，支持删除场景）
+
+        多 worker 部署时，每个 worker 有独立的内存状态，
+        需要从磁盘重新加载以获取其他 worker 写入的变更。
 
         Returns:
             加载的配置数量
@@ -82,13 +85,19 @@ class SubagentRegistry:
         self._custom_loader = SubagentLoader(custom_dir)
         custom_configs = self._custom_loader.configs
 
+        # 全量刷新：先移除旧的定制条目，再合并新的
+        # 仅移除定制条目（不在 _builtin_names 中的），保留内置
+        stale_names = [name for name in self._configs if name not in self._builtin_names]
+        for name in stale_names:
+            self._configs.pop(name, None)
+
         # 合并：定制不覆盖内置
         for name, config in custom_configs.items():
             if name not in self._configs:
                 self._configs[name] = config
 
         self._build_indices()
-        loaded_count = sum(1 for n in custom_configs if n not in self._builtin_names)
+        loaded_count = len(custom_configs)
         logger.info(f"SubagentRegistry loaded {loaded_count} custom subagents from {custom_dir}")
         return loaded_count
 
@@ -292,13 +301,25 @@ class SubagentRegistry:
         获取Subagent完整内容
         
         Args:
-            name: Subagent名称
+            name: Subagent名称或目录名
             
         Returns:
             内容字符串
         """
         if self._loader:
-            return self._loader.get_subagent_content(name)
+            # 先尝试按 name 查找，再按 dir_name 查找
+            content = self._loader.get_subagent_content(name)
+            if content:
+                return content
+            # loader 不支持 dir_name 查找，通过 registry.get 补偿
+            config = self.get(name)
+            if config and config.path:
+                from pathlib import Path as P
+                try:
+                    return P(config.path).read_text(encoding='utf-8')
+                except Exception as e:
+                    logger.error(f"Failed to read subagent content by dir_name: {e}")
+            return None
         
         config = self.get(name)
         if config:

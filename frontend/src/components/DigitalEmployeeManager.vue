@@ -1,31 +1,43 @@
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
-    <!-- Header -->
-    <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4">
-      <div class="flex items-center gap-3">
-        <button @click="goBack" class="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <h1 class="text-lg font-medium text-gray-800">数字员工管理</h1>
-      </div>
-      <div class="flex-1"></div>
-      <button
-        @click="createNew"
-        class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-      >
-        + 新建定制
-      </button>
-    </header>
-
     <!-- Main Content -->
-    <div class="flex-1 flex overflow-hidden">
-      <!-- Left: List -->
-      <div class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto">
+    <main class="flex-1 flex overflow-hidden">
+      <!-- Session Sidebar -->
+      <SessionSidebar
+        :is-collapsed="isSidebarCollapsed"
+        @collapse="isSidebarCollapsed = true"
+      />
+
+      <!-- Right Content Area -->
+      <div class="flex-1 flex flex-col min-w-0">
+        <!-- Header Bar -->
+        <AppHeader
+          title="数字员工"
+          :is-online="true"
+          :is-logged-in="isLoggedIn"
+          :user="user"
+          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+        >
+          <template #menu-items="{ closeMenu }">
+            <button
+              @click="createNew(); closeMenu()"
+              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
+              新建定制
+            </button>
+          </template>
+        </AppHeader>
+
+        <!-- Content Area -->
+        <div class="flex-1 flex overflow-hidden">
+          <!-- Left: List -->
+          <div class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto">
         <!-- Builtin -->
         <div class="p-3">
-          <div class="text-xs font-medium text-gray-500 mb-2">内置 ({{ builtinList.length }})</div>
+          <div class="text-sm font-bold text-gray-500 mb-2">内置 ({{ builtinList.length }})</div>
           <div v-for="item in builtinList" :key="item.agent_id"
             @click="selectAgent(item)"
             :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
@@ -36,7 +48,7 @@
         </div>
         <!-- Custom -->
         <div class="p-3 border-t border-gray-100">
-          <div class="text-xs font-medium text-gray-500 mb-2">定制 ({{ customList.length }})</div>
+          <div class="text-sm font-bold text-gray-500 mb-2">定制 ({{ customList.length }})</div>
           <div v-for="item in customList" :key="item.agent_id"
             @click="selectAgent(item)"
             :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
@@ -56,16 +68,16 @@
             <svg class="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            <p class="text-lg">选择一个数字员工查看详情</p>
+            <p class="text-base">选择一个数字员工查看详情</p>
             <p class="text-sm mt-1">或点击右上角"新建定制"创建</p>
           </div>
         </div>
 
         <!-- Read-only View (Builtin) -->
-        <div v-else-if="selectedAgent && !isEditMode" class="max-w-3xl">
-          <div class="flex items-center justify-between mb-6">
+        <div v-else-if="selectedAgent && !isEditMode" class="flex flex-col h-full">
+          <div class="flex items-center justify-between mb-6 flex-shrink-0">
             <div>
-              <h2 class="text-xl font-semibold text-gray-800">{{ detail?.name }}</h2>
+              <h2 class="text-base font-semibold text-gray-800">{{ detail?.name }}</h2>
               <span :class="['inline-block mt-1 px-2 py-0.5 text-xs rounded-full', selectedAgent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700']">
                 {{ selectedAgent.type === 'builtin' ? '内置' : '定制' }}
               </span>
@@ -75,33 +87,33 @@
               <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">另存为</button>
             </div>
           </div>
-          <div class="space-y-4">
+          <div class="space-y-4 flex-1 flex flex-col min-h-0">
             <div>
-              <label class="block text-sm font-medium text-gray-500 mb-1">ID</label>
+              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">ID</label>
               <p class="text-sm text-gray-800 bg-gray-50 rounded-lg px-3 py-2 font-mono">{{ detail?.agent_id }}</p>
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-500 mb-1">描述</label>
+              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">描述</label>
               <p class="text-sm text-gray-800 whitespace-pre-wrap">{{ detail?.description || '无' }}</p>
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-500 mb-1">能力标签</label>
+              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">能力标签</label>
               <div class="flex flex-wrap gap-1">
-                <span v-for="cap in detail?.capabilities" :key="cap" class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">{{ cap }}</span>
+                <span v-for="cap in detail?.capabilities" :key="cap" class="px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded">{{ cap }}</span>
                 <span v-if="!detail?.capabilities?.length" class="text-sm text-gray-400">无</span>
               </div>
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-500 mb-1">系统提示词</label>
-              <div class="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto text-sm text-gray-800 whitespace-pre-wrap" v-html="renderedMarkdown"></div>
+              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">系统提示词</label>
+              <div class="bg-gray-50 rounded-lg p-4 flex-1 overflow-y-auto text-sm text-gray-800 whitespace-pre-wrap" v-html="renderedMarkdown"></div>
             </div>
           </div>
         </div>
 
         <!-- Edit / Create Mode -->
-        <div v-else class="max-w-3xl">
+        <div v-else class="">
           <div class="flex items-center justify-between mb-6">
-            <h2 class="text-xl font-semibold text-gray-800">{{ isNewMode ? '新建数字员工' : '编辑数字员工' }}</h2>
+            <h2 class="text-base font-semibold text-gray-800">{{ isNewMode ? '新建数字员工' : '编辑数字员工' }}</h2>
             <button @click="cancelEdit" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">取消</button>
           </div>
           <div class="space-y-4">
@@ -164,13 +176,15 @@
             <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg ml-auto">另存为</button>
           </div>
         </div>
+          </div>
+        </div>
       </div>
-    </div>
+    </main>
 
     <!-- Duplicate Dialog -->
     <div v-if="showDuplicateDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-        <h3 class="text-lg font-semibold mb-4">另存为</h3>
+        <h3 class="text-base font-semibold mb-4">另存为</h3>
         <div class="space-y-3">
           <div>
             <label class="block text-sm font-medium text-gray-500 mb-1">新 ID</label>
@@ -192,7 +206,7 @@
     <div v-if="showAiCompareDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col p-6">
         <div class="flex items-center justify-between mb-4 flex-shrink-0">
-          <h3 class="text-lg font-semibold">AI 完善结果</h3>
+          <h3 class="text-base font-semibold">AI 完善结果</h3>
           <button @click="showAiCompareDialog = false" class="p-1 text-gray-400 hover:text-gray-600">&times;</button>
         </div>
         <div class="flex-1 flex gap-4 overflow-hidden min-h-0">
@@ -217,6 +231,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
+import SessionSidebar from './SessionSidebar.vue'
+import AppHeader from './AppHeader.vue'
+import { useAuth } from '@/composables/useAuth'
 import {
   listSubagents,
   getSubagentDetail,
@@ -229,6 +246,9 @@ import {
   type SubagentListItem,
   type SubagentDetail,
 } from '../api/adminSubagent'
+
+const { user, isLoggedIn } = useAuth()
+const isSidebarCollapsed = ref(false)
 
 // State
 const allList = ref<SubagentListItem[]>([])
@@ -476,10 +496,6 @@ function acceptAiEnhance() {
   }
   showAiCompareDialog.value = false
   promptMode.value = 'edit'
-}
-
-function goBack() {
-  window.location.href = '/'
 }
 
 onMounted(() => {

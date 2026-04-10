@@ -53,6 +53,7 @@
 
       <!-- Digital Employee Management -->
       <button
+        v-if="isAdmin"
         @click="goToDigitalEmployeeManager"
         :class="[
           'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
@@ -176,7 +177,7 @@
       @click.self="showRenameModal = false"
     >
       <div class="bg-white rounded-lg p-4 w-64 border border-gray-200 shadow-xl">
-        <h3 class="text-base font-medium text-gray-800 mb-3">重命名会话</h3>
+        <h3 class="text-sm font-medium text-gray-800 mb-3">重命名会话</h3>
         <input
           v-model="renameInput"
           @keyup.enter="confirmRename"
@@ -221,7 +222,7 @@ defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { isLoggedIn } = useAuth()
+const { isLoggedIn, isAdmin } = useAuth()
 const {
   sessions,
   currentSessionId,

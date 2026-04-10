@@ -316,7 +316,7 @@
     >
       <div class="bg-white rounded-2xl w-full max-w-lg mx-4 shadow-2xl">
         <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <h2 class="text-lg font-semibold text-gray-800">上传文档</h2>
+          <h2 class="text-sm font-semibold text-gray-800">上传文档</h2>
           <button
             @click="showUploadModal = false"
             class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
@@ -416,7 +416,7 @@
             </svg>
           </div>
           <div>
-            <h3 class="text-lg font-semibold text-gray-800">删除文档</h3>
+            <h3 class="text-sm font-semibold text-gray-800">删除文档</h3>
             <p class="text-sm text-gray-500">确定要删除"{{ documentToDelete.title }}"吗？此操作不可恢复。</p>
           </div>
         </div>

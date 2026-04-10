@@ -34,11 +34,13 @@ class UseSkillTool(BaseTool):
 
         Args:
             skill: 技能名称
+            _substitutions: 内部参数，AgentSkills 标准字符串替换上下文
 
         Returns:
             技能内容字典
         """
         skill_name = kwargs.get("skill", "")
+        substitutions = kwargs.get("_substitutions")  # 内部参数，不来自 LLM
 
         if not skill_name:
             return {
@@ -63,7 +65,7 @@ class UseSkillTool(BaseTool):
             }
 
         skill = self.skill_registry.get(skill_name)
-        skill_content = self.skill_registry.get_content(skill_name)
+        skill_content = self.skill_registry.get_content(skill_name, substitutions=substitutions)
 
         if skill_content is None:
             available = self.skill_registry.list_skills()

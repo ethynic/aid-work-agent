@@ -98,6 +98,17 @@ admin:
 
 # Skill 配置
 skills:
+  # 多目录发现（优先级从低到高，高优先级目录覆盖同名 skill）
+  # AgentSkills 标准支持多级发现
+  directories:
+    - src/skills/
+    # - storage/skills/enterprise/  # 企业级 skill（取消注释启用）
+
+  # 安全配置
+  security:
+    allow_dynamic_context: false  # 动态上下文注入 (!`command`)，企业环境建议关闭
+    allow_hooks: true             # 生命周期 hooks (onLoad/onUnload)
+
   # 主智能体允许使用的 skills 列表
   # 如果为空列表，则允许使用所有 skills
   master_agent:

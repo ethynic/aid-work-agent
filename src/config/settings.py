@@ -190,6 +190,29 @@ class Settings(BaseModel):
         extra = "allow"
 
 
+class _AttrDict:
+    """将字典递归转换为支持属性访问的对象，用于自动加载 YAML 配置中的额外字段。
+
+    对于 config.yaml 中未在 Settings.__fields__ 里定义的顶层节点，
+    会自动转换为 _AttrDict 实例，使得 settings.xxx.yyy 形式的访问可用。
+    """
+
+    def __init__(self, data: dict):
+        for key, value in data.items():
+            if isinstance(value, dict):
+                setattr(self, key, _AttrDict(value))
+            elif isinstance(value, list):
+                setattr(self, key, [
+                    _AttrDict(item) if isinstance(item, dict) else item
+                    for item in value
+                ])
+            else:
+                setattr(self, key, value)
+
+    def __repr__(self):
+        return f"_AttrDict({self.__dict__})"
+
+
 def _substitute_env_vars(value: Any) -> Any:
     """递归替换环境变量占位符"""
     if isinstance(value, str):
@@ -287,7 +310,17 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("TAVILY_API_KEY"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
 
-    return Settings(**yaml_config)
+    s = Settings(**yaml_config)
+
+    # 将 YAML 中未在 Settings.__fields__ 里定义的嵌套字典自动转换为属性可访问对象
+    # 这样 config.yaml 新增的配置节（如 admin、scheduler 等）无需在 Settings 中声明，
+    # 即可通过 settings.xxx.yyy 形式直接访问
+    defined_fields = set(getattr(Settings, 'model_fields', {}).keys())
+    for key, value in yaml_config.items():
+        if key not in defined_fields and isinstance(value, dict):
+            setattr(s, key, _AttrDict(value))
+
+    return s
 
 
 # 全局配置实例

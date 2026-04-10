@@ -1,0 +1,41 @@
+---
+description: 后端开发注意事项，包括 Gunicorn 多 worker 进程内存隔离等关键问题
+globs:
+  - "src/**/*.py"
+---
+
+# 后端开发注意事项
+
+## Gunicorn 多 Worker 进程内存隔离
+
+**核心问题**：Gunicorn 启动多个 worker 进程时，每个 worker 拥有独立的 Python 内存空间。模块级单例变量（如 `registry = SubagentRegistry()`）在每个 worker 中各有一份副本，进程之间**不共享内存**。
+
+### 现象
+
+- 写入请求（POST）命中 worker A，更新了 worker A 的内存
+- 读取请求（GET）命中 worker B，读到的是旧数据
+- 同一 API 间歇性返回不一致结果
+
+### 判断依据
+
+如果生产环境使用 Gunicorn + UvicornWorker（本项目配置为 8 个 worker），所有内存中的状态都存在进程隔离问题。
+
+### 解决方案
+
+| 方案 | 适用场景 | 说明 |
+|------|---------|------|
+| **磁盘刷新** | 低频读操作（如管理后台配置读取） | 每次读请求前从磁盘重新加载数据，保证一致性 |
+| **Redis 共享缓存** | 高频读操作 | 用 Redis 替代进程内 dict，所有 worker 共享同一数据源 |
+| **数据库** | 持久化数据 | 所有状态变更写入数据库，读取时查库 |
+| **单 worker** | 开发/调试 | `gunicorn --workers 1`，仅限非生产环境 |
+
+### 关键原则
+
+> **磁盘/数据库是共享的，内存是隔离的。** 任何依赖内存状态且跨请求的读写操作，都必须考虑多 worker 一致性。
+
+### 参考案例
+
+本项目 `SubagentRegistry` 的修复：
+- 写入时：保存配置到磁盘（`storage/subagents2/`）
+- 读取前：`_load_custom()` 从磁盘全量刷新，移除已删除的条目
+- 详见 `src/subagents/registry.py` 和 `src/api/admin_subagent.py`
