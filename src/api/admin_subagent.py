@@ -79,15 +79,35 @@ def _require_admin(request: Request) -> Dict:
     return admin
 
 
+def _sanitize_error_info(error_msg: str) -> str:
+    """过滤错误信息中的敏感信息"""
+    if not error_msg:
+        return error_msg
+    import re
+    patterns = [
+        r'password["\s:=]+\S+',
+        r'passwd["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'access[_-]?key["\s:=]+\S+',
+        r'private[_-]?key["\s:=]+\S+',
+        r'auth[_-]?token["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
 def _error_response(error: str, debug: str, status_code: int = 500):
     """标准错误响应"""
-    from src.utils.error_utils import sanitize_error_info
     return JSONResponse(
         status_code=status_code,
         content={
             "success": False,
             "error": error,
-            "debug": sanitize_error_info(debug),
+            "debug": _sanitize_error_info(debug),
         },
     )
 
@@ -105,6 +125,10 @@ async def list_subagents(request: Request):
         registry = master_agent.subagent_registry
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
+
+        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
 
         items = registry.get_all_subagents_with_type()
         return {"success": True, "data": items}
@@ -125,6 +149,10 @@ async def get_subagent_detail(request: Request, agent_id: str):
         registry = master_agent.subagent_registry
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
+
+        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
 
         config = registry.get(agent_id)
         if not config:
@@ -164,6 +192,10 @@ async def get_subagent_content(request: Request, agent_id: str):
         registry = master_agent.subagent_registry
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
+
+        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
 
         content = registry.get_content(agent_id)
         if not content:

@@ -14,7 +14,7 @@
 
       <!-- Page Title -->
       <div class="flex items-center gap-2 min-w-0">
-        <h1 class="text-sm font-medium text-gray-800 truncate">
+        <h1 class="text-sm font-bold text-gray-800 truncate">
           <slot name="title">{{ title }}</slot>
         </h1>
       </div>
@@ -27,7 +27,7 @@
         <span class="text-sm text-gray-600">{{ user?.username }}</span>
         <button
           @click="$emit('logout')"
-          class="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+          class="px-2 py-1 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
         >
           退出
         </button>
@@ -36,7 +36,7 @@
       <!-- Online Status -->
       <div class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-gray-100">
         <span :class="isOnline ? 'bg-success-500' : 'bg-gray-400'" class="w-1.5 h-1.5 rounded-full"></span>
-        <span class="text-xs text-gray-500">{{ isOnline ? '在线' : '离线' }}</span>
+        <span class="text-sm text-gray-500">{{ isOnline ? '在线' : '离线' }}</span>
       </div>
 
       <!-- More Menu -->

@@ -36,6 +36,9 @@ class EmailSettingsRequest(BaseModel):
 async def get_email_settings(current_user: dict = Depends(get_current_user)):
     """获取当前用户的邮箱配置（密码掩码）"""
     try:
+        if not current_user:
+            return {"success": True, "data": None, "bound": False}
+
         user_id = current_user.get("user_id")
         config = EmailCredentialDB.get_masked_by_user(user_id)
 

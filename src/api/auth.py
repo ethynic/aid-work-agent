@@ -14,6 +14,7 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -331,11 +332,19 @@ async def get_current_user_info(request: Request):
     """获取当前用户信息"""
     user = get_current_user(request)
     if user:
+        # 判断是否为管理员
+        admin_phones = getattr(settings, "admin", None)
+        is_admin = False
+        if admin_phones:
+            phone_list = getattr(admin_phones, "phones", [])
+            is_admin = user.get("phone", "") in phone_list
+
         return {
             "user_id": user["user_id"],
             "username": user["username"],
             "phone": user["phone"],
-            "avatar_url": user.get("avatar_url")
+            "avatar_url": user.get("avatar_url"),
+            "is_admin": is_admin,
         }
     raise HTTPException(status_code=401, detail="未登录")
 

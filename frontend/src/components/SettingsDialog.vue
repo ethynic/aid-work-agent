@@ -8,8 +8,8 @@
       <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col overflow-hidden">
         <!-- Header -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <h2 class="text-lg font-semibold text-gray-800">设置</h2>
-          <button @click="$emit('close')" class="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors text-xl">&times;</button>
+          <h2 class="text-base font-semibold text-gray-800">设置</h2>
+          <button @click="$emit('close')" class="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors text-base">&times;</button>
         </div>
 
         <!-- Body: Left Nav + Right Content -->

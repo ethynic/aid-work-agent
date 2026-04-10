@@ -25,7 +25,8 @@
       "Bash(PYTHONUTF8=1 python:*)",
       "Bash(find \"c:\\\\repos\\\\aid-work-agent\\\\src\\\\skills\" -name \"SKILL.md\" -exec head -20 {} \\\\;)",
       "WebSearch",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(gh pr:*)"
     ]
   }
 }

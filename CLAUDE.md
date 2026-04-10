@@ -1,32 +1,32 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文档为 Claude Code (claude.ai/code) 在本项目中工作时提供指导。
 
-## Project Overview
+## 项目概览
 
-AID Work Agent is an enterprise intelligent agent system (企业员工智能代理系统) built for handling daily enterprise employee tasks via conversational AI. It uses Chinese domestic LLM providers (Qwen/DashScope and ZhipuAI) and supports multi-channel access (WeCom, DingTalk, Feishu). The system is multi-tenant and supports hundreds of concurrent users.
+AID Work Agent 是企业员工智能代理系统，通过对话式 AI 处理企业员工的日常任务。系统使用国内大模型提供商（Qwen/DashScope 和 ZhipuAI），支持多渠道接入（企业微信、钉钉、飞书）。系统支持多租户，可承载数百并发用户。
 
-**Design principles**: Stability and predictability over creativity. Professional, concise responses. When uncertain, honestly admit it. No humor, no entertainment, no academic speculation. Sensitive information must be encrypted and never returned in plaintext to users.
+**设计原则**：稳定性和可预测性优先于创造力。专业、简洁的回复。不确定时诚实承认。不幽默、不娱乐、不学术猜测。敏感信息必须加密，绝不以明文形式返回给用户。
 
-## Commands
+## 命令
 
-### Backend
+### 后端
 ```bash
-pip install -r requirements.txt          # Install dependencies
-python -m src.main                       # Start FastAPI server (port 8000)
-CLI_MODE=true python -m src.main         # CLI chat mode (no web server)
-python gradio_app.py                     # Gradio debug UI (port 7860)
-gunicorn -c deploy/gunicorn.conf.py src.main:app  # Production server
+pip install -r requirements.txt          # 安装依赖
+python -m src.main                       # 启动 FastAPI 服务器（端口 8000）
+CLI_MODE=true python -m src.main         # CLI 聊天模式（不启动 Web 服务器）
+python gradio_app.py                     # Gradio 调试 UI（端口 7860）
+gunicorn -c deploy/gunicorn.conf.py src.main:app  # 生产环境服务器
 ```
 
-### Frontend
+### 前端
 ```bash
-cd frontend && npm install               # Install frontend deps
-cd frontend && npm run dev               # Dev server (port 5173)
-cd frontend && npm run build             # Production build
+cd frontend && npm install               # 安装前端依赖
+cd frontend && npm run dev               # 开发服务器（端口 5173）
+cd frontend && npm run build             # 生产环境构建
 ```
 
-### Testing
+### 测试
 ```bash
 # 后端（pytest）
 pytest                                    # 运行全部（默认跳过 e2e）
@@ -45,73 +45,222 @@ cd frontend && npm run test:watch         # 监听模式
 
 ### Docker
 ```bash
-docker compose up -d                     # Dev environment
-docker compose -f docker-compose.prod.yml up -d --build  # Production
+docker compose up -d                     # 开发环境
+docker compose -f docker-compose.prod.yml up -d --build  # 生产环境
 ```
 
-## Architecture
+## 开发规范
 
-### Request Flow
+### 后端开发规范
+
+#### 日志规范
+**本项目后端统一使用 `loguru` 作为日志库，禁止使用标准库 `logging`。**
+
+```python
+from loguru import logger
+
+# 后端日志：复杂业务逻辑长期保留
+logger.info('后端日志：开始处理用户请求')
+
+# 后端日志：异常捕获
+logger.error(f'后端日志：数据库连接失败: {e}', exc_info=True)
+
+# 临时调试日志（bug 修复后删除）
+logger.debug(f'临时调试：请求参数 {params}')
 ```
-User/Channel (WeCom, DingTalk, Feishu, Web)
-  → FastAPI (src/main.py) — HTTP routes, SSE streaming
-    → Master Agent (src/core/agent.py) — LLM agent loop (max 20 iterations)
-      → LLM Gateway (src/llm/gateway.py) + Tool Registry (src/tools/)
-        → SubAgent Executor / Skill Executor / Direct Tool Execution
+
+#### 错误处理规范
+所有 API 错误响应必须包含 `debug` 字段，且必须过滤敏感信息：
+
+```python
+import re
+
+SENSITIVE_PATTERNS = [
+    r'password["\s:=]+\S+',
+    r'api[_-]?key["\s:=]+\S+',
+    r'token["\s:=]+\S+',
+]
+
+def sanitize_error_info(error_msg: str) -> str:
+    for pattern in SENSITIVE_PATTERNS:
+        error_msg = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', error_msg, flags=re.IGNORECASE)
+    return error_msg
+
+# 错误响应格式
+return {
+    "success": False,
+    "error": "操作失败，请稍后重试",
+    "debug": sanitize_error_info(str(e))
+}
 ```
 
-### Core Components
+#### 异步/同步开发规范
+**避免 `await` 调用同步方法导致的 `TypeError`**：
 
-**Agent** (`src/core/agent.py`): The brain. A single `Agent` class serves as both master and sub-agent (via `is_master` flag). The `master_agent` singleton is exported from `src/core/__init__.py`. The agent loop calls LLM, executes tools, accumulates results, and pushes progress events via callbacks.
+| 类型 | 定义 | 调用 |
+|------|------|------|
+| 同步 | `def method()` | `obj.method()` |
+| 异步 | `async def method()` | `await obj.method()` |
 
-**Tool System** (`src/tools/`): Tools inherit `BaseTool` and implement `async execute(args)`. **Critical**: Tool schemas for LLM function calling are defined in `AGENT_TOOLS` list at the top of `agent.py`, which is SEPARATE from `ToolRegistry` implementations. Adding a tool requires updating both places: the schema in `AGENT_TOOLS` and registration in `Agent._register_builtin_tools()`.
+异步路由调用同步服务时，使用 `asyncio.to_thread()`：
+```python
+import asyncio
 
-**Skill System** (`src/core/skill_*.py` + `src/skills/`): Domain knowledge extension packages stored as directories with `SKILL.md` files (YAML frontmatter + Markdown). `SkillRegistry` discovers and indexes skills. Skills are loaded into context when the LLM calls `use_skill`, and executed via `skill_execute`. Skills support auto-matching by file extension.
+@router.get("/data")
+async def get_data():
+    service = MyService()
+    result = await asyncio.to_thread(service.sync_method)  # ✅ 正确
+    return result
+```
 
-**SubAgent System** (`subagents/` + `src/subagents/`): Defined in `subagents/<name>/SUBAGENT.md` (YAML + Markdown). The master agent delegates tasks via `delegate_to_subagent`. `SubagentExecutor` instantiates a child `Agent(is_master=False)` and runs it in a separate thread.
+#### Gunicorn 多 Worker 进程内存隔离
+**核心问题**：Gunicorn 启动多个 worker 进程时，每个 worker 拥有独立的 Python 内存空间。
 
-**LLM Gateway** (`src/llm/gateway.py`): Unified interface to `qwen` (DashScope) and `zhipu` (ZhipuAI) providers. All calls go through `chat_with_tools()`. Provider is switchable via `llm.provider` in `configs/config.yaml`. `KeyPool` manages multiple API keys with semaphore-based concurrency control.
+| 方案 | 适用场景 |
+|------|---------|
+| 磁盘刷新 | 低频读操作（如管理后台配置读取） |
+| Redis 共享缓存 | 高频读操作 |
+| 数据库 | 持久化数据 |
+| 单 worker | 开发/调试（`gunicorn --workers 1`） |
 
-**Channel System** (`src/channels/`): Each channel (WeCom, DingTalk, Feishu) extends `ChannelAdapter`. `ChannelManager` dispatches messages. Enabled/disabled via `configs/config.yaml` per-channel `enabled` flag.
+> **磁盘/数据库是共享的，内存是隔离的。** 任何依赖内存状态且跨请求的读写操作，都必须考虑多 worker 一致性。
 
-**Memory** (`src/memory/short_term.py`): `ShortTermMemory` uses a deque-based sliding window per session_id, with configurable max_messages and TTL.
+#### API 接口命名规范
+接口名称应与 Python 方法名保持一致，使用具体、有明确指向性的命名：
 
-**Knowledge Base** (`src/knowledge/`): RAG pipeline with parsers → chunker → embedding (via LLM gateway) → sqlite-vec vector DB → hybrid retriever.
+```python
+# ✅ 正确
+@router.post("/search_documents")
+async def search_documents(request: SearchRequest):
 
-**Database** (`src/db/`): Default SQLite (`aid_work_agent.db`), configurable via `DATABASE_URL` env var to PostgreSQL or MySQL. Used for session persistence and auth.
+# ❌ 错误
+@router.post("/search")
+async def search_documents(request: SearchRequest):
+```
 
-### Key Entry Points
+### 前端开发规范
 
-- `src/main.py` — FastAPI app with all HTTP routes (chat, SSE stream, upload, channel callbacks)
-- `gradio_app.py` — Standalone debug UI that directly imports `master_agent`, bypassing FastAPI
-- `v4_skills_agent.py` — Standalone Claude/Anthropic API demo, not part of the main system
+#### 日志规范
+```javascript
+// 长期保留日志
+console.log('前端日志：开始验证用户凭证', { username });
 
-### Configuration
+// 临时调试日志（bug 修复后删除）
+console.log('临时调试：API 响应', response);
+```
 
-Configuration loads in layers (later overrides earlier):
-1. `configs/config.yaml` — Base YAML config with `${ENV_VAR}` placeholders
-2. `.env` file — Environment variables
-3. OS environment variables — Direct overrides
+#### 缓存使用规范
+**非必要，不使用缓存。** 优先使用直接请求：
+```javascript
+// ✅ 推荐
+export const knowledgeAPI = {
+  list: (params) => api.get('/knowledge/', { params }),
+}
+```
 
-Key env vars: `LLM_PROVIDER` (qwen|zhipu), `QWEN_API_KEYS`, `ZHIPU_API_KEYS`, `DATABASE_URL`, `TAVILY_API_KEY`, channel configs (`WECOM_*`, `DINGTALK_*`, `FEISHU_*`), `SMTP_*`/`IMAP_*` for email.
+#### 页面布局一致性规范
+从 `SessionSidebar` 导航进入的页面**必须**保留 `SessionSidebar` + `AppHeader` 布局。
 
-## Extension Points
+### 测试规范（TDD）
 
-### Adding a New Tool
-1. Create tool class in `src/tools/<category>/`, inherit `BaseTool`
-2. Define Pydantic `InputModel` for parameter validation (with Chinese Field descriptions)
-3. Set `name`, `description`, `display_name`, `InputModel` on the class
-4. Implement `async execute(self, **kwargs) -> Dict[str, Any]`
-5. Optionally override `get_display_name()` for dynamic display names
-6. Register in `Agent._register_builtin_tools()`
+```
+需求分析 → 编写测试 → 审核通过 → 运行测试(红灯) → 实现代码 → 测试通过(绿灯) → 重构 → 重复
+```
+
+| 项目 | 要求 |
+|------|------|
+| 命名 | `test_<场景>_<预期结果>` |
+| 覆盖率 | 目标 100% |
+| 覆盖范围 | 正常路径、边界条件、异常路径 |
+
+### 部署规范
+
+详细部署流程见 [`.codebuddy/rules/deploy-code.mdc`](.codebuddy/rules/deploy-code.mdc)。
+
+**快速命令**：
+```bash
+# 1. 前端编译
+Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; Remove-Item -Recurse -Force -Path "dist" -ErrorAction SilentlyContinue; npm run build
+
+# 2. Git 提交推送
+python scripts/commit.py "提交信息" --push
+
+# 3. FTP 上传
+powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1
+```
+
+**需要重启容器的场景**：
+- 配置文件修改（`configs/config.yaml`）
+- 依赖包变更（`requirements.txt`）
+- 环境变量修改
+- 新增 Skill/SubAgent
+- Docker 相关文件修改
+
+---
+
+## 架构
+
+### 请求流程
+```
+用户/渠道（企业微信、钉钉、飞书、Web）
+  → FastAPI (src/main.py) — HTTP 路由、SSE 流式输出
+    → 主智能体 (src/core/agent.py) — 大模型智能体循环（最多 20 轮）
+      → 大模型网关 (src/llm/gateway.py) + 工具注册表 (src/tools/)
+        → 子智能体执行器 / 技能执行器 / 直接工具执行
+```
+
+### 核心组件
+
+**智能体** (`src/core/agent.py`)：核心大脑。单个 `Agent` 类同时作为主智能体和子智能体（通过 `is_master` 标志区分）。`master_agent` 单例从 `src/core/__init__.py` 导出。智能体循环调用大模型、执行工具、累积结果，并通过回调推送进度事件。
+
+**工具系统** (`src/tools/`)：工具继承 `BaseTool` 并实现 `async execute(args)`。**关键**：用于大模型函数调用的工具 schema 定义在 `agent.py` 顶部的 `AGENT_TOOLS` 列表中，与 `ToolRegistry` 实现是**分开的**。添加工具需要同时更新两处：`AGENT_TOOLS` 中的 schema 和 `Agent._register_builtin_tools()` 中的注册。
+
+**技能系统** (`src/core/skill_*.py` + `src/skills/`)：领域知识扩展包，存储在带 `SKILL.md` 文件（YAML 头部 + Markdown）的目录中。`SkillRegistry` 发现并索引技能。当大模型调用 `use_skill` 时，技能被加载到上下文中，并通过 `skill_execute` 执行。技能支持按文件扩展名自动匹配。
+
+**子智能体系统** (`subagents/` + `src/subagents/`)：在 `subagents/<name>/SUBAGENT.md` 中定义（YAML + Markdown）。主智能体通过 `delegate_to_subagent` 委托任务。`SubagentExecutor` 实例化一个子 `Agent(is_master=False)` 并在线程中运行。
+
+**大模型网关** (`src/llm/gateway.py`)：统一接口到 `qwen`（DashScope）和 `zhipu`（ZhipuAI）提供商。所有调用都通过 `chat_with_tools()`。提供商可通过 `configs/config.yaml` 中的 `llm.provider` 切换。`KeyPool` 通过信号量控制并发，管理多个 API 密钥。
+
+**渠道系统** (`src/channels/`)：每个渠道（企业微信、钉钉、飞书）继承 `ChannelAdapter`。`ChannelManager` 分发消息。渠道通过 `configs/config.yaml` 中的 `enabled` 标志启用/禁用。
+
+**记忆** (`src/memory/short_term.py`)：`ShortTermMemory` 使用基于 deque 的滑动窗口，按 session_id 分隔，配置 max_messages 和 TTL。
+
+**知识库** (`src/knowledge/`)：RAG 流程，包含解析器 → 分块器 → 嵌入（通过大模型网关）→ sqlite-vec 向量数据库 → 混合检索器。
+
+**数据库** (`src/db/`)：默认 SQLite (`aid_work_agent.db`)，可通过 `DATABASE_URL` 环境变量配置为 PostgreSQL 或 MySQL。用于会话持久化和认证。
+
+### 关键入口点
+
+- `src/main.py` — FastAPI 应用，包含所有 HTTP 路由（聊天、SSE 流式上传、渠道回调）
+- `gradio_app.py` — 独立调试 UI，直接导入 `master_agent`，绕过 FastAPI
+- `v4_skills_agent.py` — 独立的 Claude/Anthropic API 演示，不属于主系统
+
+### 配置加载
+
+配置按以下层级加载（后者覆盖前者）：
+1. `configs/config.yaml` — 基础 YAML 配置，支持 `${ENV_VAR}` 占位符
+2. `.env` 文件 — 环境变量
+3. OS 环境变量 — 直接覆盖
+
+关键环境变量：`LLM_PROVIDER`（qwen|zhipu）、`QWEN_API_KEYS`、`ZHIPU_API_KEYS`、`DATABASE_URL`、`TAVILY_API_KEY`、渠道配置（`WECOM_*`、`DINGTALK_*`、`FEISHU_*`）、邮箱配置（`SMTP_*`/`IMAP_*`）。
+
+## 扩展点
+
+### 添加工具
+1. 在 `src/tools/<category>/` 中创建工具类，继承 `BaseTool`
+2. 定义 Pydantic `InputModel` 用于参数验证（带中文 Field 描述）
+3. 在类上设置 `name`、`description`、`display_name`、`InputModel`
+4. 实现 `async execute(self, **kwargs) -> Dict[str, Any]`
+5. 可选择重写 `get_display_name()` 用于动态显示名称
+6. 在 `Agent._register_builtin_tools()` 中注册
 
 **Schema 来源**：每个工具类通过 `InputModel`（Pydantic BaseModel）或 `parameters_schema` 定义参数 schema，`ToolRegistry.get_tool_definitions()` 自动收集。不再需要手动维护 `schemas.py`。
 
-### Adding a New Skill
-Create directory `src/skills/<name>-<version>/` with a `SKILL.md` file (see existing skills for format). Auto-loaded on restart.
+### 添加技能
+创建目录 `src/skills/<name>-<version>/`，包含 `SKILL.md` 文件（参考现有技能格式）。重启后自动加载。
 
-### Adding a New SubAgent
-Create `subagents/<name>/SUBAGENT.md` with YAML frontmatter (name, description, capabilities, triggers, tools, skills.allowed) + Markdown body. Auto-loaded on restart.
+### 添加子智能体
+创建 `subagents/<name>/SUBAGENT.md`，包含 YAML 头部（name、description、capabilities、triggers、tools、skills.allowed）+ Markdown 正文。重启后自动加载。
 
 **SUBAGENT.md 格式规范**：
 ```
@@ -142,10 +291,10 @@ context:
 - 正确做法：**不要在 frontmatter 中定义 system_prompt**，把系统提示词写在闭合 `---` 之后的 body 中。Loader 代码 `frontmatter.get("system_prompt", body.strip())` 会自动使用 body 作为 system_prompt
 - URL 路由匹配：`/chat/<目录名>` 通过 `dir_name` 字段匹配（例如 `/chat/contract-archive-review` 匹配 `subagents/contract-archive-review/`）
 
-### Adding a New Channel
-Extend `src/channels/base.py` `ChannelAdapter`, implement `parse_message`/`send_message`/`verify_signature`, register in `src/main.py` lifespan.
+### 添加渠道
+继承 `src/channels/base.py` 的 `ChannelAdapter`，实现 `parse_message`/`send_message`/`verify_signature`，在 `src/main.py` 生命周期中注册。
 
-## Testing
+## 测试指南
 
 ### 测试目录结构
 
@@ -268,6 +417,6 @@ async def test_my_route():
 - **异步测试**使用 `@pytest.mark.asyncio`，`pytest.ini` 中 `asyncio_mode = auto` 已全局启用。
 - **旧测试文件**（`tests/test_*.py`）已迁移到子目录，通过 `collect_ignore` 跳过收集，可后续清理删除。
 
-## Language Note
+## 语言说明
 
-The codebase uses mixed languages: README, comments, and prompts are primarily Chinese (Simplified). Code identifiers are English. UI text is Chinese.
+本项目使用多种语言：README、注释和提示词主要为中文（简体）。代码标识符为英文。UI 文本为中文。

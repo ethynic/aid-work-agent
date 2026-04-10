@@ -44,3 +44,92 @@ export const someAPI = {
 # 检查是否在 API 定义中使用了 cachedRequest
 grep -rn "cachedRequest" frontend/src/services/api.js
 ```
+
+## 页面布局一致性规范
+
+**核心原则**：系统主要功能菜单（`SessionSidebar` 中部从"企业知识库"开始的导航菜单项），点击后跳转的页面**必须**保留左侧的 `SessionSidebar` 和顶部的 `AppHeader`，确保用户始终感觉在同一个系统中切换页面，而不是跳转到了独立站点。
+
+### 规范要求
+
+1. **从 `SessionSidebar` 跳转的页面，必须包含 `SessionSidebar` + `AppHeader` 布局**：参考 `ChatContainer.vue` 和 `KnowledgeBase.vue` 的结构。
+
+2. **禁止使用独立的页面布局**：不要创建自带 header、不含 `SessionSidebar` 的全屏独立页面。
+
+### 标准页面布局结构
+
+```vue
+<template>
+  <div class="h-screen flex flex-col bg-gray-50">
+    <main class="flex-1 flex overflow-hidden">
+      <!-- Session Sidebar -->
+      <SessionSidebar
+        :is-collapsed="isSidebarCollapsed"
+        @collapse="isSidebarCollapsed = true"
+      />
+
+      <!-- Right Content Area -->
+      <div class="flex-1 flex flex-col min-w-0">
+        <!-- Header Bar -->
+        <AppHeader
+          title="页面标题"
+          :is-online="true"
+          :is-logged-in="isLoggedIn"
+          :user="user"
+          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+        >
+          <template #menu-items="{ closeMenu }">
+            <!-- 页面特有的菜单项 -->
+          </template>
+        </AppHeader>
+
+        <!-- 页面具体内容 -->
+        <div class="flex-1 overflow-auto">
+          ...
+        </div>
+      </div>
+    </main>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import SessionSidebar from './SessionSidebar.vue'
+import AppHeader from './AppHeader.vue'
+import { useAuth } from '@/composables/useAuth'
+
+const { user, isLoggedIn } = useAuth()
+const isSidebarCollapsed = ref(false)
+</script>
+```
+
+### 已有的合规页面
+
+| 页面 | 路由 | 包含 SessionSidebar | 包含 AppHeader |
+|------|------|---------------------|----------------|
+| 对话 | `/`、`/chat/:subagent` | ✅ | ✅ |
+| 企业知识库 | `/knowledge-base` | ✅ | ✅ |
+| 数字员工 | `/admin/subagents` | ✅ | ✅ |
+
+### ❌ 错误示例
+
+```vue
+<!-- ❌ 独立全屏页面，没有 SessionSidebar 和 AppHeader -->
+<template>
+  <div class="h-screen flex flex-col bg-gray-50">
+    <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4">
+      <button @click="goBack">返回</button>
+      <h1>页面标题</h1>
+    </header>
+    <!-- 页面内容 -->
+  </div>
+</template>
+```
+
+### 例外情况
+
+以下页面**不适用**此规范，因为它们不是从 `SessionSidebar` 导航进入的：
+
+| 页面 | 路由 | 说明 |
+|------|------|------|
+| 客户信息 | `/customer-info` | 通过聊天页菜单弹窗打开（新标签页） |
+| 定时任务 | `/scheduled-tasks` | 通过聊天页菜单弹窗打开（新标签页） |
