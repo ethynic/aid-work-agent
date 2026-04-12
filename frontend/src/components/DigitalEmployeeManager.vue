@@ -1,5 +1,22 @@
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
+    <!-- Toast Messages -->
+    <div class="fixed top-[20%] left-1/2 -translate-x-1/2 z-50 space-y-2">
+      <TransitionGroup name="toast">
+        <div v-for="toast in toasts" :key="toast.id"
+          :class="['px-4 py-2 rounded-lg shadow-lg text-sm flex items-center gap-2',
+            toast.type === 'success' ? 'bg-green-500 text-white' : '',
+            toast.type === 'error' ? 'bg-red-500 text-white' : '',
+            toast.type === 'info' ? 'bg-blue-500 text-white' : ''
+          ]">
+          <svg v-if="toast.type === 'success'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+          </svg>
+          <span>{{ toast.message }}</span>
+        </div>
+      </TransitionGroup>
+    </div>
+
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar -->
@@ -111,32 +128,32 @@
         </div>
 
         <!-- Edit / Create Mode -->
-        <div v-else class="">
-          <div class="flex items-center justify-between mb-6">
+        <div v-else class="h-full flex flex-col">
+          <div class="flex items-center justify-between mb-4 flex-shrink-0">
             <h2 class="text-base font-semibold text-gray-800">{{ isNewMode ? '新建数字员工' : '编辑数字员工' }}</h2>
             <button @click="cancelEdit" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">取消</button>
           </div>
-          <div class="space-y-4">
+          <div class="flex-1 flex flex-col min-h-0 space-y-4 overflow-y-auto">
             <!-- Agent ID -->
-            <div>
+            <div class="flex-shrink-0">
               <label class="block text-sm font-medium text-gray-500 mb-1">ID (目录名)</label>
               <input v-model="editForm.agent_id" :disabled="!isNewMode" type="text" placeholder="如 my-custom-agent"
                 class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100" />
             </div>
             <!-- Name -->
-            <div>
+            <div class="flex-shrink-0">
               <label class="block text-sm font-medium text-gray-500 mb-1">显示名称</label>
               <input v-model="editForm.name" type="text" placeholder="数字员工名称"
                 class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
             </div>
             <!-- Description -->
-            <div>
+            <div class="flex-shrink-0">
               <label class="block text-sm font-medium text-gray-500 mb-1">描述</label>
               <textarea v-model="editForm.description" rows="2" placeholder="简要描述此数字员工的用途"
                 class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"></textarea>
             </div>
             <!-- Capabilities -->
-            <div>
+            <div class="flex-shrink-0">
               <label class="block text-sm font-medium text-gray-500 mb-1">能力标签</label>
               <div class="flex flex-wrap gap-1 mb-1">
                 <span v-for="(cap, idx) in editForm.capabilities" :key="idx"
@@ -151,23 +168,23 @@
                 <button @click="addCapability" class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">添加</button>
               </div>
             </div>
-            <!-- System Prompt -->
-            <div>
-              <div class="flex items-center justify-between mb-1">
+            <!-- System Prompt - 撑满剩余空间 -->
+            <div class="flex-1 flex flex-col min-h-0">
+              <div class="flex items-center justify-between mb-1 flex-shrink-0">
                 <label class="block text-sm font-medium text-gray-500">系统提示词 (Markdown)</label>
                 <div class="flex gap-1">
                   <button @click="promptMode = 'edit'" :class="['px-2 py-1 text-xs rounded', promptMode === 'edit' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:bg-gray-100']">编辑</button>
                   <button @click="promptMode = 'preview'" :class="['px-2 py-1 text-xs rounded', promptMode === 'preview' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:bg-gray-100']">预览</button>
                 </div>
               </div>
-              <textarea v-if="promptMode === 'edit'" v-model="editForm.system_prompt" rows="16" placeholder="## 角色定义&#10;&#10;你是一个..."
-                class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono resize-y"></textarea>
-              <div v-else class="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto text-sm text-gray-800 whitespace-pre-wrap" v-html="editRenderedMarkdown"></div>
+              <textarea v-if="promptMode === 'edit'" v-model="editForm.system_prompt" placeholder="## 角色定义&#10;&#10;你是一个..."
+                class="flex-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono resize-none min-h-0"></textarea>
+              <div v-else class="flex-1 bg-gray-50 rounded-lg p-4 overflow-y-auto text-sm text-gray-800 whitespace-pre-wrap" v-html="editRenderedMarkdown"></div>
             </div>
           </div>
 
-          <!-- Actions -->
-          <div class="flex gap-2 mt-6 pt-4 border-t border-gray-200">
+          <!-- Actions - 固定在底部 -->
+          <div class="flex gap-2 mt-4 pt-4 border-t border-gray-200 flex-shrink-0">
             <button @click="aiEnhance" :disabled="aiEnhancing" class="px-3 py-1.5 text-sm text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
               {{ aiEnhancing ? 'AI 完善中...' : 'AI 完善' }}
             </button>
@@ -279,6 +296,18 @@ const showAiCompareDialog = ref(false)
 const aiCompareOriginal = ref('')
 const aiCompareEnhanced = ref('')
 
+// Toast messages
+const toasts = ref<Array<{ id: number; message: string; type: 'success' | 'error' | 'info' }>>([])
+let toastId = 0
+
+function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
+  const id = toastId++
+  toasts.value.push({ id, message, type })
+  setTimeout(() => {
+    toasts.value = toasts.value.filter(t => t.id !== id)
+  }, 3000)
+}
+
 // Computed
 const builtinList = computed(() => allList.value.filter(i => i.type === 'builtin'))
 const customList = computed(() => allList.value.filter(i => i.type === 'custom'))
@@ -370,7 +399,7 @@ function addCapability() {
 
 async function saveAgent() {
   if (!editForm.value.agent_id.trim() || !editForm.value.name.trim()) {
-    alert('ID 和名称不能为空')
+    showToast('ID 和名称不能为空', 'error')
     return
   }
   try {
@@ -381,7 +410,7 @@ async function saveAgent() {
       res = await updateSubagent(editForm.value.agent_id, editForm.value)
     }
     if (res.success) {
-      alert('保存成功')
+      showToast('保存成功', 'success')
       await loadList()
       // Select the saved agent
       const agentId = isNewMode.value ? editForm.value.agent_id : selectedAgent.value?.agent_id
@@ -390,10 +419,10 @@ async function saveAgent() {
         if (found) await selectAgent(found)
       }
     } else {
-      alert(res.error || '保存失败')
+      showToast(res.error || '保存失败', 'error')
     }
   } catch (e: any) {
-    alert(e.message || '保存失败')
+    showToast(e.message || '保存失败', 'error')
   }
 }
 
@@ -404,43 +433,43 @@ async function deleteCurrentAgent() {
   try {
     const res = await deleteSubagent(selectedAgent.value.agent_id)
     if (res.success) {
-      alert('已删除')
+      showToast('已删除', 'success')
       selectedAgent.value = null
       detail.value = null
       await loadList()
     } else {
-      alert(res.error || '删除失败')
+      showToast(res.error || '删除失败', 'error')
     }
   } catch (e: any) {
-    alert(e.message || '删除失败')
+    showToast(e.message || '删除失败', 'error')
   }
 }
 
 async function duplicateAgent() {
   if (!selectedAgent.value) return
   if (!duplicateForm.value.new_agent_id.trim() || !duplicateForm.value.new_name.trim()) {
-    alert('新 ID 和名称不能为空')
+    showToast('新 ID 和名称不能为空', 'error')
     return
   }
   try {
     const res = await duplicateSubagent(selectedAgent.value.agent_id, duplicateForm.value)
     if (res.success) {
-      alert('另存为成功')
+      showToast('另存为成功', 'success')
       showDuplicateDialog.value = false
       await loadList()
       const found = allList.value.find(i => i.agent_id === duplicateForm.value.new_agent_id)
       if (found) await selectAgent(found)
     } else {
-      alert(res.error || '另存为失败')
+      showToast(res.error || '另存为失败', 'error')
     }
   } catch (e: any) {
-    alert(e.message || '另存为失败')
+    showToast(e.message || '另存为失败', 'error')
   }
 }
 
 async function aiEnhance() {
   if (!editForm.value.system_prompt.trim()) {
-    alert('系统提示词不能为空')
+    showToast('系统提示词不能为空', 'error')
     return
   }
   // Build the full SUBAGENT.md content from current form state
@@ -464,10 +493,10 @@ async function aiEnhance() {
       aiCompareEnhanced.value = res.data.enhanced_content
       showAiCompareDialog.value = true
     } else {
-      alert(res.error || 'AI 完善失败')
+      showToast(res.error || 'AI 完善失败', 'error')
     }
   } catch (e: any) {
-    alert(e.message || 'AI 完善失败')
+    showToast(e.message || 'AI 完善失败', 'error')
   } finally {
     aiEnhancing.value = false
   }
