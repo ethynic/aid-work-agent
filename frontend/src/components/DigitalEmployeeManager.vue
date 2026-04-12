@@ -334,7 +334,6 @@ import { useAuth } from '@/composables/useAuth'
 import {
   listSubagents,
   getSubagentDetail,
-  getSubagentContent,
   createSubagent,
   updateSubagent,
   deleteSubagent,
@@ -457,7 +456,7 @@ async function selectAgent(item: SubagentListItem) {
   loading.value = true
   try {
     const res = await getSubagentDetail(item.agent_id)
-    if (res.success) {
+    if (res.success && res.data) {
       detail.value = res.data
     }
   } catch (e: any) {

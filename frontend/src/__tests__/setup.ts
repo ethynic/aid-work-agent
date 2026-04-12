@@ -29,10 +29,14 @@ globalThis.ResizeObserver = class ResizeObserver {
 
 // Mock IntersectionObserver
 globalThis.IntersectionObserver = class IntersectionObserver {
+  readonly root: Element | null = null
+  readonly rootMargin: string = ''
+  readonly thresholds: ReadonlyArray<number> = []
   constructor() {}
   observe() {}
   unobserve() {}
   disconnect() {}
+  takeRecords(): IntersectionObserverEntry[] { return [] }
 }
 
 // Mock matchMedia
