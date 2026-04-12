@@ -228,6 +228,33 @@ async def list_available_skills(request: Request):
         return _error_response("获取技能列表失败", str(e))
 
 
+@router.get("/tools")
+async def list_available_tools(request: Request):
+    """获取可选工具列表"""
+    try:
+        admin = _require_admin(request)
+        if admin is None:
+            return _error_response("无管理员权限", "User not in admin phone list", 403)
+
+        tool_registry = master_agent.tool_registry
+        if not tool_registry:
+            return {"success": True, "data": []}
+
+        # 获取所有工具的名称和描述
+        tools = []
+        for name, tool in tool_registry._tools.items():
+            tools.append({
+                "name": name,
+                "description": getattr(tool, 'description', '') or '',
+                "display_name": getattr(tool, 'display_name', name) or name,
+            })
+        return {"success": True, "data": tools}
+
+    except Exception as e:
+        logger.error(f"获取工具列表失败: {e}", exc_info=True)
+        return _error_response("获取工具列表失败", str(e))
+
+
 @router.post("/subagents")
 async def create_subagent(request: Request, body: CreateSubagentRequest):
     """创建定制数字员工"""
@@ -427,20 +454,22 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
         system_prompt = """你是一个数字员工（子智能体）配置优化专家。用户会提供一个 SUBAGENT.md 文件的当前内容，请你优化它。
 
 ## 输出要求
-- 输出**完整的 SUBAGENT.md 内容**（包含 YAML frontmatter 和 Markdown body），不要省略任何部分
-- 保持 `---` 分隔的 YAML frontmatter + Markdown body 格式
-- 不要输出任何解释说明，只输出优化后的内容
+- **直接输出优化后的 SUBAGENT.md 内容**，不要包含任何解释、说明、前言、总结
+- 不要输出 "以下是优化后的内容"、"Here is the optimized..."、"已优化" 等任何引导文字
+- 输出格式：包含 YAML frontmatter（以 --- 开头和结尾）和 Markdown body 的完整内容
+- 不要使用 markdown 代码块包裹（不要用 ```markdown ```）
+- **description 字段必须使用中文**
+- **system_prompt（Markdown body）必须使用中文**
 
 ## 优化方向
-1. **description**：使描述更精准、更专业，突出核心价值和适用场景
-2. **capabilities**：补充遗漏的能力标签，移除不相关的标签，使用英文小写下划线命名
+1. **description**：用中文使描述更精准、更专业，突出核心价值和适用场景
+2. **capabilities**：补充遗漏的能力标签，使用英文小写下划线命名
 3. **triggers.file_patterns**：根据智能体用途补充合理的文件触发模式
 4. **skills.allowed**：根据能力需要补充或调整技能配置
 5. **system_prompt（Markdown body）**：
-   - 优化角色定义和职责描述，使其更清晰具体
-   - 补充工作流程、注意事项、禁止行为等关键内容
-   - 确保提示词结构化，使用 Markdown 标题、列表、表格等格式
-   - 保持专业性，语气严谨、清晰、简洁"""
+   - 使用中文优化角色定义和职责描述
+   - 补充工作流程、注意事项、禁止行为等
+   - 确保提示词结构化，使用 Markdown 格式"""
 
         # 调用 LLM
         from src.llm.gateway import llm_gateway

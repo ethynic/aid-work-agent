@@ -117,8 +117,23 @@
               <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">能力标签</label>
               <div class="flex flex-wrap gap-1">
                 <span v-for="cap in detail?.capabilities" :key="cap" class="px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded">{{ cap }}</span>
-                <span v-if="!detail?.capabilities?.length" class="text-sm text-gray-400">无</span>
+                <span v-if="!detail?.capabilities?.length" class="text-sm text-gray-400">（空）</span>
               </div>
+            </div>
+            <div>
+              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">工具配置</label>
+              <div v-if="detail?.tools?.inherit" class="text-sm text-gray-800">继承全部工具</div>
+              <div v-else-if="detail?.tools?.list?.length" class="flex flex-wrap gap-1">
+                <span v-for="tool in detail.tools.list" :key="tool" class="px-2 py-0.5 text-xs bg-purple-50 text-purple-700 rounded border border-purple-200">{{ tool }}</span>
+              </div>
+              <span v-else class="text-sm text-gray-400">（空）</span>
+            </div>
+            <div>
+              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">可用技能</label>
+              <div v-if="detail?.skills?.allowed?.length" class="flex flex-wrap gap-1">
+                <span v-for="skill in detail.skills.allowed" :key="skill" class="px-2 py-0.5 text-xs bg-green-50 text-green-700 rounded border border-green-200">{{ skill }}</span>
+              </div>
+              <span v-else class="text-sm text-gray-400">（空）</span>
             </div>
             <div>
               <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">系统提示词</label>
@@ -168,6 +183,71 @@
                 <button @click="addCapability" class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">添加</button>
               </div>
             </div>
+
+            <!-- Tools Configuration -->
+            <div class="flex-shrink-0">
+              <label class="block text-sm font-medium text-gray-500 mb-1">工具配置</label>
+              <div class="flex items-center gap-2">
+                <input v-model="editForm.tools.inherit" type="checkbox" id="tools-inherit" class="w-4 h-4" @change="editForm.tools.list = []" />
+                <label for="tools-inherit" class="text-sm text-gray-700">继承全部工具 (inherit: true)</label>
+              </div>
+              <div v-if="!editForm.tools.inherit" class="mt-2">
+                <div class="flex flex-wrap gap-1 mb-1">
+                  <span v-for="(tool, idx) in editForm.tools.list" :key="tool"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-purple-50 text-purple-700 rounded border border-purple-200">
+                    {{ tool }}
+                    <button @click="editForm.tools.list.splice(idx, 1)" class="hover:text-red-500">&times;</button>
+                  </span>
+                  <span v-if="!editForm.tools.list?.length" class="text-sm text-gray-400">（空）</span>
+                </div>
+                <button @click="showingTools = !showingTools"
+                  class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">
+                  {{ showingTools ? '收起工具列表' : '选择工具' }}
+                </button>
+                <div v-if="showingTools" class="mt-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                  <div v-for="tool in availableTools" :key="tool.name"
+                    class="flex items-center gap-2 py-1 px-2 hover:bg-gray-50 rounded">
+                    <input :checked="editForm.tools.list.includes(tool.name)" @change="toggleTool($event, tool.name)" type="checkbox" :id="'tool-'+tool.name"
+                      class="w-4 h-4" />
+                    <label :for="'tool-'+tool.name" class="text-sm text-gray-700 cursor-pointer flex-1">{{ tool.display_name || tool.name }}</label>
+                  </div>
+                  <div v-if="availableTools.length === 0" class="text-sm text-gray-400 text-center py-2">
+                    暂无可用工具
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skills Selection -->
+            <div class="flex-shrink-0">
+              <label class="block text-sm font-medium text-gray-500 mb-1">可用技能</label>
+              <div class="flex flex-wrap gap-1 mb-1">
+                <span v-for="(skill, idx) in editForm.skills.allowed" :key="skill"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-green-50 text-green-700 rounded border border-green-200">
+                  {{ skill }}
+                  <button @click="editForm.skills.allowed.splice(idx, 1)" class="hover:text-red-500">&times;</button>
+                </span>
+                <span v-if="!editForm.skills.allowed?.length" class="text-sm text-gray-400">（空）</span>
+              </div>
+              <div class="mt-2">
+                <button @click="showingSkills = !showingSkills"
+                  class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">
+                  {{ showingSkills ? '收起技能列表' : '选择技能' }}
+                </button>
+              </div>
+              <div v-if="showingSkills" class="mt-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                <div v-for="skill in availableSkills" :key="skill"
+                  class="flex items-center gap-2 py-1 px-2 hover:bg-gray-50 rounded">
+                  <input :checked="editForm.skills.allowed.includes(skill)" @change="toggleSkill($event, skill)" type="checkbox" :id="'skill-'+skill"
+                    class="w-4 h-4" />
+                  <label :for="'skill-'+skill" class="text-sm text-gray-700 cursor-pointer flex-1">{{ skill }}</label>
+                </div>
+                <div v-if="availableSkills.length === 0" class="text-sm text-gray-400 text-center py-2">
+                  暂无可用技能
+                </div>
+              </div>
+            </div>
+
             <!-- System Prompt - 撑满剩余空间 -->
             <div class="flex-1 flex flex-col min-h-0">
               <div class="flex items-center justify-between mb-1 flex-shrink-0">
@@ -260,6 +340,8 @@ import {
   deleteSubagent,
   duplicateSubagent,
   aiEnhanceSubagent,
+  listAvailableSkills,
+  listAvailableTools,
   type SubagentListItem,
   type SubagentDetail,
 } from '../api/adminSubagent'
@@ -282,9 +364,19 @@ const editForm = ref({
   name: '',
   description: '',
   capabilities: [] as string[],
+  tools: { inherit: true, list: [] as string[] },
+  skills: { allowed: [] as string[] },
   system_prompt: '',
 })
 const newCapability = ref('')
+
+// Available skills
+const availableSkills = ref<string[]>([])
+const showingSkills = ref(false)
+
+// Available tools
+const availableTools = ref<Array<{ name: string; description: string; display_name: string }>>([])
+const showingTools = ref(false)
 
 // Duplicate dialog
 const showDuplicateDialog = ref(false)
@@ -334,6 +426,30 @@ async function loadList() {
   }
 }
 
+// Load available skills
+async function loadSkills() {
+  try {
+    const res = await listAvailableSkills()
+    if (res.success) {
+      availableSkills.value = res.data || []
+    }
+  } catch (e: any) {
+    console.error('临时调试：加载技能列表失败', e)
+  }
+}
+
+// Load available tools
+async function loadTools() {
+  try {
+    const res = await listAvailableTools()
+    if (res.success) {
+      availableTools.value = res.data || []
+    }
+  } catch (e: any) {
+    console.error('临时调试：加载工具列表失败', e)
+  }
+}
+
 async function selectAgent(item: SubagentListItem) {
   selectedAgent.value = item
   isNewMode.value = false
@@ -361,6 +477,8 @@ function createNew() {
     name: '',
     description: '',
     capabilities: [],
+    tools: { inherit: true, list: [] },
+    skills: { allowed: [] },
     system_prompt: '',
   }
   promptMode.value = 'edit'
@@ -369,11 +487,18 @@ function createNew() {
 function enterEdit() {
   if (!detail.value) return
   isEditMode.value = true
+  const detailSkills = detail.value.skills || {}
+  const detailTools = detail.value.tools || {}
   editForm.value = {
     agent_id: detail.value.agent_id,
     name: detail.value.name,
     description: detail.value.description,
     capabilities: [...(detail.value.capabilities || [])],
+    tools: {
+      inherit: detailTools.inherit ?? true,
+      list: detailTools.list || [],
+    },
+    skills: { allowed: detailSkills.allowed || [] },
     system_prompt: detail.value.system_prompt,
   }
   promptMode.value = 'edit'
@@ -395,6 +520,28 @@ function addCapability() {
     editForm.value.capabilities.push(val)
   }
   newCapability.value = ''
+}
+
+function toggleSkill(event: Event, skill: string) {
+  const checked = (event.target as HTMLInputElement).checked
+  if (checked) {
+    if (!editForm.value.skills.allowed.includes(skill)) {
+      editForm.value.skills.allowed.push(skill)
+    }
+  } else {
+    editForm.value.skills.allowed = editForm.value.skills.allowed.filter(s => s !== skill)
+  }
+}
+
+function toggleTool(event: Event, toolName: string) {
+  const checked = (event.target as HTMLInputElement).checked
+  if (checked) {
+    if (!editForm.value.tools.list.includes(toolName)) {
+      editForm.value.tools.list.push(toolName)
+    }
+  } else {
+    editForm.value.tools.list = editForm.value.tools.list.filter(t => t !== toolName)
+  }
 }
 
 async function saveAgent() {
@@ -480,6 +627,8 @@ async function aiEnhance() {
     `version: 1.0.0`,
     `author: admin`,
     editForm.value.capabilities.length ? `capabilities:\n${editForm.value.capabilities.map(c => `  - ${c}`).join('\n')}` : '',
+    `tools:\n  inherit: ${editForm.value.tools.inherit}`,
+    editForm.value.skills.allowed.length ? `skills:\n  allowed:\n${editForm.value.skills.allowed.map(s => `    - ${s}`).join('\n')}` : 'skills: {}',
     '---',
   ].filter(Boolean).join('\n')
   const fullContent = `${frontmatter}\n\n${editForm.value.system_prompt}`
@@ -529,5 +678,7 @@ function acceptAiEnhance() {
 
 onMounted(() => {
   loadList()
+  loadSkills()
+  loadTools()
 })
 </script>
