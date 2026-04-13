@@ -1,8 +1,8 @@
 ---
 name: contract-approval
 description: >
-  合同审批流程自动化技能，使用 Playwright 自动登录 OA 系统，在待办列表中搜索合同编号，
-  打开审批单据并执行通过或驳回操作。
+  合同审批流程自动化技能，优先通过 EAS 审批 API 接口完成审批操作，
+  API 不可用时自动回退到 Playwright 模拟网页操作。
   使用场景：合同审批、OA流程处理、审批单据处理。
 metadata:
   version: "1.0.0"
@@ -23,9 +23,7 @@ metadata:
 ## 何时使用此技能
 
 **使用合同审批技能用于**：
-- 登录 OA 系统处理合同审批
-- 在待办列表中搜索特定合同编号
-- 打开审批单据查看详情
+- 查询用户待审批的合同流程
 - 通过或驳回合同审批申请
 - 查看审批单据信息
 
@@ -37,6 +35,19 @@ metadata:
 - 审批通过
 - 审批驳回
 - 合同编号审批
+
+---
+
+## ⚠️ 严禁事项
+
+**绝对禁止使用浏览器工具（browser tool）去操作审批网页！**
+
+本技能内置了精确定位页面元素的 Playwright 脚本（CSS选择器/XPath），比浏览器工具的语义点击准确得多。所有审批操作必须且只能通过 `skill_execute` 调用本脚本来完成：
+
+```
+✅ 正确：skill_execute(skill="contract-approval", command='python scripts/contract_approval.py ...')
+❌ 错误：自己用 browser tool 打开网页、查找元素、点击按钮
+```
 
 ---
 
@@ -52,15 +63,21 @@ CONTRACT_OA_USERNAME=你的用户名
 CONTRACT_OA_PASSWORD=你的密码
 ```
 
+### 可选环境变量
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `CONTRACT_APPROVAL_API_URL` | EAS 审批 API 地址 | `https://dc.trendzone.com.cn/manage/api/trend_eas_approval` |
+| `CONTRACT_OA_HEADLESS` | 是否无头模式运行浏览器 | `false` |
+
 ### 参数说明
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
-| `contract_no` | string | 是 | 合同编号，用于在待办中搜索 |
-| `approve` | boolean | 是（二选一） | 通过审批 |
-| `reject` | boolean | 是（二选一） | 驳回审批 |
+| `contract_no` | string | 是 | 合同编号 |
+| `approve` | flag | 是（二选一） | 通过审批 |
+| `reject` | flag | 是（二选一） | 驳回审批 |
 | `comment` | string | 否 | 审批意见/备注 |
-| `headless` | boolean | 否 | 是否无头模式运行，默认 false（显示浏览器窗口） |
 
 ---
 
@@ -73,10 +90,17 @@ CONTRACT_OA_PASSWORD=你的密码
          ↓
 加载技能 use_skill(contract-approval)
          ↓
-【调用 skill_execute 执行完整审批流程】
-python scripts/contract_approval.py --contract-no "HT-2024-001234" --approve --comment "同意"
+【调用 skill_execute，只需一条命令】
+skill_execute(
+  skill="contract-approval",
+  command='python scripts/contract_approval.py --contract-no "HT-2024-001234" --approve'
+)
          ↓
-自动完成：登录 → 搜索合同 → 打开单据 → 审批通过 → 关闭浏览器
+脚本内部自动完成（API 优先）：
+  1. 调用 API 查询该合同是否在当前用户待审批列表中
+  2. 找到 → 通过 API 执行审批，返回结果
+  3. 未找到 → 返回提示（合同不在待审批中）
+  4. API 不可用（500/网络错误）→ 自动回退到 Playwright 脚本操作网页
          ↓
 调用 skill_complete 标记完成
 ```
@@ -87,13 +111,21 @@ python scripts/contract_approval.py --contract-no "HT-2024-001234" --approve --c
 python scripts/contract_approval.py --contract-no "HT-2024-001234" --approve --comment "同意"
 ```
 
-### 驳回审批
+### 驳回审批（仅当用户明确要求驳回时使用）
 
 ```bash
 python scripts/contract_approval.py --contract-no "HT-2024-001234" --reject --comment "请修改合同金额"
 ```
 
-脚本会自动执行完整流程：**登录 → 搜索合同 → 打开审批单据 → 执行审批 → 关闭浏览器**
+### 执行策略
+
+脚本内部采用 **API 优先、Playwright 脚本备用** 的策略，调用者无需关心回退逻辑：
+
+| 场景 | 脚本行为 |
+|------|---------|
+| API 返回审批数据 | 直接通过 API 完成审批 |
+| API 返回空列表 | 提示"合同不在待审批中"，结束 |
+| API 不可用（500/网络错误） | 自动回退到内置 Playwright 脚本操作网页 |
 
 ---
 
@@ -101,22 +133,31 @@ python scripts/contract_approval.py --contract-no "HT-2024-001234" --reject --co
 
 所有命令返回 JSON 格式结果：
 
-**成功响应**：
+**成功响应（API 方式）**：
 ```json
 {
   "success": true,
-  "action": "login",
-  "message": "登录成功",
-  "data": { ... }
+  "message": "合同 HT-2024-001234 审批操作（通过）完成",
+  "data": {"step": "api_check", "status": "completed", "method": "api", "assignId": "xxx"}
 }
 ```
 
-**错误响应**：
+**合同不在待审批中**：
 ```json
 {
   "success": false,
-  "error": "登录失败：用户名或密码错误",
-  "debug": "详细错误信息"
+  "message": "合同 HT-2024-001234 不在当前用户的待审批列表中",
+  "data": {"step": "api_list", "status": "not_found", "method": "api"},
+  "debug": "可能原因：流程尚未到达当前审批人，或该合同已审批完毕"
+}
+```
+
+**API 不可用，回退网页**：
+```json
+{
+  "success": true,
+  "message": "API 调用失败，正在回退到网页操作...",
+  "data": {"step": "api_fallback", "status": "fallback", "method": "api"}
 }
 ```
 
@@ -127,30 +168,17 @@ python scripts/contract_approval.py --contract-no "HT-2024-001234" --reject --co
 | 错误情况 | 处理方式 |
 |---------|---------|
 | 环境变量未配置 | 提示用户在 .env 文件中配置 |
-| 登录失败 | 检查用户名密码，提示重试 |
-| 合同未找到 | 提示用户检查合同编号 |
-| 页面元素未找到 | 截图并提示可能的页面变化 |
-| 网络超时 | 提示检查网络连接 |
+| API 不可用 | 脚本自动回退到 Playwright 网页操作 |
+| 合同不在待审批中 | 提示用户（可能流程未到或已审批） |
+| 网页登录失败 | 检查用户名密码，提示重试 |
 
 ---
 
 ## 重要说明
 
-1. **完整流程**：脚本自动执行 登录→搜索→打开单据→审批→关闭，无需分步操作
-2. **安全要求**：用户名密码保存在 `.env` 文件中，**不**提交到 git
-3. **操作确认**：执行审批操作前应向用户确认
-4. **元素定位**：使用 CSS 选择器或 XPath 定位页面元素，页面结构变化时需要更新定位策略
-
----
-
-## 测试技能
-
-验证技能是否正常工作：
-
-```bash
-# 通过审批（完整流程）
-python scripts/contract_approval.py --contract-no "TEST-001" --approve
-
-# 驳回审批（完整流程）
-python scripts/contract_approval.py --contract-no "TEST-001" --reject --comment "测试驳回"
-```
+1. **API 优先**：脚本优先使用 API 接口，更快更稳定
+2. **自动回退**：仅在 API 不可用（500/网络错误）时才回退到 Playwright 网页操作
+3. **用户一致性**：API 的 userCode 和网页登录使用同一个用户名（`CONTRACT_OA_USERNAME`）
+4. **必须通过脚本操作**：不要使用浏览器工具自行操作审批网页，本技能的 Playwright 脚本已精确定位所有页面元素
+5. **安全要求**：用户名密码保存在 `.env` 文件中，**不**提交到 git
+6. **操作确认**：执行审批操作前应向用户确认
