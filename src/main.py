@@ -613,9 +613,17 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             }
 
             # 如果提供了 file_id，使用 uploaded_files 中的实际路径
+            # 兜底：多 worker 内存隔离时 uploaded_files 可能无此 file_id，
+            # 此时根据 file_id 直接在 UPLOAD_DIR 中查找文件
             file_id = f.get("file_id")
-            if file_id and file_id in uploaded_files:
-                att["path"] = uploaded_files[file_id]["path"]
+            if file_id:
+                if file_id in uploaded_files:
+                    att["path"] = uploaded_files[file_id]["path"]
+                else:
+                    # 多 worker 兜底：扫描 UPLOAD_DIR 中以该 file_id 开头的文件
+                    matched = list(UPLOAD_DIR.glob(f"{file_id}.*"))
+                    if matched:
+                        att["path"] = str(matched[0].absolute())
                 att["file_id"] = file_id
 
             if "content" in f:
