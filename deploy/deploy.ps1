@@ -219,6 +219,7 @@ $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)deploy*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)docs*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)src*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)package*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)frontend$([System.IO.Path]::DirectorySeparatorChar)node_modules*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).idea*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).vscode*") -and
