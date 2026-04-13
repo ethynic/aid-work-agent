@@ -92,6 +92,7 @@ services:
 
       # 上传附件目录
       - /var/www/qb3_upload/agent_uploads:/app/uploads
+      - /var/www/qb3_upload/agent_storage:/app/storage
 
       # 记忆文件目录
       - /var/www/qb3_upload/agent_memories:/app/memories

@@ -19,13 +19,6 @@ python gradio_app.py                     # Gradio 调试 UI（端口 7860）
 gunicorn -c deploy/gunicorn.conf.py src.main:app  # 生产环境服务器
 ```
 
-### 前端
-```bash
-cd frontend && npm install               # 安装前端依赖
-cd frontend && npm run dev               # 开发服务器（端口 5173）
-cd frontend && npm run build             # 生产环境构建
-```
-
 ### 测试
 ```bash
 # 后端（pytest）
@@ -36,11 +29,6 @@ pytest -m tools                           # 按组件：tools / skills / agent /
 pytest -m e2e                             # 端到端测试（需要真实凭证）
 pytest --cov=src --cov-report=term-missing  # 带覆盖率
 pytest -m "integration and tools"         # 组合筛选
-
-# 前端（Vitest）
-cd frontend && npm test                   # 运行前端测试
-cd frontend && npm run test:coverage      # 带覆盖率
-cd frontend && npm run test:watch         # 监听模式
 ```
 
 ### Docker
@@ -138,30 +126,7 @@ async def search_documents(request: SearchRequest):
 async def search_documents(request: SearchRequest):
 ```
 
-### 前端开发规范
-
-#### 日志规范
-```javascript
-// 长期保留日志
-console.log('前端日志：开始验证用户凭证', { username });
-
-// 临时调试日志（bug 修复后删除）
-console.log('临时调试：API 响应', response);
-```
-
-#### 缓存使用规范
-**非必要，不使用缓存。** 优先使用直接请求：
-```javascript
-// ✅ 推荐
-export const knowledgeAPI = {
-  list: (params) => api.get('/knowledge/', { params }),
-}
-```
-
-#### 页面布局一致性规范
-从 `SessionSidebar` 导航进入的页面**必须**保留 `SessionSidebar` + `AppHeader` 布局。
-
-### 测试规范（TDD）
+### Docker
 
 ```
 需求分析 → 编写测试 → 审核通过 → 运行测试(红灯) → 实现代码 → 测试通过(绿灯) → 重构 → 重复
@@ -179,13 +144,10 @@ export const knowledgeAPI = {
 
 **快速命令**：
 ```bash
-# 1. 前端编译
-Set-Location -Path "d:\workbase\projects\aid-work-agent\frontend"; Remove-Item -Recurse -Force -Path "dist" -ErrorAction SilentlyContinue; npm run build
-
-# 2. Git 提交推送
+# 1. Git 提交推送
 python scripts/commit.py "提交信息" --push
 
-# 3. FTP 上传
+# 2. FTP 上传
 powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1
 ```
 
@@ -323,13 +285,6 @@ tests/
     ├── test_llm_real.py     # 真实 LLM API 调用
     ├── test_email_real.py   # 真实 SMTP/IMAP
     └── test_agent_full.py   # 完整 Agent 交互
-
-frontend/src/__tests__/      # 前端测试（Vitest + Vue Test Utils + MSW）
-├── setup.ts                 # jsdom 环境 + MSW 启动
-├── mocks/                   # API mock（handlers.ts、server.ts、fixtures.ts）
-├── composables/             # Composable 逻辑测试
-├── api/                     # API 层测试
-└── components/              # 组件测试
 ```
 
 ### 测试分层规则
@@ -386,8 +341,6 @@ async def test_my_route():
     response = client.get("/api/my-route")
     assert response.status_code == 200
 ```
-
-**前端组件/Composable 测试**，在 `frontend/src/__tests__/` 对应目录添加 `.test.ts` 文件。API 请求由 MSW 自动拦截（配置在 `mocks/handlers.ts`）。
 
 ### 可用 Markers
 

@@ -6,6 +6,7 @@
 """
 
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
@@ -266,6 +267,10 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
         registry = master_agent.subagent_registry
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
+
+        # agent_id 格式校验（只允许字母、数字、下划线、连字符）
+        if not re.match(r'^[a-zA-Z0-9_-]+$', body.agent_id):
+            return _error_response("ID 只能包含字母、数字、下划线和连字符", f"invalid agent_id format: {body.agent_id}", 400)
 
         # 唯一性校验
         if not registry.validate_id_uniqueness(body.agent_id):

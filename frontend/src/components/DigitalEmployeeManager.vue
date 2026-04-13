@@ -101,7 +101,7 @@
             </div>
             <div class="flex gap-2">
               <button v-if="selectedAgent.type === 'custom'" @click="enterEdit" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">编辑</button>
-              <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">另存为</button>
+              <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">另存为</button>
             </div>
           </div>
           <div class="space-y-4 flex-1 flex flex-col min-h-0">
@@ -400,8 +400,16 @@ function showToast(message: string, type: 'success' | 'error' | 'info' = 'info')
 }
 
 // Computed
-const builtinList = computed(() => allList.value.filter(i => i.type === 'builtin'))
-const customList = computed(() => allList.value.filter(i => i.type === 'custom'))
+const builtinList = computed(() =>
+  allList.value
+    .filter(i => i.type === 'builtin')
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+)
+const customList = computed(() =>
+  allList.value
+    .filter(i => i.type === 'custom')
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+)
 
 const renderedMarkdown = computed(() => {
   if (!detail.value?.system_prompt) return ''
@@ -548,6 +556,12 @@ async function saveAgent() {
     showToast('ID 和名称不能为空', 'error')
     return
   }
+  // agent_id 格式校验（只允许字母、数字、下划线、连字符）
+  const validAgentId = editForm.value.agent_id.trim().replace(/[^a-zA-Z0-9_-]/g, '')
+  if (editForm.value.agent_id !== validAgentId) {
+    showToast('ID 只能包含字母、数字、下划线和连字符', 'error')
+    return
+  }
   try {
     let res
     if (isNewMode.value) {
@@ -557,6 +571,10 @@ async function saveAgent() {
     }
     if (res.success) {
       showToast('保存成功', 'success')
+      // 保存成功后重置新建模式状态
+      if (isNewMode.value) {
+        isNewMode.value = false
+      }
       await loadList()
       // Select the saved agent
       const agentId = isNewMode.value ? editForm.value.agent_id : selectedAgent.value?.agent_id
