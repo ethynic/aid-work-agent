@@ -13,8 +13,9 @@ import logging
 from src.knowledge.parsers.parser_factory import parser_factory
 from src.knowledge.chunker import TextChunker
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sanitize_error_info
-from src.knowledge.vector_db.vector_db import VectorDBSQLite
+from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
+from src.db.database import DB_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -134,11 +135,7 @@ class KnowledgeBaseService:
                 chunk_ids.append(cursor.lastrowid)
 
             # 插入向量（复用同一个数据库连接，避免锁冲突）
-            vector_db = VectorDBSQLite(
-                db_path=self.db_path,
-                dimension=1024,
-                conn=conn
-            )
+            vector_db = get_vector_db(dimension=1024, conn=conn)
             await vector_db.insert(chunk_ids, embeddings)
 
             # FTS5 触发器会自动处理，无需手动插入
@@ -185,11 +182,7 @@ class KnowledgeBaseService:
             file_path = row["file_path"]
 
             # 删除向量（复用同一个数据库连接，避免锁冲突）
-            vector_db = VectorDBSQLite(
-                db_path=self.db_path,
-                dimension=1024,
-                conn=conn
-            )
+            vector_db = get_vector_db(dimension=1024, conn=conn)
             await vector_db.delete_by_doc(doc_id)
 
             # 删除 chunks（FTS 触发器会自动删除）
@@ -320,7 +313,7 @@ class KnowledgeBaseService:
             # 初始化 HybridRetriever
             from src.knowledge.retriever.hybrid_retriever import HybridRetriever
             from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
-            from src.knowledge.vector_db.vector_db import VectorDBSQLite
+            from src.knowledge.vector_db.vector_db import get_vector_db
 
             qwen_keys = settings.llm.qwen.get_effective_keys()
             if not qwen_keys:
@@ -333,12 +326,13 @@ class KnowledgeBaseService:
 
             conn = self._get_db_connection()
             embedding_client = TextEmbeddingV3Client(api_key=qwen_keys[0])
-            vector_db = VectorDBSQLite(db_path=self.db_path, dimension=1024, conn=conn)
+            vector_db = get_vector_db(dimension=1024, conn=conn)
 
             retriever = HybridRetriever(
                 vector_db=vector_db,
                 embedding_client=embedding_client,
-                conn=conn
+                conn=conn,
+                db_type=DB_TYPE
             )
 
             # 执行混合检索

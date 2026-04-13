@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp
 from src.db.remote_credential import encryption_manager
 
 
@@ -29,17 +29,19 @@ class EmailCredentialDB:
         """
         # 加密密码
         encrypted_password = encryption_manager.encrypt(config["smtp_password"])
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
             # 先尝试更新
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE user_email_settings
-                SET email_address = ?, smtp_server = ?, smtp_port = ?, smtp_user = ?,
-                    smtp_password = ?, smtp_encryption = ?, imap_server = ?,
-                    imap_port = ?, imap_encryption = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND status = 1
+                SET email_address = {placeholder}, smtp_server = {placeholder}, smtp_port = {placeholder}, smtp_user = {placeholder},
+                    smtp_password = {placeholder}, smtp_encryption = {placeholder}, imap_server = {placeholder},
+                    imap_port = {placeholder}, imap_encryption = {placeholder}, updated_at = {ts}
+                WHERE user_id = {placeholder} AND status = 1
             """, (
                 config["email_address"],
                 config["smtp_server"],
@@ -59,12 +61,13 @@ class EmailCredentialDB:
                 return True
 
             # 不存在则插入
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO user_email_settings (
                     user_id, email_address, smtp_server, smtp_port, smtp_user,
                     smtp_password, smtp_encryption, imap_server, imap_port,
                     imap_encryption, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                         {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 1)
             """, (
                 user_id,
                 config["email_address"],
@@ -92,11 +95,12 @@ class EmailCredentialDB:
         Returns:
             配置字典或 None
         """
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM user_email_settings
-                WHERE user_id = ? AND status = 1
+                WHERE user_id = {placeholder} AND status = 1
             """, (user_id,))
             row = cursor.fetchone()
 
@@ -140,12 +144,14 @@ class EmailCredentialDB:
         Returns:
             是否成功
         """
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE user_email_settings
-                SET status = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND status = 1
+                SET status = 0, updated_at = {ts}
+                WHERE user_id = {placeholder} AND status = 1
             """, (user_id,))
             conn.commit()
 

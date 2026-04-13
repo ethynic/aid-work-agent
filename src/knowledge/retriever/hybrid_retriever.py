@@ -8,6 +8,8 @@ import re
 from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
 
+from src.db.database import DB_TYPE
+
 
 class HybridRetriever:
     """混合检索器（向量 + FTS5 + 加权 RRF 融合）"""
@@ -53,11 +55,13 @@ class HybridRetriever:
         self,
         vector_db,
         embedding_client,
-        conn: sqlite3.Connection
+        conn: sqlite3.Connection,
+        db_type: str = None
     ):
         self.vector_db = vector_db
         self.embedding_client = embedding_client
         self.conn = conn
+        self.db_type = db_type or DB_TYPE
 
     async def retrieve(
         self,
@@ -232,7 +236,16 @@ class HybridRetriever:
         return " OR ".join(keywords)
 
     def _fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
-        """FTS5 全文检索"""
+        """全文检索（SQLite FTS5 或 PostgreSQL tsvector）"""
+        cursor = self.conn.cursor()
+
+        if self.db_type == "postgresql":
+            return self._postgres_fts_search(query, top_k)
+        else:
+            return self._sqlite_fts_search(query, top_k)
+
+    def _sqlite_fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
+        """SQLite FTS5 全文检索"""
         cursor = self.conn.cursor()
 
         try:
@@ -247,6 +260,31 @@ class HybridRetriever:
             return [(row[0], row[1]) for row in cursor.fetchall()]
         except Exception as e:
             logger.warning(f"后端日志：FTS5 检索失败（查询可能包含特殊字符）: {e}")
+            return []
+
+    def _postgres_fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
+        """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
+        cursor = self.conn.cursor()
+
+        try:
+            # 预处理查询：将空格替换为 |（OR 语义）以支持多关键词
+            processed_query = self._preprocess_fts_query(query)
+
+            # PostgreSQL 全文搜索：使用 to_tsquery 和 ts_rank
+            cursor.execute("""
+                SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
+                FROM chunks c
+                WHERE c.text_vec @@ plainto_tsquery(%s)
+                ORDER BY score DESC
+                LIMIT %s
+            """, (processed_query, processed_query, top_k))
+
+            results = cursor.fetchall()
+            # ts_rank 返回的是排名分数，越大越相关
+            # 转换为负数以便与 SQLite BM25 分数格式一致（越小越相关）
+            return [(row[0], -row[1]) for row in results if row[1] > 0]
+        except Exception as e:
+            logger.warning(f"后端日志：PostgreSQL 全文检索失败: {e}")
             return []
 
     @staticmethod

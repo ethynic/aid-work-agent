@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp, DB_TYPE
 
 
 # ============== 密码哈希 ==============
@@ -52,13 +52,14 @@ class UserDB:
               wx_openid: str = None, username: str = None) -> Optional[Dict[str, Any]]:
         """创建新用户"""
         user_id = generate_user_id()
+        placeholder = get_db_placeholder()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("""
+                cursor.execute(f"""
                     INSERT INTO users (user_id, phone, password_hash, wx_openid, username)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (user_id, phone, hash_password(password) if password else None,
                       wx_openid, username or (f"用户{phone[-4:]}" if phone else f"用户{user_id[-4:]}")))
                 conn.commit()
@@ -72,27 +73,30 @@ class UserDB:
     @staticmethod
     def get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         """根据用户ID获取用户"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     @staticmethod
     def get_by_phone(phone: str) -> Optional[Dict[str, Any]]:
         """根据手机号获取用户"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE phone = ?", (phone,))
+            cursor.execute(f"SELECT * FROM users WHERE phone = {placeholder}", (phone,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     @staticmethod
     def get_by_wx_openid(openid: str) -> Optional[Dict[str, Any]]:
         """根据微信openid获取用户"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE wx_openid = ?", (openid,))
+            cursor.execute(f"SELECT * FROM users WHERE wx_openid = {placeholder}", (openid,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -107,9 +111,10 @@ class UserDB:
     @staticmethod
     def update_wx_openid(user_id: str, wx_openid: str) -> bool:
         """绑定微信openid"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET wx_openid = ? WHERE user_id = ?",
+            cursor.execute(f"UPDATE users SET wx_openid = {placeholder} WHERE user_id = {placeholder}",
                           (wx_openid, user_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -123,12 +128,14 @@ class UserDB:
         if not updates:
             return False
 
-        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+        placeholder = get_db_placeholder()
+        set_clause = ", ".join([f"{k} = {placeholder}" for k in updates.keys()])
+        ts = get_current_timestamp()
         values = list(updates.values()) + [user_id]
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+            cursor.execute(f"UPDATE users SET {set_clause}, updated_at = {ts} WHERE user_id = {placeholder}",
                           values)
             conn.commit()
             return cursor.rowcount > 0
@@ -151,13 +158,14 @@ class SessionDB:
     def create(user_id: str, title: str = None, context_data: dict = None) -> Optional[Dict[str, Any]]:
         """创建新会话"""
         session_id = generate_session_id()
+        placeholder = get_db_placeholder()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("""
+                cursor.execute(f"""
                     INSERT INTO chat_sessions (session_id, user_id, title, context_data)
-                    VALUES (?, ?, ?, ?)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (session_id, user_id, title or "新会话",
                       json.dumps(context_data) if context_data else None))
                 conn.commit()
@@ -171,9 +179,10 @@ class SessionDB:
     @staticmethod
     def get_by_id(session_id: str) -> Optional[Dict[str, Any]]:
         """根据会话ID获取会话"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM chat_sessions WHERE session_id = ?", (session_id,))
+            cursor.execute(f"SELECT * FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
             row = cursor.fetchone()
             if row:
                 result = dict(row)
@@ -185,13 +194,14 @@ class SessionDB:
     @staticmethod
     def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的所有会话"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM chat_sessions
-                WHERE user_id = ?
+                WHERE user_id = {placeholder}
                 ORDER BY updated_at DESC
-                LIMIT ?
+                LIMIT {placeholder}
             """, (user_id, limit))
             sessions = []
             for row in cursor.fetchall():
@@ -204,12 +214,14 @@ class SessionDB:
     @staticmethod
     def update_title(session_id: str, title: str) -> bool:
         """更新会话标题"""
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE chat_sessions
-                SET title = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE session_id = ?
+                SET title = {placeholder}, updated_at = {ts}
+                WHERE session_id = {placeholder}
             """, (title, session_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -217,12 +229,14 @@ class SessionDB:
     @staticmethod
     def update_context(session_id: str, context_data: dict) -> bool:
         """更新会话上下文数据"""
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE chat_sessions
-                SET context_data = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE session_id = ?
+                SET context_data = {placeholder}, updated_at = {ts}
+                WHERE session_id = {placeholder}
             """, (json.dumps(context_data), session_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -230,22 +244,24 @@ class SessionDB:
     @staticmethod
     def touch(session_id: str) -> bool:
         """更新会话时间戳"""
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?
-            """, (session_id,))
+            cursor.execute(f"UPDATE chat_sessions SET updated_at = {ts} WHERE session_id = {placeholder}",
+                          (session_id,))
             conn.commit()
             return cursor.rowcount > 0
 
     @staticmethod
     def delete(session_id: str) -> bool:
         """删除会话及其所有消息"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-                cursor.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
+                cursor.execute(f"DELETE FROM chat_messages WHERE session_id = {placeholder}", (session_id,))
+                cursor.execute(f"DELETE FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
                 conn.commit()
                 logger.info(f"Chat session deleted: {session_id}")
                 return True
@@ -262,13 +278,14 @@ class MessageDB:
                metadata: dict = None) -> Optional[Dict[str, Any]]:
         """创建新消息"""
         message_id = generate_message_id()
+        placeholder = get_db_placeholder()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("""
+                cursor.execute(f"""
                     INSERT INTO chat_messages (message_id, session_id, role, content, metadata)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (message_id, session_id, role, content,
                       json.dumps(metadata) if metadata else None))
                 conn.commit()
@@ -282,9 +299,10 @@ class MessageDB:
     @staticmethod
     def get_by_id(message_id: str) -> Optional[Dict[str, Any]]:
         """根据消息ID获取消息"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM chat_messages WHERE message_id = ?", (message_id,))
+            cursor.execute(f"SELECT * FROM chat_messages WHERE message_id = {placeholder}", (message_id,))
             row = cursor.fetchone()
             if row:
                 result = dict(row)
@@ -296,13 +314,14 @@ class MessageDB:
     @staticmethod
     def list_by_session(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """获取会话的所有消息"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM chat_messages
-                WHERE session_id = ?
+                WHERE session_id = {placeholder}
                 ORDER BY created_at ASC
-                LIMIT ?
+                LIMIT {placeholder}
             """, (session_id, limit))
             messages = []
             for row in cursor.fetchall():
@@ -321,9 +340,10 @@ class MessageDB:
     @staticmethod
     def delete(message_id: str) -> bool:
         """删除消息"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM chat_messages WHERE message_id = ?", (message_id,))
+            cursor.execute(f"DELETE FROM chat_messages WHERE message_id = {placeholder}", (message_id,))
             conn.commit()
             return cursor.rowcount > 0
 
@@ -355,16 +375,19 @@ class ChatRecordDB:
     ) -> Optional[Dict[str, Any]]:
         """创建新的会话记录"""
         record_id = generate_record_id()
+        placeholder = get_db_placeholder()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("""
-                    INSERT INTO chat_records 
+                cursor.execute(f"""
+                    INSERT INTO chat_records
                     (record_id, session_id, user_id, user_message, assistant_message,
                      total_token_count, prompt_tokens, completion_tokens, model,
                      execution_details, status, error_message, duration_ms)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder})
                 """, (
                     record_id, session_id, user_id, user_message, assistant_message,
                     total_token_count, prompt_tokens, completion_tokens, model,
@@ -382,9 +405,10 @@ class ChatRecordDB:
     @staticmethod
     def get_by_id(record_id: str) -> Optional[Dict[str, Any]]:
         """根据记录ID获取会话记录"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM chat_records WHERE record_id = ?", (record_id,))
+            cursor.execute(f"SELECT * FROM chat_records WHERE record_id = {placeholder}", (record_id,))
             row = cursor.fetchone()
             if row:
                 result = dict(row)
@@ -396,13 +420,14 @@ class ChatRecordDB:
     @staticmethod
     def list_by_session(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """获取会话的所有记录"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM chat_records
-                WHERE session_id = ?
+                WHERE session_id = {placeholder}
                 ORDER BY created_at ASC
-                LIMIT ?
+                LIMIT {placeholder}
             """, (session_id, limit))
             records = []
             for row in cursor.fetchall():
@@ -415,13 +440,14 @@ class ChatRecordDB:
     @staticmethod
     def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的所有会话记录"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM chat_records
-                WHERE user_id = ?
+                WHERE user_id = {placeholder}
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT {placeholder}
             """, (user_id, limit))
             records = []
             for row in cursor.fetchall():
@@ -434,15 +460,16 @@ class ChatRecordDB:
     @staticmethod
     def get_total_token_by_session(session_id: str) -> Dict[str, int]:
         """获取会话的总token消耗"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT 
+            cursor.execute(f"""
+                SELECT
                     COALESCE(SUM(total_token_count), 0) as total,
                     COALESCE(SUM(prompt_tokens), 0) as prompt,
                     COALESCE(SUM(completion_tokens), 0) as completion
                 FROM chat_records
-                WHERE session_id = ?
+                WHERE session_id = {placeholder}
             """, (session_id,))
             row = cursor.fetchone()
             if row:
@@ -456,18 +483,20 @@ class ChatRecordDB:
     @staticmethod
     def delete(record_id: str) -> bool:
         """删除会话记录"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM chat_records WHERE record_id = ?", (record_id,))
+            cursor.execute(f"DELETE FROM chat_records WHERE record_id = {placeholder}", (record_id,))
             conn.commit()
             return cursor.rowcount > 0
 
     @staticmethod
     def delete_by_session(session_id: str) -> bool:
         """删除会话的所有记录"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM chat_records WHERE session_id = ?", (session_id,))
+            cursor.execute(f"DELETE FROM chat_records WHERE session_id = {placeholder}", (session_id,))
             conn.commit()
             return cursor.rowcount > 0
 
@@ -480,15 +509,16 @@ def send_sms_code(phone: str) -> bool:
     当前为Mock实现，固定验证码888888
     """
     code = "888888"
+    placeholder = get_db_placeholder()
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE sms_codes SET used = 1 WHERE phone = ?", (phone,))
+        cursor.execute(f"UPDATE sms_codes SET used = 1 WHERE phone = {placeholder}", (phone,))
 
         expires_at = (datetime.now() + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
+        cursor.execute(f"""
             INSERT INTO sms_codes (phone, code, expires_at)
-            VALUES (?, ?, ?)
+            VALUES ({placeholder}, {placeholder}, {placeholder})
         """, (phone, code, expires_at))
         conn.commit()
 
@@ -498,18 +528,19 @@ def send_sms_code(phone: str) -> bool:
 
 def verify_sms_code(phone: str, code: str) -> bool:
     """验证短信验证码"""
+    placeholder = get_db_placeholder()
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT * FROM sms_codes
-            WHERE phone = ? AND code = ? AND used = 0
-            AND expires_at > ?
+            WHERE phone = {placeholder} AND code = {placeholder} AND used = 0
+            AND expires_at > {placeholder}
             ORDER BY created_at DESC LIMIT 1
         """, (phone, code, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         row = cursor.fetchone()
 
         if row:
-            cursor.execute("UPDATE sms_codes SET used = 1 WHERE phone = ? AND code = ?",
+            cursor.execute(f"UPDATE sms_codes SET used = 1 WHERE phone = {placeholder} AND code = {placeholder}",
                          (phone, code))
             conn.commit()
             return True
