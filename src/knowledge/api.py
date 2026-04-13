@@ -265,8 +265,6 @@ async def download_document(doc_id: int):
 
     - 新窗口打开或下载原文
     """
-    import os
-
     # 查询文档的 file_path
     conn = knowledge_service._get_db_connection()
     cursor = conn.cursor()

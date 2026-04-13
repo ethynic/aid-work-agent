@@ -141,12 +141,7 @@ class KnowledgeBaseService:
             )
             await vector_db.insert(chunk_ids, embeddings)
 
-            # 插入 FTS5（触发器会自动处理，但确保数据一致）
-            for chunk in chunks:
-                cursor.execute("""
-                    INSERT INTO chunks_fts(rowid, text)
-                    SELECT id, text FROM chunks WHERE id = last_insert_rowid()
-                """)
+            # FTS5 触发器会自动处理，无需手动插入
 
             conn.commit()
             conn.close()

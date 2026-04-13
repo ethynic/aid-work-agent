@@ -2,6 +2,7 @@
 混合检索器 - 向量检索 + FTS5 全文检索 + RRF 融合
 """
 
+import json
 import sqlite3
 import re
 from typing import List, Dict, Tuple, Optional, Any
@@ -335,7 +336,6 @@ class HybridRetriever:
         for chunk_id, score in fused:
             row = id_to_row.get(chunk_id)
             if row:
-                import json
                 metadata = json.loads(row[4]) if row[4] else {}
                 results.append({
                     "chunk_id": row[0],

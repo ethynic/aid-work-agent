@@ -44,9 +44,11 @@ class VectorDBSQLite(VectorDatabase):
         if conn is not None:
             self.conn = conn
             self._external_conn = True
-            # 外部连接也需要加载 sqlite-vec 扩展
+            # 外部连接也需要加载 sqlite-vec 扩展和设置 PRAGMA
             import sqlite_vec
             sqlite_vec.load(self.conn)
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA busy_timeout=10000")
         else:
             self._external_conn = False
             self.conn: Optional[sqlite3.Connection] = None
