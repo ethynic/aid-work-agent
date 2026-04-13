@@ -101,7 +101,7 @@
             </div>
             <div class="flex gap-2">
               <button v-if="selectedAgent.type === 'custom'" @click="enterEdit" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">编辑</button>
-              <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">另存为</button>
+              <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">另存为</button>
             </div>
           </div>
           <div class="space-y-4 flex-1 flex flex-col min-h-0">
