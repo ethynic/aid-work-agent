@@ -1,0 +1,115 @@
+"""
+租户上下文中间件
+
+根据请求 URL 和认证信息解析 tenant_id，设置到 request.state 和 ContextVar。
+
+路由分发逻辑：
+- /api/saas/*  → 从 Authorization header 取管理员 token → 查 tenant_admin_tokens → 得 tenant_id
+- /api/chat/*  → 从 Authorization header 取用户 token → 查 users.tenant_id → 得 tenant_id
+- /t/{tenant_id}/*/callback → 从 URL path 取 tenant_id
+"""
+
+import re
+from typing import Optional
+
+from fastapi import Request, Response
+from loguru import logger
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+
+from src.saas.context import set_tenant_context, clear_tenant_context
+
+
+# 匹配租户级回调路由：/t/{tenant_id}/...
+_TENANT_CALLBACK_PATTERN = re.compile(r"^/t/([^/]+)/")
+
+
+class TenantContextMiddleware(BaseHTTPMiddleware):
+    """
+    租户上下文中间件
+
+    在每个请求开始时解析 tenant_id 并设置到：
+    - request.state.tenant_id
+    - request.state.instance_id
+    - ContextVar (current_tenant_id, current_instance_id)
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        tenant_id = None
+        instance_id = None
+
+        try:
+            path = request.url.path
+
+            # 1. 租户级回调路由：/t/{tenant_id}/...
+            tenant_match = _TENANT_CALLBACK_PATTERN.match(path)
+            if tenant_match:
+                tenant_id = tenant_match.group(1)
+                # 后续 Phase 会从 agent_instances 查询 instance_id
+                logger.debug(f"[TenantMiddleware] Tenant callback: tenant_id={tenant_id}")
+
+            # 2. SaaS 管理 API：/api/saas/*
+            elif path.startswith("/api/saas/"):
+                tenant_id = await self._resolve_admin_tenant(request)
+                if tenant_id:
+                    logger.debug(f"[TenantMiddleware] SaaS admin: tenant_id={tenant_id}")
+
+            # 3. 普通 Chat API：/api/chat/*
+            elif path.startswith("/api/chat"):
+                tenant_id = await self._resolve_user_tenant(request)
+                if tenant_id:
+                    logger.debug(f"[TenantMiddleware] Chat user: tenant_id={tenant_id}")
+
+        except Exception as e:
+            logger.warning(f"[TenantMiddleware] Error resolving tenant context: {e}")
+
+        # 设置上下文
+        request.state.tenant_id = tenant_id
+        request.state.instance_id = instance_id
+        set_tenant_context(tenant_id, instance_id)
+
+        try:
+            response = await call_next(request)
+        finally:
+            # 清理上下文
+            clear_tenant_context()
+
+        return response
+
+    async def _resolve_admin_tenant(self, request: Request) -> Optional[str]:
+        """从管理员 token 解析 tenant_id"""
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+
+        token = auth_header[7:]
+        # 避免循环导入，延迟导入
+        from src.saas.db.tenant_admin_db import TenantAdminTokenDB
+        result = TenantAdminTokenDB.verify(token)
+        if result:
+            return result["tenant_id"]
+        return None
+
+    async def _resolve_user_tenant(self, request: Request) -> Optional[str]:
+        """从用户 token 解析 tenant_id"""
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+
+        token = auth_header[7:]
+
+        # 先验证用户 token
+        from src.api.auth import verify_token
+        from src.db.database import get_db_connection
+
+        user_id = verify_token(token)
+        if not user_id:
+            return None
+
+        # 查询用户的 tenant_id
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT tenant_id FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row["tenant_id"]:
+                return row["tenant_id"]
+        return None

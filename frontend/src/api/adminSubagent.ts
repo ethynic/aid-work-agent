@@ -114,6 +114,16 @@ export async function listAvailableSkills(): Promise<ApiResponse<string[]>> {
 }
 
 /**
+ * 获取可选 tools 列表
+ */
+export async function listAvailableTools(): Promise<ApiResponse<Array<{ name: string; description: string; display_name: string }>>> {
+  const response = await fetch(`${API_BASE}/tools`, {
+    headers: getAuthHeaders(),
+  })
+  return handleResponse(response)
+}
+
+/**
  * 创建定制数字员工
  */
 export async function createSubagent(data: CreateSubagentRequest): Promise<ApiResponse> {

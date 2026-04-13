@@ -49,6 +49,31 @@ class LLMConfig(BaseModel):
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
 
 
+class WecomMessageConfig(BaseModel):
+    """企业微信消息配置"""
+    default_type: str = "markdown"  # text | markdown
+    max_bytes: int = 2048
+    split_on_paragraph: bool = True
+
+
+class WecomMediaConfig(BaseModel):
+    """企业微信媒体配置"""
+    upload_dir: str = "./uploads/wecom"
+    max_file_size: int = 20971520  # 20MB（WeCom 限制）
+
+
+class WecomRateLimitConfig(BaseModel):
+    """企业微信速率限制配置"""
+    enabled: bool = True
+    max_per_minute: int = 10
+
+
+class WecomRetryConfig(BaseModel):
+    """企业微信重试配置"""
+    max_attempts: int = 3
+    backoff_base: float = 1.0
+
+
 class WecomConfig(BaseModel):
     """企业微信配置"""
     enabled: bool = False
@@ -57,6 +82,10 @@ class WecomConfig(BaseModel):
     secret: str = ""
     token: str = ""
     encoding_aes_key: str = ""
+    message: WecomMessageConfig = Field(default_factory=WecomMessageConfig)
+    media: WecomMediaConfig = Field(default_factory=WecomMediaConfig)
+    rate_limit: WecomRateLimitConfig = Field(default_factory=WecomRateLimitConfig)
+    retry: WecomRetryConfig = Field(default_factory=WecomRetryConfig)
 
 
 class DingtalkConfig(BaseModel):
@@ -167,6 +196,14 @@ class AppConfig(BaseModel):
     port: int = 8000
 
 
+class SaasConfig(BaseModel):
+    """SaaS 多租户配置"""
+    enabled: bool = False
+    tenant_skills_dir: str = "storage/tenants"
+    default_max_instances: int = 5
+    default_max_users: int = 50
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -176,9 +213,33 @@ class Settings(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    saas: SaasConfig = Field(default_factory=SaasConfig)
 
     class Config:
         extra = "allow"
+
+
+class _AttrDict:
+    """将字典递归转换为支持属性访问的对象，用于自动加载 YAML 配置中的额外字段。
+
+    对于 config.yaml 中未在 Settings.__fields__ 里定义的顶层节点，
+    会自动转换为 _AttrDict 实例，使得 settings.xxx.yyy 形式的访问可用。
+    """
+
+    def __init__(self, data: dict):
+        for key, value in data.items():
+            if isinstance(value, dict):
+                setattr(self, key, _AttrDict(value))
+            elif isinstance(value, list):
+                setattr(self, key, [
+                    _AttrDict(item) if isinstance(item, dict) else item
+                    for item in value
+                ])
+            else:
+                setattr(self, key, value)
+
+    def __repr__(self):
+        return f"_AttrDict({self.__dict__})"
 
 
 def _substitute_env_vars(value: Any) -> Any:
@@ -237,6 +298,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("WECOM_SECRET"):
         yaml_config.setdefault("channels", {}).setdefault("wecom", {})["secret"] = os.getenv("WECOM_SECRET")
 
+    if os.getenv("WECOM_TOKEN"):
+        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["token"] = os.getenv("WECOM_TOKEN")
+
+    if os.getenv("WECOM_ENCODING_AES_KEY"):
+        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["encoding_aes_key"] = os.getenv("WECOM_ENCODING_AES_KEY")
+
     if os.getenv("DINGTALK_APP_KEY"):
         yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["app_key"] = os.getenv("DINGTALK_APP_KEY")
 
@@ -278,7 +345,17 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("TAVILY_API_KEY"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
 
-    return Settings(**yaml_config)
+    s = Settings(**yaml_config)
+
+    # 将 YAML 中未在 Settings.__fields__ 里定义的嵌套字典自动转换为属性可访问对象
+    # 这样 config.yaml 新增的配置节（如 admin、scheduler 等）无需在 Settings 中声明，
+    # 即可通过 settings.xxx.yyy 形式直接访问
+    defined_fields = set(getattr(Settings, 'model_fields', {}).keys())
+    for key, value in yaml_config.items():
+        if key not in defined_fields and isinstance(value, dict):
+            setattr(s, key, _AttrDict(value))
+
+    return s
 
 
 # 全局配置实例

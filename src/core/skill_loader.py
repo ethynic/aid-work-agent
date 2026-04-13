@@ -4,6 +4,7 @@
 Skill Loader - Skill文件加载器
 
 负责从文件系统加载Skill定义，解析SKILL.md文件。
+兼容 AgentSkills 开放规范 (agentskills.io)。
 
 Skill目录结构:
     skills/
@@ -15,22 +16,16 @@ Skill目录结构:
     └── email/
         └── SKILL.md
 
-SKILL.md格式:
+SKILL.md格式（AgentSkills 标准）:
     ---
     name: pdf
     description: 处理PDF文件。用于读取、创建或合并PDF。
     version: 1.0.0
     author: system
+    paths: "**/*.pdf"
     dependencies:
         - pdftotext
         - PyMuPDF
-    triggers:
-        - .pdf
-        - pdf文件
-        - PDF
-    sandbox:
-        enabled: true
-        timeout: 60
     ---
 
     # PDF处理技能
@@ -61,47 +56,46 @@ class SkillDependency:
 
 
 @dataclass
-class SkillTrigger:
-    """Skill触发器"""
-    type: str  # file_extension, keyword, regex
-    pattern: str
-    case_sensitive: bool = False
-
-
-@dataclass
 class Skill:
-    """Skill定义 - 兼容 AgentSkills 规范 (agentskills.io)"""
+    """Skill定义 - 兼容 AgentSkills 开放规范 (agentskills.io)
+
+    支持 Claude Code / OpenClaw / SkillsMP 生态的 SKILL.md 标准格式。
+    所有可选字段均有默认值，确保向后兼容。
+    """
     name: str
     description: str
     body: str  # SKILL.md正文内容
     path: Path  # SKILL.md文件路径
     dir: Path  # Skill目录路径
-    
+
     # 可选元数据
     version: str = "1.0.0"
     author: str = "unknown"
-    
-    # AgentSkills 规范兼容字段
     license: Optional[str] = None
     compatibility: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+
+    # AgentSkills 标准字段
     allowed_tools: Optional[List[str]] = None
-    
-    # Claude Code / OpenClaw 扩展字段
     user_invocable: bool = True
     disable_model_invocation: bool = False
-    
+    argument_hint: Optional[str] = None
+    context_mode: str = "inline"  # inline | fork
+    model: Optional[str] = None
+    effort: Optional[str] = None
+    paths: Optional[List[str]] = None  # 文件 glob 模式，用于文件类型匹配
+    shell: str = "bash"
+    hooks: Optional[Dict[str, str]] = None  # {onLoad: cmd, onUnload: cmd}
+    agent: Optional[str] = None  # fork 时使用的子智能体类型
+
     # 依赖项
     dependencies: List[SkillDependency] = field(default_factory=list)
-    
-    # 触发器
-    triggers: List[SkillTrigger] = field(default_factory=list)
-    
+
     # 资源文件
     scripts: List[Path] = field(default_factory=list)
     references: List[Path] = field(default_factory=list)
     assets: List[Path] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -111,13 +105,17 @@ class Skill:
             "author": self.author,
             "path": str(self.path),
             "dir": str(self.dir),
+            "context_mode": self.context_mode,
+            "argument_hint": self.argument_hint,
+            "model": self.model,
+            "effort": self.effort,
+            "paths": self.paths,
+            "shell": self.shell,
+            "hooks": self.hooks,
+            "agent": self.agent,
             "dependencies": [
                 {"name": d.name, "type": d.type, "version": d.version}
                 for d in self.dependencies
-            ],
-            "triggers": [
-                {"type": t.type, "pattern": t.pattern, "case_sensitive": t.case_sensitive}
-                for t in self.triggers
             ],
             "scripts": [str(p) for p in self.scripts],
             "references": [str(p) for p in self.references],
@@ -207,10 +205,7 @@ class SkillLoader:
                     type=dep.get("type", "pip"),
                     version=dep.get("version"),
                 ))
-        
-        # 初始化触发器列表
-        triggers = []
-        
+
         # 解析 metadata（兼容 AgentSkills / OpenClaw）
         metadata = frontmatter.get("metadata")
         if isinstance(metadata, str):
@@ -221,37 +216,26 @@ class SkillLoader:
                 metadata = None
         if metadata is None:
             metadata = {}
-        
-        # 从 metadata.triggers 合并触发器（metadata 优先）
-        metadata_triggers = metadata.get("triggers", []) if isinstance(metadata, dict) else []
-        all_trigger_sources = metadata_triggers + frontmatter.get("triggers", [])
-        # 去重（按 pattern）
-        seen_patterns = set()
-        for trigger in all_trigger_sources:
-            if isinstance(trigger, str):
-                if trigger not in seen_patterns:
-                    seen_patterns.add(trigger)
-                    # 自动判断触发器类型
-                    if trigger.startswith("."):
-                        triggers.append(SkillTrigger(type="file_extension", pattern=trigger))
-                    elif trigger.startswith("^") or trigger.endswith("$"):
-                        triggers.append(SkillTrigger(type="regex", pattern=trigger))
-                    else:
-                        triggers.append(SkillTrigger(type="keyword", pattern=trigger))
-            elif isinstance(trigger, dict):
-                pattern = trigger.get("pattern", "")
-                if pattern and pattern not in seen_patterns:
-                    seen_patterns.add(pattern)
-                    triggers.append(SkillTrigger(
-                        type=trigger.get("type", "keyword"),
-                        pattern=pattern,
-                        case_sensitive=trigger.get("case_sensitive", False),
-                    ))
-        
-        # 解析 allowed-tools（AgentSkills 实验性字段）
+
+        # 解析 allowed-tools
         allowed_tools_raw = frontmatter.get("allowed-tools", "")
         allowed_tools = allowed_tools_raw.split() if isinstance(allowed_tools_raw, str) and allowed_tools_raw else []
-        
+
+        # 解析 paths（AgentSkills 标准字段，逗号或空格分隔的 glob 模式）
+        paths_raw = frontmatter.get("paths")
+        paths = None
+        if paths_raw:
+            if isinstance(paths_raw, str):
+                paths = [p.strip() for p in paths_raw.replace(",", " ").split() if p.strip()]
+            elif isinstance(paths_raw, list):
+                paths = paths_raw
+
+        # 解析 hooks
+        hooks_raw = frontmatter.get("hooks")
+        hooks = None
+        if isinstance(hooks_raw, dict):
+            hooks = hooks_raw
+
         skill = Skill(
             name=frontmatter["name"],
             description=frontmatter["description"],
@@ -266,8 +250,15 @@ class SkillLoader:
             allowed_tools=allowed_tools if allowed_tools else None,
             user_invocable=frontmatter.get("user-invocable", True),
             disable_model_invocation=frontmatter.get("disable-model-invocation", False),
+            argument_hint=frontmatter.get("argument-hint"),
+            context_mode=frontmatter.get("context", "inline"),
+            model=frontmatter.get("model"),
+            effort=frontmatter.get("effort"),
+            paths=paths,
+            shell=frontmatter.get("shell", "bash"),
+            hooks=hooks,
+            agent=frontmatter.get("agent"),
             dependencies=dependencies,
-            triggers=triggers,
         )
         
         # 扫描资源文件
@@ -325,39 +316,50 @@ class SkillLoader:
     def get_skill_descriptions(self) -> str:
         """
         生成Skill描述列表
-        
+
         这是Layer 1 - 仅name和description，约100 tokens/skill。
         完整内容(Layer 2)仅在Skill工具调用时加载。
-        
+
         Returns:
             Skill描述字符串
         """
         if not self.skills:
             return "(no skills available)"
-        
+
         return "\n".join(
             f"- {name}: {skill.description}"
             for name, skill in self.skills.items()
         )
     
-    def get_skill_content(self, name: str) -> Optional[str]:
+    def get_skill_content(self, name: str, substitutions: Optional[Dict[str, str]] = None) -> Optional[str]:
         """
         获取Skill完整内容用于注入
-        
+
         这是Layer 2 - 完整的SKILL.md正文，加上可用资源提示(Layer 3)。
-        
+
         Args:
             name: Skill名称
-            
+            substitutions: 可选的替换上下文，用于 $ARGUMENTS 等变量替换
+
         Returns:
             Skill内容字符串，如果未找到返回None
         """
         if name not in self.skills:
             return None
-        
+
         skill = self.skills[name]
-        content = f"# Skill: {skill.name}\n\n{skill.body}"
-        
+        body = skill.body
+
+        # 执行字符串替换（AgentSkills 标准）
+        if substitutions:
+            from src.core.skill_substitutions import SkillSubstitutor
+            body = SkillSubstitutor.substitute(body, substitutions)
+
+        # 处理动态上下文注入 !`command`（AgentSkills 标准）
+        body = self._process_dynamic_context(body, skill.dir)
+
+        content = f"# Skill: {skill.name}\n\n{body}"
+
         # 列出可用资源 (Layer 3提示)
         resources = []
         for folder, label in [
@@ -368,13 +370,62 @@ class SkillLoader:
             files = getattr(skill, folder, [])
             if files:
                 resources.append(f"{label}: {', '.join(f.name for f in files)}")
-        
+
         if resources:
             content += f"\n\n**Available resources in {skill.dir}:**\n"
             content += "\n".join(f"- {r}" for r in resources)
-        
+
         return content
-    
+
+    def _process_dynamic_context(self, body: str, skill_dir: Path) -> str:
+        """
+        处理 SKILL.md body 中的动态上下文注入语法 !`command`。
+
+        企业环境默认关闭，需要配置 skills.security.allow_dynamic_context: true
+        或 skill 的 metadata.allow_dynamic_context: true 才会执行。
+
+        Args:
+            body: SKILL.md 正文
+            skill_dir: Skill 目录路径
+
+        Returns:
+            处理后的正文
+        """
+        # 检查是否包含动态注入语法
+        if "!`" not in body:
+            return body
+
+        # 安全检查：默认关闭，需要配置开启
+        from src.config.settings import settings
+        allow = getattr(settings, "skills_security_allow_dynamic_context", False)
+        if not allow:
+            # 也检查 skill 级别的配置
+            # 此处无法直接获取 skill 对象，在调用方检查
+            return body
+
+        import subprocess
+
+        pattern = r"!`([^`]+)`"
+
+        def replacer(match: re.Match) -> str:
+            cmd = match.group(1)
+            try:
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(skill_dir),
+                    timeout=10,
+                )
+                return result.stdout.strip()
+            except subprocess.TimeoutExpired:
+                return f"(error: command timed out: {cmd})"
+            except Exception as e:
+                return f"(error running: {cmd}: {e})"
+
+        return re.sub(pattern, replacer, body)
+
     def get_skill(self, name: str) -> Optional[Skill]:
         """
         获取Skill对象
@@ -396,56 +447,43 @@ class SkillLoader:
         """
         return list(self.skills.keys())
     
-    def match_skill_by_file(self, filename: str) -> Optional[str]:
+    def match_by_file(self, filename: str) -> Optional[str]:
         """
-        根据文件名匹配Skill
-        
+        根据文件名匹配Skill（基于 paths 字段）
+
+        AgentSkills 标准使用 paths glob 模式进行文件类型匹配。
+        从 paths 中提取文件扩展名进行匹配。
+
         Args:
             filename: 文件名
-            
+
         Returns:
             匹配的Skill名称，如果没有匹配返回None
         """
+        from fnmatch import fnmatch
         filename_lower = filename.lower()
-        
+
         for name, skill in self.skills.items():
-            for trigger in skill.triggers:
-                if trigger.type == "file_extension":
-                    pattern = trigger.pattern.lower()
-                    if filename_lower.endswith(pattern):
-                        return name
-                elif trigger.type == "regex":
-                    flags = 0 if trigger.case_sensitive else re.IGNORECASE
-                    if re.search(trigger.pattern, filename, flags):
-                        return name
-        
+            if not skill.paths:
+                continue
+            for pattern in skill.paths:
+                # 直接用 glob 模式匹配文件名
+                if fnmatch(filename_lower, pattern.lower()):
+                    return name
+                # 从 glob 模式中提取扩展名进行后缀匹配
+                # 例如 "src/**/*.pdf" → 匹配 .pdf 文件
+                ext = self._extract_extension(pattern)
+                if ext and filename_lower.endswith(ext.lower()):
+                    return name
+
         return None
-    
-    def match_skill_by_keyword(self, text: str) -> Optional[str]:
-        """
-        根据关键词匹配Skill
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            匹配的Skill名称，如果没有匹配返回None
-        """
-        text_lower = text.lower()
-        
-        for name, skill in self.skills.items():
-            for trigger in skill.triggers:
-                if trigger.type == "keyword":
-                    pattern = trigger.pattern if trigger.case_sensitive else trigger.pattern.lower()
-                    search_text = text if trigger.case_sensitive else text_lower
-                    if pattern in search_text:
-                        return name
-                elif trigger.type == "regex":
-                    flags = 0 if trigger.case_sensitive else re.IGNORECASE
-                    if re.search(trigger.pattern, text, flags):
-                        return name
-        
-        return None
+
+    @staticmethod
+    def _extract_extension(pattern: str) -> Optional[str]:
+        """从 glob 模式中提取文件扩展名"""
+        # 匹配模式末尾的扩展名，如 **/*.pdf → .pdf
+        match = re.search(r'\*?(\.\w+)$', pattern)
+        return match.group(1) if match else None
     
     def reload_skills(self):
         """

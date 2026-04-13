@@ -93,6 +93,10 @@ frontend/.env
 frontend/.env.local
 frontend/.env.*.local
 
+# Frontend package cache
+frontend/package/
+frontend/npm.tgz
+
 uploads/
 memories/
 storage/

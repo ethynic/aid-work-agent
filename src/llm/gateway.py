@@ -5,6 +5,8 @@ LLM网关
 集成 KeyPool 支持多 API Key 轮询与并发控制。
 """
 
+import asyncio
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from loguru import logger
@@ -129,7 +131,6 @@ class LLMGateway:
         """
         流式调用：Key 在整个流结束后才归还，保证流的完整性。
         """
-        import time
         stream_start = time.time()
         chunk_count = 0
         logger.info(f"[LLM] _stream_with_pool started, provider={self.provider_name}, fn={fn_name}")

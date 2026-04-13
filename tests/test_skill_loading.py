@@ -11,8 +11,8 @@ print('Skills:', loader.list_skills())
 for name, skill in loader.skills.items():
     print(f'\nSkill: {name}')
     print(f'  Description: {skill.description[:100]}...')
-    print(f'  Triggers: {skill.triggers}')
-    for t in skill.triggers:
-        print(f'    - type={t.type}, pattern={t.pattern}')
+    print(f'  Paths: {skill.paths}')
+    print(f'  Context mode: {skill.context_mode}')
+    print(f'  Argument hint: {skill.argument_hint}')
 
-print('\nMatch by file test.pdf:', loader.match_skill_by_file('test.pdf'))
+print('\nMatch by file test.pdf:', loader.match_by_file('test.pdf'))

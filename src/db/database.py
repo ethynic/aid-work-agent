@@ -100,6 +100,7 @@ def init_database():
                 wx_openid TEXT UNIQUE,
                 wx_unionid TEXT,
                 avatar_url TEXT,
+                tenant_id TEXT,
                 status INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -424,6 +425,13 @@ def init_database():
 
         conn.commit()
         logger.info(f"Database initialized at {get_sqlite_path()}")
+
+        # 初始化 SaaS 多租户表
+        try:
+            from src.saas.db.tables import init_saas_tables
+            init_saas_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize SaaS tables (saas module may not be configured): {e}")
 
 
 if __name__ == "__main__":

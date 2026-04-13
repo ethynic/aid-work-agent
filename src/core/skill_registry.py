@@ -13,7 +13,7 @@ Skill Registry - Skill注册表
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from loguru import logger
 
 from src.core.skill_loader import SkillLoader, Skill
@@ -28,13 +28,13 @@ class SkillRegistry:
     使用示例:
         registry = SkillRegistry()
         registry.load_from_directory(Path("skills"))
-        
+
         # 获取Skill
         skill = registry.get("pdf")
-        
-        # 匹配Skill
+
+        # 匹配Skill（基于 paths 字段的文件类型匹配）
         skill_name = registry.match_by_file("document.pdf")
-        
+
         # 获取描述
         descriptions = registry.get_descriptions()
     """
@@ -49,11 +49,6 @@ class SkillRegistry:
         self._skills: Dict[str, Skill] = {}
         self._loader: Optional[SkillLoader] = None
         self._allowed: Optional[Set[str]] = None  # allow 名单
-
-        # 文件扩展名索引
-        self._extension_index: Dict[str, str] = {}
-        # 关键词索引
-        self._keyword_index: Dict[str, Set[str]] = {}
 
         if skills_dir:
             self.load_from_directory(skills_dir)
@@ -89,84 +84,87 @@ class SkillRegistry:
             self._skills = all_skills
             logger.info(f"SkillRegistry loaded {len(self._skills)} skills from {skills_dir}")
 
-        # 构建索引
-        self._build_indices()
         return len(self._skills)
-    
-    def _build_indices(self):
-        """构建加速查找的索引"""
-        self._extension_index.clear()
-        self._keyword_index.clear()
-        
-        for name, skill in self._skills.items():
-            for trigger in skill.triggers:
-                if trigger.type == "file_extension":
-                    ext = trigger.pattern.lower()
-                    self._extension_index[ext] = name
-                elif trigger.type == "keyword":
-                    keyword = trigger.pattern.lower()
-                    if keyword not in self._keyword_index:
-                        self._keyword_index[keyword] = set()
-                    self._keyword_index[keyword].add(name)
-    
+
+    def load_from_directories(
+        self,
+        dirs: List[Path],
+        allowed: Optional[List[str]] = None,
+    ) -> int:
+        """
+        从多个目录加载 Skill，按优先级从低到高加载，高优先级目录覆盖同名 Skill。
+
+        AgentSkills 标准支持多级发现（企业 > 个人 > 项目 > 插件）。
+        服务器端映射：src/skills/ (基础) → storage/skills/enterprise/ (企业)。
+
+        Args:
+            dirs: Skill 目录列表（优先级从低到高）
+            allowed: 允许加载的 skill 名称列表，None 或空列表表示不限制
+
+        Returns:
+            加载的 Skill 总数
+        """
+        self._allowed = set(allowed) if allowed else None
+        combined_skills: Dict[str, Skill] = {}
+
+        for skills_dir in dirs:
+            if not skills_dir.exists():
+                continue
+            loader = SkillLoader(skills_dir)
+            # 后加载的目录覆盖先加载的同名 skill（高优先级覆盖低优先级）
+            combined_skills.update(loader.skills)
+
+        # 过滤
+        if self._allowed is not None:
+            self._skills = {
+                name: skill
+                for name, skill in combined_skills.items()
+                if name in self._allowed
+            }
+        else:
+            self._skills = combined_skills
+
+        # 保存最后一个有效的 loader 用于 get_content
+        self._loader = loader if dirs else None
+
+        logger.info(f"SkillRegistry loaded {len(self._skills)} skills from {len(dirs)} directories")
+        return len(self._skills)
+
     def register(self, skill: Skill) -> bool:
         """
         注册一个Skill
-        
+
         Args:
             skill: Skill对象
-            
+
         Returns:
             是否注册成功
         """
         if skill.name in self._skills:
             logger.warning(f"Skill already registered: {skill.name}")
             return False
-        
+
         self._skills[skill.name] = skill
-        
-        # 更新索引
-        for trigger in skill.triggers:
-            if trigger.type == "file_extension":
-                ext = trigger.pattern.lower()
-                self._extension_index[ext] = skill.name
-            elif trigger.type == "keyword":
-                keyword = trigger.pattern.lower()
-                if keyword not in self._keyword_index:
-                    self._keyword_index[keyword] = set()
-                self._keyword_index[keyword].add(skill.name)
-        
+
         logger.info(f"Registered skill: {skill.name}")
         return True
     
     def unregister(self, name: str) -> bool:
         """
         注销一个Skill
-        
+
         Args:
             name: Skill名称
-            
+
         Returns:
             是否注销成功
         """
         if name not in self._skills:
             logger.warning(f"Skill not found: {name}")
             return False
-        
-        skill = self._skills.pop(name)
-        
-        # 更新索引
-        for trigger in skill.triggers:
-            if trigger.type == "file_extension":
-                ext = trigger.pattern.lower()
-                self._extension_index.pop(ext, None)
-            elif trigger.type == "keyword":
-                keyword = trigger.pattern.lower()
-                if keyword in self._keyword_index:
-                    self._keyword_index[keyword].discard(name)
-                    if not self._keyword_index[keyword]:
-                        del self._keyword_index[keyword]
-        
+
+        del self._skills[name]
+
         logger.info(f"Unregistered skill: {name}")
         return True
     
@@ -182,19 +180,20 @@ class SkillRegistry:
         """
         return self._skills.get(name)
     
-    def get_content(self, name: str) -> Optional[str]:
+    def get_content(self, name: str, substitutions: Optional[Dict[str, str]] = None) -> Optional[str]:
         """
         获取Skill内容
-        
+
         Args:
             name: Skill名称
-            
+            substitutions: 可选的替换上下文，用于 $ARGUMENTS 等变量替换
+
         Returns:
             Skill内容字符串
         """
         if self._loader:
-            return self._loader.get_skill_content(name)
-        
+            return self._loader.get_skill_content(name, substitutions=substitutions)
+
         skill = self.get(name)
         if skill:
             return f"# Skill: {skill.name}\n\n{skill.body}"
@@ -228,82 +227,16 @@ class SkillRegistry:
     
     def match_by_file(self, filename: str) -> Optional[str]:
         """
-        根据文件名匹配Skill
-        
+        根据文件名匹配Skill（基于 paths 字段）
+
         Args:
             filename: 文件名
-            
+
         Returns:
             匹配的Skill名称，如果没有匹配返回None
         """
-        # 首先检查扩展名索引
-        filename_lower = filename.lower()
-        for ext, skill_name in self._extension_index.items():
-            if filename_lower.endswith(ext):
-                return skill_name
-        
-        # 使用loader的匹配方法（支持正则）
         if self._loader:
-            return self._loader.match_skill_by_file(filename)
-        
-        return None
-    
-    def match_by_keyword(self, text: str) -> List[str]:
-        """
-        根据关键词匹配Skill
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            匹配的Skill名称列表
-        """
-        matched: Set[str] = set()
-        text_lower = text.lower()
-        
-        # 检查关键词索引
-        for keyword, skill_names in self._keyword_index.items():
-            if keyword in text_lower:
-                matched.update(skill_names)
-        
-        # 使用loader的匹配方法（支持正则）
-        if self._loader:
-            skill_name = self._loader.match_skill_by_keyword(text)
-            if skill_name:
-                matched.add(skill_name)
-        
-        return list(matched)
-    
-    def match_skill(self, context: Dict) -> Optional[str]:
-        """
-        综合匹配Skill
-        
-        根据上下文信息（文件名、文本内容等）匹配最合适的Skill。
-        
-        Args:
-            context: 上下文信息，包含:
-                - filename: 文件名
-                - text: 文本内容
-                - intent: 意图
-                
-        Returns:
-            匹配的Skill名称，如果没有匹配返回None
-        """
-        # 优先匹配文件类型
-        filename = context.get("filename")
-        if filename:
-            skill_name = self.match_by_file(filename)
-            if skill_name:
-                return skill_name
-        
-        # 匹配关键词
-        text = context.get("text", "")
-        if text:
-            matched = self.match_by_keyword(text)
-            if matched:
-                # 返回第一个匹配的
-                return matched[0]
-        
+            return self._loader.match_by_file(filename)
         return None
 
     def is_allowed(self, skill_name: str) -> bool:
@@ -341,9 +274,9 @@ class SkillRegistry:
                 },
             }
 
-        # 只生成允许的 skills 描述
+        # 只生成允许的 skills 描述（含 argument_hint）
         skill_list = "\n".join(
-            f"- {name}: {skill.description}"
+            f"- {name}: {skill.description}" + (f" (args: {skill.argument_hint})" if skill.argument_hint else "")
             for name, skill in self._skills.items()
         )
 
@@ -379,14 +312,13 @@ class SkillRegistry:
     def reload(self) -> int:
         """
         重新加载所有Skill
-        
+
         Returns:
             加载的Skill数量
         """
         if self._loader:
             self._loader.reload_skills()
             self._skills = self._loader.skills
-            self._build_indices()
             logger.info(f"SkillRegistry reloaded {len(self._skills)} skills")
         return len(self._skills)
     

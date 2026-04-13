@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+~*
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+.venv/
+venv/
+env/
+*.db
+*.sqlite
+*.sqlite3
+
+# Frontend package cache (local npm copies)
+frontend/package/
+frontend/npm.tgz
+
+# Development scripts
+frontend-dev
+frontend-dev.bat
+
+# Git
+.git/
+.gitignore  # 通常不需要忽略，保留以便查看
+
+# Environment
+.env
+.env.local
+.env.*.local
