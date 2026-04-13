@@ -225,6 +225,7 @@ $files = Get-ChildItem -Path $localBasePath -File -Recurse | Where-Object {
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar).vscode*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)log*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)uploads*") -and
+    -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)storage*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)memories*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)plans*") -and
     -not ($fullPath -like "*$([System.IO.Path]::DirectorySeparatorChar)test_uploads*") -and

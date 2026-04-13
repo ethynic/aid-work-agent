@@ -142,20 +142,20 @@ cd /var/www/agent/deploy
 
 ```bash
 # 查看容器状态
-docker-compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml ps
 
 # 查看日志
-docker-compose -f docker-compose.prod.yml logs -f
+docker compose -f docker-compose.prod.yml logs -f
 
 # 重启服务
-docker-compose -f docker-compose.prod.yml restart
+docker compose -f docker-compose.prod.yml restart
 
 # 停止服务
-docker-compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml down
 
 # 重新构建
-docker-compose -f docker-compose.prod.yml up -d --build
-docker-compose -f docker-compose.prod.yml up -d --build --no-cache
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.test.yml up -d --build
 ```
 
 ### Nginx 管理
