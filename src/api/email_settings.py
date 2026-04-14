@@ -32,7 +32,7 @@ class EmailSettingsRequest(BaseModel):
 
 # ============== API 路由 ==============
 
-@router.get("/")
+@router.get("")
 async def get_email_settings(current_user: dict = Depends(get_current_user)):
     """获取当前用户的邮箱配置（密码掩码）"""
     try:
@@ -65,7 +65,7 @@ async def get_email_settings(current_user: dict = Depends(get_current_user)):
         return {"success": False, "error": "获取邮箱配置失败"}
 
 
-@router.post("/")
+@router.post("")
 async def save_email_settings(
     request: EmailSettingsRequest,
     current_user: dict = Depends(get_current_user),
@@ -76,6 +76,9 @@ async def save_email_settings(
     测试邮件发送给用户自己，验证 SMTP 配置正确性
     """
     try:
+        if not current_user:
+            return {"success": False, "error": "未登录"}
+
         user_id = current_user.get("user_id")
 
         # 1. 构造 UserEmail 用于测试
@@ -126,10 +129,13 @@ async def save_email_settings(
         return {"success": False, "error": f"保存邮箱配置失败: {str(e)}"}
 
 
-@router.delete("/")
+@router.delete("")
 async def delete_email_settings(current_user: dict = Depends(get_current_user)):
     """删除当前用户的邮箱配置"""
     try:
+        if not current_user:
+            return {"success": False, "error": "未登录"}
+
         user_id = current_user.get("user_id")
         success = EmailCredentialDB.delete(user_id)
 
