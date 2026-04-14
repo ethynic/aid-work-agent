@@ -13,14 +13,23 @@ from loguru import logger
 
 try:
     import psycopg2
+    from psycopg2 import pool as pg_pool
     from psycopg2 import extras as pg_extras
 except ImportError:
     psycopg2 = None
+    pg_pool = None
     pg_extras = None
 
 # 数据库配置
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./aid_work_agent.db")
 DATABASE_ECHO = os.getenv("DATABASE_ECHO", "false").lower() == "true"
+
+# PostgreSQL 连接池配置
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
+# 模块级连接池
+_pg_connection_pool = None
 
 
 def get_database_config() -> dict:
@@ -71,6 +80,72 @@ _sqlite_connections = {}
 _pg_connections = {}
 
 
+def init_postgres_pool(minconn: int = None, maxconn: int = None):
+    """初始化 PostgreSQL 连接池"""
+    global _pg_connection_pool
+
+    if DB_TYPE != "postgresql":
+        logger.warning("跳过连接池初始化，当前数据库不是 PostgreSQL")
+        return
+
+    if psycopg2 is None or pg_pool is None:
+        raise ImportError("psycopg2 is required for PostgreSQL. Install with: pip install psycopg2-binary")
+
+    minconn = minconn or DB_POOL_MIN
+    maxconn = maxconn or DB_POOL_MAX
+
+    _pg_connection_pool = pg_pool.ThreadedConnectionPool(
+        minconn=minconn,
+        maxconn=maxconn,
+        host=DB_CONFIG["host"],
+        port=DB_CONFIG["port"],
+        database=DB_CONFIG["database"],
+        user=DB_CONFIG["user"],
+        password=DB_CONFIG["password"]
+    )
+    logger.info(f"PostgreSQL 连接池初始化完成: min={minconn}, max={maxconn}")
+
+
+def get_postgres_pool():
+    """获取 PostgreSQL 连接池"""
+    return _pg_connection_pool
+
+
+def get_pooled_connection():
+    """从连接池获取连接"""
+    if _pg_connection_pool is None:
+        raise RuntimeError("PostgreSQL 连接池未初始化，请先调用 init_postgres_pool()")
+    return _pg_connection_pool.getconn()
+
+
+def return_pooled_connection(conn):
+    """归还连接到连接池"""
+    if _pg_connection_pool and conn:
+        _pg_connection_pool.putconn(conn)
+
+
+def close_postgres_pool():
+    """关闭连接池"""
+    global _pg_connection_pool
+    if _pg_connection_pool:
+        _pg_connection_pool.closeall()
+        _pg_connection_pool = None
+        logger.info("PostgreSQL 连接池已关闭")
+
+
+def get_postgres_pool_status() -> dict:
+    """获取连接池状态"""
+    if _pg_connection_pool is None:
+        return {"initialized": False}
+
+    return {
+        "initialized": True,
+        "minconn": _pg_connection_pool.minconn,
+        "maxconn": _pg_connection_pool.maxconn,
+        "dsn": _pg_connection_pool.dsn,
+    }
+
+
 def get_sqlite_path() -> str:
     """获取SQLite数据库路径"""
     if DB_CONFIG["driver"] == "sqlite":
@@ -89,22 +164,6 @@ def get_current_timestamp() -> str:
     """获取当前数据库的时间戳函数"""
     # SQLite 和 PostgreSQL 语法相同
     return "CURRENT_TIMESTAMP"
-
-
-def _create_postgres_connection():
-    """创建 PostgreSQL 连接"""
-    import psycopg2
-
-    conn = psycopg2.connect(
-        host=DB_CONFIG["host"],
-        port=DB_CONFIG["port"],
-        database=DB_CONFIG["database"],
-        user=DB_CONFIG["user"],
-        password=DB_CONFIG["password"]
-    )
-    conn.autocommit = False
-    return conn
-
 
 class PGRow:
     """PostgreSQL 行包装器，提供类似 sqlite3.Row 的接口"""
@@ -158,10 +217,11 @@ def get_db_connection() -> Generator[Any, None, None]:
         finally:
             conn.close()
     elif DB_TYPE == "postgresql":
-        if psycopg2 is None:
+        if psycopg2 is None or pg_pool is None:
             raise ImportError("psycopg2 is required for PostgreSQL. Install with: pip install psycopg2-binary")
 
-        conn = _create_postgres_connection()
+        # 从连接池获取连接
+        conn = get_pooled_connection()
 
         # 使用 DictCursor 使 psycopg2 返回字典-like 对象
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -172,9 +232,15 @@ def get_db_connection() -> Generator[Any, None, None]:
                 self._cursor = cursor
 
             def execute(self, query, params=None):
+                # 自动将 SQLite 的 ? 占位符转换为 PostgreSQL 的 %s
+                if params and "?" in query:
+                    query = query.replace("?", "%s")
                 return self._cursor.execute(query, params)
 
             def executemany(self, query, params_list):
+                # 自动将 SQLite 的 ? 占位符转换为 PostgreSQL 的 %s
+                if params_list and "?" in query:
+                    query = query.replace("?", "%s")
                 return self._cursor.executemany(query, params_list)
 
             def fetchone(self):
@@ -221,7 +287,8 @@ def get_db_connection() -> Generator[Any, None, None]:
         try:
             yield PGConnectionWrapper(conn, cursor)
         finally:
-            conn.close()
+            # 归还连接到池而非关闭
+            return_pooled_connection(conn)
     else:
         # Fallback to SQLite
         db_path = get_sqlite_path()
@@ -853,6 +920,11 @@ def _init_postgresql():
             )
         """)
 
+        # 确保 text_vec 列存在（旧表迁移）
+        cursor.execute("""
+            ALTER TABLE chunks ADD COLUMN IF NOT EXISTS text_vec tsvector
+        """)
+
         # 创建 GIN 索引用于全文检索
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_chunks_text_vec
@@ -870,8 +942,12 @@ def _init_postgresql():
             $$ LANGUAGE plpgsql
         """)
 
+        # PostgreSQL 不支持 CREATE TRIGGER IF NOT EXISTS，需要先删除再创建
         cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS chunks_text_vec_trigger
+            DROP TRIGGER IF EXISTS chunks_text_vec_trigger ON chunks
+        """)
+        cursor.execute("""
+            CREATE TRIGGER chunks_text_vec_trigger
             BEFORE INSERT OR UPDATE ON chunks
             FOR EACH ROW EXECUTE FUNCTION chunks_text_vec_update()
         """)

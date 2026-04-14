@@ -12,7 +12,7 @@ services:
       # 数据库配置（生产环境请修改密码）
       POSTGRES_DB: ${POSTGRES_DB:-aid_work_agent}
       POSTGRES_USER: ${POSTGRES_USER:-aid_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aid_secure_pass_2024}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:

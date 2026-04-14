@@ -133,7 +133,7 @@ docker compose -f docker-compose.postgres.yml up -d
 
 ### 配置应用连接
 ```bash
-DATABASE_URL=postgresql://aid_user:aid_secure_pass_2024@localhost:5432/aid_work_agent
+DATABASE_URL=postgresql://aid_user:Aid_2026@localhost:5432/aid_work_agent
 ```
 
 ## 验证方法

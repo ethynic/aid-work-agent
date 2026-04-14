@@ -22,12 +22,22 @@ class ChannelSessionManager:
     会话包含：聊天记录、用户信息、渠道信息
     """
 
+    _instance = None
+    _initialized = False
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
-        """初始化会话管理器"""
-        self._ensure_tables()
+        """初始化会话管理器（延迟初始化）"""
+        pass
 
     def _ensure_tables(self):
-        """确保数据库表存在"""
+        """确保数据库表存在（延迟初始化）"""
+        if self._initialized:
+            return
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -75,6 +85,9 @@ class ChannelSessionManager:
             """)
 
             conn.commit()
+
+        self._initialized = True
+        logger.info("PostgreSQL: channel_sessions 表初始化完成")
 
     def _generate_session_id(self, channel_type: str, channel_user_id: str) -> str:
         """生成会话ID"""

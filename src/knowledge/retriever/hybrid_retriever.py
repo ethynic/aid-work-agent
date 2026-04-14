@@ -8,7 +8,7 @@ import re
 from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
 
-from src.db.database import DB_TYPE
+from src.db.database import DB_TYPE, get_db_placeholder
 
 
 class HybridRetriever:
@@ -356,7 +356,8 @@ class HybridRetriever:
             return []
 
         chunk_ids = [chunk_id for chunk_id, _ in fused]
-        placeholders = ','.join(['?'] * len(chunk_ids))
+        placeholder = get_db_placeholder()
+        placeholders = ','.join([placeholder] * len(chunk_ids))
 
         cursor = self.conn.cursor()
         cursor.execute(f"""

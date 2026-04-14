@@ -36,7 +36,7 @@ docker exec -it aid-postgres psql -U aid_user -d aid_work_agent -c "SELECT versi
 
 ```bash
 # PostgreSQL 连接
-DATABASE_URL=postgresql://aid_user:aid_secure_pass_2024@localhost:5432/aid_work_agent
+DATABASE_URL=postgresql://aid_user:Aid_2026@localhost:5432/aid_work_agent
 ```
 
 ## 服务端口
@@ -85,7 +85,7 @@ docker exec -i aid-postgres psql -U aid_user aid_work_agent < backup.sql
    - Port: 5432
    - Database: aid_work_agent
    - Username: aid_user
-   - Password: aid_secure_pass_2024
+   - Password: Aid_2026
 
 ## 数据持久化
 
@@ -106,5 +106,5 @@ docker exec -i aid-postgres psql -U aid_user aid_work_agent < backup.sql
 |------|--------|------|
 | POSTGRES_DB | aid_work_agent | 数据库名 |
 | POSTGRES_USER | aid_user | 用户名 |
-| POSTGRES_PASSWORD | aid_secure_pass_2024 | 密码 |
+| POSTGRES_PASSWORD | Aid_2026 | 密码 |
 | POSTGRES_PORT | 5432 | 端口 |

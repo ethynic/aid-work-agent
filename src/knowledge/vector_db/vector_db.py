@@ -215,11 +215,17 @@ class VectorDBPostgreSQL(VectorDatabase):
         """)
 
         # 创建索引（使用 HNSW 索引以获得更好的搜索性能）
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_chunks_vec_embedding
-            ON chunks_vec USING hnsw (embedding vector_cosine_ops)
-            WITH (m = 16, ef_construction = 64)
-        """)
+        # 注意：IF NOT EXISTS 在并发场景下仍可能触发 UniqueViolation，需捕获处理
+        try:
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunks_vec_embedding
+                ON chunks_vec USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+            """)
+        except Exception as e:
+            # 忽略索引已存在的错误（并发场景或残留索引）
+            if "duplicate key" not in str(e).lower() and "already exists" not in str(e).lower():
+                raise
 
         self.conn.commit()
         logger.info(f"PostgreSQL pgvector 表初始化完成，维度: {self.dimension}")
