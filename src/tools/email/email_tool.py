@@ -452,8 +452,8 @@ class EmailReadTool(BaseTool):
                             "uid": uid.decode(),
                             "subject": subject,
                             "from": from_,
-                            "to": msg.get("To", ""),
-                            "date": msg.get("Date", ""),
+                            "to": self._decode_header_value(msg.get("To", "")),
+                            "date": self._decode_header_value(msg.get("Date", "")),
                             "body_preview": body[:200] if body else "",
                         })
                         
