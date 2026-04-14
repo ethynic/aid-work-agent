@@ -421,46 +421,66 @@ class EmailReadTool(BaseTool):
             emails = []
             fetched_count = 0
             for uid in reversed(email_uids):
-                # 使用 UID 和 BODY.PEEK[] 避免自动标记为已读
-                status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[])")
+                # 使用 UID 同时获取 BODY.PEEK[] 和 INTERNALDATE
+                status, msg_data = mail.uid("fetch", uid, "(BODY.PEEK[] INTERNALDATE)")
                 if status != "OK":
                     logger.warning(f"获取邮件 UID:{uid} 失败: {status}")
                     continue
-                
+
                 fetched_count += 1
-                    
+
+                # 提取 INTERNALDATE
+                internal_date = ""
+                for response_part in msg_data:
+                    if isinstance(response_part, bytes):
+                        part_str = response_part.decode(errors="ignore")
+                        if "INTERNALDATE" in part_str:
+                            # 解析 INTERNALDATE "DD-Mon-YYYY HH:MM:SS +ZZZZ"
+                            import re
+                            m = re.search(r'INTERNALDATE\s+"([^"]+)"', part_str)
+                            if m:
+                                try:
+                                    from email.utils import parsedate_to_datetime
+                                    dt = parsedate_to_datetime(m.group(1))
+                                    internal_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+                                except Exception:
+                                    internal_date = m.group(1)
+
                 for response_part in msg_data:
                     if isinstance(response_part, tuple):
                         msg = email.message_from_bytes(response_part[1])
 
                         # 解码主题
                         subject = self._decode_header_value(msg["Subject"])
-                        
+
                         # 获取发件人
                         from_ = self._decode_header_value(msg.get("From", ""))
-                        
+
                         # 本地过滤
                         if local_from_filter and local_from_filter.lower() not in from_.lower():
                             continue
                         if local_subject_filter and local_subject_filter.lower() not in subject.lower():
                             continue
-                        
+
                         # 获取正文
                         body = self._get_email_body(msg)
+
+                        # 优先使用 INTERNALDATE（服务器收到时间），其次用 Date 头
+                        date_str = internal_date or self._decode_header_value(msg.get("Date", ""))
 
                         emails.append({
                             "uid": uid.decode(),
                             "subject": subject,
                             "from": from_,
                             "to": self._decode_header_value(msg.get("To", "")),
-                            "date": self._decode_header_value(msg.get("Date", "")),
+                            "date": date_str,
                             "body_preview": body[:200] if body else "",
                         })
-                        
+
                         # 达到限制数量后停止
                         if len(emails) >= limit:
                             break
-                
+
                 if len(emails) >= limit:
                     break
 
@@ -486,11 +506,15 @@ class EmailReadTool(BaseTool):
                 "error": f"邮件收取失败: {str(e)}",
             }
 
-    def _decode_header_value(self, value: Optional[str]) -> str:
+    def _decode_header_value(self, value) -> str:
         """解码邮件头部值"""
         if not value:
             return ""
-        
+
+        # 确保输入是字符串（Header 对象需要先转 str）
+        if not isinstance(value, str):
+            value = str(value)
+
         try:
             decoded_parts = decode_header(value)
             result = []
