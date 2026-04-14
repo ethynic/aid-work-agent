@@ -264,14 +264,17 @@ class VectorDBPostgreSQL(VectorDatabase):
         """向量相似度搜索（使用余弦相似度）"""
         cursor = self.conn.cursor()
 
+        # 将查询向量转换为 vector 类型字符串
+        vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
         # pgvector 使用余弦距离 (<=>)，距离越小越相似
         # 为了返回相似度（0-1），使用 1 - distance
         cursor.execute("""
-            SELECT chunk_id, embedding <=> %s as distance
+            SELECT chunk_id, embedding <=> %s::vector as distance
             FROM chunks_vec
             ORDER BY distance
             LIMIT %s
-        """, (query_embedding, top_k))
+        """, (vector_str, top_k))
 
         results = cursor.fetchall()
 
