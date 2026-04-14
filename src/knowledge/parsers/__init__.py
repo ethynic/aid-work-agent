@@ -3,7 +3,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from dataclasses import dataclass, field
 
 
@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 class ParseResult:
     """文档解析结果"""
     text: str                              # 提取的文本内容
-    metadata: Dict[str, any] = field(default_factory=dict)  # 元数据
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 元数据
     thumbnail_path: Optional[str] = None   # 缩略图路径（图片/视频）
     raw_text: Optional[str] = None        # 原始文本（OCR 结果等）
 
