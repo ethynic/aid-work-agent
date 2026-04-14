@@ -68,3 +68,6 @@ cryptography>=41.0.0  # Password encryption
 # Task Scheduling
 APScheduler>=3.10.0  # Background task scheduling
 
+# Database
+psycopg2-binary>=2.9.0  # PostgreSQL database driver
+

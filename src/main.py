@@ -27,7 +27,7 @@ from src.core.agent_router import agent_router
 from src.models.message import UnifiedMessage
 from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
-from src.db.database import init_database
+from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
 from src.api import admin_subagent
 from src.knowledge.api import router as knowledge_router
@@ -137,10 +137,18 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app.name} v{settings.app.version}")
     logger.info(f"LLM Provider: {settings.llm.provider}")
     logger.info(f"Registered tools: {master_agent.tool_registry.list_tools()}")
-    
-    # Initialize database
+
+    # Initialize PostgreSQL connection pool first (required by init_database)
+    init_postgres_pool()
+
+    # Initialize database (may use PostgreSQL)
     init_database()
     logger.info("Database initialized")
+
+    # Initialize channel session manager (triggers lazy table creation)
+    from src.channels.session import channel_session_manager
+    channel_session_manager._ensure_tables()
+    logger.info("Channel session manager initialized")
 
     # Initialize scheduled task scheduler
     try:
@@ -184,6 +192,9 @@ async def lifespan(app: FastAPI):
 
     # On shutdown
     logger.info("Application shutting down")
+
+    # Close PostgreSQL connection pool
+    close_postgres_pool()
 
     # Cleanup SaaS instances
     if settings.saas.enabled:

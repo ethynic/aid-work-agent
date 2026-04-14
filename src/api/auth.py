@@ -100,7 +100,12 @@ def verify_token(token: str) -> Optional[str]:
             return None
 
         # 检查是否过期，过期则主动删除
-        if datetime.now() > datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S"):
+        # PostgreSQL 返回 datetime 对象，SQLite 返回字符串
+        expires_at = row["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+
+        if datetime.now() > expires_at:
             cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
             conn.commit()
             return None
@@ -315,7 +320,7 @@ async def bind_phone(request: BindPhoneRequest):
     user = UserDB.get_by_id(request.user_id)
     if not user:
         return {"success": False, "message": "用户不存在"}
-    
+
     # 更新用户手机号
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -323,7 +328,7 @@ async def bind_phone(request: BindPhoneRequest):
             UPDATE users SET phone = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
         """, (request.phone, request.user_id))
         conn.commit()
-    
+
     return {"success": True, "message": "手机号绑定成功"}
 
 

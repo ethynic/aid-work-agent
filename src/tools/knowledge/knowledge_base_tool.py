@@ -2,17 +2,16 @@
 知识库检索工具 - 提供给 Agent 调用
 """
 
-import os
-import sqlite3
 from typing import Dict, Any, List, Optional
 import logging
 
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
-from src.knowledge.vector_db.vector_db import VectorDBSQLite
+from src.knowledge.vector_db.vector_db import get_vector_db
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.retriever.hybrid_retriever import HybridRetriever
+from src.db.database import DB_TYPE, get_db_connection, get_db_placeholder
 
 logger = logging.getLogger(__name__)
 
@@ -44,27 +43,20 @@ class KnowledgeBaseTool(BaseTool):
         self.retriever = self._init_retriever()
 
     def _init_retriever(self):
-        """初始化检索器"""
-        # 从环境变量获取数据库路径，与 database.py 保持一致
-        database_url = os.getenv("DATABASE_URL", "sqlite:///./aid_work_agent.db")
-        db_path = database_url.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10.0)
-        conn.enable_load_extension(True)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-
+        """初始化检索器（自动适配 SQLite / PostgreSQL）"""
         # 从配置获取 Qwen API Key（支持 key 池）
         from src.config.settings import settings
         qwen_keys = settings.llm.qwen.get_effective_keys()
         qwen_api_key = qwen_keys[0] if qwen_keys else ""
-        vector_db = VectorDBSQLite(db_path=db_path, dimension=1024, conn=conn)
+
+        vector_db = get_vector_db(dimension=1024)
         embedding_client = TextEmbeddingV3Client(api_key=qwen_api_key)
 
         return HybridRetriever(
             vector_db=vector_db,
             embedding_client=embedding_client,
-            conn=conn
+            conn=vector_db.conn,
+            db_type=DB_TYPE
         )
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -95,14 +87,20 @@ class KnowledgeBaseTool(BaseTool):
             # 提取文档标题
             if results:
                 doc_ids = {r["doc_id"] for r in results}
-                placeholders = ','.join(['?'] * len(doc_ids))
+                placeholder = get_db_placeholder()
+                placeholders = ','.join([placeholder] * len(doc_ids))
 
-                cursor = self.retriever.conn.cursor()
-                cursor.execute(f"""
-                    SELECT id, title FROM documents WHERE id IN ({placeholders})
-                """, list(doc_ids))
+                conn_cm = get_db_connection()
+                conn = conn_cm.__enter__()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(f"""
+                        SELECT id, title FROM documents WHERE id IN ({placeholders})
+                    """, list(doc_ids))
 
-                doc_titles = {row[0]: row[1] for row in cursor.fetchall()}
+                    doc_titles = {row[0]: row[1] for row in cursor.fetchall()}
+                finally:
+                    conn_cm.__exit__(None, None, None)
 
                 # 格式化结果
                 formatted_results = [

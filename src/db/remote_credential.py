@@ -12,7 +12,7 @@ from loguru import logger
 from cryptography.fernet import Fernet
 import base64
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp
 
 
 # ============== 加密密钥管理 ==============
@@ -120,9 +120,12 @@ class RemoteCredentialDB:
         if not name:
             name = f"{connection_type.upper()}://{server_host}{remote_path}"
 
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO remote_credentials (
                     credential_id,
                     user_id,
@@ -138,7 +141,9 @@ class RemoteCredentialDB:
                     status,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                          {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                          {placeholder}, 1, {ts}, {ts})
             """, (
                 credential_id,
                 user_id,
@@ -169,11 +174,12 @@ class RemoteCredentialDB:
         Returns:
             凭据字典或None
         """
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM remote_credentials
-                WHERE credential_id = ? AND user_id = ? AND status = 1
+                WHERE credential_id = {placeholder} AND user_id = {placeholder} AND status = 1
             """, (credential_id, user_id))
             row = cursor.fetchone()
 
@@ -202,24 +208,25 @@ class RemoteCredentialDB:
         Returns:
             凭据列表
         """
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if connection_type:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT credential_id, connection_type, server_host, server_port,
                            username, remote_path, domain, name, description,
                            status, created_at, updated_at
                     FROM remote_credentials
-                    WHERE user_id = ? AND connection_type = ? AND status = 1
+                    WHERE user_id = {placeholder} AND connection_type = {placeholder} AND status = 1
                     ORDER BY created_at DESC
                 """, (user_id, connection_type))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT credential_id, connection_type, server_host, server_port,
                            username, remote_path, domain, name, description,
                            status, created_at, updated_at
                     FROM remote_credentials
-                    WHERE user_id = ? AND status = 1
+                    WHERE user_id = {placeholder} AND status = 1
                     ORDER BY created_at DESC
                 """, (user_id,))
 
@@ -237,14 +244,15 @@ class RemoteCredentialDB:
         Returns:
             凭据字典或None（不包含密码）
         """
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT credential_id, connection_type, server_host, server_port,
                        username, remote_path, domain, name, description,
                        status, created_at, updated_at
                 FROM remote_credentials
-                WHERE user_id = ? AND remote_path = ? AND status = 1
+                WHERE user_id = {placeholder} AND remote_path = {placeholder} AND status = 1
                 LIMIT 1
             """, (user_id, remote_path))
             row = cursor.fetchone()
@@ -278,15 +286,17 @@ class RemoteCredentialDB:
         if not updates:
             return False
 
-        set_clause = ', '.join([f"{key} = ?" for key in updates.keys()])
+        placeholder = get_db_placeholder()
+        set_clause = ', '.join([f"{key} = {placeholder}" for key in updates.keys()])
+        ts = get_current_timestamp()
         values = list(updates.values()) + [credential_id, user_id]
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
                 UPDATE remote_credentials
-                SET {set_clause}, updated_at = CURRENT_TIMESTAMP
-                WHERE credential_id = ? AND user_id = ?
+                SET {set_clause}, updated_at = {ts}
+                WHERE credential_id = {placeholder} AND user_id = {placeholder}
             """, values)
             conn.commit()
 
@@ -308,12 +318,14 @@ class RemoteCredentialDB:
         Returns:
             是否成功
         """
+        placeholder = get_db_placeholder()
+        ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE remote_credentials
-                SET status = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE credential_id = ? AND user_id = ?
+                SET status = 0, updated_at = {ts}
+                WHERE credential_id = {placeholder} AND user_id = {placeholder}
             """, (credential_id, user_id))
             conn.commit()
 

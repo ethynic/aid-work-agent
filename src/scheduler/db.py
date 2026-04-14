@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from loguru import logger
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp
 
 
 def _sanitize_error(error_msg: str) -> str:
@@ -41,16 +41,18 @@ class ScheduledTaskDB:
         """创建定时任务"""
         task_id = f"sched_{uuid.uuid4().hex[:12]}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        placeholder = get_db_placeholder()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("""
-                    INSERT INTO scheduled_tasks 
-                    (task_id, user_id, name, description, task_prompt, 
+                cursor.execute(f"""
+                    INSERT INTO scheduled_tasks
+                    (task_id, user_id, name, description, task_prompt,
                      schedule_type, cron_expression, interval_seconds, session_id,
                      status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, 'active', {placeholder}, {placeholder})
                 """, (task_id, user_id, name, description, task_prompt,
                       schedule_type, cron_expression, interval_seconds, session_id,
                       now, now))
@@ -64,30 +66,32 @@ class ScheduledTaskDB:
     @staticmethod
     def get_by_id(task_id: str) -> Optional[Dict[str, Any]]:
         """根据任务ID获取定时任务"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM scheduled_tasks WHERE task_id = ?", (task_id,))
+            cursor.execute(f"SELECT * FROM scheduled_tasks WHERE task_id = {placeholder}", (task_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     @staticmethod
     def list_by_user(user_id: str, status: str = None, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的定时任务列表"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if status:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM scheduled_tasks
-                    WHERE user_id = ? AND status = ?
+                    WHERE user_id = {placeholder} AND status = {placeholder}
                     ORDER BY created_at DESC
-                    LIMIT ?
+                    LIMIT {placeholder}
                 """, (user_id, status, limit))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM scheduled_tasks
-                    WHERE user_id = ?
+                    WHERE user_id = {placeholder}
                     ORDER BY created_at DESC
-                    LIMIT ?
+                    LIMIT {placeholder}
                 """, (user_id, limit))
             return [dict(row) for row in cursor.fetchall()]
 
@@ -109,12 +113,13 @@ class ScheduledTaskDB:
         """更新任务调度配置"""
         from src.tools.scheduler.scheduled_task_tool import generate_cron_expression
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE scheduled_tasks
-                SET cron_expression = ?, interval_seconds = ?, updated_at = ?
-                WHERE task_id = ?
+                SET cron_expression = {placeholder}, interval_seconds = {placeholder}, updated_at = {placeholder}
+                WHERE task_id = {placeholder}
             """, (cron_expression, interval_seconds, now, task_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -123,12 +128,13 @@ class ScheduledTaskDB:
     def update_status(task_id: str, status: str) -> bool:
         """更新任务状态"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE scheduled_tasks
-                SET status = ?, updated_at = ?
-                WHERE task_id = ?
+                SET status = {placeholder}, updated_at = {placeholder}
+                WHERE task_id = {placeholder}
             """, (status, now, task_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -138,16 +144,17 @@ class ScheduledTaskDB:
                          result_summary: str = None) -> bool:
         """任务执行后更新统计"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE scheduled_tasks
                 SET total_runs = total_runs + 1,
-                    success_count = success_count + CASE WHEN ? THEN 1 ELSE 0 END,
-                    fail_count = fail_count + CASE WHEN ? THEN 1 ELSE 0 END,
-                    last_run_at = ?,
-                    updated_at = ?
-                WHERE task_id = ?
+                    success_count = success_count + CASE WHEN {placeholder} THEN 1 ELSE 0 END,
+                    fail_count = fail_count + CASE WHEN {placeholder} THEN 1 ELSE 0 END,
+                    last_run_at = {placeholder},
+                    updated_at = {placeholder}
+                WHERE task_id = {placeholder}
             """, (1 if success else 0, 0 if success else 1, now, now, task_id))
             conn.commit()
             success_count = cursor.rowcount > 0
@@ -164,11 +171,12 @@ class ScheduledTaskDB:
     @staticmethod
     def count_by_user(user_id: str, status: str = "active") -> int:
         """统计用户的定时任务数量"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COUNT(*) as cnt FROM scheduled_tasks
-                WHERE user_id = ? AND status = ?
+                WHERE user_id = {placeholder} AND status = {placeholder}
             """, (user_id, status))
             row = cursor.fetchone()
             return row["cnt"] if row else 0
@@ -187,6 +195,7 @@ class ScheduledTaskLogDB:
         """创建执行日志"""
         log_id = f"slog_{uuid.uuid4().hex[:12]}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        placeholder = get_db_placeholder()
 
         # 过滤敏感信息
         safe_result = result_summary or ""
@@ -196,12 +205,13 @@ class ScheduledTaskLogDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute("""
+                cursor.execute(f"""
                     INSERT INTO scheduled_task_logs
                     (log_id, task_id, user_id, session_id, status, trigger_type,
                      result_summary, result_detail, error_message, error_trace,
                      duration_ms, token_usage, started_at, completed_at, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (log_id, task_id, user_id, session_id, status, trigger_type,
                       safe_result, result_detail, safe_error, safe_trace,
                       duration_ms, token_usage, started_at or now, completed_at, now))
@@ -215,51 +225,55 @@ class ScheduledTaskLogDB:
     @staticmethod
     def get_by_id(log_id: str) -> Optional[Dict[str, Any]]:
         """根据日志ID获取日志"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM scheduled_task_logs WHERE log_id = ?", (log_id,))
+            cursor.execute(f"SELECT * FROM scheduled_task_logs WHERE log_id = {placeholder}", (log_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     @staticmethod
     def list_by_task(task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """获取任务的执行日志"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM scheduled_task_logs
-                WHERE task_id = ?
+                WHERE task_id = {placeholder}
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT {placeholder}
             """, (task_id, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的所有执行日志"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM scheduled_task_logs
-                WHERE user_id = ?
+                WHERE user_id = {placeholder}
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT {placeholder}
             """, (user_id, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def get_stats(task_id: str) -> Dict[str, Any]:
         """获取任务的执行统计"""
+        placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT
                     COUNT(*) as total_runs,
                     SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as fail_count,
                     COALESCE(AVG(CASE WHEN status = 'success' THEN duration_ms END), 0) as avg_duration_ms
                 FROM scheduled_task_logs
-                WHERE task_id = ?
+                WHERE task_id = {placeholder}
             """, (task_id,))
             row = cursor.fetchone()
             if row:

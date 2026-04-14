@@ -1,0 +1,56 @@
+# PostgreSQL Docker Compose 配置
+# 用于快速搭建开发/测试环境的 PostgreSQL 实例
+# 包含 pgvector 扩展支持向量搜索
+
+services:
+  # PostgreSQL 数据库（带 pgvector 扩展）
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aid-postgres
+    restart: unless-stopped
+    environment:
+      # 数据库配置（生产环境请修改密码）
+      POSTGRES_DB: ${POSTGRES_DB:-aid_work_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-aid_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # 持久化数据卷
+      - postgres_data:/var/lib/postgresql/data
+      # 初始化脚本（首次启动时执行）
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aid_user} -d ${POSTGRES_DB:-aid_work_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL Admin UI（可选，用于管理数据库）
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: aid-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@aid.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - aid-network
+    profiles:
+      - admin  # 使用 docker compose --profile admin 启动
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+networks:
+  aid-network:
+    driver: bridge
