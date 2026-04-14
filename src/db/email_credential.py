@@ -58,7 +58,17 @@ class EmailCredentialDB:
                 logger.info(f"更新用户邮箱配置: user_id={user_id}")
                 return True
 
-            # 不存在则插入
+            # 清除旧记录（包括软删除的），避免 UNIQUE 冲突
+            cursor.execute("""
+                DELETE FROM user_email_settings WHERE user_id = ?
+            """, (user_id,))
+
+            if cursor.rowcount > 0:
+                conn.commit()
+                logger.info(f"恢复已删除邮箱配置: user_id={user_id}")
+                return True
+
+            # 真正不存在则插入
             cursor.execute("""
                 INSERT INTO user_email_settings (
                     user_id, email_address, smtp_server, smtp_port, smtp_user,
