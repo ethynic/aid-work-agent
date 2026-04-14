@@ -37,10 +37,14 @@ class EncryptionManager:
             else:
                 self.fernet = Fernet(key_env)
         else:
-            # 开发环境使用固定密钥（生产环境必须配置）
-            logger.warning("使用开发环境加密密钥，生产环境请配置 ENCRYPTION_KEY 环境变量")
-            # 生成一个有效的 Fernet 密钥
-            self.fernet = Fernet(Fernet.generate_key())
+            # 使用基于项目路径的确定性密钥（避免多 worker 密钥不一致）
+            import hashlib
+            project_identifier = "aid-work-agent-encryption-key-v1"
+            derived_key = base64.urlsafe_b64encode(
+                hashlib.sha256(project_identifier.encode()).digest()
+            )
+            self.fernet = Fernet(derived_key)
+            logger.warning("使用默认加密密钥，生产环境请配置 ENCRYPTION_KEY 环境变量")
 
     def encrypt(self, data: str) -> str:
         """加密字符串"""

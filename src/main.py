@@ -211,8 +211,9 @@ async def lifespan(app: FastAPI):
 import shutil
 from pathlib import Path
 
-# 上传文件存储目录
-UPLOAD_DIR = Path("./uploads")
+# 上传文件存储目录（基于项目根目录，不受 cwd 影响）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = _PROJECT_ROOT / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 # 已上传的文件存储 {file_id: file_info}
