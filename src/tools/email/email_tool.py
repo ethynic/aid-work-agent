@@ -31,8 +31,8 @@ class EmailSendInput(BaseModel):
 class EmailReadInput(BaseModel):
     """读取邮件参数"""
     folder: Optional[str] = Field("INBOX", description="邮件文件夹，默认INBOX")
-    limit: Optional[int] = Field(10, description="收取邮件数量，默认10封")
-    unseen_only: Optional[bool] = Field(False, description="是否只收取未读邮件，默认False")
+    limit: Optional[int] = Field(50, description="收取邮件数量，默认50封。查询近期邮件时建议设50以上，精确查找时设较小值")
+    unseen_only: Optional[bool] = Field(False, description="是否只收取未读邮件，默认False（收取全部）。用户问'未读邮件'时设True，问'收到哪些邮件'时设False")
     from_filter: Optional[str] = Field("", description="发件人过滤条件（可选）")
     subject_filter: Optional[str] = Field("", description="主题过滤条件（可选）")
 
