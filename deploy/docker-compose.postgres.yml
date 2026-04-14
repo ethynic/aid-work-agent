@@ -1,24 +1,85 @@
 # PostgreSQL Docker Compose 配置
-# 用于快速搭建开发/测试环境的 PostgreSQL 实例
+# 单实例方案：一个 PostgreSQL 容器同时服务生产 + 测试环境
+# 通过数据库名和用户名隔离，节省服务器资源
 # 包含 pgvector 扩展支持向量搜索
+# 生产优化：连接池、WAL、内存、安全等配置
 
 services:
-  # PostgreSQL 数据库（带 pgvector 扩展）
   postgres:
     image: pgvector/pgvector:pg16
     container_name: aid-postgres
     restart: unless-stopped
     environment:
-      # 数据库配置（生产环境请修改密码）
+      # 默认创建的数据库和用户（生产环境）
       POSTGRES_DB: ${POSTGRES_DB:-aid_work_agent}
       POSTGRES_USER: ${POSTGRES_USER:-aid_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
+      # 生产优化参数
+      # 最大连接数（默认100，生产+测试共用建议200-300）
+      POSTGRES_MAX_CONNECTIONS: 200
+      # 共享缓冲区（建议为物理内存的25%）
+      POSTGRES_SHARED_BUFFERS: 512MB
+      # 有效缓存大小（建议为物理内存的75%）
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1536MB
+      # 工作内存（每个排序/哈希操作可用内存）
+      POSTGRES_WORK_MEM: 16MB
+      # 维护工作内存（VACUUM/CREATE INDEX等操作可用内存）
+      POSTGRES_MAINTENANCE_WORK_MEM: 256MB
+      # WAL 配置
+      POSTGRES_WAL_LEVEL: replica
+      POSTGRES_MAX_WAL_SIZE: 2GB
+      POSTGRES_MIN_WAL_SIZE: 512MB
+      # 检查点配置
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
+      # 随机页成本（SSD设为1.1，HDD设为4）
+      POSTGRES_RANDOM_PAGE_COST: 1.1
+      # 日志配置
+      POSTGRES_LOG_MIN_DURATION_STATEMENT: 1000
+      POSTGRES_LOG_CHECKPOINTS: "on"
+      POSTGRES_LOG_CONNECTIONS: "on"
+      POSTGRES_LOG_DISCONNECTIONS: "on"
+      # 时区
+      TZ: Asia/Shanghai
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "min_wal_size=512MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "log_min_duration_statement=1000"
+      - "-c"
+      - "log_checkpoints=on"
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
+      - "-c"
+      - "log_timezone=Asia/Shanghai"
+      - "-c"
+      - "timezone=Asia/Shanghai"
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       # 持久化数据卷
       - postgres_data:/var/lib/postgresql/data
-      # 初始化脚本（首次启动时执行）
+      # 初始化脚本（首次启动时执行，创建 prod + test 双库）
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - aid-network
@@ -27,25 +88,57 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+    # 生产环境资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+    shm_size: 256mb
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
-  # PostgreSQL Admin UI（可选，用于管理数据库）
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: aid-pgadmin
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@aid.local
-      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@aid-admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-Aid_2026}
+      # 服务器模式：允许通过环境变量自动配置连接
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      # 禁用增强密码策略（开发/内部使用）
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+      TZ: Asia/Shanghai
     ports:
       - "${PGADMIN_PORT:-5050}:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      - postgres
     networks:
       - aid-network
-    profiles:
-      - admin  # 使用 docker compose --profile admin 启动
+    depends_on:
+      postgres:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.1"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
 volumes:
   postgres_data:

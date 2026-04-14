@@ -42,6 +42,7 @@ env/
 logs/
 log/
 *.log
+backups/
 
 # Database
 *.db

@@ -32,13 +32,13 @@ class UploadResponse(BaseModel):
 
 class DocumentResponse(BaseModel):
     id: int
-    title: str
-    source_type: str
-    file_type: str
+    title: Optional[str] = None
+    source_type: Optional[str] = None
+    file_type: Optional[str] = None
     file_path: Optional[str] = None
-    file_size: Optional[int]
-    total_chunks: int
-    created_at: str
+    file_size: Optional[int] = None
+    total_chunks: int = 0
+    created_at: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -266,11 +266,10 @@ async def download_document(doc_id: int):
     - 新窗口打开或下载原文
     """
     # 查询文档的 file_path
-    conn = knowledge_service._get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT file_path, title FROM documents WHERE id = ?", (doc_id,))
-    row = cursor.fetchone()
-    conn.close()
+    with knowledge_service._get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_path, title FROM documents WHERE id = ?", (doc_id,))
+        row = cursor.fetchone()
 
     if not row or not row["file_path"]:
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")

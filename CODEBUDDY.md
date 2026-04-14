@@ -188,7 +188,7 @@ Skill 是领域知识扩展包，以目录形式存放在 `src/skills/<skill-nam
 
 ### 数据库（`src/db/`）
 
-默认使用 SQLite（`aid_work_agent.db`），通过 `DATABASE_URL` 环境变量可切换为 PostgreSQL 或 MySQL。主要用于会话持久化和认证管理（`src/api/auth.py`、`src/api/session.py`）。
+默认使用 PostgreSQL，通过 `DATABASE_URL` 环境变量可切换为 SQLite 或 MySQL。主要用于会话持久化和认证管理（`src/api/auth.py`、`src/api/session.py`）。
 
 ### 多租户与用户隔离（`src/multi_tenant/`）
 
@@ -295,7 +295,7 @@ Vue 3 + TypeScript + Vite + TailwindCSS 构建的单页应用。通过 SSE（Eve
 |--------|------|
 | `QWEN_API_KEYS` | 通义千问 API Key |
 | `ZHIPU_API_KEYS` | 智谱 GLM API Key |
-| `DATABASE_URL` | 数据库连接字符串，默认 `sqlite:///./aid_work_agent.db` |
+| `DATABASE_URL` | 数据库连接字符串 |
 | `WECOM_CORP_ID` / `WECOM_SECRET` 等 | 企业微信配置 |
 | `DINGTALK_APP_KEY` 等 | 钉钉配置 |
 | `FEISHU_APP_ID` 等 | 飞书配置 |

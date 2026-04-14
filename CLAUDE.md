@@ -138,27 +138,13 @@ async def search_documents(request: SearchRequest):
 | 覆盖率 | 目标 100% |
 | 覆盖范围 | 正常路径、边界条件、异常路径 |
 
-### 部署规范
+#### Git 提交规范
+**不要自动提交代码，提交代码仅能由用户发起**
+1. 提交前执行 `git fetch` 拉取远程最新代码
+2. 检查是否有冲突：`git status` 或 `git diff origin/master`
+3. 如有冲突先解决冲突再提交
+4. 提交后立即 `git push` 推送到远程
 
-详细部署流程见 [`.codebuddy/rules/deploy-code.mdc`](.codebuddy/rules/deploy-code.mdc)。
-
-**快速命令**：
-```bash
-# 1. Git 提交推送
-python scripts/commit.py "提交信息" --push
-
-# 2. FTP 上传
-powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1
-```
-
-**需要重启容器的场景**：
-- 配置文件修改（`configs/config.yaml`）
-- 依赖包变更（`requirements.txt`）
-- 环境变量修改
-- 新增 Skill/SubAgent
-- Docker 相关文件修改
-
----
 
 ## 架构
 
@@ -187,9 +173,9 @@ powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1
 
 **记忆** (`src/memory/short_term.py`)：`ShortTermMemory` 使用基于 deque 的滑动窗口，按 session_id 分隔，配置 max_messages 和 TTL。
 
-**知识库** (`src/knowledge/`)：RAG 流程，包含解析器 → 分块器 → 嵌入（通过大模型网关）→ sqlite-vec 向量数据库 → 混合检索器。
+**知识库** (`src/knowledge/`)：RAG 流程，包含解析器 → 分块器 → 嵌入（通过大模型网关）→ 向量数据库 → 混合检索器。
 
-**数据库** (`src/db/`)：默认 SQLite (`aid_work_agent.db`)，可通过 `DATABASE_URL` 环境变量配置为 PostgreSQL 或 MySQL。用于会话持久化和认证。
+**数据库** (`src/db/`)：默认 PostgreSQL，可通过 `DATABASE_URL` 环境变量配置为 SQLite 或 MySQL。用于会话持久化和认证。
 
 ### 关键入口点
 

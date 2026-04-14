@@ -285,7 +285,7 @@ watch(isLoggedIn, async (loggedIn) => {
 
 // 格式化时间（后端 CURRENT_TIMESTAMP 为 UTC，需补 Z 标记确保正确解析）
 function formatTime(isoString: string): string {
-  // 后端 SQLite CURRENT_TIMESTAMP 返回 "2026-03-26 05:00:00" 格式（UTC，无时区标识）
+  // 后端 CURRENT_TIMESTAMP 返回 "2026-03-26 05:00:00" 格式（UTC，无时区标识）
   // JavaScript new Date() 会将其当作本地时间解析，导致差8小时
   // 补上 Z 后缀让 JS 正确识别为 UTC 时间
   const dateStr = isoString.endsWith('Z') ? isoString : isoString + 'Z'

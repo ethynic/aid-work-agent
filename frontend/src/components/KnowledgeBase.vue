@@ -476,7 +476,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 
 // Pagination state
 const currentPage = ref(1)
-const pageSize = ref(5)
+const pageSize = ref(10)
 const totalDocuments = ref(0)
 
 // Layout state

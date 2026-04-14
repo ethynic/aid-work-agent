@@ -69,6 +69,8 @@ temp/
 frontend/node_modules/
 frontend/dist/
 frontend/build/
+backups/
+logs/
 
 # 大型数据文件
 *.pdf

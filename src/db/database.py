@@ -246,12 +246,20 @@ def get_db_connection() -> Generator[Any, None, None]:
         class DictCursorWrapper:
             def __init__(self, cursor):
                 self._cursor = cursor
+                self._lastrowid = None
 
             def execute(self, query, params=None):
                 # 自动将 SQLite 的 ? 占位符转换为 PostgreSQL 的 %s
                 if params and "?" in query:
                     query = query.replace("?", "%s")
-                return self._cursor.execute(query, params)
+                result = self._cursor.execute(query, params)
+                # PostgreSQL 支持通过 cursor.statusmessage 获取插入的 ID
+                # 对于 INSERT 语句，psycopg2 会设置 lastrowid
+                try:
+                    self._lastrowid = self._cursor.lastrowid
+                except AttributeError:
+                    pass
+                return result
 
             def executemany(self, query, params_list):
                 # 自动将 SQLite 的 ? 占位符转换为 PostgreSQL 的 %s
@@ -273,6 +281,27 @@ def get_db_connection() -> Generator[Any, None, None]:
             @property
             def rowcount(self):
                 return self._cursor.rowcount
+
+            @property
+            def lastrowid(self):
+                """获取最后插入的 ID"""
+                if self._lastrowid is not None:
+                    return self._lastrowid
+                # 尝试从 cursor 获取
+                try:
+                    return self._cursor.lastrowid
+                except AttributeError:
+                    # 如果没有，使用 lastval() 获取
+                    try:
+                        self._cursor.execute("SELECT lastval()")
+                        result = self._cursor.fetchone()
+                        return result[0] if result else None
+                    except Exception:
+                        return None
+
+            def mogrify(self, query, params=None):
+                """psycopg2.extras.execute_batch 需要的方法"""
+                return self._cursor.mogrify(query, params)
 
         wrapper = DictCursorWrapper(cursor)
 
