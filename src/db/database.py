@@ -112,10 +112,26 @@ def get_postgres_pool():
 
 
 def get_pooled_connection():
-    """从连接池获取连接"""
+    """从连接池获取连接，并检查连接有效性"""
     if _pg_connection_pool is None:
         raise RuntimeError("PostgreSQL 连接池未初始化，请先调用 init_postgres_pool()")
-    return _pg_connection_pool.getconn()
+
+    conn = _pg_connection_pool.getconn()
+
+    # 检查连接是否有效
+    try:
+        if conn.closed:
+            # 连接已关闭，重新获取
+            logger.warning("PostgreSQL 连接已关闭，重新获取")
+            return get_pooled_connection()
+        # 执行简单查询检查连接状态
+        conn.isolation_level
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        # 连接失效，重新获取
+        logger.warning("PostgreSQL 连接失效，重新获取")
+        return get_pooled_connection()
+
+    return conn
 
 
 def return_pooled_connection(conn):

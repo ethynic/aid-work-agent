@@ -66,6 +66,26 @@ class UserInfo(BaseModel):
     avatar_url: Optional[str] = None
 
 
+def get_user_info_with_admin(user: dict) -> dict:
+    """构建包含 is_admin 标记的完整用户信息"""
+    if not user:
+        return {}
+    # 判断是否为管理员
+    admin_phones = getattr(settings, "admin", None)
+    is_admin = False
+    if admin_phones:
+        phone_list = getattr(admin_phones, "phones", [])
+        is_admin = user.get("phone", "") in phone_list
+
+    return {
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "phone": user["phone"],
+        "avatar_url": user.get("avatar_url"),
+        "is_admin": is_admin,
+    }
+
+
 # ============== Token管理（数据库存储，支持多进程）==============
 
 
@@ -185,11 +205,7 @@ async def phone_login(request: PhoneLoginRequest):
                 return LoginResponse(
                     success=True,
                     token=token,
-                    user={
-                        "user_id": user["user_id"],
-                        "username": user["username"],
-                        "phone": user["phone"]
-                    }
+                    user=get_user_info_with_admin(user)
                 )
             else:
                 return LoginResponse(success=False, message="手机号或密码有误")
@@ -200,11 +216,7 @@ async def phone_login(request: PhoneLoginRequest):
                 return LoginResponse(
                     success=True,
                     token=token,
-                    user={
-                        "user_id": user["user_id"],
-                        "username": user["username"],
-                        "phone": user["phone"]
-                    }
+                    user=get_user_info_with_admin(user)
                 )
             else:
                 return LoginResponse(success=False, message="手机号或密码有误")
@@ -216,11 +228,7 @@ async def phone_login(request: PhoneLoginRequest):
             return LoginResponse(
                 success=True,
                 token=token,
-                user={
-                    "user_id": user["user_id"],
-                    "username": user["username"],
-                    "phone": user["phone"]
-                },
+                user=get_user_info_with_admin(user),
                 message="账号已自动创建"
             )
         return LoginResponse(success=False, message="登录失败")
@@ -240,11 +248,7 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
             return LoginResponse(
                 success=True,
                 token=token,
-                user={
-                    "user_id": user["user_id"],
-                    "username": user["username"],
-                    "phone": user["phone"]
-                }
+                user=get_user_info_with_admin(user)
             )
         return LoginResponse(success=False, message="登录失败")
 
@@ -256,11 +260,7 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
             return LoginResponse(
                 success=True,
                 token=token,
-                user={
-                    "user_id": user["user_id"],
-                    "username": user["username"],
-                    "phone": user["phone"]
-                }
+                user=get_user_info_with_admin(user)
             )
         else:
             # 手机号不存在，自动注册
@@ -270,12 +270,8 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
                 return LoginResponse(
                     success=True,
                     token=token,
-                    user={
-                        "user_id": user["user_id"],
-                        "username": user["username"],
-                        "phone": user["phone"]
-                    }
-                )
+                    user=get_user_info_with_admin(user)
+            )
     return LoginResponse(success=False, message="验证码错误或已过期")
 
 
@@ -297,11 +293,7 @@ async def register(request: RegisterRequest):
         return LoginResponse(
             success=True,
             token=token,
-            user={
-                "user_id": user["user_id"],
-                "username": user["username"],
-                "phone": user["phone"]
-            }
+            user=get_user_info_with_admin(user)
         )
     return {"success": False, "message": "注册失败"}
 
@@ -383,12 +375,7 @@ async def update_profile(
         return {
             "success": True,
             "message": "资料更新成功",
-            "user": {
-                "user_id": updated_user["user_id"],
-                "username": updated_user["username"],
-                "phone": updated_user["phone"],
-                "avatar_url": updated_user.get("avatar_url"),
-            },
+            "user": get_user_info_with_admin(updated_user),
         }
     return {"success": False, "error": "更新失败"}
 
