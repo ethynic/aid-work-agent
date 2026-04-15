@@ -94,6 +94,10 @@ sudo mkdir -p /var/www/qb3_upload/agent_memories
 sudo chown -R $USER:$USER /var/www/agent
 sudo chown -R www-data:www-data /var/www/qb3_upload
 
+# 创建 SMB 共享目录挂载点（EAS 合同核对功能使用）
+sudo mkdir -p /mnt/smb/AIUpload
+sudo chown -R $USER:$USER /mnt/smb/AIUpload
+
 # 验证安装
 docker --version
 docker compose version
@@ -175,7 +179,61 @@ TAVILY_API_KEY=your_tavily_key
 # 百度OCR
 BAIDU_OCR_API_KEY=your_ocr_key
 BAIDU_OCR_SECRET_KEY=your_ocr_secret
+
+# ========== EAS 合同核对 - SMB 共享目录配置 ==========
+# EAS 合同归档 API
+EAS_API_URL=https://dc.trendzone.com.cn/manage/api/eas_auto_contAttach
+
+# SMB 服务器与共享目录
+SMB_SERVER=192.168.200.10
+SMB_SHARE_NAME=AIUpload
+SMB_USERNAME=aiupload
+SMB_PASSWORD=your_smb_password_here
+
+# Linux 挂载点路径（容器内访问路径，需与宿主机挂载点一致）
+SMB_MOUNT_POINT=/mnt/smb/AIUpload
 ```
+
+### 第3.5步：挂载 SMB 共享目录（EAS 合同核对功能）
+
+EAS 合同核对功能需要将文件上传到 Windows SMB 共享目录。在 Ubuntu 生产环境中，需在**宿主机**上预先挂载，再通过 Docker volumes 映射到容器内。
+
+```bash
+# 1. 安装 CIFS 工具
+sudo apt-get install -y cifs-utils
+
+# 2. 创建挂载点
+sudo mkdir -p /mnt/smb/AIUpload
+
+# 3. 创建凭据文件（避免密码出现在命令行和 fstab 中）
+sudo tee /etc/smb-credentials.aiupload > /dev/null <<'EOF'
+username=aiupload
+password=your_smb_password_here
+domain=
+EOF
+sudo chmod 600 /etc/smb-credentials.aiupload
+
+# 4. 临时挂载（立即生效，重启后失效）
+sudo mount -t cifs //192.168.200.10/AIUpload /mnt/smb/AIUpload \
+  -o credentials=/etc/smb-credentials.aiupload,uid=$(id -u),gid=$(id -g),iocharset=utf8,vers=3.0
+
+# 5. 验证挂载
+ls /mnt/smb/AIUpload
+# 应能看到共享目录内容
+
+# 6. 配置开机自动挂载（添加到 /etc/fstab）
+echo '//192.168.200.10/AIUpload /mnt/smb/AIUpload cifs credentials=/etc/smb-credentials.aiupload,uid=$(id -u),gid=$(id -g),iocharset=utf8,vers=3.0,_netdev 0 0' | sudo tee -a /etc/fstab
+
+# 7. 验证 fstab 配置
+sudo mount -a
+# 无报错即为正确
+```
+
+> **注意事项**：
+> - `vers=3.0` 指定 SMB 协议版本，如果服务器不支持 3.0 可改为 `vers=2.1` 或 `vers=1.0`
+> - `_netdev` 确保网络就绪后才挂载，避免开机报错
+> - Docker 容器通过 `docker-compose.prod.yml` 中的 volumes 配置访问此挂载点
+> - 如果 SMB 服务器不可达，EAS 合同核对功能会返回明确的错误提示
 
 ### 第四步：构建前端
 
@@ -553,6 +611,7 @@ QWEN_API_KEYS=key1,key2,key3
 - [ ] 服务器环境准备完成（Docker、docker compose、Nginx）
 - [ ] 项目代码拉取完成
 - [ ] 环境变量配置完成（`.env`）
+- [ ] SMB 共享目录挂载完成（`/mnt/smb/AIUpload`，EAS 合同核对功能）
 - [ ] 前端构建完成
 - [ ] Docker 容器运行正常（确认 9 个 gunicorn worker 启动）
 - [ ] Nginx 配置生效

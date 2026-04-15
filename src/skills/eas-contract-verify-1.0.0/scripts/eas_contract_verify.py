@@ -35,10 +35,30 @@ logger = logging.getLogger(__name__)
 # 配置
 # =============================================================================
 
-EAS_API_URL = "https://dc.trendzone.com.cn/manage/api/eas_auto_contAttach"
-SHARED_PATH = r"\\192.168.200.10\AIUpload"
-SHARED_USERNAME = "aiupload"
-SHARED_PASSWORD = "Ai@2025"
+EAS_API_URL = os.environ.get(
+    "EAS_API_URL", "https://dc.trendzone.com.cn/manage/api/eas_auto_contAttach"
+)
+
+# SMB 共享目录配置（支持 Windows / Linux / Docker 跨平台）
+# - Windows 开发环境：使用 UNC 路径 + net use 命令建立凭据连接
+# - Linux/Docker 生产环境：宿主机预先 mount.cifs 挂载，容器通过 volumes 映射
+SMB_SERVER = os.environ.get("SMB_SERVER", "192.168.200.10")
+SMB_SHARE_NAME = os.environ.get("SMB_SHARE_NAME", "AIUpload")
+SMB_USERNAME = os.environ.get("SMB_USERNAME", "aiupload")
+SMB_PASSWORD = os.environ.get("SMB_PASSWORD", "Ai@2025")
+
+# 根据操作系统设置共享路径
+# Windows: UNC 路径 \\server\share
+# Linux/Docker: 挂载点路径（通过 SMB_MOUNT_POINT 环境变量配置，默认 /mnt/smb/AIUpload）
+import platform as _platform
+if _platform.system() == "Windows":
+    SHARED_PATH = rf"\\{SMB_SERVER}\{SMB_SHARE_NAME}"
+else:
+    SHARED_PATH = os.environ.get("SMB_MOUNT_POINT", f"/mnt/smb/{SMB_SHARE_NAME}")
+
+# 兼容旧变量名
+SHARED_USERNAME = SMB_USERNAME
+SHARED_PASSWORD = SMB_PASSWORD
 
 DEFAULT_TIMEOUT = 30  # 秒
 
@@ -81,6 +101,52 @@ def _safe_filename(filename: str) -> str:
     if not cleaned:
         cleaned = f"file_{uuid.uuid4().hex[:8]}"
     return cleaned
+
+
+def _ensure_smb_connection() -> bool:
+    """
+    确保共享目录可访问（跨平台）
+
+    - Windows: 使用 net use 命令建立 SMB 凭据连接
+    - Linux/Docker: 期望宿主机已通过 mount.cifs 挂载，容器通过 volumes 映射；
+      仅检查路径是否存在，不做运行时挂载（容器内通常无权限）
+
+    Returns:
+        True 表示连接成功或路径已就绪，False 表示失败
+    """
+    import subprocess as _sp
+
+    if _platform.system() == "Windows":
+        # Windows: 通过 net use 建立 SMB 凭据连接
+        try:
+            _net_use = _sp.run(
+                f'net use "{SHARED_PATH}" /user:"{SMB_USERNAME}" "{SMB_PASSWORD}"',
+                shell=True, capture_output=True, text=True
+            )
+            # 错误 1219 表示已有连接，忽略
+            if _net_use.returncode != 0 and "1219" not in (_net_use.stderr + _net_use.stdout):
+                logger.warning(f"后端日志：net use 返回: {_net_use.stderr.strip()}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"后端日志：net use 执行失败: {e}")
+            return False
+    else:
+        # Linux/Docker: 检查挂载点路径是否可访问
+        if os.path.isdir(SHARED_PATH):
+            # 尝试列出目录内容，验证读写权限
+            try:
+                os.listdir(SHARED_PATH)
+                return True
+            except PermissionError:
+                logger.error(f"后端日志：共享路径无访问权限: {SHARED_PATH}")
+                return False
+        else:
+            logger.error(
+                f"后端日志：共享路径不存在: {SHARED_PATH}，"
+                f"请在宿主机执行 mount.cifs 挂载，或在 docker-compose 中配置 volumes 映射"
+            )
+            return False
 
 
 def _make_result(success: bool, data: Any = None, error: str = "", debug: str = "") -> Dict:
@@ -376,15 +442,14 @@ def upload_contract_attachment(contract_code: str, file_path: str, file_desc: st
 
     # 2. 复制文件到共享路径
     try:
-        # 尝试建立共享目录凭据连接（Windows）
-        import subprocess as _sp
-        _net_use = _sp.run(
-            f'net use "{SHARED_PATH}" /user:"{SHARED_USERNAME}" "{SHARED_PASSWORD}"',
-            shell=True, capture_output=True, text=True
-        )
-        # 错误 1219 表示已有连接，忽略
-        if _net_use.returncode != 0 and "1219" not in (_net_use.stderr + _net_use.stdout):
-            logger.warning(f"后端日志：net use 返回: {_net_use.stderr.strip()}")
+        # 确保共享目录可访问（跨平台：Windows 用 net use，Linux 用预挂载路径）
+        if not _ensure_smb_connection():
+            return _make_result(
+                False,
+                error="文件上传失败：无法连接共享目录",
+                debug=f"共享路径: {SHARED_PATH}，系统: {_platform.system()}，"
+                      f"Windows 请检查 net use 命令，Linux/Docker 请检查宿主机 mount.cifs 挂载"
+            )
 
         target_dir = os.path.join(SHARED_PATH, contract_code)
         os.makedirs(target_dir, exist_ok=True)
