@@ -215,6 +215,14 @@ docker compose -f docker-compose.prod-eas.yml logs -f aid-agent-api
 # 部署 postgresql 数据库容器
 cd /var/www/agent/deploy
 docker compose -f docker-compose.postgres.yml up -d --build
+# 以上命令报错，用本地导出、服务器导入镜像的方法
+# 导出两个镜像
+docker save -o aid_pgadmin.tar dpage/pgadmin4:latest
+docker save -o aid_pgvector.tar pgvector/pgvector:pg16
+docker load -i aid_pgadmin.tar
+docker load -i aid_pgvector.tar
+# 启动 postgres（不需要 --build）
+docker compose -f docker-compose.postgres.yml up -d
 
 ```
 

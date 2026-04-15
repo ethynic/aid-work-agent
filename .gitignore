@@ -20,6 +20,10 @@ wheels/
 .installed.cfg
 *.egg
 
+*.tar
+*.zip
+*.gz
+
 # Virtual Environment
 venv/
 ENV/

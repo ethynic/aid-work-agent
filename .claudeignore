@@ -23,6 +23,10 @@ backups/
 *.swp
 *.swo
 ~*
+*.tar
+*.zip
+*.gz
+
 
 # IDE
 .idea/
