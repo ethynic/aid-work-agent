@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder
 from src.saas.db.subscription_db import SubscriptionDB
 
 
@@ -71,9 +71,11 @@ class PaymentService:
         """列出租户的支付订单"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            placeholder = get_db_placeholder()
+            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
             cursor.execute(
-                "SELECT * FROM payment_orders WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
-                (tenant_id, limit),
+                f"SELECT * FROM payment_orders WHERE tenant_id = {placeholder} ORDER BY created_at DESC LIMIT {limit}",
+                (tenant_id,),
             )
             return [dict(row) for row in cursor.fetchall()]
 

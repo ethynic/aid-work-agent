@@ -252,24 +252,26 @@ class KnowledgeBaseService:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                placeholder = get_db_placeholder()
 
                 if user_id:
-                    cursor.execute("""
+                    # PostgreSQL 不支持 LIMIT ? OFFSET ?，需要直接拼接
+                    cursor.execute(f"""
                         SELECT id, title, source_type, file_type, file_path, file_size,
                                total_chunks, created_at
                         FROM documents
-                        WHERE user_id = ?
+                        WHERE user_id = {placeholder}
                         ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                    """, (user_id, limit, offset))
+                        LIMIT {limit} OFFSET {offset}
+                    """, (user_id,))
                 else:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT id, title, source_type, file_type, file_path, file_size,
                                total_chunks, created_at
                         FROM documents
                         ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                    """, (limit, offset))
+                        LIMIT {limit} OFFSET {offset}
+                    """)
 
                 rows = cursor.fetchall()
 

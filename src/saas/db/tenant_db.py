@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder
 
 
 class TenantDB:
@@ -91,15 +91,16 @@ class TenantDB:
         """列出租户"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            placeholder = get_db_placeholder()
+            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
             if status:
                 cursor.execute(
-                    "SELECT * FROM tenants WHERE status = ? ORDER BY created_at DESC LIMIT ?",
-                    (status, limit),
+                    f"SELECT * FROM tenants WHERE status = {placeholder} ORDER BY created_at DESC LIMIT {limit}",
+                    (status,),
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM tenants ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
+                    f"SELECT * FROM tenants ORDER BY created_at DESC LIMIT {limit}",
                 )
             rows = cursor.fetchall()
             results = []

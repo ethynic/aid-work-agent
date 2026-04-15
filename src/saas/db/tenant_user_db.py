@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder
 
 
 class TenantUserDB:
@@ -77,14 +77,16 @@ class TenantUserDB:
         """列出租户下所有用户"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            placeholder = get_db_placeholder()
+            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+            cursor.execute(f"""
                 SELECT tu.*, u.username, u.phone
                 FROM tenant_users tu
                 LEFT JOIN users u ON u.user_id = tu.user_id
-                WHERE tu.tenant_id = ? AND tu.status = 1
+                WHERE tu.tenant_id = {placeholder} AND tu.status = 1
                 ORDER BY tu.created_at DESC
-                LIMIT ?
-            """, (tenant_id, limit))
+                LIMIT {limit}
+            """, (tenant_id,))
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod

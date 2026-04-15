@@ -232,8 +232,26 @@ def parse_json_safe(json_str: str) -> Any:
 
 def get_db_connection():
     """获取数据库连接"""
-    from src.db.database import get_db_connection as _get_db
+    from src.db.database import get_db_connection as _get_db, get_db_placeholder as _placeholder, DB_TYPE as _db_type
     return _get_db()
+
+
+def get_db_placeholder():
+    """获取参数占位符"""
+    from src.db.database import get_db_placeholder as _placeholder
+    return _placeholder()
+
+
+def get_db_type():
+    """获取数据库类型"""
+    from src.db.database import DB_TYPE
+    return DB_TYPE
+
+
+def get_date_offset(days: int) -> str:
+    """获取指定天数前的日期时间函数"""
+    from src.db.database import get_date_offset as _get_date_offset
+    return _get_date_offset(days)
 
 
 def init_tables():
@@ -617,25 +635,27 @@ def list_emails(
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            placeholder = get_db_placeholder()
 
             if customer_id:
-                cursor.execute("""
+                # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+                cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
                     FROM customer_emails ce
                     LEFT JOIN matched_customers mc ON ce.customer_id = mc.customer_id
-                    WHERE ce.customer_id = ?
+                    WHERE ce.customer_id = {placeholder}
                     ORDER BY ce.created_at DESC
-                    LIMIT ?
-                """, (customer_id, limit))
+                    LIMIT {limit}
+                """, (customer_id,))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
                     FROM customer_emails ce
                     LEFT JOIN matched_customers mc ON ce.customer_id = mc.customer_id
-                    WHERE ce.user_id = ?
+                    WHERE ce.user_id = {placeholder}
                     ORDER BY ce.created_at DESC
-                    LIMIT ?
-                """, (user_id, limit))
+                    LIMIT {limit}
+                """, (user_id,))
 
             rows = cursor.fetchall()
             emails = [dict(row) for row in rows]
@@ -694,16 +714,17 @@ def get_stats(user_id: str) -> Dict[str, Any]:
             failed_emails = cursor.fetchone()["total"]
 
             # 最近7天的客户新增数
-            cursor.execute("""
+            seven_days_ago = get_date_offset(-7)
+            cursor.execute(f"""
                 SELECT COUNT(*) as total FROM matched_customers
-                WHERE user_id = ? AND created_at >= datetime('now', '-7 days')
+                WHERE user_id = ? AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_customers = cursor.fetchone()["total"]
 
             # 最近7天的邮件发送数
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COUNT(*) as total FROM customer_emails
-                WHERE user_id = ? AND created_at >= datetime('now', '-7 days')
+                WHERE user_id = ? AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_emails = cursor.fetchone()["total"]
 

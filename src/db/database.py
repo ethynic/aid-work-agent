@@ -181,6 +181,23 @@ def get_current_timestamp() -> str:
     # SQLite 和 PostgreSQL 语法相同
     return "CURRENT_TIMESTAMP"
 
+
+def get_date_offset(days: int) -> str:
+    """
+    获取指定天数前的日期时间函数
+    Args:
+        days: 负数表示过去，正数表示未来
+    Returns:
+        SQL 函数调用字符串
+    """
+    if DB_TYPE == "postgresql":
+        # PostgreSQL 使用 INTERVAL
+        return f"CURRENT_TIMESTAMP + INTERVAL '{days} days'"
+    else:
+        # SQLite 使用 datetime('now', '±N days')
+        sign = "+" if days > 0 else ""
+        return f"datetime('now', '{sign}{abs(days)} days')"
+
 class PGRow:
     """PostgreSQL 行包装器，提供类似 sqlite3.Row 的接口"""
 

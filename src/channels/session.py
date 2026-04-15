@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.db.database import get_db_connection
+from src.db.database import get_db_connection, get_db_placeholder
 from src.models.message import ChannelType
 
 
@@ -328,23 +328,24 @@ class ChannelSessionManager:
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            placeholder = get_db_placeholder()
 
             if before_message_id:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM channel_messages
-                    WHERE session_id = ? AND created_at < (
-                        SELECT created_at FROM channel_messages WHERE message_id = ?
+                    WHERE session_id = {placeholder} AND created_at < (
+                        SELECT created_at FROM channel_messages WHERE message_id = {placeholder}
                     )
                     ORDER BY created_at DESC
-                    LIMIT ?
-                """, (session_id, before_message_id, limit))
+                    LIMIT {limit}
+                """, (session_id, before_message_id))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM channel_messages
-                    WHERE session_id = ?
+                    WHERE session_id = {placeholder}
                     ORDER BY created_at DESC
-                    LIMIT ?
-                """, (session_id, limit))
+                    LIMIT {limit}
+                """, (session_id,))
 
             rows = cursor.fetchall()
             return [dict(row) for row in reversed(rows)]
@@ -403,17 +404,18 @@ class ChannelSessionManager:
                 values.append(channel_type)
 
             if user_id:
-                conditions.append("user_id = ?")
+                conditions.append(f"user_id = {get_db_placeholder()}")
                 values.append(user_id)
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 
+            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
             cursor.execute(f"""
                 SELECT * FROM channel_sessions
                 WHERE {where_clause}
                 ORDER BY last_message_at DESC
-                LIMIT ?
-            """, values + [limit])
+                LIMIT {limit}
+            """, values)
 
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
