@@ -1,8 +1,6 @@
 # AID Work Agent 生产环境 Docker Compose 配置
 # 优化用于生产环境部署
 
-version: '3.8'
-
 services:
   # FastAPI 后端服务
   aid-agent-api:
