@@ -226,6 +226,21 @@ docker compose -f docker-compose.postgres.yml up -d
 
 ```
 
+**重要说明**：
+- 容器内的 `appuser` 用户 uid=1000，与宿主机 SMB 挂载时指定的 `uid=1000`（ubuntu 用户）保持一致
+- 这样可以确保容器内的应用对 SMB 共享目录有正确的读写权限
+
+**验证 SMB 共享目录写入权限**：
+```bash
+# 验证容器内用户
+docker exec -it aid-agent-api id
+# 应显示：uid=1000(appuser) gid=999(appgroup)
+
+# 测试写入
+docker exec -it aid-agent-api bash -c "touch /mnt/smb/AIUpload/.write_test && rm /mnt/smb/AIUpload/.write_test && echo 'SMB write OK'"
+# 应返回：SMB write OK
+```
+
 ### 第八步：配置 Nginx
 
 ```bash
@@ -262,7 +277,44 @@ curl -I http://localhost
 docker logs aid-agent-api --tail 50
 ```
 
----
+### 第十步：配置备份任务
+
+```bash
+# 创建备份目录
+sudo mkdir -p /home/ubuntu/aid_backup/postgres
+sudo mkdir -p /home/ubuntu/aid_backup/uploads
+sudo chown -R ubuntu:ubuntu /home/ubuntu/aid_backup
+
+# 安装 cron（如果没有）
+sudo apt-get install -y cron
+
+# 编辑 crontab
+crontab -e
+```
+
+**在 crontab 中添加以下内容**：
+
+```cron
+# 每天 1:00 全量备份 PostgreSQL 数据库（zip 压缩），保留 180 天
+0 1 * * * docker exec aid-postgres-1 pg_dump -U postgres -d aid_agent | zip > /home/ubuntu/aid_backup/postgres/backup_$(date +\%Y\%m\%d).sql.zip && find /home/ubuntu/aid_backup/postgres/ -name "backup_*.sql.zip" -mtime +180 -delete
+
+# 每天 0:01 备份前一天的上传文件（增量备份，打包为 zip，全部保留）
+1 0 * * * cd /home/ubuntu/aid_data/uploads && find . -type f -mtime 1 | zip -@ /home/ubuntu/aid_backup/uploads/backup_$(date +\%Y\%m\%d).zip 2>/dev/null || true
+```
+
+**说明**：
+- PostgreSQL 备份：每天 1:00 执行全量备份，自动删除 180 天前的旧备份
+- 上传文件备份：每天 0:01 备份前一天新增的上传文件，保留全部历史
+
+**验证备份**：
+```bash
+# 查看备份目录
+ls -la /home/ubuntu/aid_backup/postgres/
+ls -la /home/ubuntu/aid_backup/uploads/
+
+# 手动测试 PostgreSQL 备份
+docker exec aid-postgres-1 pg_dump -U postgres -d aid_agent > /tmp/test_backup.sql
+```
 
 ## 🔧 运维命令
 
