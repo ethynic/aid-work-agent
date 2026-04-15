@@ -97,11 +97,11 @@ services:
       - ./skills:/app/skills
 
       # 上传附件目录
-      - /var/www/qb3_upload/agent_uploads:/app/uploads
-      - /var/www/qb3_upload/agent_storage:/app/storage
+      - /home/ubuntu/aid_data/uploads:/app/uploads
+      - /home/ubuntu/aid_data/storage:/app/storage
 
       # 记忆文件目录
-      - /var/www/qb3_upload/agent_memories:/app/memories
+      - /home/ubuntu/aid_data/memories:/app/memories
 
       # SMB 共享目录（EAS 合同核对使用）
       # 宿主机需预先挂载 SMB 共享：mount.cifs //192.168.200.10/AIUpload /mnt/smb/AIUpload -o username=aiupload,password=***
