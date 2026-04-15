@@ -58,7 +58,6 @@ sudo mkdir -p /etc/docker
 sudo tee /etc/docker/daemon.json <<EOF
 {
   "registry-mirrors": [
-    "https://mirror.ccs.tencentyun.com",
     "https://registry.docker-cn.com"
   ]
 }
@@ -204,7 +203,7 @@ npm run build
 ```bash
 cd /var/www/agent
 
-# 首次构建并启动
+# 首次构建并启动。如果构建失败，可以尝试将本机的 python:3.11-slim 导出（docker save -o python311slim.tar python:3.11-slim），到服务器上导入（docker load -i python311slim.tar），然后再构建
 docker compose -f docker-compose.prod-eas.yml up -d --build
 
 # 查看容器状态
@@ -212,6 +211,11 @@ docker compose -f docker-compose.prod-eas.yml ps
 
 # 查看日志
 docker compose -f docker-compose.prod-eas.yml logs -f aid-agent-api
+
+# 部署 postgresql 数据库容器
+cd /var/www/agent/deploy
+docker compose -f docker-compose.postgres.yml up -d --build
+
 ```
 
 ### 第八步：配置 Nginx
