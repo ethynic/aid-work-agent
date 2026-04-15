@@ -78,7 +78,13 @@ services:
       - SMB_USERNAME=${SMB_USERNAME:-aiupload}
       - SMB_PASSWORD=${SMB_PASSWORD}
       - SMB_MOUNT_POINT=${SMB_MOUNT_POINT:-/mnt/smb/AIUpload}
-      
+
+      # OA 审批配置（contract-approval Skill）
+      - CONTRACT_OA_URL=${CONTRACT_OA_URL}
+      - CONTRACT_OA_USERNAME=${CONTRACT_OA_USERNAME}
+      - CONTRACT_OA_PASSWORD=${CONTRACT_OA_PASSWORD}
+      - CONTRACT_OA_HEADLESS=${CONTRACT_OA_HEADLESS:-false}
+
       # 其他配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     

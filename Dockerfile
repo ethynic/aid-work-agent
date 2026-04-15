@@ -107,7 +107,8 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     && rm -rf /var/lib/apt/lists/*
 
 # 创建非 root 用户及 home 目录（Uvicorn control server 需要）
-RUN groupadd -r appgroup && useradd -r -g appgroup -m appuser
+# 注意：uid=1000 与宿主机 SMB 挂载的 ubuntu 用户 uid 保持一致
+RUN groupadd -r appgroup && useradd -r -g appgroup --uid 1000 -m appuser
 ENV HOME=/home/appuser
 
 # 设置工作目录
