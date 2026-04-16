@@ -232,7 +232,17 @@ def parse_json_safe(json_str: str) -> Any:
 
 def get_db_connection():
     """获取数据库连接"""
-    from src.db.database import get_db_connection as _get_db, get_db_placeholder as _placeholder, DB_TYPE as _db_type
+    from src.db.database import (
+        get_db_connection as _get_db,
+        get_db_placeholder as _placeholder,
+        DB_TYPE as _db_type,
+        get_postgres_pool,
+        init_postgres_pool,
+    )
+    # 子进程独立运行时，PostgreSQL 连接池可能未初始化，需要自动初始化
+    if _db_type == "postgresql" and get_postgres_pool() is None:
+        logger.info("后端日志：[trade-customer] 子进程中 PostgreSQL 连接池未初始化，正在自动初始化")
+        init_postgres_pool()
     return _get_db()
 
 

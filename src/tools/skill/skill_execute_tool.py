@@ -145,7 +145,11 @@ class SkillExecuteTool(BaseTool):
         stdin_content = None
         content_text = kwargs.get("content")
         if content_text:
-            stdin_content = content_text.encode("utf-8")
+            # 支持字符串或列表类型，列表时转为 JSON 字符串
+            if isinstance(content_text, list):
+                import json
+                content_text = json.dumps(content_text, ensure_ascii=False)
+            stdin_content = str(content_text).encode("utf-8")
 
         try:
             # 后端日志：诊断实际提交给执行器的命令

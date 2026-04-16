@@ -335,6 +335,18 @@ class Agent:
         # 1. 从 ToolRegistry 获取所有已注册工具的 schema
         tools = self.tool_registry.get_tool_definitions()
 
+        # 2. 添加虚拟工具定义（skill_execute, skill_complete, create_plan, clarify）
+        # 这些工具不放入 tool_registry，但需要将定义暴露给 LLM
+        virtual_tools = [
+            self._skill_execute_tool,
+            self._skill_complete_tool,
+            self._create_plan_tool,
+            self._clarify_tool,
+        ]
+        for vtool in virtual_tools:
+            if vtool:
+                tools.append(vtool.to_tool_definition())
+
         # 添加技能工具
         if self.skill_registry:
             skill_tool = self.skill_registry.get_skill_tool_definition()
