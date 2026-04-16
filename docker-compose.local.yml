@@ -9,6 +9,8 @@ services:
       dockerfile: Dockerfile
     container_name: aid-agent-api
     restart: unless-stopped
+    # 本地开发：以 root 启动确保挂载目录有写入权限
+    user: "0"
     ports:
       - "${API_PORT:-8000}:8000"
     environment:
@@ -54,8 +56,8 @@ services:
     volumes:
       # 挂载项目根目录到容器，实现代码热更新
       - .:/app
-      # 挂载日志目录
-      - ./log:/app/log
+      # 日志目录由容器内创建，不再挂载
+      # - ./log:/app/log
     networks:
       - aid-network
     healthcheck:
@@ -72,6 +74,8 @@ services:
       dockerfile: Dockerfile
     container_name: aid-agent-ui
     restart: unless-stopped
+    # 本地开发：以 root 启动确保挂载目录有写入权限
+    user: "0"
     ports:
       - "${GRADIO_PORT:-7860}:7860"
     environment:
@@ -114,8 +118,8 @@ services:
     volumes:
       # 挂载项目根目录到容器，实现代码热更新
       - .:/app
-      # 挂载日志目录
-      - ./log:/app/log
+      # 日志目录由容器内创建，不再挂载
+      # - ./log:/app/log
     networks:
       - aid-network
     profiles:

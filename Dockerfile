@@ -124,8 +124,8 @@ RUN chown -R appuser:appgroup /opt/venv
 # 复制应用代码
 COPY --chown=appuser:appgroup . .
 
-# 创建必要的目录
-# RUN mkdir -p log && chown -R appuser:appgroup log
+# 创建必要的目录（日志等）
+RUN mkdir -p log/agent && chown -R appuser:appgroup log
 
 # 安装 Playwright 浏览器（使用国内镜像）- 默认跳过，如需浏览器功能取消注释
 # RUN playwright install chromium --with-deps -i https://playwright.aimir.cn/simple || \
