@@ -302,7 +302,7 @@ class QwenProvider(BaseLLMProvider):
                 # 工具响应消息 - 必须包含tool_call_id
                 tool_msg = {
                     "role": "tool",
-                    "content": str(content),
+                    "content": json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else (content if isinstance(content, str) else str(content)),
                     "tool_call_id": msg.get("tool_call_id", ""),
                 }
                 formatted.append(tool_msg)

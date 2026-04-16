@@ -2235,7 +2235,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.get("id", ""),
-                            "content": str({"success": True, "question": question, "status": "clarifying"})
+                            "content": json.dumps({"success": True, "question": question, "status": "clarifying"}, ensure_ascii=False)
                         })
 
                         # 返回特殊结果，告知主智能体需要澄清
@@ -2408,7 +2408,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
-                        "content": str(tool_result)
+                        "content": json.dumps(tool_result, ensure_ascii=False) if isinstance(tool_result, dict) else str(tool_result)
                     })
                 
                 # 延迟执行 Skill 上下文压缩（在 tool_message 写入 messages 之后）

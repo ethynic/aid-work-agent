@@ -4,6 +4,7 @@ LLM提供者基类
 定义所有LLM提供者必须实现的接口
 """
 
+import json
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -117,7 +118,7 @@ class BaseLLMProvider(ABC):
                 formatted.append({
                     "role": "tool",
                     "tool_call_id": msg.get("tool_call_id", ""),
-                    "content": str(content) if not isinstance(content, str) else content,
+                    "content": json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else (content if isinstance(content, str) else str(content)),
                 })
             elif role == "assistant" and "tool_calls" in msg:
                 # 包含工具调用的assistant消息
