@@ -6,6 +6,7 @@
 import os
 import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator, Optional, Any, Union
 from urllib.parse import urlparse
 
@@ -720,6 +721,19 @@ def _init_sqlite():
         except Exception as e:
             logger.warning(f"Failed to initialize SaaS tables (saas module may not be configured): {e}")
 
+        # 初始化客户管理表（trade-customer skill）
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "customer_manager",
+                str(Path(__file__).parent.parent / "skills" / "trade-customer-1.0.0" / "scripts" / "customer_manager.py")
+            )
+            customer_manager = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(customer_manager)
+            customer_manager.init_tables()
+        except Exception as e:
+            logger.warning(f"Failed to initialize customer tables: {e}")
+
 
 def _init_postgresql():
     """初始化 PostgreSQL 数据库表"""
@@ -1072,6 +1086,19 @@ def _init_postgresql():
             init_saas_tables_postgresql(conn)
         except Exception as e:
             logger.warning(f"Failed to initialize SaaS tables (saas module may not be configured): {e}")
+
+        # 初始化客户管理表（trade-customer skill）
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "customer_manager",
+                str(Path(__file__).parent.parent / "skills" / "trade-customer-1.0.0" / "scripts" / "customer_manager.py")
+            )
+            customer_manager = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(customer_manager)
+            customer_manager.init_tables()
+        except Exception as e:
+            logger.warning(f"Failed to initialize customer tables: {e}")
 
 
 if __name__ == "__main__":

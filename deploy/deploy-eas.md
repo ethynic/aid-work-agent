@@ -25,6 +25,8 @@ ssh ubuntu@192.168.200.72
 ### 第二步：更新系统并安装基础软件
 
 ```bash
+sudo timedatectl set-timezone Asia/Shanghai
+
 # 更新系统包
 sudo apt-get update && sudo apt-get upgrade -y
 

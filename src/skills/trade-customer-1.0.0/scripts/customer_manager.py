@@ -256,13 +256,16 @@ def get_date_offset(days: int) -> str:
 
 def init_tables():
     """初始化客户相关表"""
+    db_type = get_db_type()
+    id_column = "INTEGER PRIMARY KEY AUTOINCREMENT" if db_type == "sqlite" else "SERIAL PRIMARY KEY"
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
         # 匹配客户表
-        cursor.execute("""
+        cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS matched_customers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {id_column},
                 customer_id TEXT UNIQUE NOT NULL,
                 user_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
@@ -281,9 +284,9 @@ def init_tables():
         """)
 
         # 客户邮件表
-        cursor.execute("""
+        cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS customer_emails (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {id_column},
                 email_id TEXT UNIQUE NOT NULL,
                 customer_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
