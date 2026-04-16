@@ -79,6 +79,14 @@ function getThemePreviewColor(themeName: ThemeName): string {
   switch (themeName) {
     case 'blue':
       return '#003A8C'
+    case 'gray':
+      return '#374151'
+    case 'green':
+      return '#059669'
+    case 'burgundy':
+      return '#991B1B'
+    case 'orange':
+      return '#EA580C'
     default:
       return '#003A8C'
   }
