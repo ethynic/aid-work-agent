@@ -289,29 +289,49 @@ class SkillLoader:
     def load_skills(self):
         """
         扫描并加载所有Skill
-        
+
         仅加载元数据，正文内容按需加载。
         这保持初始上下文精简。
         """
         if not self.skills_dir.exists():
             return
-        
+
         for skill_dir in self.skills_dir.iterdir():
             if not skill_dir.is_dir():
                 continue
             if skill_dir.name.startswith("."):
                 continue
-            
+
             skill_md = skill_dir / "SKILL.md"
             if not skill_md.exists():
                 continue
-            
+
             skill = self.parse_skill_md(skill_md)
             if skill:
                 self.skills[skill.name] = skill
                 logger.info(f"Loaded skill: {skill.name} v{skill.version}")
-        
+
         logger.info(f"Total skills loaded: {len(self.skills)}")
+
+        # 对需要数据库初始化的 skill 执行初始化
+        self._init_skill_tables()
+
+    def _init_skill_tables(self):
+        """初始化需要数据库表的 skill"""
+        # trade-customer skill 需要 matched_customers 表
+        if "trade-customer" in self.skills:
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "customer_manager",
+                    str(self.skills_dir / "trade-customer-1.0.0" / "scripts" / "customer_manager.py")
+                )
+                customer_manager = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(customer_manager)
+                customer_manager.init_tables()
+                logger.info("trade-customer skill tables initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize trade-customer tables: {e}")
     
     def get_skill_descriptions(self) -> str:
         """

@@ -81,13 +81,13 @@ async def list_customers(
 
             if session_id:
                 cursor.execute("""
-                    SELECT * FROM matched_customers
+                    SELECT * FROM bs_trade_specialist_matched_customers
                     WHERE user_id = ? AND session_id = ?
                     ORDER BY created_at DESC
                 """, (user_id, session_id))
             else:
                 cursor.execute("""
-                    SELECT * FROM matched_customers
+                    SELECT * FROM bs_trade_specialist_matched_customers
                     WHERE user_id = ?
                     ORDER BY created_at DESC
                 """, (user_id,))
@@ -121,7 +121,7 @@ async def get_customer(customer_id: str):
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT * FROM matched_customers WHERE customer_id = ?
+                SELECT * FROM bs_trade_specialist_matched_customers WHERE customer_id = ?
             """, (customer_id,))
 
             row = cursor.fetchone()
@@ -135,7 +135,7 @@ async def get_customer(customer_id: str):
 
             # 查询邮件历史
             cursor.execute("""
-                SELECT * FROM customer_emails
+                SELECT * FROM bs_trade_specialist_customer_emails
                 WHERE customer_id = ?
                 ORDER BY created_at DESC
             """, (customer_id,))
@@ -180,8 +180,8 @@ async def list_emails(
                 # PostgreSQL 不支持 LIMIT ?，需要直接拼接
                 cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
-                    FROM customer_emails ce
-                    LEFT JOIN matched_customers mc ON ce.customer_id = mc.customer_id
+                    FROM bs_trade_specialist_customer_emails ce
+                    LEFT JOIN bs_trade_specialist_matched_customers mc ON ce.customer_id = mc.customer_id
                     WHERE ce.customer_id = {placeholder}
                     ORDER BY ce.created_at DESC
                     LIMIT {limit}
@@ -189,8 +189,8 @@ async def list_emails(
             else:
                 cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
-                    FROM customer_emails ce
-                    LEFT JOIN matched_customers mc ON ce.customer_id = mc.customer_id
+                    FROM bs_trade_specialist_customer_emails ce
+                    LEFT JOIN bs_trade_specialist_matched_customers mc ON ce.customer_id = mc.customer_id
                     WHERE ce.user_id = {placeholder}
                     ORDER BY ce.created_at DESC
                     LIMIT {limit}
@@ -228,26 +228,26 @@ async def get_stats(
 
             # 客户总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM matched_customers WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers WHERE user_id = ?
             """, (user_id,))
             total_customers = cursor.fetchone()["total"]
 
             # 邮件发送总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM customer_emails WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails WHERE user_id = ?
             """, (user_id,))
             total_emails = cursor.fetchone()["total"]
 
             # 成功发送数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM customer_emails
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
                 WHERE user_id = ? AND send_status = 'success'
             """, (user_id,))
             success_emails = cursor.fetchone()["total"]
 
             # 发送失败的邮件数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM customer_emails
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
                 WHERE user_id = ? AND send_status = 'failed'
             """, (user_id,))
             failed_emails = cursor.fetchone()["total"]
@@ -255,14 +255,14 @@ async def get_stats(
             # 最近7天的客户新增数
             seven_days_ago = get_date_offset(-7)
             cursor.execute(f"""
-                SELECT COUNT(*) as total FROM matched_customers
+                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers
                 WHERE user_id = ? AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_customers = cursor.fetchone()["total"]
 
             # 最近7天的邮件发送数
             cursor.execute(f"""
-                SELECT COUNT(*) as total FROM customer_emails
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
                 WHERE user_id = ? AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_emails = cursor.fetchone()["total"]
@@ -270,7 +270,7 @@ async def get_stats(
             # 按国家分布
             cursor.execute("""
                 SELECT country, COUNT(*) as count
-                FROM matched_customers
+                FROM bs_trade_specialist_matched_customers
                 WHERE user_id = ?
                 GROUP BY country
                 ORDER BY count DESC
@@ -311,7 +311,7 @@ async def get_session_customers(session_id: str):
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT * FROM matched_customers
+                SELECT * FROM bs_trade_specialist_matched_customers
                 WHERE session_id = ?
                 ORDER BY created_at DESC
             """, (session_id,))
