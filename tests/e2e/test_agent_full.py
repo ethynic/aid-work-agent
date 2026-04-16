@@ -1,7 +1,7 @@
 """
 端到端测试：完整 Agent + 真实 LLM 交互场景
 
-需要环境变量：QWEN_API_KEYS 或 ZHIPU_API_KEYS
+需要环境变量：API_KEYS
 运行：pytest -m e2e tests/e2e/test_agent_full.py
 """
 
@@ -18,7 +18,7 @@ pytestmark = [
 
 
 @pytest.mark.skipif(
-    not os.getenv("QWEN_API_KEYS") and not os.getenv("ZHIPU_API_KEYS"),
+    not os.getenv("API_KEYS"),
     reason="需要 LLM API 密钥",
 )
 class TestAgentFull:

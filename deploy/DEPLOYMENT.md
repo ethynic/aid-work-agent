@@ -138,14 +138,14 @@ vim .env
 # ========== LLM 配置 ==========
 # 通义千问（推荐）
 LLM_PROVIDER=qwen
-QWEN_API_KEYS=your_qwen_api_key_here
+API_KEYS=your_qwen_api_key_here
 
 # 多 Key 池（可选，多个 key 用逗号分隔，有效利用免费额度）
-# QWEN_API_KEYS=key1,key2,key3
+# API_KEYS=key1,key2,key3
 
 # 智谱GLM（备选）
 # LLM_PROVIDER=zhipu\
-# ZHIPU_API_KEYS=key1,key2,key3
+# API_KEYS=key1,key2,key3
 
 # ========== Gunicorn 配置 ==========
 # 当前服务器 4 核，推荐 workers = 2×4+1 = 9（已为默认值，无需修改）
@@ -589,7 +589,7 @@ proxy_send_timeout 180s;
 
 ```bash
 # .env 中配置 Key 池（逗号分隔）
-QWEN_API_KEYS=key1,key2,key3
+API_KEYS=key1,key2,key3
 
 # 每个 Key 默认并发 2，3 个 Key 总并发 = 6
 # 配置在 configs/config.yaml 中可调整每 Key 并发上限

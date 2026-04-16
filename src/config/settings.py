@@ -279,15 +279,18 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     
     # 从环境变量覆盖配置
     if os.getenv("LLM_PROVIDER"):
-        yaml_config.setdefault("llm", {})["provider"] = os.getenv("LLM_PROVIDER")
-    
-    # Qwen：只使用 QWEN_API_KEYS（逗号分隔的多 Key）
-    if os.getenv("QWEN_API_KEYS"):
-        yaml_config.setdefault("llm", {}).setdefault("qwen", {})["api_keys"] = os.getenv("QWEN_API_KEYS")
+        provider = os.getenv("LLM_PROVIDER")
+        yaml_config.setdefault("llm", {})["provider"] = provider
 
-    # Zhipu：只使用 ZHIPU_API_KEYS（逗号分隔的多 Key）
-    if os.getenv("ZHIPU_API_KEYS"):
-        yaml_config.setdefault("llm", {}).setdefault("zhipu", {})["api_keys"] = os.getenv("ZHIPU_API_KEYS")
+        # 统一环境变量：API_KEYS、BASE_URL、MODEL_CODE
+        # 根据 LLM_PROVIDER 的值，写入对应 provider 的配置
+        provider_cfg = yaml_config.setdefault("llm", {}).setdefault(provider, {})
+        if os.getenv("API_KEYS"):
+            provider_cfg["api_keys"] = os.getenv("API_KEYS")
+        if os.getenv("BASE_URL"):
+            provider_cfg["base_url"] = os.getenv("BASE_URL")
+        if os.getenv("MODEL_CODE"):
+            provider_cfg["model"] = os.getenv("MODEL_CODE")
     
     if os.getenv("WECOM_CORP_ID"):
         yaml_config.setdefault("channels", {}).setdefault("wecom", {})["corp_id"] = os.getenv("WECOM_CORP_ID")

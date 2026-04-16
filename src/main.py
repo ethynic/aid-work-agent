@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     # On startup
     logger.info(f"Starting {settings.app.name} v{settings.app.version}")
-    logger.info(f"LLM Provider: {settings.llm.provider}")
+    logger.info(f"LLM Provider: {settings.llm.provider}, Model: {settings.llm.qwen.model}, Base URL: {settings.llm.qwen.base_url}")
     logger.info(f"Registered tools: {master_agent.tool_registry.list_tools()}")
 
     # Initialize PostgreSQL connection pool first (required by init_database)

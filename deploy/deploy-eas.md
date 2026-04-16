@@ -122,7 +122,7 @@ vim .env
 ```bash
 # ========== LLM 配置 ==========
 LLM_PROVIDER=qwen
-QWEN_API_KEYS=your_qwen_api_key_here
+API_KEYS=your_qwen_api_key_here
 
 # ========== Gunicorn 配置 ==========
 # 4核服务器: workers = 2×4+1 = 9

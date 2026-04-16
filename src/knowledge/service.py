@@ -72,7 +72,7 @@ class KnowledgeBaseService:
             # 3. 向量化（批量）
             qwen_keys = settings.llm.qwen.get_effective_keys()
             if not qwen_keys:
-                raise ValueError("QWEN API key 未配置，请检查 QWEN_API_KEYS 环境变量")
+                raise ValueError("QWEN API key 未配置，请检查 API_KEYS 环境变量")
             # TODO: 后续支持 key 池轮询或并发控制，避免单 key 限流
             embedding_client = TextEmbeddingV3Client(api_key=qwen_keys[0])
             chunk_texts = [c["text"] for c in chunks]
@@ -345,7 +345,7 @@ class KnowledgeBaseService:
             if not qwen_keys:
                 return {
                     "success": False,
-                    "error": "QWEN API key 未配置",
+                    "error": "API key 未配置",
                     "results": [],
                     "count": 0
                 }

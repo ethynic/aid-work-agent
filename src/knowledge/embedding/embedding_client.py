@@ -42,7 +42,7 @@ class TextEmbeddingV3Client:
 
     def __init__(self, api_key: str):
         if not api_key:
-            raise ValueError("Embedding API key 未配置，请检查 QWEN_API_KEYS 环境变量")
+            raise ValueError("Embedding API key 未配置，请检查 API_KEYS 环境变量")
         import dashscope
         dashscope.api_key = api_key
         self._api_key = api_key  # 保存 key 用于日志

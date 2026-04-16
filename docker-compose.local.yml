@@ -17,8 +17,9 @@ services:
       - SERVER_PORT=8000
       # LLM 配置
       - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
-      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
-      - QWEN_API_KEYS=${QWEN_API_KEYS}
+      - API_KEYS=${API_KEYS}
+      - BASE_URL=${BASE_URL}
+      - MODEL_CODE=${MODEL_CODE}
       # 调试模式
       - DEBUG=${DEBUG:-false}
       # 渠道配置 - 企业微信
@@ -78,8 +79,9 @@ services:
       - SERVER_PORT=7860
       # LLM 配置
       - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
-      - ZHIPU_API_KEYS=${ZHIPU_API_KEYS}
-      - QWEN_API_KEYS=${QWEN_API_KEYS}
+      - API_KEYS=${API_KEYS}
+      - BASE_URL=${BASE_URL}
+      - MODEL_CODE=${MODEL_CODE}
       # 调试模式
       - DEBUG=${DEBUG:-false}
       # 渠道配置（同上）

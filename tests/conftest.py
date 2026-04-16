@@ -20,7 +20,7 @@ collect_ignore = sorted(str(p) for p in Path(__file__).parent.glob("test_*.py"))
 
 # 在导入 src 模块之前设置测试环境变量
 os.environ.setdefault("LLM_PROVIDER", "qwen")
-os.environ.setdefault("QWEN_API_KEYS", "test-key-1,test-key-2")
+os.environ.setdefault("API_KEYS", "api-key-1,api-key-2")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_agent.db")
 
 # Mock sqlite_vec 模块（可能未安装，但 agent 初始化需要）

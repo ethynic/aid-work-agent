@@ -237,7 +237,7 @@ if __name__ == "__main__":
 
 1. **异步调用**：`search_documents` 是 `async` 方法，必须用 `await` 调用；在同步上下文中使用 `asyncio.run()` 或 `asyncio.to_thread()`。
 
-2. **服务已就绪**：`knowledge_service` 全局单例在模块导入时自动创建，无需手动初始化。但确保 `QWEN_API_KEYS` 环境变量已配置（用于生成查询向量）。
+2. **服务已就绪**：`knowledge_service` 全局单例在模块导入时自动创建，无需手动初始化。但确保 `API_KEYS` 环境变量已配置（用于生成查询向量）。
 
 3. **结果过滤**：返回的 `score` 是 0-1 的相关度分数，建议设置阈值（如 0.3）过滤低质量结果：
 

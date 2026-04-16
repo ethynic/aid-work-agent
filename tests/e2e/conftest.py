@@ -7,14 +7,14 @@ import pytest
 
 def pytest_collection_modifyitems(config, items):
     """根据环境变量自动跳过缺少凭证的 e2e 测试"""
-    skip_llm = pytest.mark.skip(reason="未配置 LLM API 密钥 (QWEN_API_KEYS/ZHIPU_API_KEYS)")
+    skip_llm = pytest.mark.skip(reason="未配置 LLM API 密钥 (API_KEYS)")
     skip_email = pytest.mark.skip(reason="未配置邮件测试凭证 (TEST_SMTP_SERVER)")
     skip_search = pytest.mark.skip(reason="未配置搜索 API 密钥 (TAVILY_API_KEY)")
     skip_browser = pytest.mark.skip(reason="未安装 playwright")
 
     for item in items:
         if "llm" in item.keywords:
-            if not os.getenv("QWEN_API_KEYS") and not os.getenv("ZHIPU_API_KEYS"):
+            if not os.getenv("API_KEYS"):
                 item.add_marker(skip_llm)
         if "email" in item.keywords:
             if not os.getenv("TEST_SMTP_SERVER"):

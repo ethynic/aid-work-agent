@@ -42,7 +42,7 @@
 2. `.env` 文件 — 环境变量
 3. OS 环境变量 — 直接覆盖
 
-关键环境变量：`LLM_PROVIDER`（qwen|zhipu）、`QWEN_API_KEYS`、`ZHIPU_API_KEYS`、`DATABASE_URL`、`TAVILY_API_KEY`、渠道配置（`WECOM_*`、`DINGTALK_*`、`FEISHU_*`）、邮箱配置（`SMTP_*`/`IMAP_*`）。
+关键环境变量：`LLM_PROVIDER`（qwen|zhipu）、`API_KEYS`、`MODEL_CODE`、`BASE_URL`、`DATABASE_URL`、`TAVILY_API_KEY`、渠道配置（`WECOM_*`、`DINGTALK_*`、`FEISHU_*`）、邮箱配置（`SMTP_*`/`IMAP_*`）。
 
 ## 扩展点
 

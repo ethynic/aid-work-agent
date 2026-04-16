@@ -1567,7 +1567,7 @@ const handleUrlSubmit = async () => {
 
 ```env
 # Embedding 配置
-QWEN_API_KEYS=xxx  # 通义千问 API Key
+API_KEYS=xxx  # LLM API Key
 
 # 知识库配置
 KNOWLEDGE_UPLOAD_PATH=uploads/knowledge  # 文档存储路径
