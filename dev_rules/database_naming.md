@@ -15,7 +15,7 @@
 - `chat_sessions` - 会话表
 - `chat_messages` - 消息表
 - `chat_records` - 会话记录表
-- `matched_customers` - 匹配客户表（系统级）
+- `bs_trade_specialist_matched_customers` - 匹配客户表（系统级）
 - `documents` - 文档表
 - `chunks` - 文本块表
 
@@ -34,7 +34,7 @@ bs_[subagent]_[tablename]
 **示例**：
 | 子智能体 | 原表名 | 业务表名 |
 |---------|--------|---------|
-| trade-specialist | matched_customers | bs_trade_specialist_matched_customers |
+| trade-specialist | bs_trade_specialist_matched_customers | bs_trade_specialist_matched_customers |
 | trade-specialist | customer_emails | bs_trade_specialist_customer_emails |
 
 ## 租户隔离要求

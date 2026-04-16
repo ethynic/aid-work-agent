@@ -17,45 +17,36 @@ from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 class ZhipuProvider(BaseLLMProvider):
     """
-    智谱GLM LLM提供者
-    
-    支持智谱GLM系列模型的API调用
+    智谱GLM LLM提供者（OpenAI 兼容模式）
+
+    支持智谱GLM系列模型的 API 调用，请求/响应格式与 OpenAI Chat Completions API 一致。
     """
-    
-    # API端点
-    API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-    
-    # 支持的模型
-    SUPPORTED_MODELS = [
-        "glm-4",
-        "glm-4-air",
-        "glm-4-airx",
-        "glm-4-flash",
-        "glm-3-turbo",
-    ]
-    
+
+    # 默认 API 端点，可通过 base_url 覆盖
+    DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+
     def __init__(
         self,
         api_key: str,
         model: str = "glm-4",
+        base_url: Optional[str] = None,
         **kwargs
     ):
         """
         初始化智谱GLM提供者
-        
+
         Args:
             api_key: 智谱AI API Key
             model: 模型名称
+            base_url: API 基础 URL
             **kwargs: 其他配置参数
         """
-        super().__init__(api_key, model, **kwargs)
+        super().__init__(api_key, model, base_url=base_url, **kwargs)
+        self.api_url = f"{self.base_url or self.DEFAULT_BASE_URL}/chat/completions"
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        
-        if model not in self.SUPPORTED_MODELS:
-            logger.warning(f"模型 {model} 可能不被支持，支持的模型: {self.SUPPORTED_MODELS}")
     
     async def chat(
         self,
@@ -90,7 +81,7 @@ class ZhipuProvider(BaseLLMProvider):
         
         # 添加工具定义
         if tools:
-            request_body["tools"] = self._format_tools_zhipu(tools)
+            request_body["tools"] = self._format_tools(tools)
             if tool_choice:
                 request_body["tool_choice"] = tool_choice
         
@@ -104,7 +95,7 @@ class ZhipuProvider(BaseLLMProvider):
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
-                    self.API_URL,
+                    self.api_url,
                     headers=self.headers,
                     json=request_body,
                 )
@@ -184,7 +175,7 @@ class ZhipuProvider(BaseLLMProvider):
         }
         
         if tools:
-            request_body["tools"] = self._format_tools_zhipu(tools)
+            request_body["tools"] = self._format_tools(tools)
         
         request_body.update(kwargs)
         
@@ -196,7 +187,7 @@ class ZhipuProvider(BaseLLMProvider):
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
                     "POST",
-                    self.API_URL,
+                    self.api_url,
                     headers=self.headers,
                     json=request_body,
                 ) as response:
@@ -251,39 +242,7 @@ class ZhipuProvider(BaseLLMProvider):
             )
             logger.error(f"智谱GLM流式调用异常: {e}")
             raise
-    
-    def _format_tools_zhipu(
-        self,
-        tools: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        格式化工具定义为智谱GLM格式（OpenAI兼容）
-        
-        Args:
-            tools: 原始工具定义列表
-        
-        Returns:
-            智谱GLM格式的工具定义列表
-        """
-        formatted_tools = []
-        for tool in tools:
-            tool_def = {
-                "type": "function",
-                "function": {
-                    "name": tool.get("name", ""),
-                    "description": tool.get("description", ""),
-                }
-            }
-            
-            # 处理参数定义
-            input_schema = tool.get("input_schema", tool.get("parameters", {}))
-            if input_schema:
-                tool_def["function"]["parameters"] = input_schema
-            
-            formatted_tools.append(tool_def)
-        
-        return formatted_tools
-    
+
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """
         解析智谱GLM响应为标准格式

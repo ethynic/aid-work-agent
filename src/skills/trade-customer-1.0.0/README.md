@@ -63,7 +63,7 @@ python scripts/customer_manager.py stats --user-id "user_xxx"
 
 ## 数据库表
 
-### matched_customers（匹配客户表）
+### bs_trade_specialist_matched_customers（匹配客户表）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|

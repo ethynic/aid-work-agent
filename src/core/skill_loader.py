@@ -318,7 +318,7 @@ class SkillLoader:
 
     def _init_skill_tables(self):
         """初始化需要数据库表的 skill"""
-        # trade-customer skill 需要 matched_customers 表
+        # trade-customer skill 需要 bs_trade_specialist_matched_customers 表
         if "trade-customer" in self.skills:
             try:
                 import importlib.util
