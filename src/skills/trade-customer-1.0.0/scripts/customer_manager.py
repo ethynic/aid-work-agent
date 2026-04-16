@@ -264,9 +264,10 @@ def init_tables():
 
         # 匹配客户表
         cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS matched_customers (
+            CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
                 id {id_column},
                 customer_id TEXT UNIQUE NOT NULL,
+                tenant_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
                 company_name TEXT,
@@ -285,10 +286,11 @@ def init_tables():
 
         # 客户邮件表
         cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS customer_emails (
+            CREATE TABLE IF NOT EXISTS bs_trade_specialist_customer_emails (
                 id {id_column},
                 email_id TEXT UNIQUE NOT NULL,
                 customer_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
                 email_subject TEXT,
@@ -298,26 +300,34 @@ def init_tables():
                 send_status TEXT DEFAULT 'success',
                 error_message TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES matched_customers(customer_id)
+                FOREIGN KEY (customer_id) REFERENCES bs_trade_specialist_matched_customers(customer_id)
             )
         """)
 
         # 索引
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_matched_customers_user
-            ON matched_customers(user_id, created_at DESC)
+            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_tenant
+            ON bs_trade_specialist_matched_customers(tenant_id, created_at DESC)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_matched_customers_session
-            ON matched_customers(session_id)
+            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_user
+            ON bs_trade_specialist_matched_customers(user_id, created_at DESC)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_customer_emails_customer
-            ON customer_emails(customer_id, created_at DESC)
+            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_session
+            ON bs_trade_specialist_matched_customers(session_id)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_customer_emails_user
-            ON customer_emails(user_id, created_at DESC)
+            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_customer
+            ON bs_trade_specialist_customer_emails(customer_id, created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_user
+            ON bs_trade_specialist_customer_emails(user_id, created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_tenant
+            ON bs_trade_specialist_customer_emails(tenant_id, created_at DESC)
         """)
 
         conn.commit()
@@ -354,7 +364,7 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
             import_category = customer.get("import_category") or customer.get("import_products", "")
 
             cursor.execute("""
-                INSERT INTO matched_customers
+                INSERT INTO bs_trade_specialist_matched_customers
                 (customer_id, user_id, session_id, company_name, contact_name,
                  email, country, language, industry, import_category,
                  company_size, match_reason, match_date)
@@ -418,7 +428,7 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
                 import_category = customer.get("import_category") or customer.get("import_products", "")
 
                 cursor.execute("""
-                    INSERT INTO matched_customers
+                    INSERT INTO bs_trade_specialist_matched_customers
                     (customer_id, user_id, session_id, company_name, contact_name,
                      email, country, language, industry, import_category,
                      company_size, match_reason, match_date)
@@ -476,13 +486,13 @@ def list_customers(user_id: str, session_id: Optional[str] = None) -> Dict[str, 
 
             if session_id:
                 cursor.execute("""
-                    SELECT * FROM matched_customers
+                    SELECT * FROM bs_trade_specialist_matched_customers
                     WHERE user_id = ? AND session_id = ?
                     ORDER BY created_at DESC
                 """, (user_id, session_id))
             else:
                 cursor.execute("""
-                    SELECT * FROM matched_customers
+                    SELECT * FROM bs_trade_specialist_matched_customers
                     WHERE user_id = ?
                     ORDER BY created_at DESC
                 """, (user_id,))
@@ -519,7 +529,7 @@ def get_customer(customer_id: str) -> Dict[str, Any]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM matched_customers WHERE customer_id = ?
+                SELECT * FROM bs_trade_specialist_matched_customers WHERE customer_id = ?
             """, (customer_id,))
 
             row = cursor.fetchone()
@@ -533,7 +543,7 @@ def get_customer(customer_id: str) -> Dict[str, Any]:
 
             # 查询该客户的邮件历史
             cursor.execute("""
-                SELECT * FROM customer_emails
+                SELECT * FROM bs_trade_specialist_customer_emails
                 WHERE customer_id = ?
                 ORDER BY created_at DESC
             """, (customer_id,))
@@ -576,7 +586,7 @@ def record_email(
             cursor = conn.cursor()
 
             # 检查客户是否存在
-            cursor.execute("SELECT customer_id FROM matched_customers WHERE customer_id = ?",
+            cursor.execute("SELECT customer_id FROM bs_trade_specialist_matched_customers WHERE customer_id = ?",
                           (customer_id,))
             if not cursor.fetchone():
                 return {
@@ -588,7 +598,7 @@ def record_email(
             send_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.execute("""
-                INSERT INTO customer_emails
+                INSERT INTO bs_trade_specialist_customer_emails
                 (email_id, customer_id, user_id, session_id, email_subject,
                  email_body, email_language, send_time, send_status, error_message)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -644,8 +654,8 @@ def list_emails(
                 # PostgreSQL 不支持 LIMIT ?，需要直接拼接
                 cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
-                    FROM customer_emails ce
-                    LEFT JOIN matched_customers mc ON ce.customer_id = mc.customer_id
+                    FROM bs_trade_specialist_customer_emails ce
+                    LEFT JOIN bs_trade_specialist_matched_customers mc ON ce.customer_id = mc.customer_id
                     WHERE ce.customer_id = {placeholder}
                     ORDER BY ce.created_at DESC
                     LIMIT {limit}
@@ -653,8 +663,8 @@ def list_emails(
             else:
                 cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
-                    FROM customer_emails ce
-                    LEFT JOIN matched_customers mc ON ce.customer_id = mc.customer_id
+                    FROM bs_trade_specialist_customer_emails ce
+                    LEFT JOIN bs_trade_specialist_matched_customers mc ON ce.customer_id = mc.customer_id
                     WHERE ce.user_id = {placeholder}
                     ORDER BY ce.created_at DESC
                     LIMIT {limit}
@@ -692,26 +702,26 @@ def get_stats(user_id: str) -> Dict[str, Any]:
 
             # 客户总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM matched_customers WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers WHERE user_id = ?
             """, (user_id,))
             total_customers = cursor.fetchone()["total"]
 
             # 邮件发送总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM customer_emails WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails WHERE user_id = ?
             """, (user_id,))
             total_emails = cursor.fetchone()["total"]
 
             # 成功发送数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM customer_emails
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
                 WHERE user_id = ? AND send_status = 'success'
             """, (user_id,))
             success_emails = cursor.fetchone()["total"]
 
             # 发送失败的邮件数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM customer_emails
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
                 WHERE user_id = ? AND send_status = 'failed'
             """, (user_id,))
             failed_emails = cursor.fetchone()["total"]
@@ -719,14 +729,14 @@ def get_stats(user_id: str) -> Dict[str, Any]:
             # 最近7天的客户新增数
             seven_days_ago = get_date_offset(-7)
             cursor.execute(f"""
-                SELECT COUNT(*) as total FROM matched_customers
+                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers
                 WHERE user_id = ? AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_customers = cursor.fetchone()["total"]
 
             # 最近7天的邮件发送数
             cursor.execute(f"""
-                SELECT COUNT(*) as total FROM customer_emails
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
                 WHERE user_id = ? AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_emails = cursor.fetchone()["total"]
@@ -734,7 +744,7 @@ def get_stats(user_id: str) -> Dict[str, Any]:
             # 按国家分布
             cursor.execute("""
                 SELECT country, COUNT(*) as count
-                FROM matched_customers
+                FROM bs_trade_specialist_matched_customers
                 WHERE user_id = ?
                 GROUP BY country
                 ORDER BY count DESC

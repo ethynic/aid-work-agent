@@ -35,6 +35,7 @@ docker compose -f docker-compose.prod.yml up -d --build  # 生产环境
 | [dev_rules/frontend_dev.md](dev_rules/frontend_dev.md) | 前端开发规范 |
 | [dev_rules/testing.md](dev_rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
 | [dev_rules/architecture.md](dev_rules/architecture.md) | 系统架构、核心组件、扩展点 |
+| [dev_rules/database_naming.md](dev_rules/database_naming.md) | 数据库表命名规范，系统表与业务数据表分类、租户隔离要求 |
 
 ## Git 提交规范
 **不要自动提交代码，提交代码仅能由用户发起**
