@@ -214,7 +214,7 @@ async def validate_captcha(captcha_id: str, code: str):
     """验证图形验证码（用于重置密码前校验）"""
     if verify_captcha(captcha_id, code):
         return {"success": True, "message": "验证码正确"}
-    return {"success": False, "message": "验证码错误或已过期"}
+    return {"success": False, "message": "验证码错误或已过期，过期时间5分钟"}
 
 
 @router.post("/phone/send-code")
@@ -239,7 +239,7 @@ async def login(request: LoginRequest):
     """
     # 校验图形验证码
     if not verify_captcha(request.captcha_id, request.captcha_code):
-        return LoginResponse(success=False, message="图形验证码错误或已过期")
+        return LoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
 
     # 根据 identifier 判断是手机号还是用户名
     identifier = request.identifier.strip()
@@ -403,7 +403,7 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
                     token=token,
                     user=get_user_info_with_admin(user)
             )
-    return LoginResponse(success=False, message="验证码错误或已过期")
+    return LoginResponse(success=False, message="验证码错误或已过期，过期时间5分钟")
 
 
 @router.post("/register")
@@ -411,7 +411,7 @@ async def register(request: RegisterRequest):
     """用户注册"""
     # 验证验证码
     if not verify_sms_code(request.phone, request.code):
-        return {"success": False, "message": "验证码错误或已过期"}
+        return {"success": False, "message": "验证码错误或已过期，过期时间5分钟"}
     
     # 检查手机号是否已注册
     if UserDB.get_by_phone(request.phone):
@@ -433,7 +433,7 @@ async def register(request: RegisterRequest):
 async def bind_phone(request: BindPhoneRequest):
     """绑定手机号（用于微信用户绑定手机）"""
     if not verify_sms_code(request.phone, request.code):
-        return {"success": False, "message": "验证码错误或已过期"}
+        return {"success": False, "message": "验证码错误或已过期，过期时间5分钟"}
     
     # 检查手机号是否已被占用
     existing = UserDB.get_by_phone(request.phone)
@@ -521,7 +521,7 @@ async def send_reset_password_code(request: SendResetCodeRequest):
     """发送重置密码短信验证码（需先通过图形验证码）"""
     # 校验图形验证码
     if not verify_captcha(request.captcha_id, request.captcha_code):
-        return {"success": False, "message": "图形验证码错误或已过期"}
+        return {"success": False, "message": "图形验证码错误或已过期，过期时间5分钟"}
 
     # 校验手机号格式
     if len(request.phone) != 11 or not request.phone.isdigit():
@@ -543,7 +543,7 @@ async def reset_password(request: ResetPasswordRequest):
     """重置密码"""
     # 校验图形验证码
     if not verify_captcha(request.captcha_id, request.captcha_code):
-        return {"success": False, "message": "图形验证码错误或已过期"}
+        return {"success": False, "message": "图形验证码错误或已过期，过期时间5分钟"}
 
     # 校验手机号格式
     if len(request.phone) != 11 or not request.phone.isdigit():
@@ -552,7 +552,7 @@ async def reset_password(request: ResetPasswordRequest):
     # 校验短信验证码（固定888888）
     if request.sms_code != "888888":
         # TODO: 短信平台确定后，改为调用 verify_sms_code
-        return {"success": False, "message": "短信验证码错误或已过期"}
+        return {"success": False, "message": "短信验证码错误或已过期，过期时间5分钟"}
 
     # 校验新密码是否符合规则
     password_rule = getattr(settings, "password_rule", r"^(?=.*[A-Za-z])(?=.*\d).{8,50}$")

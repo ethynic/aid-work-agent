@@ -218,7 +218,7 @@ async def admin_login(request: AdminLoginRequest):
 
     # 1. 验证验证码
     if not verify_admin_sms_code(request.phone, request.code):
-        return AdminLoginResponse(success=False, message="验证码错误或已过期")
+        return AdminLoginResponse(success=False, message="验证码错误或已过期，过期时间5分钟")
 
     # 2. 查找用户
     user = UserDB.get_by_phone(request.phone)
