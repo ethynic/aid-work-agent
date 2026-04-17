@@ -255,12 +255,15 @@ class SessionDB:
 
     @staticmethod
     def delete(session_id: str) -> bool:
-        """删除会话及其所有消息"""
+        """删除会话及其所有消息和记录"""
         placeholder = get_db_placeholder()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
+                # 先删除子表记录（按外键依赖顺序）
+                cursor.execute(f"DELETE FROM chat_records WHERE session_id = {placeholder}", (session_id,))
                 cursor.execute(f"DELETE FROM chat_messages WHERE session_id = {placeholder}", (session_id,))
+                # 最后删除主表
                 cursor.execute(f"DELETE FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
                 conn.commit()
                 logger.info(f"Chat session deleted: {session_id}")

@@ -15,8 +15,68 @@ from loguru import logger
 
 from src.saas.db.tenant_admin_db import TenantAdminDB, TenantAdminTokenDB
 from src.saas.db.tenant_db import TenantDB
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/auth", tags=["SaaS 认证"])
+
+# 默认租户 ID（用于配置文件中的管理员）
+DEFAULT_TENANT_ID = "tenant_default"
+
+
+def _get_or_create_default_tenant() -> Optional[dict]:
+    """获取或创建默认租户"""
+    tenant = TenantDB.get_by_id(DEFAULT_TENANT_ID)
+    if tenant:
+        return tenant
+
+    # 创建默认租户
+    logger.info("Creating default tenant for config-based admins")
+    return TenantDB.create(
+        tenant_id=DEFAULT_TENANT_ID,
+        company_name="默认租户",
+        contact_name="系统管理员",
+        plan="enterprise",
+    )
+
+
+def _ensure_config_admin(phone: str) -> Optional[dict]:
+    """
+    如果手机号在配置的管理员列表中，确保该管理员存在
+    返回管理员信息（如果不存在或不在配置中返回 None）
+    """
+    # 获取配置中的管理员手机号列表
+    admin_phones = getattr(settings, "admin", None)
+    if not admin_phones:
+        return None
+
+    phones = getattr(admin_phones, "phones", None)
+    if not phones:
+        return None
+
+    if phone not in phones:
+        return None
+
+    # 检查是否已存在管理员
+    admin = TenantAdminDB.get_by_phone(phone)
+    if admin:
+        return admin
+
+    # 确保有默认租户
+    tenant = _get_or_create_default_tenant()
+    if not tenant:
+        logger.error(f"Failed to get or create default tenant for admin {phone}")
+        return None
+
+    # 创建管理员
+    logger.info(f"Creating admin from config: {phone} for tenant {tenant['tenant_id']}")
+    admin = TenantAdminDB.create(
+        tenant_id=tenant["tenant_id"],
+        phone=phone,
+        name="管理员",
+        role="super_admin",
+    )
+
+    return admin
 
 
 # ============== 请求/响应模型 ==============
@@ -107,17 +167,20 @@ async def admin_login(request: AdminLoginRequest):
     # 2. 查找管理员
     admin = TenantAdminDB.get_by_phone(request.phone)
     if not admin:
-        return AdminLoginResponse(success=False, message="该手机号未注册为管理员")
+        # 3. 检查是否是配置中的管理员手机号，尝试自动创建
+        admin = _ensure_config_admin(request.phone)
+        if not admin:
+            return AdminLoginResponse(success=False, message="该手机号未注册为管理员")
 
     if admin.get("status", 1) != 1:
         return AdminLoginResponse(success=False, message="管理员账号已停用")
 
-    # 3. 生成 token
+    # 4. 生成 token
     token = TenantAdminTokenDB.create(admin["admin_id"], admin["tenant_id"])
     if not token:
         return AdminLoginResponse(success=False, message="登录失败，请重试")
 
-    # 4. 获取租户信息
+    # 5. 获取租户信息
     tenant = TenantDB.get_by_id(admin["tenant_id"])
 
     logger.info(f"Admin login: {admin['admin_id']} ({request.phone}) -> tenant {admin['tenant_id']}")
@@ -164,9 +227,12 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     # 2. 匹配管理员
     admin = TenantAdminDB.get_by_phone(phone)
     if not admin:
-        return AdminLoginResponse(success=False, message="该 IM 用户未注册为管理员")
+        # 3. 检查是否是配置中的管理员手机号，尝试自动创建
+        admin = _ensure_config_admin(phone)
+        if not admin:
+            return AdminLoginResponse(success=False, message="该 IM 用户未注册为管理员")
 
-    # 3. 生成 token
+    # 4. 生成 token
     token = TenantAdminTokenDB.create(admin["admin_id"], admin["tenant_id"])
     tenant = TenantDB.get_by_id(admin["tenant_id"])
 

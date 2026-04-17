@@ -202,9 +202,7 @@ async def search_documents(
             status_code=500,
             content={
                 "success": False,
-                "error": result.get("error", "搜索失败"),
-                "debug": result.get("debug", ""),
-                "results": [],
+                "result": result,
                 "count": 0
             }
         )
