@@ -354,9 +354,12 @@ CONTRACT_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的合同文档分析助�
   "is_contract": true/false,
   "is_approval_form_first_page": true/false,
   "contract_name": "合同名称",
+  "contract_type": "合同类型",
   "party_a": "甲方全称",
   "party_b": "乙方全称",
   "total_amount": "纯数字金额",
+  "total_amount_cn": "中文大写金额",
+  "amount_consistent": true/false,
   "stamp_pages": [页码列表，如 [3, 5, 8]],
   "has_party_a_stamp": true/false,
   "has_party_b_stamp": true/false,
@@ -367,9 +370,19 @@ CONTRACT_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的合同文档分析助�
 - is_contract: 整个文档是否为合同（或包含合同内容）
 - is_approval_form_first_page: 第一页是否为合同审批单/用印审批单
 - contract_name: 合同名称/标题
+- contract_type: 合同类型，必须从以下选项中选择一个：
+  - "销售合同"
+  - "采购合同"
+  - "劳务合同"
+  - "暂替合同"
+  - "终止合同"
+  - "其他合同"
+  根据合同内容判断，无法确定时填"其他合同"
 - party_a: 甲方全称
 - party_b: 乙方全称
 - total_amount: 合同总金额，纯数字（如 150000.00），不带货币符号和中文
+- total_amount_cn: 合同中的中文大写金额原文（如"壹拾伍万元整"），如果没有中文大写金额则填空字符串
+- amount_consistent: 数字金额和中文大写金额是否一致。如果合同中同时存在数字金额和中文大写金额，判断两者是否对应一致；如果只有其中一种，填 true
 - stamp_pages: 合同中需要双方盖章（签字/盖章页）的页码列表（1-based）
 - has_party_a_stamp: 甲方是否在合同中盖章（根据盖章页和文本内容判断）
 - has_party_b_stamp: 乙方是否在合同中盖章（根据盖章页和文本内容判断）
@@ -492,13 +505,21 @@ def _parse_llm_json_response(content: str) -> Dict[str, Any]:
     try:
         parsed = json.loads(content)
         # 规范化字段
+        valid_contract_types = {"销售合同", "采购合同", "劳务合同", "暂替合同", "终止合同", "其他合同"}
+        contract_type = str(parsed.get("contract_type", "其他合同"))
+        if contract_type not in valid_contract_types:
+            contract_type = "其他合同"
+
         return {
             "is_contract": bool(parsed.get("is_contract", False)),
             "is_approval_form_first_page": bool(parsed.get("is_approval_form_first_page", False)),
             "contract_name": str(parsed.get("contract_name", "")),
+            "contract_type": contract_type,
             "party_a": str(parsed.get("party_a", "")),
             "party_b": str(parsed.get("party_b", "")),
             "total_amount": str(parsed.get("total_amount", "")),
+            "total_amount_cn": str(parsed.get("total_amount_cn", "")),
+            "amount_consistent": bool(parsed.get("amount_consistent", True)),
             "stamp_pages": [int(p) for p in parsed.get("stamp_pages", []) if isinstance(p, (int, float, str))],
             "has_party_a_stamp": bool(parsed.get("has_party_a_stamp", False)),
             "has_party_b_stamp": bool(parsed.get("has_party_b_stamp", False)),

@@ -24,7 +24,7 @@
   "triggers": [
     { "type": "keyword", "pattern": "合同审批" },
     { "type": "keyword", "pattern": "审批合同" },
-    { "type": "keyword", "pattern": "OA审批" },
+    { "type": "keyword", "pattern": "EAS审批" },
     { "type": "keyword", "pattern": "待办处理" },
     { "type": "keyword", "pattern": "审批通过" },
     { "type": "keyword", "pattern": "审批驳回" }

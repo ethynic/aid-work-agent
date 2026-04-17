@@ -474,7 +474,31 @@ def upload_contract_attachment(contract_code: str, file_path: str, file_desc: st
             debug=sanitize_error_info(str(e))
         )
 
-    # 3. 调用 EAS API 创建归档
+    # 3. 先查询已存在的附件列表，避免重复上传
+    try:
+        list_result = _call_eas_api({
+            "doType": "list",
+            "contract_code": contract_code,
+        })
+        if isinstance(list_result, dict) and list_result.get("success"):
+            existing_files = list_result.get("data", [])
+            for f in existing_files:
+                file_name = f.get("Name", "")
+                if contract_code in file_name:
+                    logger.info(f"合同 {contract_code} 已存在附件 {file_name}，跳过上传")
+                    return _make_result(True, data={
+                        "contract_code": contract_code,
+                        "file_name": safe_filename,
+                        "original_filename": original_filename,
+                        "file_desc": file_desc,
+                        "shared_path": os.path.join(target_dir, safe_filename),
+                        "skipped": True,
+                        "reason": f"已存在包含合同编号的附件: {file_name}",
+                    })
+    except Exception as e:
+        logger.warning(f"查询已存在附件列表失败，继续上传: {sanitize_error_info(str(e))}")
+
+    # 4. 调用 EAS API 创建归档
     try:
         result = _call_eas_api({
             "doType": "create",
@@ -661,10 +685,13 @@ def _save_verify_report(result: Dict[str, Any], file_path: str, contract_code: s
                 "is_contract": llm.get("is_contract"),
                 "is_approval_form_first_page": llm.get("is_approval_form_first_page"),
                 "contract_name": llm.get("contract_name", ""),
+                "contract_type": llm.get("contract_type", "其他合同"),
                 "contract_code_from_ocr": llm.get("contract_code", ""),
                 "party_a": llm.get("party_a", ""),
                 "party_b": llm.get("party_b", ""),
                 "total_amount": llm.get("total_amount", ""),
+                "total_amount_cn": llm.get("total_amount_cn", ""),
+                "amount_consistent": llm.get("amount_consistent", True),
                 "has_party_a_stamp": llm.get("has_party_a_stamp"),
                 "has_party_b_stamp": llm.get("has_party_b_stamp"),
             }
@@ -674,6 +701,7 @@ def _save_verify_report(result: Dict[str, Any], file_path: str, contract_code: s
             "total_pages": details.get("total_pages", 0),
             "has_riding_seal": details.get("has_riding_seal"),
             "is_contract": details.get("is_contract"),
+            "contract_type": details.get("contract_type", "其他合同"),
             "has_approval_form": details.get("has_approval_form"),
             "has_party_a_stamp": details.get("has_party_a_stamp"),
             "has_party_b_stamp": details.get("has_party_b_stamp"),
@@ -779,6 +807,7 @@ def verify_and_archive_contract(
     # 步骤 2：基础校验
     # ------------------------------------------------------------------
     check_failures = []
+    warnings = []
 
     # 2a. 是否为合同
     if not llm.get("is_contract"):
@@ -787,26 +816,40 @@ def verify_and_archive_contract(
     else:
         details["is_contract"] = True
 
-    # 2b. 是否有审批单
+    # 2b. 合同类型
+    contract_type = llm.get("contract_type", "其他合同")
+    details["contract_type"] = contract_type
+
+    # 2c. 是否有审批单 — 仅提醒，不影响后续流程
     if not llm.get("is_approval_form_first_page"):
-        check_failures.append("未检测到合同审批单（第一页非审批单）")
+        warnings.append("未检测到合同审批单（第一页非审批单），请确认是否需要补充")
         details["has_approval_form"] = False
     else:
         details["has_approval_form"] = True
 
-    # 2c. 是否有骑缝章（全局汇总）— 仅记录，不作为不通过条件
+    # 2d. 是否有骑缝章（全局汇总）— 仅记录，不作为不通过条件
     details["has_riding_seal"] = data.get("has_riding_seal", False)
 
-    # 2d. 是否有甲乙双方盖章
+    # 2e. 中文大写金额与数字金额一致性校验
+    details["total_amount_cn"] = llm.get("total_amount_cn", "")
+    if not llm.get("amount_consistent", True) and llm.get("total_amount_cn"):
+        check_failures.append("合同中数字金额与中文大写金额不一致")
+
+    # 2f. 是否有甲乙双方盖章（暂替合同、终止合同不强制要求盖章）
+    stamp_exempt_types = {"暂替合同", "终止合同"}
+    requires_stamp = contract_type not in stamp_exempt_types
+
     if not llm.get("has_party_a_stamp"):
-        check_failures.append("未检测到甲方盖章")
         details["has_party_a_stamp"] = False
+        if requires_stamp:
+            check_failures.append("未检测到甲方盖章")
     else:
         details["has_party_a_stamp"] = True
 
     if not llm.get("has_party_b_stamp"):
-        check_failures.append("未检测到乙方盖章")
         details["has_party_b_stamp"] = False
+        if requires_stamp:
+            check_failures.append("未检测到乙方盖章")
     else:
         details["has_party_b_stamp"] = True
 
@@ -845,7 +888,7 @@ def verify_and_archive_contract(
     upload_result = upload_contract_attachment(
         contract_code,
         file_path,
-        file_desc=os.path.basename(file_path),
+        file_desc=contract_code,
     )
     details["upload"] = upload_result
 
@@ -858,9 +901,12 @@ def verify_and_archive_contract(
         _save_verify_report(result, file_path, contract_code)
         return result
 
+    success_msg = "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过EAS审批流程完成审批。"
+    if warnings:
+        success_msg += " 提醒: " + "; ".join(warnings)
     result = {
         "result": "yes",
-        "message": "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过OA审批流程完成审批。",
+        "message": success_msg,
         "details": details,
     }
     _save_verify_report(result, file_path, contract_code)

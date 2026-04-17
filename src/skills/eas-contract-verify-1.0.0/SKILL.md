@@ -71,7 +71,7 @@ metadata:
 ├─────────────────────────────────────────────────────┤
 │ 5. 合同审批（需配合 contract-approval 技能）          │
 │    - verify=yes 后调用 contract-approval 技能        │
-│    - 自动通过OA审批流程                              │
+│    - 自动通过EAS审批流程                              │
 └─────────────────────────────────────────────────────┘
     ↓
 输出审核结果
@@ -99,7 +99,7 @@ python scripts/eas_contract_verify.py verify --contract-code "<合同编号>" --
 ```json
 {
   "result": "yes",
-  "message": "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过OA审批流程完成审批。",
+  "message": "合同归档自动化审核通过，附件已上传至EAS系统。下一步将通过EAS审批流程完成审批。",
   "details": {
     "contract_code": "XZCG-2026-0001",
     "is_contract": true,
@@ -166,7 +166,7 @@ python scripts/eas_contract_verify.py upload --contract-code "<合同编号>" --
 
 #### 步骤 5：合同审批（需配合 contract-approval 技能）
 
-审核通过后，调用 contract-approval 技能完成OA审批：
+审核通过后，调用 contract-approval 技能完成EAS审批：
 
 ```bash
 python src/skills/contract-approval-1.0.0/scripts/contract_approval.py --contract-no "<合同编号>" --approve
@@ -180,16 +180,26 @@ python src/skills/contract-approval-1.0.0/scripts/contract_approval.py --contrac
 - LLM根据全文内容判断文档是否为合同
 - 包含合同要素：甲乙方、合同金额、签署页等
 
+### 合同类型识别
+- LLM自动识别合同类型：销售合同、采购合同、劳务合同、暂替合同、终止合同、其他合同
+- **暂替合同和终止合同不强制要求甲乙双方盖章**
+
 ### 审批单检测
 - 检查第一页是否为合同审批单/用印审批单
+- **审批单仅作提醒，不影响后续流程**
 
 ### 骑缝章检测
 - 全局汇总：检查所有页面，任一页检测到骑缝章即判定为有
 - 骑缝章判定：图片右边缘距页面右边缘不超过50像素
 
+### 中文大写金额校验
+- 如果合同中同时存在数字金额和中文大写金额，会自动校验两者是否一致
+- 不一致则校验不通过
+
 ### 甲乙双方盖章检测
 - LLM根据盖章页和文本内容判断甲乙方是否盖章
-- 必须双方都盖章才通过
+- 销售合同、采购合同、劳务合同、其他合同：必须双方都盖章才通过
+- **暂替合同、终止合同：不强制要求盖章**
 
 ---
 
@@ -257,7 +267,7 @@ Agent 在完成审核后，应向用户输出清晰的结果：
 - 合同金额：100,000.00 元 ✓
 - 附件已上传至EAS系统 ✓
 
-下一步将通过OA审批流程完成合同审批。
+下一步将通过EAS审批流程完成合同审批。
 ```
 
 **审核不通过时**：
