@@ -215,6 +215,11 @@ class Settings(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)
 
+    # 认证相关配置（从环境变量加载）
+    qb_token: str = ""  # 平台管理员超级token
+    password_rule: str = r"^(?=.*[A-Za-z])(?=.*\d).{8,50}$"  # 密码正则规则
+    password_msg: str = "长度8-50位，必须有字母+数字"  # 密码规则提示信息
+
     class Config:
         extra = "allow"
 
@@ -347,6 +352,14 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     # 搜索工具配置
     if os.getenv("TAVILY_API_KEY"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
+
+    # 认证相关配置（从环境变量加载）
+    if os.getenv("QBTOKEN"):
+        yaml_config["qb_token"] = os.getenv("QBTOKEN")
+    if os.getenv("PASSWORD_RULE"):
+        yaml_config["password_rule"] = os.getenv("PASSWORD_RULE")
+    if os.getenv("PASSWORD_MSG"):
+        yaml_config["password_msg"] = os.getenv("PASSWORD_MSG")
 
     s = Settings(**yaml_config)
 

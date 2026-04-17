@@ -162,3 +162,93 @@ export function getAuthHeader(): Record<string, string> {
   }
   return {}
 }
+
+// ============== 图形验证码 ==============
+
+export interface CaptchaResponse {
+  success: boolean
+  captcha_id?: string
+  code?: string  // 开发环境返回
+  message?: string
+}
+
+/**
+ * 获取图形验证码
+ */
+export async function getCaptcha(): Promise<CaptchaResponse> {
+  const res = await fetch(`${API_BASE}/captcha`)
+  return res.json()
+}
+
+/**
+ * 验证图形验证码（用于重置密码前校验）
+ */
+export async function validateCaptcha(captchaId: string, code: string): Promise<{ success: boolean, message?: string }> {
+  const res = await fetch(`${API_BASE}/captcha/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ captcha_id: captchaId, code })
+  })
+  return res.json()
+}
+
+// ============== 登录（新方式） ==============
+
+export interface NewLoginRequest {
+  identifier: string  // 手机号或用户名
+  password: string
+  captcha_code: string
+  captcha_id: string
+}
+
+/**
+ * 新登录接口：手机号/用户名 + 密码 + 图形验证码
+ */
+export async function login(request: NewLoginRequest): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return res.json()
+}
+
+// ============== 忘记密码 ==============
+
+export interface SendResetCodeRequest {
+  phone: string
+  captcha_code: string
+  captcha_id: string
+}
+
+export interface ResetPasswordRequest {
+  phone: string
+  captcha_code: string
+  captcha_id: string
+  sms_code: string
+  new_password: string
+}
+
+/**
+ * 发送重置密码短信验证码（需先通过图形验证码）
+ */
+export async function sendResetPasswordCode(request: SendResetCodeRequest): Promise<SendCodeResponse> {
+  const res = await fetch(`${API_BASE}/reset-password/send-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return res.json()
+}
+
+/**
+ * 重置密码
+ */
+export async function resetPassword(request: ResetPasswordRequest): Promise<{ success: boolean, message?: string }> {
+  const res = await fetch(`${API_BASE}/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return res.json()
+}

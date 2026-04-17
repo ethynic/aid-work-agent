@@ -59,6 +59,11 @@ const router = createRouter({
       component: () => import('./components/saas/TenantLogin.vue')
     },
     {
+      path: '/portal/reset-password',
+      name: 'portal-reset-password',
+      component: () => import('./components/saas/ResetPassword.vue')
+    },
+    {
       path: '/portal',
       component: () => import('./components/saas/PortalLayout.vue'),
       children: [

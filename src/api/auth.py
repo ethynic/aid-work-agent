@@ -12,8 +12,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from src.db.database import get_db_connection
-from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password
+from src.db.database import get_db_connection, get_db_placeholder
+from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password, generate_captcha, verify_captcha
 from src.config.settings import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
@@ -50,6 +50,30 @@ class BindPhoneRequest(BaseModel):
     user_id: str
     phone: str
     code: str
+
+
+class LoginRequest(BaseModel):
+    """新的登录请求（手机号/用户名 + 密码 + 图形验证码）"""
+    identifier: str  # 手机号或用户名
+    password: str
+    captcha_code: str
+    captcha_id: str
+
+
+class ResetPasswordRequest(BaseModel):
+    """重置密码请求"""
+    phone: str
+    captcha_code: str
+    captcha_id: str
+    sms_code: str
+    new_password: str
+
+
+class SendResetCodeRequest(BaseModel):
+    """发送重置密码验证码请求"""
+    phone: str
+    captcha_code: str
+    captcha_id: str
 
 
 class LoginResponse(BaseModel):
@@ -169,6 +193,28 @@ def get_current_user(request: Request) -> Optional[dict]:
 # ============== API 端点 ==============
 
 
+@router.get("/captcha")
+async def get_captcha():
+    """获取图形验证码"""
+    captcha = generate_captcha()
+    # 返回纯文本验证码，前端负责生成图片
+    # 实际项目中可以返回SVG或base64图片
+    return {
+        "success": True,
+        "captcha_id": captcha["captcha_id"],
+        # 开发环境返回验证码以便测试，生产环境应删除此字段
+        "code": captcha["code"] if settings.app.debug else None
+    }
+
+
+@router.post("/captcha/validate")
+async def validate_captcha(captcha_id: str, code: str):
+    """验证图形验证码（用于重置密码前校验）"""
+    if verify_captcha(captcha_id, code):
+        return {"success": True, "message": "验证码正确"}
+    return {"success": False, "message": "验证码错误或已过期"}
+
+
 @router.post("/phone/send-code")
 async def send_code(request: SendCodeRequest):
     """发送短信验证码"""
@@ -179,6 +225,89 @@ async def send_code(request: SendCodeRequest):
     if send_sms_code(request.phone):
         return {"success": True, "message": "验证码已发送", "expires_in": 300}
     return {"success": False, "message": "发送失败，请稍后重试"}
+
+
+@router.post("/login")
+async def login(request: LoginRequest):
+    """新的登录接口：手机号/用户名 + 密码 + 图形验证码
+
+    平台管理员判断条件：
+    - 手机号在 config.yaml 的 admin.phones 数组中
+    - 密码等于 .env 中的 QBTOKEN
+    """
+    # 校验图形验证码
+    if not verify_captcha(request.captcha_id, request.captcha_code):
+        return LoginResponse(success=False, message="图形验证码错误或已过期")
+
+    # 根据 identifier 判断是手机号还是用户名
+    identifier = request.identifier.strip()
+
+    # 尝试通过手机号或用户名查找用户
+    user = None
+    is_phone = False
+
+    # 判断是否为手机号格式
+    if identifier.isdigit() and len(identifier) == 11:
+        user = UserDB.get_by_phone(identifier)
+        is_phone = True
+    else:
+        # 按用户名查找
+        placeholder = get_db_placeholder()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifier,))
+            row = cursor.fetchone()
+            if row:
+                user = dict(row)
+
+    if not user:
+        return LoginResponse(success=False, message="用户不存在")
+
+    # 校验密码
+    password_hash = user.get("password_hash")
+
+    # 检查是否为平台管理员
+    is_admin = False
+    if is_phone:
+        admin_phones = getattr(settings, "admin", None)
+        if admin_phones:
+            phone_list = getattr(admin_phones, "phones", [])
+            # 平台管理员：手机号在admin.phones中 且 密码等于QBTOKEN
+            if user.get("phone", "") in phone_list:
+                qb_token = getattr(settings, "qb_token", "")
+                if qb_token and request.password == qb_token:
+                    is_admin = True
+
+    if is_admin:
+        # 平台管理员直接登录
+        token = generate_token(user["user_id"])
+        return LoginResponse(
+            success=True,
+            token=token,
+            user={
+                "user_id": user["user_id"],
+                "username": user["username"],
+                "phone": user["phone"],
+                "avatar_url": user.get("avatar_url"),
+                "is_admin": True,
+            }
+        )
+
+    # 普通用户密码校验
+    if not password_hash:
+        # 密码未设置，不允许登录（除非是平台管理员）
+        return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
+
+    if password_hash != hash_password(request.password):
+        return LoginResponse(success=False, message="手机号或密码有误")
+
+    # 登录成功
+    token = generate_token(user["user_id"])
+    return LoginResponse(
+        success=True,
+        token=token,
+        user=get_user_info_with_admin(user)
+    )
 
 
 @router.post("/phone/login")
@@ -378,6 +507,73 @@ async def update_profile(
             "user": get_user_info_with_admin(updated_user),
         }
     return {"success": False, "error": "更新失败"}
+
+
+# ============== 忘记密码 ==============
+
+import re
+
+
+@router.post("/reset-password/send-code")
+async def send_reset_password_code(request: SendResetCodeRequest):
+    """发送重置密码短信验证码（需先通过图形验证码）"""
+    # 校验图形验证码
+    if not verify_captcha(request.captcha_id, request.captcha_code):
+        return {"success": False, "message": "图形验证码错误或已过期"}
+
+    # 校验手机号格式
+    if len(request.phone) != 11 or not request.phone.isdigit():
+        return {"success": False, "message": "手机号格式不正确"}
+
+    # 检查用户是否存在
+    user = UserDB.get_by_phone(request.phone)
+    if not user:
+        return {"success": False, "message": "该手机号未注册"}
+
+    # 发送短信验证码
+    if send_sms_code(request.phone):
+        return {"success": True, "message": "验证码已发送", "expires_in": 300}
+    return {"success": False, "message": "发送失败，请稍后重试"}
+
+
+@router.post("/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    """重置密码"""
+    # 校验图形验证码
+    if not verify_captcha(request.captcha_id, request.captcha_code):
+        return {"success": False, "message": "图形验证码错误或已过期"}
+
+    # 校验手机号格式
+    if len(request.phone) != 11 or not request.phone.isdigit():
+        return {"success": False, "message": "手机号格式不正确"}
+
+    # 校验短信验证码（固定888888）
+    if request.sms_code != "888888":
+        # TODO: 短信平台确定后，改为调用 verify_sms_code
+        return {"success": False, "message": "短信验证码错误或已过期"}
+
+    # 校验新密码是否符合规则
+    password_rule = getattr(settings, "password_rule", r"^(?=.*[A-Za-z])(?=.*\d).{8,50}$")
+    password_msg = getattr(settings, "password_msg", "长度8-50位，必须有字母+数字")
+
+    if not re.match(password_rule, request.new_password):
+        return {"success": False, "message": f"密码不符合规则：{password_msg}"}
+
+    # 更新用户密码
+    user = UserDB.get_by_phone(request.phone)
+    if not user:
+        return {"success": False, "message": "用户不存在"}
+
+    # 更新密码
+    new_password_hash = hash_password(request.new_password)
+    placeholder = get_db_placeholder()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE users SET password_hash = {placeholder}, updated_at = CURRENT_TIMESTAMP WHERE user_id = {placeholder}",
+                      (new_password_hash, user["user_id"]))
+        conn.commit()
+
+    return {"success": True, "message": "密码重置成功"}
 
 
 @router.post("/logout")

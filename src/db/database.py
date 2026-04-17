@@ -469,6 +469,16 @@ def _init_sqlite():
             )
         """)
 
+        # 图形验证码表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS captchas (
+                captcha_id TEXT PRIMARY KEY,
+                code TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # 远程连接凭据表 (SMB/FTP)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS remote_credentials (
@@ -827,6 +837,16 @@ def _init_postgresql():
                 phone TEXT NOT NULL,
                 code TEXT NOT NULL,
                 used INTEGER DEFAULT 0,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 图形验证码表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS captchas (
+                captcha_id TEXT PRIMARY KEY,
+                code TEXT NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

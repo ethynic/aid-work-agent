@@ -128,7 +128,7 @@ skills:
 
 # SaaS 多租户配置
 saas:
-  enabled: false
+  enabled: true
   tenant_skills_dir: "storage/tenants"
   default_max_instances: 5
   default_max_users: 50

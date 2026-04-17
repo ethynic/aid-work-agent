@@ -609,3 +609,85 @@ def verify_sms_code(phone: str, code: str) -> bool:
             conn.commit()
             return True
         return False
+
+
+# ============== 图形验证码 ==============
+
+import random
+import string
+import uuid
+
+
+def generate_captcha_code(length: int = 4) -> str:
+    """生成图形验证码（去除易混淆字符 O,0,I,1）"""
+    chars = string.digits + string.ascii_uppercase + string.ascii_lowercase
+    # 去除易混淆字符
+    exclude_chars = {'O', '0', 'I', '1', 'o', 'l'}
+    chars = ''.join(c for c in chars if c not in exclude_chars)
+    return ''.join(random.choice(chars) for _ in range(length))
+
+
+def generate_captcha() -> dict:
+    """
+    生成图形验证码
+    返回 captcha_id 和 code
+    """
+    captcha_id = str(uuid.uuid4())
+    code = generate_captcha_code(4)
+    expires_at = (datetime.now() + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    placeholder = get_db_placeholder()
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # 清理过期的验证码
+        cursor.execute(f"DELETE FROM captchas WHERE expires_at < {placeholder}",
+                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        # 插入新验证码
+        cursor.execute(f"""
+            INSERT INTO captchas (captcha_id, code, expires_at)
+            VALUES ({placeholder}, {placeholder}, {placeholder})
+        """, (captcha_id, code, expires_at))
+        conn.commit()
+
+    return {"captcha_id": captcha_id, "code": code}
+
+
+def verify_captcha(captcha_id: str, code: str) -> bool:
+    """
+    验证图形验证码
+    验证成功后删除验证码（一次性）
+    """
+    placeholder = get_db_placeholder()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT * FROM captchas
+            WHERE captcha_id = {placeholder} AND code = {placeholder}
+            AND expires_at > {placeholder}
+        """, (captcha_id, code.lower(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        row = cursor.fetchone()
+
+        if row:
+            # 验证成功后删除验证码（一次性）
+            cursor.execute(f"DELETE FROM captchas WHERE captcha_id = {placeholder}", (captcha_id,))
+            conn.commit()
+            return True
+        return False
+
+
+def get_captcha_image(captcha_id: str) -> Optional[str]:
+    """获取验证码对应的SVG图片（可选，用于直接返回图片）"""
+    # 如果需要返回图片而非纯文本，可以在这里生成SVG
+    # 当前实现返回纯文本code，由前端生成图片
+    placeholder = get_db_placeholder()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT code FROM captchas
+            WHERE captcha_id = {placeholder}
+            AND expires_at > {placeholder}
+        """, (captcha_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        row = cursor.fetchone()
+        if row:
+            return row["code"]
+    return None
