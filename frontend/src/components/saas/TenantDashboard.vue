@@ -73,6 +73,11 @@ function formatTokens(n: number): string {
 }
 
 async function loadData() {
+  // 未登录时不调用需要认证的 API
+  if (!localStorage.getItem('saas_token')) {
+    loading.value = false
+    return
+  }
   loading.value = true
   error.value = ''
   try {

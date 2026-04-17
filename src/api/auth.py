@@ -196,14 +196,16 @@ def get_current_user(request: Request) -> Optional[dict]:
 @router.get("/captcha")
 async def get_captcha():
     """获取图形验证码"""
+    from loguru import logger
     captcha = generate_captcha()
+    # 后端日志：生成验证码信息
+    logger.info(f'后端日志：生成验证码, captcha_id={captcha["captcha_id"]}, code={captcha["code"]}, debug={settings.app.debug}')
     # 返回纯文本验证码，前端负责生成图片
     # 实际项目中可以返回SVG或base64图片
     return {
         "success": True,
         "captcha_id": captcha["captcha_id"],
-        # 开发环境返回验证码以便测试，生产环境应删除此字段
-        "code": captcha["code"] if settings.app.debug else None
+        "code": captcha["code"]
     }
 
 
