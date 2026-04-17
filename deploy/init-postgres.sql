@@ -196,7 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(u
 -- 文档表
 CREATE TABLE IF NOT EXISTS documents (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER,
+    user_id TEXT NOT NULL,
     title TEXT NOT NULL,
     source_type TEXT NOT NULL,
     file_type TEXT NOT NULL,
@@ -634,44 +634,6 @@ CREATE TABLE IF NOT EXISTS scheduled_task_logs (
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(user_id, created_at DESC);
-
--- 文档表
-CREATE TABLE IF NOT EXISTS documents (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER,
-    title TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_size INTEGER,
-    total_chunks INTEGER NOT NULL,
-    embedding_model TEXT NOT NULL,
-    thumbnail_path TEXT,
-    duration INTEGER,
-    width INTEGER,
-    height INTEGER,
-    mime_type TEXT,
-    raw_text TEXT,
-    metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
-
--- 文本块表
-CREATE TABLE IF NOT EXISTS chunks (
-    id SERIAL PRIMARY KEY,
-    doc_id INTEGER NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    tokens INTEGER NOT NULL,
-    metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
 
 -- 向量表
 CREATE TABLE IF NOT EXISTS chunks_vec (

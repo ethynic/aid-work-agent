@@ -597,7 +597,7 @@ def _init_sqlite():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                user_id TEXT,
                 title TEXT NOT NULL,
                 source_type TEXT NOT NULL,
                 file_type TEXT NOT NULL,
@@ -956,7 +956,7 @@ def _init_postgresql():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER,
+                user_id TEXT,
                 title TEXT NOT NULL,
                 source_type TEXT NOT NULL,
                 file_type TEXT NOT NULL,

@@ -277,7 +277,7 @@ def init_tables():
             CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
                 id {id_column},
                 customer_id TEXT UNIQUE NOT NULL,
-                tenant_id TEXT NOT NULL,
+                tenant_id TEXT,
                 user_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
                 company_name TEXT,
@@ -300,7 +300,7 @@ def init_tables():
                 id {id_column},
                 email_id TEXT UNIQUE NOT NULL,
                 customer_id TEXT NOT NULL,
-                tenant_id TEXT NOT NULL,
+                tenant_id TEXT,
                 user_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
                 email_subject TEXT,

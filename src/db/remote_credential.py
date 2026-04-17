@@ -44,7 +44,7 @@ class EncryptionManager:
                 hashlib.sha256(project_identifier.encode()).digest()
             )
             self.fernet = Fernet(derived_key)
-            logger.warning("使用默认加密密钥，生产环境请配置 ENCRYPTION_KEY 环境变量")
+
 
     def encrypt(self, data: str) -> str:
         """加密字符串"""

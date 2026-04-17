@@ -39,13 +39,13 @@ bs_[subagent]_[tablename]
 
 ## 租户隔离要求
 
-所有业务数据表（`bs_` 开头）**必须**包含 `tenant_id` 字段，实现租户数据隔离。
+所有业务数据表（`bs_` 开头）**建议**包含 `tenant_id` 字段，实现租户数据隔离。当 SAAS 模式禁用时，该字段允许为 NULL。
 
 ```sql
 CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
     id SERIAL PRIMARY KEY,
     customer_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,  -- 租户ID，必需字段
+    tenant_id TEXT,  -- 租户ID，SAAS模式下必填，非SAAS模式可为NULL
     user_id TEXT NOT NULL,
     ...
 );
@@ -83,6 +83,6 @@ def init_tables():
 
 - [ ] 表名以 `bs_` 开头
 - [ ] 表名包含子智能体名称（`-` 替换为 `_`）
-- [ ] 表中包含 `tenant_id` 字段（用于租户隔离）
+- [ ] 表中包含 `tenant_id` 字段（用于租户隔离，SAAS模式下必填，非SAAS模式可为NULL）
 - [ ] 在 skill 加载时调用 `init_tables()` 初始化表
 - [ ] 更新本文档，添加新表到示例表格
