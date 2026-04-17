@@ -35,7 +35,7 @@ metadata:
 
 ## 数据表结构
 
-### 1. 匹配客户表 (matched_customers)
+### 1. 匹配客户表 (bs_trade_specialist_matched_customers)
 
 记录外贸获客过程中匹配到的客户信息：
 

@@ -51,9 +51,17 @@ def _build_key_pool(provider_name: str) -> KeyPool:
 def _build_provider(provider_name: str, api_key: str) -> BaseLLMProvider:
     """用给定 key 构建 Provider 实例（轻量，不缓存）"""
     if provider_name == "qwen":
-        return QwenProvider(api_key=api_key, model=settings.llm.qwen.model)
+        return QwenProvider(
+            api_key=api_key,
+            model=settings.llm.qwen.model,
+            base_url=settings.llm.qwen.base_url,
+        )
     elif provider_name == "zhipu":
-        return ZhipuProvider(api_key=api_key, model=settings.llm.zhipu.model)
+        return ZhipuProvider(
+            api_key=api_key,
+            model=settings.llm.zhipu.model,
+            base_url=settings.llm.zhipu.base_url,
+        )
     raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
 

@@ -1,7 +1,7 @@
 """
 通义千问LLM提供者
 
-实现阿里云通义千问API的对接
+通过 OpenAI 兼容接口实现阿里云通义千问模型调用
 """
 
 import json
@@ -17,45 +17,38 @@ from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 class QwenProvider(BaseLLMProvider):
     """
-    通义千问LLM提供者
-    
-    支持通义千问系列模型的API调用
+    通义千问LLM提供者（OpenAI 兼容模式）
+
+    通过阿里云百炼 OpenAI 兼容接口调用通义千问系列模型，
+    请求/响应格式与 OpenAI Chat Completions API 一致。
     """
-    
-    # API端点
-    API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-    
-    # 支持的模型
-    SUPPORTED_MODELS = [
-        "qwen-turbo",
-        "qwen-plus",
-        "qwen-max",
-        "qwen-max-longcontext",
-    ]
-    
+
+    # 默认 OpenAI 兼容端点，可通过 base_url 覆盖
+    DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
     def __init__(
         self,
         api_key: str,
         model: str = "qwen-plus",
+        base_url: Optional[str] = None,
         **kwargs
     ):
         """
         初始化通义千问提供者
-        
+
         Args:
-            api_key: 阿里云API Key
+            api_key: 阿里云 API Key
             model: 模型名称
+            base_url: OpenAI 兼容 API 基础 URL
             **kwargs: 其他配置参数
         """
-        super().__init__(api_key, model, **kwargs)
+        super().__init__(api_key, model, base_url=base_url, **kwargs)
+        self.api_url = f"{self.base_url or self.DEFAULT_BASE_URL}/chat/completions"
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        
-        if model not in self.SUPPORTED_MODELS:
-            logger.warning(f"模型 {model} 可能不被支持，支持的模型: {self.SUPPORTED_MODELS}")
-    
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -66,8 +59,8 @@ class QwenProvider(BaseLLMProvider):
         **kwargs
     ) -> Dict[str, Any]:
         """
-        发送对话请求
-        
+        发送对话请求（非流式）
+
         Args:
             messages: 消息列表
             tools: 工具定义列表
@@ -75,52 +68,47 @@ class QwenProvider(BaseLLMProvider):
             temperature: 温度参数
             max_tokens: 最大生成token数
             **kwargs: 其他参数
-        
+
         Returns:
             标准化的响应字典
         """
-        # 构建请求体
+        # 构建请求体（OpenAI 兼容格式）
         request_body = {
             "model": self.model,
-            "input": {
-                "messages": self._format_messages_qwen(messages),
-            },
-            "parameters": {
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "result_format": "message",
-            },
+            "messages": self._format_messages(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
-        
+
         # 添加工具定义
         if tools:
-            request_body["parameters"]["tools"] = self._format_tools_qwen(tools)
+            request_body["tools"] = self._format_tools(tools)
             if tool_choice:
-                request_body["parameters"]["tool_choice"] = tool_choice
-        
+                request_body["tool_choice"] = tool_choice
+
         # 合并额外参数
-        request_body["parameters"].update(kwargs)
-        
+        request_body.update(kwargs)
+
         invoke_id = generate_request_id()
         start_time = time.perf_counter()
         parsed = None
-        
+
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
-                    self.API_URL,
+                    self.api_url,
                     headers=self.headers,
                     json=request_body,
                 )
                 response.raise_for_status()
                 result = response.json()
-            
+
             parsed = self._parse_response(result)
 
             # 后端日志：记录LLM调用
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
-                request_id=result.get("request_id", invoke_id),
+                request_id=result.get("id", invoke_id),
                 provider="qwen",
                 model=self.model,
                 request_params=request_body,
@@ -128,9 +116,9 @@ class QwenProvider(BaseLLMProvider):
                 usage=parsed.get("usage"),
                 duration_ms=round(duration_ms, 2),
             )
-            
+
             return parsed
-        
+
         except httpx.HTTPStatusError as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
@@ -155,7 +143,7 @@ class QwenProvider(BaseLLMProvider):
             )
             logger.error(f"通义千问调用异常: {e}")
             raise
-    
+
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],
@@ -166,46 +154,44 @@ class QwenProvider(BaseLLMProvider):
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
-        流式对话
-        
+        流式对话（OpenAI 兼容格式）
+
+        注意：阿里云百炼 OpenAI 兼容接口当前不支持 tools 与 stream 同时使用，
+        调用方应确保流式模式下不传入 tools。
+
         Args:
             messages: 消息列表
-            tools: 工具定义列表
+            tools: 工具定义列表（流式模式下不支持）
             tool_choice: 工具选择策略
             temperature: 温度参数
             max_tokens: 最大生成token数
             **kwargs: 其他参数
-        
+
         Yields:
             流式输出的文本片段
         """
         request_body = {
             "model": self.model,
-            "input": {
-                "messages": self._format_messages_qwen(messages),
-            },
-            "parameters": {
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "result_format": "message",
-                "incremental_output": True,
-            },
+            "messages": self._format_messages(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
         }
-        
+
         if tools:
-            request_body["parameters"]["tools"] = self._format_tools_qwen(tools)
-        
-        request_body["parameters"].update(kwargs)
-        
+            logger.warning("通义千问 OpenAI 兼容接口不支持 tools 与 stream 同时使用，tools 参数将被忽略")
+
+        request_body.update(kwargs)
+
         invoke_id = generate_request_id()
         start_time = time.perf_counter()
         full_content = ""
-        
+
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
                     "POST",
-                    self.API_URL,
+                    self.api_url,
                     headers=self.headers,
                     json=request_body,
                 ) as response:
@@ -213,6 +199,8 @@ class QwenProvider(BaseLLMProvider):
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
                             data = line[5:].strip()
+                            if data == "[DONE]":
+                                break
                             if data:
                                 try:
                                     chunk = json.loads(data)
@@ -222,7 +210,7 @@ class QwenProvider(BaseLLMProvider):
                                         yield content
                                 except json.JSONDecodeError:
                                     continue
-            
+
             # 后端日志：记录流式LLM调用成功
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
@@ -233,7 +221,7 @@ class QwenProvider(BaseLLMProvider):
                 response_data={"content": full_content, "stream": True},
                 duration_ms=round(duration_ms, 2),
             )
-        
+
         except httpx.HTTPStatusError as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
@@ -258,126 +246,41 @@ class QwenProvider(BaseLLMProvider):
             )
             logger.error(f"通义千问流式调用异常: {e}")
             raise
-    
-    def _format_messages_qwen(
-        self,
-        messages: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        格式化消息为通义千问格式
-        
-        Args:
-            messages: 原始消息列表
-        
-        Returns:
-            通义千问格式的消息列表
-        """
-        formatted = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # 通义千问使用 system/user/assistant 角色
-            if role == "system":
-                formatted.append({
-                    "role": role,
-                    "content": str(content) if not isinstance(content, str) else content,
-                })
-            elif role == "user":
-                formatted.append({
-                    "role": role,
-                    "content": str(content) if not isinstance(content, str) else content,
-                })
-            elif role == "assistant":
-                # Assistant消息可能包含tool_calls
-                assistant_msg = {
-                    "role": role,
-                    "content": str(content) if not isinstance(content, str) else content,
-                }
-                # 如果有tool_calls，也要包含
-                if "tool_calls" in msg:
-                    assistant_msg["tool_calls"] = msg["tool_calls"]
-                formatted.append(assistant_msg)
-            elif role == "tool":
-                # 工具响应消息 - 必须包含tool_call_id
-                tool_msg = {
-                    "role": "tool",
-                    "content": json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else (content if isinstance(content, str) else str(content)),
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                }
-                formatted.append(tool_msg)
-        
-        return formatted
-    
-    def _format_tools_qwen(
-        self,
-        tools: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        格式化工具定义为通义千问格式
-        
-        Args:
-            tools: 原始工具定义列表
-        
-        Returns:
-            通义千问格式的工具定义列表
-        """
-        formatted_tools = []
-        for tool in tools:
-            tool_def = {
-                "type": "function",
-                "function": {
-                    "name": tool.get("name", ""),
-                    "description": tool.get("description", ""),
-                }
-            }
-            
-            # 处理参数定义
-            input_schema = tool.get("input_schema", tool.get("parameters", {}))
-            if input_schema:
-                tool_def["function"]["parameters"] = input_schema
-            
-            formatted_tools.append(tool_def)
-        
-        return formatted_tools
-    
+
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """
-        解析通义千问响应为标准格式
-        
+        解析 OpenAI 兼容格式响应为标准格式
+
         Args:
-            response: 通义千问API响应
-        
+            response: API 响应（OpenAI 格式）
+
         Returns:
             标准化的响应字典
         """
-        output = response.get("output", {})
+        choices = response.get("choices", [])
         usage = response.get("usage", {})
-        
-        # 获取消息内容
-        choices = output.get("choices", [])
+
         if choices:
             message = choices[0].get("message", {})
             content = message.get("content", "")
             tool_calls = message.get("tool_calls", [])
             finish_reason = choices[0].get("finish_reason", "stop")
         else:
-            # 兼容旧格式
-            content = output.get("text", "")
-            tool_calls = output.get("tool_calls", [])
-            finish_reason = output.get("finish_reason", "stop")
-        
+            content = ""
+            tool_calls = []
+            finish_reason = "stop"
+
         result = {
             "content": content,
             "finish_reason": finish_reason,
             "usage": {
-                "prompt_tokens": usage.get("input_tokens", 0),
-                "completion_tokens": usage.get("output_tokens", 0),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
             },
-            "request_id": response.get("request_id", ""),
+            "request_id": response.get("id", ""),
         }
-        
+
         # 处理工具调用
         if tool_calls:
             result["tool_calls"] = [
@@ -392,24 +295,23 @@ class QwenProvider(BaseLLMProvider):
                 for tc in tool_calls
             ]
             result["finish_reason"] = "tool_calls"
-        
+
         return result
-    
+
     def _extract_stream_content(self, chunk: Dict[str, Any]) -> Optional[str]:
         """
-        从流式响应块中提取内容
-        
+        从流式响应块中提取内容（OpenAI 兼容格式）
+
         Args:
             chunk: 流式响应块
-        
+
         Returns:
-            文本内容或None
+            文本内容或 None
         """
-        output = chunk.get("output", {})
-        choices = output.get("choices", [])
-        
+        choices = chunk.get("choices", [])
+
         if choices:
             delta = choices[0].get("delta", {})
             return delta.get("content", "")
-        
+
         return None

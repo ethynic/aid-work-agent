@@ -68,7 +68,15 @@ class SkillExecuteTool(BaseTool):
         user_id = kwargs.get("user_id")
         workdir = kwargs.get("workdir")
 
+        # 后端日志：诊断 skill_execute 调用
+        logger.info(f"后端日志：[trade-customer诊断] skill_execute 被调用, skill={skill_name}, session_id={session_id}, user_id={user_id}, command={'有' if command else '无'}")
+        if command:
+            # 截断过长的命令，只记录关键信息
+            cmd_preview = command[:500] if len(command) > 500 else command
+            logger.info(f"后端日志：[trade-customer诊断] 原始命令内容: {cmd_preview}")
+
         if not skill_name:
+            logger.warning(f"后端日志：[trade-customer诊断] skill_name 为空，直接返回错误")
             return {
                 "success": False,
                 "error": "No skill name provided"
@@ -137,9 +145,18 @@ class SkillExecuteTool(BaseTool):
         stdin_content = None
         content_text = kwargs.get("content")
         if content_text:
-            stdin_content = content_text.encode("utf-8")
+            # 支持字符串或列表类型，列表时转为 JSON 字符串
+            if isinstance(content_text, list):
+                import json
+                content_text = json.dumps(content_text, ensure_ascii=False)
+            stdin_content = str(content_text).encode("utf-8")
 
         try:
+            # 后端日志：诊断实际提交给执行器的命令
+            logger.info(f"后端日志：[trade-customer诊断] 提交给 skill_executor 执行, skill={skill_name}, real_session_id={real_session_id}, real_user_id={real_user_id}")
+            cmd_preview = processed_command[:500] if len(processed_command) > 500 else processed_command
+            logger.info(f"后端日志：[trade-customer诊断] 最终命令: {cmd_preview}")
+
             result = await self.skill_executor.execute_skill_command(
                 skill_name=skill_name,
                 command=processed_command,
@@ -148,6 +165,17 @@ class SkillExecuteTool(BaseTool):
                 user_id=real_user_id,
                 stdin_content=stdin_content,
             )
+
+            # 后端日志：诊断执行结果
+            logger.info(f"后端日志：[trade-customer诊断] 执行结果: success={result.success}, exit_code={result.exit_code}, duration={result.duration:.2f}s, timed_out={result.timed_out}")
+            if result.stdout:
+                stdout_preview = result.stdout[:300] if len(result.stdout) > 300 else result.stdout
+                logger.info(f"后端日志：[trade-customer诊断] stdout: {stdout_preview}")
+            if result.stderr:
+                stderr_preview = result.stderr[:300] if len(result.stderr) > 300 else result.stderr
+                logger.warning(f"后端日志：[trade-customer诊断] stderr: {stderr_preview}")
+            if not result.success:
+                logger.error(f"后端日志：[trade-customer诊断] 命令执行失败! error={result.error}, stderr={result.stderr[:500] if result.stderr else '无'}")
 
             # 构建 error 字段：优先使用 result.error，fallback 到 stderr
             exec_error = result.error or result.stderr or f"exit_code={result.exit_code}"

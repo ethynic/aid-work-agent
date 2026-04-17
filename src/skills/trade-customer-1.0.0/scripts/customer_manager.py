@@ -232,7 +232,17 @@ def parse_json_safe(json_str: str) -> Any:
 
 def get_db_connection():
     """获取数据库连接"""
-    from src.db.database import get_db_connection as _get_db, get_db_placeholder as _placeholder, DB_TYPE as _db_type
+    from src.db.database import (
+        get_db_connection as _get_db,
+        get_db_placeholder as _placeholder,
+        DB_TYPE as _db_type,
+        get_postgres_pool,
+        init_postgres_pool,
+    )
+    # 子进程独立运行时，PostgreSQL 连接池可能未初始化，需要自动初始化
+    if _db_type == "postgresql" and get_postgres_pool() is None:
+        logger.info("后端日志：[trade-customer] 子进程中 PostgreSQL 连接池未初始化，正在自动初始化")
+        init_postgres_pool()
     return _get_db()
 
 
@@ -348,12 +358,16 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
         保存结果
     """
     if not user_id or not session_id:
+        logger.warning(f"后端日志：[trade-customer诊断] save_customer 缺少必需参数: user_id={'有' if user_id else '无'}, session_id={'有' if session_id else '无'}")
         return {"success": False, "error": "user_id 和 session_id 是必需参数"}
 
     if not customer:
+        logger.warning(f"后端日志：[trade-customer诊断] save_customer customer 为空")
         return {"success": False, "error": "客户信息不能为空"}
 
     try:
+        logger.info(f"后端日志：[trade-customer诊断] save_customer 开始写入数据库, user_id={user_id}, session_id={session_id}, customer_keys={list(customer.keys()) if customer else '无'}")
+        logger.info(f"后端日志：[trade-customer诊断] save_customer 客户详情: company_name={customer.get('company_name')}, contact_name={customer.get('contact_name') or customer.get('contact_person')}, email={customer.get('email')}, country={customer.get('country')}")
         with get_db_connection() as conn:
             cursor = conn.cursor()
             customer_id = generate_customer_id()
@@ -387,6 +401,7 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
 
             conn.commit()
             logger.info(f"后端日志：保存单个客户 {customer_id} - {customer.get('company_name', '')}")
+            logger.info(f"后端日志：[trade-customer诊断] save_customer 数据库写入成功! customer_id={customer_id}, session_id={session_id}, company={customer.get('company_name')}")
 
             return {
                 "success": True,
@@ -399,6 +414,7 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
             }
     except Exception as e:
         logger.error(f"后端日志：保存单个客户失败: {e}", exc_info=True)
+        logger.error(f"后端日志：[trade-customer诊断] save_customer 数据库写入失败! user_id={user_id}, session_id={session_id}, error={e}", exc_info=True)
         return {
             "success": False,
             "error": "保存客户信息失败",
@@ -409,12 +425,17 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
 def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]]) -> Dict[str, Any]:
     """保存客户信息（批量方式）"""
     if not user_id or not session_id:
+        logger.warning(f"后端日志：[trade-customer诊断] save_customers 缺少必需参数: user_id={'有' if user_id else '无'}, session_id={'有' if session_id else '无'}")
         return {"success": False, "error": "user_id 和 session_id 是必需参数"}
 
     if not customers:
+        logger.warning(f"后端日志：[trade-customer诊断] save_customers customers 为空")
         return {"success": False, "error": "客户列表不能为空"}
 
     try:
+        logger.info(f"后端日志：[trade-customer诊断] save_customers 开始批量写入数据库, user_id={user_id}, session_id={session_id}, customers_count={len(customers)}")
+        for i, c in enumerate(customers):
+            logger.info(f"后端日志：[trade-customer诊断] 客户[{i}]: company_name={c.get('company_name')}, contact_name={c.get('contact_name') or c.get('contact_person')}, email={c.get('email')}, country={c.get('country')}")
         with get_db_connection() as conn:
             cursor = conn.cursor()
             saved_customers = []
@@ -458,6 +479,7 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
 
             conn.commit()
             logger.info(f"后端日志：保存了 {len(saved_customers)} 个客户")
+            logger.info(f"后端日志：[trade-customer诊断] save_customers 批量写入成功! saved_count={len(saved_customers)}, session_id={session_id}")
 
             return {
                 "success": True,
@@ -468,6 +490,7 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
             }
     except Exception as e:
         logger.error(f"后端日志：保存客户失败: {e}", exc_info=True)
+        logger.error(f"后端日志：[trade-customer诊断] save_customers 批量写入失败! user_id={user_id}, session_id={session_id}, error={e}", exc_info=True)
         return {
             "success": False,
             "error": "保存客户信息失败",
@@ -836,18 +859,37 @@ def main():
     result = None
 
     if args.command == "save-customer":
+        # 后端日志：诊断 save-customer 命令入口
+        logger.info(f"后端日志：[trade-customer诊断] save-customer 命令被调用, user_id={args.user_id}, session_id={args.session_id}")
+        customer_raw = getattr(args, 'customer', None)
+        if customer_raw:
+            logger.info(f"后端日志：[trade-customer诊断] --customer 原始值: {customer_raw[:500] if len(str(customer_raw)) > 500 else customer_raw}")
+        else:
+            logger.warning(f"后端日志：[trade-customer诊断] --customer 参数为空! 未传入客户数据")
         try:
-            if getattr(args, 'customer', None):
+            if customer_raw:
                 customer = parse_json_safe(args.customer)
+                if customer:
+                    logger.info(f"后端日志：[trade-customer诊断] JSON 解析成功, customer 类型={type(customer).__name__}, 内容={json.dumps(customer, ensure_ascii=False)[:500]}")
+                else:
+                    logger.error(f"后端日志：[trade-customer诊断] JSON 解析结果为 None! 原始值: {customer_raw[:200]}")
             else:
                 result = {"success": False, "error": "必须指定 --customer"}
         except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"后端日志：[trade-customer诊断] JSON 解析异常: {e}, 原始值: {customer_raw[:200] if customer_raw else '空'}")
             result = {"success": False, "error": "JSON格式错误", "debug": str(e)}
         else:
             if result is None:
                 result = save_customer(args.user_id, args.session_id, customer)
 
     elif args.command == "save-customers":
+        # 后端日志：诊断 save-customers 命令入口
+        logger.info(f"后端日志：[trade-customer诊断] save-customers 命令被调用, user_id={args.user_id}, session_id={args.session_id}")
+        customers_raw = getattr(args, 'customers', None)
+        if customers_raw:
+            logger.info(f"后端日志：[trade-customer诊断] --customers 原始值: {customers_raw[:500] if len(str(customers_raw)) > 500 else customers_raw}")
+        else:
+            logger.warning(f"后端日志：[trade-customer诊断] --customers 参数为空!")
         try:
             # 优先从文件读取，其次从命令行参数
             if getattr(args, 'customers_file', None):
@@ -856,11 +898,16 @@ def main():
                     result = {"success": False, "error": f"客户文件不存在: {args.customers_file}"}
                 else:
                     customers = parse_json_safe(customers_file.read_text(encoding="utf-8"))
-            elif getattr(args, 'customers', None):
+            elif customers_raw:
                 customers = parse_json_safe(args.customers)
+                if customers:
+                    logger.info(f"后端日志：[trade-customer诊断] JSON 解析成功, customers 类型={type(customers).__name__}, 数量={len(customers) if isinstance(customers, list) else 'N/A'}")
+                else:
+                    logger.error(f"后端日志：[trade-customer诊断] JSON 解析结果为 None!")
             else:
                 result = {"success": False, "error": "必须指定 --customers 或 --customers-file"}
         except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"后端日志：[trade-customer诊断] JSON 解析异常: {e}")
             result = {"success": False, "error": "JSON格式错误", "debug": str(e)}
         else:
             if result is None:
@@ -895,6 +942,12 @@ def main():
 
     # 输出结果
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    # 后端日志：诊断最终输出结果
+    if result:
+        logger.info(f"后端日志：[trade-customer诊断] 命令 '{args.command}' 最终结果: success={result.get('success')}")
+        if not result.get("success"):
+            logger.warning(f"后端日志：[trade-customer诊断] 命令执行失败! error={result.get('error')}, debug={result.get('debug', '')}")
 
     # 保存执行日志到文件
     log_args = vars(args) if hasattr(args, '__dict__') else {}
