@@ -110,7 +110,7 @@ cd frontend && npx vitest run saas          # 只跑 SaaS 相关
 **CSV 文件示例**：
 ```csv
 phone,username,department,role
-13900001111,张三,技术部,member
+13900001111,张三,技术部,user
 13900002222,李四,市场部,admin
 ```
 

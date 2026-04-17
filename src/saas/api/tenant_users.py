@@ -4,6 +4,8 @@ SaaS 企业用户管理 API
 路由：/api/saas/users/*
 - 用户列表、创建、更新、删除
 - 批量导入（CSV）
+
+注意：用户统一存储在 users 表中，通过 tenant_id 字段区分租户
 """
 
 import csv
@@ -15,7 +17,6 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
-from src.saas.db.tenant_user_db import TenantUserDB
 from src.saas.db.tenant_db import TenantDB
 from src.db.models import UserDB
 from src.config.settings import settings
@@ -28,13 +29,10 @@ router = APIRouter(prefix="/api/saas/users", tags=["SaaS 企业用户"])
 class UserCreateRequest(BaseModel):
     phone: str = Field(..., min_length=11, max_length=11, description="手机号")
     username: Optional[str] = Field(None, max_length=50, description="用户名")
-    department: Optional[str] = Field(None, max_length=50, description="部门")
-    role: str = Field("member", description="角色：member/admin")
 
 
 class UserUpdateRequest(BaseModel):
-    department: Optional[str] = Field(None, max_length=50, description="部门")
-    role: Optional[str] = Field(None, description="角色")
+    username: Optional[str] = Field(None, max_length=50, description="用户名")
 
 
 # ============== API 端点 ==============
@@ -46,7 +44,11 @@ async def list_users(request: Request):
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    users = TenantUserDB.list_by_tenant(admin["tenant_id"])
+    # 平台管理员可查看所有租户的用户
+    if admin.get("role") == "platform_admin":
+        users = UserDB.list_users()
+    else:
+        users = UserDB.list_by_tenant(admin["tenant_id"])
     return {"success": True, "users": users}
 
 
@@ -59,39 +61,33 @@ async def create_user(request: Request, body: UserCreateRequest):
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
+    # 平台管理员不能直接创建用户，需要指定租户
+    if admin.get("role") == "platform_admin":
+        return {"success": False, "message": "平台管理员请使用租户管理功能"}
+
     # 1. 检查用户上限
     tenant = TenantDB.get_by_id(tenant_id)
-    current_users = TenantUserDB.list_by_tenant(tenant_id)
+    current_users = UserDB.list_by_tenant(tenant_id)
     if tenant and len(current_users) >= tenant["max_users"]:
         raise HTTPException(status_code=400, detail=f"已达到最大用户数限制（{tenant['max_users']}）")
 
     # 2. 创建或查找用户
     user = UserDB.get_by_phone(body.phone)
     if not user:
-        user = UserDB.create(phone=body.phone, username=body.username)
+        user = UserDB.create(
+            phone=body.phone,
+            username=body.username,
+            tenant_id=tenant_id,
+        )
+    else:
+        # 用户已存在，更新 tenant_id
+        UserDB.update(user["user_id"], tenant_id=tenant_id)
 
     if not user:
         raise HTTPException(status_code=500, detail="创建用户失败")
 
-    # 3. 检查是否已在租户中
-    existing = TenantUserDB.get_by_user_and_tenant(user["user_id"], tenant_id)
-    if existing:
-        raise HTTPException(status_code=400, detail="该用户已在本企业中")
-
-    # 4. 创建租户映射
-    mapping = TenantUserDB.create(
-        tenant_id=tenant_id,
-        user_id=user["user_id"],
-        department=body.department,
-        role=body.role,
-        source="admin_manual",
-    )
-
-    if not mapping:
-        raise HTTPException(status_code=500, detail="创建用户映射失败")
-
     logger.info(f"User created for tenant {tenant_id}: {user['user_id']} ({body.phone})")
-    return {"success": True, "user": mapping}
+    return {"success": True, "user": user}
 
 
 @router.post("/batch")
@@ -99,12 +95,17 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
     """
     批量导入用户（CSV 上传）
 
-    CSV 格式：phone,username,department,role
+    CSV 格式：phone,username
     """
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
+
+    # 平台管理员不能直接导入
+    if admin.get("role") == "platform_admin":
+        return {"success": False, "message": "平台管理员请使用租户管理功能"}
+
     tenant_id = admin["tenant_id"]
 
     # 读取 CSV
@@ -127,8 +128,6 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
         users_to_import.append({
             "phone": phone,
             "username": row.get("username", "").strip() or None,
-            "department": row.get("department", "").strip() or None,
-            "role": row.get("role", "member").strip() or "member",
         })
 
     if not users_to_import:
@@ -136,14 +135,14 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
 
     # 检查上限
     tenant = TenantDB.get_by_id(tenant_id)
-    current_count = len(TenantUserDB.list_by_tenant(tenant_id))
+    current_count = len(UserDB.list_by_tenant(tenant_id))
     if tenant and current_count + len(users_to_import) > tenant["max_users"]:
         raise HTTPException(
             status_code=400,
             detail=f"导入后用户数将超过上限（{tenant['max_users']}）"
         )
 
-    # 创建用户和映射
+    # 创建用户
     imported = 0
     for user_data in users_to_import:
         user = UserDB.get_by_phone(user_data["phone"])
@@ -151,20 +150,14 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
             user = UserDB.create(
                 phone=user_data["phone"],
                 username=user_data.get("username"),
+                tenant_id=tenant_id,
             )
+        else:
+            # 用户已存在，更新 tenant_id
+            UserDB.update(user["user_id"], tenant_id=tenant_id)
 
         if user:
-            # 检查是否已存在
-            existing = TenantUserDB.get_by_user_and_tenant(user["user_id"], tenant_id)
-            if not existing:
-                TenantUserDB.create(
-                    tenant_id=tenant_id,
-                    user_id=user["user_id"],
-                    department=user_data.get("department"),
-                    role=user_data.get("role", "member"),
-                    source="batch_import",
-                )
-                imported += 1
+            imported += 1
 
     logger.info(f"Batch import for tenant {tenant_id}: {imported} users imported")
     return {
@@ -183,29 +176,36 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
 
     admin = require_admin(request)
 
-    mapping = TenantUserDB.get_by_user_and_tenant(user_id, admin["tenant_id"])
-    if not mapping:
+    # 检查用户是否属于该租户
+    user = UserDB.get_by_id(user_id)
+    if not user or user.get("tenant_id") != admin["tenant_id"]:
         raise HTTPException(status_code=404, detail="用户不在此企业中")
 
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return {"success": False, "message": "没有需要更新的字段"}
 
-    success = TenantUserDB.update(mapping["mapping_id"], **updates)
+    success = UserDB.update(user_id, **updates)
     return {"success": success}
 
 
 @router.delete("/{user_id}")
 async def remove_user(user_id: str, request: Request):
-    """移除企业用户"""
+    """移除企业用户（仅从租户中移除，不删除用户）"""
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
 
-    mapping = TenantUserDB.get_by_user_and_tenant(user_id, admin["tenant_id"])
-    if not mapping:
+    # 检查用户是否属于该租户
+    user = UserDB.get_by_id(user_id)
+    if not user or user.get("tenant_id") != admin["tenant_id"]:
         raise HTTPException(status_code=404, detail="用户不在此企业中")
 
-    success = TenantUserDB.delete(mapping["mapping_id"])
+    # 平台管理员不能被移除
+    if user.get("role") == "platform_admin":
+        return {"success": False, "message": "无法移除平台管理员"}
+
+    # 将 tenant_id 设为 None，而不是删除用户
+    success = UserDB.update(user_id, tenant_id=None)
     return {"success": success}

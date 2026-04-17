@@ -389,6 +389,7 @@ def _init_sqlite():
                 wx_unionid TEXT,
                 avatar_url TEXT,
                 tenant_id TEXT,
+                role TEXT DEFAULT 'user',
                 status INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

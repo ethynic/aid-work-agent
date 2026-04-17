@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
     wx_unionid TEXT,
     avatar_url TEXT,
     tenant_id TEXT,
+    role TEXT DEFAULT 'user',
     status INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -307,40 +308,40 @@ CREATE TABLE IF NOT EXISTS tenants (
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 
--- 租户管理员表
-CREATE TABLE IF NOT EXISTS tenant_admins (
-    id SERIAL PRIMARY KEY,
-    admin_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    name TEXT,
-    password_hash TEXT,
-    sso_provider TEXT,
-    sso_uid TEXT,
-    role TEXT DEFAULT 'admin',
-    status INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
-);
+-- 租户管理员表 (已废弃，统一使用 users 表)
+-- CREATE TABLE IF NOT EXISTS tenant_admins (
+--     id SERIAL PRIMARY KEY,
+--     admin_id TEXT UNIQUE NOT NULL,
+--     tenant_id TEXT NOT NULL,
+--     phone TEXT NOT NULL,
+--     name TEXT,
+--     password_hash TEXT,
+--     sso_provider TEXT,
+--     sso_uid TEXT,
+--     role TEXT DEFAULT 'admin',
+--     status INTEGER DEFAULT 1,
+--     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+-- );
+--
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admins_tenant ON tenant_admins(tenant_id, status);
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admins_phone ON tenant_admins(phone);
 
-CREATE INDEX IF NOT EXISTS idx_tenant_admins_tenant ON tenant_admins(tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_tenant_admins_phone ON tenant_admins(phone);
-
--- 管理员 Token 表
-CREATE TABLE IF NOT EXISTS tenant_admin_tokens (
-    id SERIAL PRIMARY KEY,
-    token TEXT UNIQUE NOT NULL,
-    admin_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (admin_id) REFERENCES tenant_admins(admin_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_token ON tenant_admin_tokens(token);
-CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_admin ON tenant_admin_tokens(admin_id, expires_at);
+-- 管理员 Token 表 (已废弃，复用 tokens 表)
+-- CREATE TABLE IF NOT EXISTS tenant_admin_tokens (
+--     id SERIAL PRIMARY KEY,
+--     token TEXT UNIQUE NOT NULL,
+--     admin_id TEXT NOT NULL,
+--     tenant_id TEXT NOT NULL,
+--     expires_at TIMESTAMP NOT NULL,
+--     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (admin_id) REFERENCES tenant_admins(admin_id) ON DELETE CASCADE,
+--     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+-- );
+--
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_token ON tenant_admin_tokens(token);
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_admin ON tenant_admin_tokens(admin_id, expires_at);
 
 -- 订阅表
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -400,24 +401,24 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
 
--- 租户用户映射表
-CREATE TABLE IF NOT EXISTS tenant_users (
-    id SERIAL PRIMARY KEY,
-    mapping_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    department TEXT,
-    role TEXT DEFAULT 'member',
-    source TEXT DEFAULT 'admin_manual',
-    status INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant ON tenant_users(tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_tenant_users_user ON tenant_users(user_id, tenant_id);
+-- 租户用户映射表 (已废弃，统一使用 users 表)
+-- CREATE TABLE IF NOT EXISTS tenant_users (
+--     id SERIAL PRIMARY KEY,
+--     mapping_id TEXT UNIQUE NOT NULL,
+--     tenant_id TEXT NOT NULL,
+--     user_id TEXT NOT NULL,
+--     department TEXT,
+--     role TEXT DEFAULT 'user',
+--     source TEXT DEFAULT 'admin_manual',
+--     status INTEGER DEFAULT 1,
+--     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+--     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+-- );
+--
+-- CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant ON tenant_users(tenant_id, status);
+-- CREATE INDEX IF NOT EXISTS idx_tenant_users_user ON tenant_users(user_id, tenant_id);
 
 -- 支付订单表
 CREATE TABLE IF NOT EXISTS payment_orders (
@@ -483,6 +484,7 @@ CREATE TABLE IF NOT EXISTS users (
     wx_unionid TEXT,
     avatar_url TEXT,
     tenant_id TEXT,
+    role TEXT DEFAULT 'user',
     status INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -707,40 +709,40 @@ CREATE TABLE IF NOT EXISTS tenants (
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 
--- 租户管理员表
-CREATE TABLE IF NOT EXISTS tenant_admins (
-    id SERIAL PRIMARY KEY,
-    admin_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    name TEXT,
-    password_hash TEXT,
-    sso_provider TEXT,
-    sso_uid TEXT,
-    role TEXT DEFAULT 'admin',
-    status INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
-);
+-- 租户管理员表 (已废弃，统一使用 users 表)
+-- CREATE TABLE IF NOT EXISTS tenant_admins (
+--     id SERIAL PRIMARY KEY,
+--     admin_id TEXT UNIQUE NOT NULL,
+--     tenant_id TEXT NOT NULL,
+--     phone TEXT NOT NULL,
+--     name TEXT,
+--     password_hash TEXT,
+--     sso_provider TEXT,
+--     sso_uid TEXT,
+--     role TEXT DEFAULT 'admin',
+--     status INTEGER DEFAULT 1,
+--     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+-- );
+--
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admins_tenant ON tenant_admins(tenant_id, status);
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admins_phone ON tenant_admins(phone);
 
-CREATE INDEX IF NOT EXISTS idx_tenant_admins_tenant ON tenant_admins(tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_tenant_admins_phone ON tenant_admins(phone);
-
--- 管理员 Token 表
-CREATE TABLE IF NOT EXISTS tenant_admin_tokens (
-    id SERIAL PRIMARY KEY,
-    token TEXT UNIQUE NOT NULL,
-    admin_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (admin_id) REFERENCES tenant_admins(admin_id) ON DELETE CASCADE,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_token ON tenant_admin_tokens(token);
-CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_admin ON tenant_admin_tokens(admin_id, expires_at);
+-- 管理员 Token 表 (已废弃，复用 tokens 表)
+-- CREATE TABLE IF NOT EXISTS tenant_admin_tokens (
+--     id SERIAL PRIMARY KEY,
+--     token TEXT UNIQUE NOT NULL,
+--     admin_id TEXT NOT NULL,
+--     tenant_id TEXT NOT NULL,
+--     expires_at TIMESTAMP NOT NULL,
+--     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (admin_id) REFERENCES tenant_admins(admin_id) ON DELETE CASCADE,
+--     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+-- );
+--
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_token ON tenant_admin_tokens(token);
+-- CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_admin ON tenant_admin_tokens(admin_id, expires_at);
 
 -- 订阅表
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -800,24 +802,24 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
 
--- 租户用户映射表
-CREATE TABLE IF NOT EXISTS tenant_users (
-    id SERIAL PRIMARY KEY,
-    mapping_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    department TEXT,
-    role TEXT DEFAULT 'member',
-    source TEXT DEFAULT 'admin_manual',
-    status INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant ON tenant_users(tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_tenant_users_user ON tenant_users(user_id, tenant_id);
+-- 租户用户映射表 (已废弃，统一使用 users 表)
+-- CREATE TABLE IF NOT EXISTS tenant_users (
+--     id SERIAL PRIMARY KEY,
+--     mapping_id TEXT UNIQUE NOT NULL,
+--     tenant_id TEXT NOT NULL,
+--     user_id TEXT NOT NULL,
+--     department TEXT,
+--     role TEXT DEFAULT 'user',
+--     source TEXT DEFAULT 'admin_manual',
+--     status INTEGER DEFAULT 1,
+--     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+--     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+-- );
+--
+-- CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant ON tenant_users(tenant_id, status);
+-- CREATE INDEX IF NOT EXISTS idx_tenant_users_user ON tenant_users(user_id, tenant_id);
 
 -- 支付订单表
 CREATE TABLE IF NOT EXISTS payment_orders (

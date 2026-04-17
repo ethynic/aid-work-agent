@@ -36,7 +36,7 @@
             <td class="px-4 py-3">
               <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
                 :class="u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'">
-                {{ u.role === 'admin' ? '管理员' : '成员' }}
+                {{ u.role === 'admin' ? '管理员' : '普通用户' }}
               </span>
             </td>
             <td class="px-4 py-3">
@@ -80,7 +80,7 @@
             <label class="block text-sm text-slate-600 mb-1">角色</label>
             <select v-model="addForm.role"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
-              <option value="member">成员</option>
+              <option value="user">普通用户</option>
               <option value="admin">管理员</option>
             </select>
           </div>
@@ -139,10 +139,10 @@ const importFile = ref<File | null>(null)
 const importResult = ref<{ imported: number; total: number; errors?: string[] } | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const addForm = ref({ phone: '', username: '', department: '', role: 'member' })
+const addForm = ref({ phone: '', username: '', department: '', role: 'user' })
 
 function openAddUser() {
-  addForm.value = { phone: '', username: '', department: '', role: 'member' }
+  addForm.value = { phone: '', username: '', department: '', role: 'user' }
   addError.value = ''
   showAdd.value = true
 }

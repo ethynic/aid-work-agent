@@ -123,16 +123,16 @@ class TenantDB:
             )
             instance_count = cursor.fetchone()["count"]
 
-            # 用户数
+            # 用户数（使用 users 表）
             cursor.execute(
-                "SELECT COUNT(*) as count FROM tenant_users WHERE tenant_id = ? AND status = 1",
+                "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND status = 1 AND role != 'platform_admin'",
                 (tenant_id,),
             )
             user_count = cursor.fetchone()["count"]
 
-            # 管理员数
+            # 管理员数（使用 users 表）
             cursor.execute(
-                "SELECT COUNT(*) as count FROM tenant_admins WHERE tenant_id = ? AND status = 1",
+                "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND role = 'tenant_admin' AND status = 1",
                 (tenant_id,),
             )
             admin_count = cursor.fetchone()["count"]

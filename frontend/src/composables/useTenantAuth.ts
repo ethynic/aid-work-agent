@@ -7,9 +7,9 @@ import { ref, computed } from 'vue'
 import { getAdminInfo, adminLogout as apiLogout } from '@/api/saasTenant'
 
 export interface TenantAdmin {
-  admin_id: string
+  user_id: string
   phone: string
-  name: string
+  username: string
   role: string
 }
 

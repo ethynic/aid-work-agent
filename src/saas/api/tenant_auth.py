@@ -5,6 +5,10 @@ SaaS 管理员认证 API
 - 手机号+验证码登录
 - IM 平台 SSO 登录
 - 登出、获取当前管理员信息
+
+注意：管理员统一使用 users 表存储，通过 role 字段区分：
+- platform_admin: 平台管理员，tenant_id 为空
+- tenant_admin: 租户管理员，tenant_id 为租户ID
 """
 
 from typing import Optional
@@ -13,7 +17,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from src.saas.db.tenant_admin_db import TenantAdminDB, TenantAdminTokenDB
 from src.saas.db.tenant_db import TenantDB
 from src.config.settings import settings
 
@@ -39,10 +42,14 @@ def _get_or_create_default_tenant() -> Optional[dict]:
     )
 
 
-def _ensure_config_admin(phone: str) -> Optional[dict]:
+def _ensure_config_admin(phone: str, role: str = "platform_admin") -> Optional[dict]:
     """
     如果手机号在配置的管理员列表中，确保该管理员存在
     返回管理员信息（如果不存在或不在配置中返回 None）
+
+    Args:
+        phone: 手机号
+        role: 角色类型，platform_admin 或 tenant_admin
     """
     # 获取配置中的管理员手机号列表
     admin_phones = getattr(settings, "admin", None)
@@ -56,27 +63,32 @@ def _ensure_config_admin(phone: str) -> Optional[dict]:
     if phone not in phones:
         return None
 
-    # 检查是否已存在管理员
-    admin = TenantAdminDB.get_by_phone(phone)
-    if admin:
-        return admin
+    # 查找已有用户
+    from src.db.models import UserDB
+    user = UserDB.get_by_phone(phone)
+    if user:
+        # 更新 role 为 platform_admin
+        UserDB.update(user["user_id"], role="platform_admin")
+        return user
 
-    # 确保有默认租户
-    tenant = _get_or_create_default_tenant()
-    if not tenant:
-        logger.error(f"Failed to get or create default tenant for admin {phone}")
-        return None
+    # 平台管理员不需要 tenant_id
+    tenant_id = None
+    if role == "tenant_admin":
+        tenant = _get_or_create_default_tenant()
+        if not tenant:
+            logger.error(f"Failed to get or create default tenant for admin {phone}")
+            return None
+        tenant_id = tenant["tenant_id"]
 
-    # 创建管理员
-    logger.info(f"Creating admin from config: {phone} for tenant {tenant['tenant_id']}")
-    admin = TenantAdminDB.create(
-        tenant_id=tenant["tenant_id"],
+    # 创建管理员用户
+    logger.info(f"Creating admin from config: {phone} with role {role}")
+    user = UserDB.create(
+        username="管理员",
         phone=phone,
-        name="管理员",
-        role="super_admin",
+        role=role,
+        tenant_id=tenant_id,
     )
-
-    return admin
+    return user
 
 
 # ============== 请求/响应模型 ==============
@@ -98,7 +110,7 @@ class SSOLoginRequest(BaseModel):
 class AdminLoginResponse(BaseModel):
     success: bool
     token: Optional[str] = None
-    admin: Optional[dict] = None
+    user: Optional[dict] = None
     tenant: Optional[dict] = None
     message: Optional[str] = None
 
@@ -116,29 +128,54 @@ def get_current_admin(request: Request) -> Optional[dict]:
     """
     从请求中获取当前管理员信息
 
-    Returns: {"admin_id", "tenant_id", "phone", "name", "role"} 或 None
+    Returns: {"user_id", "tenant_id", "phone", "username", "role"} 或 None
     """
+    from src.db.models import UserDB
+    from src.db.database import get_db_connection
+    import secrets
+
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return None
 
     token = auth_header[7:]
+
     # 验证 token
-    token_info = TenantAdminTokenDB.verify(token)
-    if not token_info:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT user_id, expires_at FROM tokens WHERE token = ?
+        """, (token,))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        # 检查过期
+        from datetime import datetime
+        if datetime.now() > datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S"):
+            cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            conn.commit()
+            return None
+
+        user_id = row["user_id"]
+
+    # 获取用户信息
+    user = UserDB.get_by_id(user_id)
+    if not user or user.get("status", 1) != 1:
         return None
 
-    # 获取管理员信息
-    admin = TenantAdminDB.get_by_id(token_info["admin_id"])
-    if not admin or admin.get("status", 1) != 1:
+    # 检查是否是管理员
+    role = user.get("role", "user")
+    if role not in ("platform_admin", "tenant_admin"):
         return None
 
     return {
-        "admin_id": admin["admin_id"],
-        "tenant_id": admin["tenant_id"],
-        "phone": admin["phone"],
-        "name": admin.get("name"),
-        "role": admin["role"],
+        "user_id": user["user_id"],
+        "tenant_id": user.get("tenant_id"),
+        "phone": user.get("phone"),
+        "username": user.get("username"),
+        "role": role,
     }
 
 
@@ -168,6 +205,11 @@ async def send_admin_sms(request: SendSmsRequest):
 @router.post("/login")
 async def admin_login(request: AdminLoginRequest):
     """管理员手机号+验证码登录"""
+    from src.db.models import UserDB
+    from src.db.database import get_db_connection
+    import secrets
+    from datetime import datetime, timedelta
+
     # 检查 SaaS 是否启用
     if not settings.saas.enabled:
         return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
@@ -178,35 +220,49 @@ async def admin_login(request: AdminLoginRequest):
     if not verify_admin_sms_code(request.phone, request.code):
         return AdminLoginResponse(success=False, message="验证码错误或已过期")
 
-    # 2. 查找管理员
-    admin = TenantAdminDB.get_by_phone(request.phone)
-    if not admin:
+    # 2. 查找用户
+    user = UserDB.get_by_phone(request.phone)
+    if not user:
         # 3. 检查是否是配置中的管理员手机号，尝试自动创建
-        admin = _ensure_config_admin(request.phone)
-        if not admin:
+        user = _ensure_config_admin(request.phone, "platform_admin")
+        if not user:
             return AdminLoginResponse(success=False, message="该手机号未注册为管理员")
 
-    if admin.get("status", 1) != 1:
-        return AdminLoginResponse(success=False, message="管理员账号已停用")
+    # 4. 检查是否是管理员
+    role = user.get("role", "user")
+    if role not in ("platform_admin", "tenant_admin"):
+        return AdminLoginResponse(success=False, message="该手机号不是管理员")
 
-    # 4. 生成 token
-    token = TenantAdminTokenDB.create(admin["admin_id"], admin["tenant_id"])
-    if not token:
-        return AdminLoginResponse(success=False, message="登录失败，请重试")
+    if user.get("status", 1) != 1:
+        return AdminLoginResponse(success=False, message="账号已停用")
 
-    # 5. 获取租户信息
-    tenant = TenantDB.get_by_id(admin["tenant_id"])
+    # 5. 生成 token（复用 tokens 表）
+    token = f"saas_{secrets.token_urlsafe(32)}"
+    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
-    logger.info(f"Admin login: {admin['admin_id']} ({request.phone}) -> tenant {admin['tenant_id']}")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tokens (token, user_id, expires_at)
+            VALUES (?, ?, ?)
+        """, (token, user["user_id"], expires_at))
+        conn.commit()
+
+    # 6. 获取租户信息
+    tenant = None
+    if user.get("tenant_id"):
+        tenant = TenantDB.get_by_id(user["tenant_id"])
+
+    logger.info(f"Admin login: {user['user_id']} ({request.phone}) -> role {role}, tenant {user.get('tenant_id')}")
 
     return AdminLoginResponse(
         success=True,
         token=token,
-        admin={
-            "admin_id": admin["admin_id"],
-            "phone": admin["phone"],
-            "name": admin.get("name"),
-            "role": admin["role"],
+        user={
+            "user_id": user["user_id"],
+            "phone": user["phone"],
+            "username": user.get("username"),
+            "role": role,
         },
         tenant={
             "tenant_id": tenant["tenant_id"],
@@ -219,11 +275,12 @@ async def admin_login(request: AdminLoginRequest):
 
 @router.post("/sso/{provider}")
 async def admin_sso_login(provider: str, request: SSOLoginRequest):
-    """
-    IM 平台 SSO 登录
+    """IM 平台 SSO 登录"""
+    from src.db.models import UserDB
+    from src.db.database import get_db_connection
+    import secrets
+    from datetime import datetime, timedelta
 
-    provider: wecom / dingtalk / feishu
-    """
     if not settings.saas.enabled:
         return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
 
@@ -234,35 +291,51 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
         raise HTTPException(status_code=400, detail=f"不支持的 SSO 平台: {provider}")
 
     # 1. 通过 OAuth code 获取手机号
-    # TODO: 从租户渠道配置获取凭证（Phase 5 完善后可用）
-    config = {}  # 占位
+    config = {}
     phone = await sso.get_user_phone(request.code, config)
 
     if not phone:
         return AdminLoginResponse(success=False, message=f"SSO 登录失败：无法获取手机号")
 
-    # 2. 匹配管理员
-    admin = TenantAdminDB.get_by_phone(phone)
-    if not admin:
-        # 3. 检查是否是配置中的管理员手机号，尝试自动创建
-        admin = _ensure_config_admin(phone)
-        if not admin:
+    # 2. 匹配用户
+    user = UserDB.get_by_phone(phone)
+    if not user:
+        # 3. 检查是否是配置中的管理员手机号
+        user = _ensure_config_admin(phone, "platform_admin")
+        if not user:
             return AdminLoginResponse(success=False, message="该 IM 用户未注册为管理员")
 
-    # 4. 生成 token
-    token = TenantAdminTokenDB.create(admin["admin_id"], admin["tenant_id"])
-    tenant = TenantDB.get_by_id(admin["tenant_id"])
+    # 4. 检查是否是管理员
+    role = user.get("role", "user")
+    if role not in ("platform_admin", "tenant_admin"):
+        return AdminLoginResponse(success=False, message="该 IM 用户不是管理员")
 
-    logger.info(f"Admin SSO login ({provider}): {admin['admin_id']} ({phone})")
+    # 5. 生成 token
+    token = f"saas_{secrets.token_urlsafe(32)}"
+    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tokens (token, user_id, expires_at)
+            VALUES (?, ?, ?)
+        """, (token, user["user_id"], expires_at))
+        conn.commit()
+
+    tenant = None
+    if user.get("tenant_id"):
+        tenant = TenantDB.get_by_id(user["tenant_id"])
+
+    logger.info(f"Admin SSO login ({provider}): {user['user_id']} ({phone})")
 
     return AdminLoginResponse(
         success=True,
         token=token,
-        admin={
-            "admin_id": admin["admin_id"],
-            "phone": admin["phone"],
-            "name": admin.get("name"),
-            "role": admin["role"],
+        user={
+            "user_id": user["user_id"],
+            "phone": user["phone"],
+            "username": user.get("username"),
+            "role": role,
         },
         tenant={
             "tenant_id": tenant["tenant_id"],
@@ -279,10 +352,15 @@ async def admin_logout(request: Request):
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
+    from src.db.database import get_db_connection
+
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        TenantAdminTokenDB.delete(token)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            conn.commit()
     return {"success": True}
 
 
@@ -293,13 +371,15 @@ async def get_admin_info(request: Request):
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    tenant = TenantDB.get_by_id(admin["tenant_id"])
+    tenant = None
+    if admin.get("tenant_id"):
+        tenant = TenantDB.get_by_id(admin["tenant_id"])
 
     return {
-        "admin": {
-            "admin_id": admin["admin_id"],
+        "user": {
+            "user_id": admin["user_id"],
             "phone": admin["phone"],
-            "name": admin.get("name"),
+            "username": admin.get("username"),
             "role": admin["role"],
         },
         "tenant": {

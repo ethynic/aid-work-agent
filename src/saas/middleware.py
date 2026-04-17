@@ -4,9 +4,11 @@
 根据请求 URL 和认证信息解析 tenant_id，设置到 request.state 和 ContextVar。
 
 路由分发逻辑：
-- /api/saas/*  → 从 Authorization header 取管理员 token → 查 tenant_admin_tokens → 得 tenant_id
+- /api/saas/*  → 从 Authorization header 取管理员 token → 查 tokens + users → 得 tenant_id
 - /api/chat/*  → 从 Authorization header 取用户 token → 查 users.tenant_id → 得 tenant_id
 - /t/{tenant_id}/*/callback → 从 URL path 取 tenant_id
+
+注意：platform_admin (平台管理员) tenant_id 为空，可以访问所有租户
 """
 
 import re
@@ -17,6 +19,7 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from src.saas.context import set_tenant_context, clear_tenant_context
+from src.db.database import get_db_connection
 
 
 # 匹配租户级回调路由：/t/{tenant_id}/...
@@ -76,18 +79,53 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         return response
 
     async def _resolve_admin_tenant(self, request: Request) -> Optional[str]:
-        """从管理员 token 解析 tenant_id"""
+        """从管理员 token 解析 tenant_id
+
+        平台管理员 (role=platform_admin) tenant_id 为空，返回 None 表示可访问所有租户
+        租户管理员 (role=tenant_admin) 返回其 tenant_id
+        """
+        from datetime import datetime
+
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return None
 
         token = auth_header[7:]
-        # 避免循环导入，延迟导入
-        from src.saas.db.tenant_admin_db import TenantAdminTokenDB
-        result = TenantAdminTokenDB.verify(token)
-        if result:
-            return result["tenant_id"]
-        return None
+
+        # 查询 tokens 表获取 user_id
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT user_id, expires_at FROM tokens WHERE token = ?
+            """, (token,))
+            row = cursor.fetchone()
+
+            if not row:
+                return None
+
+            # 检查过期
+            if datetime.now() > datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S"):
+                cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+                conn.commit()
+                return None
+
+            user_id = row["user_id"]
+
+        # 查询用户信息获取 role 和 tenant_id
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT role, tenant_id FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            role = row["role"]
+            # platform_admin 返回 None，表示可以访问所有租户
+            if role == "platform_admin":
+                return None
+
+            # tenant_admin 返回其 tenant_id
+            return row["tenant_id"]
 
     async def _resolve_user_tenant(self, request: Request) -> Optional[str]:
         """从用户 token 解析 tenant_id"""

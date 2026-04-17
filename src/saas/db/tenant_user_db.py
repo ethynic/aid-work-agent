@@ -18,7 +18,7 @@ class TenantUserDB:
         tenant_id: str,
         user_id: str,
         department: Optional[str] = None,
-        role: str = "member",
+        role: str = "user",
         source: str = "admin_manual",
     ) -> Optional[Dict[str, Any]]:
         """创建租户用户映射"""
@@ -138,7 +138,7 @@ class TenantUserDB:
                         mapping_id, tenant_id,
                         user_data["user_id"],
                         user_data.get("department"),
-                        user_data.get("role", "member"),
+                        user_data.get("role", "user"),
                         user_data.get("source", "batch_import"),
                     ))
                     count += 1

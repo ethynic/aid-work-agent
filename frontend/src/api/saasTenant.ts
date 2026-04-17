@@ -21,7 +21,7 @@ export async function sendAdminSmsCode(phone: string): Promise<{ success: boolea
 export async function adminLogin(phone: string, code: string): Promise<{
   success: boolean
   token?: string
-  admin?: { admin_id: string; phone: string; name: string; role: string }
+  user?: { user_id: string; phone: string; username: string; role: string }
   tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
   message?: string
 }> {
@@ -48,7 +48,7 @@ export async function adminLogout(): Promise<void> {
 }
 
 export async function getAdminInfo(): Promise<{
-  admin?: { admin_id: string; phone: string; name: string; role: string }
+  user?: { user_id: string; phone: string; username: string; role: string }
   tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
 } | null> {
   const token = localStorage.getItem('saas_token')

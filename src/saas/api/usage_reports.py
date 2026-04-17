@@ -14,7 +14,6 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin, get_current_admin
 from src.saas.db.usage_log_db import UsageLogDB
-from src.saas.db.tenant_user_db import TenantUserDB
 from src.api.auth import get_current_user
 from src.config.settings import settings
 

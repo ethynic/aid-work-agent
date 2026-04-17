@@ -49,8 +49,18 @@ class UserDB:
 
     @staticmethod
     def create(phone: str = None, password: str = None,
-              wx_openid: str = None, username: str = None) -> Optional[Dict[str, Any]]:
-        """创建新用户"""
+              wx_openid: str = None, username: str = None,
+              role: str = "user", tenant_id: str = None) -> Optional[Dict[str, Any]]:
+        """创建新用户
+
+        Args:
+            phone: 手机号
+            password: 密码
+            wx_openid: 微信openid
+            username: 用户名
+            role: 角色，platform_admin/tenant_admin/user
+            tenant_id: 租户ID，平台管理员为空
+        """
         user_id = generate_user_id()
         placeholder = get_db_placeholder()
 
@@ -58,13 +68,14 @@ class UserDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO users (user_id, phone, password_hash, wx_openid, username)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    INSERT INTO users (user_id, phone, password_hash, wx_openid, username, role, tenant_id)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (user_id, phone, hash_password(password) if password else None,
-                      wx_openid, username or (f"用户{phone[-4:]}" if phone else f"用户{user_id[-4:]}")))
+                      wx_openid, username or (f"用户{phone[-4:]}" if phone else f"用户{user_id[-4:]}"),
+                      role, tenant_id))
                 conn.commit()
 
-                logger.info(f"User created: {user_id}")
+                logger.info(f"User created: {user_id} with role {role}")
                 return UserDB.get_by_id(user_id)
             except Exception as e:
                 logger.error(f"Failed to create user: {e}")
@@ -121,8 +132,13 @@ class UserDB:
 
     @staticmethod
     def update_info(user_id: str, **kwargs) -> bool:
-        """更新用户信息"""
-        allowed_fields = ["username", "avatar_url"]
+        """更新用户信息
+
+        Args:
+            user_id: 用户ID
+            **kwargs: 可更新字段，支持 username, avatar_url, role, tenant_id
+        """
+        allowed_fields = ["username", "avatar_url", "role", "tenant_id"]
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
         if not updates:
@@ -140,12 +156,57 @@ class UserDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    # 别名方法，保持向后兼容
+    update = update_info
+
     @staticmethod
     def list_users() -> List[Dict[str, Any]]:
         """获取所有用户（管理用）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM users ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def list_by_tenant(tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取指定租户下的所有用户
+
+        Args:
+            tenant_id: 租户ID
+            limit: 返回数量限制
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM users
+                WHERE tenant_id = ? AND status = 1
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (tenant_id, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def list_admins(tenant_id: str = None) -> List[Dict[str, Any]]:
+        """获取管理员列表
+
+        Args:
+            tenant_id: 如果指定则列出该租户的管理员，否则列出所有平台管理员
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if tenant_id:
+                cursor.execute("""
+                    SELECT * FROM users
+                    WHERE role IN ('platform_admin', 'tenant_admin')
+                    AND tenant_id = ? AND status = 1
+                    ORDER BY created_at
+                """, (tenant_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM users
+                    WHERE role = 'platform_admin' AND status = 1
+                    ORDER BY created_at
+                """)
             return [dict(row) for row in cursor.fetchall()]
 
 

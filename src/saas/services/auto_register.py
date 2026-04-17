@@ -1,7 +1,7 @@
 """
 IM 用户自动注册服务
 
-当 IM 渠道用户首次发送消息时，自动创建 users + tenant_users 记录。
+当 IM 渠道用户首次发送消息时，自动创建 users 记录并设置 tenant_id。
 """
 
 from typing import Optional
@@ -10,7 +10,6 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.db.models import UserDB
-from src.saas.db.tenant_user_db import TenantUserDB
 
 
 async def ensure_user_registered(
@@ -21,7 +20,8 @@ async def ensure_user_registered(
     """
     确保 IM 用户已注册。
 
-    如果用户不存在，自动创建 users + tenant_users 记录。
+    如果用户不存在，自动创建 users 记录。
+    如果提供了 tenant_id，则设置用户的 tenant_id。
 
     Args:
         channel_type: 渠道类型（wecom/dingtalk/feishu）
@@ -32,46 +32,41 @@ async def ensure_user_registered(
         user_id 或 None
     """
     # 1. 尝试通过渠道用户 ID 查找已有用户
-    # 渠道用户的 session 格式为 {channel_type}_{channel_user_id}
-    # 我们需要查找 users 表中是否有对应记录
-
-    # 先通过 channel_user_id 模式匹配查找
     existing_user_id = _find_user_by_channel_id(channel_type, channel_user_id)
     if existing_user_id:
+        # 如果有 tenant_id 但用户没有，更新
+        if tenant_id:
+            user = UserDB.get_by_id(existing_user_id)
+            if user and not user.get("tenant_id"):
+                UserDB.update(existing_user_id, tenant_id=tenant_id)
+                logger.info(f"Updated user {existing_user_id} tenant_id to {tenant_id}")
         return existing_user_id
 
-    # 2. 用户不存在，尝试获取手机号（如果渠道 API 支持）
-    phone = None
-    # TODO: 调用渠道 API 获取用户手机号
-    # 需要渠道适配器和实例，Phase 5 骨架中暂不实现
-
-    # 3. 创建用户
+    # 2. 用户不存在，创建用户（设置 tenant_id）
     username = f"{channel_type}用户{channel_user_id[-4:]}"
-    user = UserDB.create(username=username)
+    user = UserDB.create(
+        username=username,
+        tenant_id=tenant_id,
+    )
     if not user:
         logger.error(f"Failed to auto-create user for {channel_type}:{channel_user_id}")
         return None
 
     user_id = user["user_id"]
 
-    # 4. 如果是租户用户，创建 tenant_users 映射
-    if tenant_id:
-        mapping = TenantUserDB.create(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            role="member",
-            source="im_auto",
-        )
-        if mapping:
-            logger.info(
-                f"IM user auto-registered: {channel_type}:{channel_user_id} "
-                f"→ user={user_id}, tenant={tenant_id}"
-            )
-        else:
-            logger.warning(f"Created user {user_id} but failed to create tenant mapping")
-
-    # 5. 记录渠道关联信息
+    # 3. 记录渠道关联信息
     _save_channel_user_mapping(channel_type, channel_user_id, user_id)
+
+    if tenant_id:
+        logger.info(
+            f"IM user auto-registered: {channel_type}:{channel_user_id} "
+            f"→ user={user_id}, tenant={tenant_id}"
+        )
+    else:
+        logger.info(
+            f"IM user auto-registered: {channel_type}:{channel_user_id} "
+            f"→ user={user_id}"
+        )
 
     return user_id
 

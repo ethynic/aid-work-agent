@@ -25,10 +25,10 @@ class UsageLogDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 从 tenant_users 获取该租户的所有 user_id
+            # 从 users 表获取该租户的所有用户（排除平台管理员）
             cursor.execute("""
-                SELECT user_id FROM tenant_users
-                WHERE tenant_id = ? AND status = 1
+                SELECT user_id FROM users
+                WHERE tenant_id = ? AND status = 1 AND role != 'platform_admin'
             """, (tenant_id,))
             user_ids = [row["user_id"] for row in cursor.fetchall()]
 
@@ -61,6 +61,7 @@ class UsageLogDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
+            # 使用 users 表查询
             cursor.execute("""
                 SELECT
                     cr.user_id,
@@ -68,10 +69,9 @@ class UsageLogDB:
                     COALESCE(SUM(cr.total_token_count), 0) as total_tokens,
                     COUNT(DISTINCT cr.session_id) as total_sessions,
                     MAX(cr.created_at) as last_active
-                FROM tenant_users tu
-                JOIN chat_records cr ON cr.user_id = tu.user_id
-                LEFT JOIN users u ON u.user_id = tu.user_id
-                WHERE tu.tenant_id = ? AND tu.status = 1
+                FROM users u
+                JOIN chat_records cr ON cr.user_id = u.user_id
+                WHERE u.tenant_id = ? AND u.status = 1 AND u.role != 'platform_admin'
                   AND cr.created_at >= ? AND cr.created_at <= ?
                 GROUP BY cr.user_id, u.username
                 ORDER BY total_tokens DESC
@@ -89,10 +89,10 @@ class UsageLogDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
+            # 使用 users 表获取租户用户
             cursor.execute("""
-                SELECT
-                    tu.user_id FROM tenant_users tu
-                WHERE tu.tenant_id = ? AND tu.status = 1
+                SELECT user_id FROM users
+                WHERE tenant_id = ? AND status = 1 AND role != 'platform_admin'
             """, (tenant_id,))
             user_ids = [row["user_id"] for row in cursor.fetchall()]
 
