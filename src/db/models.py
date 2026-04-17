@@ -662,7 +662,7 @@ def verify_captcha(captcha_id: str, code: str) -> bool:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT * FROM captchas
-            WHERE captcha_id = {placeholder} AND code = {placeholder}
+            WHERE captcha_id = {placeholder} AND LOWER(code) = {placeholder}
             AND expires_at > {placeholder}
         """, (captcha_id, code.lower(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         row = cursor.fetchone()
