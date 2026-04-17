@@ -103,6 +103,13 @@ class AdminLoginResponse(BaseModel):
     message: Optional[str] = None
 
 
+def _check_saas_enabled():
+    """检查 SaaS 模式是否启用，未启用时返回友好响应"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式，无法访问"}
+    return None
+
+
 # ============== 认证依赖 ==============
 
 def get_current_admin(request: Request) -> Optional[dict]:
@@ -148,6 +155,9 @@ def require_admin(request: Request) -> dict:
 @router.post("/sms/send")
 async def send_admin_sms(request: SendSmsRequest):
     """发送管理员短信验证码"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式，无法访问"}
+
     from src.saas.services.sms import send_admin_sms_code
 
     if send_admin_sms_code(request.phone):
@@ -158,6 +168,10 @@ async def send_admin_sms(request: SendSmsRequest):
 @router.post("/login")
 async def admin_login(request: AdminLoginRequest):
     """管理员手机号+验证码登录"""
+    # 检查 SaaS 是否启用
+    if not settings.saas.enabled:
+        return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
+
     from src.saas.services.sms import verify_admin_sms_code
 
     # 1. 验证验证码
@@ -210,6 +224,9 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
 
     provider: wecom / dingtalk / feishu
     """
+    if not settings.saas.enabled:
+        return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
+
     from src.saas.services.sso import get_sso_provider
 
     sso = get_sso_provider(provider)
@@ -259,6 +276,9 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
 @router.post("/logout")
 async def admin_logout(request: Request):
     """管理员登出"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
@@ -269,6 +289,9 @@ async def admin_logout(request: Request):
 @router.get("/me")
 async def get_admin_info(request: Request):
     """获取当前管理员信息"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     tenant = TenantDB.get_by_id(admin["tenant_id"])
 

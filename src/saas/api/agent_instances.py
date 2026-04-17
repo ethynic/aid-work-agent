@@ -17,6 +17,7 @@ from src.saas.db.agent_instance_db import AgentInstanceDB
 from src.saas.db.tenant_db import TenantDB
 from src.saas.services.billing import create_subscription_for_tenant
 from src.saas.services.instance_manager import instance_manager
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/instances", tags=["SaaS 智能体实例"])
 
@@ -45,6 +46,9 @@ class InstanceUpdateRequest(BaseModel):
 @router.get("")
 async def list_instances(request: Request):
     """列出当前租户的实例"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     instances = AgentInstanceDB.list_by_tenant(admin["tenant_id"])
     return {"success": True, "instances": instances}
@@ -57,6 +61,9 @@ async def create_instance(request: Request, body: InstanceCreateRequest):
 
     流程：创建订阅 → 创建实例 → 返回信息
     """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -112,6 +119,9 @@ async def create_instance(request: Request, body: InstanceCreateRequest):
 @router.get("/{instance_id}")
 async def get_instance(instance_id: str, request: Request):
     """获取实例详情"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     instance = AgentInstanceDB.get_by_id(instance_id)
     if not instance:
@@ -124,6 +134,9 @@ async def get_instance(instance_id: str, request: Request):
 @router.patch("/{instance_id}")
 async def update_instance(instance_id: str, request: Request, body: InstanceUpdateRequest):
     """更新实例配置"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     instance = AgentInstanceDB.get_by_id(instance_id)
     if not instance:
@@ -145,6 +158,9 @@ async def update_instance(instance_id: str, request: Request, body: InstanceUpda
 @router.delete("/{instance_id}")
 async def delete_instance(instance_id: str, request: Request):
     """删除实例"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     instance = AgentInstanceDB.get_by_id(instance_id)
     if not instance:
@@ -163,6 +179,9 @@ async def delete_instance(instance_id: str, request: Request):
 @router.post("/{instance_id}/start")
 async def start_instance(instance_id: str, request: Request):
     """启动实例"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     instance = AgentInstanceDB.get_by_id(instance_id)
     if not instance:
@@ -189,6 +208,9 @@ async def start_instance(instance_id: str, request: Request):
 @router.post("/{instance_id}/stop")
 async def stop_instance(instance_id: str, request: Request):
     """停止实例"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     instance = AgentInstanceDB.get_by_id(instance_id)
     if not instance:

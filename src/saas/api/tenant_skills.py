@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.services.skill_resolver import SkillResolver
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/skills", tags=["SaaS Skill 管理"])
 
@@ -28,6 +29,9 @@ class SkillUpdateRequest(BaseModel):
 @router.get("")
 async def list_skills(request: Request):
     """列出租户自定义 Skills"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     skills = SkillResolver.list_tenant_skills(admin["tenant_id"])
     return {"success": True, "skills": skills}
@@ -36,6 +40,9 @@ async def list_skills(request: Request):
 @router.post("")
 async def upload_skill(request: Request, body: SkillUploadRequest):
     """上传自定义 Skill"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
 
     success = SkillResolver.save_tenant_skill(
@@ -52,6 +59,9 @@ async def upload_skill(request: Request, body: SkillUploadRequest):
 @router.put("/{skill_name}")
 async def update_skill(skill_name: str, request: Request, body: SkillUpdateRequest):
     """更新自定义 Skill"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
 
     success = SkillResolver.save_tenant_skill(
@@ -68,6 +78,9 @@ async def update_skill(skill_name: str, request: Request, body: SkillUpdateReque
 @router.delete("/{skill_name}")
 async def delete_skill(skill_name: str, request: Request):
     """删除自定义 Skill"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
 
     success = SkillResolver.delete_tenant_skill(

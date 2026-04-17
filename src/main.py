@@ -967,21 +967,20 @@ app.include_router(email_settings.router)
 app.include_router(knowledge_router)
 app.include_router(admin_subagent.router)
 
-# SaaS 多租户 API
-if settings.saas.enabled:
-    from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
-    from src.saas.api import channel_config, tenant_skills, channel_routes
-    from src.saas.api import tenant_users, usage_reports
-    app.include_router(tenant_auth.router)
-    app.include_router(tenant_mgmt.router)
-    app.include_router(subscriptions.router)
-    app.include_router(agent_instances.router)
-    app.include_router(channel_config.router)
-    app.include_router(tenant_skills.router)
-    app.include_router(channel_routes.router)
-    app.include_router(tenant_users.router)
-    app.include_router(usage_reports.router)
-    app.include_router(usage_reports.public_router)
+# SaaS 多租户 API（始终注册，未启用时返回友好提示）
+from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
+from src.saas.api import channel_config, tenant_skills, channel_routes
+from src.saas.api import tenant_users, usage_reports
+app.include_router(tenant_auth.router)
+app.include_router(tenant_mgmt.router)
+app.include_router(subscriptions.router)
+app.include_router(agent_instances.router)
+app.include_router(channel_config.router)
+app.include_router(tenant_skills.router)
+app.include_router(channel_routes.router)
+app.include_router(tenant_users.router)
+app.include_router(usage_reports.router)
+app.include_router(usage_reports.public_router)
 
 
 

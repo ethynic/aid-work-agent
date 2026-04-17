@@ -14,6 +14,7 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["SaaS 企业管理"])
 
@@ -31,6 +32,9 @@ class TenantUpdateRequest(BaseModel):
 @router.get("/me")
 async def get_tenant_info(request: Request):
     """获取当前企业信息"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     tenant = TenantDB.get_by_id(admin["tenant_id"])
     if not tenant:
@@ -41,6 +45,9 @@ async def get_tenant_info(request: Request):
 @router.patch("/me")
 async def update_tenant_info(request: Request, body: TenantUpdateRequest):
     """更新当前企业信息"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     updates = body.model_dump(exclude_unset=True)
 
@@ -58,6 +65,9 @@ async def update_tenant_info(request: Request, body: TenantUpdateRequest):
 @router.get("/me/stats")
 async def get_tenant_stats(request: Request):
     """获取企业概览统计"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     stats = TenantDB.get_stats(admin["tenant_id"])
     return {"success": True, "stats": stats}

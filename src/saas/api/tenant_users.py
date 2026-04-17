@@ -18,6 +18,7 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_user_db import TenantUserDB
 from src.saas.db.tenant_db import TenantDB
 from src.db.models import UserDB
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/users", tags=["SaaS 企业用户"])
 
@@ -41,6 +42,9 @@ class UserUpdateRequest(BaseModel):
 @router.get("")
 async def list_users(request: Request):
     """列出企业用户"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     users = TenantUserDB.list_by_tenant(admin["tenant_id"])
     return {"success": True, "users": users}
@@ -49,6 +53,9 @@ async def list_users(request: Request):
 @router.post("")
 async def create_user(request: Request, body: UserCreateRequest):
     """手动创建单个用户"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -94,6 +101,9 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
 
     CSV 格式：phone,username,department,role
     """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -168,6 +178,9 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
 @router.patch("/{user_id}")
 async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
     """更新企业用户信息"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
 
     mapping = TenantUserDB.get_by_user_and_tenant(user_id, admin["tenant_id"])
@@ -185,6 +198,9 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
 @router.delete("/{user_id}")
 async def remove_user(user_id: str, request: Request):
     """移除企业用户"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
 
     mapping = TenantUserDB.get_by_user_and_tenant(user_id, admin["tenant_id"])

@@ -13,6 +13,7 @@ from loguru import logger
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.services.channel_factory import ChannelFactory
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
 
@@ -53,6 +54,9 @@ _REQUIRED_FIELDS = {
 @router.get("")
 async def list_channels(request: Request):
     """列出当前租户的渠道配置"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     configs = ChannelConfigDB.list_by_tenant(admin["tenant_id"])
     return {"success": True, "channels": configs}
@@ -61,6 +65,9 @@ async def list_channels(request: Request):
 @router.post("")
 async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     """新增渠道配置"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
 
     if body.channel_type not in ("wecom", "dingtalk", "feishu"):
@@ -91,6 +98,9 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
 @router.put("/{config_id}")
 async def update_channel(config_id: str, request: Request, body: ChannelConfigUpdateRequest):
     """更新渠道配置"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     existing = ChannelConfigDB.get_by_id(config_id)
 
@@ -109,6 +119,9 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
 @router.delete("/{config_id}")
 async def delete_channel(config_id: str, request: Request):
     """删除渠道配置"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     existing = ChannelConfigDB.get_by_id(config_id)
 
@@ -124,6 +137,9 @@ async def delete_channel(config_id: str, request: Request):
 @router.post("/{config_id}/verify")
 async def verify_channel(config_id: str, request: Request):
     """验证渠道凭证有效性"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
     admin = require_admin(request)
     config = ChannelConfigDB.get_by_id(config_id)
 
