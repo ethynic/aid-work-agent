@@ -248,12 +248,15 @@ class _AttrDict:
 
 
 def _substitute_env_vars(value: Any) -> Any:
-    """递归替换环境变量占位符"""
+    """递归替换环境变量占位符，支持 ${VAR_NAME} 和 ${VAR_NAME:-default} 语法"""
     if isinstance(value, str):
-        # 匹配 ${VAR_NAME} 格式
         if value.startswith("${") and value.endswith("}"):
-            env_var = value[2:-1]
-            return os.getenv(env_var, "")
+            env_expr = value[2:-1]
+            # 处理 ${VAR:-default} 语法
+            if ":-" in env_expr:
+                env_var, default_val = env_expr.split(":-", 1)
+                return os.getenv(env_var, default_val)
+            return os.getenv(env_expr, "")
         return value
     elif isinstance(value, dict):
         return {k: _substitute_env_vars(v) for k, v in value.items()}

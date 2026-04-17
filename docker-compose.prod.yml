@@ -18,65 +18,20 @@ services:
       - "${API_PORT:-8000}:8000"
     
     # 环境变量
+    env_file:
+      - .env
     environment:
-      # 服务模式
+      # 服务模式（固定值）
       - SERVER_MODE=fastapi
       - SERVER_PORT=8000
-      
       # Gunicorn 配置
-      # 当前服务器 4 核，workers = 2×4+1 = 9
       - WORKERS=${WORKERS:-9}
       - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
-      
-      # LLM 配置
-      - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
-      - API_KEYS=${API_KEYS}
-      - BASE_URL=${BASE_URL}
-      - MODEL_CODE=${MODEL_CODE}
-      
       # 调试模式（生产环境必须为 false）
       - DEBUG=${DEBUG:-false}
-      
-      # 企业微信渠道
-      - WECOM_ENABLED=${WECOM_ENABLED:-false}
-      - WECOM_CORP_ID=${WECOM_CORP_ID}
-      - WECOM_AGENT_ID=${WECOM_AGENT_ID}
-      - WECOM_SECRET=${WECOM_SECRET}
-      - WECOM_TOKEN=${WECOM_TOKEN}
-      - WECOM_ENCODING_AES_KEY=${WECOM_ENCODING_AES_KEY}
-      
-      # 钉钉渠道
-      - DINGTALK_ENABLED=${DINGTALK_ENABLED:-false}
-      - DINGTALK_APP_KEY=${DINGTALK_APP_KEY}
-      - DINGTALK_APP_SECRET=${DINGTALK_APP_SECRET}
-      - DINGTALK_TOKEN=${DINGTALK_TOKEN}
-      - DINGTALK_ENCODING_AES_KEY=${DINGTALK_ENCODING_AES_KEY}
-      
-      # 飞书渠道
-      - FEISHU_ENABLED=${FEISHU_ENABLED:-false}
-      - FEISHU_APP_ID=${FEISHU_APP_ID}
-      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
-      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
-      - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY}
-      
-      # 邮件工具
-      - SMTP_SERVER=${SMTP_SERVER}
-      - SMTP_PORT=${SMTP_PORT:-465}
-      - SMTP_USER=${SMTP_USER}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
-      - IMAP_SERVER=${IMAP_SERVER}
-      - IMAP_PORT=${IMAP_PORT:-993}
-      
-      # 搜索工具
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      
-      # OCR 工具
-      - BAIDU_OCR_API_KEY=${BAIDU_OCR_API_KEY}
-      - BAIDU_OCR_SECRET_KEY=${BAIDU_OCR_SECRET_KEY}
-      
       # 其他配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    
+
     # Volume 挂载 - 实现代码热更新
     volumes:
       # 挂载整个项目目录到容器（关键：实现代码热更新）
