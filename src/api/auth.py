@@ -236,6 +236,10 @@ async def login(request: LoginRequest):
     平台管理员判断条件：
     - 手机号在 config.yaml 的 admin.phones 数组中
     - 密码等于 .env 中的 QBTOKEN
+
+    平台管理员特殊逻辑：
+    - 如果用户不存在但满足平台管理员条件，自动在 users 表创建该用户（role='platform_admin'）
+    - 这样方便管理员的数据初始化
     """
     # 校验图形验证码
     if not verify_captcha(request.captcha_id, request.captcha_code):
@@ -261,6 +265,36 @@ async def login(request: LoginRequest):
             row = cursor.fetchone()
             if row:
                 user = dict(row)
+
+    # 平台管理员检查：手机号在admin.phones中 且 密码等于QBTOKEN
+    admin_phones = getattr(settings, "admin", None)
+    qb_token = getattr(settings, "qb_token", "")
+    is_platform_admin = (
+        is_phone
+        and admin_phones
+        and identifier in getattr(admin_phones, "phones", [])
+        and qb_token
+        and request.password == qb_token
+    )
+
+    if is_platform_admin and not user:
+        # 平台管理员但用户不存在，自动创建用户（role='platform_admin'）
+        logger.info(f"后端日志：平台管理员用户不存在，自动创建，phone={identifier}")
+        placeholder = get_db_placeholder()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # 生成唯一user_id
+            user_id = str(uuid.uuid4())
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(f"""
+                INSERT INTO users (user_id, username, phone, role, created_at, updated_at)
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+            """, (user_id, identifier, identifier, "platform_admin", now, now))
+            conn.commit()
+
+            # 查询刚创建的用户
+            cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
+            user = dict(cursor.fetchone())
 
     if not user:
         return LoginResponse(success=False, message="用户不存在")

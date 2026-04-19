@@ -35,55 +35,6 @@ def init_saas_tables_sqlite(conn: sqlite3.Connection):
         ON tenants(status)
     """)
 
-    # 2. 租户管理员表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            name TEXT,
-            password_hash TEXT,
-            sso_provider TEXT,
-            sso_uid TEXT,
-            role TEXT DEFAULT 'admin',
-            status INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admins_tenant
-        ON tenant_admins(tenant_id, status)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admins_phone
-        ON tenant_admins(phone)
-    """)
-
-    # 3. 管理员 Token 表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_admin_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            token TEXT UNIQUE NOT NULL,
-            admin_id TEXT NOT NULL,
-            tenant_id TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (admin_id) REFERENCES tenant_admins(admin_id),
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_token
-        ON tenant_admin_tokens(token)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_admin
-        ON tenant_admin_tokens(admin_id, expires_at)
-    """)
-
     # 4. 订阅表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -156,59 +107,6 @@ def init_saas_tables_sqlite(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant
         ON tenant_channel_configs(tenant_id, channel_type)
     """)
-
-    # 7. 租户用户映射表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mapping_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            department TEXT,
-            role TEXT DEFAULT 'user',
-            source TEXT DEFAULT 'admin_manual',
-            status INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-            FOREIGN KEY (user_id) REFERENCES users(user_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant
-        ON tenant_users(tenant_id, status)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_users_user
-        ON tenant_users(user_id, tenant_id)
-    """)
-
-    # 8. 支付订单表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS payment_orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            subscription_id TEXT,
-            amount REAL NOT NULL,
-            payment_method TEXT,
-            payment_status TEXT DEFAULT 'pending',
-            paid_at TIMESTAMP,
-            transaction_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-            FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
-        ON payment_orders(tenant_id, payment_status)
-    """)
-
-    conn.commit()
-    logger.info("SQLite SaaS multi-tenant tables initialized")
-
 
 def init_saas_tables_postgresql(conn):
     """初始化 PostgreSQL SaaS 多租户相关表"""
@@ -236,55 +134,6 @@ def init_saas_tables_postgresql(conn):
         ON tenants(status)
     """)
 
-    # 2. 租户管理员表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_admins (
-            id SERIAL PRIMARY KEY,
-            admin_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            name TEXT,
-            password_hash TEXT,
-            sso_provider TEXT,
-            sso_uid TEXT,
-            role TEXT DEFAULT 'admin',
-            status INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admins_tenant
-        ON tenant_admins(tenant_id, status)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admins_phone
-        ON tenant_admins(phone)
-    """)
-
-    # 3. 管理员 Token 表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_admin_tokens (
-            id SERIAL PRIMARY KEY,
-            token TEXT UNIQUE NOT NULL,
-            admin_id TEXT NOT NULL,
-            tenant_id TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (admin_id) REFERENCES tenant_admins(admin_id),
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_token
-        ON tenant_admin_tokens(token)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_admin_tokens_admin
-        ON tenant_admin_tokens(admin_id, expires_at)
-    """)
-
     # 4. 订阅表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -356,32 +205,6 @@ def init_saas_tables_postgresql(conn):
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant
         ON tenant_channel_configs(tenant_id, channel_type)
-    """)
-
-    # 7. 租户用户映射表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_users (
-            id SERIAL PRIMARY KEY,
-            mapping_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            department TEXT,
-            role TEXT DEFAULT 'user',
-            source TEXT DEFAULT 'admin_manual',
-            status INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-            FOREIGN KEY (user_id) REFERENCES users(user_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant
-        ON tenant_users(tenant_id, status)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_users_user
-        ON tenant_users(user_id, tenant_id)
     """)
 
     # 8. 支付订单表

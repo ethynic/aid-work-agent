@@ -54,15 +54,12 @@
 | 表名 | 用途 | 关键字段 |
 |------|------|----------|
 | `tenants` | 企业/租户 | `tenant_id`, `company_name`, `status`, `plan`, `max_agent_instances`, `max_users`, `settings(JSON)` |
-| `tenant_admins` | 租户管理员（独立于 end-user） | `admin_id`, `tenant_id`, `phone`, `password_hash`(可为空-SSO用户), `sso_provider`, `sso_uid`, `role(owner/admin/viewer)` |
-| `tenant_admin_tokens` | 管理员 token（与用户 token 分离） | `token`, `admin_id`, `tenant_id`, `expires_at` |
 | `subscriptions` | 订阅/计费记录 | `subscription_id`, `tenant_id`(nullable, NULL=公共用户), `user_id`(nullable, 公共用户付费时用), `subagent_type`, `billing_cycle`, `unit_price`, `token_quota`(-1=不限量, >0=具体配额), `tokens_used`, `status`, `expires_at`, `payment_status` |
 | `agent_instances` | 部署的智能体实例 | `instance_id`, `tenant_id`, `subscription_id`, `subagent_type`, `display_name`, `status(running/stopped)`, `config(JSON)`, `bound_channel_type`, `allowed_skills(JSON)` |
 | `tenant_channel_configs` | 租户 IM 渠道凭证 | `config_id`, `tenant_id`, `channel_type`, `config(JSON, 加密)`, `verified` |
-| `tenant_users` | 租户用户映射 | `mapping_id`, `tenant_id`, `user_id(FK→users)`, `department`, `role`, `source(im_auto/admin_manual/batch_import)` |
 | `payment_orders` | 支付订单 | `order_id`, `tenant_id`, `subscription_id`, `amount`, `payment_method(wechat/alipay)`, `payment_status`, `paid_at`, `transaction_id` |
 
-**现有表唯一修改**：`users` 表增加 `tenant_id TEXT` 列（nullable，向后兼容）。数据隔离通过 `tenant_users` 映射表实现，不在现有表加 tenant_id 过滤。
+**现有表唯一修改**：`users` 表增加 `tenant_id TEXT` 列（nullable，向后兼容）。
 
 ---
 

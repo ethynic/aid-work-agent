@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-8 pt-8 pb-6">
-        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">企业管理平台</h1>
+        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">爱定义管理中台</h1>
         <p class="text-sm text-slate-500 text-center mb-8">管理员登录</p>
 
         <div class="space-y-4">

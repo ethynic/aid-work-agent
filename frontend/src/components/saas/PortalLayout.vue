@@ -4,7 +4,7 @@
     <aside class="w-60 bg-slate-900 text-white flex flex-col flex-shrink-0">
       <!-- 企业信息 -->
       <div class="p-4 border-b border-slate-700">
-        <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '企业管理平台' }}</h2>
+        <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '爱定义管理后台' }}</h2>
         <p class="text-sm text-slate-400 mt-1">{{ admin?.username || admin?.phone || '' }}</p>
       </div>
 
