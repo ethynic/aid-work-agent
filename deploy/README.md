@@ -288,9 +288,11 @@ keepalive_timeout 65;
 
 - **2026-03-23**: 初始版本，包含完整部署脚本和文档
 
-## 📞 联系支持
-
 如遇问题，请查看：
 1. 完整部署文档：`DEPLOYMENT.md`
 2. 项目文档：`/var/www/agent/docs/`
 3. 日志文件：`/var/www/agent/log/`
+
+本地 wsl + docker engine：
+wsl -d Ubuntu-22.04
+cd /mnt/d/workbase/projects/aid-work-agent
