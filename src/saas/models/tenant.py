@@ -23,7 +23,7 @@ class TenantUpdate(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=50, description="联系人姓名")
     contact_phone: Optional[str] = Field(None, max_length=20, description="联系人电话")
     plan: Optional[str] = Field(None, description="套餐：basic/standard/premium")
-    status: Optional[str] = Field(None, description="状态：active/suspended/deactivated")
+    status: Optional[int | str] = Field(None, description="状态：active(1)/suspended(0)/deactivated(-1)")
     max_instances: Optional[int] = Field(None, description="最大实例数")
     max_users: Optional[int] = Field(None, description="最大用户数")
 
