@@ -34,10 +34,10 @@ cd frontend && npx vitest run saas          # 只跑 SaaS 相关
 
 2. **启动前端 dev server**
    ```bash
-   cd frontend && npm run dev  # port 5173
+   cd frontend && npm run dev  # port 3000
    ```
 
-3. **访问** `http://localhost:5173/portal/login`
+3. **访问** `http://localhost:3000/portal/login`
 
 ---
 

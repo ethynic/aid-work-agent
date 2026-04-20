@@ -13,16 +13,16 @@ setlocal enabledelayedexpansion
 @REM docker stop aid-agent-ui 2>nul
 @REM echo.
 
-@REM echo Step 2/4: Stop frontend service (if running)
-@REM echo ----------------------------------------
-@REM for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5173"') do (
-@REM     taskkill /F /PID %%a >nul 2>&1
-@REM     if !errorlevel! equ 0 (
-@REM         echo [OK] Frontend service stopped (PID: %%a)
-@REM     )
-@REM )
-@REM echo [INFO] Frontend service check complete
-@REM echo.
+echo Step 2/4: Stop frontend service (if running)
+echo ----------------------------------------
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000"') do (
+    taskkill /F /PID %%a >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [OK] Frontend service stopped (PID: %%a)
+    )
+)
+echo [INFO] Frontend service check complete
+echo.
 
 @REM echo Step 3/4: Start backend Docker container
 @REM echo ----------------------------------------
@@ -37,7 +37,7 @@ setlocal enabledelayedexpansion
 @REM     echo   All services started successfully!
 @REM     echo ========================================
 @REM     echo.
-@REM     echo Frontend: http://localhost:5173
+@REM     echo Frontend: http://localhost:3000
 @REM     echo Backend:  http://localhost:8000
 @REM     echo Health:   http://localhost:8000/health
 @REM     echo.
@@ -59,11 +59,11 @@ if not exist "node_modules" (
     call npm install
 )
 echo [OK] Starting frontend dev server...
-start "AID Frontend" cmd /k "npm run dev -- --port 5173"
+start "AID Frontend" cmd /k "npm run dev -- --port 3000"
 timeout /t 3 /nobreak >nul
-start http://localhost:5173
+start http://localhost:3000/portal
 cd /d "%~dp0"
-echo [OK] Frontend starting at http://localhost:5173
+echo [OK] Frontend starting at http://localhost:3000
 echo.
 
 endlocal

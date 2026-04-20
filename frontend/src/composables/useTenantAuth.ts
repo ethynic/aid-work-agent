@@ -84,9 +84,10 @@ export function useTenantAuth() {
         // 验证 token 有效性
         const info = await getAdminInfo()
         // 修复: 后端返回 user 而非 admin
-        if (info?.user && info?.tenant) {
+        // 平台管理员的 tenant 可能是 null，需要分开判断
+        if (info?.user) {
           admin.value = info.user
-          tenant.value = info.tenant
+          tenant.value = info.tenant || null
         } else {
           // token 无效，清除
           clearStorage()
