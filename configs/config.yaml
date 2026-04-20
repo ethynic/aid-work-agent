@@ -133,6 +133,11 @@ saas:
   default_max_instances: 5
   default_max_users: 50
 
+# 演示模式配置
+demo:
+  enabled: ${DEMO_ENABLED:-true}
+  mock_password: "888888"
+
 # 定时任务配置
 scheduler:
   enabled: true

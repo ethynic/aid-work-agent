@@ -13,6 +13,7 @@ SaaS 管理员认证 API
 
 from typing import Optional
 
+import uuid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -102,6 +103,15 @@ class AdminLoginRequest(BaseModel):
     code: str = Field(..., min_length=4, max_length=6, description="短信验证码")
 
 
+class AdminPasswordLoginRequest(BaseModel):
+    """管理员密码+图形验证码登录请求"""
+    identifier: str = Field(..., description="手机号或用户名")
+    password: str = Field(..., description="密码")
+    captcha_code: str = Field(..., description="图形验证码")
+    captcha_id: str = Field(..., description="图形验证码ID")
+    tenant_id: Optional[str] = Field(None, description="租户ID（平台管理员可选，其他用户必填）")
+
+
 class SSOLoginRequest(BaseModel):
     code: str = Field(..., description="OAuth 授权码")
     redirect_uri: Optional[str] = Field(None, description="回调地址")
@@ -153,7 +163,7 @@ def get_current_admin(request: Request) -> Optional[dict]:
 
         # 检查过期
         from datetime import datetime
-        if datetime.now() > datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S"):
+        if datetime.now() > row["expires_at"]:
             cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
             conn.commit()
             return None
@@ -180,10 +190,28 @@ def get_current_admin(request: Request) -> Optional[dict]:
 
 
 def require_admin(request: Request) -> dict:
-    """要求管理员认证，否则返回 401"""
+    """
+    要求管理员认证，否则返回 401
+    支持平台管理员通过 X-Tenant-Id Header 代管理租户
+    """
     admin = get_current_admin(request)
     if not admin:
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
+
+    # 平台管理员代管理：使用 X-Tenant-Id Header
+    x_tenant_id = request.headers.get("X-Tenant-Id")
+    if admin["role"] == "platform_admin" and x_tenant_id:
+        # 验证目标租户存在
+        target_tenant = TenantDB.get_by_id(x_tenant_id)
+        if not target_tenant:
+            raise HTTPException(status_code=404, detail="目标租户不存在")
+        # 切换到目标租户
+        admin["tenant_id"] = x_tenant_id
+    elif admin["role"] == "tenant_admin":
+        # 租户管理员只能访问自己的租户
+        if x_tenant_id and x_tenant_id != admin.get("tenant_id"):
+            raise HTTPException(status_code=403, detail="无权访问其他租户")
+
     return admin
 
 
@@ -261,6 +289,161 @@ async def admin_login(request: AdminLoginRequest):
         user={
             "user_id": user["user_id"],
             "phone": user["phone"],
+            "username": user.get("username"),
+            "role": role,
+        },
+        tenant={
+            "tenant_id": tenant["tenant_id"],
+            "company_name": tenant["company_name"],
+            "plan": tenant["plan"],
+            "status": tenant["status"],
+        } if tenant else None,
+    )
+
+
+@router.post("/login/password")
+async def admin_password_login(request: AdminPasswordLoginRequest):
+    """管理员密码+图形验证码登录"""
+    from src.db.models import UserDB
+    from src.db.database import get_db_connection, get_db_placeholder
+    import secrets
+    from datetime import datetime, timedelta
+
+    # 检查 SaaS 是否启用
+    if not settings.saas.enabled:
+        return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
+
+    # 1. 验证图形验证码
+    from src.db.models import verify_captcha
+    if not verify_captcha(request.captcha_id, request.captcha_code):
+        return AdminLoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
+
+    # 2. 根据 identifier 判断是手机号还是用户名
+    identifier = request.identifier.strip()
+    user = None
+    is_phone = False
+
+    if identifier.isdigit() and len(identifier) == 11:
+        user = UserDB.get_by_phone(identifier)
+        is_phone = True
+    else:
+        # 按用户名查找
+        placeholder = get_db_placeholder()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifier,))
+            row = cursor.fetchone()
+            if row:
+                user = dict(row)
+
+    # 3. 平台管理员检查：手机号在admin.phones中 且 密码等于QBTOKEN
+    admin_phones = getattr(settings, "admin", None)
+    qb_token = getattr(settings, "qb_token", "")
+    is_platform_admin = (
+        is_phone
+        and admin_phones
+        and identifier in getattr(admin_phones, "phones", [])
+        and qb_token
+        and request.password == qb_token
+    )
+
+    if is_platform_admin and not user:
+        # 平台管理员但用户不存在，自动创建用户（role='platform_admin'）
+        logger.info(f"平台管理员用户不存在，自动创建，phone={identifier}")
+        placeholder = get_db_placeholder()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            user_id = str(uuid.uuid4())
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(f"""
+                INSERT INTO users (user_id, username, phone, role, created_at, updated_at)
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+            """, (user_id, identifier, identifier, "platform_admin", now, now))
+            conn.commit()
+            cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
+            user = dict(cursor.fetchone())
+
+    if not user:
+        return AdminLoginResponse(success=False, message="用户不存在")
+
+    # 4. 检查是否是管理员
+    role = user.get("role", "user")
+    if role not in ("platform_admin", "tenant_admin"):
+        return AdminLoginResponse(success=False, message="该账号不是管理员")
+
+    if user.get("status", 1) != 1:
+        return AdminLoginResponse(success=False, message="账号已停用")
+
+    # 5. 平台管理员直接登录
+    if is_phone and admin_phones:
+        phone_list = getattr(admin_phones, "phones", [])
+        if user.get("phone", "") in phone_list:
+            qb_token = getattr(settings, "qb_token", "")
+            if qb_token and request.password == qb_token:
+                # 确保 role 为 platform_admin
+                if user.get("role") != "platform_admin":
+                    UserDB.update(user["user_id"], role="platform_admin")
+                    user = UserDB.get_by_id(user["user_id"])
+                role = "platform_admin"
+            else:
+                return AdminLoginResponse(success=False, message="手机号或密码有误")
+        else:
+            return AdminLoginResponse(success=False, message="手机号或密码有误")
+    else:
+        # 普通管理员密码校验
+        password_hash = user.get("password_hash")
+        if not password_hash:
+            return AdminLoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
+
+        from src.db.models import hash_password
+        if password_hash != hash_password(request.password):
+            return AdminLoginResponse(success=False, message="手机号或密码有误")
+
+    # 6. tenant_id 验证（非必填，但传入时需要验证）
+    if request.tenant_id:
+        if role == "platform_admin":
+            # 平台管理员：验证目标租户存在
+            target_tenant = TenantDB.get_by_id(request.tenant_id)
+            if not target_tenant:
+                return AdminLoginResponse(success=False, message="目标租户不存在")
+            # 平台管理员可以访问任意租户
+            target_tenant_id = request.tenant_id
+        elif role in ("tenant_admin", "user"):
+            # 租户管理员/普通用户：只能访问自己的租户
+            if request.tenant_id != user.get("tenant_id"):
+                return AdminLoginResponse(success=False, message="无权访问其他租户")
+            target_tenant_id = user.get("tenant_id")
+        else:
+            target_tenant_id = user.get("tenant_id")
+    else:
+        # 未传 tenant_id，使用用户自身的 tenant_id
+        target_tenant_id = user.get("tenant_id")
+
+    # 7. 生成 token
+    token = f"saas_{secrets.token_urlsafe(32)}"
+    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tokens (token, user_id, expires_at)
+            VALUES (?, ?, ?)
+        """, (token, user["user_id"], expires_at))
+        conn.commit()
+
+    # 8. 获取租户信息（使用 target_tenant_id，可能是平台管理员代管理的目标租户）
+    tenant = None
+    if target_tenant_id:
+        tenant = TenantDB.get_by_id(target_tenant_id)
+
+    logger.info(f"Admin password login: {user['user_id']} ({identifier}) -> role {role}, target_tenant {target_tenant_id}")
+
+    return AdminLoginResponse(
+        success=True,
+        token=token,
+        user={
+            "user_id": user["user_id"],
+            "phone": user.get("phone"),
             "username": user.get("username"),
             "role": role,
         },

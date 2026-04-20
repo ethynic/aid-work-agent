@@ -1,7 +1,7 @@
 /**
  * SaaS 租户管理 API Client
  * 所有 /api/saas/* 调用的统一封装
- * 使用独立的 saas_token（与公共用户 auth_token 分离）
+ * 使用独立的 saas_token（与演示模式 demo_token 分离）
  */
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
@@ -34,24 +34,71 @@ export async function adminLogin(phone: string, code: string): Promise<{
   return res.json()
 }
 
+export interface AdminPasswordLoginRequest {
+  identifier: string
+  password: string
+  captcha_code: string
+  captcha_id: string
+  tenant_id?: string
+}
+
+export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Promise<{
+  success: boolean
+  token?: string
+  user?: { user_id: string; phone: string; username: string; role: string }
+  tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/auth/login/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  if (!res.ok) throw new Error('登录失败')
+  return res.json()
+}
+
 export async function adminLogout(): Promise<void> {
-  const token = localStorage.getItem('saas_token')
+  const path = window.location.pathname
+  let tokenKey: string
+  if (path.startsWith('/portal')) {
+    tokenKey = 'portal_token'
+  } else if (path.startsWith('/t/')) {
+    tokenKey = 'saas_token'
+  } else {
+    tokenKey = 'saas_token'
+  }
+
+  const adminKey = tokenKey.replace('token', 'admin')
+  const tenantKey = tokenKey.replace('token', 'tenant')
+
+  const token = localStorage.getItem(tokenKey)
   if (token) {
     await fetch(`${API_BASE}/auth/logout`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     })
   }
-  localStorage.removeItem('saas_token')
-  localStorage.removeItem('saas_admin')
-  localStorage.removeItem('saas_tenant')
+  localStorage.removeItem(tokenKey)
+  localStorage.removeItem(adminKey)
+  localStorage.removeItem(tenantKey)
 }
 
 export async function getAdminInfo(): Promise<{
   user?: { user_id: string; phone: string; username: string; role: string }
   tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
 } | null> {
-  const token = localStorage.getItem('saas_token')
+  const path = window.location.pathname
+  let tokenKey: string
+  if (path.startsWith('/portal')) {
+    tokenKey = 'portal_token'
+  } else if (path.startsWith('/t/')) {
+    tokenKey = 'saas_token'
+  } else {
+    tokenKey = 'saas_token'
+  }
+
+  const token = localStorage.getItem(tokenKey)
   if (!token) return null
   const res = await fetch(`${API_BASE}/auth/me`, {
     headers: { 'Authorization': `Bearer ${token}` }
@@ -88,6 +135,14 @@ export async function getTenantStats(): Promise<{
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取统计数据失败')
+  return res.json()
+}
+
+export async function listTenants(): Promise<{ success: boolean; tenants: any[] }> {
+  const res = await fetch(`${API_BASE}/tenants/list`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取租户列表失败')
   return res.json()
 }
 
@@ -361,10 +416,39 @@ export async function getUsage(): Promise<{
 
 // ==================== 工具函数 ====================
 
-function getSaasAuthHeader(): Record<string, string> {
-  const token = localStorage.getItem('saas_token')
-  if (token) {
-    return { 'Authorization': `Bearer ${token}` }
+// 根据当前路由获取对应的 token key
+function getTokenKey(): string {
+  const path = window.location.pathname
+  if (path.startsWith('/portal')) {
+    return 'portal_token'
+  } else if (path.startsWith('/t/')) {
+    return 'saas_token'
   }
-  return {}
+  return 'saas_token'
+}
+
+// 获取当前 tenant_id（从 URL 路径 /t/:tenant_id 中提取）
+function getCurrentTenantId(): string | null {
+  const path = window.location.pathname
+  const match = path.match(/^\/t\/([^/]+)/)
+  return match ? match[1] : null
+}
+
+function getSaasAuthHeader(): Record<string, string> {
+  const headers: Record<string, string> = {}
+
+  // 根据路由获取对应的 token
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  // 从 URL 路径获取 tenant_id，添加到 Header
+  const tenantId = getCurrentTenantId()
+  if (tenantId) {
+    headers['X-Tenant-Id'] = tenantId
+  }
+
+  return headers
 }

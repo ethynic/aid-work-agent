@@ -49,15 +49,38 @@ class TextEmbeddingV3Client:
         self.model = "text-embedding-v3"
         self.dimension = 1024
 
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    async def embed_batch(self, texts: List[str], batch_size: int = 10) -> List[List[float]]:
         """
-        批量向量化
+        批量向量化（自动分批，避免超限）
 
         Args:
             texts: 文本列表
+            batch_size: 每批大小，默认 10（API 限制）
 
         Returns:
             向量列表，每个向量维度为 1024
+        """
+        if not texts:
+            return []
+
+        all_embeddings = []
+        # 分批处理，每批最多 batch_size 个
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            batch_embeddings = await self._embed_single_batch(batch)
+            all_embeddings.extend(batch_embeddings)
+
+        return all_embeddings
+
+    async def _embed_single_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        单批次向量化（不拆分）
+
+        Args:
+            texts: 文本列表（最多 10 个）
+
+        Returns:
+            向量列表
         """
         try:
             # TextEmbedding.call 是同步 SDK，使用 to_thread 包装

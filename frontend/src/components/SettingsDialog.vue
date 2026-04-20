@@ -279,7 +279,7 @@ async function saveProfile() {
       avatar_url: profileForm.avatar_url || undefined,
     })
     if (result.success && result.user) {
-      setLogin(localStorage.getItem('auth_token')!, result.user)
+      setLogin(localStorage.getItem('demo_token')!, result.user)
       alert('资料更新成功')
     } else {
       alert(result.error || '更新失败')

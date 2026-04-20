@@ -30,7 +30,7 @@ export function useAuth() {
 
     isLoading.value = true
     try {
-      const savedToken = localStorage.getItem('auth_token')
+      const savedToken = localStorage.getItem('demo_token')
       const savedUser = localStorage.getItem('user_info')
 
       if (savedToken && savedUser) {
@@ -42,7 +42,7 @@ export function useAuth() {
           user.value = userInfo
         } else {
           // token 无效，清除
-          localStorage.removeItem('auth_token')
+          localStorage.removeItem('demo_token')
           localStorage.removeItem('user_info')
           token.value = null
         }
@@ -61,7 +61,7 @@ export function useAuth() {
   function setLogin(newToken: string, userInfo: User) {
     token.value = newToken
     user.value = userInfo
-    localStorage.setItem('auth_token', newToken)
+    localStorage.setItem('demo_token', newToken)
     localStorage.setItem('user_info', JSON.stringify(userInfo))
   }
 
@@ -76,7 +76,7 @@ export function useAuth() {
     } finally {
       token.value = null
       user.value = null
-      localStorage.removeItem('auth_token')
+      localStorage.removeItem('demo_token')
       localStorage.removeItem('user_info')
     }
   }
@@ -85,7 +85,7 @@ export function useAuth() {
    * 获取 Authorization header
    */
   function getAuthHeader(): Record<string, string> {
-    const t = token.value || localStorage.getItem('auth_token')
+    const t = token.value || localStorage.getItem('demo_token')
     if (t) {
       return { 'Authorization': `Bearer ${t}` }
     }

@@ -197,6 +197,10 @@ class TextChunker:
         Returns:
             句子列表
         """
+        # 将换行符转换为空格，保留行内语义但不作为句子边界
+        text = text.replace('\n', ' ')
+        text = re.sub(r' {2,}', ' ', text)  # 合并多个空格
+
         # 先处理中文句子边界
         result = []
         buffer = ""
@@ -213,12 +217,7 @@ class TextChunker:
             elif char == '.' or char == '!' or char == '?':
                 buffer += char
                 # 检查是否是英文句子结束（后面跟空格或结束）
-                if i + 1 >= len(text) or text[i + 1] in ' \n\t':
-                    result.append(buffer)
-                    buffer = ""
-            elif char == '\n':
-                # 换行符作为段落分隔，保留当前累积内容
-                if buffer:
+                if i + 1 >= len(text) or text[i + 1] in ' \t':
                     result.append(buffer)
                     buffer = ""
             else:

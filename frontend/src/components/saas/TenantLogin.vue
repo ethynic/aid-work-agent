@@ -2,8 +2,8 @@
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-8 pt-8 pb-6">
-        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">爱定义管理中台</h1>
-        <p class="text-sm text-slate-500 text-center mb-8">管理员登录</p>
+        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">{{ pageTitle.title }}</h1>
+        <p class="text-sm text-slate-500 text-center mb-8">{{ pageTitle.subtitle }}</p>
 
         <div class="space-y-4">
           <!-- 账号类型切换 -->
@@ -106,13 +106,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { login, getCaptcha } from '@/api/auth'
+import { ref, onMounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { getCaptcha } from '@/api/auth'
+import { adminPasswordLogin } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
+const route = useRoute()
 const { setLogin } = useTenantAuth()
+
+// 从路由参数获取 tenant_id
+const tenantId = computed(() => route.params.tenant_id as string)
+const isPortalRoute = computed(() => !tenantId.value)
+
+// 登录页标题动态显示
+const pageTitle = computed(() => {
+  if (isPortalRoute.value) {
+    return { title: '爱定义管理后台', subtitle: '平台管理员登录' }
+  }
+  return { title: '租户登录', subtitle: '请输入账号信息' }
+})
 
 const loginType = ref<'phone' | 'username'>('phone')
 const identifier = ref('')
@@ -159,15 +173,21 @@ async function handleLogin() {
   errorMessage.value = ''
 
   try {
-    const res = await login({
+    const res = await adminPasswordLogin({
       identifier: identifier.value,
       password: password.value,
       captcha_code: captchaCode.value,
-      captcha_id: captchaId.value
+      captcha_id: captchaId.value,
+      tenant_id: tenantId.value
     })
     if (res.success && res.token && res.user) {
-      setLogin(res.token, res.user, null)
-      router.push('/portal')
+      setLogin(res.token, res.user, res.tenant)
+      // 根据当前路由决定跳转
+      if (isPortalRoute.value) {
+        router.push('/portal')
+      } else {
+        router.push(`/t/${tenantId.value}`)
+      }
     } else {
       errorMessage.value = res.message || '登录失败'
       // 登录失败后刷新验证码
@@ -184,6 +204,11 @@ async function handleLogin() {
 }
 
 onMounted(() => {
+  // /t/:tenant_id/login 路径下必须有 tenant_id
+  if (!isPortalRoute.value && !tenantId.value) {
+    errorMessage.value = 'URL 缺少租户ID'
+    return
+  }
   refreshCaptcha()
 })
 </script>

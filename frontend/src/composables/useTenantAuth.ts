@@ -1,6 +1,8 @@
 /**
  * SaaS 租户管理员认证状态管理
- * 独立于普通用户认证（useAuth），使用 saas_token
+ * 根据路由判断使用不同的 token key：
+ * - /portal 路由使用 portal_token
+ * - /t/:tenant_id 路由使用 saas_token
  */
 
 import { ref, computed } from 'vue'
@@ -26,6 +28,37 @@ const saasToken = ref<string | null>(null)
 const isLoading = ref(false)
 const isInitialized = ref(false)
 
+// 根据当前路由获取对应的 token key
+function getTokenKey(): string {
+  const path = window.location.pathname
+  if (path.startsWith('/portal')) {
+    return 'portal_token'
+  } else if (path.startsWith('/t/')) {
+    return 'saas_token'
+  }
+  return 'saas_token' // 默认
+}
+
+function getAdminKey(): string {
+  const path = window.location.pathname
+  if (path.startsWith('/portal')) {
+    return 'portal_admin'
+  } else if (path.startsWith('/t/')) {
+    return 'saas_admin'
+  }
+  return 'saas_admin'
+}
+
+function getTenantKey(): string {
+  const path = window.location.pathname
+  if (path.startsWith('/portal')) {
+    return 'portal_tenant'
+  } else if (path.startsWith('/t/')) {
+    return 'saas_tenant'
+  }
+  return 'saas_tenant'
+}
+
 export function useTenantAuth() {
   const isLoggedIn = computed(() => !!saasToken.value && !!admin.value)
 
@@ -37,17 +70,22 @@ export function useTenantAuth() {
 
     isLoading.value = true
     try {
-      const savedToken = localStorage.getItem('saas_token')
-      const savedAdmin = localStorage.getItem('saas_admin')
-      const savedTenant = localStorage.getItem('saas_tenant')
+      const tokenKey = getTokenKey()
+      const adminKey = getAdminKey()
+      const tenantKey = getTenantKey()
+
+      const savedToken = localStorage.getItem(tokenKey)
+      const savedAdmin = localStorage.getItem(adminKey)
+      const savedTenant = localStorage.getItem(tenantKey)
 
       if (savedToken) {
         saasToken.value = savedToken
 
         // 验证 token 有效性
         const info = await getAdminInfo()
-        if (info?.admin && info?.tenant) {
-          admin.value = info.admin
+        // 修复: 后端返回 user 而非 admin
+        if (info?.user && info?.tenant) {
+          admin.value = info.user
           tenant.value = info.tenant
         } else {
           // token 无效，清除
@@ -74,12 +112,16 @@ export function useTenantAuth() {
    * 设置登录状态
    */
   function setLogin(token: string, adminInfo: TenantAdmin, tenantInfo: TenantInfo) {
+    const tokenKey = getTokenKey()
+    const adminKey = getAdminKey()
+    const tenantKey = getTenantKey()
+
     saasToken.value = token
     admin.value = adminInfo
     tenant.value = tenantInfo
-    localStorage.setItem('saas_token', token)
-    localStorage.setItem('saas_admin', JSON.stringify(adminInfo))
-    localStorage.setItem('saas_tenant', JSON.stringify(tenantInfo))
+    localStorage.setItem(tokenKey, token)
+    localStorage.setItem(adminKey, JSON.stringify(adminInfo))
+    localStorage.setItem(tenantKey, JSON.stringify(tenantInfo))
   }
 
   /**
@@ -102,7 +144,8 @@ export function useTenantAuth() {
    * 获取 Authorization header
    */
   function getAuthHeader(): Record<string, string> {
-    const t = saasToken.value || localStorage.getItem('saas_token')
+    const tokenKey = getTokenKey()
+    const t = saasToken.value || localStorage.getItem(tokenKey)
     if (t) {
       return { 'Authorization': `Bearer ${t}` }
     }
@@ -110,9 +153,12 @@ export function useTenantAuth() {
   }
 
   function clearStorage() {
-    localStorage.removeItem('saas_token')
-    localStorage.removeItem('saas_admin')
-    localStorage.removeItem('saas_tenant')
+    const tokenKey = getTokenKey()
+    const adminKey = getAdminKey()
+    const tenantKey = getTenantKey()
+    localStorage.removeItem(tokenKey)
+    localStorage.removeItem(adminKey)
+    localStorage.removeItem(tenantKey)
   }
 
   return {

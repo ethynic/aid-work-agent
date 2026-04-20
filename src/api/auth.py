@@ -233,6 +233,10 @@ async def send_code(request: SendCodeRequest):
 async def login(request: LoginRequest):
     """新的登录接口：手机号/用户名 + 密码 + 图形验证码
 
+    支持两种模式：
+    - 演示模式（DEMO_ENABLED=true）：任意手机号 + 888888 密码登录，自动注册用户
+    - SaaS 模式：需要 users 表中有注册用户，且密码正确
+
     平台管理员判断条件：
     - 手机号在 config.yaml 的 admin.phones 数组中
     - 密码等于 .env 中的 QBTOKEN
@@ -241,9 +245,15 @@ async def login(request: LoginRequest):
     - 如果用户不存在但满足平台管理员条件，自动在 users 表创建该用户（role='platform_admin'）
     - 这样方便管理员的数据初始化
     """
+    from src.config.settings import settings
+
     # 校验图形验证码
     if not verify_captcha(request.captcha_id, request.captcha_code):
         return LoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
+
+    # 检查演示模式配置
+    demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
+    mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
 
     # 根据 identifier 判断是手机号还是用户名
     identifier = request.identifier.strip()
@@ -265,6 +275,20 @@ async def login(request: LoginRequest):
             row = cursor.fetchone()
             if row:
                 user = dict(row)
+
+    # 演示模式：任意手机号 + mock_password 即可登录（自动注册）
+    if demo_enabled and is_phone and request.password == mock_password:
+        if not user:
+            # 自动创建用户
+            user = UserDB.create(phone=identifier)
+            logger.info(f"演示模式自动创建用户: {identifier}")
+        if user:
+            token = generate_token(user["user_id"])
+            return LoginResponse(
+                success=True,
+                token=token,
+                user=get_user_info_with_admin(user)
+            )
 
     # 平台管理员检查：手机号在admin.phones中 且 密码等于QBTOKEN
     admin_phones = getattr(settings, "admin", None)
@@ -315,7 +339,10 @@ async def login(request: LoginRequest):
                     is_admin = True
 
     if is_admin:
-        # 平台管理员直接登录
+        # 平台管理员直接登录，确保 role 为 platform_admin
+        if user.get("role") != "platform_admin":
+            UserDB.update(user["user_id"], role="platform_admin")
+            user = UserDB.get_by_id(user["user_id"])
         token = generate_token(user["user_id"])
         return LoginResponse(
             success=True,
@@ -401,9 +428,23 @@ async def phone_login(request: PhoneLoginRequest):
 
 @router.post("/phone/code-login")
 async def phone_code_login(request: PhoneCodeLoginRequest):
-    """手机号验证码登录"""
-    # 如果验证码是888888，直接认为是合法验证码
-    if request.code == "888888":
+    """手机号验证码登录
+
+    支持两种模式：
+    - 演示模式（DEMO_ENABLED=true）：任意手机号 + 888888 验证码登录
+    - SaaS 模式：正常的短信验证码登录
+    """
+    from src.config.settings import settings
+
+    # 检查演示模式
+    demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
+    mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
+
+    # 如果验证码是888888，根据 DEMO_ENABLED 决定是否允许登录
+    if request.code == mock_password:
+        if not demo_enabled:
+            return LoginResponse(success=False, message="演示模式已关闭")
+
         user = UserDB.get_by_phone(request.phone)
         if not user:
             # 手机号不存在，自动注册

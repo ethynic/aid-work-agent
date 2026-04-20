@@ -52,7 +52,7 @@ const router = createRouter({
       name: 'admin-subagents',
       component: () => import('./components/DigitalEmployeeManager.vue')
     },
-    // SaaS 租户管理 Portal
+    // SaaS 租户管理 Portal（仅平台管理员）
     {
       path: '/portal/login',
       name: 'portal-login',
@@ -68,13 +68,22 @@ const router = createRouter({
       component: () => import('./components/saas/PortalLayout.vue'),
       children: [
         { path: '', name: 'portal-dashboard', component: () => import('./components/saas/TenantDashboard.vue') },
-        { path: 'instances', name: 'portal-instances', component: () => import('./components/saas/InstanceManager.vue') },
-        { path: 'channels', name: 'portal-channels', component: () => import('./components/saas/ChannelConfig.vue') },
-        { path: 'users', name: 'portal-users', component: () => import('./components/saas/TenantUserManager.vue') },
-        { path: 'skills', name: 'portal-skills', component: () => import('./components/saas/SkillManager.vue') },
-        { path: 'reports', name: 'portal-reports', component: () => import('./components/saas/UsageReports.vue') },
-        { path: 'billing', name: 'portal-billing', component: () => import('./components/saas/BillingView.vue') },
-        { path: 'settings', name: 'portal-settings', component: () => import('./components/saas/TenantSettings.vue') },
+        { path: 'tenants', name: 'portal-tenants', component: () => import('./components/saas/TenantMgmt.vue') },
+        { path: 'subagents', name: 'portal-subagents', component: () => import('./components/DigitalEmployeeManager.vue') },
+      ]
+    },
+    // 租户入口 /t/:tenant_id（所有用户）
+    {
+      path: '/t/:tenant_id',
+      component: () => import('./components/saas/PortalLayout.vue'),
+      children: [
+        { path: '', name: 'tenant-dashboard', component: () => import('./components/saas/TenantDashboard.vue') },
+        { path: 'login', name: 'tenant-login', component: () => import('./components/saas/TenantLogin.vue') },
+        { path: 'users', name: 'tenant-users', component: () => import('./components/saas/TenantUserManager.vue') },
+        { path: 'knowledge', name: 'tenant-knowledge', component: () => import('./components/KnowledgeBase.vue') },
+        { path: 'channels', name: 'tenant-channels', component: () => import('./components/saas/ChannelConfig.vue') },
+        { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
+        { path: 'chat', name: 'tenant-chat', component: () => import('./components/ChatContainer.vue') },
       ]
     }
   ]

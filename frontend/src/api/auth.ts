@@ -126,7 +126,7 @@ export async function bindPhone(userId: string, phone: string, code: string): Pr
  * 获取当前用户信息
  */
 export async function getCurrentUser(): Promise<any> {
-  const token = localStorage.getItem('auth_token')
+  const token = localStorage.getItem('demo_token')
   if (!token) return null
 
   const res = await fetch(`${API_BASE}/me`, {
@@ -141,14 +141,14 @@ export async function getCurrentUser(): Promise<any> {
  * 登出
  */
 export async function logout(): Promise<void> {
-  const token = localStorage.getItem('auth_token')
+  const token = localStorage.getItem('demo_token')
   if (token) {
     await fetch(`${API_BASE}/logout`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     })
   }
-  localStorage.removeItem('auth_token')
+  localStorage.removeItem('demo_token')
   localStorage.removeItem('user_info')
 }
 
@@ -156,7 +156,7 @@ export async function logout(): Promise<void> {
  * 获取认证请求头
  */
 export function getAuthHeader(): Record<string, string> {
-  const token = localStorage.getItem('auth_token')
+  const token = localStorage.getItem('demo_token')
   if (token) {
     return { 'Authorization': `Bearer ${token}` }
   }

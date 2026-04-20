@@ -79,9 +79,10 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         return response
 
     async def _resolve_admin_tenant(self, request: Request) -> Optional[str]:
-        """从管理员 token 解析 tenant_id
+        """
+        从管理员 token 解析 tenant_id
 
-        平台管理员 (role=platform_admin) tenant_id 为空，返回 None 表示可访问所有租户
+        平台管理员 (role=platform_admin) 可通过 X-Tenant-Id Header 指定目标租户
         租户管理员 (role=tenant_admin) 返回其 tenant_id
         """
         from datetime import datetime
@@ -103,8 +104,11 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             if not row:
                 return None
 
-            # 检查过期
-            if datetime.now() > datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S"):
+            # 检查过期（PostgreSQL 返回 datetime 对象，SQLite 返回字符串）
+            expires_at = row["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+            if datetime.now() > expires_at:
                 cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
                 conn.commit()
                 return None
@@ -120,8 +124,16 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                 return None
 
             role = row["role"]
-            # platform_admin 返回 None，表示可以访问所有租户
+
+            # 平台管理员：优先使用 X-Tenant-Id Header（代管理）
             if role == "platform_admin":
+                x_tenant_id = request.headers.get("X-Tenant-Id")
+                if x_tenant_id:
+                    # 验证目标租户存在
+                    from src.saas.db.tenant_db import TenantDB
+                    target_tenant = TenantDB.get_by_id(x_tenant_id)
+                    if target_tenant:
+                        return x_tenant_id
                 return None
 
             # tenant_admin 返回其 tenant_id

@@ -204,6 +204,12 @@ class SaasConfig(BaseModel):
     default_max_users: int = 50
 
 
+class DemoConfig(BaseModel):
+    """演示模式配置"""
+    enabled: bool = True
+    mock_password: str = "888888"
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -214,6 +220,7 @@ class Settings(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)
+    demo: DemoConfig = Field(default_factory=DemoConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token

@@ -4,7 +4,7 @@
     <aside class="w-60 bg-slate-900 text-white flex flex-col flex-shrink-0">
       <!-- 企业信息 -->
       <div class="p-4 border-b border-slate-700">
-        <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '爱定义管理后台' }}</h2>
+        <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || (isTenantRoute ? '租户管理后台' : '爱定义管理后台') }}</h2>
         <p class="text-sm text-slate-400 mt-1">{{ admin?.username || admin?.phone || '' }}</p>
       </div>
 
@@ -49,55 +49,84 @@ const router = useRouter()
 const route = useRoute()
 const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
 
-const menuItems = [
-  { path: '/portal', label: '仪表盘', icon: '📊' },
-  { path: '/portal/instances', label: '智能体管理', icon: '🤖' },
-  { path: '/portal/channels', label: '渠道配置', icon: '📡' },
-  { path: '/portal/users', label: '用户管理', icon: '👥' },
-  { path: '/portal/skills', label: 'Skill 管理', icon: '🧩' },
-  { path: '/portal/reports', label: '用量报告', icon: '📈' },
-  { path: '/portal/billing', label: '计费管理', icon: '💳' },
-  { path: '/portal/settings', label: '企业设置', icon: '⚙️' },
-]
+// 判断是否在 /t/:tenant_id 路由下
+const tenantId = computed(() => route.params.tenant_id as string)
+const isTenantRoute = computed(() => !!tenantId.value)
 
-// 平台管理员可见的菜单项
-const platformMenuItems = [
+// /portal 下的菜单（仅平台管理员）
+const portalMenuItems = [
   { path: '/portal', label: '仪表盘', icon: '📊' },
   { path: '/portal/tenants', label: '租户管理', icon: '🏢' },
-  { path: '/portal/skills', label: 'Skill 管理', icon: '🧩' },
-  { path: '/portal/reports', label: '用量报告', icon: '📈' },
+  { path: '/portal/subagents', label: '数字员工管理', icon: '🤖' },
 ]
 
+// /t/:tenant_id 下的管理员菜单（platform_admin + tenant_admin）
+const tenantAdminMenuItems = computed(() => [
+  { path: `/t/${tenantId.value}`, label: '仪表盘', icon: '📊' },
+  { path: `/t/${tenantId.value}/users`, label: '用户管理', icon: '👥' },
+  { path: `/t/${tenantId.value}/knowledge`, label: '企业知识库', icon: '📚' },
+  { path: `/t/${tenantId.value}/channels`, label: '渠道配置', icon: '📡' },
+  { path: `/t/${tenantId.value}/settings`, label: '企业设置', icon: '⚙️' },
+  { path: `/t/${tenantId.value}/chat`, label: '聊天', icon: '💬' },
+])
+
+// /t/:tenant_id 下的普通用户菜单（仅聊天）
+const tenantUserMenuItems = computed(() => [
+  { path: `/t/${tenantId.value}/chat`, label: '聊天', icon: '💬' },
+])
+
+// 根据路由和角色选择菜单
 const currentMenuItems = computed(() => {
-  if (admin.value?.role === 'platform_admin') {
-    return platformMenuItems
+  // /portal 路由下
+  if (!isTenantRoute.value) {
+    return portalMenuItems
   }
-  return menuItems
+  // /t/:tenant_id 路由下，根据角色判断
+  if (admin.value?.role === 'platform_admin' || admin.value?.role === 'tenant_admin') {
+    return tenantAdminMenuItems.value
+  }
+  // 普通用户
+  return tenantUserMenuItems.value
 })
 
-import { computed } from 'vue'
-
 function isActive(path: string) {
+  // 处理 /portal 路由
   if (path === '/portal') return route.path === '/portal'
+  // 处理 /t/:tenant_id 路由 - 需要替换实际 tenant_id
+  if (path.startsWith('/t/')) {
+    const basePath = path.replace(`/${tenantId.value}`, '')
+    return route.path === path || route.path.startsWith(path + '/')
+  }
   return route.path.startsWith(path)
 }
 
 async function handleLogout() {
   await logout()
-  router.push('/portal/login')
+  // 根据当前路由决定跳转
+  if (isTenantRoute.value) {
+    router.push(`/t/${tenantId.value}/login`)
+  } else {
+    router.push('/portal/login')
+  }
 }
 
 onMounted(async () => {
   await init()
   if (!isLoggedIn.value) {
-    router.push('/portal/login')
+    // 根据当前路由跳转到对应登录页
+    if (isTenantRoute.value) {
+      router.push(`/t/${tenantId.value}/login`)
+    } else {
+      router.push('/portal/login')
+    }
     return
   }
-  // 租户管理员不能访问 Portal
-  if (admin.value?.role === 'tenant_admin') {
-    alert('租户管理员无法访问管理后台')
+  // /portal 路由下，只允许 platform_admin
+  if (!isTenantRoute.value && admin.value?.role !== 'platform_admin') {
+    alert('只有平台管理员才能访问管理后台')
     await logout()
     router.push('/portal/login')
   }
+  // 租户管理员访问其他租户应被拒绝（在后端处理）
 })
 </script>

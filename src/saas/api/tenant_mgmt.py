@@ -71,3 +71,20 @@ async def get_tenant_stats(request: Request):
     admin = require_admin(request)
     stats = TenantDB.get_stats(admin["tenant_id"])
     return {"success": True, "stats": stats}
+
+
+@router.get("/list")
+async def list_tenants(request: Request):
+    """获取租户列表（仅平台管理员）"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+
+    # 只有平台管理员可以查看所有租户
+    if admin.get("role") != "platform_admin":
+        return {"success": False, "message": "权限不足"}
+
+    # 获取所有租户（使用较大的 limit）
+    tenants = TenantDB.list_tenants(limit=1000)
+    return {"success": True, "tenants": tenants}
