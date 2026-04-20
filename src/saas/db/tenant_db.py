@@ -111,6 +111,21 @@ class TenantDB:
             return results
 
     @staticmethod
+    def delete(tenant_id: str) -> bool:
+        """删除租户（软删除，设置 status = deactivated）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tenants SET status = 'deactivated', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?",
+                (tenant_id,),
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info(f"Tenant deleted: {tenant_id}")
+                return True
+            return False
+
+    @staticmethod
     def get_stats(tenant_id: str) -> Dict[str, Any]:
         """获取租户统计信息"""
         with get_db_connection() as conn:

@@ -146,6 +146,64 @@ export async function listTenants(): Promise<{ success: boolean; tenants: any[] 
   return res.json()
 }
 
+// ==================== 租户管理（平台管理员） ====================
+
+export interface TenantFormData {
+  company_name: string
+  contact_name?: string
+  contact_phone?: string
+  plan?: string
+  max_instances?: number
+  max_users?: number
+}
+
+export async function getTenantById(tenantId: string): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {
+  const res = await fetch(`${API_BASE}/tenants/${encodeURIComponent(tenantId)}`, {
+    headers: getSaasAuthHeader()
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '获取租户详情失败')
+  return data
+}
+
+export async function createTenant(data: TenantFormData): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {
+  const res = await fetch(`${API_BASE}/tenants/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(data)
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.error || result.debug || '创建租户失败')
+  }
+  return result
+}
+
+export async function updateTenant(tenantId: string, data: Partial<TenantFormData & { status?: string }>): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {
+  const res = await fetch(`${API_BASE}/tenants/${encodeURIComponent(tenantId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(data)
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.error || result.debug || '更新租户失败')
+  }
+  return result
+}
+
+export async function deleteTenant(tenantId: string): Promise<{ success: boolean; message?: string; error?: string; debug?: string }> {
+  const res = await fetch(`${API_BASE}/tenants/${encodeURIComponent(tenantId)}`, {
+    method: 'DELETE',
+    headers: getSaasAuthHeader()
+  })
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.error || result.debug || '删除租户失败')
+  }
+  return result
+}
+
 // ==================== 智能体实例 ====================
 
 export async function listInstances(): Promise<{ success: boolean; instances: any[] }> {
