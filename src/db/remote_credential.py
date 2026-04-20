@@ -179,7 +179,7 @@ class RemoteCredentialDB:
             cursor = conn.cursor()
             cursor.execute(f"""
                 SELECT * FROM remote_credentials
-                WHERE credential_id = {placeholder} AND user_id = {placeholder} AND status = 1
+                WHERE credential_id = {placeholder} AND user_id = {placeholder} AND status = 'active'
             """, (credential_id, user_id))
             row = cursor.fetchone()
 
@@ -217,7 +217,7 @@ class RemoteCredentialDB:
                            username, remote_path, domain, name, description,
                            status, created_at, updated_at
                     FROM remote_credentials
-                    WHERE user_id = {placeholder} AND connection_type = {placeholder} AND status = 1
+                    WHERE user_id = {placeholder} AND connection_type = {placeholder} AND status = 'active'
                     ORDER BY created_at DESC
                 """, (user_id, connection_type))
             else:
@@ -226,7 +226,7 @@ class RemoteCredentialDB:
                            username, remote_path, domain, name, description,
                            status, created_at, updated_at
                     FROM remote_credentials
-                    WHERE user_id = {placeholder} AND status = 1
+                    WHERE user_id = {placeholder} AND status = 'active'
                     ORDER BY created_at DESC
                 """, (user_id,))
 
@@ -252,7 +252,7 @@ class RemoteCredentialDB:
                        username, remote_path, domain, name, description,
                        status, created_at, updated_at
                 FROM remote_credentials
-                WHERE user_id = {placeholder} AND remote_path = {placeholder} AND status = 1
+                WHERE user_id = {placeholder} AND remote_path = {placeholder} AND status = 'active'
                 LIMIT 1
             """, (user_id, remote_path))
             row = cursor.fetchone()
@@ -324,7 +324,7 @@ class RemoteCredentialDB:
             cursor = conn.cursor()
             cursor.execute(f"""
                 UPDATE remote_credentials
-                SET status = 0, updated_at = {ts}
+                SET status = 'inactive', updated_at = {ts}
                 WHERE credential_id = {placeholder} AND user_id = {placeholder}
             """, (credential_id, user_id))
             conn.commit()

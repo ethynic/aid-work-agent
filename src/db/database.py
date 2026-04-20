@@ -390,7 +390,7 @@ def _init_sqlite():
                 avatar_url TEXT,
                 tenant_id TEXT,
                 role TEXT DEFAULT 'user',
-                status INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -494,7 +494,7 @@ def _init_sqlite():
                 domain TEXT,
                 name TEXT,
                 description TEXT,
-                status INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
@@ -710,7 +710,7 @@ def _init_sqlite():
                 imap_server TEXT NOT NULL,
                 imap_port INTEGER NOT NULL,
                 imap_encryption TEXT DEFAULT 'ssl',
-                status INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
@@ -764,7 +764,7 @@ def _init_postgresql():
                 avatar_url TEXT,
                 tenant_id TEXT,
                 role TEXT DEFAULT 'user',
-                status INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -868,7 +868,7 @@ def _init_postgresql():
                 domain TEXT,
                 name TEXT,
                 description TEXT,
-                status INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
@@ -1087,7 +1087,7 @@ def _init_postgresql():
                 imap_server TEXT NOT NULL,
                 imap_port INTEGER NOT NULL,
                 imap_encryption TEXT DEFAULT 'ssl',
-                status INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)

@@ -39,7 +39,7 @@ class EmailCredentialDB:
                 SET email_address = ?, smtp_server = ?, smtp_port = ?, smtp_user = ?,
                     smtp_password = ?, smtp_encryption = ?, imap_server = ?,
                     imap_port = ?, imap_encryption = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND status = 1
+                WHERE user_id = ? AND status = 'active'
             """, (
                 config["email_address"],
                 config["smtp_server"],
@@ -74,7 +74,7 @@ class EmailCredentialDB:
                     user_id, email_address, smtp_server, smtp_port, smtp_user,
                     smtp_password, smtp_encryption, imap_server, imap_port,
                     imap_encryption, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
             """, (
                 user_id,
                 config["email_address"],
@@ -106,7 +106,7 @@ class EmailCredentialDB:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM user_email_settings
-                WHERE user_id = ? AND status = 1
+                WHERE user_id = ? AND status = 'active'
             """, (user_id,))
             row = cursor.fetchone()
 
@@ -154,8 +154,8 @@ class EmailCredentialDB:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE user_email_settings
-                SET status = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND status = 1
+                SET status = 'inactive', updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND status = 'active'
             """, (user_id,))
             conn.commit()
 

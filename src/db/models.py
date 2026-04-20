@@ -179,7 +179,7 @@ class UserDB:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM users
-                WHERE tenant_id = ? AND status = 1
+                WHERE tenant_id = ? AND status = 'active'
                 ORDER BY created_at DESC
                 LIMIT ?
             """, (tenant_id, limit))
@@ -198,13 +198,13 @@ class UserDB:
                 cursor.execute("""
                     SELECT * FROM users
                     WHERE role IN ('platform_admin', 'tenant_admin')
-                    AND tenant_id = ? AND status = 1
+                    AND tenant_id = ? AND status = 'active'
                     ORDER BY created_at
                 """, (tenant_id,))
             else:
                 cursor.execute("""
                     SELECT * FROM users
-                    WHERE role = 'platform_admin' AND status = 1
+                    WHERE role = 'platform_admin' AND status = 'active'
                     ORDER BY created_at
                 """)
             return [dict(row) for row in cursor.fetchall()]

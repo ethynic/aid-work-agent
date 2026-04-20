@@ -28,7 +28,7 @@ class UsageLogDB:
             # 从 users 表获取该租户的所有用户（排除平台管理员）
             cursor.execute("""
                 SELECT user_id FROM users
-                WHERE tenant_id = ? AND status = 1 AND role != 'platform_admin'
+                WHERE tenant_id = ? AND status = 'active' AND role != 'platform_admin'
             """, (tenant_id,))
             user_ids = [row["user_id"] for row in cursor.fetchall()]
 
@@ -71,7 +71,7 @@ class UsageLogDB:
                     MAX(cr.created_at) as last_active
                 FROM users u
                 JOIN chat_records cr ON cr.user_id = u.user_id
-                WHERE u.tenant_id = ? AND u.status = 1 AND u.role != 'platform_admin'
+                WHERE u.tenant_id = ? AND u.status = 'active' AND u.role != 'platform_admin'
                   AND cr.created_at >= ? AND cr.created_at <= ?
                 GROUP BY cr.user_id, u.username
                 ORDER BY total_tokens DESC
@@ -92,7 +92,7 @@ class UsageLogDB:
             # 使用 users 表获取租户用户
             cursor.execute("""
                 SELECT user_id FROM users
-                WHERE tenant_id = ? AND status = 1 AND role != 'platform_admin'
+                WHERE tenant_id = ? AND status = 'active' AND role != 'platform_admin'
             """, (tenant_id,))
             user_ids = [row["user_id"] for row in cursor.fetchall()]
 

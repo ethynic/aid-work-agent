@@ -29,7 +29,7 @@ CREATE TABLE remote_credentials (
     domain TEXT,  -- SMB 域（可选）
     name TEXT,
     description TEXT,
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP,
     updated_at TIMESTAMP
 )

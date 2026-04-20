@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url TEXT,
     tenant_id TEXT,
     role TEXT DEFAULT 'user',
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS remote_credentials (
     domain TEXT,
     name TEXT,
     description TEXT,
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS user_email_settings (
     imap_server TEXT NOT NULL,
     imap_port INTEGER NOT NULL,
     imap_encryption TEXT DEFAULT 'ssl',
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -431,7 +431,7 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url TEXT,
     tenant_id TEXT,
     role TEXT DEFAULT 'user',
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -508,7 +508,7 @@ CREATE TABLE IF NOT EXISTS remote_credentials (
     domain TEXT,
     name TEXT,
     description TEXT,
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -629,7 +629,7 @@ CREATE TABLE IF NOT EXISTS user_email_settings (
     imap_server TEXT NOT NULL,
     imap_port INTEGER NOT NULL,
     imap_encryption TEXT DEFAULT 'ssl',
-    status INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
