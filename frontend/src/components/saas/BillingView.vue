@@ -112,7 +112,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { getPlans, listSubscriptions, getUsage, createSubscription, payOrder } from '@/api/saasTenant'
+
+const toast = useToast()
 
 const loading = ref(true)
 const plans = ref<any[]>([])
@@ -163,7 +166,7 @@ async function handleSubscribe() {
     }
     await loadData()
   } catch (e: any) {
-    alert(e.message || '订阅失败')
+    toast.error(e.message || '订阅失败')
   } finally {
     subscribing.value = false
   }

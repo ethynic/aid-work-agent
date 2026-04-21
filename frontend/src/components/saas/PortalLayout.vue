@@ -43,11 +43,13 @@
 <script setup lang="ts">
 import { onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
 const route = useRoute()
 const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
+const toast = useToast()
 
 // 判断是否在 /t/:tenant_id 路由下
 const tenantId = computed(() => route.params.tenant_id as string)
@@ -123,7 +125,7 @@ onMounted(async () => {
   }
   // /portal 路由下，只允许 platform_admin
   if (!isTenantRoute.value && admin.value?.role !== 'platform_admin') {
-    alert('只有平台管理员才能访问管理后台')
+    toast.warning('只有平台管理员才能访问管理后台')
     await logout()
     router.push('/portal/login')
   }

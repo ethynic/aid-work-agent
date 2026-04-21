@@ -127,6 +127,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
@@ -139,6 +140,8 @@ import { useAgent } from '@/composables/useAgent'
 import { useAuth } from '@/composables/useAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
+
+const toast = useToast()
 
 const {
   messages,
@@ -198,7 +201,7 @@ function openCustomerInfo() {
     window.open(`/customer-info?${params.toString()}`, '_blank')
   } else {
     // 如果没有用户信息，提示登录
-    alert('请先登录')
+    toast.warning('请先登录')
     showLoginModal.value = true
   }
 }

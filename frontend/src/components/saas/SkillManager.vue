@@ -63,7 +63,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { listSkills, uploadSkill, updateSkill, deleteSkill } from '@/api/saasTenant'
+
+const toast = useToast()
 
 const loading = ref(true)
 const skills = ref<any[]>([])
@@ -133,7 +136,7 @@ async function handleDelete(name: string) {
     await deleteSkill(name)
     await loadSkills()
   } catch (e: any) {
-    alert(e.message || '删除失败')
+    toast.error(e.message || '删除失败')
   }
 }
 

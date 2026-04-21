@@ -91,7 +91,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { getUsageSummary, getTokenTrend, getUserUsage, exportReport } from '@/api/saasTenant'
+
+const toast = useToast()
 
 const loading = ref(true)
 const days = ref(30)
@@ -139,7 +142,7 @@ async function handleExport() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: any) {
-    alert(e.message || '导出失败')
+    toast.error(e.message || '导出失败')
   }
 }
 

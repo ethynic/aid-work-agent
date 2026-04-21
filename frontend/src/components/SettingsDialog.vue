@@ -216,6 +216,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, h } from 'vue'
 import { useAuth } from '@/composables/useAuth'
+import { useToast } from 'vue-toastification'
 import {
   getEmailSettings as apiGetEmailSettings,
   saveEmailSettings as apiSaveEmailSettings,
@@ -249,6 +250,7 @@ defineEmits<{
 }>()
 
 const { user, setLogin } = useAuth()
+const toast = useToast()
 
 const tabs = [
   { key: 'basic', label: '基础设置', icon: IconUser },
@@ -280,12 +282,12 @@ async function saveProfile() {
     })
     if (result.success && result.user) {
       setLogin(localStorage.getItem('demo_token')!, result.user)
-      alert('资料更新成功')
+      toast.success('资料更新成功')
     } else {
-      alert(result.error || '更新失败')
+      toast.error(result.error || '更新失败')
     }
   } catch (e: any) {
-    alert('更新失败: ' + e.message)
+    toast.error('更新失败: ' + e.message)
   } finally {
     profileSaving.value = false
   }
@@ -365,7 +367,7 @@ async function saveEmailSettings() {
   try {
     const result = await apiSaveEmailSettings({ ...emailForm })
     if (result.success) {
-      alert('邮箱绑定成功！测试邮件已发送到您的邮箱。')
+      toast.success('邮箱绑定成功！测试邮件已发送到您的邮箱。')
       await loadEmailSettings()
     } else {
       emailError.value = result.error || '保存失败'
@@ -389,10 +391,10 @@ async function handleDeleteEmail() {
     if (result.success) {
       await loadEmailSettings()
     } else {
-      alert(result.error || '删除失败')
+      toast.error(result.error || '删除失败')
     }
   } catch (e: any) {
-    alert('删除失败: ' + e.message)
+    toast.error('删除失败: ' + e.message)
   } finally {
     emailDeleting.value = false
   }

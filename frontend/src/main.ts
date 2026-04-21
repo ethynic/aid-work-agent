@@ -1,5 +1,7 @@
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
+import Toast, { useToast } from 'vue-toastification'
+import 'vue-toastification/dist/index.css'
 import App from './App.vue'
 import './style.css'
 import { useTheme } from './composables/useTheme'
@@ -97,4 +99,22 @@ router.beforeEach(async () => {
   }
 })
 
-createApp(App).use(router).mount('#app')
+createApp(App).use(router).use(Toast, {
+  position: 'top-center',
+  timeout: 3000,
+  closeOnClick: true,
+  pauseOnFocusLoss: true,
+  pauseOnHover: true,
+  draggable: true,
+  draggablePercent: 0.6,
+  showCloseButtonOnHover: false,
+  hideProgressBar: false,
+  closeButton: 'button',
+  icon: true,
+  rtl: false,
+  transition: {
+    enter: 'fade-enter',
+    exit: 'fade-exit',
+    move: 'fade-move',
+  }
+}).mount('#app')

@@ -449,6 +449,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
 import SessionSidebar from './SessionSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
@@ -457,6 +458,7 @@ import { useAuth } from '@/composables/useAuth'
 
 const router = useRouter()
 const { user, isLoggedIn, logout } = useAuth()
+const toast = useToast()
 
 const documents = ref<DocumentResponse[]>([])
 const isLoading = ref(false)
@@ -689,7 +691,7 @@ async function confirmDelete() {
     await loadDocuments()
   } catch (error: any) {
     console.error('前端日志：删除文档失败', error)
-    alert(error.response?.data?.error || '删除失败')
+    toast.error(error.response?.data?.error || '删除失败')
   } finally {
     isDeleting.value = false
   }
@@ -741,7 +743,7 @@ function openCustomerInfo() {
   if (userId) {
     window.open(`/customer-info?user_id=${userId}`, '_blank')
   } else {
-    alert('请先登录')
+    toast.warning('请先登录')
   }
 }
 

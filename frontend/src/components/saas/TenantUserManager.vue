@@ -125,7 +125,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser } from '@/api/saasTenant'
+
+const toast = useToast()
 
 const loading = ref(true)
 const users = ref<any[]>([])
@@ -205,7 +208,7 @@ async function handleRemove(userId: string) {
     await removeTenantUser(userId)
     await loadUsers()
   } catch (e: any) {
-    alert(e.message || '删除失败')
+    toast.error(e.message || '删除失败')
   }
 }
 

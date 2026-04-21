@@ -193,6 +193,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useToast } from 'vue-toastification'
 import {
   listCredentials,
   createCredential,
@@ -202,6 +203,8 @@ import {
   type CreateCredentialRequest,
   type UpdateCredentialRequest
 } from '@/api/credentials'
+
+const toast = useToast()
 
 const credentials = ref<RemoteCredential[]>([])
 const loading = ref(true)
@@ -236,7 +239,7 @@ async function loadCredentials() {
     }
   } catch (error) {
     console.error('加载凭据失败:', error)
-    alert('加载凭据失败，请稍后重试')
+    toast.error('加载凭据失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -267,25 +270,25 @@ async function submitForm() {
       }
       const result = await updateCredential(editingCredential.value.credential_id, updateData)
       if (result.success) {
-        alert('更新成功')
+        toast.success('更新成功')
         closeDialog()
         await loadCredentials()
       } else {
-        alert(result.error || '更新失败')
+        toast.error(result.error || '更新失败')
       }
     } else {
       const result = await createCredential(formData.value)
       if (result.success) {
-        alert('创建成功')
+        toast.success('创建成功')
         closeDialog()
         await loadCredentials()
       } else {
-        alert(result.error || '创建失败')
+        toast.error(result.error || '创建失败')
       }
     }
   } catch (error) {
     console.error('操作失败:', error)
-    alert('操作失败，请稍后重试')
+    toast.error('操作失败，请稍后重试')
   }
 }
 
@@ -296,14 +299,14 @@ async function handleDeleteCredential(credentialId: string) {
   try {
     const result = await apiDeleteCredential(credentialId)
     if (result.success) {
-      alert('删除成功')
+      toast.success('删除成功')
       await loadCredentials()
     } else {
-      alert(result.error || '删除失败')
+      toast.error(result.error || '删除失败')
     }
   } catch (error) {
     console.error('删除失败:', error)
-    alert('删除失败，请稍后重试')
+    toast.error('删除失败，请稍后重试')
   }
 }
 

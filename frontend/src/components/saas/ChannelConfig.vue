@@ -189,8 +189,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+
+const toast = useToast()
 
 const { tenant } = useTenantAuth()
 const loading = ref(true)
@@ -411,13 +414,13 @@ async function handleVerify(configId: string) {
   try {
     const res = await verifyChannel(configId)
     if (res.verified) {
-      alert('验证通过！渠道凭证有效。')
+      toast.success('验证通过！渠道凭证有效。')
     } else {
-      alert('验证失败: ' + (res.message || '请检查凭证配置是否正确'))
+      toast.error('验证失败: ' + (res.message || '请检查凭证配置是否正确'))
     }
     await loadChannels()
   } catch (e: any) {
-    alert(e.message || '验证失败')
+    toast.error(e.message || '验证失败')
   }
 }
 
@@ -425,9 +428,10 @@ async function handleDelete(configId: string) {
   if (!confirm('确定要删除此渠道配置吗？删除后对应渠道将无法接收消息。')) return
   try {
     await deleteChannel(configId)
+    toast.success('删除成功')
     await loadChannels()
   } catch (e: any) {
-    alert(e.message || '删除失败')
+    toast.error(e.message || '删除失败')
   }
 }
 

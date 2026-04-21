@@ -20,6 +20,7 @@
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">联系电话</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">套餐</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户入口网址</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
           </tr>
         </thead>
@@ -37,6 +38,12 @@
               >
                 {{ getStatusLabel(tenant.status) }}
               </span>
+            </td>
+            <td class="px-4 py-3">
+              <a :href="getTenantUrl(tenant.tenant_id)" target="_blank"
+                class="text-cyan-600 hover:text-cyan-800 hover:underline text-sm">
+                {{ getTenantUrl(tenant.tenant_id) }}
+              </a>
             </td>
             <td class="px-4 py-3">
               <div class="flex gap-2">
@@ -195,8 +202,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
+
+const toast = useToast()
 
 const loading = ref(true)
 const tenants = ref<any[]>([])
@@ -283,7 +293,7 @@ async function handleSubmit() {
     }
     // 如果后端返回了消息（创建初始管理员），显示成功消息
     if (result.message) {
-      alert(result.message)
+      toast.success(result.message)
     }
     showFormDialog.value = false
     await loadTenants()
@@ -300,7 +310,7 @@ async function handleDelete(tenant: any) {
     await deleteTenant(tenant.tenant_id)
     await loadTenants()
   } catch (e: any) {
-    alert(e.message || '删除失败')
+    toast.error(e.message || '删除失败')
   }
 }
 
@@ -318,6 +328,10 @@ function getStatusClass(status: number | string | undefined): string {
   if (info?.color === 'green') return 'bg-green-100 text-green-700'
   if (info?.color === 'red') return 'bg-red-100 text-red-700'
   return 'bg-gray-100 text-gray-600'
+}
+
+function getTenantUrl(tenantId: string): string {
+  return `${window.location.origin}/t/${tenantId}`
 }
 
 onMounted(() => {

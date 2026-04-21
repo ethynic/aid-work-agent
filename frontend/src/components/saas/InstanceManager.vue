@@ -120,7 +120,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useToast } from 'vue-toastification'
 import { listInstances, createInstance, startInstance, stopInstance, deleteInstance } from '@/api/saasTenant'
+
+const toast = useToast()
 
 const loading = ref(true)
 const instances = ref<any[]>([])
@@ -171,7 +174,7 @@ async function handleStart(id: string) {
     await startInstance(id)
     await loadInstances()
   } catch (e: any) {
-    alert(e.message || '启动失败')
+    toast.error(e.message || '启动失败')
   }
 }
 
@@ -180,7 +183,7 @@ async function handleStop(id: string) {
     await stopInstance(id)
     await loadInstances()
   } catch (e: any) {
-    alert(e.message || '停止失败')
+    toast.error(e.message || '停止失败')
   }
 }
 
@@ -190,7 +193,7 @@ async function handleDelete(id: string) {
     await deleteInstance(id)
     await loadInstances()
   } catch (e: any) {
-    alert(e.message || '删除失败')
+    toast.error(e.message || '删除失败')
   }
 }
 

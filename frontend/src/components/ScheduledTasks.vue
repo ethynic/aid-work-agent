@@ -241,6 +241,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import {
   listScheduledTasks,
   getTaskStats,
@@ -256,6 +257,7 @@ import {
 } from '../api/scheduledTask'
 
 const router = useRouter()
+const toast = useToast()
 
 const loading = ref(false)
 const loadingLogs = ref(false)
@@ -331,10 +333,10 @@ async function handleUpdateSchedule() {
       editModal.show = false
       await loadData()
     } else {
-      alert(res.error || '修改失败')
+      toast.error(res.error || '修改失败')
     }
   } catch (e: any) {
-    alert('修改失败: ' + e.message)
+    toast.error('修改失败: ' + e.message)
   } finally {
     editModal.saving = false
   }
@@ -379,10 +381,10 @@ async function handlePause(taskId: string) {
     if (res.success) {
       await loadData()
     } else {
-      alert(res.error || '暂停失败')
+      toast.error(res.error || '暂停失败')
     }
   } catch (e: any) {
-    alert('暂停失败: ' + e.message)
+    toast.error('暂停失败: ' + e.message)
   }
 }
 
@@ -392,10 +394,10 @@ async function handleResume(taskId: string) {
     if (res.success) {
       await loadData()
     } else {
-      alert(res.error || '恢复失败')
+      toast.error(res.error || '恢复失败')
     }
   } catch (e: any) {
-    alert('恢复失败: ' + e.message)
+    toast.error('恢复失败: ' + e.message)
   }
 }
 
@@ -406,10 +408,10 @@ async function handleCancel(taskId: string) {
     if (res.success) {
       await loadData()
     } else {
-      alert(res.error || '取消失败')
+      toast.error(res.error || '取消失败')
     }
   } catch (e: any) {
-    alert('取消失败: ' + e.message)
+    toast.error('取消失败: ' + e.message)
   }
 }
 
@@ -418,12 +420,12 @@ async function handleTrigger(taskId: string) {
   try {
     const res = await triggerTask(taskId)
     if (res.success) {
-      alert('已触发执行，请稍后查看日志')
+      toast.success('已触发执行，请稍后查看日志')
     } else {
-      alert(res.error || '触发失败')
+      toast.error(res.error || '触发失败')
     }
   } catch (e: any) {
-    alert('触发失败: ' + e.message)
+    toast.error('触发失败: ' + e.message)
   }
 }
 
