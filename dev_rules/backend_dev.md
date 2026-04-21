@@ -84,3 +84,44 @@ async def search_documents(request: SearchRequest):
 @router.post("/search")
 async def search_documents(request: SearchRequest):
 ```
+
+## 枚举值定义规范
+**涉及到字段枚举值的判断代码，必须以 `src/saas/models/enums.py` 为准。**
+
+所有 SaaS 相关表字段的枚举值（如租户状态、订阅状态、支付状态等）统一在 `src/saas/models/enums.py` 中定义。
+
+```python
+# ✅ 正确：使用枚举类
+from src.saas.models import TenantStatus
+
+if tenant.status == TenantStatus.ACTIVE:
+    ...
+
+# ❌ 错误：硬编码数字或字符串
+if tenant.status == 1:
+    ...
+if tenant.status == "active":
+    ...
+```
+
+### 枚举值设计原则
+
+1. **数据库字段类型尽量使用 TEXT**：这样管理员在检查数据时无需查找枚举定义即可理解字段含义。
+
+2. **前后端枚举值尽量与数据库存储值一致**：减少 mapping 翻译，提高代码可读性。
+
+```python
+# ✅ 推荐：枚举值 = 数据库存储值
+class TenantStatus(str, Enum):
+    ACTIVE = "active"       # 数据库存 "active"
+    SUSPENDED = "suspended" # 数据库存 "suspended"
+
+# ❌ 不推荐：枚举值需额外映射
+class TenantStatus(IntEnum):
+    ACTIVE = 1       # 数据库存 1，需翻译为 "active"
+    SUSPENDED = 0    # 数据库存 0，需翻译为 "suspended"
+```
+
+3. **前端显示值不受此限制**：显示值通常为中文，通过映射表实现（如 `TenantStatusMap`）。
+
+**如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/src/api/enums.ts`（前端）。

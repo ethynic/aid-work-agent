@@ -32,10 +32,10 @@
             <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.plan }}</td>
             <td class="px-4 py-3">
               <span
-                :class="Number(tenant.status) === 1 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+                :class="getStatusClass(tenant.status)"
                 class="px-2 py-1 rounded-full text-xs font-medium"
               >
-                {{ Number(tenant.status) === 1 ? '正常' : Number(tenant.status) === 0 ? '停用' : '已删除' }}
+                {{ getStatusLabel(tenant.status) }}
               </span>
             </td>
             <td class="px-4 py-3">
@@ -149,8 +149,8 @@
           </div>
           <div class="flex border-b border-slate-100 pb-2">
             <span class="w-24 text-sm text-slate-500">状态</span>
-            <span :class="Number(currentTenant?.status) === 1 ? 'text-green-600' : 'text-red-600'" class="text-sm font-medium">
-              {{ Number(currentTenant?.status) === 1 ? '正常' : Number(currentTenant?.status) === 0 ? '停用' : '已删除' }}
+            <span :class="getStatusClass(currentTenant?.status)" class="text-sm font-medium">
+              {{ getStatusLabel(currentTenant?.status) }}
             </span>
           </div>
           <div class="flex border-b border-slate-100 pb-2">
@@ -175,6 +175,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
+import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const loading = ref(true)
 const tenants = ref<any[]>([])
@@ -278,6 +279,22 @@ async function handleDelete(tenant: any) {
   } catch (e: any) {
     alert(e.message || '删除失败')
   }
+}
+
+function getStatusLabel(status: number | string | undefined): string {
+  if (status === undefined || status === null) return '未知'
+  const numStatus = Number(status)
+  const info = TenantStatusMap[numStatus as TenantStatus]
+  return info?.label ?? '未知'
+}
+
+function getStatusClass(status: number | string | undefined): string {
+  if (status === undefined || status === null) return 'bg-gray-100 text-gray-600'
+  const numStatus = Number(status)
+  const info = TenantStatusMap[numStatus as TenantStatus]
+  return info?.color === 'green'
+    ? 'bg-green-100 text-green-700'
+    : 'bg-red-100 text-red-700'
 }
 
 onMounted(() => {

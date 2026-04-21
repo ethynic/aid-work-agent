@@ -1,0 +1,183 @@
+"""
+SaaS 领域枚举值定义
+
+所有 SaaS 相关表字段的枚举值统一在此定义。
+包括：租户状态、订阅状态、支付状态、智能体实例状态等。
+
+使用说明：
+- 后端 Pydantic 模型引用：from src.saas.models import TenantStatus
+- 数据库默认值引用：TenantStatus.ACTIVE.value
+"""
+
+from enum import Enum
+
+
+# ============== 租户状态 ==============
+
+class TenantStatus(str, Enum):
+    """
+    租户状态枚举
+
+    数据库存储：TEXT
+    - active      = 正常
+    - suspended  = 停用
+    - deactivated = 已删除
+    """
+    ACTIVE = "active"       # 正常
+    SUSPENDED = "suspended"    # 停用
+    DEACTIVATED = "deactivated"  # 已删除
+
+    @property
+    def display_name(self) -> str:
+        """用户友好的显示名称"""
+        mapping = {
+            self.ACTIVE: "正常",
+            self.SUSPENDED: "停用",
+            self.DEACTIVATED: "已删除",
+        }
+        return mapping.get(self, "未知")
+
+
+# ============== 订阅状态 ==============
+
+class SubscriptionStatus(str):
+    """
+    订阅状态枚举
+
+    数据库存储：TEXT
+    - active    = 活跃
+    - expired   = 已过期
+    - cancelled = 已取消
+    """
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.ACTIVE, cls.EXPIRED, cls.CANCELLED]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.ACTIVE: "活跃",
+            self.EXPIRED: "已过期",
+            self.CANCELLED: "已取消",
+        }
+        return mapping.get(self, "未知")
+
+
+# ============== 支付状态 ==============
+
+class PaymentStatus(str):
+    """
+    支付状态枚举
+
+    数据库存储：TEXT
+    - pending  = 待支付
+    - paid     = 已支付
+    - refunded = 已退款
+    """
+    PENDING = "pending"
+    PAID = "paid"
+    REFUNDED = "refunded"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.PENDING, cls.PAID, cls.REFUNDED]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.PENDING: "待支付",
+            self.PAID: "已支付",
+            self.REFUNDED: "已退款",
+        }
+        return mapping.get(self, "未知")
+
+
+# ============== 智能体实例状态 ==============
+
+class AgentInstanceStatus(str):
+    """
+    智能体实例状态枚举
+
+    数据库存储：TEXT
+    - running = 运行中
+    - stopped = 已停止
+    - error   = 异常
+    """
+    RUNNING = "running"
+    STOPPED = "stopped"
+    ERROR = "error"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.RUNNING, cls.STOPPED, cls.ERROR]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.RUNNING: "运行中",
+            self.STOPPED: "已停止",
+            self.ERROR: "异常",
+        }
+        return mapping.get(self, "未知")
+
+
+# ============== 用户角色 ==============
+
+class UserRole(str):
+    """
+    用户角色枚举
+
+    数据库存储：TEXT
+    - platform_admin = 平台管理员
+    - tenant_admin   = 租户管理员
+    - tenant_user    = 租户用户
+    """
+    PLATFORM_ADMIN = "platform_admin"
+    TENANT_ADMIN = "tenant_admin"
+    TENANT_USER = "tenant_user"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.PLATFORM_ADMIN, cls.TENANT_ADMIN, cls.TENANT_USER]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.PLATFORM_ADMIN: "平台管理员",
+            self.TENANT_ADMIN: "租户管理员",
+            self.TENANT_USER: "用户",
+        }
+        return mapping.get(self, "未知")
+
+
+# ============== 套餐计划 ==============
+
+class PlanType(str):
+    """
+    套餐类型枚举
+
+    数据库存储：TEXT
+    - basic    = 基础版
+    - standard = 标准版
+    - premium  = 旗舰版
+    """
+    BASIC = "basic"
+    STANDARD = "standard"
+    PREMIUM = "premium"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.BASIC, cls.STANDARD, cls.PREMIUM]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.BASIC: "基础版",
+            self.STANDARD: "标准版",
+            self.PREMIUM: "旗舰版",
+        }
+        return mapping.get(self, "未知")
