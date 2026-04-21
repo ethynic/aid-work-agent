@@ -19,12 +19,6 @@
 
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
-      <!-- Session Sidebar -->
-      <SessionSidebar
-        :is-collapsed="isSidebarCollapsed"
-        @collapse="isSidebarCollapsed = true"
-      />
-
       <!-- Right Content Area -->
       <div class="flex-1 flex flex-col min-w-0">
         <!-- Header Bar -->
@@ -33,7 +27,6 @@
           :is-online="true"
           :is-logged-in="isLoggedIn"
           :user="user"
-          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
         >
           <template #menu-items="{ closeMenu }">
             <button
@@ -328,7 +321,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
-import SessionSidebar from './SessionSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import { useAuth } from '@/composables/useAuth'
 import {
@@ -346,7 +338,6 @@ import {
 } from '../api/adminSubagent'
 
 const { user, isLoggedIn } = useAuth()
-const isSidebarCollapsed = ref(false)
 
 // State
 const allList = ref<SubagentListItem[]>([])

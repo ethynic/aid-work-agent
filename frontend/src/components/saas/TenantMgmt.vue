@@ -97,8 +97,8 @@
             <label class="block text-sm text-slate-600 mb-1">状态</label>
             <select v-model="formData.status"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
-              <option :value="1">正常</option>
-              <option :value="0">停用</option>
+              <option value="active">正常</option>
+              <option value="suspended">停用</option>
               <option value="deactivated">已删除</option>
             </select>
           </div>
@@ -193,7 +193,7 @@ const defaultFormData: TenantFormData = {
   plan: 'basic',
 }
 
-const formData = ref<TenantFormData & { status: number | string }>({ ...defaultFormData, status: 1 })
+const formData = ref<TenantFormData & { status: string }>({ ...defaultFormData, status: 'active' })
 
 async function loadTenants() {
   loading.value = true
@@ -217,7 +217,7 @@ function formatDate(dateStr: string | undefined) {
 
 function openAddDialog() {
   isEdit.value = false
-  formData.value = { ...defaultFormData, status: 1 }
+  formData.value = { ...defaultFormData, status: 'active' }
   formError.value = ''
   showFormDialog.value = true
 }
@@ -230,7 +230,7 @@ function openEditDialog(tenant: any) {
     contact_name: tenant.contact_name || '',
     contact_phone: tenant.contact_phone || '',
     plan: tenant.plan,
-    status: Number(tenant.status),
+    status: String(tenant.status),
   }
   formError.value = ''
   showFormDialog.value = true
@@ -250,15 +250,8 @@ async function handleSubmit() {
   formError.value = ''
   try {
     if (isEdit.value && currentTenant.value) {
-      // 编辑时处理 status 字段映射
-      const updateData: any = { ...formData.value }
-      if (updateData.status === 'deactivated') {
-        updateData.status = 'deactivated'
-      } else if (typeof updateData.status === 'string') {
-        // select 显示的字符串转回数字
-        updateData.status = parseInt(updateData.status) || updateData.status
-      }
-      await updateTenant(currentTenant.value.tenant_id, updateData)
+      // 直接提交 formData，status 已经是字符串格式
+      await updateTenant(currentTenant.value.tenant_id, formData.value)
     } else {
       await createTenant(formData.value)
     }
@@ -283,18 +276,18 @@ async function handleDelete(tenant: any) {
 
 function getStatusLabel(status: number | string | undefined): string {
   if (status === undefined || status === null) return '未知'
-  const numStatus = Number(status)
-  const info = TenantStatusMap[numStatus as TenantStatus]
+  const strStatus = String(status)
+  const info = TenantStatusMap[strStatus as TenantStatus]
   return info?.label ?? '未知'
 }
 
 function getStatusClass(status: number | string | undefined): string {
   if (status === undefined || status === null) return 'bg-gray-100 text-gray-600'
-  const numStatus = Number(status)
-  const info = TenantStatusMap[numStatus as TenantStatus]
-  return info?.color === 'green'
-    ? 'bg-green-100 text-green-700'
-    : 'bg-red-100 text-red-700'
+  const strStatus = String(status)
+  const info = TenantStatusMap[strStatus as TenantStatus]
+  if (info?.color === 'green') return 'bg-green-100 text-green-700'
+  if (info?.color === 'red') return 'bg-red-100 text-red-700'
+  return 'bg-gray-100 text-gray-600'
 }
 
 onMounted(() => {

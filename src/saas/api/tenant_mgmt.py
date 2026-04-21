@@ -175,17 +175,18 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
     if not updates:
         return {"success": False, "error": "没有需要更新的字段", "debug": "No fields to update"}
 
-    # 处理 status 字段映射（支持字符串和数字）
+    # 处理 status 字段：直接使用字符串值，不做数字映射
+    # 数据库按 enums.py 规范存储：active/suspended/deactivated
     if "status" in updates:
         status_val = updates["status"]
-        if isinstance(status_val, str):
-            # 字符串映射：active->1, suspended->0, deactivated->-1
-            status_map = {"active": 1, "suspended": 0, "deactivated": -1}
-            updates["status"] = status_map.get(status_val, status_val)
+        # 验证并规范化 status 值
+        valid_statuses = {"active", "suspended", "deactivated"}
+        if isinstance(status_val, str) and status_val in valid_statuses:
+            updates["status"] = status_val  # 保持字符串格式
         elif isinstance(status_val, int):
-            # 数字直接存储，但转换为 1/0/-1
-            if status_val not in (1, 0, -1):
-                updates["status"] = 1 if status_val > 0 else 0
+            # 数字映射：1->active, 0->suspended, -1->deactivated
+            int_to_str = {1: "active", 0: "suspended", -1: "deactivated"}
+            updates["status"] = int_to_str.get(status_val, "active")
 
     try:
         success = TenantDB.update(tenant_id, **updates)

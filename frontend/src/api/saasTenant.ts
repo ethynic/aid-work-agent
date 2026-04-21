@@ -22,7 +22,7 @@ export async function adminLogin(phone: string, code: string): Promise<{
   success: boolean
   token?: string
   user?: { user_id: string; phone: string; username: string; role: string }
-  tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
+  tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
   message?: string
 }> {
   const res = await fetch(`${API_BASE}/auth/login`, {
@@ -46,7 +46,7 @@ export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Pr
   success: boolean
   token?: string
   user?: { user_id: string; phone: string; username: string; role: string }
-  tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
+  tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
   message?: string
 }> {
   const res = await fetch(`${API_BASE}/auth/login/password`, {
@@ -86,7 +86,7 @@ export async function adminLogout(): Promise<void> {
 
 export async function getAdminInfo(): Promise<{
   user?: { user_id: string; phone: string; username: string; role: string }
-  tenant?: { tenant_id: string; company_name: string; plan: string; status: number }
+  tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
 } | null> {
   const path = window.location.pathname
   let tokenKey: string
