@@ -84,6 +84,19 @@
             <input v-model="formData.contact_phone" type="tel" placeholder="请输入联系电话" maxlength="20"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
           </div>
+          <div class="pt-2 border-t border-slate-200">
+            <p class="text-sm font-medium text-slate-700 mb-3">初始管理员（可选）</p>
+          </div>
+          <div>
+            <label class="block text-sm text-slate-600 mb-1">初始管理员姓名</label>
+            <input v-model="formData.initial_admin_name" type="text" placeholder="请输入管理员姓名" maxlength="50"
+              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+          </div>
+          <div>
+            <label class="block text-sm text-slate-600 mb-1">初始管理员手机号</label>
+            <input v-model="formData.initial_admin_phone" type="tel" placeholder="请输入11位手机号" maxlength="11"
+              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+          </div>
           <div>
             <label class="block text-sm text-slate-600 mb-1">套餐</label>
             <select v-model="formData.plan"
@@ -134,6 +147,14 @@
           <div class="flex border-b border-slate-100 pb-2">
             <span class="w-24 text-sm text-slate-500">联系电话</span>
             <span class="text-sm text-slate-800">{{ currentTenant?.contact_phone || '-' }}</span>
+          </div>
+          <div class="flex border-b border-slate-100 pb-2">
+            <span class="w-24 text-sm text-slate-500">初始管理员</span>
+            <span class="text-sm text-slate-800">{{ currentTenant?.initial_admin_name || '-' }}</span>
+          </div>
+          <div class="flex border-b border-slate-100 pb-2">
+            <span class="w-24 text-sm text-slate-500">管理员手机</span>
+            <span class="text-sm text-slate-800">{{ currentTenant?.initial_admin_phone || '-' }}</span>
           </div>
           <div class="flex border-b border-slate-100 pb-2">
             <span class="w-24 text-sm text-slate-500">套餐</span>
@@ -190,6 +211,8 @@ const defaultFormData: TenantFormData = {
   company_name: '',
   contact_name: '',
   contact_phone: '',
+  initial_admin_name: '',
+  initial_admin_phone: '',
   plan: 'basic',
 }
 
@@ -229,6 +252,8 @@ function openEditDialog(tenant: any) {
     company_name: tenant.company_name,
     contact_name: tenant.contact_name || '',
     contact_phone: tenant.contact_phone || '',
+    initial_admin_name: tenant.initial_admin_name || '',
+    initial_admin_phone: tenant.initial_admin_phone || '',
     plan: tenant.plan,
     status: String(tenant.status),
   }
@@ -249,11 +274,16 @@ async function handleSubmit() {
   submitting.value = true
   formError.value = ''
   try {
+    let result
     if (isEdit.value && currentTenant.value) {
       // 直接提交 formData，status 已经是字符串格式
-      await updateTenant(currentTenant.value.tenant_id, formData.value)
+      result = await updateTenant(currentTenant.value.tenant_id, formData.value)
     } else {
-      await createTenant(formData.value)
+      result = await createTenant(formData.value)
+    }
+    // 如果后端返回了消息（创建初始管理员），显示成功消息
+    if (result.message) {
+      alert(result.message)
     }
     showFormDialog.value = false
     await loadTenants()

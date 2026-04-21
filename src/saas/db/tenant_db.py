@@ -19,6 +19,8 @@ class TenantDB:
         company_name: str,
         contact_name: Optional[str] = None,
         contact_phone: Optional[str] = None,
+        initial_admin_name: Optional[str] = None,
+        initial_admin_phone: Optional[str] = None,
         plan: str = "basic",
         max_instances: int = 5,
         max_users: int = 50,
@@ -32,10 +34,12 @@ class TenantDB:
             try:
                 cursor.execute("""
                     INSERT INTO tenants (tenant_id, company_name, contact_name, contact_phone,
+                                        initial_admin_name, initial_admin_phone,
                                         plan, max_instances, max_users, settings)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     tenant_id, company_name, contact_name, contact_phone,
+                    initial_admin_name, initial_admin_phone,
                     plan, max_instances, max_users,
                     json.dumps(settings or {}, ensure_ascii=False),
                 ))
@@ -64,6 +68,7 @@ class TenantDB:
         """更新租户信息"""
         allowed_fields = {
             "company_name", "contact_name", "contact_phone",
+            "initial_admin_name", "initial_admin_phone",
             "plan", "status", "max_instances", "max_users", "settings",
         }
         updates = {}

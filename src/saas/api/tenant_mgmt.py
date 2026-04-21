@@ -12,11 +12,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from loguru import logger
+import re
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.config.settings import settings
+from src.db.models import UserDB
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["SaaS 企业管理"])
 
@@ -27,6 +29,8 @@ class TenantUpdateRequest(BaseModel):
     company_name: Optional[str] = Field(None, max_length=100, description="企业名称")
     contact_name: Optional[str] = Field(None, max_length=50, description="联系人姓名")
     contact_phone: Optional[str] = Field(None, max_length=20, description="联系人电话")
+    initial_admin_name: Optional[str] = Field(None, max_length=50, description="初始管理员姓名")
+    initial_admin_phone: Optional[str] = Field(None, max_length=11, description="初始管理员手机号")
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -46,6 +50,43 @@ def sanitize_error_info(error_msg: str) -> str:
     for pattern in sensitive_patterns:
         sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
     return sanitized
+
+
+def is_valid_phone(phone: str) -> bool:
+    """验证手机号是否为合法中国手机号（11位，以1开头）"""
+    if not phone or len(phone) != 11:
+        return False
+    return bool(re.match(r'^1[3-9]\d{9}$', phone))
+
+
+def create_initial_admin(tenant_id: str, admin_name: str, admin_phone: str) -> Optional[dict]:
+    """
+    创建初始租户管理员账户
+    如果手机号已存在用户，则返回 None
+    """
+    # 检查用户是否已存在
+    existing_user = UserDB.get_by_phone(admin_phone)
+    if existing_user:
+        logger.info(f"手机号 {admin_phone} 已存在用户，无法创建初始管理员")
+        return None
+
+    # 创建租户管理员（密码留空）
+    user = UserDB.create(
+        phone=admin_phone,
+        username=admin_name or f"管理员{admin_phone[-4:]}",
+        role="tenant_admin",
+        tenant_id=tenant_id,
+    )
+
+    if user:
+        logger.info(f"为租户 {tenant_id} 创建初始管理员: {admin_phone}")
+        return {
+            "user_id": user["user_id"],
+            "phone": admin_phone,
+            "username": user["username"],
+            "role": user["role"],
+        }
+    return None
 
 
 # ============== API 端点 ==============
@@ -128,14 +169,34 @@ async def create_tenant(request: Request, body: TenantCreate):
             company_name=body.company_name,
             contact_name=body.contact_name,
             contact_phone=body.contact_phone,
+            initial_admin_name=body.initial_admin_name,
+            initial_admin_phone=body.initial_admin_phone,
             plan=body.plan,
             max_instances=body.max_instances or 5,
             max_users=body.max_users or 50,
         )
-        if tenant:
-            logger.info(f"租户创建成功: {tenant['tenant_id']} by admin {admin['user_id']}")
-            return {"success": True, "tenant": tenant}
-        return {"success": False, "error": "创建租户失败", "debug": "TenantDB.create returned None"}
+        if not tenant:
+            return {"success": False, "error": "创建租户失败", "debug": "TenantDB.create returned None"}
+
+        # 检查是否需要创建初始管理员
+        admin_account = None
+        if body.initial_admin_phone and is_valid_phone(body.initial_admin_phone):
+            admin_account = create_initial_admin(
+                tenant["tenant_id"],
+                body.initial_admin_name,
+                body.initial_admin_phone,
+            )
+
+        logger.info(f"租户创建成功: {tenant['tenant_id']} by admin {admin['user_id']}")
+
+        response = {"success": True, "tenant": tenant}
+        if admin_account:
+            response["message"] = "租户信息保存成功，且创建初始管理员账户 {}，初始密码为空，用户可以点击'忘记密码'通过短信验证码重置密码。".format(
+                admin_account["phone"]
+            )
+            response["admin_account"] = admin_account
+        return response
+
     except Exception as e:
         logger.error(f"创建租户异常: {e}", exc_info=True)
         return {"success": False, "error": "创建租户失败", "debug": sanitize_error_info(str(e))}
@@ -193,7 +254,23 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
         if success:
             tenant = TenantDB.get_by_id(tenant_id)
             logger.info(f"租户更新成功: {tenant_id} by admin {admin['user_id']}, fields={list(updates.keys())}")
-            return {"success": True, "tenant": tenant}
+
+            # 检查是否需要创建初始管理员
+            admin_account = None
+            if body.initial_admin_phone and is_valid_phone(body.initial_admin_phone):
+                admin_account = create_initial_admin(
+                    tenant_id,
+                    body.initial_admin_name,
+                    body.initial_admin_phone,
+                )
+
+            response = {"success": True, "tenant": tenant}
+            if admin_account:
+                response["message"] = "租户信息保存成功，且创建初始管理员账户 {}，初始密码为空，用户可以点击'忘记密码'通过短信验证码重置密码。".format(
+                    admin_account["phone"]
+                )
+                response["admin_account"] = admin_account
+            return response
         return {"success": False, "error": "更新失败", "debug": "TenantDB.update returned False"}
     except Exception as e:
         logger.error(f"更新租户异常: {e}", exc_info=True)

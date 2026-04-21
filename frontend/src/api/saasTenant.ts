@@ -152,6 +152,8 @@ export interface TenantFormData {
   company_name: string
   contact_name?: string
   contact_phone?: string
+  initial_admin_name?: string
+  initial_admin_phone?: string
   plan?: string
   max_instances?: number
   max_users?: number
@@ -166,7 +168,14 @@ export async function getTenantById(tenantId: string): Promise<{ success: boolea
   return data
 }
 
-export async function createTenant(data: TenantFormData): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {
+export async function createTenant(data: TenantFormData): Promise<{
+  success: boolean
+  tenant?: any
+  message?: string
+  admin_account?: { phone: string; username: string }
+  error?: string
+  debug?: string
+}> {
   const res = await fetch(`${API_BASE}/tenants/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
@@ -179,7 +188,14 @@ export async function createTenant(data: TenantFormData): Promise<{ success: boo
   return result
 }
 
-export async function updateTenant(tenantId: string, data: Partial<TenantFormData & { status?: string }>): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {
+export async function updateTenant(tenantId: string, data: Partial<TenantFormData & { status?: string }>): Promise<{
+  success: boolean
+  tenant?: any
+  message?: string
+  admin_account?: { phone: string; username: string }
+  error?: string
+  debug?: string
+}> {
   const res = await fetch(`${API_BASE}/tenants/${encodeURIComponent(tenantId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },

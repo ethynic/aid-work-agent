@@ -12,6 +12,8 @@ class TenantCreate(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=100, description="企业名称")
     contact_name: Optional[str] = Field(None, max_length=50, description="联系人姓名")
     contact_phone: Optional[str] = Field(None, max_length=20, description="联系人电话")
+    initial_admin_name: Optional[str] = Field(None, max_length=50, description="初始管理员姓名")
+    initial_admin_phone: Optional[str] = Field(None, max_length=11, description="初始管理员手机号")
     plan: str = Field("basic", description="套餐：basic/standard/premium")
     max_instances: Optional[int] = Field(None, description="最大实例数，None 使用默认值")
     max_users: Optional[int] = Field(None, description="最大用户数，None 使用默认值")
@@ -22,6 +24,8 @@ class TenantUpdate(BaseModel):
     company_name: Optional[str] = Field(None, max_length=100, description="企业名称")
     contact_name: Optional[str] = Field(None, max_length=50, description="联系人姓名")
     contact_phone: Optional[str] = Field(None, max_length=20, description="联系人电话")
+    initial_admin_name: Optional[str] = Field(None, max_length=50, description="初始管理员姓名")
+    initial_admin_phone: Optional[str] = Field(None, max_length=11, description="初始管理员手机号")
     plan: Optional[str] = Field(None, description="套餐：basic/standard/premium")
     status: Optional[int | str] = Field(None, description="状态：active(1)/suspended(0)/deactivated(-1)")
     max_instances: Optional[int] = Field(None, description="最大实例数")
@@ -34,6 +38,8 @@ class TenantResponse(BaseModel):
     company_name: str
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
+    initial_admin_name: Optional[str] = None
+    initial_admin_phone: Optional[str] = None
     status: str
     plan: str
     max_instances: int
