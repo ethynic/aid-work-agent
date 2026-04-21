@@ -266,7 +266,7 @@ async def download_document(doc_id: int):
     # 查询文档的 file_path
     with knowledge_service._get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT file_path, title FROM documents WHERE id = ?", (doc_id,))
+        cursor.execute("SELECT file_path, title FROM documents WHERE id = %s", (doc_id,))
         row = cursor.fetchone()
 
     if not row or not row["file_path"]:

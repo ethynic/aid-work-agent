@@ -34,7 +34,7 @@ class SubscriptionDB:
                     INSERT INTO subscriptions
                         (subscription_id, tenant_id, user_id, subagent_type,
                          billing_cycle, unit_price, token_quota, expires_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     subscription_id, tenant_id, user_id, subagent_type,
                     billing_cycle, unit_price, token_quota, expires_at,
@@ -51,7 +51,7 @@ class SubscriptionDB:
         """根据 ID 获取订阅"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM subscriptions WHERE subscription_id = ?", (subscription_id,))
+            cursor.execute("SELECT * FROM subscriptions WHERE subscription_id = %s", (subscription_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -62,12 +62,12 @@ class SubscriptionDB:
             cursor = conn.cursor()
             if status:
                 cursor.execute(
-                    "SELECT * FROM subscriptions WHERE tenant_id = ? AND status = ? ORDER BY created_at DESC",
+                    "SELECT * FROM subscriptions WHERE tenant_id = %s AND status = %s ORDER BY created_at DESC",
                     (tenant_id, status),
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM subscriptions WHERE tenant_id = ? ORDER BY created_at DESC",
+                    "SELECT * FROM subscriptions WHERE tenant_id = %s ORDER BY created_at DESC",
                     (tenant_id,),
                 )
             return [dict(row) for row in cursor.fetchall()]
@@ -79,8 +79,8 @@ class SubscriptionDB:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE subscriptions
-                SET tokens_used = tokens_used + ?, updated_at = CURRENT_TIMESTAMP
-                WHERE subscription_id = ?
+                SET tokens_used = tokens_used + %s, updated_at = CURRENT_TIMESTAMP
+                WHERE subscription_id = %s
             """, (tokens_delta, subscription_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -93,14 +93,14 @@ class SubscriptionDB:
             if payment_status:
                 cursor.execute("""
                     UPDATE subscriptions
-                    SET status = ?, payment_status = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE subscription_id = ?
+                    SET status = %s, payment_status = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE subscription_id = %s
                 """, (status, payment_status, subscription_id))
             else:
                 cursor.execute("""
                     UPDATE subscriptions
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE subscription_id = ?
+                    SET status = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE subscription_id = %s
                 """, (status, subscription_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -113,7 +113,7 @@ class SubscriptionDB:
             cursor.execute("""
                 SELECT s.* FROM subscriptions s
                 JOIN agent_instances ai ON ai.subscription_id = s.subscription_id
-                WHERE ai.instance_id = ? AND s.status = 'active'
+                WHERE ai.instance_id = %s AND s.status = 'active'
             """, (instance_id,))
             row = cursor.fetchone()
             return dict(row) if row else None

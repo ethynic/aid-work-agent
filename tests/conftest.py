@@ -21,7 +21,17 @@ collect_ignore = sorted(str(p) for p in Path(__file__).parent.glob("test_*.py"))
 # 在导入 src 模块之前设置测试环境变量
 os.environ.setdefault("LLM_PROVIDER", "qwen")
 os.environ.setdefault("API_KEYS", "api-key-1,api-key-2")
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test_agent.db")
+
+# 尝试从 .env 文件加载 DATABASE_URL，如果不存在则使用 PostgreSQL 默认值
+from pathlib import Path
+from dotenv import load_dotenv
+project_root = Path(__file__).parent.parent
+env_path = project_root / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+
+# 如果 .env 中没有 DATABASE_URL，使用默认值
+os.environ.setdefault("DATABASE_URL", os.getenv("DATABASE_URL", "postgresql://aid_user:Aid_2026@192.168.195.89:5433/aid_work_agent"))
 
 # Mock sqlite_vec 模块（可能未安装，但 agent 初始化需要）
 # sqlite_vec.load(conn) 调用 C 扩展，在测试环境中不可用

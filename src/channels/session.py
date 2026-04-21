@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.db.database import get_db_connection, get_db_placeholder
+from src.db.database import get_db_connection
 from src.models.message import ChannelType
 
 
@@ -123,7 +123,7 @@ class ChannelSessionManager:
             # 查找已存在的会话
             cursor.execute("""
                 SELECT * FROM channel_sessions
-                WHERE channel_type = ? AND channel_user_id = ?
+                WHERE channel_type = %s AND channel_user_id = %s
             """, (channel_type, channel_user_id))
 
             row = cursor.fetchone()
@@ -132,8 +132,8 @@ class ChannelSessionManager:
                 # 更新最后消息时间
                 cursor.execute("""
                     UPDATE channel_sessions
-                    SET last_message_at = ?, updated_at = ?
-                    WHERE session_id = ?
+                    SET last_message_at = %s, updated_at = %s
+                    WHERE session_id = %s
                 """, (now, now, session_id))
                 conn.commit()
 
@@ -149,7 +149,7 @@ class ChannelSessionManager:
                     (session_id, channel_type, channel_user_id, channel_chat_id,
                      user_id, username, title, context_data, created_at, updated_at,
                      last_message_at, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     session_id,
                     channel_type,
@@ -199,7 +199,7 @@ class ChannelSessionManager:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM channel_sessions WHERE session_id = ?
+                SELECT * FROM channel_sessions WHERE session_id = %s
             """, (session_id,))
 
             row = cursor.fetchone()
@@ -226,19 +226,19 @@ class ChannelSessionManager:
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        updates = ["updated_at = ?"]
+        updates = ["updated_at = %s"]
         values = [now]
 
         if title is not None:
-            updates.append("title = ?")
+            updates.append("title = %s")
             values.append(title)
 
         if context_data is not None:
-            updates.append("context_data = ?")
+            updates.append("context_data = %s")
             values.append(str(context_data))
 
         if metadata is not None:
-            updates.append("metadata = ?")
+            updates.append("metadata = %s")
             values.append(str(metadata))
 
         values.append(session_id)
@@ -248,7 +248,7 @@ class ChannelSessionManager:
             cursor.execute(f"""
                 UPDATE channel_sessions
                 SET {', '.join(updates)}
-                WHERE session_id = ?
+                WHERE session_id = %s
             """, values)
             conn.commit()
 
@@ -286,7 +286,7 @@ class ChannelSessionManager:
                 INSERT INTO channel_messages
                 (message_id, session_id, role, content, message_type,
                  attachments, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 message_id,
                 session_id,
@@ -301,8 +301,8 @@ class ChannelSessionManager:
             # 更新会话最后消息时间
             cursor.execute("""
                 UPDATE channel_sessions
-                SET last_message_at = ?, updated_at = ?
-                WHERE session_id = ?
+                SET last_message_at = %s, updated_at = %s
+                WHERE session_id = %s
             """, (now, now, session_id))
 
             conn.commit()
@@ -328,7 +328,7 @@ class ChannelSessionManager:
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            placeholder = get_db_placeholder()
+            placeholder = "%s"
 
             if before_message_id:
                 cursor.execute(f"""
@@ -400,16 +400,16 @@ class ChannelSessionManager:
             values = []
 
             if channel_type:
-                conditions.append("channel_type = ?")
+                conditions.append("channel_type = %s")
                 values.append(channel_type)
 
             if user_id:
-                conditions.append(f"user_id = {get_db_placeholder()}")
+                conditions.append(f"user_id = %s")
                 values.append(user_id)
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+            # PostgreSQL 不支持 LIMIT %s，需要直接拼接
             cursor.execute(f"""
                 SELECT * FROM channel_sessions
                 WHERE {where_clause}
@@ -435,12 +435,12 @@ class ChannelSessionManager:
 
             # 删除消息
             cursor.execute("""
-                DELETE FROM channel_messages WHERE session_id = ?
+                DELETE FROM channel_messages WHERE session_id = %s
             """, (session_id,))
 
             # 删除会话
             cursor.execute("""
-                DELETE FROM channel_sessions WHERE session_id = ?
+                DELETE FROM channel_sessions WHERE session_id = %s
             """, (session_id,))
 
             conn.commit()

@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection, get_db_placeholder
+from src.db.database import get_db_connection
 
 
 class TenantDB:
@@ -33,7 +33,7 @@ class TenantDB:
                 cursor.execute("""
                     INSERT INTO tenants (tenant_id, company_name, contact_name, contact_phone,
                                         plan, max_instances, max_users, settings)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     tenant_id, company_name, contact_name, contact_phone,
                     plan, max_instances, max_users,
@@ -51,7 +51,7 @@ class TenantDB:
         """根据 tenant_id 获取租户"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tenants WHERE tenant_id = ?", (tenant_id,))
+            cursor.execute("SELECT * FROM tenants WHERE tenant_id = %s", (tenant_id,))
             row = cursor.fetchone()
             if row:
                 d = dict(row)
@@ -77,12 +77,12 @@ class TenantDB:
             return False
 
         updates["updated_at"] = "CURRENT_TIMESTAMP"
-        set_clause = ", ".join(f"{k} = ?" if k != "updated_at" else f"{k} = CURRENT_TIMESTAMP" for k in updates)
+        set_clause = ", ".join(f"{k} = %s" if k != "updated_at" else f"{k} = CURRENT_TIMESTAMP" for k in updates)
         values = [v for k, v in updates.items() if k != "updated_at"]
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"UPDATE tenants SET {set_clause} WHERE tenant_id = ?", (*values, tenant_id))
+            cursor.execute(f"UPDATE tenants SET {set_clause} WHERE tenant_id = %s", (*values, tenant_id))
             conn.commit()
             return cursor.rowcount > 0
 
@@ -91,8 +91,8 @@ class TenantDB:
         """列出租户"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            placeholder = get_db_placeholder()
-            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+            placeholder = "%s"
+            # PostgreSQL 不支持 LIMIT %s，需要直接拼接
             if status:
                 cursor.execute(
                     f"SELECT * FROM tenants WHERE status = {placeholder} ORDER BY created_at DESC LIMIT {limit}",
@@ -116,7 +116,7 @@ class TenantDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE tenants SET status = 'deactivated', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?",
+                "UPDATE tenants SET status = 'deactivated', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = %s",
                 (tenant_id,),
             )
             conn.commit()
@@ -133,28 +133,28 @@ class TenantDB:
 
             # 实例数
             cursor.execute(
-                "SELECT COUNT(*) as count FROM agent_instances WHERE tenant_id = ?",
+                "SELECT COUNT(*) as count FROM agent_instances WHERE tenant_id = %s",
                 (tenant_id,),
             )
             instance_count = cursor.fetchone()["count"]
 
             # 用户数（使用 users 表）
             cursor.execute(
-                "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND status = 'active' AND role != 'platform_admin'",
+                "SELECT COUNT(*) as count FROM users WHERE tenant_id = %s AND status = 'active' AND role != 'platform_admin'",
                 (tenant_id,),
             )
             user_count = cursor.fetchone()["count"]
 
             # 管理员数（使用 users 表）
             cursor.execute(
-                "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND role = 'tenant_admin' AND status = 'active'",
+                "SELECT COUNT(*) as count FROM users WHERE tenant_id = %s AND role = 'tenant_admin' AND status = 'active'",
                 (tenant_id,),
             )
             admin_count = cursor.fetchone()["count"]
 
             # 活跃订阅数
             cursor.execute(
-                "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND status = 'active'",
+                "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = %s AND status = 'active'",
                 (tenant_id,),
             )
             active_subscriptions = cursor.fetchone()["count"]

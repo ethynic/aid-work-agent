@@ -28,14 +28,14 @@ class UsageLogDB:
             # 从 users 表获取该租户的所有用户（排除平台管理员）
             cursor.execute("""
                 SELECT user_id FROM users
-                WHERE tenant_id = ? AND status = 'active' AND role != 'platform_admin'
+                WHERE tenant_id = %s AND status = 'active' AND role != 'platform_admin'
             """, (tenant_id,))
             user_ids = [row["user_id"] for row in cursor.fetchall()]
 
             if not user_ids:
                 return {"total_tokens": 0, "total_sessions": 0, "active_users": 0}
 
-            placeholders = ",".join("?" for _ in user_ids)
+            placeholders = ",".join("%s" for _ in user_ids)
 
             # Token 总量
             cursor.execute(f"""
@@ -45,7 +45,7 @@ class UsageLogDB:
                     COUNT(DISTINCT user_id) as active_users
                 FROM chat_records
                 WHERE user_id IN ({placeholders})
-                  AND created_at >= ? AND created_at <= ?
+                  AND created_at >= %s AND created_at <= %s
             """, (*user_ids, start_date, end_date))
 
             row = cursor.fetchone()
@@ -71,8 +71,8 @@ class UsageLogDB:
                     MAX(cr.created_at) as last_active
                 FROM users u
                 JOIN chat_records cr ON cr.user_id = u.user_id
-                WHERE u.tenant_id = ? AND u.status = 'active' AND u.role != 'platform_admin'
-                  AND cr.created_at >= ? AND cr.created_at <= ?
+                WHERE u.tenant_id = %s AND u.status = 'active' AND u.role != 'platform_admin'
+                  AND cr.created_at >= %s AND cr.created_at <= %s
                 GROUP BY cr.user_id, u.username
                 ORDER BY total_tokens DESC
             """, (tenant_id, start_date, end_date))
@@ -92,14 +92,14 @@ class UsageLogDB:
             # 使用 users 表获取租户用户
             cursor.execute("""
                 SELECT user_id FROM users
-                WHERE tenant_id = ? AND status = 'active' AND role != 'platform_admin'
+                WHERE tenant_id = %s AND status = 'active' AND role != 'platform_admin'
             """, (tenant_id,))
             user_ids = [row["user_id"] for row in cursor.fetchall()]
 
             if not user_ids:
                 return []
 
-            placeholders = ",".join("?" for _ in user_ids)
+            placeholders = ",".join("%s" for _ in user_ids)
 
             cursor.execute(f"""
                 SELECT
@@ -108,7 +108,7 @@ class UsageLogDB:
                     COUNT(DISTINCT session_id) as sessions
                 FROM chat_records
                 WHERE user_id IN ({placeholders})
-                  AND created_at >= ? AND created_at <= ?
+                  AND created_at >= %s AND created_at <= %s
                 GROUP BY DATE(created_at)
                 ORDER BY date
             """, (*user_ids, start_date, end_date))
@@ -128,7 +128,7 @@ class UsageLogDB:
                     COALESCE(SUM(total_token_count), 0) as tokens,
                     COUNT(DISTINCT session_id) as sessions
                 FROM chat_records
-                WHERE user_id = ? AND created_at >= ?
+                WHERE user_id = %s AND created_at >= %s
                 GROUP BY DATE(created_at)
                 ORDER BY date
             """, (user_id, start_date))

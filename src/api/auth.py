@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from src.db.database import get_db_connection, get_db_placeholder
+from src.db.database import get_db_connection
 from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password, generate_captcha, verify_captcha
 from src.config.settings import settings
 
@@ -122,7 +122,7 @@ def generate_token(user_id: str) -> str:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO tokens (token, user_id, expires_at)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         """, (token, user_id, expires_at))
         conn.commit()
 
@@ -136,7 +136,7 @@ def verify_token(token: str) -> Optional[str]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT user_id, expires_at FROM tokens
-            WHERE token = ?
+            WHERE token = %s
         """, (token,))
         row = cursor.fetchone()
 
@@ -150,7 +150,7 @@ def verify_token(token: str) -> Optional[str]:
             expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
 
         if datetime.now() > expires_at:
-            cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
             conn.commit()
             return None
 
@@ -161,7 +161,7 @@ def delete_token(token: str) -> bool:
     """删除指定的 token"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+        cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
         conn.commit()
         return cursor.rowcount > 0
 
@@ -170,7 +170,7 @@ def cleanup_expired_tokens() -> int:
     """清理所有过期的 token，返回清理数量"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM tokens WHERE expires_at < ?",
+        cursor.execute("DELETE FROM tokens WHERE expires_at < %s",
                       (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         conn.commit()
         count = cursor.rowcount
@@ -268,7 +268,7 @@ async def login(request: LoginRequest):
         is_phone = True
     else:
         # 按用户名查找
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifier,))
@@ -304,7 +304,7 @@ async def login(request: LoginRequest):
     if is_platform_admin and not user:
         # 平台管理员但用户不存在，自动创建用户（role='platform_admin'）
         logger.info(f"后端日志：平台管理员用户不存在，自动创建，phone={identifier}")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             # 生成唯一user_id
@@ -523,7 +523,7 @@ async def bind_phone(request: BindPhoneRequest):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE users SET phone = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+            UPDATE users SET phone = %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s
         """, (request.phone, request.user_id))
         conn.commit()
 
@@ -630,7 +630,7 @@ async def reset_password(request: ResetPasswordRequest):
         return {"success": False, "message": "短信验证码错误或已过期，过期时间5分钟"}
 
     # 校验新密码是否符合规则
-    password_rule = getattr(settings, "password_rule", r"^(?=.*[A-Za-z])(?=.*\d).{8,50}$")
+    password_rule = getattr(settings, "password_rule", r"^(%s=.*[A-Za-z])(%s=.*\d).{8,50}$")
     password_msg = getattr(settings, "password_msg", "长度8-50位，必须有字母+数字")
 
     if not re.match(password_rule, request.new_password):
@@ -643,7 +643,7 @@ async def reset_password(request: ResetPasswordRequest):
 
     # 更新密码
     new_password_hash = hash_password(request.new_password)
-    placeholder = get_db_placeholder()
+    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE users SET password_hash = {placeholder}, updated_at = CURRENT_TIMESTAMP WHERE user_id = {placeholder}",

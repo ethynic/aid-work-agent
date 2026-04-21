@@ -36,10 +36,10 @@ class EmailCredentialDB:
             # 先尝试更新
             cursor.execute("""
                 UPDATE user_email_settings
-                SET email_address = ?, smtp_server = ?, smtp_port = ?, smtp_user = ?,
-                    smtp_password = ?, smtp_encryption = ?, imap_server = ?,
-                    imap_port = ?, imap_encryption = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND status = 'active'
+                SET email_address = %s, smtp_server = %s, smtp_port = %s, smtp_user = %s,
+                    smtp_password = %s, smtp_encryption = %s, imap_server = %s,
+                    imap_port = %s, imap_encryption = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s AND status = 'active'
             """, (
                 config["email_address"],
                 config["smtp_server"],
@@ -60,7 +60,7 @@ class EmailCredentialDB:
 
             # 清除旧记录（包括软删除的），避免 UNIQUE 冲突
             cursor.execute("""
-                DELETE FROM user_email_settings WHERE user_id = ?
+                DELETE FROM user_email_settings WHERE user_id = %s
             """, (user_id,))
 
             if cursor.rowcount > 0:
@@ -74,7 +74,7 @@ class EmailCredentialDB:
                     user_id, email_address, smtp_server, smtp_port, smtp_user,
                     smtp_password, smtp_encryption, imap_server, imap_port,
                     imap_encryption, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
             """, (
                 user_id,
                 config["email_address"],
@@ -106,7 +106,7 @@ class EmailCredentialDB:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM user_email_settings
-                WHERE user_id = ? AND status = 'active'
+                WHERE user_id = %s AND status = 'active'
             """, (user_id,))
             row = cursor.fetchone()
 
@@ -155,7 +155,7 @@ class EmailCredentialDB:
             cursor.execute("""
                 UPDATE user_email_settings
                 SET status = 'inactive', updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND status = 'active'
+                WHERE user_id = %s AND status = 'active'
             """, (user_id,))
             conn.commit()
 

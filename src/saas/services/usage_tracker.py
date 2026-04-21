@@ -51,7 +51,7 @@ def track_from_chat_record(record_id: str):
         cursor.execute("""
             SELECT cr.session_id, cr.total_token_count
             FROM chat_records cr
-            WHERE cr.record_id = ?
+            WHERE cr.record_id = %s
         """, (record_id,))
         row = cursor.fetchone()
         if not row or not row["total_token_count"]:

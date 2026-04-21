@@ -28,7 +28,7 @@ class ChannelConfigDB:
             try:
                 cursor.execute("""
                     INSERT INTO tenant_channel_configs (config_id, tenant_id, channel_type, config)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 """, (
                     config_id, tenant_id, channel_type,
                     json.dumps(config, ensure_ascii=False),
@@ -45,7 +45,7 @@ class ChannelConfigDB:
         """根据 ID 获取渠道配置"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tenant_channel_configs WHERE config_id = ?", (config_id,))
+            cursor.execute("SELECT * FROM tenant_channel_configs WHERE config_id = %s", (config_id,))
             row = cursor.fetchone()
             if row:
                 d = dict(row)
@@ -60,12 +60,12 @@ class ChannelConfigDB:
             cursor = conn.cursor()
             if channel_type:
                 cursor.execute(
-                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = ? AND channel_type = ?",
+                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = %s AND channel_type = %s",
                     (tenant_id, channel_type),
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = ?",
+                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = %s",
                     (tenant_id,),
                 )
             results = []
@@ -82,8 +82,8 @@ class ChannelConfigDB:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE tenant_channel_configs
-                SET config = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE config_id = ?
+                SET config = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE config_id = %s
             """, (json.dumps(config, ensure_ascii=False), config_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -95,8 +95,8 @@ class ChannelConfigDB:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE tenant_channel_configs
-                SET verified = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE config_id = ?
+                SET verified = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE config_id = %s
             """, (1 if verified else 0, config_id))
             conn.commit()
             return cursor.rowcount > 0
@@ -106,6 +106,6 @@ class ChannelConfigDB:
         """删除渠道配置"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM tenant_channel_configs WHERE config_id = ?", (config_id,))
+            cursor.execute("DELETE FROM tenant_channel_configs WHERE config_id = %s", (config_id,))
             conn.commit()
             return cursor.rowcount > 0

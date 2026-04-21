@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection, get_db_placeholder
+from src.db.database import get_db_connection
 from src.saas.db.subscription_db import SubscriptionDB
 
 
@@ -45,11 +45,11 @@ class PaymentService:
                 cursor.execute("""
                     INSERT INTO payment_orders
                         (order_id, tenant_id, subscription_id, amount, payment_method, payment_status)
-                    VALUES (?, ?, ?, ?, ?, 'pending')
+                    VALUES (%s, %s, %s, %s, %s, 'pending')
                 """, (order_id, tenant_id, subscription_id, amount, payment_method))
                 conn.commit()
 
-                cursor.execute("SELECT * FROM payment_orders WHERE order_id = ?", (order_id,))
+                cursor.execute("SELECT * FROM payment_orders WHERE order_id = %s", (order_id,))
                 row = cursor.fetchone()
                 logger.info(f"Payment order created: {order_id}, amount={amount}, method={payment_method}")
                 return dict(row) if row else None
@@ -62,7 +62,7 @@ class PaymentService:
         """获取订单信息"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM payment_orders WHERE order_id = ?", (order_id,))
+            cursor.execute("SELECT * FROM payment_orders WHERE order_id = %s", (order_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -71,8 +71,8 @@ class PaymentService:
         """列出租户的支付订单"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            placeholder = get_db_placeholder()
-            # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+            placeholder = "%s"
+            # PostgreSQL 不支持 LIMIT %s，需要直接拼接
             cursor.execute(
                 f"SELECT * FROM payment_orders WHERE tenant_id = {placeholder} ORDER BY created_at DESC LIMIT {limit}",
                 (tenant_id,),
@@ -95,10 +95,10 @@ class PaymentService:
         payment_method = order["payment_method"]
         if payment_method == "wechat":
             # TODO: 调用微信支付统一下单 API
-            return f"https://pay.example.com/wechat?order={order_id}&amount={order['amount']}"
+            return f"https://pay.example.com/wechat%sorder={order_id}&amount={order['amount']}"
         elif payment_method == "alipay":
             # TODO: 调用支付宝统一下单 API
-            return f"https://pay.example.com/alipay?order={order_id}&amount={order['amount']}"
+            return f"https://pay.example.com/alipay%sorder={order_id}&amount={order['amount']}"
 
         return None
 
@@ -122,9 +122,9 @@ class PaymentService:
             # 1. 更新订单状态
             cursor.execute("""
                 UPDATE payment_orders
-                SET payment_status = 'paid', transaction_id = ?, paid_at = ?,
+                SET payment_status = 'paid', transaction_id = %s, paid_at = %s,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE order_id = ? AND payment_status = 'pending'
+                WHERE order_id = %s AND payment_status = 'pending'
             """, (transaction_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), order_id))
 
             if cursor.rowcount == 0:
@@ -132,7 +132,7 @@ class PaymentService:
                 return False
 
             # 2. 查询关联订阅（在同一连接中）
-            cursor.execute("SELECT subscription_id FROM payment_orders WHERE order_id = ?", (order_id,))
+            cursor.execute("SELECT subscription_id FROM payment_orders WHERE order_id = %s", (order_id,))
             row = cursor.fetchone()
             subscription_id = row["subscription_id"] if row else None
 
@@ -141,7 +141,7 @@ class PaymentService:
                 cursor.execute("""
                     UPDATE subscriptions
                     SET status = 'active', payment_status = 'paid', updated_at = CURRENT_TIMESTAMP
-                    WHERE subscription_id = ?
+                    WHERE subscription_id = %s
                 """, (subscription_id,))
                 logger.info(f"Subscription activated: {subscription_id} via order {order_id}")
 

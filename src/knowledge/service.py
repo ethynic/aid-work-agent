@@ -15,7 +15,7 @@ from src.knowledge.chunker import TextChunker
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
-from src.db.database import DB_TYPE, get_db_connection, get_db_placeholder
+from src.db.database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -86,76 +86,42 @@ class KnowledgeBaseService:
                 ext = Path(file_filename).suffix.lower().lstrip('.')
 
                 # 插入文档记录（PostgreSQL 使用 RETURNING 获取 ID）
-                if DB_TYPE == "postgresql":
-                    cursor.execute("""
-                        INSERT INTO documents (
-                            user_id, title, source_type, file_type, file_path,
-                            file_size, total_chunks, embedding_model,
-                            raw_text, metadata
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                    """, (
-                        user_id,
-                        file_filename,
-                        "file",
-                        ext,
-                        file_path,
-                        os.path.getsize(file_path) if os.path.exists(file_path) else 0,
-                        len(chunks),
-                        "text-embedding-v3",
-                        parse_result.text[:10000] if parse_result.text else None,
-                        json.dumps(parse_result.metadata) if parse_result.metadata else None
-                    ))
-                    doc_id = cursor.fetchone()["id"]
-                else:
-                    cursor.execute("""
-                        INSERT INTO documents (
-                            user_id, title, source_type, file_type, file_path,
-                            file_size, total_chunks, embedding_model,
-                            raw_text, metadata
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        user_id,
-                        file_filename,
-                        "file",
-                        ext,
-                        file_path,
-                        os.path.getsize(file_path) if os.path.exists(file_path) else 0,
-                        len(chunks),
-                        "text-embedding-v3",
-                        parse_result.text[:10000] if parse_result.text else None,
-                        json.dumps(parse_result.metadata) if parse_result.metadata else None
-                    ))
-                    doc_id = cursor.lastrowid
+                cursor.execute("""
+                    INSERT INTO documents (
+                        user_id, title, source_type, file_type, file_path,
+                        file_size, total_chunks, embedding_model,
+                        raw_text, metadata
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    user_id,
+                    file_filename,
+                    "file",
+                    ext,
+                    file_path,
+                    os.path.getsize(file_path) if os.path.exists(file_path) else 0,
+                    len(chunks),
+                    "text-embedding-v3",
+                    parse_result.text[:10000] if parse_result.text else None,
+                    json.dumps(parse_result.metadata) if parse_result.metadata else None
+                ))
+                doc_id = cursor.fetchone()["id"]
 
                 # 插入 chunks
                 chunk_ids = []
                 for chunk in chunks:
-                    if DB_TYPE == "postgresql":
-                        cursor.execute("""
-                            INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                            VALUES (%s, %s, %s, %s, %s)
-                            RETURNING id
-                        """, (
-                            doc_id,
-                            chunk["index"],
-                            chunk["text"],
-                            chunk["tokens"],
-                            json.dumps({"char_count": len(chunk["text"])})
-                        ))
-                        chunk_ids.append(cursor.fetchone()["id"])
-                    else:
-                        cursor.execute("""
-                            INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (
-                            doc_id,
-                            chunk["index"],
-                            chunk["text"],
-                            chunk["tokens"],
-                            json.dumps({"char_count": len(chunk["text"])})
-                        ))
-                        chunk_ids.append(cursor.lastrowid)
+                    cursor.execute("""
+                        INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (
+                        doc_id,
+                        chunk["index"],
+                        chunk["text"],
+                        chunk["tokens"],
+                        json.dumps({"char_count": len(chunk["text"])})
+                    ))
+                    chunk_ids.append(cursor.fetchone()["id"])
 
                 # 插入向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -195,7 +161,7 @@ class KnowledgeBaseService:
                 cursor = conn.cursor()
 
                 # 获取文件路径
-                cursor.execute("SELECT file_path FROM documents WHERE id = ?", (doc_id,))
+                cursor.execute("SELECT file_path FROM documents WHERE id = %s", (doc_id,))
                 row = cursor.fetchone()
                 if not row:
                     return {"success": False, "error": "文档不存在"}
@@ -207,10 +173,10 @@ class KnowledgeBaseService:
                 await vector_db.delete_by_doc(doc_id)
 
                 # 删除 chunks（FTS 触发器会自动删除）
-                cursor.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+                cursor.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
 
                 # 删除文档记录
-                cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                cursor.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
 
                 conn.commit()
 
@@ -232,7 +198,7 @@ class KnowledgeBaseService:
                 cursor = conn.cursor()
 
                 if user_id:
-                    cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = ?", (user_id,))
+                    cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = %s", (user_id,))
                 else:
                     cursor.execute("SELECT COUNT(*) FROM documents")
 
@@ -252,10 +218,10 @@ class KnowledgeBaseService:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                placeholder = get_db_placeholder()
+                placeholder = "%s"
 
                 if user_id:
-                    # PostgreSQL 不支持 LIMIT ? OFFSET ?，需要直接拼接
+                    # PostgreSQL 不支持 LIMIT %s OFFSET %s，需要直接拼接
                     cursor.execute(f"""
                         SELECT id, title, source_type, file_type, file_path, file_size,
                                total_chunks, created_at
@@ -297,7 +263,7 @@ class KnowledgeBaseService:
                 cursor.execute("""
                     SELECT id, chunk_index, text, tokens, metadata
                     FROM chunks
-                    WHERE doc_id = ?
+                    WHERE doc_id = %s
                     ORDER BY chunk_index
                 """, (doc_id,))
 
@@ -358,7 +324,7 @@ class KnowledgeBaseService:
                     vector_db=vector_db,
                     embedding_client=embedding_client,
                     conn=conn,
-                    db_type=DB_TYPE
+                    db_type="postgresql"
                 )
 
                 # 执行混合检索
@@ -367,7 +333,7 @@ class KnowledgeBaseService:
                 # 提取文档标题
                 if results:
                     doc_ids = {r["doc_id"] for r in results}
-                    placeholders = ','.join(['?'] * len(doc_ids))
+                    placeholders = ','.join(['%s'] * len(doc_ids))
 
                     cursor = conn.cursor()
                     cursor.execute(f"""

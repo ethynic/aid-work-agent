@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 
 from loguru import logger
 
-from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp, DB_TYPE
+from src.db.database import get_db_connection, get_current_timestamp
 
 
 # ============== 密码哈希 ==============
@@ -62,7 +62,7 @@ class UserDB:
             tenant_id: 租户ID，平台管理员为空
         """
         user_id = generate_user_id()
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -84,7 +84,7 @@ class UserDB:
     @staticmethod
     def get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         """根据用户ID获取用户"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
@@ -94,7 +94,7 @@ class UserDB:
     @staticmethod
     def get_by_phone(phone: str) -> Optional[Dict[str, Any]]:
         """根据手机号获取用户"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE phone = {placeholder}", (phone,))
@@ -104,7 +104,7 @@ class UserDB:
     @staticmethod
     def get_by_wx_openid(openid: str) -> Optional[Dict[str, Any]]:
         """根据微信openid获取用户"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE wx_openid = {placeholder}", (openid,))
@@ -122,7 +122,7 @@ class UserDB:
     @staticmethod
     def update_wx_openid(user_id: str, wx_openid: str) -> bool:
         """绑定微信openid"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"UPDATE users SET wx_openid = {placeholder} WHERE user_id = {placeholder}",
@@ -144,7 +144,7 @@ class UserDB:
         if not updates:
             return False
 
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         set_clause = ", ".join([f"{k} = {placeholder}" for k in updates.keys()])
         ts = get_current_timestamp()
         values = list(updates.values()) + [user_id]
@@ -179,9 +179,9 @@ class UserDB:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM users
-                WHERE tenant_id = ? AND status = 'active'
+                WHERE tenant_id = %s AND status = 'active'
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT %s
             """, (tenant_id, limit))
             return [dict(row) for row in cursor.fetchall()]
 
@@ -198,7 +198,7 @@ class UserDB:
                 cursor.execute("""
                     SELECT * FROM users
                     WHERE role IN ('platform_admin', 'tenant_admin')
-                    AND tenant_id = ? AND status = 'active'
+                    AND tenant_id = %s AND status = 'active'
                     ORDER BY created_at
                 """, (tenant_id,))
             else:
@@ -219,7 +219,7 @@ class SessionDB:
     def create(user_id: str, title: str = None, context_data: dict = None) -> Optional[Dict[str, Any]]:
         """创建新会话"""
         session_id = generate_session_id()
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -240,7 +240,7 @@ class SessionDB:
     @staticmethod
     def get_by_id(session_id: str) -> Optional[Dict[str, Any]]:
         """根据会话ID获取会话"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
@@ -255,7 +255,7 @@ class SessionDB:
     @staticmethod
     def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的所有会话"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -275,7 +275,7 @@ class SessionDB:
     @staticmethod
     def update_title(session_id: str, title: str) -> bool:
         """更新会话标题"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -290,7 +290,7 @@ class SessionDB:
     @staticmethod
     def update_context(session_id: str, context_data: dict) -> bool:
         """更新会话上下文数据"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -305,7 +305,7 @@ class SessionDB:
     @staticmethod
     def touch(session_id: str) -> bool:
         """更新会话时间戳"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -317,7 +317,7 @@ class SessionDB:
     @staticmethod
     def delete(session_id: str) -> bool:
         """删除会话及其所有消息和记录"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -342,7 +342,7 @@ class MessageDB:
                metadata: dict = None) -> Optional[Dict[str, Any]]:
         """创建新消息"""
         message_id = generate_message_id()
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -363,7 +363,7 @@ class MessageDB:
     @staticmethod
     def get_by_id(message_id: str) -> Optional[Dict[str, Any]]:
         """根据消息ID获取消息"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM chat_messages WHERE message_id = {placeholder}", (message_id,))
@@ -378,7 +378,7 @@ class MessageDB:
     @staticmethod
     def list_by_session(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """获取会话的所有消息"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -404,7 +404,7 @@ class MessageDB:
     @staticmethod
     def delete(message_id: str) -> bool:
         """删除消息"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"DELETE FROM chat_messages WHERE message_id = {placeholder}", (message_id,))
@@ -439,7 +439,7 @@ class ChatRecordDB:
     ) -> Optional[Dict[str, Any]]:
         """创建新的会话记录"""
         record_id = generate_record_id()
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -469,7 +469,7 @@ class ChatRecordDB:
     @staticmethod
     def get_by_id(record_id: str) -> Optional[Dict[str, Any]]:
         """根据记录ID获取会话记录"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM chat_records WHERE record_id = {placeholder}", (record_id,))
@@ -484,7 +484,7 @@ class ChatRecordDB:
     @staticmethod
     def list_by_session(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """获取会话的所有记录"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -504,7 +504,7 @@ class ChatRecordDB:
     @staticmethod
     def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的所有会话记录"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -524,7 +524,7 @@ class ChatRecordDB:
     @staticmethod
     def get_total_token_by_session(session_id: str) -> Dict[str, int]:
         """获取会话的总token消耗"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -547,7 +547,7 @@ class ChatRecordDB:
     @staticmethod
     def delete(record_id: str) -> bool:
         """删除会话记录"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"DELETE FROM chat_records WHERE record_id = {placeholder}", (record_id,))
@@ -557,7 +557,7 @@ class ChatRecordDB:
     @staticmethod
     def delete_by_session(session_id: str) -> bool:
         """删除会话的所有记录"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"DELETE FROM chat_records WHERE session_id = {placeholder}", (session_id,))
@@ -573,7 +573,7 @@ def send_sms_code(phone: str) -> bool:
     当前为Mock实现，固定验证码888888
     """
     code = "888888"
-    placeholder = get_db_placeholder()
+    placeholder = "%s"
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -592,7 +592,7 @@ def send_sms_code(phone: str) -> bool:
 
 def verify_sms_code(phone: str, code: str) -> bool:
     """验证短信验证码"""
-    placeholder = get_db_placeholder()
+    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -635,7 +635,7 @@ def generate_captcha() -> dict:
     captcha_id = str(uuid.uuid4())
     code = generate_captcha_code(4)
     expires_at = (datetime.now() + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
-    placeholder = get_db_placeholder()
+    placeholder = "%s"
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -657,7 +657,7 @@ def verify_captcha(captcha_id: str, code: str) -> bool:
     验证图形验证码
     验证成功后删除验证码（一次性）
     """
-    placeholder = get_db_placeholder()
+    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -679,7 +679,7 @@ def get_captcha_image(captcha_id: str) -> Optional[str]:
     """获取验证码对应的SVG图片（可选，用于直接返回图片）"""
     # 如果需要返回图片而非纯文本，可以在这里生成SVG
     # 当前实现返回纯文本code，由前端生成图片
-    placeholder = get_db_placeholder()
+    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""

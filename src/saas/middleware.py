@@ -97,7 +97,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT user_id, expires_at FROM tokens WHERE token = ?
+                SELECT user_id, expires_at FROM tokens WHERE token = %s
             """, (token,))
             row = cursor.fetchone()
 
@@ -109,7 +109,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             if isinstance(expires_at, str):
                 expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
             if datetime.now() > expires_at:
-                cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+                cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
                 conn.commit()
                 return None
 
@@ -118,7 +118,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         # 查询用户信息获取 role 和 tenant_id
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT role, tenant_id FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT role, tenant_id FROM users WHERE user_id = %s", (user_id,))
             row = cursor.fetchone()
             if not row:
                 return None
@@ -158,7 +158,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         # 查询用户的 tenant_id
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT tenant_id FROM users WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT tenant_id FROM users WHERE user_id = %s", (user_id,))
             row = cursor.fetchone()
             if row and row["tenant_id"]:
                 return row["tenant_id"]

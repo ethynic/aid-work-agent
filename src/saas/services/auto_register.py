@@ -78,7 +78,7 @@ def _find_user_by_channel_id(channel_type: str, channel_user_id: str) -> Optiona
         # 查找是否已有此渠道用户的映射
         cursor.execute("""
             SELECT user_id FROM users
-            WHERE username LIKE ?
+            WHERE username LIKE %s
             LIMIT 1
         """, (f"{channel_type}用户{channel_user_id[-4:]}",))
         row = cursor.fetchone()
@@ -94,7 +94,7 @@ def _save_channel_user_mapping(channel_type: str, channel_user_id: str, user_id:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE users SET username = ?
-            WHERE user_id = ?
+            UPDATE users SET username = %s
+            WHERE user_id = %s
         """, (f"{channel_type}用户{channel_user_id[-4:]}", user_id))
         conn.commit()

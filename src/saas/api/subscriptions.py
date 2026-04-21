@@ -157,7 +157,7 @@ async def initiate_payment(order_id: str, request: Request, body: PayOrderReques
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE payment_orders SET payment_method = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ?",
+            "UPDATE payment_orders SET payment_method = %s, updated_at = CURRENT_TIMESTAMP WHERE order_id = %s",
             (body.payment_method, order_id),
         )
         conn.commit()

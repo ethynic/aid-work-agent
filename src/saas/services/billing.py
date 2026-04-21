@@ -136,7 +136,7 @@ def check_expired_subscriptions() -> int:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             SELECT subscription_id FROM subscriptions
-            WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < ?
+            WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < %s
         """, (now,))
         expired = cursor.fetchall()
 

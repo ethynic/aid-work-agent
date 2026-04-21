@@ -11,7 +11,7 @@ from src.tools.base import BaseTool
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.retriever.hybrid_retriever import HybridRetriever
-from src.db.database import DB_TYPE, get_db_connection, get_db_placeholder
+from src.db.database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class KnowledgeBaseTool(BaseTool):
             vector_db=vector_db,
             embedding_client=embedding_client,
             conn=vector_db.conn,
-            db_type=DB_TYPE
+            db_type="postgresql"
         )
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -87,7 +87,7 @@ class KnowledgeBaseTool(BaseTool):
             # 提取文档标题
             if results:
                 doc_ids = {r["doc_id"] for r in results}
-                placeholder = get_db_placeholder()
+                placeholder = "%s"
                 placeholders = ','.join([placeholder] * len(doc_ids))
 
                 conn_cm = get_db_connection()

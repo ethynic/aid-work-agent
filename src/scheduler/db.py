@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from loguru import logger
-from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp
+from src.db.database import get_db_connection, get_current_timestamp
 
 
 def _sanitize_error(error_msg: str) -> str:
@@ -41,7 +41,7 @@ class ScheduledTaskDB:
         """创建定时任务"""
         task_id = f"sched_{uuid.uuid4().hex[:12]}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -66,7 +66,7 @@ class ScheduledTaskDB:
     @staticmethod
     def get_by_id(task_id: str) -> Optional[Dict[str, Any]]:
         """根据任务ID获取定时任务"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM scheduled_tasks WHERE task_id = {placeholder}", (task_id,))
@@ -76,7 +76,7 @@ class ScheduledTaskDB:
     @staticmethod
     def list_by_user(user_id: str, status: str = None, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的定时任务列表"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if status:
@@ -113,7 +113,7 @@ class ScheduledTaskDB:
         """更新任务调度配置"""
         from src.tools.scheduler.scheduled_task_tool import generate_cron_expression
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -128,7 +128,7 @@ class ScheduledTaskDB:
     def update_status(task_id: str, status: str) -> bool:
         """更新任务状态"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -144,7 +144,7 @@ class ScheduledTaskDB:
                          result_summary: str = None) -> bool:
         """任务执行后更新统计"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -171,7 +171,7 @@ class ScheduledTaskDB:
     @staticmethod
     def count_by_user(user_id: str, status: str = "active") -> int:
         """统计用户的定时任务数量"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -195,7 +195,7 @@ class ScheduledTaskLogDB:
         """创建执行日志"""
         log_id = f"slog_{uuid.uuid4().hex[:12]}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
 
         # 过滤敏感信息
         safe_result = result_summary or ""
@@ -225,7 +225,7 @@ class ScheduledTaskLogDB:
     @staticmethod
     def get_by_id(log_id: str) -> Optional[Dict[str, Any]]:
         """根据日志ID获取日志"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM scheduled_task_logs WHERE log_id = {placeholder}", (log_id,))
@@ -235,7 +235,7 @@ class ScheduledTaskLogDB:
     @staticmethod
     def list_by_task(task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """获取任务的执行日志"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -249,7 +249,7 @@ class ScheduledTaskLogDB:
     @staticmethod
     def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的所有执行日志"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -263,7 +263,7 @@ class ScheduledTaskLogDB:
     @staticmethod
     def get_stats(task_id: str) -> Dict[str, Any]:
         """获取任务的执行统计"""
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""

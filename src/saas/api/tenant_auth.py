@@ -154,7 +154,7 @@ def get_current_admin(request: Request) -> Optional[dict]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT user_id, expires_at FROM tokens WHERE token = ?
+            SELECT user_id, expires_at FROM tokens WHERE token = %s
         """, (token,))
         row = cursor.fetchone()
 
@@ -164,7 +164,7 @@ def get_current_admin(request: Request) -> Optional[dict]:
         # 检查过期
         from datetime import datetime
         if datetime.now() > row["expires_at"]:
-            cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
             conn.commit()
             return None
 
@@ -272,7 +272,7 @@ async def admin_login(request: AdminLoginRequest):
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO tokens (token, user_id, expires_at)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         """, (token, user["user_id"], expires_at))
         conn.commit()
 
@@ -305,7 +305,7 @@ async def admin_login(request: AdminLoginRequest):
 async def admin_password_login(request: AdminPasswordLoginRequest):
     """管理员密码+图形验证码登录"""
     from src.db.models import UserDB
-    from src.db.database import get_db_connection, get_db_placeholder
+    from src.db.database import get_db_connection
     import secrets
     from datetime import datetime, timedelta
 
@@ -328,7 +328,7 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
         is_phone = True
     else:
         # 按用户名查找
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifier,))
@@ -350,7 +350,7 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
     if is_platform_admin and not user:
         # 平台管理员但用户不存在，自动创建用户（role='platform_admin'）
         logger.info(f"平台管理员用户不存在，自动创建，phone={identifier}")
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             user_id = str(uuid.uuid4())
@@ -427,7 +427,7 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO tokens (token, user_id, expires_at)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         """, (token, user["user_id"], expires_at))
         conn.commit()
 
@@ -501,7 +501,7 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO tokens (token, user_id, expires_at)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
         """, (token, user["user_id"], expires_at))
         conn.commit()
 
@@ -542,7 +542,7 @@ async def admin_logout(request: Request):
         token = auth_header[7:]
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
             conn.commit()
     return {"success": True}
 

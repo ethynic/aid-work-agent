@@ -123,7 +123,7 @@ def parse_json_safe(json_str: str) -> Any:
     try:
         import re
         # 匹配不在转义序列中的单引号
-        fixed = re.sub(r"(?<!\\)'", '"', json_str)
+        fixed = re.sub(r"(%s<!\\)'", '"', json_str)
         return json.loads(fixed)
     except json.JSONDecodeError:
         pass
@@ -204,7 +204,7 @@ def parse_json_safe(json_str: str) -> Any:
                     item = item[:-1]
 
                 # 使用正则匹配 key:value
-                pairs = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\}]+))', item)
+                pairs = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(%s:"([^"]*)"|\'([^\']*)\'|([^,\}]+))', item)
 
                 obj = {}
                 for match in pairs:
@@ -234,13 +234,11 @@ def get_db_connection():
     """获取数据库连接"""
     from src.db.database import (
         get_db_connection as _get_db,
-        get_db_placeholder as _placeholder,
-        DB_TYPE as _db_type,
         get_postgres_pool,
         init_postgres_pool,
     )
     # 子进程独立运行时，PostgreSQL 连接池可能未初始化，需要自动初始化
-    if _db_type == "postgresql" and get_postgres_pool() is None:
+    if get_postgres_pool() is None:
         logger.info("后端日志：[trade-customer] 子进程中 PostgreSQL 连接池未初始化，正在自动初始化")
         init_postgres_pool()
     return _get_db()
@@ -248,14 +246,12 @@ def get_db_connection():
 
 def get_db_placeholder():
     """获取参数占位符"""
-    from src.db.database import get_db_placeholder as _placeholder
-    return _placeholder()
+    return "%s"
 
 
 def get_db_type():
     """获取数据库类型"""
-    from src.db.database import DB_TYPE
-    return DB_TYPE
+    return "postgresql"
 
 
 def get_date_offset(days: int) -> str:
@@ -270,7 +266,7 @@ def init_tables():
     id_column = "INTEGER PRIMARY KEY AUTOINCREMENT" if db_type == "sqlite" else "SERIAL PRIMARY KEY"
 
     with get_db_connection() as conn:
-        cursor = conn.cursor()
+        cursor = conn
 
         # 匹配客户表
         cursor.execute(f"""
@@ -369,7 +365,7 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
         logger.info(f"后端日志：[trade-customer诊断] save_customer 开始写入数据库, user_id={user_id}, session_id={session_id}, customer_keys={list(customer.keys()) if customer else '无'}")
         logger.info(f"后端日志：[trade-customer诊断] save_customer 客户详情: company_name={customer.get('company_name')}, contact_name={customer.get('contact_name') or customer.get('contact_person')}, email={customer.get('email')}, country={customer.get('country')}")
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn
             customer_id = generate_customer_id()
             match_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -382,7 +378,7 @@ def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Di
                 (customer_id, user_id, session_id, company_name, contact_name,
                  email, country, language, industry, import_category,
                  company_size, match_reason, match_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 customer_id,
                 user_id,
@@ -437,7 +433,7 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
         for i, c in enumerate(customers):
             logger.info(f"后端日志：[trade-customer诊断] 客户[{i}]: company_name={c.get('company_name')}, contact_name={c.get('contact_name') or c.get('contact_person')}, email={c.get('email')}, country={c.get('country')}")
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn
             saved_customers = []
 
             for customer in customers:
@@ -453,7 +449,7 @@ def save_customers(user_id: str, session_id: str, customers: List[Dict[str, Any]
                     (customer_id, user_id, session_id, company_name, contact_name,
                      email, country, language, industry, import_category,
                      company_size, match_reason, match_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     customer_id,
                     user_id,
@@ -505,18 +501,18 @@ def list_customers(user_id: str, session_id: Optional[str] = None) -> Dict[str, 
 
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn
 
             if session_id:
                 cursor.execute("""
                     SELECT * FROM bs_trade_specialist_matched_customers
-                    WHERE user_id = ? AND session_id = ?
+                    WHERE user_id = %s AND session_id = %s
                     ORDER BY created_at DESC
                 """, (user_id, session_id))
             else:
                 cursor.execute("""
                     SELECT * FROM bs_trade_specialist_matched_customers
-                    WHERE user_id = ?
+                    WHERE user_id = %s
                     ORDER BY created_at DESC
                 """, (user_id,))
 
@@ -550,9 +546,9 @@ def get_customer(customer_id: str) -> Dict[str, Any]:
 
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn
             cursor.execute("""
-                SELECT * FROM bs_trade_specialist_matched_customers WHERE customer_id = ?
+                SELECT * FROM bs_trade_specialist_matched_customers WHERE customer_id = %s
             """, (customer_id,))
 
             row = cursor.fetchone()
@@ -567,7 +563,7 @@ def get_customer(customer_id: str) -> Dict[str, Any]:
             # 查询该客户的邮件历史
             cursor.execute("""
                 SELECT * FROM bs_trade_specialist_customer_emails
-                WHERE customer_id = ?
+                WHERE customer_id = %s
                 ORDER BY created_at DESC
             """, (customer_id,))
 
@@ -606,10 +602,10 @@ def record_email(
 
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn
 
             # 检查客户是否存在
-            cursor.execute("SELECT customer_id FROM bs_trade_specialist_matched_customers WHERE customer_id = ?",
+            cursor.execute("SELECT customer_id FROM bs_trade_specialist_matched_customers WHERE customer_id = %s",
                           (customer_id,))
             if not cursor.fetchone():
                 return {
@@ -624,7 +620,7 @@ def record_email(
                 INSERT INTO bs_trade_specialist_customer_emails
                 (email_id, customer_id, user_id, session_id, email_subject,
                  email_body, email_language, send_time, send_status, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 email_id,
                 customer_id,
@@ -670,11 +666,11 @@ def list_emails(
 
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            placeholder = get_db_placeholder()
+            cursor = conn
+            placeholder = "%s"
 
             if customer_id:
-                # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+                # PostgreSQL 不支持 LIMIT %s，需要直接拼接
                 cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
                     FROM bs_trade_specialist_customer_emails ce
@@ -721,31 +717,31 @@ def get_stats(user_id: str) -> Dict[str, Any]:
 
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn
 
             # 客户总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers WHERE user_id = %s
             """, (user_id,))
             total_customers = cursor.fetchone()["total"]
 
             # 邮件发送总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails WHERE user_id = %s
             """, (user_id,))
             total_emails = cursor.fetchone()["total"]
 
             # 成功发送数
             cursor.execute("""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
-                WHERE user_id = ? AND send_status = 'success'
+                WHERE user_id = %s AND send_status = 'success'
             """, (user_id,))
             success_emails = cursor.fetchone()["total"]
 
             # 发送失败的邮件数
             cursor.execute("""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
-                WHERE user_id = ? AND send_status = 'failed'
+                WHERE user_id = %s AND send_status = 'failed'
             """, (user_id,))
             failed_emails = cursor.fetchone()["total"]
 
@@ -753,14 +749,14 @@ def get_stats(user_id: str) -> Dict[str, Any]:
             seven_days_ago = get_date_offset(-7)
             cursor.execute(f"""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers
-                WHERE user_id = ? AND created_at >= {seven_days_ago}
+                WHERE user_id = %s AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_customers = cursor.fetchone()["total"]
 
             # 最近7天的邮件发送数
             cursor.execute(f"""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
-                WHERE user_id = ? AND created_at >= {seven_days_ago}
+                WHERE user_id = %s AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_emails = cursor.fetchone()["total"]
 
@@ -768,7 +764,7 @@ def get_stats(user_id: str) -> Dict[str, Any]:
             cursor.execute("""
                 SELECT country, COUNT(*) as count
                 FROM bs_trade_specialist_matched_customers
-                WHERE user_id = ?
+                WHERE user_id = %s
                 GROUP BY country
                 ORDER BY count DESC
                 LIMIT 10

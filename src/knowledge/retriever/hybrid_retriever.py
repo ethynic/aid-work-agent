@@ -1,14 +1,12 @@
 """
-混合检索器 - 向量检索 + FTS5 全文检索 + RRF 融合
+混合检索器 - 向量检索 + 全文检索 + RRF 融合
+PostgreSQL 版本
 """
 
 import json
-import sqlite3
 import re
 from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
-
-from src.db.database import DB_TYPE, get_db_placeholder
 
 
 class HybridRetriever:
@@ -55,13 +53,13 @@ class HybridRetriever:
         self,
         vector_db,
         embedding_client,
-        conn: sqlite3.Connection,
-        db_type: str = None
+        conn,
+        db_type: str = "postgresql"
     ):
         self.vector_db = vector_db
         self.embedding_client = embedding_client
         self.conn = conn
-        self.db_type = db_type or DB_TYPE
+        self.db_type = db_type
 
     async def retrieve(
         self,
@@ -356,7 +354,7 @@ class HybridRetriever:
             return []
 
         chunk_ids = [chunk_id for chunk_id, _ in fused]
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         placeholders = ','.join([placeholder] * len(chunk_ids))
 
         cursor = self.conn.cursor()

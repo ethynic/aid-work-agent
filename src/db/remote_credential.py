@@ -12,7 +12,7 @@ from loguru import logger
 from cryptography.fernet import Fernet
 import base64
 
-from src.db.database import get_db_connection, get_db_placeholder, get_current_timestamp
+from src.db.database import get_db_connection, get_current_timestamp
 
 
 # ============== 加密密钥管理 ==============
@@ -120,7 +120,7 @@ class RemoteCredentialDB:
         if not name:
             name = f"{connection_type.upper()}://{server_host}{remote_path}"
 
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         ts = get_current_timestamp()
 
         with get_db_connection() as conn:
@@ -174,7 +174,7 @@ class RemoteCredentialDB:
         Returns:
             凭据字典或None
         """
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -208,7 +208,7 @@ class RemoteCredentialDB:
         Returns:
             凭据列表
         """
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if connection_type:
@@ -244,7 +244,7 @@ class RemoteCredentialDB:
         Returns:
             凭据字典或None（不包含密码）
         """
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
@@ -286,7 +286,7 @@ class RemoteCredentialDB:
         if not updates:
             return False
 
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         set_clause = ', '.join([f"{key} = {placeholder}" for key in updates.keys()])
         ts = get_current_timestamp()
         values = list(updates.values()) + [credential_id, user_id]
@@ -318,7 +318,7 @@ class RemoteCredentialDB:
         Returns:
             是否成功
         """
-        placeholder = get_db_placeholder()
+        placeholder = "%s"
         ts = get_current_timestamp()
         with get_db_connection() as conn:
             cursor = conn.cursor()

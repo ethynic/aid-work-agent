@@ -49,7 +49,7 @@ class ScheduledTaskExecutor:
             try:
                 cursor.execute("""
                     INSERT INTO chat_sessions (session_id, user_id, title, context_data)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 """, (session_id, user_id, title or "新会话",
                       json.dumps(context_data) if context_data else None))
                 conn.commit()
@@ -187,7 +187,7 @@ class ScheduledTaskExecutor:
                 with get_db_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
-                        UPDATE scheduled_tasks SET retry_count = ? WHERE task_id = ?
+                        UPDATE scheduled_tasks SET retry_count = %s WHERE task_id = %s
                     """, (new_retry_count, task_id))
                     conn.commit()
 

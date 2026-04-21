@@ -34,7 +34,7 @@ class AgentInstanceDB:
                     INSERT INTO agent_instances
                         (instance_id, tenant_id, subscription_id, subagent_type,
                          display_name, config, bound_channel_type, allowed_skills)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     instance_id, tenant_id, subscription_id, subagent_type,
                     display_name,
@@ -54,7 +54,7 @@ class AgentInstanceDB:
         """根据 ID 获取实例"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM agent_instances WHERE instance_id = ?", (instance_id,))
+            cursor.execute("SELECT * FROM agent_instances WHERE instance_id = %s", (instance_id,))
             row = cursor.fetchone()
             if row:
                 return AgentInstanceDB._row_to_dict(row)
@@ -67,12 +67,12 @@ class AgentInstanceDB:
             cursor = conn.cursor()
             if status:
                 cursor.execute(
-                    "SELECT * FROM agent_instances WHERE tenant_id = ? AND status = ? ORDER BY created_at DESC",
+                    "SELECT * FROM agent_instances WHERE tenant_id = %s AND status = %s ORDER BY created_at DESC",
                     (tenant_id, status),
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM agent_instances WHERE tenant_id = ? ORDER BY created_at DESC",
+                    "SELECT * FROM agent_instances WHERE tenant_id = %s ORDER BY created_at DESC",
                     (tenant_id,),
                 )
             return [AgentInstanceDB._row_to_dict(row) for row in cursor.fetchall()]
@@ -93,13 +93,13 @@ class AgentInstanceDB:
         if not updates:
             return False
 
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
         values = list(updates.values())
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"UPDATE agent_instances SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE instance_id = ?",
+                f"UPDATE agent_instances SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE instance_id = %s",
                 (*values, instance_id),
             )
             conn.commit()
@@ -110,7 +110,7 @@ class AgentInstanceDB:
         """删除实例"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM agent_instances WHERE instance_id = ?", (instance_id,))
+            cursor.execute("DELETE FROM agent_instances WHERE instance_id = %s", (instance_id,))
             conn.commit()
             return cursor.rowcount > 0
 

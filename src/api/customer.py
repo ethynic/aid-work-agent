@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from loguru import logger
 
-from src.db.database import get_db_connection, get_db_placeholder, DB_TYPE, get_date_offset
+from src.db.database import get_db_connection, get_date_offset
 
 
 # 敏感信息过滤
@@ -22,10 +22,10 @@ def sanitize_error_info(error_msg: str) -> str:
         r'passwd["\s:=]+\S+',
         r'secret["\s:=]+\S+',
         r'token["\s:=]+\S+',
-        r'api[_-]?key["\s:=]+\S+',
-        r'access[_-]?key["\s:=]+\S+',
-        r'private[_-]?key["\s:=]+\S+',
-        r'auth[_-]?token["\s:=]+\S+',
+        r'api[_-]%skey["\s:=]+\S+',
+        r'access[_-]%skey["\s:=]+\S+',
+        r'private[_-]%skey["\s:=]+\S+',
+        r'auth[_-]%stoken["\s:=]+\S+',
     ]
     sanitized = error_msg
     for pattern in sensitive_patterns:
@@ -82,13 +82,13 @@ async def list_customers(
             if session_id:
                 cursor.execute("""
                     SELECT * FROM bs_trade_specialist_matched_customers
-                    WHERE user_id = ? AND session_id = ?
+                    WHERE user_id = %s AND session_id = %s
                     ORDER BY created_at DESC
                 """, (user_id, session_id))
             else:
                 cursor.execute("""
                     SELECT * FROM bs_trade_specialist_matched_customers
-                    WHERE user_id = ?
+                    WHERE user_id = %s
                     ORDER BY created_at DESC
                 """, (user_id,))
 
@@ -121,7 +121,7 @@ async def get_customer(customer_id: str):
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT * FROM bs_trade_specialist_matched_customers WHERE customer_id = ?
+                SELECT * FROM bs_trade_specialist_matched_customers WHERE customer_id = %s
             """, (customer_id,))
 
             row = cursor.fetchone()
@@ -136,7 +136,7 @@ async def get_customer(customer_id: str):
             # 查询邮件历史
             cursor.execute("""
                 SELECT * FROM bs_trade_specialist_customer_emails
-                WHERE customer_id = ?
+                WHERE customer_id = %s
                 ORDER BY created_at DESC
             """, (customer_id,))
 
@@ -174,10 +174,10 @@ async def list_emails(
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            placeholder = get_db_placeholder()
+            placeholder = "%s"
 
             if customer_id:
-                # PostgreSQL 不支持 LIMIT ?，需要直接拼接
+                # PostgreSQL 不支持 LIMIT %s，需要直接拼接
                 cursor.execute(f"""
                     SELECT ce.*, mc.company_name, mc.contact_name
                     FROM bs_trade_specialist_customer_emails ce
@@ -228,27 +228,27 @@ async def get_stats(
 
             # 客户总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers WHERE user_id = %s
             """, (user_id,))
             total_customers = cursor.fetchone()["total"]
 
             # 邮件发送总数
             cursor.execute("""
-                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails WHERE user_id = ?
+                SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails WHERE user_id = %s
             """, (user_id,))
             total_emails = cursor.fetchone()["total"]
 
             # 成功发送数
             cursor.execute("""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
-                WHERE user_id = ? AND send_status = 'success'
+                WHERE user_id = %s AND send_status = 'success'
             """, (user_id,))
             success_emails = cursor.fetchone()["total"]
 
             # 发送失败的邮件数
             cursor.execute("""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
-                WHERE user_id = ? AND send_status = 'failed'
+                WHERE user_id = %s AND send_status = 'failed'
             """, (user_id,))
             failed_emails = cursor.fetchone()["total"]
 
@@ -256,14 +256,14 @@ async def get_stats(
             seven_days_ago = get_date_offset(-7)
             cursor.execute(f"""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_matched_customers
-                WHERE user_id = ? AND created_at >= {seven_days_ago}
+                WHERE user_id = %s AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_customers = cursor.fetchone()["total"]
 
             # 最近7天的邮件发送数
             cursor.execute(f"""
                 SELECT COUNT(*) as total FROM bs_trade_specialist_customer_emails
-                WHERE user_id = ? AND created_at >= {seven_days_ago}
+                WHERE user_id = %s AND created_at >= {seven_days_ago}
             """, (user_id,))
             recent_emails = cursor.fetchone()["total"]
 
@@ -271,7 +271,7 @@ async def get_stats(
             cursor.execute("""
                 SELECT country, COUNT(*) as count
                 FROM bs_trade_specialist_matched_customers
-                WHERE user_id = ?
+                WHERE user_id = %s
                 GROUP BY country
                 ORDER BY count DESC
                 LIMIT 10
@@ -312,7 +312,7 @@ async def get_session_customers(session_id: str):
 
             cursor.execute("""
                 SELECT * FROM bs_trade_specialist_matched_customers
-                WHERE session_id = ?
+                WHERE session_id = %s
                 ORDER BY created_at DESC
             """, (session_id,))
 
