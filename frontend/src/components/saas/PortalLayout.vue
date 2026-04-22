@@ -1,7 +1,7 @@
 <template>
-  <div class="min-h-screen flex bg-slate-100">
-    <!-- 管理后台菜单 - 仅 /portal 路由下显示，/t/:tenant_id 租户前台不显示 -->
-    <aside id="portal-menu" v-if="!isTenantRoute" class="w-60 bg-slate-900 text-white flex flex-col flex-shrink-0">
+  <div class="h-screen flex bg-slate-100">
+    <!-- 管理后台菜单 - 仅 /portal 路由下显示 -->
+    <aside v-if="!isTenantRoute" class="w-60 bg-slate-900 text-white flex flex-col flex-shrink-0">
       <!-- 企业信息 -->
       <div class="p-4 border-b border-slate-700">
         <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '管理后台' }}</h2>
@@ -33,6 +33,15 @@
       </div>
     </aside>
 
+    <!-- 租户前台菜单 - 复用 MenuSidebar 组件 -->
+    <MenuSidebar
+      v-else
+      :is-collapsed="false"
+      :show-history="true"
+      :show-new-session="true"
+      class="bg-white border-r border-gray-200"
+    />
+
     <!-- 主内容区 -->
     <main class="flex-1 overflow-y-auto">
       <router-view />
@@ -45,6 +54,7 @@ import { onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import MenuSidebar from '@/components/MenuSidebar.vue'
 
 const router = useRouter()
 const route = useRoute()

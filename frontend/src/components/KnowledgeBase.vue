@@ -2,8 +2,9 @@
   <div class="h-screen flex flex-col bg-gray-50">
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
-      <!-- Session Sidebar -->
+      <!-- Session Sidebar - 仅在非PortalLayout子路由时渲染 -->
       <MenuSidebar
+        v-if="!isNestedRoute"
         :is-collapsed="isSidebarCollapsed"
         @collapse="isSidebarCollapsed = true"
       />
@@ -448,7 +449,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
@@ -457,6 +458,7 @@ import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocu
 import { useAuth } from '@/composables/useAuth'
 
 const router = useRouter()
+const route = useRoute()
 const { user, isLoggedIn, logout } = useAuth()
 const toast = useToast()
 
@@ -483,6 +485,10 @@ const totalDocuments = ref(0)
 
 // Layout state
 const isSidebarCollapsed = ref(false)
+
+// 判断是否为嵌套路由（作为PortalLayout的子路由）
+// 如果路由路径以 /t/ 开头，说明被PortalLayout包裹，不需要自己渲染MenuSidebar
+const isNestedRoute = computed(() => route.path.startsWith('/t/'))
 const isOnline = ref(true)
 const showCredentialManager = ref(false)
 

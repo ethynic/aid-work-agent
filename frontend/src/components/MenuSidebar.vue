@@ -23,6 +23,7 @@
     <div class="flex-shrink-0 p-2 space-y-1">
       <!-- New Session Button -->
       <button
+        v-if="showNewSession"
         @click="handleNewSession"
         :disabled="isCreating"
         class="w-full flex items-center gap-3 px-3 py-2.5 bg-primary-600 hover:bg-primary-500 disabled:bg-primary-400 text-white rounded-lg transition-colors"
@@ -95,22 +96,6 @@
             </button>
           </div>
         </div>
-
-        <!-- 知识库（租户模式下直接导航） -->
-        <button
-          @click="goToTenantKnowledge"
-          :class="[
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === tenantKnowledgePath
-              ? 'bg-primary-50 text-primary-700 font-medium'
-              : 'text-gray-600 hover:bg-gray-50'
-          ]"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-          </svg>
-          <span>企业知识库</span>
-        </button>
       </template>
 
       <!-- 普通模式菜单 -->
@@ -151,7 +136,7 @@
     </div>
 
     <!-- Decorative Divider - 装饰性分隔线 -->
-    <div class="flex-shrink-0 px-4 py-2">
+    <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
       <div class="flex items-center gap-3">
         <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
         <svg class="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -162,7 +147,7 @@
     </div>
 
     <!-- History Sessions Header - 历史会话标题 -->
-    <div class="flex-shrink-0 px-4 py-2">
+    <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
       <div class="flex items-center justify-between">
         <h2 class="text-xs font-medium text-gray-500 uppercase tracking-wider">历史会话</h2>
         <button
@@ -178,7 +163,7 @@
     </div>
 
     <!-- Session List - 会话列表 -->
-    <div class="flex-1 overflow-y-auto px-2">
+    <div v-if="showHistory" class="flex-1 overflow-y-auto px-2">
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -307,9 +292,16 @@ import ThemeSwitcher from './ThemeSwitcher.vue'
 
 interface Props {
   isCollapsed: boolean
+  /** 是否显示历史会话区域，默认 true */
+  showHistory?: boolean
+  /** 是否显示新会话按钮，默认 true */
+  showNewSession?: boolean
 }
 
-defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  showHistory: true,
+  showNewSession: true
+})
 defineEmits<{
   collapse: []
 }>()
@@ -351,7 +343,6 @@ const isTenantAdmin = computed(() => {
 
 // 租户模式下的仪表盘路径
 const tenantDashboardPath = computed(() => tenantId.value ? `/t/${tenantId.value}` : '/')
-const tenantKnowledgePath = computed(() => tenantId.value ? `/t/${tenantId.value}/knowledge` : '/knowledge-base')
 
 // 侧边栏标题
 const sidebarTitle = computed(() => {
@@ -370,6 +361,7 @@ const adminSubMenuItems = computed(() => {
   return [
     { path: `${base}/users`, label: '用户管理', icon: '👥' },
     { path: `${base}/channels`, label: '渠道配置', icon: '📡' },
+    { path: `${base}/knowledge`, label: '企业知识库', icon: '📚' },
     { path: `${base}/settings`, label: '企业设置', icon: '⚙️' },
   ]
 })
@@ -410,15 +402,6 @@ function goToDashboard() {
     router.push(`/t/${tenantId.value}`)
   } else {
     router.push('/')
-  }
-}
-
-// 跳转到租户知识库
-function goToTenantKnowledge() {
-  if (tenantId.value) {
-    router.push(`/t/${tenantId.value}/knowledge`)
-  } else {
-    router.push('/knowledge-base')
   }
 }
 

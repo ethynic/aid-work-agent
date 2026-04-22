@@ -67,8 +67,8 @@
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">手机号</label>
-            <input v-model="addForm.phone" type="tel" placeholder="请输入手机号"
+            <label class="block text-sm text-slate-600 mb-1">手机号 <span class="text-red-500">*</span></label>
+            <input v-model="addForm.phone" type="tel" placeholder="请输入11位手机号"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
           </div>
           <div>
@@ -101,7 +101,7 @@
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
         <h3 class="text-lg font-bold text-slate-800 mb-4">CSV 批量导入</h3>
         <div class="mb-4">
-          <p class="text-sm text-slate-500 mb-2">CSV 格式要求：列名为 phone, username, department, role</p>
+          <p class="text-sm text-slate-500 mb-2">CSV 格式：phone（必填，11位数字）, username（选填）</p>
           <input type="file" accept=".csv" @change="onFileSelect" ref="fileInput"
             class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-cyan-50 file:text-cyan-700 hover:file:bg-cyan-100" />
         </div>
@@ -170,8 +170,16 @@ async function loadUsers() {
 }
 
 async function handleAddUser() {
-  if (!addForm.value.phone || !addForm.value.username) {
-    addError.value = '请填写手机号和用户名'
+  if (!addForm.value.phone) {
+    addError.value = '请填写手机号'
+    return
+  }
+  if (!/^\d{11}$/.test(addForm.value.phone)) {
+    addError.value = '手机号必须为11位数字'
+    return
+  }
+  if (!addForm.value.username) {
+    addError.value = '请填写用户名'
     return
   }
   adding.value = true
@@ -180,6 +188,7 @@ async function handleAddUser() {
     await createTenantUser(addForm.value)
     showAdd.value = false
     await loadUsers()
+    toast.success('创建用户成功，密码为空，用户首次登录时，需要点击"忘记密码"进行重置')
   } catch (e: any) {
     addError.value = e.message || '添加失败'
   } finally {
@@ -195,6 +204,7 @@ async function handleImport() {
   try {
     importResult.value = await batchImportUsers(importFile.value)
     await loadUsers()
+    toast.success('导入用户成功，密码为空，用户首次登录时，需要点击"忘记密码"进行重置')
   } catch (e: any) {
     importError.value = e.message || '导入失败'
   } finally {
