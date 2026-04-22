@@ -630,10 +630,46 @@ def generate_captcha_code(length: int = 4) -> str:
     return ''.join(random.choice(chars) for _ in range(length))
 
 
+def _generate_captcha_svg(code: str) -> str:
+    """生成图形验证码 SVG 图片"""
+    width, height = 120, 40
+    # 随机颜色
+    def rand_color(start=50, end=180):
+        r = random.randint(start, end)
+        g = random.randint(start, end)
+        b = random.randint(start, end)
+        return f"rgb({r},{g},{b})"
+
+    # 干扰线
+    lines = ""
+    for _ in range(5):
+        x1, y1 = random.randint(0, width), random.randint(0, height)
+        x2, y2 = random.randint(0, width), random.randint(0, height)
+        lines += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{rand_color(100, 200)}" stroke-width="1"/>'
+
+    # 干扰点
+    dots = ""
+    for _ in range(30):
+        x, y = random.randint(0, width), random.randint(0, height)
+        dots += f'<circle cx="{x}" cy="{y}" r="1" fill="{rand_color(100, 200)}"/>'
+
+    # 文字
+    chars = ""
+    for i, ch in enumerate(code):
+        x = 15 + i * 25
+        y = 28 + random.randint(-5, 5)
+        angle = random.randint(-15, 15)
+        color = rand_color(10, 80)
+        chars += f'<text x="{x}" y="{y}" fill="{color}" font-size="24" font-weight="bold" transform="rotate({angle},{x},{y})">{ch}</text>'
+
+    svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><rect width="{width}" height="{height}" fill="#f0f0f0"/>{lines}{dots}{chars}</svg>'
+    return svg
+
+
 def generate_captcha() -> dict:
     """
     生成图形验证码
-    返回 captcha_id 和 code
+    返回 captcha_id 和 svg 图片（base64），不再返回明文 code
     """
     captcha_id = str(uuid.uuid4())
     code = generate_captcha_code(4)
@@ -652,7 +688,11 @@ def generate_captcha() -> dict:
         """, (captcha_id, code, expires_at))
         conn.commit()
 
-    return {"captcha_id": captcha_id, "code": code}
+    svg = _generate_captcha_svg(code)
+    import base64
+    svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+
+    return {"captcha_id": captcha_id, "svg_base64": svg_b64}
 
 
 def verify_captcha(captcha_id: str, code: str) -> bool:

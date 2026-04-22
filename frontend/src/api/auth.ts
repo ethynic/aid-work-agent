@@ -168,7 +168,7 @@ export function getAuthHeader(): Record<string, string> {
 export interface CaptchaResponse {
   success: boolean
   captcha_id?: string
-  code?: string  // 开发环境返回
+  svg_base64?: string  // SVG 图片 base64 编码
   message?: string
 }
 

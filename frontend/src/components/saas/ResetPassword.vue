@@ -31,11 +31,12 @@
                 @keyup.enter="handleSendCode"
               />
               <div
-                class="w-24 h-12 bg-slate-200 rounded-lg cursor-pointer flex items-center justify-center text-lg font-bold tracking-wider text-slate-700 select-none"
+                class="w-24 h-12 bg-slate-200 rounded-lg cursor-pointer flex items-center justify-center select-none overflow-hidden"
                 @click="refreshCaptcha"
                 title="点击刷新"
               >
-                {{ captchaDisplay }}
+                <img v-if="captchaSvg" :src="'data:image/svg+xml;base64,' + captchaSvg" alt="验证码" class="w-full h-full" />
+                <span v-else class="text-slate-400 text-sm">加载中</span>
               </div>
             </div>
           </div>
@@ -148,7 +149,6 @@
       </div>
 
       <div class="px-8 pb-6">
-        <p class="text-xs text-slate-400 text-center">测试环境短信验证码固定为：888888</p>
       </div>
     </div>
   </div>
@@ -172,7 +172,7 @@ const step = ref<1 | 2 | 'success'>(1)
 const phone = ref('')
 const captchaCode = ref('')
 const captchaId = ref('')
-const captchaDisplay = ref('????')
+const captchaSvg = ref('')
 const smsCode = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
@@ -191,12 +191,7 @@ async function refreshCaptcha() {
     const res = await getCaptcha()
     if (res.success) {
       captchaId.value = res.captcha_id || ''
-      // 开发环境显示验证码，生产环境显示????
-      if (res.code) {
-        captchaDisplay.value = res.code
-      } else {
-        captchaDisplay.value = '????'
-      }
+      captchaSvg.value = res.svg_base64 || ''
     }
   } catch (e) {
     console.error('获取图形验证码失败:', e)

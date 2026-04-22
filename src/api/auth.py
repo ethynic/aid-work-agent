@@ -193,17 +193,13 @@ def get_current_user(request: Request) -> Optional[dict]:
 
 @router.get("/captcha")
 async def get_captcha():
-    """获取图形验证码"""
-    from loguru import logger
+    """获取图形验证码（返回 SVG 图片，不返回明文验证码）"""
     captcha = generate_captcha()
-    # 后端日志：生成验证码信息
-    logger.info(f'后端日志：生成验证码, captcha_id={captcha["captcha_id"]}, code={captcha["code"]}, debug={settings.app.debug}')
-    # 返回纯文本验证码，前端负责生成图片
-    # 实际项目中可以返回SVG或base64图片
+    logger.info(f'后端日志：生成验证码, captcha_id={captcha["captcha_id"]}')
     return {
         "success": True,
         "captcha_id": captcha["captcha_id"],
-        "code": captcha["code"]
+        "svg_base64": captcha["svg_base64"]
     }
 
 
@@ -618,9 +614,8 @@ async def reset_password(request: ResetPasswordRequest):
     if len(request.phone) != 11 or not request.phone.isdigit():
         return {"success": False, "message": "手机号格式不正确"}
 
-    # 校验短信验证码（固定888888）
-    if request.sms_code != "888888":
-        # TODO: 短信平台确定后，改为调用 verify_sms_code
+    # 校验短信验证码
+    if not verify_sms_code(request.phone, request.sms_code):
         return {"success": False, "message": "短信验证码错误或已过期，过期时间5分钟"}
 
     # 校验新密码是否符合规则
