@@ -107,10 +107,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       postgres:
         condition: service_healthy
+    # 清空 Dockerfile 的 ENTRYPOINT，否则 command 不会生效
+    # Dockerfile 默认使用 gunicorn，这里改为 uvicorn 用于本地开发
+    entrypoint: []
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Gradio UI 服务（可选）
   aid-agent-ui:
