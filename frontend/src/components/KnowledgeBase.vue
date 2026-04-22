@@ -3,7 +3,7 @@
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar -->
-      <SessionSidebar
+      <MenuSidebar
         :is-collapsed="isSidebarCollapsed"
         @collapse="isSidebarCollapsed = true"
       />
@@ -451,7 +451,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
-import SessionSidebar from './SessionSidebar.vue'
+import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem } from '@/api/knowledge'
 import { useAuth } from '@/composables/useAuth'

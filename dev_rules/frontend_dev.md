@@ -38,7 +38,7 @@ export const knowledgeAPI = {
 ```
 
 ### 页面布局一致性规范
-从 `SessionSidebar` 导航进入的页面**必须**保留 `SessionSidebar` + `AppHeader` 布局。
+从 `MenuSidebar` 导航进入的页面**必须**保留 `MenuSidebar` + `AppHeader` 布局。
 
 ### 枚举值定义规范
 **涉及到字段枚举值的判断代码，必须以 `frontend/src/api/enums.ts` 为准。**

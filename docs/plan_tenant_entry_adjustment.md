@@ -161,7 +161,7 @@ const currentMenuItems = computed(() => {
 **决策：创建新组件** `TenantKnowledgeBase.vue`，而非修改现有 `KnowledgeBase.vue`。
 
 **原因**：
-1. `KnowledgeBase.vue`（760行）深度绑定演示模式：使用 `useAuth`（demo_token）、`AppHeader`、`SessionSidebar`、`CredentialManager` 等组件
+1. `KnowledgeBase.vue`（760行）深度绑定演示模式：使用 `useAuth`（demo_token）、`AppHeader`、`MenuSidebar`、`CredentialManager` 等组件
 2. 导航路径硬编码为 `router.push('/')`，不适用于 SaaS 模式
 3. 认证体系完全不同（demo_token vs saas_token + X-Tenant-Id Header）
 4. 保持演示模式不受影响，避免回归
@@ -170,7 +170,7 @@ const currentMenuItems = computed(() => {
 - 复制 `KnowledgeBase.vue` 为 `TenantKnowledgeBase.vue`
 - 将 `useAuth` 替换为 `useTenantAuth`
 - 将所有 API 调用改为携带 `X-Tenant-Id` Header（从路由参数获取 tenant_id）
-- 移除 `AppHeader`、`SessionSidebar`、`CredentialManager` 等演示模式专用组件（SaaS 模式下侧边栏由 `PortalLayout.vue` 提供）
+- 移除 `AppHeader`、`MenuSidebar`、`CredentialManager` 等演示模式专用组件（SaaS 模式下侧边栏由 `PortalLayout.vue` 提供）
 - 导航路径改为 `/t/${tenantId}/chat`
 - 文件上传路径需带租户 ID
 

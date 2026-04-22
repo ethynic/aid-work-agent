@@ -3,7 +3,7 @@
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar -->
-      <SessionSidebar
+      <MenuSidebar
         :is-collapsed="isSidebarCollapsed"
         @collapse="isSidebarCollapsed = true"
       />
@@ -132,7 +132,7 @@ import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
 import AppHeader from './AppHeader.vue'
-import SessionSidebar from './SessionSidebar.vue'
+import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'

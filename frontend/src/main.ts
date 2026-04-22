@@ -54,6 +54,11 @@ const router = createRouter({
       name: 'admin-subagents',
       component: () => import('./components/DigitalEmployeeManager.vue')
     },
+    {
+      path: '/all-sessions',
+      name: 'all-sessions',
+      component: () => import('./components/AllSessions.vue')
+    },
     // SaaS 租户管理 Portal（仅平台管理员）
     {
       path: '/portal/login',

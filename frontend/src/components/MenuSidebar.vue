@@ -13,7 +13,9 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
           </svg>
         </div>
-        <h1 class="text-base font-semibold text-gray-800 truncate">爱定义工作助理</h1>
+        <h1 class="text-base font-semibold text-gray-800 truncate">
+          {{ sidebarTitle }}
+        </h1>
       </div>
     </div>
 
@@ -32,41 +34,120 @@
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
-        <span class="text-sm font-medium">新会话</span>
+        <span class="text-sm font-medium">+ 新会话</span>
       </button>
 
-      <!-- Knowledge Base Menu Item -->
-      <button
-        @click="goToKnowledgeBase"
-        :class="[
-          'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-          isKnowledgeBaseActive
-            ? 'bg-primary-50 text-primary-700 font-medium'
-            : 'text-gray-600 hover:bg-gray-50'
-        ]"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-        </svg>
-        <span>企业知识库</span>
-      </button>
+      <!-- 租户模式菜单 -->
+      <template v-if="isTenantMode">
+        <!-- 仪表盘 -->
+        <button
+          @click="goToDashboard"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path === tenantDashboardPath
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 13a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z" />
+          </svg>
+          <span>仪表盘</span>
+        </button>
 
-      <!-- Digital Employee Management -->
-      <button
-        v-if="isAdmin"
-        @click="goToDigitalEmployeeManager"
-        :class="[
-          'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-          route.path === '/admin/subagents'
-            ? 'bg-primary-50 text-primary-700 font-medium'
-            : 'text-gray-600 hover:bg-gray-50'
-        ]"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-        <span>数字员工</span>
-      </button>
+        <!-- 管理菜单（可折叠，仅租户管理员可见） -->
+        <div v-if="isTenantAdmin">
+          <!-- 管理菜单标题 -->
+          <button
+            @click="isAdminMenuExpanded = !isAdminMenuExpanded"
+            class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+          >
+            <div class="flex items-center gap-3">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span>管理菜单</span>
+            </div>
+            <svg
+              :class="['w-4 h-4 transition-transform', isAdminMenuExpanded ? 'rotate-180' : '']"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          <!-- 管理子菜单 -->
+          <div v-show="isAdminMenuExpanded" class="ml-4 mt-1 space-y-1">
+            <button
+              v-for="item in adminSubMenuItems"
+              :key="item.path"
+              @click="router.push(item.path)"
+              :class="[
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+                route.path === item.path
+                  ? 'bg-primary-50 text-primary-700 font-medium'
+                  : 'text-gray-600 hover:bg-gray-50'
+              ]"
+            >
+              <span class="text-base">{{ item.icon }}</span>
+              <span>{{ item.label }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 知识库（租户模式下直接导航） -->
+        <button
+          @click="goToTenantKnowledge"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path === tenantKnowledgePath
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+          </svg>
+          <span>企业知识库</span>
+        </button>
+      </template>
+
+      <!-- 普通模式菜单 -->
+      <template v-else>
+        <!-- Knowledge Base Menu Item -->
+        <button
+          @click="goToKnowledgeBase"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            isKnowledgeBaseActive
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+          </svg>
+          <span>企业知识库</span>
+        </button>
+
+        <!-- Digital Employee Management -->
+        <button
+          v-if="isAdmin"
+          @click="goToDigitalEmployeeManager"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path === '/admin/subagents'
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <span>数字员工</span>
+        </button>
+      </template>
     </div>
 
     <!-- Decorative Divider - 装饰性分隔线 -->
@@ -115,7 +196,7 @@
 
       <div v-else class="space-y-1">
         <div
-          v-for="session in filteredSessions"
+          v-for="session in recentSessions"
           :key="session.session_id"
           :class="[
             'group relative p-2.5 rounded-lg cursor-pointer transition-colors',
@@ -162,6 +243,18 @@
             </button>
           </div>
         </div>
+
+        <!-- 全部历史会话链接 -->
+        <button
+          v-if="filteredSessions.length > 0"
+          @click="goToAllSessions"
+          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span>全部历史会话</span>
+        </button>
       </div>
     </div>
 
@@ -209,6 +302,7 @@ import { ref, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useAuth } from '@/composables/useAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 
 interface Props {
@@ -223,6 +317,7 @@ defineEmits<{
 const router = useRouter()
 const route = useRoute()
 const { isLoggedIn, isAdmin } = useAuth()
+const { admin: tenantAdmin, tenant } = useTenantAuth()
 const {
   sessions,
   currentSessionId,
@@ -238,6 +333,46 @@ const isCreating = ref(false)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
+const isAdminMenuExpanded = ref(true)
+
+// 判断是否为租户模式（路由以 /t/ 开头）
+const isTenantMode = computed(() => route.path.startsWith('/t/'))
+
+// 租户 ID
+const tenantId = computed(() => {
+  const match = route.path.match(/^\/t\/([^/]+)/)
+  return match ? match[1] : null
+})
+
+// 是否为租户管理员
+const isTenantAdmin = computed(() => {
+  return tenantAdmin.value?.role === 'tenant_admin' || tenantAdmin.value?.role === 'platform_admin'
+})
+
+// 租户模式下的仪表盘路径
+const tenantDashboardPath = computed(() => tenantId.value ? `/t/${tenantId.value}` : '/')
+const tenantKnowledgePath = computed(() => tenantId.value ? `/t/${tenantId.value}/knowledge` : '/knowledge-base')
+
+// 侧边栏标题
+const sidebarTitle = computed(() => {
+  if (isTenantMode.value && tenant.value && tenantAdmin.value) {
+    // 租户模式：显示"租户名称 用户名称"
+    return `${tenant.value.company_name} ${tenantAdmin.value.username || tenantAdmin.value.phone || ''}`
+  }
+  // 普通模式：显示默认名称
+  return '爱定义工作助理'
+})
+
+// 管理子菜单项（租户管理员可见）
+const adminSubMenuItems = computed(() => {
+  if (!tenantId.value) return []
+  const base = `/t/${tenantId.value}`
+  return [
+    { path: `${base}/users`, label: '用户管理', icon: '👥' },
+    { path: `${base}/channels`, label: '渠道配置', icon: '📡' },
+    { path: `${base}/settings`, label: '企业设置', icon: '⚙️' },
+  ]
+})
 
 // 当前子智能体（从路由参数获取）
 const currentSubagent = computed<string | null>(() =>
@@ -254,6 +389,11 @@ const filteredSessions = computed(() => {
   return sessions.value.filter(s => s.context_data?.subagent === currentSubagent.value)
 })
 
+// 只显示前10个会话
+const recentSessions = computed(() => {
+  return filteredSessions.value.slice(0, 10)
+})
+
 // 判断当前是否在知识库页面
 const isKnowledgeBaseActive = computed(() => {
   return route.path === '/knowledge-base'
@@ -264,7 +404,25 @@ const isHistorySessionActive = computed(() => {
   return !isKnowledgeBaseActive.value
 })
 
-// 跳转到知识库
+// 跳转到租户仪表盘
+function goToDashboard() {
+  if (tenantId.value) {
+    router.push(`/t/${tenantId.value}`)
+  } else {
+    router.push('/')
+  }
+}
+
+// 跳转到租户知识库
+function goToTenantKnowledge() {
+  if (tenantId.value) {
+    router.push(`/t/${tenantId.value}/knowledge`)
+  } else {
+    router.push('/knowledge-base')
+  }
+}
+
+// 跳转到知识库（普通模式）
 function goToKnowledgeBase() {
   router.push('/knowledge-base')
 }
@@ -272,6 +430,11 @@ function goToKnowledgeBase() {
 // 跳转到数字员工管理
 function goToDigitalEmployeeManager() {
   router.push('/admin/subagents')
+}
+
+// 跳转到全部历史会话
+function goToAllSessions() {
+  router.push('/all-sessions')
 }
 
 // 监听登录状态，登录后加载会话

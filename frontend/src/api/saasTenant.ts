@@ -6,6 +6,18 @@
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
 
+// ==================== 租户公开信息（无需认证） ====================
+
+export async function getTenantPublicInfo(tenantId: string): Promise<{
+  success: boolean
+  tenant?: { tenant_id: string; company_name: string }
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/auth/tenant/${encodeURIComponent(tenantId)}`)
+  if (!res.ok) throw new Error('获取租户信息失败')
+  return res.json()
+}
+
 // ==================== 认证 ====================
 
 export async function sendAdminSmsCode(phone: string): Promise<{ success: boolean; message?: string; expires_in?: number }> {

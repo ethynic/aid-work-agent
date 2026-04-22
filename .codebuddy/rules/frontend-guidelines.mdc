@@ -47,13 +47,13 @@ grep -rn "cachedRequest" frontend/src/services/api.js
 
 ## 页面布局一致性规范
 
-**核心原则**：系统主要功能菜单（`SessionSidebar` 中部从"企业知识库"开始的导航菜单项），点击后跳转的页面**必须**保留左侧的 `SessionSidebar` 和顶部的 `AppHeader`，确保用户始终感觉在同一个系统中切换页面，而不是跳转到了独立站点。
+**核心原则**：系统主要功能菜单（`MenuSidebar` 中部从"企业知识库"开始的导航菜单项），点击后跳转的页面**必须**保留左侧的 `MenuSidebar` 和顶部的 `AppHeader`，确保用户始终感觉在同一个系统中切换页面，而不是跳转到了独立站点。
 
 ### 规范要求
 
-1. **从 `SessionSidebar` 跳转的页面，必须包含 `SessionSidebar` + `AppHeader` 布局**：参考 `ChatContainer.vue` 和 `KnowledgeBase.vue` 的结构。
+1. **从 `MenuSidebar` 跳转的页面，必须包含 `MenuSidebar` + `AppHeader` 布局**：参考 `ChatContainer.vue` 和 `KnowledgeBase.vue` 的结构。
 
-2. **禁止使用独立的页面布局**：不要创建自带 header、不含 `SessionSidebar` 的全屏独立页面。
+2. **禁止使用独立的页面布局**：不要创建自带 header、不含 `MenuSidebar` 的全屏独立页面。
 
 ### 标准页面布局结构
 
@@ -62,7 +62,7 @@ grep -rn "cachedRequest" frontend/src/services/api.js
   <div class="h-screen flex flex-col bg-gray-50">
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar -->
-      <SessionSidebar
+      <MenuSidebar
         :is-collapsed="isSidebarCollapsed"
         @collapse="isSidebarCollapsed = true"
       />
@@ -93,7 +93,7 @@ grep -rn "cachedRequest" frontend/src/services/api.js
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import SessionSidebar from './SessionSidebar.vue'
+import MenuSidebar from './MenuSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import { useAuth } from '@/composables/useAuth'
 
@@ -104,7 +104,7 @@ const isSidebarCollapsed = ref(false)
 
 ### 已有的合规页面
 
-| 页面 | 路由 | 包含 SessionSidebar | 包含 AppHeader |
+| 页面 | 路由 | 包含 MenuSidebar | 包含 AppHeader |
 |------|------|---------------------|----------------|
 | 对话 | `/`、`/chat/:subagent` | ✅ | ✅ |
 | 企业知识库 | `/knowledge-base` | ✅ | ✅ |
@@ -113,7 +113,7 @@ const isSidebarCollapsed = ref(false)
 ### ❌ 错误示例
 
 ```vue
-<!-- ❌ 独立全屏页面，没有 SessionSidebar 和 AppHeader -->
+<!-- ❌ 独立全屏页面，没有 MenuSidebar 和 AppHeader -->
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
     <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4">
@@ -127,7 +127,7 @@ const isSidebarCollapsed = ref(false)
 
 ### 例外情况
 
-以下页面**不适用**此规范，因为它们不是从 `SessionSidebar` 导航进入的：
+以下页面**不适用**此规范，因为它们不是从 `MenuSidebar` 导航进入的：
 
 | 页面 | 路由 | 说明 |
 |------|------|------|

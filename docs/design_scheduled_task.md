@@ -887,7 +887,7 @@ export async function triggerTask(taskId: string) { ... }
 
 用户可以通过以下方式访问"我的定时任务"页面：
 
-1. **Session 侧边栏**：在 `SessionSidebar.vue` 中添加"我的定时任务"入口按钮
+1. **菜单侧边栏**：在 `MenuSidebar.vue` 中添加"我的定时任务"入口按钮
 2. **定时任务创建成功后**：Agent 回复中包含跳转链接
 3. **直接 URL**：`/scheduled-tasks?user_id=xxx`
 

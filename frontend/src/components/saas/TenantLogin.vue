@@ -109,7 +109,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getCaptcha } from '@/api/auth'
-import { adminPasswordLogin } from '@/api/saasTenant'
+import { adminPasswordLogin, getTenantPublicInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
@@ -120,12 +120,14 @@ const { setLogin } = useTenantAuth()
 const tenantId = computed(() => route.params.tenant_id as string)
 const isPortalRoute = computed(() => !tenantId.value)
 
+const tenantName = ref('')
+
 // 登录页标题动态显示
 const pageTitle = computed(() => {
   if (isPortalRoute.value) {
     return { title: '爱定义管理后台', subtitle: '平台管理员登录' }
   }
-  return { title: '租户登录', subtitle: '请输入账号信息' }
+  return { title: tenantName.value || '用户登录', subtitle: '请输入账号信息' }
 })
 
 const loginType = ref<'phone' | 'username'>('phone')
@@ -210,5 +212,16 @@ onMounted(() => {
     return
   }
   refreshCaptcha()
+
+  // 获取租户名称用于标题显示
+  if (tenantId.value) {
+    getTenantPublicInfo(tenantId.value).then(res => {
+      if (res.success && res.tenant) {
+        tenantName.value = res.tenant.company_name
+      }
+    }).catch(() => {
+      // 获取失败不影响登录，标题保持默认
+    })
+  }
 })
 </script>

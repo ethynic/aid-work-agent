@@ -547,6 +547,27 @@ async def admin_logout(request: Request):
     return {"success": True}
 
 
+@router.get("/tenant/{tenant_id}")
+async def get_tenant_public_info(tenant_id: str):
+    """获取租户公开信息（无需认证，供登录页使用）"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式"}
+
+    tenant = TenantDB.get_by_id(tenant_id)
+    if not tenant:
+        return {"success": False, "message": "租户不存在"}
+    if tenant.get("status") != "active":
+        return {"success": False, "message": "该租户已停用"}
+
+    return {
+        "success": True,
+        "tenant": {
+            "tenant_id": tenant["tenant_id"],
+            "company_name": tenant["company_name"],
+        },
+    }
+
+
 @router.get("/me")
 async def get_admin_info(request: Request):
     """获取当前管理员信息"""
