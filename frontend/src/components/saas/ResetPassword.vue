@@ -49,7 +49,7 @@
           </button>
 
           <div class="text-center">
-            <router-link to="/portal/login" class="text-sm text-cyan-500 hover:text-cyan-600">
+            <router-link :to="loginUrl" class="text-sm text-cyan-500 hover:text-cyan-600">
               返回登录
             </router-link>
           </div>
@@ -135,7 +135,7 @@
           <h2 class="text-xl font-bold text-slate-800 mb-2">密码重置成功</h2>
           <p class="text-sm text-slate-500 mb-6">请使用新密码登录</p>
           <router-link
-            to="/portal/login"
+            :to="loginUrl"
             class="inline-block px-6 py-3 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors"
           >
             立即登录
@@ -155,8 +155,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { getCaptcha, sendResetPasswordCode, resetPassword } from '@/api/auth'
+
+const route = useRoute()
+const tenantId = computed(() => route.query.tenant_id as string || '')
+const loginUrl = computed(() =>
+  tenantId.value ? `/t/${tenantId.value}/login` : '/portal/login'
+)
 
 // 默认密码规则提示
 const DEFAULT_PASSWORD_MSG = '长度8-50位，必须有字母+数字'

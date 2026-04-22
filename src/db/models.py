@@ -4,12 +4,12 @@
 提供用户和会话的数据库CRUD操作
 """
 
-import hashlib
 import json
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
+import bcrypt
 from loguru import logger
 
 from src.db.database import get_db_connection, get_current_timestamp
@@ -18,13 +18,16 @@ from src.db.database import get_db_connection, get_current_timestamp
 # ============== 密码哈希 ==============
 
 def hash_password(password: str) -> str:
-    """简单密码哈希（生产环境应使用bcrypt）"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """使用 bcrypt 哈希密码"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     """验证密码"""
-    return hash_password(password) == password_hash
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except Exception:
+        return False
 
 
 def generate_user_id() -> str:
@@ -115,7 +118,7 @@ class UserDB:
     def verify_login(phone: str, password: str) -> Optional[Dict[str, Any]]:
         """验证手机号密码登录"""
         user = UserDB.get_by_phone(phone)
-        if user and user.get("password_hash") == hash_password(password):
+        if user and verify_password(password, user.get("password_hash", "")):
             return user
         return None
 

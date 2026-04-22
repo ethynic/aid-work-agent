@@ -89,7 +89,7 @@
 
           <!-- 忘记密码链接 -->
           <div class="text-center">
-            <router-link to="/portal/reset-password" class="text-sm text-cyan-500 hover:text-cyan-600">
+            <router-link :to="resetPasswordUrl" class="text-sm text-cyan-500 hover:text-cyan-600">
               忘记密码？
             </router-link>
           </div>
@@ -118,6 +118,9 @@ const { setLogin } = useTenantAuth()
 // 从路由参数获取 tenant_id
 const tenantId = computed(() => route.params.tenant_id as string)
 const isPortalRoute = computed(() => !tenantId.value)
+const resetPasswordUrl = computed(() =>
+  tenantId.value ? `/portal/reset-password?tenant_id=${tenantId.value}` : '/portal/reset-password'
+)
 
 const tenantName = ref('')
 
