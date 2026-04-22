@@ -134,13 +134,11 @@
             </svg>
           </div>
           <h2 class="text-xl font-bold text-slate-800 mb-2">密码重置成功</h2>
-          <p class="text-sm text-slate-500 mb-6">请使用新密码登录</p>
-          <router-link
-            :to="loginUrl"
-            class="inline-block px-6 py-3 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-medium transition-colors"
-          >
-            立即登录
-          </router-link>
+          <p class="text-sm text-slate-500 mb-6">密码重置成功，3秒后自动跳转到登录页</p>
+          <!-- Toast 提示 -->
+          <div class="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-3 bg-green-500 text-white rounded-lg shadow-lg z-50">
+            密码重置成功，3秒后自动跳转到登录页
+          </div>
         </div>
 
         <div v-if="errorMessage" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
@@ -282,6 +280,10 @@ async function handleResetPassword() {
     })
     if (res.success) {
       step.value = 'success'
+      // 3秒后自动跳转到登录页
+      setTimeout(() => {
+        window.location.href = loginUrl.value
+      }, 3000)
     } else {
       errorMessage.value = res.message || '重置失败'
     }

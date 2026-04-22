@@ -33,9 +33,9 @@
       </div>
     </aside>
 
-    <!-- 租户前台菜单 - 复用 MenuSidebar 组件 -->
+    <!-- 租户前台菜单 - 登录后才显示 -->
     <MenuSidebar
-      v-else
+      v-else-if="isLoggedIn"
       :is-collapsed="false"
       :show-history="true"
       :show-new-session="true"

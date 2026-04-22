@@ -340,14 +340,17 @@ export async function listTenantUsers(): Promise<{ success: boolean; users: any[
   return res.json()
 }
 
-export async function createTenantUser(data: { phone: string; username: string; department?: string; role?: string }): Promise<any> {
+export async function createTenantUser(data: { phone: string; username: string; department?: string; role?: string; tenant_id?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/users`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
     body: JSON.stringify(data)
   })
-  if (!res.ok) throw new Error('创建用户失败')
-  return res.json()
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.error || result.debug || '创建用户失败')
+  }
+  return result
 }
 
 export async function batchImportUsers(file: File): Promise<{
@@ -360,8 +363,11 @@ export async function batchImportUsers(file: File): Promise<{
     headers: getSaasAuthHeader(),
     body: formData
   })
-  if (!res.ok) throw new Error('批量导入失败')
-  return res.json()
+  const result = await res.json()
+  if (!res.ok || !result.success) {
+    throw new Error(result.error || result.debug || '批量导入失败')
+  }
+  return result
 }
 
 export async function removeTenantUser(userId: string): Promise<{ success: boolean }> {

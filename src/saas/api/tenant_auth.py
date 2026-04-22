@@ -175,9 +175,11 @@ def get_current_admin(request: Request) -> Optional[dict]:
     if not user or user.get("status", "active") != "active":
         return None
 
-    # 检查是否是管理员
+    # 检查用户状态
     role = user.get("role", "user")
-    if role not in ("platform_admin", "tenant_admin"):
+    if role not in ("platform_admin", "tenant_admin", "user"):
+        return None
+    if user.get("status", "active") != "active":
         return None
 
     return {
@@ -368,8 +370,16 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
 
     # 4. 检查是否是管理员
     role = user.get("role", "user")
-    if role not in ("platform_admin", "tenant_admin"):
-        return AdminLoginResponse(success=False, message="该账号不是管理员")
+    # 租户前台（tenant_id 存在）：允许 user 角色登录（普通员工）
+    # 只有平台后台（tenant_id 为空）才要求必须是管理员
+    if request.tenant_id:
+        # 租户前台：允许 platform_admin、tenant_admin、user 角色
+        if role not in ("platform_admin", "tenant_admin", "user"):
+            return AdminLoginResponse(success=False, message=f"该账号角色 {role} 不合法")
+    else:
+        # 平台后台：必须是 platform_admin 或 tenant_admin
+        if role not in ("platform_admin", "tenant_admin"):
+            return AdminLoginResponse(success=False, message="该账号不是管理员")
 
     if user.get("status", "active") != "active":
         return AdminLoginResponse(success=False, message="账号已停用")

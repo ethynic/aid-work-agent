@@ -35,8 +35,8 @@
             <td class="px-4 py-3 text-sm text-slate-600">{{ u.department || '-' }}</td>
             <td class="px-4 py-3">
               <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-                :class="u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'">
-                {{ u.role === 'admin' ? '管理员' : '普通用户' }}
+                :class="u.role === 'tenant_admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'">
+                {{ u.role === 'tenant_admin' ? '管理员' : '普通用户' }}
               </span>
             </td>
             <td class="px-4 py-3">
@@ -62,7 +62,7 @@
         <h3 class="text-lg font-bold text-slate-800 mb-4">添加用户</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-sm text-slate-600 mb-1">用户名</label>
+            <label class="block text-sm text-slate-600 mb-1">用户名 <span class="text-red-500">*</span></label>
             <input v-model="addForm.username" type="text" placeholder="请输入用户名"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
           </div>
@@ -81,7 +81,7 @@
             <select v-model="addForm.role"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
               <option value="user">普通用户</option>
-              <option value="admin">管理员</option>
+              <option value="tenant_admin">管理员</option>
             </select>
           </div>
         </div>
@@ -124,11 +124,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser } from '@/api/saasTenant'
 
+const route = useRoute()
 const toast = useToast()
+const tenantId = computed(() => route.params.tenant_id as string)
 
 const loading = ref(true)
 const users = ref<any[]>([])
@@ -185,7 +188,7 @@ async function handleAddUser() {
   adding.value = true
   addError.value = ''
   try {
-    await createTenantUser(addForm.value)
+    await createTenantUser({ ...addForm.value, tenant_id: tenantId.value })
     showAdd.value = false
     await loadUsers()
     toast.success('创建用户成功，密码为空，用户首次登录时，需要点击"忘记密码"进行重置')

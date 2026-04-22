@@ -105,6 +105,32 @@ class UserDB:
             return dict(row) if row else None
 
     @staticmethod
+    def get_by_phone_in_tenant(phone: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """根据手机号和租户ID获取用户（用于检查租户内手机号是否重复）"""
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE phone = {placeholder} AND tenant_id = {placeholder}",
+                (phone, tenant_id)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def get_by_username_in_tenant(username: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """根据用户名和租户ID获取用户（用于检查租户内用户名是否重复）"""
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE username = {placeholder} AND tenant_id = {placeholder}",
+                (username, tenant_id)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
     def get_by_wx_openid(openid: str) -> Optional[Dict[str, Any]]:
         """根据微信openid获取用户"""
         placeholder = "%s"

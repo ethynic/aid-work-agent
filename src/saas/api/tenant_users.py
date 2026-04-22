@@ -29,6 +29,8 @@ router = APIRouter(prefix="/api/saas/users", tags=["SaaS 企业用户"])
 class UserCreateRequest(BaseModel):
     phone: str = Field(..., min_length=11, max_length=11, description="手机号")
     username: Optional[str] = Field(None, max_length=50, description="用户名")
+    role: str = Field("user", description="角色，platform_admin/tenant_admin/user（租户管理员传 tenant_admin）")
+    tenant_id: Optional[str] = Field(None, description="租户ID（平台管理员代租户创建用户时使用）")
 
 
 class UserUpdateRequest(BaseModel):
@@ -59,11 +61,14 @@ async def create_user(request: Request, body: UserCreateRequest):
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    tenant_id = admin["tenant_id"]
 
-    # 平台管理员不能直接创建用户，需要指定租户
+    # 平台管理员可以代替租户管理员创建用户，但需要指定 tenant_id
     if admin.get("role") == "platform_admin":
-        return {"success": False, "message": "平台管理员请使用租户管理功能"}
+        if not body.tenant_id:
+            return {"success": False, "message": "平台管理员代租户创建用户时必须指定 tenant_id"}
+        tenant_id = body.tenant_id
+    else:
+        tenant_id = admin["tenant_id"]
 
     # 1. 检查用户上限
     tenant = TenantDB.get_by_id(tenant_id)
@@ -71,17 +76,37 @@ async def create_user(request: Request, body: UserCreateRequest):
     if tenant and len(current_users) >= tenant["max_users"]:
         raise HTTPException(status_code=400, detail=f"已达到最大用户数限制（{tenant['max_users']}）")
 
-    # 2. 创建或查找用户
+    # 2. 检查租户内用户名是否重复
+    if body.username:
+        existing_user_by_username = UserDB.get_by_username_in_tenant(body.username, tenant_id)
+        if existing_user_by_username:
+            return {
+                "success": False,
+                "error": f"用户名 '{body.username}' 在本企业已存在",
+                "debug": f"Duplicate username '{body.username}' in tenant {tenant_id}"
+            }
+
+    # 3. 检查租户内手机号是否重复
+    existing_user_by_phone = UserDB.get_by_phone_in_tenant(body.phone, tenant_id)
+    if existing_user_by_phone:
+        return {
+            "success": False,
+            "error": f"手机号 '{body.phone}' 在本企业已存在",
+            "debug": f"Duplicate phone '{body.phone}' in tenant {tenant_id}"
+        }
+
+    # 4. 创建或查找用户
     user = UserDB.get_by_phone(body.phone)
     if not user:
         user = UserDB.create(
             phone=body.phone,
             username=body.username,
+            role=body.role,
             tenant_id=tenant_id,
         )
     else:
-        # 用户已存在，更新 tenant_id
-        UserDB.update(user["user_id"], tenant_id=tenant_id)
+        # 用户已存在，更新 tenant_id 和 role
+        UserDB.update(user["user_id"], tenant_id=tenant_id, role=body.role)
 
     if not user:
         raise HTTPException(status_code=500, detail="创建用户失败")
@@ -91,7 +116,7 @@ async def create_user(request: Request, body: UserCreateRequest):
 
 
 @router.post("/batch")
-async def batch_import_users(request: Request, file: UploadFile = File(...)):
+async def batch_import_users(request: Request, file: UploadFile = File(...), tenant_id: Optional[str] = None):
     """
     批量导入用户（CSV 上传）
 
@@ -102,11 +127,12 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
 
     admin = require_admin(request)
 
-    # 平台管理员不能直接导入
+    # 平台管理员可以代替租户管理员导入用户，但需要指定 tenant_id
     if admin.get("role") == "platform_admin":
-        return {"success": False, "message": "平台管理员请使用租户管理功能"}
-
-    tenant_id = admin["tenant_id"]
+        if not tenant_id:
+            return {"success": False, "message": "平台管理员代租户导入用户时必须指定 tenant_id"}
+    else:
+        tenant_id = admin["tenant_id"]
 
     # 读取 CSV
     content = await file.read()
@@ -118,20 +144,69 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
     reader = csv.DictReader(io.StringIO(text))
     users_to_import = []
     errors = []
+    seen_phones = set()  # 用于检测 CSV 内部重复手机号
+    seen_usernames = set()  # 用于检测 CSV 内部重复用户名
 
     for i, row in enumerate(reader, start=2):  # 从第 2 行开始（第 1 行是表头）
         phone = row.get("phone", "").strip()
+        username = row.get("username", "").strip() or None
+
         if not phone or len(phone) != 11:
             errors.append(f"第 {i} 行：手机号格式错误 ({phone})")
             continue
 
+        # 检查 CSV 内部手机号重复
+        if phone in seen_phones:
+            errors.append(f"第 {i} 行：手机号 {phone} 在 CSV 中重复")
+            continue
+        seen_phones.add(phone)
+
+        # 检查 CSV 内部用户名重复（仅当用户名非空时检查）
+        if username and username in seen_usernames:
+            errors.append(f"第 {i} 行：用户名 {username} 在 CSV 中重复")
+            continue
+        if username:
+            seen_usernames.add(username)
+
         users_to_import.append({
             "phone": phone,
-            "username": row.get("username", "").strip() or None,
+            "username": username,
         })
 
     if not users_to_import:
         return {"success": False, "message": "没有有效数据", "errors": errors}
+
+    # 检查租户内手机号和用户名是否重复
+    existing_phones = set()
+    existing_usernames = set()
+    current_users = UserDB.list_by_tenant(tenant_id)
+    for u in current_users:
+        if u.get("phone"):
+            existing_phones.add(u["phone"])
+        if u.get("username"):
+            existing_usernames.add(u["username"])
+
+    # 检查即将导入的用户是否与租户内现有用户重复
+    for idx, user_data in enumerate(users_to_import):
+        row_num = idx + 2  # 实际行号
+        phone = user_data["phone"]
+        username = user_data["username"]
+
+        if phone in existing_phones:
+            errors.append(f"第 {row_num} 行：手机号 {phone} 在本企业已存在")
+            users_to_import[idx] = None  # 标记为跳过
+            continue
+
+        if username and username in existing_usernames:
+            errors.append(f"第 {row_num} 行：用户名 {username} 在本企业已存在")
+            users_to_import[idx] = None  # 标记为跳过
+            continue
+
+    # 过滤掉重复的用户
+    users_to_import = [u for u in users_to_import if u is not None]
+
+    if not users_to_import:
+        return {"success": False, "message": "所有用户均已存在或重复", "errors": errors}
 
     # 检查上限
     tenant = TenantDB.get_by_id(tenant_id)
@@ -163,7 +238,7 @@ async def batch_import_users(request: Request, file: UploadFile = File(...)):
     return {
         "success": True,
         "imported": imported,
-        "total": len(users_to_import),
+        "total": len(users_to_import) + len(errors),
         "errors": errors,
     }
 
