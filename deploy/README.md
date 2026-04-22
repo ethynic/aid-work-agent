@@ -294,5 +294,5 @@ keepalive_timeout 65;
 3. 日志文件：`/var/www/agent/log/`
 
 本地 wsl + docker engine：
-wsl -d Ubuntu-22.04
+wsl -d Ubuntu
 cd /mnt/d/workbase/projects/aid-work-agent

@@ -63,8 +63,11 @@
               <input
                 v-model="smsCode"
                 type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
                 placeholder="请输入短信验证码"
                 maxlength="6"
+                autocomplete="one-time-code"
                 class="flex-1 px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
                 @keyup.enter="handleResetPassword"
               />
@@ -84,6 +87,7 @@
               v-model="newPassword"
               type="password"
               placeholder="请输入新密码"
+              autocomplete="new-password"
               class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
               @keyup.enter="handleResetPassword"
             />
@@ -95,6 +99,7 @@
               v-model="confirmPassword"
               type="password"
               placeholder="请再次输入新密码"
+              autocomplete="new-password"
               class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
               @keyup.enter="handleResetPassword"
             />

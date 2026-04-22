@@ -150,7 +150,7 @@
 
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-1">SMTP 密码</label>
-                  <input v-model="emailForm.smtp_password" type="password" :placeholder="emailBound ? '不修改请留空' : '请输入邮箱密码/授权码'" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+                  <input v-model="emailForm.smtp_password" type="password" :placeholder="emailBound ? '不修改请留空' : '请输入邮箱密码/授权码'" autocomplete="off" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
                 </div>
 
                 <div>

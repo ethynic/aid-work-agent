@@ -39,17 +39,19 @@
               v-model="identifier"
               :type="loginType === 'phone' ? 'tel' : 'text'"
               :placeholder="loginType === 'phone' ? '请输入手机号' : '请输入用户名'"
+              :autocomplete="loginType === 'phone' ? 'tel' : 'username'"
               class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
             />
           </div>
 
           <!-- 密码输入 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">密码</label>
+            <label class="block text-sm text-slate-600 mb-1">密码（首次登录，没有密码，请点击下方"忘记密码"）</label>
             <input
               v-model="password"
               type="password"
               placeholder="请输入密码"
+              autocomplete="current-password"
               class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
               @keyup.enter="handleLogin"
             />
@@ -98,9 +100,6 @@
         </div>
       </div>
 
-      <div class="px-8 pb-6">
-        <p class="text-xs text-slate-400 text-center">测试环境图形验证码固定为：8888（开发模式显示）</p>
-      </div>
     </div>
   </div>
 </template>

@@ -96,6 +96,7 @@ services:
       - SERVER_MODE=fastapi
       - SERVER_PORT=8000
       - DEBUG=true
+      - WATCHFILES_FORCE_POLLING=true
     volumes:
       - .:/app
     networks:

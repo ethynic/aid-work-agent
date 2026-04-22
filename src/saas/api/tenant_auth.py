@@ -172,7 +172,7 @@ def get_current_admin(request: Request) -> Optional[dict]:
 
     # 获取用户信息
     user = UserDB.get_by_id(user_id)
-    if not user or user.get("status", 1) != 1:
+    if not user or user.get("status", "active") != "active":
         return None
 
     # 检查是否是管理员
@@ -261,7 +261,7 @@ async def admin_login(request: AdminLoginRequest):
     if role not in ("platform_admin", "tenant_admin"):
         return AdminLoginResponse(success=False, message="该手机号不是管理员")
 
-    if user.get("status", 1) != 1:
+    if user.get("status", "active") != "active":
         return AdminLoginResponse(success=False, message="账号已停用")
 
     # 5. 生成 token（复用 tokens 表）
@@ -371,7 +371,7 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
     if role not in ("platform_admin", "tenant_admin"):
         return AdminLoginResponse(success=False, message="该账号不是管理员")
 
-    if user.get("status", 1) != 1:
+    if user.get("status", "active") != "active":
         return AdminLoginResponse(success=False, message="账号已停用")
 
     # 5. 平台管理员直接登录

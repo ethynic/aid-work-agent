@@ -27,7 +27,7 @@ class TenantUpdate(BaseModel):
     initial_admin_name: Optional[str] = Field(None, max_length=50, description="初始管理员姓名")
     initial_admin_phone: Optional[str] = Field(None, max_length=11, description="初始管理员手机号")
     plan: Optional[str] = Field(None, description="套餐：basic/standard/premium")
-    status: Optional[int | str] = Field(None, description="状态：active(1)/suspended(0)/deactivated(-1)")
+    status: Optional[str] = Field(None, description="状态：active/suspended/deactivated")
     max_instances: Optional[int] = Field(None, description="最大实例数")
     max_users: Optional[int] = Field(None, description="最大用户数")
 

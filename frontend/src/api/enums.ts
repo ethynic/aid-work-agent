@@ -61,6 +61,20 @@ export const AgentInstanceStatusMap = {
   [AgentInstanceStatus.ERROR]: { label: '异常', color: 'red' },
 } as const;
 
+/** 用户状态 */
+export enum UserStatus {
+  ACTIVE = 'active',       // 正常
+  SUSPENDED = 'suspended',   // 停用
+  DEACTIVATED = 'deactivated', // 已注销
+}
+
+/** 用户状态工具函数 */
+export const UserStatusMap = {
+  [UserStatus.ACTIVE]: { label: '正常', color: 'green' },
+  [UserStatus.SUSPENDED]: { label: '停用', color: 'red' },
+  [UserStatus.DEACTIVATED]: { label: '已注销', color: 'gray' },
+} as const;
+
 /** 用户角色 */
 export enum UserRole {
   PLATFORM_ADMIN = 'platform_admin',

@@ -243,11 +243,7 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
         # 验证并规范化 status 值
         valid_statuses = {"active", "suspended", "deactivated"}
         if isinstance(status_val, str) and status_val in valid_statuses:
-            updates["status"] = status_val  # 保持字符串格式
-        elif isinstance(status_val, int):
-            # 数字映射：1->active, 0->suspended, -1->deactivated
-            int_to_str = {1: "active", 0: "suspended", -1: "deactivated"}
-            updates["status"] = int_to_str.get(status_val, "active")
+            updates["status"] = status_val
 
     try:
         success = TenantDB.update(tenant_id, **updates)

@@ -125,6 +125,32 @@ class AgentInstanceStatus(str):
         return mapping.get(self, "未知")
 
 
+# ============== 用户状态 ==============
+
+class UserStatus(str, Enum):
+    """
+    用户状态枚举
+
+    数据库存储：TEXT (users.status)
+    - active      = 正常
+    - suspended   = 停用
+    - deactivated = 已注销
+    """
+    ACTIVE = "active"         # 正常
+    SUSPENDED = "suspended"    # 停用
+    DEACTIVATED = "deactivated"  # 已注销
+
+    @property
+    def display_name(self) -> str:
+        """用户友好的显示名称"""
+        mapping = {
+            self.ACTIVE: "正常",
+            self.SUSPENDED: "停用",
+            self.DEACTIVATED: "已注销",
+        }
+        return mapping.get(self, "未知")
+
+
 # ============== 用户角色 ==============
 
 class UserRole(str):
