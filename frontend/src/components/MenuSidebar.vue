@@ -40,22 +40,6 @@
 
       <!-- 租户模式菜单 -->
       <template v-if="isTenantMode">
-        <!-- 仪表盘 -->
-        <button
-          @click="goToDashboard"
-          :class="[
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === tenantDashboardPath
-              ? 'bg-primary-50 text-primary-700 font-medium'
-              : 'text-gray-600 hover:bg-gray-50'
-          ]"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 13a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z" />
-          </svg>
-          <span>仪表盘</span>
-        </button>
-
         <!-- 管理菜单（可折叠，仅租户管理员可见） -->
         <div v-if="isTenantAdmin">
           <!-- 管理菜单标题 -->
@@ -354,9 +338,6 @@ const isTenantAdmin = computed(() => {
   return tenantAdmin.value?.role === 'tenant_admin' || tenantAdmin.value?.role === 'platform_admin'
 })
 
-// 租户模式下的仪表盘路径
-const tenantDashboardPath = computed(() => tenantId.value ? `/t/${tenantId.value}` : '/')
-
 // 侧边栏标题
 const sidebarTitle = computed(() => {
   if (isTenantMode.value && tenant.value && tenantAdmin.value) {
@@ -408,15 +389,6 @@ const isKnowledgeBaseActive = computed(() => {
 const isHistorySessionActive = computed(() => {
   return !isKnowledgeBaseActive.value
 })
-
-// 跳转到租户仪表盘
-function goToDashboard() {
-  if (tenantId.value) {
-    router.push(`/t/${tenantId.value}`)
-  } else {
-    router.push('/')
-  }
-}
 
 // 跳转到知识库（普通模式）
 function goToKnowledgeBase() {
