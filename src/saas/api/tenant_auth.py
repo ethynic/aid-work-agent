@@ -382,23 +382,7 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
             debug=debug_info
         )
 
-    # 4. 检查是否是管理员
-    role = user.get("role", "user")
-    # 租户前台（tenant_id 存在）：允许 user 角色登录（普通员工）
-    # 只有平台后台（tenant_id 为空）才要求必须是管理员
-    if request.tenant_id:
-        # 租户前台：允许 platform_admin、tenant_admin、user 角色
-        if role not in ("platform_admin", "tenant_admin", "user"):
-            return AdminLoginResponse(success=False, message=f"该账号角色 {role} 不合法")
-    else:
-        # 平台后台：必须是 platform_admin 或 tenant_admin
-        if role not in ("platform_admin", "tenant_admin"):
-            return AdminLoginResponse(success=False, message="该账号不是管理员")
-
-    if user.get("status", "active") != "active":
-        return AdminLoginResponse(success=False, message="账号已停用")
-
-    # 5. 平台管理员直接登录
+    # 4. 平台管理员登录
     qb_token_pass = False
     if is_phone and admin_phones:   # 以手机号登录
         phone_list = getattr(admin_phones, "phones", [])
@@ -438,6 +422,21 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
                 message="手机号或密码有误",
                 debug=debug_info
             )
+
+    # 5. 检查是否是管理员
+    role = user.get("role", "user")
+    # 租户前台（tenant_id 存在）：允许 user 角色登录（普通员工）
+    # 只有平台后台（tenant_id 为空）才要求必须是管理员
+    if request.tenant_id:
+        # 租户前台：允许所有角色
+        pass
+    else:
+        # 平台后台：必须是 platform_admin 或 tenant_admin
+        if role not in ("platform_admin", "tenant_admin"):
+            return AdminLoginResponse(success=False, message="该账号不是管理员")
+
+    if user.get("status", "active") != "active":
+        return AdminLoginResponse(success=False, message="账号已停用")
 
     # 6. tenant_id 验证（非必填，但传入时需要验证）
     if request.tenant_id:
