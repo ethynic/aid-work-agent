@@ -14,7 +14,6 @@
         <!-- Header Bar -->
         <AppHeader
           title="企业知识库"
-          :is-online="isOnline"
           :is-logged-in="effectiveIsLoggedIn"
           :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
@@ -510,7 +509,6 @@ const isSidebarCollapsed = ref(false)
 // 判断是否为嵌套路由（作为PortalLayout的子路由）
 // 如果路由路径以 /t/ 开头，说明被PortalLayout包裹，不需要自己渲染MenuSidebar
 const isNestedRoute = computed(() => route.path.startsWith('/t/'))
-const isOnline = ref(true)
 const showCredentialManager = ref(false)
 
 // 分页总页数

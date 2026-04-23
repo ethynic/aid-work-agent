@@ -13,7 +13,6 @@
         <!-- Header Bar -->
         <AppHeader
           title="全部历史会话"
-          :is-online="isOnline"
           :is-logged-in="effectiveIsLoggedIn"
           :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
@@ -185,7 +184,6 @@ const {
 const { switchSession } = useAgent()
 
 const isSidebarCollapsed = ref(false)
-const isOnline = ref(true)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)

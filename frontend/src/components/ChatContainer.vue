@@ -16,7 +16,6 @@
           <!-- Header Bar -->
           <AppHeader
             :title="pageTitle"
-            :is-online="isOnline"
             :is-logged-in="effectiveIsLoggedIn"
             :user="effectiveUser"
             @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
@@ -192,7 +191,6 @@ const effectiveUser = computed(() => {
   return user.value
 })
 
-const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
 const showLoginModal = ref(false)
 const showCredentialManager = ref(false)
@@ -239,8 +237,6 @@ function openScheduledTasks() {
 }
 
 // 模拟在线状态检测
-let heartbeatInterval: number | null = null
-
 onMounted(async () => {
   // 初始化认证状态（租户模式和普通模式都需要初始化）
   await Promise.all([initAuth(), initTenantAuth()])
@@ -259,15 +255,9 @@ onMounted(async () => {
       }
     }
   }
-
-  // 简化版：假设一直在线
-  isOnline.value = true
 })
 
 onUnmounted(() => {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval)
-  }
 })
 
 async function handleSend(content: string) {

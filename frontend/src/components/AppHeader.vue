@@ -33,12 +33,6 @@
         </button>
       </div>
 
-      <!-- Online Status -->
-      <div class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-gray-100">
-        <span :class="isOnline ? 'bg-success-500' : 'bg-gray-400'" class="w-1.5 h-1.5 rounded-full"></span>
-        <span class="text-sm text-gray-500">{{ isOnline ? '在线' : '离线' }}</span>
-      </div>
-
       <!-- More Menu -->
       <div class="relative">
         <button
@@ -74,7 +68,6 @@ import { ref } from 'vue'
 
 defineProps<{
   title?: string
-  isOnline?: boolean
   isLoggedIn?: boolean
   user?: { username: string; user_id?: string | number } | null
 }>()
