@@ -141,12 +141,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
-import { useAuth, type User } from '@/composables/useAuth'
+import { useAuth } from '@/composables/useAuth'
 import { useSession } from '@/composables/useSession'
+import { useAgent } from '@/composables/useAgent'
 
 const router = useRouter()
 const { user, isLoggedIn, logout } = useAuth()
@@ -157,9 +158,9 @@ const {
   loadSessions,
   selectSession,
   removeSession,
-  renameSession,
-  switchSession
+  renameSession
 } = useSession()
+const { switchSession } = useAgent()
 
 const isSidebarCollapsed = ref(false)
 const isOnline = ref(true)

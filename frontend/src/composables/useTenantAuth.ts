@@ -87,7 +87,7 @@ export function useTenantAuth() {
         // 平台管理员的 tenant 可能是 null，需要分开判断
         if (info?.user) {
           admin.value = info.user
-          tenant.value = info.tenant || null
+          tenant.value = info.tenant ? { ...info.tenant, status: Number(info.tenant.status) } : null
         } else {
           // token 无效，清除
           clearStorage()

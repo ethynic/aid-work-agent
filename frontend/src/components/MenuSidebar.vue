@@ -298,7 +298,7 @@ interface Props {
   showNewSession?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   showHistory: true,
   showNewSession: true
 })

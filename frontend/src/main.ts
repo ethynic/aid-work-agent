@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
-import Toast, { useToast } from 'vue-toastification'
+import Toast from 'vue-toastification'
 import 'vue-toastification/dist/index.css'
 import App from './App.vue'
 import './style.css'

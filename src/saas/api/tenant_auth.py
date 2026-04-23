@@ -350,7 +350,7 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (user_id, identifier, identifier, "platform_admin", None, now, now))
             conn.commit()
-            cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
+            cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
             user = dict(cursor.fetchone())
 
     if not user:
