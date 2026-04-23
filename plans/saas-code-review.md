@@ -312,7 +312,7 @@ class ResetPasswordRequest(BaseModel):
 
 ---
 
-### 18. 前端 localStorage 暴露敏感信息
+### 18. 【已修复】前端 localStorage 暴露敏感信息
 
 **文件**: `frontend/src/composables/useAuth.ts:64-65`，`frontend/src/composables/useTenantAuth.ts:123-125`
 
