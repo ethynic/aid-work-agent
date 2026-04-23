@@ -74,8 +74,6 @@ class LoginRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
     phone: str
-    captcha_code: str  # 图形验证码
-    captcha_id: str    # 图形验证码ID
     sms_code: str
     new_password: str
 
@@ -656,9 +654,6 @@ async def send_reset_password_code(request: SendResetCodeRequest):
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
     """重置密码"""
-    # 校验图形验证码
-    if not verify_captcha(request.captcha_id, request.captcha_code):
-        return {"success": False, "message": "图形验证码错误或已过期，过期时间5分钟"}
 
     # 校验手机号格式
     if len(request.phone) != 11 or not request.phone.isdigit():

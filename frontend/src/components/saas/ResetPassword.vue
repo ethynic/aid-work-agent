@@ -279,8 +279,6 @@ async function handleResetPassword() {
   try {
     const res = await resetPassword({
       phone: phone.value,
-      captcha_code: captchaCode.value,
-      captcha_id: captchaId.value,
       sms_code: smsCode.value,
       new_password: newPassword.value
     })

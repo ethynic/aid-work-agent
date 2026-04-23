@@ -223,8 +223,6 @@ export interface SendResetCodeRequest {
 
 export interface ResetPasswordRequest {
   phone: string
-  captcha_code: string
-  captcha_id: string
   sms_code: string
   new_password: string
 }

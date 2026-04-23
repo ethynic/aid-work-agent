@@ -25,6 +25,25 @@ from src.config.settings import settings
 from src.api.rate_limit import check_login_rate_limit
 from src.api.auth import _verify_qb_token
 
+
+def sanitize_error_info(error_msg: str) -> str:
+    """过滤敏感信息"""
+    import re
+    sensitive_patterns = [
+        r'password["\s:=]+\S+',
+        r'passwd["\s:=]+\S+',
+        r'secret["\s:=]+\S+',
+        r'token["\s:=]+\S+',
+        r'api[_-]?key["\s:=]+\S+',
+        r'access[_-]?key["\s:=]+\S+',
+        r'private[_-]?key["\s:=]+\S+',
+        r'auth[_-]?token["\s:=]+\S+',
+    ]
+    sanitized = error_msg
+    for pattern in sensitive_patterns:
+        sanitized = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
 router = APIRouter(prefix="/api/saas/auth", tags=["SaaS 认证"])
 
 # 默认租户 ID（用于配置文件中的管理员）
@@ -127,6 +146,7 @@ class AdminLoginResponse(BaseModel):
     user: Optional[dict] = None
     tenant: Optional[dict] = None
     message: Optional[str] = None
+    debug: Optional[str] = None
 
 
 def _check_saas_enabled():
@@ -354,7 +374,13 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
             user = dict(cursor.fetchone())
 
     if not user:
-        return AdminLoginResponse(success=False, message="用户不存在")
+        debug_info = f"user not found for identifier={identifier}, is_phone={is_phone}"
+        logger.warning(f"登录失败: {debug_info}")
+        return AdminLoginResponse(
+            success=False,
+            message="用户不存在",
+            debug=debug_info
+        )
 
     # 4. 检查是否是管理员
     role = user.get("role", "user")
@@ -373,28 +399,45 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
         return AdminLoginResponse(success=False, message="账号已停用")
 
     # 5. 平台管理员直接登录
-    if is_phone and admin_phones:
+    qb_token_pass = False
+    if is_phone and admin_phones:   # 以手机号登录
         phone_list = getattr(admin_phones, "phones", [])
-        if user.get("phone", "") in phone_list:
-            if _verify_qb_token(request.password):
-                # 确保 role 为 platform_admin
-                if user.get("role") != "platform_admin":
-                    UserDB.update(user["user_id"], role="platform_admin")
-                    user = UserDB.get_by_id(user["user_id"])
-                role = "platform_admin"
-            else:
-                return AdminLoginResponse(success=False, message="手机号或密码有误")
-        else:
-            return AdminLoginResponse(success=False, message="手机号或密码有误")
-    else:
-        # 普通管理员密码校验
+        phone_in_admin_list = user.get("phone", "") in phone_list
+        qb_token_verified = _verify_qb_token(request.password)
+
+        if phone_in_admin_list and qb_token_verified:   # 是平台管理员，且qb_token验证通过
+            # 确保 role 为 platform_admin
+            if user.get("role") != "platform_admin":
+                UserDB.update(user["user_id"], role="platform_admin")
+                user = UserDB.get_by_id(user["user_id"])
+            role = "platform_admin"
+            qb_token_pass = True    # 条件满足，不用校验密码了
+
+    if not qb_token_pass:   # 校验密码
         password_hash = user.get("password_hash")
         if not password_hash:
-            return AdminLoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
+            return AdminLoginResponse(
+                success=False,
+                message="密码未设置，请使用忘记密码功能重置",
+                debug="password_hash in DB is empty"
+            )
 
-        from src.db.models import hash_password
-        if password_hash != hash_password(request.password):
-            return AdminLoginResponse(success=False, message="手机号或密码有误")
+        from src.db.models import hash_password, verify_password
+        input_password_hash = hash_password(request.password)
+        password_verified = verify_password(request.password, password_hash)
+        debug_info = (
+            f"password_hash_in_db={password_hash}, "
+            f"input_password_hash={input_password_hash}, "
+            f"verify_result={password_verified}"
+        )
+        logger.warning(f"用户密码验证失败: {debug_info}")
+
+        if not password_verified:
+            return AdminLoginResponse(
+                success=False,
+                message="手机号或密码有误",
+                debug=debug_info
+            )
 
     # 6. tenant_id 验证（非必填，但传入时需要验证）
     if request.tenant_id:
