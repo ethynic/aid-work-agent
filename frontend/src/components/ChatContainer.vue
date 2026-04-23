@@ -18,8 +18,11 @@
             :title="pageTitle"
             :is-logged-in="effectiveIsLoggedIn"
             :user="effectiveUser"
-            @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+            :available-subagents="availableSubagents"
+            :current-subagent-id="currentSubagentId"
+            @toggle-sidebar="handleToggleSidebar"
             @logout="handleLogout"
+            @change-subagent="handleSubagentChange"
           >
             <template #menu-items="{ closeMenu }">
               <button
@@ -125,8 +128,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
@@ -141,8 +144,15 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
+import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
 
 const toast = useToast()
+const router = useRouter()
+
+// 从 PortalLayout 注入侧边栏状态（租户前台模式）
+const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed')
+const toggleSidebarFn = inject<() => void>('toggleSidebar')
+const collapseSidebarFn = inject<() => void>('collapseSidebar')
 
 const {
   messages,
@@ -164,9 +174,22 @@ const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSe
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 
 const route = useRoute()
-const subagentName = computed<string | null>(() =>
-  route.name === 'chat-subagent' ? (route.params.subagent as string) : null
-)
+const subagentName = computed<string | null>(() => {
+  // 支持两种路由匹配：普通模式 /chat/subagent 和租户模式 /t/tenantId/chat/subagent
+  if (route.name === 'chat-subagent') {
+    return route.params.subagent as string
+  }
+  if (route.name === 'tenant-chat-subagent') {
+    return route.params.subagent as string
+  }
+  return null
+})
+
+// 可用的数字员工列表
+const availableSubagents = ref<SubagentListItem[]>([])
+
+// 当前选中的数字员工ID（null 表示主智能体）
+const currentSubagentId = computed(() => subagentName.value)
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -191,7 +214,18 @@ const effectiveUser = computed(() => {
   return user.value
 })
 
-const isSidebarCollapsed = ref(false)
+// 侧边栏折叠状态（优先使用注入的状态，否则使用本地状态）
+const localSidebarCollapsed = ref(false)
+const isSidebarCollapsed = computed({
+  get: () => sidebarCollapsed?.value ?? localSidebarCollapsed.value,
+  set: (val: boolean) => {
+    if (sidebarCollapsed) {
+      sidebarCollapsed.value = val
+    } else {
+      localSidebarCollapsed.value = val
+    }
+  }
+})
 const showLoginModal = ref(false)
 const showCredentialManager = ref(false)
 const showSettingsDialog = ref(false)
@@ -200,12 +234,19 @@ const skipNextSwitch = ref(false)
 
 // 计算页面标题
 const pageTitle = computed(() => {
-  const prefix = subagentName.value ? `${subagentName.value} - ` : ''
+  // 从 availableSubagents 中查找当前数字员工的名称
+  let agentName = ''
+  if (subagentName.value) {
+    const agent = availableSubagents.value.find(a => a.agent_id === subagentName.value)
+    agentName = agent?.name || subagentName.value
+  }
+  const prefix = agentName ? `${agentName} - ` : ''
   if (!currentSessionId.value) {
     return `${prefix}新会话`
   }
   const session = sessions.value.find(s => s.session_id === currentSessionId.value)
-  if (session?.title) {
+  // 只有当会话有自定义标题（非默认的"新会话"）时才显示"历史会话："前缀
+  if (session?.title && session.title !== '新会话') {
     return `${prefix}历史会话：${session.title}`
   }
   return `${prefix}新会话`
@@ -236,10 +277,50 @@ function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')
 }
 
+// 加载数字员工列表
+async function loadAvailableSubagents() {
+  try {
+    const res = await listSubagents()
+    if (res.success && res.data) {
+      // 在列表最前面插入"主智能体"选项（特殊ID 'main'）
+      availableSubagents.value = [
+        { agent_id: 'main', name: 'CEO智能体', description: '', capabilities: [], type: 'builtin' },
+        ...res.data
+      ]
+    }
+  } catch (e) {
+    console.error('加载数字员工列表失败:', e)
+  }
+}
+
+// 处理数字员工选择变化
+async function handleSubagentChange(agentId: string) {
+  // 构建目标路由路径
+  let targetPath: string
+  const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
+  if (tenantMatch) {
+    // 租户模式
+    const tenantId = tenantMatch[1]
+    targetPath = agentId === 'main'
+      ? `/t/${tenantId}/chat`
+      : `/t/${tenantId}/chat/${agentId}`
+  } else {
+    // 普通演示模式
+    targetPath = agentId === 'main' ? '/' : `/chat/${agentId}`
+  }
+
+  // 导航到对应路由
+  // 现有代码已经监听 subagentName 变化，会自动清空会话并创建新会话
+  await router.push(targetPath)
+}
+
 // 模拟在线状态检测
 onMounted(async () => {
   // 初始化认证状态（租户模式和普通模式都需要初始化）
   await Promise.all([initAuth(), initTenantAuth()])
+
+  // 加载可用数字员工列表
+  await loadAvailableSubagents()
 
   // 检查登录状态
   if (!effectiveIsLoggedIn.value) {
@@ -306,6 +387,15 @@ function handleRemoveFile(file_id: string) {
   removeAttachment(file_id)
 }
 
+// 处理侧边栏切换
+function handleToggleSidebar() {
+  if (toggleSidebarFn) {
+    toggleSidebarFn()
+  } else {
+    isSidebarCollapsed.value = !isSidebarCollapsed.value
+  }
+}
+
 async function handleNewSession() {
   if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
@@ -320,7 +410,11 @@ async function handleNewSession() {
     clearSession()
     clearAttachments()
     // 展开侧边栏
-    isSidebarCollapsed.value = false
+    if (collapseSidebarFn) {
+      collapseSidebarFn()
+    } else {
+      isSidebarCollapsed.value = false
+    }
   }
 }
 

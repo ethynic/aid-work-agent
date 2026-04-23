@@ -96,7 +96,7 @@ export async function adminLogout(): Promise<void> {
   localStorage.removeItem(tenantKey)
 }
 
-export async function getAdminInfo(): Promise<{
+export async function getAdminInfo(tenantId?: string): Promise<{
   user?: { user_id: string; phone: string; username: string; role: string }
   tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
 } | null> {
@@ -112,7 +112,8 @@ export async function getAdminInfo(): Promise<{
 
   const token = localStorage.getItem(tokenKey)
   if (!token) return null
-  const res = await fetch(`${API_BASE}/auth/me`, {
+  const url = tenantId ? `${API_BASE}/auth/me?tenant_id=${encodeURIComponent(tenantId)}` : `${API_BASE}/auth/me`
+  const res = await fetch(url, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   if (!res.ok) return null

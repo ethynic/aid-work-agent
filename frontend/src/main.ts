@@ -92,6 +92,7 @@ const router = createRouter({
         { path: 'channels', name: 'tenant-channels', component: () => import('./components/saas/ChannelConfig.vue') },
         { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
+        { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
       ]
     }
   ]

@@ -94,7 +94,7 @@
                       </div>
                     </div>
                     <p class="text-sm text-gray-500 mt-1 truncate">
-                      {{ session.context_data?.subagent ? `数字员工: ${session.context_data.subagent}` : '主智能体' }}
+                      {{ session.context_data?.subagent ? `数字员工: ${session.context_data.subagent}` : 'CEO智能体' }}
                     </p>
                   </div>
                 </div>

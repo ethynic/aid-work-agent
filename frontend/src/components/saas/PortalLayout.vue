@@ -36,10 +36,11 @@
     <!-- 租户前台菜单 - 登录后才显示 -->
     <MenuSidebar
       v-else-if="isLoggedIn"
-      :is-collapsed="false"
+      :is-collapsed="sidebarCollapsed"
       :show-history="true"
       :show-new-session="true"
       class="bg-white border-r border-gray-200"
+      @collapse="sidebarCollapsed = true"
     />
 
     <!-- 主内容区 -->
@@ -50,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, ref, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -60,6 +61,18 @@ const router = useRouter()
 const route = useRoute()
 const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
 const toast = useToast()
+
+// 侧边栏折叠状态
+const sidebarCollapsed = ref(false)
+
+// 提供侧边栏状态给子组件
+provide('sidebarCollapsed', sidebarCollapsed)
+provide('toggleSidebar', () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+})
+provide('collapseSidebar', () => {
+  sidebarCollapsed.value = true
+})
 
 // 判断是否在 /t/:tenant_id 路由下（租户前台）
 const tenantId = computed(() => route.params.tenant_id as string)

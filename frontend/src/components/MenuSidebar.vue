@@ -340,9 +340,16 @@ const isTenantAdmin = computed(() => {
 
 // 侧边栏标题
 const sidebarTitle = computed(() => {
-  if (isTenantMode.value && tenant.value && tenantAdmin.value) {
-    // 租户模式：显示"租户名称 用户名称"
-    return `${tenant.value.company_name} ${tenantAdmin.value.username || tenantAdmin.value.phone || ''}`
+  console.log('临时调试：sidebarTitle 计算属性', {
+    isTenantMode: isTenantMode.value,
+    tenantId: tenantId.value,
+    tenant: tenant.value,
+    tenantAdmin: tenantAdmin.value,
+    isLoggedIn: isLoggedIn.value
+  })
+  if (isTenantMode.value && tenant.value) {
+    // 租户模式：只显示租户名称
+    return tenant.value.company_name
   }
   // 普通模式：显示默认名称
   return '爱定义工作助理'
