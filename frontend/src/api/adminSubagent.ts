@@ -4,7 +4,7 @@
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/admin`
 
 function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('demo_token')
+  const token = localStorage.getItem('portal_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
