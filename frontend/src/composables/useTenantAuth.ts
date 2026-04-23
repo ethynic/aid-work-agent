@@ -111,6 +111,8 @@ export function useTenantAuth() {
 
   /**
    * 设置登录状态
+   * localStorage 仅存储 token 和最小化管理员标识（user_id、username、role），
+   * 敏感信息（手机号等）通过 API 获取，不持久化到 localStorage。
    */
   function setLogin(token: string, adminInfo: TenantAdmin, tenantInfo: TenantInfo) {
     const tokenKey = getTokenKey()
@@ -121,7 +123,12 @@ export function useTenantAuth() {
     admin.value = adminInfo
     tenant.value = tenantInfo
     localStorage.setItem(tokenKey, token)
-    localStorage.setItem(adminKey, JSON.stringify(adminInfo))
+    // 仅存储非敏感字段
+    localStorage.setItem(adminKey, JSON.stringify({
+      user_id: adminInfo.user_id,
+      username: adminInfo.username,
+      role: adminInfo.role,
+    }))
     localStorage.setItem(tenantKey, JSON.stringify(tenantInfo))
   }
 

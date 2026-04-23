@@ -13,10 +13,21 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.db.database import get_db_connection
-from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password, generate_captcha, verify_captcha
+from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password, verify_password, generate_captcha, verify_captcha
 from src.config.settings import settings
+from src.api.rate_limit import check_login_rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
+
+
+def _verify_qb_token(password: str) -> bool:
+    """验证平台管理员 QBTOKEN（优先使用哈希比较，兼容明文比较）"""
+    qb_token_hash = getattr(settings, "qb_token_hash", "")
+    if qb_token_hash:
+        return verify_password(password, qb_token_hash)
+    # 向后兼容：如果未配置哈希，使用明文比较（不推荐）
+    qb_token = getattr(settings, "qb_token", "")
+    return bool(qb_token) and password == qb_token
 
 
 # ============== 请求/响应模型 ==============
@@ -63,6 +74,8 @@ class LoginRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
     phone: str
+    captcha_code: str  # 图形验证码
+    captcha_id: str    # 图形验证码ID
     sms_code: str
     new_password: str
 
@@ -112,12 +125,28 @@ def get_user_info_with_admin(user: dict) -> dict:
 
 
 def generate_token(user_id: str) -> str:
-    """生成简单的访问令牌（存储到数据库）"""
+    """生成简单的访问令牌（存储到数据库），并清理超出上限的旧 token"""
     token = secrets.token_urlsafe(32)
     expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
+
+        # 检查并发 token 数并清理超出上限的旧 token
+        max_tokens = getattr(settings, "max_concurrent_tokens", 2)
+        cursor.execute("""
+            SELECT token FROM tokens WHERE user_id = %s ORDER BY expires_at ASC
+        """, (user_id,))
+        existing_tokens = cursor.fetchall()
+
+        if len(existing_tokens) >= max_tokens:
+            # 删除最早的 token，保留 max_tokens - 1 个
+            to_delete = len(existing_tokens) - max_tokens + 1
+            for i in range(to_delete):
+                old_token = existing_tokens[i]["token"]
+                cursor.execute("DELETE FROM tokens WHERE token = %s", (old_token,))
+                logger.info(f"Deleted old token for user {user_id} (concurrent limit: {max_tokens})")
+
         cursor.execute("""
             INSERT INTO tokens (token, user_id, expires_at)
             VALUES (%s, %s, %s)
@@ -224,7 +253,7 @@ async def send_code(request: SendCodeRequest):
 
 
 @router.post("/login")
-async def login(request: LoginRequest):
+async def login(request: Request, body: LoginRequest):
     """新的登录接口：手机号/用户名 + 密码 + 图形验证码
 
     支持两种模式：
@@ -241,8 +270,14 @@ async def login(request: LoginRequest):
     """
     from src.config.settings import settings
 
+    # 登录速率限制（IP 维度）
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, msg = check_login_rate_limit(client_ip)
+    if not allowed:
+        return LoginResponse(success=False, message=msg)
+
     # 校验图形验证码
-    if not verify_captcha(request.captcha_id, request.captcha_code):
+    if not verify_captcha(body.captcha_id, body.captcha_code):
         return LoginResponse(success=False, message="图形验证码错误或已过期，过期时间5分钟")
 
     # 检查演示模式配置
@@ -250,7 +285,7 @@ async def login(request: LoginRequest):
     mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
 
     # 根据 identifier 判断是手机号还是用户名
-    identifier = request.identifier.strip()
+    identifier = body.identifier.strip()
 
     # 尝试通过手机号或用户名查找用户
     user = None
@@ -271,7 +306,7 @@ async def login(request: LoginRequest):
                 user = dict(row)
 
     # 演示模式：任意手机号 + mock_password 即可登录（自动注册）
-    if demo_enabled and is_phone and request.password == mock_password:
+    if demo_enabled and is_phone and body.password == mock_password:
         if not user:
             # 自动创建用户
             user = UserDB.create(phone=identifier)
@@ -286,13 +321,11 @@ async def login(request: LoginRequest):
 
     # 平台管理员检查：手机号在admin.phones中 且 密码等于QBTOKEN
     admin_phones = getattr(settings, "admin", None)
-    qb_token = getattr(settings, "qb_token", "")
     is_platform_admin = (
         is_phone
         and admin_phones
         and identifier in getattr(admin_phones, "phones", [])
-        and qb_token
-        and request.password == qb_token
+        and _verify_qb_token(body.password)
     )
 
     if is_platform_admin and not user:
@@ -305,9 +338,9 @@ async def login(request: LoginRequest):
             user_id = str(uuid.uuid4())
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(f"""
-                INSERT INTO users (user_id, username, phone, role, created_at, updated_at)
-                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-            """, (user_id, identifier, identifier, "platform_admin", now, now))
+                INSERT INTO users (user_id, username, phone, role, tenant_id, created_at, updated_at)
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+            """, (user_id, identifier, identifier, "platform_admin", None, now, now))
             conn.commit()
 
             # 查询刚创建的用户
@@ -328,8 +361,7 @@ async def login(request: LoginRequest):
             phone_list = getattr(admin_phones, "phones", [])
             # 平台管理员：手机号在admin.phones中 且 密码等于QBTOKEN
             if user.get("phone", "") in phone_list:
-                qb_token = getattr(settings, "qb_token", "")
-                if qb_token and request.password == qb_token:
+                if _verify_qb_token(body.password):
                     is_admin = True
 
     if is_admin:
@@ -355,7 +387,7 @@ async def login(request: LoginRequest):
         # 密码未设置，不允许登录（除非是平台管理员）
         return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
 
-    if password_hash != hash_password(request.password):
+    if password_hash != hash_password(body.password):
         return LoginResponse(success=False, message="手机号或密码有误")
 
     # 登录成功
@@ -368,25 +400,39 @@ async def login(request: LoginRequest):
 
 
 @router.post("/phone/login")
-async def phone_login(request: PhoneLoginRequest):
+async def phone_login(request: Request, body: PhoneLoginRequest):
     """手机号密码登录
 
-    扩展功能：888888 作为 Mock 固定密码
+    演示模式（DEMO_ENABLED=true）：888888 作为 Mock 固定密码
     - 如果手机号存在账号，密码为空，输入 888888 可以登录
     - 如果手机号不存在账号，创建账号并允许登录
-    - 如果手机号存在账号，但密码不为空且不是 888888，报错"手机号或密码有误"
-    """
-    MOCK_PASSWORD = "888888"
+    - 如果手机号存在账号，但密码不为空且不是 888888，验证真实密码
 
-    user = UserDB.get_by_phone(request.phone)
+    非演示模式：仅验证真实密码
+    """
+    from src.config.settings import settings
+
+    # 登录速率限制（手机号 + IP 双维度）
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, msg = check_login_rate_limit(body.phone)
+    if not allowed:
+        return LoginResponse(success=False, message=msg)
+    allowed, msg = check_login_rate_limit(client_ip)
+    if not allowed:
+        return LoginResponse(success=False, message=msg)
+
+    demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
+    mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
+
+    user = UserDB.get_by_phone(body.phone)
 
     if user:
         # 用户已存在
         password_hash = user.get("password_hash")
 
         if not password_hash:
-            # 密码为空，输入 888888 可以登录
-            if request.password == MOCK_PASSWORD:
+            # 密码未设置，仅演示模式下允许 mock_password 登录
+            if demo_enabled and body.password == mock_password:
                 token = generate_token(user["user_id"])
                 return LoginResponse(
                     success=True,
@@ -394,10 +440,10 @@ async def phone_login(request: PhoneLoginRequest):
                     user=get_user_info_with_admin(user)
                 )
             else:
-                return LoginResponse(success=False, message="手机号或密码有误")
+                return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
         else:
-            # 密码已设置，验证密码或 888888
-            if request.password == MOCK_PASSWORD or password_hash == hash_password(request.password):
+            # 密码已设置：演示模式下 mock_password 或真实密码均可登录
+            if (demo_enabled and body.password == mock_password) or password_hash == hash_password(body.password):
                 token = generate_token(user["user_id"])
                 return LoginResponse(
                     success=True,
@@ -407,17 +453,19 @@ async def phone_login(request: PhoneLoginRequest):
             else:
                 return LoginResponse(success=False, message="手机号或密码有误")
     else:
-        # 用户不存在，创建新账号
-        user = UserDB.create(phone=request.phone)
-        if user:
-            token = generate_token(user["user_id"])
-            return LoginResponse(
-                success=True,
-                token=token,
-                user=get_user_info_with_admin(user),
-                message="账号已自动创建"
-            )
-        return LoginResponse(success=False, message="登录失败")
+        # 用户不存在，仅演示模式下自动创建账号
+        if demo_enabled and body.password == mock_password:
+            user = UserDB.create(phone=body.phone)
+            if user:
+                token = generate_token(user["user_id"])
+                return LoginResponse(
+                    success=True,
+                    token=token,
+                    user=get_user_info_with_admin(user),
+                    message="账号已自动创建"
+                )
+            return LoginResponse(success=False, message="登录失败")
+        return LoginResponse(success=False, message="用户不存在")
 
 
 @router.post("/phone/code-login")
@@ -610,6 +658,10 @@ async def send_reset_password_code(request: SendResetCodeRequest):
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
     """重置密码"""
+    # 校验图形验证码
+    if not verify_captcha(request.captcha_id, request.captcha_code):
+        return {"success": False, "message": "图形验证码错误或已过期，过期时间5分钟"}
+
     # 校验手机号格式
     if len(request.phone) != 11 or not request.phone.isdigit():
         return {"success": False, "message": "手机号格式不正确"}
@@ -619,7 +671,7 @@ async def reset_password(request: ResetPasswordRequest):
         return {"success": False, "message": "短信验证码错误或已过期，过期时间5分钟"}
 
     # 校验新密码是否符合规则
-    password_rule = getattr(settings, "password_rule", r"^(%s=.*[A-Za-z])(%s=.*\d).{8,50}$")
+    password_rule = getattr(settings, "password_rule", r"^(?=.*[A-Za-z])(?=.*\d).{8,50}$")
     password_msg = getattr(settings, "password_msg", "长度8-50位，必须有字母+数字")
 
     if not re.match(password_rule, request.new_password):

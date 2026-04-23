@@ -57,12 +57,20 @@ export function useAuth() {
 
   /**
    * 设置登录状态
+   * localStorage 仅存储 token 和最小化用户标识（user_id、is_admin），
+   * 敏感信息（手机号等）通过 API 获取，不持久化到 localStorage。
    */
   function setLogin(newToken: string, userInfo: User) {
     token.value = newToken
     user.value = userInfo
     localStorage.setItem('demo_token', newToken)
-    localStorage.setItem('user_info', JSON.stringify(userInfo))
+    // 仅存储非敏感字段
+    localStorage.setItem('user_info', JSON.stringify({
+      user_id: userInfo.user_id,
+      username: userInfo.username,
+      is_admin: userInfo.is_admin,
+      avatar_url: userInfo.avatar_url,
+    }))
   }
 
   /**

@@ -92,20 +92,31 @@ class TenantDB:
             return cursor.rowcount > 0
 
     @staticmethod
-    def list_tenants(status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        """列出租户"""
+    def list_tenants(status: Optional[str] = None, page: int = 1, page_size: int = 20) -> dict:
+        """列出租户（分页）
+
+        Returns:
+            {"tenants": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            placeholder = "%s"
-            # PostgreSQL 不支持 LIMIT %s，需要直接拼接
             if status:
                 cursor.execute(
-                    f"SELECT * FROM tenants WHERE status = {placeholder} ORDER BY created_at DESC LIMIT {limit}",
+                    "SELECT COUNT(*) as cnt FROM tenants WHERE status = %s",
                     (status,),
                 )
-            else:
+                total = cursor.fetchone()["cnt"]
                 cursor.execute(
-                    f"SELECT * FROM tenants ORDER BY created_at DESC LIMIT {limit}",
+                    "SELECT * FROM tenants WHERE status = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    (status, page_size, offset),
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) as cnt FROM tenants")
+                total = cursor.fetchone()["cnt"]
+                cursor.execute(
+                    "SELECT * FROM tenants ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    (page_size, offset),
                 )
             rows = cursor.fetchall()
             results = []
@@ -113,7 +124,7 @@ class TenantDB:
                 d = dict(row)
                 d["settings"] = json.loads(d["settings"]) if d.get("settings") else {}
                 results.append(d)
-            return results
+            return {"tenants": results, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
     def delete(tenant_id: str) -> bool:

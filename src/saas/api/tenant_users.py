@@ -37,21 +37,26 @@ class UserUpdateRequest(BaseModel):
     username: Optional[str] = Field(None, max_length=50, description="用户名")
 
 
+class UserListRequest(BaseModel):
+    page: int = Field(1, ge=1, description="页码")
+    page_size: int = Field(20, ge=1, le=100, description="每页数量")
+
+
 # ============== API 端点 ==============
 
 @router.get("")
-async def list_users(request: Request):
-    """列出企业用户"""
+async def list_users(request: Request, page: int = 1, page_size: int = 20):
+    """列出企业用户（分页）"""
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
     # 平台管理员可查看所有租户的用户
     if admin.get("role") == "platform_admin":
-        users = UserDB.list_users()
+        result = UserDB.list_users(page=page, page_size=page_size)
     else:
-        users = UserDB.list_by_tenant(admin["tenant_id"])
-    return {"success": True, "users": users}
+        result = UserDB.list_by_tenant(admin["tenant_id"], page=page, page_size=page_size)
+    return {"success": True, **result}
 
 
 @router.post("")
@@ -72,8 +77,9 @@ async def create_user(request: Request, body: UserCreateRequest):
 
     # 1. 检查用户上限
     tenant = TenantDB.get_by_id(tenant_id)
-    current_users = UserDB.list_by_tenant(tenant_id)
-    if tenant and len(current_users) >= tenant["max_users"]:
+    current_result = UserDB.list_by_tenant(tenant_id, page_size=1)  # 只需 total
+    current_count = current_result["total"]
+    if tenant and current_count >= tenant["max_users"]:
         raise HTTPException(status_code=400, detail=f"已达到最大用户数限制（{tenant['max_users']}）")
 
     # 2. 检查租户内用户名是否重复
@@ -179,8 +185,8 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
     # 检查租户内手机号和用户名是否重复
     existing_phones = set()
     existing_usernames = set()
-    current_users = UserDB.list_by_tenant(tenant_id)
-    for u in current_users:
+    current_result = UserDB.list_by_tenant(tenant_id, page_size=10000)
+    for u in current_result["users"]:
         if u.get("phone"):
             existing_phones.add(u["phone"])
         if u.get("username"):
@@ -210,7 +216,7 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
 
     # 检查上限
     tenant = TenantDB.get_by_id(tenant_id)
-    current_count = len(UserDB.list_by_tenant(tenant_id))
+    current_count = UserDB.list_by_tenant(tenant_id, page_size=1)["total"]
     if tenant and current_count + len(users_to_import) > tenant["max_users"]:
         raise HTTPException(
             status_code=400,

@@ -204,6 +204,16 @@ class SaasConfig(BaseModel):
     default_max_users: int = 50
 
 
+class CorsConfig(BaseModel):
+    """CORS 配置"""
+    allowed_origins: List[str] = Field(default_factory=lambda: [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:7860",
+        "https://*.aidingyi.cn",
+    ])
+
+
 class DemoConfig(BaseModel):
     """演示模式配置"""
     enabled: bool = True
@@ -221,9 +231,12 @@ class Settings(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     saas: SaasConfig = Field(default_factory=SaasConfig)
     demo: DemoConfig = Field(default_factory=DemoConfig)
+    cors: CorsConfig = Field(default_factory=CorsConfig)
 
     # 认证相关配置（从环境变量加载）
-    qb_token: str = ""  # 平台管理员超级token
+    qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
+    qb_token_hash: str = ""  # 平台管理员超级token 的 bcrypt 哈希值（推荐）
+    max_concurrent_tokens: int = 2  # 同一用户最大并发 token 数
     password_rule: str = r"^(?=.*[A-Za-z])(?=.*\d).{8,50}$"  # 密码正则规则
     password_msg: str = "长度8-50位，必须有字母+数字"  # 密码规则提示信息
 
@@ -366,6 +379,13 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     # 认证相关配置（从环境变量加载）
     if os.getenv("QBTOKEN"):
         yaml_config["qb_token"] = os.getenv("QBTOKEN")
+    if os.getenv("QBTOKEN_HASH"):
+        yaml_config["qb_token_hash"] = os.getenv("QBTOKEN_HASH")
+    if os.getenv("MAX_CONCURRENT_TOKENS"):
+        try:
+            yaml_config["max_concurrent_tokens"] = int(os.getenv("MAX_CONCURRENT_TOKENS"))
+        except ValueError:
+            pass
     if os.getenv("PASSWORD_RULE"):
         yaml_config["password_rule"] = os.getenv("PASSWORD_RULE")
     if os.getenv("PASSWORD_MSG"):

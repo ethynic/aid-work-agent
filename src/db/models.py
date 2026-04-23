@@ -189,30 +189,65 @@ class UserDB:
     update = update_info
 
     @staticmethod
-    def list_users() -> List[Dict[str, Any]]:
-        """获取所有用户（管理用）"""
+    def list_users(page: int = 1, page_size: int = 20, tenant_id: str = None) -> dict:
+        """获取用户列表（分页）
+
+        Args:
+            page: 页码，从1开始
+            page_size: 每页数量
+            tenant_id: 可选，按租户过滤
+
+        Returns:
+            {"users": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users ORDER BY created_at DESC")
-            return [dict(row) for row in cursor.fetchall()]
+            if tenant_id:
+                cursor.execute("SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s", (tenant_id,))
+                total = cursor.fetchone()["cnt"]
+                cursor.execute(
+                    "SELECT * FROM users WHERE tenant_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    (tenant_id, page_size, offset),
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) as cnt FROM users")
+                total = cursor.fetchone()["cnt"]
+                cursor.execute(
+                    "SELECT * FROM users ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    (page_size, offset),
+                )
+            users = [dict(row) for row in cursor.fetchall()]
+        return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
-    def list_by_tenant(tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取指定租户下的所有用户
+    def list_by_tenant(tenant_id: str, page: int = 1, page_size: int = 20) -> dict:
+        """获取指定租户下的用户列表（分页）
 
         Args:
             tenant_id: 租户ID
-            limit: 返回数量限制
+            page: 页码，从1开始
+            page_size: 每页数量
+
+        Returns:
+            {"users": [...], "total": int, "page": int, "page_size": int}
         """
+        offset = (page - 1) * page_size
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s AND status = 'active'",
+                (tenant_id,),
+            )
+            total = cursor.fetchone()["cnt"]
             cursor.execute("""
                 SELECT * FROM users
                 WHERE tenant_id = %s AND status = 'active'
                 ORDER BY created_at DESC
-                LIMIT %s
-            """, (tenant_id, limit))
-            return [dict(row) for row in cursor.fetchall()]
+                LIMIT %s OFFSET %s
+            """, (tenant_id, page_size, offset))
+            users = [dict(row) for row in cursor.fetchall()]
+        return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
     def list_admins(tenant_id: str = None) -> List[Dict[str, Any]]:

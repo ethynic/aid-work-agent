@@ -70,7 +70,7 @@ if request.sms_code != "888888":
 
 ---
 
-### 4. 演示模式 phone/login 接口存在万能密码 "888888"
+### 4. 【已修复】演示模式 phone/login 接口存在万能密码 "888888"
 
 **文件**: `src/api/auth.py:374-424`
 
@@ -89,7 +89,7 @@ if request.password == MOCK_PASSWORD or password_hash == hash_password(request.p
 
 ---
 
-### 5. CORS 允许所有来源 + 允许凭证
+### 5. 【已修复】CORS 允许所有来源 + 允许凭证
 
 **文件**: `src/main.py:243-249`
 
@@ -111,7 +111,7 @@ app.add_middleware(
 
 ## 二、高危问题 (High)
 
-### 6. 登录接口缺少速率限制
+### 6. 【已修复】登录接口缺少速率限制
 
 **文件**: `src/api/auth.py` 全部登录端点，`src/saas/api/tenant_auth.py` 全部登录端点
 
@@ -123,7 +123,7 @@ app.add_middleware(
 
 ---
 
-### 7. Token 无并发会话控制
+### 7. 【已修复】Token 无并发会话控制
 
 **文件**: `src/api/auth.py:114-128`
 
@@ -140,7 +140,7 @@ def generate_token(user_id: str) -> str:
 
 ---
 
-### 8. 平台管理员密码明文比较（QBTOKEN）
+### 8. 【已修复】平台管理员密码明文比较（QBTOKEN）
 
 **文件**: `src/api/auth.py:294-300`，`src/saas/api/tenant_auth.py:339-348`
 
@@ -160,7 +160,7 @@ is_platform_admin = (
 
 ---
 
-### 9. SaaS 认证 token 前缀泄露信息
+### 9. 【已修复】SaaS 认证 token 前缀泄露信息
 
 **文件**: `src/saas/api/tenant_auth.py:268, 423`
 
@@ -174,7 +174,7 @@ token = f"saas_{secrets.token_urlsafe(32)}"
 
 ---
 
-### 10. 管理员认证逻辑在 middleware 和 API 层重复实现
+### 10. 【已修复】管理员认证逻辑在 middleware 和 API 层重复实现
 
 **文件**: `src/saas/middleware.py:81-140` vs `src/saas/api/tenant_auth.py:137-215`
 
@@ -193,7 +193,7 @@ if datetime.now() > row["expires_at"]:
 
 ## 三、中危问题 (Medium)
 
-### 11. 密码规则正则表达式格式异常
+### 11. 【已修复】密码规则正则表达式格式异常
 
 **文件**: `src/api/auth.py:627`
 
@@ -207,7 +207,7 @@ password_rule = getattr(settings, "password_rule", r"^(%s=.*[A-Za-z])(%s=.*\d).{
 
 ---
 
-### 12. 管理员自动创建用户时缺少 tenant_id
+### 12. 【已修复】管理员自动创建用户时缺少 tenant_id
 
 **文件**: `src/api/auth.py:306-319`，`src/saas/api/tenant_auth.py:350-364`
 
@@ -225,7 +225,7 @@ cursor.execute(f"""
 
 ---
 
-### 13. `/api/auth/login` 和 `/api/saas/auth/login/password` 逻辑高度重复
+### 13. 【已修复】`/api/auth/login` 和 `/api/saas/auth/login/password` 逻辑高度重复
 
 **文件**: `src/api/auth.py:231-371` vs `src/saas/api/tenant_auth.py:304-456`
 
@@ -235,7 +235,7 @@ cursor.execute(f"""
 
 ---
 
-### 14. 租户删除不级联清理关联数据
+### 14. 【已修复】租户删除不级联清理关联数据
 
 **文件**: `src/saas/api/tenant_mgmt.py:276-298`
 
@@ -251,7 +251,7 @@ cursor.execute(f"""
 
 ---
 
-### 15. 平台管理员可查看所有租户的用户列表，无分页
+### 15. 【已修复】平台管理员可查看所有租户的用户列表，无分页
 
 **文件**: `src/saas/api/tenant_users.py:41-52`
 
@@ -266,7 +266,7 @@ if admin.get("role") == "platform_admin":
 
 ---
 
-### 16. 租户列表查询使用硬编码 limit=1000
+### 16. 【已修复】租户列表查询使用硬编码 limit=1000
 
 **文件**: `src/saas/api/tenant_mgmt.py:151`
 
@@ -282,7 +282,7 @@ tenants = TenantDB.list_tenants(limit=1000)
 
 ## 四、低危问题 (Low)
 
-### 17. 前端 resetPassword API 参数不匹配后端
+### 17. 【已修复】前端 resetPassword API 参数不匹配后端
 
 **文件**: `frontend/src/api/auth.ts:224-230` vs `src/api/auth.py:63-67`
 

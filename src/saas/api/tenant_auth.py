@@ -20,6 +20,8 @@ from loguru import logger
 
 from src.saas.db.tenant_db import TenantDB
 from src.config.settings import settings
+from src.api.rate_limit import check_login_rate_limit
+from src.api.auth import _verify_qb_token
 
 router = APIRouter(prefix="/api/saas/auth", tags=["SaaS 认证"])
 
@@ -141,8 +143,7 @@ def get_current_admin(request: Request) -> Optional[dict]:
     Returns: {"user_id", "tenant_id", "phone", "username", "role"} 或 None
     """
     from src.db.models import UserDB
-    from src.db.database import get_db_connection
-    import secrets
+    from src.api.auth import verify_token
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -150,25 +151,10 @@ def get_current_admin(request: Request) -> Optional[dict]:
 
     token = auth_header[7:]
 
-    # 验证 token
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT user_id, expires_at FROM tokens WHERE token = %s
-        """, (token,))
-        row = cursor.fetchone()
-
-        if not row:
-            return None
-
-        # 检查过期
-        from datetime import datetime
-        if datetime.now() > row["expires_at"]:
-            cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
-            conn.commit()
-            return None
-
-        user_id = row["user_id"]
+    # 复用统一的 token 验证服务
+    user_id = verify_token(token)
+    if not user_id:
+        return None
 
     # 获取用户信息
     user = UserDB.get_by_id(user_id)
@@ -178,8 +164,6 @@ def get_current_admin(request: Request) -> Optional[dict]:
     # 检查用户状态
     role = user.get("role", "user")
     if role not in ("platform_admin", "tenant_admin", "user"):
-        return None
-    if user.get("status", "active") != "active":
         return None
 
     return {
@@ -267,7 +251,7 @@ async def admin_login(request: AdminLoginRequest):
         return AdminLoginResponse(success=False, message="账号已停用")
 
     # 5. 生成 token（复用 tokens 表）
-    token = f"saas_{secrets.token_urlsafe(32)}"
+    token = secrets.token_urlsafe(32)
     expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:
@@ -304,7 +288,7 @@ async def admin_login(request: AdminLoginRequest):
 
 
 @router.post("/login/password")
-async def admin_password_login(request: AdminPasswordLoginRequest):
+async def admin_password_login(http_request: Request, request: AdminPasswordLoginRequest):
     """管理员密码+图形验证码登录"""
     from src.db.models import UserDB
     from src.db.database import get_db_connection
@@ -314,6 +298,12 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
     # 检查 SaaS 是否启用
     if not settings.saas.enabled:
         return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
+
+    # 登录速率限制（IP 维度）
+    client_ip = http_request.client.host if http_request.client else "unknown"
+    allowed, msg = check_login_rate_limit(client_ip)
+    if not allowed:
+        return AdminLoginResponse(success=False, message=msg)
 
     # 1. 验证图形验证码
     from src.db.models import verify_captcha
@@ -338,15 +328,13 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
             if row:
                 user = dict(row)
 
-    # 3. 平台管理员检查：手机号在admin.phones中 且 密码等于QBTOKEN
+    # 3. 平台管理员检查：手机号在admin.phones中 且 密码哈希匹配QBTOKEN
     admin_phones = getattr(settings, "admin", None)
-    qb_token = getattr(settings, "qb_token", "")
     is_platform_admin = (
         is_phone
         and admin_phones
         and identifier in getattr(admin_phones, "phones", [])
-        and qb_token
-        and request.password == qb_token
+        and _verify_qb_token(request.password)
     )
 
     if is_platform_admin and not user:
@@ -358,9 +346,9 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
             user_id = str(uuid.uuid4())
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(f"""
-                INSERT INTO users (user_id, username, phone, role, created_at, updated_at)
-                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-            """, (user_id, identifier, identifier, "platform_admin", now, now))
+                INSERT INTO users (user_id, username, phone, role, tenant_id, created_at, updated_at)
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+            """, (user_id, identifier, identifier, "platform_admin", None, now, now))
             conn.commit()
             cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
             user = dict(cursor.fetchone())
@@ -388,8 +376,7 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
     if is_phone and admin_phones:
         phone_list = getattr(admin_phones, "phones", [])
         if user.get("phone", "") in phone_list:
-            qb_token = getattr(settings, "qb_token", "")
-            if qb_token and request.password == qb_token:
+            if _verify_qb_token(request.password):
                 # 确保 role 为 platform_admin
                 if user.get("role") != "platform_admin":
                     UserDB.update(user["user_id"], role="platform_admin")
@@ -430,7 +417,7 @@ async def admin_password_login(request: AdminPasswordLoginRequest):
         target_tenant_id = user.get("tenant_id")
 
     # 7. 生成 token
-    token = f"saas_{secrets.token_urlsafe(32)}"
+    token = secrets.token_urlsafe(32)
     expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:
@@ -504,7 +491,7 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
         return AdminLoginResponse(success=False, message="该 IM 用户不是管理员")
 
     # 5. 生成 token
-    token = f"saas_{secrets.token_urlsafe(32)}"
+    token = secrets.token_urlsafe(32)
     expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:

@@ -240,9 +240,14 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+cors_origins = settings.cors.allowed_origins
+# 支持环境变量覆盖：CORS_ORIGINS=http://a.com,http://b.com
+_env_origins = os.getenv("CORS_ORIGINS")
+if _env_origins:
+    cors_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

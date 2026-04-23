@@ -85,35 +85,17 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         平台管理员 (role=platform_admin) 可通过 X-Tenant-Id Header 指定目标租户
         租户管理员 (role=tenant_admin) 返回其 tenant_id
         """
-        from datetime import datetime
-
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return None
 
         token = auth_header[7:]
 
-        # 查询 tokens 表获取 user_id
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT user_id, expires_at FROM tokens WHERE token = %s
-            """, (token,))
-            row = cursor.fetchone()
-
-            if not row:
-                return None
-
-            # 检查过期（PostgreSQL 返回 datetime 对象，SQLite 返回字符串）
-            expires_at = row["expires_at"]
-            if isinstance(expires_at, str):
-                expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
-            if datetime.now() > expires_at:
-                cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
-                conn.commit()
-                return None
-
-            user_id = row["user_id"]
+        # 复用统一的 token 验证服务
+        from src.api.auth import verify_token
+        user_id = verify_token(token)
+        if not user_id:
+            return None
 
         # 查询用户信息获取 role 和 tenant_id
         with get_db_connection() as conn:

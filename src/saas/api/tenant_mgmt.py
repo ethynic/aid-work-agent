@@ -136,8 +136,8 @@ async def get_tenant_stats(request: Request):
 
 
 @router.get("/list")
-async def list_tenants(request: Request):
-    """获取租户列表（仅平台管理员）"""
+async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
+    """获取租户列表（仅平台管理员，分页）"""
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
@@ -147,9 +147,8 @@ async def list_tenants(request: Request):
     if admin.get("role") != "platform_admin":
         return {"success": False, "message": "权限不足"}
 
-    # 获取所有租户（使用较大的 limit）
-    tenants = TenantDB.list_tenants(limit=1000)
-    return {"success": True, "tenants": tenants}
+    result = TenantDB.list_tenants(page=page, page_size=page_size)
+    return {"success": True, **result}
 
 
 # ============== 平台管理员 - 租户 CRUD ==============
