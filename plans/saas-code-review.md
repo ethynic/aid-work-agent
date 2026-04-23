@@ -328,7 +328,7 @@ localStorage.setItem('saas_admin', JSON.stringify(adminInfo)) // 包含手机号
 
 ---
 
-### 19. TenantLogin.vue 缺少密码强度前端校验
+### 19. 【已修复】TenantLogin.vue 缺少密码强度前端校验
 
 **文件**: `frontend/src/components/saas\TenantLogin.vue`
 
@@ -340,7 +340,7 @@ localStorage.setItem('saas_admin', JSON.stringify(adminInfo)) // 包含手机号
 
 ## 五、代码质量问题
 
-### 20. SQL 拼接占位符模式冗余
+### 20. 【已修复】SQL 拼接占位符模式冗余
 
 **文件**: `src/api/auth.py:269-272`，多处
 
@@ -355,7 +355,7 @@ cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifie
 
 ---
 
-### 21. 重复 import 语句
+### 21. 【已修复】重复 import 语句
 
 **文件**: `src/saas/api/tenant_auth.py` 中 `import secrets`, `from datetime import datetime, timedelta` 在文件顶部和函数内部多处重复 import。
 

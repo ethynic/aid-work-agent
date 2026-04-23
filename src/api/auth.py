@@ -297,10 +297,9 @@ async def login(request: Request, body: LoginRequest):
         is_phone = True
     else:
         # 按用户名查找
-        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifier,))
+            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
             row = cursor.fetchone()
             if row:
                 user = dict(row)
@@ -331,15 +330,14 @@ async def login(request: Request, body: LoginRequest):
     if is_platform_admin and not user:
         # 平台管理员但用户不存在，自动创建用户（role='platform_admin'）
         logger.info(f"后端日志：平台管理员用户不存在，自动创建，phone={identifier}")
-        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             # 生成唯一user_id
             user_id = str(uuid.uuid4())
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(f"""
+            cursor.execute("""
                 INSERT INTO users (user_id, username, phone, role, tenant_id, created_at, updated_at)
-                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (user_id, identifier, identifier, "platform_admin", None, now, now))
             conn.commit()
 
@@ -684,10 +682,9 @@ async def reset_password(request: ResetPasswordRequest):
 
     # 更新密码
     new_password_hash = hash_password(request.new_password)
-    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(f"UPDATE users SET password_hash = {placeholder}, updated_at = CURRENT_TIMESTAMP WHERE user_id = {placeholder}",
+        cursor.execute("UPDATE users SET password_hash = %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
                       (new_password_hash, user["user_id"]))
         conn.commit()
 

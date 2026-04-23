@@ -14,6 +14,8 @@ SaaS 管理员认证 API
 from typing import Optional
 
 import uuid
+import secrets
+from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -320,10 +322,9 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
         is_phone = True
     else:
         # 按用户名查找
-        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"SELECT * FROM users WHERE username = {placeholder}", (identifier,))
+            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
             row = cursor.fetchone()
             if row:
                 user = dict(row)
@@ -340,14 +341,13 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
     if is_platform_admin and not user:
         # 平台管理员但用户不存在，自动创建用户（role='platform_admin'）
         logger.info(f"平台管理员用户不存在，自动创建，phone={identifier}")
-        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             user_id = str(uuid.uuid4())
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(f"""
+            cursor.execute("""
                 INSERT INTO users (user_id, username, phone, role, tenant_id, created_at, updated_at)
-                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (user_id, identifier, identifier, "platform_admin", None, now, now))
             conn.commit()
             cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))

@@ -266,6 +266,12 @@ async function handleResetPassword() {
     errorMessage.value = '两次输入的密码不一致'
     return
   }
+  // 前端密码规则校验
+  const passwordRule = /^(?=.*[A-Za-z])(?=.*\d).{8,50}$/
+  if (!passwordRule.test(newPassword.value)) {
+    errorMessage.value = `密码不符合规则：${passwordMsg.value}`
+    return
+  }
 
   isLoading.value = true
   errorMessage.value = ''
