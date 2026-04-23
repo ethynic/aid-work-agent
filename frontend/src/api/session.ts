@@ -2,9 +2,24 @@
  * 会话管理 API
  */
 
-import { getAuthHeader } from './auth'
+import { getAuthHeader as getNormalAuthHeader } from './auth'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/sessions`
+
+// 根据路由获取正确的认证头
+function getAuthHeader(): Record<string, string> {
+  const path = window.location.pathname
+  // 租户/平台路由使用 saas_token 或 portal_token
+  if (path.startsWith('/t/')) {
+    const saasToken = localStorage.getItem('saas_token')
+    if (saasToken) return { 'Authorization': `Bearer ${saasToken}` }
+  } else if (path.startsWith('/portal')) {
+    const portalToken = localStorage.getItem('portal_token')
+    if (portalToken) return { 'Authorization': `Bearer ${portalToken}` }
+  }
+  // 普通路由使用 demo_token
+  return getNormalAuthHeader()
+}
 
 export interface ChatSession {
   session_id: string

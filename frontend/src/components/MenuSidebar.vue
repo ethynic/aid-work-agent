@@ -461,15 +461,28 @@ function formatTime(isoString: string): string {
 
 // 新建会话
 async function handleNewSession() {
-  if (isCreating.value) return
+  // 根据模式选择正确的登录状态检查
+  // 租户模式使用 tenantAdmin.value，普通模式使用 isLoggedIn.value
+  const effectiveIsLoggedIn = isTenantMode.value ? !!tenantAdmin.value : isLoggedIn.value
+  if (!effectiveIsLoggedIn) {
+    return
+  }
+
+  if (isCreating.value) {
+    return
+  }
 
   isCreating.value = true
   try {
     const newSession = await createNewSession(undefined, currentSubagent.value)
     if (newSession) {
       selectSession(newSession.session_id)
-      // 导航到对应路由
-      const targetPath = currentSubagent.value ? `/chat/${currentSubagent.value}` : '/'
+      // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
+      const targetPath = currentSubagent.value
+        ? `/chat/${currentSubagent.value}`
+        : isTenantMode.value
+          ? `/t/${tenantId.value}/chat`
+          : '/'
       if (route.path !== targetPath) {
         router.push(targetPath)
       }
@@ -482,10 +495,14 @@ async function handleNewSession() {
 // 选择会话
 function handleSelectSession(sessionId: string) {
   selectSession(sessionId)
-  // 根据会话的 subagent 标记导航到对应路由
+  // 根据会话的 subagent 标记导航到对应路由（租户模式使用 /t/:tenant_id/chat）
   const session = sessions.value.find(s => s.session_id === sessionId)
   const subagent = session?.context_data?.subagent as string | undefined
-  const targetPath = subagent ? `/chat/${subagent}` : '/'
+  const targetPath = subagent
+    ? `/chat/${subagent}`
+    : isTenantMode.value
+      ? `/t/${tenantId.value}/chat`
+      : '/'
   if (route.path !== targetPath) {
     router.push(targetPath)
   }

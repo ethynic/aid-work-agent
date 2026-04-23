@@ -2,8 +2,9 @@
   <div class="h-screen flex flex-col bg-gray-50">
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
-      <!-- Session Sidebar -->
+      <!-- Session Sidebar - 仅在非 PortalLayout 模式下显示（避免重复） -->
       <MenuSidebar
+        v-if="!isInPortalLayout"
         :is-collapsed="isSidebarCollapsed"
         @collapse="isSidebarCollapsed = true"
       />
@@ -16,8 +17,8 @@
           <AppHeader
             :title="pageTitle"
             :is-online="isOnline"
-            :is-logged-in="isLoggedIn"
-            :user="user"
+            :is-logged-in="effectiveIsLoggedIn"
+            :user="effectiveUser"
             @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
             @logout="handleLogout"
           >
@@ -138,6 +139,7 @@ import SettingsDialog from './SettingsDialog.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 import { useAgent } from '@/composables/useAgent'
 import { useAuth } from '@/composables/useAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
@@ -158,6 +160,7 @@ const {
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initTenantAuth } = useTenantAuth()
 const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 
@@ -165,6 +168,37 @@ const route = useRoute()
 const subagentName = computed<string | null>(() =>
   route.name === 'chat-subagent' ? (route.params.subagent as string) : null
 )
+
+// 判断是否为租户模式
+const isTenantMode = computed(() => route.path.startsWith('/t/'))
+
+// 判断是否在 PortalLayout 内（此时 MenuSidebar 由 PortalLayout 渲染）
+const isInPortalLayout = computed(() => route.path.startsWith('/t/') || route.path.startsWith('/portal/'))
+
+// 统一的登录状态检查
+const effectiveIsLoggedIn = computed(() => {
+  return isTenantMode.value ? tenantIsLoggedIn.value : isLoggedIn.value
+})
+
+// 租户模式下使用租户用户信息，否则使用普通用户信息
+const effectiveUser = computed(() => {
+  if (isTenantMode.value) {
+    return tenantAdmin.value ? {
+      user_id: tenantAdmin.value.user_id,
+      username: tenantAdmin.value.username,
+      phone: tenantAdmin.value.phone
+    } : null
+  }
+  return user.value
+})
+
+const effectiveLogout = async () => {
+  if (isTenantMode.value) {
+    await doLogout()
+  } else {
+    await doLogout()
+  }
+}
 
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
@@ -190,7 +224,8 @@ const pageTitle = computed(() => {
 // 跳转到客户信息页面
 function openCustomerInfo() {
   // 使用 user_id 和 currentSessionId 构建 URL
-  const userId = user.value?.user_id
+  const currentUser = effectiveUser.value
+  const userId = currentUser?.user_id
   const sessionId = currentSessionId.value
   if (userId) {
     const params = new URLSearchParams()
@@ -215,11 +250,11 @@ function openScheduledTasks() {
 let heartbeatInterval: number | null = null
 
 onMounted(async () => {
-  // 初始化认证状态
-  await initAuth()
+  // 初始化认证状态（租户模式和普通模式都需要初始化）
+  await Promise.all([initAuth(), initTenantAuth()])
 
   // 检查登录状态
-  if (!isLoggedIn.value) {
+  if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
   } else {
     // 已登录，加载会话列表
@@ -244,7 +279,7 @@ onUnmounted(() => {
 })
 
 async function handleSend(content: string) {
-  if (!isLoggedIn.value) {
+  if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
   }
@@ -290,7 +325,7 @@ function handleRemoveFile(file_id: string) {
 }
 
 async function handleNewSession() {
-  if (!isLoggedIn.value) {
+  if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
   }
@@ -326,7 +361,7 @@ function handleLoginSuccess() {
 }
 
 // 监听登录状态变化
-watch(isLoggedIn, async (loggedIn) => {
+watch(effectiveIsLoggedIn, async (loggedIn) => {
   if (!loggedIn) {
     showLoginModal.value = true
   } else {

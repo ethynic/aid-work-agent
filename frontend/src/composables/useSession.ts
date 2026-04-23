@@ -19,10 +19,24 @@ import {
   type TokenUsage
 } from '@/api/session'
 import { useAuth } from './useAuth'
+import { useTenantAuth } from './useTenantAuth'
 
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
 const isLoading = ref(false)
+
+// 检查是否已登录（考虑租户模式）
+function checkIsLoggedIn(): boolean {
+  const { isLoggedIn: normalLoggedIn } = useAuth()
+  const { isLoggedIn: tenantLoggedIn, saasToken } = useTenantAuth()
+
+  // 租户模式：检查 saas_token
+  if (window.location.pathname.startsWith('/t/')) {
+    return tenantLoggedIn.value
+  }
+  // 普通模式：检查 demo_token
+  return normalLoggedIn.value
+}
 
 export function useSession() {
   const { isLoggedIn } = useAuth()
@@ -31,7 +45,7 @@ export function useSession() {
    * 加载会话列表
    */
   async function loadSessions() {
-    if (!isLoggedIn.value) return
+    if (!checkIsLoggedIn()) return
 
     isLoading.value = true
     try {
@@ -52,7 +66,7 @@ export function useSession() {
    * 创建新会话
    */
   async function createNewSession(title?: string, subagent?: string | null): Promise<ChatSession | null> {
-    if (!isLoggedIn.value) return null
+    if (!checkIsLoggedIn()) return null
 
     try {
       const newSession = await createSession({

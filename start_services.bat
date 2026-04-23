@@ -15,7 +15,7 @@ setlocal enabledelayedexpansion
 
 echo Step 2/4: Stop frontend service (if running)
 echo ----------------------------------------
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5173"') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":15173"') do (
     taskkill /F /PID %%a >nul 2>&1
     if !errorlevel! equ 0 (
         echo [OK] Frontend service stopped (PID: %%a)
@@ -61,9 +61,9 @@ if not exist "node_modules" (
 echo [OK] Starting frontend dev server...
 start "AID Frontend" cmd /k "npm run dev"
 timeout /t 3 /nobreak >nul
-start http://localhost:5173/portal
+start http://localhost:15173/portal
 cd /d "%~dp0"
-echo [OK] Frontend starting at http://localhost:5173
+echo [OK] Frontend starting at http://localhost:15173
 echo.
 
 endlocal
