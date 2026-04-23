@@ -248,6 +248,19 @@
       <ThemeSwitcher />
     </div>
 
+    <!-- 退出登录 - 租户模式专用 -->
+    <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
+      <button
+        @click="handleTenantLogout"
+        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+        <span>退出登录</span>
+      </button>
+    </div>
+
     <!-- Rename Modal -->
     <div
       v-if="showRenameModal"
@@ -309,7 +322,7 @@ defineEmits<{
 const router = useRouter()
 const route = useRoute()
 const { isLoggedIn, isAdmin } = useDemoAuth()
-const { admin: tenantAdmin, tenant } = useTenantAuth()
+const { admin: tenantAdmin, tenant, logout: tenantLogout } = useTenantAuth()
 const {
   sessions,
   currentSessionId,
@@ -529,6 +542,16 @@ async function confirmRename() {
     showRenameModal.value = false
     renamingSessionId.value = null
     renameInput.value = ''
+  }
+}
+
+// 租户模式退出登录
+async function handleTenantLogout() {
+  await tenantLogout()
+  if (tenantId.value) {
+    router.push(`/t/${tenantId.value}/login`)
+  } else {
+    router.push('/')
   }
 }
 </script>

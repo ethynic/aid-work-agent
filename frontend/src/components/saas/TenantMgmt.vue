@@ -16,9 +16,7 @@
           <tr>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户ID</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">企业名称</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">联系人</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">联系电话</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">套餐</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">初始管理员手机号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户入口网址</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
@@ -28,9 +26,7 @@
           <tr v-for="tenant in tenants" :key="tenant.tenant_id" class="hover:bg-slate-50">
             <td class="px-4 py-3 text-sm text-slate-800 font-mono">{{ tenant.tenant_id }}</td>
             <td class="px-4 py-3 text-sm text-slate-800">{{ tenant.company_name }}</td>
-            <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.contact_name || '-' }}</td>
-            <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.contact_phone || '-' }}</td>
-            <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.plan }}</td>
+            <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.initial_admin_phone || '-' }}</td>
             <td class="px-4 py-3">
               <span
                 :class="getStatusClass(tenant.status)"
@@ -40,10 +36,19 @@
               </span>
             </td>
             <td class="px-4 py-3">
-              <a :href="getTenantUrl(tenant.tenant_id)" target="_blank"
-                class="text-cyan-600 hover:text-cyan-800 hover:underline text-sm">
-                {{ getTenantUrl(tenant.tenant_id) }}
-              </a>
+              <div class="flex items-center gap-2">
+                <a :href="getTenantUrl(tenant.tenant_id)" target="_blank"
+                  class="text-cyan-600 hover:text-cyan-800 hover:underline text-sm">
+                  {{ getTenantUrl(tenant.tenant_id) }}
+                </a>
+                <button @click="copyTenantUrl(tenant.tenant_id)"
+                  class="p-1 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded transition-colors"
+                  title="复制网址">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </button>
+              </div>
             </td>
             <td class="px-4 py-3">
               <div class="flex gap-2">
@@ -332,6 +337,23 @@ function getStatusClass(status: number | string | undefined): string {
 
 function getTenantUrl(tenantId: string): string {
   return `${window.location.origin}/t/${tenantId}`
+}
+
+async function copyTenantUrl(tenantId: string) {
+  const url = getTenantUrl(tenantId)
+  try {
+    await navigator.clipboard.writeText(url)
+    toast.success('网址已复制到剪贴板')
+  } catch (e) {
+    // 降级方案：使用 document.execCommand
+    const textarea = document.createElement('textarea')
+    textarea.value = url
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    toast.success('网址已复制到剪贴板')
+  }
 }
 
 onMounted(() => {
