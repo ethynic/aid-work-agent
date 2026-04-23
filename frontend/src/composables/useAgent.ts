@@ -1,10 +1,19 @@
 import { ref, onUnmounted } from 'vue'
 import type { ChatMessage, ProgressMessage } from '@/types'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
-import { useAuth } from './useAuth'
+import { useDemoAuth } from './useDemoAuth'
+import { useTenantAuth } from './useTenantAuth'
 
 export function useAgent() {
-  const { getAuthHeader } = useAuth()
+  // 根据路由判断使用 demo 还是 tenant 认证头
+  function getEffectiveAuthHeader(): Record<string, string> {
+    if (window.location.pathname.startsWith('/t/')) {
+      const { getAuthHeader } = useTenantAuth()
+      return getAuthHeader()
+    }
+    const { getAuthHeader } = useDemoAuth()
+    return getAuthHeader()
+  }
   const messages = ref<ChatMessage[]>([])
   const progressMessages = ref<ProgressMessage[]>([])
   const isProcessing = ref(false)
@@ -125,7 +134,7 @@ export function useAgent() {
         content,
         sessionId.value,
         currentFiles.value.length > 0 ? [...currentFiles.value] : undefined,
-        getAuthHeader(), // 传递认证头
+        getEffectiveAuthHeader(), // 传递认证头
         // onProgress - 工具执行进度，仅添加到执行详情
         (data) => {
           addProgress(data, 'progress')

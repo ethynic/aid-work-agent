@@ -183,7 +183,11 @@ async function handleLogin() {
     if (res.success && res.token && res.user) {
       // 平台管理员的 tenant 可能为 null
       const tenantInfo = res.tenant ? { ...res.tenant, status: Number(res.tenant.status) } : null
-      setLogin(res.token, res.user, tenantInfo)
+      if (tenantInfo) {
+        setLogin(res.token, res.user, tenantInfo)
+      } else {
+        setLogin(res.token, res.user, { tenant_id: '', company_name: '', plan: 'free', status: 1 })
+      }
       // 根据当前路由决定跳转
       if (isPortalRoute.value) {
         router.push('/portal')

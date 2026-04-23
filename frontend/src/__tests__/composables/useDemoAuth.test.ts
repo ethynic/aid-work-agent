@@ -1,5 +1,5 @@
 /**
- * useAuth composable 测试
+ * useDemoAuth composable 测试
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -12,7 +12,7 @@ vi.mock('@/api/auth', () => ({
   logout: vi.fn(),
 }))
 
-describe('useAuth', () => {
+describe('useDemoAuth', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.clearAllMocks()

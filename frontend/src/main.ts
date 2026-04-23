@@ -5,7 +5,8 @@ import 'vue-toastification/dist/index.css'
 import App from './App.vue'
 import './style.css'
 import { useTheme } from './composables/useTheme'
-import { useAuth } from './composables/useAuth'
+import { useDemoAuth } from './composables/useDemoAuth'
+import { useTenantAuth } from './composables/useTenantAuth'
 
 // 客户信息页面
 import CustomerInfo from './components/CustomerInfo.vue'
@@ -98,9 +99,17 @@ const router = createRouter({
 
 // 全局路由守卫：确保 auth 状态在任何页面刷新时都能初始化
 router.beforeEach(async () => {
-  const { init, isInitialized } = useAuth()
-  if (!isInitialized.value) {
-    await init()
+  const path = window.location.pathname
+  if (path.startsWith('/t/') || path.startsWith('/portal')) {
+    const { init, isInitialized } = useTenantAuth()
+    if (!isInitialized.value) {
+      await init()
+    }
+  } else {
+    const { init, isInitialized } = useDemoAuth()
+    if (!isInitialized.value) {
+      await init()
+    }
   }
 })
 

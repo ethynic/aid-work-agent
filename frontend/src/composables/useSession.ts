@@ -18,7 +18,7 @@ import {
   type ChatRecord,
   type TokenUsage
 } from '@/api/session'
-import { useAuth } from './useAuth'
+import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 
 const sessions = ref<ChatSession[]>([])
@@ -27,8 +27,8 @@ const isLoading = ref(false)
 
 // 检查是否已登录（考虑租户模式）
 function checkIsLoggedIn(): boolean {
-  const { isLoggedIn: normalLoggedIn } = useAuth()
-  const { isLoggedIn: tenantLoggedIn, saasToken } = useTenantAuth()
+  const { isLoggedIn: normalLoggedIn } = useDemoAuth()
+  const { isLoggedIn: tenantLoggedIn, saasToken: _saasToken } = useTenantAuth()
 
   // 租户模式：检查 saas_token
   if (window.location.pathname.startsWith('/t/')) {
@@ -39,7 +39,6 @@ function checkIsLoggedIn(): boolean {
 }
 
 export function useSession() {
-  const { isLoggedIn } = useAuth()
 
   /**
    * 加载会话列表
@@ -160,7 +159,7 @@ export function useSession() {
    * 加载并自动选择最近会话
    */
   async function loadLatestSession(): Promise<boolean> {
-    if (!isLoggedIn.value) return false
+    if (!checkIsLoggedIn()) return false
 
     try {
       const result = await getLatestSession()

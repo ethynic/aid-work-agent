@@ -286,7 +286,7 @@
 import { ref, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 
@@ -308,7 +308,7 @@ defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { isLoggedIn, isAdmin } = useAuth()
+const { isLoggedIn, isAdmin } = useDemoAuth()
 const { admin: tenantAdmin, tenant } = useTenantAuth()
 const {
   sessions,

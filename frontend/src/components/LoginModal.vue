@@ -107,7 +107,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 // import { phoneLogin, phoneCodeLogin, sendSmsCode, getWxQrcode, checkWxQrcodeStatus, wxLogin } from '@/api/auth'
 import { phoneLogin, phoneCodeLogin, sendSmsCode } from '@/api/auth'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
 
 const props = defineProps<{
   visible: boolean
@@ -118,7 +118,7 @@ const emit = defineEmits<{
   success: []
 }>()
 
-const { setLogin } = useAuth()
+const { setLogin } = useDemoAuth()
 
 const tabs = [
   { key: 'code', label: '验证码登录' },

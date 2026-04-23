@@ -1,5 +1,6 @@
 /**
- * 认证状态管理
+ * 演示模式认证状态管理
+ * 用于 / 路由下的演示用户身份验证，使用 demo_token
  */
 
 import { ref, computed } from 'vue'
@@ -18,7 +19,7 @@ const token = ref<string | null>(null)
 const isLoading = ref(false)
 const isInitialized = ref(false)
 
-export function useAuth() {
+export function useDemoAuth() {
   const isLoggedIn = computed(() => !!token.value && !!user.value)
   const isAdmin = computed(() => !!user.value?.is_admin)
 
@@ -35,7 +36,7 @@ export function useAuth() {
 
       if (savedToken && savedUser) {
         token.value = savedToken
-        
+
         // 验证 token 是否有效
         const userInfo = await getCurrentUser()
         if (userInfo) {
@@ -48,7 +49,7 @@ export function useAuth() {
         }
       }
     } catch (e) {
-      console.error('Auth init error:', e)
+      console.error('DemoAuth init error:', e)
     } finally {
       isLoading.value = false
       isInitialized.value = true
@@ -80,7 +81,7 @@ export function useAuth() {
     try {
       await apiLogout()
     } catch (e) {
-      console.error('Logout error:', e)
+      console.error('DemoAuth logout error:', e)
     } finally {
       token.value = null
       user.value = null

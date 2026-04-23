@@ -15,8 +15,8 @@
         <AppHeader
           title="企业知识库"
           :is-online="isOnline"
-          :is-logged-in="isLoggedIn"
-          :user="user"
+          :is-logged-in="effectiveIsLoggedIn"
+          :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
           @logout="handleLogout"
         >
@@ -455,11 +455,32 @@ import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem } from '@/api/knowledge'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { user, isLoggedIn, logout } = useAuth()
+const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+
+const isTenantMode = computed(() => route.path.startsWith('/t/'))
+
+// 统一的登录状态检查
+const effectiveIsLoggedIn = computed(() => {
+  return isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
+})
+
+// 统一的用户信息
+const effectiveUser = computed(() => {
+  if (isTenantMode.value) {
+    return tenantAdmin.value ? {
+      user_id: tenantAdmin.value.user_id,
+      username: tenantAdmin.value.username,
+      phone: tenantAdmin.value.phone
+    } : null
+  }
+  return demoUser.value
+})
 const toast = useToast()
 
 const documents = ref<DocumentResponse[]>([])
@@ -745,7 +766,7 @@ function goToChat() {
 }
 
 function openCustomerInfo() {
-  const userId = user.value?.user_id
+  const userId = effectiveUser.value?.user_id
   if (userId) {
     window.open(`/customer-info?user_id=${userId}`, '_blank')
   } else {
@@ -758,8 +779,12 @@ function openScheduledTasks() {
 }
 
 async function handleLogout() {
-  await logout()
-  router.push('/')
+  if (isTenantMode.value) {
+    await tenantLogout()
+  } else {
+    await demoLogout()
+  }
+  router.push(isTenantMode.value ? route.path.replace(/\/knowledge.*/, '') : '/')
 }
 
 onMounted(() => {

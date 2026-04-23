@@ -215,7 +215,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, watch, h } from 'vue'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useToast } from 'vue-toastification'
 import {
   getEmailSettings as apiGetEmailSettings,
@@ -249,7 +249,7 @@ defineEmits<{
   (e: 'close'): void
 }>()
 
-const { user, setLogin } = useAuth()
+const { user, setLogin } = useDemoAuth()
 const toast = useToast()
 
 const tabs = [

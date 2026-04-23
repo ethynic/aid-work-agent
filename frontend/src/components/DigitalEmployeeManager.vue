@@ -25,8 +25,8 @@
         <AppHeader
           title="数字员工"
           :is-online="true"
-          :is-logged-in="isLoggedIn"
-          :user="user"
+          :is-logged-in="effectiveIsLoggedIn"
+          :user="demoUser"
         >
           <template #menu-items="{ closeMenu }">
             <button
@@ -322,7 +322,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
 import AppHeader from './AppHeader.vue'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import {
   listSubagents,
   getSubagentDetail,
@@ -337,7 +338,10 @@ import {
   type SubagentDetail,
 } from '../api/adminSubagent'
 
-const { user, isLoggedIn } = useAuth()
+const { user: demoUser, isLoggedIn: demoIsLoggedIn } = useDemoAuth()
+const { admin: _tenantAdmin, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
+const isTenantMode = computed(() => window.location.pathname.startsWith('/t/'))
+const effectiveIsLoggedIn = computed(() => isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value)
 
 // State
 const allList = ref<SubagentListItem[]>([])

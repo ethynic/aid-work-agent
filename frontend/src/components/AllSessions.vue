@@ -14,8 +14,8 @@
         <AppHeader
           title="全部历史会话"
           :is-online="isOnline"
-          :is-logged-in="isLoggedIn"
-          :user="user"
+          :is-logged-in="effectiveIsLoggedIn"
+          :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
           @logout="handleLogout"
         />
@@ -141,16 +141,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAgent } from '@/composables/useAgent'
 
 const router = useRouter()
-const { user, isLoggedIn, logout } = useAuth()
+const route = useRoute()
+const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+
+const isTenantMode = computed(() => route.path.startsWith('/t/'))
+
+// 统一的登录状态检查
+const effectiveIsLoggedIn = computed(() => {
+  return isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
+})
+
+// 统一的用户信息
+const effectiveUser = computed(() => {
+  if (isTenantMode.value) {
+    return tenantAdmin.value ? {
+      user_id: tenantAdmin.value.user_id,
+      username: tenantAdmin.value.username,
+      phone: tenantAdmin.value.phone
+    } : null
+  }
+  return demoUser.value
+})
 const {
   sessions,
   currentSessionId,
@@ -226,8 +248,12 @@ function goToChat() {
 
 // 登出
 async function handleLogout() {
-  await logout()
-  router.push('/')
+  if (isTenantMode.value) {
+    await tenantLogout()
+  } else {
+    await demoLogout()
+  }
+  router.push(isTenantMode.value ? route.path.replace(/\/chat.*/, '') : '/')
 }
 
 onMounted(async () => {

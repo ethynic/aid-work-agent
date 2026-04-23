@@ -138,7 +138,7 @@ import CredentialManager from './CredentialManager.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 import { useAgent } from '@/composables/useAgent'
-import { useAuth } from '@/composables/useAuth'
+import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
@@ -159,7 +159,7 @@ const {
   sessionId: agentSessionId
 } = useAgent()
 
-const { user, isLoggedIn, init: initAuth, logout: doLogout } = useAuth()
+const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initTenantAuth } = useTenantAuth()
 const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
@@ -191,14 +191,6 @@ const effectiveUser = computed(() => {
   }
   return user.value
 })
-
-const effectiveLogout = async () => {
-  if (isTenantMode.value) {
-    await doLogout()
-  } else {
-    await doLogout()
-  }
-}
 
 const isOnline = ref(true)
 const isSidebarCollapsed = ref(false)
