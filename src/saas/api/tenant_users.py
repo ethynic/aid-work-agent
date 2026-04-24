@@ -51,11 +51,12 @@ async def list_users(request: Request, page: int = 1, page_size: int = 20):
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    # 平台管理员可查看所有租户的用户
-    if admin.get("role") == "platform_admin":
-        result = UserDB.list_users(page=page, page_size=page_size)
+    # 平台管理员带 X-Tenant-Id header 访问租户前台时，进行租户隔离
+    if admin.get("tenant_id"):
+        result = UserDB.list_users(page=page, page_size=page_size, tenant_id=admin["tenant_id"])
     else:
-        result = UserDB.list_by_tenant(admin["tenant_id"], page=page, page_size=page_size)
+        # 平台管理员在平台后台查看所有租户的用户
+        result = UserDB.list_users(page=page, page_size=page_size)
     return {"success": True, **result}
 
 
