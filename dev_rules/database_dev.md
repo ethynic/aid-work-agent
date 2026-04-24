@@ -21,7 +21,7 @@
 
 ### 2. 业务数据表（Business Data Tables）
 
-业务数据表是子智能体产生的业务数据，表名以 `bs_` 开头。
+业务数据表是子智能体产生的业务数据，表名以 `bs_` 开头。例如外贸智能体产生的客户数据、email数据。
 
 **命名规则**：
 ```
@@ -37,7 +37,7 @@ bs_[subagent]_[tablename]
 | trade-specialist | bs_trade_specialist_matched_customers | bs_trade_specialist_matched_customers |
 | trade-specialist | customer_emails | bs_trade_specialist_customer_emails |
 
-## 租户隔离要求
+#### 租户隔离要求
 
 所有业务数据表（`bs_` 开头）**建议**包含 `tenant_id` 字段，实现租户数据隔离。当 SAAS 模式禁用时，该字段允许为 NULL。
 
@@ -77,7 +77,7 @@ def init_tables():
     """)
 ```
 
-## 命名检查清单
+## 业务数据表规则
 
 新增业务数据表时，请确认以下事项：
 
@@ -92,3 +92,10 @@ def init_tables():
 开发过程中，涉及到加表、加字段、改字段等操作，需要修改如下文件：
 - `deploy/init-postgres.sql` 数据库初始化脚本，用于新环境的部署。
 - `deploy/db_update.sql` 数据库修改脚本，用于在已有的环境中进行数据库升级。注释应包含变更日期及简单说明。
+
+## 避免使用
+
+开发过程中，请避免使用如下内容：
+- 触发器
+- 外键约束。应在python代码中实现约束逻辑，而不是在数据库中实现。
+- 非必要的字段 NOT NULL 约束。尽量在python代码中实现非空检查，而不是在数据库中实现。当然，主键除外。
