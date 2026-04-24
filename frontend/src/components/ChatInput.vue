@@ -27,12 +27,12 @@
       </div>
 
       <!-- Text Input -->
-      <div class="flex items-end gap-3">
+      <div class="flex items-start gap-3">
         <!-- 上传按钮 -->
         <button
           @click="triggerFileInput"
           :disabled="disabled || isProcessing"
-          class="flex-shrink-0 p-3 rounded-xl bg-gray-100 border border-gray-200 text-gray-500 hover:text-primary-500 hover:border-primary-300 transition-all disabled:opacity-50"
+          class="flex-shrink-0 box-border h-[46px] px-3.5 rounded-xl bg-gray-100 border border-gray-200 text-gray-500 hover:text-primary-500 hover:border-primary-300 transition-all disabled:opacity-50 flex items-center justify-center"
           title="添加附件"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -55,17 +55,18 @@
             v-model="inputText"
             @keydown.enter.exact.prevent="handleSend"
             @keydown.shift.enter="newLine"
+            @input="autoResize"
             :disabled="disabled"
             placeholder="输入您的问题或任务，按Enter发送..."
             rows="1"
-            class="w-full px-4 py-3 bg-white border border-gray-300 rounded-xl text-gray-800 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 transition-all disabled:opacity-50"
-            :class="[isProcessing ? 'pr-20' : '']"
+            class="box-border w-full min-h-[46px] max-h-[120px] px-4 py-2 bg-white border border-gray-300 rounded-xl text-gray-800 placeholder-gray-400 resize-none outline-none focus:border-primary-500 disabled:opacity-50 overflow-y-auto"
+            :class="[isProcessing ? 'pr-12' : 'pr-4']"
           ></textarea>
 
           <!-- Processing indicator -->
           <div
             v-if="isProcessing"
-            class="absolute right-3 bottom-3 flex items-center gap-2 text-primary-500"
+            class="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-primary-500 bg-white pl-2"
           >
             <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -80,7 +81,7 @@
           @click="handleSend"
           :disabled="!canSend || (!inputText.trim() && files.length === 0)"
           :class="[
-            'px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2',
+            'box-border h-[46px] px-5 rounded-xl font-medium transition-all flex items-center gap-2',
             canSend && (inputText.trim() || files.length > 0)
               ? 'bg-gradient-to-r from-primary-500 to-primary-700 text-white hover:from-primary-400 hover:to-primary-600 shadow-lg shadow-primary-500/25'
               : 'bg-gray-200 text-gray-400 cursor-not-allowed'
@@ -150,6 +151,15 @@ function handleSend() {
 function newLine() {
   // Allow default behavior for Shift+Enter
   // Auto-resize textarea is handled by CSS
+  setTimeout(autoResize, 0)
+}
+
+function autoResize() {
+  const textarea = inputRef.value
+  if (textarea) {
+    textarea.style.height = 'auto'
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
+  }
 }
 
 function triggerFileInput() {
