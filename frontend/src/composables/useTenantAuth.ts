@@ -84,7 +84,7 @@ export function useTenantAuth() {
         // 从 URL 路由中提取 tenant_id（平台管理员访问租户前台时需要）
         const path = window.location.pathname
         const routeMatch = path.match(/^\/t\/([^/]+)/)
-        const routeTenantId = routeMatch ? routeMatch[1] : null
+        const routeTenantId = routeMatch ? routeMatch[1] : undefined
 
         // 验证 token 有效性
         const info = await getAdminInfo(routeTenantId)
