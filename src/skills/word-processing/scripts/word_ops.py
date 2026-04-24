@@ -32,6 +32,9 @@ from word_lib import (
     document_to_dict,
     markdown_to_doc,
     _resolve_alignment,
+    _replace_text_cross_run,
+    get_template,
+    list_templates,
     PAGE_SIZES,
 )
 from docx import Document
@@ -67,6 +70,16 @@ def cmd_analyze(args):
 
 
 # =============================================================================
+# list-templates 子命令
+# =============================================================================
+
+def cmd_list_templates(args):
+    """列出所有可用模板"""
+    templates = list_templates()
+    _output({"success": True, "templates": templates})
+
+
+# =============================================================================
 # create-from-md 子命令
 # =============================================================================
 
@@ -97,13 +110,23 @@ def cmd_create_from_md(args):
     title = args.title or ""
     author = args.author or ""
 
-    doc = markdown_to_doc(md_text, title=title, author=author)
+    # 加载模板
+    template = None
+    if args.template:
+        try:
+            template = get_template(args.template)
+        except ValueError as e:
+            _error_exit(str(e))
+
+    doc = markdown_to_doc(md_text, title=title, author=author, template=template)
 
     # 保存到临时目录
     file_name = args.file_name or (f"{title}.docx" if title else "document.docx")
     result = FileHandler.save_temp(doc, file_name=file_name, output_dir=args.output_dir)
     result["success"] = True
     result["message"] = "从 Markdown 创建 Word 文档成功"
+    if args.template:
+        result["template"] = args.template
 
     _output(result)
 
@@ -177,38 +200,30 @@ def _execute_modify_op(doc: Document, op: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _op_replace_text(doc: Document, op: Dict[str, Any]) -> Dict[str, Any]:
-    """全局查找替换文本"""
+    """全局查找替换文本（支持跨 run 匹配）"""
     target = op.get("target", "")
     replacement = op.get("replacement", "")
     count = 0
 
+    # 正文段落
     for para in doc.paragraphs:
         if target in para.text:
-            for run in para.runs:
-                if target in run.text:
-                    run.text = run.text.replace(target, replacement)
-                    count += 1
+            count += _replace_text_cross_run(para.runs, target, replacement)
 
-    # 表格中替换
+    # 表格
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs:
                     if target in para.text:
-                        for run in para.runs:
-                            if target in run.text:
-                                run.text = run.text.replace(target, replacement)
-                                count += 1
+                        count += _replace_text_cross_run(para.runs, target, replacement)
 
-    # 页眉页脚中替换
+    # 页眉页脚
     for section in doc.sections:
         for hf in [section.header, section.footer]:
             for para in hf.paragraphs:
                 if target in para.text:
-                    for run in para.runs:
-                        if target in run.text:
-                            run.text = run.text.replace(target, replacement)
-                            count += 1
+                    count += _replace_text_cross_run(para.runs, target, replacement)
 
     return {"op": "replace_text", "success": True, "replacements": count,
             "detail": f"替换 '{target}' → '{replacement}'，共 {count} 处"}
@@ -747,6 +762,10 @@ def main():
     p_md.add_argument("--author", default=None, help="文档作者")
     p_md.add_argument("--file-name", default=None, help="输出文件名")
     p_md.add_argument("--output-dir", default=None, help="输出目录")
+    p_md.add_argument("--template", default=None, help="模板名称 (default, formal, modern, report)")
+
+    # list-templates
+    subparsers.add_parser("list-templates", help="列出可用的文档模板")
 
     args = parser.parse_args()
 
@@ -762,6 +781,8 @@ def main():
         cmd_format(args)
     elif args.command == "create-from-md":
         cmd_create_from_md(args)
+    elif args.command == "list-templates":
+        cmd_list_templates(args)
 
 
 if __name__ == "__main__":

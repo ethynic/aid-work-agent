@@ -1,0 +1,58 @@
+{
+  "name": "report",
+  "display_name": "报告格式",
+  "description": "结构化报告样式，SimSun正文，SimHei标题层级分明，适用于工作报告和分析报告",
+  "body": {
+    "font_name": "SimSun",
+    "east_asia_font": "SimSun",
+    "font_size": 12,
+    "alignment": "JUSTIFY",
+    "line_spacing": 1.5,
+    "first_line_indent": 0.74,
+    "space_before": 0,
+    "space_after": 3
+  },
+  "headings": {
+    "1": {
+      "font_name": "SimHei",
+      "east_asia_font": "SimHei",
+      "font_size": 18,
+      "alignment": "CENTER",
+      "color": "000000",
+      "space_before": 18,
+      "space_after": 12
+    },
+    "2": {
+      "font_name": "SimHei",
+      "east_asia_font": "SimHei",
+      "font_size": 15,
+      "alignment": "LEFT",
+      "color": "1F4E79",
+      "space_before": 12,
+      "space_after": 6
+    },
+    "3": {
+      "font_name": "SimHei",
+      "east_asia_font": "SimHei",
+      "font_size": 13,
+      "alignment": "LEFT",
+      "color": "2E75B6",
+      "space_before": 8,
+      "space_after": 4
+    }
+  },
+  "page": {
+    "size": "A4",
+    "orientation": "portrait",
+    "margins": {
+      "top": 2.54,
+      "bottom": 2.54,
+      "left": 3.17,
+      "right": 3.17
+    }
+  },
+  "table": {
+    "header_font_name": "SimHei",
+    "header_east_asia_font": "SimHei"
+  }
+}

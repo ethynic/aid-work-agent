@@ -1,0 +1,53 @@
+{
+  "name": "formal",
+  "display_name": "公文格式",
+  "description": "适用于正式公文，FangSong正文16pt两端对齐，SimHei标题，双倍行距，公文标准页边距",
+  "body": {
+    "font_name": "FangSong",
+    "east_asia_font": "FangSong",
+    "font_size": 16,
+    "alignment": "JUSTIFY",
+    "line_spacing": 2.0,
+    "first_line_indent": 0.74,
+    "space_before": 0,
+    "space_after": 0
+  },
+  "headings": {
+    "1": {
+      "font_name": "SimHei",
+      "east_asia_font": "SimHei",
+      "font_size": 22,
+      "alignment": "CENTER",
+      "line_spacing": 2.0,
+      "color": "000000"
+    },
+    "2": {
+      "font_name": "SimHei",
+      "east_asia_font": "SimHei",
+      "font_size": 16,
+      "alignment": "LEFT",
+      "color": "000000"
+    },
+    "3": {
+      "font_name": "SimHei",
+      "east_asia_font": "SimHei",
+      "font_size": 16,
+      "alignment": "LEFT",
+      "color": "000000"
+    }
+  },
+  "page": {
+    "size": "A4",
+    "orientation": "portrait",
+    "margins": {
+      "top": 3.7,
+      "bottom": 3.5,
+      "left": 2.8,
+      "right": 2.6
+    }
+  },
+  "table": {
+    "header_font_name": "SimHei",
+    "header_east_asia_font": "SimHei"
+  }
+}

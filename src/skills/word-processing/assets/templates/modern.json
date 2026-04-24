@@ -1,0 +1,54 @@
+{
+  "name": "modern",
+  "display_name": "现代商务",
+  "description": "微软雅黑正文，简洁间距，深蓝标题，适用于现代商务文档和演示材料",
+  "body": {
+    "font_name": "Microsoft YaHei",
+    "east_asia_font": "Microsoft YaHei",
+    "font_size": 11,
+    "alignment": "LEFT",
+    "line_spacing": 1.5,
+    "space_before": 0,
+    "space_after": 6
+  },
+  "headings": {
+    "1": {
+      "font_name": "Microsoft YaHei",
+      "east_asia_font": "Microsoft YaHei",
+      "font_size": 18,
+      "color": "1F4E79",
+      "space_before": 12,
+      "space_after": 6
+    },
+    "2": {
+      "font_name": "Microsoft YaHei",
+      "east_asia_font": "Microsoft YaHei",
+      "font_size": 14,
+      "color": "2E75B6",
+      "space_before": 10,
+      "space_after": 4
+    },
+    "3": {
+      "font_name": "Microsoft YaHei",
+      "east_asia_font": "Microsoft YaHei",
+      "font_size": 12,
+      "color": "2E75B6",
+      "space_before": 8,
+      "space_after": 4
+    }
+  },
+  "page": {
+    "size": "A4",
+    "orientation": "portrait",
+    "margins": {
+      "top": 2.54,
+      "bottom": 2.54,
+      "left": 3.17,
+      "right": 3.17
+    }
+  },
+  "table": {
+    "header_font_name": "Microsoft YaHei",
+    "header_east_asia_font": "Microsoft YaHei"
+  }
+}

@@ -2,7 +2,7 @@
 name: word-processing
 description: Word文档处理技能，用于分析.docx文档结构、创建全新Word文档、修改已有文档内容和调整文档格式排版。当用户上传.docx文件、要求创建Word文档、修改Word内容、调整文档格式/字体/排版、生成报告或合同模板时使用此技能。即使用户只是提到'文档处理'、'排版'、'写文档'而没有明确说Word，也应使用此技能。
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   author: aid-work-agent
 ---
 
@@ -16,6 +16,25 @@ metadata:
 - **调整格式**：用户需要改变文档的字体、段落格式、页面设置
 
 如果用户只是想阅读文档内容，使用 `file_read` 工具即可。
+
+## 可用模板
+
+创建文档时可使用 `--template` 参数选择模板：
+
+| 模板名 | 说明 | 适用场景 |
+|--------|------|---------|
+| default | SimSun 12pt 正文，SimHei 标题 | 通用文档（默认） |
+| formal | FangSong 16pt，两端对齐，双倍行距，公文页边距 | 正式公文 |
+| modern | 微软雅黑正文，简洁间距，深蓝标题 | 现代商务文档 |
+| report | SimSun 正文，SimHei 层级标题，两端对齐 | 工作报告、分析报告 |
+
+**模板选择建议**：
+- 用户要求"公文"/"正式"/"政府文件" → 使用 `--template formal`
+- 用户要求"报告"/"工作报告"/"分析报告" → 使用 `--template report`
+- 用户要求"现代"/"商务"/"简洁" → 使用 `--template modern`
+- 不确定或用户无特殊要求 → 使用默认（不加 --template）
+
+用 `list-templates` 子命令查看当前可用的模板列表。
 
 ## 工作流程
 
@@ -38,11 +57,24 @@ skill_execute(skill="word-processing", command='python scripts/word_ops.py analy
 3. **注册下载**：调用 `register_download_file` 工具注册文件，用户即可下载
 
 ```bash
-# 步骤 2：将 Markdown 纯文本内容转为 Word
+# 步骤 2：将 Markdown 纯文本内容转为 Word（默认模板）
 skill_execute(
     skill="word-processing",
     command="python scripts/word_ops.py create-from-md --title '文档标题'",
     content="这里直接放 content_generate 生成的 Markdown 纯文本内容"
+)
+
+# 步骤 2（指定模板）：使用公文格式
+skill_execute(
+    skill="word-processing",
+    command="python scripts/word_ops.py create-from-md --title '公文标题' --template formal",
+    content="这里直接放 Markdown 纯文本内容"
+)
+
+# 查看可用模板
+skill_execute(
+    skill="word-processing",
+    command="python scripts/word_ops.py list-templates"
 )
 
 # 步骤 3：注册到下载系统（用输出的 file_path）
@@ -102,6 +134,7 @@ register_download_file(file_path="输出中的file_path值", display_name="用�
 ## 注意事项
 
 - **创建新文档只用 create-from-md + content 参数**：不接受 JSON 格式，不要使用 `files` 参数做 base64 编码，命令中也不需要任何文件路径参数
+- **模板选择**：根据文档类型选择合适的 `--template`，不确定时使用默认
 - **段落索引**：modify 操作的段落索引来自 analyze 输出。多次修改同一文件时，每次都重新 analyze
 - **所有操作基于副本**：原始文件不会被修改
 - **JSON 转义**：命令行中 JSON 用单引号包裹，内部用双引号
@@ -120,7 +153,19 @@ register_download_file(file_path="输出中的file_path值", display_name="用�
 4. 告知用户下载链接
 ```
 
-**示例 2：修改合同中的公司名**
+**示例 2：创建正式公文**
+
+```
+1. content_generate：生成公文的 Markdown 内容
+2. skill_execute：将 Markdown 转为 Word（使用公文模板）
+   skill="word-processing"
+   command="python scripts/word_ops.py create-from-md --title '通知' --template formal"
+   content="上面 content_generate 返回的 Markdown 纯文本内容"
+3. register_download_file(file_path="输出路径", display_name="通知.docx")
+4. 告知用户下载链接
+```
+
+**示例 3：修改合同中的公司名**
 
 ```
 1. skill_execute：analyze --file-path "<合同路径>"
@@ -129,7 +174,7 @@ register_download_file(file_path="输出中的file_path值", display_name="用�
 4. 告知用户下载链接
 ```
 
-**示例 3：统一文档格式**
+**示例 4：统一文档格式**
 
 ```
 1. skill_execute：analyze --file-path "<路径>"

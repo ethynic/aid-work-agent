@@ -502,10 +502,117 @@ def _extract_table(table, index: int) -> Dict[str, Any]:
 
 
 # =============================================================================
+# 跨 Run 文本替换
+# =============================================================================
+
+def _replace_text_cross_run(runs, target: str, replacement: str) -> int:
+    """
+    替换可能跨越多个 run 的文本。
+
+    Word 文档中一个逻辑句子可能被拆分为多个 run（编辑、格式变化等导致），
+    此函数拼接相邻 run 文本进行匹配，然后从后向前修改以保持索引稳定。
+
+    Args:
+        runs: 段落的 run 对象列表
+        target: 要查找的文本
+        replacement: 替换为的文本
+
+    Returns:
+        替换次数
+    """
+    if not runs or not target:
+        return 0
+
+    # 拼接所有 run 文本，构建字符到 (run_index, char_index_in_run) 映射
+    concat = ""
+    char_map = []
+    for ri, run in enumerate(runs):
+        for ci, ch in enumerate(run.text):
+            char_map.append((ri, ci))
+            concat += ch
+
+    # 查找所有出现位置
+    occurrences = []
+    pos = 0
+    while True:
+        idx = concat.find(target, pos)
+        if idx == -1:
+            break
+        occurrences.append(idx)
+        pos = idx + len(target)
+
+    if not occurrences:
+        return 0
+
+    # 从后向前处理，避免修改影响后续索引
+    for occ_idx in reversed(occurrences):
+        end_idx = occ_idx + len(target) - 1
+        run_start = char_map[occ_idx][0]
+        run_end = char_map[end_idx][0]
+        char_start = char_map[occ_idx][1]
+        char_end = char_map[end_idx][1]
+
+        if run_start == run_end:
+            # 单 run 情况：直接替换
+            run_text = runs[run_start].text
+            runs[run_start].text = (
+                run_text[:char_start] + replacement + run_text[char_end + 1:]
+            )
+        else:
+            # 跨 run 情况
+            runs[run_start].text = runs[run_start].text[:char_start] + replacement
+            for ri in range(run_start + 1, run_end):
+                runs[ri].text = ""
+            runs[run_end].text = runs[run_end].text[char_end + 1:]
+
+    return len(occurrences)
+
+
+# =============================================================================
+# 模板加载
+# =============================================================================
+
+def get_template(template_name: str) -> Dict[str, Any]:
+    """
+    加载命名模板。
+
+    模板文件位于 skills/word-processing/assets/templates/<name>.json。
+    """
+    templates_dir = Path(__file__).parent.parent / "assets" / "templates"
+    template_path = templates_dir / f"{template_name}.json"
+    if not template_path.exists():
+        available = [p.stem for p in sorted(templates_dir.glob("*.json"))] if templates_dir.exists() else []
+        raise ValueError(
+            f"未知模板 '{template_name}'。可用模板: {available}"
+        )
+    return json.loads(template_path.read_text(encoding="utf-8"))
+
+
+def list_templates() -> List[Dict[str, str]]:
+    """列出所有可用模板的名称和描述。"""
+    templates_dir = Path(__file__).parent.parent / "assets" / "templates"
+    if not templates_dir.exists():
+        return []
+    result = []
+    for p in sorted(templates_dir.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append({
+                "name": data.get("name", p.stem),
+                "display_name": data.get("display_name", p.stem),
+                "description": data.get("description", ""),
+            })
+        except (json.JSONDecodeError, KeyError):
+            result.append({"name": p.stem, "display_name": p.stem, "description": ""})
+    return result
+
+
+# =============================================================================
 # Markdown → Word 转换
 # =============================================================================
 
-def markdown_to_doc(md_text: str, title: str = "", author: str = "") -> Document:
+def markdown_to_doc(md_text: str, title: str = "", author: str = "",
+                    template: Optional[Dict[str, Any]] = None) -> Document:
     """
     将 Markdown 文本转换为 python-docx Document。
 
@@ -530,23 +637,92 @@ def markdown_to_doc(md_text: str, title: str = "", author: str = "") -> Document
     if author:
         doc.core_properties.author = author
 
-    # 设置默认字体
+    # 加载模板（未指定时使用 default）
+    if template is None:
+        template = get_template("default")
+
+    # 应用模板：正文样式
+    body_spec = template.get("body", {})
+    body_font = body_spec.get("font_name", "SimSun")
+    body_ea = body_spec.get("east_asia_font", body_font)
+    body_size = body_spec.get("font_size", 12)
+
     style = doc.styles['Normal']
     font = style.font
-    font.name = 'SimSun'
-    font.size = Pt(12)
-    style.element.rPr.rFonts.set(qn("w:eastAsia"), 'SimSun')
+    font.name = body_font
+    font.size = Pt(body_size)
+    style.element.rPr.rFonts.set(qn("w:eastAsia"), body_ea)
 
-    # 标题字体
+    if "alignment" in body_spec:
+        resolved = _resolve_alignment(body_spec["alignment"])
+        if resolved is not None:
+            style.paragraph_format.alignment = resolved
+    if "line_spacing" in body_spec:
+        style.paragraph_format.line_spacing = float(body_spec["line_spacing"])
+    if "first_line_indent" in body_spec:
+        style.paragraph_format.first_line_indent = Cm(float(body_spec["first_line_indent"]))
+    if "space_before" in body_spec:
+        style.paragraph_format.space_before = Pt(float(body_spec["space_before"]))
+    if "space_after" in body_spec:
+        style.paragraph_format.space_after = Pt(float(body_spec["space_after"]))
+
+    # 应用模板：标题样式
+    headings_spec = template.get("headings", {})
     for level in range(1, 7):
         style_name = f'Heading {level}'
+        h_spec = headings_spec.get(str(level), {})
+        if not h_spec:
+            h_spec = {"font_name": "SimHei", "east_asia_font": "SimHei"}
         try:
             h_style = doc.styles[style_name]
-            h_font = h_style.font
-            h_font.name = 'SimHei'
-            h_style.element.rPr.rFonts.set(qn("w:eastAsia"), 'SimHei')
+            h_fn = h_spec.get("font_name", "SimHei")
+            h_ea = h_spec.get("east_asia_font", h_fn)
+            h_style.font.name = h_fn
+            h_style.element.rPr.rFonts.set(qn("w:eastAsia"), h_ea)
+            if "font_size" in h_spec:
+                h_style.font.size = Pt(float(h_spec["font_size"]))
+            if "color" in h_spec:
+                rgb = _parse_color(h_spec["color"])
+                if rgb:
+                    h_style.font.color.rgb = rgb
+            if "alignment" in h_spec:
+                resolved = _resolve_alignment(h_spec["alignment"])
+                if resolved is not None:
+                    h_style.paragraph_format.alignment = resolved
+            if "line_spacing" in h_spec:
+                h_style.paragraph_format.line_spacing = float(h_spec["line_spacing"])
+            if "space_before" in h_spec:
+                h_style.paragraph_format.space_before = Pt(float(h_spec["space_before"]))
+            if "space_after" in h_spec:
+                h_style.paragraph_format.space_after = Pt(float(h_spec["space_after"]))
         except KeyError:
             pass
+
+    # 应用模板：页面设置
+    page_spec = template.get("page", {})
+    if page_spec:
+        size_name = page_spec.get("size", "A4")
+        orientation = page_spec.get("orientation", "portrait")
+        if size_name.upper() in PAGE_SIZES:
+            w, h = PAGE_SIZES[size_name.upper()]
+            for section in doc.sections:
+                if orientation.lower() == "landscape":
+                    section.page_width = Cm(h)
+                    section.page_height = Cm(w)
+                else:
+                    section.page_width = Cm(w)
+                    section.page_height = Cm(h)
+        margins = page_spec.get("margins", {})
+        if margins:
+            for section in doc.sections:
+                if "top" in margins:
+                    section.top_margin = Cm(margins["top"])
+                if "bottom" in margins:
+                    section.bottom_margin = Cm(margins["bottom"])
+                if "left" in margins:
+                    section.left_margin = Cm(margins["left"])
+                if "right" in margins:
+                    section.right_margin = Cm(margins["right"])
 
     lines = md_text.split('\n')
     i = 0
@@ -559,7 +735,6 @@ def markdown_to_doc(md_text: str, title: str = "", author: str = "") -> Document
         # 代码块处理
         if line.strip().startswith('```'):
             if in_code_block:
-                # 结束代码块
                 code_text = '\n'.join(code_buffer)
                 _add_code_paragraph(doc, code_text)
                 code_buffer = []
@@ -591,7 +766,7 @@ def markdown_to_doc(md_text: str, title: str = "", author: str = "") -> Document
         if heading_match:
             level = len(heading_match.group(1))
             text = heading_match.group(2).strip()
-            _add_heading(doc, text, level)
+            _add_heading(doc, text, level, template)
             i += 1
             continue
 
@@ -599,7 +774,7 @@ def markdown_to_doc(md_text: str, title: str = "", author: str = "") -> Document
         if '|' in line and i + 1 < len(lines):
             table_lines, consumed = _extract_table(lines, i)
             if table_lines:
-                _add_table(doc, table_lines)
+                _add_table(doc, table_lines, template)
                 i += consumed
                 continue
 
@@ -637,13 +812,17 @@ def markdown_to_doc(md_text: str, title: str = "", author: str = "") -> Document
     return doc
 
 
-def _add_heading(doc: Document, text: str, level: int):
-    """添加标题，应用中文字体"""
+def _add_heading(doc: Document, text: str, level: int,
+                 template: Optional[Dict[str, Any]] = None):
+    """添加标题，应用模板指定的字体"""
     para = doc.add_heading(text, level=min(level, 6))
-    # 确保中文字体
+    headings_spec = (template or {}).get("headings", {})
+    h_spec = headings_spec.get(str(level), {"font_name": "SimHei", "east_asia_font": "SimHei"})
+    h_fn = h_spec.get("font_name", "SimHei")
+    h_ea = h_spec.get("east_asia_font", h_fn)
     for run in para.runs:
-        run.font.name = 'SimHei'
-        run._element.rPr.rFonts.set(qn("w:eastAsia"), 'SimHei')
+        run.font.name = h_fn
+        run._element.rPr.rFonts.set(qn("w:eastAsia"), h_ea)
 
 
 def _add_rich_paragraph(doc: Document, text: str, style: str = "Normal"):
@@ -744,7 +923,8 @@ def _extract_table(lines: list, start: int) -> tuple:
     return table_lines, len(table_lines)
 
 
-def _add_table(doc: Document, table_lines: list):
+def _add_table(doc: Document, table_lines: list,
+               template: Optional[Dict[str, Any]] = None):
     """将 Markdown 表格转为 Word 表格"""
     # 解析单元格
     rows_data = []
@@ -767,6 +947,11 @@ def _add_table(doc: Document, table_lines: list):
     except KeyError:
         pass
 
+    # 模板中的表格字体配置
+    table_spec = (template or {}).get("table", {})
+    header_fn = table_spec.get("header_font_name", "SimHei")
+    header_ea = table_spec.get("header_east_asia_font", header_fn)
+
     # 填充数据
     for row_idx, row_data in enumerate(rows_data):
         for col_idx, cell_text in enumerate(row_data):
@@ -777,8 +962,8 @@ def _add_table(doc: Document, table_lines: list):
                     cell.text = ""
                     run = cell.paragraphs[0].add_run(cell_text)
                     run.bold = True
-                    run.font.name = 'SimHei'
-                    run._element.rPr.rFonts.set(qn("w:eastAsia"), 'SimHei')
+                    run.font.name = header_fn
+                    run._element.rPr.rFonts.set(qn("w:eastAsia"), header_ea)
                 else:
                     cell.text = cell_text
 
