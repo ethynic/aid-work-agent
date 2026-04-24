@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,
     session_id TEXT UNIQUE NOT NULL,
     user_id TEXT NOT NULL,
+    tenant_id TEXT,
     title TEXT,
     context_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS chat_records (
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (
@@ -443,6 +445,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,
     session_id TEXT UNIQUE NOT NULL,
     user_id TEXT NOT NULL,
+    tenant_id TEXT,
     title TEXT,
     context_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -485,6 +488,7 @@ CREATE TABLE IF NOT EXISTS chat_records (
 
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (

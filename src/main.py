@@ -601,10 +601,13 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
         # 从请求头获取用户身份后创建会话
         if current_user:
+            from src.saas.context import get_current_tenant_id
+            chat_tenant_id = get_current_tenant_id()
             session = SessionDB.create(
                 user_id=user_id,
                 title=title,
-                context_data={"user_info": {"user_id": user_id, "username": current_user.get("username")}}
+                context_data={"user_info": {"user_id": user_id, "username": current_user.get("username")}},
+                tenant_id=chat_tenant_id
             )
             if session:
                 session_id = session["session_id"]

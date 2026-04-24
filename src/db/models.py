@@ -280,7 +280,7 @@ class SessionDB:
     """会话数据库访问类"""
 
     @staticmethod
-    def create(user_id: str, title: str = None, context_data: dict = None) -> Optional[Dict[str, Any]]:
+    def create(user_id: str, title: str = None, context_data: dict = None, tenant_id: str = None) -> Optional[Dict[str, Any]]:
         """创建新会话"""
         session_id = generate_session_id()
         placeholder = "%s"
@@ -289,13 +289,13 @@ class SessionDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO chat_sessions (session_id, user_id, title, context_data)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})
-                """, (session_id, user_id, title or "新会话",
+                    INSERT INTO chat_sessions (session_id, user_id, tenant_id, title, context_data)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """, (session_id, user_id, tenant_id, title or "新会话",
                       json.dumps(context_data) if context_data else None))
                 conn.commit()
 
-                logger.info(f"Chat session created: {session_id} for user: {user_id}")
+                logger.info(f"Chat session created: {session_id} for user: {user_id}, tenant: {tenant_id}")
                 return SessionDB.get_by_id(session_id)
             except Exception as e:
                 logger.error(f"Failed to create chat session: {e}")
@@ -317,17 +317,31 @@ class SessionDB:
             return None
 
     @staticmethod
-    def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """获取用户的所有会话"""
+    def list_by_user(user_id: str, limit: int = 50, tenant_id: str = None) -> List[Dict[str, Any]]:
+        """获取用户的会话列表
+
+        Args:
+            user_id: 用户ID
+            limit: 返回数量上限
+            tenant_id: 租户ID，传入时仅返回该租户下的会话；不传则返回所有会话（兼容非SaaS模式）
+        """
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT * FROM chat_sessions
-                WHERE user_id = {placeholder}
-                ORDER BY updated_at DESC
-                LIMIT {placeholder}
-            """, (user_id, limit))
+            if tenant_id is not None:
+                cursor.execute(f"""
+                    SELECT * FROM chat_sessions
+                    WHERE user_id = {placeholder} AND tenant_id = {placeholder}
+                    ORDER BY updated_at DESC
+                    LIMIT {placeholder}
+                """, (user_id, tenant_id, limit))
+            else:
+                cursor.execute(f"""
+                    SELECT * FROM chat_sessions
+                    WHERE user_id = {placeholder}
+                    ORDER BY updated_at DESC
+                    LIMIT {placeholder}
+                """, (user_id, limit))
             sessions = []
             for row in cursor.fetchall():
                 result = dict(row)

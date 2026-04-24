@@ -6,24 +6,43 @@ import { getAuthHeader as getNormalAuthHeader } from './auth'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/sessions`
 
-// 根据路由获取正确的认证头
+// 从 URL 路径提取 tenant_id
+function getCurrentTenantId(): string | null {
+  const path = window.location.pathname
+  const match = path.match(/^\/t\/([^/]+)/)
+  return match ? match[1] : null
+}
+
+// 根据路由获取正确的认证头（包含 X-Tenant-Id）
 function getAuthHeader(): Record<string, string> {
   const path = window.location.pathname
+  let headers: Record<string, string> = {}
+
   // 租户/平台路由使用 saas_token 或 portal_token
   if (path.startsWith('/t/')) {
     const saasToken = localStorage.getItem('saas_token')
-    if (saasToken) return { 'Authorization': `Bearer ${saasToken}` }
+    if (saasToken) headers['Authorization'] = `Bearer ${saasToken}`
   } else if (path.startsWith('/portal')) {
     const portalToken = localStorage.getItem('portal_token')
-    if (portalToken) return { 'Authorization': `Bearer ${portalToken}` }
+    if (portalToken) headers['Authorization'] = `Bearer ${portalToken}`
+  } else {
+    // 普通路由使用 demo_token
+    headers = getNormalAuthHeader()
   }
-  // 普通路由使用 demo_token
-  return getNormalAuthHeader()
+
+  // 租户路由下传递 X-Tenant-Id，用于租户隔离
+  const tenantId = getCurrentTenantId()
+  if (tenantId) {
+    headers['X-Tenant-Id'] = tenantId
+  }
+
+  return headers
 }
 
 export interface ChatSession {
   session_id: string
   user_id: string
+  tenant_id?: string
   title: string
   context_data?: Record<string, any>
   created_at: string

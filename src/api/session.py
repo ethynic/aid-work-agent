@@ -11,6 +11,7 @@ from loguru import logger
 
 from src.api.auth import get_current_user
 from src.db.models import SessionDB, MessageDB, ChatRecordDB
+from src.saas.context import get_current_tenant_id
 
 router = APIRouter(prefix="/api/sessions", tags=["会话管理"])
 
@@ -36,6 +37,7 @@ class CreateMessageRequest(BaseModel):
 class SessionResponse(BaseModel):
     session_id: str
     user_id: str
+    tenant_id: Optional[str] = None
     title: str
     context_data: Optional[dict] = None
     created_at: str
@@ -55,18 +57,19 @@ class MessageResponse(BaseModel):
 
 @router.get("")
 async def list_sessions(request: Request):
-    """获取当前用户的所有会话"""
+    """获取当前用户的会话列表（支持租户隔离）"""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
 
-    sessions = SessionDB.list_by_user(user["user_id"])
+    tenant_id = get_current_tenant_id()
+    sessions = SessionDB.list_by_user(user["user_id"], tenant_id=tenant_id)
     return {"sessions": sessions}
 
 
 @router.post("")
 async def create_session(request: Request, body: CreateSessionRequest = None):
-    """创建新会话"""
+    """创建新会话（支持租户隔离）"""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
@@ -83,7 +86,8 @@ async def create_session(request: Request, body: CreateSessionRequest = None):
         "phone": user.get("phone")
     }
 
-    session = SessionDB.create(user["user_id"], title, context_data)
+    tenant_id = get_current_tenant_id()
+    session = SessionDB.create(user["user_id"], title, context_data, tenant_id=tenant_id)
     if session:
         return session
     raise HTTPException(status_code=500, detail="创建会话失败")
@@ -91,12 +95,13 @@ async def create_session(request: Request, body: CreateSessionRequest = None):
 
 @router.get("/latest")
 async def get_latest_session(request: Request):
-    """获取当前用户的最近会话"""
+    """获取当前用户的最近会话（支持租户隔离）"""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
 
-    sessions = SessionDB.list_by_user(user["user_id"], limit=1)
+    tenant_id = get_current_tenant_id()
+    sessions = SessionDB.list_by_user(user["user_id"], limit=1, tenant_id=tenant_id)
     if not sessions:
         return {"session": None}
 
@@ -116,6 +121,11 @@ async def get_session(request: Request, session_id: str):
 
     # 验证会话属于当前用户
     if session["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 租户隔离：验证会话属于当前租户
+    tenant_id = get_current_tenant_id()
+    if tenant_id and session.get("tenant_id") and session["tenant_id"] != tenant_id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
     return session
