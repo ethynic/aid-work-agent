@@ -82,11 +82,12 @@
     </div>
 
     <!-- Right Side - User Info & Actions -->
-    <div class="flex items-center gap-3 flex-shrink-0">
+    <div v-if="isLoggedIn" class="flex items-center gap-3 flex-shrink-0">
       <!-- User Name -->
-      <div v-if="isLoggedIn" class="flex items-center gap-2">
+      <div class="flex items-center gap-2">
         <span class="text-sm text-gray-600">{{ user?.username }}</span>
         <button
+          v-if="showDemoLogout"
           @click="$emit('logout')"
           class="px-2 py-1 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
         >
@@ -136,6 +137,8 @@ const props = defineProps<{
   availableSubagents?: SubagentListItem[]
   /** 当前选中的数字员工ID，null 表示主智能体 */
   currentSubagentId?: string | null
+  /** 是否显示右上角演示模式退出按钮，默认 true */
+  showDemoLogout?: boolean
 }>()
 
 const emit = defineEmits<{

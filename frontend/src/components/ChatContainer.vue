@@ -20,6 +20,7 @@
             :user="effectiveUser"
             :available-subagents="availableSubagents"
             :current-subagent-id="currentSubagentId"
+            :show-demo-logout="!isTenantMode"
             @toggle-sidebar="handleToggleSidebar"
             @logout="handleLogout"
             @change-subagent="handleSubagentChange"
