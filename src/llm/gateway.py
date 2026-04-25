@@ -27,13 +27,6 @@ def _build_key_pool(provider_name: str) -> KeyPool:
     else:
         raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
-    # 临时调试：打印配置值
-    logger.info(
-        f"后端日志：_build_key_pool provider={provider_name}, "
-        f"cfg.api_keys={cfg.api_keys!r}, "
-        f"cfg.get_effective_keys()={cfg.get_effective_keys()!r}"
-    )
-
     keys = cfg.get_effective_keys()
     if not keys:
         raise ValueError(

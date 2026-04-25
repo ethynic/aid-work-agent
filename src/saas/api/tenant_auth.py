@@ -619,13 +619,11 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    print(f"临时调试：get_admin_info admin={admin}, tenant_id={admin.get('tenant_id')}, query_tenant_id={tenant_id}")
     tenant = None
     # 优先使用 admin 自带的 tenant_id，否则使用请求参数中的 tenant_id
     target_tenant_id = admin.get("tenant_id") or tenant_id
     if target_tenant_id:
         tenant = TenantDB.get_by_id(target_tenant_id)
-        print(f"临时调试：TenantDB.get_by_id({target_tenant_id}) = {tenant}")
 
     return {
         "user": {

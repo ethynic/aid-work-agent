@@ -163,9 +163,11 @@ const {
   clearSession,
   switchSession,
   clearSessionCache,
+  precacheNewSession,
   uploadAttachment,
   removeAttachment,
   clearAttachments,
+  abortStreaming,
   sessionId: agentSessionId
 } = useAgent()
 
@@ -176,7 +178,7 @@ const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview(
 
 const route = useRoute()
 const subagentName = computed<string | null>(() => {
-  // 支持两种路由匹配：普通模式 /chat/subagent 和租户模式 /t/tenantId/chat/subagent
+  // 支持两种路由匹配：演示模式 /chat/subagent 和租户模式 /t/tenantId/chat/subagent
   if (route.name === 'chat-subagent') {
     return route.params.subagent as string
   }
@@ -296,6 +298,18 @@ async function loadAvailableSubagents() {
 
 // 处理数字员工选择变化
 async function handleSubagentChange(agentId: string) {
+  console.log(`[${now()}] [ConfirmDialog] handleSubagentChange called, isProcessing=`, isProcessing.value, 'agentId=', agentId)
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    console.log(`[${now()}] [ConfirmDialog] isProcessing=true, show confirm dialog`)
+    if (!confirm('当前会话还未结束，您希望终止当前会话，切换数字员工吗？')) {
+      console.log(`[${now()}] [ConfirmDialog] user canceled`)
+      return
+    }
+    console.log(`[${now()}] [ConfirmDialog] user confirmed, abort streaming`)
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
+  }
   // 构建目标路由路径
   let targetPath: string
   const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
@@ -310,14 +324,16 @@ async function handleSubagentChange(agentId: string) {
     targetPath = agentId === 'main' ? '/' : `/chat/${agentId}`
   }
 
+  console.log(`[${now()}] [ConfirmDialog] router.push to`, targetPath)
   // 导航到对应路由
   // 现有代码已经监听 subagentName 变化，会自动清空会话并创建新会话
   await router.push(targetPath)
+  console.log(`[${now()}] [ConfirmDialog] router.push done`)
 }
 
 // 模拟在线状态检测
 onMounted(async () => {
-  // 初始化认证状态（租户模式和普通模式都需要初始化）
+  // 初始化认证状态（租户模式和演示模式都需要初始化）
   await Promise.all([initAuth(), initTenantAuth()])
 
   // 加载可用数字员工列表
@@ -343,25 +359,35 @@ onUnmounted(() => {
 })
 
 async function handleSend(content: string) {
+  console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
   if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
   }
 
-  // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新）
+  // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
   if (!currentSessionId.value) {
+    console.log(`[${now()}] [handleSend] no current session, creating new session...`)
+    const startTime = Date.now()
     const newSession = await createNewSession(undefined, subagentName.value)
+    console.log(`[${now()}] [handleSend] createNewSession done in ${Date.now() - startTime}ms, newSession=`, newSession)
     if (newSession) {
+      // 新建会话本来就是空的，预先缓存空数组，避免切换时请求后端
+      precacheNewSession(newSession.session_id)
       skipNextSwitch.value = true
       selectSession(newSession.session_id)
       agentSessionId.value = newSession.session_id
       // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
       await switchSession(newSession.session_id)
+      console.log(`[${now()}] [handleSend] switchSession done, ready to send message`)
     }
   }
 
   const sid = currentSessionId.value
-  if (!sid) return
+  if (!sid) {
+    console.log(`[${now()}] [handleSend] still no sessionId, abort`)
+    return
+  }
 
   // 如果是当前会话的首条用户消息（标题还是默认的"新会话"），自动用前10个字更新标题
   const session = sessions.value.find(s => s.session_id === sid)
@@ -397,26 +423,44 @@ function handleToggleSidebar() {
   }
 }
 
+function now(): string {
+  const d = new Date()
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
+}
+
 async function handleNewSession() {
+  console.log(`[${now()}] [ConfirmDialog] handleNewSession called, isProcessing=`, isProcessing.value)
   if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
   }
-  const newSession = await createNewSession(undefined, subagentName.value)
-  if (newSession) {
-    // 选中新会话并同步到useAgent
-    selectSession(newSession.session_id)
-    agentSessionId.value = newSession.session_id
-    // 创建新会话后，清空当前消息，开始新对话
-    clearSession()
-    clearAttachments()
-    // 展开侧边栏
-    if (collapseSidebarFn) {
-      collapseSidebarFn()
-    } else {
-      isSidebarCollapsed.value = false
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    console.log(`[${now()}] [ConfirmDialog] isProcessing=true, show confirm dialog`)
+    if (!confirm('当前会话还未结束，您希望终止当前会话，进入新会话吗？')) {
+      console.log(`[${now()}] [ConfirmDialog] user canceled`)
+      return
     }
+    console.log(`[${now()}] [ConfirmDialog] user confirmed, abort streaming`)
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
   }
+  // 优化：点击新会话立即响应，不等待后端 API
+  // 直接清空当前会话，显示空界面，用户输入第一条消息时才真正创建会话
+  console.log(`[${now()}] [ConfirmDialog] go to empty new session immediately`)
+  skipNextSwitch.value = true
+  selectSession(null)
+  agentSessionId.value = null as any
+  // 创建新会话后，清空当前消息，开始新对话
+  clearSession()
+  clearAttachments()
+  // 展开侧边栏
+  if (collapseSidebarFn) {
+    collapseSidebarFn()
+  } else {
+    isSidebarCollapsed.value = false
+  }
+  console.log(`[${now()}] [ConfirmDialog] handleNewSession done instantly`)
 }
 
 async function handleLogout() {

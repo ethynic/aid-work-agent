@@ -82,7 +82,7 @@
         </div>
       </template>
 
-      <!-- 普通模式菜单 -->
+      <!-- 演示模式菜单 -->
       <template v-else>
         <!-- Knowledge Base Menu Item -->
         <button
@@ -280,11 +280,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useAgent } from '@/composables/useAgent'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 
 interface Props {
@@ -305,18 +306,18 @@ defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { isLoggedIn, isAdmin } = useDemoAuth()
-const { admin: tenantAdmin, tenant, logout: tenantLogout } = useTenantAuth()
+const { isLoggedIn: demoIsLoggedIn, isAdmin } = useDemoAuth()
+const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
 const {
   sessions,
   currentSessionId,
   isLoading,
   loadSessions,
-  createNewSession,
   removeSession,
   renameSession,
   selectSession
 } = useSession()
+const { isProcessing, abortStreaming } = useAgent()
 
 const isCreating = ref(false)
 const showRenameModal = ref(false)
@@ -340,18 +341,11 @@ const isTenantAdmin = computed(() => {
 
 // 侧边栏标题
 const sidebarTitle = computed(() => {
-  console.log('临时调试：sidebarTitle 计算属性', {
-    isTenantMode: isTenantMode.value,
-    tenantId: tenantId.value,
-    tenant: tenant.value,
-    tenantAdmin: tenantAdmin.value,
-    isLoggedIn: isLoggedIn.value
-  })
   if (isTenantMode.value && tenant.value) {
     // 租户模式：只显示租户名称
     return tenant.value.company_name
   }
-  // 普通模式：显示默认名称
+  // 演示模式：显示默认名称
   return '爱定义工作助理'
 })
 
@@ -397,7 +391,7 @@ const isHistorySessionActive = computed(() => {
   return !isKnowledgeBaseActive.value
 })
 
-// 跳转到知识库（普通模式）
+// 跳转到知识库（演示模式）
 function goToKnowledgeBase() {
   router.push('/knowledge-base')
 }
@@ -413,13 +407,17 @@ function goToAllSessions() {
 }
 
 // 监听登录状态，登录后加载会话
-watch(isLoggedIn, async (loggedIn) => {
-  if (loggedIn) {
+// 租户模式监听 tenantIsLoggedIn，演示模式监听 demoIsLoggedIn
+import { watchEffect } from 'vue'
+watchEffect(async () => {
+  const isTenantMode = route.path.startsWith('/t/')
+  const effectiveLoggedIn = isTenantMode ? tenantIsLoggedIn.value : demoIsLoggedIn.value
+  if (effectiveLoggedIn) {
     await loadSessions()
   } else {
     sessions.value = []
   }
-}, { immediate: true })
+})
 
 // 格式化时间（后端 CURRENT_TIMESTAMP 为 UTC，需补 Z 标记确保正确解析）
 function formatTime(isoString: string): string {
@@ -451,11 +449,17 @@ function formatTime(isoString: string): string {
   return `${month}月${day}日`
 }
 
+function now(): string {
+  const d = new Date()
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
+}
+
 // 新建会话
 async function handleNewSession() {
+  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleNewSession called, isProcessing=`, isProcessing.value)
   // 根据模式选择正确的登录状态检查
-  // 租户模式使用 tenantAdmin.value，普通模式使用 isLoggedIn.value
-  const effectiveIsLoggedIn = isTenantMode.value ? !!tenantAdmin.value : isLoggedIn.value
+  // 租户模式使用 tenantIsLoggedIn，演示模式使用 demoIsLoggedIn
+  const effectiveIsLoggedIn = isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
   if (!effectiveIsLoggedIn) {
     return
   }
@@ -464,28 +468,58 @@ async function handleNewSession() {
     return
   }
 
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] isProcessing=true, show confirm dialog`)
+    if (!confirm('当前会话还未结束，您希望终止当前会话，进入新会话吗？')) {
+      console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user canceled`)
+      return
+    }
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user confirmed, abort streaming`)
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
+  }
+
+  // 优化：点击新会话立即响应，不等待后端 API
+  // 直接清空当前会话，导航到空界面，用户输入第一条消息时才真正创建会话
   isCreating.value = true
   try {
-    const newSession = await createNewSession(undefined, currentSubagent.value)
-    if (newSession) {
-      selectSession(newSession.session_id)
-      // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
-      const targetPath = currentSubagent.value
-        ? `/chat/${currentSubagent.value}`
-        : isTenantMode.value
-          ? `/t/${tenantId.value}/chat`
-          : '/'
-      if (route.path !== targetPath) {
-        router.push(targetPath)
-      }
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] go to empty new session immediately`)
+    selectSession(null)
+    // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
+    const targetPath = currentSubagent.value
+      ? `/chat/${currentSubagent.value}`
+      : isTenantMode.value
+        ? `/t/${tenantId.value}/chat`
+        : '/'
+    if (route.path !== targetPath) {
+      console.log(`[${now()}] [ConfirmDialog:MenuSidebar] router.push to`, targetPath)
+      router.push(targetPath)
+    } else {
+      // 如果已经在目标路由，still need to trigger watch by selecting null
+      // 路由相同但 currentSessionId 变化会触发 watch 清空 messages
     }
   } finally {
     isCreating.value = false
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleNewSession finished instantly`)
   }
 }
 
 // 选择会话
-function handleSelectSession(sessionId: string) {
+async function handleSelectSession(sessionId: string) {
+  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleSelectSession called, sessionId=`, sessionId, 'isProcessing=', isProcessing.value)
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] isProcessing=true, show confirm dialog`)
+    if (!confirm('当前会话还未结束，您希望终止当前会话，切换到选中的会话吗？')) {
+      console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user canceled`)
+      return
+    }
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user confirmed, abort streaming`)
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
+  }
+  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] calling selectSession`, sessionId)
   selectSession(sessionId)
   // 根据会话的 subagent 标记导航到对应路由（租户模式使用 /t/:tenant_id/chat）
   const session = sessions.value.find(s => s.session_id === sessionId)
@@ -496,8 +530,10 @@ function handleSelectSession(sessionId: string) {
       ? `/t/${tenantId.value}/chat`
       : '/'
   if (route.path !== targetPath) {
+    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] router.push to`, targetPath)
     router.push(targetPath)
   }
+  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleSelectSession done`)
 }
 
 // 删除会话

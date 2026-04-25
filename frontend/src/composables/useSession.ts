@@ -34,7 +34,7 @@ function checkIsLoggedIn(): boolean {
   if (window.location.pathname.startsWith('/t/')) {
     return tenantLoggedIn.value
   }
-  // 普通模式：检查 demo_token
+  // 演示模式：检查 demo_token
   return normalLoggedIn.value
 }
 
@@ -44,12 +44,26 @@ export function useSession() {
    * 加载会话列表
    */
   async function loadSessions() {
-    if (!checkIsLoggedIn()) return
+    if (!checkIsLoggedIn()) {
+      return
+    }
 
     isLoading.value = true
     try {
       const result = await listSessions()
-      sessions.value = result.sessions || []
+      let loadedSessions = result.sessions || []
+
+      // 过滤掉创建超过5分钟仍然是默认标题的空会话
+      const now = new Date().getTime()
+      loadedSessions = loadedSessions.filter(s => {
+        const createdTime = new Date(s.created_at).getTime()
+        const isEmptyTitle = s.title === '新会话' || !s.title
+        const isOldEmpty = isEmptyTitle && (now - createdTime) > 5 * 60000 // 超过5分钟
+        
+        return !isOldEmpty
+      })
+
+      sessions.value = loadedSessions
       // 按更新时间倒序
       sessions.value.sort((a, b) =>
         new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -63,11 +77,37 @@ export function useSession() {
 
   /**
    * 创建新会话
+   * 在创建前自动清理空会话（标题为"新会话"且未发送任何消息的会话）
    */
   async function createNewSession(title?: string, subagent?: string | null): Promise<ChatSession | null> {
     if (!checkIsLoggedIn()) return null
 
     try {
+      // 自动清理：创建新会话前，删除已有的空会话（标题为默认"新会话"且没有消息）
+      // 这些会话是用户点击"新会话"后又立即点击"新会话"产生的，没有实际内容
+      const emptySessions = sessions.value.filter(s =>
+        (s.title === '新会话' || !s.title) &&
+        // 如果是默认标题且是最新创建的，认为是空会话
+        new Date().getTime() - new Date(s.created_at).getTime() < 60000 // 1分钟内创建的
+      )
+
+      // 先从列表中移除，再在后台并行删除（不阻塞创建新会话）
+      for (const empty of emptySessions) {
+        console.log(`[Cleanup] 计划删除空会话 ${empty.session_id} - 未发送任何消息`)
+        sessions.value = sessions.value.filter(s => s.session_id !== empty.session_id)
+      }
+      // 后台并行删除，不需要阻塞创建新会话
+      if (emptySessions.length > 0) {
+        Promise.all(emptySessions.map(empty =>
+          removeSession(empty.session_id).catch(err =>
+            console.error(`[Cleanup] 删除空会话 ${empty.session_id} 失败:`, err)
+          )
+        )).then(() => {
+          console.log(`[Cleanup] 完成批量删除，共 ${emptySessions.length} 个空会话`)
+        })
+      }
+
+      // 创建新会话
       const newSession = await createSession({
         title,
         ...(subagent ? { context_data: { subagent } } : {})
@@ -115,7 +155,9 @@ export function useSession() {
    * 选择会话
    */
   function selectSession(sessionId: string | null) {
+    console.log('[selectSession] called, sessionId=', sessionId, 'previous currentSessionId=', currentSessionId.value)
     currentSessionId.value = sessionId
+    console.log('[selectSession] done, currentSessionId now=', currentSessionId.value)
   }
 
   /**
@@ -159,7 +201,9 @@ export function useSession() {
    * 加载并自动选择最近会话
    */
   async function loadLatestSession(): Promise<boolean> {
-    if (!checkIsLoggedIn()) return false
+    if (!checkIsLoggedIn()) {
+      return false
+    }
 
     try {
       const result = await getLatestSession()

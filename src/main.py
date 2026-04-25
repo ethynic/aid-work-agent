@@ -40,13 +40,14 @@ from src.services.session_record import SessionRecordManager
 
 class SSEConnectionManager:
     """管理SSE连接和会话"""
-    
+
     def __init__(self):
         # session_id -> {"history": [], "sse_queues": []}
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.sse_connections: Dict[str, List[queue.Queue]] = {}
+        self.cancelled_sessions: set[str] = set()  # 被用户主动取消的会话
         self.lock = threading.Lock()
-    
+
     def get_or_create_session(self, session_id: str = None) -> str:
         with self.lock:
             if session_id is None:
@@ -59,7 +60,7 @@ class SSEConnectionManager:
                 self.sse_connections[session_id] = []
                 logger.info(f"Created SSE session: {session_id}")
             return session_id
-    
+
     def add_sse_client(self, session_id: str) -> queue.Queue:
         client_queue = queue.Queue(maxsize=100)
         with self.lock:
@@ -67,7 +68,7 @@ class SSEConnectionManager:
                 self.sse_connections[session_id] = []
             self.sse_connections[session_id].append(client_queue)
         return client_queue
-    
+
     def remove_sse_client(self, session_id: str, client_queue: queue.Queue):
         with self.lock:
             if session_id in self.sse_connections:
@@ -75,7 +76,23 @@ class SSEConnectionManager:
                     self.sse_connections[session_id].remove(client_queue)
                 except ValueError:
                     pass
-    
+
+    def cancel_session(self, session_id: str) -> None:
+        """标记会话为已取消，停止后续生成"""
+        with self.lock:
+            self.cancelled_sessions.add(session_id)
+            logger.info(f"Session cancelled by user: {session_id}")
+
+    def is_cancelled(self, session_id: str) -> bool:
+        """检查会话是否已被取消"""
+        with self.lock:
+            return session_id in self.cancelled_sessions
+
+    def clear_cancelled(self, session_id: str) -> None:
+        """清除取消标记（生成完成后）"""
+        with self.lock:
+            self.cancelled_sessions.discard(session_id)
+
     def broadcast(self, session_id: str, event: Dict[str, Any]):
         with self.lock:
             queues = self.sse_connections.get(session_id, []).copy()
@@ -84,7 +101,7 @@ class SSEConnectionManager:
                 q.put_nowait(event)
             except queue.Full:
                 pass
-    
+
     def add_to_history(self, session_id: str, role: str, content: str):
         with self.lock:
             if session_id in self.sessions:
@@ -92,7 +109,7 @@ class SSEConnectionManager:
                     "role": role,
                     "content": content
                 })
-    
+
     def get_history(self, session_id: str) -> List[Dict[str, str]]:
         with self.lock:
             if session_id in self.sessions:
@@ -711,8 +728,15 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 """在线程中运行agent"""
                 thread_start_time = datetime.now()
                 logger.info(f"[SSE-Thread] run_agent started, session_id={session_id}")
-                
+
                 try:
+                    # 提前检查是否已被取消
+                    if sse_manager.is_cancelled(session_id):
+                        logger.info(f"[SSE-Thread] Session already cancelled before start, exiting: session_id={session_id}")
+                        results['error'] = "Cancelled by user"
+                        completed.set()
+                        return
+
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     logger.info(f"[SSE-Thread] Event loop created, session_id={session_id}")
@@ -720,6 +744,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     # 进度回调：同步函数，支持多种事件类型
                     # event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
                     def sync_progress_callback(event):
+                        # 检查是否已被取消
+                        if sse_manager.is_cancelled(session_id):
+                            logger.info(f"[SSE-Thread] Generation cancelled by user during progress: session_id={session_id}")
+                            raise asyncio.CancelledError("Cancelled by user")
                         results['progress'].append(event)
                         # 同时将事件传递给会话记录服务（同步版本）
                         record_service.handle_progress_event(event)
@@ -753,56 +781,75 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     # 支持直接接收 dict 事件（子智能体的 tool_start/tool_result 等完整事件）
                     # 或字符串消息（主智能体的 progress 消息）
                     async def async_progress_callback(message):
+                        # 检查是否已被取消
+                        if sse_manager.is_cancelled(session_id):
+                            logger.info(f"[SSE-Thread] Generation cancelled by user during async progress: session_id={session_id}")
+                            raise asyncio.CancelledError("Cancelled by user")
                         if isinstance(message, dict):
                             # 已经是完整的事件格式，直接传递
                             sync_progress_callback(message)
                         else:
                             # 字符串消息，包装为 progress 事件
                             sync_progress_callback({"type": "progress", "data": message})
-                    
+
                     # 运行agent
                     async def consume_generator():
                         """创建协程来迭代async generator"""
-                        async for chunk in agent.process_message(
-                            user_input=full_message,
-                            session_id=session_id,
-                            user=agent_user,
-                            attachments=attachments,
-                            progress_callback=async_progress_callback
-                        ):
-                            results['chunks'].append(chunk)
-                    
+                        try:
+                            async for chunk in agent.process_message(
+                                user_input=full_message,
+                                session_id=session_id,
+                                user=agent_user,
+                                attachments=attachments,
+                                progress_callback=async_progress_callback
+                            ):
+                                # 每接收一个chunk就检查一次是否被取消
+                                if sse_manager.is_cancelled(session_id):
+                                    logger.info(f"[SSE-Thread] Generation cancelled by user during chunk generation: session_id={session_id}")
+                                    raise asyncio.CancelledError("Cancelled by user")
+                                results['chunks'].append(chunk)
+                        except asyncio.CancelledError:
+                            logger.info(f"[SSE-Thread] Consumption cancelled: session_id={session_id}")
+                            raise
+
                     loop.run_until_complete(consume_generator())
                     loop.close()
-                    
-                    # 保存会话记录
-                    full_response = "".join(results['chunks'])
-                    record_service.complete(full_response)
-                    if results.get('error'):
-                        record_service.mark_error(results['error'])
-                    SessionRecordManager.end_record()
 
-                    # 同时保存消息到 chat_messages 表（用于前端显示历史消息）
-                    # 保存用户消息
-                    user_metadata = {"progressMessages": []}
-                    # 将附件信息保存到 metadata，以便前端历史消息能显示附件
-                    if request.files:
-                        user_metadata["attachments"] = request.files
-                    MessageDB.create(
-                        session_id=session_id,
-                        role="user",
-                        content=full_message,
-                        metadata=user_metadata
-                    )
-                    # 保存AI回复（包含执行详情，但不作为模型上下文）
-                    if full_response:
+                    # 如果未被取消，保存会话记录
+                    full_response = "".join(results['chunks'])
+                    if not sse_manager.is_cancelled(session_id) and full_response:
+                        record_service.complete(full_response)
+                        if results.get('error'):
+                            record_service.mark_error(results['error'])
+                        SessionRecordManager.end_record()
+
+                        # 同时保存消息到 chat_messages 表（用于前端显示历史消息）
+                        # 保存用户消息
+                        user_metadata = {"progressMessages": []}
+                        # 将附件信息保存到 metadata，以便前端历史消息能显示附件
+                        if request.files:
+                            user_metadata["attachments"] = request.files
                         MessageDB.create(
                             session_id=session_id,
-                            role="assistant",
-                            content=full_response,
-                            metadata={"progressMessages": results.get('progress', [])}  # 执行详情仅用于显示
+                            role="user",
+                            content=full_message,
+                            metadata=user_metadata
                         )
-                    
+                        # 保存AI回复（包含执行详情，但不作为模型上下文）
+                        if full_response:
+                            MessageDB.create(
+                                session_id=session_id,
+                                role="assistant",
+                                content=full_response,
+                                metadata={"progressMessages": results.get('progress', [])}  # 执行详情仅用于显示
+                            )
+
+                except asyncio.CancelledError:
+                    logger.info(f"[SSE-Thread] Agent generation was cancelled by user: session_id={session_id}")
+                    results['error'] = "Cancelled by user"
+                    if SessionRecordManager.get_current_record():
+                        SessionRecordManager.get_current_record().mark_error("Cancelled by user")
+                        SessionRecordManager.end_record()
                 except Exception as e:
                     import traceback
                     error_trace = traceback.format_exc()
@@ -814,6 +861,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         SessionRecordManager.get_current_record().mark_error(str(e))
                         SessionRecordManager.end_record()
                 finally:
+                    # 清除取消标记
+                    sse_manager.clear_cancelled(session_id)
                     completed.set()
                     thread_duration = (datetime.now() - thread_start_time).total_seconds()
                     logger.info(f"[SSE-Thread] run_agent finished, session_id={session_id}, duration={thread_duration:.2f}s, chunks={len(results['chunks'])}, progress={len(results['progress'])}")
@@ -961,6 +1010,18 @@ async def delete_chat_session(session_id: str):
         if session_id in sse_manager.sse_connections:
             del sse_manager.sse_connections[session_id]
     return JSONResponse({"status": "deleted", "session_id": session_id})
+
+
+@app.post("/api/chat/{session_id}/cancel")
+async def cancel_chat_generation(session_id: str):
+    """用户主动取消当前正在生成的会话"""
+    sse_manager.cancel_session(session_id)
+    logger.info(f"[Cancel] User requested cancel generation: session_id={session_id}")
+    return JSONResponse({
+        "success": True,
+        "message": "Cancel request accepted",
+        "session_id": session_id
+    })
 
 
 # ==================== Auth & Session API ====================

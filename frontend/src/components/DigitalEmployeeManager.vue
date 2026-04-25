@@ -424,7 +424,7 @@ async function loadList() {
       allList.value = res.data || []
     }
   } catch (e: any) {
-    console.error('临时调试：加载列表失败', e)
+    console.error('加载列表失败', e)
   }
 }
 
@@ -436,7 +436,7 @@ async function loadSkills() {
       availableSkills.value = res.data || []
     }
   } catch (e: any) {
-    console.error('临时调试：加载技能列表失败', e)
+    console.error('加载技能列表失败', e)
   }
 }
 
@@ -448,7 +448,7 @@ async function loadTools() {
       availableTools.value = res.data || []
     }
   } catch (e: any) {
-    console.error('临时调试：加载工具列表失败', e)
+    console.error('加载工具列表失败', e)
   }
 }
 
@@ -463,7 +463,7 @@ async function selectAgent(item: SubagentListItem) {
       detail.value = res.data
     }
   } catch (e: any) {
-    console.error('临时调试：加载详情失败', e)
+    console.error('加载详情失败', e)
   } finally {
     loading.value = false
   }

@@ -88,13 +88,11 @@ export function useTenantAuth() {
 
         // 验证 token 有效性
         const info = await getAdminInfo(routeTenantId)
-        console.log('临时调试：getAdminInfo 返回', info)
         // 修复: 后端返回 user 而非 admin
         // 平台管理员的 tenant 可能是 null，需要分开判断
         if (info?.user) {
           admin.value = info.user
           tenant.value = info.tenant ? { ...info.tenant, status: Number(info.tenant.status) } : null
-          console.log('临时调试：设置后 tenant.value', tenant.value)
         } else {
           // token 无效，清除
           clearStorage()
