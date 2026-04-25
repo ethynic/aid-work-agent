@@ -280,7 +280,7 @@ class SessionDB:
     """会话数据库访问类"""
 
     @staticmethod
-    def create(user_id: str, title: str = None, context_data: dict = None, tenant_id: str = None) -> Optional[Dict[str, Any]]:
+    def create(user_id: str, title: str = None, context_data: dict = None, tenant_id: str = None, subagent_id: str = None) -> Optional[Dict[str, Any]]:
         """创建新会话"""
         session_id = generate_session_id()
         placeholder = "%s"
@@ -289,13 +289,13 @@ class SessionDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO chat_sessions (session_id, user_id, tenant_id, title, context_data)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                """, (session_id, user_id, tenant_id, title or "新会话",
+                    INSERT INTO chat_sessions (session_id, user_id, tenant_id, subagent_id, title, context_data)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """, (session_id, user_id, tenant_id, subagent_id, title or "新会话",
                       json.dumps(context_data) if context_data else None))
                 conn.commit()
 
-                logger.info(f"Chat session created: {session_id} for user: {user_id}, tenant: {tenant_id}")
+                logger.info(f"Chat session created: {session_id} for user: {user_id}, tenant: {tenant_id}, subagent: {subagent_id}")
                 return SessionDB.get_by_id(session_id)
             except Exception as e:
                 logger.error(f"Failed to create chat session: {e}")
@@ -377,6 +377,21 @@ class SessionDB:
                 SET context_data = {placeholder}, updated_at = {ts}
                 WHERE session_id = {placeholder}
             """, (json.dumps(context_data), session_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def update_subagent_id(session_id: str, subagent_id: Optional[str]) -> bool:
+        """更新会话关联的数字员工ID"""
+        placeholder = "%s"
+        ts = get_current_timestamp()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE chat_sessions
+                SET subagent_id = {placeholder}, updated_at = {ts}
+                WHERE session_id = {placeholder}
+            """, (subagent_id, session_id))
             conn.commit()
             return cursor.rowcount > 0
 

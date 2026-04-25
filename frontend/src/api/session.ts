@@ -43,6 +43,7 @@ export interface ChatSession {
   session_id: string
   user_id: string
   tenant_id?: string
+  subagent_id?: string
   title: string
   context_data?: Record<string, any>
   created_at: string
@@ -61,6 +62,7 @@ export interface ChatMessage {
 export interface CreateSessionRequest {
   title?: string
   context_data?: Record<string, any>
+  subagent_id?: string
 }
 
 export interface SessionContext {
@@ -118,7 +120,7 @@ export async function getSession(sessionId: string): Promise<ChatSession> {
 /**
  * 更新会话
  */
-export async function updateSession(sessionId: string, data: { title?: string, context_data?: Record<string, any> }): Promise<ChatSession> {
+export async function updateSession(sessionId: string, data: { title?: string, context_data?: Record<string, any>, subagent_id?: string }): Promise<ChatSession> {
   const res = await fetch(`${API_BASE}/${sessionId}`, {
     method: 'PATCH',
     headers: {

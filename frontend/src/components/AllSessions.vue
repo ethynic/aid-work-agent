@@ -210,8 +210,26 @@ function formatTime(isoString: string): string {
 // 选择会话
 function handleSelectSession(sessionId: string) {
   selectSession(sessionId)
+  const session = sessions.value.find(s => s.session_id === sessionId)
   switchSession(sessionId).then(() => {
-    router.push('/')
+    // 根据会话保存的 subagent_id 跳转到对应路由
+    const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
+    if (tenantMatch) {
+      // 租户模式
+      const tenantId = tenantMatch[1]
+      if (session?.subagent_id) {
+        router.push(`/t/${tenantId}/chat/${session.subagent_id}`)
+      } else {
+        router.push(`/t/${tenantId}/chat`)
+      }
+    } else {
+      // 普通演示模式
+      if (session?.subagent_id) {
+        router.push(`/chat/${session.subagent_id}`)
+      } else {
+        router.push('/')
+      }
+    }
   })
 }
 

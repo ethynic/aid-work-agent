@@ -21,11 +21,13 @@ router = APIRouter(prefix="/api/sessions", tags=["会话管理"])
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     context_data: Optional[dict] = None
+    subagent_id: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
     context_data: Optional[dict] = None
+    subagent_id: Optional[str] = None
 
 
 class CreateMessageRequest(BaseModel):
@@ -38,6 +40,7 @@ class SessionResponse(BaseModel):
     session_id: str
     user_id: str
     tenant_id: Optional[str] = None
+    subagent_id: Optional[str] = None
     title: str
     context_data: Optional[dict] = None
     created_at: str
@@ -76,6 +79,7 @@ async def create_session(request: Request, body: CreateSessionRequest = None):
 
     title = body.title if body else None
     context_data = body.context_data if body else None
+    subagent_id = body.subagent_id if body else None
 
     # 如果有context_data，添加用户基础信息
     if context_data is None:
@@ -87,7 +91,7 @@ async def create_session(request: Request, body: CreateSessionRequest = None):
     }
 
     tenant_id = get_current_tenant_id()
-    session = SessionDB.create(user["user_id"], title, context_data, tenant_id=tenant_id)
+    session = SessionDB.create(user["user_id"], title, context_data, tenant_id=tenant_id, subagent_id=subagent_id)
     if session:
         return session
     raise HTTPException(status_code=500, detail="创建会话失败")
@@ -149,6 +153,8 @@ async def update_session(request: Request, session_id: str, body: UpdateSessionR
         SessionDB.update_title(session_id, body.title)
     if body.context_data:
         SessionDB.update_context(session_id, body.context_data)
+    if body.subagent_id is not None:
+        SessionDB.update_subagent_id(session_id, body.subagent_id)
 
     # 每次更新时都刷新 updated_at 时间戳
     SessionDB.touch(session_id)

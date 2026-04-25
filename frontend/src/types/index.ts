@@ -59,6 +59,8 @@ export interface User {
 export interface Session {
   session_id: string
   user_id: string
+  tenant_id?: string
+  subagent_id?: string
   title: string
   context_data?: Record<string, any>
   created_at: string

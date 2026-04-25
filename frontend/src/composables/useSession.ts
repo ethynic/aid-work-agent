@@ -110,7 +110,7 @@ export function useSession() {
       // 创建新会话
       const newSession = await createSession({
         title,
-        ...(subagent ? { context_data: { subagent } } : {})
+        ...(subagent ? { context_data: { subagent }, subagent_id: subagent } : {})
       })
       sessions.value.unshift(newSession)
       return newSession

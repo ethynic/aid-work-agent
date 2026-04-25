@@ -264,6 +264,8 @@ def _init_postgresql():
                 id SERIAL PRIMARY KEY,
                 session_id TEXT UNIQUE NOT NULL,
                 user_id TEXT NOT NULL,
+                tenant_id TEXT,
+                subagent_id TEXT,
                 title TEXT,
                 context_data TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
