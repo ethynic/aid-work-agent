@@ -346,7 +346,9 @@ onMounted(async () => {
     // 已登录，加载会话列表
     await loadSessions()
     // 子智能体模式下不加载主智能体最近会话
-    if (!subagentName.value) {
+    // 如果 currentSessionId 已经是 null 且 sessions 已经加载（说明用户已经在导航前点击了"新会话"），不要再覆盖它
+    // 只有当页面刚刷新（sessions 为空列表）且 currentSessionId 为 null 时，才需要加载最近会话
+    if (!subagentName.value && (currentSessionId.value !== null || sessions.value.length === 0)) {
       const hasSession = await loadLatestSession()
       if (hasSession && currentSessionId.value) {
         agentSessionId.value = currentSessionId.value
