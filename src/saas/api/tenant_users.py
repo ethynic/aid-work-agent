@@ -18,8 +18,10 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
+from src.saas.db.permission_db import TenantAgentPermissionDB, UserAgentPermissionDB
 from src.db.models import UserDB
 from src.config.settings import settings
+from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/users", tags=["SaaS 企业用户"])
 
@@ -117,6 +119,15 @@ async def create_user(request: Request, body: UserCreateRequest):
 
     if not user:
         raise HTTPException(status_code=500, detail="创建用户失败")
+
+    # 如果租户只授权了一个数字员工，自动给新用户添加该授权
+    with get_db_connection() as conn:
+        tenant_allowed = TenantAgentPermissionDB.get_allowed_agents(conn, tenant_id)
+        if len(tenant_allowed) == 1 and body.role == "user":
+            # 自动授权唯一的那个数字员工
+            agent_id = tenant_allowed[0]
+            UserAgentPermissionDB.add_permission(conn, user["user_id"], tenant_id, agent_id)
+            logger.info(f"Auto authorized new user {user['user_id']} for agent {agent_id} (tenant {tenant_id} has only one agent)")
 
     logger.info(f"User created for tenant {tenant_id}: {user['user_id']} ({body.phone})")
     return {"success": True, "user": user}
@@ -289,5 +300,9 @@ async def remove_user(user_id: str, request: Request):
         return {"success": False, "message": "无法移除平台管理员"}
 
     # 将 tenant_id 设为 None，而不是删除用户
+    # 同时清除该用户的所有数字员工授权
+    with get_db_connection() as conn:
+        UserAgentPermissionDB.clear_user_permissions(conn, user_id)
+
     success = UserDB.update(user_id, tenant_id=None)
     return {"success": success}

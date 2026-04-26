@@ -391,41 +391,6 @@ function now(): string {
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
 }
 
-async function handleNewSession() {
-  console.log(`[${now()}] [ConfirmDialog] handleNewSession called, isProcessing=`, isProcessing.value)
-  if (!effectiveIsLoggedIn.value) {
-    showLoginModal.value = true
-    return
-  }
-  // 如果当前正在流式响应，需要用户确认是否终止
-  if (isProcessing.value) {
-    console.log(`[${now()}] [ConfirmDialog] isProcessing=true, show confirm dialog`)
-    if (!confirm('当前会话还未结束，您希望终止当前会话，进入新会话吗？')) {
-      console.log(`[${now()}] [ConfirmDialog] user canceled`)
-      return
-    }
-    console.log(`[${now()}] [ConfirmDialog] user confirmed, abort streaming`)
-    // 用户确认，终止当前流式响应
-    await abortStreaming()
-  }
-  // 优化：点击新会话立即响应，不等待后端 API
-  // 直接清空当前会话，显示空界面，用户输入第一条消息时才真正创建会话
-  console.log(`[${now()}] [ConfirmDialog] go to empty new session immediately`)
-  skipNextSwitch.value = true
-  selectSession(null)
-  agentSessionId.value = null as any
-  // 创建新会话后，清空当前消息，开始新对话
-  clearSession()
-  clearAttachments()
-  // 展开侧边栏
-  if (collapseSidebarFn) {
-    collapseSidebarFn()
-  } else {
-    isSidebarCollapsed.value = false
-  }
-  console.log(`[${now()}] [ConfirmDialog] handleNewSession done instantly`)
-}
-
 async function handleLogout() {
   await doLogout()
   showLoginModal.value = true

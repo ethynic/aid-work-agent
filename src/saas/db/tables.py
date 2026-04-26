@@ -91,6 +91,41 @@ def init_saas_tables_sqlite(conn: sqlite3.Connection):
         ON agent_instances(tenant_id, status)
     """)
 
+    # 7. 租户-数字员工授权表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, agent_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant
+        ON tenant_agent_permissions(tenant_id)
+    """)
+
+    # 8. 用户-数字员工授权表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_agent_permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, agent_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user
+        ON user_agent_permissions(user_id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user
+        ON user_agent_permissions(tenant_id, user_id)
+    """)
+
     # 6. 租户渠道配置表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tenant_channel_configs (
@@ -190,6 +225,41 @@ def init_saas_tables_postgresql(conn):
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant
         ON agent_instances(tenant_id, status)
+    """)
+
+    # 7. 租户-数字员工授权表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
+            id SERIAL PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, agent_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant
+        ON tenant_agent_permissions(tenant_id)
+    """)
+
+    # 8. 用户-数字员工授权表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_agent_permissions (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, agent_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user
+        ON user_agent_permissions(user_id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user
+        ON user_agent_permissions(tenant_id, user_id)
     """)
 
     # 6. 租户渠道配置表

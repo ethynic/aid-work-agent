@@ -19,6 +19,8 @@ from src.config.settings import settings
 from src.core.agent import master_agent
 from src.models.subagent import SubagentConfig
 from src.subagents.loader import SubagentLoader
+from src.saas.context import get_current_tenant_id
+from src.saas.permissions.checker import get_allowed_agent_ids_for_user
 
 router = APIRouter(prefix="/api/admin", tags=["数字员工管理"])
 
@@ -132,6 +134,18 @@ async def list_subagents(request: Request):
             registry._load_custom(registry._custom_dir)
 
         items = registry.get_all_subagents_with_type()
+
+        # 租户模式下按权限过滤：
+        # - 平台管理员代管理租户时，只返回租户被授权的数字员工
+        # - 租户管理员/普通用户只返回自身被授权的数字员工
+        tenant_id = get_current_tenant_id()
+        if tenant_id is not None:
+            # 获取当前用户允许的agent列表
+            user = get_current_user(request)
+            if user:
+                allowed_ids = set(get_allowed_agent_ids_for_user(user))
+                items = [item for item in items if item["agent_id"] in allowed_ids]
+
         return {"success": True, "data": items}
 
     except Exception as e:

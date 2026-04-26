@@ -356,6 +356,28 @@ CREATE TABLE IF NOT EXISTS payment_orders (
 
 CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant ON payment_orders(tenant_id, payment_status);
 
+-- 租户级数字员工授权表
+CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    tenant_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
+
+-- 用户级数字员工授权表
+CREATE TABLE IF NOT EXISTS user_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
+
 
 -- 输出初始化完成信息
 DO $$
@@ -652,6 +674,28 @@ CREATE TABLE IF NOT EXISTS payment_orders (
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant ON payment_orders(tenant_id, payment_status);
+
+-- 租户级数字员工授权表
+CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    tenant_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
+
+-- 用户级数字员工授权表
+CREATE TABLE IF NOT EXISTS user_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
 
 
 -- 测试库初始化完成

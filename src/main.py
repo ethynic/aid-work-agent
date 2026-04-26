@@ -305,7 +305,7 @@ async def root():
 async def chat(request: Request):
     """
     Web chat API
-    
+
     For direct web client calls
     """
     try:
@@ -323,6 +323,17 @@ async def chat(request: Request):
 
         # 从请求头解析用户身份
         current_user = auth.get_current_user(request)
+
+        # 权限检查：数字员工访问授权
+        if subagent_name and current_user:
+            from src.saas.permissions.checker import check_agent_access
+            if not check_agent_access(subagent_name, current_user):
+                return JSONResponse({
+                    "success": False,
+                    "error": "未授权使用数字员工",
+                    "details": "您没有权限访问此数字员工，请联系管理员申请授权",
+                }, status_code=403)
+
         agent_user = None
         if current_user:
             from src.models.user import User
@@ -594,21 +605,32 @@ async def download_file(file_id: str):
 async def chat_stream(http_request: Request, request: ChatRequest):
     """
     SSE流式聊天接口
-    
+
     前端通过EventSource连接此接口，接收实时的进度和响应消息
-    
+
     请求体:
     {
         "message": "用户消息",
         "session_id": "会话ID（可选）",
         "files": [] // 可选的文件列表
     }
-    
+
     响应: Server-Sent Events 流
     """
     # 从请求头解析用户身份
     current_user = auth.get_current_user(http_request)
     user_id = current_user["user_id"] if current_user else "anonymous"
+
+    # 权限检查：数字员工访问授权
+    if request.subagent and current_user:
+        from src.saas.permissions.checker import check_agent_access
+        if not check_agent_access(request.subagent, current_user):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "success": False,
+                "error": "未授权使用数字员工",
+                "details": "您没有权限访问此数字员工，请联系管理员申请授权",
+            }, status_code=403)
 
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
@@ -1039,7 +1061,7 @@ app.include_router(admin_subagent.router)
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes
-from src.saas.api import tenant_users, usage_reports
+from src.saas.api import tenant_users, usage_reports, permissions
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
 app.include_router(subscriptions.router)
@@ -1050,6 +1072,7 @@ app.include_router(channel_routes.router)
 app.include_router(tenant_users.router)
 app.include_router(usage_reports.router)
 app.include_router(usage_reports.public_router)
+app.include_router(permissions.router)
 
 
 

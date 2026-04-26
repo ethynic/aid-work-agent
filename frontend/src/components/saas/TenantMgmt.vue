@@ -18,6 +18,7 @@
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">企业名称</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">初始管理员手机号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">数字员工授权</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户入口网址</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
           </tr>
@@ -33,6 +34,16 @@
                 class="px-2 py-1 rounded-full text-xs font-medium"
               >
                 {{ getStatusLabel(tenant.status) }}
+              </span>
+            </td>
+            <td class="px-4 py-3">
+              <span v-if="tenant.agent_permission_count > 0"
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                {{ tenant.agent_permission_count }} 个已授权
+              </span>
+              <span v-else
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                未授权
               </span>
             </td>
             <td class="px-4 py-3">
@@ -80,7 +91,27 @@
       <div class="absolute inset-0 bg-black/50" @click="showFormDialog = false"></div>
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
         <h3 class="text-lg font-bold text-slate-800 mb-4">{{ isEdit ? '编辑租户' : '新增租户' }}</h3>
-        <div class="space-y-4">
+        <!-- 标签页 -->
+        <div class="flex border-b border-slate-200 mb-4">
+          <button
+            @click="activeTab = 'basic'"
+            :class="['px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === 'basic' ? 'border-cyan-500 text-cyan-600' : 'border-transparent text-slate-500 hover:text-slate-700']"
+          >
+            基本信息
+          </button>
+          <button
+            @click="activeTab = 'agents'"
+            :class="['px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === 'agents' ? 'border-cyan-500 text-cyan-600' : 'border-transparent text-slate-500 hover:text-slate-700']"
+            v-if="isEdit"
+          >
+            数字员工授权
+            <span v-if="selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span>
+          </button>
+        </div>
+        <!-- 基本信息标签页 -->
+        <div v-if="activeTab === 'basic'" class="space-y-4">
           <div>
             <label class="block text-sm text-slate-600 mb-1">企业名称 <span class="text-red-500">*</span></label>
             <input v-model="formData.company_name" type="text" placeholder="请输入企业名称" maxlength="100"
@@ -126,6 +157,29 @@
               <option value="suspended">停用</option>
               <option value="deactivated">已删除</option>
             </select>
+          </div>
+        </div>
+        <!-- 数字员工授权标签页 -->
+        <div v-if="activeTab === 'agents'" class="max-h-96 overflow-y-auto">
+          <div v-if="loadingAgents" class="text-center py-6 text-slate-500 text-sm">加载中...</div>
+          <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-slate-500 text-sm">暂无可用数字员工</div>
+          <div v-else class="space-y-2 py-2">
+            <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-slate-50 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="selectedAgentIds.includes(agent.agent_id)"
+                @change="toggleAgentSelection(agent.agent_id)"
+                class="w-4 h-4 text-cyan-600 border-slate-300 rounded focus:ring-cyan-500"
+              />
+              <div class="ml-3 flex-1">
+                <div class="text-sm font-medium text-slate-800">{{ agent.name }}</div>
+                <div v-if="agent.description" class="text-xs text-slate-500">{{ agent.description }}</div>
+              </div>
+              <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
+                :class="agent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'">
+                {{ agent.type === 'builtin' ? '内置' : '定制' }}
+              </span>
+            </label>
           </div>
         </div>
         <div v-if="formError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ formError }}</div>
@@ -209,6 +263,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, type AgentItem } from '@/api/saasPermissions'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -221,6 +276,12 @@ const isEdit = ref(false)
 const submitting = ref(false)
 const formError = ref('')
 const currentTenant = ref<any>(null)
+
+// 数字员工授权标签页相关
+const activeTab = ref<'basic' | 'agents'>('basic')
+const availableAgents = ref<AgentItem[]>([])
+const selectedAgentIds = ref<string[]>([])
+const loadingAgents = ref(false)
 
 const defaultFormData: TenantFormData = {
   company_name: '',
@@ -260,7 +321,7 @@ function openAddDialog() {
   showFormDialog.value = true
 }
 
-function openEditDialog(tenant: any) {
+async function openEditDialog(tenant: any) {
   isEdit.value = true
   currentTenant.value = tenant
   formData.value = {
@@ -272,6 +333,27 @@ function openEditDialog(tenant: any) {
     plan: tenant.plan,
     status: String(tenant.status),
   }
+  // 切换到基本信息标签页
+  activeTab.value = 'basic'
+  // 加载所有可用数字员工
+  selectedAgentIds.value = []
+  loadingAgents.value = true
+  try {
+    const [agentsRes, permissionsRes] = await Promise.all([
+      getAllAvailableAgents(),
+      getTenantAgentPermissions(tenant.tenant_id),
+    ])
+    if (agentsRes.success && agentsRes.data) {
+      availableAgents.value = agentsRes.data
+    }
+    if (permissionsRes.success && permissionsRes.data) {
+      selectedAgentIds.value = permissionsRes.data.agent_ids || []
+    }
+  } catch (e) {
+    console.error('加载数字员工授权失败:', e)
+  } finally {
+    loadingAgents.value = false
+  }
   formError.value = ''
   showFormDialog.value = true
 }
@@ -279,6 +361,15 @@ function openEditDialog(tenant: any) {
 function openDetailDialog(tenant: any) {
   currentTenant.value = tenant
   showDetailDialog.value = true
+}
+
+function toggleAgentSelection(agentId: string) {
+  const index = selectedAgentIds.value.indexOf(agentId)
+  if (index >= 0) {
+    selectedAgentIds.value.splice(index, 1)
+  } else {
+    selectedAgentIds.value.push(agentId)
+  }
 }
 
 async function handleSubmit() {
@@ -295,6 +386,15 @@ async function handleSubmit() {
       result = await updateTenant(currentTenant.value.tenant_id, formData.value)
     } else {
       result = await createTenant(formData.value)
+    }
+    if (!result.success) {
+      formError.value = result.message || result.error || '操作失败'
+      submitting.value = false
+      return
+    }
+    // 如果是编辑且有租户ID，保存数字员工授权
+    if (isEdit.value && currentTenant.value) {
+      await setTenantAgentPermissions(currentTenant.value.tenant_id, selectedAgentIds.value)
     }
     // 如果后端返回了消息（创建初始管理员），显示成功消息
     if (result.message) {

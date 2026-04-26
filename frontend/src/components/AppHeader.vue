@@ -46,7 +46,7 @@
           class="absolute left-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-64 overflow-y-auto"
         >
           <button
-            v-for="agent in props.availableSubagents"
+            v-for="agent in filteredAvailableSubagents"
             :key="agent.agent_id"
             @click="selectSubagent(agent.agent_id)"
             :class="[
@@ -126,7 +126,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { getMyAllowedAgents } from '@/api/saasPermissions'
 import type { SubagentListItem } from '@/api/adminSubagent'
 
 const props = defineProps<{
@@ -147,18 +149,56 @@ const emit = defineEmits<{
   'change-subagent': [agentId: string]
 }>()
 
+const route = useRoute()
 const showMenuDropdown = ref(false)
 const showSubagentDropdown = ref(false)
 
+// 权限：当前用户允许访问的数字员工 ID 列表（仅租户模式需要）
+const myAllowedAgentIds = ref<Set<string>>(new Set())
+
+// 判断是否为租户模式
+const isTenantMode = computed(() => route.path.startsWith('/t/'))
+
+// 加载当前用户允许的数字员工权限
+async function loadMyAllowedAgents() {
+  if (!isTenantMode.value) {
+    return
+  }
+  try {
+    const res = await getMyAllowedAgents()
+    if (res.success && res.data) {
+      myAllowedAgentIds.value = new Set(res.data.map(a => a.agent_id))
+    }
+  } catch (err) {
+    console.error('加载用户数字员工权限失败', err)
+  }
+}
+
+// 过滤后可用的数字员工列表（根据权限过滤）
+const filteredAvailableSubagents = computed(() => {
+  if (!props.availableSubagents) return []
+  if (!isTenantMode.value || myAllowedAgentIds.value.size === 0) {
+    // 非租户模式：不过滤，返回全部
+    return props.availableSubagents
+  }
+  // 租户模式：只返回当前用户有权限的
+  return props.availableSubagents.filter(s => myAllowedAgentIds.value.has(s.agent_id))
+})
+
+// 在挂载时加载权限
+onMounted(() => {
+  loadMyAllowedAgents()
+})
+
 // 是否应该显示选择框：只有多个选项时才显示
 const shouldShowSelector = computed(() => {
-  return props.availableSubagents && props.availableSubagents.length > 1
+  return filteredAvailableSubagents.value && filteredAvailableSubagents.value.length > 1
 })
 
 // 当前选中的数字员工名称
 const currentSubagentName = computed(() => {
   if (props.currentSubagentId == null) return 'CEO智能体'
-  const found = props.availableSubagents?.find((s: SubagentListItem) => s.agent_id === props.currentSubagentId)
+  const found = filteredAvailableSubagents.value.find((s: SubagentListItem) => s.agent_id === props.currentSubagentId)
   return found?.name || 'CEO智能体'
 })
 
