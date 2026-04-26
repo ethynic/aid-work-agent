@@ -6,6 +6,8 @@
       <MenuSidebar
         v-if="!isInPortalLayout"
         :is-collapsed="isSidebarCollapsed"
+        :current-subagent-id="currentSubagentId"
+        :available-subagents="availableSubagents"
         @collapse="isSidebarCollapsed = true"
       />
 
@@ -26,24 +28,7 @@
             @change-subagent="handleSubagentChange"
           >
             <template #menu-items="{ closeMenu }">
-              <button
-                @click="handleNewSession(); closeMenu()"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                </svg>
-                新会话
-              </button>
-              <button
-                @click="openCustomerInfo"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-                我的客户
-              </button>
+
               <button
                 @click="showCredentialManager = true; closeMenu()"
                 class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
@@ -131,7 +116,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useToast } from 'vue-toastification'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
@@ -146,8 +130,6 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
-
-const toast = useToast()
 const router = useRouter()
 
 // 从 PortalLayout 注入侧边栏状态（租户前台模式）
@@ -192,7 +174,7 @@ const subagentName = computed<string | null>(() => {
 const availableSubagents = ref<SubagentListItem[]>([])
 
 // 当前选中的数字员工ID（null 表示主智能体）
-const currentSubagentId = computed(() => subagentName.value)
+const currentSubagentId = computed(() => subagentName.value ?? undefined)
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -254,27 +236,6 @@ const pageTitle = computed(() => {
   }
   return `${prefix}新会话`
 })
-
-// 跳转到客户信息页面
-function openCustomerInfo() {
-  // 使用 user_id 和 currentSessionId 构建 URL
-  const currentUser = effectiveUser.value
-  const userId = currentUser?.user_id
-  const sessionId = currentSessionId.value
-  if (userId) {
-    const params = new URLSearchParams()
-    params.append('user_id', userId)
-    if (sessionId) {
-      params.append('session_id', sessionId)
-    }
-    window.open(`/customer-info?${params.toString()}`, '_blank')
-  } else {
-    // 如果没有用户信息，提示登录
-    toast.warning('请先登录')
-    showLoginModal.value = true
-  }
-}
-
 // 跳转到定时任务页面
 function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')

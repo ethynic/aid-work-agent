@@ -6,6 +6,8 @@
       <MenuSidebar
         v-if="!isNestedRoute"
         :is-collapsed="isSidebarCollapsed"
+        :current-subagent-id="currentSubagentId"
+        :available-subagents="availableSubagents"
         @collapse="isSidebarCollapsed = true"
       />
 
@@ -453,6 +455,7 @@ import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
+import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
 import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem } from '@/api/knowledge'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -510,6 +513,48 @@ const isSidebarCollapsed = ref(false)
 // 如果路由路径以 /t/ 开头，说明被PortalLayout包裹，不需要自己渲染MenuSidebar
 const isNestedRoute = computed(() => route.path.startsWith('/t/'))
 const showCredentialManager = ref(false)
+
+// 可用的数字员工列表
+const availableSubagents = ref<SubagentListItem[]>([])
+
+// 当前选中的子智能体ID（从路由获取）
+const currentSubagentId = computed(() => {
+  const segments = route.path.split('/').filter(p => p)
+  // 租户模式：segments = ['t', 'tenantId', ...]
+  if (segments[0] === 't' && segments.length >= 3) {
+    if (segments[2] === 'chat' && segments.length >= 4) {
+      // 格式: /t/:tenantId/chat/:subagentId
+      return segments[3]
+    }
+    // 格式: /t/:tenantId/:subagentId/* （业务数据页面）
+    return segments[2]
+  }
+  // 非租户模式：匹配 /chat/:subagentId 或 /:subagentId/*
+  if (segments.length >= 1) {
+    if (segments[0] === 'chat' && segments.length >= 2) {
+      // 格式: /chat/:subagentId
+      return segments[1]
+    }
+    // 格式: /:subagentId/* （业务数据页面）
+    return segments[0]
+  }
+  return undefined
+})
+
+// 加载数字员工列表
+async function loadAvailableSubagents() {
+  try {
+    const res = await listSubagents()
+    if (res.success && res.data) {
+      availableSubagents.value = [
+        { agent_id: 'main', name: 'CEO智能体', description: '', capabilities: [], type: 'builtin' },
+        ...res.data
+      ]
+    }
+  } catch (e) {
+    console.error('加载数字员工列表失败:', e)
+  }
+}
 
 // 分页总页数
 const totalPages = computed(() => Math.ceil(totalDocuments.value / pageSize.value) || 1)
@@ -786,6 +831,7 @@ async function handleLogout() {
 }
 
 onMounted(() => {
+  loadAvailableSubagents()
   loadDocuments()
 })
 </script>

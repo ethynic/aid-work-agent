@@ -18,12 +18,20 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 // ============== 类型定义 ==============
 
+export interface BusinessPage {
+  id: string
+  title: string
+  icon: string
+  route: string
+}
+
 export interface SubagentListItem {
   agent_id: string
   name: string
   description: string
   capabilities: string[]
   type: 'builtin' | 'custom'
+  business_pages?: BusinessPage[]
 }
 
 export interface SubagentDetail {
@@ -39,6 +47,7 @@ export interface SubagentDetail {
   context: Record<string, any>
   system_prompt: string
   type: 'builtin' | 'custom'
+  business_pages?: BusinessPage[]
 }
 
 export interface CreateSubagentRequest {

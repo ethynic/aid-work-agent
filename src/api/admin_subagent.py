@@ -159,22 +159,25 @@ async def get_subagent_detail(request: Request, agent_id: str):
         if not config:
             return _error_response(f"数字员工不存在: {agent_id}", f"agent_id={agent_id} not found", 404)
 
+        data = {
+            "agent_id": config.dir_name or agent_id,
+            "name": config.name,
+            "description": config.description,
+            "version": config.version,
+            "author": config.author,
+            "capabilities": config.capabilities,
+            "triggers": config.triggers,
+            "tools": config.tools,
+            "skills": config.skills,
+            "context": config.context,
+            "system_prompt": config.system_prompt,
+            "type": "builtin" if registry.is_builtin(agent_id) else "custom",
+        }
+        if config.business_pages:
+            data["business_pages"] = config.business_pages
         return {
             "success": True,
-            "data": {
-                "agent_id": config.dir_name or agent_id,
-                "name": config.name,
-                "description": config.description,
-                "version": config.version,
-                "author": config.author,
-                "capabilities": config.capabilities,
-                "triggers": config.triggers,
-                "tools": config.tools,
-                "skills": config.skills,
-                "context": config.context,
-                "system_prompt": config.system_prompt,
-                "type": "builtin" if registry.is_builtin(agent_id) else "custom",
-            },
+            "data": data
         }
 
     except Exception as e:

@@ -119,6 +119,47 @@
       </template>
     </div>
 
+    <!-- 业务数据分组 - 在企业知识库之后，历史会话之前 -->
+    <div v-if="currentBusinessPages.length > 0" class="flex-shrink-0 p-2">
+      <div class="flex-shrink-0 px-2 py-2">
+        <div class="flex items-center gap-3">
+          <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+        </div>
+      </div>
+      <button
+        @click="toggleBusinessData"
+        class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+      >
+        <div class="flex items-center gap-3">
+          <span class="text-base">📊</span>
+          <span>业务数据</span>
+        </div>
+        <span class="toggle-icon text-xs">{{ isBusinessDataExpanded ? '▼' : '▶' }}</span>
+      </button>
+
+      <div v-show="isBusinessDataExpanded" class="mt-1 ml-4 space-y-1">
+        <!-- 当前数字员工标签 -->
+        <div class="px-3 py-1 text-xs text-gray-400">
+          ── {{ currentSubagentName }} ──
+        </div>
+        <!-- 业务菜单项 -->
+        <div
+          v-for="page in currentBusinessPages"
+          :key="page.id"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm cursor-pointer',
+            route.path === page.route
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+          @click="navigateToBusinessPage(page)"
+        >
+          <span class="text-base">{{ page.icon }}</span>
+          <span>{{ page.title }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Decorative Divider - 装饰性分隔线 -->
     <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
       <div class="flex items-center gap-3">
@@ -307,15 +348,21 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 
+import type { SubagentListItem, BusinessPage } from '@/api/adminSubagent'
+
 interface Props {
   isCollapsed: boolean
   /** 是否显示历史会话区域，默认 true */
   showHistory?: boolean
   /** 是否显示新会话按钮，默认 true */
   showNewSession?: boolean
+  /** 当前选中的子智能体 ID */
+  currentSubagentId?: string
+  /** 所有可用的子智能体列表 */
+  availableSubagents: SubagentListItem[]
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   showHistory: true,
   showNewSession: true
 })
@@ -344,6 +391,17 @@ const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 const isAdminMenuExpanded = ref(true)
 const isHistoryExpanded = ref(false)
+
+// 业务数据分组折叠状态（持久化到 localStorage）
+const storageKey = 'aid_work_agent:business_data_expanded'
+const isBusinessDataExpanded = ref(
+  localStorage.getItem(storageKey) !== 'false'
+)
+
+const toggleBusinessData = () => {
+  isBusinessDataExpanded.value = !isBusinessDataExpanded.value
+  localStorage.setItem(storageKey, String(isBusinessDataExpanded.value))
+}
 
 // 判断是否为租户模式（路由以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -410,6 +468,36 @@ const isKnowledgeBaseActive = computed(() => {
 const isHistorySessionActive = computed(() => {
   return !isKnowledgeBaseActive.value
 })
+
+// 当前业务数据页面列表
+const currentBusinessPages = computed(() => {
+  const subagentId = props.currentSubagentId || currentSubagent.value
+  if (!subagentId) return []
+  const subagent = props.availableSubagents.find(
+    (s: SubagentListItem) => s.agent_id === subagentId
+  )
+  return subagent?.business_pages || []
+})
+
+// 当前子智能体名称
+const currentSubagentName = computed(() => {
+  const subagentId = props.currentSubagentId || currentSubagent.value
+  if (!subagentId) return ''
+  const subagent = props.availableSubagents.find(
+    (s: SubagentListItem) => s.agent_id === subagentId
+  )
+  return subagent?.name || ''
+})
+
+// 跳转到业务数据页面
+function navigateToBusinessPage(page: BusinessPage) {
+  // 如果是租户模式，需要加上租户 ID 前缀
+  if (isTenantMode.value && tenantId.value) {
+    router.push(`/t/${tenantId.value}${page.route}`)
+  } else {
+    router.push(page.route)
+  }
+}
 
 // 跳转到知识库（演示模式）
 function goToKnowledgeBase() {

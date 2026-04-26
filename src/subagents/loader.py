@@ -166,6 +166,7 @@ class SubagentLoader:
             system_prompt=frontmatter.get("system_prompt", body.strip()),
             delegatable_to=frontmatter.get("delegatable_to", []),
             allow_delegation=frontmatter.get("allow_delegation", True),
+            business_pages=frontmatter.get("business_pages", None),
             path=str(path),
             dir=str(path.parent),
         )
@@ -259,6 +260,8 @@ class SubagentLoader:
             frontmatter["skills"] = config.skills
         if config.context:
             frontmatter["context"] = config.context
+        if config.business_pages:
+            frontmatter["business_pages"] = config.business_pages
 
         yaml_str = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
         return f"---\n{yaml_str}---\n\n{body}"
