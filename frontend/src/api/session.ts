@@ -80,10 +80,15 @@ export interface SessionContext {
 }
 
 /**
- * 获取当前用户的所有会话
+ * 获取当前用户的所有会话（分页）
  */
-export async function listSessions(): Promise<{ sessions: ChatSession[] }> {
-  const res = await fetch(API_BASE, {
+export async function listSessions(page: number = 1, pageSize: number = 20): Promise<{
+  sessions: ChatSession[],
+  total: number,
+  page: number,
+  page_size: number
+}> {
+  const res = await fetch(`${API_BASE}?page=${page}&page_size=${pageSize}`, {
     headers: { ...getAuthHeader() }
   })
   if (!res.ok) throw new Error('Failed to fetch sessions')

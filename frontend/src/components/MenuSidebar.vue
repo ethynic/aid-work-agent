@@ -423,7 +423,10 @@ function goToDigitalEmployeeManager() {
 
 // 跳转到全部历史会话
 function goToAllSessions() {
-  router.push('/all-sessions')
+  const targetPath = isTenantMode.value && tenantId.value
+    ? `/t/${tenantId.value}/all-sessions`
+    : '/all-sessions'
+  router.push(targetPath)
 }
 
 // 监听登录状态，登录后加载会话

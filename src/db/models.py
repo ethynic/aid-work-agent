@@ -317,38 +317,56 @@ class SessionDB:
             return None
 
     @staticmethod
-    def list_by_user(user_id: str, limit: int = 50, tenant_id: str = None) -> List[Dict[str, Any]]:
-        """获取用户的会话列表
+    def list_by_user(user_id: str, page: int = 1, page_size: int = 20, tenant_id: str = None) -> Dict[str, Any]:
+        """获取用户的会话列表（分页）
 
         Args:
             user_id: 用户ID
-            limit: 返回数量上限
+            page: 页码，从1开始
+            page_size: 每页数量
             tenant_id: 租户ID，传入时仅返回该租户下的会话；不传则返回所有会话（兼容非SaaS模式）
         """
+        offset = (page - 1) * page_size
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            # 先统计总数
             if tenant_id is not None:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM chat_sessions WHERE user_id = %s AND tenant_id = %s",
+                    (user_id, tenant_id)
+                )
+                total = cursor.fetchone()["cnt"]
                 cursor.execute(f"""
                     SELECT * FROM chat_sessions
                     WHERE user_id = {placeholder} AND tenant_id = {placeholder}
                     ORDER BY updated_at DESC
-                    LIMIT {placeholder}
-                """, (user_id, tenant_id, limit))
+                    LIMIT {placeholder} OFFSET {placeholder}
+                """, (user_id, tenant_id, page_size, offset))
             else:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM chat_sessions WHERE user_id = %s",
+                    (user_id,)
+                )
+                total = cursor.fetchone()["cnt"]
                 cursor.execute(f"""
                     SELECT * FROM chat_sessions
                     WHERE user_id = {placeholder}
                     ORDER BY updated_at DESC
-                    LIMIT {placeholder}
-                """, (user_id, limit))
+                    LIMIT {placeholder} OFFSET {placeholder}
+                """, (user_id, page_size, offset))
             sessions = []
             for row in cursor.fetchall():
                 result = dict(row)
                 if result.get("context_data"):
                     result["context_data"] = json.loads(result["context_data"])
                 sessions.append(result)
-            return sessions
+            return {
+                "sessions": sessions,
+                "total": total,
+                "page": page,
+                "page_size": page_size
+            }
 
     @staticmethod
     def update_title(session_id: str, title: str) -> bool:

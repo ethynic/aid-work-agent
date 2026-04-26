@@ -2,7 +2,7 @@
  * 会话状态管理
  */
 
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import {
   listSessions,
   createSession,
@@ -24,6 +24,9 @@ import { useTenantAuth } from './useTenantAuth'
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
 const isLoading = ref(false)
+const currentPage = ref(1)
+const totalSessions = ref(0)
+const pageSize = ref(20)
 
 // 检查是否已登录（考虑租户模式）
 function checkIsLoggedIn(): boolean {
@@ -43,14 +46,14 @@ export function useSession() {
   /**
    * 加载会话列表
    */
-  async function loadSessions() {
+  async function loadSessions(page: number = 1) {
     if (!checkIsLoggedIn()) {
       return
     }
 
     isLoading.value = true
     try {
-      const result = await listSessions()
+      const result = await listSessions(page, pageSize.value)
       let loadedSessions = result.sessions || []
 
       // 过滤掉创建超过5分钟仍然是默认标题的空会话
@@ -59,15 +62,14 @@ export function useSession() {
         const createdTime = new Date(s.created_at).getTime()
         const isEmptyTitle = s.title === '新会话' || !s.title
         const isOldEmpty = isEmptyTitle && (now - createdTime) > 5 * 60000 // 超过5分钟
-        
+
         return !isOldEmpty
       })
 
       sessions.value = loadedSessions
-      // 按更新时间倒序
-      sessions.value.sort((a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      )
+      totalSessions.value = result.total
+      currentPage.value = result.page
+      pageSize.value = result.page_size
     } catch (e) {
       console.error('Failed to load sessions:', e)
     } finally {
@@ -198,6 +200,14 @@ export function useSession() {
   }
 
   /**
+   * 跳转到指定页
+   */
+  async function goToPage(page: number) {
+    if (page < 1 || page > totalPages.value) return
+    await loadSessions(page)
+  }
+
+  /**
    * 加载并自动选择最近会话
    */
   async function loadLatestSession(): Promise<boolean> {
@@ -248,11 +258,19 @@ export function useSession() {
     }
   }
 
+  // 计算总页数
+  const totalPages = computed(() => Math.ceil(totalSessions.value / pageSize.value))
+
   return {
     sessions,
     currentSessionId,
     isLoading,
+    currentPage,
+    totalSessions,
+    pageSize,
+    totalPages,
     loadSessions,
+    goToPage,
     createNewSession,
     removeSession,
     renameSession,

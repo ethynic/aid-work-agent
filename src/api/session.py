@@ -59,15 +59,15 @@ class MessageResponse(BaseModel):
 # ============== API 端点 ==============
 
 @router.get("")
-async def list_sessions(request: Request):
-    """获取当前用户的会话列表（支持租户隔离）"""
+async def list_sessions(request: Request, page: int = 1, page_size: int = 20):
+    """获取当前用户的会话列表（支持租户隔离、分页）"""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
 
     tenant_id = get_current_tenant_id()
-    sessions = SessionDB.list_by_user(user["user_id"], tenant_id=tenant_id)
-    return {"sessions": sessions}
+    result = SessionDB.list_by_user(user["user_id"], page=page, page_size=page_size, tenant_id=tenant_id)
+    return result
 
 
 @router.post("")
@@ -105,7 +105,8 @@ async def get_latest_session(request: Request):
         raise HTTPException(status_code=401, detail="未登录")
 
     tenant_id = get_current_tenant_id()
-    sessions = SessionDB.list_by_user(user["user_id"], limit=1, tenant_id=tenant_id)
+    result = SessionDB.list_by_user(user["user_id"], page=1, page_size=1, tenant_id=tenant_id)
+    sessions = result["sessions"]
     if not sessions:
         return {"session": None}
 
