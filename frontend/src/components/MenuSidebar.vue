@@ -130,13 +130,29 @@
       </div>
     </div>
 
-    <!-- History Sessions Header - 历史会话标题 -->
-    <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
-      <div class="flex items-center justify-between">
-        <h2 class="text-xs font-medium text-gray-500 uppercase tracking-wider">历史会话</h2>
+    <!-- History Sessions Header - 历史会话标题（可折叠） -->
+    <div v-if="showHistory" class="flex-shrink-0 p-2">
+      <div class="flex items-center justify-between gap-3">
+        <button
+          @click="isHistoryExpanded = !isHistoryExpanded"
+          class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+        >
+          <div class="flex items-center gap-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>历史会话</span>
+          </div>
+          <svg
+            :class="['w-4 h-4 transition-transform', isHistoryExpanded ? 'rotate-180' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
         <button
           @click="$emit('collapse')"
-          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors flex-shrink-0"
           title="收起侧边栏"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -147,7 +163,7 @@
     </div>
 
     <!-- Session List - 会话列表 -->
-    <div v-if="showHistory" class="flex-1 overflow-y-auto px-2">
+    <div v-show="showHistory && isHistoryExpanded" class="flex-1 overflow-y-auto px-2">
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -227,22 +243,25 @@
       </div>
     </div>
 
-    <!-- Theme Switcher - 主题切换器 -->
-    <div class="flex-shrink-0 p-3 border-t border-gray-200">
-      <ThemeSwitcher />
-    </div>
+    <!-- 底部固定区域 -->
+    <div class="mt-auto">
+      <!-- Theme Switcher - 主题切换器 -->
+      <div class="flex-shrink-0 p-3 border-t border-gray-200">
+        <ThemeSwitcher />
+      </div>
 
-    <!-- 退出登录 - 租户模式专用 -->
-    <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
-      <button
-        @click="handleTenantLogout"
-        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-        </svg>
-        <span>退出登录</span>
-      </button>
+      <!-- 退出登录 - 租户模式专用 -->
+      <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
+        <button
+          @click="handleTenantLogout"
+          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span>退出登录</span>
+        </button>
+      </div>
     </div>
 
     <!-- Rename Modal -->
@@ -324,6 +343,7 @@ const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 const isAdminMenuExpanded = ref(true)
+const isHistoryExpanded = ref(false)
 
 // 判断是否为租户模式（路由以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))

@@ -80,13 +80,19 @@ function getThemePreviewColor(themeName: ThemeName): string {
     case 'blue':
       return '#003A8C'
     case 'gray':
-      return '#374151'
-    case 'green':
-      return '#059669'
+      return '#2F3641'
+    case 'pine':
+      return '#164E42'
     case 'burgundy':
-      return '#991B1B'
-    case 'orange':
-      return '#EA580C'
+      return '#5C1A21'
+    case 'bamboo':
+      return '#25B26B'
+    case 'iris':
+      return '#8551F9'
+    case 'sunrise':
+      return '#FF7D00'
+    case 'peony':
+      return '#D91A80'
     default:
       return '#003A8C'
   }
