@@ -69,9 +69,11 @@
               </div>
             </div>
 
-            <!-- Hint Text - Dynamic Position -->
-            <p v-if="currentTab === 'password'" class="text-sm text-slate-400">测试环境默认密码为：888888</p>
-            <p v-else class="text-sm text-slate-400 mt-1">测试环境验证码固定为：888888</p>
+            <!-- Hint Text - Dynamic Position (only shown when VITE_SHOW_TEST_HINT=true) -->
+            <template v-if="import.meta.env.VITE_SHOW_TEST_HINT === 'true'">
+              <p v-if="currentTab === 'password'" class="text-sm text-slate-400">测试环境默认密码为：888888</p>
+              <p v-else class="text-sm text-slate-400 mt-1">测试环境验证码固定为：888888</p>
+            </template>
 
             <!-- Login Button - Fixed Position -->
             <button

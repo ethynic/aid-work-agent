@@ -245,9 +245,9 @@ def _init_postgresql():
                 id SERIAL PRIMARY KEY,
                 user_id TEXT UNIQUE NOT NULL,
                 username TEXT,
-                phone TEXT UNIQUE,
+                phone TEXT,
                 password_hash TEXT,
-                wx_openid TEXT UNIQUE,
+                wx_openid TEXT,
                 wx_unionid TEXT,
                 avatar_url TEXT,
                 tenant_id TEXT,
@@ -257,6 +257,34 @@ def _init_postgresql():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # 租户内手机号唯一约束（不同租户允许相同手机号）
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone
+            ON users (tenant_id, phone)
+            WHERE phone IS NOT NULL AND tenant_id IS NOT NULL
+        """)
+
+        # 迁移：删除旧的 phone 全局唯一约束（如果存在）
+        cursor.execute("""
+            SELECT conname FROM pg_constraint
+            WHERE conrelid = 'users'::regclass AND contype = 'u'
+            AND conname LIKE '%phone%'
+        """)
+        old_constraint = cursor.fetchone()
+        if old_constraint:
+            cursor.execute(f'ALTER TABLE users DROP CONSTRAINT {old_constraint[0]}')
+            logger.info(f"Dropped old phone unique constraint: {old_constraint[0]}")
+
+        # 同步删除旧的 phone 唯一索引（如果存在）
+        cursor.execute("""
+            SELECT indexname FROM pg_indexes
+            WHERE tablename = 'users' AND indexname = 'users_phone_key'
+        """)
+        old_index = cursor.fetchone()
+        if old_index:
+            cursor.execute('DROP INDEX IF EXISTS users_phone_key')
+            logger.info("Dropped old phone unique index: users_phone_key")
 
         # 会话表
         cursor.execute("""

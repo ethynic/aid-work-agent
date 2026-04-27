@@ -14,7 +14,7 @@ import {
   getSessionRecords,
   getSessionTokenUsage,
   type ChatSession,
-  type ChatMessage,
+  type ChatMessageRecord,
   type ChatRecord,
   type TokenUsage
 } from '@/api/session'
@@ -165,7 +165,7 @@ export function useSession() {
   /**
    * 获取会话消息历史
    */
-  async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+  async function loadSessionMessages(sessionId: string): Promise<ChatMessageRecord[]> {
     try {
       const result = await getSessionMessages(sessionId)
       return result.messages || []

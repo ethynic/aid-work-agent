@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     user_id TEXT UNIQUE NOT NULL,
     username TEXT,
-    phone TEXT UNIQUE,
+    phone TEXT,
     password_hash TEXT,
-    wx_openid TEXT UNIQUE,
+    wx_openid TEXT ,
     wx_unionid TEXT,
     avatar_url TEXT,
     tenant_id TEXT,
@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 租户内手机号唯一约束（不同租户允许相同手机号）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
 
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -361,8 +364,7 @@ CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
     id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     tenant_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, agent_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
 
@@ -372,8 +374,7 @@ CREATE TABLE IF NOT EXISTS user_agent_permissions (
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     tenant_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, agent_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
@@ -395,9 +396,9 @@ CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     user_id TEXT UNIQUE NOT NULL,
     username TEXT,
-    phone TEXT UNIQUE,
+    phone TEXT,
     password_hash TEXT,
-    wx_openid TEXT UNIQUE,
+    wx_openid TEXT,
     wx_unionid TEXT,
     avatar_url TEXT,
     tenant_id TEXT,
@@ -406,6 +407,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 租户内手机号唯一约束（不同租户允许相同手机号）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
 
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -680,8 +684,7 @@ CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
     id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     tenant_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, agent_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
 
@@ -691,8 +694,7 @@ CREATE TABLE IF NOT EXISTS user_agent_permissions (
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     tenant_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, agent_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);

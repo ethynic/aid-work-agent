@@ -355,11 +355,20 @@ async def chat(request: Request):
         if not agent:
             agent = agent_router.get_agent(subagent_name, session_id)
 
-        # Process message
-        response_text = await agent.process_message_sync(
-            user_input=user_input,
-            session_id=session_id,
-            user=agent_user,
+        # Process message — run in executor to avoid blocking the event loop
+        # under high concurrency (LLM calls can take 2-30s).
+        # This mirrors the SSE endpoint's pattern of offloading agent work to
+        # a separate thread with its own event loop.
+        loop = asyncio.get_running_loop()
+        response_text = await loop.run_in_executor(
+            None,
+            lambda: asyncio.run(
+                agent.process_message_sync(
+                    user_input=user_input,
+                    session_id=session_id,
+                    user=agent_user,
+                )
+            ),
         )
 
         return JSONResponse({

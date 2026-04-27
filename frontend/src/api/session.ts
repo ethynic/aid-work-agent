@@ -50,7 +50,7 @@ export interface ChatSession {
   updated_at: string
 }
 
-export interface ChatMessage {
+export interface ChatMessageRecord {
   message_id: string
   session_id: string
   role: 'user' | 'assistant' | 'system'
@@ -76,7 +76,7 @@ export interface SessionContext {
     title: string
     created_at: string
   }
-  messages: ChatMessage[]
+  messages: ChatMessageRecord[]
 }
 
 /**
@@ -152,7 +152,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 /**
  * 获取会话消息
  */
-export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessage[] }> {
+export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessageRecord[] }> {
   const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
     headers: { ...getAuthHeader() }
   })
@@ -163,7 +163,7 @@ export async function getSessionMessages(sessionId: string): Promise<{ messages:
 /**
  * 添加消息到会话
  */
-export async function addSessionMessage(sessionId: string, role: string, content: string, metadata?: Record<string, any>): Promise<ChatMessage> {
+export async function addSessionMessage(sessionId: string, role: string, content: string, metadata?: Record<string, any>): Promise<ChatMessageRecord> {
   const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
     method: 'POST',
     headers: {

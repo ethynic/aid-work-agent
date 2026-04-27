@@ -4,7 +4,7 @@
 
 import { getAuthHeader } from './auth'
 
-const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api/customer'}`
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/customer`
 
 export interface Customer {
   customer_id: string

@@ -7,6 +7,7 @@ Subagent Executor - 子智能体执行管理器
 """
 
 import asyncio
+import os
 import time
 import uuid
 from datetime import datetime
@@ -76,6 +77,11 @@ class SubagentExecutor:
         self.parent_plan_manager = parent_plan_manager
         self._active_executions: Dict[str, asyncio.Task] = {}
         self._subagent_instances: Dict[str, 'Agent'] = {}
+        # 并发限制：防止高并发下子智能体数量无上限导致 OOM
+        # 默认 max_workers = min(32, cpu_count * 2)，与 ThreadPoolExecutor 有上限的语义一致
+        _max_workers = min(32, (os.cpu_count() or 1) * 2)
+        self._concurrency_sem = asyncio.Semaphore(_max_workers)
+        logger.info(f"[SUBAGENT] Concurrency limit set to {_max_workers}")
     
     def _create_execution_id(self) -> str:
         """生成唯一的执行ID"""
@@ -274,86 +280,88 @@ class SubagentExecutor:
         logger.info(f"[SUBAGENT] record.execution_id: {record.execution_id}")
         logger.info(f"[SUBAGENT] record.task_description: {record.task_description}")
 
-        try:
-            # 更新状态为运行中
-            record.start()
-            self._update_task_record(record)
-            logger.info(f"[SUBAGENT] Record status updated to: {record.status}")
-
-            # 执行任务（带超时）
-            import time
-            exec_start_time = time.time()
-            logger.info(f"[SUBAGENT] Calling instance.execute_as_subagent() with timeout={timeout}s, execution_id={record.execution_id}...")
-            
+        async with self._concurrency_sem:
+            # 并发受限：超出上限的子智能体会在此等待，避免无限制创建协程导致 OOM
             try:
-                result = await asyncio.wait_for(
-                    instance.execute_as_subagent(
-                        task_description=task_description,
-                        parent_session_id=session_id,
-                        task_record=record,
-                        progress_callback=progress_callback,
-                    ),
-                    timeout=timeout
-                )
-                
-                exec_duration = time.time() - exec_start_time
-                logger.info(f"[SUBAGENT] instance.execute_as_subagent() completed, execution_id={record.execution_id}, duration={exec_duration:.2f}s")
-                logger.info(f"[SUBAGENT] Result preview: {str(result)[:200] if result else 'None'}...")
-                
-            except asyncio.TimeoutError as e:
-                exec_duration = time.time() - exec_start_time
-                logger.error(f"[SUBAGENT] execute_as_subagent TIMEOUT, execution_id={record.execution_id}, duration={exec_duration:.2f}s, timeout={timeout}s")
-                raise
-            except asyncio.CancelledError as e:
-                exec_duration = time.time() - exec_start_time
-                logger.warning(f"[SUBAGENT] execute_as_subagent CANCELLED, execution_id={record.execution_id}, duration={exec_duration:.2f}s")
-                raise
-            except Exception as e:
-                exec_duration = time.time() - exec_start_time
-                logger.error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}", exc_info=True)
-                raise
-            
-            # 更新结果
-            if result:
-                # 检查是否为 clarifying 状态（子智能体需要用户补充信息）
-                if result.get("status") == "clarifying":
-                    # CLARIFYING 状态由 execute_as_subagent 内部设置，
-                    # 这里只需要记录日志，不需要再调用 record.request_clarification()
-                    logger.info(f"[SUBAGENT] Subagent returned clarifying status for execution_id={record.execution_id}")
-                else:
-                    record.complete(
-                        result=result.get("result"),
-                        summary=result.get("summary", "")
+                # 更新状态为运行中
+                record.start()
+                self._update_task_record(record)
+                logger.info(f"[SUBAGENT] Record status updated to: {record.status}")
+
+                # 执行任务（带超时）
+                import time
+                exec_start_time = time.time()
+                logger.info(f"[SUBAGENT] Calling instance.execute_as_subagent() with timeout={timeout}s, execution_id={record.execution_id}...")
+
+                try:
+                    result = await asyncio.wait_for(
+                        instance.execute_as_subagent(
+                            task_description=task_description,
+                            parent_session_id=session_id,
+                            task_record=record,
+                            progress_callback=progress_callback,
+                        ),
+                        timeout=timeout
                     )
-                    if result.get("token_usage"):
-                        record.token_usage = result["token_usage"]
-                    logger.info(f"[SUBAGENT] Record completed with summary: {record.summary[:200] if record.summary else 'N/A'}")
-            else:
-                record.complete(result={}, summary="Task completed")
-                logger.info(f"[SUBAGENT] Record completed with empty result")
-            
-        except asyncio.TimeoutError:
-            logger.error(f"[SUBAGENT] Execution timed out: {record.execution_id}")
-            record.fail(f"Execution timed out after {timeout} seconds")
-            
-        except asyncio.CancelledError:
-            logger.warning(f"[SUBAGENT] Execution cancelled: {record.execution_id}")
-            record.cancel()
-            
-        except Exception as e:
-            import traceback
-            error_trace = traceback.format_exc()
-            logger.error(f"[SUBAGENT] Execution failed: {record.execution_id}, error: {e}")
-            logger.error(f"[SUBAGENT] Traceback:\n{error_trace}")
-            record.fail(str(e))
-            
-        finally:
-            self._update_task_record(record)
-            logger.info(f"[SUBAGENT] Final record status: {record.status}")
-            # 清理
-            self._active_executions.pop(record.execution_id, None)
-            self._subagent_instances.pop(record.execution_id, None)
-            logger.info(f"[SUBAGENT] Execution cleanup done")
+
+                    exec_duration = time.time() - exec_start_time
+                    logger.info(f"[SUBAGENT] instance.execute_as_subagent() completed, execution_id={record.execution_id}, duration={exec_duration:.2f}s")
+                    logger.info(f"[SUBAGENT] Result preview: {str(result)[:200] if result else 'None'}...")
+
+                except asyncio.TimeoutError as e:
+                    exec_duration = time.time() - exec_start_time
+                    logger.error(f"[SUBAGENT] execute_as_subagent TIMEOUT, execution_id={record.execution_id}, duration={exec_duration:.2f}s, timeout={timeout}s")
+                    raise
+                except asyncio.CancelledError as e:
+                    exec_duration = time.time() - exec_start_time
+                    logger.warning(f"[SUBAGENT] execute_as_subagent CANCELLED, execution_id={record.execution_id}, duration={exec_duration:.2f}s")
+                    raise
+                except Exception as e:
+                    exec_duration = time.time() - exec_start_time
+                    logger.error(f"[SUBAGENT] execute_as_subagent FAILED, execution_id={record.execution_id}, duration={exec_duration:.2f}s, error: {e}", exc_info=True)
+                    raise
+
+                # 更新结果
+                if result:
+                    # 检查是否为 clarifying 状态（子智能体需要用户补充信息）
+                    if result.get("status") == "clarifying":
+                        # CLARIFYING 状态由 execute_as_subagent 内部设置，
+                        # 这里只需要记录日志，不需要再调用 record.request_clarification()
+                        logger.info(f"[SUBAGENT] Subagent returned clarifying status for execution_id={record.execution_id}")
+                    else:
+                        record.complete(
+                            result=result.get("result"),
+                            summary=result.get("summary", "")
+                        )
+                        if result.get("token_usage"):
+                            record.token_usage = result["token_usage"]
+                        logger.info(f"[SUBAGENT] Record completed with summary: {record.summary[:200] if record.summary else 'N/A'}")
+                else:
+                    record.complete(result={}, summary="Task completed")
+                    logger.info(f"[SUBAGENT] Record completed with empty result")
+
+            except asyncio.TimeoutError:
+                logger.error(f"[SUBAGENT] Execution timed out: {record.execution_id}")
+                record.fail(f"Execution timed out after {timeout} seconds")
+
+            except asyncio.CancelledError:
+                logger.warning(f"[SUBAGENT] Execution cancelled: {record.execution_id}")
+                record.cancel()
+
+            except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
+                logger.error(f"[SUBAGENT] Execution failed: {record.execution_id}, error: {e}")
+                logger.error(f"[SUBAGENT] Traceback:\n{error_trace}")
+                record.fail(str(e))
+
+            finally:
+                self._update_task_record(record)
+                logger.info(f"[SUBAGENT] Final record status: {record.status}")
+                # 清理
+                self._active_executions.pop(record.execution_id, None)
+                self._subagent_instances.pop(record.execution_id, None)
+                logger.info(f"[SUBAGENT] Execution cleanup done")
     
     async def wait_for_result(
         self,

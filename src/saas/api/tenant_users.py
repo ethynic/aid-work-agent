@@ -104,18 +104,13 @@ async def create_user(request: Request, body: UserCreateRequest):
             "debug": f"Duplicate phone '{body.phone}' in tenant {tenant_id}"
         }
 
-    # 4. 创建或查找用户
-    user = UserDB.get_by_phone(body.phone)
-    if not user:
-        user = UserDB.create(
-            phone=body.phone,
-            username=body.username,
-            role=body.role,
-            tenant_id=tenant_id,
-        )
-    else:
-        # 用户已存在，更新 tenant_id 和 role
-        UserDB.update(user["user_id"], tenant_id=tenant_id, role=body.role)
+    # 4. 创建用户（租户内手机号唯一，不同租户允许相同手机号）
+    user = UserDB.create(
+        phone=body.phone,
+        username=body.username,
+        role=body.role,
+        tenant_id=tenant_id,
+    )
 
     if not user:
         raise HTTPException(status_code=500, detail="创建用户失败")
@@ -238,16 +233,13 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
     # 创建用户
     imported = 0
     for user_data in users_to_import:
-        user = UserDB.get_by_phone(user_data["phone"])
+        user = UserDB.get_by_phone_in_tenant(user_data["phone"], tenant_id)
         if not user:
             user = UserDB.create(
                 phone=user_data["phone"],
                 username=user_data.get("username"),
                 tenant_id=tenant_id,
             )
-        else:
-            # 用户已存在，更新 tenant_id
-            UserDB.update(user["user_id"], tenant_id=tenant_id)
 
         if user:
             imported += 1

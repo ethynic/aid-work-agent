@@ -1,3 +1,5 @@
+import { getAuthHeader } from './auth'
+
 /** 远程连接凭据管理 API */
 
 export interface RemoteCredential {
@@ -50,12 +52,14 @@ export async function listCredentials(connectionType?: string): Promise<{
   data: RemoteCredential[]
   count: number
 }> {
-  const url = new URL(`${apiBase}/credentials`)
+  const params = new URLSearchParams()
   if (connectionType) {
-    url.searchParams.append('connection_type', connectionType)
+    params.append('connection_type', connectionType)
   }
-
-  const response = await fetch(url.toString())
+  const query = params.toString()
+  const response = await fetch(`${apiBase}/credentials${query ? '?' + query : ''}`, {
+    headers: { ...getAuthHeader() },
+  })
   return await response.json()
 }
 
@@ -66,7 +70,9 @@ export async function getCredential(credentialId: string): Promise<{
   success: boolean
   data: RemoteCredential & { password: string }
 }> {
-  const response = await fetch(`${apiBase}/credentials/${credentialId}`)
+  const response = await fetch(`${apiBase}/credentials/${credentialId}`, {
+    headers: { ...getAuthHeader() },
+  })
   return await response.json()
 }
 
@@ -84,6 +90,7 @@ export async function createCredential(request: CreateCredentialRequest): Promis
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeader(),
     },
     body: JSON.stringify(request),
   })
@@ -106,6 +113,7 @@ export async function updateCredential(
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeader(),
     },
     body: JSON.stringify(request),
   })
@@ -123,6 +131,7 @@ export async function deleteCredential(credentialId: string): Promise<{
 }> {
   const response = await fetch(`${apiBase}/credentials/${credentialId}`, {
     method: 'DELETE',
+    headers: { ...getAuthHeader() },
   })
   return await response.json()
 }

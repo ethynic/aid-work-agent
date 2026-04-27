@@ -119,8 +119,11 @@ export function useAgent() {
     currentFiles.value = []
   }
 
-  async function sendMessage(content: string, subagent?: string | null) {
+  async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string) {
     if (!content.trim() || isProcessing.value) return
+
+    // 优先使用外部传入的 sessionId（来自 DB 的真实会话 ID），避免与本地生成的 sessionId 产生竞态
+    const effectiveSessionId = overrideSessionId || sessionId.value
 
     // 构建用户消息内容（含附件信息）
     let userContent = content.trim()
@@ -159,7 +162,7 @@ export function useAgent() {
     try {
       await sseManager.connect(
         content,
-        sessionId.value,
+        effectiveSessionId,
         currentFiles.value.length > 0 ? [...currentFiles.value] : undefined,
         getEffectiveAuthHeader(), // 传递认证头
         // onProgress - 工具执行进度，仅添加到执行详情
@@ -237,42 +240,53 @@ export function useAgent() {
 
   function getToolDisplayName(toolName: string, toolArgs: object): string {
     switch (toolName) {
-      case 'web_search':
+      case 'web_search': {
         const keyword = (toolArgs as any)?.keyword || ''
         return `网络搜索「${keyword.slice(0, 20)}...」`
-      case 'email_send':
+      }
+      case 'email_send': {
         const to = (toolArgs as any)?.to || ''
         return `发送邮件至「${to}」`
-      case 'email_read':
+      }
+      case 'email_read': {
         const folder = (toolArgs as any)?.folder || 'INBOX'
         const limit = (toolArgs as any)?.limit || 10
         return `读取邮件（${folder}，${limit}封）`
-      case 'content_generate':
+      }
+      case 'content_generate': {
         const contentType = (toolArgs as any)?.content_type || ''
         return `生成内容（${contentType}）`
-      case 'browser_open':
+      }
+      case 'browser_open': {
         const url = (toolArgs as any)?.url || ''
         return `打开网页「${url.slice(0, 30)}...」`
-      case 'delegate_to_subagent':
+      }
+      case 'delegate_to_subagent': {
         const subagentName = (toolArgs as any)?.subagent_name || ''
         return `调用${subagentName}子智能体`
-      case 'skill_execute':
+      }
+      case 'skill_execute': {
         const skill = (toolArgs as any)?.skill || ''
         return `执行技能「${skill}」`
-      case 'use_skill':
+      }
+      case 'use_skill': {
         const skillName = (toolArgs as any)?.skill || ''
         return `加载技能「${skillName}」`
-      case 'file_read':
+      }
+      case 'file_read': {
         const filePath = (toolArgs as any)?.file_path || ''
         return `读取文件「${filePath}」`
+      }
       case 'doc_summarize':
         return '总结文档'
-      case 'doc_translate':
+      case 'doc_translate': {
         const target = (toolArgs as any)?.target_lang || ''
         return `翻译文档为${target}`
-      case 'ocr_image':
+      }
+      case 'ocr_image': {
         const imagePath = (toolArgs as any)?.image_path || ''
         return `识别图片文字「${imagePath}」`
+      }
       case 'create_plan':
         return '创建执行计划'
       default:

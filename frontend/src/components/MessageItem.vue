@@ -110,7 +110,7 @@ import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js'
-import type { ChatMessage, AttachmentInfo } from '@/types'
+import type { ChatMessage, AttachmentInfo, ProgressMessage } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
@@ -173,69 +173,19 @@ function getProgressIcon(type: string): string {
   }
 }
 
-function formatProgressContent(msg: string | Record<string, any>): string {
-  // 消息有两种格式：
-  // 1. 实时消息: { type: "progress", content: string|object, timestamp: number }
-  // 2. 历史消息（扁平）: { type: "tool_start", toolName, toolArgs, timestamp: number }
-  // 3. 历史消息（扁平）: { type: "tool_result", toolName, result, success, timestamp: number }
-
-  if (!msg || typeof msg !== 'object') {
-    return String(msg ?? '')
-  }
-
-  const m = msg as Record<string, any>
-
+function formatProgressContent(msg: ProgressMessage): string {
   // 扁平格式：顶层 type 就是 tool_start/tool_result
-  if (m.type === 'tool_start' && m.toolName) {
-    return `🔧 需要调用工具【${m.toolName}】`
+  if (msg.type === 'tool_start' && msg.toolName) {
+    return `🔧 需要调用工具【${msg.toolName}】`
   }
-  if (m.type === 'tool_result' && m.toolName) {
-    const success = m.success !== false
-    return success ? `✅ ${m.toolName}执行完成` : `❌ ${m.toolName}执行失败`
-  }
-
-  // 嵌套格式：{ type: "progress", content: ... }
-  const content = m.content
-
-  // content 是字符串：直接显示
-  if (typeof content === 'string') {
-    // 移除 emoji，截断过长的内容
-    const cleaned = content.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
-    return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned
+  if (msg.type === 'tool_result' && msg.toolName) {
+    const success = msg.success !== false
+    return success ? `✅ ${msg.toolName}执行完成` : `❌ ${msg.toolName}执行失败`
   }
 
-  // content 是对象：根据 type 处理
-  if (typeof content === 'object' && content !== null) {
-    const c = content as Record<string, any>
-
-    // type 为 tool_start：显示调用工具名称
-    if (c.type === 'tool_start' && c.toolName) {
-      return `🔧 需要调用工具【${c.toolName}】`
-    }
-
-    // type 为 tool_result：显示 data
-    if (c.type === 'tool_result' && c.result !== undefined) {
-      const data = c.result
-      if (typeof data === 'string') {
-        return data.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
-      }
-      return JSON.stringify(data).slice(0, 100)
-    }
-
-    // type 为 progress：显示 data
-    if (c.type === 'progress' && c.data !== undefined) {
-      const data = c.data
-      if (typeof data === 'string') {
-        return data.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
-      }
-      return JSON.stringify(data).slice(0, 100)
-    }
-
-    // 其他情况，JSON 化
-    return JSON.stringify(c).slice(0, 100)
-  }
-
-  return String(content ?? '')
+  // content 始终为 string（ProgressMessage 类型定义），移除 emoji 并截断
+  const cleaned = msg.content.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
+  return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned
 }
 
 // 结构化附件列表（来自 attachments 字段）

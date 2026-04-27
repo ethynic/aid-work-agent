@@ -19,8 +19,7 @@ CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
     id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     tenant_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(tenant_id, agent_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
 
@@ -30,9 +29,15 @@ CREATE TABLE IF NOT EXISTS user_agent_permissions (
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     tenant_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, agent_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
 
+-- 2026-4-27，用户手机号唯一性从全局改为租户内唯一（不同租户允许相同手机号）
+-- 1. 删除 phone 全局唯一约束
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_key;
+-- 2. 创建租户内手机号联合唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
+
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_wx_openid_key;

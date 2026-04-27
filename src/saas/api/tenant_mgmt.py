@@ -64,12 +64,12 @@ def is_valid_phone(phone: str) -> bool:
 def create_initial_admin(tenant_id: str, admin_name: str, admin_phone: str) -> Optional[dict]:
     """
     创建初始租户管理员账户
-    如果手机号已存在用户，则返回 None
+    如果该租户内手机号已存在用户，则返回 None
     """
-    # 检查用户是否已存在
-    existing_user = UserDB.get_by_phone(admin_phone)
+    # 检查租户内用户是否已存在
+    existing_user = UserDB.get_by_phone_in_tenant(admin_phone, tenant_id)
     if existing_user:
-        logger.info(f"手机号 {admin_phone} 已存在用户，无法创建初始管理员")
+        logger.info(f"手机号 {admin_phone} 在租户 {tenant_id} 内已存在用户，无法创建初始管理员")
         return None
 
     # 创建租户管理员（密码留空）
