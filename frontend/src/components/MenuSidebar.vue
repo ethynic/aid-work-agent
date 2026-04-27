@@ -175,7 +175,7 @@
     <div v-if="showHistory" class="flex-shrink-0 p-2">
       <div class="flex items-center justify-between gap-3">
         <button
-          @click="isHistoryExpanded = !isHistoryExpanded"
+          @click="toggleHistoryExpanded"
           class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
         >
           <div class="flex items-center gap-3">
@@ -391,7 +391,16 @@ const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 const isAdminMenuExpanded = ref(true)
-const isHistoryExpanded = ref(false)
+// 历史会话折叠状态（持久化到 localStorage）
+const historyStorageKey = 'aid_work_agent:history_expanded'
+const isHistoryExpanded = ref(
+  localStorage.getItem(historyStorageKey) !== 'false'
+)
+
+const toggleHistoryExpanded = () => {
+  isHistoryExpanded.value = !isHistoryExpanded.value
+  localStorage.setItem(historyStorageKey, String(isHistoryExpanded.value))
+}
 
 // 权限：当前用户允许访问的数字员工 ID 列表（仅租户模式需要）
 const myAllowedAgentIds = ref<Set<string>>(new Set())

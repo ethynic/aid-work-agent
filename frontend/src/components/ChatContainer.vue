@@ -308,12 +308,16 @@ onMounted(async () => {
     await loadSessions()
     // 子智能体模式下不加载主智能体最近会话
     // 如果 currentSessionId 已经是 null 且 sessions 已经加载（说明用户已经在导航前点击了"新会话"），不要再覆盖它
-    // 只有当页面刚刷新（sessions 为空列表）且 currentSessionId 为 null 时，才需要加载最近会话
-    if (!subagentName.value && (currentSessionId.value !== null || sessions.value.length === 0)) {
+    // 只有当 currentSessionId 为 null 时（直接打开页面/刷新页面），才需要加载最近会话
+    // 如果 currentSessionId 已有值（从历史列表点击跳转过来），保留用户选中的会话
+    if (!subagentName.value && currentSessionId.value === null) {
       const hasSession = await loadLatestSession()
       if (hasSession && currentSessionId.value) {
         agentSessionId.value = currentSessionId.value
       }
+    } else if (currentSessionId.value) {
+      // currentSessionId 已有值（从历史页面跳转过来），需要同步到 agentSessionId
+      agentSessionId.value = currentSessionId.value
     }
   }
 })
