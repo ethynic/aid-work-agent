@@ -104,14 +104,13 @@
             @click="activeTab = 'agents'"
             :class="['px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
               activeTab === 'agents' ? 'border-cyan-500 text-cyan-600' : 'border-transparent text-slate-500 hover:text-slate-700']"
-            v-if="isEdit"
           >
             数字员工授权
             <span v-if="selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span>
           </button>
         </div>
         <!-- 基本信息标签页 -->
-        <div v-if="activeTab === 'basic'" class="space-y-4">
+        <div v-if="activeTab === 'basic'" class="space-y-4 min-h-[640px]">
           <div>
             <label class="block text-sm text-slate-600 mb-1">企业名称 <span class="text-red-500">*</span></label>
             <input v-model="formData.company_name" type="text" placeholder="请输入企业名称" maxlength="100"
@@ -160,7 +159,7 @@
           </div>
         </div>
         <!-- 数字员工授权标签页 -->
-        <div v-if="activeTab === 'agents'" class="max-h-96 overflow-y-auto">
+        <div v-if="activeTab === 'agents'" class="overflow-y-auto min-h-[640px]">
           <div v-if="loadingAgents" class="text-center py-6 text-slate-500 text-sm">加载中...</div>
           <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-slate-500 text-sm">暂无可用数字员工</div>
           <div v-else class="space-y-2 py-2">
@@ -318,6 +317,19 @@ function openAddDialog() {
   isEdit.value = false
   formData.value = { ...defaultFormData, status: 'active' }
   formError.value = ''
+  activeTab.value = 'basic'
+  // 加载所有可用数字员工
+  selectedAgentIds.value = []
+  loadingAgents.value = true
+  getAllAvailableAgents().then(res => {
+    if (res.success && res.data) {
+      availableAgents.value = res.data
+    }
+  }).catch(e => {
+    console.error('加载数字员工授权失败:', e)
+  }).finally(() => {
+    loadingAgents.value = false
+  })
   showFormDialog.value = true
 }
 
@@ -381,20 +393,26 @@ async function handleSubmit() {
   formError.value = ''
   try {
     let result
+    let createdTenantId = null
     if (isEdit.value && currentTenant.value) {
       // 直接提交 formData，status 已经是字符串格式
       result = await updateTenant(currentTenant.value.tenant_id, formData.value)
     } else {
       result = await createTenant(formData.value)
+      // 获取新创建租户的ID
+      if (result.success && result.data?.tenant_id) {
+        createdTenantId = result.data.tenant_id
+      }
     }
     if (!result.success) {
       formError.value = result.message || result.error || '操作失败'
       submitting.value = false
       return
     }
-    // 如果是编辑且有租户ID，保存数字员工授权
-    if (isEdit.value && currentTenant.value) {
-      await setTenantAgentPermissions(currentTenant.value.tenant_id, selectedAgentIds.value)
+    // 保存数字员工授权（编辑已有租户或新建租户）
+    const targetTenantId = isEdit.value ? currentTenant.value?.tenant_id : createdTenantId
+    if (targetTenantId) {
+      await setTenantAgentPermissions(targetTenantId, selectedAgentIds.value)
     }
     // 如果后端返回了消息（创建初始管理员），显示成功消息
     if (result.message) {
