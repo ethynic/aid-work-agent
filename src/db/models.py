@@ -13,6 +13,7 @@ import bcrypt
 from loguru import logger
 
 from src.db.database import get_db_connection, get_current_timestamp
+from src.saas.db.permission_db import UserAgentPermissionDB
 
 
 # ============== 密码哈希 ==============
@@ -218,6 +219,9 @@ class UserDB:
                     (page_size, offset),
                 )
             users = [dict(row) for row in cursor.fetchall()]
+            # 添加每个用户的数字员工授权数量
+            for u in users:
+                u["agent_count"] = UserAgentPermissionDB.count_allowed(conn, u["user_id"])
         return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
@@ -247,6 +251,9 @@ class UserDB:
                 LIMIT %s OFFSET %s
             """, (tenant_id, page_size, offset))
             users = [dict(row) for row in cursor.fetchall()]
+            # 添加每个用户的数字员工授权数量
+            for u in users:
+                u["agent_count"] = UserAgentPermissionDB.count_allowed(conn, u["user_id"])
         return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
