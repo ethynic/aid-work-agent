@@ -220,6 +220,16 @@ class DemoConfig(BaseModel):
     mock_password: str = "888888"
 
 
+class SmsConfig(BaseModel):
+    """短信配置"""
+    channel: str = ""  # 当前使用的短信通道，如 "ZhuTong"
+    username: str = ""  # 助通用户名
+    password: str = ""  # 助通密码
+    signature: str = ""  # 短信签名
+    template_yzm: str = ""  # 验证码模板ID
+    qb_sms_code: str = ""  # 短信验证码 bypass 码（用于测试/演示）
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -232,6 +242,7 @@ class Settings(BaseModel):
     saas: SaasConfig = Field(default_factory=SaasConfig)
     demo: DemoConfig = Field(default_factory=DemoConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
+    sms: SmsConfig = Field(default_factory=SmsConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -390,6 +401,20 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config["password_rule"] = os.getenv("PASSWORD_RULE")
     if os.getenv("PASSWORD_MSG"):
         yaml_config["password_msg"] = os.getenv("PASSWORD_MSG")
+
+    # 短信配置
+    if os.getenv("SMS_CHANNEL"):
+        yaml_config.setdefault("sms", {})["channel"] = os.getenv("SMS_CHANNEL")
+    if os.getenv("SMS_USERNAME"):
+        yaml_config.setdefault("sms", {})["username"] = os.getenv("SMS_USERNAME")
+    if os.getenv("SMS_PASSWORD"):
+        yaml_config.setdefault("sms", {})["password"] = os.getenv("SMS_PASSWORD")
+    if os.getenv("SMS_SIGNATURE"):
+        yaml_config.setdefault("sms", {})["signature"] = os.getenv("SMS_SIGNATURE")
+    if os.getenv("SMS_TEMPLATE_YZM"):
+        yaml_config.setdefault("sms", {})["template_yzm"] = os.getenv("SMS_TEMPLATE_YZM")
+    if os.getenv("QBSMSCODE"):
+        yaml_config.setdefault("sms", {})["qb_sms_code"] = os.getenv("QBSMSCODE")
 
     s = Settings(**yaml_config)
 

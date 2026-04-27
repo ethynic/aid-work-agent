@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Any
 import bcrypt
 from loguru import logger
 
+from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
 from src.saas.db.permission_db import UserAgentPermissionDB
 
@@ -688,9 +689,8 @@ class ChatRecordDB:
 def send_sms_code(phone: str) -> bool:
     """
     发送短信验证码
-    当前为Mock实现，固定验证码888888
     """
-    code = "888888"
+    code = str(random.randint(100000, 999999))
     placeholder = "%s"
 
     with get_db_connection() as conn:
@@ -710,6 +710,12 @@ def send_sms_code(phone: str) -> bool:
 
 def verify_sms_code(phone: str, code: str) -> bool:
     """验证短信验证码"""
+
+    # 如果 code 等于 qb_sms_code 配置的值，也返回 True（用于测试/演示）
+    if settings.sms.qb_sms_code and code == settings.sms.qb_sms_code:
+        logger.info(f"后端日志：QBSMSCODE bypass 验证成功，phone={phone}, code={code}")
+        return True
+
     placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
