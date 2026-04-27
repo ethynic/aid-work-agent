@@ -70,7 +70,7 @@
             </div>
 
             <!-- Hint Text - Dynamic Position (only shown when VITE_SHOW_TEST_HINT=true) -->
-            <template v-if="import.meta.env.VITE_SHOW_TEST_HINT === 'true'">
+            <template v-if="showTestHint">
               <p v-if="currentTab === 'password'" class="text-sm text-slate-400">测试环境默认密码为：888888</p>
               <p v-else class="text-sm text-slate-400 mt-1">测试环境验证码固定为：888888</p>
             </template>
@@ -110,6 +110,8 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 // import { phoneLogin, phoneCodeLogin, sendSmsCode, getWxQrcode, checkWxQrcodeStatus, wxLogin } from '@/api/auth'
 import { phoneLogin, phoneCodeLogin, sendSmsCode } from '@/api/auth'
 import { useDemoAuth } from '@/composables/useDemoAuth'
+
+const showTestHint = import.meta.env.VITE_SHOW_TEST_HINT === 'true'
 
 const props = defineProps<{
   visible: boolean
