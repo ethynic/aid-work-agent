@@ -47,9 +47,7 @@ export function useAgent() {
   async function switchSession(newSessionId: string): Promise<void> {
     // 保存当前会话的消息到缓存（仅当有消息且正在处理时，避免覆盖已完成的干净状态）
     const currentSid = sessionId.value
-    console.log(`[${now()}] [switchSession] start: currentSid=`, currentSid, 'newSessionId=', newSessionId, 'current messages len=', messages.value.length)
     if (currentSid && messages.value.length > 0) {
-      console.log(`[${now()}] [switchSession] save current messages to cache, currentSid=`, currentSid, 'len=', messages.value.length)
       sessionMessagesCache.set(currentSid, JSON.parse(JSON.stringify(messages.value)))
     }
 
@@ -65,20 +63,15 @@ export function useAgent() {
     // 优先使用缓存（包含实时消息和进行中的内容），否则从数据库加载
     const cached = sessionMessagesCache.get(newSessionId)
     if (cached) {
-      console.log(`[${now()}] [switchSession] use cached messages, newSessionId=`, newSessionId, 'len=', cached.length)
       messages.value = cached
     } else {
       // 检查缓存中是否标记为"空会话"（新建的会话），直接返回空数组，跳过DB请求
       if (sessionMessagesCache.has(newSessionId) && sessionMessagesCache.get(newSessionId)!.length === 0) {
-        console.log(`[${now()}] [switchSession] new empty session, skip DB request`)
         messages.value = []
         sessionMessagesCache.delete(newSessionId)
       } else {
-        console.log(`[${now()}] [switchSession] load from DB, newSessionId=`, newSessionId)
         const { getSessionMessages } = await import('@/api/session')
-        const startTime = Date.now()
         const result = await getSessionMessages(newSessionId)
-        console.log(`[${now()}] [switchSession] DB request done in ${Date.now() - startTime}ms, messages len=`, result.messages?.length)
         messages.value = result.messages?.map(m => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
@@ -88,12 +81,10 @@ export function useAgent() {
         })) || []
         // 如果数据库也没有消息，确保缓存中也没有，避免下次误读
         if (!result.messages || result.messages.length === 0) {
-          console.log(`[${now()}] [switchSession] DB empty, delete cache entry if any`)
           sessionMessagesCache.delete(newSessionId)
         }
       }
     }
-    console.log(`[${now()}] [switchSession] done, final messages len=`, messages.value.length)
   }
 
   /**

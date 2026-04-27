@@ -607,14 +607,8 @@ function formatTime(isoString: string): string {
   return `${month}月${day}日`
 }
 
-function now(): string {
-  const d = new Date()
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
-}
-
 // 新建会话
 async function handleNewSession() {
-  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleNewSession called, isProcessing=`, isProcessing.value)
   // 根据模式选择正确的登录状态检查
   // 租户模式使用 tenantIsLoggedIn，演示模式使用 demoIsLoggedIn
   const effectiveIsLoggedIn = isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
@@ -628,12 +622,9 @@ async function handleNewSession() {
 
   // 如果当前正在流式响应，需要用户确认是否终止
   if (isProcessing.value) {
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] isProcessing=true, show confirm dialog`)
     if (!confirm('当前会话还未结束，您希望终止当前会话，进入新会话吗？')) {
-      console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user canceled`)
       return
     }
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user confirmed, abort streaming`)
     // 用户确认，终止当前流式响应
     await abortStreaming()
   }
@@ -642,7 +633,6 @@ async function handleNewSession() {
   // 直接清空当前会话，导航到空界面，用户输入第一条消息时才真正创建会话
   isCreating.value = true
   try {
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] go to empty new session immediately`)
     selectSession(null)
     // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
     const targetPath = currentSubagent.value
@@ -651,7 +641,6 @@ async function handleNewSession() {
         ? `/t/${tenantId.value}/chat`
         : '/'
     if (route.path !== targetPath) {
-      console.log(`[${now()}] [ConfirmDialog:MenuSidebar] router.push to`, targetPath)
       router.push(targetPath)
     } else {
       // 如果已经在目标路由，still need to trigger watch by selecting null
@@ -659,25 +648,19 @@ async function handleNewSession() {
     }
   } finally {
     isCreating.value = false
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleNewSession finished instantly`)
   }
 }
 
 // 选择会话
 async function handleSelectSession(sessionId: string) {
-  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleSelectSession called, sessionId=`, sessionId, 'isProcessing=', isProcessing.value)
   // 如果当前正在流式响应，需要用户确认是否终止
   if (isProcessing.value) {
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] isProcessing=true, show confirm dialog`)
     if (!confirm('当前会话还未结束，您希望终止当前会话，切换到选中的会话吗？')) {
-      console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user canceled`)
       return
     }
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] user confirmed, abort streaming`)
     // 用户确认，终止当前流式响应
     await abortStreaming()
   }
-  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] calling selectSession`, sessionId)
   selectSession(sessionId)
   // 根据会话的 subagent 标记导航到对应路由（租户模式使用 /t/:tenant_id/chat）
   const session = sessions.value.find(s => s.session_id === sessionId)
@@ -688,10 +671,8 @@ async function handleSelectSession(sessionId: string) {
       ? `/t/${tenantId.value}/chat`
       : '/'
   if (route.path !== targetPath) {
-    console.log(`[${now()}] [ConfirmDialog:MenuSidebar] router.push to`, targetPath)
     router.push(targetPath)
   }
-  console.log(`[${now()}] [ConfirmDialog:MenuSidebar] handleSelectSession done`)
 }
 
 // 删除会话

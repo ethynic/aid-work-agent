@@ -157,9 +157,7 @@ export function useSession() {
    * 选择会话
    */
   function selectSession(sessionId: string | null) {
-    console.log('[selectSession] called, sessionId=', sessionId, 'previous currentSessionId=', currentSessionId.value)
     currentSessionId.value = sessionId
-    console.log('[selectSession] done, currentSessionId now=', currentSessionId.value)
   }
 
   /**
