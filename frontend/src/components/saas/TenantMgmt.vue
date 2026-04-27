@@ -400,8 +400,8 @@ async function handleSubmit() {
     } else {
       result = await createTenant(formData.value)
       // 获取新创建租户的ID
-      if (result.success && result.data?.tenant_id) {
-        createdTenantId = result.data.tenant_id
+      if (result.success && result.tenant?.tenant_id) {
+        createdTenantId = result.tenant.tenant_id
       }
     }
     if (!result.success) {
