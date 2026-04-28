@@ -57,7 +57,7 @@ class UserEmail(BaseModel):
         """获取IMAP认证信息"""
         if self.use_smtp_auth:
             return (self.smtp_user, self.smtp_password)
-        return (self.smtp_user, self.smtp_password)  # 可扩展为独立IMAP认证
+        raise NotImplementedError("独立IMAP认证尚未实现，请启用 use_smtp_auth")
 
 
 class User(BaseModel):

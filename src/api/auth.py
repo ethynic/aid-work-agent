@@ -52,10 +52,6 @@ class RegisterRequest(BaseModel):
     code: str
 
 
-# class WechatLoginRequest(BaseModel):
-#     wx_openid: str
-#     wx_unionid: Optional[str] = None
-
 
 class BindPhoneRequest(BaseModel):
     user_id: str
@@ -340,7 +336,7 @@ async def login(request: Request, body: LoginRequest):
             conn.commit()
 
             # 查询刚创建的用户
-            cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
+            cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
             user = dict(cursor.fetchone())
 
     if not user:
@@ -383,7 +379,7 @@ async def login(request: Request, body: LoginRequest):
         # 密码未设置，不允许登录（除非是平台管理员）
         return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
 
-    if password_hash != hash_password(body.password):
+    if not verify_password(body.password, password_hash):
         return LoginResponse(success=False, message="手机号或密码有误")
 
     # 登录成功
@@ -439,7 +435,7 @@ async def phone_login(request: Request, body: PhoneLoginRequest):
                 return LoginResponse(success=False, message="密码未设置，请使用忘记密码功能重置")
         else:
             # 密码已设置：演示模式下 mock_password 或真实密码均可登录
-            if (demo_enabled and body.password == mock_password) or password_hash == hash_password(body.password):
+            if (demo_enabled and body.password == mock_password) or verify_password(body.password, password_hash):
                 token = generate_token(user["user_id"])
                 return LoginResponse(
                     success=True,

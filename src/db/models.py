@@ -5,6 +5,7 @@
 """
 
 import json
+import random
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -737,7 +738,6 @@ def verify_sms_code(phone: str, code: str) -> bool:
 
 # ============== 图形验证码 ==============
 
-import random
 import string
 import uuid
 

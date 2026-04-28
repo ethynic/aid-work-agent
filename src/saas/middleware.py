@@ -69,6 +69,12 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                 if tenant_id:
                     logger.debug(f"[TenantMiddleware] Chat user: tenant_id={tenant_id}")
 
+            # 5. 其他 API 路径（凭据、知识库、定时任务、客户管理等）：从用户 token 解析 tenant_id
+            elif path.startswith("/api/"):
+                tenant_id = await self._resolve_user_tenant(request)
+                if tenant_id:
+                    logger.debug(f"[TenantMiddleware] API fallback: tenant_id={tenant_id}")
+
         except Exception as e:
             logger.warning(f"[TenantMiddleware] Error resolving tenant context: {e}")
 

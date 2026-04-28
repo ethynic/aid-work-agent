@@ -12,12 +12,19 @@ export interface UploadedFile {
 /**
  * 上传文件到服务器
  */
-export async function uploadFile(file: File): Promise<UploadedFile> {
+export async function uploadFile(file: File, authHeaders?: Record<string, string>): Promise<UploadedFile> {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch('/api/upload', {
+  const headers: Record<string, string> = {
+    ...authHeaders
+  }
+  // Don't set Content-Type for FormData - browser sets it automatically with boundary
+
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+  const response = await fetch(`${apiBase}/upload`, {
     method: 'POST',
+    headers,
     body: formData,
   })
 
@@ -130,7 +137,6 @@ export class SSEManager {
           if (buffer.trim()) {
             this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification })
           }
-          onComplete()
           break
         }
 
@@ -197,7 +203,7 @@ export class SSEManager {
             callbacks.onResponse(event.data)
             break
           case 'complete':
-            // 由外层循环处理
+            callbacks.onComplete?.()
             break
           case 'error':
             callbacks.onError(new Error(event.data))

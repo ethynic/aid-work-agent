@@ -91,7 +91,7 @@ export function useAgent() {
    * 上传单个文件
    */
   async function uploadAttachment(file: File): Promise<UploadedFile> {
-    const uploaded = await uploadFile(file)
+    const uploaded = await uploadFile(file, getEffectiveAuthHeader())
     currentFiles.value.push(uploaded)
     return uploaded
   }

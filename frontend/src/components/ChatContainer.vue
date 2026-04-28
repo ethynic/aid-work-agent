@@ -139,7 +139,6 @@ const toggleSidebarFn = inject<() => void>('toggleSidebar')
 const {
   messages,
   isProcessing,
-  currentResponse,
   currentFiles,
   sendMessage,
   clearSession,
@@ -155,7 +154,7 @@ const {
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initTenantAuth } = useTenantAuth()
-const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession, saveMessage } = useSession()
+const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 
 const route = useRoute()
@@ -435,15 +434,9 @@ watch(currentSessionId, async (newSessionId) => {
   }
 })
 
-// SSE 完成后保存AI回复到后端，并清除该会话的内存缓存，确保下次切回时从数据库加载最新数据
+// SSE 完成后清除该会话的内存缓存，确保下次切回时从数据库加载最新数据
 watch(isProcessing, (processing, wasProcessing) => {
   if (wasProcessing && !processing) {
-    // 保存AI回复到后端（前端已保存用户消息，但AI回复未保存，刷新后丢失）
-    const sid = currentSessionId.value
-    const responseText = currentResponse.value
-    if (sid && responseText) {
-      saveMessage(sid, 'assistant', responseText)
-    }
     clearSessionCache()
   }
 })

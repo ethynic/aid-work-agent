@@ -488,12 +488,12 @@ async def get_uploaded_file(file_id: str):
 
     返回文件的元信息（不返回文件内容）
     """
-    if file_id not in uploaded_files:
+    file_info = _get_file_info(file_id)
+    if not file_info:
         raise HTTPException(status_code=404, detail="文件不存在")
-
     return JSONResponse({
         "success": True,
-        **uploaded_files[file_id]
+        **file_info
     })
 
 
@@ -502,14 +502,16 @@ async def delete_uploaded_file(file_id: str):
     """
     删除已上传的文件
     """
-    if file_id not in uploaded_files:
+    file_info = _get_file_info(file_id)
+    if not file_info:
         raise HTTPException(status_code=404, detail="文件不存在")
 
     try:
-        file_path = Path(uploaded_files[file_id]["path"])
+        file_path = Path(file_info["path"])
         if file_path.exists():
             file_path.unlink()
-        del uploaded_files[file_id]
+        # Also remove from in-memory dict if present
+        uploaded_files.pop(file_id, None)
 
         return JSONResponse({
             "success": True,
@@ -750,7 +752,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             results = {
                 'chunks': [],
                 'progress': [],
-                'error': None
+                'error': None,
+                'full_response': ""
             }
             completed = threading.Event()
             logger.info(f"[SSE] ThreadPoolExecutor initialized, session_id={session_id}")
@@ -848,6 +851,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
                     # 如果未被取消，保存会话记录
                     full_response = "".join(results['chunks'])
+                    results['full_response'] = full_response
                     if not sse_manager.is_cancelled(session_id) and full_response:
                         record_service.complete(full_response)
                         if results.get('error'):
@@ -985,7 +989,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     logger.warning(f"[SSE] Client disconnected before error message sent, session_id={session_id}, error: {e}")
             
             # 保存完整响应到历史
-            full_response = "".join(results['chunks'])
+            full_response = results.get('full_response', "".join(results['chunks']))
             sse_manager.add_to_history(session_id, "assistant", full_response)
             
             # 发送完成消息

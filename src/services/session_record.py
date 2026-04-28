@@ -9,6 +9,7 @@
 
 import time
 import json
+import threading
 from typing import Optional, List, Dict, Any, Callable, Coroutine, Any as AnyType
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -250,37 +251,37 @@ class SessionRecordService:
 class SessionRecordManager:
     """
     会话记录管理器
-    
+
     管理当前请求的生命周期内的记录服务实例
     """
-    
-    _current_record_service: Optional[SessionRecordService] = None
-    
+
+    _local = threading.local()
+
     @classmethod
     def start_record(
-        cls, 
-        session_id: str, 
-        user_id: str, 
+        cls,
+        session_id: str,
+        user_id: str,
         user_message: str
     ) -> SessionRecordService:
         """开始一条新的记录"""
-        cls._current_record_service = SessionRecordService(
+        cls._local.record_service = SessionRecordService(
             session_id=session_id,
             user_id=user_id,
             user_message=user_message
         )
-        return cls._current_record_service
-    
+        return cls._local.record_service
+
     @classmethod
     def get_current_record(cls) -> Optional[SessionRecordService]:
         """获取当前记录服务"""
-        return cls._current_record_service
-    
+        return getattr(cls._local, 'record_service', None)
+
     @classmethod
     def end_record(cls) -> Optional[Dict[str, Any]]:
         """结束当前记录并保存"""
-        if cls._current_record_service:
-            record = cls._current_record_service.save()
-            cls._current_record_service = None
+        if hasattr(cls._local, 'record_service') and cls._local.record_service:
+            record = cls._local.record_service.save()
+            cls._local.record_service = None
             return record
         return None
