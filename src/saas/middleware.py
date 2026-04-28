@@ -135,7 +135,23 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             return row["tenant_id"]
 
     async def _resolve_user_tenant(self, request: Request) -> Optional[str]:
-        """从用户 token 解析 tenant_id"""
+        """
+        从请求解析 tenant_id
+
+        优先级：
+        1. X-Tenant-Id Header（平台管理员代管理时由前端传入）
+        2. 用户自身的 tenant_id（租户管理员/普通用户）
+        """
+        # 先尝试 X-Tenant-Id Header（平台管理员代租户操作）
+        x_tenant_id = request.headers.get("X-Tenant-Id")
+        if x_tenant_id:
+            # 验证目标租户存在
+            from src.saas.db.tenant_db import TenantDB
+            target_tenant = TenantDB.get_by_id(x_tenant_id)
+            if target_tenant:
+                return x_tenant_id
+
+        # 回退到用户自身的 tenant_id
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return None

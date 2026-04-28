@@ -108,3 +108,51 @@ frontend/src/__tests__/      # 前端测试（Vitest + Vue Test Utils + MSW）
 ## 语言说明
 
 UI 文本为中文。代码标识符为英文。
+
+## SaaS 租户隔离规范
+
+### 核心规则
+
+租户前台页面 `/t/{tenant_id}` 中，**所有需要认证的 API 请求都必须传递 `X-Tenant-Id` header**。
+
+### 如何正确传递 X-Tenant-Id
+
+| API 文件位置 | 使用方式 |
+|-------------|----------|
+| 独立使用认证头 | 使用 `getAuthHeader()` from `@/api/auth`，该函数已自动包含 `X-Tenant-Id` |
+| SaaS 管理 API | 使用 `getSaasAuthHeader()` from `@/api/saasTenant`，该函数已自动包含 `X-Tenant-Id` |
+| 自定义 | 从 URL `^/t/([^/]+)` 提取 `tenant_id` 并添加到 headers |
+
+### 正确示例
+
+```typescript
+// ✅ 正确：使用 getAuthHeader() 自动包含 X-Tenant-Id
+import { getAuthHeader } from '@/api/auth'
+
+export async function listDocuments(): Promise<DocumentListResponse> {
+  const response = await fetch(`${API_BASE}/documents`, {
+    headers: { ...getAuthHeader() }
+  })
+  return response.json()
+}
+```
+
+### 必须传递 X-Tenant-Id 的场景
+
+1. **平台管理员访问租户前台**：平台管理员账号本身没有租户属性，必须通过 `X-Tenant-Id` 告诉后端当前操作哪个租户
+2. **租户管理员和普通用户**：虽然用户自身 token 包含 tenant_id，但为了保持一致性，前端仍需传递 `X-Tenant-Id`，后端会进行校验
+
+### 检查清单
+
+添加新 API 时，请确认：
+- [ ] 是否使用了 `getAuthHeader()` 或 `getSaasAuthHeader()` 获取认证头
+- [ ] 认证头是否正确传递给 `fetch`
+- [ ] 不要自己硬编码认证头，复用现有工具函数
+
+### 已修复的问题记录
+
+以下文件已修复遗漏 `X-Tenant-Id` 的问题：
+- `api/auth.ts` - `getAuthHeader()` 添加 `X-Tenant-Id`
+- `api/knowledge.ts` - 所有 API 添加认证头
+- `api/agent.ts` - `deleteFile()` 添加认证头
+- `composables/useTenantAuth.ts` - `getAuthHeader()` 添加 `X-Tenant-Id`

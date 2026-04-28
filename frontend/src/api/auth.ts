@@ -159,15 +159,28 @@ export async function logout(): Promise<void> {
 
 /**
  * 获取认证请求头
+ * 在租户前台模式 (/t/:tenant_id) 下自动添加 X-Tenant-Id header
  */
+function getCurrentTenantId(): string | null {
+  const path = window.location.pathname
+  const match = path.match(/^\/t\/([^/]+)/)
+  return match ? match[1] : null
+}
+
 export function getAuthHeader(): Record<string, string> {
   const isTenantMode = window.location.pathname.startsWith('/t/')
   const tokenKey = isTenantMode ? 'saas_token' : 'demo_token'
   const token = localStorage.getItem(tokenKey)
+  const headers: Record<string, string> = {}
   if (token) {
-    return { 'Authorization': `Bearer ${token}` }
+    headers['Authorization'] = `Bearer ${token}`
   }
-  return {}
+  // 在租户前台模式下添加 X-Tenant-Id header
+  const tenantId = getCurrentTenantId()
+  if (tenantId) {
+    headers['X-Tenant-Id'] = tenantId
+  }
+  return headers
 }
 
 // ============== 图形验证码 ==============

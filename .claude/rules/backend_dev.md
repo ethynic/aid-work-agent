@@ -125,3 +125,46 @@ class TenantStatus(IntEnum):
 3. **前端显示值不受此限制**：显示值通常为中文，通过映射表实现（如 `TenantStatusMap`）。
 
 **如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/src/api/enums.ts`（前端）。
+
+## SaaS 租户隔离规范
+
+### 核心规则
+
+所有需要租户隔离的 API 必须遵循以下规则：
+
+1. **租户 ID 解析**：由 `TenantContextMiddleware` 统一解析 `tenant_id` 并设置到：
+   - `request.state.tenant_id`
+   - ContextVar `current_tenant_id`
+
+2. **优先级规则**：
+   ```
+   X-Tenant-Id Header（平台管理员代租户操作） > 用户 token 中的 tenant_id
+   ```
+   - 平台管理员（role=platform_admin）本身没有租户属性，通过 `X-Tenant-Id` header 指定目标租户
+   - 租户管理员和普通用户使用账号本身的 `tenant_id`，禁止越权访问其他租户
+
+3. **数据库查询必须加租户过滤**：
+   ```python
+   # ✅ 正确：必须带 tenant_id 过滤
+   cursor.execute("SELECT * FROM documents WHERE tenant_id = %s", (tenant_id,))
+
+   # ❌ 错误：不带租户过滤会导致跨租户数据泄露
+   cursor.execute("SELECT * FROM documents WHERE id = %s", (doc_id,))
+   ```
+
+### X-Tenant-Id Header 处理逻辑
+
+| 路由前缀 | 解析方法 | 是否处理 X-Tenant-Id |
+|---------|----------|----------------------|
+| `/api/saas/*` | `_resolve_admin_tenant` | ✅ 是 |
+| `/api/sessions/*` | `_resolve_session_tenant` | ✅ 是 |
+| `/api/chat/*` | `_resolve_user_tenant` | ✅ 是 |
+| 其他 `/api/*` | `_resolve_user_tenant` | ✅ 是 |
+
+**所有 `/api/*` 路径都支持 `X-Tenant-Id`，无需自己手动解析。**
+
+### 注意事项
+
+- 业务数据表（`bs_` 开头）必须包含 `tenant_id` 字段，详见 [database_dev.md](./database_dev.md)
+- 平台管理员访问租户前台 (`/t/{tenant_id}`) 时，前端必须在所有 API 请求中添加 `X-Tenant-Id` header
+- 租户管理员只能访问自己租户的数据，`require_admin` 会验证 `X-Tenant-Id` 与用户自身 `tenant_id` 是否一致

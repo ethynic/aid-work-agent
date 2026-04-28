@@ -1,6 +1,8 @@
 /**
  * 知识库 API
  */
+import { getAuthHeader } from './auth'
+
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/knowledge`
 
 export interface DocumentResponse {
@@ -56,7 +58,9 @@ export interface DocumentListResponse {
  * 获取知识库文档列表（分页）
  */
 export async function listDocuments(limit = 100, offset = 0): Promise<DocumentListResponse> {
-  const response = await fetch(`${API_BASE}/documents?limit=${limit}&offset=${offset}`)
+  const response = await fetch(`${API_BASE}/documents?limit=${limit}&offset=${offset}`, {
+    headers: { ...getAuthHeader() }
+  })
   if (!response.ok) {
     throw new Error(`获取文档列表失败: ${response.status}`)
   }
@@ -68,7 +72,8 @@ export async function listDocuments(limit = 100, offset = 0): Promise<DocumentLi
  */
 export async function deleteDocument(docId: number): Promise<ApiResponse> {
   const response = await fetch(`${API_BASE}/documents/${docId}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: { ...getAuthHeader() }
   })
   return response.json()
 }
@@ -82,6 +87,7 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
 
   const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
+    headers: { ...getAuthHeader() },
     body: formData
   })
   if (!response.ok) {
@@ -95,7 +101,9 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
  * 获取文档分块（用于调试）
  */
 export async function getDocumentChunks(docId: number): Promise<any> {
-  const response = await fetch(`${API_BASE}/documents/${docId}/chunks`)
+  const response = await fetch(`${API_BASE}/documents/${docId}/chunks`, {
+    headers: { ...getAuthHeader() }
+  })
   return response.json()
 }
 
@@ -113,7 +121,8 @@ export async function searchDocuments(query: string, top_k = 10): Promise<Search
   const response = await fetch(`${API_BASE}/search_documents`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
     },
     body: JSON.stringify({ query, top_k })
   })

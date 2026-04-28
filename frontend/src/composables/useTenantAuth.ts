@@ -154,15 +154,30 @@ export function useTenantAuth() {
   }
 
   /**
-   * 获取 Authorization header
+   * 获取 Authorization header + X-Tenant-Id
+   */
+  function getCurrentTenantId(): string | null {
+    const path = window.location.pathname
+    const match = path.match(/^\/t\/([^/]+)/)
+    return match ? match[1] : null
+  }
+
+  /**
+   * 获取认证请求头（包含 Authorization 和 X-Tenant-Id）
    */
   function getAuthHeader(): Record<string, string> {
     const tokenKey = getTokenKey()
     const t = saasToken.value || localStorage.getItem(tokenKey)
+    const headers: Record<string, string> = {}
     if (t) {
-      return { 'Authorization': `Bearer ${t}` }
+      headers['Authorization'] = `Bearer ${t}`
     }
-    return {}
+    // 添加 X-Tenant-Id header
+    const tenantId = getCurrentTenantId()
+    if (tenantId) {
+      headers['X-Tenant-Id'] = tenantId
+    }
+    return headers
   }
 
   function clearStorage() {
