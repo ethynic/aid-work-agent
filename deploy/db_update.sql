@@ -41,3 +41,7 @@ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_wx_openid_key;
+
+-- 2026-4-28，documents 表增加 tenant_id 字段，支持知识库文件租户隔离
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
