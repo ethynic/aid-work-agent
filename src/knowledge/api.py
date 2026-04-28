@@ -94,13 +94,11 @@ async def upload_document(
     # 获取租户 ID，决定上传目录
     tenant_id = get_current_tenant_id()
 
-    # 保存文件
+    # 保存文件（使用统一存储结构）
+    # 有租户: storage/uploads/{tenant_id}/knowledge/
+    # 无租户: storage/uploads/knowledge/
     file_id = f"kb_{uuid.uuid4().hex[:12]}"
-    if tenant_id:
-        upload_dir = Path(f"./uploads/knowledge/{tenant_id}")
-    else:
-        upload_dir = Path("./uploads/knowledge")
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = knowledge_service._get_upload_path(tenant_id)
     file_path = upload_dir / f"{file_id}{ext}"
 
     try:

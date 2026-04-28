@@ -59,8 +59,13 @@ PAGE_SIZES = {
     "B5": (17.6, 25.0),
 }
 
-# 默认 uploads 目录
-DEFAULT_UPLOAD_DIR = Path("./uploads")
+# 默认 uploads 目录（新结构: storage/uploads）
+try:
+    from src.config.settings import settings
+    DEFAULT_UPLOAD_DIR = Path(settings.storage.uploads_dir)
+except ImportError:
+    # 独立脚本运行时，使用默认路径
+    DEFAULT_UPLOAD_DIR = Path("./storage/uploads")
 
 
 def _resolve_font_name(name: str) -> str:

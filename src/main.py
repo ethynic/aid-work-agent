@@ -253,22 +253,31 @@ async def lifespan(app: FastAPI):
 # ============== File Upload Configuration ==============
 import shutil
 from pathlib import Path
+from src.config.settings import settings
 
 # 上传文件存储目录（基于项目根目录，不受 cwd 影响）
+# 新结构: storage/uploads/{tenant_id}/conversation/ (有租户)
+#          storage/uploads/conversation/ (无租户)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-UPLOAD_DIR = _PROJECT_ROOT / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = _PROJECT_ROOT / settings.storage.uploads_dir
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _get_tenant_upload_dir() -> Path:
-    """获取当前租户的上传目录，租户模式下按 tenant_id 隔离"""
+    """获取当前租户的对话上传目录
+    有租户: storage/uploads/{tenant_id}/conversation/
+    无租户: storage/uploads/conversation/
+    """
     from src.saas.context import get_current_tenant_id
     tenant_id = get_current_tenant_id()
     if tenant_id:
-        tenant_dir = UPLOAD_DIR / tenant_id
-        tenant_dir.mkdir(parents=True, exist_ok=True)
-        return tenant_dir
-    return UPLOAD_DIR
+        # 租户对话上传文件放到 tenant_dir/conversation/
+        tenant_dir = UPLOAD_DIR / tenant_id / "conversation"
+    else:
+        # 非租户模式：所有对话上传文件统一放到 conversation/
+        tenant_dir = UPLOAD_DIR / "conversation"
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    return tenant_dir
 
 # 已上传的文件存储 {file_id: file_info}
 uploaded_files: Dict[str, Dict[str, Any]] = {}

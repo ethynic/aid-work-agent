@@ -56,9 +56,16 @@ class WecomMessageConfig(BaseModel):
     split_on_paragraph: bool = True
 
 
+class StorageConfig(BaseModel):
+    """存储配置（所有业务数据集中于此，便于备份和迁移）"""
+    base_dir: str = "storage"  # 存储根目录
+    uploads_dir: str = "storage/uploads"  # 上传文件根目录
+    memories_dir: str = "storage/memories"  # 长期记忆文件目录
+
+
 class WecomMediaConfig(BaseModel):
     """企业微信媒体配置"""
-    upload_dir: str = "./uploads/wecom"
+    upload_dir: str = "./storage/uploads/wecom"  # 跟随 uploads 迁移到 storage
     max_file_size: int = 20971520  # 20MB（WeCom 限制）
 
 
@@ -244,6 +251,7 @@ class Settings(BaseModel):
     demo: DemoConfig = Field(default_factory=DemoConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     sms: SmsConfig = Field(default_factory=SmsConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）

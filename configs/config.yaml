@@ -142,6 +142,12 @@ demo:
   enabled: ${DEMO_ENABLED:-true}
   mock_password: "888888"
 
+# 存储配置（所有业务数据集中于此，便于备份和迁移）
+storage:
+  base_dir: "storage"
+  uploads_dir: "storage/uploads"
+  memories_dir: "storage/memories"
+
 # 定时任务配置
 scheduler:
   enabled: true

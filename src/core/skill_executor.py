@@ -43,6 +43,7 @@ load_dotenv()
 
 from src.core.skill_loader import Skill, SkillDependency
 from src.core.skill_registry import SkillRegistry
+from src.config.settings import settings
 
 
 @dataclass
@@ -721,7 +722,8 @@ Follow the instructions in the skill above to complete the user's task."""
         search_dirs = [
             Path.cwd(),  # 当前工作目录
             Path.cwd() / "test_uploads",  # test_uploads 目录
-            Path.cwd() / "uploads",  # uploads 目录
+            Path.cwd() / settings.storage.uploads_dir,  # 新存储目录: storage/uploads
+            Path.cwd() / "uploads",  # 旧目录（向后兼容）
             self.workspace,  # 执行器工作空间
         ]
         

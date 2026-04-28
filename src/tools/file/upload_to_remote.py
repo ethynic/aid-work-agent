@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.db.remote_credential import RemoteCredentialDB
+from src.config.settings import settings
 
 
 class UploadToRemoteInput(BaseModel):
@@ -243,9 +244,10 @@ class UploadToRemoteTool(BaseTool):
         """
         # 如果是相对路径，尝试在 uploads 目录查找
         if not os.path.isabs(file_path):
-            # 尝试多个可能的目录
+            # 尝试多个可能的目录（新路径优先，旧路径向后兼容）
             possible_paths = [
-                os.path.join('uploads', file_path),
+                os.path.join(settings.storage.uploads_dir, file_path),  # 新目录: storage/uploads
+                os.path.join('uploads', file_path),  # 旧目录（向后兼容）
                 os.path.join('test_uploads', file_path),
                 file_path  # 直接使用
             ]
