@@ -1304,6 +1304,29 @@ create_plan(
 
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
 
+        # 恢复历史会话上下文：如果该 session 的 memory 为空，从 DB 加载历史消息
+        if self.memory.get_message_count(session_id) == 0:
+            try:
+                from src.db.models import MessageDB
+                db_messages = MessageDB.list_by_session(
+                    session_id,
+                    limit=self.memory.short_term.max_messages,
+                    roles=["user", "assistant"],
+                )
+                if db_messages:
+                    history_messages = [
+                        {
+                            "role": msg["role"],
+                            "content": msg["content"] or "",
+                            "timestamp": msg.get("created_at", ""),
+                        }
+                        for msg in db_messages
+                    ]
+                    self.memory.load_history(session_id, history_messages)
+                    logger.info(f"Loaded {len(history_messages)} history messages for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to load history for session {session_id}: {e}")
+
         # 设置邮件工具的 user_id，使工具能从数据库读取用户邮箱配置
         if user:
             for tool_name in ("email_send", "email_read", "email_list_folders"):

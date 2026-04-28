@@ -195,6 +195,36 @@ class ShortTermMemory:
             return 0
         return len(self._cache[session_id])
     
+    def load_history(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """
+        批量加载历史消息到指定 session（仅在 session 为空时生效）
+
+        用于会话恢复场景：Agent 首次处理某 session 的消息前，
+        从 DB 加载历史消息到 ShortTermMemory。
+
+        Args:
+            session_id: 会话 ID
+            messages: 历史消息列表，每条消息需包含 role 和 content 字段
+                      顺序应为时间正序（ASC）
+        """
+        # 如果 session 已存在且有数据，跳过加载
+        if session_id in self._cache and len(self._cache[session_id]) > 0:
+            return
+
+        dq = deque(maxlen=self.max_messages)
+        for msg in messages:
+            if "role" in msg and "content" in msg:
+                if "timestamp" not in msg:
+                    msg["timestamp"] = datetime.now().isoformat()
+                dq.append(msg)
+
+        self._cache[session_id] = dq
+        self._timestamps[session_id] = datetime.now()
+
     def get_active_sessions(self) -> List[str]:
         """
         获取活跃会话列表

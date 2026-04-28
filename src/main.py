@@ -213,9 +213,9 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(interval)
             try:
-                stats = master_agent.memory.cleanup_expired()
-                if stats.get("active_sessions", 0) > 0:
-                    logger.debug(f"Memory cleanup: {stats}")
+                cleaned = master_agent.memory.cleanup_expired()
+                if cleaned > 0:
+                    logger.debug(f"Memory cleanup: cleaned {cleaned} expired sessions")
             except Exception as e:
                 logger.error(f"Memory cleanup error: {e}")
     asyncio.create_task(_memory_cleanup_loop())

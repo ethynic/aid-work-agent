@@ -496,17 +496,36 @@ class MessageDB:
             return None
 
     @staticmethod
-    def list_by_session(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取会话的所有消息"""
+    def list_by_session(
+        session_id: str,
+        limit: int = 100,
+        roles: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """获取会话的所有消息
+
+        Args:
+            session_id: 会话 ID
+            limit: 最大返回数量
+            roles: 可选，只返回指定角色的消息（如 ["user", "assistant"]）
+        """
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT * FROM chat_messages
-                WHERE session_id = {placeholder}
-                ORDER BY created_at ASC
-                LIMIT {placeholder}
-            """, (session_id, limit))
+            if roles:
+                role_placeholders = ",".join([placeholder] * len(roles))
+                cursor.execute(f"""
+                    SELECT * FROM chat_messages
+                    WHERE session_id = {placeholder} AND role IN ({role_placeholders})
+                    ORDER BY created_at ASC
+                    LIMIT {placeholder}
+                """, (session_id, *roles, limit))
+            else:
+                cursor.execute(f"""
+                    SELECT * FROM chat_messages
+                    WHERE session_id = {placeholder}
+                    ORDER BY created_at ASC
+                    LIMIT {placeholder}
+                """, (session_id, limit))
             messages = []
             for row in cursor.fetchall():
                 result = dict(row)

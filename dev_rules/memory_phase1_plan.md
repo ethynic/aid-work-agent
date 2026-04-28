@@ -51,8 +51,8 @@ Task 1.2 标注 DialogManager ────┘
 | `src/core/agent.py:117` | `ShortTermMemory()` → `ShortTermMemory(max_messages=settings.memory.short_term.max_messages, ttl=settings.memory.short_term.ttl)` | Agent 从配置创建 memory |
 
 **验收标准**:
-- [ ] Agent 的 ShortTermMemory max_messages 与 config.yaml 一致
-- [ ] 修改 config.yaml 中的 max_messages 后，重启服务 Agent 行为随之变化
+- [x] Agent 的 ShortTermMemory max_messages 与 config.yaml 一致
+- [x] 修改 config.yaml 中的 max_messages 后，重启服务 Agent 行为随之变化
 
 **风险**: 低。改动小且明确。
 
@@ -70,7 +70,7 @@ Task 1.2 标注 DialogManager ────┘
 | `src/core/__init__.py` | 检查是否需要调整导出 | 确保不误导 |
 
 **验收标准**:
-- [ ] DialogManager 的文档清晰标注其未投入使用的状态
+- [x] DialogManager 的文档清晰标注其未投入使用的状态
 
 **风险**: 无。仅修改注释。
 
@@ -117,8 +117,8 @@ class MemoryManager:
 ```
 
 **验收标准**:
-- [ ] MemoryManager 暴露所有 ShortTermMemory 已有的公开方法
-- [ ] `_cache` 属性可访问（过渡方案）
+- [x] MemoryManager 暴露所有 ShortTermMemory 已有的公开方法
+- [x] `_cache` 属性可访问（过渡方案）
 
 ---
 
@@ -137,8 +137,8 @@ class MemoryManager:
 - `self.memory._cache` 直接访问需替换为 MemoryManager 提供的方法
 
 **验收标准**:
-- [ ] Agent 通过 MemoryManager 操作短期记忆
-- [ ] 不再有直接访问 `_cache` 的代码
+- [x] Agent 通过 MemoryManager 操作短期记忆
+- [x] 不再有直接访问 `_cache` 的代码
 
 ---
 
@@ -155,8 +155,8 @@ class MemoryManager:
 **方案**: 保持 `set_context` 接受 `memory_cache` 参数（类型不变），通过 MemoryManager 的 `_cache` property 获取。未来 Phase 可进一步重构为通过 MemoryManager 的公开方法操作。
 
 **验收标准**:
-- [ ] 技能完成后上下文压缩正常工作
-- [ ] 技能摘要消息正确生成
+- [x] 技能完成后上下文压缩正常工作
+- [x] 技能摘要消息正确生成
 
 ---
 
@@ -175,8 +175,8 @@ class MemoryManager:
 - Phase 1 暂不重构此机制，但需将 `_cache` 访问改为通过 MemoryManager
 
 **验收标准**:
-- [ ] 子智能体工厂创建的 agent 能正常使用注入的 memory
-- [ ] 不再有 `_cache.keys().__iter__().__next__()` 这类脆弱代码
+- [x] 子智能体工厂创建的 agent 能正常使用注入的 memory
+- [x] 不再有 `_cache.keys().__iter__().__next__()` 这类脆弱代码
 
 ---
 
@@ -209,9 +209,9 @@ async def _memory_cleanup_task():
 ```
 
 **验收标准**:
-- [ ] 过期会话在配置的间隔时间内被主动清理
-- [ ] MemoryManager.get_stats() 准确反映当前活跃会话数
-- [ ] 清理异常不影响主服务运行
+- [x] 过期会话在配置的间隔时间内被主动清理
+- [x] MemoryManager.get_stats() 准确反映当前活跃会话数
+- [x] 清理异常不影响主服务运行
 
 ---
 

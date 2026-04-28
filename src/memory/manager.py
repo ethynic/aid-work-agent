@@ -118,6 +118,14 @@ class MemoryManager:
     def get_active_sessions(self) -> List[str]:
         """获取所有活跃会话ID列表"""
         return self.short_term.get_active_sessions()
+
+    def load_history(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """批量加载历史消息到短期记忆（仅在 session 为空时生效）"""
+        self.short_term.load_history(session_id, messages)
     
     # ==================== 对话记忆操作 ====================
     
@@ -312,22 +320,17 @@ class MemoryManager:
     
     # ==================== 清理操作 ====================
 
-    def cleanup_expired(self) -> Dict[str, int]:
+    def cleanup_expired(self) -> int:
         """
-        清理过期记忆
-
-        Returns:
-            清理统计信息
+        清理过期记忆，返回清理的会话数量
         """
-        # get_active_sessions 内部会自动清理过期会话
-        active_sessions = self.short_term.get_active_sessions()
-        total_sessions = len(active_sessions)
-
-        logger.debug(f"记忆清理完成，活跃会话数: {total_sessions}")
-
-        return {
-            "active_sessions": total_sessions,
-        }
+        before = len(self.short_term._cache)
+        self.short_term.get_active_sessions()
+        after = len(self.short_term._cache)
+        cleaned = before - after
+        if cleaned > 0:
+            logger.debug(f"记忆清理完成，清理 {cleaned} 个过期会话，剩余 {after} 个活跃会话")
+        return cleaned
     
     def get_stats(self) -> Dict[str, int]:
         """

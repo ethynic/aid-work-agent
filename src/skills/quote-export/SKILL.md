@@ -19,16 +19,24 @@ dependencies:
 
 ### 导出报价Excel
 
+**当报价项较多时，必须通过 `content` 参数传递 items JSON，避免命令行参数过长被截断：**
+
 ```bash
-# 导出报价Excel
+# 导出报价Excel（推荐：使用 content 参数通过 stdin 传递 items）
 skill_execute(
   skill="quote-export",
-  command='python scripts/export_xlsx.py --title "贵州天悦旅行社有限公司研学报价表" --course-name "超级贵州研学" --date "2025-07-01" --people 30 --items \'[{"category":"用车","name":"旅游大巴","unit_price":9800,"quantity":1,"unit":"团","frequency":1,"freq_unit":"次","subtotal":326.67,"remark":"40座6天全程"}]\' --total 2551.33'
+  command='python scripts/export_xlsx.py --course-name "超级贵州研学" --date "2025-07-01" --people 30 --total 2551.33',
+  content='[{"category":"用车","name":"旅游大巴","unit_price":9800,"quantity":1,"unit":"团","frequency":1,"freq_unit":"次","subtotal":326.67,"remark":"40座6天全程"},{"category":"用餐","name":"研学正餐","unit_price":40,"quantity":1,"unit":"人","frequency":8,"freq_unit":"餐","subtotal":320.00,"remark":"标准餐标"}]'
 )
 
 # 注册下载
 register_download_file(file_path="<输出的file_path>", display_name="超级贵州报价单_30人.xlsx")
 ```
+
+**重要规则：**
+1. 使用 `content` 参数传 items JSON 数组，不要用命令行 --items 参数
+2. **所有字段值（category、name、remark 等）必须使用中文**，不要翻译成英文
+3. Excel 内部的标题、表头、数据都应显示中文内容
 
 ### 参数说明
 

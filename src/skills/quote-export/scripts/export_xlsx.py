@@ -180,14 +180,29 @@ def main():
     parser.add_argument('--course-name', required=True, help='课程名称')
     parser.add_argument('--date', required=True, help='日期')
     parser.add_argument('--people', type=int, required=True, help='人数')
-    parser.add_argument('--items', required=True, help='报价项JSON字符串')
+    parser.add_argument('--items', help='报价项JSON字符串（短数据可用此参数，长数据请用stdin）')
+    parser.add_argument('--items-file', help='报价项JSON文件路径')
     parser.add_argument('--total', type=float, required=True, help='总费用')
     parser.add_argument('--teacher-total', type=float, default=0, help='老师费用合计')
     parser.add_argument('--output', help='输出文件路径（可选）')
 
     try:
         args = parser.parse_args()
-        items = json.loads(args.items)
+
+        # 按优先级获取 items JSON：--items > --items-file > stdin
+        if args.items:
+            items = json.loads(args.items)
+        elif args.items_file:
+            with open(args.items_file, 'r', encoding='utf-8') as f:
+                items = json.load(f)
+        elif not sys.stdin.isatty():
+            items = json.load(sys.stdin)
+        else:
+            print(json.dumps({
+                'success': False,
+                'error': '请通过 --items、--items-file 或 stdin 提供报价项数据'
+            }, ensure_ascii=False))
+            sys.exit(1)
 
         if not isinstance(items, list) or len(items) == 0:
             print(json.dumps({
@@ -207,12 +222,17 @@ def main():
             'teacher_total': args.teacher_total
         }
 
-        # 输出路径
+        # 输出路径 - 文件名使用纯ASCII避免Windows编码问题
         if args.output:
             output_path = args.output
         else:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"报价单_{args.course_name}_{args.people}人_{timestamp}.xlsx"
+            # 文件名只用纯ASCII字符，中文信息放在Excel内容中
+            import re
+            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '', args.course_name.replace(' ', '_'))[:30]
+            if not safe_name:
+                safe_name = 'quote'
+            filename = f"quote_{safe_name}_{args.people}p_{timestamp}.xlsx"
             output_path = os.path.join(tempfile.gettempdir(), filename)
 
         export_quote_xlsx(quote_data, output_path)
@@ -221,6 +241,7 @@ def main():
             'success': True,
             'file_path': os.path.abspath(output_path),
             'filename': os.path.basename(output_path),
+            'display_name': f"{args.course_name}_报价单_{args.people}人.xlsx",
             'people_count': args.people,
             'total': args.total
         }, ensure_ascii=False))

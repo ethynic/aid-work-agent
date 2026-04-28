@@ -50,14 +50,17 @@ knowledge_base_search(query="保险 费用 研学")
 
 ### Step 2：调用 calculate 脚本计算
 
-将检索到的价格数据整理为报价项列表，调用计算脚本：
+将检索到的价格数据整理为报价项列表，调用计算脚本。**当报价项较多时，必须通过 stdin 传递 JSON 数据，避免命令行参数过长被截断：**
 
 ```
 skill_execute(
   skill="quote-generator",
-  command='python scripts/calculate.py --items \'[{"category":"用车","name":"旅游大巴","unit_price":9800,"quantity":1,"unit":"团","frequency":1,"freq_unit":"次","remark":"40座6天全程"}]\' --people 30'
+  command='python scripts/calculate.py --people 30',
+  content='[{"category":"用车","name":"旅游大巴","unit_price":9800,"quantity":1,"unit":"团","frequency":1,"freq_unit":"次","remark":"40座6天全程"},{"category":"用餐","name":"研学正餐","unit_price":40,"quantity":1,"unit":"人","frequency":8,"freq_unit":"餐","remark":"标准餐标"}]'
 )
 ```
+
+**重要：使用 `content` 参数传 items JSON 数组，不要用命令行 --items 参数！** content 参数会通过 stdin 传给脚本，不受命令行长度限制。
 
 ### Step 3：输出结构化报价表
 
