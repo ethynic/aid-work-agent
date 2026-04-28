@@ -690,10 +690,42 @@ class ChatRecordDB:
 def send_sms_code(phone: str) -> bool:
     """
     发送短信验证码
-    """
-    code = str(random.randint(100000, 999999))
-    placeholder = "%s"
 
+    使用配置的短信通道真实发送短信。
+    演示模式下使用固定验证码 888888。
+    """
+    from src.sms.manager import sms_manager
+
+    # 演示模式：不实际发送，验证码固定为 888888
+    if settings.demo.enabled:
+        code = "888888"
+        logger.info(f"演示模式，手机号 {phone} 使用固定验证码 888888")
+    else:
+        # 生成6位验证码
+        code = str(random.randint(100000, 999999))
+        logger.info(f"发送验证码到 {phone}，验证码: {code}")
+
+        # 检查短信通道是否可用
+        sender = sms_manager.get_sender()
+        if sender is None or not sender.is_available():
+            logger.error("短信通道未配置或不可用，无法发送验证码")
+            return False
+
+        # 调用短信通道发送
+        result = sms_manager.send(phone, template_params={"code": code})
+        if result is None:
+            logger.error(f"发送验证码失败: 无可用通道")
+            return False
+
+        code_result = result.get("code")
+        if code_result != 200:
+            logger.error(f"验证码发送失败: phone={phone}, code={code_result}, msg={result.get('msg')}")
+            return False
+
+        logger.info(f"验证码发送成功: phone={phone}, result={result}")
+
+    # 保存验证码到数据库
+    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE sms_codes SET used = 1 WHERE phone = {placeholder}", (phone,))
@@ -705,14 +737,13 @@ def send_sms_code(phone: str) -> bool:
         """, (phone, code, expires_at))
         conn.commit()
 
-    logger.info(f"[MOCK SMS] 验证码 {code} 已发送到 {phone}")
     return True
 
 
 def verify_sms_code(phone: str, code: str) -> bool:
     """验证短信验证码"""
 
-    # 如果 code 等于 qb_sms_code 配置的值，也返回 True（用于测试/演示）
+    # 如果 code 等于 qb_sms_code 配置的值，也返回 True（用于测试）
     if settings.sms.qb_sms_code and code == settings.sms.qb_sms_code:
         logger.info(f"后端日志：QBSMSCODE bypass 验证成功，phone={phone}, code={code}")
         return True
