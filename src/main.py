@@ -259,6 +259,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = _PROJECT_ROOT / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+
+def _get_tenant_upload_dir() -> Path:
+    """获取当前租户的上传目录，租户模式下按 tenant_id 隔离"""
+    from src.saas.context import get_current_tenant_id
+    tenant_id = get_current_tenant_id()
+    if tenant_id:
+        tenant_dir = UPLOAD_DIR / tenant_id
+        tenant_dir.mkdir(parents=True, exist_ok=True)
+        return tenant_dir
+    return UPLOAD_DIR
+
 # 已上传的文件存储 {file_id: file_info}
 uploaded_files: Dict[str, Dict[str, Any]] = {}
 
@@ -441,8 +452,9 @@ async def upload_file(file: UploadFile = File(...)):
         # 获取文件扩展名
         suffix = Path(file.filename or "unknown").suffix.lower()
 
-        # 保存文件
-        file_path = UPLOAD_DIR / f"{file_id}{suffix}"
+        # 保存文件（租户模式下按 tenant_id 隔离）
+        upload_dir = _get_tenant_upload_dir()
+        file_path = upload_dir / f"{file_id}{suffix}"
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -525,6 +537,14 @@ async def delete_uploaded_file(file_id: str):
         file_path = Path(file_info["path"])
         if file_path.exists():
             file_path.unlink()
+            # 清理空的租户目录
+            try:
+                parent_dir = file_path.parent
+                if parent_dir != UPLOAD_DIR and parent_dir.is_dir() and not any(parent_dir.iterdir()):
+                    parent_dir.rmdir()
+                    logger.info(f"已清理空目录: {parent_dir}")
+            except OSError:
+                pass
         # Also remove from in-memory dict if present
         uploaded_files.pop(file_id, None)
 
@@ -549,36 +569,45 @@ def _get_file_info(file_id: str) -> dict | None:
     if file_id in uploaded_files:
         return uploaded_files[file_id]
 
-    # 尝试从磁盘目录扫描恢复
-    for f in UPLOAD_DIR.iterdir():
-        if f.is_file() and f.stem == file_id:
-            suffix = f.suffix.lower()
-            mime_type_map = {
-                '.pdf': 'application/pdf',
-                '.doc': 'application/msword',
-                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                '.xls': 'application/vnd.ms-excel',
-                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                '.txt': 'text/plain',
-                '.png': 'image/png',
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.gif': 'image/gif',
-                '.mp3': 'audio/mpeg',
-                '.mp4': 'video/mp4',
-            }
-            mime_type = mime_type_map.get(suffix, 'application/octet-stream')
-            file_info = {
-                "file_id": file_id,
-                "name": f.name,
-                "path": str(f.absolute()),
-                "size": f.stat().st_size,
-                "mime_type": mime_type,
-                "type": "image" if mime_type.startswith("image/") else "file"
-            }
-            # 缓存回内存，避免重复磁盘扫描
-            uploaded_files[file_id] = file_info
-            return file_info
+    # 尝试从磁盘目录扫描恢复（包括租户子目录）
+    search_dirs = [UPLOAD_DIR]
+    if UPLOAD_DIR.exists():
+        for d in UPLOAD_DIR.iterdir():
+            if d.is_dir() and d.name != "knowledge" and d.name != "wecom":
+                search_dirs.append(d)
+
+    for search_dir in search_dirs:
+        if not search_dir.exists():
+            continue
+        for f in search_dir.iterdir():
+            if f.is_file() and f.stem == file_id:
+                suffix = f.suffix.lower()
+                mime_type_map = {
+                    '.pdf': 'application/pdf',
+                    '.doc': 'application/msword',
+                    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    '.xls': 'application/vnd.ms-excel',
+                    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    '.txt': 'text/plain',
+                    '.png': 'image/png',
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.gif': 'image/gif',
+                    '.mp3': 'audio/mpeg',
+                    '.mp4': 'video/mp4',
+                }
+                mime_type = mime_type_map.get(suffix, 'application/octet-stream')
+                file_info = {
+                    "file_id": file_id,
+                    "name": f.name,
+                    "path": str(f.absolute()),
+                    "size": f.stat().st_size,
+                    "mime_type": mime_type,
+                    "type": "image" if mime_type.startswith("image/") else "file"
+                }
+                # 缓存回内存，避免重复磁盘扫描
+                uploaded_files[file_id] = file_info
+                return file_info
 
     return None
 

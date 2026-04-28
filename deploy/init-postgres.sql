@@ -195,6 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(u
 CREATE TABLE IF NOT EXISTS documents (
     id SERIAL PRIMARY KEY,
     user_id TEXT,
+    tenant_id TEXT,
     title TEXT,
     source_type TEXT,
     file_type TEXT,
@@ -214,6 +215,7 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
 
 -- 文本块表
 CREATE TABLE IF NOT EXISTS chunks (

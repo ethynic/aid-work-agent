@@ -507,6 +507,7 @@ def _init_postgresql():
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
                 user_id TEXT,
+                tenant_id TEXT,
                 title TEXT NOT NULL,
                 source_type TEXT NOT NULL,
                 file_type TEXT NOT NULL,
@@ -529,6 +530,11 @@ def _init_postgresql():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_documents_user
             ON documents(user_id)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_tenant
+            ON documents(tenant_id)
         """)
 
         # 文本块表

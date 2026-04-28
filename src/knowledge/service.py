@@ -26,13 +26,22 @@ class KnowledgeBaseService:
     def __init__(self):
         self.chunk_size = getattr(settings, 'knowledge_chunk_size', 512)
         self.chunk_overlap = getattr(settings, 'knowledge_chunk_overlap', 64)
-        self.upload_path = Path(getattr(settings, 'knowledge_upload_path', 'uploads/knowledge'))
-        self.upload_path.mkdir(parents=True, exist_ok=True)
+        self.base_upload_path = Path(getattr(settings, 'knowledge_upload_path', 'uploads/knowledge'))
+        self.base_upload_path.mkdir(parents=True, exist_ok=True)
 
         self.chunker = TextChunker(
             chunk_size=self.chunk_size,
             overlap=self.chunk_overlap
         )
+
+    def _get_upload_path(self, tenant_id: Optional[str] = None) -> Path:
+        """获取上传路径，租户模式下按 tenant_id 隔离"""
+        if tenant_id:
+            path = self.base_upload_path / tenant_id
+        else:
+            path = self.base_upload_path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _get_db_connection(self):
         """获取数据库连接（使用统一的数据库连接管理）"""
@@ -42,7 +51,8 @@ class KnowledgeBaseService:
         self,
         file_path: str,
         file_filename: str,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        tenant_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         上传并处理文档
@@ -51,6 +61,7 @@ class KnowledgeBaseService:
             file_path: 文件保存路径
             file_filename: 原始文件名
             user_id: 用户 ID
+            tenant_id: 租户 ID
 
         Returns:
             处理结果
@@ -88,13 +99,14 @@ class KnowledgeBaseService:
                 # 插入文档记录（PostgreSQL 使用 RETURNING 获取 ID）
                 cursor.execute("""
                     INSERT INTO documents (
-                        user_id, title, source_type, file_type, file_path,
+                        user_id, tenant_id, title, source_type, file_type, file_path,
                         file_size, total_chunks, embedding_model,
                         raw_text, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     user_id,
+                    tenant_id,
                     file_filename,
                     "file",
                     ext,
@@ -183,6 +195,14 @@ class KnowledgeBaseService:
             # 删除文件
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
+                # 清理空的租户目录
+                try:
+                    parent_dir = os.path.dirname(file_path)
+                    if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+                        os.rmdir(parent_dir)
+                        logger.info(f"已清理空目录: {parent_dir}")
+                except OSError:
+                    pass  # 目录非空或无权限，忽略
 
             logger.info(f"后端日志：文档删除成功，doc_id={doc_id}")
             return {"success": True, "message": "文档已删除"}
@@ -191,14 +211,25 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：文档删除失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def count_documents(self, user_id: Optional[int] = None) -> int:
+    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None) -> int:
         """获取文档总数"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
+                conditions = []
+                params = []
+
+                if tenant_id is not None:
+                    conditions.append("tenant_id = %s")
+                    params.append(tenant_id)
                 if user_id:
-                    cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = %s", (user_id,))
+                    conditions.append("user_id = %s")
+                    params.append(user_id)
+
+                where_clause = " AND ".join(conditions)
+                if where_clause:
+                    cursor.execute(f"SELECT COUNT(*) FROM documents WHERE {where_clause}", params)
                 else:
                     cursor.execute("SELECT COUNT(*) FROM documents")
 
@@ -211,6 +242,7 @@ class KnowledgeBaseService:
     def list_documents(
         self,
         user_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
         limit: int = 100,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
@@ -220,24 +252,28 @@ class KnowledgeBaseService:
                 cursor = conn.cursor()
                 placeholder = "%s"
 
+                conditions = []
+                params = []
+
+                if tenant_id is not None:
+                    conditions.append(f"tenant_id = {placeholder}")
+                    params.append(tenant_id)
                 if user_id:
-                    # PostgreSQL 不支持 LIMIT %s OFFSET %s，需要直接拼接
-                    cursor.execute(f"""
-                        SELECT id, title, source_type, file_type, file_path, file_size,
-                               total_chunks, created_at
-                        FROM documents
-                        WHERE user_id = {placeholder}
-                        ORDER BY created_at DESC
-                        LIMIT {limit} OFFSET {offset}
-                    """, (user_id,))
-                else:
-                    cursor.execute(f"""
-                        SELECT id, title, source_type, file_type, file_path, file_size,
-                               total_chunks, created_at
-                        FROM documents
-                        ORDER BY created_at DESC
-                        LIMIT {limit} OFFSET {offset}
-                    """)
+                    conditions.append(f"user_id = {placeholder}")
+                    params.append(user_id)
+
+                where_clause = ""
+                if conditions:
+                    where_clause = "WHERE " + " AND ".join(conditions)
+
+                cursor.execute(f"""
+                    SELECT id, title, source_type, file_type, file_path, file_size,
+                           total_chunks, created_at
+                    FROM documents
+                    {where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT {limit} OFFSET {offset}
+                """, params)
 
                 rows = cursor.fetchall()
 
@@ -288,6 +324,7 @@ class KnowledgeBaseService:
         self,
         query: str,
         user_id: Optional[int] = None,
+        tenant_id: Optional[str] = None,
         top_k: int = 10
     ) -> Dict[str, Any]:
         """
@@ -296,6 +333,7 @@ class KnowledgeBaseService:
         Args:
             query: 搜索关键词
             user_id: 用户 ID（权限控制，暂未实现）
+            tenant_id: 租户 ID
             top_k: 返回结果数量
 
         Returns:
@@ -336,9 +374,16 @@ class KnowledgeBaseService:
                     placeholders = ','.join(['%s'] * len(doc_ids))
 
                     cursor = conn.cursor()
-                    cursor.execute(f"""
-                        SELECT id, title, file_type, file_path FROM documents WHERE id IN ({placeholders})
-                    """, list(doc_ids))
+                    # 按 tenant_id 过滤，确保租户隔离
+                    if tenant_id is not None:
+                        cursor.execute(f"""
+                            SELECT id, title, file_type, file_path FROM documents
+                            WHERE id IN ({placeholders}) AND tenant_id = %s
+                        """, list(doc_ids) + [tenant_id])
+                    else:
+                        cursor.execute(f"""
+                            SELECT id, title, file_type, file_path FROM documents WHERE id IN ({placeholders})
+                        """, list(doc_ids))
 
                     doc_info = {row["id"]: {"title": row["title"], "file_type": row["file_type"], "file_path": row["file_path"]} for row in cursor.fetchall()}
 

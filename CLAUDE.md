@@ -27,15 +27,15 @@ docker compose -f docker-compose.prod.yml up -d --build  # 生产环境
 
 ## 开发规范
 
-详细规范见 [dev_rules/](dev_rules/) 目录：
+详细规范见 [.claude/rules/](.claude/rules/) 目录：
 
 | 文档 | 内容 |
 |------|------|
-| [dev_rules/backend_dev.md](dev_rules/backend_dev.md) | 后端开发规范，日志、错误处理、异步/Gunicorn、API 命名规范 |
-| [dev_rules/frontend_dev.md](dev_rules/frontend_dev.md) | 前端开发规范 |
-| [dev_rules/testing.md](dev_rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
-| [dev_rules/architecture.md](dev_rules/architecture.md) | 系统架构、核心组件、扩展点 |
-| [dev_rules/database_dev.md](dev_rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
+| [.claude/rules/backend_dev.md](.claude/rules/backend_dev.md) | 后端开发规范，日志、错误处理、异步/Gunicorn、API 命名规范 |
+| [.claude/rules/frontend_dev.md](.claude/rules/frontend_dev.md) | 前端开发规范 |
+| [.claude/rules/testing.md](.claude/rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
+| [.claude/rules/architecture.md](.claude/rules/architecture.md) | 系统架构、核心组件、扩展点 |
+| [.claude/rules/database_dev.md](.claude/rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
 
 ## Git 提交规范
 **不要自动提交代码，仅当用户明确说“提交代码”才提交**
