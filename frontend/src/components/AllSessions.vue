@@ -349,7 +349,7 @@ import { useAgent } from '@/composables/useAgent'
 const router = useRouter()
 const route = useRoute()
 const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
-const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout, init: initTenantAuth } = useTenantAuth()
 
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
@@ -560,6 +560,10 @@ const visiblePages = computed(() => {
 })
 
 onMounted(async () => {
+  // 初始化租户认证状态（平台管理员访问租户前台时需要）
+  if (isTenantMode.value) {
+    await initTenantAuth()
+  }
   await loadAvailableSubagents()
   await loadSessions(1)
 })

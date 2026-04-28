@@ -15,6 +15,7 @@ from loguru import logger
 
 from src.api import auth
 from src.knowledge.service import knowledge_service
+from src.saas.context import get_current_tenant_id
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -90,9 +91,15 @@ async def upload_document(
     if current_user:
         user_id = current_user.get("user_id")
 
+    # 获取租户 ID，决定上传目录
+    tenant_id = get_current_tenant_id()
+
     # 保存文件
     file_id = f"kb_{uuid.uuid4().hex[:12]}"
-    upload_dir = Path("./uploads/knowledge")
+    if tenant_id:
+        upload_dir = Path(f"./uploads/knowledge/{tenant_id}")
+    else:
+        upload_dir = Path("./uploads/knowledge")
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / f"{file_id}{ext}"
 
@@ -106,7 +113,8 @@ async def upload_document(
         result = await knowledge_service.upload_document(
             file_path=str(file_path),
             file_filename=file.filename or "unknown",
-            user_id=user_id
+            user_id=user_id,
+            tenant_id=tenant_id
         )
 
         if not result.get("success"):
@@ -162,12 +170,15 @@ async def list_documents(
     if current_user:
         user_id = current_user.get("user_id")
 
+    tenant_id = get_current_tenant_id()
+
     documents = knowledge_service.list_documents(
         user_id=user_id,
+        tenant_id=tenant_id,
         limit=limit,
         offset=offset
     )
-    total = knowledge_service.count_documents(user_id=user_id)
+    total = knowledge_service.count_documents(user_id=user_id, tenant_id=tenant_id)
 
     return {
         "items": [DocumentResponse(**doc) for doc in documents],
@@ -191,9 +202,12 @@ async def search_documents(
     if current_user:
         user_id = current_user.get("user_id")
 
+    tenant_id = get_current_tenant_id()
+
     result = await knowledge_service.search_documents(
         query=request.query,
         user_id=user_id,
+        tenant_id=tenant_id,
         top_k=request.top_k or 10
     )
 

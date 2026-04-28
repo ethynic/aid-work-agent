@@ -66,7 +66,7 @@ class RegisterDownloadFileTool(BaseTool):
 
         try:
             # 延迟导入，避免循环依赖
-            from src.main import uploaded_files, UPLOAD_DIR
+            from src.main import uploaded_files, UPLOAD_DIR, _get_tenant_upload_dir
 
             # 生成 file_id
             file_id = f"file_{uuid.uuid4().hex[:12]}"
@@ -91,15 +91,15 @@ class RegisterDownloadFileTool(BaseTool):
             }
             mime_type = mime_type_map.get(suffix, 'application/octet-stream')
 
-            # 确保 uploads 目录存在
-            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            # 获取租户感知的上传目录
+            upload_dir = _get_tenant_upload_dir()
 
             # 确保文件名有正确后缀
             if not display_name.lower().endswith(suffix):
                 display_name += suffix
 
             # 复制文件到 uploads 目录
-            dest_path = UPLOAD_DIR / f"{file_id}_{display_name}"
+            dest_path = upload_dir / f"{file_id}_{display_name}"
             shutil.copy2(str(src), str(dest_path))
 
             file_size = dest_path.stat().st_size
