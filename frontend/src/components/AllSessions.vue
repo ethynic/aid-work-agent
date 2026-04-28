@@ -560,6 +560,10 @@ const visiblePages = computed(() => {
 })
 
 onMounted(async () => {
+  // 初始化租户认证状态（平台管理员访问租户前台时需要）
+  if (isTenantMode.value) {
+    await tenantAuth.init()
+  }
   await loadAvailableSubagents()
   await loadSessions(1)
 })
