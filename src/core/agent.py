@@ -994,7 +994,7 @@ create_plan(
         """是否有活跃的 Skill Session"""
         return bool(self._active_skill_sessions)
 
-    async def process_message(
+    async def _delegate_to_subagent_direct(
         self,
         subagent_name: str,
         task_description: str,
@@ -1557,7 +1557,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # AgentSkills 标准的 allowed-tools 权限检查
                 # 如果当前有活跃的 skill session 且该 skill 设置了 allowed_tools，
                 # 则只允许执行允许列表中的工具（生命周期工具除外）
-                _LIFECYCLE_TOOLS = {"use_skill", "skill_complete", "skill_execute"}
+                _LIFECYCLE_TOOLS = {"skill_complete", "skill_execute"}
                 if self._active_skill_sessions and tool_name not in _LIFECYCLE_TOOLS:
                     for _active_skill_name, _ in self._active_skill_sessions.items():
                         _active_skill_obj = self.skill_registry.get(_active_skill_name) if self.skill_registry else None

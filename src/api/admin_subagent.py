@@ -19,6 +19,8 @@ from src.config.settings import settings
 from src.core.agent import master_agent
 from src.models.subagent import SubagentConfig
 from src.subagents.loader import SubagentLoader
+from src.saas.context import get_current_tenant_id
+from src.saas.permissions.checker import get_allowed_agent_ids_for_user
 
 router = APIRouter(prefix="/api/admin", tags=["数字员工管理"])
 
@@ -132,6 +134,18 @@ async def list_subagents(request: Request):
             registry._load_custom(registry._custom_dir)
 
         items = registry.get_all_subagents_with_type()
+
+        # 租户模式下按权限过滤：
+        # - 平台管理员代管理租户时，只返回租户被授权的数字员工
+        # - 租户管理员/普通用户只返回自身被授权的数字员工
+        tenant_id = get_current_tenant_id()
+        if tenant_id is not None:
+            # 获取当前用户允许的agent列表
+            user = get_current_user(request)
+            if user:
+                allowed_ids = set(get_allowed_agent_ids_for_user(user))
+                items = [item for item in items if item["agent_id"] in allowed_ids]
+
         return {"success": True, "data": items}
 
     except Exception as e:
@@ -159,22 +173,25 @@ async def get_subagent_detail(request: Request, agent_id: str):
         if not config:
             return _error_response(f"数字员工不存在: {agent_id}", f"agent_id={agent_id} not found", 404)
 
+        data = {
+            "agent_id": config.dir_name or agent_id,
+            "name": config.name,
+            "description": config.description,
+            "version": config.version,
+            "author": config.author,
+            "capabilities": config.capabilities,
+            "triggers": config.triggers,
+            "tools": config.tools,
+            "skills": config.skills,
+            "context": config.context,
+            "system_prompt": config.system_prompt,
+            "type": "builtin" if registry.is_builtin(agent_id) else "custom",
+        }
+        if config.business_pages:
+            data["business_pages"] = config.business_pages
         return {
             "success": True,
-            "data": {
-                "agent_id": config.dir_name or agent_id,
-                "name": config.name,
-                "description": config.description,
-                "version": config.version,
-                "author": config.author,
-                "capabilities": config.capabilities,
-                "triggers": config.triggers,
-                "tools": config.tools,
-                "skills": config.skills,
-                "context": config.context,
-                "system_prompt": config.system_prompt,
-                "type": "builtin" if registry.is_builtin(agent_id) else "custom",
-            },
+            "data": data
         }
 
     except Exception as e:

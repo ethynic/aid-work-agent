@@ -60,6 +60,19 @@ const router = createRouter({
       name: 'all-sessions',
       component: () => import('./components/AllSessions.vue')
     },
+    // 外贸获客智能体业务数据页面
+    {
+      path: '/trade-specialist',
+      name: 'trade-specialist',
+      component: () => import('./components/BaseBusinessLayout.vue'),
+      children: [
+        {
+          path: 'customers',
+          name: 'trade-specialist-customers',
+          component: () => import('./components/CustomerInfo.vue')
+        },
+      ]
+    },
     // SaaS 租户管理 Portal（仅平台管理员）
     {
       path: '/portal/login',
@@ -93,6 +106,20 @@ const router = createRouter({
         { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
+        { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },
+        // 外贸获客智能体业务数据页面
+        {
+          path: 'trade-specialist',
+          name: 'tenant-trade-specialist',
+          component: () => import('./components/BaseBusinessLayout.vue'),
+          children: [
+            {
+              path: 'customers',
+              name: 'tenant-trade-specialist-customers',
+              component: () => import('./components/CustomerInfo.vue')
+            },
+          ]
+        },
       ]
     }
   ]

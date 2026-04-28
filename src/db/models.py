@@ -5,6 +5,7 @@
 """
 
 import json
+import random
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -12,7 +13,9 @@ from typing import Optional, List, Dict, Any
 import bcrypt
 from loguru import logger
 
+from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
+from src.saas.db.permission_db import UserAgentPermissionDB
 
 
 # ============== 密码哈希 ==============
@@ -218,6 +221,9 @@ class UserDB:
                     (page_size, offset),
                 )
             users = [dict(row) for row in cursor.fetchall()]
+            # 添加每个用户的数字员工授权数量
+            for u in users:
+                u["agent_count"] = UserAgentPermissionDB.count_allowed(conn, u["user_id"])
         return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
@@ -247,6 +253,9 @@ class UserDB:
                 LIMIT %s OFFSET %s
             """, (tenant_id, page_size, offset))
             users = [dict(row) for row in cursor.fetchall()]
+            # 添加每个用户的数字员工授权数量
+            for u in users:
+                u["agent_count"] = UserAgentPermissionDB.count_allowed(conn, u["user_id"])
         return {"users": users, "total": total, "page": page, "page_size": page_size}
 
     @staticmethod
@@ -280,7 +289,7 @@ class SessionDB:
     """会话数据库访问类"""
 
     @staticmethod
-    def create(user_id: str, title: str = None, context_data: dict = None) -> Optional[Dict[str, Any]]:
+    def create(user_id: str, title: str = None, context_data: dict = None, tenant_id: str = None, subagent_id: str = None) -> Optional[Dict[str, Any]]:
         """创建新会话"""
         session_id = generate_session_id()
         placeholder = "%s"
@@ -289,13 +298,13 @@ class SessionDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO chat_sessions (session_id, user_id, title, context_data)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})
-                """, (session_id, user_id, title or "新会话",
+                    INSERT INTO chat_sessions (session_id, user_id, tenant_id, subagent_id, title, context_data)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """, (session_id, user_id, tenant_id, subagent_id, title or "新会话",
                       json.dumps(context_data) if context_data else None))
                 conn.commit()
 
-                logger.info(f"Chat session created: {session_id} for user: {user_id}")
+                logger.info(f"Chat session created: {session_id} for user: {user_id}, tenant: {tenant_id}, subagent: {subagent_id}")
                 return SessionDB.get_by_id(session_id)
             except Exception as e:
                 logger.error(f"Failed to create chat session: {e}")
@@ -317,24 +326,56 @@ class SessionDB:
             return None
 
     @staticmethod
-    def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """获取用户的所有会话"""
+    def list_by_user(user_id: str, page: int = 1, page_size: int = 20, tenant_id: str = None) -> Dict[str, Any]:
+        """获取用户的会话列表（分页）
+
+        Args:
+            user_id: 用户ID
+            page: 页码，从1开始
+            page_size: 每页数量
+            tenant_id: 租户ID，传入时仅返回该租户下的会话；不传则返回所有会话（兼容非SaaS模式）
+        """
+        offset = (page - 1) * page_size
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT * FROM chat_sessions
-                WHERE user_id = {placeholder}
-                ORDER BY updated_at DESC
-                LIMIT {placeholder}
-            """, (user_id, limit))
+            # 先统计总数
+            if tenant_id is not None:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM chat_sessions WHERE user_id = %s AND tenant_id = %s",
+                    (user_id, tenant_id)
+                )
+                total = cursor.fetchone()["cnt"]
+                cursor.execute(f"""
+                    SELECT * FROM chat_sessions
+                    WHERE user_id = {placeholder} AND tenant_id = {placeholder}
+                    ORDER BY updated_at DESC
+                    LIMIT {placeholder} OFFSET {placeholder}
+                """, (user_id, tenant_id, page_size, offset))
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM chat_sessions WHERE user_id = %s",
+                    (user_id,)
+                )
+                total = cursor.fetchone()["cnt"]
+                cursor.execute(f"""
+                    SELECT * FROM chat_sessions
+                    WHERE user_id = {placeholder}
+                    ORDER BY updated_at DESC
+                    LIMIT {placeholder} OFFSET {placeholder}
+                """, (user_id, page_size, offset))
             sessions = []
             for row in cursor.fetchall():
                 result = dict(row)
                 if result.get("context_data"):
                     result["context_data"] = json.loads(result["context_data"])
                 sessions.append(result)
-            return sessions
+            return {
+                "sessions": sessions,
+                "total": total,
+                "page": page,
+                "page_size": page_size
+            }
 
     @staticmethod
     def update_title(session_id: str, title: str) -> bool:
@@ -363,6 +404,21 @@ class SessionDB:
                 SET context_data = {placeholder}, updated_at = {ts}
                 WHERE session_id = {placeholder}
             """, (json.dumps(context_data), session_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def update_subagent_id(session_id: str, subagent_id: Optional[str]) -> bool:
+        """更新会话关联的数字员工ID"""
+        placeholder = "%s"
+        ts = get_current_timestamp()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE chat_sessions
+                SET subagent_id = {placeholder}, updated_at = {ts}
+                WHERE session_id = {placeholder}
+            """, (subagent_id, session_id))
             conn.commit()
             return cursor.rowcount > 0
 
@@ -634,11 +690,42 @@ class ChatRecordDB:
 def send_sms_code(phone: str) -> bool:
     """
     发送短信验证码
-    当前为Mock实现，固定验证码888888
-    """
-    code = "888888"
-    placeholder = "%s"
 
+    使用配置的短信通道真实发送短信。
+    演示模式下使用固定验证码 888888。
+    """
+    from src.sms.manager import sms_manager
+
+    # 演示模式：不实际发送，验证码固定为 888888
+    if settings.demo.enabled:
+        code = "888888"
+        logger.info(f"演示模式，手机号 {phone} 使用固定验证码 888888")
+    else:
+        # 生成6位验证码
+        code = str(random.randint(100000, 999999))
+        logger.info(f"发送验证码到 {phone}，验证码: {code}")
+
+        # 检查短信通道是否可用
+        sender = sms_manager.get_sender()
+        if sender is None or not sender.is_available():
+            logger.error("短信通道未配置或不可用，无法发送验证码")
+            return False
+
+        # 调用短信通道发送
+        result = sms_manager.send(phone, template_params={"code": code})
+        if result is None:
+            logger.error(f"发送验证码失败: 无可用通道")
+            return False
+
+        code_result = result.get("code")
+        if code_result != 200:
+            logger.error(f"验证码发送失败: phone={phone}, code={code_result}, msg={result.get('msg')}")
+            return False
+
+        logger.info(f"验证码发送成功: phone={phone}, result={result}")
+
+    # 保存验证码到数据库
+    placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE sms_codes SET used = 1 WHERE phone = {placeholder}", (phone,))
@@ -650,12 +737,17 @@ def send_sms_code(phone: str) -> bool:
         """, (phone, code, expires_at))
         conn.commit()
 
-    logger.info(f"[MOCK SMS] 验证码 {code} 已发送到 {phone}")
     return True
 
 
 def verify_sms_code(phone: str, code: str) -> bool:
     """验证短信验证码"""
+
+    # 如果 code 等于 qb_sms_code 配置的值，也返回 True（用于测试）
+    if settings.sms.qb_sms_code and code == settings.sms.qb_sms_code:
+        logger.info(f"后端日志：QBSMSCODE bypass 验证成功，phone={phone}, code={code}")
+        return True
+
     placeholder = "%s"
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -677,7 +769,6 @@ def verify_sms_code(phone: str, code: str) -> bool:
 
 # ============== 图形验证码 ==============
 
-import random
 import string
 import uuid
 

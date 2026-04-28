@@ -1,3 +1,5 @@
+import type { UploadedFile } from '@/api/agent'
+
 export interface AttachmentInfo {
   file_id: string
   name: string
@@ -27,7 +29,7 @@ export interface ProgressMessage {
 export interface SendMessageRequest {
   message: string
   session_id: string
-  files?: File[]
+  files?: UploadedFile[]
 }
 
 export interface SendMessageResponse {
@@ -59,6 +61,8 @@ export interface User {
 export interface Session {
   session_id: string
   user_id: string
+  tenant_id?: string
+  subagent_id?: string
   title: string
   context_data?: Record<string, any>
   created_at: string

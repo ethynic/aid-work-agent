@@ -2,7 +2,7 @@
  * 会话状态管理
  */
 
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import {
   listSessions,
   createSession,
@@ -14,7 +14,7 @@ import {
   getSessionRecords,
   getSessionTokenUsage,
   type ChatSession,
-  type ChatMessage,
+  type ChatMessageRecord,
   type ChatRecord,
   type TokenUsage
 } from '@/api/session'
@@ -24,6 +24,9 @@ import { useTenantAuth } from './useTenantAuth'
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
 const isLoading = ref(false)
+const currentPage = ref(1)
+const totalSessions = ref(0)
+const pageSize = ref(20)
 
 // 检查是否已登录（考虑租户模式）
 function checkIsLoggedIn(): boolean {
@@ -34,7 +37,7 @@ function checkIsLoggedIn(): boolean {
   if (window.location.pathname.startsWith('/t/')) {
     return tenantLoggedIn.value
   }
-  // 普通模式：检查 demo_token
+  // 演示模式：检查 demo_token
   return normalLoggedIn.value
 }
 
@@ -43,17 +46,30 @@ export function useSession() {
   /**
    * 加载会话列表
    */
-  async function loadSessions() {
-    if (!checkIsLoggedIn()) return
+  async function loadSessions(page: number = 1) {
+    if (!checkIsLoggedIn()) {
+      return
+    }
 
     isLoading.value = true
     try {
-      const result = await listSessions()
-      sessions.value = result.sessions || []
-      // 按更新时间倒序
-      sessions.value.sort((a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      )
+      const result = await listSessions(page, pageSize.value)
+      let loadedSessions = result.sessions || []
+
+      // 过滤掉创建超过5分钟仍然是默认标题的空会话
+      const now = new Date().getTime()
+      loadedSessions = loadedSessions.filter(s => {
+        const createdTime = new Date(s.created_at).getTime()
+        const isEmptyTitle = s.title === '新会话' || !s.title
+        const isOldEmpty = isEmptyTitle && (now - createdTime) > 5 * 60000 // 超过5分钟
+
+        return !isOldEmpty
+      })
+
+      sessions.value = loadedSessions
+      totalSessions.value = result.total
+      currentPage.value = result.page
+      pageSize.value = result.page_size
     } catch (e) {
       console.error('Failed to load sessions:', e)
     } finally {
@@ -63,14 +79,40 @@ export function useSession() {
 
   /**
    * 创建新会话
+   * 在创建前自动清理空会话（标题为"新会话"且未发送任何消息的会话）
    */
   async function createNewSession(title?: string, subagent?: string | null): Promise<ChatSession | null> {
     if (!checkIsLoggedIn()) return null
 
     try {
+      // 自动清理：创建新会话前，删除已有的空会话（标题为默认"新会话"且没有消息）
+      // 这些会话是用户点击"新会话"后又立即点击"新会话"产生的，没有实际内容
+      const emptySessions = sessions.value.filter(s =>
+        (s.title === '新会话' || !s.title) &&
+        // 如果是默认标题且是最新创建的，认为是空会话
+        new Date().getTime() - new Date(s.created_at).getTime() < 60000 // 1分钟内创建的
+      )
+
+      // 先从列表中移除，再在后台并行删除（不阻塞创建新会话）
+      for (const empty of emptySessions) {
+        console.log(`[Cleanup] 计划删除空会话 ${empty.session_id} - 未发送任何消息`)
+        sessions.value = sessions.value.filter(s => s.session_id !== empty.session_id)
+      }
+      // 后台并行删除，不需要阻塞创建新会话
+      if (emptySessions.length > 0) {
+        Promise.all(emptySessions.map(empty =>
+          removeSession(empty.session_id).catch(err =>
+            console.error(`[Cleanup] 删除空会话 ${empty.session_id} 失败:`, err)
+          )
+        )).then(() => {
+          console.log(`[Cleanup] 完成批量删除，共 ${emptySessions.length} 个空会话`)
+        })
+      }
+
+      // 创建新会话
       const newSession = await createSession({
         title,
-        ...(subagent ? { context_data: { subagent } } : {})
+        ...(subagent ? { context_data: { subagent }, subagent_id: subagent } : {})
       })
       sessions.value.unshift(newSession)
       return newSession
@@ -121,7 +163,7 @@ export function useSession() {
   /**
    * 获取会话消息历史
    */
-  async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+  async function loadSessionMessages(sessionId: string): Promise<ChatMessageRecord[]> {
     try {
       const result = await getSessionMessages(sessionId)
       return result.messages || []
@@ -156,10 +198,20 @@ export function useSession() {
   }
 
   /**
+   * 跳转到指定页
+   */
+  async function goToPage(page: number) {
+    if (page < 1 || page > totalPages.value) return
+    await loadSessions(page)
+  }
+
+  /**
    * 加载并自动选择最近会话
    */
   async function loadLatestSession(): Promise<boolean> {
-    if (!checkIsLoggedIn()) return false
+    if (!checkIsLoggedIn()) {
+      return false
+    }
 
     try {
       const result = await getLatestSession()
@@ -204,11 +256,19 @@ export function useSession() {
     }
   }
 
+  // 计算总页数
+  const totalPages = computed(() => Math.ceil(totalSessions.value / pageSize.value))
+
   return {
     sessions,
     currentSessionId,
     isLoading,
+    currentPage,
+    totalSessions,
+    pageSize,
+    totalPages,
     loadSessions,
+    goToPage,
     createNewSession,
     removeSession,
     renameSession,

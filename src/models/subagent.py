@@ -77,7 +77,10 @@ class SubagentConfig(BaseModel):
     # 元数据
     path: Optional[str] = Field(default=None, description="配置文件路径")
     dir: Optional[str] = Field(default=None, description="配置目录路径")
-    
+
+    # 业务数据页面配置
+    business_pages: Optional[List[Dict[str, Any]]] = Field(default=None, description="业务数据页面列表")
+
     class Config:
         use_enum_values = True
     

@@ -5,12 +5,9 @@
 
 import { ref, computed } from 'vue'
 import { getCurrentUser, logout as apiLogout } from '@/api/auth'
+import type { User as BaseUser } from '@/types'
 
-export interface User {
-  user_id: string
-  username: string
-  phone?: string
-  avatar_url?: string
+export interface User extends BaseUser {
   is_admin?: boolean
 }
 

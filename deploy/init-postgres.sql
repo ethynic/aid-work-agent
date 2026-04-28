@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     user_id TEXT UNIQUE NOT NULL,
     username TEXT,
-    phone TEXT UNIQUE,
+    phone TEXT,
     password_hash TEXT,
-    wx_openid TEXT UNIQUE,
+    wx_openid TEXT ,
     wx_unionid TEXT,
     avatar_url TEXT,
     tenant_id TEXT,
@@ -42,37 +42,40 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 租户内手机号唯一约束（不同租户允许相同手机号）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
+
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,
     session_id TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
+    user_id TEXT,
+    tenant_id TEXT,
+    subagent_id TEXT,
     title TEXT,
     context_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 消息表
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,
     message_id TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    role TEXT NOT NULL,
+    session_id TEXT,
+    role TEXT,
     content TEXT,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 会话记录表（每次和AI的对话）
 CREATE TABLE IF NOT EXISTS chat_records (
     id SERIAL PRIMARY KEY,
     record_id TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    user_message TEXT NOT NULL,
+    session_id TEXT,
+    user_id TEXT,
+    user_message TEXT,
     assistant_message TEXT,
     total_token_count INTEGER DEFAULT 0,
     prompt_tokens INTEGER DEFAULT 0,
@@ -82,22 +85,21 @@ CREATE TABLE IF NOT EXISTS chat_records (
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (
     id SERIAL PRIMARY KEY,
-    phone TEXT NOT NULL,
-    code TEXT NOT NULL,
+    phone TEXT,
+    code TEXT,
     used INTEGER DEFAULT 0,
-    expires_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -105,20 +107,19 @@ CREATE TABLE IF NOT EXISTS sms_codes (
 CREATE TABLE IF NOT EXISTS remote_credentials (
     id SERIAL PRIMARY KEY,
     credential_id TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
-    connection_type TEXT NOT NULL,
-    server_host TEXT NOT NULL,
-    server_port INTEGER NOT NULL,
-    username TEXT NOT NULL,
-    password TEXT NOT NULL,
-    remote_path TEXT NOT NULL,
+    user_id TEXT,
+    connection_type TEXT,
+    server_host TEXT,
+    server_port INTEGER,
+    username TEXT,
+    password TEXT,
+    remote_path TEXT,
     domain TEXT,
     name TEXT,
     description TEXT,
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 远程凭据索引
@@ -129,10 +130,9 @@ CREATE INDEX IF NOT EXISTS idx_remote_credentials_path ON remote_credentials(use
 CREATE TABLE IF NOT EXISTS tokens (
     id SERIAL PRIMARY KEY,
     token TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    user_id TEXT,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Token 索引
@@ -143,11 +143,11 @@ CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id, expires_at);
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id SERIAL PRIMARY KEY,
     task_id TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
+    user_id TEXT,
+    name TEXT,
     description TEXT,
-    task_prompt TEXT NOT NULL,
-    schedule_type TEXT NOT NULL,
+    task_prompt TEXT,
+    schedule_type TEXT,
     cron_expression TEXT,
     interval_seconds INTEGER,
     session_id TEXT,
@@ -160,8 +160,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     success_count INTEGER DEFAULT 0,
     fail_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user ON scheduled_tasks(user_id, status, created_at DESC);
@@ -171,22 +170,20 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_
 CREATE TABLE IF NOT EXISTS scheduled_task_logs (
     id SERIAL PRIMARY KEY,
     log_id TEXT UNIQUE NOT NULL,
-    task_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
+    task_id TEXT,
+    user_id TEXT,
     session_id TEXT,
-    status TEXT NOT NULL,
-    trigger_type TEXT NOT NULL,
+    status TEXT,
+    trigger_type TEXT,
     result_summary TEXT,
     result_detail TEXT,
     error_message TEXT,
     error_trace TEXT,
     duration_ms INTEGER DEFAULT 0,
     token_usage INTEGER DEFAULT 0,
-    started_at TIMESTAMP NOT NULL,
+    started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (task_id) REFERENCES scheduled_tasks(task_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(task_id, created_at DESC);
@@ -197,14 +194,14 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(u
 -- 文档表
 CREATE TABLE IF NOT EXISTS documents (
     id SERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    file_path TEXT NOT NULL,
+    user_id TEXT,
+    title TEXT,
+    source_type TEXT,
+    file_type TEXT,
+    file_path TEXT,
     file_size INTEGER,
-    total_chunks INTEGER NOT NULL,
-    embedding_model TEXT NOT NULL,
+    total_chunks INTEGER,
+    embedding_model TEXT,
     thumbnail_path TEXT,
     duration INTEGER,
     width INTEGER,
@@ -221,13 +218,12 @@ CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 -- 文本块表
 CREATE TABLE IF NOT EXISTS chunks (
     id SERIAL PRIMARY KEY,
-    doc_id INTEGER NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    tokens INTEGER NOT NULL,
+    doc_id INTEGER,
+    chunk_index INTEGER,
+    text TEXT,
+    tokens INTEGER,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
@@ -235,8 +231,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
 -- 向量表（使用 pgvector）
 CREATE TABLE IF NOT EXISTS chunks_vec (
     chunk_id INTEGER PRIMARY KEY,
-    embedding vector(1024),
-    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    embedding vector(1024)
 );
 
 -- 创建向量索引（使用 HNSW 算法，支持余弦相似度搜索）
@@ -245,45 +240,29 @@ CREATE INDEX IF NOT EXISTS idx_chunks_vec_cosine ON chunks_vec USING hnsw (embed
 -- FTS5 全文搜索表（PostgreSQL 使用 tsvector）
 CREATE TABLE IF NOT EXISTS chunks_fts (
     chunk_id INTEGER PRIMARY KEY,
-    text TEXT NOT NULL,
-    fts_vector tsvector,
-    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    text TEXT,
+    fts_vector tsvector
 );
 
 -- 创建 GIN 索引用于全文搜索
 CREATE INDEX IF NOT EXISTS idx_chunks_fts_fts ON chunks_fts USING gin (fts_vector);
 
--- 创建触发器同步全文搜索
-CREATE OR REPLACE FUNCTION chunks_fts_trigger() RETURNS trigger AS $$
-BEGIN
-    NEW.fts_vector := to_tsvector('simple', NEW.text);
-    RETURN NEW;
-END
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER chunks_fts_insert BEFORE INSERT ON chunks_fts
-    FOR EACH ROW EXECUTE FUNCTION chunks_fts_trigger();
-
-CREATE TRIGGER chunks_fts_update BEFORE UPDATE ON chunks_fts
-    FOR EACH ROW EXECUTE FUNCTION chunks_fts_trigger();
-
 -- 用户邮箱配置表
 CREATE TABLE IF NOT EXISTS user_email_settings (
     id SERIAL PRIMARY KEY,
     user_id TEXT UNIQUE NOT NULL,
-    email_address TEXT NOT NULL,
-    smtp_server TEXT NOT NULL,
-    smtp_port INTEGER NOT NULL,
-    smtp_user TEXT NOT NULL,
-    smtp_password TEXT NOT NULL,
+    email_address TEXT,
+    smtp_server TEXT,
+    smtp_port INTEGER,
+    smtp_user TEXT,
+    smtp_password TEXT,
     smtp_encryption TEXT DEFAULT 'ssl',
-    imap_server TEXT NOT NULL,
-    imap_port INTEGER NOT NULL,
+    imap_server TEXT,
+    imap_port INTEGER,
     imap_encryption TEXT DEFAULT 'ssl',
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(user_id);
@@ -294,7 +273,7 @@ CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(u
 CREATE TABLE IF NOT EXISTS tenants (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT UNIQUE NOT NULL,
-    company_name TEXT NOT NULL,
+    company_name TEXT,
     contact_name TEXT,
     contact_phone TEXT,
     initial_admin_name TEXT,
@@ -325,9 +304,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     payment_status TEXT DEFAULT 'pending',
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE SET NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id, status);
@@ -337,18 +314,16 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, stat
 CREATE TABLE IF NOT EXISTS agent_instances (
     id SERIAL PRIMARY KEY,
     instance_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
+    tenant_id TEXT,
     subscription_id TEXT,
-    subagent_type TEXT NOT NULL,
-    display_name TEXT NOT NULL,
+    subagent_type TEXT,
+    display_name TEXT,
     status TEXT DEFAULT 'stopped',
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-    FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id) ON DELETE SET NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
@@ -357,13 +332,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     id SERIAL PRIMARY KEY,
     config_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
-    channel_type TEXT NOT NULL,
-    config TEXT NOT NULL,
+    tenant_id TEXT,
+    channel_type TEXT,
+    config TEXT,
     verified INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
@@ -372,43 +346,39 @@ CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_c
 CREATE TABLE IF NOT EXISTS payment_orders (
     id SERIAL PRIMARY KEY,
     order_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
+    tenant_id TEXT,
     subscription_id TEXT,
-    amount REAL NOT NULL,
+    amount REAL,
     payment_method TEXT,
     payment_status TEXT DEFAULT 'pending',
     paid_at TIMESTAMP,
     transaction_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-    FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id) ON DELETE SET NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant ON payment_orders(tenant_id, payment_status);
 
--- 同步 chunks 和 chunks_fts 表的触发器
-CREATE OR REPLACE FUNCTION sync_chunks_fts() RETURNS trigger AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        INSERT INTO chunks_fts(chunk_id, text) VALUES (NEW.id, NEW.text);
-    ELSIF TG_OP = 'UPDATE' THEN
-        UPDATE chunks_fts SET text = NEW.text WHERE chunk_id = OLD.id;
-    ELSIF TG_OP = 'DELETE' THEN
-        DELETE FROM chunks_fts WHERE chunk_id = OLD.id;
-    END IF;
-    RETURN NEW;
-END
-$$ LANGUAGE plpgsql;
+-- 租户级数字员工授权表
+CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    tenant_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
 
-CREATE TRIGGER chunks_sync_fts_insert AFTER INSERT ON chunks
-    FOR EACH ROW EXECUTE FUNCTION sync_chunks_fts();
+-- 用户级数字员工授权表
+CREATE TABLE IF NOT EXISTS user_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
 
-CREATE TRIGGER chunks_sync_fts_update AFTER UPDATE ON chunks
-    FOR EACH ROW EXECUTE FUNCTION sync_chunks_fts();
-
-CREATE TRIGGER chunks_sync_fts_delete AFTER DELETE ON chunks
-    FOR EACH ROW EXECUTE FUNCTION sync_chunks_fts();
 
 -- 输出初始化完成信息
 DO $$
@@ -426,9 +396,9 @@ CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     user_id TEXT UNIQUE NOT NULL,
     username TEXT,
-    phone TEXT UNIQUE,
+    phone TEXT,
     password_hash TEXT,
-    wx_openid TEXT UNIQUE,
+    wx_openid TEXT,
     wx_unionid TEXT,
     avatar_url TEXT,
     tenant_id TEXT,
@@ -438,37 +408,40 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 租户内手机号唯一约束（不同租户允许相同手机号）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
+
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,
     session_id TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
+    user_id TEXT,
+    tenant_id TEXT,
+    subagent_id TEXT,
     title TEXT,
     context_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 消息表
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,
     message_id TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    role TEXT NOT NULL,
+    session_id TEXT,
+    role TEXT,
     content TEXT,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 会话记录表
 CREATE TABLE IF NOT EXISTS chat_records (
     id SERIAL PRIMARY KEY,
     record_id TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    user_message TEXT NOT NULL,
+    session_id TEXT,
+    user_id TEXT,
+    user_message TEXT,
     assistant_message TEXT,
     total_token_count INTEGER DEFAULT 0,
     prompt_tokens INTEGER DEFAULT 0,
@@ -478,21 +451,20 @@ CREATE TABLE IF NOT EXISTS chat_records (
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (
     id SERIAL PRIMARY KEY,
-    phone TEXT NOT NULL,
-    code TEXT NOT NULL,
+    phone TEXT,
+    code TEXT,
     used INTEGER DEFAULT 0,
-    expires_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -500,20 +472,19 @@ CREATE TABLE IF NOT EXISTS sms_codes (
 CREATE TABLE IF NOT EXISTS remote_credentials (
     id SERIAL PRIMARY KEY,
     credential_id TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
-    connection_type TEXT NOT NULL,
-    server_host TEXT NOT NULL,
-    server_port INTEGER NOT NULL,
-    username TEXT NOT NULL,
-    password TEXT NOT NULL,
-    remote_path TEXT NOT NULL,
+    user_id TEXT,
+    connection_type TEXT,
+    server_host TEXT,
+    server_port INTEGER,
+    username TEXT,
+    password TEXT,
+    remote_path TEXT,
     domain TEXT,
     name TEXT,
     description TEXT,
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_credentials_user ON remote_credentials(user_id, status, created_at DESC);
@@ -523,10 +494,9 @@ CREATE INDEX IF NOT EXISTS idx_remote_credentials_path ON remote_credentials(use
 CREATE TABLE IF NOT EXISTS tokens (
     id SERIAL PRIMARY KEY,
     token TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    user_id TEXT,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
@@ -536,11 +506,11 @@ CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id, expires_at);
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id SERIAL PRIMARY KEY,
     task_id TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
+    user_id TEXT,
+    name TEXT,
     description TEXT,
-    task_prompt TEXT NOT NULL,
-    schedule_type TEXT NOT NULL,
+    task_prompt TEXT,
+    schedule_type TEXT,
     cron_expression TEXT,
     interval_seconds INTEGER,
     session_id TEXT,
@@ -553,8 +523,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     success_count INTEGER DEFAULT 0,
     fail_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user ON scheduled_tasks(user_id, status, created_at DESC);
@@ -564,22 +533,20 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_
 CREATE TABLE IF NOT EXISTS scheduled_task_logs (
     id SERIAL PRIMARY KEY,
     log_id TEXT UNIQUE NOT NULL,
-    task_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
+    task_id TEXT,
+    user_id TEXT,
     session_id TEXT,
-    status TEXT NOT NULL,
-    trigger_type TEXT NOT NULL,
+    status TEXT,
+    trigger_type TEXT,
     result_summary TEXT,
     result_detail TEXT,
     error_message TEXT,
     error_trace TEXT,
     duration_ms INTEGER DEFAULT 0,
     token_usage INTEGER DEFAULT 0,
-    started_at TIMESTAMP NOT NULL,
+    started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (task_id) REFERENCES scheduled_tasks(task_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(task_id, created_at DESC);
@@ -588,8 +555,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(u
 -- 向量表
 CREATE TABLE IF NOT EXISTS chunks_vec (
     chunk_id INTEGER PRIMARY KEY,
-    embedding vector(1024),
-    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    embedding vector(1024)
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_vec_cosine ON chunks_vec USING hnsw (embedding vector_cosine_ops);
@@ -597,44 +563,28 @@ CREATE INDEX IF NOT EXISTS idx_chunks_vec_cosine ON chunks_vec USING hnsw (embed
 -- 全文搜索表
 CREATE TABLE IF NOT EXISTS chunks_fts (
     chunk_id INTEGER PRIMARY KEY,
-    text TEXT NOT NULL,
-    fts_vector tsvector,
-    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    text TEXT,
+    fts_vector tsvector
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_fts_fts ON chunks_fts USING gin (fts_vector);
-
--- FTS 触发器（测试库中也需要）
-CREATE OR REPLACE FUNCTION chunks_fts_trigger() RETURNS trigger AS $$
-BEGIN
-    NEW.fts_vector := to_tsvector('simple', NEW.text);
-    RETURN NEW;
-END
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER chunks_fts_insert BEFORE INSERT ON chunks_fts
-    FOR EACH ROW EXECUTE FUNCTION chunks_fts_trigger();
-
-CREATE TRIGGER chunks_fts_update BEFORE UPDATE ON chunks_fts
-    FOR EACH ROW EXECUTE FUNCTION chunks_fts_trigger();
 
 -- 用户邮箱配置表
 CREATE TABLE IF NOT EXISTS user_email_settings (
     id SERIAL PRIMARY KEY,
     user_id TEXT UNIQUE NOT NULL,
-    email_address TEXT NOT NULL,
-    smtp_server TEXT NOT NULL,
-    smtp_port INTEGER NOT NULL,
-    smtp_user TEXT NOT NULL,
-    smtp_password TEXT NOT NULL,
+    email_address TEXT,
+    smtp_server TEXT,
+    smtp_port INTEGER,
+    smtp_user TEXT,
+    smtp_password TEXT,
     smtp_encryption TEXT DEFAULT 'ssl',
-    imap_server TEXT NOT NULL,
-    imap_port INTEGER NOT NULL,
+    imap_server TEXT,
+    imap_port INTEGER,
     imap_encryption TEXT DEFAULT 'ssl',
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(user_id);
@@ -643,7 +593,7 @@ CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(u
 CREATE TABLE IF NOT EXISTS tenants (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT UNIQUE NOT NULL,
-    company_name TEXT NOT NULL,
+    company_name TEXT,
     contact_name TEXT,
     contact_phone TEXT,
     initial_admin_name TEXT,
@@ -674,9 +624,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     payment_status TEXT DEFAULT 'pending',
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE SET NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id, status);
@@ -686,18 +634,16 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, stat
 CREATE TABLE IF NOT EXISTS agent_instances (
     id SERIAL PRIMARY KEY,
     instance_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
+    tenant_id TEXT,
     subscription_id TEXT,
-    subagent_type TEXT NOT NULL,
-    display_name TEXT NOT NULL,
+    subagent_type TEXT,
+    display_name TEXT,
     status TEXT DEFAULT 'stopped',
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-    FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id) ON DELETE SET NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
@@ -706,13 +652,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     id SERIAL PRIMARY KEY,
     config_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
-    channel_type TEXT NOT NULL,
-    config TEXT NOT NULL,
+    tenant_id TEXT,
+    channel_type TEXT,
+    config TEXT,
     verified INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
@@ -721,43 +666,39 @@ CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_c
 CREATE TABLE IF NOT EXISTS payment_orders (
     id SERIAL PRIMARY KEY,
     order_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL,
+    tenant_id TEXT,
     subscription_id TEXT,
-    amount REAL NOT NULL,
+    amount REAL,
     payment_method TEXT,
     payment_status TEXT DEFAULT 'pending',
     paid_at TIMESTAMP,
     transaction_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-    FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id) ON DELETE SET NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant ON payment_orders(tenant_id, payment_status);
 
--- 同步 chunks 和 chunks_fts 表的触发器（测试库）
-CREATE OR REPLACE FUNCTION sync_chunks_fts() RETURNS trigger AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        INSERT INTO chunks_fts(chunk_id, text) VALUES (NEW.id, NEW.text);
-    ELSIF TG_OP = 'UPDATE' THEN
-        UPDATE chunks_fts SET text = NEW.text WHERE chunk_id = OLD.id;
-    ELSIF TG_OP = 'DELETE' THEN
-        DELETE FROM chunks_fts WHERE chunk_id = OLD.id;
-    END IF;
-    RETURN NEW;
-END
-$$ LANGUAGE plpgsql;
+-- 租户级数字员工授权表
+CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    tenant_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
 
-CREATE TRIGGER chunks_sync_fts_insert AFTER INSERT ON chunks
-    FOR EACH ROW EXECUTE FUNCTION sync_chunks_fts();
+-- 用户级数字员工授权表
+CREATE TABLE IF NOT EXISTS user_agent_permissions (
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
 
-CREATE TRIGGER chunks_sync_fts_update AFTER UPDATE ON chunks
-    FOR EACH ROW EXECUTE FUNCTION sync_chunks_fts();
-
-CREATE TRIGGER chunks_sync_fts_delete AFTER DELETE ON chunks
-    FOR EACH ROW EXECUTE FUNCTION sync_chunks_fts();
 
 -- 测试库初始化完成
 DO $$

@@ -18,8 +18,10 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
+from src.saas.db.permission_db import TenantAgentPermissionDB, UserAgentPermissionDB
 from src.db.models import UserDB
 from src.config.settings import settings
+from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/users", tags=["SaaS 企业用户"])
 
@@ -51,11 +53,12 @@ async def list_users(request: Request, page: int = 1, page_size: int = 20):
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    # 平台管理员可查看所有租户的用户
-    if admin.get("role") == "platform_admin":
-        result = UserDB.list_users(page=page, page_size=page_size)
+    # 平台管理员带 X-Tenant-Id header 访问租户前台时，进行租户隔离
+    if admin.get("tenant_id"):
+        result = UserDB.list_users(page=page, page_size=page_size, tenant_id=admin["tenant_id"])
     else:
-        result = UserDB.list_by_tenant(admin["tenant_id"], page=page, page_size=page_size)
+        # 平台管理员在平台后台查看所有租户的用户
+        result = UserDB.list_users(page=page, page_size=page_size)
     return {"success": True, **result}
 
 
@@ -101,21 +104,25 @@ async def create_user(request: Request, body: UserCreateRequest):
             "debug": f"Duplicate phone '{body.phone}' in tenant {tenant_id}"
         }
 
-    # 4. 创建或查找用户
-    user = UserDB.get_by_phone(body.phone)
-    if not user:
-        user = UserDB.create(
-            phone=body.phone,
-            username=body.username,
-            role=body.role,
-            tenant_id=tenant_id,
-        )
-    else:
-        # 用户已存在，更新 tenant_id 和 role
-        UserDB.update(user["user_id"], tenant_id=tenant_id, role=body.role)
+    # 4. 创建用户（租户内手机号唯一，不同租户允许相同手机号）
+    user = UserDB.create(
+        phone=body.phone,
+        username=body.username,
+        role=body.role,
+        tenant_id=tenant_id,
+    )
 
     if not user:
         raise HTTPException(status_code=500, detail="创建用户失败")
+
+    # 如果租户只授权了一个数字员工，自动给新用户添加该授权
+    with get_db_connection() as conn:
+        tenant_allowed = TenantAgentPermissionDB.get_allowed_agents(conn, tenant_id)
+        if len(tenant_allowed) == 1 and body.role == "user":
+            # 自动授权唯一的那个数字员工
+            agent_id = tenant_allowed[0]
+            UserAgentPermissionDB.add_permission(conn, user["user_id"], tenant_id, agent_id)
+            logger.info(f"Auto authorized new user {user['user_id']} for agent {agent_id} (tenant {tenant_id} has only one agent)")
 
     logger.info(f"User created for tenant {tenant_id}: {user['user_id']} ({body.phone})")
     return {"success": True, "user": user}
@@ -226,16 +233,13 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
     # 创建用户
     imported = 0
     for user_data in users_to_import:
-        user = UserDB.get_by_phone(user_data["phone"])
+        user = UserDB.get_by_phone_in_tenant(user_data["phone"], tenant_id)
         if not user:
             user = UserDB.create(
                 phone=user_data["phone"],
                 username=user_data.get("username"),
                 tenant_id=tenant_id,
             )
-        else:
-            # 用户已存在，更新 tenant_id
-            UserDB.update(user["user_id"], tenant_id=tenant_id)
 
         if user:
             imported += 1
@@ -288,5 +292,9 @@ async def remove_user(user_id: str, request: Request):
         return {"success": False, "message": "无法移除平台管理员"}
 
     # 将 tenant_id 设为 None，而不是删除用户
+    # 同时清除该用户的所有数字员工授权
+    with get_db_connection() as conn:
+        UserAgentPermissionDB.clear_user_permissions(conn, user_id)
+
     success = UserDB.update(user_id, tenant_id=None)
     return {"success": success}

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allowedTools": [
+      "Read", "Write", "Edit", "Delete", "Create", "List", "Search",
+      "Bash(git *)", "Bash(npm *)", "Bash(pnpm *)", "Bash(yarn *)"
+    ],
+    "allowedPaths": ["./**/*"]
+  }
+}

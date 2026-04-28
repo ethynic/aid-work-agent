@@ -33,6 +33,21 @@ context:
   max_input_tokens: 8000
   max_output_tokens: 4000
 
+# 业务数据页面配置
+business_pages:
+  - id: customers
+    title: 我的客户
+    icon: 👥
+    route: /trade-specialist/customers
+  - id: email-records
+    title: 邮件记录
+    icon: 📧
+    route: /trade-specialist/email-records
+  - id: match-stats
+    title: 匹配统计
+    icon: 📊
+    route: /trade-specialist/match-stats
+
 # 系统提示词（专业领域约束，会追加到主智能体基础提示词后面）
 system_prompt: |
   ## 外贸专员职责

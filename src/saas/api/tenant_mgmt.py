@@ -16,9 +16,11 @@ import re
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
+from src.saas.db.permission_db import TenantAgentPermissionDB
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.config.settings import settings
 from src.db.models import UserDB
+from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["SaaS 企业管理"])
 
@@ -62,12 +64,12 @@ def is_valid_phone(phone: str) -> bool:
 def create_initial_admin(tenant_id: str, admin_name: str, admin_phone: str) -> Optional[dict]:
     """
     创建初始租户管理员账户
-    如果手机号已存在用户，则返回 None
+    如果该租户内手机号已存在用户，则返回 None
     """
-    # 检查用户是否已存在
-    existing_user = UserDB.get_by_phone(admin_phone)
+    # 检查租户内用户是否已存在
+    existing_user = UserDB.get_by_phone_in_tenant(admin_phone, tenant_id)
     if existing_user:
-        logger.info(f"手机号 {admin_phone} 已存在用户，无法创建初始管理员")
+        logger.info(f"手机号 {admin_phone} 在租户 {tenant_id} 内已存在用户，无法创建初始管理员")
         return None
 
     # 创建租户管理员（密码留空）
@@ -289,7 +291,10 @@ async def delete_tenant(request: Request, tenant_id: str):
     try:
         success = TenantDB.delete(tenant_id)
         if success:
-            logger.info(f"租户删除成功: {tenant_id} by admin {admin['user_id']}")
+            # 级联删除：删除该租户所有的数字员工授权（租户级和用户级）
+            with get_db_connection() as conn:
+                TenantAgentPermissionDB.delete_all_for_tenant(conn, tenant_id)
+            logger.info(f"租户删除成功: {tenant_id} by admin {admin['user_id']}, permissions deleted")
             return {"success": True, "message": "删除成功"}
         return {"success": False, "error": "删除失败", "debug": "TenantDB.delete returned False"}
     except Exception as e:

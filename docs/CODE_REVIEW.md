@@ -1,6 +1,6 @@
 # Code Review Report — AID Work Agent
 
-> **审核日期**：2026-03-25  
+> **审核日期**：2026-04-25  
 > **审核范围**：全项目（`src/`、`frontend/`、`configs/`、`subagents/`）  
 > **审核原则**：只记录问题，不修改代码  
 > **问题分级**：🔴 严重（Critical）｜🟡 中等（Warning）｜🟢 可清理（Cleanup）
@@ -10,15 +10,11 @@
 ## 目录
 
 1. [🔴 严重问题（Critical）](#严重问题)
-   - [1.1 auth.py — 函数名遮蔽（Name Shadowing）](#11-authpy--函数名遮蔽name-shadowing)
-   - [1.2 auth.py — 注释块破坏语法结构（Orphan Code）](#12-authpy--注释块破坏语法结构orphan-code)
-   - [1.3 core/executor.py vs tools/executor.py — 同名类双重定义](#13-coreexecutorpy-vs-toolsexecutorpy--同名类双重定义)
-   - [1.4 models.py — SessionDB.delete() 级联删除不完整](#14-modelspy--sessiondbdelete-级联删除不完整)
+   - [1.1 core/executor.py vs tools/executor.py — 同名类双重定义](#11-coreexecutorpy-vs-toolsexecutorpy--同名类双重定义)
 2. [🟡 中等问题（Warning）](#中等问题)
    - [2.1 前端类型命名冲突（ChatMessage 双定义）](#21-前端类型命名冲突chatmessage-双定义)
-   - [2.2 auth.py — verify_token 过期清理逻辑位置不当](#22-authpy--verify_token-过期清理逻辑位置不当)
-   - [2.3 agent.py — SubAgent 线程池未设上限](#23-agentpy--subagent-线程池未设上限)
-   - [2.4 main.py — /api/chat 同步接口阻塞事件循环](#24-mainpy--apichat-同步接口阻塞事件循环)
+   - [2.2 agent.py — SubAgent 线程池未设上限](#22-agentpy--subagent-线程池未设上限)
+   - [2.3 main.py — /api/chat 同步接口阻塞事件循环](#23-mainpy--apichat-同步接口阻塞事件循环)
 3. [🟢 可清理冗余代码（Dead Code / Unused Modules）](#可清理冗余代码)
    - [3.1 src/core/dialog_manager.py — 零引用，344 行死代码](#31-srccoredialog_managerpy--零引用344-行死代码)
    - [3.2 src/core/intent_engine.py — 链式冗余，456 行死代码](#32-srccoreintent_enginepy--链式冗余456-行死代码)
@@ -30,7 +26,7 @@
    - [F-2 🔴 credentials.ts — new URL() 不兼容相对路径，崩溃](#f-2--credentialsts--listcredentials-构造-url-方式不兼容相对路径)
    - [F-3 🟡 useAgent.ts — sessionId 双轨制竞态，消息丢失风险](#f-3--useagentts--session_id-双轨制管理存在数据丢失风险)
    - [F-4 🟡 ChatContainer.vue — AI 回复从未持久化，历史消息消失](#f-4--chatcontainervue--历史消息恢复不保存-ai-回复助手消息丢失)
-   - [F-5 🟡 useAuth.ts — User 接口重复定义](#f-5--useauthts--user-接口与-typesindexts-重复定义)
+   - [F-5 🟡 useDemoAuth.ts — User 接口重复定义](#f-5--usedemoauthts--user-接口与-typesindexts-重复定义)
    - [F-6 🟡 MessageItem.vue — formatProgressContent 参数类型错误](#f-6--messageitemvue--formatprogresscontent-参数类型签名与实际调用不符)
    - [F-7 🟡 credentials.ts — 所有接口无 Authorization Header](#f-7--credentialsts--凭据列表请求无鉴权-header)
    - [F-9 🟢 types/index.ts — SendMessageRequest.files 类型错误](#f-9--sendmessagerequest-类型定义中-files-字段类型错误)
@@ -77,58 +73,6 @@ from src.tools.executor import ToolExecutor   # ← 真正在使用的版本
 - 删除 `src/core/executor.py` 整个文件（324 行）
 - 从 `src/core/__init__.py` 中移除对应导出
 - 若 `RespondTool` / `ClarifyTool` 有需要，迁移到 `src/tools/` 目录下
-
----
-
-### 1.2 models.py — `SessionDB.delete()` 级联删除不完整
-
-- **文件**：`src/db/models.py`
-- **位置**：第 241-254 行（`SessionDB.delete()`）和第 466-472 行（`ChatRecordDB.delete_by_session()`）
-
-**问题描述**：
-
-`SessionDB.delete()` 方法删除会话时只清理了两张表：
-
-```python
-# 第 241-254 行
-@staticmethod
-def delete(session_id: str) -> bool:
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        # 删除消息
-        cursor.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-        # 删除会话
-        cursor.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
-        conn.commit()
-        return True
-```
-
-但 `chat_records` 表（由 `ChatRecordDB` 管理）中存储的记录**也关联了 `session_id`**，且 `ChatRecordDB` 专门提供了 `delete_by_session()` 方法（第 466-472 行）：
-
-```python
-# 第 466-472 行
-@staticmethod
-def delete_by_session(session_id: str) -> int:
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_records WHERE session_id = ?", (session_id,))
-        conn.commit()
-        return cursor.rowcount
-```
-
-`SessionDB.delete()` **没有调用** `ChatRecordDB.delete_by_session()`。
-
-**影响**：
-- 每次删除会话后，`chat_records` 表中会遗留**孤立记录（orphaned records）**
-- 长期运行后 `chat_records` 表数据量持续膨胀，且这些记录无法再通过会话 ID 关联到任何有效会话
-- 如果后续有"审计记录"查询，这些孤立记录会干扰统计数据
-
-**修复建议**：
-在 `SessionDB.delete()` 中追加调用：
-```python
-ChatRecordDB.delete_by_session(session_id)
-```
-或在数据库层面对 `chat_records.session_id` 加外键约束 `ON DELETE CASCADE`。
 
 ---
 
@@ -469,25 +413,26 @@ async function handleSend(content: string) {
 
 ---
 
-### F-5 🟡 useAuth.ts — User 接口与 types/index.ts 重复定义
+### F-5 🟡 useDemoAuth.ts — User 接口与 types/index.ts 重复定义
 
-- **文件 A**：`frontend/src/composables/useAuth.ts`，第 8-13 行
-- **文件 B**：`frontend/src/types/index.ts`，第 41-46 行
+- **文件 A**：`frontend/src/composables/useDemoAuth.ts`，第 9-15 行
+- **文件 B**：`frontend/src/types/index.ts`，第 51-56 行
 
 **问题描述**：
 
-两个文件都定义了完全相同的 `User` 接口：
+两个文件都定义了 `User` 接口，且存在差异：
 
 ```typescript
-// useAuth.ts 第 8-13 行
+// useDemoAuth.ts 第 9-15 行
 export interface User {
   user_id: string
   username: string
   phone?: string
   avatar_url?: string
+  is_admin?: boolean    // ← 独有字段
 }
 
-// types/index.ts 第 41-46 行
+// types/index.ts 第 51-56 行
 export interface User {
   user_id: string
   username: string
@@ -496,16 +441,19 @@ export interface User {
 }
 ```
 
-两个定义字段完全一致，但分散在两个文件中独立维护。
+`useDemoAuth.ts` 比 `types/index.ts` 多了 `is_admin` 字段，但未从 `types/index.ts` 导入扩展，而是重新声明。
 
 **影响**：
 - 若未来需要在 `User` 中加字段，需要同时修改两处，容易漏改
-- `useAuth.ts` 没有从 `types/index.ts` 导入，而是重新声明，违反 DRY 原则
+- `useDemoAuth.ts` 没有从 `types/index.ts` 导入，违反 DRY 原则
 
 **修复建议**：
-`useAuth.ts` 中删除本地 `User` 接口定义，改为：
+`useDemoAuth.ts` 中删除本地 `User` 接口定义，改为从 `types/index.ts` 扩展：
 ```typescript
-import type { User } from '@/types'
+import type { User as BaseUser } from '@/types'
+export interface User extends BaseUser {
+  is_admin?: boolean
+}
 ```
 
 ---
@@ -713,7 +661,7 @@ case 'web_search': {
 | F-2 | 🔴 严重 | `api/credentials.ts` | `new URL()` 不支持相对路径，listCredentials 报错崩溃 |
 | F-3 | 🟡 中等 | `composables/useAgent.ts` + `ChatContainer.vue` | sessionId 双轨制竞态，消息可能存入孤立 session |
 | F-4 | 🟡 中等 | `components/ChatContainer.vue` | AI 回复从未保存到后端，切换会话后 AI 消息全消失 |
-| F-5 | 🟡 中等 | `composables/useAuth.ts` | `User` 接口与 `types/index.ts` 重复定义 |
+| F-5 | 🟡 中等 | `composables/useDemoAuth.ts` | `User` 接口与 `types/index.ts` 重复定义 |
 | F-6 | 🟡 中等 | `components/MessageItem.vue` | `formatProgressContent` 参数类型签名与实际调用不符 |
 | F-7 | 🟡 中等 | `api/credentials.ts` | 所有凭据接口无 Authorization Header，后端 401 |
 | F-8 | 🟢 可清理 | `components/LoginModal.vue` | 测试密码提示语硬编码在 UI 中，生产环境泄露信息 |
@@ -757,4 +705,4 @@ case 'web_search': {
 
 ---
 
-*本报告生成于 2026-03-25，前端专项审核补充于 2026-03-25。代码一行未动，仅记录问题。*
+*本报告生成于 2026-03-25，前端专项审核补充于 2026-03-25。2026-04-27 复查：已移除已修复问题（1.2 models.py 级联删除、auth.py 相关问题），已更新 F-5 文件名变更（useAuth.ts → useDemoAuth.ts）。*

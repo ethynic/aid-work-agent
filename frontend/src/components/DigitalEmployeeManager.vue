@@ -45,6 +45,11 @@
         <div class="flex-1 flex overflow-hidden">
           <!-- Left: List -->
           <div class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto">
+          <!-- 未授权警告 -->
+          <div v-if="hasNoAllowedAgents" class="p-4 m-3 bg-red-50 border border-red-200 rounded-lg">
+            <p class="text-sm font-bold text-red-700 mb-1">未授权使用数字员工</p>
+            <p class="text-xs text-red-600">当前账号未被授权使用任何数字员工，请联系企业管理员申请授权。</p>
+          </div>
         <!-- Builtin -->
         <div class="p-3">
           <div class="text-sm font-bold text-gray-500 mb-2">内置 ({{ builtinList.length }})</div>
@@ -324,6 +329,7 @@ import { marked } from 'marked'
 import AppHeader from './AppHeader.vue'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
   listSubagents,
   getSubagentDetail,
@@ -345,6 +351,8 @@ const effectiveIsLoggedIn = computed(() => isTenantMode.value ? tenantIsLoggedIn
 
 // State
 const allList = ref<SubagentListItem[]>([])
+const allowedAgentIds = ref<Set<string>>(new Set())
+const hasNoAllowedAgents = computed(() => isTenantMode.value && allowedAgentIds.value.size === 0)
 const selectedAgent = ref<SubagentListItem | null>(null)
 const detail = ref<SubagentDetail | null>(null)
 const isNewMode = ref(false)
@@ -395,16 +403,22 @@ function showToast(message: string, type: 'success' | 'error' | 'info' = 'info')
 }
 
 // Computed
-const builtinList = computed(() =>
-  allList.value
-    .filter(i => i.type === 'builtin')
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-)
-const customList = computed(() =>
-  allList.value
-    .filter(i => i.type === 'custom')
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-)
+const builtinList = computed(() => {
+  let list = allList.value.filter(i => i.type === 'builtin')
+  // 租户模式下按权限过滤
+  if (isTenantMode.value && allowedAgentIds.value.size > 0) {
+    list = list.filter(i => allowedAgentIds.value.has(i.agent_id))
+  }
+  return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+})
+const customList = computed(() => {
+  let list = allList.value.filter(i => i.type === 'custom')
+  // 租户模式下按权限过滤
+  if (isTenantMode.value && allowedAgentIds.value.size > 0) {
+    list = list.filter(i => allowedAgentIds.value.has(i.agent_id))
+  }
+  return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+})
 
 const renderedMarkdown = computed(() => {
   if (!detail.value?.system_prompt) return ''
@@ -423,8 +437,19 @@ async function loadList() {
     if (res.success) {
       allList.value = res.data || []
     }
+    // 租户模式下，获取当前用户允许访问的列表，用于过滤
+    if (isTenantMode.value) {
+      try {
+        const allowedRes = await getMyAllowedAgents()
+        if (allowedRes.success && allowedRes.data) {
+          allowedAgentIds.value = new Set(allowedRes.data.map(a => a.agent_id))
+        }
+      } catch (e) {
+        console.error('加载权限允许的数字员工失败', e)
+      }
+    }
   } catch (e: any) {
-    console.error('临时调试：加载列表失败', e)
+    console.error('加载列表失败', e)
   }
 }
 
@@ -436,7 +461,7 @@ async function loadSkills() {
       availableSkills.value = res.data || []
     }
   } catch (e: any) {
-    console.error('临时调试：加载技能列表失败', e)
+    console.error('加载技能列表失败', e)
   }
 }
 
@@ -448,7 +473,7 @@ async function loadTools() {
       availableTools.value = res.data || []
     }
   } catch (e: any) {
-    console.error('临时调试：加载工具列表失败', e)
+    console.error('加载工具列表失败', e)
   }
 }
 
@@ -463,7 +488,7 @@ async function selectAgent(item: SubagentListItem) {
       detail.value = res.data
     }
   } catch (e: any) {
-    console.error('临时调试：加载详情失败', e)
+    console.error('加载详情失败', e)
   } finally {
     loading.value = false
   }

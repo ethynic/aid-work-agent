@@ -109,13 +109,16 @@ class SubagentRegistry:
         """返回所有子智能体列表，带 type 字段"""
         result = []
         for name, config in self._configs.items():
-            result.append({
+            item = {
                 "agent_id": config.dir_name or name,
                 "name": config.name,
                 "description": config.description,
                 "capabilities": config.capabilities,
                 "type": "builtin" if name in self._builtin_names else "custom",
-            })
+            }
+            if config.business_pages:
+                item["business_pages"] = config.business_pages
+            result.append(item)
         return result
 
     def validate_id_uniqueness(self, agent_id: str, exclude_id: str = None) -> bool:

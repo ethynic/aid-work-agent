@@ -35,7 +35,7 @@
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
-        <span class="text-sm font-medium">+ 新会话</span>
+        <span class="text-sm font-medium">新会话</span>
       </button>
 
       <!-- 租户模式菜单 -->
@@ -82,7 +82,7 @@
         </div>
       </template>
 
-      <!-- 普通模式菜单 -->
+      <!-- 演示模式菜单 -->
       <template v-else>
         <!-- Knowledge Base Menu Item -->
         <button
@@ -119,6 +119,47 @@
       </template>
     </div>
 
+    <!-- 业务数据分组 - 在企业知识库之后，历史会话之前 -->
+    <div v-if="currentBusinessPages.length > 0" class="flex-shrink-0 p-2">
+      <div class="flex-shrink-0 px-2 py-2">
+        <div class="flex items-center gap-3">
+          <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+        </div>
+      </div>
+      <button
+        @click="toggleBusinessData"
+        class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+      >
+        <div class="flex items-center gap-3">
+          <span class="text-base">📊</span>
+          <span>业务数据</span>
+        </div>
+        <span class="toggle-icon text-xs">{{ isBusinessDataExpanded ? '▼' : '▶' }}</span>
+      </button>
+
+      <div v-show="isBusinessDataExpanded" class="mt-1 ml-4 space-y-1">
+        <!-- 当前数字员工标签 -->
+        <div class="px-3 py-1 text-xs text-gray-400">
+          ── {{ currentSubagentName }} ──
+        </div>
+        <!-- 业务菜单项 -->
+        <div
+          v-for="page in currentBusinessPages"
+          :key="page.id"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm cursor-pointer',
+            route.path === page.route
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+          @click="navigateToBusinessPage(page)"
+        >
+          <span class="text-base">{{ page.icon }}</span>
+          <span>{{ page.title }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Decorative Divider - 装饰性分隔线 -->
     <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
       <div class="flex items-center gap-3">
@@ -130,13 +171,29 @@
       </div>
     </div>
 
-    <!-- History Sessions Header - 历史会话标题 -->
-    <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
-      <div class="flex items-center justify-between">
-        <h2 class="text-xs font-medium text-gray-500 uppercase tracking-wider">历史会话</h2>
+    <!-- History Sessions Header - 历史会话标题（可折叠） -->
+    <div v-if="showHistory" class="flex-shrink-0 p-2">
+      <div class="flex items-center justify-between gap-3">
+        <button
+          @click="toggleHistoryExpanded"
+          class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+        >
+          <div class="flex items-center gap-3">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>历史会话</span>
+          </div>
+          <svg
+            :class="['w-4 h-4 transition-transform', isHistoryExpanded ? 'rotate-180' : '']"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
         <button
           @click="$emit('collapse')"
-          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors flex-shrink-0"
           title="收起侧边栏"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -147,7 +204,7 @@
     </div>
 
     <!-- Session List - 会话列表 -->
-    <div v-if="showHistory" class="flex-1 overflow-y-auto px-2">
+    <div v-show="showHistory && isHistoryExpanded" class="flex-1 overflow-y-auto px-2">
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -227,22 +284,25 @@
       </div>
     </div>
 
-    <!-- Theme Switcher - 主题切换器 -->
-    <div class="flex-shrink-0 p-3 border-t border-gray-200">
-      <ThemeSwitcher />
-    </div>
+    <!-- 底部固定区域 -->
+    <div class="mt-auto">
+      <!-- Theme Switcher - 主题切换器 -->
+      <div class="flex-shrink-0 p-3 border-t border-gray-200">
+        <ThemeSwitcher />
+      </div>
 
-    <!-- 退出登录 - 租户模式专用 -->
-    <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
-      <button
-        @click="handleTenantLogout"
-        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-        </svg>
-        <span>退出登录</span>
-      </button>
+      <!-- 退出登录 - 租户模式专用 -->
+      <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
+        <button
+          @click="handleTenantLogout"
+          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span>退出登录</span>
+        </button>
+      </div>
     </div>
 
     <!-- Rename Modal -->
@@ -280,12 +340,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useAgent } from '@/composables/useAgent'
+import { getMyAllowedAgents } from '@/api/saasPermissions'
 import ThemeSwitcher from './ThemeSwitcher.vue'
+
+import type { SubagentListItem, BusinessPage } from '@/api/adminSubagent'
 
 interface Props {
   isCollapsed: boolean
@@ -293,9 +357,13 @@ interface Props {
   showHistory?: boolean
   /** 是否显示新会话按钮，默认 true */
   showNewSession?: boolean
+  /** 当前选中的子智能体 ID */
+  currentSubagentId?: string
+  /** 所有可用的子智能体列表 */
+  availableSubagents: SubagentListItem[]
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   showHistory: true,
   showNewSession: true
 })
@@ -305,24 +373,82 @@ defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { isLoggedIn, isAdmin } = useDemoAuth()
-const { admin: tenantAdmin, tenant, logout: tenantLogout } = useTenantAuth()
+const { isLoggedIn: demoIsLoggedIn, isAdmin } = useDemoAuth()
+const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
 const {
   sessions,
   currentSessionId,
   isLoading,
   loadSessions,
-  createNewSession,
   removeSession,
   renameSession,
   selectSession
 } = useSession()
+const { isProcessing, abortStreaming } = useAgent()
 
 const isCreating = ref(false)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 const isAdminMenuExpanded = ref(true)
+// 历史会话折叠状态（持久化到 localStorage）
+const historyStorageKey = 'aid_work_agent:history_expanded'
+const isHistoryExpanded = ref(
+  localStorage.getItem(historyStorageKey) !== 'false'
+)
+
+const toggleHistoryExpanded = () => {
+  isHistoryExpanded.value = !isHistoryExpanded.value
+  localStorage.setItem(historyStorageKey, String(isHistoryExpanded.value))
+}
+
+// 权限：当前用户允许访问的数字员工 ID 列表（仅租户模式需要）
+const myAllowedAgentIds = ref<Set<string>>(new Set())
+const allowedAgentsLoaded = ref(false)
+
+// 加载当前用户允许的数字员工权限
+async function loadMyAllowedAgents() {
+  if (!isTenantMode.value) {
+    allowedAgentsLoaded.value = true
+    return
+  }
+  try {
+    const res = await getMyAllowedAgents()
+    if (res.success && res.data) {
+      myAllowedAgentIds.value = new Set(res.data.map(a => a.agent_id))
+    }
+  } catch (err) {
+    console.error('加载用户数字员工权限失败', err)
+  } finally {
+    allowedAgentsLoaded.value = true
+  }
+}
+
+// 在挂载时加载权限
+onMounted(() => {
+  loadMyAllowedAgents()
+})
+
+// 过滤后可用的数字员工列表（根据权限过滤）
+const filteredAvailableSubagents = computed(() => {
+  if (!isTenantMode.value || myAllowedAgentIds.value.size === 0) {
+    // 非租户模式：不过滤，返回全部
+    return props.availableSubagents
+  }
+  // 租户模式：只返回当前用户有权限的
+  return props.availableSubagents.filter(s => myAllowedAgentIds.value.has(s.agent_id))
+})
+
+// 业务数据分组折叠状态（持久化到 localStorage）
+const storageKey = 'aid_work_agent:business_data_expanded'
+const isBusinessDataExpanded = ref(
+  localStorage.getItem(storageKey) !== 'false'
+)
+
+const toggleBusinessData = () => {
+  isBusinessDataExpanded.value = !isBusinessDataExpanded.value
+  localStorage.setItem(storageKey, String(isBusinessDataExpanded.value))
+}
 
 // 判断是否为租户模式（路由以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -340,18 +466,11 @@ const isTenantAdmin = computed(() => {
 
 // 侧边栏标题
 const sidebarTitle = computed(() => {
-  console.log('临时调试：sidebarTitle 计算属性', {
-    isTenantMode: isTenantMode.value,
-    tenantId: tenantId.value,
-    tenant: tenant.value,
-    tenantAdmin: tenantAdmin.value,
-    isLoggedIn: isLoggedIn.value
-  })
   if (isTenantMode.value && tenant.value) {
     // 租户模式：只显示租户名称
     return tenant.value.company_name
   }
-  // 普通模式：显示默认名称
+  // 演示模式：显示默认名称
   return '爱定义工作助理'
 })
 
@@ -397,7 +516,37 @@ const isHistorySessionActive = computed(() => {
   return !isKnowledgeBaseActive.value
 })
 
-// 跳转到知识库（普通模式）
+// 当前业务数据页面列表
+const currentBusinessPages = computed(() => {
+  const subagentId = props.currentSubagentId || currentSubagent.value
+  if (!subagentId) return []
+  const subagent = filteredAvailableSubagents.value.find(
+    (s: SubagentListItem) => s.agent_id === subagentId
+  )
+  return subagent?.business_pages || []
+})
+
+// 当前子智能体名称
+const currentSubagentName = computed(() => {
+  const subagentId = props.currentSubagentId || currentSubagent.value
+  if (!subagentId) return ''
+  const subagent = filteredAvailableSubagents.value.find(
+    (s: SubagentListItem) => s.agent_id === subagentId
+  )
+  return subagent?.name || ''
+})
+
+// 跳转到业务数据页面
+function navigateToBusinessPage(page: BusinessPage) {
+  // 如果是租户模式，需要加上租户 ID 前缀
+  if (isTenantMode.value && tenantId.value) {
+    router.push(`/t/${tenantId.value}${page.route}`)
+  } else {
+    router.push(page.route)
+  }
+}
+
+// 跳转到知识库（演示模式）
 function goToKnowledgeBase() {
   router.push('/knowledge-base')
 }
@@ -409,17 +558,24 @@ function goToDigitalEmployeeManager() {
 
 // 跳转到全部历史会话
 function goToAllSessions() {
-  router.push('/all-sessions')
+  const targetPath = isTenantMode.value && tenantId.value
+    ? `/t/${tenantId.value}/all-sessions`
+    : '/all-sessions'
+  router.push(targetPath)
 }
 
 // 监听登录状态，登录后加载会话
-watch(isLoggedIn, async (loggedIn) => {
-  if (loggedIn) {
+// 租户模式监听 tenantIsLoggedIn，演示模式监听 demoIsLoggedIn
+import { watchEffect } from 'vue'
+watchEffect(async () => {
+  const isTenantMode = route.path.startsWith('/t/')
+  const effectiveLoggedIn = isTenantMode ? tenantIsLoggedIn.value : demoIsLoggedIn.value
+  if (effectiveLoggedIn) {
     await loadSessions()
   } else {
     sessions.value = []
   }
-}, { immediate: true })
+})
 
 // 格式化时间（后端 CURRENT_TIMESTAMP 为 UTC，需补 Z 标记确保正确解析）
 function formatTime(isoString: string): string {
@@ -454,8 +610,8 @@ function formatTime(isoString: string): string {
 // 新建会话
 async function handleNewSession() {
   // 根据模式选择正确的登录状态检查
-  // 租户模式使用 tenantAdmin.value，普通模式使用 isLoggedIn.value
-  const effectiveIsLoggedIn = isTenantMode.value ? !!tenantAdmin.value : isLoggedIn.value
+  // 租户模式使用 tenantIsLoggedIn，演示模式使用 demoIsLoggedIn
+  const effectiveIsLoggedIn = isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
   if (!effectiveIsLoggedIn) {
     return
   }
@@ -464,20 +620,31 @@ async function handleNewSession() {
     return
   }
 
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    if (!confirm('当前会话还未结束，您希望终止当前会话，进入新会话吗？')) {
+      return
+    }
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
+  }
+
+  // 优化：点击新会话立即响应，不等待后端 API
+  // 直接清空当前会话，导航到空界面，用户输入第一条消息时才真正创建会话
   isCreating.value = true
   try {
-    const newSession = await createNewSession(undefined, currentSubagent.value)
-    if (newSession) {
-      selectSession(newSession.session_id)
-      // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
-      const targetPath = currentSubagent.value
-        ? `/chat/${currentSubagent.value}`
-        : isTenantMode.value
-          ? `/t/${tenantId.value}/chat`
-          : '/'
-      if (route.path !== targetPath) {
-        router.push(targetPath)
-      }
+    selectSession(null)
+    // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
+    const targetPath = currentSubagent.value
+      ? `/chat/${currentSubagent.value}`
+      : isTenantMode.value
+        ? `/t/${tenantId.value}/chat`
+        : '/'
+    if (route.path !== targetPath) {
+      router.push(targetPath)
+    } else {
+      // 如果已经在目标路由，still need to trigger watch by selecting null
+      // 路由相同但 currentSessionId 变化会触发 watch 清空 messages
     }
   } finally {
     isCreating.value = false
@@ -485,7 +652,15 @@ async function handleNewSession() {
 }
 
 // 选择会话
-function handleSelectSession(sessionId: string) {
+async function handleSelectSession(sessionId: string) {
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    if (!confirm('当前会话还未结束，您希望终止当前会话，切换到选中的会话吗？')) {
+      return
+    }
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
+  }
   selectSession(sessionId)
   // 根据会话的 subagent 标记导航到对应路由（租户模式使用 /t/:tenant_id/chat）
   const session = sessions.value.find(s => s.session_id === sessionId)

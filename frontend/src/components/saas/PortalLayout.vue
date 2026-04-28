@@ -39,6 +39,8 @@
       :is-collapsed="sidebarCollapsed"
       :show-history="true"
       :show-new-session="true"
+      :current-subagent-id="currentSubagentId"
+      :available-subagents="availableSubagents"
       class="bg-white border-r border-gray-200"
       @collapse="sidebarCollapsed = true"
     />
@@ -55,6 +57,7 @@ import { onMounted, computed, ref, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
 import MenuSidebar from '@/components/MenuSidebar.vue'
 
 const router = useRouter()
@@ -64,6 +67,41 @@ const toast = useToast()
 
 // 侧边栏折叠状态
 const sidebarCollapsed = ref(false)
+
+// 可用的数字员工列表
+const availableSubagents = ref<SubagentListItem[]>([])
+
+// 当前选中的子智能体ID（从路由获取）
+const currentSubagentId = computed(() => {
+  // 匹配 /t/:tenantId/chat/:subagentId 或 /t/:tenantId/:subagentId/*（业务数据页面）
+  const segments = route.path.split('/').filter(p => p)
+  // segments: ['t', 'tenantId', ...]
+  // - 格式1: ['t', 'tenantId', 'chat', 'subagentId'] → index 3
+  // - 格式2: ['t', 'tenantId', 'subagentId', ...] → index 2
+  if (segments.length >= 3) {
+    if (segments[2] === 'chat' && segments.length >= 4) {
+      return segments[3]
+    }
+    // 检查第三段是否是已知的业务页面路由前缀（trade-specialist等），它就是 subagentId
+    return segments[2]
+  }
+  return undefined
+})
+
+// 加载数字员工列表
+async function loadAvailableSubagents() {
+  try {
+    const res = await listSubagents()
+    if (res.success && res.data) {
+      availableSubagents.value = [
+        { agent_id: 'main', name: 'CEO智能体', description: '', capabilities: [], type: 'builtin' },
+        ...res.data
+      ]
+    }
+  } catch (e) {
+    console.error('加载数字员工列表失败:', e)
+  }
+}
 
 // 提供侧边栏状态给子组件
 provide('sidebarCollapsed', sidebarCollapsed)
@@ -108,6 +146,7 @@ async function handleLogout() {
 
 onMounted(async () => {
   await init()
+  await loadAvailableSubagents()
   if (!isLoggedIn.value) {
     // 根据当前路由跳转到对应登录页
     if (isTenantRoute.value) {

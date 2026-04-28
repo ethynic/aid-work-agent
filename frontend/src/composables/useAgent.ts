@@ -4,6 +4,27 @@ import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 
+// 全局共享状态 - 整个应用只维护一份会话状态
+const messages = ref<ChatMessage[]>([])
+const progressMessages = ref<ProgressMessage[]>([])
+const isProcessing = ref(false)
+const currentResponse = ref('')
+const error = ref<string | null>(null)
+const sessionId = ref<string>(generateSessionId())
+
+// 当前附件列表
+const currentFiles = ref<UploadedFile[]>([])
+
+// 全局唯一的 SSE 管理器
+const sseManager = new SSEManager()
+
+// Per-session 消息缓存：切换会话时保存当前会话的实时消息快照
+const sessionMessagesCache = new Map<string, ChatMessage[]>()
+
+function generateSessionId(): string {
+  return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+}
+
 export function useAgent() {
   // 根据路由判断使用 demo 还是 tenant 认证头
   function getEffectiveAuthHeader(): Record<string, string> {
@@ -14,23 +35,10 @@ export function useAgent() {
     const { getAuthHeader } = useDemoAuth()
     return getAuthHeader()
   }
-  const messages = ref<ChatMessage[]>([])
-  const progressMessages = ref<ProgressMessage[]>([])
-  const isProcessing = ref(false)
-  const currentResponse = ref('')
-  const error = ref<string | null>(null)
-  const sessionId = ref<string>(generateSessionId())
 
-  // 当前附件列表
-  const currentFiles = ref<UploadedFile[]>([])
-
-  const sseManager = new SSEManager()
-
-  // Per-session 消息缓存：切换会话时保存当前会话的实时消息快照
-  const sessionMessagesCache = new Map<string, ChatMessage[]>()
-
-  function generateSessionId(): string {
-    return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+  function now(): string {
+    const d = new Date()
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
   }
 
   /**
@@ -57,15 +65,25 @@ export function useAgent() {
     if (cached) {
       messages.value = cached
     } else {
-      const { getSessionMessages } = await import('@/api/session')
-      const result = await getSessionMessages(newSessionId)
-      messages.value = result.messages?.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-        timestamp: new Date(m.created_at.endsWith('Z') ? m.created_at : m.created_at + 'Z').getTime(),
-        progressMessages: m.metadata?.progressMessages || [],
-        attachments: m.metadata?.attachments || undefined
-      })) || []
+      // 检查缓存中是否标记为"空会话"（新建的会话），直接返回空数组，跳过DB请求
+      if (sessionMessagesCache.has(newSessionId) && sessionMessagesCache.get(newSessionId)!.length === 0) {
+        messages.value = []
+        sessionMessagesCache.delete(newSessionId)
+      } else {
+        const { getSessionMessages } = await import('@/api/session')
+        const result = await getSessionMessages(newSessionId)
+        messages.value = result.messages?.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: new Date(m.created_at.endsWith('Z') ? m.created_at : m.created_at + 'Z').getTime(),
+          progressMessages: m.metadata?.progressMessages || [],
+          attachments: m.metadata?.attachments || undefined
+        })) || []
+        // 如果数据库也没有消息，确保缓存中也没有，避免下次误读
+        if (!result.messages || result.messages.length === 0) {
+          sessionMessagesCache.delete(newSessionId)
+        }
+      }
     }
   }
 
@@ -73,7 +91,7 @@ export function useAgent() {
    * 上传单个文件
    */
   async function uploadAttachment(file: File): Promise<UploadedFile> {
-    const uploaded = await uploadFile(file)
+    const uploaded = await uploadFile(file, getEffectiveAuthHeader())
     currentFiles.value.push(uploaded)
     return uploaded
   }
@@ -92,8 +110,11 @@ export function useAgent() {
     currentFiles.value = []
   }
 
-  async function sendMessage(content: string, subagent?: string | null) {
+  async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string) {
     if (!content.trim() || isProcessing.value) return
+
+    // 优先使用外部传入的 sessionId（来自 DB 的真实会话 ID），避免与本地生成的 sessionId 产生竞态
+    const effectiveSessionId = overrideSessionId || sessionId.value
 
     // 构建用户消息内容（含附件信息）
     let userContent = content.trim()
@@ -132,7 +153,7 @@ export function useAgent() {
     try {
       await sseManager.connect(
         content,
-        sessionId.value,
+        effectiveSessionId,
         currentFiles.value.length > 0 ? [...currentFiles.value] : undefined,
         getEffectiveAuthHeader(), // 传递认证头
         // onProgress - 工具执行进度，仅添加到执行详情
@@ -210,42 +231,53 @@ export function useAgent() {
 
   function getToolDisplayName(toolName: string, toolArgs: object): string {
     switch (toolName) {
-      case 'web_search':
+      case 'web_search': {
         const keyword = (toolArgs as any)?.keyword || ''
         return `网络搜索「${keyword.slice(0, 20)}...」`
-      case 'email_send':
+      }
+      case 'email_send': {
         const to = (toolArgs as any)?.to || ''
         return `发送邮件至「${to}」`
-      case 'email_read':
+      }
+      case 'email_read': {
         const folder = (toolArgs as any)?.folder || 'INBOX'
         const limit = (toolArgs as any)?.limit || 10
         return `读取邮件（${folder}，${limit}封）`
-      case 'content_generate':
+      }
+      case 'content_generate': {
         const contentType = (toolArgs as any)?.content_type || ''
         return `生成内容（${contentType}）`
-      case 'browser_open':
+      }
+      case 'browser_open': {
         const url = (toolArgs as any)?.url || ''
         return `打开网页「${url.slice(0, 30)}...」`
-      case 'delegate_to_subagent':
+      }
+      case 'delegate_to_subagent': {
         const subagentName = (toolArgs as any)?.subagent_name || ''
         return `调用${subagentName}子智能体`
-      case 'skill_execute':
+      }
+      case 'skill_execute': {
         const skill = (toolArgs as any)?.skill || ''
         return `执行技能「${skill}」`
-      case 'use_skill':
+      }
+      case 'use_skill': {
         const skillName = (toolArgs as any)?.skill || ''
         return `加载技能「${skillName}」`
-      case 'file_read':
+      }
+      case 'file_read': {
         const filePath = (toolArgs as any)?.file_path || ''
         return `读取文件「${filePath}」`
+      }
       case 'doc_summarize':
         return '总结文档'
-      case 'doc_translate':
+      case 'doc_translate': {
         const target = (toolArgs as any)?.target_lang || ''
         return `翻译文档为${target}`
-      case 'ocr_image':
+      }
+      case 'ocr_image': {
         const imagePath = (toolArgs as any)?.image_path || ''
         return `识别图片文字「${imagePath}」`
+      }
       case 'create_plan':
         return '创建执行计划'
       default:
@@ -290,12 +322,46 @@ export function useAgent() {
   }
 
   /**
+   * 预先缓存一个新建的空会话（跳过后续 DB 请求）
+   */
+  function precacheNewSession(sessionId: string) {
+    console.log(`[${now()}] [precacheNewSession] precache empty session:`, sessionId)
+    sessionMessagesCache.set(sessionId, [])
+  }
+
+  /**
    * 清除指定会话的缓存（在 SSE 完成后由 watcher 调用，确保下次切回加载最新数据）
    */
   function clearSessionCache(sid?: string) {
     const targetSid = sid || sessionId.value
     if (targetSid) {
       sessionMessagesCache.delete(targetSid)
+    }
+  }
+
+  /**
+   * 中止当前正在进行的流式响应
+   */
+  async function abortStreaming() {
+    console.log(`[${now()}] [abortStreaming] called, isProcessing=`, isProcessing.value, 'sessionId=', sessionId.value)
+    if (isProcessing.value && sessionId.value) {
+      console.log(`[${now()}] [abortStreaming] aborting current connection and notify backend`)
+      // 先断开前端连接
+      sseManager.disconnect()
+      // 通知后端取消生成，避免继续消耗token
+      try {
+        const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+        await fetch(`${apiBase}/chat/${encodeURIComponent(sessionId.value)}/cancel`, {
+          method: 'POST',
+          headers: getEffectiveAuthHeader()
+        })
+        console.log(`[${now()}] [abortStreaming] backend cancel request sent`)
+      } catch (err) {
+        console.warn('[abortStreaming] failed to notify backend:', err)
+        // 即使后端通知失败，前端仍然中止
+      }
+      isProcessing.value = false
+      console.log(`[${now()}] [abortStreaming] done, isProcessing=`, isProcessing.value)
     }
   }
 
@@ -317,8 +383,10 @@ export function useAgent() {
     clearSession,
     switchSession,
     clearSessionCache,
+    precacheNewSession,
     uploadAttachment,
     removeAttachment,
-    clearAttachments
+    clearAttachments,
+    abortStreaming
   }
 }

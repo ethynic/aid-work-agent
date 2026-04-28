@@ -38,7 +38,7 @@ docker compose -f docker-compose.prod.yml up -d --build  # 生产环境
 | [dev_rules/database_dev.md](dev_rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
 
 ## Git 提交规范
-**不要自动提交代码，提交代码仅能由用户发起**
+**不要自动提交代码，仅当用户明确说“提交代码”才提交**
 1. 提交前执行 `git fetch` 拉取远程最新代码
 2. 检查是否有冲突：`git status` 或 `git diff origin/master`
 3. 如有冲突先解决冲突再提交

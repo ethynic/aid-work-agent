@@ -46,7 +46,7 @@
 
           <!-- 密码输入 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">密码（首次登录，没有密码，请点击下方"忘记密码"）</label>
+            <label class="block text-sm text-slate-600 mb-1">密码{{ !isPortalRoute ? '（首次登录，没有密码，请点击下方"忘记密码"）' : '' }}</label>
             <input
               v-model="password"
               type="password"
@@ -88,8 +88,8 @@
             {{ isLoading ? '登录中...' : '登录' }}
           </button>
 
-          <!-- 忘记密码链接 -->
-          <div class="text-center">
+          <!-- 忘记密码链接 - 仅租户前台显示 -->
+          <div v-if="!isPortalRoute" class="text-center">
             <router-link :to="resetPasswordUrl" class="text-sm text-cyan-500 hover:text-cyan-600">
               忘记密码？
             </router-link>
@@ -118,7 +118,7 @@ const { setLogin } = useTenantAuth()
 
 // 从路由参数获取 tenant_id
 const tenantId = computed(() => route.params.tenant_id as string)
-const isPortalRoute = computed(() => !tenantId.value)
+const isPortalRoute = computed(() => route.path.includes('/portal'))
 const resetPasswordUrl = computed(() =>
   tenantId.value ? `/portal/reset-password?tenant_id=${tenantId.value}` : '/portal/reset-password'
 )

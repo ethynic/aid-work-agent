@@ -80,6 +80,14 @@ export enum TenantStatus {
 
 **如需修改字段枚举值，注意前后端协调修改**：同时更新 `frontend/src/api/enums.ts`（前端）和 `src/saas/models/enums.py`（后端）。
 
+## 运行构建
+所有前端代码修改后，都需要运行构建命令，确保没有语法错误。构建命令如下：
+
+```bash
+cd frontend
+npm run build
+```
+
 ## 测试指南
 
 ### 测试目录结构

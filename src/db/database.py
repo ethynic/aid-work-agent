@@ -65,8 +65,6 @@ def get_database_config() -> dict:
 DB_CONFIG = get_database_config()
 
 # 连接池
-_pg_connections = {}
-
 
 def init_postgres_pool(minconn: int = None, maxconn: int = None):
     """初始化 PostgreSQL 连接池"""
@@ -99,27 +97,30 @@ def get_postgres_pool():
     return _pg_connection_pool
 
 
-def get_pooled_connection():
+def get_pooled_connection(max_retries: int = 3):
     """从连接池获取连接，并检查连接有效性"""
     if _pg_connection_pool is None:
         raise RuntimeError("PostgreSQL 连接池未初始化，请先调用 init_postgres_pool()")
 
-    conn = _pg_connection_pool.getconn()
+    for attempt in range(max_retries):
+        conn = _pg_connection_pool.getconn()
 
-    # 检查连接是否有效
-    try:
-        if conn.closed:
-            # 连接已关闭，重新获取
-            logger.warning("PostgreSQL 连接已关闭，重新获取")
-            return get_pooled_connection()
-        # 执行简单查询检查连接状态
-        conn.isolation_level
-    except (psycopg2.OperationalError, psycopg2.InterfaceError):
-        # 连接失效，重新获取
-        logger.warning("PostgreSQL 连接失效，重新获取")
-        return get_pooled_connection()
+        # 检查连接是否有效
+        try:
+            if conn.closed:
+                logger.warning("PostgreSQL 连接已关闭，重新获取 (attempt %d/%d)", attempt + 1, max_retries)
+                _pg_connection_pool.putconn(conn, close=True)
+                continue
+            # 执行简单查询检查连接状态
+            conn.isolation_level
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            logger.warning("PostgreSQL 连接失效，重新获取 (attempt %d/%d)", attempt + 1, max_retries)
+            _pg_connection_pool.putconn(conn, close=True)
+            continue
 
-    return conn
+        return conn
+
+    raise RuntimeError(f"获取数据库连接失败：连续 {max_retries} 次获取到无效连接")
 
 
 def return_pooled_connection(conn):
@@ -135,19 +136,6 @@ def close_postgres_pool():
         _pg_connection_pool.closeall()
         _pg_connection_pool = None
         logger.info("PostgreSQL 连接池已关闭")
-
-
-def get_postgres_pool_status() -> dict:
-    """获取连接池状态"""
-    if _pg_connection_pool is None:
-        return {"initialized": False}
-
-    return {
-        "initialized": True,
-        "minconn": _pg_connection_pool.minconn,
-        "maxconn": _pg_connection_pool.maxconn,
-        "dsn": _pg_connection_pool.dsn,
-    }
 
 
 def get_postgres_pool_status() -> dict:
@@ -245,9 +233,9 @@ def _init_postgresql():
                 id SERIAL PRIMARY KEY,
                 user_id TEXT UNIQUE NOT NULL,
                 username TEXT,
-                phone TEXT UNIQUE,
+                phone TEXT,
                 password_hash TEXT,
-                wx_openid TEXT UNIQUE,
+                wx_openid TEXT,
                 wx_unionid TEXT,
                 avatar_url TEXT,
                 tenant_id TEXT,
@@ -258,12 +246,42 @@ def _init_postgresql():
             )
         """)
 
+        # 租户内手机号唯一约束（不同租户允许相同手机号）
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone
+            ON users (tenant_id, phone)
+            WHERE phone IS NOT NULL AND tenant_id IS NOT NULL
+        """)
+
+        # 迁移：删除旧的 phone 全局唯一约束（如果存在）
+        cursor.execute("""
+            SELECT conname FROM pg_constraint
+            WHERE conrelid = 'users'::regclass AND contype = 'u'
+            AND conname LIKE '%phone%'
+        """)
+        old_constraint = cursor.fetchone()
+        if old_constraint:
+            cursor.execute(f'ALTER TABLE users DROP CONSTRAINT {old_constraint[0]}')
+            logger.info(f"Dropped old phone unique constraint: {old_constraint[0]}")
+
+        # 同步删除旧的 phone 唯一索引（如果存在）
+        cursor.execute("""
+            SELECT indexname FROM pg_indexes
+            WHERE tablename = 'users' AND indexname = 'users_phone_key'
+        """)
+        old_index = cursor.fetchone()
+        if old_index:
+            cursor.execute('DROP INDEX IF EXISTS users_phone_key')
+            logger.info("Dropped old phone unique index: users_phone_key")
+
         # 会话表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id SERIAL PRIMARY KEY,
                 session_id TEXT UNIQUE NOT NULL,
                 user_id TEXT NOT NULL,
+                tenant_id TEXT,
+                subagent_id TEXT,
                 title TEXT,
                 context_data TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

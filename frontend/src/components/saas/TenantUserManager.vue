@@ -1,20 +1,61 @@
 <template>
-  <div class="p-6">
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-slate-800">用户管理</h1>
-      <div class="flex gap-2">
-        <button @click="showImport = true"
-          class="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-lg text-sm font-medium transition-colors">
-          CSV 导入
+  <div class="h-screen flex flex-col bg-gray-50">
+    <!-- Header Bar -->
+    <AppHeader
+      title="用户管理"
+      :is-logged-in="effectiveIsLoggedIn"
+      :user="effectiveUser"
+      @toggle-sidebar="handleToggleSidebar"
+      @logout="handleLogout"
+    >
+      <template #menu-items="{ closeMenu }">
+        <button
+          @click="goToChat(); closeMenu()"
+          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          返回对话
         </button>
-        <button @click="openAddUser"
-          class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
-          添加用户
+        <button
+          @click="openCustomerInfo(); closeMenu()"
+          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+          </svg>
+          我的客户
         </button>
-      </div>
-    </div>
+        <button
+          @click="openScheduledTasks(); closeMenu()"
+          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          我的定时任务
+        </button>
+      </template>
+    </AppHeader>
 
-    <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+    <!-- Main Content -->
+    <div class="flex-1 overflow-y-auto p-6">
+      <div class="flex items-center justify-between mb-6">
+        <div></div>
+        <div class="flex gap-2">
+          <button @click="showImport = true"
+            class="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-lg text-sm font-medium transition-colors">
+            CSV 导入
+          </button>
+          <button @click="openAddUser"
+            class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
+            添加用户
+          </button>
+        </div>
+      </div>
+
+      <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
 
     <!-- 用户列表 -->
     <div v-else-if="users.length > 0" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -25,6 +66,7 @@
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">手机号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">部门</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">角色</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">数字员工授权</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
           </tr>
         </thead>
@@ -40,10 +82,30 @@
               </span>
             </td>
             <td class="px-4 py-3">
-              <button @click="handleRemove(u.user_id)"
-                class="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors">
-                删除
-              </button>
+              <span v-if="u.role === 'tenant_admin'"
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                默认全部
+              </span>
+              <span v-else-if="u.agent_count > 0"
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                {{ u.agent_count }} 个已授权
+              </span>
+              <span v-else
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                未授权
+              </span>
+            </td>
+            <td class="px-4 py-3">
+              <div class="flex gap-2">
+                <button @click="openPermissionDialog(u)"
+                  class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                  授权
+                </button>
+                <button @click="handleRemove(u.user_id)"
+                  class="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors">
+                  删除
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -53,6 +115,7 @@
     <div v-else class="text-center py-12 text-slate-500">
       <p class="text-lg mb-2">暂无企业用户</p>
       <p class="text-sm">点击"添加用户"或"CSV 导入"添加用户</p>
+    </div>
     </div>
 
     <!-- 添加用户弹窗 -->
@@ -120,18 +183,125 @@
         </div>
       </div>
     </div>
+
+    <!-- 用户数字员工授权弹窗 -->
+    <div v-if="showPermissionDialog" class="fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showPermissionDialog = false"></div>
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6 max-h-[80vh] overflow-y-auto">
+        <h3 class="text-lg font-bold text-slate-800 mb-4">
+          数字员工授权 - {{ currentUser?.username || currentUser?.phone }}
+        </h3>
+        <div v-if="loadingAgents" class="text-center py-6 text-slate-500 text-sm">加载中...</div>
+        <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-slate-500 text-sm">
+          当前租户未授权任何数字员工，无法给用户授权
+        </div>
+        <div v-else class="space-y-2 py-2">
+          <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-slate-50 rounded cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="selectedAgentIds.includes(agent.agent_id)"
+              @change="toggleAgentSelection(agent.agent_id)"
+              class="w-4 h-4 text-cyan-600 border-slate-300 rounded focus:ring-cyan-500"
+            />
+            <div class="ml-3 flex-1">
+              <div class="text-sm font-medium text-slate-800">{{ agent.name }}</div>
+              <div v-if="agent.description" class="text-xs text-slate-500">{{ agent.description }}</div>
+            </div>
+            <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
+              :class="agent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'">
+              {{ agent.type === 'builtin' ? '内置' : '定制' }}
+            </span>
+          </label>
+        </div>
+        <div v-if="permissionError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
+          {{ permissionError }}
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button @click="showPermissionDialog = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
+            取消
+          </button>
+          <button @click="saveUserPermissions" :disabled="savingPermissions" class="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors">
+            {{ savingPermissions ? '保存中...' : '确认保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, inject } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
+import AppHeader from '@/components/AppHeader.vue'
 import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser } from '@/api/saasTenant'
+import { getTenantAvailableUserAgents, getUserAgentPermissions, setUserAgentPermissions, type AgentItem } from '@/api/saasPermissions'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
+const router = useRouter()
 const toast = useToast()
 const tenantId = computed(() => route.params.tenant_id as string)
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+
+// 统一的登录状态检查
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
+
+// 统一的用户信息
+const effectiveUser = computed(() => {
+  return tenantAdmin.value ? {
+    user_id: tenantAdmin.value.user_id,
+    username: tenantAdmin.value.username,
+    phone: tenantAdmin.value.phone
+  } : null
+})
+
+// 从 PortalLayout 注入侧边栏状态
+const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed')
+const toggleSidebarFn = inject<() => void>('toggleSidebar')
+
+// 侧边栏折叠状态
+const localSidebarCollapsed = ref(false)
+const isSidebarCollapsed = computed({
+  get: () => sidebarCollapsed?.value ?? localSidebarCollapsed.value,
+  set: (val: boolean) => {
+    if (sidebarCollapsed) {
+      sidebarCollapsed.value = val
+    } else {
+      localSidebarCollapsed.value = val
+    }
+  }
+})
+
+function handleToggleSidebar() {
+  if (toggleSidebarFn) {
+    toggleSidebarFn()
+  } else {
+    isSidebarCollapsed.value = !isSidebarCollapsed.value
+  }
+}
+
+async function handleLogout() {
+  await tenantLogout()
+  router.push(`/t/${tenantId.value}/login`)
+}
+
+function goToChat() {
+  router.push(`/t/${tenantId.value}/chat`)
+}
+
+function openCustomerInfo() {
+  const userId = effectiveUser.value?.user_id
+  if (userId) {
+    window.open(`/customer-info?user_id=${userId}`, '_blank')
+  } else {
+    toast.warning('请先登录')
+  }
+}
+
+function openScheduledTasks() {
+  window.open('/scheduled-tasks', '_blank')
+}
 
 const loading = ref(true)
 const users = ref<any[]>([])
@@ -147,10 +317,72 @@ const fileInput = ref<HTMLInputElement | null>(null)
 
 const addForm = ref({ phone: '', username: '', department: '', role: 'user' })
 
+// 数字员工授权弹窗相关
+const showPermissionDialog = ref(false)
+const currentUser = ref<any>(null)
+const availableAgents = ref<AgentItem[]>([])
+const selectedAgentIds = ref<string[]>([])
+const loadingAgents = ref(false)
+const savingPermissions = ref(false)
+const permissionError = ref('')
+
 function openAddUser() {
   addForm.value = { phone: '', username: '', department: '', role: 'user' }
   addError.value = ''
   showAdd.value = true
+}
+
+function openPermissionDialog(user: any) {
+  currentUser.value = user
+  selectedAgentIds.value = []
+  loadingAgents.value = true
+  permissionError.value = ''
+  showPermissionDialog.value = true
+  // 加载可用数字员工和当前授权
+  ;(async () => {
+    try {
+      const [availableRes, permissionsRes] = await Promise.all([
+        getTenantAvailableUserAgents(),
+        getUserAgentPermissions(user.user_id),
+      ])
+      if (availableRes.success && availableRes.data) {
+        availableAgents.value = availableRes.data
+      }
+      if (permissionsRes.success && permissionsRes.data) {
+        selectedAgentIds.value = permissionsRes.data.agent_ids || []
+      }
+    } catch (e) {
+      console.error('加载数字员工授权失败:', e)
+      permissionError.value = '加载失败，请重试'
+    } finally {
+      loadingAgents.value = false
+    }
+  })()
+}
+
+function toggleAgentSelection(agentId: string) {
+  const index = selectedAgentIds.value.indexOf(agentId)
+  if (index >= 0) {
+    selectedAgentIds.value.splice(index, 1)
+  } else {
+    selectedAgentIds.value.push(agentId)
+  }
+}
+
+async function saveUserPermissions() {
+  if (!currentUser.value) return
+  savingPermissions.value = true
+  permissionError.value = ''
+  try {
+    await setUserAgentPermissions(currentUser.value.user_id, selectedAgentIds.value)
+    toast.success('授权保存成功')
+    showPermissionDialog.value = false
+    await loadUsers()
+  } catch (e: any) {
+    permissionError.value = e.message || '保存失败'
+  } finally {
+    savingPermissions.value = false
+  }
 }
 
 function onFileSelect(e: Event) {

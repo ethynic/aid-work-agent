@@ -6,31 +6,51 @@ import { getAuthHeader as getNormalAuthHeader } from './auth'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/sessions`
 
-// 根据路由获取正确的认证头
+// 从 URL 路径提取 tenant_id
+function getCurrentTenantId(): string | null {
+  const path = window.location.pathname
+  const match = path.match(/^\/t\/([^/]+)/)
+  return match ? match[1] : null
+}
+
+// 根据路由获取正确的认证头（包含 X-Tenant-Id）
 function getAuthHeader(): Record<string, string> {
   const path = window.location.pathname
+  let headers: Record<string, string> = {}
+
   // 租户/平台路由使用 saas_token 或 portal_token
   if (path.startsWith('/t/')) {
     const saasToken = localStorage.getItem('saas_token')
-    if (saasToken) return { 'Authorization': `Bearer ${saasToken}` }
+    if (saasToken) headers['Authorization'] = `Bearer ${saasToken}`
   } else if (path.startsWith('/portal')) {
     const portalToken = localStorage.getItem('portal_token')
-    if (portalToken) return { 'Authorization': `Bearer ${portalToken}` }
+    if (portalToken) headers['Authorization'] = `Bearer ${portalToken}`
+  } else {
+    // 普通路由使用 demo_token
+    headers = getNormalAuthHeader()
   }
-  // 普通路由使用 demo_token
-  return getNormalAuthHeader()
+
+  // 租户路由下传递 X-Tenant-Id，用于租户隔离
+  const tenantId = getCurrentTenantId()
+  if (tenantId) {
+    headers['X-Tenant-Id'] = tenantId
+  }
+
+  return headers
 }
 
 export interface ChatSession {
   session_id: string
   user_id: string
+  tenant_id?: string
+  subagent_id?: string
   title: string
   context_data?: Record<string, any>
   created_at: string
   updated_at: string
 }
 
-export interface ChatMessage {
+export interface ChatMessageRecord {
   message_id: string
   session_id: string
   role: 'user' | 'assistant' | 'system'
@@ -42,6 +62,7 @@ export interface ChatMessage {
 export interface CreateSessionRequest {
   title?: string
   context_data?: Record<string, any>
+  subagent_id?: string
 }
 
 export interface SessionContext {
@@ -55,14 +76,19 @@ export interface SessionContext {
     title: string
     created_at: string
   }
-  messages: ChatMessage[]
+  messages: ChatMessageRecord[]
 }
 
 /**
- * 获取当前用户的所有会话
+ * 获取当前用户的所有会话（分页）
  */
-export async function listSessions(): Promise<{ sessions: ChatSession[] }> {
-  const res = await fetch(API_BASE, {
+export async function listSessions(page: number = 1, pageSize: number = 20): Promise<{
+  sessions: ChatSession[],
+  total: number,
+  page: number,
+  page_size: number
+}> {
+  const res = await fetch(`${API_BASE}?page=${page}&page_size=${pageSize}`, {
     headers: { ...getAuthHeader() }
   })
   if (!res.ok) throw new Error('Failed to fetch sessions')
@@ -99,7 +125,7 @@ export async function getSession(sessionId: string): Promise<ChatSession> {
 /**
  * 更新会话
  */
-export async function updateSession(sessionId: string, data: { title?: string, context_data?: Record<string, any> }): Promise<ChatSession> {
+export async function updateSession(sessionId: string, data: { title?: string, context_data?: Record<string, any>, subagent_id?: string }): Promise<ChatSession> {
   const res = await fetch(`${API_BASE}/${sessionId}`, {
     method: 'PATCH',
     headers: {
@@ -126,7 +152,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 /**
  * 获取会话消息
  */
-export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessage[] }> {
+export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessageRecord[] }> {
   const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
     headers: { ...getAuthHeader() }
   })
@@ -137,7 +163,7 @@ export async function getSessionMessages(sessionId: string): Promise<{ messages:
 /**
  * 添加消息到会话
  */
-export async function addSessionMessage(sessionId: string, role: string, content: string, metadata?: Record<string, any>): Promise<ChatMessage> {
+export async function addSessionMessage(sessionId: string, role: string, content: string, metadata?: Record<string, any>): Promise<ChatMessageRecord> {
   const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
     method: 'POST',
     headers: {

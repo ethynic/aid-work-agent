@@ -6,6 +6,8 @@
       <MenuSidebar
         v-if="!isInPortalLayout"
         :is-collapsed="isSidebarCollapsed"
+        :current-subagent-id="currentSubagentId"
+        :available-subagents="availableSubagents"
         @collapse="isSidebarCollapsed = true"
       />
 
@@ -20,29 +22,13 @@
             :user="effectiveUser"
             :available-subagents="availableSubagents"
             :current-subagent-id="currentSubagentId"
+            :show-demo-logout="!isTenantMode"
             @toggle-sidebar="handleToggleSidebar"
             @logout="handleLogout"
             @change-subagent="handleSubagentChange"
           >
             <template #menu-items="{ closeMenu }">
-              <button
-                @click="handleNewSession(); closeMenu()"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                </svg>
-                新会话
-              </button>
-              <button
-                @click="openCustomerInfo"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-                我的客户
-              </button>
+
               <button
                 @click="showCredentialManager = true; closeMenu()"
                 class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
@@ -130,7 +116,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useToast } from 'vue-toastification'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
@@ -145,14 +130,11 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
-
-const toast = useToast()
 const router = useRouter()
 
 // 从 PortalLayout 注入侧边栏状态（租户前台模式）
 const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed')
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
-const collapseSidebarFn = inject<() => void>('collapseSidebar')
 
 const {
   messages,
@@ -162,9 +144,11 @@ const {
   clearSession,
   switchSession,
   clearSessionCache,
+  precacheNewSession,
   uploadAttachment,
   removeAttachment,
   clearAttachments,
+  abortStreaming,
   sessionId: agentSessionId
 } = useAgent()
 
@@ -175,7 +159,7 @@ const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview(
 
 const route = useRoute()
 const subagentName = computed<string | null>(() => {
-  // 支持两种路由匹配：普通模式 /chat/subagent 和租户模式 /t/tenantId/chat/subagent
+  // 支持两种路由匹配：演示模式 /chat/subagent 和租户模式 /t/tenantId/chat/subagent
   if (route.name === 'chat-subagent') {
     return route.params.subagent as string
   }
@@ -189,7 +173,7 @@ const subagentName = computed<string | null>(() => {
 const availableSubagents = ref<SubagentListItem[]>([])
 
 // 当前选中的数字员工ID（null 表示主智能体）
-const currentSubagentId = computed(() => subagentName.value)
+const currentSubagentId = computed(() => subagentName.value ?? undefined)
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -251,27 +235,6 @@ const pageTitle = computed(() => {
   }
   return `${prefix}新会话`
 })
-
-// 跳转到客户信息页面
-function openCustomerInfo() {
-  // 使用 user_id 和 currentSessionId 构建 URL
-  const currentUser = effectiveUser.value
-  const userId = currentUser?.user_id
-  const sessionId = currentSessionId.value
-  if (userId) {
-    const params = new URLSearchParams()
-    params.append('user_id', userId)
-    if (sessionId) {
-      params.append('session_id', sessionId)
-    }
-    window.open(`/customer-info?${params.toString()}`, '_blank')
-  } else {
-    // 如果没有用户信息，提示登录
-    toast.warning('请先登录')
-    showLoginModal.value = true
-  }
-}
-
 // 跳转到定时任务页面
 function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')
@@ -295,6 +258,18 @@ async function loadAvailableSubagents() {
 
 // 处理数字员工选择变化
 async function handleSubagentChange(agentId: string) {
+  console.log(`[${now()}] [ConfirmDialog] handleSubagentChange called, isProcessing=`, isProcessing.value, 'agentId=', agentId)
+  // 如果当前正在流式响应，需要用户确认是否终止
+  if (isProcessing.value) {
+    console.log(`[${now()}] [ConfirmDialog] isProcessing=true, show confirm dialog`)
+    if (!confirm('当前会话还未结束，您希望终止当前会话，切换数字员工吗？')) {
+      console.log(`[${now()}] [ConfirmDialog] user canceled`)
+      return
+    }
+    console.log(`[${now()}] [ConfirmDialog] user confirmed, abort streaming`)
+    // 用户确认，终止当前流式响应
+    await abortStreaming()
+  }
   // 构建目标路由路径
   let targetPath: string
   const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
@@ -309,14 +284,16 @@ async function handleSubagentChange(agentId: string) {
     targetPath = agentId === 'main' ? '/' : `/chat/${agentId}`
   }
 
+  console.log(`[${now()}] [ConfirmDialog] router.push to`, targetPath)
   // 导航到对应路由
   // 现有代码已经监听 subagentName 变化，会自动清空会话并创建新会话
   await router.push(targetPath)
+  console.log(`[${now()}] [ConfirmDialog] router.push done`)
 }
 
 // 模拟在线状态检测
 onMounted(async () => {
-  // 初始化认证状态（租户模式和普通模式都需要初始化）
+  // 初始化认证状态（租户模式和演示模式都需要初始化）
   await Promise.all([initAuth(), initTenantAuth()])
 
   // 加载可用数字员工列表
@@ -329,11 +306,17 @@ onMounted(async () => {
     // 已登录，加载会话列表
     await loadSessions()
     // 子智能体模式下不加载主智能体最近会话
-    if (!subagentName.value) {
+    // 如果 currentSessionId 已经是 null 且 sessions 已经加载（说明用户已经在导航前点击了"新会话"），不要再覆盖它
+    // 只有当 currentSessionId 为 null 时（直接打开页面/刷新页面），才需要加载最近会话
+    // 如果 currentSessionId 已有值（从历史列表点击跳转过来），保留用户选中的会话
+    if (!subagentName.value && currentSessionId.value === null) {
       const hasSession = await loadLatestSession()
       if (hasSession && currentSessionId.value) {
         agentSessionId.value = currentSessionId.value
       }
+    } else if (currentSessionId.value) {
+      // currentSessionId 已有值（从历史页面跳转过来），需要同步到 agentSessionId
+      agentSessionId.value = currentSessionId.value
     }
   }
 })
@@ -342,25 +325,35 @@ onUnmounted(() => {
 })
 
 async function handleSend(content: string) {
+  console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
   if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
   }
 
-  // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新）
+  // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
   if (!currentSessionId.value) {
+    console.log(`[${now()}] [handleSend] no current session, creating new session...`)
+    const startTime = Date.now()
     const newSession = await createNewSession(undefined, subagentName.value)
+    console.log(`[${now()}] [handleSend] createNewSession done in ${Date.now() - startTime}ms, newSession=`, newSession)
     if (newSession) {
+      // 新建会话本来就是空的，预先缓存空数组，避免切换时请求后端
+      precacheNewSession(newSession.session_id)
       skipNextSwitch.value = true
       selectSession(newSession.session_id)
       agentSessionId.value = newSession.session_id
       // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
       await switchSession(newSession.session_id)
+      console.log(`[${now()}] [handleSend] switchSession done, ready to send message`)
     }
   }
 
   const sid = currentSessionId.value
-  if (!sid) return
+  if (!sid) {
+    console.log(`[${now()}] [handleSend] still no sessionId, abort`)
+    return
+  }
 
   // 如果是当前会话的首条用户消息（标题还是默认的"新会话"），自动用前10个字更新标题
   const session = sessions.value.find(s => s.session_id === sid)
@@ -369,7 +362,7 @@ async function handleSend(content: string) {
     await renameSession(sid, title)
   }
 
-  await sendMessage(content, subagentName.value)
+  await sendMessage(content, subagentName.value, currentSessionId.value ?? undefined)
 
   // 发送成功后清空附件
   clearAttachments()
@@ -396,26 +389,9 @@ function handleToggleSidebar() {
   }
 }
 
-async function handleNewSession() {
-  if (!effectiveIsLoggedIn.value) {
-    showLoginModal.value = true
-    return
-  }
-  const newSession = await createNewSession(undefined, subagentName.value)
-  if (newSession) {
-    // 选中新会话并同步到useAgent
-    selectSession(newSession.session_id)
-    agentSessionId.value = newSession.session_id
-    // 创建新会话后，清空当前消息，开始新对话
-    clearSession()
-    clearAttachments()
-    // 展开侧边栏
-    if (collapseSidebarFn) {
-      collapseSidebarFn()
-    } else {
-      isSidebarCollapsed.value = false
-    }
-  }
+function now(): string {
+  const d = new Date()
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
 }
 
 async function handleLogout() {
