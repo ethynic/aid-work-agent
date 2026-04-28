@@ -87,6 +87,12 @@ services:
       - "tcp_keepalives_interval=10"
       - "-c"
       - "tcp_keepalives_count=6"
+      # 语句超时：防止单条 SQL 长时间占用连接（30秒）
+      - "-c"
+      - "statement_timeout=30000"
+      # 锁等待超时：防止死锁导致连接永远阻塞（10秒）
+      - "-c"
+      - "lock_timeout=10000"
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:

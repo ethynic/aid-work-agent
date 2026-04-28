@@ -145,10 +145,15 @@ def get_pooled_connection(max_retries: int = 3):
     raise RuntimeError(f"获取数据库连接失败：连续 {max_retries} 次获取到无效连接")
 
 
-def return_pooled_connection(conn):
-    """归还连接到连接池"""
+def return_pooled_connection(conn, close: bool = False):
+    """归还连接到连接池
+
+    Args:
+        conn: 要归还的连接
+        close: 是否关闭并丢弃该连接（用于坏连接）
+    """
     if _pg_connection_pool and conn:
-        _pg_connection_pool.putconn(conn)
+        _pg_connection_pool.putconn(conn, close=close)
 
 
 def close_postgres_pool():
@@ -160,15 +165,71 @@ def close_postgres_pool():
         logger.info("PostgreSQL 连接池已关闭")
 
 
+def health_check_pool() -> dict:
+    """连接池健康检查：检测并清理坏连接
+
+    Returns:
+        dict: 包含 healthy/bad 连接数和详细信息
+    """
+    if _pg_connection_pool is None:
+        return {"initialized": False, "healthy": 0, "bad": 0}
+
+    healthy = 0
+    bad = 0
+    bad_details = []
+
+    # 检查池中所有可用连接
+    if hasattr(_pg_connection_pool, '_pool'):
+        connections_to_check = list(_pg_connection_pool._pool)
+        for conn in connections_to_check:
+            try:
+                if conn.closed:
+                    bad += 1
+                    bad_details.append("连接已关闭")
+                    continue
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                conn.rollback()  # 确保连接状态干净
+                healthy += 1
+            except Exception as e:
+                bad += 1
+                bad_details.append(str(e)[:100])
+                try:
+                    _pg_connection_pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+
+    result = {
+        "initialized": True,
+        "healthy": healthy,
+        "bad": bad,
+    }
+    if bad_details:
+        result["bad_details"] = bad_details
+
+    if bad > 0:
+        logger.warning(f"后端日志：连接池健康检查发现 {bad} 个坏连接，已清理")
+
+    return result
+
+
 def get_postgres_pool_status() -> dict:
-    """获取连接池状态"""
+    """获取连接池状态（含健康检测）"""
     if _pg_connection_pool is None:
         return {"initialized": False}
+
+    # ThreadedConnectionPool 的内部状态
+    # _pool: 可用连接列表, _used: 已借出连接字典
+    pool_size = len(_pg_connection_pool._pool) if hasattr(_pg_connection_pool, '_pool') else -1
+    used_size = len(_pg_connection_pool._used) if hasattr(_pg_connection_pool, '_used') else -1
 
     return {
         "initialized": True,
         "minconn": _pg_connection_pool.minconn,
         "maxconn": _pg_connection_pool.maxconn,
+        "pool_available": pool_size,   # 池中可用连接数
+        "pool_in_use": used_size,       # 正在被使用的连接数
         "dsn": _pg_connection_pool.dsn,
     }
 
@@ -231,12 +292,33 @@ def get_db_connection() -> Generator[Any, None, None]:
             pass  # 不实际关闭，由上下文管理器处理
 
     wrapper = CursorWrapper(cursor, conn)
+    conn_handled = False  # 标记连接是否已被处理（归还/丢弃）
 
     try:
         yield wrapper
+    except Exception:
+        # 发生异常时必须 rollback，否则连接进入 aborted transaction 状态
+        # 后续所有查询都会报 "current transaction is aborted" 导致连接被毒化
+        try:
+            conn.rollback()
+        except Exception as rollback_err:
+            logger.error(f"后端日志：rollback 失败，连接将被丢弃: {rollback_err}")
+            # rollback 失败说明连接已坏，直接关闭丢弃
+            return_pooled_connection(conn, close=True)
+            conn_handled = True
+        raise
     finally:
-        # 归还连接到池而非关闭
-        return_pooled_connection(conn)
+        if not conn_handled:
+            # 正常退出时也 rollback，清理可能残留的未提交事务
+            # 这是防止连接池毒化的关键：确保归还的连接始终处于干净状态
+            try:
+                conn.rollback()
+            except Exception:
+                # rollback 失败则关闭丢弃该连接
+                return_pooled_connection(conn, close=True)
+                return
+            # 归还连接到池而非关闭
+            return_pooled_connection(conn)
 
 
 def init_database():

@@ -307,11 +307,31 @@ if settings.saas.enabled:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint（含数据库连接池状态）"""
+    from src.db.database import get_postgres_pool_status, health_check_pool
+
+    pool_status = get_postgres_pool_status()
+    db_healthy = pool_status.get("initialized", False) and pool_status.get("pool_available", 0) >= 0
+
     return {
-        "status": "healthy",
+        "status": "healthy" if db_healthy else "degraded",
         "version": settings.app.version,
         "provider": settings.llm.provider,
+        "db_pool": pool_status,
+    }
+
+
+@app.get("/health/db")
+async def health_check_db():
+    """数据库连接池详细健康检查（检测并清理坏连接）"""
+    from src.db.database import get_postgres_pool_status, health_check_pool
+
+    pool_status = get_postgres_pool_status()
+    pool_health = health_check_pool()
+
+    return {
+        "pool_status": pool_status,
+        "pool_health": pool_health,
     }
 
 

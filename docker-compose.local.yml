@@ -11,39 +11,48 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-aid_work_agent}
       POSTGRES_USER: ${POSTGRES_USER:-aid_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
+      # 优化参数
       POSTGRES_MAX_CONNECTIONS: 200
-      POSTGRES_SHARED_BUFFERS: 512MB
+      POSTGRES_SHARED_BUFFERS: 256MB
       POSTGRES_EFFECTIVE_CACHE_SIZE: 1536MB
       POSTGRES_WORK_MEM: 16MB
-      POSTGRES_MAINTENANCE_WORK_MEM: 256MB
-      POSTGRES_WAL_LEVEL: replica
-      POSTGRES_MAX_WAL_SIZE: 2GB
-      POSTGRES_MIN_WAL_SIZE: 512MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 128MB
+      # WAL 配置（本地开发无需复制，使用 minimal 减少 WAL 开销）
+      POSTGRES_WAL_LEVEL: minimal
+      POSTGRES_MAX_WAL_SIZE: 1GB
+      POSTGRES_MIN_WAL_SIZE: 256MB
+      # 检查点配置
       POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
+      # 随机页成本（SSD设为1.1，HDD设为4）
       POSTGRES_RANDOM_PAGE_COST: 1.1
+      # 连接超时防护
+      POSTGRES_IDLE_IN_TRANSACTION_SESSION_TIMEOUT: 60000
+      POSTGRES_IDLE_SESSION_TIMEOUT: 300000
+      # 日志配置
       POSTGRES_LOG_MIN_DURATION_STATEMENT: 1000
       POSTGRES_LOG_CHECKPOINTS: "on"
       POSTGRES_LOG_CONNECTIONS: "on"
       POSTGRES_LOG_DISCONNECTIONS: "on"
+      # 时区
       TZ: Asia/Shanghai
     command:
       - "postgres"
       - "-c"
       - "max_connections=200"
       - "-c"
-      - "shared_buffers=512MB"
+      - "shared_buffers=256MB"
       - "-c"
       - "effective_cache_size=1536MB"
       - "-c"
       - "work_mem=16MB"
       - "-c"
-      - "maintenance_work_mem=256MB"
+      - "maintenance_work_mem=128MB"
       - "-c"
-      - "wal_level=replica"
+      - "wal_level=minimal"
       - "-c"
-      - "max_wal_size=2GB"
+      - "max_wal_size=1GB"
       - "-c"
-      - "min_wal_size=512MB"
+      - "min_wal_size=256MB"
       - "-c"
       - "checkpoint_completion_target=0.9"
       - "-c"
@@ -60,6 +69,22 @@ services:
       - "log_timezone=Asia/Shanghai"
       - "-c"
       - "timezone=Asia/Shanghai"
+      - "-c"
+      - "idle_in_transaction_session_timeout=60000"
+      - "-c"
+      - "idle_session_timeout=300000"
+      - "-c"
+      - "tcp_keepalives_idle=60"
+      - "-c"
+      - "tcp_keepalives_interval=10"
+      - "-c"
+      - "tcp_keepalives_count=6"
+      # 语句超时：防止单条 SQL 长时间占用连接（30秒）
+      - "-c"
+      - "statement_timeout=30000"
+      # 锁等待超时：防止死锁导致连接永远阻塞（10秒）
+      - "-c"
+      - "lock_timeout=10000"
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
@@ -73,7 +98,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    shm_size: 256mb
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 2G
+          cpus: "0.5"
+    shm_size: 512mb
     logging:
       driver: json-file
       options:
