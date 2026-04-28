@@ -87,7 +87,16 @@ def init_postgres_pool(minconn: int = None, maxconn: int = None):
         port=DB_CONFIG["port"],
         database=DB_CONFIG["database"],
         user=DB_CONFIG["user"],
-        password=DB_CONFIG["password"]
+        password=DB_CONFIG["password"],
+        # TCP keepalive：防止空闲连接被防火墙/服务器断开
+        keepalives=1,
+        keepalives_idle=60,      # 空闲60秒后开始发送keepalive
+        keepalives_interval=10,  # 每10秒重试
+        keepalives_count=6,      # 6次无响应则断开
+        # 连接超时
+        connect_timeout=10,
+        # 应用名称（方便在 pg_stat_activity 中识别）
+        application_name="aid-work-agent"
     )
     logger.info(f"PostgreSQL 连接池初始化完成: min={minconn}, max={maxconn}")
 
@@ -111,11 +120,24 @@ def get_pooled_connection(max_retries: int = 3):
                 logger.warning("PostgreSQL 连接已关闭，重新获取 (attempt %d/%d)", attempt + 1, max_retries)
                 _pg_connection_pool.putconn(conn, close=True)
                 continue
-            # 执行简单查询检查连接状态
-            conn.isolation_level
+            # 用轻量查询检测连接是否真的活着
+            # conn.isolation_level 不发网络请求，无法检测服务端断开
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
             logger.warning("PostgreSQL 连接失效，重新获取 (attempt %d/%d)", attempt + 1, max_retries)
-            _pg_connection_pool.putconn(conn, close=True)
+            try:
+                _pg_connection_pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            continue
+        except Exception as e:
+            logger.warning("PostgreSQL 连接检查异常: %s，重新获取 (attempt %d/%d)", e, attempt + 1, max_retries)
+            try:
+                _pg_connection_pool.putconn(conn, close=True)
+            except Exception:
+                pass
             continue
 
         return conn
