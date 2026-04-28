@@ -49,6 +49,9 @@ services:
       - "maintenance_work_mem=128MB"
       - "-c"
       - "wal_level=minimal"
+      # 禁用 WAL 发送者（minimal 模式不支持复制，必须设为0）
+      - "-c"
+      - "max_wal_senders=0"
       - "-c"
       - "max_wal_size=1GB"
       - "-c"

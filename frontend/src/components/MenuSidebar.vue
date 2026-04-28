@@ -487,18 +487,44 @@ const adminSubMenuItems = computed(() => {
 })
 
 // 当前子智能体（从路由参数获取）
-const currentSubagent = computed<string | null>(() =>
-  route.name === 'chat-subagent' ? (route.params.subagent as string) : null
-)
+// 支持多种路由格式：
+// - /chat/:subagent → 普通模式
+// - /t/:tenantId/chat/:subagent → 租户模式聊天页
+// - /t/:tenantId/:subagent → 租户模式子智能体业务页
+const currentSubagent = computed<string | null>(() => {
+  // 优先从路由参数获取
+  if (route.params.subagent) {
+    return route.params.subagent as string
+  }
+  // 从路径分段提取：/t/{tenantId}/{subagent} 或 /t/{tenantId}/chat/{subagent}
+  const segments = route.path.split('/').filter(p => p)
+  if (segments.length >= 2 && segments[0] === 't') {
+    // segments = ['t', 'tenantId', 'subagentId']
+    if (segments.length >= 3 && segments[2] !== 'chat') {
+      return segments[2]
+    }
+    // segments = ['t', 'tenantId', 'chat', 'subagentId']
+    if (segments.length >= 4 && segments[2] === 'chat') {
+      return segments[3]
+    }
+  }
+  // 普通路径：/chat/:subagent
+  if (segments.length >= 2 && segments[0] === 'chat') {
+    return segments[1]
+  }
+  return null
+})
 
 // 按子智能体过滤会话列表
 const filteredSessions = computed(() => {
   if (!currentSubagent.value) {
-    // 主智能体模式：过滤掉有 subagent 标记的会话
-    return sessions.value.filter(s => !s.context_data?.subagent)
+    // 没有指定子智能体（租户首页或主页面）：显示所有会话
+    // 不要过滤掉子智能体会话，用户在首页应该能看到所有历史
+    return sessions.value
+  } else {
+    // 子智能体模式：只显示同名会话
+    return sessions.value.filter(s => s.context_data?.subagent === currentSubagent.value)
   }
-  // 子智能体模式：只显示同名会话
-  return sessions.value.filter(s => s.context_data?.subagent === currentSubagent.value)
 })
 
 // 只显示前10个会话
