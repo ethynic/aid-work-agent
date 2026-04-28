@@ -202,7 +202,7 @@ class KnowledgeBaseService:
                 else:
                     cursor.execute("SELECT COUNT(*) FROM documents")
 
-                count = cursor.fetchone()[0]
+                count = cursor.fetchone()["count"]
                 return count
         except Exception as e:
             logger.error(f"后端日志：获取文档总数失败: {e}", exc_info=True)
@@ -340,7 +340,7 @@ class KnowledgeBaseService:
                         SELECT id, title, file_type, file_path FROM documents WHERE id IN ({placeholders})
                     """, list(doc_ids))
 
-                    doc_info = {row[0]: {"title": row[1], "file_type": row[2], "file_path": row[3]} for row in cursor.fetchall()}
+                    doc_info = {row["id"]: {"title": row["title"], "file_type": row["file_type"], "file_path": row["file_path"]} for row in cursor.fetchall()}
 
                     # 格式化结果
                     formatted_results = [

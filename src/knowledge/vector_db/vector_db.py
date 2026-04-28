@@ -69,6 +69,8 @@ class VectorDBPostgreSQL(VectorDatabase):
             user=DB_CONFIG["user"],
             password=DB_CONFIG["password"]
         )
+        # 设置 cursor_factory 以确保所有 cursor 返回字典，与外部连接一致
+        self.conn.cursor_factory = psycopg2.extras.RealDictCursor
         self.conn.autocommit = False
 
     def _ensure_table(self):
@@ -153,10 +155,10 @@ class VectorDBPostgreSQL(VectorDatabase):
         # 将余弦距离转换为余弦相似度
         cosine_results = []
         for row in results:
-            distance = row[1]
+            distance = row["distance"]
             # 距离范围 [0, 2]，相似度 = 1 - distance/2
             similarity = max(0.0, min(1.0, 1.0 - distance / 2.0))
-            cosine_results.append((row[0], similarity))
+            cosine_results.append((row["chunk_id"], similarity))
 
         return cosine_results
 

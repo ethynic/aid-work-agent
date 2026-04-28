@@ -280,7 +280,7 @@ class HybridRetriever:
             results = cursor.fetchall()
             # ts_rank 返回的是排名分数，越大越相关
             # 转换为负数以便与 SQLite BM25 分数格式一致（越小越相关）
-            return [(row[0], -row[1]) for row in results if row[1] > 0]
+            return [(row["id"], -row["score"]) for row in results if row["score"] > 0]
         except Exception as e:
             logger.warning(f"后端日志：PostgreSQL 全文检索失败: {e}")
             return []
@@ -367,18 +367,18 @@ class HybridRetriever:
         rows = cursor.fetchall()
 
         # 按 fused 顺序排序
-        id_to_row = {row[0]: row for row in rows}
+        id_to_row = {row["id"]: row for row in rows}
         results = []
 
         for chunk_id, score in fused:
             row = id_to_row.get(chunk_id)
             if row:
-                metadata = json.loads(row[4]) if row[4] else {}
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
                 results.append({
-                    "chunk_id": row[0],
-                    "doc_id": row[1],
-                    "text": row[2],
-                    "tokens": row[3],
+                    "chunk_id": row["id"],
+                    "doc_id": row["doc_id"],
+                    "text": row["text"],
+                    "tokens": row["tokens"],
                     "metadata": metadata,
                     "score": score
                 })

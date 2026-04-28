@@ -98,7 +98,7 @@ class KnowledgeBaseTool(BaseTool):
                         SELECT id, title FROM documents WHERE id IN ({placeholders})
                     """, list(doc_ids))
 
-                    doc_titles = {row[0]: row[1] for row in cursor.fetchall()}
+                    doc_titles = {row["id"]: row["title"] for row in cursor.fetchall()}
                 finally:
                     conn_cm.__exit__(None, None, None)
 
