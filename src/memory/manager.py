@@ -26,12 +26,12 @@ class MemoryManager:
     
     def __init__(
         self,
-        max_short_term_messages: int = 10,
+        max_short_term_messages: int = 100,
         short_term_ttl: int = 3600,
     ):
         """
         初始化记忆管理器
-        
+
         Args:
             max_short_term_messages: 短期记忆最大消息数
             short_term_ttl: 短期记忆过期时间
@@ -43,27 +43,45 @@ class MemoryManager:
         # 中期记忆和长期记忆在V1.5/V2.0实现
         self._conversation_memories: Dict[str, ConversationMemory] = {}
         self._user_preferences: Dict[str, UserPreference] = {}
-    
+
+    # ==================== 内部属性访问（过渡方案） ====================
+
+    @property
+    def _cache(self):
+        """临时兼容：供 SkillCompleteTool 等需要直接操作缓存的场景。后续 Phase 应重构为公开方法。"""
+        return self.short_term._cache
+
     # ==================== 短期记忆操作 ====================
-    
-    def add_message(
+
+    def add(
         self,
         session_id: str,
         role: str,
         content: str,
     ) -> None:
         """
-        添加消息到短期记忆
-        
+        添加简单消息到短期记忆
+
         Args:
             session_id: 会话ID
             role: 角色
             content: 内容
         """
-        self.short_term.add_message(session_id, {
-            "role": role,
-            "content": content,
-        })
+        self.short_term.add(session_id, role, content)
+
+    def add_message(
+        self,
+        session_id: str,
+        message: Dict[str, Any],
+    ) -> None:
+        """
+        添加完整消息到短期记忆
+
+        Args:
+            session_id: 会话ID
+            message: 消息字典，需包含 role 和 content
+        """
+        self.short_term.add_message(session_id, message)
     
     def get_context(
         self,
@@ -83,11 +101,23 @@ class MemoryManager:
     def clear_session(self, session_id: str) -> None:
         """
         清除会话记忆
-        
+
         Args:
             session_id: 会话ID
         """
         self.short_term.clear(session_id)
+
+    def clear(self, session_id: str) -> None:
+        """清除会话记忆（别名，与 ShortTermMemory 接口兼容）"""
+        self.short_term.clear(session_id)
+
+    def get_message_count(self, session_id: str) -> int:
+        """获取会话消息数量"""
+        return self.short_term.get_message_count(session_id)
+
+    def get_active_sessions(self) -> List[str]:
+        """获取所有活跃会话ID列表"""
+        return self.short_term.get_active_sessions()
     
     # ==================== 对话记忆操作 ====================
     
@@ -281,21 +311,23 @@ class MemoryManager:
         return messages
     
     # ==================== 清理操作 ====================
-    
-    def cleanup_expired(self) -> int:
+
+    def cleanup_expired(self) -> Dict[str, int]:
         """
         清理过期记忆
-        
+
         Returns:
-            清理的数量
+            清理统计信息
         """
-        count = 0
-        
-        # 清理短期记忆
+        # get_active_sessions 内部会自动清理过期会话
         active_sessions = self.short_term.get_active_sessions()
-        # 短期记忆的清理已在get_active_sessions中完成
-        
-        return count
+        total_sessions = len(active_sessions)
+
+        logger.debug(f"记忆清理完成，活跃会话数: {total_sessions}")
+
+        return {
+            "active_sessions": total_sessions,
+        }
     
     def get_stats(self) -> Dict[str, int]:
         """

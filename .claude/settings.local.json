@@ -60,7 +60,12 @@
       "Bash(curl -s http://localhost:8000/api/admin/skills)",
       "mcp__zai-mcp-server__analyze_image",
       "mcp__zai-mcp-server__extract_text_from_screenshot",
-      "Bash(code .:*)"
+      "Bash(code .:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git push:*)",
+      "Bash(pip show:*)",
+      "Bash(python3:*)"
     ]
   }
 }

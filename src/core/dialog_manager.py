@@ -1,7 +1,8 @@
 """
 对话管理器
 
-管理多轮对话上下文和会话状态
+⚠️ 未投入使用：当前生产流程中，Agent 直接使用 ShortTermMemory 管理对话上下文，
+DialogManager 未被任何业务代码调用。保留此模块供未来扩展使用。
 """
 
 import uuid
@@ -18,7 +19,9 @@ from src.memory.short_term import ShortTermMemory
 class DialogManager:
     """
     对话管理器
-    
+
+    ⚠️ 未投入使用。当前生产流程中 Agent 直接管理对话上下文。
+
     负责：
     - 管理多轮对话上下文
     - 维护会话状态

@@ -110,13 +110,10 @@ class SubagentExecutor:
             task_parameters=task_parameters,
         )
         
-        # 存储到memory
-        key = get_task_record_key(execution_id)
-        self.memory.add_message(self.memory._cache.keys().__iter__().__next__(), {
-            "type": "subagent_task_record",
-            "key": key,
-            "record": record.model_dump(),
-        })
+        # 存储到本地记录
+        if not hasattr(self, '_task_records'):
+            self._task_records: Dict[str, SubagentTaskRecord] = {}
+        self._task_records[execution_id] = record
         
         return record
     

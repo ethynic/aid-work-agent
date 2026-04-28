@@ -156,13 +156,14 @@ class ToolsConfig(BaseModel):
 
 class ShortTermMemoryConfig(BaseModel):
     """短期记忆配置"""
-    max_messages: int = 10
+    max_messages: int = 100
     ttl: int = 3600
 
 
 class MemoryConfig(BaseModel):
     """记忆配置"""
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
+    cleanup_interval: int = 300  # 过期会话清理间隔（秒）
 
 
 class AuthConfig(BaseModel):

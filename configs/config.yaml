@@ -80,8 +80,9 @@ tools:
 # 记忆配置
 memory:
   short_term:
-    max_messages: 10
+    max_messages: 100
     ttl: 3600
+  cleanup_interval: 300  # 过期会话清理间隔（秒），默认5分钟
 
 # 认证配置
 auth:
@@ -121,6 +122,9 @@ skills:
       - contract-approval
       - word-processing
       - excel-data-assitant
+      - trip-planner
+      - quote-generator
+      - quote-export
   # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
   subagent:
     default_allowed:

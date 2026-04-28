@@ -27,6 +27,7 @@ from src.llm.gateway import llm_gateway
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
+from src.memory.manager import MemoryManager
 from src.models.message import UnifiedMessage
 from src.models.user import User
 from src.models.plan import TaskStatus
@@ -114,7 +115,10 @@ class Agent:
         self.llm = llm_gateway
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
-        self.memory = ShortTermMemory()
+        self.memory = MemoryManager(
+            max_short_term_messages=settings.memory.short_term.max_messages,
+            short_term_ttl=settings.memory.short_term.ttl,
+        )
 
         # Skill 会话管理 - 跟踪活跃的 Skill 执行
         self._active_skill_sessions: Dict[str, SkillSession] = {}
@@ -1669,7 +1673,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                     # 创建 Skill Session，记录当前 memory 消息数量
                     if skill_result.get("success") and skill_name not in self._active_skill_sessions:
-                        msg_count = len(self.memory._cache.get(session_id, []))
+                        msg_count = self.memory.get_message_count(session_id)
                         self._active_skill_sessions[skill_name] = SkillSession(
                             skill_name=skill_name,
                             start_index=msg_count,
@@ -2287,7 +2291,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         tool_result = skill_result
                         # 创建 Skill Session
                         if skill_result.get("success") and skill_name not in self._active_skill_sessions:
-                            msg_count = len(self.memory._cache.get(self.session_id, []))
+                            msg_count = self.memory.get_message_count(self.session_id)
                             self._active_skill_sessions[skill_name] = SkillSession(
                                 skill_name=skill_name,
                                 start_index=msg_count,

@@ -188,6 +188,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to initialize SaaS instance manager: {e}", exc_info=True)
 
+    # Start memory cleanup background task
+    async def _memory_cleanup_loop():
+        """后台定时清理过期会话记忆"""
+        interval = settings.memory.cleanup_interval
+        logger.info(f"Memory cleanup task started, interval={interval}s")
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                stats = master_agent.memory.cleanup_expired()
+                if stats.get("active_sessions", 0) > 0:
+                    logger.debug(f"Memory cleanup: {stats}")
+            except Exception as e:
+                logger.error(f"Memory cleanup error: {e}")
+    asyncio.create_task(_memory_cleanup_loop())
+
     yield
 
     # On shutdown
