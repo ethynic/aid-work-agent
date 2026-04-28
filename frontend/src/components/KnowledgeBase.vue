@@ -778,8 +778,8 @@ function formatFileSize(bytes: number | null): string {
 // Format time
 function formatTime(isoString: string): string {
   if (!isoString) return '-'
-  const dateStr = isoString.endsWith('Z') ? isoString : isoString + 'Z'
-  const date = new Date(dateStr)
+  // 直接解析 ISO 字符串，JavaScript 会正确处理本地时间（不带 Z 的格式）
+  const date = new Date(isoString)
   const month = date.getMonth() + 1
   const day = date.getDate()
   const hours = date.getHours().toString().padStart(2, '0')

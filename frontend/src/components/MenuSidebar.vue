@@ -577,13 +577,10 @@ watchEffect(async () => {
   }
 })
 
-// 格式化时间（后端 CURRENT_TIMESTAMP 为 UTC，需补 Z 标记确保正确解析）
+// 格式化时间
 function formatTime(isoString: string): string {
-  // 后端 CURRENT_TIMESTAMP 返回 "2026-03-26 05:00:00" 格式（UTC，无时区标识）
-  // JavaScript new Date() 会将其当作本地时间解析，导致差8小时
-  // 补上 Z 后缀让 JS 正确识别为 UTC 时间
-  const dateStr = isoString.endsWith('Z') ? isoString : isoString + 'Z'
-  const date = new Date(dateStr)
+  // 直接解析 ISO 字符串，JavaScript 会正确处理本地时间
+  const date = new Date(isoString)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
 

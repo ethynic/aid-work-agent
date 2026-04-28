@@ -434,8 +434,8 @@ async function loadAvailableSubagents() {
 // 格式化时间
 function formatTime(isoString: string): string {
   if (!isoString) return ''
-  const dateStr = isoString.endsWith('Z') ? isoString : isoString + 'Z'
-  const date = new Date(dateStr)
+  // 直接解析 ISO 字符串，JavaScript 会正确处理本地时间
+  const date = new Date(isoString)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
 
