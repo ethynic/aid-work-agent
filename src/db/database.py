@@ -230,7 +230,7 @@ def get_postgres_pool_status() -> dict:
         "maxconn": _pg_connection_pool.maxconn,
         "pool_available": pool_size,   # 池中可用连接数
         "pool_in_use": used_size,       # 正在被使用的连接数
-        "dsn": _pg_connection_pool.dsn,
+        "dsn": getattr(_pg_connection_pool, 'dsn', getattr(_pg_connection_pool, 'connstring', '')),
     }
 
 

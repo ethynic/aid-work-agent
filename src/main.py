@@ -253,7 +253,6 @@ async def lifespan(app: FastAPI):
 # ============== File Upload Configuration ==============
 import shutil
 from pathlib import Path
-from src.config.settings import settings
 
 # 上传文件存储目录（基于项目根目录，不受 cwd 影响）
 # 新结构: storage/uploads/{tenant_id}/conversation/ (有租户)
