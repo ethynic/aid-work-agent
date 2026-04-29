@@ -26,6 +26,7 @@ class TenantDB:
         max_instances: int = 5,
         max_users: int = 50,
         settings: Optional[dict] = None,
+        expire_at=None,
     ) -> Optional[Dict[str, Any]]:
         """创建租户"""
         tenant_id = f"tenant_{uuid.uuid4().hex[:12]}"
@@ -36,13 +37,14 @@ class TenantDB:
                 cursor.execute("""
                     INSERT INTO tenants (tenant_id, company_name, contact_name, contact_phone,
                                         initial_admin_name, initial_admin_phone,
-                                        plan, max_instances, max_users, settings)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                        plan, max_instances, max_users, settings, expire_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     tenant_id, company_name, contact_name, contact_phone,
                     initial_admin_name, initial_admin_phone,
                     plan, max_instances, max_users,
                     json.dumps(settings or {}, ensure_ascii=False),
+                    expire_at,
                 ))
                 conn.commit()
                 logger.info(f"Tenant created: {tenant_id} ({company_name})")
@@ -73,6 +75,7 @@ class TenantDB:
             "company_name", "contact_name", "contact_phone",
             "initial_admin_name", "initial_admin_phone",
             "plan", "status", "max_instances", "max_users", "settings",
+            "expire_at",
         }
         updates = {}
         for k, v in kwargs.items():

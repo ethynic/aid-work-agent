@@ -18,6 +18,7 @@
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">企业名称</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">初始管理员手机号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">到期日期</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">数字员工授权</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户入口网址</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
@@ -35,6 +36,12 @@
               >
                 {{ getStatusLabel(tenant.status) }}
               </span>
+            </td>
+            <td class="px-4 py-3">
+              <span v-if="tenant.expire_at" :class="getExpireStatusClass(tenant.expire_at)" class="text-sm">
+                {{ formatExpireDate(tenant.expire_at) }}
+              </span>
+              <span v-else class="text-sm text-slate-400">永久有效</span>
             </td>
             <td class="px-4 py-3">
               <span v-if="tenant.agent_count > 0"
@@ -157,6 +164,12 @@
               <option value="deactivated">已删除</option>
             </select>
           </div>
+          <div v-if="isEdit">
+            <label class="block text-sm text-slate-600 mb-1">到期日期</label>
+            <input v-model="formData.expire_at" type="date" placeholder="不设置则永久有效"
+              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+            <p class="text-xs text-slate-500 mt-1">到期当天 23:59:59 前仍可登录，清空则永久有效</p>
+          </div>
         </div>
         <!-- 数字员工授权标签页 -->
         <div v-if="activeTab === 'agents'" class="overflow-y-auto min-h-[640px]">
@@ -240,6 +253,13 @@
             </span>
           </div>
           <div class="flex border-b border-slate-100 pb-2">
+            <span class="w-24 text-sm text-slate-500">到期日期</span>
+            <span v-if="currentTenant?.expire_at" :class="getExpireStatusClass(currentTenant.expire_at)" class="text-sm font-medium">
+              {{ formatExpireDate(currentTenant.expire_at) }}
+            </span>
+            <span v-else class="text-sm text-slate-500">永久有效</span>
+          </div>
+          <div class="flex border-b border-slate-100 pb-2">
             <span class="w-24 text-sm text-slate-500">创建时间</span>
             <span class="text-sm text-slate-800">{{ formatDate(currentTenant?.created_at) }}</span>
           </div>
@@ -289,6 +309,7 @@ const defaultFormData: TenantFormData = {
   initial_admin_name: '',
   initial_admin_phone: '',
   plan: 'basic',
+  expire_at: '',
 }
 
 const formData = ref<TenantFormData & { status: string }>({ ...defaultFormData, status: 'active' })
@@ -311,6 +332,24 @@ function formatDate(dateStr: string | undefined) {
   if (!dateStr) return '-'
   const date = new Date(dateStr)
   return date.toLocaleDateString('zh-CN') + ' ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatExpireDate(dateStr: string | undefined) {
+  if (!dateStr) return '永久有效'
+  const date = new Date(dateStr)
+  return date.toLocaleDateString('zh-CN')
+}
+
+function getExpireStatusClass(dateStr: string | undefined): string {
+  if (!dateStr) return 'text-slate-600'
+
+  const expireDate = new Date(dateStr)
+  const now = new Date()
+  const diffDays = Math.ceil((expireDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) return 'text-red-600 font-medium'
+  if (diffDays < 15) return 'text-orange-600 font-medium'
+  return 'text-slate-600'
 }
 
 function openAddDialog() {
@@ -344,6 +383,7 @@ async function openEditDialog(tenant: any) {
     initial_admin_phone: tenant.initial_admin_phone || '',
     plan: tenant.plan,
     status: String(tenant.status),
+    expire_at: tenant.expire_at ? tenant.expire_at.split('T')[0].split(' ')[0] : '',
   }
   // 切换到基本信息标签页
   activeTab.value = 'basic'

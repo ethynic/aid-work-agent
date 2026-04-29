@@ -3,7 +3,16 @@
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-8 pt-8 pb-6">
         <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">{{ pageTitle.title }}</h1>
-        <p class="text-sm text-slate-500 text-center mb-8">{{ pageTitle.subtitle }}</p>
+        <p class="text-sm text-slate-500 text-center mb-2">{{ pageTitle.subtitle }}</p>
+
+        <!-- 租户过期提示 -->
+        <div v-if="tenantExpiredMessage" class="text-red-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-red-50 rounded border border-red-200">
+          {{ tenantExpiredMessage }}
+        </div>
+        <!-- 租户即将过期提示 -->
+        <div v-else-if="tenantExpiringMessage" class="text-orange-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-orange-50 rounded border border-orange-200">
+          {{ tenantExpiringMessage }}
+        </div>
 
         <div class="space-y-4">
           <!-- 账号类型切换 -->
@@ -108,6 +117,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import { getCaptcha } from '@/api/auth'
 import { adminPasswordLogin, getTenantPublicInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -115,6 +125,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 const router = useRouter()
 const route = useRoute()
 const { setLogin } = useTenantAuth()
+const toast = useToast()
 
 // 从路由参数获取 tenant_id
 const tenantId = computed(() => route.params.tenant_id as string)
@@ -141,6 +152,8 @@ const captchaId = ref('')
 const captchaSvg = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
+const tenantExpiredMessage = ref('')
+const tenantExpiringMessage = ref('')
 
 // 获取图形验证码
 async function refreshCaptcha() {
@@ -188,6 +201,14 @@ async function handleLogin() {
       } else {
         setLogin(res.token, res.user, { tenant_id: '', company_name: '', plan: 'free', status: 1 })
       }
+      // 显示到期警告
+      if (res.expire_warning) {
+        toast.warning(res.expire_warning, {
+          timeout: 10000,
+          closeOnClick: true,
+          pauseOnHover: true,
+        })
+      }
       // 根据当前路由决定跳转
       if (isPortalRoute.value) {
         router.push('/portal')
@@ -217,11 +238,17 @@ onMounted(() => {
   }
   refreshCaptcha()
 
-  // 获取租户名称用于标题显示
+  // 获取租户名称用于标题显示，并检查租户过期状态
   if (tenantId.value) {
     getTenantPublicInfo(tenantId.value).then(res => {
       if (res.success && res.tenant) {
         tenantName.value = res.tenant.company_name
+      }
+      // 显示租户过期提示（不影响用户输入账号密码，登录时后端仍会验证）
+      if (res.expire_info?.is_expired && res.expire_info.expire_date) {
+        tenantExpiredMessage.value = `该租户已过期（到期日期：${res.expire_info.expire_date}），请联系平台管理员续费`
+      } else if (res.expire_info?.show_warning && res.expire_info.expire_date) {
+        tenantExpiringMessage.value = `您的租户即将过期（到期日期：${res.expire_info.expire_date}），请联系平台管理员续费`
       }
     }).catch(() => {
       // 获取失败不影响登录，标题保持默认

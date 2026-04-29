@@ -17,6 +17,7 @@ class TenantCreate(BaseModel):
     plan: str = Field("basic", description="套餐：basic/standard/premium")
     max_instances: Optional[int] = Field(None, description="最大实例数，None 使用默认值")
     max_users: Optional[int] = Field(None, description="最大用户数，None 使用默认值")
+    expire_at: Optional[str] = Field(None, description="到期日期（YYYY-MM-DD，空表示永久有效）")
 
 
 class TenantUpdate(BaseModel):
@@ -30,6 +31,7 @@ class TenantUpdate(BaseModel):
     status: Optional[str] = Field(None, description="状态：active/suspended/deactivated")
     max_instances: Optional[int] = Field(None, description="最大实例数")
     max_users: Optional[int] = Field(None, description="最大用户数")
+    expire_at: Optional[str] = Field(None, description="到期日期（YYYY-MM-DD，空表示永久有效）")
 
 
 class TenantResponse(BaseModel):
@@ -44,6 +46,7 @@ class TenantResponse(BaseModel):
     plan: str
     max_instances: int
     max_users: int
+    expire_at: Optional[str] = None
     settings: Optional[dict] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

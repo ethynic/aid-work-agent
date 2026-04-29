@@ -286,11 +286,15 @@ CREATE TABLE IF NOT EXISTS tenants (
     max_instances INTEGER DEFAULT 5,
     max_users INTEGER DEFAULT 50,
     settings TEXT,
+    expire_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
+
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
+CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
 
 -- 订阅表
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -606,11 +610,15 @@ CREATE TABLE IF NOT EXISTS tenants (
     max_instances INTEGER DEFAULT 5,
     max_users INTEGER DEFAULT 50,
     settings TEXT,
+    expire_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
+
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
+CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
 
 -- 订阅表
 CREATE TABLE IF NOT EXISTS subscriptions (

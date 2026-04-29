@@ -11,6 +11,7 @@ SaaS 企业信息管理 API
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional
+from datetime import datetime
 from loguru import logger
 import re
 
@@ -23,6 +24,30 @@ from src.db.models import UserDB
 from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["SaaS 企业管理"])
+
+
+def _normalize_expire_date(date_str: str | None) -> datetime | None:
+    """
+    将日期字符串标准化为当天 23:59:59 的 datetime
+
+    输入格式: YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS
+    输出: datetime 对象（时分秒为 23:59:59）
+    """
+    if not date_str:
+        return None
+
+    try:
+        # 如果已经是完整的 datetime 格式
+        if " " in date_str or "T" in date_str:
+            dt = datetime.fromisoformat(date_str.replace("T", " "))
+            # 强制设置为当天 23:59:59
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0)
+        else:
+            # 只有日期部分
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0)
+    except ValueError:
+        return None
 
 
 # ============== 请求模型 ==============
@@ -166,6 +191,9 @@ async def create_tenant(request: Request, body: TenantCreate):
         return {"success": False, "error": "权限不足", "debug": "Not platform_admin"}
 
     try:
+        # 处理到期日期
+        expire_at = _normalize_expire_date(body.expire_at) if body.expire_at else None
+
         tenant = TenantDB.create(
             company_name=body.company_name,
             contact_name=body.contact_name,
@@ -175,6 +203,7 @@ async def create_tenant(request: Request, body: TenantCreate):
             plan=body.plan,
             max_instances=body.max_instances or 5,
             max_users=body.max_users or 50,
+            expire_at=expire_at,
         )
         if not tenant:
             return {"success": False, "error": "创建租户失败", "debug": "TenantDB.create returned None"}
@@ -245,6 +274,10 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
         valid_statuses = {"active", "suspended", "deactivated"}
         if isinstance(status_val, str) and status_val in valid_statuses:
             updates["status"] = status_val
+
+    # 处理到期日期：标准化为当天 23:59:59
+    if "expire_at" in updates:
+        updates["expire_at"] = _normalize_expire_date(updates["expire_at"])
 
     try:
         success = TenantDB.update(tenant_id, **updates)

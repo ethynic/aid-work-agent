@@ -11,6 +11,12 @@ const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
 export async function getTenantPublicInfo(tenantId: string): Promise<{
   success: boolean
   tenant?: { tenant_id: string; company_name: string }
+  expire_info?: {
+    is_expired: boolean
+    expire_date: string | null
+    days_remaining: number | null
+    show_warning: boolean
+  }
   message?: string
 }> {
   const res = await fetch(`${API_BASE}/auth/tenant/${encodeURIComponent(tenantId)}`)
@@ -58,8 +64,9 @@ export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Pr
   success: boolean
   token?: string
   user?: { user_id: string; phone: string; username: string; role: string }
-  tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
+  tenant?: { tenant_id: string; company_name: string; plan: string; status: string; expire_at?: string }
   message?: string
+  expire_warning?: string
 }> {
   const res = await fetch(`${API_BASE}/auth/login/password`, {
     method: 'POST',
@@ -170,6 +177,7 @@ export interface TenantFormData {
   plan?: string
   max_instances?: number
   max_users?: number
+  expire_at?: string
 }
 
 export async function getTenantById(tenantId: string): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {

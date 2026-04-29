@@ -48,3 +48,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
 
 -- 2026-4-29，documents 表增加 summary 字段，存储文档摘要
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary TEXT;
+
+-- 2026-4-29，tenants 表增加 expire_at 字段，租户到期管理
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS expire_at TIMESTAMP;
+COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
+CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
