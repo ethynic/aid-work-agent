@@ -422,3 +422,10 @@ fi
 - [ ] Nginx 配置生效
 - [ ] 健康检查通过：`curl http://localhost:8000/health`
 
+## ⚠️ 常见问题
+# 服务器重启后，共享目录没有写入权限
+报错类似于： 附件上传失败,原因是没有共享目录的写入权限。目标路径为:/mnt/smb/AlUpload/212321SG073-XMCG-004,请确认共享路径可访问且账户有写入权限
+目录 /mnt/smb/AIUpload 的所有权是 root，说明是本地目录，没有被 CIFS 挂载覆盖。而且 /mnt/smb/AIUpload 目录是空的，原来上传的文件看不到。
+
+可以手动重新挂载
+sudo mount -t cifs //192.168.200.10/AIUpload /mnt/smb/AIUpload -o credentials=/etc/smb-credentials.aiupload,uid=1000,gid=1000,iocharset=utf8,vers=3.0
