@@ -429,3 +429,7 @@ fi
 
 可以手动重新挂载
 sudo mount -t cifs //192.168.200.10/AIUpload /mnt/smb/AIUpload -o credentials=/etc/smb-credentials.aiupload,uid=1000,gid=1000,iocharset=utf8,vers=3.0
+
+然后重启容器
+docker compose -f docker-compose.prod-eas.yml down
+docker compose -f docker-compose.prod-eas.yml up -d

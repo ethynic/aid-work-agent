@@ -562,13 +562,13 @@ const currentSubagentName = computed(() => {
   return subagent?.name || ''
 })
 
-// 跳转到业务数据页面
+// 跳转到业务数据页面（在新窗口打开）
 function navigateToBusinessPage(page: BusinessPage) {
   // 如果是租户模式，需要加上租户 ID 前缀
   if (isTenantMode.value && tenantId.value) {
-    router.push(`/t/${tenantId.value}${page.route}`)
+    window.open(`/t/${tenantId.value}${page.route}`, '_blank')
   } else {
-    router.push(page.route)
+    window.open(page.route, '_blank')
   }
 }
 
