@@ -400,6 +400,15 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
     if not qb_token_pass:   # 校验密码
         password_hash = user.get("password_hash")
         if not password_hash:
+            # 先检查是否是平台管理员，如果不是则提示使用平台管理员账号登录
+            role = user.get("role", "user")
+            if role != "platform_admin":
+                return AdminLoginResponse(
+                    success=False,
+                    message="请使用平台管理员账号登录",
+                    debug=f"user role={role}, not platform_admin, password_hash is empty"
+                )
+            # 平台管理员密码未设置，仍提示重置
             return AdminLoginResponse(
                 success=False,
                 message="密码未设置，请使用忘记密码功能重置",
