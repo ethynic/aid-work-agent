@@ -27,6 +27,10 @@ router = APIRouter(prefix="/api/saas/instances", tags=["SaaS 智能体实例"])
 class InstanceCreateRequest(BaseModel):
     subagent_type: str = Field(..., description="子智能体类型（对应 subagents 目录名）")
     display_name: str = Field(..., min_length=1, max_length=50, description="实例显示名称")
+    instance_name: Optional[str] = Field(None, min_length=1, max_length=50, description="拟人化实例名称，如'外贸小明'")
+    avatar: str = Field("🤖", max_length=10, description="头像 emoji")
+    description: Optional[str] = Field(None, max_length=200, description="实例描述")
+    personality_traits: Optional[List[str]] = Field(None, description="性格特征标签")
     plan: str = Field("basic", description="套餐：basic/standard/premium")
     billing_cycle: str = Field("monthly", description="计费周期：monthly/yearly")
     config: Optional[dict] = Field(None, description="自定义配置")
@@ -36,6 +40,10 @@ class InstanceCreateRequest(BaseModel):
 
 class InstanceUpdateRequest(BaseModel):
     display_name: Optional[str] = Field(None, max_length=50, description="显示名称")
+    instance_name: Optional[str] = Field(None, max_length=50, description="拟人化实例名称")
+    avatar: Optional[str] = Field(None, max_length=10, description="头像 emoji")
+    description: Optional[str] = Field(None, max_length=200, description="实例描述")
+    personality_traits: Optional[List[str]] = Field(None, description="性格特征标签")
     config: Optional[dict] = Field(None, description="自定义配置")
     bound_channel_type: Optional[str] = Field(None, description="绑定渠道")
     allowed_skills: Optional[List[str]] = Field(None, description="允许的 Skill 列表")
@@ -91,6 +99,10 @@ async def create_instance(request: Request, body: InstanceCreateRequest):
         tenant_id=tenant_id,
         subagent_type=body.subagent_type,
         display_name=body.display_name,
+        instance_name=body.instance_name,
+        avatar=body.avatar,
+        description=body.description,
+        personality_traits=body.personality_traits,
         subscription_id=subscription["subscription_id"],
         config=body.config,
         bound_channel_type=body.bound_channel_type,

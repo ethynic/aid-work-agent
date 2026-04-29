@@ -52,11 +52,14 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     user_id TEXT,
     tenant_id TEXT,
     subagent_id TEXT,
+    instance_id TEXT,                        -- 关联的数字员工实例ID
     title TEXT,
     context_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_id, created_at DESC);
 
 -- 消息表
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -303,12 +306,14 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     tenant_id TEXT,
     user_id TEXT,
     subagent_type TEXT,
+    instance_quota INTEGER DEFAULT 1,      -- 实例并发配额
     billing_cycle TEXT DEFAULT 'monthly',
     unit_price REAL DEFAULT 0,
     token_quota INTEGER DEFAULT -1,
     tokens_used INTEGER DEFAULT 0,
     status TEXT DEFAULT 'active',
     payment_status TEXT DEFAULT 'pending',
+    starts_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- 生效时间
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -316,6 +321,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_time_range ON subscriptions(tenant_id, subagent_type, starts_at, expires_at, status);
 
 -- 智能体实例表
 CREATE TABLE IF NOT EXISTS agent_instances (
@@ -324,16 +330,47 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     tenant_id TEXT,
     subscription_id TEXT,
     subagent_type TEXT,
-    display_name TEXT,
-    status TEXT DEFAULT 'stopped',
+    display_name TEXT,                          -- 子智能体类型显示名
+    instance_name TEXT,                         -- 实例名称："外贸小明"
+    avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
+    description TEXT,                            -- 实例描述
+    personality_traits TEXT,                     -- 性格特征（JSON数组）
+    status TEXT DEFAULT 'idle',                  -- idle / busy / offline
+    current_session_id TEXT,                     -- 当前活跃会话ID
+    current_user_id TEXT,                        -- 当前使用者
+    locked_at TIMESTAMP,                         -- 锁定开始时间
+    lock_expires_at TIMESTAMP,                   -- 锁过期时间
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
+    total_chats INTEGER DEFAULT 0,               -- 累计对话次数
+    total_messages INTEGER DEFAULT 0,            -- 累计消息数
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
+
+-- 实例等待队列表
+CREATE TABLE IF NOT EXISTS agent_instance_queue (
+    id SERIAL PRIMARY KEY,
+    queue_id TEXT UNIQUE NOT NULL,
+    instance_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    status TEXT DEFAULT 'waiting',        -- waiting / ready / expired / cancelled
+    enqueued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    wait_timeout_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_instance_queue_instance ON agent_instance_queue(instance_id, position);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_session ON agent_instance_queue(session_id);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_timeout ON agent_instance_queue(wait_timeout_at);
 
 -- 租户渠道配置表
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (
@@ -425,11 +462,14 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     user_id TEXT,
     tenant_id TEXT,
     subagent_id TEXT,
+    instance_id TEXT,                        -- 关联的数字员工实例ID
     title TEXT,
     context_data TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_id, created_at DESC);
 
 -- 消息表
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -627,12 +667,14 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     tenant_id TEXT,
     user_id TEXT,
     subagent_type TEXT,
+    instance_quota INTEGER DEFAULT 1,      -- 实例并发配额
     billing_cycle TEXT DEFAULT 'monthly',
     unit_price REAL DEFAULT 0,
     token_quota INTEGER DEFAULT -1,
     tokens_used INTEGER DEFAULT 0,
     status TEXT DEFAULT 'active',
     payment_status TEXT DEFAULT 'pending',
+    starts_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- 生效时间
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -640,6 +682,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_time_range ON subscriptions(tenant_id, subagent_type, starts_at, expires_at, status);
 
 -- 智能体实例表
 CREATE TABLE IF NOT EXISTS agent_instances (
@@ -648,16 +691,47 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     tenant_id TEXT,
     subscription_id TEXT,
     subagent_type TEXT,
-    display_name TEXT,
-    status TEXT DEFAULT 'stopped',
+    display_name TEXT,                          -- 子智能体类型显示名
+    instance_name TEXT,                         -- 实例名称："外贸小明"
+    avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
+    description TEXT,                            -- 实例描述
+    personality_traits TEXT,                     -- 性格特征（JSON数组）
+    status TEXT DEFAULT 'idle',                  -- idle / busy / offline
+    current_session_id TEXT,                     -- 当前活跃会话ID
+    current_user_id TEXT,                        -- 当前使用者
+    locked_at TIMESTAMP,                         -- 锁定开始时间
+    lock_expires_at TIMESTAMP,                   -- 锁过期时间
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
+    total_chats INTEGER DEFAULT 0,               -- 累计对话次数
+    total_messages INTEGER DEFAULT 0,            -- 累计消息数
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
+
+-- 实例等待队列表
+CREATE TABLE IF NOT EXISTS agent_instance_queue (
+    id SERIAL PRIMARY KEY,
+    queue_id TEXT UNIQUE NOT NULL,
+    instance_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    status TEXT DEFAULT 'waiting',        -- waiting / ready / expired / cancelled
+    enqueued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    wait_timeout_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_instance_queue_instance ON agent_instance_queue(instance_id, position);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_session ON agent_instance_queue(session_id);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_timeout ON agent_instance_queue(wait_timeout_at);
 
 -- 租户渠道配置表
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (

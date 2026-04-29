@@ -171,6 +171,16 @@ const subagentName = computed<string | null>(() => {
   return null
 })
 
+// 从路由 query 参数中获取实例 ID（用于并发控制）
+const instanceId = computed<string | null>(() => {
+  return (route.query.instance_id as string) || null
+})
+
+// 从路由 query 参数中获取预生成的会话 ID（从 Lobby 跳转时传入）
+const pregeneratedSessionId = computed<string | null>(() => {
+  return (route.query._sid as string) || null
+})
+
 // 可用的数字员工列表
 const availableSubagents = ref<SubagentListItem[]>([])
 
@@ -333,8 +343,16 @@ async function handleSend(content: string) {
     return
   }
 
-  // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
-  if (!currentSessionId.value) {
+  // 如果有预生成的会话ID（从 Lobby 跳转），直接使用它
+  // 这种情况下不需要创建 DB 会话，锁已通过 InstanceService 预先获取
+  let sid: string | null | undefined
+  if (pregeneratedSessionId.value) {
+    sid = pregeneratedSessionId.value
+    // 确保 agent 使用这个 sessionId
+    agentSessionId.value = sid
+    precacheNewSession(sid)
+  } else if (!currentSessionId.value) {
+    // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
     console.log(`[${now()}] [handleSend] no current session, creating new session...`)
     const startTime = Date.now()
     const newSession = await createNewSession(undefined, subagentName.value)
@@ -348,23 +366,28 @@ async function handleSend(content: string) {
       // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
       await switchSession(newSession.session_id)
       console.log(`[${now()}] [handleSend] switchSession done, ready to send message`)
+      sid = newSession.session_id
     }
+  } else {
+    sid = currentSessionId.value
   }
 
-  const sid = currentSessionId.value
   if (!sid) {
     console.log(`[${now()}] [handleSend] still no sessionId, abort`)
     return
   }
 
   // 如果是当前会话的首条用户消息（标题还是默认的"新会话"），自动用前10个字更新标题
-  const session = sessions.value.find(s => s.session_id === sid)
-  if (session && (!session.title || session.title === '新会话')) {
-    const title = content.slice(0, 10).trim() || '新会话'
-    await renameSession(sid, title)
+  // 注意：预生成的会话ID还没有对应的 DB 记录，所以跳过这一步
+  if (!pregeneratedSessionId.value) {
+    const session = sessions.value.find(s => s.session_id === sid)
+    if (session && (!session.title || session.title === '新会话')) {
+      const title = content.slice(0, 10).trim() || '新会话'
+      await renameSession(sid, title)
+    }
   }
 
-  await sendMessage(content, subagentName.value, currentSessionId.value ?? undefined)
+  await sendMessage(content, subagentName.value, sid, instanceId.value)
 
   // 发送成功后清空附件
   clearAttachments()
