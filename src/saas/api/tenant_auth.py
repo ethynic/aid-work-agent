@@ -50,6 +50,76 @@ router = APIRouter(prefix="/api/saas/auth", tags=["SaaS 认证"])
 DEFAULT_TENANT_ID = "tenant_default"
 
 
+def _check_tenant_expiration(tenant: dict) -> dict:
+    """
+    检查租户到期状态
+
+    Returns:
+        {
+            "can_login": bool,          # 是否允许登录
+            "is_expired": bool,         # 是否已过期
+            "days_remaining": int | None,  # 剩余天数（未过期时）
+            "expire_date": str | None,  # 到期日期字符串
+            "show_warning": bool        # 是否显示续费提示
+        }
+    """
+    expire_at = tenant.get("expire_at")
+
+    # 到期日期为空，不限制
+    if not expire_at:
+        return {
+            "can_login": True,
+            "is_expired": False,
+            "days_remaining": None,
+            "expire_date": None,
+            "show_warning": False
+        }
+
+    # 处理 datetime 或字符串类型
+    if isinstance(expire_at, str):
+        try:
+            expire_datetime = datetime.fromisoformat(expire_at)
+        except ValueError:
+            # 格式错误，视为不限制
+            return {
+                "can_login": True,
+                "is_expired": False,
+                "days_remaining": None,
+                "expire_date": expire_at,
+                "show_warning": False
+            }
+    else:
+        expire_datetime = expire_at
+
+    now = datetime.now()
+
+    is_expired = now > expire_datetime
+
+    if is_expired:
+        return {
+            "can_login": False,
+            "is_expired": True,
+            "days_remaining": 0,
+            "expire_date": expire_datetime.strftime("%Y-%m-%d"),
+            "show_warning": False
+        }
+
+    # 计算剩余天数
+    delta = expire_datetime - now
+    days_remaining = delta.days
+
+    # 剩余不足 15 天，显示提示
+    show_warning = days_remaining < 15
+
+    return {
+        "can_login": True,
+        "is_expired": False,
+        "days_remaining": days_remaining,
+        "expire_date": expire_datetime.strftime("%Y-%m-%d"),
+        "show_warning": show_warning
+    }
+
+
 def _get_or_create_default_tenant() -> Optional[dict]:
     """获取或创建默认租户"""
     tenant = TenantDB.get_by_id(DEFAULT_TENANT_ID)
@@ -147,6 +217,7 @@ class AdminLoginResponse(BaseModel):
     tenant: Optional[dict] = None
     message: Optional[str] = None
     debug: Optional[str] = None
+    expire_warning: Optional[str] = None
 
 
 def _check_saas_enabled():
@@ -272,9 +343,28 @@ async def admin_login(request: AdminLoginRequest):
     if user.get("status", "active") != "active":
         return AdminLoginResponse(success=False, message="账号已停用")
 
+    # 6. 获取租户信息
+    tenant = None
+    if user.get("tenant_id"):
+        tenant = TenantDB.get_by_id(user["tenant_id"])
+
     # 5. 生成 token（复用 tokens 表）
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    # 根据租户到期日期动态设置 token 有效期
+    now = datetime.now()
+    token_expires = now + timedelta(days=7)
+    if tenant:
+        expire_check = _check_tenant_expiration(tenant)
+        if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
+            # 如果租户到期日期在7天内，token 有效期设置为到期日期
+            if expire_check["days_remaining"] < 7:
+                expire_at = tenant.get("expire_at")
+                if isinstance(expire_at, str):
+                    expire_at = datetime.fromisoformat(expire_at)
+                token_expires = expire_at
+                logger.info(f"Tenant {tenant['tenant_id']} expires in {expire_check['days_remaining']} days, setting token expiry to {token_expires}")
+
+    expires_at = token_expires.strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -283,11 +373,6 @@ async def admin_login(request: AdminLoginRequest):
             VALUES (%s, %s, %s)
         """, (token, user["user_id"], expires_at))
         conn.commit()
-
-    # 6. 获取租户信息
-    tenant = None
-    if user.get("tenant_id"):
-        tenant = TenantDB.get_by_id(user["tenant_id"])
 
     logger.info(f"Admin login: {user['user_id']} ({request.phone}) -> role {role}, tenant {user.get('tenant_id')}")
 
@@ -467,9 +552,40 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
         # 未传 tenant_id，使用用户自身的 tenant_id
         target_tenant_id = user.get("tenant_id")
 
+    # 8. 获取租户信息（使用 target_tenant_id，可能是平台管理员代管理的目标租户）
+    tenant = None
+    expire_warning = None
+    if target_tenant_id:
+        tenant = TenantDB.get_by_id(target_tenant_id)
+
+        if tenant:
+            # 检查租户到期状态
+            expire_check = _check_tenant_expiration(tenant)
+            if not expire_check["can_login"]:
+                return AdminLoginResponse(
+                    success=False,
+                    message=f"该租户已过期（到期日期：{expire_check['expire_date']}），请联系平台管理员续费"
+                )
+            if expire_check["show_warning"]:
+                expire_warning = f"您的租户将于 {expire_check['expire_date']} 到期（剩余 {expire_check['days_remaining']} 天），请及时续费。"
+
     # 7. 生成 token
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    # 根据租户到期日期动态设置 token 有效期
+    now = datetime.now()
+    token_expires = now + timedelta(days=7)
+    if tenant:
+        expire_check = _check_tenant_expiration(tenant)
+        if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
+            # 如果租户到期日期在7天内，token 有效期设置为到期日期
+            if expire_check["days_remaining"] < 7:
+                expire_at = tenant.get("expire_at")
+                if isinstance(expire_at, str):
+                    expire_at = datetime.fromisoformat(expire_at)
+                token_expires = expire_at
+                logger.info(f"Tenant {tenant['tenant_id']} expires in {expire_check['days_remaining']} days, setting token expiry to {token_expires}")
+
+    expires_at = token_expires.strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -478,11 +594,6 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
             VALUES (%s, %s, %s)
         """, (token, user["user_id"], expires_at))
         conn.commit()
-
-    # 8. 获取租户信息（使用 target_tenant_id，可能是平台管理员代管理的目标租户）
-    tenant = None
-    if target_tenant_id:
-        tenant = TenantDB.get_by_id(target_tenant_id)
 
     logger.info(f"Admin password login: {user['user_id']} ({identifier}) -> role {role}, target_tenant {target_tenant_id}")
 
@@ -500,7 +611,9 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
             "company_name": tenant["company_name"],
             "plan": tenant["plan"],
             "status": tenant["status"],
+            "expire_at": tenant.get("expire_at").isoformat() if tenant and tenant.get("expire_at") else None,
         } if tenant else None,
+        expire_warning=expire_warning,
     )
 
 
@@ -541,9 +654,27 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     if role not in ("platform_admin", "tenant_admin"):
         return AdminLoginResponse(success=False, message="该 IM 用户不是管理员")
 
+    tenant = None
+    if user.get("tenant_id"):
+        tenant = TenantDB.get_by_id(user["tenant_id"])
+
     # 5. 生成 token
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    # 根据租户到期日期动态设置 token 有效期
+    now = datetime.now()
+    token_expires = now + timedelta(days=7)
+    if tenant:
+        expire_check = _check_tenant_expiration(tenant)
+        if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
+            # 如果租户到期日期在7天内，token 有效期设置为到期日期
+            if expire_check["days_remaining"] < 7:
+                expire_at = tenant.get("expire_at")
+                if isinstance(expire_at, str):
+                    expire_at = datetime.fromisoformat(expire_at)
+                token_expires = expire_at
+                logger.info(f"Tenant {tenant['tenant_id']} expires in {expire_check['days_remaining']} days, setting token expiry to {token_expires}")
+
+    expires_at = token_expires.strftime("%Y-%m-%d %H:%M:%S")
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -552,10 +683,6 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
             VALUES (%s, %s, %s)
         """, (token, user["user_id"], expires_at))
         conn.commit()
-
-    tenant = None
-    if user.get("tenant_id"):
-        tenant = TenantDB.get_by_id(user["tenant_id"])
 
     logger.info(f"Admin SSO login ({provider}): {user['user_id']} ({phone})")
 
@@ -607,11 +734,20 @@ async def get_tenant_public_info(tenant_id: str):
     if tenant.get("status") != "active":
         return {"success": False, "message": "该租户已停用"}
 
+    # 检查租户到期状态
+    expire_check = _check_tenant_expiration(tenant)
+
     return {
         "success": True,
         "tenant": {
             "tenant_id": tenant["tenant_id"],
             "company_name": tenant["company_name"],
+        },
+        "expire_info": {
+            "is_expired": expire_check["is_expired"],
+            "expire_date": expire_check["expire_date"],
+            "days_remaining": expire_check["days_remaining"],
+            "show_warning": expire_check["show_warning"],
         },
     }
 
