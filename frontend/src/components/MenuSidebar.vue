@@ -100,13 +100,13 @@
           <span>企业知识库</span>
         </button>
 
-        <!-- Digital Employee Management -->
+        <!-- Digital Employee Management - only shown in portal management -->
         <button
-          v-if="isAdmin"
+          v-if="route.path.startsWith('/portal')"
           @click="goToDigitalEmployeeManager"
           :class="[
             'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
-            route.path === '/admin/subagents'
+            route.path === '/subagents' || route.path === '/portal/subagents'
               ? 'bg-primary-50 text-primary-700 font-medium'
               : 'text-gray-600 hover:bg-gray-50'
           ]"
@@ -349,7 +349,7 @@ import { useAgent } from '@/composables/useAgent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 
-import type { SubagentListItem, BusinessPage } from '@/api/adminSubagent'
+import type { SubagentListItem, BusinessPage } from '@/api/subagent'
 
 interface Props {
   isCollapsed: boolean
@@ -373,7 +373,7 @@ defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { isLoggedIn: demoIsLoggedIn, isAdmin } = useDemoAuth()
+const { isLoggedIn: demoIsLoggedIn } = useDemoAuth()
 const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
 const {
   sessions,
@@ -579,7 +579,7 @@ function goToKnowledgeBase() {
 
 // 跳转到数字员工管理
 function goToDigitalEmployeeManager() {
-  router.push('/admin/subagents')
+  router.push('/portal/subagents')
 }
 
 // 跳转到全部历史会话

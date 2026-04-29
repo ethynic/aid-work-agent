@@ -1,7 +1,8 @@
 /**
- * 数字员工管理 API
+ * 数字员工管理 API（管理后台专用）
+ * 包含完整的 CRUD + AI 完善功能
  */
-const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/admin`
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/admin/subagents`
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem('portal_token')
@@ -72,21 +73,13 @@ export interface AiEnhanceResponse {
   enhanced_content: string
 }
 
-export interface ApiResponse<T = any> {
-  success: boolean
-  data?: T
-  error?: string
-  debug?: string
-  message?: string
-}
-
 // ============== API 方法 ==============
 
 /**
  * 获取所有数字员工列表
  */
-export async function listSubagents(): Promise<ApiResponse<SubagentListItem[]>> {
-  const response = await fetch(`${API_BASE}/subagents`, {
+export async function listSubagents(): Promise<{ success: boolean; data: SubagentListItem[] }> {
+  const response = await fetch(`${API_BASE}`, {
     headers: getAuthHeaders(),
   })
   return handleResponse(response)
@@ -95,8 +88,8 @@ export async function listSubagents(): Promise<ApiResponse<SubagentListItem[]>> 
 /**
  * 获取单个数字员工详情
  */
-export async function getSubagentDetail(agentId: string): Promise<ApiResponse<SubagentDetail>> {
-  const response = await fetch(`${API_BASE}/subagents/${encodeURIComponent(agentId)}`, {
+export async function getSubagentDetail(agentId: string): Promise<{ success: boolean; data: SubagentDetail }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}`, {
     headers: getAuthHeaders(),
   })
   return handleResponse(response)
@@ -105,8 +98,8 @@ export async function getSubagentDetail(agentId: string): Promise<ApiResponse<Su
 /**
  * 获取 SUBAGENT.md 原始内容
  */
-export async function getSubagentContent(agentId: string): Promise<ApiResponse<string>> {
-  const response = await fetch(`${API_BASE}/subagents/${encodeURIComponent(agentId)}/content`, {
+export async function getSubagentContent(agentId: string): Promise<{ success: boolean; data: string }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/content`, {
     headers: getAuthHeaders(),
   })
   return handleResponse(response)
@@ -115,7 +108,7 @@ export async function getSubagentContent(agentId: string): Promise<ApiResponse<s
 /**
  * 获取可选 skills 列表
  */
-export async function listAvailableSkills(): Promise<ApiResponse<string[]>> {
+export async function listAvailableSkills(): Promise<{ success: boolean; data: string[] }> {
   const response = await fetch(`${API_BASE}/skills`, {
     headers: getAuthHeaders(),
   })
@@ -125,7 +118,10 @@ export async function listAvailableSkills(): Promise<ApiResponse<string[]>> {
 /**
  * 获取可选 tools 列表
  */
-export async function listAvailableTools(): Promise<ApiResponse<Array<{ name: string; description: string; display_name: string }>>> {
+export async function listAvailableTools(): Promise<{
+  success: boolean
+  data: Array<{ name: string; description: string; display_name: string }>
+}> {
   const response = await fetch(`${API_BASE}/tools`, {
     headers: getAuthHeaders(),
   })
@@ -135,8 +131,8 @@ export async function listAvailableTools(): Promise<ApiResponse<Array<{ name: st
 /**
  * 创建定制数字员工
  */
-export async function createSubagent(data: CreateSubagentRequest): Promise<ApiResponse> {
-  const response = await fetch(`${API_BASE}/subagents`, {
+export async function createSubagent(data: CreateSubagentRequest): Promise<{ success: boolean; data?: any; error?: string }> {
+  const response = await fetch(`${API_BASE}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
@@ -147,8 +143,8 @@ export async function createSubagent(data: CreateSubagentRequest): Promise<ApiRe
 /**
  * 更新定制数字员工
  */
-export async function updateSubagent(agentId: string, data: CreateSubagentRequest): Promise<ApiResponse> {
-  const response = await fetch(`${API_BASE}/subagents/${encodeURIComponent(agentId)}`, {
+export async function updateSubagent(agentId: string, data: CreateSubagentRequest): Promise<{ success: boolean; data?: any; error?: string }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
@@ -159,8 +155,8 @@ export async function updateSubagent(agentId: string, data: CreateSubagentReques
 /**
  * 删除定制数字员工
  */
-export async function deleteSubagent(agentId: string): Promise<ApiResponse> {
-  const response = await fetch(`${API_BASE}/subagents/${encodeURIComponent(agentId)}`, {
+export async function deleteSubagent(agentId: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   })
@@ -170,8 +166,8 @@ export async function deleteSubagent(agentId: string): Promise<ApiResponse> {
 /**
  * 另存为
  */
-export async function duplicateSubagent(agentId: string, data: DuplicateRequest): Promise<ApiResponse> {
-  const response = await fetch(`${API_BASE}/subagents/${encodeURIComponent(agentId)}/duplicate`, {
+export async function duplicateSubagent(agentId: string, data: DuplicateRequest): Promise<{ success: boolean; data?: any; error?: string }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/duplicate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
@@ -182,8 +178,8 @@ export async function duplicateSubagent(agentId: string, data: DuplicateRequest)
 /**
  * AI 完善（同步请求）
  */
-export async function aiEnhanceSubagent(agentId: string, content: string): Promise<ApiResponse<AiEnhanceResponse>> {
-  const response = await fetch(`${API_BASE}/subagents/${encodeURIComponent(agentId)}/ai-enhance`, {
+export async function aiEnhanceSubagent(agentId: string, content: string): Promise<{ success: boolean; data?: AiEnhanceResponse; error?: string }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/ai-enhance`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ content }),

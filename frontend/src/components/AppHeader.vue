@@ -129,7 +129,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
-import type { SubagentListItem } from '@/api/adminSubagent'
+import type { SubagentListItem } from '@/api/subagent'
 
 const props = defineProps<{
   title?: string

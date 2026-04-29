@@ -34,7 +34,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
+import { listSubagents, type SubagentListItem } from '@/api/subagent'
 
 const route = useRoute()
 const router = useRouter()

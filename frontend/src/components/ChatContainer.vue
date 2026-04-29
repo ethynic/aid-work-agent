@@ -129,7 +129,7 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
-import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
+import { listSubagents, type SubagentListItem } from '@/api/subagent'
 const router = useRouter()
 
 // 从 PortalLayout 注入侧边栏状态（租户前台模式）

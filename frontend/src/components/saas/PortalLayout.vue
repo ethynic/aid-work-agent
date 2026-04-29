@@ -57,7 +57,7 @@ import { onMounted, computed, ref, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
-import { listSubagents, type SubagentListItem } from '@/api/adminSubagent'
+import { listSubagents, type SubagentListItem } from '@/api/subagent'
 import MenuSidebar from '@/components/MenuSidebar.vue'
 
 const router = useRouter()

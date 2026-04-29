@@ -29,7 +29,7 @@ from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
-from src.api import admin_subagent
+from src.api import admin_subagent, subagent
 from src.knowledge.api import router as knowledge_router
 from src.db.models import SessionDB, MessageDB
 from src.channels import callback as channels_api
@@ -1142,6 +1142,7 @@ app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)
 app.include_router(admin_subagent.router)
+app.include_router(subagent.router)
 
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
