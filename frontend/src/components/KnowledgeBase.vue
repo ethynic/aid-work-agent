@@ -343,62 +343,90 @@
             <input
               ref="fileInputRef"
               type="file"
-              accept=".docx,.xlsx,.pptx,.pdf"
+              multiple
+              accept=".docx,.xlsx,.pptx,.pdf,.txt,.md,.json,.yaml,.yml,.log,.csv,.xml,.ini,.properties,.conf,.config"
               @change="handleFileSelect"
               class="hidden"
             />
 
-            <svg v-if="!selectedFile" class="w-12 h-12 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
 
-            <div v-if="!selectedFile" class="space-y-2">
+            <div v-if="selectedFiles.length === 0" class="space-y-2">
               <p class="text-gray-600 font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
-              <p class="text-sm text-gray-400">支持 docx, xlsx, pptx, pdf 格式</p>
+              <p class="text-sm text-gray-400">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
+              <p class="text-xs text-gray-400">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, log, csv, xml 等</p>
             </div>
 
-            <div v-else class="space-y-2">
-              <div class="flex items-center justify-center gap-3">
-                <div :class="getFileIconClass(selectedFile.type)" class="w-10 h-10 rounded-lg flex items-center justify-center">
-                  <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                <div class="text-left">
-                  <p class="text-gray-800 font-medium">{{ selectedFile.name }}</p>
-                  <p class="text-sm text-gray-400">{{ formatFileSize(selectedFile.size) }}</p>
+            <div v-else class="space-y-3">
+              <div class="space-y-2 max-h-48 overflow-y-auto">
+                <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 rounded-lg">
+                  <div class="flex items-center gap-3 min-w-0 flex-1">
+                    <div :class="getFileIconClassByExt(file.name)" class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0">
+                      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </div>
+                    <div class="text-left min-w-0 flex-1">
+                      <p class="text-gray-800 font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
+                      <p class="text-xs text-gray-400">{{ formatFileSize(file.size) }}</p>
+                    </div>
+                  </div>
+                  <button
+                    @click.stop="removeFile(index)"
+                    class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded flex-shrink-0"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
               </div>
-              <button
-                @click.stop="selectedFile = null"
-                class="text-sm text-gray-500 hover:text-gray-700"
-              >
-                移除
-              </button>
+              <div class="flex items-center justify-between">
+                <p class="text-sm text-gray-500">已选择 {{ selectedFiles.length }} 个文件</p>
+                <button
+                  @click.stop="clearFiles"
+                  class="text-sm text-gray-500 hover:text-gray-700"
+                >
+                  清空全部
+                </button>
+              </div>
             </div>
           </div>
 
-          <!-- Error Message -->
-          <p v-if="uploadError" class="mt-3 text-sm text-danger-500">{{ uploadError }}</p>
+          <!-- Error Messages -->
+          <div v-if="uploadError" class="mt-3 p-3 bg-danger-50 rounded-lg">
+            <p class="text-sm text-danger-500">{{ uploadError }}</p>
+          </div>
+          <div v-if="uploadErrors.length > 0" class="mt-3 p-3 bg-warning-50 rounded-lg">
+            <p class="text-sm text-warning-600 font-medium mb-2">以下文件上传失败：</p>
+            <ul class="text-sm text-warning-700 space-y-1">
+              <li v-for="(err, index) in uploadErrors" :key="index" class="flex items-start gap-2">
+                <span class="text-warning-500">•</span>
+                <span>{{ err.filename }}: {{ err.error }}</span>
+              </li>
+            </ul>
+          </div>
         </div>
 
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
           <button
-            @click="showUploadModal = false"
+            @click="handleCancelUpload"
             class="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded-lg transition-colors"
           >
             取消
           </button>
           <button
             @click="handleUpload"
-            :disabled="!selectedFile || isUploading"
+            :disabled="selectedFiles.length === 0 || isUploading"
             class="px-4 py-2 bg-primary-600 hover:bg-primary-500 disabled:bg-primary-400 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <svg v-if="isUploading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            {{ isUploading ? '上传中...' : '上传' }}
+            {{ uploadButtonText }}
           </button>
         </div>
       </div>
@@ -456,7 +484,7 @@ import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
-import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem } from '@/api/knowledge'
+import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem, type BatchUploadError } from '@/api/knowledge'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -492,12 +520,24 @@ const searchResults = ref<SearchResultItem[]>([])
 const isSearching = ref(false)
 const searchError = ref('')
 const showUploadModal = ref(false)
-const selectedFile = ref<File | null>(null)
+const selectedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const isUploading = ref(false)
 const uploadError = ref('')
+const uploadErrors = ref<BatchUploadError[]>([])
 const documentToDelete = ref<DocumentResponse | null>(null)
 const isDeleting = ref(false)
+
+// 串行上传进度追踪
+const uploadProgress = ref({
+  total: 0,
+  current: 0,
+  currentFileName: ''
+})
+
+// 文件大小限制（从环境变量读取，默认 50MB）
+const MAX_FILE_SIZE = (import.meta.env.VITE_MAX_KNOWLEDGE_FILE_SIZE || 50) * 1024 * 1024
+const MAX_FILE_SIZE_MB = Math.round(MAX_FILE_SIZE / 1024 / 1024)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -558,6 +598,18 @@ async function loadAvailableSubagents() {
 
 // 分页总页数
 const totalPages = computed(() => Math.ceil(totalDocuments.value / pageSize.value) || 1)
+
+// 上传按钮文本
+const uploadButtonText = computed(() => {
+  if (isUploading.value) {
+    const progress = uploadProgress.value
+    if (progress.total > 0) {
+      return `上传中 ${progress.current}/${progress.total} - ${progress.currentFileName}`
+    }
+    return `上传中 (${selectedFiles.value.length} 个文件)...`
+  }
+  return `上传 (${selectedFiles.value.length})`
+})
 
 // Filtered documents based on search
 const filteredDocuments = computed(() => {
@@ -672,41 +724,149 @@ function shouldShowPage(page: number): boolean {
   return false
 }
 
-// Handle file selection
-function handleFileSelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  if (input.files && input.files[0]) {
-    selectedFile.value = input.files[0]
-    uploadError.value = ''
+// 允许的文件扩展名
+const ALLOWED_EXTENSIONS = ['.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.md', '.json', '.yaml', '.yml', '.log', '.csv', '.xml', '.ini', '.properties', '.conf', '.config']
+
+// 验证单个文件
+function validateFile(file: File): { valid: boolean; error?: string } {
+  const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return { valid: false, error: `不支持的文件格式: ${ext}` }
   }
+  if (file.size > MAX_FILE_SIZE) {
+    return { valid: false, error: `文件过大，最大支持 ${MAX_FILE_SIZE_MB}MB` }
+  }
+  return { valid: true }
 }
 
-// Handle drag and drop
-function handleDrop(event: DragEvent) {
-  isDragging.value = false
-  if (event.dataTransfer?.files && event.dataTransfer.files[0]) {
-    const file = event.dataTransfer.files[0]
-    const allowedTypes = ['.docx', '.xlsx', '.pptx', '.pdf']
-    const ext = '.' + file.name.split('.').pop()?.toLowerCase()
-    if (allowedTypes.includes(ext)) {
-      selectedFile.value = file
+// 处理文件选择
+function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files && input.files.length > 0) {
+    const newFiles: File[] = []
+    const errors: string[] = []
+
+    for (let i = 0; i < input.files.length; i++) {
+      const file = input.files[i]
+      const validation = validateFile(file)
+      if (validation.valid) {
+        // 避免重复添加
+        if (!selectedFiles.value.some(f => f.name === file.name && f.size === file.size)) {
+          newFiles.push(file)
+        }
+      } else {
+        errors.push(`${file.name}: ${validation.error}`)
+      }
+    }
+
+    if (newFiles.length > 0) {
+      selectedFiles.value = [...selectedFiles.value, ...newFiles]
       uploadError.value = ''
-    } else {
-      uploadError.value = `不支持的文件格式。支持：${allowedTypes.join(', ')}`
+      uploadErrors.value = []
+    }
+
+    if (errors.length > 0) {
+      uploadError.value = errors.join('；')
     }
   }
 }
 
-// Handle upload
+// 处理拖拽
+function handleDrop(event: DragEvent) {
+  isDragging.value = false
+  if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+    const newFiles: File[] = []
+    const errors: string[] = []
+
+    for (let i = 0; i < event.dataTransfer.files.length; i++) {
+      const file = event.dataTransfer.files[i]
+      const validation = validateFile(file)
+      if (validation.valid) {
+        if (!selectedFiles.value.some(f => f.name === file.name && f.size === file.size)) {
+          newFiles.push(file)
+        }
+      } else {
+        errors.push(`${file.name}: ${validation.error}`)
+      }
+    }
+
+    if (newFiles.length > 0) {
+      selectedFiles.value = [...selectedFiles.value, ...newFiles]
+      uploadError.value = ''
+      uploadErrors.value = []
+    }
+
+    if (errors.length > 0) {
+      uploadError.value = errors.join('；')
+    }
+  }
+}
+
+// 移除单个文件
+function removeFile(index: number) {
+  selectedFiles.value.splice(index, 1)
+}
+
+// 清空所有文件
+function clearFiles() {
+  selectedFiles.value = []
+  uploadError.value = ''
+  uploadErrors.value = []
+}
+
+// 取消上传
+function handleCancelUpload() {
+  clearFiles()
+  showUploadModal.value = false
+}
+
+// 处理批量上传（串行模式，1个1个传，配合服务器带宽限制）
 async function handleUpload() {
-  if (!selectedFile.value) return
+  if (selectedFiles.value.length === 0) return
 
   isUploading.value = true
   uploadError.value = ''
+  uploadErrors.value = []
+
+  // 保存要上传的文件列表，然后清空 selectedFiles，防止用户重复添加
+  const filesToUpload = [...selectedFiles.value]
+  const totalFiles = filesToUpload.length
+
+  // 初始化进度
+  uploadProgress.value = {
+    total: totalFiles,
+    current: 0,
+    currentFileName: ''
+  }
+
+  const successResults: any[] = []
+  const errorResults: BatchUploadError[] = []
 
   try {
-    await uploadDocument(selectedFile.value)
+    // 串行上传，1个1个传
+    for (let i = 0; i < filesToUpload.length; i++) {
+      const file = filesToUpload[i]
+      uploadProgress.value.current = i + 1
+      uploadProgress.value.currentFileName = file.name
+
+      try {
+        // 调用单文件上传接口
+        const result = await uploadDocument(file)
+        successResults.push(result)
+
+        // 每上传成功一个，就刷新一次列表，让用户马上能看到
+        await loadDocuments()
+      } catch (error: any) {
+        const errorMsg = error.response?.data?.error || error.message || '上传失败'
+        errorResults.push({
+          filename: file.name,
+          error: errorMsg
+        })
+      }
+    }
+
     showUploadModal.value = false
+
     // 清除搜索状态，回到文档列表视图
     searchQuery.value = ''
     searchResults.value = []
@@ -715,18 +875,38 @@ async function handleUpload() {
       clearTimeout(searchDebounceTimer)
       searchDebounceTimer = null
     }
-    const fileName = selectedFile.value.name
-    selectedFile.value = null
-    // 翻回第一页，刷新列表，最新文档在最上面
+
+    // 清空选择
+    selectedFiles.value = []
+
+    // 翻回第一页，刷新列表
     currentPage.value = 1
     await loadDocuments()
-    toast.success(`${fileName} 上传成功`)
+
+    // 显示结果
+    if (successResults.length > 0) {
+      if (successResults.length === totalFiles) {
+        toast.success('全部 ' + successResults.length + ' 个文件上传成功')
+      } else {
+        toast.success('' + successResults.length + ' 个文件上传成功')
+      }
+    }
+    if (errorResults.length > 0) {
+      uploadErrors.value = errorResults
+      toast.warning('' + errorResults.length + ' 个文件上传失败')
+    }
   } catch (error: any) {
     const errorMsg = error.response?.data?.error || error.message || '上传失败'
     uploadError.value = errorMsg
     toast.error(errorMsg)
   } finally {
     isUploading.value = false
+    // 重置进度
+    uploadProgress.value = {
+      total: 0,
+      current: 0,
+      currentFileName: ''
+    }
   }
 }
 
@@ -773,17 +953,23 @@ function formatTime(isoString: string): string {
   const day = date.getDate()
   const hours = date.getHours().toString().padStart(2, '0')
   const minutes = date.getMinutes().toString().padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}`
+  return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes
 }
 
 // Get file icon class based on type
 function getFileIconClass(fileType: string): string {
   const ext = fileType.toLowerCase()
-  if (ext === '.pdf') return 'bg-danger-500'
-  if (ext === '.docx' || ext === '.doc') return 'bg-primary-500'
-  if (ext === '.xlsx' || ext === '.xls') return 'bg-success-500'
-  if (ext === '.pptx' || ext === '.ppt') return 'bg-warning-500'
+  if (ext === 'pdf' || ext === '.pdf') return 'bg-danger-500'
+  if (ext === 'docx' || ext === '.docx' || ext === 'doc' || ext === '.doc') return 'bg-primary-500'
+  if (ext === 'xlsx' || ext === '.xlsx' || ext === 'xls' || ext === '.xls') return 'bg-success-500'
+  if (ext === 'pptx' || ext === '.pptx' || ext === 'ppt' || ext === '.ppt') return 'bg-warning-500'
   return 'bg-gray-500'
+}
+
+// 根据文件名获取图标类（用于多文件上传显示）
+function getFileIconClassByExt(filename: string): string {
+  const ext = '.' + filename.split('.').pop()?.toLowerCase()
+  return getFileIconClass(ext)
 }
 
 // 打开原始文档（新窗口）
@@ -803,7 +989,7 @@ function goToChat() {
 function openCustomerInfo() {
   const userId = effectiveUser.value?.user_id
   if (userId) {
-    window.open(`/customer-info?user_id=${userId}`, '_blank')
+    window.open('/customer-info?user_id=' + userId, '_blank')
   } else {
     toast.warning('请先登录')
   }

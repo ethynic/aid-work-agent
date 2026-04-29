@@ -36,7 +36,7 @@ sudo docker run --rm -v /var/www/agent2/frontend:/app -w /app node:22-alpine npm
 
 # 3. 重启后端容器（代码已通过 volume 挂载，无需重建）
 echo "[3/3] 重启后端服务..."
-sudo docker restart aid-agent-api2
+sudo docker compose -f docker-compose.test.yml up -d
 
 echo ""
 echo "=========================================="

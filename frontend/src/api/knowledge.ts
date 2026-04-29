@@ -25,6 +25,17 @@ export interface UploadResponse {
   message: string
 }
 
+export interface BatchUploadError {
+  filename: string
+  error: string
+}
+
+export interface BatchUploadResponse {
+  success: boolean
+  results: UploadResponse[]
+  errors: BatchUploadError[]
+}
+
 export interface SearchResultItem {
   doc_id: number
   chunk_id: number
@@ -80,7 +91,7 @@ export async function deleteDocument(docId: number): Promise<ApiResponse> {
 }
 
 /**
- * 上传知识库文档
+ * 上传知识库文档（单文件）
  */
 export async function uploadDocument(file: File): Promise<UploadResponse> {
   const formData = new FormData()
@@ -105,6 +116,26 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
     throw new Error(result.error || result.detail || result.message || '上传失败')
   }
   return result
+}
+
+/**
+ * 批量上传知识库文档（多文件）
+ */
+export async function uploadDocumentsBatch(files: File[]): Promise<BatchUploadResponse> {
+  const formData = new FormData()
+  files.forEach(file => {
+    formData.append('files', file)
+  })
+
+  const response = await fetch(`${API_BASE}/upload/batch`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+    body: formData
+  })
+  if (!response.ok) {
+    throw new Error('批量上传失败')
+  }
+  return response.json()
 }
 
 /**

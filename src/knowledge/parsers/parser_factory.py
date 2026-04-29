@@ -11,6 +11,7 @@ from .word_parser import WordParser
 from .excel_parser import ExcelParser
 from .ppt_parser import PPTParser
 from .pdf_parser import PDFParser
+from .text_parser import TextParser
 
 
 class ParserFactory:
@@ -27,6 +28,7 @@ class ParserFactory:
             ExcelParser(),
             PPTParser(),
             PDFParser(),
+            TextParser(),
         ]
         for parser in parsers:
             for ext in parser.supported_extensions():
