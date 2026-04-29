@@ -4,7 +4,7 @@
 
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from loguru import logger
 
@@ -19,9 +19,11 @@ class SubscriptionDB:
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None,
         subagent_type: Optional[str] = None,
+        instance_quota: int = 1,
         billing_cycle: str = "monthly",
         unit_price: float = 0,
         token_quota: int = -1,
+        starts_at: Optional[str] = None,
         expires_at: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """创建订阅"""
@@ -33,11 +35,13 @@ class SubscriptionDB:
                 cursor.execute("""
                     INSERT INTO subscriptions
                         (subscription_id, tenant_id, user_id, subagent_type,
-                         billing_cycle, unit_price, token_quota, expires_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         instance_quota, billing_cycle, unit_price, token_quota,
+                         starts_at, expires_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     subscription_id, tenant_id, user_id, subagent_type,
-                    billing_cycle, unit_price, token_quota, expires_at,
+                    instance_quota, billing_cycle, unit_price, token_quota,
+                    starts_at, expires_at,
                 ))
                 conn.commit()
                 logger.info(f"Subscription created: {subscription_id}")
@@ -106,6 +110,30 @@ class SubscriptionDB:
             return cursor.rowcount > 0
 
     @staticmethod
+    def get_quota(tenant_id: str, subagent_type: str) -> Tuple[bool, int]:
+        """
+        获取租户对某个数字员工的访问权限和实例配额
+
+        Returns:
+            (has_access: bool, instance_quota: int)
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    COUNT(*) > 0 AS has_access,
+                    COALESCE(MAX(instance_quota), 0) AS instance_quota
+                FROM subscriptions
+                WHERE tenant_id = %s
+                  AND subagent_type = %s
+                  AND status = 'active'
+                  AND starts_at <= CURRENT_TIMESTAMP
+                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            """, (tenant_id, subagent_type))
+            row = cursor.fetchone()
+            return bool(row["has_access"]), int(row["instance_quota"])
+
+    @staticmethod
     def get_active_by_instance(instance_id: str) -> Optional[Dict[str, Any]]:
         """根据 agent_instance 获取关联的有效订阅"""
         with get_db_connection() as conn:
@@ -113,7 +141,10 @@ class SubscriptionDB:
             cursor.execute("""
                 SELECT s.* FROM subscriptions s
                 JOIN agent_instances ai ON ai.subscription_id = s.subscription_id
-                WHERE ai.instance_id = %s AND s.status = 'active'
+                WHERE ai.instance_id = %s
+                  AND s.status = 'active'
+                  AND s.starts_at <= CURRENT_TIMESTAMP
+                  AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
             """, (instance_id,))
             row = cursor.fetchone()
             return dict(row) if row else None

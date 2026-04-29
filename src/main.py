@@ -129,6 +129,7 @@ class ChatRequest(BaseModel):
     files: Optional[List[Dict[str, Any]]] = None
     user_id: Optional[str] = None  # 用于会话记录
     subagent: Optional[str] = None  # 子智能体名称（由前端从路由参数提取后传入）
+    instance_id: Optional[str] = None  # 数字员工实例ID（用于并发控制锁）
 
 
 class ChatResponse(BaseModel):
@@ -728,6 +729,28 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "details": "您没有权限访问此数字员工，请联系管理员申请授权",
             }, status_code=403)
 
+    # 并发控制：验证实例锁（如果提供了 instance_id）
+    instance_id = request.instance_id
+    if instance_id and settings.saas.enabled and current_user:
+        from src.saas.db.agent_instance_db import AgentInstanceDB
+        instance = AgentInstanceDB.get_by_id(instance_id)
+        if not instance:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "success": False,
+                "error": "实例不存在",
+            }, status_code=404)
+
+        # 验证当前会话是否持有锁
+        if instance["current_session_id"] != session_id:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "success": False,
+                "error": "实例被占用",
+                "details": "该数字员工正在被其他会话使用，请先锁定实例再开始对话",
+                "current_status": instance["status"],
+            }, status_code=409)
+
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
         # 从用户第一条消息提取前20个字作为会话标题
@@ -742,7 +765,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 user_id=user_id,
                 title=title,
                 context_data={"user_info": {"user_id": user_id, "username": current_user.get("username")}},
-                tenant_id=chat_tenant_id
+                tenant_id=chat_tenant_id,
+                instance_id=instance_id
             )
             if session:
                 session_id = session["session_id"]
@@ -1076,7 +1100,16 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             # 保存完整响应到历史
             full_response = results.get('full_response', "".join(results['chunks']))
             sse_manager.add_to_history(session_id, "assistant", full_response)
-            
+
+            # 并发控制：刷新实例锁（3分钟思考窗口）
+            if instance_id and settings.saas.enabled and not results.get('error'):
+                from src.saas.services.instance_service import InstanceService
+                try:
+                    InstanceService.refresh_lock(instance_id, session_id, extend_minutes=3)
+                    logger.info(f"[Concurrency] Lock refreshed: instance={instance_id}, session={session_id}")
+                except Exception as e:
+                    logger.warning(f"[Concurrency] Failed to refresh lock: {e}")
+
             # 发送完成消息
             try:
                 yield f"data: {json.dumps({'type': 'complete', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
@@ -1154,6 +1187,9 @@ app.include_router(customer.router)
 app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)
+# 聊天实例并发控制API
+from src.api import chat_instances
+app.include_router(chat_instances.router)
 app.include_router(admin_subagent.router)
 app.include_router(subagent.router)
 

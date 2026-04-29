@@ -53,3 +53,72 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS expire_at TIMESTAMP;
 COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
 CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
+
+-- ============================================================================
+-- 2026-4-30，数字员工实例并发控制功能开发
+-- ============================================================================
+
+-- 1. subscriptions 表增强：增加实例配额和生效时间
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS instance_quota INTEGER DEFAULT 1;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS starts_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_subscriptions_time_range ON subscriptions(tenant_id, subagent_type, starts_at, expires_at, status);
+
+-- 2. 数据迁移：将 tenant_agent_permissions 的授权迁移到 subscriptions 表
+--    将现有权限转换为永久有效的订阅（expires_at = null）
+INSERT INTO subscriptions (
+    subscription_id, tenant_id, subagent_type, instance_quota,
+    status, starts_at, created_at, updated_at
+)
+SELECT
+    'sub_mig_' || md5(random()::text)::uuid::text AS subscription_id,
+    tenant_id,
+    agent_id AS subagent_type,
+    1 AS instance_quota,
+    'active' AS status,
+    CURRENT_TIMESTAMP AS starts_at,
+    CURRENT_TIMESTAMP AS created_at,
+    CURRENT_TIMESTAMP AS updated_at
+FROM tenant_agent_permissions tap
+WHERE NOT EXISTS (
+    SELECT 1 FROM subscriptions s
+    WHERE s.tenant_id = tap.tenant_id
+      AND s.subagent_type = tap.agent_id
+      AND s.status = 'active'
+);
+
+-- 3. agent_instances 表增强：增加拟人属性和锁状态字段
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS instance_name TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS avatar TEXT DEFAULT '🤖';
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS personality_traits TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'idle';
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS current_session_id TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS current_user_id TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS lock_expires_at TIMESTAMP;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS total_chats INTEGER DEFAULT 0;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS total_messages INTEGER DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
+
+-- 4. 创建实例等待队列表
+CREATE TABLE IF NOT EXISTS agent_instance_queue (
+    id SERIAL PRIMARY KEY,
+    queue_id TEXT UNIQUE NOT NULL,
+    instance_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    status TEXT DEFAULT 'waiting',
+    enqueued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    wait_timeout_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_instance ON agent_instance_queue(instance_id, position);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_session ON agent_instance_queue(session_id);
+CREATE INDEX IF NOT EXISTS idx_instance_queue_timeout ON agent_instance_queue(wait_timeout_at);
+
+-- 5. chat_sessions 表增加 instance_id 字段，与会话绑定
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS instance_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_id, created_at DESC);

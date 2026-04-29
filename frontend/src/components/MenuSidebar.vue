@@ -40,6 +40,22 @@
 
       <!-- 租户模式菜单 -->
       <template v-if="isTenantMode">
+        <!-- 实例大厅 - 选择数字员工开始对话 -->
+        <button
+          @click="goToInstanceLobby"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path.includes('/instances')
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          <span>实例大厅</span>
+        </button>
+
         <!-- 管理菜单（可折叠，仅租户管理员可见） -->
         <div v-if="isTenantAdmin">
           <!-- 管理菜单标题 -->
@@ -98,6 +114,22 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
           </svg>
           <span>企业知识库</span>
+        </button>
+
+        <!-- Instance Lobby Menu Item - Demo Mode -->
+        <button
+          @click="goToInstanceLobby"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path === '/instances'
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          <span>实例大厅</span>
         </button>
 
         <!-- Digital Employee Management - only shown in portal management -->
@@ -575,6 +607,14 @@ function navigateToBusinessPage(page: BusinessPage) {
 // 跳转到知识库（演示模式）
 function goToKnowledgeBase() {
   router.push('/knowledge-base')
+}
+
+// 跳转到实例大厅
+function goToInstanceLobby() {
+  const targetPath = isTenantMode.value && tenantId.value
+    ? `/t/${tenantId.value}/instances`
+    : '/instances'
+  router.push(targetPath)
 }
 
 // 跳转到数字员工管理

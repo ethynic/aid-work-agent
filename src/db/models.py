@@ -289,7 +289,7 @@ class SessionDB:
     """会话数据库访问类"""
 
     @staticmethod
-    def create(user_id: str, title: str = None, context_data: dict = None, tenant_id: str = None, subagent_id: str = None) -> Optional[Dict[str, Any]]:
+    def create(user_id: str, title: str = None, context_data: dict = None, tenant_id: str = None, subagent_id: str = None, instance_id: str = None) -> Optional[Dict[str, Any]]:
         """创建新会话"""
         session_id = generate_session_id()
         placeholder = "%s"
@@ -298,9 +298,9 @@ class SessionDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO chat_sessions (session_id, user_id, tenant_id, subagent_id, title, context_data)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                """, (session_id, user_id, tenant_id, subagent_id, title or "新会话",
+                    INSERT INTO chat_sessions (session_id, user_id, tenant_id, subagent_id, instance_id, title, context_data)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                """, (session_id, user_id, tenant_id, subagent_id, instance_id, title or "新会话",
                       json.dumps(context_data) if context_data else None))
                 conn.commit()
 

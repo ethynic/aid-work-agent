@@ -119,7 +119,8 @@ export class SSEManager {
     onToolResult?: (toolName: string, result: any, success: boolean) => void,
     onThinking?: (data: string) => void,
     onClarification?: (subagentName: string, question: string) => void,
-    subagent?: string | null
+    subagent?: string | null,
+    instance_id?: string | null
   ): Promise<void> {
     this.abortController = new AbortController()
 
@@ -142,6 +143,7 @@ export class SSEManager {
             size: f.size,
           })),
           ...(subagent ? { subagent } : {}),
+          ...(instance_id ? { instance_id } : {}),
         }),
         signal: this.abortController.signal,
       })

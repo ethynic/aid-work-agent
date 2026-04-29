@@ -56,6 +56,11 @@ const router = createRouter({
       component: () => import('./components/DigitalEmployeeManager.vue')
     },
     {
+      path: '/instances',
+      name: 'instances',
+      component: () => import('./components/InstanceLobby.vue')
+    },
+    {
       path: '/portal/subagents',
       name: 'portal-subagents',
       component: () => import('./components/DigitalEmployeeManager.vue')
@@ -111,6 +116,7 @@ const router = createRouter({
         { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
+        { path: 'instances', name: 'tenant-instances', component: () => import('./components/InstanceLobby.vue') },
         { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },
         // 外贸获客智能体业务数据页面
         {

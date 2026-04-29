@@ -110,7 +110,7 @@ export function useAgent() {
     currentFiles.value = []
   }
 
-  async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string) {
+  async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null) {
     if (!content.trim() || isProcessing.value) return
 
     // 优先使用外部传入的 sessionId（来自 DB 的真实会话 ID），避免与本地生成的 sessionId 产生竞态
@@ -220,7 +220,8 @@ export function useAgent() {
         (subagentName, question) => {
           addProgress(`❓ ${subagentName}需要补充信息: ${question}`, 'tool_start', 'clarification')
         },
-        subagent
+        subagent,
+        instanceId
       )
     } catch (err) {
       error.value = (err as Error).message

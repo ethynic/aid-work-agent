@@ -19,6 +19,10 @@ class AgentInstanceDB:
         tenant_id: str,
         subagent_type: str,
         display_name: str,
+        instance_name: Optional[str] = None,
+        avatar: str = "🤖",
+        description: Optional[str] = None,
+        personality_traits: Optional[List[str]] = None,
         subscription_id: Optional[str] = None,
         config: Optional[dict] = None,
         bound_channel_type: Optional[str] = None,
@@ -33,11 +37,16 @@ class AgentInstanceDB:
                 cursor.execute("""
                     INSERT INTO agent_instances
                         (instance_id, tenant_id, subscription_id, subagent_type,
-                         display_name, config, bound_channel_type, allowed_skills)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         display_name, instance_name, avatar, description,
+                         personality_traits, config, bound_channel_type, allowed_skills)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     instance_id, tenant_id, subscription_id, subagent_type,
                     display_name,
+                    instance_name or display_name,  # 默认用 display_name
+                    avatar,
+                    description,
+                    json.dumps(personality_traits or [], ensure_ascii=False),
                     json.dumps(config or {}, ensure_ascii=False),
                     bound_channel_type,
                     json.dumps(allowed_skills or [], ensure_ascii=False),
@@ -80,13 +89,17 @@ class AgentInstanceDB:
     @staticmethod
     def update(instance_id: str, **kwargs) -> bool:
         """更新实例"""
-        allowed_fields = {"display_name", "status", "config", "bound_channel_type", "allowed_skills"}
+        allowed_fields = {
+            "display_name", "instance_name", "avatar", "description",
+            "personality_traits", "status", "config", "bound_channel_type",
+            "allowed_skills"
+        }
         updates = {}
         for k, v in kwargs.items():
             if k in allowed_fields and v is not None:
                 if k in ("config",) and isinstance(v, dict):
                     v = json.dumps(v, ensure_ascii=False)
-                elif k == "allowed_skills" and isinstance(v, list):
+                elif k in ("allowed_skills", "personality_traits") and isinstance(v, list):
                     v = json.dumps(v, ensure_ascii=False)
                 updates[k] = v
 
@@ -137,4 +150,6 @@ class AgentInstanceDB:
             d["config"] = json.loads(d["config"])
         if d.get("allowed_skills"):
             d["allowed_skills"] = json.loads(d["allowed_skills"])
+        if d.get("personality_traits"):
+            d["personality_traits"] = json.loads(d["personality_traits"])
         return d
