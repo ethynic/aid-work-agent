@@ -43,7 +43,7 @@ class KnowledgeBaseTool(BaseTool):
         self.retriever = self._init_retriever()
 
     def _init_retriever(self):
-        """初始化检索器（自动适配 SQLite / PostgreSQL）"""
+        """初始化检索器（适配 PostgreSQL）"""
         # 从配置获取 Qwen API Key（支持 key 池）
         from src.config.settings import settings
         qwen_keys = settings.llm.qwen.get_effective_keys()
@@ -55,8 +55,7 @@ class KnowledgeBaseTool(BaseTool):
         return HybridRetriever(
             vector_db=vector_db,
             embedding_client=embedding_client,
-            conn=vector_db.conn,
-            db_type="postgresql"
+            conn=vector_db.conn
         )
 
     async def execute(self, **kwargs) -> Dict[str, Any]:

@@ -53,13 +53,11 @@ class HybridRetriever:
         self,
         vector_db,
         embedding_client,
-        conn,
-        db_type: str = "postgresql"
+        conn
     ):
         self.vector_db = vector_db
         self.embedding_client = embedding_client
         self.conn = conn
-        self.db_type = db_type
 
     async def retrieve(
         self,
@@ -234,31 +232,8 @@ class HybridRetriever:
         return " OR ".join(keywords)
 
     def _fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
-        """全文检索（SQLite FTS5 或 PostgreSQL tsvector）"""
-        cursor = self.conn.cursor()
-
-        if self.db_type == "postgresql":
-            return self._postgres_fts_search(query, top_k)
-        else:
-            return self._sqlite_fts_search(query, top_k)
-
-    def _sqlite_fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
-        """SQLite FTS5 全文检索"""
-        cursor = self.conn.cursor()
-
-        try:
-            cursor.execute("""
-                SELECT rowid, bm25(chunks_fts) as score
-                FROM chunks_fts
-                WHERE chunks_fts MATCH ?
-                ORDER BY score
-                LIMIT ?
-            """, (query, top_k))
-
-            return [(row[0], row[1]) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.warning(f"后端日志：FTS5 检索失败（查询可能包含特殊字符）: {e}")
-            return []
+        """全文检索（PostgreSQL tsvector）"""
+        return self._postgres_fts_search(query, top_k)
 
     def _postgres_fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
@@ -279,7 +254,7 @@ class HybridRetriever:
 
             results = cursor.fetchall()
             # ts_rank 返回的是排名分数，越大越相关
-            # 转换为负数以便与 SQLite BM25 分数格式一致（越小越相关）
+            # 转换为负数以便与 BM25 分数格式一致（越小越相关）
             return [(row["id"], -row["score"]) for row in results if row["score"] > 0]
         except Exception as e:
             logger.warning(f"后端日志：PostgreSQL 全文检索失败: {e}")

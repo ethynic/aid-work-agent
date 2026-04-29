@@ -61,6 +61,9 @@ class StorageConfig(BaseModel):
     base_dir: str = "storage"  # 存储根目录
     uploads_dir: str = "storage/uploads"  # 上传文件根目录
     memories_dir: str = "storage/memories"  # 长期记忆文件目录
+    # 注意：代码内部使用字节单位，.env 中配置使用 MB 单位
+    max_knowledge_file_size: int = 50 * 1024 * 1024  # 知识库文件大小限制（默认 50MB），支持 .env 覆盖
+    max_general_file_size: int = 20 * 1024 * 1024  # 通用上传文件大小限制（默认 20MB），支持 .env 覆盖
 
 
 class WecomMediaConfig(BaseModel):
@@ -339,7 +342,7 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
             provider_cfg["base_url"] = os.getenv("BASE_URL")
         if os.getenv("MODEL_CODE"):
             provider_cfg["model"] = os.getenv("MODEL_CODE")
-    
+
     if os.getenv("WECOM_CORP_ID"):
         yaml_config.setdefault("channels", {}).setdefault("wecom", {})["corp_id"] = os.getenv("WECOM_CORP_ID")
     
@@ -391,6 +394,18 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True
+
+    # 文件上传大小限制（.env 中单位为 MB，代码内部转换为字节）
+    if os.getenv("STORAGE_MAX_KNOWLEDGE_FILE_SIZE"):
+        try:
+            yaml_config.setdefault("storage", {})["max_knowledge_file_size"] = int(os.getenv("STORAGE_MAX_KNOWLEDGE_FILE_SIZE")) * 1024 * 1024
+        except ValueError:
+            pass
+    if os.getenv("STORAGE_MAX_GENERAL_FILE_SIZE"):
+        try:
+            yaml_config.setdefault("storage", {})["max_general_file_size"] = int(os.getenv("STORAGE_MAX_GENERAL_FILE_SIZE")) * 1024 * 1024
+        except ValueError:
+            pass
 
     # 搜索工具配置
     if os.getenv("TAVILY_API_KEY"):

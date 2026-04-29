@@ -16,9 +16,6 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     build-essential \
     curl \
     wget \
-    # sqlite-vec C 扩展编译依赖
-    # libsqlite3-dev \
-    # sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -33,9 +30,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --ignore-installed -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple
 
 # 确保关键依赖安装成功（部分镜像源可能同步延迟，pip install 失败可能被静默吞掉）
-# RUN pip install --no-cache-dir sqlite-vec -i https://pypi.org/simple/ && \
-#     python -c "import sqlite_vec; print('sqlite-vec loaded OK:', sqlite_vec.load.__module__)"
-
 RUN python -c "import apscheduler; print('apscheduler loaded OK:', apscheduler.__version__)" || \
     (echo "ERROR: apscheduler not installed, reinstalling from pypi.org..." && \
      pip install --no-cache-dir 'APScheduler>=3.10.0' -i https://pypi.org/simple/ && \
@@ -81,11 +75,7 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     jq \
     lsof \
     tree \
-    # 字体支持（用于 PDF 等处理）
     fonts-noto-cjk \
-    # sqlite-vec 运行时依赖
-    # libsqlite3-0 \
-    # 其他运行时依赖
     libglib2.0-0 \
     libnss3 \
     libnspr4 \

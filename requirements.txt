@@ -57,7 +57,6 @@ chardet>=5.0.0   # Character encoding auto-detection for CSV
 python-pptx>=1.0.0  # PPT document reading and processing
 
 # Knowledge Base Dependencies
-# sqlite-vec>=0.1.6  # Vector database for embeddings
 pypdf>=4.0.0  # PDF parsing
 Pillow>=10.0.0  # Image processing
 

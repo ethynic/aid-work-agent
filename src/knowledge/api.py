@@ -16,6 +16,7 @@ from loguru import logger
 from src.api import auth
 from src.knowledge.service import knowledge_service
 from src.saas.context import get_current_tenant_id
+from src.config.settings import settings
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -83,6 +84,15 @@ async def upload_document(
         raise HTTPException(
             status_code=400,
             detail=f"不支持的文件格式: {ext}，支持的格式：{', '.join(ALLOWED_EXTENSIONS)}"
+        )
+
+    # 验证文件大小
+    max_size = settings.storage.max_knowledge_file_size
+    if file.size and file.size > max_size:
+        max_size_mb = max_size / 1024 / 1024
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，最大支持 {max_size_mb:.0f}MB"
         )
 
     # 获取用户 ID

@@ -455,6 +455,7 @@ async def list_tools():
 # ==================== File Upload API ====================
 
 from fastapi import UploadFile, File
+from src.config.settings import settings
 
 
 @app.post("/api/upload")
@@ -479,6 +480,18 @@ async def upload_file(file: UploadFile = File(...)):
 
         # 获取文件扩展名
         suffix = Path(file.filename or "unknown").suffix.lower()
+
+        # 验证文件大小
+        max_size = settings.storage.max_general_file_size
+        if file.size and file.size > max_size:
+            max_size_mb = max_size / 1024 / 1024
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "success": False,
+                    "error": f"文件过大，最大支持 {max_size_mb:.0f}MB"
+                }
+            )
 
         # 保存文件（租户模式下按 tenant_id 隔离）
         upload_dir = _get_tenant_upload_dir()

@@ -33,32 +33,6 @@ if env_path.exists():
 # 如果 .env 中没有 DATABASE_URL，使用默认值
 os.environ.setdefault("DATABASE_URL", os.getenv("DATABASE_URL", "postgresql://aid_user:Aid_2026@192.168.195.89:5433/aid_work_agent"))
 
-# Mock sqlite_vec 模块（可能未安装，但 agent 初始化需要）
-# sqlite_vec.load(conn) 调用 C 扩展，在测试环境中不可用
-# 直接 mock VectorDBSQLite 类以避免 sqlite_vec 原生扩展加载问题
-import unittest.mock as _mock
-
-_orig_vector_db_init = None
-
-def _patch_vector_db_init():
-    """安全地 patch VectorDBSQLite.__init__ 以跳过 sqlite_vec 加载"""
-    try:
-        from src.knowledge.vector_db.vector_db import VectorDBSQLite
-        global _orig_vector_db_init
-        _orig_vector_db_init = VectorDBSQLite.__init__
-
-        def _mock_init(self, db_path=':memory:', dimension=1024, conn=None):
-            self.db_path = db_path
-            self.dimension = dimension
-            self.conn = conn
-            self._external_conn = conn is not None
-
-        VectorDBSQLite.__init__ = _mock_init
-    except ImportError:
-        pass
-
-_patch_vector_db_init()
-
 
 # ============================================================
 # 临时目录 fixtures

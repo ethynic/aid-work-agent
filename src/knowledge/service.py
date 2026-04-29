@@ -131,7 +131,7 @@ class KnowledgeBaseService:
                     os.path.getsize(file_path) if os.path.exists(file_path) else 0,
                     len(chunks),
                     "text-embedding-v3",
-                    parse_result.text[:10000] if parse_result.text else None,
+                    parse_result.text if parse_result.text else None,
                     json.dumps(parse_result.metadata) if parse_result.metadata else None
                 ))
                 doc_id = cursor.fetchone()["id"]
@@ -378,8 +378,7 @@ class KnowledgeBaseService:
                 retriever = HybridRetriever(
                     vector_db=vector_db,
                     embedding_client=embedding_client,
-                    conn=conn,
-                    db_type="postgresql"
+                    conn=conn
                 )
 
                 # 执行混合检索

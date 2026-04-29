@@ -188,7 +188,7 @@ Skill 是领域知识扩展包，以目录形式存放在 `src/skills/<skill-nam
 
 ### 数据库（`src/db/`）
 
-默认使用 PostgreSQL，通过 `DATABASE_URL` 环境变量可切换为 SQLite 或 MySQL。主要用于会话持久化和认证管理（`src/api/auth.py`、`src/api/session.py`）。
+使用 PostgreSQL + pgvector，通过 `DATABASE_URL` 环境变量配置。主要用于会话持久化和认证管理（`src/api/auth.py`、`src/api/session.py`）。
 
 ### 多租户与用户隔离（`src/multi_tenant/`）
 

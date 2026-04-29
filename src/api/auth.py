@@ -165,7 +165,7 @@ def verify_token(token: str) -> Optional[str]:
             return None
 
         # 检查是否过期，过期则主动删除
-        # PostgreSQL 返回 datetime 对象，SQLite 返回字符串
+        # PostgreSQL 返回 datetime 对象
         expires_at = row["expires_at"]
         if isinstance(expires_at, str):
             expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")

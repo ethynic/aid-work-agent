@@ -262,8 +262,7 @@ def get_date_offset(days: int) -> str:
 
 def init_tables():
     """初始化客户相关表"""
-    db_type = get_db_type()
-    id_column = "INTEGER PRIMARY KEY AUTOINCREMENT" if db_type == "sqlite" else "SERIAL PRIMARY KEY"
+    id_column = "SERIAL PRIMARY KEY"
 
     with get_db_connection() as conn:
         cursor = conn

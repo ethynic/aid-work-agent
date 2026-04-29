@@ -27,7 +27,7 @@
 
 **知识库** (`src/knowledge/`)：RAG 流程，包含解析器 → 分块器 → 嵌入（通过大模型网关）→ 向量数据库 → 混合检索器。
 
-**数据库** (`src/db/`)：默认 PostgreSQL，可通过 `DATABASE_URL` 环境变量配置为 SQLite 或 MySQL。用于会话持久化和认证。
+**数据库** (`src/db/`)：PostgreSQL。
 
 ## 关键入口点
 
