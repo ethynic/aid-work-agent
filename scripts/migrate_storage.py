@@ -45,8 +45,8 @@ def main():
     # 1. 迁移 wecom 目录 (无租户)
     old_wecom = old_uploads_dir / "wecom"
     new_wecom = new_uploads_dir / "wecom"
+    action = "移动" if args.yes else "将移动"
     if old_wecom.exists():
-        action = "移动" if args.yes else "将移动"
         print(f"[企业微信媒体] {action}:")
         print(f"  {old_wecom}")
         print(f"  -> {new_wecom}")
