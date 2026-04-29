@@ -151,8 +151,22 @@ def generate_token(user_id: str) -> str:
     return token
 
 
-def verify_token(token: str) -> Optional[str]:
-    """验证令牌并返回user_id"""
+def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
+    """
+    验证令牌并返回 user_id，支持自动刷新有效期（滑动窗口）
+
+    Args:
+        token: 认证令牌
+        auto_refresh: 是否自动刷新有效期
+
+    刷新规则：
+    1. token 剩余有效期 < 3 天时自动刷新回 7 天
+    2. 租户用户：刷新后的有效期不能超过租户到期日期
+    3. 平台管理员：不受租户限制，直接刷新到 7 天
+    """
+    from src.db.models import UserDB
+    from src.saas.db.tenant_db import TenantDB
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -164,16 +178,47 @@ def verify_token(token: str) -> Optional[str]:
         if not row:
             return None
 
-        # 检查是否过期，过期则主动删除
-        # PostgreSQL 返回 datetime 对象
+        # 检查是否过期
         expires_at = row["expires_at"]
         if isinstance(expires_at, str):
             expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
 
-        if datetime.now() > expires_at:
+        now = datetime.now()
+        if now > expires_at:
             cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
             conn.commit()
             return None
+
+        # 滑动有效期：如果剩余时间 < 3 天，自动刷新
+        if auto_refresh:
+            remaining_seconds = (expires_at - now).total_seconds()
+            remaining_days = remaining_seconds / 86400
+
+            if remaining_days < 3:
+                user_id = row["user_id"]
+                new_expires_at = now + timedelta(days=7)
+
+                # 租户用户：检查租户到期日期，token 有效期不能超过租户到期日
+                user = UserDB.get_by_id(user_id)
+                if user and user.get("tenant_id"):
+                    tenant = TenantDB.get_by_id(user["tenant_id"])
+                    if tenant and tenant.get("expire_at"):
+                        tenant_expire_at = tenant["expire_at"]
+                        if isinstance(tenant_expire_at, str):
+                            tenant_expire_at = datetime.fromisoformat(tenant_expire_at)
+                        # 取 7 天和租户到期日中较早的一个
+                        if tenant_expire_at < new_expires_at:
+                            new_expires_at = tenant_expire_at
+                            logger.info(f"Tenant {tenant['tenant_id']} expires earlier than 7 days, token expiry limited to {new_expires_at}")
+
+                # 更新 token 有效期
+                new_expires_at_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute("""
+                    UPDATE tokens SET expires_at = %s WHERE token = %s
+                """, (new_expires_at_str, token))
+                conn.commit()
+
+                logger.debug(f"Token refreshed for user {user_id}, new expiry: {new_expires_at_str}")
 
         return row["user_id"]
 
