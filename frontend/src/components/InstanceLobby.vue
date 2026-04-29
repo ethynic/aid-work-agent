@@ -87,7 +87,7 @@
 
             <!-- Queue Info -->
             <div
-              v-if="instance.queue_length > 0"
+              v-if="instance.queue_length && instance.queue_length > 0"
               class="mb-4 flex items-center gap-2 text-sm text-slate-500"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,7 +174,10 @@ import {
   type ChatInstance,
 } from '@/api/chatInstances'
 import InstanceQueueModal from './InstanceQueueModal.vue'
-import { generateSessionId } from '@/utils/session'
+
+function generateSessionId(): string {
+  return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -337,20 +340,16 @@ function handleQueueReady() {
 /**
  * 获取状态颜色
  */
-function getStatusColor(status: string) {
-  return {
-    'bg-green-400 animate-pulse': status === 'idle',
-    'bg-amber-400': status === 'busy',
-    'bg-slate-400': status === 'offline',
-  }[status] || 'bg-slate-400'
+function getStatusColor(status: string): string {
+  if (status === 'idle') return 'bg-green-400 animate-pulse'
+  if (status === 'busy') return 'bg-amber-400'
+  return 'bg-slate-400'
 }
 
-function getStatusTextColor(status: string) {
-  return {
-    'text-green-600': status === 'idle',
-    'text-amber-600': status === 'busy',
-    'text-slate-500': status === 'offline',
-  }[status] || 'text-slate-500'
+function getStatusTextColor(status: string): string {
+  if (status === 'idle') return 'text-green-600'
+  if (status === 'busy') return 'text-amber-600'
+  return 'text-slate-500'
 }
 
 function getStatusText(status: string) {

@@ -147,6 +147,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # 提供完整的交互式终端支持（方向键、命令历史、路径提示符）
+    stdin_open: true
+    tty: true
     # 清空 Dockerfile 的 ENTRYPOINT，否则 command 不会生效
     # Dockerfile 默认使用 gunicorn，这里改为 uvicorn 用于本地开发
     entrypoint: []
