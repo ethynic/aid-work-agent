@@ -148,7 +148,8 @@ router.beforeEach(async () => {
 
 createApp(App).use(router).use(Toast, {
   position: 'top-center',
-  timeout: 3000,
+  timeout: 5000,
+  maxToasts: 3,
   closeOnClick: true,
   pauseOnFocusLoss: true,
   pauseOnHover: true,

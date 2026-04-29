@@ -605,7 +605,8 @@ def _init_postgresql():
                 raw_text TEXT,
                 metadata TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                summary TEXT
             )
         """)
 

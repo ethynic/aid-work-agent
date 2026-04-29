@@ -211,7 +211,8 @@ CREATE TABLE IF NOT EXISTS documents (
     raw_text TEXT,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    summary TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);

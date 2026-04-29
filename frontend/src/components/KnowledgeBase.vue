@@ -64,17 +64,6 @@
         <!-- Main Content Area -->
         <div class="flex-1 overflow-hidden p-6">
           <div class="max-w-6xl mx-auto h-full flex flex-col">
-            <!-- Upload Success Banner -->
-            <div
-              v-if="uploadSuccessMessage"
-              class="mb-4 px-4 py-2.5 bg-success-50 border border-success-200 rounded-lg flex items-center gap-2 text-sm text-success-700"
-            >
-              <svg class="w-5 h-5 text-success-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-              {{ uploadSuccessMessage }}
-            </div>
-
             <!-- Toolbar -->
             <div class="flex items-center justify-between mb-4">
               <!-- Search -->
@@ -196,7 +185,8 @@
                 <table class="w-full">
                   <thead class="sticky top-0 bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">文档名称</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">文档名称</th>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-96">摘要</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">大小</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分块数</th>
@@ -213,17 +203,27 @@
                       <td class="px-6 py-4">
                         <div class="flex items-center gap-3">
                           <!-- File Icon -->
-                          <div :class="getFileIconClass(doc.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center">
+                          <div :class="getFileIconClass(doc.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
                             <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </div>
-                          <span
-                            @click="openDocument(doc.id)"
-                            class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate max-w-xs"
-                            :title="'点击打开原文: ' + doc.title"
-                          >{{ doc.title }}</span>
+                          <div class="flex-1 min-w-0">
+                            <span
+                              @click="openDocument(doc.id)"
+                              class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block"
+                              :title="'点击打开原文: ' + doc.title"
+                            >{{ doc.title }}</span>
+                          </div>
                         </div>
+                      </td>
+                      <td class="px-6 py-4">
+                        <p
+                          v-if="doc.summary"
+                          class="text-sm text-gray-600 line-clamp-2"
+                          :title="doc.summary"
+                        >{{ doc.summary }}</p>
+                        <p v-else class="text-sm text-gray-400">-</p>
                       </td>
                       <td class="px-6 py-4">
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 uppercase">
@@ -697,20 +697,6 @@ function handleDrop(event: DragEvent) {
   }
 }
 
-// 上传成功提示
-const uploadSuccessMessage = ref('')
-let uploadSuccessTimer: ReturnType<typeof setTimeout> | null = null
-
-function showUploadSuccess(fileName: string) {
-  uploadSuccessMessage.value = `${fileName} 上传成功`
-  if (uploadSuccessTimer) {
-    clearTimeout(uploadSuccessTimer)
-  }
-  uploadSuccessTimer = setTimeout(() => {
-    uploadSuccessMessage.value = ''
-  }, 3000)
-}
-
 // Handle upload
 async function handleUpload() {
   if (!selectedFile.value) return
@@ -734,9 +720,11 @@ async function handleUpload() {
     // 翻回第一页，刷新列表，最新文档在最上面
     currentPage.value = 1
     await loadDocuments()
-    showUploadSuccess(fileName)
+    toast.success(`${fileName} 上传成功`)
   } catch (error: any) {
-    uploadError.value = error.response?.data?.error || error.message || '上传失败'
+    const errorMsg = error.response?.data?.error || error.message || '上传失败'
+    uploadError.value = errorMsg
+    toast.error(errorMsg)
   } finally {
     isUploading.value = false
   }
@@ -780,11 +768,12 @@ function formatTime(isoString: string): string {
   if (!isoString) return '-'
   // 直接解析 ISO 字符串，JavaScript 会正确处理本地时间（不带 Z 的格式）
   const date = new Date(isoString)
+  const year = date.getFullYear()
   const month = date.getMonth() + 1
   const day = date.getDate()
   const hours = date.getHours().toString().padStart(2, '0')
   const minutes = date.getMinutes().toString().padStart(2, '0')
-  return `${month}月${day}日 ${hours}:${minutes}`
+  return `${year}-${month}-${day} ${hours}:${minutes}`
 }
 
 // Get file icon class based on type

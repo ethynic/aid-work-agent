@@ -14,6 +14,7 @@ export interface DocumentResponse {
   file_size: number | null
   total_chunks: number
   created_at: string
+  summary: string | null
 }
 
 export interface UploadResponse {
@@ -90,11 +91,20 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
     headers: { ...getAuthHeader() },
     body: formData
   })
-  if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.error || '上传失败')
+  let result: any
+  try {
+    result = await response.json()
+  } catch (e) {
+    throw new Error('服务器响应异常')
   }
-  return response.json()
+  // 检查 HTTP 状态码和业务字段
+  // 注意：后端成功时返回 UploadResponse（无 success 字段，有 document_id）
+  //       失败时返回 { success: false, error: "..." }
+  const isSuccess = response.ok && (result.success !== false || result.document_id)
+  if (!isSuccess) {
+    throw new Error(result.error || result.detail || result.message || '上传失败')
+  }
+  return result
 }
 
 /**

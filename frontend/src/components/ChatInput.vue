@@ -45,7 +45,7 @@
           ref="fileInputRef"
           type="file"
           class="hidden"
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx"
           @change="handleFileChange"
         />
 

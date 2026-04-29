@@ -16,6 +16,7 @@ from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sani
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
 from src.db.database import get_db_connection
+from src.llm.gateway import LLMGateway
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,62 @@ class KnowledgeBaseService:
             chunk_size=self.chunk_size,
             overlap=self.chunk_overlap
         )
+        # LLM 网关（懒加载）
+        self._llm_gateway = None
+
+    @property
+    def llm_gateway(self):
+        """获取 LLM 网关实例（懒加载）"""
+        if self._llm_gateway is None:
+            self._llm_gateway = LLMGateway()
+        return self._llm_gateway
+
+    async def generate_summary(self, text: str, title: str, max_length: int = 300) -> str:
+        """
+        调用 LLM 生成文档摘要
+
+        Args:
+            text: 文档原文
+            title: 文档标题
+            max_length: 摘要最大长度（字符）
+
+        Returns:
+            文档摘要字符串
+        """
+        if not text or not text.strip():
+            return ""
+
+        # 限制输入文本长度，避免超出 LLM 上下文限制
+        # 取前 5000 字符（大约 1250 tokens）用于生成摘要
+        truncated_text = text[:5000]
+        if len(text) > 5000:
+            truncated_text += "..."
+
+        prompt = f"""请为以下文档生成一个简洁的中文摘要，不超过 {max_length} 个字符。
+
+文档标题: {title}
+
+文档内容:
+{truncated_text}
+
+要求:
+1. 准确概括文档的核心内容
+2. 语言简洁通顺
+3. 不要包含"摘要"、"本文"等字样
+4. 直接输出摘要内容，不需要其他说明
+"""
+
+        try:
+            response = await self.llm_gateway.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500
+            )
+            summary = response.get("content", "") or ""
+            return summary.strip()
+        except Exception as e:
+            logger.warning(f"生成文档摘要失败: {e}")
+            return ""
 
     def _get_upload_path(self, tenant_id: Optional[str] = None) -> Path:
         """获取知识库文档上传路径
@@ -106,7 +163,13 @@ class KnowledgeBaseService:
             chunk_texts = [c["text"] for c in chunks]
             embeddings = await embedding_client.embed_batch(chunk_texts)
 
-            # 4. 保存到数据库
+            # 4. 生成文档摘要
+            summary = await self.generate_summary(
+                text=parse_result.text or "",
+                title=file_filename
+            )
+
+            # 5. 保存到数据库
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
@@ -118,8 +181,8 @@ class KnowledgeBaseService:
                     INSERT INTO documents (
                         user_id, tenant_id, title, source_type, file_type, file_path,
                         file_size, total_chunks, embedding_model,
-                        raw_text, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        raw_text, metadata, summary
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     user_id,
@@ -132,7 +195,8 @@ class KnowledgeBaseService:
                     len(chunks),
                     "text-embedding-v3",
                     parse_result.text if parse_result.text else None,
-                    json.dumps(parse_result.metadata) if parse_result.metadata else None
+                    json.dumps(parse_result.metadata) if parse_result.metadata else None,
+                    summary or None
                 ))
                 doc_id = cursor.fetchone()["id"]
 
@@ -285,7 +349,7 @@ class KnowledgeBaseService:
 
                 cursor.execute(f"""
                     SELECT id, title, source_type, file_type, file_path, file_size,
-                           total_chunks, created_at
+                           total_chunks, created_at, summary
                     FROM documents
                     {where_clause}
                     ORDER BY created_at DESC

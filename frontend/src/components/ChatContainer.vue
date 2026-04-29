@@ -130,7 +130,9 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
+import { useToast } from 'vue-toastification'
 const router = useRouter()
+const toast = useToast()
 
 // 从 PortalLayout 注入侧边栏状态（租户前台模式）
 const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed')
@@ -370,9 +372,14 @@ async function handleSend(content: string) {
 
 async function handleUpload(file: File) {
   try {
-    await uploadAttachment(file)
-  } catch (error) {
-    console.error('文件上传失败:', error)
+    console.log('前端日志：开始上传文件', file.name, file.size)
+    const result = await uploadAttachment(file)
+    console.log('前端日志：文件上传成功', result)
+  } catch (error: any) {
+    console.error('前端日志：文件上传失败', error)
+    const errorMsg = error?.message || error?.toString?.() || '文件上传失败'
+    console.error('前端日志：错误消息', errorMsg)
+    toast.error(errorMsg)
   }
 }
 

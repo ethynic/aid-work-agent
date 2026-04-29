@@ -14,31 +14,58 @@ export interface UploadedFile {
  * 上传文件到服务器
  */
 export async function uploadFile(file: File, authHeaders?: Record<string, string>): Promise<UploadedFile> {
-  const formData = new FormData()
-  formData.append('file', file)
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
 
-  const headers: Record<string, string> = {
-    ...authHeaders
+    const headers: Record<string, string> = {
+      ...authHeaders
+    }
+    // Don't set Content-Type for FormData - browser sets it automatically with boundary
+
+    const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+    console.log('前端日志：开始上传文件', file.name, '大小:', file.size, '字节')
+    const response = await fetch(`${apiBase}/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+
+    console.log('前端日志：upload 响应状态码', response.status)
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      console.log('前端日志：upload 错误响应', errorData)
+      if (errorData?.error) {
+        throw new Error(errorData.error)
+      }
+      if (response.status === 413) {
+        throw new Error('文件过大，服务器拒绝接收')
+      }
+      throw new Error(`上传失败: HTTP ${response.status}`)
+    }
+
+    let result: any
+    try {
+      result = await response.json()
+    } catch (e) {
+      console.error('前端日志：upload 响应解析失败，响应内容不是有效的 JSON')
+      throw new Error('服务器响应异常，请刷新页面后重试')
+    }
+    console.log('前端日志：upload 响应数据', result)
+    if (!result.success) {
+      throw new Error(result.error || '上传失败')
+    }
+
+    console.log('前端日志：文件上传成功', result)
+    return result
+  } catch (error: any) {
+    console.error('前端日志：upload 异常捕获', error)
+    if (error instanceof Error) {
+      throw error
+    }
+    throw new Error(error?.message || error?.toString?.() || '文件上传失败')
   }
-  // Don't set Content-Type for FormData - browser sets it automatically with boundary
-
-  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
-  const response = await fetch(`${apiBase}/upload`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
-
-  if (!response.ok) {
-    throw new Error(`上传失败: ${response.status}`)
-  }
-
-  const result = await response.json()
-  if (!result.success) {
-    throw new Error(result.error || '上传失败')
-  }
-
-  return result
 }
 
 /**

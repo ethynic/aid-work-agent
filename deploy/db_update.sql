@@ -45,3 +45,6 @@ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_wx_openid_key;
 -- 2026-4-28，documents 表增加 tenant_id 字段，支持知识库文件租户隔离
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS tenant_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
+
+-- 2026-4-29，documents 表增加 summary 字段，存储文档摘要
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary TEXT;

@@ -486,7 +486,7 @@ async def upload_file(file: UploadFile = File(...)):
         if file.size and file.size > max_size:
             max_size_mb = max_size / 1024 / 1024
             return JSONResponse(
-                status_code=413,
+                status_code=200,
                 content={
                     "success": False,
                     "error": f"文件过大，最大支持 {max_size_mb:.0f}MB"

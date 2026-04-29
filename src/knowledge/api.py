@@ -41,6 +41,7 @@ class DocumentResponse(BaseModel):
     file_size: Optional[int] = None
     total_chunks: int = 0
     created_at: Optional[str] = None
+    summary: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -90,9 +91,9 @@ async def upload_document(
     max_size = settings.storage.max_knowledge_file_size
     if file.size and file.size > max_size:
         max_size_mb = max_size / 1024 / 1024
-        raise HTTPException(
-            status_code=413,
-            detail=f"文件过大，最大支持 {max_size_mb:.0f}MB"
+        return JSONResponse(
+            status_code=200,
+            content={"success": False, "error": f"文件过大，最大支持 {max_size_mb:.0f}MB"}
         )
 
     # 获取用户 ID
