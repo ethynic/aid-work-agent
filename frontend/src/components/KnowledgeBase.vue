@@ -805,7 +805,10 @@ function openDocument(docId: number) {
 
 // Navigation functions
 function goToChat() {
-  router.push('/')
+  const targetPath = isTenantMode.value
+    ? route.path.replace(/\/knowledge.*/, '')
+    : '/'
+  router.push(targetPath)
 }
 
 function openCustomerInfo() {

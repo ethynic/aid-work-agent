@@ -659,7 +659,9 @@ async function handleNewSession() {
     selectSession(null)
     // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
     const targetPath = currentSubagent.value
-      ? `/chat/${currentSubagent.value}`
+      ? isTenantMode.value
+        ? `/t/${tenantId.value}/chat/${currentSubagent.value}`
+        : `/chat/${currentSubagent.value}`
       : isTenantMode.value
         ? `/t/${tenantId.value}/chat`
         : '/'
@@ -689,7 +691,9 @@ async function handleSelectSession(sessionId: string) {
   const session = sessions.value.find(s => s.session_id === sessionId)
   const subagent = session?.context_data?.subagent as string | undefined
   const targetPath = subagent
-    ? `/chat/${subagent}`
+    ? isTenantMode.value
+      ? `/t/${tenantId.value}/chat/${subagent}`
+      : `/chat/${subagent}`
     : isTenantMode.value
       ? `/t/${tenantId.value}/chat`
       : '/'

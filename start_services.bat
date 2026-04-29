@@ -60,7 +60,7 @@ if not exist "node_modules" (
 )
 echo [OK] Starting frontend dev server...
 start "AID Frontend" cmd /k "npm run dev"
-timeout /t 3 /nobreak >nul
+timeout /t 5 /nobreak >nul
 start http://localhost:15173/portal
 cd /d "%~dp0"
 echo [OK] Frontend starting at http://localhost:15173
