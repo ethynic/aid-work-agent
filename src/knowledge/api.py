@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from loguru import logger
@@ -68,7 +68,7 @@ class SearchResponse(BaseModel):
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    http_request=None
+    http_request: Request = None
 ):
     """
     上传知识库文档
@@ -155,7 +155,7 @@ async def upload_document(
 async def list_documents(
     limit: int = 100,
     offset: int = 0,
-    http_request=None
+    http_request: Request = None
 ):
     """
     获取知识库文档列表
@@ -187,7 +187,7 @@ async def list_documents(
 @router.post("/search_documents", response_model=SearchResponse)
 async def search_documents(
     request: SearchRequest,
-    http_request=None
+    http_request: Request = None
 ):
     """
     根据内容搜索文档（混合检索：向量 + FTS5 + RRF）

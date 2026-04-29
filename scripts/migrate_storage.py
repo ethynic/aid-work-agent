@@ -11,6 +11,12 @@
 使用方法:
     python scripts/migrate_storage.py          # 预览迁移
     python scripts/migrate_storage.py --yes    # 执行迁移
+
+数据库中 file_path 字段可以手动更新
+update documents set tenant_id='tenant_9eb3e45cab83';
+UPDATE documents
+SET file_path = 'storage/uploads/' || tenant_id || '/knowledge/' || split_part(file_path, '/', -1)
+WHERE file_path LIKE 'uploads/knowledge/%';
 """
 
 import os
