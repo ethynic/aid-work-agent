@@ -24,6 +24,7 @@ import { useTenantAuth } from './useTenantAuth'
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
 const isLoading = ref(false)
+const isLoaded = ref(false)    // 是否已加载完成（避免重复请求）
 const currentPage = ref(1)
 const totalSessions = ref(0)
 const pageSize = ref(20)
@@ -44,10 +45,22 @@ function checkIsLoggedIn(): boolean {
 export function useSession() {
 
   /**
-   * 加载会话列表
+   * 加载会话列表（带缓存，避免重复请求）
+   * @param page 页码
+   * @param forceRefresh 是否强制刷新，默认 false
    */
-  async function loadSessions(page: number = 1) {
+  async function loadSessions(page: number = 1, forceRefresh = false) {
     if (!checkIsLoggedIn()) {
+      return
+    }
+
+    // 已有数据且不强制刷新，直接返回
+    if (isLoaded.value && !forceRefresh && !isLoading.value) {
+      return
+    }
+
+    // 避免并发重复请求
+    if (isLoading.value) {
       return
     }
 
@@ -70,6 +83,7 @@ export function useSession() {
       totalSessions.value = result.total
       currentPage.value = result.page
       pageSize.value = result.page_size
+      isLoaded.value = true
     } catch (e) {
       console.error('Failed to load sessions:', e)
     } finally {
@@ -259,10 +273,23 @@ export function useSession() {
   // 计算总页数
   const totalPages = computed(() => Math.ceil(totalSessions.value / pageSize.value))
 
+  /**
+   * 清空缓存（重新登录或切换租户时调用）
+   */
+  function clearSessionCache() {
+    sessions.value = []
+    currentSessionId.value = null
+    isLoaded.value = false
+    isLoading.value = false
+    currentPage.value = 1
+    totalSessions.value = 0
+  }
+
   return {
     sessions,
     currentSessionId,
     isLoading,
+    isLoaded,
     currentPage,
     totalSessions,
     pageSize,
@@ -278,6 +305,7 @@ export function useSession() {
     clearCurrentSession,
     loadLatestSession,
     loadSessionRecords,
-    loadSessionTokenUsage
+    loadSessionTokenUsage,
+    clearSessionCache,
   }
 }

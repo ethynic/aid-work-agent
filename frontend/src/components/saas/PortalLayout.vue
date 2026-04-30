@@ -57,8 +57,7 @@ import { onMounted, computed, ref, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
-import { type SubagentListItem } from '@/api/subagent'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
+import { useSubagentList } from '@/composables/useSubagentList'
 import MenuSidebar from '@/components/MenuSidebar.vue'
 
 const router = useRouter()
@@ -69,8 +68,8 @@ const toast = useToast()
 // 侧边栏折叠状态
 const sidebarCollapsed = ref(false)
 
-// 可用的数字员工列表
-const availableSubagents = ref<SubagentListItem[]>([])
+// 可用数字员工列表（带缓存，避免重复请求）
+const { availableSubagents, loadAvailableSubagents } = useSubagentList()
 
 // 当前选中的子智能体ID（从路由获取）
 const currentSubagentId = computed(() => {
@@ -88,28 +87,6 @@ const currentSubagentId = computed(() => {
   }
   return undefined
 })
-
-// 加载数字员工列表
-async function loadAvailableSubagents() {
-  try {
-    let res
-    if (isTenantRoute.value) {
-      // 租户前台：使用 allowed-agents 接口，只返回当前用户有权限的
-      res = await getMyAllowedAgents()
-    } else {
-      // 平台管理后台：使用 listSubagents 接口，返回所有智能体
-      const { listSubagents } = await import('@/api/subagent')
-      res = await listSubagents()
-    }
-
-    if (res.success && res.data) {
-      // 后端已返回完整格式，直接使用
-      availableSubagents.value = res.data as SubagentListItem[]
-    }
-  } catch (e) {
-    console.error('加载数字员工列表失败:', e)
-  }
-}
 
 // 提供侧边栏状态给子组件
 provide('sidebarCollapsed', sidebarCollapsed)
@@ -154,7 +131,7 @@ async function handleLogout() {
 
 onMounted(async () => {
   await init()
-  await loadAvailableSubagents()
+  await loadAvailableSubagents(isTenantRoute.value)
   if (!isLoggedIn.value) {
     // 根据当前路由跳转到对应登录页
     if (isTenantRoute.value) {

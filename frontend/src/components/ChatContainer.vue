@@ -129,8 +129,7 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
-import { type AgentItem } from '@/api/saasPermissions'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
+import { useSubagentList } from '@/composables/useSubagentList'
 import { useToast } from 'vue-toastification'
 const router = useRouter()
 const toast = useToast()
@@ -182,8 +181,8 @@ const pregeneratedSessionId = computed<string | null>(() => {
   return (route.query._sid as string) || null
 })
 
-// 可用的数字员工列表（租户模式下为实例列表，演示模式下为子智能体类型列表）
-const availableSubagents = ref<AgentItem[]>([])
+// 可用的数字员工列表（带缓存，避免重复请求）
+const { availableSubagents, loadAvailableSubagents } = useSubagentList()
 
 // 当前选中的数字员工ID（null 表示主智能体）
 // 租户模式下为实例ID，演示模式下为子智能体类型
@@ -253,81 +252,39 @@ const showSettingsDialog = ref(false)
 // 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
 const skipNextSwitch = ref(false)
 
-// 计算页面标题
+// 计算页面标题（标题中不显示数字员工名称，避免与右侧选择器重复）
 const pageTitle = computed(() => {
-  // 从 availableSubagents 中查找当前数字员工的名称
-  let agentName = ''
-  if (subagentName.value) {
-    // 租户模式下，优先使用实例名称，其次使用显示名称，最后使用agent_id
-    if (isTenantMode.value && availableSubagents.value.length > 0) {
-      // 查找匹配的实例
-      const instance = availableSubagents.value.find(a =>
-        a.instance_id === subagentName.value || a.agent_id === subagentName.value
-      )
-      if (instance) {
-        agentName = instance.instance_name || instance.display_name || instance.name || subagentName.value
-      } else {
-        agentName = subagentName.value
-      }
-    } else {
-      // 演示模式下使用agent_id查找
-      const agent = availableSubagents.value.find(a => a.agent_id === subagentName.value)
-      agentName = agent?.name || subagentName.value
-    }
-  }
-  const prefix = agentName ? `${agentName} - ` : ''
   if (!currentSessionId.value) {
-    return `${prefix}新会话`
+    return '新会话'
   }
   const session = sessions.value.find(s => s.session_id === currentSessionId.value)
   // 只有当会话有自定义标题（非默认的"新会话"）时才显示"历史会话："前缀
   if (session?.title && session.title !== '新会话') {
-    return `${prefix}历史会话：${session.title}`
+    return `历史会话：${session.title}`
   }
-  return `${prefix}新会话`
+  return '新会话'
 })
 // 跳转到定时任务页面
 function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')
 }
 
-// 加载数字员工列表
-async function loadAvailableSubagents() {
-  try {
-    // 租户模式下使用 allowed-agents 接口，非租户模式使用 listSubagents
-    let res
-    if (isTenantMode.value) {
-      res = await getMyAllowedAgents()
-    } else {
-      // 非租户模式仍使用 listSubagents
-      const { listSubagents } = await import('@/api/subagent')
-      res = await listSubagents()
-    }
-
-    if (res.success && res.data) {
-      // 后端已返回完整格式，直接使用
-      availableSubagents.value = res.data as AgentItem[]
-
-      // 租户模式下，如果主智能体不可用且当前路由为主智能体，重定向到第一个可用智能体
-      if (isTenantMode.value && !subagentName.value) {
-        const hasMainAgent = availableSubagents.value.some((agent: AgentItem) => agent.agent_id === 'main')
-        if (!hasMainAgent && availableSubagents.value.length > 0) {
-          const firstAgent = availableSubagents.value[0]
-          // 构建重定向路径
-          const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
-          if (tenantMatch) {
-            const tenantId = tenantMatch[1]
-            const targetPath = `/t/${tenantId}/chat/${firstAgent.agent_id}`
-            console.log(`主智能体不可用，重定向到 ${targetPath}`)
-            await router.replace(targetPath)
-            // 重定向后，subagentName 会更新，避免后续重复处理
-            return
-          }
-        }
+// 检查并处理主智能体不可用的情况（ChatContainer 特有逻辑）
+async function checkAndRedirectIfMainAgentUnavailable() {
+  // 租户模式下，如果主智能体不可用且当前路由为主智能体，重定向到第一个可用智能体
+  if (isTenantMode.value && !subagentName.value && availableSubagents.value.length > 0) {
+    const hasMainAgent = availableSubagents.value.some((agent: any) => agent.agent_id === 'main')
+    if (!hasMainAgent) {
+      const firstAgent = availableSubagents.value[0]
+      // 构建重定向路径
+      const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
+      if (tenantMatch) {
+        const tenantId = tenantMatch[1]
+        const targetPath = `/t/${tenantId}/chat/${firstAgent.agent_id}`
+        console.log(`主智能体不可用，重定向到 ${targetPath}`)
+        await router.replace(targetPath)
       }
     }
-  } catch (e) {
-    console.error('加载数字员工列表失败:', e)
   }
 }
 
@@ -389,8 +346,11 @@ onMounted(async () => {
   // 初始化认证状态（租户模式和演示模式都需要初始化）
   await Promise.all([initAuth(), initTenantAuth()])
 
-  // 加载可用数字员工列表
-  await loadAvailableSubagents()
+  // 加载可用数字员工列表（带缓存，避免重复请求）
+  await loadAvailableSubagents(isTenantMode.value)
+
+  // 检查并处理主智能体不可用的情况
+  await checkAndRedirectIfMainAgentUnavailable()
 
   // 检查登录状态
   if (!effectiveIsLoggedIn.value) {

@@ -132,8 +132,8 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
         if not tenant_allowed:
             return []
 
-        # 租户管理员 → 返回租户允许的全部
-        if is_tenant_admin(user):
+        # 租户管理员 或 平台管理员代管理 → 返回租户允许的全部
+        if is_tenant_admin(user) or is_platform_admin(user):
             return tenant_allowed
 
         # 普通用户 → 取交集（用户允许且租户有订阅）

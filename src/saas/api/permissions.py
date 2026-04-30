@@ -236,9 +236,9 @@ def get_tenant_available_user_agents(request: Request):
 @router.get("/my/allowed-agents")
 def get_my_allowed_agents(request: Request):
     """获取当前登录用户可使用的数字员工列表"""
-    user = get_current_admin(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="未登录")
+    # 使用 require_admin 而不是 get_current_admin，这样才能正确处理 X-Tenant-Id Header
+    # 平台管理员通过 X-Tenant-Id 代管理租户时，tenant_id 会被正确设置
+    user = require_admin(request)
 
     allowed_ids = get_allowed_agent_ids_for_user(user)
 
