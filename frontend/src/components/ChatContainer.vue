@@ -129,7 +129,7 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
-import { type SubagentListItem } from '@/api/subagent'
+import { type AgentItem } from '@/api/saasPermissions'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import { useToast } from 'vue-toastification'
 const router = useRouter()
@@ -182,11 +182,35 @@ const pregeneratedSessionId = computed<string | null>(() => {
   return (route.query._sid as string) || null
 })
 
-// 可用的数字员工列表
-const availableSubagents = ref<SubagentListItem[]>([])
+// 可用的数字员工列表（租户模式下为实例列表，演示模式下为子智能体类型列表）
+const availableSubagents = ref<AgentItem[]>([])
 
 // 当前选中的数字员工ID（null 表示主智能体）
-const currentSubagentId = computed(() => subagentName.value ?? undefined)
+// 租户模式下为实例ID，演示模式下为子智能体类型
+const currentSubagentId = computed(() => {
+  // 优先使用 instance_id 查询参数（租户模式下实例选择）
+  if (isTenantMode.value && instanceId.value) {
+    return instanceId.value
+  }
+
+  if (!subagentName.value) return undefined
+
+  // 租户模式下，尝试查找匹配的实例
+  if (isTenantMode.value && availableSubagents.value.length > 0) {
+    // 首先尝试作为实例ID匹配
+    const instance = availableSubagents.value.find(a => a.instance_id === subagentName.value)
+    if (instance) {
+      return instance.instance_id || instance.agent_id
+    }
+    // 然后尝试作为agent_id匹配（用于主智能体main）
+    const agent = availableSubagents.value.find(a => a.agent_id === subagentName.value)
+    if (agent) {
+      return agent.instance_id || agent.agent_id
+    }
+  }
+
+  return subagentName.value
+})
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
@@ -234,8 +258,22 @@ const pageTitle = computed(() => {
   // 从 availableSubagents 中查找当前数字员工的名称
   let agentName = ''
   if (subagentName.value) {
-    const agent = availableSubagents.value.find(a => a.agent_id === subagentName.value)
-    agentName = agent?.name || subagentName.value
+    // 租户模式下，优先使用实例名称，其次使用显示名称，最后使用agent_id
+    if (isTenantMode.value && availableSubagents.value.length > 0) {
+      // 查找匹配的实例
+      const instance = availableSubagents.value.find(a =>
+        a.instance_id === subagentName.value || a.agent_id === subagentName.value
+      )
+      if (instance) {
+        agentName = instance.instance_name || instance.display_name || instance.name || subagentName.value
+      } else {
+        agentName = subagentName.value
+      }
+    } else {
+      // 演示模式下使用agent_id查找
+      const agent = availableSubagents.value.find(a => a.agent_id === subagentName.value)
+      agentName = agent?.name || subagentName.value
+    }
   }
   const prefix = agentName ? `${agentName} - ` : ''
   if (!currentSessionId.value) {
@@ -268,11 +306,11 @@ async function loadAvailableSubagents() {
 
     if (res.success && res.data) {
       // 后端已返回完整格式，直接使用
-      availableSubagents.value = res.data as SubagentListItem[]
+      availableSubagents.value = res.data as AgentItem[]
 
       // 租户模式下，如果主智能体不可用且当前路由为主智能体，重定向到第一个可用智能体
       if (isTenantMode.value && !subagentName.value) {
-        const hasMainAgent = availableSubagents.value.some((agent: SubagentListItem) => agent.agent_id === 'main')
+        const hasMainAgent = availableSubagents.value.some((agent: AgentItem) => agent.agent_id === 'main')
         if (!hasMainAgent && availableSubagents.value.length > 0) {
           const firstAgent = availableSubagents.value[0]
           // 构建重定向路径
@@ -307,24 +345,42 @@ async function handleSubagentChange(agentId: string) {
     // 用户确认，终止当前流式响应
     await abortStreaming()
   }
-  // 构建目标路由路径
+
+  // 在 availableSubagents 中查找匹配的项
+  const matchedAgent = availableSubagents.value.find((agent: AgentItem) =>
+    agent.instance_id === agentId || agent.agent_id === agentId
+  )
+
+  // 构建目标路由路径和查询参数
   let targetPath: string
+  const query: Record<string, string> = {}
   const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
+
   if (tenantMatch) {
     // 租户模式
     const tenantId = tenantMatch[1]
-    targetPath = agentId === 'main'
-      ? `/t/${tenantId}/chat`
-      : `/t/${tenantId}/chat/${agentId}`
+
+    if (agentId === 'main') {
+      targetPath = `/t/${tenantId}/chat`
+    } else {
+      // 如果有匹配的实例，使用其 agent_id 作为路由参数，instance_id 作为查询参数
+      if (matchedAgent && matchedAgent.instance_id) {
+        targetPath = `/t/${tenantId}/chat/${matchedAgent.agent_id}`
+        query.instance_id = matchedAgent.instance_id
+      } else {
+        // 没有实例（可能是子智能体类型），直接使用 agentId 作为路由参数
+        targetPath = `/t/${tenantId}/chat/${agentId}`
+      }
+    }
   } else {
     // 普通演示模式
     targetPath = agentId === 'main' ? '/' : `/chat/${agentId}`
   }
 
-  console.log(`[${now()}] [ConfirmDialog] router.push to`, targetPath)
+  console.log(`[${now()}] [ConfirmDialog] router.push to`, targetPath, 'query:', query)
   // 导航到对应路由
   // 现有代码已经监听 subagentName 变化，会自动清空会话并创建新会话
-  await router.push(targetPath)
+  await router.push({ path: targetPath, query: Object.keys(query).length > 0 ? query : undefined })
   console.log(`[${now()}] [ConfirmDialog] router.push done`)
 }
 

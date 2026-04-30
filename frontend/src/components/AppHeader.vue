@@ -49,16 +49,16 @@
           >
             <button
               v-for="agent in filteredAvailableSubagents"
-              :key="agent.agent_id"
-              @click="selectSubagent(agent.agent_id)"
+              :key="agent.instance_id || agent.agent_id"
+              @click="selectSubagent(agent.instance_id || agent.agent_id)"
               :class="[
                 'w-full px-4 py-3 text-left text-sm transition-colors flex items-center gap-3',
-                isCurrentAgent(agent.agent_id)
+                isCurrentAgent(agent.instance_id || agent.agent_id)
                   ? 'bg-primary-50 text-primary-700 font-medium'
                   : 'text-gray-700 hover:bg-primary-50 hover:text-primary-700'
               ]"
             >
-              <span class="flex-1 truncate text-sm" :title="agent.name">{{ agent.name }}</span>
+              <span class="flex-1 truncate text-sm" :title="getAgentDisplayName(agent)">{{ getAgentDisplayName(agent) }}</span>
               <svg
                 v-if="isCurrentAgent(agent.agent_id)"
                 class="w-4 h-4 text-primary-600 flex-shrink-0"
@@ -134,15 +134,15 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { SubagentListItem } from '@/api/subagent'
+import type { AgentItem } from '@/api/saasPermissions'
 
 const props = defineProps<{
   title?: string
   isLoggedIn?: boolean
   user?: { username: string; user_id?: string | number } | null
-  /** 可用的数字员工列表 */
-  availableSubagents?: SubagentListItem[]
-  /** 当前选中的数字员工ID，null 表示主智能体 */
+  /** 可用的数字员工列表（演示模式为子智能体类型，租户模式为实例列表） */
+  availableSubagents?: AgentItem[]
+  /** 当前选中的数字员工ID，null 表示主智能体。租户模式下为 instance_id，演示模式下为 agent_id */
   currentSubagentId?: string | null
   /** 是否显示右上角演示模式退出按钮，默认 true */
   showDemoLogout?: boolean
@@ -182,19 +182,27 @@ const showReadonlyLabel = computed(() => {
 const currentSubagentName = computed(() => {
   if (props.currentSubagentId == null) {
     // 检查主智能体是否在可用列表中
-    const mainAgent = filteredAvailableSubagents.value.find((s: SubagentListItem) => s.agent_id === 'main')
+    const mainAgent = filteredAvailableSubagents.value.find((s: AgentItem) => s.agent_id === 'main')
     if (mainAgent) {
       return 'CEO智能体'
     }
     // 主智能体不可用，返回第一个可用智能体的名称或空字符串
     if (filteredAvailableSubagents.value.length > 0) {
-      return filteredAvailableSubagents.value[0].name
+      return getAgentDisplayName(filteredAvailableSubagents.value[0])
     }
     return ''
   }
-  const found = filteredAvailableSubagents.value.find((s: SubagentListItem) => s.agent_id === props.currentSubagentId)
-  return found?.name || ''
+  const found = filteredAvailableSubagents.value.find((s: AgentItem) =>
+    // 租户模式下优先匹配 instance_id，其次匹配 agent_id
+    s.instance_id === props.currentSubagentId || s.agent_id === props.currentSubagentId
+  )
+  return found ? getAgentDisplayName(found) : ''
 })
+
+// 获取数字员工的显示名称（优先使用 instance_name，其次 display_name，最后 name）
+function getAgentDisplayName(agent: AgentItem): string {
+  return agent.instance_name || agent.display_name || agent.name || agent.agent_id
+}
 
 // 判断是否为当前选中
 function isCurrentAgent(agentId: string): boolean {
