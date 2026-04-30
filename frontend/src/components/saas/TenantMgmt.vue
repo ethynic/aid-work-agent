@@ -44,14 +44,28 @@
               <span v-else class="text-sm text-slate-400">永久有效</span>
             </td>
             <td class="px-4 py-3">
-              <span v-if="tenant.agent_count > 0"
-                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                {{ tenant.agent_count }} 个已授权
-              </span>
-              <span v-else
-                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                未授权
-              </span>
+              <div class="flex items-center gap-2">
+                <span v-if="tenant.agent_count > 0"
+                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                  {{ tenant.agent_count }} 个已授权
+                </span>
+                <span v-else
+                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                  未授权
+                </span>
+                <button
+                  @click="handleSyncInstances(tenant.tenant_id)"
+                  :disabled="syncingInstances === tenant.tenant_id"
+                  class="inline-flex items-center px-2 py-1 text-xs bg-cyan-100 text-cyan-700 hover:bg-cyan-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="根据配额创建/删除实例"
+                >
+                  <svg v-if="syncingInstances === tenant.tenant_id" class="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  创建实例
+                </button>
+              </div>
             </td>
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
@@ -204,6 +218,23 @@
               </span>
             </div>
           </div>
+          <!-- 创建实例按钮 -->
+          <div class="pt-4 mt-4 border-t border-slate-200">
+            <div class="text-xs text-slate-500 mb-2">
+              💡 提示：请先保存上面的授权设置，然后点击下方按钮根据配额创建实例。
+            </div>
+            <button
+              @click="handleSyncInstancesInEdit"
+              :disabled="syncingInstances === currentTenant?.tenant_id"
+              class="w-full px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <svg v-if="syncingInstances === currentTenant?.tenant_id" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              根据当前配额创建实例
+            </button>
+          </div>
         </div>
         <div v-if="formError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ formError }}</div>
         <div class="flex gap-3 mt-6">
@@ -293,7 +324,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
-import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, type AgentItem } from '@/api/saasPermissions'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, type AgentItem } from '@/api/saasPermissions'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -313,6 +344,7 @@ const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const selectedAgentQuotas = ref<Record<string, number>>({})
 const loadingAgents = ref(false)
+const syncingInstances = ref<string | null>(null)
 
 const defaultFormData: TenantFormData = {
   company_name: '',
@@ -543,6 +575,48 @@ async function copyTenantUrl(tenantId: string) {
     document.execCommand('copy')
     document.body.removeChild(textarea)
     toast.success('网址已复制到剪贴板')
+  }
+}
+
+async function handleSyncInstances(tenantId: string) {
+  if (!confirm('确定要同步租户的数字员工实例吗？\n\n系统将根据当前配额创建或删除实例。\n已创建的实例名称格式为："数字员工名称 - 实例序号"。')) {
+    return
+  }
+  syncingInstances.value = tenantId
+  try {
+    const res = await syncTenantInstances(tenantId)
+    if (res.success) {
+      toast.success(res.message || '实例同步成功')
+    } else {
+      toast.error(res.message || '实例同步失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '实例同步失败')
+  } finally {
+    syncingInstances.value = null
+  }
+}
+
+async function handleSyncInstancesInEdit() {
+  if (!currentTenant.value?.tenant_id) {
+    toast.error('未找到租户信息')
+    return
+  }
+  if (!confirm('确定要根据当前配额创建实例吗？\n\n系统将根据数据库中已保存的配额创建或删除实例。\n请确保已保存上方的授权设置。\n已创建的实例名称格式为："数字员工名称 - 实例序号"。')) {
+    return
+  }
+  syncingInstances.value = currentTenant.value.tenant_id
+  try {
+    const res = await syncTenantInstances(currentTenant.value.tenant_id)
+    if (res.success) {
+      toast.success(res.message || '实例同步成功')
+    } else {
+      toast.error(res.message || '实例同步失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '实例同步失败')
+  } finally {
+    syncingInstances.value = null
   }
 }
 

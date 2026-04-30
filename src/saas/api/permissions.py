@@ -15,6 +15,7 @@ from loguru import logger
 from src.saas.api.tenant_auth import get_current_admin, require_admin
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.db.agent_instance_db import AgentInstanceDB
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user
 from src.db.database import get_db_connection
 from src.core.agent import master_agent
@@ -272,3 +273,104 @@ def get_my_allowed_agents(request: Request):
         "data": sorted(result, key=lambda x: x["name"]),
         "count": len(result)
     }
+
+
+@router.post("/tenant/{tenant_id}/sync-instances")
+def sync_tenant_instances(request: Request, tenant_id: str):
+    """同步租户数字员工实例（根据配额创建/删除实例）"""
+    admin = require_admin(request)
+    if not admin or admin.get("role") != "platform_admin":
+        raise HTTPException(status_code=403, detail="无权限")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 获取租户所有有效订阅的数字员工及其配额
+        cursor.execute("""
+            SELECT subagent_type, instance_quota
+            FROM subscriptions
+            WHERE tenant_id = %s
+              AND status = 'active'
+              AND starts_at <= CURRENT_TIMESTAMP
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY subagent_type
+        """, (tenant_id,))
+        subscriptions = cursor.fetchall()
+
+        if not subscriptions:
+            return {"success": True, "message": "租户无有效订阅", "created": 0, "deleted": 0}
+
+        # 获取数字员工名称映射
+        registry = master_agent.subagent_registry
+        agent_name_map = {}
+        if registry:
+            all_items = registry.get_all_subagents_with_type()
+            for item in all_items:
+                agent_name_map[item["agent_id"]] = item["name"]
+
+        # 添加主智能体
+        agent_name_map["main"] = "CEO智能体"
+
+        created_count = 0
+        deleted_count = 0
+
+        for sub in subscriptions:
+            agent_id = sub["subagent_type"]
+            quota = sub["instance_quota"]
+            if quota < 1:
+                quota = 1
+
+            # 获取当前实例
+            cursor.execute("""
+                SELECT instance_id, status, created_at
+                FROM agent_instances
+                WHERE tenant_id = %s AND subagent_type = %s
+                ORDER BY created_at ASC
+            """, (tenant_id, agent_id))
+            current_instances = cursor.fetchall()
+            current_count = len(current_instances)
+
+            # 获取数字员工显示名称
+            display_name = agent_name_map.get(agent_id, agent_id)
+
+            if current_count < quota:
+                # 需要创建实例
+                need_create = quota - current_count
+                for i in range(need_create):
+                    instance_num = current_count + i + 1
+                    instance_name = f"{display_name} - 实例{instance_num}"
+                    # 创建实例
+                    instance = AgentInstanceDB.create(
+                        tenant_id=tenant_id,
+                        subagent_type=agent_id,
+                        display_name=display_name,
+                        instance_name=instance_name,
+                        subscription_id=None,  # 暂不关联具体订阅
+                        config={},
+                    )
+                    if instance:
+                        created_count += 1
+                        logger.info(f"Created instance {instance['instance_id']} for tenant {tenant_id}, agent {agent_id}")
+
+            elif current_count > quota:
+                # 需要删除实例（删除最晚创建的空闲实例）
+                need_delete = current_count - quota
+                # 按创建时间倒序，优先删除最晚创建的
+                for inst in reversed(current_instances):
+                    if need_delete <= 0:
+                        break
+                    # 只删除空闲实例
+                    if inst["status"] == "idle":
+                        success = AgentInstanceDB.delete(inst["instance_id"])
+                        if success:
+                            deleted_count += 1
+                            need_delete -= 1
+                            logger.info(f"Deleted instance {inst['instance_id']} for tenant {tenant_id}, agent {agent_id}")
+                    # TODO: 如果有非空闲实例，需要处理策略（如标记为待删除）
+
+        return {
+            "success": True,
+            "message": f"同步完成，创建 {created_count} 个实例，删除 {deleted_count} 个实例",
+            "created": created_count,
+            "deleted": deleted_count,
+        }

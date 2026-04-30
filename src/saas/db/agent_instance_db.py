@@ -39,7 +39,7 @@ class AgentInstanceDB:
                         (instance_id, tenant_id, subscription_id, subagent_type,
                          display_name, instance_name, avatar, description,
                          personality_traits, config, bound_channel_type, allowed_skills)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     instance_id, tenant_id, subscription_id, subagent_type,
                     display_name,

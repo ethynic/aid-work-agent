@@ -144,3 +144,21 @@ export async function getMyAllowedAgents(): Promise<{
   if (!res.ok) throw new Error('获取当前用户可访问数字员工失败')
   return res.json()
 }
+
+// ==================== 实例同步 ====================
+
+export async function syncTenantInstances(tenantId: string): Promise<{
+  success: boolean
+  message?: string
+  created?: number
+  deleted?: number
+}> {
+  const headers = getSaasAuthHeader()
+  headers['Content-Type'] = 'application/json'
+  const res = await fetch(`${API_BASE}/tenant/${encodeURIComponent(tenantId)}/sync-instances`, {
+    method: 'POST',
+    headers: headers,
+  })
+  if (!res.ok) throw new Error('同步租户实例失败')
+  return res.json()
+}
