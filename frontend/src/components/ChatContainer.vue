@@ -129,7 +129,8 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
-import { listSubagents, type SubagentListItem } from '@/api/subagent'
+import { type SubagentListItem } from '@/api/subagent'
+import { getMyAllowedAgents } from '@/api/saasPermissions'
 import { useToast } from 'vue-toastification'
 const router = useRouter()
 const toast = useToast()
@@ -255,13 +256,37 @@ function openScheduledTasks() {
 // 加载数字员工列表
 async function loadAvailableSubagents() {
   try {
-    const res = await listSubagents()
+    // 租户模式下使用 allowed-agents 接口，非租户模式使用 listSubagents
+    let res
+    if (isTenantMode.value) {
+      res = await getMyAllowedAgents()
+    } else {
+      // 非租户模式仍使用 listSubagents
+      const { listSubagents } = await import('@/api/subagent')
+      res = await listSubagents()
+    }
+
     if (res.success && res.data) {
-      // 在列表最前面插入"主智能体"选项（特殊ID 'main'）
-      availableSubagents.value = [
-        { agent_id: 'main', name: 'CEO智能体', description: '', capabilities: [], type: 'builtin' },
-        ...res.data
-      ]
+      // 后端已返回完整格式，直接使用
+      availableSubagents.value = res.data as SubagentListItem[]
+
+      // 租户模式下，如果主智能体不可用且当前路由为主智能体，重定向到第一个可用智能体
+      if (isTenantMode.value && !subagentName.value) {
+        const hasMainAgent = availableSubagents.value.some((agent: SubagentListItem) => agent.agent_id === 'main')
+        if (!hasMainAgent && availableSubagents.value.length > 0) {
+          const firstAgent = availableSubagents.value[0]
+          // 构建重定向路径
+          const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
+          if (tenantMatch) {
+            const tenantId = tenantMatch[1]
+            const targetPath = `/t/${tenantId}/chat/${firstAgent.agent_id}`
+            console.log(`主智能体不可用，重定向到 ${targetPath}`)
+            await router.replace(targetPath)
+            // 重定向后，subagentName 会更新，避免后续重复处理
+            return
+          }
+        }
+      }
     }
   } catch (e) {
     console.error('加载数字员工列表失败:', e)

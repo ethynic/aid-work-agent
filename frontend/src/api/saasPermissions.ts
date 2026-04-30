@@ -45,7 +45,10 @@ export interface AgentItem {
   agent_id: string
   name: string
   description: string
+  capabilities: string[]
   type: 'builtin' | 'custom'
+  business_pages?: any[]
+  [key: string]: any  // 允许其他字段
 }
 
 // ==================== 平台管理员 - 租户授权 ====================

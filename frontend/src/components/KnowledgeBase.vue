@@ -483,7 +483,8 @@ import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
-import { listSubagents, type SubagentListItem } from '@/api/subagent'
+import { type SubagentListItem } from '@/api/subagent'
+import { getMyAllowedAgents } from '@/api/saasPermissions'
 import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem, type BatchUploadError } from '@/api/knowledge'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -584,12 +585,19 @@ const currentSubagentId = computed(() => {
 // 加载数字员工列表
 async function loadAvailableSubagents() {
   try {
-    const res = await listSubagents()
+    // 租户模式下使用 allowed-agents 接口，非租户模式使用 listSubagents
+    let res
+    if (isTenantMode.value) {
+      res = await getMyAllowedAgents()
+    } else {
+      // 非租户模式仍使用 listSubagents
+      const { listSubagents } = await import('@/api/subagent')
+      res = await listSubagents()
+    }
+
     if (res.success && res.data) {
-      availableSubagents.value = [
-        { agent_id: 'main', name: 'CEO智能体', description: '', capabilities: [], type: 'builtin' },
-        ...res.data
-      ]
+      // 后端已返回完整格式，直接使用
+      availableSubagents.value = res.data as SubagentListItem[]
     }
   } catch (e) {
     console.error('加载数字员工列表失败:', e)

@@ -115,6 +115,14 @@ def get_all_available_agents(request: Request):
         for item in items
     ]
 
+    # 添加主智能体（CEO智能体）作为可授权选项
+    result.append({
+        "agent_id": "main",
+        "name": "CEO智能体",
+        "description": "系统主智能体，具备通用能力和工具",
+        "type": "builtin"
+    })
+
     return {
         "success": True,
         "data": sorted(result, key=lambda x: x["name"])
@@ -207,6 +215,15 @@ def get_tenant_available_user_agents(request: Request):
         if item["agent_id"] in tenant_allowed
     ]
 
+    # 如果租户有主智能体授权，添加到列表中
+    if "main" in tenant_allowed:
+        result.append({
+            "agent_id": "main",
+            "name": "CEO智能体",
+            "description": "系统主智能体，具备通用能力和工具",
+            "type": "builtin"
+        })
+
     return {
         "success": True,
         "data": sorted(result, key=lambda x: x["name"])
@@ -233,16 +250,22 @@ def get_my_allowed_agents(request: Request):
         }
 
     all_items = registry.get_all_subagents_with_type()
-    result = [
-        {
-            "agent_id": item["agent_id"],
-            "name": item["name"],
-            "description": item.get("description", ""),
-            "type": item["type"]
-        }
-        for item in all_items
-        if item["agent_id"] in allowed_ids
-    ]
+    result = []
+    for item in all_items:
+        if item["agent_id"] in allowed_ids:
+            # 直接返回完整项目，确保包含所有字段
+            result.append(item)
+
+    # 如果主智能体在允许列表中，添加到结果中
+    if "main" in allowed_ids:
+        result.append({
+            "agent_id": "main",
+            "name": "CEO智能体",
+            "description": "系统主智能体，具备通用能力和工具",
+            "type": "builtin",
+            "capabilities": [],
+            "business_pages": []
+        })
 
     return {
         "success": True,

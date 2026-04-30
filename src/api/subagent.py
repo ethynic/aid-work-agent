@@ -41,6 +41,26 @@ async def list_subagents(request: Request):
             if user:
                 allowed_ids = set(get_allowed_agent_ids_for_user(user))
                 items = [item for item in items if item["agent_id"] in allowed_ids]
+                # 如果主智能体在允许列表中，添加到结果中
+                if "main" in allowed_ids:
+                    items.append({
+                        "agent_id": "main",
+                        "name": "CEO智能体",
+                        "description": "系统主智能体，具备通用能力和工具",
+                        "capabilities": [],
+                        "type": "builtin",
+                        "business_pages": []
+                    })
+        else:
+            # 非租户模式（演示模式）：添加主智能体
+            items.append({
+                "agent_id": "main",
+                "name": "CEO智能体",
+                "description": "系统主智能体，具备通用能力和工具",
+                "capabilities": [],
+                "type": "builtin",
+                "business_pages": []
+            })
 
         return {"success": True, "data": items}
 
@@ -60,6 +80,25 @@ async def get_subagent_detail(request: Request, agent_id: str):
         # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
         if registry._custom_dir:
             registry._load_custom(registry._custom_dir)
+
+        # 处理主智能体请求
+        if agent_id == "main":
+            data = {
+                "agent_id": "main",
+                "name": "CEO智能体",
+                "description": "系统主智能体，具备通用能力和工具",
+                "version": "1.0.0",
+                "author": "system",
+                "capabilities": [],
+                "triggers": {},
+                "tools": {},
+                "skills": {},
+                "context": {},
+                "system_prompt": "",
+                "type": "builtin",
+                "business_pages": []
+            }
+            return {"success": True, "data": data}
 
         config = registry.get(agent_id)
         if not config:
@@ -99,6 +138,10 @@ async def get_subagent_content(request: Request, agent_id: str):
         # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
         if registry._custom_dir:
             registry._load_custom(registry._custom_dir)
+
+        # 处理主智能体请求
+        if agent_id == "main":
+            return {"success": True, "data": "# CEO智能体\n\n系统主智能体，具备通用能力和工具"}
 
         content = registry.get_content(agent_id)
         if not content:

@@ -57,7 +57,8 @@ import { onMounted, computed, ref, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
-import { listSubagents, type SubagentListItem } from '@/api/subagent'
+import { type SubagentListItem } from '@/api/subagent'
+import { getMyAllowedAgents } from '@/api/saasPermissions'
 import MenuSidebar from '@/components/MenuSidebar.vue'
 
 const router = useRouter()
@@ -91,12 +92,19 @@ const currentSubagentId = computed(() => {
 // 加载数字员工列表
 async function loadAvailableSubagents() {
   try {
-    const res = await listSubagents()
+    let res
+    if (isTenantRoute.value) {
+      // 租户前台：使用 allowed-agents 接口，只返回当前用户有权限的
+      res = await getMyAllowedAgents()
+    } else {
+      // 平台管理后台：使用 listSubagents 接口，返回所有智能体
+      const { listSubagents } = await import('@/api/subagent')
+      res = await listSubagents()
+    }
+
     if (res.success && res.data) {
-      availableSubagents.value = [
-        { agent_id: 'main', name: 'CEO智能体', description: '', capabilities: [], type: 'builtin' },
-        ...res.data
-      ]
+      // 后端已返回完整格式，直接使用
+      availableSubagents.value = res.data as SubagentListItem[]
     }
   } catch (e) {
     console.error('加载数字员工列表失败:', e)

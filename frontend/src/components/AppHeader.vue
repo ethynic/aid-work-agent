@@ -20,64 +20,71 @@
       </div>
 
       <!-- Digital Employee Selector -->
-      <div v-if="shouldShowSelector" class="relative flex-shrink-0 ml-4">
-        <button
-          @click="showSubagentDropdown = !showSubagentDropdown"
-          class="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white border border-primary-700 rounded-lg transition-colors shadow-sm min-w-[160px]"
-          :title="currentSubagentName"
-        >
-          <span class="text-sm font-medium text-white truncate flex-1">
-            {{ currentSubagentName }}
-          </span>
-          <svg
-            class="w-5 h-5 text-white transition-transform flex-shrink-0"
-            :class="{ 'rotate-180': showSubagentDropdown }"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-
-        <!-- Dropdown Menu -->
-        <div
-          v-if="showSubagentDropdown"
-          class="absolute left-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-64 overflow-y-auto"
-        >
+      <div v-if="shouldShowSelector || showReadonlyLabel" class="relative flex-shrink-0 ml-4">
+        <!-- 选择框（多个选项时） -->
+        <div v-if="shouldShowSelector" class="relative">
           <button
-            v-for="agent in filteredAvailableSubagents"
-            :key="agent.agent_id"
-            @click="selectSubagent(agent.agent_id)"
-            :class="[
-              'w-full px-4 py-3 text-left text-sm transition-colors flex items-center gap-3',
-              isCurrentAgent(agent.agent_id)
-                ? 'bg-primary-50 text-primary-700 font-medium'
-                : 'text-gray-700 hover:bg-primary-50 hover:text-primary-700'
-            ]"
+            @click="showSubagentDropdown = !showSubagentDropdown"
+            class="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white border border-primary-700 rounded-lg transition-colors shadow-sm min-w-[160px]"
+            :title="currentSubagentName"
           >
-            <span class="flex-1 truncate text-sm" :title="agent.name">{{ agent.name }}</span>
+            <span class="text-sm font-medium text-white truncate flex-1">
+              {{ currentSubagentName }}
+            </span>
             <svg
-              v-if="isCurrentAgent(agent.agent_id)"
-              class="w-4 h-4 text-primary-600 flex-shrink-0"
-              fill="currentColor"
-              viewBox="0 0 20 20"
+              class="w-5 h-5 text-white transition-transform flex-shrink-0"
+              :class="{ 'rotate-180': showSubagentDropdown }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              <path
-                fill-rule="evenodd"
-                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                clip-rule="evenodd"
-              />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-        </div>
 
-        <!-- Click outside to close -->
-        <div
-          v-if="showSubagentDropdown"
-          class="fixed inset-0 z-40"
-          @click="showSubagentDropdown = false"
-        ></div>
+          <!-- Dropdown Menu -->
+          <div
+            v-if="showSubagentDropdown"
+            class="absolute left-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-64 overflow-y-auto"
+          >
+            <button
+              v-for="agent in filteredAvailableSubagents"
+              :key="agent.agent_id"
+              @click="selectSubagent(agent.agent_id)"
+              :class="[
+                'w-full px-4 py-3 text-left text-sm transition-colors flex items-center gap-3',
+                isCurrentAgent(agent.agent_id)
+                  ? 'bg-primary-50 text-primary-700 font-medium'
+                  : 'text-gray-700 hover:bg-primary-50 hover:text-primary-700'
+              ]"
+            >
+              <span class="flex-1 truncate text-sm" :title="agent.name">{{ agent.name }}</span>
+              <svg
+                v-if="isCurrentAgent(agent.agent_id)"
+                class="w-4 h-4 text-primary-600 flex-shrink-0"
+                fill="currentColor"
+                viewBox="0 0 20 20"
+              >
+                <path
+                  fill-rule="evenodd"
+                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Click outside to close -->
+          <div
+            v-if="showSubagentDropdown"
+            class="fixed inset-0 z-40"
+            @click="showSubagentDropdown = false"
+          ></div>
+        </div>
+        <!-- 只读标签（单个选项时） -->
+        <div v-else-if="showReadonlyLabel" class="px-4 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg text-sm font-medium truncate min-w-[160px]">
+          {{ currentSubagentName }}
+        </div>
       </div>
     </div>
 
@@ -126,9 +133,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
+import { ref, computed } from 'vue'
 import type { SubagentListItem } from '@/api/subagent'
 
 const props = defineProps<{
@@ -149,57 +154,46 @@ const emit = defineEmits<{
   'change-subagent': [agentId: string]
 }>()
 
-const route = useRoute()
 const showMenuDropdown = ref(false)
 const showSubagentDropdown = ref(false)
 
-// 权限：当前用户允许访问的数字员工 ID 列表（仅租户模式需要）
-const myAllowedAgentIds = ref<Set<string>>(new Set())
 
-// 判断是否为租户模式
-const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
-// 加载当前用户允许的数字员工权限
-async function loadMyAllowedAgents() {
-  if (!isTenantMode.value) {
-    return
-  }
-  try {
-    const res = await getMyAllowedAgents()
-    if (res.success && res.data) {
-      myAllowedAgentIds.value = new Set(res.data.map(a => a.agent_id))
-    }
-  } catch (err) {
-    console.error('加载用户数字员工权限失败', err)
-  }
-}
 
 // 过滤后可用的数字员工列表（根据权限过滤）
+// 注意：后端已根据权限过滤，这里直接返回即可
 const filteredAvailableSubagents = computed(() => {
-  if (!props.availableSubagents) return []
-  if (!isTenantMode.value || myAllowedAgentIds.value.size === 0) {
-    // 非租户模式：不过滤，返回全部
-    return props.availableSubagents
-  }
-  // 租户模式：只返回当前用户有权限的
-  return props.availableSubagents.filter(s => myAllowedAgentIds.value.has(s.agent_id))
+  return props.availableSubagents || []
 })
 
-// 在挂载时加载权限
-onMounted(() => {
-  loadMyAllowedAgents()
-})
+
 
 // 是否应该显示选择框：只有多个选项时才显示
 const shouldShowSelector = computed(() => {
   return filteredAvailableSubagents.value && filteredAvailableSubagents.value.length > 1
 })
 
+// 是否显示只读标签：只有一个选项时显示只读标签
+const showReadonlyLabel = computed(() => {
+  return filteredAvailableSubagents.value && filteredAvailableSubagents.value.length === 1
+})
+
 // 当前选中的数字员工名称
 const currentSubagentName = computed(() => {
-  if (props.currentSubagentId == null) return 'CEO智能体'
+  if (props.currentSubagentId == null) {
+    // 检查主智能体是否在可用列表中
+    const mainAgent = filteredAvailableSubagents.value.find((s: SubagentListItem) => s.agent_id === 'main')
+    if (mainAgent) {
+      return 'CEO智能体'
+    }
+    // 主智能体不可用，返回第一个可用智能体的名称或空字符串
+    if (filteredAvailableSubagents.value.length > 0) {
+      return filteredAvailableSubagents.value[0].name
+    }
+    return ''
+  }
   const found = filteredAvailableSubagents.value.find((s: SubagentListItem) => s.agent_id === props.currentSubagentId)
-  return found?.name || 'CEO智能体'
+  return found?.name || ''
 })
 
 // 判断是否为当前选中

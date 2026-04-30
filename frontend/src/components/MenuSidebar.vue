@@ -372,13 +372,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 
 import type { SubagentListItem, BusinessPage } from '@/api/subagent'
@@ -434,41 +433,12 @@ const toggleHistoryExpanded = () => {
   localStorage.setItem(historyStorageKey, String(isHistoryExpanded.value))
 }
 
-// 权限：当前用户允许访问的数字员工 ID 列表（仅租户模式需要）
-const myAllowedAgentIds = ref<Set<string>>(new Set())
-const allowedAgentsLoaded = ref(false)
 
-// 加载当前用户允许的数字员工权限
-async function loadMyAllowedAgents() {
-  if (!isTenantMode.value) {
-    allowedAgentsLoaded.value = true
-    return
-  }
-  try {
-    const res = await getMyAllowedAgents()
-    if (res.success && res.data) {
-      myAllowedAgentIds.value = new Set(res.data.map(a => a.agent_id))
-    }
-  } catch (err) {
-    console.error('加载用户数字员工权限失败', err)
-  } finally {
-    allowedAgentsLoaded.value = true
-  }
-}
-
-// 在挂载时加载权限
-onMounted(() => {
-  loadMyAllowedAgents()
-})
 
 // 过滤后可用的数字员工列表（根据权限过滤）
+// 注意：后端已根据权限过滤，这里直接返回即可
 const filteredAvailableSubagents = computed(() => {
-  if (!isTenantMode.value || myAllowedAgentIds.value.size === 0) {
-    // 非租户模式：不过滤，返回全部
-    return props.availableSubagents
-  }
-  // 租户模式：只返回当前用户有权限的
-  return props.availableSubagents.filter(s => myAllowedAgentIds.value.has(s.agent_id))
+  return props.availableSubagents || []
 })
 
 // 业务数据分组折叠状态（持久化到 localStorage）
