@@ -2,18 +2,19 @@
 SaaS 数字员工授权 API
 
 路由：/api/saas/permissions/*
-- 平台管理员：设置/获取租户级数字员工授权
+- 平台管理员：设置/获取租户级数字员工授权（通过订阅管理）
 - 租户管理员：设置/获取用户级数字员工授权
 - 普通用户：获取自身可使用的数字员工列表
 """
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 from loguru import logger
 
 from src.saas.api.tenant_auth import get_current_admin, require_admin
-from src.saas.db.permission_db import TenantAgentPermissionDB, UserAgentPermissionDB
+from src.saas.db.permission_db import UserAgentPermissionDB
+from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user
 from src.db.database import get_db_connection
 from src.core.agent import master_agent
@@ -26,6 +27,7 @@ router = APIRouter(prefix="/api/saas/permissions", tags=["SaaS 数字员工授�
 
 class SetTenantAgentPermissionsRequest(BaseModel):
     agent_ids: List[str]
+    agent_quotas: Dict[str, int] = Field(default_factory=dict, description="每个数字员工的实例配额，未指定的默认为1")
 
 
 class SetUserAgentPermissionsRequest(BaseModel):
@@ -42,13 +44,27 @@ def get_tenant_agent_permissions(request: Request, tenant_id: str):
         raise HTTPException(status_code=403, detail="无权限")
 
     with get_db_connection() as conn:
-        allowed = TenantAgentPermissionDB.get_allowed_agents(conn, tenant_id)
+        cursor = conn.cursor()
+        # 获取所有有效订阅的 agent_id 和 instance_quota
+        cursor.execute("""
+            SELECT DISTINCT subagent_type, instance_quota
+            FROM subscriptions
+            WHERE tenant_id = %s
+              AND status = 'active'
+              AND starts_at <= CURRENT_TIMESTAMP
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY subagent_type
+        """, (tenant_id,))
+        rows = cursor.fetchall()
+        allowed = [row["subagent_type"] for row in rows]
         count = len(allowed)
+        agent_quotas = {row["subagent_type"]: row["instance_quota"] for row in rows}
         return {
             "success": True,
             "data": {
                 "agent_ids": allowed,
-                "count": count
+                "count": count,
+                "agent_quotas": agent_quotas
             }
         }
 
@@ -61,7 +77,7 @@ def set_tenant_agent_permissions(request: Request, tenant_id: str, body: SetTena
         raise HTTPException(status_code=403, detail="无权限")
 
     with get_db_connection() as conn:
-        TenantAgentPermissionDB.set_permissions(conn, tenant_id, body.agent_ids)
+        SubscriptionDB.set_tenant_subscriptions(conn, tenant_id, body.agent_ids, body.agent_quotas)
 
     return {
         "success": True,
@@ -139,7 +155,7 @@ def set_user_agent_permissions(request: Request, user_id: str, body: SetUserAgen
 
     # 确保所有授权的agent_id都在租户授权范围内
     with get_db_connection() as conn:
-        tenant_allowed = set(TenantAgentPermissionDB.get_allowed_agents(conn, tenant_id))
+        tenant_allowed = set(SubscriptionDB.get_allowed_subagent_types(conn, tenant_id))
         # 过滤掉超出租户范围的
         valid_agent_ids = [aid for aid in body.agent_ids if aid in tenant_allowed]
 
@@ -177,7 +193,7 @@ def get_tenant_available_user_agents(request: Request):
         registry._load_custom(registry._custom_dir)
 
     with get_db_connection() as conn:
-        tenant_allowed = set(TenantAgentPermissionDB.get_allowed_agents(conn, tenant_id))
+        tenant_allowed = set(SubscriptionDB.get_allowed_subagent_types(conn, tenant_id))
 
     all_items = registry.get_all_subagents_with_type()
     result = [

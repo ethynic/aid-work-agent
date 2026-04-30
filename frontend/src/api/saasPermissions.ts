@@ -52,7 +52,7 @@ export interface AgentItem {
 
 export async function getTenantAgentPermissions(tenantId: string): Promise<{
   success: boolean
-  data?: { agent_ids: string[]; count: number }
+  data?: { agent_ids: string[]; count: number; agent_quotas?: Record<string, number> }
   message?: string
 }> {
   const res = await fetch(`${API_BASE}/tenant/${encodeURIComponent(tenantId)}/agents`, {
@@ -62,7 +62,7 @@ export async function getTenantAgentPermissions(tenantId: string): Promise<{
   return res.json()
 }
 
-export async function setTenantAgentPermissions(tenantId: string, agentIds: string[]): Promise<{
+export async function setTenantAgentPermissions(tenantId: string, agentIds: string[], agentQuotas: Record<string, number> = {}): Promise<{
   success: boolean
   message?: string
 }> {
@@ -71,7 +71,7 @@ export async function setTenantAgentPermissions(tenantId: string, agentIds: stri
   const res = await fetch(`${API_BASE}/tenant/${encodeURIComponent(tenantId)}/agents`, {
     method: 'POST',
     headers: headers,
-    body: JSON.stringify({ agent_ids: agentIds }),
+    body: JSON.stringify({ agent_ids: agentIds, agent_quotas: agentQuotas }),
   })
   if (!res.ok) throw new Error('设置租户数字员工授权失败')
   return res.json()

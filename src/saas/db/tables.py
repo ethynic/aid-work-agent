@@ -90,21 +90,6 @@ def init_saas_tables(conn):
         ON agent_instances(tenant_id, status)
     """)
 
-    # 7. 租户-数字员工授权表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
-            id SERIAL PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            agent_id TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(tenant_id, agent_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant
-        ON tenant_agent_permissions(tenant_id)
-    """)
-
     # 8. 用户-数字员工授权表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_agent_permissions (

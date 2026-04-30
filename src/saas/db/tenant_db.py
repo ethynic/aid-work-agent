@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any
 from loguru import logger
 
 from src.db.database import get_db_connection
-from src.saas.db.permission_db import TenantAgentPermissionDB
+from src.saas.db.subscription_db import SubscriptionDB
 
 
 class TenantDB:
@@ -64,7 +64,7 @@ class TenantDB:
                 d = dict(row)
                 d["settings"] = json.loads(d["settings"]) if d.get("settings") else {}
                 # 添加已授权数字员工数量
-                d["agent_count"] = TenantAgentPermissionDB.count_allowed(conn, tenant_id)
+                d["agent_count"] = SubscriptionDB.count_active_subscriptions(conn, tenant_id)
                 return d
             return None
 
@@ -131,7 +131,7 @@ class TenantDB:
                 d["settings"] = json.loads(d["settings"]) if d.get("settings") else {}
                 # 添加已授权数字员工数量
                 tenant_id = d["tenant_id"]
-                count = TenantAgentPermissionDB.count_allowed(conn, tenant_id)
+                count = SubscriptionDB.count_active_subscriptions(conn, tenant_id)
                 d["agent_count"] = count
                 results.append(d)
             return {"tenants": results, "total": total, "page": page, "page_size": page_size}

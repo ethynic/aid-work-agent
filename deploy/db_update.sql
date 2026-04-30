@@ -13,16 +13,6 @@ ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
 -- 2026-4-25，根据数据库开发规范，移除所有外键约束、移除非必要字段的 NOT NULL 约束、移除所有触发器
 -- 外键完整性检查放到 Python 应用层实现，业务非空检查放到 Pydantic 模型层实现
 
--- 2026-4-26，新增数字员工授权体系两张表
--- 租户级数字员工授权表
-CREATE TABLE IF NOT EXISTS tenant_agent_permissions (
-    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    tenant_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_tenant_agent_permissions_tenant ON tenant_agent_permissions(tenant_id);
-
 -- 用户级数字员工授权表
 CREATE TABLE IF NOT EXISTS user_agent_permissions (
     id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
@@ -63,28 +53,8 @@ ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS instance_quota INTEGER DEFAUL
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS starts_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_subscriptions_time_range ON subscriptions(tenant_id, subagent_type, starts_at, expires_at, status);
 
--- 2. 数据迁移：将 tenant_agent_permissions 的授权迁移到 subscriptions 表
---    将现有权限转换为永久有效的订阅（expires_at = null）
-INSERT INTO subscriptions (
-    subscription_id, tenant_id, subagent_type, instance_quota,
-    status, starts_at, created_at, updated_at
-)
-SELECT
-    'sub_mig_' || md5(random()::text)::uuid::text AS subscription_id,
-    tenant_id,
-    agent_id AS subagent_type,
-    1 AS instance_quota,
-    'active' AS status,
-    CURRENT_TIMESTAMP AS starts_at,
-    CURRENT_TIMESTAMP AS created_at,
-    CURRENT_TIMESTAMP AS updated_at
-FROM tenant_agent_permissions tap
-WHERE NOT EXISTS (
-    SELECT 1 FROM subscriptions s
-    WHERE s.tenant_id = tap.tenant_id
-      AND s.subagent_type = tap.agent_id
-      AND s.status = 'active'
-);
+-- 2. 删除已废弃的 tenant_agent_permissions 表（数据已合并到 subscriptions）
+DROP TABLE IF EXISTS tenant_agent_permissions;
 
 -- 3. agent_instances 表增强：增加拟人属性和锁状态字段
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS instance_name TEXT;

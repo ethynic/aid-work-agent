@@ -18,7 +18,8 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
-from src.saas.db.permission_db import TenantAgentPermissionDB, UserAgentPermissionDB
+from src.saas.db.permission_db import UserAgentPermissionDB
+from src.saas.db.subscription_db import SubscriptionDB
 from src.db.models import UserDB
 from src.config.settings import settings
 from src.db.database import get_db_connection
@@ -117,7 +118,7 @@ async def create_user(request: Request, body: UserCreateRequest):
 
     # 如果租户只授权了一个数字员工，自动给新用户添加该授权
     with get_db_connection() as conn:
-        tenant_allowed = TenantAgentPermissionDB.get_allowed_agents(conn, tenant_id)
+        tenant_allowed = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
         if len(tenant_allowed) == 1 and body.role == "user":
             # 自动授权唯一的那个数字员工
             agent_id = tenant_allowed[0]

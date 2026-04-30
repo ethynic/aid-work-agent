@@ -17,7 +17,7 @@ import re
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
-from src.saas.db.permission_db import TenantAgentPermissionDB
+from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.config.settings import settings
 from src.db.models import UserDB
@@ -326,7 +326,7 @@ async def delete_tenant(request: Request, tenant_id: str):
         if success:
             # 级联删除：删除该租户所有的数字员工授权（租户级和用户级）
             with get_db_connection() as conn:
-                TenantAgentPermissionDB.delete_all_for_tenant(conn, tenant_id)
+                SubscriptionDB.delete_all_for_tenant(conn, tenant_id)
             logger.info(f"租户删除成功: {tenant_id} by admin {admin['user_id']}, permissions deleted")
             return {"success": True, "message": "删除成功"}
         return {"success": False, "error": "删除失败", "debug": "TenantDB.delete returned False"}

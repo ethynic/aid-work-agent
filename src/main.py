@@ -718,6 +718,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     current_user = auth.get_current_user(http_request)
     user_id = current_user["user_id"] if current_user else "anonymous"
 
+    # 调试日志：记录请求关键信息
+    logger.info(f"[并发控制调试] chat_stream 请求: subagent={request.subagent}, instance_id={request.instance_id}, session_id={request.session_id}, user_id={user_id}")
+
     # 权限检查：数字员工访问授权
     if request.subagent and current_user:
         from src.saas.permissions.checker import check_agent_access
@@ -741,14 +744,31 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "error": "实例不存在",
             }, status_code=404)
 
+        logger.info(f"[并发控制调试] 实例状态: instance_id={instance_id}, status={instance.get('status')}, current_session_id={instance.get('current_session_id')}, locked_at={instance.get('locked_at')}")
+
         # 验证当前会话是否持有锁
-        if instance["current_session_id"] != session_id:
+        # 如果 request.session_id 为空，说明是新会话，需要先锁定实例
+        if not request.session_id:
+            logger.warning(f"[并发控制调试] 实例锁检查失败: request.session_id 为空, instance_id={instance_id}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "success": False,
+                "error": "需要先锁定实例",
+                "details": "请先调用 /api/chat/instances/{instance_id}/lock 接口锁定实例",
+            }, status_code=400)
+
+        logger.info(f"[并发控制调试] 检查实例锁: instance_current_session={instance.get('current_session_id')}, request_session={request.session_id}")
+        # 检查实例当前是否被其他会话占用
+        if instance["current_session_id"] != request.session_id:
+            logger.warning(f"[并发控制调试] 实例锁检查失败: 实例被其他会话占用, instance_id={instance_id}, current_session={instance.get('current_session_id')}, request_session={request.session_id}")
             from fastapi.responses import JSONResponse
             return JSONResponse({
                 "success": False,
                 "error": "实例被占用",
                 "details": "该数字员工正在被其他会话使用，请先锁定实例再开始对话",
                 "current_status": instance["status"],
+                "current_session_id": instance["current_session_id"],
+                "request_session_id": request.session_id,
             }, status_code=409)
 
     # 如果没有传入 session_id，创建一个新的会话记录到数据库

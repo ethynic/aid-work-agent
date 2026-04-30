@@ -356,7 +356,7 @@
             <div v-if="selectedFiles.length === 0" class="space-y-2">
               <p class="text-gray-600 font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
               <p class="text-sm text-gray-400">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
-              <p class="text-xs text-gray-400">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, log, csv, xml 等</p>
+              <p class="text-xs text-gray-400">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
             </div>
 
             <div v-else class="space-y-3">

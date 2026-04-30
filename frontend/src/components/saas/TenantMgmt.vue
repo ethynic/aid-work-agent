@@ -176,7 +176,7 @@
           <div v-if="loadingAgents" class="text-center py-6 text-slate-500 text-sm">加载中...</div>
           <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-slate-500 text-sm">暂无可用数字员工</div>
           <div v-else class="space-y-2 py-2">
-            <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-slate-50 rounded cursor-pointer">
+            <div v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-slate-50 rounded">
               <input
                 type="checkbox"
                 :checked="selectedAgentIds.includes(agent.agent_id)"
@@ -187,11 +187,22 @@
                 <div class="text-sm font-medium text-slate-800">{{ agent.name }}</div>
                 <div v-if="agent.description" class="text-xs text-slate-500">{{ agent.description }}</div>
               </div>
+              <div class="flex items-center gap-2 ml-2">
+                <span class="text-xs text-slate-500 whitespace-nowrap">实例数</span>
+                <input
+                  type="number"
+                  :value="selectedAgentQuotas[agent.agent_id] || 1"
+                  @input="updateAgentQuota(agent.agent_id, parseInt(($event.target as HTMLInputElement).value) || 1)"
+                  min="1"
+                  step="1"
+                  class="w-16 px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:border-cyan-400"
+                />
+              </div>
               <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
                 :class="agent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'">
                 {{ agent.type === 'builtin' ? '内置' : '定制' }}
               </span>
-            </label>
+            </div>
           </div>
         </div>
         <div v-if="formError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ formError }}</div>
@@ -300,6 +311,7 @@ const currentTenant = ref<any>(null)
 const activeTab = ref<'basic' | 'agents'>('basic')
 const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
+const selectedAgentQuotas = ref<Record<string, number>>({})
 const loadingAgents = ref(false)
 
 const defaultFormData: TenantFormData = {
@@ -359,6 +371,7 @@ function openAddDialog() {
   activeTab.value = 'basic'
   // 加载所有可用数字员工
   selectedAgentIds.value = []
+  selectedAgentQuotas.value = {}
   loadingAgents.value = true
   getAllAvailableAgents().then(res => {
     if (res.success && res.data) {
@@ -400,6 +413,14 @@ async function openEditDialog(tenant: any) {
     }
     if (permissionsRes.success && permissionsRes.data) {
       selectedAgentIds.value = permissionsRes.data.agent_ids || []
+      const quotas = permissionsRes.data.agent_quotas || {}
+      selectedAgentQuotas.value = quotas
+      // 确保每个选中的agent都有配额
+      for (const agentId of selectedAgentIds.value) {
+        if (!(agentId in quotas)) {
+          quotas[agentId] = 1
+        }
+      }
     }
   } catch (e) {
     console.error('加载数字员工授权失败:', e)
@@ -419,9 +440,20 @@ function toggleAgentSelection(agentId: string) {
   const index = selectedAgentIds.value.indexOf(agentId)
   if (index >= 0) {
     selectedAgentIds.value.splice(index, 1)
+    // 移除配额
+    delete selectedAgentQuotas.value[agentId]
   } else {
     selectedAgentIds.value.push(agentId)
+    // 添加默认配额
+    if (!selectedAgentQuotas.value[agentId]) {
+      selectedAgentQuotas.value[agentId] = 1
+    }
   }
+}
+
+function updateAgentQuota(agentId: string, value: number) {
+  if (value < 1) value = 1
+  selectedAgentQuotas.value[agentId] = value
 }
 
 async function handleSubmit() {
@@ -452,7 +484,7 @@ async function handleSubmit() {
     // 保存数字员工授权（编辑已有租户或新建租户）
     const targetTenantId = isEdit.value ? currentTenant.value?.tenant_id : createdTenantId
     if (targetTenantId) {
-      await setTenantAgentPermissions(targetTenantId, selectedAgentIds.value)
+      await setTenantAgentPermissions(targetTenantId, selectedAgentIds.value, selectedAgentQuotas.value)
     }
     // 如果后端返回了消息（创建初始管理员），显示成功消息
     if (result.message) {
