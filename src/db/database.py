@@ -721,8 +721,8 @@ def _init_postgresql():
 
         # 初始化 SaaS 多租户表
         try:
-            from src.saas.db.tables import init_saas_tables_postgresql
-            init_saas_tables_postgresql(conn)
+            from src.saas.db.tables import init_saas_tables
+            init_saas_tables(conn)
         except Exception as e:
             logger.warning(f"Failed to initialize SaaS tables (saas module may not be configured): {e}")
 
