@@ -433,8 +433,46 @@ class Agent:
         subagent_descriptions = ""
         available_subagents = []
         if include_delegation and self.subagent_registry:
-            subagent_descriptions = self.subagent_registry.get_descriptions() if self.subagent_registry else "(暂无可用子智能体)"
-            available_subagents = self.subagent_registry.list_subagents() if self.subagent_registry else []
+            # 获取租户可用的子智能体（SaaS模式时从subscriptions表加载，演示模式用全部）
+            from src.saas.context import get_current_tenant_id
+            tenant_id = get_current_tenant_id()
+
+            # SaaS模式且有租户ID时，从subscriptions表加载可用的子智能体
+            if settings.saas.enabled and not settings.demo.enabled and tenant_id:
+                from src.db.database import get_db_connection
+                from src.saas.db.subscription_db import SubscriptionDB
+
+                with get_db_connection() as conn:
+                    allowed_subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
+                # 过滤注册的子智能体，只保留租户订阅的
+                # 注意：subagent_type 存储的是 dir_name（如 trade-specialist），_configs的key是name（如外贸获客智能体）
+                filtered_configs = []
+                for name, config in self.subagent_registry._configs.items():
+                    agent_id = config.dir_name or name
+                    # 只包含租户订阅的，排除主智能体（CEO智能体，agent_id为"main"）
+                    if agent_id in allowed_subagent_types and agent_id != "main":
+                        filtered_configs.append((name, config))
+                available_subagents = [name for name, _ in filtered_configs]
+                # 生成描述
+                lines = []
+                for name, config in filtered_configs:
+                    capabilities = ", ".join(config.capabilities) if config.capabilities else "general"
+                    lines.append(f"- {name}: {config.description} (capabilities: {capabilities})")
+                subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
+            else:
+                # 演示模式或非SaaS模式，使用全部子智能体（排除CEO智能体）
+                all_configs = []
+                for name, config in self.subagent_registry._configs.items():
+                    agent_id = config.dir_name or name
+                    if agent_id != "main":
+                        all_configs.append((name, config))
+                available_subagents = [name for name, _ in all_configs]
+                # 生成描述
+                lines = []
+                for name, config in all_configs:
+                    capabilities = ", ".join(config.capabilities) if config.capabilities else "general"
+                    lines.append(f"- {name}: {config.description} (capabilities: {capabilities})")
+                subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
         
         # 委派工具说明（仅主智能体使用）
         delegation_guide = ""

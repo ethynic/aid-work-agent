@@ -386,24 +386,31 @@ class SubagentRegistry:
         
         return None
     
-    def get_descriptions(self) -> str:
+    def get_descriptions(self, names: Optional[List[str]] = None) -> str:
         """
-        获取所有Subagent的描述
-        
+        获取Subagent的描述
+
         用于LLM系统提示中展示可用Subagent。
-        
+
+        Args:
+            names: 可选的子智能体名称列表，用于过滤。如果为 None，返回所有。
+
         Returns:
             描述字符串
         """
         if not self._configs:
             return "(no subagents available)"
-        
+
+        filtered_configs = self._configs.items()
+        if names is not None:
+            filtered_configs = [(name, config) for name, config in filtered_configs if name in names]
+
         lines = []
-        for name, config in self._configs.items():
+        for name, config in filtered_configs:
             capabilities = ", ".join(config.capabilities) if config.capabilities else "general"
             lines.append(f"- {name}: {config.description} (capabilities: {capabilities})")
-        
-        return "\n".join(lines)
+
+        return "\n".join(lines) if lines else "(no subagents available)"
     
     def get_delegation_tool_definition(self, available_subagents: Optional[List[str]] = None) -> Dict:
         """
