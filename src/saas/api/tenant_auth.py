@@ -194,6 +194,7 @@ class SendSmsRequest(BaseModel):
 class AdminLoginRequest(BaseModel):
     phone: str = Field(..., min_length=11, max_length=11, description="手机号")
     code: str = Field(..., min_length=4, max_length=6, description="短信验证码")
+    required_role: Optional[str] = Field(None, description="要求的角色：platform_admin=平台管理员才能登录（平台管理后台专用）")
 
 
 class AdminPasswordLoginRequest(BaseModel):
@@ -203,11 +204,13 @@ class AdminPasswordLoginRequest(BaseModel):
     captcha_code: str = Field(..., description="图形验证码")
     captcha_id: str = Field(..., description="图形验证码ID")
     tenant_id: Optional[str] = Field(None, description="租户ID（平台管理员可选，其他用户必填）")
+    required_role: Optional[str] = Field(None, description="要求的角色：platform_admin=平台管理员才能登录（平台管理后台专用）")
 
 
 class SSOLoginRequest(BaseModel):
     code: str = Field(..., description="OAuth 授权码")
     redirect_uri: Optional[str] = Field(None, description="回调地址")
+    required_role: Optional[str] = Field(None, description="要求的角色：platform_admin=平台管理员才能登录（平台管理后台专用）")
 
 
 class AdminLoginResponse(BaseModel):
@@ -337,8 +340,16 @@ async def admin_login(request: AdminLoginRequest):
 
     # 4. 检查是否是管理员
     role = user.get("role", "user")
-    if role not in ("platform_admin", "tenant_admin"):
-        return AdminLoginResponse(success=False, message="该手机号不是管理员")
+
+    # 如果指定了 required_role，严格校验角色
+    if request.required_role == "platform_admin":
+        # 平台管理后台专用：只允许平台管理员登录
+        if role != "platform_admin":
+            return AdminLoginResponse(success=False, message="请使用平台管理员账号登录")
+    else:
+        # 普通管理员登录场景
+        if role not in ("platform_admin", "tenant_admin"):
+            return AdminLoginResponse(success=False, message="该手机号不是管理员")
 
     if user.get("status", "active") != "active":
         return AdminLoginResponse(success=False, message="账号已停用")
@@ -519,15 +530,23 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
 
     # 5. 检查是否是管理员
     role = user.get("role", "user")
-    # 租户前台（tenant_id 存在）：允许 user 角色登录（普通员工）
-    # 只有平台后台（tenant_id 为空）才要求必须是管理员
-    if request.tenant_id:
-        # 租户前台：允许所有角色
-        pass
+
+    # 如果指定了 required_role，严格校验角色
+    if request.required_role == "platform_admin":
+        # 平台管理后台专用：只允许平台管理员登录
+        if role != "platform_admin":
+            return AdminLoginResponse(success=False, message="请使用平台管理员账号登录")
     else:
-        # 平台后台：必须是 platform_admin 或 tenant_admin
-        if role not in ("platform_admin", "tenant_admin"):
-            return AdminLoginResponse(success=False, message="该账号不是管理员")
+        # 普通登录场景（租户前台等）
+        # 租户前台（tenant_id 存在）：允许 user 角色登录（普通员工）
+        # 只有平台后台（tenant_id 为空）才要求必须是管理员
+        if request.tenant_id:
+            # 租户前台：允许所有角色
+            pass
+        else:
+            # 平台后台：必须是 platform_admin 或 tenant_admin
+            if role not in ("platform_admin", "tenant_admin"):
+                return AdminLoginResponse(success=False, message="该账号不是管理员")
 
     if user.get("status", "active") != "active":
         return AdminLoginResponse(success=False, message="账号已停用")
@@ -651,8 +670,16 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
 
     # 4. 检查是否是管理员
     role = user.get("role", "user")
-    if role not in ("platform_admin", "tenant_admin"):
-        return AdminLoginResponse(success=False, message="该 IM 用户不是管理员")
+
+    # 如果指定了 required_role，严格校验角色
+    if request.required_role == "platform_admin":
+        # 平台管理后台专用：只允许平台管理员登录
+        if role != "platform_admin":
+            return AdminLoginResponse(success=False, message="请使用平台管理员账号登录")
+    else:
+        # 普通管理员登录场景
+        if role not in ("platform_admin", "tenant_admin"):
+            return AdminLoginResponse(success=False, message="该 IM 用户不是管理员")
 
     tenant = None
     if user.get("tenant_id"):

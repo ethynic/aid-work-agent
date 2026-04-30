@@ -191,7 +191,9 @@ async function handleLogin() {
       password: password.value,
       captcha_code: captchaCode.value,
       captcha_id: captchaId.value,
-      tenant_id: tenantId.value
+      tenant_id: tenantId.value,
+      // 平台管理后台登录：要求必须是平台管理员
+      ...(isPortalRoute.value ? { required_role: 'platform_admin' } : {})
     })
     if (res.success && res.token && res.user) {
       // 平台管理员的 tenant 可能为 null

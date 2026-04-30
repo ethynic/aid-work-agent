@@ -58,6 +58,7 @@ export interface AdminPasswordLoginRequest {
   captcha_code: string
   captcha_id: string
   tenant_id?: string
+  required_role?: string
 }
 
 export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Promise<{
