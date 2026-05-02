@@ -296,3 +296,6 @@ keepalive_timeout 65;
 本地 wsl + docker engine：
 wsl -d Ubuntu
 cd /mnt/d/workbase/projects/aid-work-agent
+
+清空日志
+sudo truncate -s 0 $(docker inspect --format='{{.LogPath}}' aid-agent-api)

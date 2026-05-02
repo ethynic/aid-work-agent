@@ -33,7 +33,7 @@ class ToolRegistry:
             raise ValueError("工具必须定义name属性")
         
         self._tools[tool.name] = tool
-        logger.info(f"注册工具: {tool.name}")
+        # logger.info(f"注册工具: {tool.name}")
     
     def unregister(self, tool_name: str) -> None:
         """

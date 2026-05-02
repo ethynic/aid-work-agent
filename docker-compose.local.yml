@@ -114,8 +114,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "10m"
+        max-file: "3"
 
   # FastAPI 服务（默认）
   aid-agent-api:

@@ -668,15 +668,29 @@ async function handleNewSession() {
   try {
     selectSession(null)
     // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
-    const targetPath = currentSubagent.value
-      ? isTenantMode.value
-        ? `/t/${tenantId.value}/chat/${currentSubagent.value}`
-        : `/chat/${currentSubagent.value}`
-      : isTenantMode.value
-        ? `/t/${tenantId.value}/chat`
-        : '/'
-    if (route.path !== targetPath) {
-      router.push(targetPath)
+    // 租户模式下，如果有选中的 subagent，尝试匹配 instance_id 传递到 query
+    let targetPath = '/'
+    const queryParams: Record<string, string> = {}
+
+    if (currentSubagent.value) {
+      if (isTenantMode.value) {
+        targetPath = `/t/${tenantId.value}/chat/${currentSubagent.value}`
+        // 尝试匹配 instance_id
+        const matchedInstance = props.availableSubagents.find(
+          (a: any) => a.agent_id === currentSubagent.value || a.subagent_type === currentSubagent.value
+        )
+        if (matchedInstance?.instance_id) {
+          queryParams.instance_id = matchedInstance.instance_id
+        }
+      } else {
+        targetPath = `/chat/${currentSubagent.value}`
+      }
+    } else if (isTenantMode.value) {
+      targetPath = `/t/${tenantId.value}/chat`
+    }
+
+    if (route.path !== targetPath || Object.keys(queryParams).length > 0) {
+      router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
     } else {
       // 如果已经在目标路由，still need to trigger watch by selecting null
       // 路由相同但 currentSessionId 变化会触发 watch 清空 messages
@@ -700,6 +714,13 @@ async function handleSelectSession(sessionId: string) {
   // 根据会话的 subagent 标记导航到对应路由（租户模式使用 /t/:tenant_id/chat）
   const session = sessions.value.find(s => s.session_id === sessionId)
   const subagent = session?.context_data?.subagent as string | undefined
+  const queryParams: Record<string, string> = {}
+
+  // 租户模式下传递 instance_id
+  if (isTenantMode.value && session?.instance_id) {
+    queryParams.instance_id = session.instance_id
+  }
+
   const targetPath = subagent
     ? isTenantMode.value
       ? `/t/${tenantId.value}/chat/${subagent}`
@@ -707,8 +728,9 @@ async function handleSelectSession(sessionId: string) {
     : isTenantMode.value
       ? `/t/${tenantId.value}/chat`
       : '/'
-  if (route.path !== targetPath) {
-    router.push(targetPath)
+
+  if (route.path !== targetPath || Object.keys(queryParams).length > 0) {
+    router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
   }
 }
 

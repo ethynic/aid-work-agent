@@ -309,7 +309,7 @@ class SkillLoader:
             skill = self.parse_skill_md(skill_md)
             if skill:
                 self.skills[skill.name] = skill
-                logger.info(f"Loaded skill: {skill.name} v{skill.version}")
+                # logger.info(f"Loaded skill: {skill.name} v{skill.version}")
 
         logger.info(f"Total skills loaded: {len(self.skills)}")
 

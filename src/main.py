@@ -221,6 +221,23 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Memory cleanup error: {e}")
     asyncio.create_task(_memory_cleanup_loop())
 
+    # Start instance lock cleanup background task
+    if settings.saas.enabled:
+        async def _instance_lock_cleanup_loop():
+            """后台定时清理过期的智能体实例锁"""
+            interval = 30  # 每30秒检查一次
+            logger.info(f"Instance lock cleanup task started, interval={interval}s")
+            from src.saas.services.instance_service import InstanceService
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    cleaned = InstanceService.cleanup_all_expired_locks()
+                    if cleaned > 0:
+                        logger.info(f"[InstanceLock] Cleaned up {cleaned} expired instance locks")
+                except Exception as e:
+                    logger.error(f"[InstanceLock] Cleanup error: {e}")
+        asyncio.create_task(_instance_lock_cleanup_loop())
+
     yield
 
     # On shutdown
@@ -732,10 +749,23 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "details": "您没有权限访问此数字员工，请联系管理员申请授权",
             }, status_code=403)
 
-    # 并发控制：验证实例锁（如果提供了 instance_id）
+    # 并发控制：验证并自动锁定实例（如果提供了 instance_id）
     instance_id = request.instance_id
+    logger.info(f"[并发控制调试] 前置条件检查: instance_id={instance_id}, saas.enabled={settings.saas.enabled}, current_user={current_user is not None}")
     if instance_id and settings.saas.enabled and current_user:
+        from src.saas.services.instance_service import InstanceService
         from src.saas.db.agent_instance_db import AgentInstanceDB
+        from src.db.models import UserDB
+
+        # session_id 不能为空（需要用它来锁定）
+        if not request.session_id:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "success": False,
+                "error": "需要先创建会话",
+                "details": "session_id 不能为空",
+            }, status_code=400)
+
         instance = AgentInstanceDB.get_by_id(instance_id)
         if not instance:
             from fastapi.responses import JSONResponse
@@ -746,30 +776,55 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
         logger.info(f"[并发控制调试] 实例状态: instance_id={instance_id}, status={instance.get('status')}, current_session_id={instance.get('current_session_id')}, locked_at={instance.get('locked_at')}")
 
-        # 验证当前会话是否持有锁
-        # 如果 request.session_id 为空，说明是新会话，需要先锁定实例
-        if not request.session_id:
-            logger.warning(f"[并发控制调试] 实例锁检查失败: request.session_id 为空, instance_id={instance_id}")
-            from fastapi.responses import JSONResponse
-            return JSONResponse({
-                "success": False,
-                "error": "需要先锁定实例",
-                "details": "请先调用 /api/chat/instances/{instance_id}/lock 接口锁定实例",
-            }, status_code=400)
-
-        logger.info(f"[并发控制调试] 检查实例锁: instance_current_session={instance.get('current_session_id')}, request_session={request.session_id}")
         # 检查实例当前是否被其他会话占用
-        if instance["current_session_id"] != request.session_id:
-            logger.warning(f"[并发控制调试] 实例锁检查失败: 实例被其他会话占用, instance_id={instance_id}, current_session={instance.get('current_session_id')}, request_session={request.session_id}")
-            from fastapi.responses import JSONResponse
-            return JSONResponse({
-                "success": False,
-                "error": "实例被占用",
-                "details": "该数字员工正在被其他会话使用，请先锁定实例再开始对话",
-                "current_status": instance["status"],
-                "current_session_id": instance["current_session_id"],
-                "request_session_id": request.session_id,
-            }, status_code=409)
+        if instance["current_session_id"] is not None and instance["current_session_id"] != request.session_id:
+            logger.warning(f"[并发控制调试] 实例被占用, instance_id={instance_id}, current_session={instance.get('current_session_id')}, current_user={instance.get('current_user_id')}")
+
+            # 获取当前使用者的用户名
+            holder_username = "其他用户"
+            is_same_user = False
+            if instance.get("current_user_id"):
+                holder_user = UserDB.get_by_id(instance["current_user_id"])
+                if holder_user and holder_user.get("username"):
+                    holder_username = holder_user["username"]
+                # 判断是否是同一个用户在不同设备上访问
+                is_same_user = (instance.get("current_user_id") == user_id)
+
+            instance_name = instance.get("instance_name") or instance.get("display_name") or "数字员工"
+            if is_same_user:
+                busy_message = f"[{instance_name}] 正在为用户【{holder_username}】（您的另一台设备）提供服务，请稍后再试或选择其他数字员工"
+            else:
+                busy_message = f"[{instance_name}] 正在为用户【{holder_username}】提供服务，请稍后再试或选择其他数字员工"
+
+            # 返回 200 并通过 SSE 流式输出提示
+            def busy_event_generator():
+                yield f"data: {json.dumps({'type': 'connected', 'session_id': request.session_id, 'agent_type': 'default'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'response', 'data': busy_message}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
+
+            return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
+
+        # 自动锁定空闲实例
+        if instance["current_session_id"] is None:
+            logger.info(f"[并发控制调试] 实例空闲，自动锁定: instance_id={instance_id}, session_id={request.session_id}, user_id={user_id}")
+            lock_result = InstanceService.try_lock_instance(
+                instance_id=instance_id,
+                session_id=request.session_id,
+                user_id=user_id,
+            )
+            if not lock_result.get("success") and not lock_result.get("was_idle"):
+                logger.warning(f"[并发控制调试] 自动锁定失败: instance_id={instance_id}, result={lock_result}")
+                # 锁定失败（竞态情况），通过 SSE 返回友好提示
+                instance_name = instance.get("instance_name") or instance.get("display_name") or "数字员工"
+                busy_message = f"[{instance_name}] 正在被其他用户占用，请稍后再试或选择其他数字员工"
+
+                def busy_event_generator():
+                    yield f"data: {json.dumps({'type': 'connected', 'session_id': request.session_id, 'agent_type': 'default'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'response', 'data': busy_message}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
+
+                return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
+            logger.info(f"[并发控制调试] 自动锁定成功: instance_id={instance_id}, was_idle={lock_result.get('was_idle')}")
 
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
@@ -1283,6 +1338,7 @@ def main():
             host=settings.app.host,
             port=settings.app.port,
             reload=settings.app.debug,
+            access_log=False,
         )
 
 

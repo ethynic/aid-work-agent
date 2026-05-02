@@ -31,7 +31,7 @@ def _build_key_pool(provider_name: str) -> KeyPool:
     if not keys:
         raise ValueError(
             f"LLM提供者 [{provider_name}] 未配置 API Key，"
-            f"请在 .env 中设置 {provider_name.upper()}_API_KEYS"
+            f"请在 .env 中设置 API_KEYS"
         )
 
     return KeyPool(

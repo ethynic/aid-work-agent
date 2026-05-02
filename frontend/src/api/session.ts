@@ -44,6 +44,7 @@ export interface ChatSession {
   user_id: string
   tenant_id?: string
   subagent_id?: string
+  instance_id?: string
   title: string
   context_data?: Record<string, any>
   created_at: string

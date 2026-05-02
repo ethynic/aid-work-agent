@@ -465,21 +465,26 @@ function handleSelectSession(sessionId: string) {
   switchSession(sessionId).then(() => {
     // 根据会话保存的 subagent_id 跳转到对应路由
     const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
+    const queryParams: Record<string, string> = {}
+
+    // 租户模式下传递 instance_id
+    if (tenantMatch && session?.instance_id) {
+      queryParams.instance_id = session.instance_id
+    }
+
     if (tenantMatch) {
       // 租户模式
       const tenantId = tenantMatch[1]
-      if (session?.context_data?.subagent) {
-        router.push(`/t/${tenantId}/chat/${session.context_data.subagent}`)
-      } else {
-        router.push(`/t/${tenantId}/chat`)
-      }
+      const path = session?.context_data?.subagent
+        ? `/t/${tenantId}/chat/${session.context_data.subagent}`
+        : `/t/${tenantId}/chat`
+      router.push({ path, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
     } else {
       // 普通演示模式
-      if (session?.context_data?.subagent) {
-        router.push(`/chat/${session.context_data.subagent}`)
-      } else {
-        router.push('/')
-      }
+      const path = session?.context_data?.subagent
+        ? `/chat/${session.context_data.subagent}`
+        : '/'
+      router.push(path)
     }
   })
 }

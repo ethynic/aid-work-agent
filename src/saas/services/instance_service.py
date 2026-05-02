@@ -81,7 +81,7 @@ class InstanceService:
             for row in cursor.fetchall():
                 inst = dict(row)
 
-                # 增强前端显示信息
+                # 增强前端显示信息（二元状态：idle = 空闲，busy = 忙碌）
                 if inst["status"] == "busy":
                     # 判断是否是当前用户自己在使用（可接管）
                     if current_user_id and inst["current_user_id"] == current_user_id:
@@ -90,11 +90,8 @@ class InstanceService:
                     else:
                         inst["status_text"] = "忙碌中"
                         inst["can_take_over"] = False
-                elif inst["status"] == "idle":
-                    inst["status_text"] = "空闲可用"
-                    inst["can_take_over"] = False
                 else:
-                    inst["status_text"] = "离线"
+                    inst["status_text"] = "空闲可用"
                     inst["can_take_over"] = False
 
                 instances.append(inst)
@@ -106,7 +103,7 @@ class InstanceService:
         instance_id: str,
         session_id: str,
         user_id: str,
-        lock_timeout_minutes: int = 30
+        lock_timeout_minutes: int = 3
     ) -> Dict[str, Any]:
         """
         尝试锁定实例（原子操作）
@@ -115,7 +112,7 @@ class InstanceService:
             instance_id: 实例ID
             session_id: 会话ID
             user_id: 用户ID
-            lock_timeout_minutes: 锁超时时间（默认30分钟）
+            lock_timeout_minutes: 锁超时时间（默认3分钟）
 
         Returns:
             {
@@ -146,10 +143,11 @@ class InstanceService:
             if not row:
                 return {"success": False, "error": "Instance not found"}
 
-            current_status = row["status"]
+            # 3. 用 current_session_id 判断是否空闲（NULL = 空闲）
+            is_busy = row["current_session_id"] is not None
 
-            # 3. 如果空闲，直接锁定
-            if current_status == "idle":
+            if not is_busy:
+                # 空闲，直接锁定（用 current_session_id IS NULL 保证原子性）
                 cursor.execute("""
                     UPDATE agent_instances
                     SET
@@ -159,8 +157,8 @@ class InstanceService:
                         locked_at = CURRENT_TIMESTAMP,
                         lock_expires_at = CURRENT_TIMESTAMP + (%s || ' minutes')::interval,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE instance_id = %s AND status = 'idle'
-                    RETURNING instance_id, instance_name, avatar, status
+                    WHERE instance_id = %s AND current_session_id IS NULL
+                    RETURNING instance_id, instance_name, avatar, status, current_session_id
                 """, (session_id, user_id, lock_timeout_minutes, instance_id))
 
                 locked = cursor.fetchone()
@@ -179,10 +177,10 @@ class InstanceService:
                     }
 
                 # 竞态：有人抢先锁定了，继续往下走进入排队
-                current_status = "busy"
+                is_busy = True
 
-            # 4. 如果忙碌，检查是否已经在队列中（防重复排队）
-            if current_status == "busy":
+            # 4. 如果忙碌（current_session_id 有值），检查是否已经在队列中（防重复排队）
+            if is_busy:
                 cursor.execute("""
                     SELECT position FROM agent_instance_queue
                     WHERE instance_id = %s AND session_id = %s AND status = 'waiting'
@@ -372,7 +370,7 @@ class InstanceService:
             if status == "ready":
                 cursor.execute("""
                     SELECT status FROM agent_instances
-                    WHERE instance_id = %s AND status = 'idle'
+                    WHERE instance_id = %s AND status != 'busy'
                 """, (instance_id,))
                 if not cursor.fetchone():
                     # 实例又被别人占用了，重新排队
@@ -496,14 +494,59 @@ class InstanceService:
             }
 
     @staticmethod
+    def cleanup_all_expired_locks() -> int:
+        """
+        全局清理过期的实例锁（供定时任务调用）
+
+        Returns:
+            清理的过期锁数量
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 查找过期锁
+            cursor.execute("""
+                SELECT instance_id, current_session_id FROM agent_instances
+                WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
+            """)
+            expired = cursor.fetchall()
+
+            if not expired:
+                return 0
+
+            instance_ids = [row["instance_id"] for row in expired]
+
+            # 释放过期锁
+            cursor.execute("""
+                UPDATE agent_instances
+                SET
+                    status = 'idle',
+                    current_session_id = NULL,
+                    current_user_id = NULL,
+                    locked_at = NULL,
+                    lock_expires_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
+            """)
+            conn.commit()
+
+            # 唤醒每个被释放锁的下一位等待者
+            for inst_id in instance_ids:
+                InstanceService._wake_up_next_waiter(conn, inst_id)
+            conn.commit()
+
+            logger.info(f"[InstanceLock] Cleaned up {len(expired)} expired locks: {instance_ids}")
+            return len(expired)
+
+    @staticmethod
     def _cleanup_expired_locks(conn):
-        """清理所有过期的实例锁"""
+        """清理所有过期的实例锁（内部方法，已有事务上下文）"""
         cursor = conn.cursor()
 
         # 查找过期锁
         cursor.execute("""
             SELECT instance_id FROM agent_instances
-            WHERE status = 'busy' AND lock_expires_at < CURRENT_TIMESTAMP
+            WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
         """)
         expired = [row["instance_id"] for row in cursor.fetchall()]
 
@@ -520,7 +563,7 @@ class InstanceService:
                 locked_at = NULL,
                 lock_expires_at = NULL,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE status = 'busy' AND lock_expires_at < CURRENT_TIMESTAMP
+            WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
         """)
 
         # 唤醒每个被释放锁的下一位等待者
@@ -542,11 +585,11 @@ class InstanceService:
                 locked_at = NULL,
                 lock_expires_at = NULL,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE instance_id = %s AND status = 'busy' AND lock_expires_at < CURRENT_TIMESTAMP
+            WHERE instance_id = %s AND current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
             RETURNING instance_id
         """, (instance_id,))
         if cursor.fetchone():
-            logger.info(f"Auto released expired lock for instance: {instance_id}")
+            logger.info(f"[InstanceLock] Auto released expired lock for instance: {instance_id}")
             InstanceService._wake_up_next_waiter(conn, instance_id)
 
     @staticmethod

@@ -172,8 +172,36 @@ const subagentName = computed<string | null>(() => {
 })
 
 // 从路由 query 参数中获取实例 ID（用于并发控制）
+// 优先级：1. 路由参数 2. 当前会话的 instance_id 字段 3. 匹配可用的子智能体实例
 const instanceId = computed<string | null>(() => {
-  return (route.query.instance_id as string) || null
+  // 1. 优先从路由参数获取（从 InstanceLobby 锁定后跳转）
+  if (route.query.instance_id) {
+    return route.query.instance_id as string
+  }
+
+  // 2. 从当前会话的 instance_id 字段获取
+  if (currentSessionId.value) {
+    const session = sessions.value.find(s => s.session_id === currentSessionId.value)
+    if (session?.instance_id) {
+      return session.instance_id
+    }
+  }
+
+  // 3. 租户模式下，如果有 subagent，从可用实例中匹配
+  if (isTenantMode.value && subagentName.value && availableSubagents.value.length > 0) {
+    // 先尝试匹配 agent_id
+    const matchedByAgent = availableSubagents.value.find(a => a.agent_id === subagentName.value)
+    if (matchedByAgent?.instance_id) {
+      return matchedByAgent.instance_id
+    }
+    // 再尝试匹配 subagent_type
+    const matchedByType = availableSubagents.value.find(a => a.subagent_type === subagentName.value)
+    if (matchedByType?.instance_id) {
+      return matchedByType.instance_id
+    }
+  }
+
+  return null
 })
 
 // 从路由 query 参数中获取预生成的会话 ID（从 Lobby 跳转时传入）

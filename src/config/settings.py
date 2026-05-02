@@ -203,6 +203,7 @@ class AppConfig(BaseModel):
     name: str = "aid-work-agent"
     version: str = "1.0.0"
     debug: bool = False
+    llm_debug: bool = False
     host: str = "0.0.0.0"
     port: int = 8000
 

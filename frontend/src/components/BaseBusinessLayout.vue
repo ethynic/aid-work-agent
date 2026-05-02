@@ -100,6 +100,18 @@ async function loadAvailableSubagents() {
 
 // 返回对话页面
 function goBack() {
+  const queryParams: Record<string, string> = {}
+
+  // 租户模式下，匹配对应的 instance_id
+  if (isTenantMode.value && tenantId.value && subagentId.value) {
+    const matchedInstance = availableSubagents.value.find(
+      (s: any) => s.agent_id === subagentId.value || s.subagent_type === subagentId.value
+    )
+    if (matchedInstance?.instance_id) {
+      queryParams.instance_id = matchedInstance.instance_id
+    }
+  }
+
   let path: string
   if (isTenantMode.value && tenantId.value) {
     path = subagentId.value
@@ -110,7 +122,8 @@ function goBack() {
       ? `/chat/${subagentId.value}`
       : '/'
   }
-  router.push(path)
+
+  router.push({ path, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
 }
 
 onMounted(() => {

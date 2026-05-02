@@ -1476,15 +1476,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             tools = self._get_tools()
             
-            logger.debug(f"\n{'='*60}\n"
-                        f"[DEBUG] Agent Iteration {iteration} - Full Prompt\n"
-                        f"{'='*60}\n"
-                        f"[System Prompt]:\n{system_prompt}\n"
-                        f"{'-'*60}\n"
-                        f"[Messages]:\n{json.dumps(messages, ensure_ascii=False, indent=2)}\n"
-                        f"{'-'*60}\n"
-                        f"[Tools]: {json.dumps([t.get('name', t.get('function', {}).get('name', 'unknown')) for t in tools], ensure_ascii=False)}\n"
-                        f"{'='*60}")
+            if settings.app.llm_debug:
+                logger.debug(f"\n{'='*60}\n"
+                            f"[LLM_DEBUG] Agent Iteration {iteration} - Full Prompt\n"
+                            f"{'='*60}\n"
+                            f"[System Prompt]:\n{system_prompt}\n"
+                            f"{'-'*60}\n"
+                            f"[Messages]:\n{json.dumps(messages, ensure_ascii=False, indent=2)}\n"
+                            f"{'-'*60}\n"
+                            f"[Tools]: {json.dumps([t.get('name', t.get('function', {}).get('name', 'unknown')) for t in tools], ensure_ascii=False)}\n"
+                            f"{'='*60}")
             
             # 后端日志：LLM调用开始
             import time
@@ -1528,14 +1529,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 usage=response.get("usage"),
             )
             
-            logger.debug(f"\n{'='*60}\n"
-                        f"[DEBUG] LLM Response - Iteration {iteration}\n"
-                        f"{'='*60}\n"
-                        f"[Content]:\n{content if content else '(None)'}\n"
-                        f"{'-'*60}\n"
-                        f"[Tool Calls]: {len(tool_calls)} call(s)\n"
-                        f"{json.dumps(tool_calls, ensure_ascii=False, indent=2) if tool_calls else '(None)'}\n"
-                        f"{'='*60}")
+            if settings.app.llm_debug:
+                logger.debug(f"\n{'='*60}\n"
+                            f"[LLM_DEBUG] LLM Response - Iteration {iteration}\n"
+                            f"{'='*60}\n"
+                            f"[Content]:\n{content if content else '(None)'}\n"
+                            f"{'-'*60}\n"
+                            f"[Tool Calls]: {len(tool_calls)} call(s)\n"
+                            f"{json.dumps(tool_calls, ensure_ascii=False, indent=2) if tool_calls else '(None)'}\n"
+                            f"{'='*60}")
             
             # Filter out empty tool calls and parse tool info
             valid_tool_calls = []
@@ -2171,15 +2173,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     task_record.update_progress(progress, f"Processing iteration {iteration}")
                 
                 # 打印LLM调用信息（与主智能体一致）
-                logger.debug(f"\n{'='*60}\n"
-                            f"[DEBUG] Subagent Iteration {iteration} - Full Prompt\n"
-                            f"{'='*60}\n"
-                            f"[System Prompt]:\n{system_prompt}\n"
-                            f"{'-'*60}\n"
-                            f"[Messages]:\n{json.dumps(messages, ensure_ascii=False, indent=2)}\n"
-                            f"{'-'*60}\n"
-                            f"[Tools]: {json.dumps([t.get('name', t.get('function', {}).get('name', 'unknown')) for t in tools], ensure_ascii=False)}\n"
-                            f"{'='*60}")
+                if settings.app.llm_debug:
+                    logger.debug(f"\n{'='*60}\n"
+                                f"[LLM_DEBUG] Subagent Iteration {iteration} - Full Prompt\n"
+                                f"{'='*60}\n"
+                                f"[System Prompt]:\n{system_prompt}\n"
+                                f"{'-'*60}\n"
+                                f"[Messages]:\n{json.dumps(messages, ensure_ascii=False, indent=2)}\n"
+                                f"{'-'*60}\n"
+                                f"[Tools]: {json.dumps([t.get('name', t.get('function', {}).get('name', 'unknown')) for t in tools], ensure_ascii=False)}\n"
+                                f"{'='*60}")
                 
                 # 调用LLM
                 import time
@@ -2224,14 +2227,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 )
                 
                 # 打印LLM响应信息
-                logger.debug(f"\n{'='*60}\n"
-                            f"[DEBUG] Subagent LLM Response - Iteration {iteration}\n"
-                            f"{'='*60}\n"
-                            f"[Content]:\n{content if content else '(None)'}\n"
-                            f"{'-'*60}\n"
-                            f"[Tool Calls]: {len(tool_calls)} call(s)\n"
-                            f"{json.dumps(tool_calls, ensure_ascii=False, indent=2) if tool_calls else '(None)'}\n"
-                            f"{'='*60}")
+                if settings.app.llm_debug:
+                    logger.debug(f"\n{'='*60}\n"
+                                f"[LLM_DEBUG] Subagent LLM Response - Iteration {iteration}\n"
+                                f"{'='*60}\n"
+                                f"[Content]:\n{content if content else '(None)'}\n"
+                                f"{'-'*60}\n"
+                                f"[Tool Calls]: {len(tool_calls)} call(s)\n"
+                                f"{json.dumps(tool_calls, ensure_ascii=False, indent=2) if tool_calls else '(None)'}\n"
+                                f"{'='*60}")
                 
                 # 如果没有工具调用，任务完成
                 if not tool_calls:
