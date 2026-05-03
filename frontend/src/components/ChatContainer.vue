@@ -29,6 +29,18 @@
           >
             <template #menu-items="{ closeMenu }">
 
+              <!-- 结束会话（仅当有实例ID时显示） -->
+              <button
+                v-if="instanceId"
+                @click="handleEndSession(); closeMenu()"
+                class="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                结束会话释放实例
+              </button>
+
               <button
                 @click="showCredentialManager = true; closeMenu()"
                 class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
@@ -110,6 +122,46 @@
       :visible="showSettingsDialog"
       @close="showSettingsDialog = false"
     />
+
+    <!-- Instance Queue Modal -->
+    <InstanceQueueModal
+      :visible="showQueueModal"
+      :instance="currentInstance"
+      :session-id="agentSessionId"
+      @ready="handleQueueReady"
+      @cancelled="handleQueueCancelled"
+    />
+
+    <!-- Busy Prompt Overlay -->
+    <Transition name="modal">
+      <div v-if="isBusy" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+          <div class="text-center mb-6">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-100 flex items-center justify-center">
+              <svg class="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h3 class="text-lg font-semibold text-gray-800 mb-2">实例繁忙</h3>
+            <p class="text-gray-600 text-sm">{{ busyMessage }}</p>
+          </div>
+          <div class="space-y-3">
+            <button
+              @click="handleJoinQueue"
+              class="w-full py-3 px-4 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium rounded-xl transition-all"
+            >
+              排队等待
+            </button>
+            <button
+              @click="cancelBusy"
+              class="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-xl transition-colors"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -124,6 +176,7 @@ import MenuSidebar from './MenuSidebar.vue'
 import CredentialManager from './CredentialManager.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
+import InstanceQueueModal from './InstanceQueueModal.vue'
 import { useAgent } from '@/composables/useAgent'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -131,6 +184,7 @@ import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { useSubagentList } from '@/composables/useSubagentList'
 import { useToast } from 'vue-toastification'
+import type { AgentItem } from '@/api/saasPermissions'
 const router = useRouter()
 const toast = useToast()
 
@@ -151,7 +205,14 @@ const {
   removeAttachment,
   clearAttachments,
   abortStreaming,
-  sessionId: agentSessionId
+  sessionId: agentSessionId,
+  isBusy,
+  busyMessage,
+  busyInstanceId,
+  pendingMessage,
+  joinQueue,
+  cancelBusy,
+  endSession
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()
@@ -277,6 +338,8 @@ const isSidebarCollapsed = computed({
 const showLoginModal = ref(false)
 const showCredentialManager = ref(false)
 const showSettingsDialog = ref(false)
+const showQueueModal = ref(false)
+
 // 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
 const skipNextSwitch = ref(false)
 
@@ -292,6 +355,59 @@ const pageTitle = computed(() => {
   }
   return '新会话'
 })
+
+// 当前排队的实例信息
+const currentInstance = computed(() => {
+  if (!busyInstanceId.value) return null
+  return availableSubagents.value.find((a: any) => a.instance_id === busyInstanceId.value) || null
+})
+
+// 加入排队
+async function handleJoinQueue() {
+  if (!busyInstanceId.value) return
+
+  const success = await joinQueue(busyInstanceId.value)
+  if (success) {
+    showQueueModal.value = true
+  } else {
+    toast.error('加入排队失败，请重试')
+    cancelBusy()
+  }
+}
+
+// 排队轮到了，自动发送消息
+async function handleQueueReady() {
+  showQueueModal.value = false
+
+  if (pendingMessage.value) {
+    const msgToSend = pendingMessage.value
+    cancelBusy() // 先清理 busy 状态
+    // 稍等一下，避免状态竞态
+    setTimeout(async () => {
+      await sendMessage(msgToSend, subagentName.value, undefined, instanceId.value)
+    }, 100)
+  } else {
+    cancelBusy()
+  }
+}
+
+// 取消排队
+function handleQueueCancelled() {
+  showQueueModal.value = false
+  cancelBusy()
+}
+
+// 结束会话，释放实例锁
+async function handleEndSession() {
+  if (!instanceId.value) return
+
+  const success = await endSession(instanceId.value)
+  if (success) {
+    toast.success('会话已结束，实例已释放')
+  } else {
+    toast.error('结束会话失败')
+  }
+}
 // 跳转到定时任务页面
 function openScheduledTasks() {
   window.open('/scheduled-tasks', '_blank')

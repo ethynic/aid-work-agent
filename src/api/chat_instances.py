@@ -16,6 +16,7 @@ from loguru import logger
 
 from src.saas.services.instance_service import InstanceService
 from src.config.settings import settings
+from src.api import auth
 
 
 router = APIRouter(prefix="/api/chat/instances", tags=["聊天实例"])
@@ -93,9 +94,11 @@ async def lock_instance(instance_id: str, request: Request, body: LockInstanceRe
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录或租户信息无效")
 
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
+    # 从认证 token 中获取用户信息（与 chat_stream 保持一致）
+    current_user = auth.get_current_user(request)
+    if not current_user:
         raise HTTPException(status_code=401, detail="未登录")
+    user_id = current_user["user_id"]
 
     result = InstanceService.try_lock_instance(
         instance_id=instance_id,
@@ -190,9 +193,11 @@ async def take_over_instance(instance_id: str, request: Request, body: TakeOverR
     if not tenant_id:
         raise HTTPException(status_code=401, detail="未登录或租户信息无效")
 
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
+    # 从认证 token 中获取用户信息
+    current_user = auth.get_current_user(request)
+    if not current_user:
         raise HTTPException(status_code=401, detail="未登录")
+    user_id = current_user["user_id"]
 
     result = InstanceService.take_over_instance(
         instance_id=instance_id,

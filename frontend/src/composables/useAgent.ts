@@ -12,6 +12,13 @@ const currentResponse = ref('')
 const error = ref<string | null>(null)
 const sessionId = ref<string>(generateSessionId())
 
+// 排队相关状态
+const isBusy = ref(false)
+const busyMessage = ref('')
+const busyInstanceId = ref('')
+const isSameUser = ref(false)
+const pendingMessage = ref('') // 等待排队发送的消息
+
 // 当前附件列表
 const currentFiles = ref<UploadedFile[]>([])
 
@@ -220,6 +227,15 @@ export function useAgent() {
         (subagentName, question) => {
           addProgress(`❓ ${subagentName}需要补充信息: ${question}`, 'tool_start', 'clarification')
         },
+        // onBusy - 实例繁忙，显示排队选项
+        (instance_id, message, is_same_user) => {
+          isBusy.value = true
+          busyMessage.value = message
+          busyInstanceId.value = instance_id
+          isSameUser.value = is_same_user
+          pendingMessage.value = content // 保存用户消息用于排队成功后发送
+          // 不需要 isProcessing = false，因为这是正常流程，用户可以选择排队
+        },
         subagent,
         instanceId
       )
@@ -366,6 +382,69 @@ export function useAgent() {
     }
   }
 
+  /**
+   * 加入排队队列
+   */
+  async function joinQueue(instanceId: string): Promise<boolean> {
+    try {
+      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+      const response = await fetch(`${apiBase}/chat/instances/${instanceId}/lock`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getEffectiveAuthHeader()
+        },
+        body: JSON.stringify({ session_id: sessionId.value })
+      })
+      const result = await response.json()
+      if (result.is_queued) {
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('joinQueue error:', err)
+      return false
+    }
+  }
+
+  /**
+   * 取消繁忙状态（不排队）
+   */
+  function cancelBusy() {
+    isBusy.value = false
+    busyMessage.value = ''
+    busyInstanceId.value = ''
+    pendingMessage.value = ''
+    isProcessing.value = false
+  }
+
+  /**
+   * 结束当前会话，释放实例锁
+   */
+  async function endSession(instanceId: string): Promise<boolean> {
+    try {
+      const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+      const response = await fetch(`${apiBase}/chat/instances/${instanceId}/release`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getEffectiveAuthHeader()
+        },
+        body: JSON.stringify({ session_id: sessionId.value })
+      })
+      const result = await response.json()
+      if (result.success) {
+        // 清理状态
+        isProcessing.value = false
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('endSession error:', err)
+      return false
+    }
+  }
+
   // 组件卸载时断开连接
   onUnmounted(() => {
     sseManager.disconnect()
@@ -388,6 +467,15 @@ export function useAgent() {
     uploadAttachment,
     removeAttachment,
     clearAttachments,
-    abortStreaming
+    abortStreaming,
+    // 排队相关
+    isBusy,
+    busyMessage,
+    busyInstanceId,
+    isSameUser,
+    pendingMessage,
+    joinQueue,
+    cancelBusy,
+    endSession
   }
 }

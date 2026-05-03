@@ -32,6 +32,14 @@ export interface SubagentListItem {
   capabilities: string[]
   type: 'builtin' | 'custom'
   business_pages?: BusinessPage[]
+  // 实例相关字段（租户模式下返回实例时包含）
+  instance_id?: string      // 实例ID，租户模式下必填
+  display_name?: string     // 显示名称
+  instance_name?: string    // 实例名称（如"外贸获客智能体 - 实例1"）
+  subagent_type?: string    // 子智能体类型
+  status?: string           // 实例状态：idle/busy/offline
+  avatar?: string           // 头像
+  [key: string]: any        // 允许其他字段
 }
 
 export interface SubagentDetail {

@@ -119,6 +119,7 @@ export class SSEManager {
     onToolResult?: (toolName: string, result: any, success: boolean) => void,
     onThinking?: (data: string) => void,
     onClarification?: (subagentName: string, question: string) => void,
+    onBusy?: (instanceId: string, message: string, isSameUser: boolean) => void,
     subagent?: string | null,
     instance_id?: string | null
   ): Promise<void> {
@@ -166,7 +167,7 @@ export class SSEManager {
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification })
+            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onBusy })
           }
           break
         }
@@ -179,7 +180,7 @@ export class SSEManager {
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification })
+          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onBusy })
         }
       }
     } catch (error) {
@@ -205,6 +206,7 @@ export class SSEManager {
       onToolResult?: (toolName: string, result: any, success: boolean) => void
       onThinking?: (data: string) => void
       onClarification?: (subagentName: string, question: string) => void
+      onBusy?: (instanceId: string, message: string, isSameUser: boolean) => void
     }
   ) {
     // 处理多行数据
@@ -250,6 +252,10 @@ export class SSEManager {
             break
           case 'clarification':
             callbacks.onClarification?.(event.subagentName, event.question)
+            break
+          case 'busy':
+            // 实例繁忙，前端显示排队选项
+            callbacks.onBusy?.(event.instance_id, event.message, event.is_same_user)
             break
         }
       } catch {

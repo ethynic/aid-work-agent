@@ -118,11 +118,19 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { checkQueueStatus, cancelQueue, type ChatInstance } from '@/api/chatInstances'
+import { checkQueueStatus, cancelQueue } from '@/api/chatInstances'
+
+// 兼容两种实例类型的公共接口
+type QueueModalInstance = {
+  instance_id?: string
+  instance_name?: string
+  display_name?: string
+  avatar?: string
+}
 
 const props = defineProps<{
   visible: boolean
-  instance: ChatInstance | null
+  instance: QueueModalInstance | null
   sessionId: string
 }>()
 
@@ -157,7 +165,7 @@ function formatWaitTime(seconds: number): string {
 }
 
 async function pollQueueStatus() {
-  if (!props.instance || !props.sessionId) return
+  if (!props.instance || !props.sessionId || !props.instance.instance_id) return
 
   try {
     const status = await checkQueueStatus(props.instance.instance_id, props.sessionId)
@@ -186,8 +194,8 @@ async function pollQueueStatus() {
 function startPolling() {
   // Poll immediately first
   pollQueueStatus()
-  // Then poll every 5 seconds
-  pollingTimer = window.setInterval(pollQueueStatus, 5000)
+  // Then poll every 10 seconds
+  pollingTimer = window.setInterval(pollQueueStatus, 10000)
 }
 
 function stopPolling() {
@@ -200,7 +208,7 @@ function stopPolling() {
 async function handleCancel() {
   stopPolling()
 
-  if (props.instance && props.sessionId) {
+  if (props.instance && props.sessionId && props.instance.instance_id) {
     try {
       await cancelQueue(props.instance.instance_id, props.sessionId)
     } catch (e) {

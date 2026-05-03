@@ -333,7 +333,7 @@ class InstanceService:
         session_id: str
     ) -> Dict[str, Any]:
         """
-        检查排队状态
+        检查排队状态（每次调用自动更新心跳）
 
         Returns:
             {
@@ -366,6 +366,15 @@ class InstanceService:
             status = row["status"]
             position = row["position"]
 
+            # 更新心跳（只有 waiting 状态需要）
+            if status == "waiting":
+                cursor.execute("""
+                    UPDATE agent_instance_queue
+                    SET last_heartbeat_at = CURRENT_TIMESTAMP
+                    WHERE instance_id = %s AND session_id = %s
+                """, (instance_id, session_id))
+                conn.commit()
+
             # 如果是 ready 状态，检查是否真的可以锁定（防止过期）
             if status == "ready":
                 cursor.execute("""
@@ -390,8 +399,26 @@ class InstanceService:
             """, (instance_id,))
             total = cursor.fetchone()["total"]
 
-            # 预估等待时间：假设每个对话平均5分钟
-            estimated_wait = position * 300
+            # 基于最近10个已完成会话的平均耗时计算预估等待时间
+            cursor.execute("""
+                SELECT AVG(EXTRACT(EPOCH FROM (cs.ended_at - cs.created_at))) as avg_duration
+                FROM chat_sessions cs
+                WHERE cs.instance_id = %s
+                  AND cs.ended_at IS NOT NULL
+                  AND cs.created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                ORDER BY cs.created_at DESC
+                LIMIT 10
+            """, (instance_id,))
+            avg_row = cursor.fetchone()
+            avg_duration = avg_row.get("avg_duration") if avg_row else None
+
+            if avg_duration and avg_duration > 0:
+                # 有历史数据，用真实平均值
+                estimated_wait = int(position * avg_duration)
+                logger.debug(f"[QueueStats] Using real avg duration: {avg_duration:.1f}s for instance {instance_id}")
+            else:
+                # 没有历史数据，用默认值3分钟（比原来的5分钟更保守）
+                estimated_wait = position * 180
 
             return {
                 "in_queue": True,
@@ -594,21 +621,33 @@ class InstanceService:
 
     @staticmethod
     def _cleanup_expired_queue_items(conn):
-        """清理超时的排队项"""
+        """清理超时的排队项（包括等待超时和20秒无心跳）"""
         cursor = conn.cursor()
+        # 1. 清理等待超时（30分钟）
         cursor.execute("""
             UPDATE agent_instance_queue
             SET status = 'expired', updated_at = CURRENT_TIMESTAMP
             WHERE wait_timeout_at < CURRENT_TIMESTAMP AND status = 'waiting'
         """)
-        count = cursor.rowcount
-        if count > 0:
-            logger.info(f"Cleaned up {count} expired queue items")
+        count_timeout = cursor.rowcount
+        if count_timeout > 0:
+            logger.info(f"Cleaned up {count_timeout} expired queue items (timeout)")
+
+        # 2. 清理超过20秒无心跳的排队项（用户可能关闭了浏览器）
+        cursor.execute("""
+            UPDATE agent_instance_queue
+            SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+            WHERE last_heartbeat_at < CURRENT_TIMESTAMP - INTERVAL '20 seconds'
+              AND status = 'waiting'
+        """)
+        count_heartbeat = cursor.rowcount
+        if count_heartbeat > 0:
+            logger.info(f"Cleaned up {count_heartbeat} abandoned queue items (no heartbeat)")
 
     @staticmethod
     def _wake_up_next_waiter(conn, instance_id: str) -> Optional[str]:
         """
-        唤醒队列头部的用户，标记为 ready
+        唤醒队列头部的用户，标记为 ready，并记录等待时间统计
 
         Returns:
             被唤醒的会话ID，如果没有则返回 None
@@ -617,7 +656,7 @@ class InstanceService:
 
         # 找到队列头部第一个
         cursor.execute("""
-            SELECT queue_id, session_id FROM agent_instance_queue
+            SELECT queue_id, session_id, queued_at FROM agent_instance_queue
             WHERE instance_id = %s AND status = 'waiting'
             ORDER BY position
             LIMIT 1
@@ -628,17 +667,34 @@ class InstanceService:
         if not row:
             return None
 
-        # 标记为 ready 状态
+        queue_id = row["queue_id"]
+        session_id = row["session_id"]
+        queued_at = row["queued_at"]
+
+        # 计算等待时长（秒）
+        wait_duration = None
+        if queued_at:
+            cursor.execute("SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - %s))", (queued_at,))
+            duration_row = cursor.fetchone()
+            if duration_row:
+                wait_duration = int(duration_row[0]) if duration_row[0] else 0
+
+        # 标记为 ready 状态，记录开始服务时间和等待时长
         cursor.execute("""
             UPDATE agent_instance_queue
-            SET status = 'ready', updated_at = CURRENT_TIMESTAMP
+            SET status = 'ready',
+                started_at = CURRENT_TIMESTAMP,
+                wait_duration_seconds = %s,
+                updated_at = CURRENT_TIMESTAMP
             WHERE queue_id = %s
-        """, (row["queue_id"],))
+        """, (wait_duration, queue_id))
 
+        # 输出等待时间统计日志
         logger.info(
-            f"Woke up session {row['session_id']} for instance {instance_id}"
+            f"[QueueStats] Woke up session {session_id} for instance {instance_id}, "
+            f"waited {wait_duration if wait_duration else 'N/A'}s"
         )
-        return row["session_id"]
+        return session_id
 
 
 # 全局单例

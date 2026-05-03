@@ -796,10 +796,18 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             else:
                 busy_message = f"[{instance_name}] 正在为用户【{holder_username}】提供服务，请稍后再试或选择其他数字员工"
 
-            # 返回 200 并通过 SSE 流式输出提示
+            # 返回 200 并通过 SSE 流式输出提示（带 busy 标志供前端识别）
             def busy_event_generator():
+                busy_data = {
+                    'type': 'busy',
+                    'flag': 'busy',
+                    'message': busy_message,
+                    'instance_id': instance_id,
+                    'is_same_user': is_same_user,
+                    'current_user_name': holder_username,
+                }
                 yield f"data: {json.dumps({'type': 'connected', 'session_id': request.session_id, 'agent_type': 'default'}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'response', 'data': busy_message}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(busy_data, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
 
             return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
@@ -814,13 +822,21 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             )
             if not lock_result.get("success") and not lock_result.get("was_idle"):
                 logger.warning(f"[并发控制调试] 自动锁定失败: instance_id={instance_id}, result={lock_result}")
-                # 锁定失败（竞态情况），通过 SSE 返回友好提示
+                # 锁定失败（竞态情况），通过 SSE 返回友好提示（带 busy 标志）
                 instance_name = instance.get("instance_name") or instance.get("display_name") or "数字员工"
                 busy_message = f"[{instance_name}] 正在被其他用户占用，请稍后再试或选择其他数字员工"
 
                 def busy_event_generator():
+                    busy_data = {
+                        'type': 'busy',
+                        'flag': 'busy',
+                        'message': busy_message,
+                        'instance_id': instance_id,
+                        'is_same_user': False,
+                        'current_user_name': '其他用户',
+                    }
                     yield f"data: {json.dumps({'type': 'connected', 'session_id': request.session_id, 'agent_type': 'default'}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'type': 'response', 'data': busy_message}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(busy_data, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
 
                 return StreamingResponse(busy_event_generator(), media_type="text/event-stream")

@@ -48,6 +48,7 @@ export type MessageStreamEvent =
   | { type: 'tool_result'; toolName: string; result: any; success: boolean; timestamp: number }
   | { type: 'thinking'; data: string; timestamp: number }
   | { type: 'clarification'; subagentName: string; question: string; timestamp: number }
+  | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }
 
 // 用户相关类型
 export interface User {
