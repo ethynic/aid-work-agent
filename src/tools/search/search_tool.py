@@ -34,7 +34,8 @@ class WebSearchTool(BaseTool):
     """网络搜索工具 - 基于 Tavily API"""
 
     name = "web_search"
-    description = "在网络上搜索实时信息，返回清洗后的内容和AI生成的答案摘要"
+    description = "在网络上搜索实时信息、新闻、数据等，返回清洗后的内容和AI生成的答案摘要。关键词必须与用户提问语言一致。"
+    usage_guide = ""
     display_name = "网络搜索"
     category = "search"
     InputModel = WebSearchInput

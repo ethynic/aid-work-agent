@@ -159,6 +159,44 @@ class BrowserOpenTool(BaseTool):
 
     name = "browser_open"
     description = "打开指定网址的网页，等待页面加载完成"
+    usage_guide = """工具使用规范（重要！）
+
+**操作网页必须遵循以下流程：**
+
+```
+1. browser_open(url="...")        → 打开网页
+2. browser_snapshot()             → 获取语义快照（必须！）
+3. browser_click/fill/select(...) → 通过自然语言操作元素
+4. browser_snapshot()             → 页面变化后重新获取快照
+5. 重复 3-4 直到完成
+```
+
+**核心规则：**
+- **browser_open 之后必须立即调用 browser_snapshot**，不要跳过这一步
+- **每次页面发生变化后（点击、导航等），必须重新调用 browser_snapshot**
+- browser_click、browser_fill、browser_select 通过**自然语言描述**定位元素，不需要 CSS 选择器
+- browser_snapshot 返回的 JSON 中包含 `interactive_elements`（每个元素有 `ref` 和 `label`），分析这些信息来决定如何操作
+
+**browser_click** - 点击元素
+- description: 要点击元素的自然语言描述，如"登录按钮"、"报销申请"
+- 示例: browser_click(description="登录按钮")
+
+**browser_fill** - 填写表单
+- field: 字段的自然语言描述，value: 要填写的值
+- 示例: browser_fill(field="用户名", value="张三")
+
+**browser_select** - 选择下拉选项
+- field: 下拉框描述，option: 要选择的选项
+- 示例: browser_select(field="部门", option="技术研发部")
+
+**browser_find** - 查找元素（不执行操作，仅查找）
+- description: 元素的自然语言描述
+- 返回匹配的 ref 和置信度，可用于确认元素存在后再操作
+
+**禁止事项：**
+- 禁止使用 CSS 选择器（如 selector="#submit-btn"）
+- 禁止在 browser_open 后直接操作元素而不获取快照
+- 禁止跳过 browser_snapshot 直接猜测元素位置"""
     display_name = "打开网页"
     category = "browser"
     InputModel = BrowserOpenInput

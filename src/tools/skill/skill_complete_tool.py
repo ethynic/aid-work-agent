@@ -18,7 +18,7 @@ from src.tools.base import BaseTool
 class SkillCompleteInput(BaseModel):
     """完成技能参数"""
     skill: str = Field(..., description="技能名称")
-    summary: str = Field(..., description="结果摘要")
+    summary: str = Field(..., description="结果摘要，一句简洁的结果描述（1-3句话）")
     session_id: str = Field(..., description="会话ID")
 
 
@@ -26,7 +26,8 @@ class SkillCompleteTool(BaseTool):
     """技能完成工具"""
 
     name = "skill_complete"
-    description = "标记当前技能执行完成"
+    description = "标记技能执行完成（必须在所有步骤完成后调用）。调用后系统会自动清理中间过程，仅保留摘要到对话历史。"
+    usage_guide = ""
     display_name = "完成技能"
     category = "skill"
     InputModel = SkillCompleteInput

@@ -18,7 +18,11 @@ class CreateScheduledTaskInput(BaseModel):
     """创建定时任务参数"""
     name: str = Field(..., description="任务名称，简短描述（如：每日邮件检查）")
     description: Optional[str] = Field("", description="任务的详细描述")
-    task_prompt: str = Field(..., description="独立可执行的提示词，不依赖对话上下文。应包含完整的任务指令、所有必要信息。")
+    task_prompt: str = Field(..., description=(
+        "独立可执行的提示词，不依赖对话上下文。应包含完整的任务指令、所有必要信息（收件人、文件路径、操作步骤等）。"
+        "如需专业领域能力，可在提示词中指示委派给子智能体。"
+        "示例：「1. 使用 email_read 读取未读邮件 2. 将邮件列表汇总为文本 3. 使用 email_send 发送汇总到 zhangsan@company.com」"
+    ))
     schedule_type: str = Field(..., description="调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性")
     time_config: Dict[str, Any] = Field(..., description="时间配置，必须从用户话语中解析，所有时间为北京时间")
 
@@ -81,13 +85,14 @@ class CreateScheduledTaskTool(BaseTool):
 
     name = "create_scheduled_task"
     description = (
-        "为用户创建定时执行的任务。创建前会先执行一次验证，只有验证通过才会创建定时任务。"
+        "为用户创建定时执行的任务。当用户说「每天/每周/每月/定期/定时/每隔X小时」+ 某个操作时使用。"
+        "创建前会先执行一次验证，只有验证通过才会创建定时任务。"
         "支持每天、每周、每月、间隔执行、一次性等模式。"
-        "task_prompt 必须是不依赖对话上下文的独立可执行提示词，"
-        "如果任务需要专业领域能力，可在 task_prompt 中指示委派给子智能体。"
-        "【重要】必须从用户话语中解析出具体的调度时间。所有时间默认为北京时间(Asia/Shanghai)。"
-        "如果用户没有给出具体时间，必须先向用户确认时间后再调用此工具，禁止自行猜测默认时间。"
+        "如果用户询问已创建的定时任务，使用 manage_scheduled_task 工具查看。"
+        "【重要】必须从用户话语中解析出具体的调度时间（北京时间）。"
+        "如果用户没有给出具体时间，必须先向用户确认后再调用，禁止自行猜测默认时间。"
     )
+    usage_guide = """"""
     display_name = "创建定时任务"
     category = "scheduler"
     InputModel = CreateScheduledTaskInput

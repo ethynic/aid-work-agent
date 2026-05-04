@@ -22,6 +22,7 @@ class BaseTool(ABC):
 
     name: str = ""
     description: str = ""
+    usage_guide: str = ""  # 工具使用指南，注入系统提示词。空字符串表示无指南。
     display_name: str = ""  # 中文显示名（用于 UI 展示）
     parameters_schema: Dict[str, Any] = {}
     category: str = "general"
@@ -74,6 +75,20 @@ class BaseTool(ABC):
             显示名
         """
         return self.display_name or self.name
+
+    def get_usage_guide(self, **kwargs) -> str:
+        """
+        获取工具使用指南文本（注入系统提示词用）。
+
+        默认返回 self.usage_guide 静态属性。子类可重写此方法提供动态内容。
+
+        Args:
+            **kwargs: 动态参数（如子智能体描述列表）
+
+        Returns:
+            使用指南文本，空字符串表示无指南
+        """
+        return self.usage_guide
 
     def validate_parameters(self, **kwargs) -> bool:
         """

@@ -28,7 +28,8 @@ class CreatePlanTool(BaseTool):
     """创建执行计划工具"""
 
     name = "create_plan"
-    description = "为复杂任务创建执行计划"
+    description = "为复杂任务创建执行计划。⚠️ 如果任务只需要一个工具或一个子智能体，直接调用该工具，不需要创建计划！只有当任务需要多个步骤协调时才使用。"
+    usage_guide = ""
     display_name = "创建执行计划"
     category = "plan"
     InputModel = CreatePlanInput

@@ -404,6 +404,31 @@ class Agent:
         # 4. Fallback
         return tool_name
 
+    def _collect_tool_usage_guides(self) -> str:
+        """
+        从 ToolRegistry 和虚拟工具中收集 usage_guide，合并为系统提示词文本。
+        仅包含 usage_guide 非空的工具。
+        """
+        # 从 ToolRegistry 收集注册工具的指南
+        guides = self.tool_registry.get_usage_guides()
+
+        # 虚拟工具指南（不在 registry 中，手动收集）
+        virtual_tools = [
+            self._skill_execute_tool,
+            self._skill_complete_tool,
+            self._create_plan_tool,
+            self._clarify_tool,
+        ]
+        for vtool in virtual_tools:
+            if vtool:
+                guide = vtool.get_usage_guide()
+                if guide:
+                    if guides:
+                        guides += "\n\n"
+                    guides += f"### {vtool.name}\n{guide}"
+
+        return guides
+
     def _build_base_system_prompt(
         self,
         include_delegation: bool = True,
@@ -477,38 +502,13 @@ class Agent:
         # 委派工具说明（仅主智能体使用）
         delegation_guide = ""
         subagent_matching_hint = ""
-        
+
         if include_delegation and available_subagents:
-            delegation_guide = f"""
-### delegate_to_subagent（委派给专业子智能体）
-当任务需要专业领域能力时，直接委派给子智能体：
-
-**可用子智能体：**
-{subagent_descriptions}
-
-**🚨 重要：直接委派，不需要先创建计划！**
-如果任务只需要委派给一个子智能体就能完成（不需要其他工具或步骤），**直接调用`delegate_to_subagent`工具**，不需要先调用`create_plan`。子智能体会自己创建和执行计划。
-
-**⚠️ task_description 必须包含完整信息！**
-如果用户上传了文件（图片、文档等），必须在 task_description 中包含以下信息：
-- 文件的完整路径（已在消息中提供，格式如 "Full path: `/path/to/file.jpg`"）
-- 文件名称和大小
-- 例如：`task_description="处理产品图片，文件路径：/tmp/skill_ws_xxx/product.jpg"`
-
-**使用场景：**
-- 代码审查任务 → 直接调用 `delegate_to_subagent(subagent_name="code-reviewer", task_description="...")`
-- HR相关任务 → 直接调用 `delegate_to_subagent(subagent_name="hr-expert", task_description="...")`
-- 外贸获客任务 → 直接调用 `delegate_to_subagent(subagent_name="外贸获客智能体", task_description="...")`
-- PDF文档处理 → 直接调用 `delegate_to_subagent(subagent_name="pdf-expert", task_description="...")`
-
-**调用示例：**
-```
-delegate_to_subagent(
-    subagent_name="外贸获客智能体",
-    task_description="帮我在中亚地区匹配LED灯客户。已上传产品图片：Full path: `/tmp/skill_ws_xxx/led_light.jpg`，请从中提取产品信息进行客户匹配"
-)
-```
-"""
+            # 从 DelegateToSubagentTool 动态获取使用指南
+            if self._delegate_tool:
+                delegation_guide = self._delegate_tool.get_usage_guide(subagent_descriptions=subagent_descriptions)
+                if delegation_guide:
+                    delegation_guide = f"\n### delegate_to_subagent{delegation_guide}\n"
             subagent_matching_hint = f"""
 **⚡ 关键：优先判断是否可以直接委派**
 在分析需求时，首先检查任务是否属于以下专业领域：
@@ -623,33 +623,6 @@ delegate_to_subagent(
 ### 可用子智能体
 {subagent_descriptions}''' if include_delegation else ''}
 
-### 定时任务能力
-
-你具备为用户创建定时执行任务的能力。当用户的需求包含以下特征时，应考虑创建定时任务：
-- "每天/每周/每月" + 某个操作
-- "定期/定时" + 某个操作
-- "每隔X小时" + 某个操作
-- "在XX时间" + 某个操作
-
-**创建定时任务时，你必须：**
-1. 使用 `create_scheduled_task` 工具
-2. 生成一个 **独立可执行的提示词（task_prompt）**，该提示词必须：
-   - 不依赖当前对话上下文
-   - 包含所有必要的信息（收件人、文件路径、操作步骤等）
-   - 描述清晰，让 Agent 可以仅凭此提示词完成任务
-   - 可以包含委派子智能体的指令（如需要领域专业能力）
-3. 系统会先验证执行一次，成功后才会创建定时任务
-4. 如果用户询问已创建的定时任务，使用 `manage_scheduled_task` 工具查看
-
-**task_prompt 示例：**
-```
-请执行以下任务：
-1. 使用 email_read 工具读取未读邮件（folder=INBOX, unseen_only=True, limit=20）
-2. 如果有未读邮件，将邮件列表汇总为文本
-3. 使用 email_send 工具发送汇总到 zhangsan@company.com，主题为"每日未读邮件汇总"
-4. 如果没有未读邮件，则发送一封简短通知"今日暂无未读邮件"
-```
-
 ### 超出能力的处理
 当用户的请求超出你的能力范围时：
 1. **明确告知用户**：说明这个任务无法完成
@@ -669,87 +642,7 @@ delegate_to_subagent(
 
 ## 工具使用指南
 
-### create_plan（仅多步骤任务需要）
-**⚠️ 如果任务只需要一个工具或一个子智能体，直接调用该工具，不需要创建计划！**
-
-只有当任务需要多个步骤协调时才创建计划：
-
-```
-create_plan(
-    goal="用户的目标",
-    steps=[
-        {{"step_number": 1, "description": "步骤描述", "tool": "工具名", "parameters": {{}}, "expected_output": "预期输出"}},
-        ...
-    ],
-    execution_mode="sequential"
-)
-```
-
-### web_search
-- 关键词必须与用户语言一致
-- 用于查询实时信息、新闻、数据等
-
-### use_skill
-- 加载技能，获取完整的操作指南（SKILL.md 正文）
-- 技能本质是给 LLM 的操作手册，加载后根据手册指引决定下一步操作
-- 不同技能行为由其操作指南决定：
-  - 脚本执行类：手册会要求调用 `skill_execute` 执行命令
-  - 引导式技能：手册会引导你调用 `content_generate`、`web_search` 等工具组合完成任务
-- 使用流程：use_skill → 阅读指南 → 按指南执行 → skill_complete 标记完成
-
-### skill_execute
-- 在技能上下文中执行命令（仅当操作指南要求时才使用）
-- 用于执行操作指南中描述的命令（如 python scripts/xxx.py）
-- 引导式技能（无脚本的技能）通常不需要调用此工具
-- 格式：skill_execute(skill="技能名", command="实际命令")
-
-### skill_complete
-- 标记技能执行完成（必须在所有步骤完成后调用）
-- `summary` 参数应是一句简洁的结果描述（1-3句话）
-- 调用后系统会自动清理中间过程，仅保留摘要到对话历史
-
-### clarify
-- 当信息不足时向用户询问
-
-### Browser 工具使用规范（重要！）
-
-**操作网页必须遵循以下流程：**
-
-```
-1. browser_open(url="...")        → 打开网页
-2. browser_snapshot()             → 获取语义快照（必须！）
-3. browser_click/fill/select(...) → 通过自然语言操作元素
-4. browser_snapshot()             → 页面变化后重新获取快照
-5. 重复 3-4 直到完成
-```
-
-**核心规则：**
-- **browser_open 之后必须立即调用 browser_snapshot**，不要跳过这一步
-- **每次页面发生变化后（点击、导航等），必须重新调用 browser_snapshot**
-- browser_click、browser_fill、browser_select 通过**自然语言描述**定位元素，不需要 CSS 选择器
-- browser_snapshot 返回的 JSON 中包含 `interactive_elements`（每个元素有 `ref` 和 `label`），分析这些信息来决定如何操作
-
-**browser_click** - 点击元素
-- description: 要点击元素的自然语言描述，如"登录按钮"、"报销申请"
-- 示例: browser_click(description="登录按钮")
-
-**browser_fill** - 填写表单
-- field: 字段的自然语言描述，value: 要填写的值
-- 示例: browser_fill(field="用户名", value="张三")
-
-**browser_select** - 选择下拉选项
-- field: 下拉框描述，option: 要选择的选项
-- 示例: browser_select(field="部门", option="技术研发部")
-
-**browser_find** - 查找元素（不执行操作，仅查找）
-- description: 元素的自然语言描述
-- 返回匹配的 ref 和置信度，可用于确认元素存在后再操作
-
-**禁止事项：**
-- 禁止使用 CSS 选择器（如 selector="#submit-btn"）
-- 禁止在 browser_open 后直接操作元素而不获取快照
-- 禁止跳过 browser_snapshot 直接猜测元素位置
-
+{{{self._collect_tool_usage_guides()}}}
 {delegation_guide}
 ---
 

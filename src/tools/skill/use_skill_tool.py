@@ -17,7 +17,8 @@ class UseSkillTool(BaseTool):
     """加载技能工具"""
 
     name = "use_skill"
-    description = "加载技能的操作指南"
+    description = "加载技能的操作指南（SKILL.md 正文）。加载后根据指南决定下一步：脚本执行类调用 skill_execute，引导式技能调用 content_generate 等工具。流程：use_skill → 按指南执行 → skill_complete 标记完成。"
+    usage_guide = ""
     display_name = "加载技能"
     category = "skill"
 

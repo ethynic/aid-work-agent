@@ -18,9 +18,21 @@ from src.llm.gateway import llm_gateway
 
 class ContentGenerateInput(BaseModel):
     """生成内容参数"""
-    prompt: str = Field(..., description="生成内容的提示词，由智能体组织。提示词应包含：1)角色/身份 2)任务描述 3)输入信息 4)输出格式要求 5)语言要求等")
+    prompt: str = Field(..., description=(
+        "完整的内容生成指令，由调用方组织。"
+        "应包含：(1)角色定义——以什么身份/专业视角生成内容 "
+        "(2)任务描述——生成什么内容、给谁看、达到什么目的 "
+        "(3)输入素材——相关的背景信息、数据、上下文要点，直接嵌入文本中 "
+        "(4)输出格式——结构要求（段落、列表、表格、JSON、Markdown等）、长度限制 "
+        "(5)质量标准——语气（正式/亲切）、风格、专业度要求。"
+        "写得越详细具体，生成质量越高。"
+    ))
     language: Optional[str] = Field("zh", description="生成内容的语言，如：zh、en、ru、de、ja、ko等")
-    content_type: Optional[str] = Field("", description="内容类型，用于选择合适的提示词模板。可选值：customer_list、email、market_report、outline、article、report、polish等")
+    content_type: Optional[str] = Field("", description=(
+        "内容类型标签。已知预设可自动获得专业系统提示："
+        "customer_list、email、market_report、outline、article、report、polish。"
+        "非预设场景留空即可，工具会使用通用模式，完全依赖 prompt 参数来指导生成。"
+    ))
 
 
 class ContentGenerateTool(BaseTool):
@@ -31,7 +43,34 @@ class ContentGenerateTool(BaseTool):
     """
 
     name = "content_generate"
-    description = "调用大模型生成内容，用于生成客户列表、撰写多语言邮件等。智能体需要提供详细的提示词来指导大模型生成所需内容。"
+    description = (
+        "通用内容生成工具。可生成任意类型的文本内容：邮件、报告、文章、大纲、客户列表、"
+        "方案、摘要、翻译润色等。支持多语言输出。"
+        "调用方需在 prompt 中提供完整的生成指令（角色、任务、素材、格式、质量要求），"
+        "工具负责调用大模型并返回结果。"
+        "content_type 参数提供常用场景的快捷预设（如 email、report），非预设场景留空即可。"
+    )
+    usage_guide = """（通用内容生成）
+
+**好的 prompt 示例：**
+```
+你代表 ABC 国际贸易有限公司，向德国客户撰写一封产品推荐邮件。
+
+客户信息：
+- 公司：SmartLiving GmbH
+- 联系人：Hans Weber
+- 行业：智能家居
+
+推荐产品：
+- 智能LED灯泡系列，节能40%，支持WiFi控制
+
+要求：
+1. 使用德语撰写
+2. 格式：邮件主题 + 正文
+3. 语气：专业但不生硬，像真实的商务邮件
+```
+
+**差的 prompt 示例：** `帮我写一封给德国客户的邮件，推销我们的智能灯泡`"""
     display_name = "生成内容"
     category = "llm"
     InputModel = ContentGenerateInput
@@ -124,7 +163,17 @@ class ContentGenerateTool(BaseTool):
         Returns:
             系统提示词
         """
-        base_prompt = "你是一个专业的内容生成助手。请根据用户提供的提示词生成高质量的内容。"
+        base_prompt = (
+            "你是一个专业的内容生成助手。请严格遵循用户的指令生成高质量内容。\n"
+            "规则：\n"
+            "1. 如果用户指令中指定了角色（如「你是外贸专家」），立即采纳该角色并以其专业视角生成内容\n"
+            "2. 如果用户指令中指定了输出格式（如JSON、表格、Markdown、邮件格式），严格按照该格式输出\n"
+            "3. 如果用户指令中包含了具体素材（数据、背景信息、要点），将这些素材准确融入生成内容，不要遗漏\n"
+            "4. 如果用户指令中指定了语言、语气、长度等质量标准，严格遵守\n"
+            "5. 如果用户指令中未指定某些维度（如未说格式），根据内容类型自动选择最合适的呈现方式\n"
+            "6. 生成的内容应直接可用，不要添加「以下是为您生成的内容」等元描述\n"
+            "7. 确保内容完整，不要截断或用省略号代替"
+        )
 
         # 根据内容类型添加特定指导
         type_guidance = {

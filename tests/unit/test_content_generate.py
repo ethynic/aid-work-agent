@@ -18,8 +18,8 @@ class TestContentGenerateNewTypes:
         for content_type in new_types:
             prompt = tool._get_system_prompt("zh", content_type)
             assert len(prompt) > 0
-            assert prompt != "你是一个专业的内容生成助手。请根据用户提供的提示词生成高质量的内容。", \
-                f"content_type={content_type} 没有匹配到特定提示词"
+            assert "严格遵循用户的指令" not in prompt, \
+                f"content_type={content_type} 没有匹配到特定提示词，落入了通用 fallback"
 
     def test_existing_content_types_still_work(self):
         tool = ContentGenerateTool()
@@ -31,7 +31,21 @@ class TestContentGenerateNewTypes:
     def test_custom_content_type_falls_back(self):
         tool = ContentGenerateTool()
         prompt = tool._get_system_prompt("zh", "custom_unknown_type")
-        assert prompt == "你是一个专业的内容生成助手。请根据用户提供的提示词生成高质量的内容。 请使用简体中文回复。"
+        # 增强版通用 fallback 应包含关键指令
+        assert "严格遵循用户的指令" in prompt
+        assert "请使用简体中文回复。" in prompt
+
+    def test_tool_description_mentions_universal(self):
+        tool = ContentGenerateTool()
+        assert "通用" in tool.description
+        assert "任意类型" in tool.description
+
+    def test_input_model_prompt_description_is_detailed(self):
+        schema = ContentGenerateTool.InputModel.model_json_schema()
+        prompt_desc = schema["properties"]["prompt"]["description"]
+        assert "角色定义" in prompt_desc
+        assert "输出格式" in prompt_desc
+        assert "输入素材" in prompt_desc
 
 
 class TestAgentSkillCompleteTool:

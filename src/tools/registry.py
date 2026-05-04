@@ -106,7 +106,7 @@ class ToolRegistry:
     def get_tool_descriptions(self) -> str:
         """
         获取所有工具的描述文本
-        
+
         Returns:
             工具描述文本
         """
@@ -114,6 +114,24 @@ class ToolRegistry:
         for name, tool in self._tools.items():
             lines.append(f"- {name}: {tool.description}")
         return "\n".join(lines)
+
+    def get_usage_guides(self, **kwargs) -> str:
+        """
+        收集所有注册工具的使用指南，合并为一段 Markdown 文本。
+        仅包含 usage_guide 非空的工具。通过 get_usage_guide() 方法收集，支持动态内容。
+
+        Args:
+            **kwargs: 传递给各工具 get_usage_guide() 的动态参数
+
+        Returns:
+            合并后的工具使用指南文本
+        """
+        guides = []
+        for tool in self._tools.values():
+            guide = tool.get_usage_guide(**kwargs)
+            if guide:
+                guides.append(f"### {tool.name}\n{guide}")
+        return "\n\n".join(guides)
 
 
 # 全局工具注册表

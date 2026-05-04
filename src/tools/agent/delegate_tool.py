@@ -18,7 +18,11 @@ class DelegateToSubagentTool(BaseTool):
     """子智能体委派工具"""
 
     name = "delegate_to_subagent"
-    description = "将任务委派给专业的子智能体执行"
+    description = (
+        "将任务委派给专业的子智能体执行。"
+        "⚠️ 如果任务只需要委派给一个子智能体就能完成，直接调用此工具，不需要先 create_plan。"
+        "task_description 必须包含完整信息（包括用户上传文件的完整路径）。"
+    )
     display_name = "调用子智能体"
     category = "agent"
 
@@ -30,6 +34,18 @@ class DelegateToSubagentTool(BaseTool):
         """
         self.subagent_registry = subagent_registry
         self.subagent_executor = subagent_executor
+
+    def get_usage_guide(self, **kwargs) -> str:
+        """动态生成委派工具使用指南，包含当前可用的子智能体列表"""
+        subagent_descriptions = kwargs.get("subagent_descriptions", "")
+        if not subagent_descriptions:
+            if self.subagent_registry:
+                subagent_descriptions = self.subagent_registry.get_descriptions()
+            if not subagent_descriptions:
+                return ""
+
+        return f"""**可用子智能体：**
+{subagent_descriptions}"""
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """

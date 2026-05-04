@@ -25,6 +25,7 @@ class ClarifyTool(BaseTool):
 
     name = "clarify"
     description = "当信息缺失时向用户询问澄清"
+    usage_guide = ""
     display_name = "澄清问题"
     category = "agent"
     InputModel = ClarifyInput
