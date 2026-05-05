@@ -55,25 +55,22 @@ class SubagentExecutor:
         registry: 'SubagentRegistry',
         tool_registry: Optional['ToolRegistry'] = None,
         skill_registry: Optional['SkillRegistry'] = None,
-        build_base_prompt_func: Optional[callable] = None,
         parent_plan_manager: Optional['PlanManager'] = None,
     ):
         """
         初始化执行管理器
-        
+
         Args:
             session_memory: 共享的session记忆实例
             registry: Subagent注册表
             tool_registry: 主智能体的工具注册表（不再使用，保留向后兼容）
             skill_registry: 主智能体的技能注册表（不再使用，保留向后兼容）
-            build_base_prompt_func: 构建基础系统提示词的函数（不再使用，保留向后兼容）
             parent_plan_manager: 主智能体的计划管理器（用于记录子智能体执行过程）
         """
         self.memory = session_memory
         self.registry = registry
         self.tool_registry = tool_registry
         self.skill_registry = skill_registry
-        self.build_base_prompt_func = build_base_prompt_func
         self.parent_plan_manager = parent_plan_manager
         self._active_executions: Dict[str, asyncio.Task] = {}
         self._subagent_instances: Dict[str, 'Agent'] = {}

@@ -28,6 +28,7 @@ from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
 from src.memory.manager import MemoryManager
+from src.prompts import PromptManager
 from src.models.message import UnifiedMessage
 from src.models.user import User
 from src.models.plan import TaskStatus
@@ -115,6 +116,7 @@ class Agent:
         self.llm = llm_gateway
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
+        self.prompt_manager = PromptManager()
         self.memory = MemoryManager(
             max_short_term_messages=settings.memory.short_term.max_messages,
             short_term_ttl=settings.memory.short_term.ttl,
@@ -179,7 +181,6 @@ class Agent:
                 self.subagent_registry,
                 self.tool_registry,
                 self.skill_registry,
-                self._build_base_system_prompt,
             )
 
             # 延迟初始化 delegate 工具（依赖 subagent_executor）
@@ -517,185 +518,14 @@ class Agent:
 **决策逻辑：**
 1. 如果任务**只需要委派给一个子智能体**就能完成 → **直接调用`delegate_to_subagent`，不需要`create_plan`**
 2. 如果任务**需要多个工具组合或多个步骤** → 先调用`create_plan`创建计划，然后在计划中指定委派
-
-例如：
-- 招聘AI产品经理 → 直接委派给 `hr-expert`（单步任务，不需要计划）
-- 代码审查 → 直接委派给 `code-reviewer`（单步任务，不需要计划）
-- PDF提取表格 → 直接委派给 `pdf-expert`（单步任务，不需要计划）
-- 搜索信息+邮件发送 → 需要`create_plan`创建多步骤计划
 """
 
-        # 基础工作流程（根据是否包含委派调整）
-        if include_delegation:
-            workflow_step1 = """### 第一步：分析需求
-1. 理解用户想要什么
-2. **首先判断是否可以完全由一个子智能体完成**
-   - 如果只需要委派给一个子智能体 → **直接调用`delegate_to_subagent`，跳过计划创建**
-   - 如果需要多个工具组合或多步骤 → 需要先`create_plan`
-3. 判断是否需要使用工具
-4. 确定需要哪些工具/技能/子智能体"""
-        else:
-            workflow_step1 = """### 第一步：分析需求
-1. 理解用户想要什么
-2. 判断是否需要使用工具
-3. 确定需要哪些工具/技能"""
+        # 组装模板变量
+        available_tools_list = ', '.join([f'`{t}`' for t in available_tools])
 
-        prompt = f"""你是一个智能工作助手。你的任务是帮助用户完成各种工作任务。
-
-## 🚨 核心工作流程（必须严格遵守）
-
-**每个用户请求都必须遵循以下流程：**
-{subagent_matching_hint}
-{workflow_step1}
-
-### 第二步：创建执行计划（仅在需要时）
-**⚠️ 并非所有任务都需要创建计划！**
-
-**不需要创建计划的情况：**
-- 任务只需要调用一个子智能体 → 直接调用`delegate_to_subagent`
-- 任务只需要调用一个工具 → 直接调用该工具
-
-**需要创建计划的情况：**
-- 任务需要多个工具组合使用
-- 任务需要多个步骤协调执行
-- 任务涉及并行处理
-
-调用 `create_plan` 时需要提供：
-- goal: 任务目标（用户需求的总结）
-- steps: 执行步骤列表，每个步骤包含：
-  - step_number: 步骤编号
-  - description: 步骤描述
-  - tool: 使用的工具名称
-  - parameters: 工具参数
-  - expected_output: 预期输出
-- execution_mode: "sequential"（顺序）或 "parallel"（并行）
-
-### 第三步：执行计划（关键！）
-**⚠️ 创建计划后，必须立即执行计划中的步骤！不要只是描述计划，要实际调用工具！**
-
-执行方式：
-1. 创建计划后，`create_plan` 会返回第一步的工具和参数
-2. **立即调用返回的工具**，而不是回复用户"正在执行"
-3. 等待工具执行结果
-4. 继续执行下一步（如果有）
-5. 收集并整合所有结果
-
-### 第四步：汇报结果
-1. 总结执行结果
-2. 展示关键信息
-3. 如有失败，说明原因和建议
-
-**⚠️ 重要规则：创建计划后不要回复用户！**
-- 创建计划后，不要对用户说"正在执行"、"请稍候"之类的话
-- 而是直接调用计划中指定的工具
-- 只有当所有工具都执行完毕后，才向用户汇报最终结果
-
----
-
-## 重要语言规则
-
-**你必须始终使用与用户提问相同的语言进行回复和工具调用！**
-- 用户用中文提问 → 你用中文回复，工具参数使用中文
-- 用户用英文提问 → 你用英文回复，工具参数使用英文
-- 搜索关键词必须与用户提问语言保持一致！
-
----
-
-## 能力范围与限制
-
-### 可用工具
-{', '.join([f'`{t}`' for t in available_tools])}
-
-### 可用技能（⚠️ 技能不是工具！不能直接调用技能名称！必须先通过 use_skill 工具加载）
-{skill_descriptions}
-
-**技能使用规则：**
-1. ⚠️ 技能名称（如 weather）不是工具，不能直接调用！必须使用 `use_skill(skill="技能名")` 加载技能，获取完整操作指南
-2. 加载后，根据技能说明书中的指引决定下一步：
-   - 如果说明书要求执行命令/脚本 → 调用 `skill_execute`
-   - 如果说明书要求生成内容 → 调用 `content_generate`
-   - 如果说明书要求搜索信息 → 调用 `web_search`
-   - 如果说明书给出了多步骤工作流 → 按步骤逐步调用相应工具
-3. 不要跳过步骤，严格按照技能说明书中的流程执行
-4. 所有步骤完成后，调用 `skill_complete(skill="技能名", summary="结果摘要")` 标记完成
-5. 调用 `skill_complete` 后系统会自动清理中间过程，仅保留摘要
-{f'''
-### 可用子智能体
-{subagent_descriptions}''' if include_delegation else ''}
-
-### 超出能力的处理
-当用户的请求超出你的能力范围时：
-1. **明确告知用户**：说明这个任务无法完成
-2. **解释原因**：说明缺少什么能力或工具
-3. **提供替代方案**：
-   - 推荐用户可以使用的其他工具或服务
-   - 建议如何分步骤完成任务
-   - 指出完成该任务需要的条件
-
-**示例回应：**
-> "抱歉，我目前无法直接执行XXX操作。完成这个任务需要：
-> 1. XXX工具/权限
-> 2. 或者您可以尝试使用YYY服务
-> 3. 或者您可以先ZZZ，然后我可以帮助您..."
-
----
-
-## 工具使用指南
-
-{{{self._collect_tool_usage_guides()}}}
-{delegation_guide}
----
-
-## 工作示例
-
-**示例1：HR招聘任务（直接委派，不需要计划）**
-用户: "我要招聘一名AI产品经理"
-1. 分析：这是招聘任务，只需要hr-expert子智能体就能完成
-2. **直接调用** delegate_to_subagent(subagent_name="hr-expert", task_description="协助招聘AI产品经理，包括JD编写、薪酬调研、面试设计")
-3. 整合子智能体的结果并回复用户
-{f'''
-**示例2：代码审查任务（直接委派，不需要计划）**
-用户: "帮我审查这段代码的安全性"
-1. 分析：这是代码审查任务，只需要code-reviewer子智能体
-2. **直接调用** delegate_to_subagent(subagent_name="code-reviewer", task_description="审查代码安全性")
-3. 整合子智能体的审查结果并回复用户
-
-**示例3：PDF文档处理（直接委派，不需要计划）**
-用户: "帮我提取这个PDF中的表格数据"
-1. 分析：这是PDF处理任务，只需要pdf-expert子智能体
-2. **直接调用** delegate_to_subagent(subagent_name="pdf-expert", task_description="提取PDF中的表格数据")
-3. 整合结果并回复用户
-
-**示例4：搜索+发送邮件（需要计划）**
-用户: "帮我搜索春节档电影，然后发邮件给同事"
-1. 分析：需要两个步骤（搜索+发邮件），需要创建计划
-2. 调用 create_plan(goal="搜索电影并发送邮件", steps=[...], execution_mode="sequential")
-3. 调用 web_search(keyword="2026年春节档电影")
-4. 调用 email_send(to=["colleague@example.com"], subject="春节档电影推荐", body="...")
-5. 整合结果并回复用户
-
-**示例5：超能力范围**''' if include_delegation else '''**示例2：超能力范围**'''}
-用户: "帮我订一张机票"
-回复: "抱歉，我目前无法直接预订机票。建议您使用携程、去哪儿等平台，或者我可以帮您搜索航班信息。"
-
----
-
-## 指导原则
-
-- **智能决策**：如果任务只需要一个子智能体或一个工具，直接调用，不需要创建计划
-- **规划复杂任务**：只有需要多个步骤协调的任务才需要先创建执行计划
-- **透明化**：让用户知道你在做什么，展示计划（如果有的话）
-- **诚实**：超出能力时明确告知，不要虚假承诺
-- **有帮助**：即使无法完成，也要提供有用的建议
-- **跟踪进度**：计划会被记录，用户可以查看进度（如果创建了计划）
-{f'''- **善用专家**：专业任务直接委派给专业子智能体''' if include_delegation else '''- **专注任务**：专注于当前任务，使用可用工具高效完成'''}
-
-高效使用工具完成任务。在行动前始终思考任务要求。
-"""
-
-        # 追加子智能体约束（如果有）
+        subagent_constraint_section = ""
         if subagent_constraint:
-            prompt += f"""
+            subagent_constraint_section = f"""
 
 ---
 
@@ -703,30 +533,39 @@ class Agent:
 
 {subagent_constraint}
 """
-        
-        # 子智能体特别说明：不能委派任务
-        if not include_delegation:
-            prompt += """
 
----
-
-## ⚠️ 重要限制
-
-**你不能委派任务给其他子智能体！**
-
-作为子智能体，你的职责是：
-1. 独立完成主智能体委托的任务
-2. 使用可用的工具和技能执行任务
-3. 如果需要分解任务，自己创建执行计划并执行
-4. 如果遇到超出能力范围的问题，向主智能体报告
-
-你**不能**调用 `delegate_to_subagent` 工具，因为这是主智能体才有的委派能力。
-"""
-        
+        user_info_section = ""
         if user:
-            prompt += f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
-        
-        return prompt
+            user_info_section = f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
+
+        # 长期记忆注入点（Phase 3 预留）
+        long_term_memory = ""
+
+        if include_delegation:
+            template_name = "master_agent.md"
+            variables = {
+                "subagent_matching_hint": subagent_matching_hint,
+                "available_tools_list": available_tools_list,
+                "skill_descriptions": skill_descriptions,
+                "subagent_descriptions": subagent_descriptions,
+                "tool_usage_guides": self._collect_tool_usage_guides(),
+                "delegation_guide": delegation_guide,
+                "subagent_constraint_section": subagent_constraint_section,
+                "long_term_memory": long_term_memory,
+                "user_info_section": user_info_section,
+            }
+        else:
+            template_name = "subagent_base.md"
+            variables = {
+                "available_tools_list": available_tools_list,
+                "skill_descriptions": skill_descriptions,
+                "tool_usage_guides": self._collect_tool_usage_guides(),
+                "subagent_constraint_section": subagent_constraint_section,
+                "long_term_memory": long_term_memory,
+                "user_info_section": user_info_section,
+            }
+
+        return self.prompt_manager.render(template_name, variables)
     
     def _build_system_prompt(self, user: Optional[User] = None) -> str:
         """

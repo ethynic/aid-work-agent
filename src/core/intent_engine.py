@@ -1,5 +1,5 @@
 """
-意图理解引擎
+意图理解引擎（⚠️ 未投入使用 — 仅被 planner.py 引用，planner.py 本身也是死代码）
 
 解析用户输入，识别意图和提取实体
 """
@@ -11,7 +11,10 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.llm.gateway import llm_gateway
-from src.llm.prompts.system import INTENT_PROMPT
+
+# INTENT_PROMPT 已随 src/llm/prompts/system.py 一同删除
+# 此文件为死代码，如需恢复请从 git 历史中找回 INTENT_PROMPT
+INTENT_PROMPT = ""
 
 
 class IntentResult:
