@@ -204,21 +204,7 @@ class Agent:
         from src.tools.ocr import PaddleOCRDocParsingTool
         from src.tools.document.doc_tool import DocSummarizeTool, DocTranslateTool
         from src.tools.search.search_tool import WebSearchTool
-        from src.tools.browser import (
-            BrowserOpenTool,
-            BrowserGetContentTool,
-            BrowserNavigateTool,
-            BrowserCloseTool,
-            BrowserScreenshotTool,
-            # 语义快照驱动工具
-            BrowserSnapshotTool,
-            BrowserClickTool,
-            BrowserFillTool,
-            BrowserSelectTool,
-            BrowserFindTool,
-            BrowserGetPathTool,
-            BrowserBacktrackTool,
-        )
+        from src.tools.browser import BrowserAutomationTool
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
         from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.file.register_download_tool import RegisterDownloadFileTool
@@ -234,18 +220,7 @@ class Agent:
         self.tool_registry.register(WebSearchTool())
         
         # 注册浏览器工具
-        self.tool_registry.register(BrowserOpenTool())
-        self.tool_registry.register(BrowserSnapshotTool())  # 语义快照（必须首先调用）
-        self.tool_registry.register(BrowserClickTool())  # 语义驱动点击
-        self.tool_registry.register(BrowserFillTool())  # 语义驱动填写
-        self.tool_registry.register(BrowserSelectTool())  # 语义驱动选择
-        self.tool_registry.register(BrowserFindTool())  # 语义查找
-        self.tool_registry.register(BrowserGetPathTool())  # 路径追踪
-        self.tool_registry.register(BrowserBacktrackTool())  # 状态回溯
-        self.tool_registry.register(BrowserGetContentTool())
-        self.tool_registry.register(BrowserNavigateTool())
-        self.tool_registry.register(BrowserCloseTool())
-        self.tool_registry.register(BrowserScreenshotTool())
+        self.tool_registry.register(BrowserAutomationTool())
         
         # 注册文件工具
         self.tool_registry.register(FileReaderTool())
@@ -1695,8 +1670,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                                 content = result.get("content", "")
                                 preview = content[:80] + "..." if len(content) > 80 else content
                                 await send_progress(f"✅ {tool_display_name}完成\n📄 {preview}")
-                            elif tool_name == "browser_open":
-                                await send_progress(f"✅ {tool_display_name}成功")
+                            elif tool_name == "browser_automation":
+                                result_text = result.get("result", result.get("message", ""))
+                                if result_text:
+                                    preview = result_text[:80] + "..." if len(result_text) > 80 else result_text
+                                    await send_progress(f"✅ {tool_display_name}完成\n{preview}")
+                                else:
+                                    await send_progress(f"✅ {tool_display_name}成功")
                             else:
                                 await send_progress(f"✅ {tool_display_name}执行完成")
                         else:

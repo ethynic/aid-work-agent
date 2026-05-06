@@ -1,6 +1,6 @@
 # 浏览器自动化工具重构设计文档
 
-> 创建日期: 2026-04-30 | 状态: 设计中
+> 创建日期: 2026-04-30 | 状态: 已实现
 
 ## 1. 问题背景
 
@@ -61,21 +61,20 @@ src/tools/browser/
 ├── session.py                     # 新：BrowserSession（从 browser_tool.py 提取）
 ├── page_ops.py                    # 新：PageOps（页面操作：click/fill/select）
 │
-├── semantic/                      # 保留不变
-│   ├── snapshot_generator.py
-│   ├── natural_matcher.py
-│   ├── element_classifier.py
-│   ├── semantic_tagger.py
-│   ├── ref_mapper.py
-│   ├── submenu_detector.py
-│   └── iframe_handler.py
+├── browser_tool.py                # 保留（兼容旧代码，BrowserSession 已迁移到 session.py）
+├── tools_semantic.py              # 保留（旧工具兼容，操作逻辑已在 page_ops.py 重新实现）
+├── tools_snapshot.py              # 保留（旧工具兼容）
+├── tools_find.py                  # 保留（旧工具兼容）
+├── tools_path.py                  # 保留（旧工具兼容）
 │
-└── [删除]
-    ├── browser_tool.py            # 拆分到 session.py + page_ops.py
-    ├── tools_semantic.py          # 合并到 page_ops.py
-    ├── tools_snapshot.py          # 合并到 orchestrator.py
-    ├── tools_find.py              # NaturalMatcher 直接在 orchestrator 中使用
-    └── tools_path.py              # PathTracker 合并到 orchestrator.py
+└── semantic/                      # 保留不变
+    ├── snapshot_generator.py
+    ├── natural_matcher.py
+    ├── element_classifier.py
+    ├── semantic_tagger.py
+    ├── ref_mapper.py
+    ├── submenu_detector.py
+    └── iframe_handler.py
 ```
 
 ## 5. 关键实现
@@ -186,9 +185,38 @@ class PageOps:
 7. 删除旧文件
 8. 更新设计文档和测试
 
-## 10. 待讨论事项
+## 10. 已确认的设计决策
 
-1. **进度回调**：工具内部循环时如何向用户推送进度？当前 agent loop 是通过 yield 回调实现的
-2. **截图**：是否在每步自动截图？还是只最终截图？
-3. **错误恢复**：某步失败时，是否让内部 LLM 重试还是直接返回失败？
-4. **内容提取**：任务不只是操作（如"提取商品信息"），结果如何格式化返回？
+### 10.1 进度回调
+
+每步推送进度（语义快照生成除外），具体规则：
+
+- **推送的步骤**：打开页面、填写输入、点击元素、选择选项、页面跳转、任务完成等
+- **不推送**：语义快照生成（内部操作）
+- **ask_user 中断**：内部 LLM 判断信息不足时，返回 `action=ask_user` + 截图 + 问题，中断工具执行。Agent 将问题转达用户后，以用户回复作为参数再次调用 `browser_automation`，orchestrator 通过 session_id 恢复浏览器会话状态继续执行
+- **执行失败**：立即中断并返回错误信息给 agent
+
+### 10.2 截图策略
+
+每个阶段结束时截图一次。阶段结束的判定条件：
+
+- 正常完成任务
+- 异常退出（错误、超时）
+- ask_user 中断等待用户输入
+
+每个阶段只返回一张截图，不返回中间步骤截图。
+
+### 10.3 错误恢复
+
+分层处理策略：
+
+- **可恢复错误**（元素匹配失败、页面未加载完、操作超时等）：内部 LLM 重新分析页面状态，尝试换方式操作，最多重试 3 次
+- **不可恢复错误**（页面 404/5xx、网络断开、浏览器崩溃等）：直接返回失败信息 + 截图，不重试
+
+### 10.4 内容提取
+
+统一提取为 Markdown 格式：
+
+- 内部 LLM 在 `action=done` 时从页面提取内容，输出为 Markdown（支持文本、表格、列表等格式）
+- 如需结构化数据（表格、列表），由后续其他工具从 Markdown 中解析提取
+- `browser_automation` 工具职责单一：操作浏览器 + 返回 Markdown 内容

@@ -1,6 +1,7 @@
-"""浏览器自动化工具
+"""浏览器基础工具（旧版兼容）
 
-实现基于Playwright的浏览器自动化功能，支持打开网页、点击元素、填写表单等操作
+BrowserSession 已迁移到 session.py。
+本文件保留旧版工具类以兼容现有代码，新代码应使用 BrowserAutomationTool。
 """
 
 import asyncio
@@ -12,6 +13,12 @@ from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.config.settings import settings
+from src.tools.browser.session import (
+    BrowserSession,
+    _browser_sessions,
+    get_browser_session,
+    close_browser_session,
+)
 
 
 class BrowserOpenInput(BaseModel):
@@ -46,112 +53,6 @@ class BrowserScreenshotInput(BaseModel):
     path: Optional[str] = Field("./screenshot.png", description="截图保存路径")
     session_id: Optional[str] = Field("default", description="浏览器会话ID")
     full_page: Optional[bool] = Field(False, description="是否截取整个页面")
-
-
-class BrowserSession:
-    """浏览器会话管理类，维护浏览器实例和页面"""
-
-    def __init__(self, headless: Optional[bool] = None):
-        """初始化浏览器会话
-
-        Args:
-            headless: 是否无头模式，默认从配置读取
-        """
-        if headless is None:
-            headless = settings.tools.browser.headless
-        self.headless = headless
-        self.browser = None
-        self.playwright = None
-        self.page = None
-        self.context = None
-
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        await self.start()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
-        await self.close()
-
-    async def start(self):
-        """启动浏览器"""
-        try:
-            from playwright.async_api import async_playwright
-
-            self.playwright = await async_playwright().start()
-
-            # 启动浏览器
-            self.browser = await self.playwright.chromium.launch(
-                headless=self.headless,
-                args=['--no-sandbox', '--disable-dev-shm-usage']
-            )
-
-            # 创建浏览器上下文
-            self.context = await self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            )
-
-            # 创建页面
-            self.page = await self.context.new_page()
-
-            logger.info("浏览器启动成功")
-
-        except ImportError as e:
-            logger.error("未安装Playwright，请运行: pip install playwright && python -m playwright install")
-            raise
-        except Exception as e:
-            logger.error(f"浏览器启动失败: {e}")
-            raise
-
-    async def close(self):
-        """关闭浏览器"""
-        if self.page:
-            await self.page.close()
-        if self.context:
-            await self.context.close()
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
-        logger.info("浏览器已关闭")
-
-    def is_running(self) -> bool:
-        """检查浏览器是否正在运行"""
-        return self.browser is not None and self.page is not None
-
-
-# 全局浏览器会话管理
-_browser_sessions: Dict[str, BrowserSession] = {}
-
-
-def get_browser_session(session_id: str, headless: Optional[bool] = None) -> BrowserSession:
-    """获取或创建浏览器会话
-
-    Args:
-        session_id: 会话ID
-        headless: 是否无头模式，默认从配置读取
-
-    Returns:
-        BrowserSession实例
-    """
-    if session_id not in _browser_sessions or not _browser_sessions[session_id].is_running():
-        _browser_sessions[session_id] = BrowserSession(headless=headless)
-    return _browser_sessions[session_id]
-
-
-def close_browser_session(session_id: str):
-    """关闭指定会话
-
-    Args:
-        session_id: 会话ID
-    """
-    if session_id in _browser_sessions:
-        session = _browser_sessions[session_id]
-        if session.is_running():
-            asyncio.create_task(session.close())
-        del _browser_sessions[session_id]
 
 
 class BrowserOpenTool(BaseTool):

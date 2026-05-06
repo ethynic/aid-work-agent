@@ -8,7 +8,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
-from src.tools.browser.browser_tool import _browser_sessions
+from src.tools.browser.session import _browser_sessions
 from src.tools.browser.semantic import SemanticSnapshotGenerator
 from src.tools.browser.tools_path import record_browser_action
 
