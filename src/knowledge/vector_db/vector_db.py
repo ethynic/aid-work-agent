@@ -9,7 +9,7 @@ import logging
 
 from loguru import logger
 
-from src.db.database import DB_CONFIG, get_db_connection
+from src.db.database import DB_CONFIG, get_db_connection, get_pooled_connection, return_pooled_connection
 
 logger = logging.getLogger(__name__)
 
@@ -44,38 +44,32 @@ class VectorDatabase:
 
 
 class VectorDBPostgreSQL(VectorDatabase):
-    """PostgreSQL + pgvector 实现"""
+    """PostgreSQL + pgvector 实现
+
+    连接管理策略：
+    - 如果传入 conn 参数：使用传入的连接（调用者负责连接生命周期）
+    - 如果不传 conn：每次操作从连接池获取连接（自动健康检查和重连）
+    """
 
     def __init__(self, dimension: int = 1024, conn=None):
         self.dimension = dimension
         self._external_conn = conn is not None
+        self._pool_conn = conn  # 保存传入的连接引用
 
+        # 初始化表结构（只在首次创建时执行）
         if conn is not None:
-            self.conn = conn
+            self._ensure_table(conn)
         else:
-            self._connect()
+            # 使用连接池连接来初始化表
+            pool_conn = get_pooled_connection()
+            try:
+                self._ensure_table(pool_conn)
+            finally:
+                return_pooled_connection(pool_conn)
 
-        self._ensure_table()
-
-    def _connect(self):
-        """建立 PostgreSQL 数据库连接"""
-        import psycopg2
-        from psycopg2 import extras as pg_extras
-
-        self.conn = psycopg2.connect(
-            host=DB_CONFIG["host"],
-            port=DB_CONFIG["port"],
-            database=DB_CONFIG["database"],
-            user=DB_CONFIG["user"],
-            password=DB_CONFIG["password"]
-        )
-        # 设置 cursor_factory 以确保所有 cursor 返回字典，与外部连接一致
-        self.conn.cursor_factory = psycopg2.extras.RealDictCursor
-        self.conn.autocommit = False
-
-    def _ensure_table(self):
+    def _ensure_table(self, conn):
         """确保向量表存在并启用 pgvector 扩展"""
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         # 确保 pgvector 扩展已启用
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -101,34 +95,50 @@ class VectorDBPostgreSQL(VectorDatabase):
             if "duplicate key" not in str(e).lower() and "already exists" not in str(e).lower():
                 raise
 
-        self.conn.commit()
+        conn.commit()
         logger.info(f"PostgreSQL pgvector 表初始化完成，维度: {self.dimension}")
+
+    def _get_connection(self):
+        """获取数据库连接
+
+        Returns:
+            - 如果传入了外部连接：返回外部连接
+            - 否则从连接池获取有效连接
+        """
+        if self._external_conn:
+            return self._pool_conn
+        return get_pooled_connection()
 
     async def insert(self, chunk_ids: List[int], embeddings: List[List[float]]) -> None:
         """批量插入向量"""
         if not chunk_ids:
             return
 
-        cursor = self.conn.cursor()
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
 
-        # pgvector 使用数组格式 '[1.0, 2.0, ...]'
-        data = [
-            (chunk_id, embedding)
-            for chunk_id, embedding in zip(chunk_ids, embeddings)
-        ]
+            # pgvector 使用数组格式 '[1.0, 2.0, ...]'
+            data = [
+                (chunk_id, embedding)
+                for chunk_id, embedding in zip(chunk_ids, embeddings)
+            ]
 
-        # 使用 psycopg2.extras.execute_batch 进行批量插入
-        from psycopg2 import extras
-        extras.execute_batch(
-            cursor,
-            "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (%s, %s)",
-            data
-        )
+            # 使用 psycopg2.extras.execute_batch 进行批量插入
+            from psycopg2 import extras
+            extras.execute_batch(
+                cursor,
+                "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (%s, %s)",
+                data
+            )
 
-        if not self._external_conn:
-            self.conn.commit()
+            if not self._external_conn:
+                conn.commit()
 
-        logger.info(f"后端日志：插入了 {len(chunk_ids)} 个向量 (pgvector)")
+            logger.info(f"后端日志：插入了 {len(chunk_ids)} 个向量 (pgvector)")
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
 
     async def search(
         self,
@@ -136,53 +146,66 @@ class VectorDBPostgreSQL(VectorDatabase):
         top_k: int = 10
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
-        cursor = self.conn.cursor()
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
 
-        # 将查询向量转换为 vector 类型字符串
-        vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+            # 将查询向量转换为 vector 类型字符串
+            vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-        # pgvector 使用余弦距离 (<=>)，距离越小越相似
-        # 为了返回相似度（0-1），使用 1 - distance
-        cursor.execute("""
-            SELECT chunk_id, embedding <=> %s::vector as distance
-            FROM chunks_vec
-            ORDER BY distance
-            LIMIT %s
-        """, (vector_str, top_k))
+            # pgvector 使用余弦距离 (<=>)，距离越小越相似
+            # 为了返回相似度（0-1），使用 1 - distance
+            cursor.execute("""
+                SELECT chunk_id, embedding <=> %s::vector as distance
+                FROM chunks_vec
+                ORDER BY distance
+                LIMIT %s
+            """, (vector_str, top_k))
 
-        results = cursor.fetchall()
+            results = cursor.fetchall()
 
-        # 将余弦距离转换为余弦相似度
-        cosine_results = []
-        for row in results:
-            distance = row["distance"]
-            # 距离范围 [0, 2]，相似度 = 1 - distance/2
-            similarity = max(0.0, min(1.0, 1.0 - distance / 2.0))
-            cosine_results.append((row["chunk_id"], similarity))
+            # 将余弦距离转换为余弦相似度
+            cosine_results = []
+            for row in results:
+                distance = row["distance"]
+                # 距离范围 [0, 2]，相似度 = 1 - distance/2
+                similarity = max(0.0, min(1.0, 1.0 - distance / 2.0))
+                cosine_results.append((row["chunk_id"], similarity))
 
-        return cosine_results
+            return cosine_results
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
 
     async def delete_by_doc(self, doc_id: int) -> None:
         """删除文档的所有向量"""
-        cursor = self.conn.cursor()
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            DELETE FROM chunks_vec
-            WHERE chunk_id IN (
-                SELECT id FROM chunks WHERE doc_id = %s
-            )
-        """, (doc_id,))
+            cursor.execute("""
+                DELETE FROM chunks_vec
+                WHERE chunk_id IN (
+                    SELECT id FROM chunks WHERE doc_id = %s
+                )
+            """, (doc_id,))
 
-        if not self._external_conn:
-            self.conn.commit()
+            if not self._external_conn:
+                conn.commit()
 
-        logger.info(f"后端日志：删除了文档 {doc_id} 的所有向量 (pgvector)")
+            logger.info(f"后端日志：删除了文档 {doc_id} 的所有向量 (pgvector)")
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
 
     def close(self):
-        """关闭数据库连接（仅关闭自行创建的连接）"""
-        if self.conn and not self._external_conn:
-            self.conn.close()
-            self.conn = None
+        """关闭数据库连接
+
+        注意：当使用连接池时不实际关闭连接（由连接池管理）
+        只有使用外部传入连接时才什么都不做（由调用者管理）
+        """
+        # 连接由连接池管理或外部传入，无需在此关闭
+        pass
 
 
 def get_vector_db(dimension: int = 1024, conn=None) -> VectorDatabase:

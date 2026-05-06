@@ -52,10 +52,11 @@ class KnowledgeBaseTool(BaseTool):
         vector_db = get_vector_db(dimension=1024)
         embedding_client = TextEmbeddingV3Client(api_key=qwen_api_key)
 
+        # 不传 conn 参数，让 VectorDB 和 HybridRetriever 使用连接池管理连接
         return HybridRetriever(
             vector_db=vector_db,
             embedding_client=embedding_client,
-            conn=vector_db.conn
+            conn=None
         )
 
     async def execute(self, **kwargs) -> Dict[str, Any]:

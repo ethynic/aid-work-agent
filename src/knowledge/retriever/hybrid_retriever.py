@@ -8,6 +8,8 @@ import re
 from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
 
+from src.db.database import get_pooled_connection, return_pooled_connection
+
 
 class HybridRetriever:
     """混合检索器（向量 + FTS5 + 加权 RRF 融合）"""
@@ -57,7 +59,19 @@ class HybridRetriever:
     ):
         self.vector_db = vector_db
         self.embedding_client = embedding_client
-        self.conn = conn
+        self._external_conn = conn is not None
+        self._conn = conn  # 保存传入的连接引用
+
+    def _get_connection(self):
+        """获取数据库连接
+
+        Returns:
+            - 如果传入了外部连接：返回外部连接
+            - 否则从连接池获取有效连接
+        """
+        if self._external_conn:
+            return self._conn
+        return get_pooled_connection()
 
     async def retrieve(
         self,
@@ -237,9 +251,10 @@ class HybridRetriever:
 
     def _postgres_fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
-        cursor = self.conn.cursor()
-
+        conn = self._get_connection()
         try:
+            cursor = conn.cursor()
+
             # 预处理查询：将空格替换为 |（OR 语义）以支持多关键词
             processed_query = self._preprocess_fts_query(query)
 
@@ -259,6 +274,9 @@ class HybridRetriever:
         except Exception as e:
             logger.warning(f"后端日志：PostgreSQL 全文检索失败: {e}")
             return []
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
 
     @staticmethod
     def _weighted_rrf_fusion(
@@ -332,30 +350,35 @@ class HybridRetriever:
         placeholder = "%s"
         placeholders = ','.join([placeholder] * len(chunk_ids))
 
-        cursor = self.conn.cursor()
-        cursor.execute(f"""
-            SELECT id, doc_id, text, tokens, metadata
-            FROM chunks
-            WHERE id IN ({placeholders})
-        """, chunk_ids)
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT id, doc_id, text, tokens, metadata
+                FROM chunks
+                WHERE id IN ({placeholders})
+            """, chunk_ids)
 
-        rows = cursor.fetchall()
+            rows = cursor.fetchall()
 
-        # 按 fused 顺序排序
-        id_to_row = {row["id"]: row for row in rows}
-        results = []
+            # 按 fused 顺序排序
+            id_to_row = {row["id"]: row for row in rows}
+            results = []
 
-        for chunk_id, score in fused:
-            row = id_to_row.get(chunk_id)
-            if row:
-                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                results.append({
-                    "chunk_id": row["id"],
-                    "doc_id": row["doc_id"],
-                    "text": row["text"],
-                    "tokens": row["tokens"],
-                    "metadata": metadata,
-                    "score": score
-                })
+            for chunk_id, score in fused:
+                row = id_to_row.get(chunk_id)
+                if row:
+                    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                    results.append({
+                        "chunk_id": row["id"],
+                        "doc_id": row["doc_id"],
+                        "text": row["text"],
+                        "tokens": row["tokens"],
+                        "metadata": metadata,
+                        "score": score
+                    })
 
-        return results
+            return results
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
