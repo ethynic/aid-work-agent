@@ -392,25 +392,88 @@ def _apply_db_updates(conn):
         )
     """)
 
+    # 检查并升级表结构（兼容旧版本）
+    try:
+        # 检查 file_hash 列是否存在
+        cursor.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+        """)
+        has_file_hash = cursor.fetchone() is not None
+
+        if not has_file_hash:
+            logger.info("升级 _db_update_applied 表结构，添加 file_hash 列")
+            cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
+            # 为现有记录设置默认值（空字符串）
+            cursor.execute("UPDATE _db_update_applied SET file_hash = '' WHERE file_hash IS NULL")
+    except Exception as e:
+        logger.warning(f"检查/升级表结构失败: {e}")
+        # 继续执行，后面的查询可能会失败，但会由错误处理机制捕获
+
+    # 清理旧的记录（旧版本使用 id='initial'）
+    try:
+        cursor.execute("DELETE FROM _db_update_applied WHERE id = 'initial'")
+        if cursor.rowcount > 0:
+            logger.info(f"清理了 {cursor.rowcount} 条旧记录（id='initial'）")
+    except Exception as e:
+        logger.warning(f"清理旧记录失败: {e}")
+
     # 检查当前哈希是否已应用
-    cursor.execute("""
-        SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'
-    """)
-    row = cursor.fetchone()
-    if row and row['file_hash'] == file_hash:
-        logger.info("数据库更新文件未变化，跳过执行")
-        return
+    try:
+        # 首先检查 file_hash 列是否存在（避免 UndefinedColumn 错误）
+        cursor.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+        """)
+        has_file_hash = cursor.fetchone() is not None
+
+        if not has_file_hash:
+            logger.warning("file_hash 列不存在，无法检查哈希记录，将继续执行更新")
+            # 列不存在，无法检查哈希，继续执行更新
+        else:
+            cursor.execute("""
+                SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'
+            """)
+            row = cursor.fetchone()
+            if row and row['file_hash'] == file_hash:
+                logger.info("数据库更新文件未变化，跳过执行")
+                return
+    except Exception as e:
+        # 如果查询失败（例如表不存在），继续执行
+        logger.warning(f"检查哈希记录失败，将继续执行更新: {e}")
 
     # 如果文件没有实际语句（只有注释或空），只更新哈希记录
     if len(statements) == 0:
         logger.info("数据库更新文件无有效语句，只更新哈希记录")
-        cursor.execute("""
-            INSERT INTO _db_update_applied (id, file_hash)
-            VALUES ('db_update', %s)
-            ON CONFLICT (id) DO UPDATE
-            SET file_hash = EXCLUDED.file_hash,
-                applied_at = CURRENT_TIMESTAMP
-        """, (file_hash,))
+        try:
+            # 确保 file_hash 列存在
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+            """)
+            has_file_hash = cursor.fetchone() is not None
+
+            if not has_file_hash:
+                logger.warning("file_hash 列不存在，尝试添加")
+                try:
+                    cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
+                    logger.info("成功添加 file_hash 列")
+                except Exception as add_col_err:
+                    logger.error(f"添加 file_hash 列失败: {add_col_err}")
+                    # 无法添加列，跳过插入哈希记录
+                    logger.warning("跳过插入哈希记录（列不存在）")
+                    return
+
+            cursor.execute("""
+                INSERT INTO _db_update_applied (id, file_hash)
+                VALUES ('db_update', %s)
+                ON CONFLICT (id) DO UPDATE
+                SET file_hash = EXCLUDED.file_hash,
+                    applied_at = CURRENT_TIMESTAMP
+            """, (file_hash,))
+        except Exception as e:
+            logger.error(f"更新哈希记录失败: {e}")
+            # 插入失败不影响主流程
         # 不在这里提交，由外部事务统一提交
         return
 
@@ -436,11 +499,26 @@ def _apply_db_updates(conn):
 
     try:
         # 获取锁后再次检查哈希（可能已被其他进程更新）
-        cursor.execute("SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'")
-        row = cursor.fetchone()
-        if row and row['file_hash'] == file_hash:
-            logger.info("其他进程已执行更新，跳过")
-            return
+        try:
+            # 首先检查 file_hash 列是否存在
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+            """)
+            has_file_hash = cursor.fetchone() is not None
+
+            if not has_file_hash:
+                logger.warning("file_hash 列不存在，无法检查哈希记录，将继续执行更新")
+                # 列不存在，无法检查哈希，继续执行更新
+            else:
+                cursor.execute("SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'")
+                row = cursor.fetchone()
+                if row and row['file_hash'] == file_hash:
+                    logger.info("其他进程已执行更新，跳过")
+                    return
+        except Exception as e:
+            logger.warning(f"获取锁后检查哈希失败，将继续执行更新: {e}")
+            # 哈希检查失败，继续执行更新
 
         logger.info(f"开始执行数据库更新，共 {len(statements)} 条语句")
 
@@ -468,15 +546,37 @@ def _apply_db_updates(conn):
         logger.info(f"数据库更新完成，成功执行 {executed}/{len(statements)} 条语句")
 
         # 更新或插入哈希记录
-        cursor.execute("""
-            INSERT INTO _db_update_applied (id, file_hash)
-            VALUES ('db_update', %s)
-            ON CONFLICT (id) DO UPDATE
-            SET file_hash = EXCLUDED.file_hash,
-                applied_at = CURRENT_TIMESTAMP
-        """, (file_hash,))
+        try:
+            # 确保 file_hash 列存在
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = '_db_update_applied' AND column_name = 'file_hash'
+            """)
+            has_file_hash = cursor.fetchone() is not None
 
-        logger.info(f"数据库更新记录已更新，哈希: {file_hash}")
+            if not has_file_hash:
+                logger.warning("file_hash 列不存在，尝试添加")
+                try:
+                    cursor.execute("ALTER TABLE _db_update_applied ADD COLUMN file_hash TEXT")
+                    logger.info("成功添加 file_hash 列")
+                except Exception as add_col_err:
+                    logger.error(f"添加 file_hash 列失败: {add_col_err}")
+                    # 无法添加列，跳过插入哈希记录
+                    logger.warning("跳过插入哈希记录（列不存在）")
+                    return
+
+            cursor.execute("""
+                INSERT INTO _db_update_applied (id, file_hash)
+                VALUES ('db_update', %s)
+                ON CONFLICT (id) DO UPDATE
+                SET file_hash = EXCLUDED.file_hash,
+                    applied_at = CURRENT_TIMESTAMP
+            """, (file_hash,))
+
+            logger.info(f"数据库更新记录已更新，哈希: {file_hash}")
+        except Exception as e:
+            logger.error(f"更新哈希记录失败: {e}")
+            # 插入失败不影响已执行的更新，继续执行（释放锁）
 
     finally:
         # 释放 advisory lock
