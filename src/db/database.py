@@ -487,8 +487,13 @@ def _apply_db_updates(conn):
     retry_interval = 1  # 秒
     locked = False
     for retry in range(max_retries):
-        cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
-        locked = cursor.fetchone()[0]
+        cursor.execute("SELECT pg_try_advisory_lock(%s) AS locked", (lock_key,))
+        result = cursor.fetchone()
+        if result is None:
+            logger.warning("pg_try_advisory_lock 查询返回空结果，视为未获取锁")
+            locked = False
+        else:
+            locked = result['locked']
         if locked:
             break
         logger.info(f"等待 advisory lock (重试 {retry+1}/{max_retries})")
@@ -581,8 +586,13 @@ def _apply_db_updates(conn):
     finally:
         # 释放 advisory lock
         if locked:
-            cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
-            unlocked = cursor.fetchone()[0]
+            cursor.execute("SELECT pg_advisory_unlock(%s) AS unlocked", (lock_key,))
+            result = cursor.fetchone()
+            if result is None:
+                logger.warning(f"pg_advisory_unlock 查询返回空结果，无法确认锁是否释放 (key={lock_key})")
+                unlocked = False
+            else:
+                unlocked = result['unlocked']
             if not unlocked:
                 logger.warning(f"释放 advisory lock 失败 (key={lock_key})")
 
@@ -626,8 +636,8 @@ def _init_postgresql():
         """)
         old_constraint = cursor.fetchone()
         if old_constraint:
-            cursor.execute(f'ALTER TABLE users DROP CONSTRAINT {old_constraint[0]}')
-            logger.info(f"Dropped old phone unique constraint: {old_constraint[0]}")
+            cursor.execute(f'ALTER TABLE users DROP CONSTRAINT {old_constraint["conname"]}')
+            logger.info(f"Dropped old phone unique constraint: {old_constraint['conname']}")
 
         # 同步删除旧的 phone 唯一索引（如果存在）
         cursor.execute("""
