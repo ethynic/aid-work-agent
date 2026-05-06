@@ -8,13 +8,9 @@ import { useTheme } from './composables/useTheme'
 import { useDemoAuth } from './composables/useDemoAuth'
 import { useTenantAuth } from './composables/useTenantAuth'
 
-// 客户信息页面
+// 静态导入的页面（始终需要或被多处引用）
 import CustomerInfo from './components/CustomerInfo.vue'
-
-// 定时任务管理页面
 import ScheduledTasks from './components/ScheduledTasks.vue'
-
-// 知识库管理页面
 import KnowledgeBase from './components/KnowledgeBase.vue'
 
 // 初始化主题
@@ -79,7 +75,7 @@ const router = createRouter({
         {
           path: 'customers',
           name: 'trade-specialist-customers',
-          component: () => import('./components/CustomerInfo.vue')
+          component: CustomerInfo
         },
       ]
     },
@@ -127,7 +123,7 @@ const router = createRouter({
             {
               path: 'customers',
               name: 'tenant-trade-specialist-customers',
-              component: () => import('./components/CustomerInfo.vue')
+              component: CustomerInfo
             },
           ]
         },

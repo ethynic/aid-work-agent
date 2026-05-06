@@ -168,15 +168,18 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { defineAsyncComponent } from 'vue'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
-import CredentialManager from './CredentialManager.vue'
-import SettingsDialog from './SettingsDialog.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
-import InstanceQueueModal from './InstanceQueueModal.vue'
+
+// ✅ 优化：对话框组件异步加载，用户点击时才加载
+const CredentialManager = defineAsyncComponent(() => import('./CredentialManager.vue'))
+const SettingsDialog = defineAsyncComponent(() => import('./SettingsDialog.vue'))
+const InstanceQueueModal = defineAsyncComponent(() => import('./InstanceQueueModal.vue'))
 import { useAgent } from '@/composables/useAgent'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'

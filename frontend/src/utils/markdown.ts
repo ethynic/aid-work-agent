@@ -1,9 +1,33 @@
 import { marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
-import hljs from 'highlight.js'
+// ✅ 优化：只导入 highlight.js 核心和需要的语言，减少约 150KB 打包体积
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import json from 'highlight.js/lib/languages/json'
+import html from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import bash from 'highlight.js/lib/languages/bash'
+import sql from 'highlight.js/lib/languages/sql'
+import yaml from 'highlight.js/lib/languages/yaml'
+import markdown from 'highlight.js/lib/languages/markdown'
+import plaintext from 'highlight.js/lib/languages/plaintext'
+
+// 注册常用语言
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('html', html)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('plaintext', plaintext)
 
 // 配置 marked 使用 highlight.js 进行代码高亮
-// 只在模块加载时初始化一次，避免重复注册导致性能问题
 marked.use(markedHighlight({
   langPrefix: 'hljs language-',
   highlight(code: string, lang: string) {

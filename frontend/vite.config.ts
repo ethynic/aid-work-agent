@@ -11,6 +11,19 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, 'src')
       }
     },
+    build: {
+      cssCodeSplit: true,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vue-vendor': ['vue', 'vue-router'],
+            'markdown-renderer': ['marked', 'marked-highlight', 'highlight.js'],
+            'ui-libs': ['vue-toastification'],
+            'http-client': ['axios'],
+          }
+        }
+      }
+    },
     server: {
       host: '0.0.0.0',
       port: parseInt(env.DEV_PORT || '3000', 10), //从前端 env 中获取端口号，默认3000

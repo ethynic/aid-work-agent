@@ -1,6 +1,7 @@
 import { ref, onUnmounted } from 'vue'
 import type { ChatMessage, ProgressMessage } from '@/types'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
+import { getSessionMessages } from '@/api/session'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 
@@ -77,7 +78,6 @@ export function useAgent() {
         messages.value = []
         sessionMessagesCache.delete(newSessionId)
       } else {
-        const { getSessionMessages } = await import('@/api/session')
         const result = await getSessionMessages(newSessionId)
         messages.value = result.messages?.map(m => ({
           role: m.role as 'user' | 'assistant',
