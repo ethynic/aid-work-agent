@@ -28,9 +28,7 @@ sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || t
 # 2. 更新前端
 echo "[2/3] 更新前端..."
 # 使用 Docker 中的 node:18-alpine 构建
-sudo rm -rf frontend/dist
-sudo mkdir frontend/dist
-sudo chmod -R 777 frontend/dist
+sudo rm -rf frontend/dist/*
 
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm install
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm run build
