@@ -326,6 +326,167 @@ def init_database():
     _init_postgresql()
 
 
+def _apply_db_updates(conn):
+    """
+    执行 deploy/db_update.sql 中的增量更新
+    使用文件哈希检测变化，确保每次文件变化后只执行一次
+    """
+    from pathlib import Path
+    import hashlib
+    import time
+
+    project_root = Path(__file__).parent.parent.parent
+    update_file = project_root / "deploy" / "db_update.sql"
+
+    if not update_file.exists():
+        logger.warning(f"数据库更新文件不存在: {update_file}")
+        return
+
+    # 计算当前文件哈希
+    try:
+        file_content = update_file.read_text(encoding='utf-8')
+        file_hash = hashlib.sha256(file_content.encode('utf-8')).hexdigest()[:32]
+    except Exception as e:
+        logger.error(f"读取数据库更新文件失败: {e}")
+        return
+
+    # 解析 SQL 语句（用于判断是否为空）
+    statements = []
+    current = []
+    lines = file_content.split('\n')
+
+    for line in lines:
+        stripped = line.strip()
+        # 跳过空行和只包含注释的行
+        if not stripped or stripped.startswith('--'):
+            continue
+
+        # 去除行内注释（简单处理：-- 之后的内容）
+        if '--' in stripped:
+            stripped = stripped.split('--')[0].strip()
+            if not stripped:
+                continue
+
+        current.append(stripped)
+        if stripped.endswith(';'):
+            # 合并为一条语句
+            statement = ' '.join(current)
+            statements.append(statement)
+            current = []
+
+    # 处理最后未以分号结尾的语句（如果有）
+    if current:
+        statement = ' '.join(current)
+        if not statement.endswith(';'):
+            statement += ';'
+        statements.append(statement)
+
+    cursor = conn.cursor()
+
+    # 创建更新记录表（包含文件哈希）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS _db_update_applied (
+            id TEXT PRIMARY KEY,
+            file_hash TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 检查当前哈希是否已应用
+    cursor.execute("""
+        SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'
+    """)
+    row = cursor.fetchone()
+    if row and row['file_hash'] == file_hash:
+        logger.info("数据库更新文件未变化，跳过执行")
+        return
+
+    # 如果文件没有实际语句（只有注释或空），只更新哈希记录
+    if len(statements) == 0:
+        logger.info("数据库更新文件无有效语句，只更新哈希记录")
+        cursor.execute("""
+            INSERT INTO _db_update_applied (id, file_hash)
+            VALUES ('db_update', %s)
+            ON CONFLICT (id) DO UPDATE
+            SET file_hash = EXCLUDED.file_hash,
+                applied_at = CURRENT_TIMESTAMP
+        """, (file_hash,))
+        # 不在这里提交，由外部事务统一提交
+        return
+
+    # 哈希不同且存在有效语句，需要执行更新，使用 advisory lock 防止多 worker 并发执行
+    # 使用固定的 advisory lock key (123456)
+    lock_key = 123456
+    logger.info(f"数据库更新文件有变化，尝试获取 advisory lock (key={lock_key})")
+
+    # 使用 pg_try_advisory_lock 非阻塞尝试，如果失败则等待
+    max_retries = 30
+    retry_interval = 1  # 秒
+    locked = False
+    for retry in range(max_retries):
+        cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+        locked = cursor.fetchone()[0]
+        if locked:
+            break
+        logger.info(f"等待 advisory lock (重试 {retry+1}/{max_retries})")
+        time.sleep(retry_interval)
+    else:
+        logger.warning("无法获取 advisory lock，跳过数据库更新（可能由其他进程执行）")
+        return
+
+    try:
+        # 获取锁后再次检查哈希（可能已被其他进程更新）
+        cursor.execute("SELECT file_hash FROM _db_update_applied WHERE id = 'db_update'")
+        row = cursor.fetchone()
+        if row and row['file_hash'] == file_hash:
+            logger.info("其他进程已执行更新，跳过")
+            return
+
+        logger.info(f"开始执行数据库更新，共 {len(statements)} 条语句")
+
+        executed = 0
+        for i, stmt in enumerate(statements):
+            # 为每条语句创建保存点，允许单条失败不影响其他语句
+            savepoint_name = f"sp_{i}"
+            try:
+                cursor.execute(f"SAVEPOINT {savepoint_name}")
+                cursor.execute(stmt)
+                executed += 1
+            except Exception as e:
+                logger.error(f"执行 SQL 语句失败: {stmt[:100]}... 错误: {e}")
+                # 回滚到保存点，清除错误状态
+                try:
+                    cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                except Exception as rollback_err:
+                    logger.error(f"回滚保存点失败: {rollback_err}")
+                    # 如果回滚失败，整个事务可能已无效，需要回滚整个事务
+                    conn.rollback()
+                    # 重新建立保存点以继续
+                    cursor.execute(f"SAVEPOINT {savepoint_name}")
+                continue
+
+        logger.info(f"数据库更新完成，成功执行 {executed}/{len(statements)} 条语句")
+
+        # 更新或插入哈希记录
+        cursor.execute("""
+            INSERT INTO _db_update_applied (id, file_hash)
+            VALUES ('db_update', %s)
+            ON CONFLICT (id) DO UPDATE
+            SET file_hash = EXCLUDED.file_hash,
+                applied_at = CURRENT_TIMESTAMP
+        """, (file_hash,))
+
+        logger.info(f"数据库更新记录已更新，哈希: {file_hash}")
+
+    finally:
+        # 释放 advisory lock
+        if locked:
+            cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+            unlocked = cursor.fetchone()[0]
+            if not unlocked:
+                logger.warning(f"释放 advisory lock 失败 (key={lock_key})")
+
+
 def _init_postgresql():
     """初始化 PostgreSQL 数据库表"""
     with get_db_connection() as conn:
@@ -738,6 +899,10 @@ def _init_postgresql():
             customer_manager.init_tables()
         except Exception as e:
             logger.warning(f"Failed to initialize customer tables: {e}")
+
+        # 执行增量数据库更新（db_update.sql）
+        _apply_db_updates(conn)
+        conn.commit()
 
 
 if __name__ == "__main__":

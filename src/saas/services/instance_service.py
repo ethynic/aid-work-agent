@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
 
 from src.db.database import get_db_connection
+import psycopg2.errors
 
 
 class InstanceService:
@@ -400,17 +401,23 @@ class InstanceService:
             total = cursor.fetchone()["total"]
 
             # 基于最近10个已完成会话的平均耗时计算预估等待时间
-            cursor.execute("""
-                SELECT AVG(EXTRACT(EPOCH FROM (cs.ended_at - cs.created_at))) as avg_duration
-                FROM chat_sessions cs
-                WHERE cs.instance_id = %s
-                  AND cs.ended_at IS NOT NULL
-                  AND cs.created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'
-                ORDER BY cs.created_at DESC
-                LIMIT 10
-            """, (instance_id,))
-            avg_row = cursor.fetchone()
-            avg_duration = avg_row.get("avg_duration") if avg_row else None
+            avg_duration = None
+            try:
+                cursor.execute("""
+                    SELECT AVG(EXTRACT(EPOCH FROM (cs.ended_at - cs.created_at))) as avg_duration
+                    FROM chat_sessions cs
+                    WHERE cs.instance_id = %s
+                      AND cs.ended_at IS NOT NULL
+                      AND cs.created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                    ORDER BY cs.created_at DESC
+                    LIMIT 10
+                """, (instance_id,))
+                avg_row = cursor.fetchone()
+                avg_duration = avg_row.get("avg_duration") if avg_row else None
+            except psycopg2.errors.UndefinedColumn:
+                # 如果 ended_at 列不存在，使用默认值（历史数据不可用）
+                logger.warning(f"[QueueStats] ended_at column not found in chat_sessions, using default duration")
+                avg_duration = None
 
             if avg_duration and avg_duration > 0:
                 # 有历史数据，用真实平均值

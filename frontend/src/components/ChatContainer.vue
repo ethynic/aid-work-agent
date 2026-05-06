@@ -366,12 +366,14 @@ const currentInstance = computed(() => {
 async function handleJoinQueue() {
   if (!busyInstanceId.value) return
 
+  // 先关闭"实例繁忙"弹框，避免与排队弹框重叠
+  cancelBusy()
+
   const success = await joinQueue(busyInstanceId.value)
   if (success) {
     showQueueModal.value = true
   } else {
     toast.error('加入排队失败，请重试')
-    cancelBusy()
   }
 }
 
@@ -522,7 +524,7 @@ onUnmounted(() => {
 })
 
 async function handleSend(content: string) {
-  console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
+  //console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
   if (!effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
@@ -538,10 +540,10 @@ async function handleSend(content: string) {
     precacheNewSession(sid)
   } else if (!currentSessionId.value) {
     // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
-    console.log(`[${now()}] [handleSend] no current session, creating new session...`)
+    //console.log(`[${now()}] [handleSend] no current session, creating new session...`)
     const startTime = Date.now()
     const newSession = await createNewSession(undefined, subagentName.value)
-    console.log(`[${now()}] [handleSend] createNewSession done in ${Date.now() - startTime}ms, newSession=`, newSession)
+    //console.log(`[${now()}] [handleSend] createNewSession done in ${Date.now() - startTime}ms, newSession=`, newSession)
     if (newSession) {
       // 新建会话本来就是空的，预先缓存空数组，避免切换时请求后端
       precacheNewSession(newSession.session_id)
@@ -550,7 +552,7 @@ async function handleSend(content: string) {
       agentSessionId.value = newSession.session_id
       // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
       await switchSession(newSession.session_id)
-      console.log(`[${now()}] [handleSend] switchSession done, ready to send message`)
+      //console.log(`[${now()}] [handleSend] switchSession done, ready to send message`)
       sid = newSession.session_id
     }
   } else {
@@ -558,7 +560,7 @@ async function handleSend(content: string) {
   }
 
   if (!sid) {
-    console.log(`[${now()}] [handleSend] still no sessionId, abort`)
+    //console.log(`[${now()}] [handleSend] still no sessionId, abort`)
     return
   }
 

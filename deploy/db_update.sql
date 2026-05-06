@@ -1,4 +1,5 @@
 -- 数据库加表、加字段等SQL语句，记录在本文件，以便升级部署
+-- 所有SQL语句必须幂等安全（可重复执行），使用 IF NOT EXISTS、DROP TABLE IF EXISTS 等保护措施
 
 -- 2026-4-21，添加租户初始管理员信息
 ALTER TABLE tenants add column IF NOT EXISTS initial_admin_name TEXT default '',add column IF NOT EXISTS initial_admin_phone TEXT default '';
@@ -99,3 +100,6 @@ CREATE INDEX IF NOT EXISTS idx_instance_queue_timeout ON agent_instance_queue(wa
 -- 5. chat_sessions 表增加 instance_id 字段，与会话绑定
 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS instance_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_id, created_at DESC);
+
+-- 2026-5-6，chat_sessions 增加 ended_at 字段，记录会话结束时间（用于排队等待时间估算）
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS ended_at TIMESTAMP;
