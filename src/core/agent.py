@@ -576,14 +576,15 @@ class Agent:
         4. 孤立的 tool 消息（无 pending tool_call_id）会被跳过
         """
         messages = []
-        
+
         history = self.memory.get_context(session_id)
-        
+        logger.debug(f"[DEBUG] _build_messages: session_id={session_id}, history_count={len(history)}")
+
         # 追踪待处理的 tool_call_ids
         pending_tool_calls = set()
         # 追踪每条带 tool_calls 的 assistant 消息在 messages 中的索引
         assistant_tc_indices = []
-        
+
         for i, msg in enumerate(history):
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -1049,10 +1050,17 @@ class Agent:
 
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
 
+        # ========== 临时调试日志 ==========
+        import time
+        _debug_start_time = time.time()
+        logger.info(f"[DEBUG] process_message called, session_id={session_id}, input_length={len(user_input)}")
+        # ========== 临时调试日志 ==========
+
         # 恢复历史会话上下文：如果该 session 的 memory 为空，从 DB 加载历史消息
         if self.memory.get_message_count(session_id) == 0:
             try:
                 from src.db.models import MessageDB
+                logger.info(f"[DEBUG] Memory empty, loading history from DB, session_id={session_id}")
                 db_messages = MessageDB.list_by_session(
                     session_id,
                     limit=self.memory.short_term.max_messages,
@@ -1068,7 +1076,7 @@ class Agent:
                         for msg in db_messages
                     ]
                     self.memory.load_history(session_id, history_messages)
-                    logger.info(f"Loaded {len(history_messages)} history messages for session {session_id}")
+                    logger.info(f"[DEBUG] Loaded {len(history_messages)} history messages for session {session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
             except Exception as e:
                 logger.warning(f"Failed to load history for session {session_id}: {e}")
 
@@ -1152,8 +1160,10 @@ class Agent:
                 enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
         
         self.memory.add(session_id, "user", enhanced_input)
-        
+        logger.info(f"[DEBUG] Added user message to memory, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
+
         messages = self._build_messages(session_id)
+        logger.info(f"[DEBUG] Built messages, msg_count={len(messages)}, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
         system_prompt = self._build_system_prompt(user)
         
         if auto_loaded_skill:
@@ -1176,8 +1186,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         
         max_iterations = 20  # Prevent infinite loops
         iteration = 0
-        
+        logger.info(f"[DEBUG] Entering agent loop, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
+
         while iteration < max_iterations:
+            logger.info(f"[DEBUG] Agent loop iteration {iteration}, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
             iteration += 1
             logger.debug(f"Agent iteration {iteration}")
             

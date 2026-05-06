@@ -188,9 +188,9 @@ import type { AgentItem } from '@/api/saasPermissions'
 const router = useRouter()
 const toast = useToast()
 
-// 从 PortalLayout 注入侧边栏状态（租户前台模式）
-const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed')
-const toggleSidebarFn = inject<() => void>('toggleSidebar')
+// 从 PortalLayout 注入侧边栏状态（租户前台模式），非租户路由下使用默认值
+const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed', { value: false })
+const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 
 const {
   messages,

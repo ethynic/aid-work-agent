@@ -104,6 +104,7 @@ async def lock_instance(instance_id: str, request: Request, body: LockInstanceRe
         instance_id=instance_id,
         session_id=body.session_id,
         user_id=user_id,
+        tenant_id=tenant_id,
         lock_timeout_minutes=30,
     )
 

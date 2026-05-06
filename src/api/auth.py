@@ -346,8 +346,8 @@ async def login(request: Request, body: LoginRequest):
     # 演示模式：任意手机号 + mock_password 即可登录（自动注册）
     if demo_enabled and is_phone and body.password == mock_password:
         if not user:
-            # 自动创建用户
-            user = UserDB.create(phone=identifier)
+            # 自动创建用户（演示模式用户 tenant_id 为 'demo'）
+            user = UserDB.create(phone=identifier, tenant_id='demo')
             logger.info(f"演示模式自动创建用户: {identifier}")
         if user:
             token = generate_token(user["user_id"])
@@ -490,9 +490,9 @@ async def phone_login(request: Request, body: PhoneLoginRequest):
             else:
                 return LoginResponse(success=False, message="手机号或密码有误")
     else:
-        # 用户不存在，仅演示模式下自动创建账号
+        # 用户不存在，仅演示模式下自动创建账号（演示模式用户 tenant_id 为 'demo'）
         if demo_enabled and body.password == mock_password:
-            user = UserDB.create(phone=body.phone)
+            user = UserDB.create(phone=body.phone, tenant_id='demo')
             if user:
                 token = generate_token(user["user_id"])
                 return LoginResponse(
@@ -526,8 +526,8 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
 
         user = UserDB.get_by_phone(request.phone)
         if not user:
-            # 手机号不存在，自动注册
-            user = UserDB.create(phone=request.phone)
+            # 手机号不存在，自动注册（演示模式用户 tenant_id 为 'demo'）
+            user = UserDB.create(phone=request.phone, tenant_id='demo')
         if user:
             token = generate_token(user["user_id"])
             return LoginResponse(

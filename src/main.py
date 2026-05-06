@@ -901,7 +901,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             attachments.append(att)
 
     # 添加SSE客户端
+    logger.info(f"[SSE-SETUP] Adding SSE client for session_id={session_id}")
     client_queue = sse_manager.add_sse_client(session_id)
+    logger.info(f"[SSE-SETUP] SSE client added for session_id={session_id}")
 
     # 构建带文件路径的上下文消息
     file_context = ""
@@ -1114,6 +1116,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
                 while not completed.is_set() or len(results['chunks']) > 0 or len(results['progress']) > last_progress_count:
                     iteration_count += 1
+                    if iteration_count == 1 or iteration_count % 10 == 0:
+                        logger.info(f"[SSE-MAIN] Loop iteration {iteration_count}, completed={completed.is_set()}, chunks={len(results['chunks'])}, progress={len(results['progress'])}, last_progress={last_progress_count}")
                     
                     # Yield 新的进度消息
                     while len(results['progress']) > last_progress_count:

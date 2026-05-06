@@ -103,3 +103,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_
 
 -- 2026-5-6，chat_sessions 增加 ended_at 字段，记录会话结束时间（用于排队等待时间估算）
 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS ended_at TIMESTAMP;
+
+-- 2026-5-6，演示模式创建的用户 tenant_id 为 NULL，将其设置为 'demo' 以便正常访问 /api/chat/instances
+UPDATE users SET tenant_id = 'demo' WHERE tenant_id IS NULL;
+
+-- 2026-5-6，同步更新 chat_sessions 表中 demo 用户的会话记录 tenant_id
+UPDATE chat_sessions SET tenant_id = 'demo' WHERE tenant_id IS NULL AND user_id IN (SELECT user_id FROM users WHERE tenant_id = 'demo');

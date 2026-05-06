@@ -173,6 +173,13 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             row = cursor.fetchone()
             if row and row["tenant_id"]:
                 return row["tenant_id"]
+
+        # 演示模式用户没有 tenant_id 时，使用演示租户
+        from src.config.settings import settings
+        demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
+        if demo_enabled:
+            return "demo"
+
         return None
 
     async def _resolve_session_tenant(self, request: Request) -> Optional[str]:

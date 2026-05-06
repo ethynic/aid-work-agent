@@ -40,8 +40,13 @@ class InstanceService:
             # 先清理过期锁
             InstanceService._cleanup_expired_locks(conn)
 
-            where_clause = "WHERE ai.tenant_id = %s"
-            params = [tenant_id]
+            if tenant_id == 'demo':
+                # 演示模式：返回所有实例，不受租户限制
+                where_clause = ""
+                params = []
+            else:
+                where_clause = "WHERE ai.tenant_id = %s"
+                params = [tenant_id]
 
             if subagent_type:
                 where_clause += " AND ai.subagent_type = %s"
@@ -104,6 +109,7 @@ class InstanceService:
         instance_id: str,
         session_id: str,
         user_id: str,
+        tenant_id: str = None,
         lock_timeout_minutes: int = 3
     ) -> Dict[str, Any]:
         """
@@ -113,6 +119,7 @@ class InstanceService:
             instance_id: 实例ID
             session_id: 会话ID
             user_id: 用户ID
+            tenant_id: 租户ID（演示模式为 'demo'）
             lock_timeout_minutes: 锁超时时间（默认3分钟）
 
         Returns:
@@ -146,6 +153,35 @@ class InstanceService:
 
             # 3. 用 current_session_id 判断是否空闲（NULL = 空闲）
             is_busy = row["current_session_id"] is not None
+
+            # 演示模式：跳过排队，直接锁定（无限并发）
+            if tenant_id == 'demo':
+                cursor.execute("""
+                    UPDATE agent_instances
+                    SET
+                        status = 'busy',
+                        current_session_id = %s,
+                        current_user_id = %s,
+                        locked_at = CURRENT_TIMESTAMP,
+                        lock_expires_at = CURRENT_TIMESTAMP + (%s || ' minutes')::interval,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE instance_id = %s
+                    RETURNING instance_id, instance_name, avatar, status, current_session_id
+                """, (session_id, user_id, lock_timeout_minutes, instance_id))
+                locked = cursor.fetchone()
+                conn.commit()
+                if locked:
+                    logger.info(
+                        f"[Demo] Instance {instance_id} locked by session {session_id}, "
+                        f"user {user_id}, timeout {lock_timeout_minutes}min"
+                    )
+                    return {
+                        "success": True,
+                        "was_idle": True,
+                        "is_queued": False,
+                        "instance": dict(locked),
+                    }
+                return {"success": False, "error": "演示模式实例锁定失败"}
 
             if not is_busy:
                 # 空闲，直接锁定（用 current_session_id IS NULL 保证原子性）
