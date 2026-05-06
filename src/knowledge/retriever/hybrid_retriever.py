@@ -268,9 +268,10 @@ class HybridRetriever:
             """, (processed_query, processed_query, top_k))
 
             results = cursor.fetchall()
+            # row 是 tuple: (id, score)，对应 SELECT c.id, ... as score
             # ts_rank 返回的是排名分数，越大越相关
             # 转换为负数以便与 BM25 分数格式一致（越小越相关）
-            return [(row["id"], -row["score"]) for row in results if row["score"] > 0]
+            return [(row[0], -row[1]) for row in results if row[1] > 0]  # row[0]=row["id"], row[1]=row["score"]
         except Exception as e:
             logger.warning(f"后端日志：PostgreSQL 全文检索失败: {e}")
             return []
@@ -362,18 +363,19 @@ class HybridRetriever:
             rows = cursor.fetchall()
 
             # 按 fused 顺序排序
-            id_to_row = {row["id"]: row for row in rows}
+            # row 是 tuple: (id, doc_id, text, tokens, metadata)，对应 SELECT id, doc_id, text, tokens, metadata
+            id_to_row = {row[0]: row for row in rows}  # row[0] = row["id"]
             results = []
 
             for chunk_id, score in fused:
                 row = id_to_row.get(chunk_id)
                 if row:
-                    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                    metadata = json.loads(row[4]) if row[4] else {}  # row[4] = row["metadata"]
                     results.append({
-                        "chunk_id": row["id"],
-                        "doc_id": row["doc_id"],
-                        "text": row["text"],
-                        "tokens": row["tokens"],
+                        "chunk_id": row[0],  # row[0] = row["id"]
+                        "doc_id": row[1],  # row[1] = row["doc_id"]
+                        "text": row[2],  # row[2] = row["text"]
+                        "tokens": row[3],  # row[3] = row["tokens"]
                         "metadata": metadata,
                         "score": score
                     })

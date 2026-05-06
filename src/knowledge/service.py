@@ -198,7 +198,8 @@ class KnowledgeBaseService:
                     json.dumps(parse_result.metadata) if parse_result.metadata else None,
                     summary or None
                 ))
-                doc_id = cursor.fetchone()["id"]
+                # row 是 tuple: (id,)，对应 RETURNING id
+                doc_id = cursor.fetchone()[0]  # row["id"]
 
                 # 插入 chunks
                 chunk_ids = []
@@ -214,7 +215,8 @@ class KnowledgeBaseService:
                         chunk["tokens"],
                         json.dumps({"char_count": len(chunk["text"])})
                     ))
-                    chunk_ids.append(cursor.fetchone()["id"])
+                    # row 是 tuple: (id,)，对应 RETURNING id
+                    chunk_ids.append(cursor.fetchone()[0])  # row["id"]
 
                 # 插入向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -259,7 +261,8 @@ class KnowledgeBaseService:
                 if not row:
                     return {"success": False, "error": "文档不存在"}
 
-                file_path = row["file_path"]
+                # row 是 tuple: (file_path,)，对应 SELECT file_path
+                file_path = row[0]  # row["file_path"]
 
                 # 删除向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -314,7 +317,8 @@ class KnowledgeBaseService:
                 else:
                     cursor.execute("SELECT COUNT(*) FROM documents")
 
-                count = cursor.fetchone()["count"]
+                # row 是 tuple: (count,)，对应 SELECT COUNT(*)
+                count = cursor.fetchone()[0]  # row["count"]
                 return count
         except Exception as e:
             logger.error(f"后端日志：获取文档总数失败: {e}", exc_info=True)
@@ -385,6 +389,9 @@ class KnowledgeBaseService:
                 """, (doc_id,))
 
                 rows = cursor.fetchall()
+
+                # 转换为 dict 以便访问列名
+                rows = [dict(row) for row in rows]
 
                 return [
                     {
@@ -465,7 +472,9 @@ class KnowledgeBaseService:
                             SELECT id, title, file_type, file_path FROM documents WHERE id IN ({placeholders})
                         """, list(doc_ids))
 
-                    doc_info = {row["id"]: {"title": row["title"], "file_type": row["file_type"], "file_path": row["file_path"]} for row in cursor.fetchall()}
+                    # 转换为 dict 以便访问列名
+                    rows = [dict(row) for row in cursor.fetchall()]
+                    doc_info = {row["id"]: {"title": row["title"], "file_type": row["file_type"], "file_path": row["file_path"]} for row in rows}
 
                     # 格式化结果
                     formatted_results = [

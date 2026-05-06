@@ -404,11 +404,12 @@ async def download_document(doc_id: int):
         cursor.execute("SELECT file_path, title FROM documents WHERE id = %s", (doc_id,))
         row = cursor.fetchone()
 
-    if not row or not row["file_path"]:
+    # row 是 tuple: (file_path, title)，对应 SELECT file_path, title
+    if not row or not row[0]:  # row[0] = row["file_path"]
         raise HTTPException(status_code=404, detail="文档不存在或文件已丢失")
 
-    file_path = row["file_path"]
-    title = row["title"] or f"document_{doc_id}"
+    file_path = row[0]  # row["file_path"]
+    title = row[1] or f"document_{doc_id}"  # row[1] = row["title"]
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="文件不存在，可能已被删除")

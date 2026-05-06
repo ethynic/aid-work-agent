@@ -167,10 +167,11 @@ class VectorDBPostgreSQL(VectorDatabase):
             # 将余弦距离转换为余弦相似度
             cosine_results = []
             for row in results:
-                distance = row["distance"]
+                # row 是 tuple: (chunk_id, distance)，对应 SELECT chunk_id, ... as distance
+                distance = row[1]  # row["distance"]
                 # 距离范围 [0, 2]，相似度 = 1 - distance/2
                 similarity = max(0.0, min(1.0, 1.0 - distance / 2.0))
-                cosine_results.append((row["chunk_id"], similarity))
+                cosine_results.append((row[0], similarity))  # row[0] = row["chunk_id"]
 
             return cosine_results
         finally:
