@@ -396,8 +396,8 @@ async def chat(request: Request):
         # 从请求头解析用户身份
         current_user = auth.get_current_user(request)
 
-        # 权限检查：数字员工访问授权
-        if subagent_name and current_user:
+        # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
+        if subagent_name and current_user and current_user.get("tenant_id") != "demo":
             from src.saas.permissions.checker import check_agent_access
             if not check_agent_access(subagent_name, current_user):
                 return JSONResponse({
@@ -738,8 +738,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 调试日志：记录请求关键信息
     logger.info(f"[并发控制调试] chat_stream 请求: subagent={request.subagent}, instance_id={request.instance_id}, session_id={request.session_id}, user_id={user_id}")
 
-    # 权限检查：数字员工访问授权
-    if request.subagent and current_user:
+    # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
+    if request.subagent and current_user and current_user.get("tenant_id") != "demo":
         from src.saas.permissions.checker import check_agent_access
         if not check_agent_access(request.subagent, current_user):
             from fastapi.responses import JSONResponse
