@@ -94,7 +94,6 @@
                 getProgressClass(msg.type)
               ]"
             >
-            <div v-if="false">{{ msg }}</div>
               <span class="mr-1">{{ getProgressIcon(msg.type) }}</span>
               <span class="opacity-80">{{ formatProgressContent(msg) }}</span>
             </div>
@@ -107,21 +106,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { marked } from 'marked'
-import { markedHighlight } from 'marked-highlight'
-import hljs from 'highlight.js'
 import type { ChatMessage, AttachmentInfo, ProgressMessage } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
-
-// 配置 marked 使用 highlight.js 进行代码高亮
-marked.use(markedHighlight({
-  langPrefix: 'hljs language-',
-  highlight(code: string, lang: string) {
-    const language = hljs.getLanguage(lang) ? lang : 'plaintext'
-    return hljs.highlight(code, { language }).value
-  }
-}))
+import { renderMarkdown } from '@/utils/markdown'
 
 interface Props {
   message: ChatMessage
@@ -216,7 +204,7 @@ const displayContent = computed(() => {
 
 const renderedContent = computed(() => {
   // 使用 marked 渲染 Markdown，支持标题、表格、粗体、斜体、代码块、列表等
-  return marked(displayContent.value)
+  return renderMarkdown(displayContent.value)
 })
 
 function handlePreview(attachment: AttachmentInfo) {

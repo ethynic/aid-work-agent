@@ -129,20 +129,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { marked } from 'marked'
-import { markedHighlight } from 'marked-highlight'
-import hljs from 'highlight.js'
 import type { AttachmentInfo } from '@/types'
 import { getFileUrl, getFileDownloadUrl } from '@/api/agent'
-
-// 配置 marked
-marked.use(markedHighlight({
-  langPrefix: 'hljs language-',
-  highlight(code: string, lang: string) {
-    const language = hljs.getLanguage(lang) ? lang : 'plaintext'
-    return hljs.highlight(code, { language }).value
-  }
-}))
+import { renderMarkdown } from '@/utils/markdown'
 
 interface Props {
   attachment: AttachmentInfo | null
@@ -189,7 +178,7 @@ const previewType = computed(() => {
 // Markdown 渲染后的内容
 const renderedTextContent = computed(() => {
   if (previewType.value === 'markdown' && textContent.value) {
-    return marked(textContent.value)
+    return renderMarkdown(textContent.value)
   }
   return ''
 })
