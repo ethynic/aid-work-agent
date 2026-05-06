@@ -540,10 +540,7 @@ async function handleSend(content: string) {
     precacheNewSession(sid)
   } else if (!currentSessionId.value) {
     // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
-    //console.log(`[${now()}] [handleSend] no current session, creating new session...`)
-    const startTime = Date.now()
     const newSession = await createNewSession(undefined, subagentName.value)
-    //console.log(`[${now()}] [handleSend] createNewSession done in ${Date.now() - startTime}ms, newSession=`, newSession)
     if (newSession) {
       // 新建会话本来就是空的，预先缓存空数组，避免切换时请求后端
       precacheNewSession(newSession.session_id)

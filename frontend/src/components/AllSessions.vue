@@ -467,6 +467,18 @@ function handleSelectSession(sessionId: string) {
     const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
     const queryParams: Record<string, string> = {}
 
+    // 检查 subagent 是否为有效的子智能体（在 availableSubagents 中存在）
+    let subagent = session?.context_data?.subagent as string | undefined
+    if (subagent && availableSubagents.value.length > 0) {
+      const matched = availableSubagents.value.find(
+        (a: any) => a.agent_id === subagent || a.subagent_type === subagent
+      )
+      if (!matched) {
+        // 不是有效的子智能体（可能是 all-sessions、instances 等其他路由参数）
+        subagent = undefined
+      }
+    }
+
     // 租户模式下传递 instance_id
     if (tenantMatch && session?.instance_id) {
       queryParams.instance_id = session.instance_id
@@ -475,14 +487,14 @@ function handleSelectSession(sessionId: string) {
     if (tenantMatch) {
       // 租户模式
       const tenantId = tenantMatch[1]
-      const path = session?.context_data?.subagent
-        ? `/t/${tenantId}/chat/${session.context_data.subagent}`
+      const path = subagent
+        ? `/t/${tenantId}/chat/${subagent}`
         : `/t/${tenantId}/chat`
       router.push({ path, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
     } else {
       // 普通演示模式
-      const path = session?.context_data?.subagent
-        ? `/chat/${session.context_data.subagent}`
+      const path = subagent
+        ? `/chat/${subagent}`
         : '/'
       router.push(path)
     }

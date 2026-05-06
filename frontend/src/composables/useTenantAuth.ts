@@ -6,7 +6,7 @@
  */
 
 import { ref, computed } from 'vue'
-import { getAdminInfo, adminLogout as apiLogout } from '@/api/saasTenant'
+import { adminLogout as apiLogout } from '@/api/saasTenant'
 
 export interface TenantAdmin {
   user_id: string
@@ -86,25 +86,47 @@ export function useTenantAuth() {
         const routeMatch = path.match(/^\/t\/([^/]+)/)
         const routeTenantId = routeMatch ? routeMatch[1] : undefined
 
-        // 验证 token 有效性
-        const info = await getAdminInfo(routeTenantId)
-        // 修复: 后端返回 user 而非 admin
-        // 平台管理员的 tenant 可能是 null，需要分开判断
-        if (info?.user) {
-          admin.value = info.user
-          tenant.value = info.tenant ? { ...info.tenant, status: Number(info.tenant.status) } : null
-        } else {
+        // 直接调用 API 验证 token，区分 401 和其他错误
+        const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+        const url = routeTenantId
+          ? `${apiBase}/saas/auth/me?tenant_id=${encodeURIComponent(routeTenantId)}`
+          : `${apiBase}/saas/auth/me`
+        const response = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${savedToken}` }
+        })
+
+        if (response.ok) {
+          const info = await response.json()
+          // 修复: 后端返回 user 而非 admin
+          // 平台管理员的 tenant 可能是 null，需要分开判断
+          if (info?.user) {
+            admin.value = info.user
+            tenant.value = info.tenant ? { ...info.tenant, status: Number(info.tenant.status) } : null
+          } else {
+            // 响应格式异常，视为 token 无效
+            clearStorage()
+            saasToken.value = null
+          }
+        } else if (response.status === 401) {
           // token 无效，清除
           clearStorage()
           saasToken.value = null
+        } else {
+          // 其他错误（如 500、网络错误），保留 token，不清除存储
+          // 标记为未验证状态，但允许后续重试
+          console.warn(`Token validation failed with status ${response.status}, keeping token for retry`)
+          saasToken.value = savedToken
+          admin.value = null
+          tenant.value = null
         }
       } else if (savedAdmin && savedTenant) {
         // 无 token 但有缓存信息，清除
         clearStorage()
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('TenantAuth init error:', e)
-      clearStorage()
+      // 网络错误或异常，保留 token 不立即清除
+      // 不清除 localStorage，允许重试
       saasToken.value = null
       admin.value = null
       tenant.value = null

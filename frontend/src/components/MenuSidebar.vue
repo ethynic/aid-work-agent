@@ -435,12 +435,6 @@ const toggleHistoryExpanded = () => {
 
 
 
-// 过滤后可用的数字员工列表（根据权限过滤）
-// 注意：后端已根据权限过滤，这里直接返回即可
-const filteredAvailableSubagents = computed(() => {
-  return props.availableSubagents || []
-})
-
 // 业务数据分组折叠状态（持久化到 localStorage）
 const storageKey = 'aid_work_agent:business_data_expanded'
 const isBusinessDataExpanded = ref(
@@ -517,16 +511,15 @@ const currentSubagent = computed<string | null>(() => {
   return null
 })
 
-// 按子智能体过滤会话列表
+// 过滤后可用的数字员工列表（根据权限过滤）
+// 注意：后端已根据权限过滤，这里直接返回即可
+const filteredAvailableSubagents = computed(() => {
+  return props.availableSubagents || []
+})
+
+// 永远显示该用户的所有历史会话，不按数字员工过滤
 const filteredSessions = computed(() => {
-  if (!currentSubagent.value) {
-    // 没有指定子智能体（租户首页或主页面）：显示所有会话
-    // 不要过滤掉子智能体会话，用户在首页应该能看到所有历史
-    return sessions.value
-  } else {
-    // 子智能体模式：只显示同名会话
-    return sessions.value.filter(s => s.context_data?.subagent === currentSubagent.value)
-  }
+  return sessions.value
 })
 
 // 只显示前10个会话
@@ -672,18 +665,30 @@ async function handleNewSession() {
     let targetPath = '/'
     const queryParams: Record<string, string> = {}
 
-    if (currentSubagent.value) {
+    // 检查 currentSubagent 是否为有效的子智能体（在 availableSubagents 中存在）
+    let effectiveSubagent = currentSubagent.value
+    if (effectiveSubagent && props.availableSubagents.length > 0) {
+      const matched = props.availableSubagents.find(
+        (a: any) => a.agent_id === effectiveSubagent || a.subagent_type === effectiveSubagent
+      )
+      if (!matched) {
+        // 不是有效的子智能体（可能是 all-sessions、instances 等其他路由参数）
+        effectiveSubagent = null
+      }
+    }
+
+    if (effectiveSubagent) {
       if (isTenantMode.value) {
-        targetPath = `/t/${tenantId.value}/chat/${currentSubagent.value}`
+        targetPath = `/t/${tenantId.value}/chat/${effectiveSubagent}`
         // 尝试匹配 instance_id
         const matchedInstance = props.availableSubagents.find(
-          (a: any) => a.agent_id === currentSubagent.value || a.subagent_type === currentSubagent.value
+          (a: any) => a.agent_id === effectiveSubagent || a.subagent_type === effectiveSubagent
         )
         if (matchedInstance?.instance_id) {
           queryParams.instance_id = matchedInstance.instance_id
         }
       } else {
-        targetPath = `/chat/${currentSubagent.value}`
+        targetPath = `/chat/${effectiveSubagent}`
       }
     } else if (isTenantMode.value) {
       targetPath = `/t/${tenantId.value}/chat`
@@ -711,27 +716,8 @@ async function handleSelectSession(sessionId: string) {
     await abortStreaming()
   }
   selectSession(sessionId)
-  // 根据会话的 subagent 标记导航到对应路由（租户模式使用 /t/:tenant_id/chat）
-  const session = sessions.value.find(s => s.session_id === sessionId)
-  const subagent = session?.context_data?.subagent as string | undefined
-  const queryParams: Record<string, string> = {}
-
-  // 租户模式下传递 instance_id
-  if (isTenantMode.value && session?.instance_id) {
-    queryParams.instance_id = session.instance_id
-  }
-
-  const targetPath = subagent
-    ? isTenantMode.value
-      ? `/t/${tenantId.value}/chat/${subagent}`
-      : `/chat/${subagent}`
-    : isTenantMode.value
-      ? `/t/${tenantId.value}/chat`
-      : '/'
-
-  if (route.path !== targetPath || Object.keys(queryParams).length > 0) {
-    router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
-  }
+  // 不再根据会话的 subagent 标记导航到对应路由
+  // 用户点击历史会话时，只是切换当前会话内容，不改变左侧会话列表的显示
 }
 
 // 删除会话

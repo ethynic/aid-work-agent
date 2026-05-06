@@ -131,7 +131,6 @@ async function handleLogout() {
 
 onMounted(async () => {
   await init()
-  await loadAvailableSubagents(isTenantRoute.value)
   if (!isLoggedIn.value) {
     // 根据当前路由跳转到对应登录页
     if (isTenantRoute.value) {
@@ -141,6 +140,8 @@ onMounted(async () => {
     }
     return
   }
+  // 登录成功后加载可用数字员工列表
+  await loadAvailableSubagents(isTenantRoute.value)
   // /portal 路由下，只允许 platform_admin
   if (!isTenantRoute.value && admin.value?.role !== 'platform_admin') {
     toast.warning('只有平台管理员才能访问管理后台')
