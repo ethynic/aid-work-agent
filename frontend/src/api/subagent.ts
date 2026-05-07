@@ -37,7 +37,7 @@ export interface SubagentListItem {
   display_name?: string     // 显示名称
   instance_name?: string    // 实例名称（如"外贸获客智能体 - 实例1"）
   subagent_type?: string    // 子智能体类型
-  status?: string           // 实例状态：idle/busy/offline
+  status?: string           // 实例状态：idle/busy
   avatar?: string           // 头像
   [key: string]: any        // 允许其他字段
 }

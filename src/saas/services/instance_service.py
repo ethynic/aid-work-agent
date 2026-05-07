@@ -283,9 +283,6 @@ class InstanceService:
                     "queue_length": total,
                 }
 
-            # offline 状态
-            return {"success": False, "error": "Instance is offline"}
-
     @staticmethod
     def release_instance(instance_id: str, session_id: str) -> bool:
         """

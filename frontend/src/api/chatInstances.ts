@@ -17,7 +17,7 @@ export interface ChatInstance {
   avatar?: string
   description?: string
   personality_traits?: string[]
-  status: 'idle' | 'busy' | 'offline'
+  status: 'idle' | 'busy'
   current_session_id?: string
   current_user_id?: string
   current_user?: {

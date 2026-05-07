@@ -17,7 +17,6 @@
           :class="{
             'ring-2 ring-green-500': instance.status === 'idle',
             'ring-2 ring-amber-400': instance.status === 'busy',
-            'opacity-60': instance.status === 'offline',
           }"
         >
           <!-- Card Header -->
@@ -136,14 +135,6 @@
                 </button>
               </template>
 
-              <!-- Offline -->
-              <button
-                v-else
-                disabled
-                class="flex-1 py-2.5 px-4 bg-slate-200 text-slate-500 font-medium rounded-xl cursor-not-allowed"
-              >
-                离线
-              </button>
             </div>
           </div>
         </div>
@@ -356,7 +347,6 @@ function getStatusText(status: string) {
   return {
     idle: '空闲可用',
     busy: '忙碌中',
-    offline: '离线',
   }[status] || status
 }
 
