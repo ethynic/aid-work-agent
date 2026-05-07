@@ -10,6 +10,7 @@ import logging
 from loguru import logger
 
 from src.db.database import DB_CONFIG, get_db_connection, get_pooled_connection, return_pooled_connection
+import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class VectorDBPostgreSQL(VectorDatabase):
 
     def _ensure_table(self, conn):
         """确保向量表存在并启用 pgvector 扩展"""
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # 确保 pgvector 扩展已启用
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -116,7 +117,7 @@ class VectorDBPostgreSQL(VectorDatabase):
 
         conn = self._get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             # pgvector 使用数组格式 '[1.0, 2.0, ...]'
             data = [
@@ -148,7 +149,7 @@ class VectorDBPostgreSQL(VectorDatabase):
         """向量相似度搜索（使用余弦相似度）"""
         conn = self._get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             # 将查询向量转换为 vector 类型字符串
             vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
@@ -167,11 +168,11 @@ class VectorDBPostgreSQL(VectorDatabase):
             # 将余弦距离转换为余弦相似度
             cosine_results = []
             for row in results:
-                # row 是 tuple: (chunk_id, distance)，对应 SELECT chunk_id, ... as distance
-                distance = row[1]  # row["distance"]
+                # row 是 dict: {"chunk_id": ..., "distance": ...}，对应 SELECT chunk_id, ... as distance
+                distance = row["distance"]
                 # 距离范围 [0, 2]，相似度 = 1 - distance/2
                 similarity = max(0.0, min(1.0, 1.0 - distance / 2.0))
-                cosine_results.append((row[0], similarity))  # row[0] = row["chunk_id"]
+                cosine_results.append((row["chunk_id"], similarity))
 
             return cosine_results
         finally:
@@ -182,7 +183,7 @@ class VectorDBPostgreSQL(VectorDatabase):
         """删除文档的所有向量"""
         conn = self._get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             cursor.execute("""
                 DELETE FROM chunks_vec

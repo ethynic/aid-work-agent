@@ -718,10 +718,10 @@ class InstanceService:
         # 计算等待时长（秒）
         wait_duration = None
         if queued_at:
-            cursor.execute("SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - %s))", (queued_at,))
+            cursor.execute("SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - %s)) AS duration", (queued_at,))
             duration_row = cursor.fetchone()
             if duration_row:
-                wait_duration = int(duration_row[0]) if duration_row[0] else 0
+                wait_duration = int(duration_row["duration"]) if duration_row["duration"] else 0
 
         # 标记为 ready 状态，记录开始服务时间和等待时长
         cursor.execute("""

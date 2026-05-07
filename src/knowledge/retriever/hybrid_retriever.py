@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from loguru import logger
 
 from src.db.database import get_pooled_connection, return_pooled_connection
+import psycopg2.extras
 
 
 class HybridRetriever:
@@ -253,7 +254,7 @@ class HybridRetriever:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
         conn = self._get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             # 预处理查询：将空格替换为 |（OR 语义）以支持多关键词
             processed_query = self._preprocess_fts_query(query)
@@ -268,10 +269,10 @@ class HybridRetriever:
             """, (processed_query, processed_query, top_k))
 
             results = cursor.fetchall()
-            # row 是 tuple: (id, score)，对应 SELECT c.id, ... as score
+            # row 是 dict: {"id": ..., "score": ...}，对应 SELECT c.id, ... as score
             # ts_rank 返回的是排名分数，越大越相关
             # 转换为负数以便与 BM25 分数格式一致（越小越相关）
-            return [(row[0], -row[1]) for row in results if row[1] > 0]  # row[0]=row["id"], row[1]=row["score"]
+            return [(row["id"], -row["score"]) for row in results if row["score"] > 0]
         except Exception as e:
             logger.warning(f"后端日志：PostgreSQL 全文检索失败: {e}")
             return []
@@ -353,7 +354,7 @@ class HybridRetriever:
 
         conn = self._get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute(f"""
                 SELECT id, doc_id, text, tokens, metadata
                 FROM chunks
@@ -363,19 +364,19 @@ class HybridRetriever:
             rows = cursor.fetchall()
 
             # 按 fused 顺序排序
-            # row 是 tuple: (id, doc_id, text, tokens, metadata)，对应 SELECT id, doc_id, text, tokens, metadata
-            id_to_row = {row[0]: row for row in rows}  # row[0] = row["id"]
+            # row 是 dict: {"id": ..., "doc_id": ..., "text": ..., "tokens": ..., "metadata": ...}
+            id_to_row = {row["id"]: row for row in rows}
             results = []
 
             for chunk_id, score in fused:
                 row = id_to_row.get(chunk_id)
                 if row:
-                    metadata = json.loads(row[4]) if row[4] else {}  # row[4] = row["metadata"]
+                    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
                     results.append({
-                        "chunk_id": row[0],  # row[0] = row["id"]
-                        "doc_id": row[1],  # row[1] = row["doc_id"]
-                        "text": row[2],  # row[2] = row["text"]
-                        "tokens": row[3],  # row[3] = row["tokens"]
+                        "chunk_id": row["id"],
+                        "doc_id": row["doc_id"],
+                        "text": row["text"],
+                        "tokens": row["tokens"],
                         "metadata": metadata,
                         "score": score
                     })

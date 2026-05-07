@@ -198,8 +198,8 @@ class KnowledgeBaseService:
                     json.dumps(parse_result.metadata) if parse_result.metadata else None,
                     summary or None
                 ))
-                # row 是 tuple: (id,)，对应 RETURNING id
-                doc_id = cursor.fetchone()[0]  # row["id"]
+                # row 是 dict: {"id": ...}，对应 RETURNING id
+                doc_id = cursor.fetchone()["id"]
 
                 # 插入 chunks
                 chunk_ids = []
@@ -215,8 +215,8 @@ class KnowledgeBaseService:
                         chunk["tokens"],
                         json.dumps({"char_count": len(chunk["text"])})
                     ))
-                    # row 是 tuple: (id,)，对应 RETURNING id
-                    chunk_ids.append(cursor.fetchone()[0])  # row["id"]
+                    # row 是 dict: {"id": ...}，对应 RETURNING id
+                    chunk_ids.append(cursor.fetchone()["id"])
 
                 # 插入向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -261,8 +261,8 @@ class KnowledgeBaseService:
                 if not row:
                     return {"success": False, "error": "文档不存在"}
 
-                # row 是 tuple: (file_path,)，对应 SELECT file_path
-                file_path = row[0]  # row["file_path"]
+                # row 是 dict: {"file_path": ...}，对应 SELECT file_path
+                file_path = row["file_path"]
 
                 # 删除向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -313,12 +313,12 @@ class KnowledgeBaseService:
 
                 where_clause = " AND ".join(conditions)
                 if where_clause:
-                    cursor.execute(f"SELECT COUNT(*) FROM documents WHERE {where_clause}", params)
+                    cursor.execute(f"SELECT COUNT(*) AS count FROM documents WHERE {where_clause}", params)
                 else:
-                    cursor.execute("SELECT COUNT(*) FROM documents")
+                    cursor.execute("SELECT COUNT(*) AS count FROM documents")
 
-                # row 是 tuple: (count,)，对应 SELECT COUNT(*)
-                count = cursor.fetchone()[0]  # row["count"]
+                # row 是 dict: {"count": ...}，对应 SELECT COUNT(*) AS count
+                count = cursor.fetchone()["count"]
                 return count
         except Exception as e:
             logger.error(f"后端日志：获取文档总数失败: {e}", exc_info=True)

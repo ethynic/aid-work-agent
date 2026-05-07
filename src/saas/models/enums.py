@@ -40,7 +40,7 @@ class TenantStatus(str, Enum):
 
 # ============== 订阅状态 ==============
 
-class SubscriptionStatus(str):
+class SubscriptionStatus(str, Enum):
     """
     订阅状态枚举
 
@@ -55,7 +55,7 @@ class SubscriptionStatus(str):
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.ACTIVE, cls.EXPIRED, cls.CANCELLED]
+        return [cls.ACTIVE.value, cls.EXPIRED.value, cls.CANCELLED.value]
 
     @property
     def display_name(self) -> str:
@@ -69,7 +69,7 @@ class SubscriptionStatus(str):
 
 # ============== 支付状态 ==============
 
-class PaymentStatus(str):
+class PaymentStatus(str, Enum):
     """
     支付状态枚举
 
@@ -84,7 +84,7 @@ class PaymentStatus(str):
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.PENDING, cls.PAID, cls.REFUNDED]
+        return [cls.PENDING.value, cls.PAID.value, cls.REFUNDED.value]
 
     @property
     def display_name(self) -> str:
@@ -98,7 +98,7 @@ class PaymentStatus(str):
 
 # ============== 智能体实例状态 ==============
 
-class AgentInstanceStatus(str):
+class AgentInstanceStatus(str, Enum):
     """
     智能体实例状态枚举
 
@@ -113,7 +113,7 @@ class AgentInstanceStatus(str):
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.IDLE, cls.BUSY]
+        return [cls.IDLE.value, cls.BUSY.value]
 
     @property
     def display_name(self) -> str:
@@ -152,7 +152,7 @@ class UserStatus(str, Enum):
 
 # ============== 用户角色 ==============
 
-class UserRole(str):
+class UserRole(str, Enum):
     """
     用户角色枚举
 
@@ -167,7 +167,7 @@ class UserRole(str):
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.PLATFORM_ADMIN, cls.TENANT_ADMIN, cls.TENANT_USER]
+        return [cls.PLATFORM_ADMIN.value, cls.TENANT_ADMIN.value, cls.TENANT_USER.value]
 
     @property
     def display_name(self) -> str:
@@ -181,7 +181,7 @@ class UserRole(str):
 
 # ============== 套餐计划 ==============
 
-class PlanType(str):
+class PlanType(str, Enum):
     """
     套餐类型枚举
 
@@ -196,7 +196,7 @@ class PlanType(str):
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.BASIC, cls.STANDARD, cls.PREMIUM]
+        return [cls.BASIC.value, cls.STANDARD.value, cls.PREMIUM.value]
 
     @property
     def display_name(self) -> str:
@@ -210,7 +210,7 @@ class PlanType(str):
 
 # ============== 排队状态 ==============
 
-class QueueStatus(str):
+class QueueStatus(str, Enum):
     """
     智能体实例排队状态枚举
 
@@ -229,7 +229,7 @@ class QueueStatus(str):
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.WAITING, cls.READY, cls.EXPIRED, cls.CANCELLED, cls.ABANDONED]
+        return [cls.WAITING.value, cls.READY.value, cls.EXPIRED.value, cls.CANCELLED.value, cls.ABANDONED.value]
 
     @property
     def display_name(self) -> str:
