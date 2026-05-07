@@ -154,11 +154,45 @@ export async function getMyAllowedAgents(): Promise<{
 
 // ==================== 实例同步 ====================
 
+export async function checkTenantInstances(tenantId: string): Promise<{
+  success: boolean
+  matched: boolean
+  message: string
+  details: Array<{
+    agent_id: string
+    name: string
+    quota: number
+    current: number
+    diff: number
+    status: 'need_create' | 'need_delete' | 'matched'
+    message: string
+  }>
+  total_quota: number
+  total_instances: number
+  need_create: number
+  need_delete: number
+}> {
+  const res = await fetch(`${API_BASE}/tenant/${encodeURIComponent(tenantId)}/check-instances`, {
+    headers: getSaasAuthHeader(),
+  })
+  if (!res.ok) throw new Error('检查租户实例失败')
+  return res.json()
+}
+
 export async function syncTenantInstances(tenantId: string): Promise<{
   success: boolean
   message?: string
   created?: number
   deleted?: number
+  details?: Array<{
+    agent_id: string
+    name: string
+    before: number
+    after: number
+    quota: number
+    created: number
+    deleted: number
+  }>
 }> {
   const headers = getSaasAuthHeader()
   headers['Content-Type'] = 'application/json'

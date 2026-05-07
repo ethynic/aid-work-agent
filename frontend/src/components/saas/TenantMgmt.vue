@@ -218,22 +218,35 @@
               </span>
             </div>
           </div>
-          <!-- 创建实例按钮 -->
+          <!-- 实例检查和创建按钮 -->
           <div class="pt-4 mt-4 border-t border-slate-200">
             <div class="text-xs text-slate-500 mb-2">
-              💡 提示：点击下方按钮将自动保存授权设置并根据配额创建实例。
+              💡 提示：点击"检查实例"先保存设置并查看实例数与配额的匹配情况，点击"创建实例"将自动保存授权设置并根据配额创建/删除实例。
             </div>
-            <button
-              @click="handleSyncInstancesInEdit"
-              :disabled="syncingInstances === currentTenant?.tenant_id"
-              class="w-full px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
-            >
-              <svg v-if="syncingInstances === currentTenant?.tenant_id" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              创建实例
-            </button>
+            <div class="flex gap-2">
+              <button
+                @click="handleCheckInstances"
+                :disabled="checkingInstances || syncingInstances === currentTenant?.tenant_id"
+                class="flex-1 px-4 py-2 bg-green-500 hover:bg-green-600 disabled:bg-slate-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <svg v-if="checkingInstances" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                检查实例
+              </button>
+              <button
+                @click="handleSyncInstancesInEdit"
+                :disabled="syncingInstances === currentTenant?.tenant_id || checkingInstances"
+                class="flex-1 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <svg v-if="syncingInstances === currentTenant?.tenant_id" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                创建实例
+              </button>
+            </div>
           </div>
         </div>
         <div v-if="formError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ formError }}</div>
@@ -324,7 +337,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
-import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, type AgentItem } from '@/api/saasPermissions'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, type AgentItem } from '@/api/saasPermissions'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -345,6 +358,7 @@ const selectedAgentIds = ref<string[]>([])
 const selectedAgentQuotas = ref<Record<string, number>>({})
 const loadingAgents = ref(false)
 const syncingInstances = ref<string | null>(null)
+const checkingInstances = ref(false)
 
 const defaultFormData: TenantFormData = {
   company_name: '',
@@ -597,14 +611,49 @@ async function handleSyncInstances(tenantId: string) {
   }
 }
 
+async function handleCheckInstances() {
+  if (!currentTenant.value?.tenant_id) {
+    toast.error('未找到租户信息')
+    return
+  }
+  // 先保存当前的授权设置（不关闭弹窗）
+  const saved = await savePermissionsOnly()
+  if (!saved) {
+    console.log('前端日志：保存授权设置失败，取消检查')
+    return
+  }
+  checkingInstances.value = true
+  try {
+    const res = await checkTenantInstances(currentTenant.value.tenant_id)
+    if (res.success) {
+      // 用 toast 显示详细结果
+      const detailLines = res.details.map((d: any) =>
+        `• ${d.name}：当前 ${d.current} / 配额 ${d.quota}`
+      ).join('\n')
+      const summary = `总计：${res.total_instances} 实例 / ${res.total_quota} 配额`
+      if (res.matched) {
+        toast.success(`实例数与配额匹配\n\n${detailLines}\n\n${summary}`, { duration: 6000 })
+      } else {
+        toast.warning(`${res.message}\n\n${detailLines}\n\n${summary}`, { duration: 6000 })
+      }
+    } else {
+      toast.error(res.message || '检查失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '检查失败')
+  } finally {
+    checkingInstances.value = false
+  }
+}
+
 async function handleSyncInstancesInEdit() {
   if (!currentTenant.value?.tenant_id) {
     toast.error('未找到租户信息')
     return
   }
   // 1. 先保存当前的授权设置（不关闭弹窗）
-  const confirmResult = await savePermissionsOnly()
-  if (!confirmResult) {
+  const saved = await savePermissionsOnly()
+  if (!saved) {
     console.log('前端日志：保存授权设置失败，取消创建实例')
     return
   }
@@ -616,7 +665,19 @@ async function handleSyncInstancesInEdit() {
   try {
     const res = await syncTenantInstances(currentTenant.value.tenant_id)
     if (res.success) {
-      toast.success(res.message || '实例同步成功')
+      // 用 toast 显示详细结果
+      if (res.details && res.details.length > 0) {
+        const detailLines = res.details.map((d: any) => {
+          const change = []
+          if (d.created > 0) change.push(`+${d.created}`)
+          if (d.deleted > 0) change.push(`-${d.deleted}`)
+          const changeStr = change.length > 0 ? ` (${change.join(', ')})` : ''
+          return `• ${d.name}：${d.before} → ${d.after} / 配额 ${d.quota}${changeStr}`
+        }).join('\n')
+        toast.success(`${res.message}\n\n${detailLines}`, { duration: 6000 })
+      } else {
+        toast.success(res.message || '实例同步成功')
+      }
     } else {
       toast.error(res.message || '实例同步失败')
     }
@@ -640,7 +701,6 @@ async function savePermissionsOnly(): Promise<boolean> {
   try {
     const res = await setTenantAgentPermissions(targetTenantId, selectedAgentIds.value, selectedAgentQuotas.value)
     if (res.success) {
-      console.log('前端日志：授权设置保存成功')
       return true
     } else {
       toast.error(res.message || '保存授权设置失败')

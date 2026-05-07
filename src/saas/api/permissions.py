@@ -359,6 +359,137 @@ def get_my_allowed_agents(request: Request):
         }
 
 
+@router.get("/tenant/{tenant_id}/check-instances")
+def check_tenant_instances(request: Request, tenant_id: str):
+    """检查租户数字员工实例与配额的匹配情况"""
+    admin = require_admin(request)
+    if not admin or admin.get("role") != "platform_admin":
+        raise HTTPException(status_code=403, detail="无权限")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 获取租户所有有效订阅的数字员工及其配额
+        cursor.execute("""
+            SELECT subagent_type, instance_quota
+            FROM subscriptions
+            WHERE tenant_id = %s
+              AND status = 'active'
+              AND starts_at <= CURRENT_TIMESTAMP
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY subagent_type
+        """, (tenant_id,))
+        subscriptions = cursor.fetchall()
+
+        if not subscriptions:
+            return {
+                "success": True,
+                "matched": True,
+                "message": "租户无有效订阅",
+                "details": [],
+                "total_quota": 0,
+                "total_instances": 0,
+                "need_create": 0,
+                "need_delete": 0,
+            }
+
+        # 获取数字员工名称映射
+        registry = master_agent.subagent_registry
+        agent_name_map = {}
+        if registry:
+            all_items = registry.get_all_subagents_with_type()
+            for item in all_items:
+                agent_name_map[item["agent_id"]] = item["name"]
+
+        # 添加主智能体
+        agent_name_map["main"] = "CEO智能体"
+
+        details = []
+        total_quota = 0
+        total_instances = 0
+        need_create = 0
+        need_delete = 0
+
+        for sub in subscriptions:
+            agent_id = sub["subagent_type"]
+            quota = sub["instance_quota"]
+            if quota < 1:
+                quota = 1
+
+            total_quota += quota
+
+            # 获取当前实例
+            cursor.execute("""
+                SELECT instance_id, status, created_at
+                FROM agent_instances
+                WHERE tenant_id = %s AND subagent_type = %s
+                ORDER BY created_at ASC
+            """, (tenant_id, agent_id))
+            current_instances = cursor.fetchall()
+            current_count = len(current_instances)
+            total_instances += current_count
+
+            # 获取数字员工显示名称
+            display_name = agent_name_map.get(agent_id, agent_id)
+
+            diff = current_count - quota
+            if diff < 0:
+                need_create += abs(diff)
+                details.append({
+                    "agent_id": agent_id,
+                    "name": display_name,
+                    "quota": quota,
+                    "current": current_count,
+                    "diff": diff,
+                    "status": "need_create",
+                    "message": f"需要创建 {abs(diff)} 个实例"
+                })
+            elif diff > 0:
+                need_delete += diff
+                details.append({
+                    "agent_id": agent_id,
+                    "name": display_name,
+                    "quota": quota,
+                    "current": current_count,
+                    "diff": diff,
+                    "status": "need_delete",
+                    "message": f"需要删除 {diff} 个实例"
+                })
+            else:
+                details.append({
+                    "agent_id": agent_id,
+                    "name": display_name,
+                    "quota": quota,
+                    "current": current_count,
+                    "diff": 0,
+                    "status": "matched",
+                    "message": "匹配"
+                })
+
+        matched = need_create == 0 and need_delete == 0
+
+        if matched:
+            message = "实例数与配额匹配"
+        else:
+            parts = []
+            if need_create > 0:
+                parts.append(f"需要创建 {need_create} 个实例")
+            if need_delete > 0:
+                parts.append(f"需要删除 {need_delete} 个实例")
+            message = "，".join(parts)
+
+        return {
+            "success": True,
+            "matched": matched,
+            "message": message,
+            "details": details,
+            "total_quota": total_quota,
+            "total_instances": total_instances,
+            "need_create": need_create,
+            "need_delete": need_delete,
+        }
+
+
 @router.post("/tenant/{tenant_id}/sync-instances")
 def sync_tenant_instances(request: Request, tenant_id: str):
     """同步租户数字员工实例（根据配额创建/删除实例）"""
@@ -380,10 +511,9 @@ def sync_tenant_instances(request: Request, tenant_id: str):
             ORDER BY subagent_type
         """, (tenant_id,))
         subscriptions = cursor.fetchall()
-        logger.info(f"[sync_tenant_instances] Tenant {tenant_id} has {len(subscriptions)} active subscriptions: {[(s['subagent_type'], s['instance_quota']) for s in subscriptions]}")
 
         if not subscriptions:
-            return {"success": True, "message": "租户无有效订阅", "created": 0, "deleted": 0}
+            return {"success": True, "message": "租户无有效订阅", "created": 0, "deleted": 0, "details": []}
 
         # 获取数字员工名称映射
         registry = master_agent.subagent_registry
@@ -398,6 +528,7 @@ def sync_tenant_instances(request: Request, tenant_id: str):
 
         created_count = 0
         deleted_count = 0
+        details = []
 
         for sub in subscriptions:
             agent_id = sub["subagent_type"]
@@ -414,10 +545,12 @@ def sync_tenant_instances(request: Request, tenant_id: str):
             """, (tenant_id, agent_id))
             current_instances = cursor.fetchall()
             current_count = len(current_instances)
-            logger.info(f"[sync_tenant_instances] Agent {agent_id}: quota={quota}, current instances={current_count}, statuses={[inst['status'] for inst in current_instances]}")
 
             # 获取数字员工显示名称
             display_name = agent_name_map.get(agent_id, agent_id)
+
+            created_for_agent = 0
+            deleted_for_agent = 0
 
             if current_count < quota:
                 # 需要创建实例
@@ -436,6 +569,7 @@ def sync_tenant_instances(request: Request, tenant_id: str):
                     )
                     if instance:
                         created_count += 1
+                        created_for_agent += 1
                         logger.info(f"Created instance {instance['instance_id']} for tenant {tenant_id}, agent {agent_id}")
 
             elif current_count > quota:
@@ -450,10 +584,23 @@ def sync_tenant_instances(request: Request, tenant_id: str):
                     success = AgentInstanceDB.delete(inst["instance_id"])
                     if success:
                         deleted_count += 1
+                        deleted_for_agent += 1
                         need_delete -= 1
                         logger.info(f"Deleted instance {inst['instance_id']} (status: {inst['status']}) for tenant {tenant_id}, agent {agent_id}")
                     else:
                         logger.error(f"[sync_tenant_instances] Failed to delete instance {inst['instance_id']} for tenant {tenant_id}, agent {agent_id}")
+
+            # 记录该智能体的详细情况
+            final_count = current_count + created_for_agent - deleted_for_agent
+            details.append({
+                "agent_id": agent_id,
+                "name": display_name,
+                "before": current_count,
+                "after": final_count,
+                "quota": quota,
+                "created": created_for_agent,
+                "deleted": deleted_for_agent,
+            })
 
         logger.info(f"[sync_tenant_instances] Tenant {tenant_id} sync completed: created {created_count}, deleted {deleted_count}")
         return {
@@ -461,4 +608,5 @@ def sync_tenant_instances(request: Request, tenant_id: str):
             "message": f"同步完成，创建 {created_count} 个实例，删除 {deleted_count} 个实例",
             "created": created_count,
             "deleted": deleted_count,
+            "details": details,
         }
