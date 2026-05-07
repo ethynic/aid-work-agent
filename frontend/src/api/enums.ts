@@ -49,16 +49,14 @@ export const PaymentStatusMap = {
 
 /** 智能体实例状态 */
 export enum AgentInstanceStatus {
-  RUNNING = 'running',
-  STOPPED = 'stopped',
-  ERROR = 'error',
+  IDLE = 'idle',
+  BUSY = 'busy',
 }
 
 /** 智能体实例状态工具函数 */
 export const AgentInstanceStatusMap = {
-  [AgentInstanceStatus.RUNNING]: { label: '运行中', color: 'green' },
-  [AgentInstanceStatus.STOPPED]: { label: '已停止', color: 'gray' },
-  [AgentInstanceStatus.ERROR]: { label: '异常', color: 'red' },
+  [AgentInstanceStatus.IDLE]: { label: '空闲', color: 'green' },
+  [AgentInstanceStatus.BUSY]: { label: '忙碌', color: 'orange' },
 } as const;
 
 /** 用户状态 */

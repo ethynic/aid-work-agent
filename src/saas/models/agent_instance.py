@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Optional, List, Any
 from pydantic import BaseModel, Field
+from src.saas.models.enums import AgentInstanceStatus
 
 
 class InstanceCreate(BaseModel):
@@ -30,7 +31,7 @@ class InstanceResponse(BaseModel):
     subscription_id: Optional[str] = None
     subagent_type: str
     display_name: str
-    status: str  # running/stopped
+    status: AgentInstanceStatus  # 实例状态：idle/busy
     config: Optional[dict] = None
     bound_channel_type: Optional[str] = None
     allowed_skills: Optional[List[str]] = None

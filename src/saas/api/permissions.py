@@ -380,6 +380,7 @@ def sync_tenant_instances(request: Request, tenant_id: str):
             ORDER BY subagent_type
         """, (tenant_id,))
         subscriptions = cursor.fetchall()
+        logger.info(f"[sync_tenant_instances] Tenant {tenant_id} has {len(subscriptions)} active subscriptions: {[(s['subagent_type'], s['instance_quota']) for s in subscriptions]}")
 
         if not subscriptions:
             return {"success": True, "message": "租户无有效订阅", "created": 0, "deleted": 0}
@@ -413,6 +414,7 @@ def sync_tenant_instances(request: Request, tenant_id: str):
             """, (tenant_id, agent_id))
             current_instances = cursor.fetchall()
             current_count = len(current_instances)
+            logger.info(f"[sync_tenant_instances] Agent {agent_id}: quota={quota}, current instances={current_count}, statuses={[inst['status'] for inst in current_instances]}")
 
             # 获取数字员工显示名称
             display_name = agent_name_map.get(agent_id, agent_id)
@@ -437,21 +439,23 @@ def sync_tenant_instances(request: Request, tenant_id: str):
                         logger.info(f"Created instance {instance['instance_id']} for tenant {tenant_id}, agent {agent_id}")
 
             elif current_count > quota:
-                # 需要删除实例（删除最晚创建的空闲实例）
+                # 需要删除实例（删除最晚创建的实例，无论状态）
                 need_delete = current_count - quota
+                logger.info(f"[sync_tenant_instances] Agent {agent_id}: need to delete {need_delete} instances, current instances statuses: {[inst['status'] for inst in current_instances]}")
                 # 按创建时间倒序，优先删除最晚创建的
                 for inst in reversed(current_instances):
                     if need_delete <= 0:
                         break
-                    # 只删除空闲实例
-                    if inst["status"] == "idle":
-                        success = AgentInstanceDB.delete(inst["instance_id"])
-                        if success:
-                            deleted_count += 1
-                            need_delete -= 1
-                            logger.info(f"Deleted instance {inst['instance_id']} for tenant {tenant_id}, agent {agent_id}")
-                    # TODO: 如果有非空闲实例，需要处理策略（如标记为待删除）
+                    # 删除实例，无论当前状态
+                    success = AgentInstanceDB.delete(inst["instance_id"])
+                    if success:
+                        deleted_count += 1
+                        need_delete -= 1
+                        logger.info(f"Deleted instance {inst['instance_id']} (status: {inst['status']}) for tenant {tenant_id}, agent {agent_id}")
+                    else:
+                        logger.error(f"[sync_tenant_instances] Failed to delete instance {inst['instance_id']} for tenant {tenant_id}, agent {agent_id}")
 
+        logger.info(f"[sync_tenant_instances] Tenant {tenant_id} sync completed: created {created_count}, deleted {deleted_count}")
         return {
             "success": True,
             "message": f"同步完成，创建 {created_count} 个实例，删除 {deleted_count} 个实例",

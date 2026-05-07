@@ -50,9 +50,7 @@ class AgentInstanceManager:
         self._routers[instance_id] = router
         self._instance_info[instance_id] = instance
 
-        # 更新 DB 状态
-        AgentInstanceDB.update(instance_id, status="running")
-
+        # 不再更新数据库状态，只在内存中管理运行状态
         logger.info(
             f"Instance started: {instance_id} "
             f"(tenant={instance['tenant_id']}, type={instance['subagent_type']})"
@@ -77,8 +75,7 @@ class AgentInstanceManager:
             router.cleanup_expired(max_age_seconds=0)
             logger.info(f"Instance stopped: {instance_id}")
 
-        # 更新 DB 状态
-        AgentInstanceDB.update(instance_id, status="stopped")
+        # 不再更新数据库状态，只在内存中管理运行状态
         return True
 
     def get_agent(self, instance_id: str, subagent_name: Optional[str], session_id: str):
@@ -116,32 +113,16 @@ class AgentInstanceManager:
 
     def restore_running_instances(self) -> int:
         """
-        恢复所有 DB 中 status='running' 的实例
+        恢复运行中的实例（简化版）
 
-        在应用启动时调用（lifespan）。
+        在应用启动时调用（lifespan）。由于状态简化，不再从数据库恢复运行状态。
+        应用重启后所有实例都停止，需要按需启动。
 
         Returns:
-            恢复的实例数量
+            恢复的实例数量（始终为0）
         """
-        instances = AgentInstanceDB.list_all_running()
-        count = 0
-        for inst in instances:
-            try:
-                from src.core.agent_router import AgentRouter
-                router = AgentRouter()
-                self._routers[inst["instance_id"]] = router
-                self._instance_info[inst["instance_id"]] = inst
-                count += 1
-                logger.info(
-                    f"Restored instance: {inst['instance_id']} "
-                    f"(tenant={inst['tenant_id']}, type={inst['subagent_type']})"
-                )
-            except Exception as e:
-                logger.error(f"Failed to restore instance {inst['instance_id']}: {e}")
-
-        if count > 0:
-            logger.info(f"Restored {count} running instances")
-        return count
+        logger.info("Instance restore skipped: status simplified to idle/busy only, no running instances to restore")
+        return 0
 
     def cleanup(self):
         """清理所有实例（shutdown 时调用）"""

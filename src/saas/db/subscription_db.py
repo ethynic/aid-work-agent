@@ -182,11 +182,13 @@ class SubscriptionDB:
         cursor = conn.cursor()
         if agent_quotas is None:
             agent_quotas = {}
+        logger.info(f"[set_tenant_subscriptions] Tenant {tenant_id}, agent_ids={agent_ids}, agent_quotas={agent_quotas}")
 
         # 获取当前有效订阅的 agent 列表
         current_agents = set(SubscriptionDB.get_allowed_subagent_types(conn, tenant_id))
         new_agents = set(agent_ids)
         removed_agents = current_agents - new_agents
+        logger.info(f"[set_tenant_subscriptions] Current agents: {current_agents}, removed agents: {removed_agents}")
 
         # 将移除的订阅设为 cancelled
         if removed_agents:
@@ -232,27 +234,34 @@ class SubscriptionDB:
             if existing:
                 # 如果配额发生变化，则更新
                 if existing["instance_quota"] != quota:
+                    logger.info(f"[set_tenant_subscriptions] Updating quota for agent {agent_id}: {existing['instance_quota']} -> {quota}")
                     cursor.execute("""
                         UPDATE subscriptions
                         SET instance_quota = %s, updated_at = CURRENT_TIMESTAMP
                         WHERE subscription_id = %s
                     """, (quota, existing["subscription_id"]))
+                else:
+                    logger.info(f"[set_tenant_subscriptions] Quota for agent {agent_id} unchanged: {quota}")
             else:
                 # 创建新订阅
                 try:
                     subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
+                    logger.info(f"[set_tenant_subscriptions] Creating new subscription for agent {agent_id} with quota {quota}")
                     cursor.execute("""
                         INSERT INTO subscriptions
                             (subscription_id, tenant_id, subagent_type, instance_quota,
                              billing_cycle, unit_price, token_quota, status, starts_at)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                     """, (subscription_id, tenant_id, agent_id, quota, 'monthly', 0, -1, 'active'))
-                except Exception:
+                except Exception as e:
+                    logger.error(f"[set_tenant_subscriptions] Failed to create subscription for agent {agent_id}: {e}")
                     pass
 
         # 级联删除：从该租户所有用户的授权中移除被删除的 agent_id
         if removed_agents:
+            logger.info(f"[set_tenant_subscriptions] Removing agents from all users in tenant: {removed_agents}")
             for agent_id in removed_agents:
+                logger.info(f"[set_tenant_subscriptions] Removing agent {agent_id} from all users in tenant {tenant_id}")
                 UserAgentPermissionDB.remove_agent_from_all_users_in_tenant(conn, tenant_id, agent_id)
 
         conn.commit()

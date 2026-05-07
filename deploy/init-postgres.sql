@@ -336,7 +336,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
     description TEXT,                            -- 实例描述
     personality_traits TEXT,                     -- 性格特征（JSON数组）
-    status TEXT DEFAULT 'idle',                  -- idle / busy / offline
+    status TEXT DEFAULT 'idle' CHECK (status IN ('idle', 'busy')), -- 只允许 idle/busy
     current_session_id TEXT,                     -- 当前活跃会话ID
     current_user_id TEXT,                        -- 当前使用者
     locked_at TIMESTAMP,                         -- 锁定开始时间
@@ -689,7 +689,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
     description TEXT,                            -- 实例描述
     personality_traits TEXT,                     -- 性格特征（JSON数组）
-    status TEXT DEFAULT 'idle',                  -- idle / busy / offline
+    status TEXT DEFAULT 'idle' CHECK (status IN ('idle', 'busy')), -- 只允许 idle/busy
     current_session_id TEXT,                     -- 当前活跃会话ID
     current_user_id TEXT,                        -- 当前使用者
     locked_at TIMESTAMP,                         -- 锁定开始时间

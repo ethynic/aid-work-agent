@@ -221,7 +221,7 @@
           <!-- 创建实例按钮 -->
           <div class="pt-4 mt-4 border-t border-slate-200">
             <div class="text-xs text-slate-500 mb-2">
-              💡 提示：请先保存上面的授权设置，然后点击下方按钮根据配额创建实例。
+              💡 提示：点击下方按钮将自动保存授权设置并根据配额创建实例。
             </div>
             <button
               @click="handleSyncInstancesInEdit"
@@ -232,7 +232,7 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              根据当前配额创建实例
+              创建实例
             </button>
           </div>
         </div>
@@ -602,7 +602,14 @@ async function handleSyncInstancesInEdit() {
     toast.error('未找到租户信息')
     return
   }
-  if (!confirm('确定要根据当前配额创建实例吗？\n\n系统将根据数据库中已保存的配额创建或删除实例。\n请确保已保存上方的授权设置。\n已创建的实例名称格式为："数字员工名称 - 实例序号"。')) {
+  // 1. 先保存当前的授权设置（不关闭弹窗）
+  const confirmResult = await savePermissionsOnly()
+  if (!confirmResult) {
+    console.log('前端日志：保存授权设置失败，取消创建实例')
+    return
+  }
+  // 2. 保存成功后再同步实例
+  if (!confirm('确定要根据当前配额创建实例吗？\n\n系统将根据数据库中已保存的配额创建或删除实例。\n已创建的实例名称格式为："数字员工名称 - 实例序号"。')) {
     return
   }
   syncingInstances.value = currentTenant.value.tenant_id
@@ -617,6 +624,31 @@ async function handleSyncInstancesInEdit() {
     toast.error(e.message || '实例同步失败')
   } finally {
     syncingInstances.value = null
+  }
+}
+
+/**
+ * 仅保存数字员工授权（不关闭弹窗）
+ * 返回 true 表示成功，false 表示失败
+ */
+async function savePermissionsOnly(): Promise<boolean> {
+  const targetTenantId = isEdit.value ? currentTenant.value?.tenant_id : null
+  if (!targetTenantId) {
+    console.error('前端日志：未找到租户ID，无法保存授权')
+    return false
+  }
+  try {
+    const res = await setTenantAgentPermissions(targetTenantId, selectedAgentIds.value, selectedAgentQuotas.value)
+    if (res.success) {
+      console.log('前端日志：授权设置保存成功')
+      return true
+    } else {
+      toast.error(res.message || '保存授权设置失败')
+      return false
+    }
+  } catch (e: any) {
+    toast.error(e.message || '保存授权设置失败')
+    return false
   }
 }
 

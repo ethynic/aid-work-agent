@@ -129,18 +129,17 @@ class AgentInstanceDB:
 
     @staticmethod
     def list_running_by_tenant(tenant_id: str) -> List[Dict[str, Any]]:
-        """列出租户所有 running 状态的实例"""
-        return AgentInstanceDB.list_by_tenant(tenant_id, status="running")
+        """列出租户所有 running 状态的实例（已弃用，返回空列表）"""
+        from loguru import logger
+        logger.warning(f"list_running_by_tenant called for tenant {tenant_id}: running status no longer supported")
+        return []
 
     @staticmethod
     def list_all_running() -> List[Dict[str, Any]]:
-        """列出所有 running 状态的实例"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM agent_instances WHERE status = 'running' ORDER BY tenant_id",
-            )
-            return [AgentInstanceDB._row_to_dict(row) for row in cursor.fetchall()]
+        """列出所有 running 状态的实例（已弃用，返回空列表）"""
+        from loguru import logger
+        logger.warning("list_all_running called: running status no longer supported")
+        return []
 
     @staticmethod
     def _row_to_dict(row) -> Dict[str, Any]:

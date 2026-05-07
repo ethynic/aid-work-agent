@@ -103,24 +103,23 @@ class AgentInstanceStatus(str):
     智能体实例状态枚举
 
     数据库存储：TEXT
-    - running = 运行中
-    - stopped = 已停止
-    - error   = 异常
+    - idle = 空闲可用（无用户使用）
+    - busy = 忙碌中（有用户正在使用）
+
+    注意：只保留并发控制状态，运行状态由instance_manager在内存中管理
     """
-    RUNNING = "running"
-    STOPPED = "stopped"
-    ERROR = "error"
+    IDLE = "idle"
+    BUSY = "busy"
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.RUNNING, cls.STOPPED, cls.ERROR]
+        return [cls.IDLE, cls.BUSY]
 
     @property
     def display_name(self) -> str:
         mapping = {
-            self.RUNNING: "运行中",
-            self.STOPPED: "已停止",
-            self.ERROR: "异常",
+            self.IDLE: "空闲",
+            self.BUSY: "忙碌",
         }
         return mapping.get(self, "未知")
 

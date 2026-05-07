@@ -109,3 +109,38 @@ UPDATE users SET tenant_id = 'demo' WHERE tenant_id IS NULL;
 
 -- 2026-5-6，同步更新 chat_sessions 表中 demo 用户的会话记录 tenant_id
 UPDATE chat_sessions SET tenant_id = 'demo' WHERE tenant_id IS NULL AND user_id IN (SELECT user_id FROM users WHERE tenant_id = 'demo');
+
+-- 2026-5-7，规范化 agent_instances 表 status 字段，只保留 idle 和 busy 状态
+UPDATE agent_instances
+SET status = CASE
+    WHEN status IN ('running', 'stopped', 'offline', 'error') THEN
+        CASE
+            WHEN current_session_id IS NULL THEN 'idle'
+            ELSE 'busy'
+        END
+    ELSE status  -- 保持现有的 idle 或 busy 不变
+END;
+
+-- 将 NULL 状态设为 idle
+UPDATE agent_instances SET status = 'idle' WHERE status IS NULL;
+
+-- 将所有非 idle/busy 的状态映射到 idle 或 busy（基于 current_session_id）
+UPDATE agent_instances
+SET status = CASE
+    WHEN current_session_id IS NULL THEN 'idle'
+    ELSE 'busy'
+END
+WHERE status NOT IN ('idle', 'busy');
+
+-- 添加 CHECK 约束确保状态只允许 idle/busy（如果约束不存在）
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'agent_instances'::regclass
+        AND conname = 'agent_instances_status_check'
+    ) THEN
+        ALTER TABLE agent_instances ADD CONSTRAINT agent_instances_status_check
+            CHECK (status IN ('idle', 'busy'));
+    END IF;
+END $$;
