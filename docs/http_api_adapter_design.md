@@ -1,6 +1,6 @@
 # 外部 API 适配器工具 & Skill 环境变量增强 — 设计文档
 
-> 版本: v1.0 | 创建: 2026-05-07 | 状态: 待审核
+> 版本: v1.1 | 创建: 2026-05-07 | 状态: 开发中
 
 ## 一、背景与目标
 
@@ -618,7 +618,7 @@ API 返回 JSON 数据，包含：
 | **简单 REST API 调用**（查天气、查企业、发通知） | SKILL.md + http_api 工具，无需写脚本 |
 | **复杂多步 API 流程**（合同归档、ERP 同步） | SKILL.md 指导多轮 http_api 调用，或保留现有脚本模式 |
 | **需要数据转换的 API**（Excel → API → 报告） | SKILL.md + http_api + 现有数据处理工具 |
-| **文件上传 API** | http_api 工具后续支持（见第六节） |
+| **文件上传 API** | http_api 工具已支持 `files` 参数（见第六节 6.1） |
 
 ### 5.3 不替代的场景
 
@@ -635,11 +635,13 @@ API 返回 JSON 数据，包含：
 
 ## 六、功能扩展预留
 
-以下功能在 Phase 1 不实现，但设计时预留扩展空间：
+以下功能按需实现：
 
-### 6.1 文件上传支持
+### 6.1 文件上传支持 ✅ 已实现
 
-未来在 `HttpApiInput` 中新增 `files` 参数：
+> 已在 Phase 3 中完成实现（commit `d77af60`）。
+
+`HttpApiInput` 中新增 `files` 参数：
 
 ```python
 files: Optional[Dict[str, str]] = Field(
@@ -647,6 +649,13 @@ files: Optional[Dict[str, str]] = Field(
     description="文件上传，{'字段名': '文件路径'}，自动以 multipart/form-data 发送"
 )
 ```
+
+**已实现功能**：
+- 文件路径解析（支持绝对路径、相对路径、项目根目录回退）
+- 单文件大小限制 20MB（`MAX_FILE_SIZE`）
+- `files` 与 `body` 互斥校验
+- `files` 可与 `form_data` 同时使用（带附加字段的文件上传）
+- 文件句柄在请求完成后自动关闭（`finally` 块）
 
 ### 6.2 响应提取（JMESPath）
 
@@ -694,32 +703,32 @@ OAUTH_CLIENT_SECRET=xxx
 
 ## 七、实施计划
 
-### Phase 1：核心工具 + Skill .env 增强（3-5 天）
+### Phase 1：核心工具 + Skill .env 增强 ✅ 已完成
 
-| 任务 | 说明 | 涉及文件 |
-|------|------|----------|
-| 1.1 实现 `http_api` 工具 | 通用 HTTP 客户端，支持 GET/POST/PUT/DELETE/PATCH | `src/tools/network/http_api.py`（新增） |
-| 1.2 注册 `http_api` 工具 | 在 Agent 启动时注册到 ToolRegistry | `src/core/agent.py`（修改 `_register_builtin_tools`） |
-| 1.3 Skill `.env` 自动加载 | SkillLoader.get_content() 中加载 `.env` | `src/core/skill_loader.py`（修改） |
-| 1.4 SKILL.md `env` 字段解析 | 解析 frontmatter 中的 env 声明 | `src/core/skill_loader.py`（修改） |
-| 1.5 租户级 `.env` 支持 | 按 tenant_id 加载对应目录的 `.env` | `src/core/skill_loader.py`（修改） |
-| 1.6 Skill `allowed-tools` 中声明 `http_api` | 各 Skill 的 SKILL.md 中将 `http_api` 加入 `allowed-tools` | 各 SKILL.md |
-| 1.7 测试 | 单元测试 + 集成测试 | `tests/unit/tools/test_http_api.py`（新增） |
+| 任务 | 说明 | 涉及文件 | 状态 |
+|------|------|----------|------|
+| 1.1 实现 `http_api` 工具 | 通用 HTTP 客户端，支持 GET/POST/PUT/DELETE/PATCH | `src/tools/network/http_api.py`（新增） | ✅ |
+| 1.2 注册 `http_api` 工具 | 在 Agent 启动时注册到 ToolRegistry | `src/core/agent.py`（修改 `_register_builtin_tools`） | ✅ |
+| 1.3 Skill `.env` 自动加载 | SkillLoader.get_content() 中加载 `.env` | `src/core/skill_loader.py`（修改） | ✅ |
+| 1.4 SKILL.md `env` 字段解析 | 解析 frontmatter 中的 env 声明 | `src/core/skill_loader.py`（修改） | ✅ |
+| 1.5 租户级 `.env` 支持 | 按 tenant_id 加载对应目录的 `.env` | `src/core/skill_loader.py`（修改） | ✅ |
+| 1.6 Skill `allowed-tools` 中声明 `http_api` | 各 Skill 的 SKILL.md 中将 `http_api` 加入 `allowed-tools` | 各 SKILL.md | 待各 Skill 按需添加 |
+| 1.7 测试 | 单元测试（34 个用例） | `tests/unit/tools/test_http_api.py`（新增） | ✅ |
 
-### Phase 2：文档
+### Phase 2：文档 ✅ 已完成
 
-| 任务 | 说明 |
-|------|------|
-| 2.1 编写 Skill 开发者指南 | 教用户如何创建使用 http_api 的 Skill |
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| 2.1 编写 Skill 开发者指南 | 教用户如何创建使用 http_api 的 Skill | ✅ `docs/http_api_skill_developer_guide.md` |
 
 ### Phase 3：高级功能（按需）
 
-| 任务 | 说明 |
-|------|------|
-| 3.1 文件上传支持 | `files` 参数 |
-| 3.2 响应提取 | JMESPath 表达式 |
-| 3.3 响应缓存 | GET 请求短期缓存 |
-| 3.4 OAuth 2.0 支持 | 自动 token 管理 |
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| 3.1 文件上传支持 | `files` 参数，multipart/form-data 编码 | ✅ 已完成 |
+| 3.2 响应提取 | JMESPath 表达式 | 待开发 |
+| 3.3 响应缓存 | GET 请求短期缓存 | 待开发 |
+| 3.4 OAuth 2.0 支持 | 自动 token 管理 | 待开发 |
 
 ---
 
@@ -727,18 +736,19 @@ OAUTH_CLIENT_SECRET=xxx
 
 ### 新增文件
 
-| 文件 | 说明 |
-|------|------|
-| `src/tools/network/__init__.py` | 网络工具包初始化 |
-| `src/tools/network/http_api.py` | 通用 HTTP API 工具实现 |
-| `tests/unit/tools/test_http_api.py` | 工具单元测试 |
+| 文件 | 说明 | 状态 |
+|------|------|------|
+| `src/tools/network/__init__.py` | 网络工具包初始化 | ✅ |
+| `src/tools/network/http_api.py` | 通用 HTTP API 工具实现（含文件上传） | ✅ |
+| `tests/unit/tools/test_http_api.py` | 工具单元测试（34 个用例） | ✅ |
+| `docs/http_api_skill_developer_guide.md` | Skill 开发者指南 | ✅ |
 
 ### 修改文件
 
-| 文件 | Phase | 改动范围 |
-|------|-------|----------|
-| `src/core/agent.py` | 1.2 | `_register_builtin_tools()` 中注册 `http_api` |
-| `src/core/skill_loader.py` | 1.3-1.5 | `get_content()` 增加 `.env` 加载；新增 `env` 字段解析 |
+| 文件 | Phase | 改动范围 | 状态 |
+|------|-------|----------|------|
+| `src/core/agent.py` | 1.2 | `_register_builtin_tools()` 中注册 `http_api` | ✅ |
+| `src/core/skill_loader.py` | 1.3-1.5 | `get_content()` 增加 `.env` 加载；新增 `env` 字段解析 | ✅ |
 
 ---
 
