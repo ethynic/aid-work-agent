@@ -81,6 +81,10 @@ build.log
 # Old SQLite database
 aid_work_agent.db
 
+# Skill .env files (只提交 .env.example)
+src/skills/*/.env
+src/skills/*/*/.env
+
 !skills/.gitkeep
 !memory/.gitkeep
 
