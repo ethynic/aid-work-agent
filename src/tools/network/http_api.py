@@ -1,6 +1,7 @@
 import os
 import re
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from loguru import logger
@@ -8,6 +9,9 @@ from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.utils import sanitize_error_info
+
+# 单个文件最大 20MB
+MAX_FILE_SIZE = 20 * 1024 * 1024
 
 
 class HttpApiInput(BaseModel):
@@ -37,6 +41,13 @@ class HttpApiInput(BaseModel):
         default=None,
         description="表单数据（application/x-www-form-urlencoded），与 body 互斥",
     )
+    files: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "文件上传，格式为 {'字段名': '文件路径'}，"
+            "自动以 multipart/form-data 发送。与 body 互斥。"
+        ),
+    )
     timeout: Optional[int] = Field(
         default=30,
         description="请求超时时间（秒），默认 30 秒",
@@ -53,7 +64,7 @@ class HttpApiTool(BaseTool):
     name = "http_api"
     description = (
         "调用外部 HTTP API 接口。支持 GET/POST/PUT/DELETE/PATCH 方法，"
-        "支持 JSON body、表单数据、自定义请求头。"
+        "支持 JSON body、表单数据、文件上传、自定义请求头。"
         "URL 和 headers 中的 ${VAR_NAME} 会被替换为环境变量值。"
     )
     usage_guide = """\
@@ -67,8 +78,16 @@ class HttpApiTool(BaseTool):
 - **headers**: 自定义请求头字典（可选）
 - **query_params**: URL 查询参数字典（可选）
 - **body**: JSON 请求体，可以是对象或数组（可选，POST/PUT 用）
-- **form_data**: 表单数据字典（可选，与 body 互斥）
+- **form_data**: 表单数据字典（可选，与 body 和 files 互斥）
+- **files**: 文件上传字典，{'字段名': '文件路径'}（可选，与 body 互斥）
 - **timeout**: 超时秒数，默认 30（可选）
+
+### 文件上传
+使用 files 参数上传文件，自动以 multipart/form-data 编码发送：
+```
+files: {"file": "/path/to/document.pdf"}
+```
+也可以与 form_data 同时使用，实现带额外字段的文件上传。
 
 ### 凭据替换
 URL 和 headers 中可以使用 `${ENV_VAR}` 占位符，运行时自动替换为实际值。
@@ -99,11 +118,15 @@ URL 和 headers 中可以使用 `${ENV_VAR}` 占位符，运行时自动替换�
         query_params = kwargs.get("query_params")
         body = kwargs.get("body")
         form_data = kwargs.get("form_data")
+        files = kwargs.get("files")
         timeout = kwargs.get("timeout", 30)
         follow_redirects = kwargs.get("follow_redirects", True)
 
         if not url:
             return {"success": False, "error": "URL 不能为空"}
+
+        if files and body is not None:
+            return {"success": False, "error": "files 和 body 不能同时使用"}
 
         # ${ENV_VAR} 替换
         url = _substitute_env_vars(url)
@@ -112,13 +135,26 @@ URL 和 headers 中可以使用 `${ENV_VAR}` 占位符，运行时自动替换�
         if query_params:
             query_params = {k: _substitute_env_vars(v) for k, v in query_params.items()}
 
+        # 准备文件上传
+        opened_files: List = []
+        httpx_files = None
+        if files:
+            httpx_files, opened_files = self._prepare_files(files)
+            if httpx_files is None:
+                return {"success": False, "error": "文件准备失败"}
+
         # 构建请求参数
         request_kwargs: Dict[str, Any] = {}
         if headers:
             request_kwargs["headers"] = headers
         if query_params:
             request_kwargs["params"] = query_params
-        if form_data:
+        if httpx_files is not None:
+            # multipart/form-data：files + 可选 data
+            request_kwargs["files"] = httpx_files
+            if form_data:
+                request_kwargs["data"] = form_data
+        elif form_data:
             request_kwargs["data"] = form_data
         elif body is not None:
             request_kwargs["json"] = body
@@ -138,6 +174,88 @@ URL 和 headers 中可以使用 `${ENV_VAR}` 占位符，运行时自动替换�
             return {"success": False, "error": f"连接失败: {sanitize_error_info(str(e))}"}
         except Exception as e:
             return {"success": False, "error": f"请求异常: {sanitize_error_info(str(e))}"}
+        finally:
+            for f in opened_files:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _prepare_files(
+        files: Dict[str, str],
+    ) -> tuple:
+        """将文件路径字典转为 httpx files 参数格式。
+
+        Args:
+            files: {'字段名': '文件路径'} 字典
+
+        Returns:
+            (httpx_files_dict, opened_file_handles) 元组。
+            调用方负责在请求完成后关闭文件句柄。
+        """
+        httpx_files: Dict[str, Any] = {}
+        opened: List = []
+
+        for field_name, file_path in files.items():
+            path = _resolve_file_path(file_path)
+            if not path:
+                for f in opened:
+                    f.close()
+                return None, []
+
+            # 检查文件大小
+            try:
+                size = path.stat().st_size
+                if size > MAX_FILE_SIZE:
+                    logger.warning(f"文件过大: {path} ({size} bytes > {MAX_FILE_SIZE})")
+                    for f in opened:
+                        f.close()
+                    return None, []
+            except OSError:
+                for f in opened:
+                    f.close()
+                return None, []
+
+            try:
+                f = open(path, "rb")
+                opened.append(f)
+                filename = path.name
+                httpx_files[field_name] = (filename, f)
+            except OSError as e:
+                logger.warning(f"无法打开文件 {path}: {e}")
+                for fh in opened:
+                    fh.close()
+                return None, []
+
+        return httpx_files, opened
+
+
+def _resolve_file_path(file_path: str) -> Optional[Path]:
+    """解析文件路径，支持绝对路径和相对路径。
+
+    解析顺序：
+    1. 绝对路径直接使用
+    2. 相对路径先尝试当前工作目录
+    3. 再尝试项目根目录
+    """
+    path = Path(file_path)
+    if path.is_absolute() and path.exists():
+        return path
+
+    if not path.is_absolute():
+        # 尝试当前工作目录
+        if path.exists():
+            return path
+
+        # 尝试项目根目录
+        project_root = Path(__file__).resolve().parent.parent.parent
+        candidate = project_root / file_path
+        if candidate.exists():
+            return candidate
+
+    logger.warning(f"文件不存在: {file_path}")
+    return None
 
 
 def _substitute_env_vars(text: str) -> str:

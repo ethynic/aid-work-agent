@@ -177,8 +177,9 @@ env:                         # 可选：声明需要的环境变量
 | `url` | string | **是** | 完整的请求 URL。支持 `${ENV_VAR}` 占位符 |
 | `headers` | dict | 否 | 请求头字典。支持 `${ENV_VAR}` 占位符 |
 | `query_params` | dict | 否 | URL 查询参数字典。支持 `${ENV_VAR}` 占位符 |
-| `body` | any | 否 | JSON 请求体（POST/PUT/PATCH 用）。与 form_data 互斥 |
+| `body` | any | 否 | JSON 请求体（POST/PUT/PATCH 用）。与 files 互斥 |
 | `form_data` | dict | 否 | 表单数据（application/x-www-form-urlencoded）。与 body 互斥 |
+| `files` | dict | 否 | 文件上传，`{'字段名': '文件路径'}`，自动以 multipart/form-data 发送。与 body 互斥 |
 | `timeout` | int | 否 | 超时秒数，默认 30 |
 | `follow_redirects` | bool | 否 | 是否跟随重定向，默认 true |
 
@@ -240,6 +241,52 @@ SKILL.md 中：
 - headers:
     - Authorization: Basic ${MY_BASIC_AUTH}
 ```
+
+---
+
+## 文件上传
+
+使用 `files` 参数上传文件，自动以 `multipart/form-data` 编码发送。
+
+### 单文件上传
+
+```markdown
+### 上传文件
+
+调用 http_api 工具，参数如下：
+
+- method: POST
+- url: https://api.example.com/v1/files/upload
+- headers:
+    - Authorization: Bearer ${MY_API_TOKEN}
+- files:
+    - file: {用户上传的文件路径}
+```
+
+### 带附加字段的文件上传
+
+`files` 可以和 `form_data` 同时使用，在 multipart 请求中同时传递文件和表单字段：
+
+```markdown
+调用 http_api 工具，参数如下：
+
+- method: POST
+- url: https://api.example.com/v1/files/upload
+- headers:
+    - Authorization: Bearer ${MY_API_TOKEN}
+- files:
+    - file: {文件路径}
+- form_data:
+    - category: report
+    - description: {文件描述}
+```
+
+### 文件路径说明
+
+- 文件路径来自用户上传的文件，通常为绝对路径（如 `C:\repos\...\storage\uploads\xxx\file.pdf`）
+- 也支持相对路径（相对于项目根目录）
+- 单个文件大小限制 20MB
+- **`files` 和 `body` 不能同时使用**
 
 ---
 

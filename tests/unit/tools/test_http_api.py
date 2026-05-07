@@ -1,4 +1,6 @@
 import os
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -334,3 +336,189 @@ class TestHttpApiToolExecute:
             assert call_kwargs[1]["data"] == {"field1": "value1", "field2": "value2"}
             # body should not be present when form_data is used
             assert "json" not in call_kwargs[1]
+
+
+class TestResolveFilePath:
+    def test_resolve_absolute_path(self, tmp_path):
+        from src.tools.network.http_api import _resolve_file_path
+
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("hello")
+        result = _resolve_file_path(str(test_file))
+        assert result is not None
+        assert result.name == "test.txt"
+
+    def test_resolve_nonexistent_path(self):
+        from src.tools.network.http_api import _resolve_file_path
+
+        result = _resolve_file_path("/nonexistent/path/file.txt")
+        assert result is None
+
+    def test_resolve_relative_path_in_cwd(self, tmp_path, monkeypatch):
+        from src.tools.network.http_api import _resolve_file_path
+
+        test_file = tmp_path / "relative.txt"
+        test_file.write_text("data")
+        monkeypatch.chdir(tmp_path)
+        result = _resolve_file_path("relative.txt")
+        assert result is not None
+        assert result.name == "relative.txt"
+
+
+class TestPrepareFiles:
+    def test_prepare_single_file(self, tmp_path):
+        from src.tools.network.http_api import HttpApiTool
+
+        test_file = tmp_path / "upload.txt"
+        test_file.write_text("file content")
+
+        httpx_files, opened = HttpApiTool._prepare_files(
+            {"file": str(test_file)}
+        )
+
+        try:
+            assert httpx_files is not None
+            assert "file" in httpx_files
+            assert httpx_files["file"][0] == "upload.txt"
+        finally:
+            for f in opened:
+                f.close()
+
+    def test_prepare_multiple_files(self, tmp_path):
+        from src.tools.network.http_api import HttpApiTool
+
+        f1 = tmp_path / "a.txt"
+        f1.write_text("aaa")
+        f2 = tmp_path / "b.pdf"
+        f2.write_text("bbb")
+
+        httpx_files, opened = HttpApiTool._prepare_files(
+            {"doc": str(f1), "attachment": str(f2)}
+        )
+
+        try:
+            assert httpx_files is not None
+            assert "doc" in httpx_files
+            assert "attachment" in httpx_files
+            assert httpx_files["doc"][0] == "a.txt"
+            assert httpx_files["attachment"][0] == "b.pdf"
+        finally:
+            for f in opened:
+                f.close()
+
+    def test_prepare_nonexistent_file(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        httpx_files, opened = HttpApiTool._prepare_files(
+            {"file": "/nonexistent/file.txt"}
+        )
+        assert httpx_files is None
+        assert opened == []
+
+    def test_prepare_file_too_large(self, tmp_path):
+        from src.tools.network import http_api
+
+        # 创建一个小文件但 mock MAX_FILE_SIZE 为 0
+        test_file = tmp_path / "big.txt"
+        test_file.write_text("x")
+
+        original_max = http_api.MAX_FILE_SIZE
+        try:
+            http_api.MAX_FILE_SIZE = 0
+            httpx_files, opened = http_api.HttpApiTool._prepare_files(
+                {"file": str(test_file)}
+            )
+            assert httpx_files is None
+        finally:
+            http_api.MAX_FILE_SIZE = original_max
+
+
+class TestHttpApiFileUpload:
+    @pytest.mark.asyncio
+    async def test_file_upload(self, tmp_path):
+        from src.tools.network.http_api import HttpApiTool
+
+        test_file = tmp_path / "data.csv"
+        test_file.write_text("col1,col2\n1,2")
+
+        tool = HttpApiTool()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"uploaded": True}
+
+        with patch("src.tools.network.http_api.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.request = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await tool.execute(
+                method="POST",
+                url="https://api.example.com/upload",
+                files={"file": str(test_file)},
+            )
+            assert result["success"] is True
+            call_kwargs = mock_client.request.call_args
+            assert "files" in call_kwargs[1]
+            assert call_kwargs[1]["files"]["file"][0] == "data.csv"
+
+    @pytest.mark.asyncio
+    async def test_file_upload_with_form_data(self, tmp_path):
+        from src.tools.network.http_api import HttpApiTool
+
+        test_file = tmp_path / "doc.pdf"
+        test_file.write_text("pdf content")
+
+        tool = HttpApiTool()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"ok": True}
+
+        with patch("src.tools.network.http_api.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.request = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await tool.execute(
+                method="POST",
+                url="https://api.example.com/upload",
+                files={"file": str(test_file)},
+                form_data={"category": "report", "description": "月度报告"},
+            )
+            assert result["success"] is True
+            call_kwargs = mock_client.request.call_args
+            assert "files" in call_kwargs[1]
+            assert call_kwargs[1]["data"] == {
+                "category": "report",
+                "description": "月度报告",
+            }
+
+    @pytest.mark.asyncio
+    async def test_files_and_body_mutually_exclusive(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        result = await tool.execute(
+            method="POST",
+            url="https://api.example.com/upload",
+            files={"file": "/some/path.txt"},
+            body={"name": "test"},
+        )
+        assert result["success"] is False
+        assert "不能同时使用" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_file_upload_nonexistent_file(self):
+        from src.tools.network.http_api import HttpApiTool
+
+        tool = HttpApiTool()
+        result = await tool.execute(
+            method="POST",
+            url="https://api.example.com/upload",
+            files={"file": "/nonexistent/file.txt"},
+        )
+        assert result["success"] is False
+        assert "文件准备失败" in result["error"]
