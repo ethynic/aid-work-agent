@@ -199,7 +199,15 @@ class KnowledgeBaseService:
                     summary or None
                 ))
                 # row 是 dict: {"id": ...}，对应 RETURNING id
-                doc_id = cursor.fetchone()["id"]
+                row = cursor.fetchone()
+                if row is None:
+                    raise ValueError("INSERT 语句未返回 ID")
+                # 兼容不同 cursor 类型：dict 或 tuple/RealDictRow
+                if isinstance(row, dict) and "id" in row:
+                    doc_id = row["id"]
+                else:
+                    # 假设是第一列（索引 0）
+                    doc_id = row[0]
 
                 # 插入 chunks
                 chunk_ids = []
@@ -216,7 +224,14 @@ class KnowledgeBaseService:
                         json.dumps({"char_count": len(chunk["text"])})
                     ))
                     # row 是 dict: {"id": ...}，对应 RETURNING id
-                    chunk_ids.append(cursor.fetchone()["id"])
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise ValueError("INSERT INTO chunks 未返回 ID")
+                    if isinstance(row, dict) and "id" in row:
+                        chunk_ids.append(row["id"])
+                    else:
+                        # 假设是第一列（索引 0）
+                        chunk_ids.append(row[0])
 
                 # 插入向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -262,7 +277,12 @@ class KnowledgeBaseService:
                     return {"success": False, "error": "文档不存在"}
 
                 # row 是 dict: {"file_path": ...}，对应 SELECT file_path
-                file_path = row["file_path"]
+                # 兼容不同 cursor 类型：dict 或 tuple/RealDictRow
+                if isinstance(row, dict) and "file_path" in row:
+                    file_path = row["file_path"]
+                else:
+                    # 假设是第一列（索引 0）
+                    file_path = row[0]
 
                 # 删除向量（复用同一个数据库连接，避免锁冲突）
                 vector_db = get_vector_db(dimension=1024, conn=conn)
@@ -318,7 +338,14 @@ class KnowledgeBaseService:
                     cursor.execute("SELECT COUNT(*) AS count FROM documents")
 
                 # row 是 dict: {"count": ...}，对应 SELECT COUNT(*) AS count
-                count = cursor.fetchone()["count"]
+                row = cursor.fetchone()
+                if row is None:
+                    count = 0
+                elif isinstance(row, dict) and "count" in row:
+                    count = row["count"]
+                else:
+                    # 假设是第一列（索引 0）
+                    count = row[0]
                 return count
         except Exception as e:
             logger.error(f"后端日志：获取文档总数失败: {e}", exc_info=True)
@@ -361,11 +388,16 @@ class KnowledgeBaseService:
                 """, params)
 
                 rows = cursor.fetchall()
+                col_names = [desc[0] for desc in cursor.description] if cursor.description else []
 
                 # 转换 datetime 为字符串
                 result = []
                 for row in rows:
-                    doc = dict(row)
+                    if isinstance(row, dict):
+                        doc = dict(row)
+                    else:
+                        # 元组，转换为字典
+                        doc = {col_names[i]: row[i] for i in range(len(col_names))} if col_names else {}
                     if doc.get("created_at"):
                         doc["created_at"] = doc["created_at"].isoformat()
                     result.append(doc)
@@ -389,9 +421,16 @@ class KnowledgeBaseService:
                 """, (doc_id,))
 
                 rows = cursor.fetchall()
+                col_names = [desc[0] for desc in cursor.description] if cursor.description else []
 
                 # 转换为 dict 以便访问列名
-                rows = [dict(row) for row in rows]
+                dict_rows = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        dict_rows.append(dict(row))
+                    else:
+                        # 元组，转换为字典
+                        dict_rows.append({col_names[i]: row[i] for i in range(len(col_names))} if col_names else {})
 
                 return [
                     {
@@ -401,7 +440,7 @@ class KnowledgeBaseService:
                         "tokens": row["tokens"],
                         "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
                     }
-                    for row in rows
+                    for row in dict_rows
                 ]
 
         except Exception as e:
@@ -473,8 +512,16 @@ class KnowledgeBaseService:
                         """, list(doc_ids))
 
                     # 转换为 dict 以便访问列名
-                    rows = [dict(row) for row in cursor.fetchall()]
-                    doc_info = {row["id"]: {"title": row["title"], "file_type": row["file_type"], "file_path": row["file_path"]} for row in rows}
+                    rows = cursor.fetchall()
+                    col_names = [desc[0] for desc in cursor.description] if cursor.description else []
+                    dict_rows = []
+                    for row in rows:
+                        if isinstance(row, dict):
+                            dict_rows.append(dict(row))
+                        else:
+                            # 元组，转换为字典
+                            dict_rows.append({col_names[i]: row[i] for i in range(len(col_names))} if col_names else {})
+                    doc_info = {row["id"]: {"title": row["title"], "file_type": row["file_type"], "file_path": row["file_path"]} for row in dict_rows}
 
                     # 格式化结果
                     formatted_results = [
