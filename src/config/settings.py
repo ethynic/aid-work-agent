@@ -211,7 +211,7 @@ class AppConfig(BaseModel):
 class SaasConfig(BaseModel):
     """SaaS 多租户配置"""
     enabled: bool = False
-    tenant_skills_dir: str = "storage/tenants"
+    tenant_skills_dir: str = "tenants"
     default_max_instances: int = 5
     default_max_users: int = 50
 

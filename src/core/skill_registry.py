@@ -13,7 +13,7 @@ Skill Registry - Skill注册表
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from loguru import logger
 
 from src.core.skill_loader import SkillLoader, Skill
@@ -48,6 +48,7 @@ class SkillRegistry:
         """
         self._skills: Dict[str, Skill] = {}
         self._loader: Optional[SkillLoader] = None
+        self._loaders: Dict[str, SkillLoader] = {}  # skill_name -> source loader（多目录支持）
         self._allowed: Optional[Set[str]] = None  # allow 名单
 
         if skills_dir:
@@ -84,6 +85,9 @@ class SkillRegistry:
             self._skills = all_skills
             logger.info(f"SkillRegistry loaded {len(self._skills)} skills from {skills_dir}")
 
+        # 填充 _loaders 映射
+        self._loaders = {name: self._loader for name in self._skills}
+
         return len(self._skills)
 
     def load_from_directories(
@@ -106,13 +110,16 @@ class SkillRegistry:
         """
         self._allowed = set(allowed) if allowed else None
         combined_skills: Dict[str, Skill] = {}
+        combined_loaders: Dict[str, SkillLoader] = {}
 
         for skills_dir in dirs:
             if not skills_dir.exists():
                 continue
             loader = SkillLoader(skills_dir)
             # 后加载的目录覆盖先加载的同名 skill（高优先级覆盖低优先级）
-            combined_skills.update(loader.skills)
+            for name, skill in loader.skills.items():
+                combined_skills[name] = skill
+                combined_loaders[name] = loader
 
         # 过滤
         if self._allowed is not None:
@@ -124,7 +131,8 @@ class SkillRegistry:
         else:
             self._skills = combined_skills
 
-        # 保存最后一个有效的 loader 用于 get_content
+        # 保存 loader 映射和最后一个有效 loader（向后兼容）
+        self._loaders = combined_loaders
         self._loader = loader if dirs else None
 
         logger.info(f"SkillRegistry loaded {len(self._skills)} skills from {len(dirs)} directories")
@@ -191,9 +199,16 @@ class SkillRegistry:
         Returns:
             Skill内容字符串
         """
+        # 优先使用 _loaders 精确定位（多目录场景）
+        loader = self._loaders.get(name)
+        if loader:
+            return loader.get_skill_content(name, substitutions=substitutions)
+
+        # Fallback 到单一 _loader（向后兼容）
         if self._loader:
             return self._loader.get_skill_content(name, substitutions=substitutions)
 
+        # Last resort: 直接使用 skill body
         skill = self.get(name)
         if skill:
             return f"# Skill: {skill.name}\n\n{skill.body}"
@@ -235,6 +250,13 @@ class SkillRegistry:
         Returns:
             匹配的Skill名称，如果没有匹配返回None
         """
+        # 多 loader 场景：遍历所有 loader 查找匹配
+        for loader in set(self._loaders.values()):
+            result = loader.match_by_file(filename)
+            if result and result in self._skills:
+                return result
+
+        # Fallback 到单一 loader
         if self._loader:
             return self._loader.match_by_file(filename)
         return None
