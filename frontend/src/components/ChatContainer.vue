@@ -620,12 +620,21 @@ function now(): string {
 async function handleLogout() {
   await doLogout()
   showLoginModal.value = true
-  // 清空会话列表
+  // 登出时清空所有缓存：会话列表、消息、附件等
+  clearSessionCache()
+  clearSession()
+  clearAttachments()
+  messages.value = []
 }
 
 function handleLoginSuccess() {
   showLoginModal.value = false
-  // 登录成功后加载会话列表并自动打开最近会话
+  // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）
+  clearSessionCache()
+  clearSession()
+  clearAttachments()
+  messages.value = []
+  // 重新加载会话列表并自动打开最近会话
   loadSessions().then(async () => {
     const hasSession = await loadLatestSession()
     if (hasSession && currentSessionId.value) {
