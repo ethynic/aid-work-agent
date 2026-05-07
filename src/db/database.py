@@ -279,13 +279,10 @@ def get_db_connection() -> Generator[Any, None, None]:
             return getattr(self._cursor, name)
 
         def cursor(self, cursor_factory=None):
-            """兼容旧 API：如果指定了 cursor_factory，返回新的 cursor；否则返回包装器本身"""
+            """兼容旧 API：如果指定了 cursor_factory，返回新的 cursor；否则返回内部的 cursor"""
             if cursor_factory is not None:
-                # 创建新的 cursor 并包装
-                new_cursor = self._conn.cursor(cursor_factory=cursor_factory)
-                return CursorWrapper(new_cursor, self._conn)
-            # 返回包装器本身，这样所有方法调用都会经过包装器
-            return self
+                return self._conn.cursor(cursor_factory=cursor_factory)
+            return self._cursor
 
         def commit(self):
             self._conn.commit()
@@ -295,31 +292,6 @@ def get_db_connection() -> Generator[Any, None, None]:
 
         def close(self):
             pass  # 不实际关闭，由上下文管理器处理
-
-        def fetchone(self):
-            row = self._cursor.fetchone()
-            if row is None:
-                return None
-            if isinstance(row, dict):
-                return row
-            # 转换为字典
-            if self._cursor.description:
-                col_names = [desc[0] for desc in self._cursor.description]
-                return {col_names[i]: row[i] for i in range(len(col_names))}
-            # 没有描述信息，返回原始行
-            return row
-
-        def fetchall(self):
-            rows = self._cursor.fetchall()
-            if not rows:
-                return rows
-            if isinstance(rows[0], dict):
-                return rows
-            # 转换为字典
-            if self._cursor.description:
-                col_names = [desc[0] for desc in self._cursor.description]
-                return [{col_names[i]: row[i] for i in range(len(col_names))} for row in rows]
-            return rows
 
     wrapper = CursorWrapper(cursor, conn)
     conn_handled = False  # 标记连接是否已被处理（归还/丢弃）
