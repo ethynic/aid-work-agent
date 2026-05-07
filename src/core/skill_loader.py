@@ -88,6 +88,9 @@ class Skill:
     hooks: Optional[Dict[str, str]] = None  # {onLoad: cmd, onUnload: cmd}
     agent: Optional[str] = None  # fork 时使用的子智能体类型
 
+    # 环境变量声明
+    env: List[Dict[str, Any]] = field(default_factory=list)
+
     # 依赖项
     dependencies: List[SkillDependency] = field(default_factory=list)
 
@@ -236,6 +239,19 @@ class SkillLoader:
         if isinstance(hooks_raw, dict):
             hooks = hooks_raw
 
+        # 解析 env 环境变量声明
+        env_raw = frontmatter.get("env", [])
+        env_vars = []
+        if isinstance(env_raw, list):
+            for item in env_raw:
+                if isinstance(item, str):
+                    env_vars.append({"name": item})
+                elif isinstance(item, dict):
+                    env_vars.append({
+                        "name": item.get("name", ""),
+                        "default": item.get("default"),
+                    })
+
         skill = Skill(
             name=frontmatter["name"],
             description=frontmatter["description"],
@@ -258,6 +274,7 @@ class SkillLoader:
             shell=frontmatter.get("shell", "bash"),
             hooks=hooks,
             agent=frontmatter.get("agent"),
+            env=env_vars,
             dependencies=dependencies,
         )
         
@@ -368,6 +385,10 @@ class SkillLoader:
             return None
 
         skill = self.skills[name]
+
+        # 加载 Skill .env 文件到进程环境变量
+        self._load_skill_env(skill)
+
         body = skill.body
 
         # 执行字符串替换（AgentSkills 标准）
@@ -396,6 +417,57 @@ class SkillLoader:
             content += "\n".join(f"- {r}" for r in resources)
 
         return content
+
+    def _load_skill_env(self, skill: Skill) -> None:
+        """加载 Skill 目录下的 .env 文件到进程环境变量。
+
+        加载优先级（从低到高）：
+        1. Skill 默认级: skill_dir/.env
+        2. 租户级: storage/tenants/{tenant_id}/skills/{skill_name}/.env
+
+        使用 override=False，不覆盖已有的同名变量。
+        """
+        import os
+        env_files = []
+
+        # 优先级 1: Skill 默认级 .env
+        skill_env = skill.dir / ".env"
+        if skill_env.exists():
+            env_files.append(skill_env)
+
+        # 优先级 2: 租户级 .env
+        tenant_id = os.environ.get("CURRENT_TENANT_ID")
+        if tenant_id:
+            tenant_env = Path(f"storage/tenants/{tenant_id}/skills/{skill.name}/.env")
+            if tenant_env.exists():
+                env_files.append(tenant_env)
+
+        for env_file in env_files:
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(env_file, override=False)
+                logger.debug(f"Loaded skill env from {env_file}")
+            except ImportError:
+                logger.warning("python-dotenv not installed, skipping .env loading")
+            except Exception as e:
+                logger.warning(f"Failed to load skill env from {env_file}: {e}")
+
+        # 注入 env 声明中的默认值（仅对环境中尚不存在的变量）
+        for var_decl in skill.env:
+            var_name = var_decl.get("name", "")
+            default_val = var_decl.get("default")
+            if var_name and default_val is not None and var_name not in os.environ:
+                os.environ[var_name] = str(default_val)
+                logger.debug(f"Set default env var {var_name}={default_val}")
+
+        # 检查必需变量（无默认值的变量是否已设置）
+        for var_decl in skill.env:
+            var_name = var_decl.get("name", "")
+            default_val = var_decl.get("default")
+            if var_name and default_val is None and var_name not in os.environ:
+                logger.warning(
+                    f"Skill '{skill.name}' requires env var '{var_name}' but it is not set"
+                )
 
     def _process_dynamic_context(self, body: str, skill_dir: Path) -> str:
         """

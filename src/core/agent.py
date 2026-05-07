@@ -278,6 +278,7 @@ class Agent:
         from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.file.register_download_tool import RegisterDownloadFileTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
+        from src.tools.network.http_api import HttpApiTool
 
         # 注册邮件工具（不传配置，运行时通过 user_id 从数据库读取）
         self.tool_registry.register(EmailSendTool())
@@ -299,6 +300,7 @@ class Agent:
         
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
+        self.tool_registry.register(HttpApiTool())
         
         # 注册定时任务工具
         from src.tools.scheduler.scheduled_task_tool import CreateScheduledTaskTool, ManageScheduledTaskTool
