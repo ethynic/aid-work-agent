@@ -153,6 +153,53 @@ async def list_subagents(request: Request):
         return _error_response("列出数字员工失败", str(e))
 
 
+@router.get("/subagents/skills")
+async def list_available_skills(request: Request):
+    """获取可选 skill 列表"""
+    try:
+        admin = _require_admin(request)
+        if admin is None:
+            return _error_response("无管理员权限", "User not in admin phone list", 403)
+
+        skill_registry = master_agent.skill_registry
+        if not skill_registry:
+            return {"success": True, "data": []}
+
+        skills = skill_registry.list_skills()
+        return {"success": True, "data": skills}
+
+    except Exception as e:
+        logger.error(f"获取技能列表失败: {e}", exc_info=True)
+        return _error_response("获取技能列表失败", str(e))
+
+
+@router.get("/subagents/tools")
+async def list_available_tools(request: Request):
+    """获取可选工具列表"""
+    try:
+        admin = _require_admin(request)
+        if admin is None:
+            return _error_response("无管理员权限", "User not in admin phone list", 403)
+
+        tool_registry = master_agent.tool_registry
+        if not tool_registry:
+            return {"success": True, "data": []}
+
+        # 获取所有工具的名称和描述
+        tools = []
+        for name, tool in tool_registry._tools.items():
+            tools.append({
+                "name": name,
+                "description": getattr(tool, 'description', '') or '',
+                "display_name": getattr(tool, 'display_name', name) or name,
+            })
+        return {"success": True, "data": tools}
+
+    except Exception as e:
+        logger.error(f"获取工具列表失败: {e}", exc_info=True)
+        return _error_response("获取工具列表失败", str(e))
+
+
 @router.get("/subagents/{agent_id}")
 async def get_subagent_detail(request: Request, agent_id: str):
     """获取单个数字员工详情"""
@@ -224,53 +271,6 @@ async def get_subagent_content(request: Request, agent_id: str):
     except Exception as e:
         logger.error(f"获取数字员工内容失败: {e}", exc_info=True)
         return _error_response("获取数字员工内容失败", str(e))
-
-
-@router.get("/skills")
-async def list_available_skills(request: Request):
-    """获取可选 skill 列表"""
-    try:
-        admin = _require_admin(request)
-        if admin is None:
-            return _error_response("无管理员权限", "User not in admin phone list", 403)
-
-        skill_registry = master_agent.skill_registry
-        if not skill_registry:
-            return {"success": True, "data": []}
-
-        skills = skill_registry.list_skills()
-        return {"success": True, "data": skills}
-
-    except Exception as e:
-        logger.error(f"获取技能列表失败: {e}", exc_info=True)
-        return _error_response("获取技能列表失败", str(e))
-
-
-@router.get("/tools")
-async def list_available_tools(request: Request):
-    """获取可选工具列表"""
-    try:
-        admin = _require_admin(request)
-        if admin is None:
-            return _error_response("无管理员权限", "User not in admin phone list", 403)
-
-        tool_registry = master_agent.tool_registry
-        if not tool_registry:
-            return {"success": True, "data": []}
-
-        # 获取所有工具的名称和描述
-        tools = []
-        for name, tool in tool_registry._tools.items():
-            tools.append({
-                "name": name,
-                "description": getattr(tool, 'description', '') or '',
-                "display_name": getattr(tool, 'display_name', name) or name,
-            })
-        return {"success": True, "data": tools}
-
-    except Exception as e:
-        logger.error(f"获取工具列表失败: {e}", exc_info=True)
-        return _error_response("获取工具列表失败", str(e))
 
 
 @router.post("/subagents")
