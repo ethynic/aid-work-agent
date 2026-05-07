@@ -427,6 +427,11 @@ async def chat(request: Request):
         if not agent:
             agent = agent_router.get_agent(subagent_name, session_id)
 
+        # 注入 tenant_id（供租户 skills 按需加载使用）
+        _tenant_id = getattr(request.state, 'tenant_id', None)
+        if _tenant_id and not agent._init_tenant_id:
+            agent._init_tenant_id = _tenant_id
+
         # Process message — run in executor to avoid blocking the event loop
         # under high concurrency (LLM calls can take 2-30s).
         # This mirrors the SSE endpoint's pattern of offloading agent work to
@@ -931,6 +936,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         agent = instance_manager.get_agent(_instance_id, request.subagent, session_id)
     if not agent:
         agent = agent_router.get_agent(request.subagent, session_id)
+
+    # 注入 tenant_id（供租户 skills 按需加载使用）
+    _tenant_id = getattr(http_request.state, 'tenant_id', None)
+    if _tenant_id and not agent._init_tenant_id:
+        agent._init_tenant_id = _tenant_id
 
     async def event_generator():
         """SSE事件生成器"""

@@ -84,6 +84,7 @@ class Agent:
         execution_id: Optional[str] = None,
         parent_plan_manager=None,
         mode: AgentMode = AgentMode.MASTER,
+        tenant_id: Optional[str] = None,
     ):
         """
         初始化智能体
@@ -95,6 +96,7 @@ class Agent:
             execution_id: 执行ID（子智能体模式时使用）
             parent_plan_manager: 父智能体的计划管理器（子智能体模式时使用，用于记录执行过程）
             mode: 智能体工作模式 (MASTER / SUBAGENT / STANDALONE)
+            tenant_id: 租户ID（SaaS模式下用于加载租户自定义 skills）
         """
         self.mode = mode
         self.subagent_config = subagent_config
@@ -156,6 +158,11 @@ class Agent:
         self._create_scheduled_task_tool = None
         self._manage_scheduled_task_tool = None
 
+        # 租户 skills 按需加载状态
+        self._init_tenant_id = tenant_id  # 初始化时传入的 tenant_id
+        self._loaded_tenant_id = None
+        self._skills_loaded_at = 0.0
+
         if self.mode == AgentMode.STANDALONE:
             # 独立模式：不创建子智能体注册表和执行器
             self.subagent_registry = None
@@ -198,6 +205,68 @@ class Agent:
 
             logger.info(f"Subagent initialized: {subagent_config.name if subagent_config else 'unknown'}")
     
+    def _ensure_tenant_skills_loaded(self):
+        """按需加载租户自定义 skills
+
+        tenant_id 来源（按优先级）：
+        1. __init__ 时传入的 tenant_id 参数（Agent 创建时已知租户）
+        2. ContextVar get_current_tenant_id()（HTTP 请求通过中间件设置）
+
+        在 SaaS 模式下，首次为某租户处理请求时，
+        从 storage/tenants/{tenant_id}/skills/ 加载租户 skills 并合并到 SkillRegistry。
+        后续请求使用缓存，避免重复磁盘扫描。
+        """
+        if not settings.saas.enabled:
+            return
+
+        # 优先使用初始化时传入的 tenant_id
+        tenant_id = self._init_tenant_id
+        if not tenant_id:
+            # 其次从 ContextVar 获取（HTTP 请求场景）
+            from src.saas.context import get_current_tenant_id
+            tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            return
+
+        # 已为该租户加载且缓存仍新鲜，跳过
+        if self._loaded_tenant_id == tenant_id:
+            from src.saas.services.tenant_skill_cache import tenant_skill_cache
+            cached = tenant_skill_cache._cache.get(tenant_id)
+            if cached and self._skills_loaded_at >= cached[1]:
+                return
+
+        # 加载合并后的 skills
+        from src.saas.services.tenant_skill_cache import tenant_skill_cache
+        from src.saas.services.skill_resolver import SkillResolver
+
+        base_skills_dir = Path(__file__).parent.parent / "skills"
+        skills_dict = tenant_skill_cache.get_or_load(
+            tenant_id, base_skills_dir, self.skill_registry._allowed,
+        )
+
+        # 重建 _loaders 映射
+        base_loader = self.skill_registry._loader
+        tenant_dir = SkillResolver.get_tenant_skills_dir(tenant_id)
+        tenant_loader = None
+        if tenant_dir.exists():
+            from src.core.skill_loader import SkillLoader
+            tenant_loader = SkillLoader(tenant_dir)
+
+        new_loaders = {}
+        if base_loader:
+            for name in base_loader.skills:
+                new_loaders[name] = base_loader
+        if tenant_loader:
+            for name in tenant_loader.skills:
+                new_loaders[name] = tenant_loader  # 租户覆盖基础
+
+        # 应用到当前 registry
+        self.skill_registry._skills = dict(skills_dict)
+        self.skill_registry._loaders = new_loaders
+
+        self._loaded_tenant_id = tenant_id
+        self._skills_loaded_at = time.time()
+
     def _register_builtin_tools(self):
         """Register built-in tools"""
         from src.tools.email.email_tool import EmailSendTool, EmailReadTool, EmailListFoldersTool
@@ -1050,6 +1119,9 @@ class Agent:
 
         logger.info(f"Processing message for session {session_id}: {user_input[:50]}...")
 
+        # 按需加载租户自定义 skills
+        self._ensure_tenant_skills_loaded()
+
         # ========== 临时调试日志 ==========
         import time
         _debug_start_time = time.time()
@@ -1817,6 +1889,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         """
         if self.mode != AgentMode.SUBAGENT:
             raise RuntimeError("execute_as_subagent() is only for subagent mode")
+
+        # 按需加载租户自定义 skills
+        self._ensure_tenant_skills_loaded()
 
         # 进度消息辅助函数
         async def send_progress(message: str):

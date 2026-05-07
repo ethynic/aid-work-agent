@@ -52,6 +52,8 @@ async def upload_skill(request: Request, body: SkillUploadRequest):
     )
 
     if success:
+        from src.saas.services.tenant_skill_cache import tenant_skill_cache
+        tenant_skill_cache.invalidate_skill(admin["tenant_id"], body.name)
         return {"success": True, "message": "Skill 上传成功"}
     raise HTTPException(status_code=500, detail="Skill 上传失败")
 
@@ -71,6 +73,8 @@ async def update_skill(skill_name: str, request: Request, body: SkillUpdateReque
     )
 
     if success:
+        from src.saas.services.tenant_skill_cache import tenant_skill_cache
+        tenant_skill_cache.invalidate_skill(admin["tenant_id"], skill_name)
         return {"success": True, "message": "Skill 更新成功"}
     raise HTTPException(status_code=500, detail="Skill 更新失败")
 
@@ -89,5 +93,7 @@ async def delete_skill(skill_name: str, request: Request):
     )
 
     if success:
+        from src.saas.services.tenant_skill_cache import tenant_skill_cache
+        tenant_skill_cache.invalidate(admin["tenant_id"])
         return {"success": True, "message": "Skill 已删除"}
     raise HTTPException(status_code=404, detail="Skill 不存在")
