@@ -715,9 +715,60 @@ async function handleSelectSession(sessionId: string) {
     // 用户确认，终止当前流式响应
     await abortStreaming()
   }
+
   selectSession(sessionId)
-  // 不再根据会话的 subagent 标记导航到对应路由
-  // 用户点击历史会话时，只是切换当前会话内容，不改变左侧会话列表的显示
+
+  // 跳转到聊天页面（如果当前不在聊天页面）
+  const session = sessions.value.find(s => s.session_id === sessionId)
+
+  // 从 session 中获取 subagent_id
+  // 优先级：1. session.subagent_id 顶层字段 2. context_data.subagent 3. context_data.subagent_id
+  let subagent = (session as any)?.subagent_id as string | undefined
+  if (!subagent) {
+    subagent = session?.context_data?.subagent as string | undefined
+  }
+  if (!subagent && session?.context_data?.subagent_id) {
+    subagent = session.context_data.subagent_id as string
+  }
+
+  // 检查 subagent 是否为有效的子智能体（在 availableSubagents 中存在）
+  if (subagent && props.availableSubagents.length > 0) {
+    const matched = props.availableSubagents.find(
+      (a: any) => a.agent_id === subagent || a.subagent_type === subagent
+    )
+    if (!matched) {
+      // 不是有效的子智能体
+      subagent = undefined
+    }
+  }
+
+  let targetPath = '/'
+  const queryParams: Record<string, string> = {}
+
+  if (isTenantMode.value && tenantId.value) {
+    // 租户模式
+    if (subagent) {
+      targetPath = `/t/${tenantId.value}/chat/${subagent}`
+      // 尝试匹配 instance_id
+      const matchedInstance = props.availableSubagents.find(
+        (a: any) => a.agent_id === subagent || a.subagent_type === subagent
+      )
+      if (matchedInstance?.instance_id) {
+        queryParams.instance_id = matchedInstance.instance_id
+      }
+    } else {
+      targetPath = `/t/${tenantId.value}/chat`
+    }
+    if (session?.instance_id) {
+      queryParams.instance_id = session.instance_id
+    }
+  } else if (subagent) {
+    targetPath = `/chat/${subagent}`
+  }
+
+  if (route.path !== targetPath) {
+    router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
+  }
 }
 
 // 删除会话

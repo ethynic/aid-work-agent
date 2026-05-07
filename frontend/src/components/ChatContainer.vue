@@ -420,6 +420,12 @@ function openScheduledTasks() {
 
 // 检查并处理主智能体不可用的情况（ChatContainer 特有逻辑）
 async function checkAndRedirectIfMainAgentUnavailable() {
+  // 关键修复：如果 currentSessionId 已有值（用户点击了历史会话），不执行重定向
+  // 优先加载用户选择的历史会话，而不是强制跳转到子智能体
+  if (currentSessionId.value) {
+    return
+  }
+
   // 租户模式下，如果主智能体不可用且当前路由为主智能体，重定向到第一个可用智能体
   if (isTenantMode.value && !subagentName.value && availableSubagents.value.length > 0) {
     const hasMainAgent = availableSubagents.value.some((agent: any) => agent.agent_id === 'main')
@@ -430,7 +436,6 @@ async function checkAndRedirectIfMainAgentUnavailable() {
       if (tenantMatch) {
         const tenantId = tenantMatch[1]
         const targetPath = `/t/${tenantId}/chat/${firstAgent.agent_id}`
-        console.log(`主智能体不可用，重定向到 ${targetPath}`)
         await router.replace(targetPath)
       }
     }
@@ -507,6 +512,7 @@ onMounted(async () => {
   } else {
     // 已登录，加载会话列表
     await loadSessions()
+
     // 子智能体模式下不加载主智能体最近会话
     // 如果 currentSessionId 已经是 null 且 sessions 已经加载（说明用户已经在导航前点击了"新会话"），不要再覆盖它
     // 只有当 currentSessionId 为 null 时（直接打开页面/刷新页面），才需要加载最近会话
@@ -659,11 +665,16 @@ watch(isProcessing, (processing, wasProcessing) => {
 })
 
 // 切换子智能体时清空当前会话和消息
+// 注意：如果 currentSessionId 已有值（从历史会话点击），不执行清空，避免覆盖用户选择
 watch(subagentName, () => {
-  selectSession(null)
-  messages.value = []
-  clearSession()
-  clearAttachments()
+  // 只有当不是从历史会话点击过来时才清空
+  // 从历史会话点击的特征：currentSessionId 已有值，且不为 null
+  if (!currentSessionId.value) {
+    selectSession(null)
+    messages.value = []
+    clearSession()
+    clearAttachments()
+  }
 })
 </script>
 
