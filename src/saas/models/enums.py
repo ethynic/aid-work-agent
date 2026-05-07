@@ -206,3 +206,38 @@ class PlanType(str):
             self.PREMIUM: "旗舰版",
         }
         return mapping.get(self, "未知")
+
+
+# ============== 排队状态 ==============
+
+class QueueStatus(str):
+    """
+    智能体实例排队状态枚举
+
+    数据库存储：TEXT (agent_instance_queue.status)
+    - waiting   = 排队中
+    - ready     = 已到号
+    - expired   = 过期
+    - cancelled = 已取消（包括用户主动取消和系统自动放弃）
+    - abandoned = 已放弃（系统自动取消，归并为 cancelled 显示）
+    """
+    WAITING = "waiting"
+    READY = "ready"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+    ABANDONED = "abandoned"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.WAITING, cls.READY, cls.EXPIRED, cls.CANCELLED, cls.ABANDONED]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.WAITING: "排队中",
+            self.READY: "已到号",
+            self.EXPIRED: "过期",
+            self.CANCELLED: "已取消",
+            self.ABANDONED: "已取消",  # 归并为 cancelled 显示
+        }
+        return mapping.get(self, "未知")

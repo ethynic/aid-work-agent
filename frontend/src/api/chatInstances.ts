@@ -46,7 +46,7 @@ export interface LockInstanceResponse {
 
 export interface QueueStatusResponse {
   in_queue: boolean
-  status: 'waiting' | 'ready' | 'expired' | 'not_in_queue'
+  status: 'waiting' | 'ready' | 'expired' | 'cancelled' | 'abandoned' | 'not_in_queue'
   position?: number
   queue_length?: number
   estimated_wait_seconds?: number

@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
 
 from src.db.database import get_db_connection
+from src.saas.models.enums import QueueStatus
 import psycopg2.errors
 
 
@@ -404,7 +405,7 @@ class InstanceService:
             position = row["position"]
 
             # 更新心跳（只有 waiting 状态需要）
-            if status == "waiting":
+            if status == QueueStatus.WAITING:
                 cursor.execute("""
                     UPDATE agent_instance_queue
                     SET last_heartbeat_at = CURRENT_TIMESTAMP
@@ -413,7 +414,7 @@ class InstanceService:
                 conn.commit()
 
             # 如果是 ready 状态，检查是否真的可以锁定（防止过期）
-            if status == "ready":
+            if status == QueueStatus.READY:
                 cursor.execute("""
                     SELECT status FROM agent_instances
                     WHERE instance_id = %s AND status != 'busy'
@@ -423,7 +424,7 @@ class InstanceService:
                     # 这种情况理论上不会发生，但为了健壮性处理
                     return {
                         "in_queue": True,
-                        "status": "waiting",
+                        "status": QueueStatus.WAITING,
                         "position": 999,
                         "queue_length": 999,
                         "estimated_wait_seconds": 600,

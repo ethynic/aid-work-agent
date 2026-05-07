@@ -101,6 +101,24 @@ export const PlanTypeMap = {
   [PlanType.PREMIUM]: { label: '旗舰版' },
 } as const;
 
+/** 排队状态 */
+export enum QueueStatus {
+  WAITING = 'waiting',
+  READY = 'ready',
+  EXPIRED = 'expired',
+  CANCELLED = 'cancelled',
+  ABANDONED = 'abandoned',
+}
+
+/** 排队状态工具函数 */
+export const QueueStatusMap = {
+  [QueueStatus.WAITING]: { label: '排队中', color: 'blue' },
+  [QueueStatus.READY]: { label: '已到号', color: 'green' },
+  [QueueStatus.EXPIRED]: { label: '过期', color: 'orange' },
+  [QueueStatus.CANCELLED]: { label: '已取消', color: 'gray' },
+  [QueueStatus.ABANDONED]: { label: '已取消', color: 'gray' }, // 归并为 cancelled 显示
+} as const;
+
 /**
  * 根据状态值获取显示标签
  * @param status 状态值（数字或字符串）
