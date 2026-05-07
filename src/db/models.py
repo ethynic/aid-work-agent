@@ -455,7 +455,15 @@ class SessionDB:
 
 
 class MessageDB:
-    """消息数据库访问类"""
+    """消息数据库访问类 - 操作 chat_messages 表
+
+    与 ChatRecordDB 的区别：
+    - 存储粒度：单条消息（最小单元） vs 完整对话交互（用户输入+助手回复）
+    - 使用场景：消息展示和上下文构建 vs 用量统计、计费、审计、性能监控
+    - 数据结构：简单的 role/content/metadata vs 包含token统计、执行详情、状态等完整信息
+
+    两个表存在内容冗余但设计合理，服务于不同的业务目的。
+    """
 
     @staticmethod
     def create(session_id: str, role: str, content: str,
@@ -559,7 +567,15 @@ def generate_record_id() -> str:
 
 
 class ChatRecordDB:
-    """会话记录数据库访问类 - 记录每次和AI的对话"""
+    """会话记录数据库访问类 - 操作 chat_records 表，记录每次和AI的对话
+
+    与 MessageDB 的区别：
+    - 存储粒度：完整对话交互（用户输入+助手回复） vs 单条消息（最小单元）
+    - 使用场景：用量统计、计费、审计、性能监控 vs 消息展示和上下文构建
+    - 数据结构：包含token统计、执行详情、状态等完整信息 vs 简单的 role/content/metadata
+
+    两个表存在内容冗余但设计合理，服务于不同的业务目的。
+    """
 
     @staticmethod
     def create(

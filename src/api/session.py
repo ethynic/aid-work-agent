@@ -1,6 +1,17 @@
 """
 会话管理API
 包括会话CRUD、消息CRUD等
+
+涉及的两个核心表：
+1. chat_messages 表 - 存储单条消息，用于前端展示聊天历史和构建对话上下文
+2. chat_records 表 - 存储完整对话记录，用于用量统计、计费、审计和性能监控
+
+两个表的区别：
+- 存储粒度：单条消息 vs 完整对话交互
+- 使用场景：消息展示和上下文构建 vs 用量统计、计费、审计
+- 数据结构：简单的 role/content/metadata vs 包含token统计、执行详情等完整信息
+
+两个表存在内容冗余但设计合理，服务于不同的业务目的。
 """
 
 from typing import Optional, List

@@ -62,7 +62,12 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_id, created_at DESC);
 
--- 消息表
+-- 消息表 - 存储用户和AI之间的每一条消息，用于前端展示聊天历史和构建对话上下文
+-- 与 chat_records 表的区别：
+-- 1. 存储粒度：单条消息（最小单元） vs 完整对话交互（用户输入+助手回复）
+-- 2. 使用场景：消息展示和上下文构建 vs 用量统计、计费、审计、性能监控
+-- 3. 数据结构：简单的 role/content/metadata vs 包含token统计、执行详情、状态等完整信息
+-- 两个表存在内容冗余但设计合理，服务于不同的业务目的
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,
     message_id TEXT UNIQUE NOT NULL,
@@ -73,7 +78,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 会话记录表（每次和AI的对话）
+-- 会话记录表（每次和AI的对话）- 存储每次完整对话的处理记录，用于用量统计、计费、审计和性能监控
+-- 与 chat_messages 表的区别：
+-- 1. 存储粒度：完整对话交互（用户输入+助手回复） vs 单条消息（最小单元）
+-- 2. 使用场景：用量统计、计费、审计、性能监控 vs 消息展示和上下文构建
+-- 3. 数据结构：包含token统计、执行详情、状态等完整信息 vs 简单的 role/content/metadata
+-- 两个表存在内容冗余但设计合理，服务于不同的业务目的
 CREATE TABLE IF NOT EXISTS chat_records (
     id SERIAL PRIMARY KEY,
     record_id TEXT UNIQUE NOT NULL,
@@ -464,7 +474,12 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_instance ON chat_sessions(instance_id, created_at DESC);
 
--- 消息表
+-- 消息表 - 存储用户和AI之间的每一条消息，用于前端展示聊天历史和构建对话上下文
+-- 与 chat_records 表的区别：
+-- 1. 存储粒度：单条消息（最小单元） vs 完整对话交互（用户输入+助手回复）
+-- 2. 使用场景：消息展示和上下文构建 vs 用量统计、计费、审计、性能监控
+-- 3. 数据结构：简单的 role/content/metadata vs 包含token统计、执行详情、状态等完整信息
+-- 两个表存在内容冗余但设计合理，服务于不同的业务目的
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,
     message_id TEXT UNIQUE NOT NULL,
@@ -475,7 +490,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 会话记录表
+-- 会话记录表 - 存储每次完整对话的处理记录，用于用量统计、计费、审计和性能监控
+-- 与 chat_messages 表的区别：
+-- 1. 存储粒度：完整对话交互（用户输入+助手回复） vs 单条消息（最小单元）
+-- 2. 使用场景：用量统计、计费、审计、性能监控 vs 消息展示和上下文构建
+-- 3. 数据结构：包含token统计、执行详情、状态等完整信息 vs 简单的 role/content/metadata
+-- 两个表存在内容冗余但设计合理，服务于不同的业务目的
 CREATE TABLE IF NOT EXISTS chat_records (
     id SERIAL PRIMARY KEY,
     record_id TEXT UNIQUE NOT NULL,

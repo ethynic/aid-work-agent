@@ -2,6 +2,12 @@
 用量追踪服务
 
 每次对话完成后，从 chat_records 累加 tokens_used 到对应 subscription。
+
+chat_records 表 vs chat_messages 表：
+- chat_records：存储完整对话记录，包含token消耗、执行详情等，用于计费和用量统计
+- chat_messages：存储单条消息，用于前端展示和上下文构建
+
+两个表存在内容冗余但设计合理，服务于不同的业务目的。
 """
 
 from loguru import logger
