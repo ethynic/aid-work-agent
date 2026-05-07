@@ -35,6 +35,7 @@ async def list_subagents(request: Request):
 
         # 租户模式下按权限过滤
         tenant_id = get_current_tenant_id()
+
         if tenant_id is not None:
             from src.api.auth import get_current_user
             user = get_current_user(request)
@@ -51,6 +52,7 @@ async def list_subagents(request: Request):
                         "type": "builtin",
                         "business_pages": []
                     })
+            # user 为 None 时（token 无效），不添加 main，保持只有内置 subagent
         else:
             # 非租户模式（演示模式）：添加主智能体
             items.append({

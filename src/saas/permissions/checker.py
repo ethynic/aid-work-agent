@@ -116,6 +116,13 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
     if not tenant_id:
         return []
 
+    # Demo 租户：可以访问所有内置的 subagent
+    if tenant_id == "demo":
+        registry = master_agent.subagent_registry
+        if registry:
+            return list(registry.list_subagents())
+        return []
+
     with get_db_connection() as conn:
         # 获取租户有有效订阅的列表
         cursor = conn.cursor()
@@ -147,6 +154,13 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
 
 def count_tenant_subscribed_agents(tenant_id: str) -> int:
     """统计租户有有效订阅的数字员工数量"""
+    # Demo 租户：返回所有内置 subagent 的数量
+    if tenant_id == "demo":
+        registry = master_agent.subagent_registry
+        if registry:
+            return len(registry.list_subagents())
+        return 0
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
