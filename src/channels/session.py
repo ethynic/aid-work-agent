@@ -69,8 +69,7 @@ class ChannelSessionManager:
                     message_type TEXT DEFAULT 'text',
                     attachments TEXT,
                     metadata TEXT,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES channel_sessions(session_id)
+                    created_at TEXT NOT NULL
                 )
             """)
 

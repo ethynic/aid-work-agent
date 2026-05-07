@@ -14,6 +14,34 @@ ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
 -- 2026-4-25，根据数据库开发规范，移除所有外键约束、移除非必要字段的 NOT NULL 约束、移除所有触发器
 -- 外键完整性检查放到 Python 应用层实现，业务非空检查放到 Pydantic 模型层实现
 
+-- 移除 chat_messages 表的外键约束
+ALTER TABLE chat_messages DROP CONSTRAINT IF EXISTS chat_messages_session_id_fkey;
+
+-- 移除 chat_sessions 表的外键约束
+ALTER TABLE chat_sessions DROP CONSTRAINT IF EXISTS chat_sessions_user_id_fkey;
+
+-- 移除 chat_records 表的外键约束
+ALTER TABLE chat_records DROP CONSTRAINT IF EXISTS chat_records_session_id_fkey;
+ALTER TABLE chat_records DROP CONSTRAINT IF EXISTS chat_records_user_id_fkey;
+
+-- 移除其他表的外键约束（如果存在）
+ALTER TABLE scheduled_task_logs DROP CONSTRAINT IF EXISTS scheduled_task_logs_task_id_fkey;
+ALTER TABLE scheduled_task_logs DROP CONSTRAINT IF EXISTS scheduled_task_logs_user_id_fkey;
+ALTER TABLE user_email_settings DROP CONSTRAINT IF EXISTS user_email_settings_user_id_fkey;
+ALTER TABLE chunks DROP CONSTRAINT IF EXISTS chunks_doc_id_fkey;
+ALTER TABLE chunks_vec DROP CONSTRAINT IF EXISTS chunks_vec_chunk_id_fkey;
+ALTER TABLE chunks_fts DROP CONSTRAINT IF EXISTS chunks_fts_chunk_id_fkey;
+
+-- 移除 SaaS 表的外键约束
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_tenant_id_fkey;
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_user_id_fkey;
+ALTER TABLE agent_instances DROP CONSTRAINT IF EXISTS agent_instances_tenant_id_fkey;
+ALTER TABLE agent_instances DROP CONSTRAINT IF EXISTS agent_instances_subscription_id_fkey;
+ALTER TABLE tenant_channel_configs DROP CONSTRAINT IF EXISTS tenant_channel_configs_tenant_id_fkey;
+ALTER TABLE payment_orders DROP CONSTRAINT IF EXISTS payment_orders_tenant_id_fkey;
+ALTER TABLE payment_orders DROP CONSTRAINT IF EXISTS payment_orders_subscription_id_fkey;
+ALTER TABLE bs_trade_specialist_customer_emails DROP CONSTRAINT IF EXISTS bs_trade_specialist_customer_emails_customer_id_fkey;
+
 -- 用户级数字员工授权表
 CREATE TABLE IF NOT EXISTS user_agent_permissions (
     id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,

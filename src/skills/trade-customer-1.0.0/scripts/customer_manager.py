@@ -304,8 +304,7 @@ def init_tables():
                 send_time TEXT,
                 send_status TEXT DEFAULT 'success',
                 error_message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES bs_trade_specialist_matched_customers(customer_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 

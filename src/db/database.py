@@ -278,8 +278,10 @@ def get_db_connection() -> Generator[Any, None, None]:
         def __getattr__(self, name):
             return getattr(self._cursor, name)
 
-        def cursor(self):
-            """兼容旧 API：返回 cursor 本身"""
+        def cursor(self, cursor_factory=None):
+            """兼容旧 API：如果指定了 cursor_factory，返回新的 cursor；否则返回内部的 cursor"""
+            if cursor_factory is not None:
+                return self._conn.cursor(cursor_factory=cursor_factory)
             return self._cursor
 
         def commit(self):
@@ -660,8 +662,7 @@ def _init_postgresql():
                 title TEXT,
                 context_data TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -674,8 +675,7 @@ def _init_postgresql():
                 role TEXT NOT NULL,
                 content TEXT,
                 metadata TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -696,9 +696,7 @@ def _init_postgresql():
                 status TEXT DEFAULT 'completed',
                 error_message TEXT,
                 duration_ms INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -751,8 +749,7 @@ def _init_postgresql():
                 description TEXT,
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -772,8 +769,7 @@ def _init_postgresql():
                 token TEXT UNIQUE NOT NULL,
                 user_id TEXT NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -808,8 +804,7 @@ def _init_postgresql():
                 success_count INTEGER DEFAULT 0,
                 fail_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -840,9 +835,7 @@ def _init_postgresql():
                 token_usage INTEGER DEFAULT 0,
                 started_at TIMESTAMP NOT NULL,
                 completed_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES scheduled_tasks(task_id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -901,8 +894,7 @@ def _init_postgresql():
                 text_vec tsvector,
                 tokens INTEGER NOT NULL,
                 metadata TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -977,8 +969,7 @@ def _init_postgresql():
                 imap_encryption TEXT DEFAULT 'ssl',
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 

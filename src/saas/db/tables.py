@@ -52,9 +52,7 @@ def init_saas_tables(conn):
             payment_status TEXT DEFAULT 'pending',
             expires_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-            FOREIGN KEY (user_id) REFERENCES users(user_id)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     cursor.execute("""
@@ -80,9 +78,7 @@ def init_saas_tables(conn):
             bound_channel_type TEXT,
             allowed_skills TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-            FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     cursor.execute("""
@@ -120,8 +116,7 @@ def init_saas_tables(conn):
             config TEXT NOT NULL,
             verified INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     cursor.execute("""
@@ -142,9 +137,7 @@ def init_saas_tables(conn):
             paid_at TIMESTAMP,
             transaction_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-            FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     cursor.execute("""
