@@ -123,45 +123,7 @@
       @close="showSettingsDialog = false"
     />
 
-    <!-- Instance Queue Modal -->
-    <InstanceQueueModal
-      :visible="showQueueModal"
-      :instance="currentInstance"
-      :session-id="agentSessionId"
-      @ready="handleQueueReady"
-      @cancelled="handleQueueCancelled"
-    />
 
-    <!-- Busy Prompt Overlay -->
-    <Transition name="modal">
-      <div v-if="isBusy" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-        <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
-          <div class="text-center mb-6">
-            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-100 flex items-center justify-center">
-              <svg class="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <h3 class="text-lg font-semibold text-gray-800 mb-2">实例繁忙</h3>
-            <p class="text-gray-600 text-sm">{{ busyMessage }}</p>
-          </div>
-          <div class="space-y-3">
-            <button
-              @click="handleJoinQueue"
-              class="w-full py-3 px-4 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium rounded-xl transition-all"
-            >
-              排队等待
-            </button>
-            <button
-              @click="cancelBusy"
-              class="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-xl transition-colors"
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
   </div>
 </template>
 
@@ -179,7 +141,6 @@ import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 // ✅ 优化：对话框组件异步加载，用户点击时才加载
 const CredentialManager = defineAsyncComponent(() => import('./CredentialManager.vue'))
 const SettingsDialog = defineAsyncComponent(() => import('./SettingsDialog.vue'))
-const InstanceQueueModal = defineAsyncComponent(() => import('./InstanceQueueModal.vue'))
 import { useAgent } from '@/composables/useAgent'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -209,12 +170,6 @@ const {
   clearAttachments,
   abortStreaming,
   sessionId: agentSessionId,
-  isBusy,
-  busyMessage,
-  busyInstanceId,
-  pendingMessage,
-  joinQueue,
-  cancelBusy,
   endSession
 } = useAgent()
 
@@ -275,6 +230,51 @@ const pregeneratedSessionId = computed<string | null>(() => {
 
 // 可用的数字员工列表（带缓存，避免重复请求）
 const { availableSubagents, loadAvailableSubagents } = useSubagentList()
+
+// 获取租户ID（租户模式下从路径中提取）
+const tenantId = computed(() => {
+  if (isTenantMode.value) {
+    const match = route.path.match(/^\/t\/([^\/]+)/)
+    return match ? match[1] : null
+  }
+  return null
+})
+
+// 获取上次选择的数字员工ID
+function getLastSelectedAgentId(): string | null {
+  const storageKey = tenantId.value ? `last_selected_agent_${tenantId.value}` : 'last_selected_agent_demo'
+  return localStorage.getItem(storageKey)
+}
+
+// 保存上次选择的数字员工ID
+function saveLastSelectedAgentId(agentId: string) {
+  const storageKey = tenantId.value ? `last_selected_agent_${tenantId.value}` : 'last_selected_agent_demo'
+  localStorage.setItem(storageKey, agentId)
+}
+
+// 获取默认数字员工ID（上次选择的或第一个可用的）
+function getDefaultAgentId(): string | null {
+  // 1. 尝试获取上次选择的
+  const lastSelected = getLastSelectedAgentId()
+  if (lastSelected) {
+    // 验证上次选择是否仍在可用列表中
+    const isAvailable = availableSubagents.value.some(agent =>
+      agent.agent_id === lastSelected || agent.instance_id === lastSelected
+    )
+    if (isAvailable) {
+      return lastSelected
+    }
+  }
+
+  // 2. 选择第一个可用的数字员工
+  if (availableSubagents.value.length > 0) {
+    const firstAgent = availableSubagents.value[0]
+    return firstAgent.instance_id || firstAgent.agent_id
+  }
+
+  // 3. 没有可用数字员工，返回null（主智能体）
+  return null
+}
 
 // 当前选中的数字员工ID（null 表示主智能体）
 // 租户模式下为实例ID，演示模式下为子智能体类型
@@ -341,7 +341,6 @@ const isSidebarCollapsed = computed({
 const showLoginModal = ref(false)
 const showCredentialManager = ref(false)
 const showSettingsDialog = ref(false)
-const showQueueModal = ref(false)
 
 // 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
 const skipNextSwitch = ref(false)
@@ -359,48 +358,9 @@ const pageTitle = computed(() => {
   return '新会话'
 })
 
-// 当前排队的实例信息
-const currentInstance = computed(() => {
-  if (!busyInstanceId.value) return null
-  return availableSubagents.value.find((a: any) => a.instance_id === busyInstanceId.value) || null
-})
-
-// 加入排队
-async function handleJoinQueue() {
-  if (!busyInstanceId.value) return
-
-  // 先关闭"实例繁忙"弹框，避免与排队弹框重叠
-  cancelBusy()
-
-  const success = await joinQueue(busyInstanceId.value)
-  if (success) {
-    showQueueModal.value = true
-  } else {
-    toast.error('加入排队失败，请重试')
-  }
-}
 
 // 排队轮到了，自动发送消息
-async function handleQueueReady() {
-  showQueueModal.value = false
 
-  if (pendingMessage.value) {
-    const msgToSend = pendingMessage.value
-    cancelBusy() // 先清理 busy 状态
-    // 稍等一下，避免状态竞态
-    setTimeout(async () => {
-      await sendMessage(msgToSend, subagentName.value, undefined, instanceId.value)
-    }, 100)
-  } else {
-    cancelBusy()
-  }
-}
-
-// 取消排队
-function handleQueueCancelled() {
-  showQueueModal.value = false
-  cancelBusy()
-}
 
 // 结束会话，释放实例锁
 async function handleEndSession() {
@@ -426,17 +386,26 @@ async function checkAndRedirectIfMainAgentUnavailable() {
     return
   }
 
-  // 租户模式下，如果主智能体不可用且当前路由为主智能体，重定向到第一个可用智能体
+  // 租户模式下，如果当前路由没有指定数字员工，确保有默认选择
   if (isTenantMode.value && !subagentName.value && availableSubagents.value.length > 0) {
-    const hasMainAgent = availableSubagents.value.some((agent: any) => agent.agent_id === 'main')
-    if (!hasMainAgent) {
-      const firstAgent = availableSubagents.value[0]
+    // 获取默认数字员工ID（上次选择的或第一个可用的）
+    const defaultAgentId = getDefaultAgentId()
+
+    // 如果默认数字员工存在且不是主智能体，重定向到该数字员工
+    if (defaultAgentId && defaultAgentId !== 'main') {
       // 构建重定向路径
       const tenantMatch = route.path.match(/^\/t\/([^\/]+)/)
       if (tenantMatch) {
         const tenantId = tenantMatch[1]
-        const targetPath = `/t/${tenantId}/chat/${firstAgent.agent_id}`
-        await router.replace(targetPath)
+        // 在 availableSubagents 中查找匹配的项
+        const matchedAgent = availableSubagents.value.find((agent: AgentItem) =>
+          agent.agent_id === defaultAgentId || agent.instance_id === defaultAgentId
+        )
+        if (matchedAgent) {
+          const targetPath = `/t/${tenantId}/chat/${matchedAgent.agent_id}`
+          // 使用 router.replace 避免添加历史记录
+          await router.replace(targetPath)
+        }
       }
     }
   }
@@ -493,6 +462,9 @@ async function handleSubagentChange(agentId: string) {
   // 现有代码已经监听 subagentName 变化，会自动清空会话并创建新会话
   await router.push({ path: targetPath, query: Object.keys(query).length > 0 ? query : undefined })
   console.log(`[${now()}] [ConfirmDialog] router.push done`)
+
+  // 保存用户选择的数字员工ID
+  saveLastSelectedAgentId(agentId)
 }
 
 // 模拟在线状态检测

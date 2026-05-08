@@ -757,6 +757,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 并发控制：验证并自动锁定实例（如果提供了 instance_id）
     instance_id = request.instance_id
     logger.info(f"[并发控制调试] 前置条件检查: instance_id={instance_id}, saas.enabled={settings.saas.enabled}, current_user={current_user is not None}")
+    # TODO: 临时修改 - 屏蔽实例并发控制
+    # 当 instance_id 为空时，跳过实例并发控制检查
+    # 未来需要恢复实例并发控制逻辑
     if instance_id and settings.saas.enabled and current_user:
         from src.saas.services.instance_service import InstanceService
         from src.saas.db.agent_instance_db import AgentInstanceDB

@@ -199,9 +199,11 @@ const currentSubagentName = computed(() => {
   return found ? getAgentDisplayName(found) : ''
 })
 
-// 获取数字员工的显示名称（优先使用 instance_name，其次 display_name，最后 name）
+// TODO: 临时修改 - 屏蔽实例并发控制
+// 优先显示智能体名称而不是实例名称（后端返回的智能体列表不包含instance_name等字段）
+// 未来需要恢复为优先显示实例名称
 function getAgentDisplayName(agent: AgentItem): string {
-  return agent.instance_name || agent.display_name || agent.name || agent.agent_id
+  return agent.name || agent.display_name || agent.instance_name || agent.agent_id
 }
 
 // 判断是否为当前选中

@@ -245,85 +245,48 @@ def get_my_allowed_agents(request: Request):
     # 判断是否为租户模式
     tenant_id = user.get("tenant_id")
     if tenant_id:
-        # 租户模式：返回实例列表
-        instances = []
+        # TODO: 临时修改 - 屏蔽实例并发控制
+        # 租户模式下本应返回实例列表，暂时改为返回智能体列表（不包含instance_id等实例字段）
+        # 未来需要恢复为返回实例列表，以支持实例并发控制
 
-        # 获取该租户下所有允许的子智能体类型的实例
-        for agent_id in allowed_ids:
-            if agent_id == "main":
-                # 主智能体没有实例，创建一个虚拟实例项
-                instances.append({
-                    "agent_id": "main",
-                    "instance_id": None,  # 主智能体没有实例ID
-                    "name": "CEO智能体",
-                    "display_name": "CEO智能体",
-                    "instance_name": "CEO智能体",
-                    "description": "系统主智能体，具备通用能力和工具",
-                    "type": "builtin",
-                    "subagent_type": "main",
-                    "capabilities": [],
-                    "business_pages": [],
-                    "status": "idle",
-                    "avatar": "👑"
+        # 租户模式：改为返回智能体列表（模仿演示模式逻辑）
+        registry = master_agent.subagent_registry
+        if not registry:
+            return {
+                "success": True,
+                "data": []
+            }
+
+        all_items = registry.get_all_subagents_with_type()
+        result = []
+        for item in all_items:
+            if item["agent_id"] in allowed_ids:
+                # 返回智能体基本信息，不包含实例相关字段
+                result.append({
+                    "agent_id": item["agent_id"],
+                    "name": item["name"],
+                    "description": item.get("description", ""),
+                    "type": item.get("type", "custom"),
+                    "capabilities": item.get("capabilities", []),
+                    "business_pages": item.get("business_pages", []),
+                    # 不包含 instance_id, instance_name, display_name 等实例字段
                 })
-            else:
-                # 获取该子智能体类型的所有实例
-                with get_db_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT instance_id, tenant_id, subagent_type, display_name,
-                               instance_name, avatar, description, status,
-                               config, bound_channel_type, allowed_skills,
-                               current_session_id, current_user_id, locked_at,
-                               lock_expires_at, total_chats, total_messages,
-                               created_at, updated_at
-                        FROM agent_instances
-                        WHERE tenant_id = %s AND subagent_type = %s
-                        ORDER BY created_at ASC
-                    """, (tenant_id, agent_id))
-                    for row in cursor.fetchall():
-                        inst = dict(row)
-                        # 获取子智能体的详细信息
-                        registry = master_agent.subagent_registry
-                        agent_info = {}
-                        if registry:
-                            all_items = registry.get_all_subagents_with_type()
-                            for item in all_items:
-                                if item["agent_id"] == agent_id:
-                                    agent_info = item
-                                    break
 
-                        # 合并信息
-                        instances.append({
-                            "agent_id": agent_id,
-                            "instance_id": inst["instance_id"],
-                            "name": agent_info.get("name", inst["display_name"]),
-                            "display_name": inst["display_name"],
-                            "instance_name": inst["instance_name"],
-                            "description": inst.get("description") or agent_info.get("description", ""),
-                            "type": agent_info.get("type", "custom"),
-                            "subagent_type": agent_id,
-                            "capabilities": agent_info.get("capabilities", []),
-                            "business_pages": agent_info.get("business_pages", []),
-                            "status": inst["status"],
-                            "avatar": inst.get("avatar", "🤖"),
-                            "config": inst.get("config"),
-                            "bound_channel_type": inst.get("bound_channel_type"),
-                            "allowed_skills": inst.get("allowed_skills"),
-                            "current_session_id": inst.get("current_session_id"),
-                            "current_user_id": inst.get("current_user_id"),
-                            "locked_at": inst.get("locked_at"),
-                            "lock_expires_at": inst.get("lock_expires_at"),
-                            "total_chats": inst.get("total_chats", 0),
-                            "total_messages": inst.get("total_messages", 0),
-                            "created_at": inst.get("created_at"),
-                            "updated_at": inst.get("updated_at")
-                        })
+        # 如果主智能体在允许列表中，添加到结果中
+        if "main" in allowed_ids:
+            result.append({
+                "agent_id": "main",
+                "name": "CEO智能体",
+                "description": "系统主智能体，具备通用能力和工具",
+                "type": "builtin",
+                "capabilities": [],
+                "business_pages": []
+            })
 
         return {
             "success": True,
-            "data": sorted(instances, key=lambda x: (x["display_name"], x.get("instance_name", ""))),
-            "count": len(instances)
+            "data": sorted(result, key=lambda x: x["name"]),
+            "count": len(result)
         }
     else:
         # 演示模式：保持原有逻辑，返回子智能体类型列表
