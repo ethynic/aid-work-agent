@@ -73,7 +73,7 @@ def init_saas_tables(conn):
             subscription_id TEXT,
             subagent_type TEXT NOT NULL,
             display_name TEXT NOT NULL,
-            status TEXT DEFAULT 'stopped',
+            status TEXT DEFAULT 'idle',
             config TEXT,
             bound_channel_type TEXT,
             allowed_skills TEXT,

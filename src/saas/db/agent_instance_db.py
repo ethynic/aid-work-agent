@@ -38,8 +38,9 @@ class AgentInstanceDB:
                     INSERT INTO agent_instances
                         (instance_id, tenant_id, subscription_id, subagent_type,
                          display_name, instance_name, avatar, description,
-                         personality_traits, config, bound_channel_type, allowed_skills)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         personality_traits, config, bound_channel_type, allowed_skills,
+                         status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'idle')
                 """, (
                     instance_id, tenant_id, subscription_id, subagent_type,
                     display_name,

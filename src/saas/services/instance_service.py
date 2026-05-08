@@ -85,10 +85,23 @@ class InstanceService:
             """, params)
 
             instances = []
+            instances_to_update = []
             for row in cursor.fetchall():
                 inst = dict(row)
 
                 # 增强前端显示信息（二元状态：idle = 空闲，busy = 忙碌）
+                # 规范化状态：所有非busy状态根据current_session_id判断
+                if inst["status"] != "busy":
+                    if inst["current_session_id"] is None:
+                        # 没有会话锁定，视为空闲
+                        if inst["status"] != "idle":
+                            inst["status"] = "idle"
+                            instances_to_update.append(inst["instance_id"])
+                    else:
+                        # 有会话锁定但状态不是busy，视为busy
+                        inst["status"] = "busy"
+                        instances_to_update.append(inst["instance_id"])
+
                 if inst["status"] == "busy":
                     # 判断是否是当前用户自己在使用（可接管）
                     if current_user_id and inst["current_user_id"] == current_user_id:
@@ -102,6 +115,27 @@ class InstanceService:
                     inst["can_take_over"] = False
 
                 instances.append(inst)
+
+            # 批量更新需要状态规范化的实例
+            if instances_to_update:
+                logger.info(f"Auto updating {len(instances_to_update)} instances with non-standard status: {instances_to_update}")
+                # 这里不需要单独更新，因为状态已经在inst字典中更新了
+                # 数据库更新将在下一次查询时由相同的逻辑处理
+                # 为了保持数据一致性，我们仍然更新数据库
+                for instance_id in instances_to_update:
+                    # 获取该实例在内存中的状态
+                    target_status = None
+                    for inst in instances:
+                        if inst["instance_id"] == instance_id:
+                            target_status = inst["status"]
+                            break
+                    if target_status:
+                        cursor.execute("""
+                            UPDATE agent_instances
+                            SET status = %s, updated_at = CURRENT_TIMESTAMP
+                            WHERE instance_id = %s
+                        """, (target_status, instance_id))
+                conn.commit()
 
             return instances
 

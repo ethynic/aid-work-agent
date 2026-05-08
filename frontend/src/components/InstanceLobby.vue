@@ -15,7 +15,7 @@
           :key="instance.instance_id"
           class="instance-card bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-md transition-all duration-300"
           :class="{
-            'ring-2 ring-green-500': instance.status === 'idle',
+            'ring-2 ring-green-500': instance.status === 'idle' || instance.status === 'stopped',
             'ring-2 ring-amber-400': instance.status === 'busy',
           }"
         >
@@ -25,7 +25,7 @@
               <!-- Avatar -->
               <div
                 class="w-16 h-16 rounded-2xl bg-gradient-to-br flex items-center justify-center text-3xl"
-                :class="instance.status === 'idle' ? 'from-green-400 to-emerald-500' : 'from-amber-400 to-orange-500'"
+                :class="(instance.status === 'idle' || instance.status === 'stopped') ? 'from-green-400 to-emerald-500' : 'from-amber-400 to-orange-500'"
               >
                 {{ instance.avatar || '🤖' }}
               </div>
@@ -110,7 +110,7 @@
             <div class="flex gap-3">
               <!-- Idle: Start Chat -->
               <button
-                v-if="instance.status === 'idle'"
+                v-if="instance.status === 'idle' || instance.status === 'stopped'"
                 @click="startChat(instance)"
                 class="flex-1 py-2.5 px-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md shadow-green-200"
               >
@@ -332,13 +332,13 @@ function handleQueueReady() {
  * 获取状态颜色
  */
 function getStatusColor(status: string): string {
-  if (status === 'idle') return 'bg-green-400 animate-pulse'
+  if (status === 'idle' || status === 'stopped') return 'bg-green-400 animate-pulse'
   if (status === 'busy') return 'bg-amber-400'
   return 'bg-slate-400'
 }
 
 function getStatusTextColor(status: string): string {
-  if (status === 'idle') return 'text-green-600'
+  if (status === 'idle' || status === 'stopped') return 'text-green-600'
   if (status === 'busy') return 'text-amber-600'
   return 'text-slate-500'
 }
@@ -346,6 +346,7 @@ function getStatusTextColor(status: string): string {
 function getStatusText(status: string) {
   return {
     idle: '空闲可用',
+    stopped: '空闲可用',
     busy: '忙碌中',
   }[status] || status
 }
