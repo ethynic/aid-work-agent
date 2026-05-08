@@ -632,9 +632,9 @@ async function handleCheckInstances() {
       ).join('\n')
       const summary = `总计：${res.total_instances} 实例 / ${res.total_quota} 配额`
       if (res.matched) {
-        toast.success(`实例数与配额匹配\n\n${detailLines}\n\n${summary}`, { duration: 6000 })
+        toast.success(`实例数与配额匹配\n\n${detailLines}\n\n${summary}`, { timeout: 6000 })
       } else {
-        toast.warning(`${res.message}\n\n${detailLines}\n\n${summary}`, { duration: 6000 })
+        toast.warning(`${res.message}\n\n${detailLines}\n\n${summary}`, { timeout: 6000 })
       }
     } else {
       toast.error(res.message || '检查失败')
@@ -674,7 +674,7 @@ async function handleSyncInstancesInEdit() {
           const changeStr = change.length > 0 ? ` (${change.join(', ')})` : ''
           return `• ${d.name}：${d.before} → ${d.after} / 配额 ${d.quota}${changeStr}`
         }).join('\n')
-        toast.success(`${res.message}\n\n${detailLines}`, { duration: 6000 })
+        toast.success(`${res.message}\n\n${detailLines}`, { timeout: 6000 })
       } else {
         toast.success(res.message || '实例同步成功')
       }
