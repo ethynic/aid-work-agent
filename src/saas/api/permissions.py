@@ -381,16 +381,52 @@ def check_tenant_instances(request: Request, tenant_id: str):
         """, (tenant_id,))
         subscriptions = cursor.fetchall()
 
+        # 获取租户下所有实例，按 subagent_type 分组计数
+        cursor.execute("""
+            SELECT subagent_type, COUNT(*) as instance_count
+            FROM agent_instances
+            WHERE tenant_id = %s
+            GROUP BY subagent_type
+        """, (tenant_id,))
+        instance_counts = {row["subagent_type"]: row["instance_count"] for row in cursor.fetchall()}
+
+        # 如果没有有效订阅，但可能存在孤儿实例需要删除
         if not subscriptions:
+            if not instance_counts:
+                return {
+                    "success": True,
+                    "matched": True,
+                    "message": "租户无有效订阅且无实例",
+                    "details": [],
+                    "total_quota": 0,
+                    "total_instances": 0,
+                    "need_create": 0,
+                    "need_delete": 0,
+                }
+            # 有孤儿实例，需要删除
+            total_instances = sum(instance_counts.values())
+            need_delete = total_instances
+            details = []
+            for agent_id, count in instance_counts.items():
+                display_name = agent_id  # 默认使用 agent_id，下面会尝试获取名称
+                details.append({
+                    "agent_id": agent_id,
+                    "name": display_name,
+                    "quota": 0,
+                    "current": count,
+                    "diff": count,  # 当前数量 - 配额（0） = 需要删除的数量
+                    "status": "need_delete",
+                    "message": f"需要删除 {count} 个实例（无有效订阅）"
+                })
             return {
                 "success": True,
-                "matched": True,
-                "message": "租户无有效订阅",
-                "details": [],
+                "matched": False,
+                "message": f"租户无有效订阅，需要删除 {need_delete} 个实例",
+                "details": details,
                 "total_quota": 0,
-                "total_instances": 0,
+                "total_instances": total_instances,
                 "need_create": 0,
-                "need_delete": 0,
+                "need_delete": need_delete,
             }
 
         # 获取数字员工名称映射
@@ -410,6 +446,10 @@ def check_tenant_instances(request: Request, tenant_id: str):
         need_create = 0
         need_delete = 0
 
+        # 有效订阅的 agent_id 集合
+        subscribed_agents = set(sub["subagent_type"] for sub in subscriptions)
+
+        # 处理有效订阅的数字员工
         for sub in subscriptions:
             agent_id = sub["subagent_type"]
             quota = sub["instance_quota"]
@@ -418,15 +458,8 @@ def check_tenant_instances(request: Request, tenant_id: str):
 
             total_quota += quota
 
-            # 获取当前实例
-            cursor.execute("""
-                SELECT instance_id, status, created_at
-                FROM agent_instances
-                WHERE tenant_id = %s AND subagent_type = %s
-                ORDER BY created_at ASC
-            """, (tenant_id, agent_id))
-            current_instances = cursor.fetchall()
-            current_count = len(current_instances)
+            # 从 instance_counts 获取当前实例数量（避免重复查询）
+            current_count = instance_counts.get(agent_id, 0)
             total_instances += current_count
 
             # 获取数字员工显示名称
@@ -465,6 +498,24 @@ def check_tenant_instances(request: Request, tenant_id: str):
                     "status": "matched",
                     "message": "匹配"
                 })
+
+        # 处理孤儿实例（有实例但无有效订阅）
+        for agent_id, current_count in instance_counts.items():
+            if agent_id in subscribed_agents:
+                continue  # 已在上面处理
+            # 孤儿实例，需要全部删除
+            total_instances += current_count
+            need_delete += current_count
+            display_name = agent_name_map.get(agent_id, agent_id)
+            details.append({
+                "agent_id": agent_id,
+                "name": display_name,
+                "quota": 0,
+                "current": current_count,
+                "diff": current_count,  # 当前数量 - 配额（0） = 需要删除的数量
+                "status": "need_delete",
+                "message": f"需要删除 {current_count} 个实例（无有效订阅）"
+            })
 
         matched = need_create == 0 and need_delete == 0
 
@@ -512,8 +563,14 @@ def sync_tenant_instances(request: Request, tenant_id: str):
         """, (tenant_id,))
         subscriptions = cursor.fetchall()
 
-        if not subscriptions:
-            return {"success": True, "message": "租户无有效订阅", "created": 0, "deleted": 0, "details": []}
+        # 获取租户下所有实例，按 subagent_type 分组计数
+        cursor.execute("""
+            SELECT subagent_type, COUNT(*) as instance_count
+            FROM agent_instances
+            WHERE tenant_id = %s
+            GROUP BY subagent_type
+        """, (tenant_id,))
+        instance_counts = {row["subagent_type"]: row["instance_count"] for row in cursor.fetchall()}
 
         # 获取数字员工名称映射
         registry = master_agent.subagent_registry
@@ -530,21 +587,18 @@ def sync_tenant_instances(request: Request, tenant_id: str):
         deleted_count = 0
         details = []
 
+        # 有效订阅的 agent_id 集合
+        subscribed_agents = set(sub["subagent_type"] for sub in subscriptions)
+
+        # 处理有效订阅的数字员工
         for sub in subscriptions:
             agent_id = sub["subagent_type"]
             quota = sub["instance_quota"]
             if quota < 1:
                 quota = 1
 
-            # 获取当前实例
-            cursor.execute("""
-                SELECT instance_id, status, created_at
-                FROM agent_instances
-                WHERE tenant_id = %s AND subagent_type = %s
-                ORDER BY created_at ASC
-            """, (tenant_id, agent_id))
-            current_instances = cursor.fetchall()
-            current_count = len(current_instances)
+            # 从 instance_counts 获取当前实例数量
+            current_count = instance_counts.get(agent_id, 0)
 
             # 获取数字员工显示名称
             display_name = agent_name_map.get(agent_id, agent_id)
@@ -575,6 +629,14 @@ def sync_tenant_instances(request: Request, tenant_id: str):
             elif current_count > quota:
                 # 需要删除实例（删除最晚创建的实例，无论状态）
                 need_delete = current_count - quota
+                # 获取该 agent_id 的所有实例，按创建时间排序
+                cursor.execute("""
+                    SELECT instance_id, status, created_at
+                    FROM agent_instances
+                    WHERE tenant_id = %s AND subagent_type = %s
+                    ORDER BY created_at ASC
+                """, (tenant_id, agent_id))
+                current_instances = cursor.fetchall()
                 logger.info(f"[sync_tenant_instances] Agent {agent_id}: need to delete {need_delete} instances, current instances statuses: {[inst['status'] for inst in current_instances]}")
                 # 按创建时间倒序，优先删除最晚创建的
                 for inst in reversed(current_instances):
@@ -599,6 +661,42 @@ def sync_tenant_instances(request: Request, tenant_id: str):
                 "after": final_count,
                 "quota": quota,
                 "created": created_for_agent,
+                "deleted": deleted_for_agent,
+            })
+
+        # 处理孤儿实例（有实例但无有效订阅）
+        for agent_id, current_count in instance_counts.items():
+            if agent_id in subscribed_agents:
+                continue  # 已在上面处理
+            # 孤儿实例，需要全部删除
+            deleted_for_agent = 0
+            # 获取该 agent_id 的所有实例，按创建时间排序
+            cursor.execute("""
+                SELECT instance_id, status, created_at
+                FROM agent_instances
+                WHERE tenant_id = %s AND subagent_type = %s
+                ORDER BY created_at ASC
+            """, (tenant_id, agent_id))
+            current_instances = cursor.fetchall()
+            logger.info(f"[sync_tenant_instances] Orphan agent {agent_id}: need to delete {current_count} instances")
+            # 按创建时间倒序，优先删除最晚创建的
+            for inst in reversed(current_instances):
+                success = AgentInstanceDB.delete(inst["instance_id"])
+                if success:
+                    deleted_count += 1
+                    deleted_for_agent += 1
+                    logger.info(f"Deleted orphan instance {inst['instance_id']} (status: {inst['status']}) for tenant {tenant_id}, agent {agent_id}")
+                else:
+                    logger.error(f"[sync_tenant_instances] Failed to delete orphan instance {inst['instance_id']} for tenant {tenant_id}, agent {agent_id}")
+            # 记录该智能体的详细情况
+            display_name = agent_name_map.get(agent_id, agent_id)
+            details.append({
+                "agent_id": agent_id,
+                "name": display_name,
+                "before": current_count,
+                "after": 0,
+                "quota": 0,
+                "created": 0,
                 "deleted": deleted_for_agent,
             })
 
