@@ -27,6 +27,7 @@ def init_saas_tables(conn):
             max_instances INTEGER DEFAULT 5,
             max_users INTEGER DEFAULT 50,
             settings TEXT,
+            tenant_code TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -34,6 +35,10 @@ def init_saas_tables(conn):
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tenants_status
         ON tenants(status)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tenants_tenant_code
+        ON tenants(tenant_code)
     """)
 
     # 4. 订阅表

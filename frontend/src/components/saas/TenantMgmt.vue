@@ -15,6 +15,7 @@
         <thead class="bg-slate-50 border-b border-slate-200">
           <tr>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户ID</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户代码</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">企业名称</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">初始管理员手机号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
@@ -27,6 +28,7 @@
         <tbody class="divide-y divide-slate-100">
           <tr v-for="tenant in tenants" :key="tenant.tenant_id" class="hover:bg-slate-50">
             <td class="px-4 py-3 text-sm text-slate-800 font-mono">{{ tenant.tenant_id }}</td>
+            <td class="px-4 py-3 text-sm text-slate-800 font-mono">{{ tenant.tenant_code || '-' }}</td>
             <td class="px-4 py-3 text-sm text-slate-800">{{ tenant.company_name }}</td>
             <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.initial_admin_phone || '-' }}</td>
             <td class="px-4 py-3">
@@ -136,6 +138,15 @@
             <label class="block text-sm text-slate-600 mb-1">企业名称 <span class="text-red-500">*</span></label>
             <input v-model="formData.company_name" type="text" placeholder="请输入企业名称" maxlength="100"
               class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+          </div>
+          <div>
+            <label class="block text-sm text-slate-600 mb-1">租户代码 <span class="text-red-500">*</span></label>
+            <input v-model="formData.tenant_code" type="text" placeholder="4-8位字母数字" maxlength="8"
+              @input="validateTenantCodeFormat"
+              @blur="checkTenantCodeUnique"
+              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+            <div class="text-xs text-red-500 mt-1" v-if="tenantCodeError">{{ tenantCodeError }}</div>
+            <p class="text-xs text-slate-500 mt-1">4-8位字母数字组合，不区分大小写，创建后不可修改</p>
           </div>
           <div>
             <label class="block text-sm text-slate-600 mb-1">联系人</label>
@@ -270,6 +281,10 @@
             <span class="text-sm text-slate-800 font-mono">{{ currentTenant?.tenant_id }}</span>
           </div>
           <div class="flex border-b border-slate-100 pb-2">
+            <span class="w-24 text-sm text-slate-500">租户代码</span>
+            <span class="text-sm text-slate-800 font-mono">{{ currentTenant?.tenant_code || '-' }}</span>
+          </div>
+          <div class="flex border-b border-slate-100 pb-2">
             <span class="w-24 text-sm text-slate-500">企业名称</span>
             <span class="text-sm text-slate-800">{{ currentTenant?.company_name }}</span>
           </div>
@@ -349,6 +364,7 @@ const showDetailDialog = ref(false)
 const isEdit = ref(false)
 const submitting = ref(false)
 const formError = ref('')
+const tenantCodeError = ref('')
 const currentTenant = ref<any>(null)
 
 // 数字员工授权标签页相关
@@ -362,6 +378,7 @@ const checkingInstances = ref(false)
 
 const defaultFormData: TenantFormData = {
   company_name: '',
+  tenant_code: '',
   contact_name: '',
   contact_phone: '',
   initial_admin_name: '',
@@ -436,6 +453,7 @@ async function openEditDialog(tenant: any) {
   currentTenant.value = tenant
   formData.value = {
     company_name: tenant.company_name,
+    tenant_code: tenant.tenant_code || '',
     contact_name: tenant.contact_name || '',
     contact_phone: tenant.contact_phone || '',
     initial_admin_name: tenant.initial_admin_name || '',
@@ -502,9 +520,44 @@ function updateAgentQuota(agentId: string, value: number) {
   selectedAgentQuotas.value[agentId] = value
 }
 
+function validateTenantCodeFormat() {
+  const code = formData.value.tenant_code || ''
+  if (!code) {
+    tenantCodeError.value = ''
+    return true
+  }
+  // 格式验证：4-8位字母数字
+  if (!/^[A-Za-z0-9]{4,8}$/.test(code)) {
+    tenantCodeError.value = '租户代码必须是4-8位字母数字组合'
+    return false
+  }
+  tenantCodeError.value = ''
+  return true
+}
+
+async function checkTenantCodeUnique() {
+  if (!isEdit.value) {
+    // 新建租户时检查唯一性
+    const code = (formData.value.tenant_code || '').toUpperCase()
+    if (!code || !/^[A-Z0-9]{4,8}$/.test(code)) {
+      return
+    }
+    // TODO: 调用API检查唯一性
+    // 暂时跳过
+  }
+}
+
 async function handleSubmit() {
   if (!formData.value.company_name?.trim()) {
     formError.value = '请填写企业名称'
+    return
+  }
+  if (!isEdit.value && !formData.value.tenant_code?.trim()) {
+    formError.value = '请填写租户代码'
+    return
+  }
+  if (!isEdit.value && !validateTenantCodeFormat()) {
+    formError.value = '租户代码格式无效'
     return
   }
   submitting.value = true

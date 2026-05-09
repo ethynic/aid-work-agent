@@ -371,3 +371,12 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_travel_seasons_tenant ON bs_travel_quote_seasons(tenant_id, is_active);
+
+-- 2026-05-10，tenants 表增加 tenant_code 字段（4-8位字母数字，唯一性在应用层检查）
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_code TEXT;
+CREATE INDEX IF NOT EXISTS idx_tenants_tenant_code ON tenants(tenant_code);
+
+-- 2026-05-10，为现有租户生成默认租户代码（t + 租户ID后5位大写字母）
+UPDATE tenants
+SET tenant_code = 't' || UPPER(RIGHT(tenant_id, 5))
+WHERE tenant_code IS NULL;

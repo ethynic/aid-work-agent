@@ -137,6 +137,11 @@ saas:
   tenant_skills_dir: "tenants"
   default_max_instances: 5
   default_max_users: 50
+  # 租户代码配置
+  tenant_code:
+    pattern: "^[A-Z0-9]{4,8}$"  # 正则表达式模式
+    min_length: 4
+    max_length: 8
 
 # 演示模式配置
 demo:

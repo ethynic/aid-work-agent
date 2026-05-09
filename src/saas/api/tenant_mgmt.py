@@ -196,6 +196,7 @@ async def create_tenant(request: Request, body: TenantCreate):
 
         tenant = TenantDB.create(
             company_name=body.company_name,
+            tenant_code=body.tenant_code,
             contact_name=body.contact_name,
             contact_phone=body.contact_phone,
             initial_admin_name=body.initial_admin_name,

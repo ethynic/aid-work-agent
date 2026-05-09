@@ -16,7 +16,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, FileResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, FileResponse, HTMLResponse
 from loguru import logger
 from pydantic import BaseModel
 
@@ -370,12 +370,320 @@ async def health_check_db():
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
-    return {
-        "name": settings.app.name,
-        "version": settings.app.version,
-        "status": "running",
-    }
+    """Root endpoint - 演示模式开启时返回JSON，关闭时返回租户入口页面"""
+    if settings.demo_enabled:
+        return {
+            "name": settings.app.name,
+            "version": settings.app.version,
+            "status": "running",
+        }
+    else:
+        # 返回租户入口页面
+        html_content = """
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>租户登录 - AID Work Agent</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin: 0;
+                    padding: 20px;
+                }
+                .container {
+                    background: white;
+                    border-radius: 12px;
+                    padding: 40px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    max-width: 400px;
+                    width: 100%;
+                    text-align: center;
+                }
+                h1 {
+                    color: #333;
+                    margin-bottom: 10px;
+                    font-size: 24px;
+                }
+                .subtitle {
+                    color: #666;
+                    margin-bottom: 30px;
+                    font-size: 14px;
+                }
+                .form-group {
+                    margin-bottom: 20px;
+                    text-align: left;
+                }
+                label {
+                    display: block;
+                    margin-bottom: 6px;
+                    color: #555;
+                    font-weight: 500;
+                }
+                input {
+                    width: 100%;
+                    padding: 12px 16px;
+                    border: 2px solid #ddd;
+                    border-radius: 8px;
+                    font-size: 16px;
+                    transition: border-color 0.3s;
+                    box-sizing: border-box;
+                }
+                input:focus {
+                    outline: none;
+                    border-color: #667eea;
+                }
+                .error {
+                    color: #e74c3c;
+                    font-size: 14px;
+                    margin-top: 5px;
+                    display: none;
+                }
+                button {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 14px;
+                    font-size: 16px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    width: 100%;
+                    transition: transform 0.2s, box-shadow 0.2s;
+                }
+                button:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+                }
+                button:disabled {
+                    opacity: 0.6;
+                    cursor: not-allowed;
+                }
+                .result {
+                    margin-top: 20px;
+                    padding: 12px;
+                    border-radius: 8px;
+                    display: none;
+                }
+                .success {
+                    background: #d4edda;
+                    color: #155724;
+                }
+                .error-result {
+                    background: #f8d7da;
+                    color: #721c24;
+                }
+                .redirect-link {
+                    display: inline-block;
+                    margin-top: 10px;
+                    color: #667eea;
+                    text-decoration: none;
+                    font-weight: 500;
+                }
+                .redirect-link:hover {
+                    text-decoration: underline;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>租户登录</h1>
+                <p class="subtitle">请输入您的租户代码以继续</p>
+
+                <form id="tenantForm">
+                    <div class="form-group">
+                        <label for="tenantCode">租户代码</label>
+                        <input type="text" id="tenantCode" placeholder="例如：ALIBB" maxlength="8" autocomplete="off" autofocus>
+                        <div id="formatError" class="error">请输入4-8位字母数字组合</div>
+                    </div>
+                    <button type="submit" id="submitBtn">进入租户</button>
+                </form>
+
+                <div id="result" class="result"></div>
+            </div>
+
+            <script>
+                const tenantCodeInput = document.getElementById('tenantCode');
+                const formatError = document.getElementById('formatError');
+                const submitBtn = document.getElementById('submitBtn');
+                const resultDiv = document.getElementById('result');
+                const form = document.getElementById('tenantForm');
+
+                // 格式验证：4-8位字母数字
+                function validateFormat(code) {
+                    return /^[A-Za-z0-9]{4,8}$/.test(code);
+                }
+
+                // 实时格式验证
+                tenantCodeInput.addEventListener('input', function() {
+                    const code = this.value.trim();
+                    if (code === '') {
+                        formatError.style.display = 'none';
+                        submitBtn.disabled = false;
+                        return;
+                    }
+                    if (!validateFormat(code)) {
+                        formatError.style.display = 'block';
+                        submitBtn.disabled = true;
+                    } else {
+                        formatError.style.display = 'none';
+                        submitBtn.disabled = false;
+                    }
+                });
+
+                // 表单提交
+                form.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const code = tenantCodeInput.value.trim().toUpperCase();
+
+                    if (!validateFormat(code)) {
+                        showError('请输入有效的租户代码（4-8位字母数字）');
+                        return;
+                    }
+
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '验证中...';
+
+                    try {
+                        const response = await fetch('/api/tenant/enter', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({ tenant_code: code }),
+                        });
+
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showSuccess(`验证成功，正在跳转到租户...`);
+                            // 2秒后重定向
+                            setTimeout(() => {
+                                window.location.href = data.redirect_url;
+                            }, 2000);
+                        } else {
+                            showError(data.error || '租户代码无效或租户不可用');
+                        }
+                    } catch (err) {
+                        showError('网络错误，请稍后重试');
+                    } finally {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '进入租户';
+                    }
+                });
+
+                function showError(message) {
+                    resultDiv.className = 'result error-result';
+                    resultDiv.innerHTML = `<strong>错误：</strong> ${message}`;
+                    resultDiv.style.display = 'block';
+                }
+
+                function showSuccess(message) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `<strong>成功：</strong> ${message}<br>
+                    <a href="#" id="redirectLink" class="redirect-link">如果未自动跳转，请点击此处</a>`;
+                    resultDiv.style.display = 'block';
+                    document.getElementById('redirectLink').addEventListener('click', function(e) {
+                        e.preventDefault();
+                        window.location.href = data.redirect_url;
+                    });
+                }
+            </script>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content)
+
+
+@app.post("/api/tenant/enter")
+async def tenant_enter(request: Request):
+    """
+    验证租户代码并返回重定向URL
+    """
+    from src.saas.db.tenant_db import TenantDB
+    from src.saas.models.enums import TenantStatus
+
+    try:
+        data = await request.json()
+        tenant_code = data.get("tenant_code", "").strip().upper()
+
+        if not tenant_code:
+            return JSONResponse({
+                "success": False,
+                "error": "租户代码不能为空"
+            }, status_code=400)
+
+        # 格式验证：4-8位字母数字
+        import re
+        if not re.match(r'^[A-Z0-9]{4,8}$', tenant_code):
+            return JSONResponse({
+                "success": False,
+                "error": "租户代码格式无效（需4-8位字母数字）"
+            }, status_code=400)
+
+        # 查询租户
+        tenant = TenantDB.get_by_code(tenant_code)
+        if not tenant:
+            return JSONResponse({
+                "success": False,
+                "error": "租户代码不存在"
+            }, status_code=404)
+
+        # 检查租户状态
+        status = tenant.get("status")
+        if status != TenantStatus.ACTIVE.value:
+            if status == TenantStatus.SUSPENDED.value:
+                return JSONResponse({
+                    "success": False,
+                    "error": "租户已被暂停，请联系管理员"
+                }, status_code=403)
+            elif status == TenantStatus.EXPIRED.value:
+                return JSONResponse({
+                    "success": False,
+                    "error": "租户已过期，请联系管理员续期"
+                }, status_code=403)
+            else:
+                return JSONResponse({
+                    "success": False,
+                    "error": f"租户状态异常：{status}"
+                }, status_code=403)
+
+        # 检查租户是否已过期（expire_at字段）
+        expire_at = tenant.get("expire_at")
+        if expire_at:
+            from datetime import datetime
+            try:
+                expire_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
+                if expire_date < datetime.now():
+                    return JSONResponse({
+                        "success": False,
+                        "error": "租户已过期，请联系管理员续期"
+                    }, status_code=403)
+            except Exception:
+                # 日期解析失败，忽略过期检查
+                pass
+
+        # 返回重定向URL
+        tenant_id = tenant["tenant_id"]
+        return JSONResponse({
+            "success": True,
+            "redirect_url": f"/t/{tenant_id}",
+            "tenant_id": tenant_id,
+            "company_name": tenant.get("company_name", "")
+        })
+
+    except Exception as e:
+        logger.error(f"Tenant enter error: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": "服务器内部错误"
+        }, status_code=500)
 
 
 # ==================== Web Chat API ====================

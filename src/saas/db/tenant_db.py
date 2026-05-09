@@ -19,6 +19,7 @@ class TenantDB:
     @staticmethod
     def create(
         company_name: str,
+        tenant_code: str,
         contact_name: Optional[str] = None,
         contact_phone: Optional[str] = None,
         initial_admin_name: Optional[str] = None,
@@ -31,24 +32,31 @@ class TenantDB:
     ) -> Optional[Dict[str, Any]]:
         """创建租户"""
         tenant_id = f"tenant_{uuid.uuid4().hex[:12]}"
+        tenant_code_upper = tenant_code.upper()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
+                # 检查租户代码唯一性（大小写不敏感）
+                cursor.execute("SELECT COUNT(*) as cnt FROM tenants WHERE UPPER(tenant_code) = %s", (tenant_code_upper,))
+                if cursor.fetchone()["cnt"] > 0:
+                    logger.error(f"Tenant code already exists: {tenant_code}")
+                    return None
+
                 cursor.execute("""
-                    INSERT INTO tenants (tenant_id, company_name, contact_name, contact_phone,
+                    INSERT INTO tenants (tenant_id, company_name, tenant_code, contact_name, contact_phone,
                                         initial_admin_name, initial_admin_phone,
                                         plan, max_instances, max_users, settings, expire_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    tenant_id, company_name, contact_name, contact_phone,
+                    tenant_id, company_name, tenant_code_upper, contact_name, contact_phone,
                     initial_admin_name, initial_admin_phone,
                     plan, max_instances, max_users,
                     json.dumps(settings or {}, ensure_ascii=False),
                     expire_at,
                 ))
                 conn.commit()
-                logger.info(f"Tenant created: {tenant_id} ({company_name})")
+                logger.info(f"Tenant created: {tenant_id} ({company_name}) code: {tenant_code_upper}")
                 return TenantDB.get_by_id(tenant_id)
             except Exception as e:
                 logger.error(f"Failed to create tenant: {e}")
@@ -70,30 +78,58 @@ class TenantDB:
             return None
 
     @staticmethod
+    def get_by_code(tenant_code: str) -> Optional[Dict[str, Any]]:
+        """根据 tenant_code 获取租户（大小写不敏感）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tenants WHERE UPPER(tenant_code) = UPPER(%s)", (tenant_code,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["settings"] = json.loads(d["settings"]) if d.get("settings") else {}
+                # 添加已授权数字员工数量
+                d["agent_count"] = SubscriptionDB.count_active_subscriptions(conn, d["tenant_id"])
+                return d
+            return None
+
+    @staticmethod
     def update(tenant_id: str, **kwargs) -> bool:
         """更新租户信息"""
         allowed_fields = {
             "company_name", "contact_name", "contact_phone",
             "initial_admin_name", "initial_admin_phone",
             "plan", "status", "max_instances", "max_users", "settings",
-            "expire_at",
+            "expire_at", "tenant_code",
         }
         updates = {}
         for k, v in kwargs.items():
             if k in allowed_fields and v is not None:
                 if k == "settings" and isinstance(v, dict):
                     v = json.dumps(v, ensure_ascii=False)
+                elif k == "tenant_code":
+                    v = v.upper()
                 updates[k] = v
 
         if not updates:
             return False
 
-        updates["updated_at"] = "CURRENT_TIMESTAMP"
-        set_clause = ", ".join(f"{k} = %s" if k != "updated_at" else f"{k} = CURRENT_TIMESTAMP" for k in updates)
-        values = [v for k, v in updates.items() if k != "updated_at"]
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            # 检查租户代码唯一性（如果正在更新）
+            if "tenant_code" in updates:
+                new_code = updates["tenant_code"]
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM tenants WHERE UPPER(tenant_code) = %s AND tenant_id != %s",
+                    (new_code, tenant_id)
+                )
+                if cursor.fetchone()["cnt"] > 0:
+                    logger.error(f"Tenant code already exists: {new_code}")
+                    return False
+
+            updates["updated_at"] = "CURRENT_TIMESTAMP"
+            set_clause = ", ".join(f"{k} = %s" if k != "updated_at" else f"{k} = CURRENT_TIMESTAMP" for k in updates)
+            values = [v for k, v in updates.items() if k != "updated_at"]
+
             cursor.execute(f"UPDATE tenants SET {set_clause} WHERE tenant_id = %s", (*values, tenant_id))
             conn.commit()
             return cursor.rowcount > 0
