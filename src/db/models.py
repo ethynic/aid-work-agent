@@ -16,6 +16,7 @@ from loguru import logger
 from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
 from src.saas.db.permission_db import UserAgentPermissionDB
+from src.saas.models.enums import UserStatus
 
 
 # ============== 密码哈希 ==============
@@ -242,13 +243,13 @@ class UserDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s AND status = 'active'",
+                f"SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s AND status = '{UserStatus.ACTIVE.value}'",
                 (tenant_id,),
             )
             total = cursor.fetchone()["cnt"]
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM users
-                WHERE tenant_id = %s AND status = 'active'
+                WHERE tenant_id = %s AND status = '{UserStatus.ACTIVE.value}'
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
             """, (tenant_id, page_size, offset))
@@ -268,16 +269,16 @@ class UserDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if tenant_id:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM users
                     WHERE role IN ('platform_admin', 'tenant_admin')
-                    AND tenant_id = %s AND status = 'active'
+                    AND tenant_id = %s AND status = '{UserStatus.ACTIVE.value}'
                     ORDER BY created_at
                 """, (tenant_id,))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM users
-                    WHERE role = 'platform_admin' AND status = 'active'
+                    WHERE role = 'platform_admin' AND status = '{UserStatus.ACTIVE.value}'
                     ORDER BY created_at
                 """)
             return [dict(row) for row in cursor.fetchall()]

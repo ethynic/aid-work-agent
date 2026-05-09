@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
 
 from src.db.database import get_db_connection
-from src.saas.models.enums import QueueStatus
+from src.saas.models.enums import QueueStatus, AgentInstanceStatus
 import psycopg2.errors
 
 
@@ -77,7 +77,7 @@ class InstanceService:
                 LEFT JOIN (
                     SELECT instance_id, COUNT(*) as queue_length
                     FROM agent_instance_queue
-                    WHERE status = 'waiting'
+                    WHERE status = '{QueueStatus.WAITING.value}'
                     GROUP BY instance_id
                 ) q ON ai.instance_id = q.instance_id
                 {where_clause}
@@ -191,10 +191,10 @@ class InstanceService:
 
             # 演示模式：跳过排队，直接锁定（无限并发）
             if tenant_id == 'demo':
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE agent_instances
                     SET
-                        status = 'busy',
+                        status = '{AgentInstanceStatus.BUSY.value}',
                         current_session_id = %s,
                         current_user_id = %s,
                         locked_at = CURRENT_TIMESTAMP,
@@ -220,10 +220,10 @@ class InstanceService:
 
             if not is_busy:
                 # 空闲，直接锁定（用 current_session_id IS NULL 保证原子性）
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE agent_instances
                     SET
-                        status = 'busy',
+                        status = '{AgentInstanceStatus.BUSY.value}',
                         current_session_id = %s,
                         current_user_id = %s,
                         locked_at = CURRENT_TIMESTAMP,
@@ -255,7 +255,7 @@ class InstanceService:
             if is_busy:
                 cursor.execute("""
                     SELECT position FROM agent_instance_queue
-                    WHERE instance_id = %s AND session_id = %s AND status = 'waiting'
+                    WHERE instance_id = %s AND session_id = %s AND status = '{QueueStatus.WAITING.value}'
                     LIMIT 1
                 """, (instance_id, session_id))
                 existing = cursor.fetchone()
@@ -333,10 +333,10 @@ class InstanceService:
             cursor = conn.cursor()
 
             # 1. 释放锁（只有持有锁的会话才能释放）
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE agent_instances
                 SET
-                    status = 'idle',
+                    status = '{AgentInstanceStatus.IDLE.value}',
                     current_session_id = NULL,
                     current_user_id = NULL,
                     locked_at = NULL,
@@ -462,9 +462,9 @@ class InstanceService:
                     }
 
             # 获取队列总长度
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COUNT(*) as total FROM agent_instance_queue
-                WHERE instance_id = %s AND status = 'waiting'
+                WHERE instance_id = %s AND status = '{QueueStatus.WAITING.value}'
             """, (instance_id,))
             total = cursor.fetchone()["total"]
 
@@ -514,10 +514,10 @@ class InstanceService:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE agent_instance_queue
-                SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-                WHERE instance_id = %s AND session_id = %s AND status = 'waiting'
+                SET status = '{QueueStatus.CANCELLED.value}', updated_at = CURRENT_TIMESTAMP
+                WHERE instance_id = %s AND session_id = %s AND status = '{QueueStatus.WAITING.value}'
             """, (instance_id, session_id))
 
             cancelled = cursor.rowcount > 0
@@ -619,10 +619,10 @@ class InstanceService:
             instance_ids = [row["instance_id"] for row in expired]
 
             # 释放过期锁
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE agent_instances
                 SET
-                    status = 'idle',
+                    status = '{AgentInstanceStatus.IDLE.value}',
                     current_session_id = NULL,
                     current_user_id = NULL,
                     locked_at = NULL,
@@ -656,10 +656,10 @@ class InstanceService:
             return
 
         # 释放过期锁
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE agent_instances
             SET
-                status = 'idle',
+                status = '{AgentInstanceStatus.IDLE.value}',
                 current_session_id = NULL,
                 current_user_id = NULL,
                 locked_at = NULL,
@@ -678,10 +678,10 @@ class InstanceService:
     def _cleanup_instance_expired_locks(conn, instance_id: str):
         """清理指定实例的过期锁"""
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE agent_instances
             SET
-                status = 'idle',
+                status = '{AgentInstanceStatus.IDLE.value}',
                 current_session_id = NULL,
                 current_user_id = NULL,
                 locked_at = NULL,
@@ -699,21 +699,21 @@ class InstanceService:
         """清理超时的排队项（包括等待超时和20秒无心跳）"""
         cursor = conn.cursor()
         # 1. 清理等待超时（30分钟）
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE agent_instance_queue
-            SET status = 'expired', updated_at = CURRENT_TIMESTAMP
-            WHERE wait_timeout_at < CURRENT_TIMESTAMP AND status = 'waiting'
+            SET status = '{QueueStatus.EXPIRED.value}', updated_at = CURRENT_TIMESTAMP
+            WHERE wait_timeout_at < CURRENT_TIMESTAMP AND status = '{QueueStatus.WAITING.value}'
         """)
         count_timeout = cursor.rowcount
         if count_timeout > 0:
             logger.info(f"Cleaned up {count_timeout} expired queue items (timeout)")
 
         # 2. 清理超过20秒无心跳的排队项（用户可能关闭了浏览器）
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE agent_instance_queue
-            SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+            SET status = '{QueueStatus.ABANDONED.value}', updated_at = CURRENT_TIMESTAMP
             WHERE last_heartbeat_at < CURRENT_TIMESTAMP - INTERVAL '20 seconds'
-              AND status = 'waiting'
+              AND status = '{QueueStatus.WAITING.value}'
         """)
         count_heartbeat = cursor.rowcount
         if count_heartbeat > 0:
@@ -730,9 +730,9 @@ class InstanceService:
         cursor = conn.cursor()
 
         # 找到队列头部第一个
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT queue_id, session_id, queued_at FROM agent_instance_queue
-            WHERE instance_id = %s AND status = 'waiting'
+            WHERE instance_id = %s AND status = '{QueueStatus.WAITING.value}'
             ORDER BY position
             LIMIT 1
             FOR UPDATE SKIP LOCKED
@@ -755,9 +755,9 @@ class InstanceService:
                 wait_duration = int(duration_row["duration"]) if duration_row["duration"] else 0
 
         # 标记为 ready 状态，记录开始服务时间和等待时长
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE agent_instance_queue
-            SET status = 'ready',
+            SET status = '{QueueStatus.READY.value}',
                 started_at = CURRENT_TIMESTAMP,
                 wait_duration_seconds = %s,
                 updated_at = CURRENT_TIMESTAMP

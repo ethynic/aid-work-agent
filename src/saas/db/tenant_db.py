@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.models.enums import TenantStatus
 
 
 class TenantDB:
@@ -142,7 +143,7 @@ class TenantDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE tenants SET status = 'deactivated', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = %s",
+                f"UPDATE tenants SET status = '{TenantStatus.DEACTIVATED.value}', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = %s",
                 (tenant_id,),
             )
             conn.commit()

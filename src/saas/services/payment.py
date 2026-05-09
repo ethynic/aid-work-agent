@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.saas.db.subscription_db import SubscriptionDB
+from src.saas.models.enums import PaymentStatus, SubscriptionStatus
 
 
 class PaymentService:
@@ -120,11 +121,11 @@ class PaymentService:
             cursor = conn.cursor()
 
             # 1. 更新订单状态
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE payment_orders
-                SET payment_status = 'paid', transaction_id = %s, paid_at = %s,
+                SET payment_status = '{PaymentStatus.PAID.value}', transaction_id = %s, paid_at = %s,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE order_id = %s AND payment_status = 'pending'
+                WHERE order_id = %s AND payment_status = '{PaymentStatus.PENDING.value}'
             """, (transaction_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), order_id))
 
             if cursor.rowcount == 0:
@@ -138,9 +139,9 @@ class PaymentService:
 
             # 3. 激活关联的订阅（在同一连接中）
             if subscription_id:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE subscriptions
-                    SET status = 'active', payment_status = 'paid', updated_at = CURRENT_TIMESTAMP
+                    SET status = '{SubscriptionStatus.ACTIVE.value}', payment_status = '{PaymentStatus.PAID.value}', updated_at = CURRENT_TIMESTAMP
                     WHERE subscription_id = %s
                 """, (subscription_id,))
                 logger.info(f"Subscription activated: {subscription_id} via order {order_id}")

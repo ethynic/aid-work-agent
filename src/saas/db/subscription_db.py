@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from loguru import logger
 
 from src.db.database import get_db_connection
+from src.saas.models.enums import SubscriptionStatus
 
 
 class SubscriptionDB:
@@ -126,7 +127,7 @@ class SubscriptionDB:
                 FROM subscriptions
                 WHERE tenant_id = %s
                   AND subagent_type = %s
-                  AND status = 'active'
+                  AND status = '{SubscriptionStatus.ACTIVE.value}'
                   AND starts_at <= CURRENT_TIMESTAMP
                   AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             """, (tenant_id, subagent_type))
@@ -140,11 +141,11 @@ class SubscriptionDB:
         替代原 TenantAgentPermissionDB.get_allowed_agents
         """
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT DISTINCT subagent_type
             FROM subscriptions
             WHERE tenant_id = %s
-              AND status = 'active'
+              AND status = '{SubscriptionStatus.ACTIVE.value}'
               AND starts_at <= CURRENT_TIMESTAMP
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             ORDER BY subagent_type
@@ -158,11 +159,11 @@ class SubscriptionDB:
         替代原 TenantAgentPermissionDB.count_allowed
         """
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT COUNT(DISTINCT subagent_type) as cnt
             FROM subscriptions
             WHERE tenant_id = %s
-              AND status = 'active'
+              AND status = '{SubscriptionStatus.ACTIVE.value}'
               AND starts_at <= CURRENT_TIMESTAMP
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """, (tenant_id,))
@@ -195,17 +196,17 @@ class SubscriptionDB:
             placeholders = ",".join(["%s"] * len(removed_agents))
             cursor.execute(f"""
                 UPDATE subscriptions
-                SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+                SET status = '{SubscriptionStatus.CANCELLED.value}', updated_at = CURRENT_TIMESTAMP
                 WHERE tenant_id = %s
                   AND subagent_type IN ({placeholders})
-                  AND status = 'active'
+                  AND status = '{SubscriptionStatus.ACTIVE.value}'
             """, (tenant_id, *removed_agents))
 
         # 获取现有有效订阅的配额映射
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT subagent_type, instance_quota FROM subscriptions
             WHERE tenant_id = %s
-              AND status = 'active'
+              AND status = '{SubscriptionStatus.ACTIVE.value}'
               AND starts_at <= CURRENT_TIMESTAMP
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """, (tenant_id,))
@@ -225,7 +226,7 @@ class SubscriptionDB:
                 SELECT subscription_id, instance_quota FROM subscriptions
                 WHERE tenant_id = %s
                   AND subagent_type = %s
-                  AND status = 'active'
+                  AND status = '{SubscriptionStatus.ACTIVE.value}'
                   AND starts_at <= CURRENT_TIMESTAMP
                   AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
                 LIMIT 1
@@ -286,10 +287,10 @@ class SubscriptionDB:
         替代原 TenantAgentPermissionDB.remove_agent_from_all_tenants
         """
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE subscriptions
-            SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-            WHERE subagent_type = %s AND status = 'active'
+            SET status = '{SubscriptionStatus.CANCELLED.value}', updated_at = CURRENT_TIMESTAMP
+            WHERE subagent_type = %s AND status = '{SubscriptionStatus.ACTIVE.value}'
         """, (agent_id,))
         cursor.execute("DELETE FROM user_agent_permissions WHERE agent_id = %s", (agent_id,))
         conn.commit()
@@ -300,11 +301,11 @@ class SubscriptionDB:
         """根据 agent_instance 获取关联的有效订阅"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT s.* FROM subscriptions s
                 JOIN agent_instances ai ON ai.subscription_id = s.subscription_id
                 WHERE ai.instance_id = %s
-                  AND s.status = 'active'
+                  AND s.status = '{SubscriptionStatus.ACTIVE.value}'
                   AND s.starts_at <= CURRENT_TIMESTAMP
                   AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
             """, (instance_id,))
