@@ -25,6 +25,7 @@ const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string | null>(null)
 const isLoading = ref(false)
 const isLoaded = ref(false)    // 是否已加载完成（避免重复请求）
+const hasAuthError = ref(false) // 是否发生认证错误（401），用于防止重复请求
 const currentPage = ref(1)
 const totalSessions = ref(0)
 const pageSize = ref(20)
@@ -50,6 +51,12 @@ export function useSession() {
    * @param forceRefresh 是否强制刷新，默认 false
    */
   async function loadSessions(page: number = 1, forceRefresh = false) {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping loadSessions due to previous auth error')
+      return
+    }
+
     if (!checkIsLoggedIn()) {
       return
     }
@@ -84,8 +91,17 @@ export function useSession() {
       currentPage.value = result.page
       pageSize.value = result.page_size
       isLoaded.value = true
-    } catch (e) {
+      // 成功加载后重置认证错误标志
+      hasAuthError.value = false
+    } catch (e: any) {
       console.error('Failed to load sessions:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected, stopping further session requests')
+        // 触发登出或重新认证流程
+        triggerAuthError()
+      }
     } finally {
       isLoading.value = false
     }
@@ -96,6 +112,12 @@ export function useSession() {
    * 在创建前自动清理空会话（标题为"新会话"且未发送任何消息的会话）
    */
   async function createNewSession(title?: string, subagent?: string | null): Promise<ChatSession | null> {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping createNewSession due to previous auth error')
+      return null
+    }
+
     if (!checkIsLoggedIn()) return null
 
     try {
@@ -129,9 +151,17 @@ export function useSession() {
         ...(subagent ? { context_data: { subagent }, subagent_id: subagent } : {})
       })
       sessions.value.unshift(newSession)
+      // 成功创建后重置认证错误标志
+      hasAuthError.value = false
       return newSession
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to create session:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in createNewSession')
+        triggerAuthError()
+      }
       return null
     }
   }
@@ -140,6 +170,12 @@ export function useSession() {
    * 删除会话
    */
   async function removeSession(sessionId: string) {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping removeSession due to previous auth error')
+      return
+    }
+
     try {
       await deleteSession(sessionId)
       sessions.value = sessions.value.filter(s => s.session_id !== sessionId)
@@ -147,8 +183,16 @@ export function useSession() {
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
       }
-    } catch (e) {
+      // 成功删除后重置认证错误标志
+      hasAuthError.value = false
+    } catch (e: any) {
       console.error('Failed to delete session:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in removeSession')
+        triggerAuthError()
+      }
     }
   }
 
@@ -156,14 +200,28 @@ export function useSession() {
    * 更新会话标题
    */
   async function renameSession(sessionId: string, title: string) {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping renameSession due to previous auth error')
+      return
+    }
+
     try {
       const updated = await updateSession(sessionId, { title })
       const index = sessions.value.findIndex(s => s.session_id === sessionId)
       if (index !== -1) {
         sessions.value[index] = updated
       }
-    } catch (e) {
+      // 成功后重置认证错误标志
+      hasAuthError.value = false
+    } catch (e: any) {
       console.error('Failed to rename session:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in renameSession')
+        triggerAuthError()
+      }
     }
   }
 
@@ -178,11 +236,25 @@ export function useSession() {
    * 获取会话消息历史
    */
   async function loadSessionMessages(sessionId: string): Promise<ChatMessageRecord[]> {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping loadSessionMessages due to previous auth error')
+      return []
+    }
+
     try {
       const result = await getSessionMessages(sessionId)
+      // 成功后重置认证错误标志
+      hasAuthError.value = false
       return result.messages || []
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to load messages:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in loadSessionMessages')
+        triggerAuthError()
+      }
       return []
     }
   }
@@ -191,6 +263,12 @@ export function useSession() {
    * 保存消息到会话
    */
   async function saveMessage(sessionId: string, role: string, content: string) {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping saveMessage due to previous auth error')
+      return
+    }
+
     try {
       await addSessionMessage(sessionId, role, content)
       // 同步更新会话的 updated_at 时间到后端
@@ -199,8 +277,16 @@ export function useSession() {
         sessions.value[index].updated_at = new Date().toISOString()
         await updateSession(sessionId, {})
       }
-    } catch (e) {
+      // 成功后重置认证错误标志
+      hasAuthError.value = false
+    } catch (e: any) {
       console.error('Failed to save message:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in saveMessage')
+        triggerAuthError()
+      }
     }
   }
 
@@ -223,6 +309,12 @@ export function useSession() {
    * 加载并自动选择最近会话
    */
   async function loadLatestSession(): Promise<boolean> {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping loadLatestSession due to previous auth error')
+      return false
+    }
+
     if (!checkIsLoggedIn()) {
       return false
     }
@@ -236,11 +328,19 @@ export function useSession() {
         if (!exists) {
           sessions.value.unshift(result.session)
         }
+        // 成功后重置认证错误标志
+        hasAuthError.value = false
         return true
       }
       return false
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to load latest session:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in loadLatestSession')
+        triggerAuthError()
+      }
       return false
     }
   }
@@ -249,11 +349,25 @@ export function useSession() {
    * 获取会话的所有记录
    */
   async function loadSessionRecords(sessionId: string): Promise<ChatRecord[]> {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping loadSessionRecords due to previous auth error')
+      return []
+    }
+
     try {
       const result = await getSessionRecords(sessionId)
+      // 成功后重置认证错误标志
+      hasAuthError.value = false
       return result.records || []
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to load records:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in loadSessionRecords')
+        triggerAuthError()
+      }
       return []
     }
   }
@@ -262,16 +376,60 @@ export function useSession() {
    * 获取会话的Token消耗
    */
   async function loadSessionTokenUsage(sessionId: string): Promise<TokenUsage | null> {
+    // 如果已经发生认证错误，不再尝试请求
+    if (hasAuthError.value) {
+      console.warn('Skipping loadSessionTokenUsage due to previous auth error')
+      return null
+    }
+
     try {
-      return await getSessionTokenUsage(sessionId)
-    } catch (e) {
+      const result = await getSessionTokenUsage(sessionId)
+      // 成功后重置认证错误标志
+      hasAuthError.value = false
+      return result
+    } catch (e: any) {
       console.error('Failed to load token usage:', e)
+      // 检查是否为401认证错误
+      if (e.status === 401 || e.message?.includes('401')) {
+        hasAuthError.value = true
+        console.warn('Authentication error (401) detected in loadSessionTokenUsage')
+        triggerAuthError()
+      }
       return null
     }
   }
 
   // 计算总页数
   const totalPages = computed(() => Math.ceil(totalSessions.value / pageSize.value))
+
+  /**
+   * 触发认证错误处理
+   */
+  function triggerAuthError() {
+    // 清除缓存
+    clearSessionCache()
+    // 重置认证错误标志，以便下次登录后可重新尝试
+    hasAuthError.value = false
+
+    // 根据当前模式触发相应的登出逻辑
+    if (window.location.pathname.startsWith('/t/')) {
+      // 租户模式：尝试清除租户认证
+      try {
+        const { logout: tenantLogout } = useTenantAuth()
+        tenantLogout()
+      } catch (e) {
+        console.error('Failed to trigger tenant logout:', e)
+      }
+    } else {
+      // 演示模式：尝试清除演示认证
+      try {
+        const { logout: demoLogout } = useDemoAuth()
+        demoLogout()
+      } catch (e) {
+        console.error('Failed to trigger demo logout:', e)
+      }
+    }
+  }
 
   /**
    * 清空缓存（重新登录或切换租户时调用）
@@ -281,6 +439,7 @@ export function useSession() {
     currentSessionId.value = null
     isLoaded.value = false
     isLoading.value = false
+    hasAuthError.value = false
     currentPage.value = 1
     totalSessions.value = 0
   }
@@ -290,6 +449,7 @@ export function useSession() {
     currentSessionId,
     isLoading,
     isLoaded,
+    hasAuthError,
     currentPage,
     totalSessions,
     pageSize,
@@ -307,5 +467,6 @@ export function useSession() {
     loadSessionRecords,
     loadSessionTokenUsage,
     clearSessionCache,
+    triggerAuthError,
   }
 }

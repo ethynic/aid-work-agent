@@ -92,7 +92,12 @@ export async function listSessions(page: number = 1, pageSize: number = 20): Pro
   const res = await fetch(`${API_BASE}?page=${page}&page_size=${pageSize}`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch sessions')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch sessions: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -108,7 +113,12 @@ export async function createSession(data?: CreateSessionRequest): Promise<ChatSe
     },
     body: JSON.stringify(data || {})
   })
-  if (!res.ok) throw new Error('Failed to create session')
+  if (!res.ok) {
+    const error = new Error(`Failed to create session: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -119,7 +129,12 @@ export async function getSession(sessionId: string): Promise<ChatSession> {
   const res = await fetch(`${API_BASE}/${sessionId}`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch session')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch session: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -135,7 +150,12 @@ export async function updateSession(sessionId: string, data: { title?: string, c
     },
     body: JSON.stringify(data)
   })
-  if (!res.ok) throw new Error('Failed to update session')
+  if (!res.ok) {
+    const error = new Error(`Failed to update session: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -147,7 +167,12 @@ export async function deleteSession(sessionId: string): Promise<void> {
     method: 'DELETE',
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to delete session')
+  if (!res.ok) {
+    const error = new Error(`Failed to delete session: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
 }
 
 /**
@@ -157,7 +182,12 @@ export async function getSessionMessages(sessionId: string): Promise<{ messages:
   const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch messages')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch messages: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -173,7 +203,12 @@ export async function addSessionMessage(sessionId: string, role: string, content
     },
     body: JSON.stringify({ role, content, metadata })
   })
-  if (!res.ok) throw new Error('Failed to add message')
+  if (!res.ok) {
+    const error = new Error(`Failed to add message: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -184,7 +219,12 @@ export async function getSessionContext(sessionId: string): Promise<SessionConte
   const res = await fetch(`${API_BASE}/${sessionId}/context`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch context')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch context: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -238,7 +278,12 @@ export async function getLatestSession(): Promise<{ session: ChatSession | null 
   const res = await fetch(`${API_BASE}/latest`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch latest session')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch latest session: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -249,7 +294,12 @@ export async function getSessionRecords(sessionId: string, limit: number = 100):
   const res = await fetch(`${API_BASE}/${sessionId}/records?limit=${limit}`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch records')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch records: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
 
@@ -260,6 +310,11 @@ export async function getSessionTokenUsage(sessionId: string): Promise<TokenUsag
   const res = await fetch(`${API_BASE}/${sessionId}/token-usage`, {
     headers: { ...getAuthHeader() }
   })
-  if (!res.ok) throw new Error('Failed to fetch token usage')
+  if (!res.ok) {
+    const error = new Error(`Failed to fetch token usage: ${res.status} ${res.statusText}`)
+    ;(error as any).response = res
+    ;(error as any).status = res.status
+    throw error
+  }
   return res.json()
 }
