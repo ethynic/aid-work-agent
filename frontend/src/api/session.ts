@@ -193,13 +193,16 @@ export async function getSessionContext(sessionId: string): Promise<SessionConte
 export interface ChatRecord {
   record_id: string
   session_id: string
+  tenant_id: string
   user_id: string
   user_message: string
   assistant_message: string
   total_token_count: number
   prompt_tokens: number
   completion_tokens: number
+  cached_input_tokens: number
   model: string
+  provider: string
   execution_details: {
     tool_executions: Array<{
       tool_name: string
@@ -214,6 +217,7 @@ export interface ChatRecord {
     plan_id: string
     plan_steps: Array<any>
   }
+  agent_iterations: number
   status: 'completed' | 'failed'
   error_message: string
   duration_ms: number

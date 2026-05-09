@@ -352,31 +352,36 @@ def _apply_db_updates(conn):
         logger.error(f"读取数据库更新文件失败: {e}")
         return
 
-    # 解析 SQL 语句（用于判断是否为空）
+    # 解析 SQL 语句，支持 $$ 定界符块（如 DO $$ ... $$）
     statements = []
     current = []
+    in_dollar_quote = False
     lines = file_content.split('\n')
 
     for line in lines:
         stripped = line.strip()
-        # 跳过空行和只包含注释的行
         if not stripped or stripped.startswith('--'):
             continue
 
-        # 去除行内注释（简单处理：-- 之后的内容）
-        if '--' in stripped:
+        # 在 $$ 块内不剥离行内注释（块内容可能包含 --）
+        if not in_dollar_quote and '--' in stripped:
             stripped = stripped.split('--')[0].strip()
             if not stripped:
                 continue
 
         current.append(stripped)
-        if stripped.endswith(';'):
-            # 合并为一条语句
+
+        # 跟踪 $$ 定界符状态
+        dollar_count = stripped.count('$$')
+        if dollar_count % 2 == 1:
+            in_dollar_quote = not in_dollar_quote
+
+        # 仅在 $$ 块外遇到分号时才切断语句
+        if not in_dollar_quote and stripped.endswith(';'):
             statement = ' '.join(current)
             statements.append(statement)
             current = []
 
-    # 处理最后未以分号结尾的语句（如果有）
     if current:
         statement = ' '.join(current)
         if not statement.endswith(';'):
@@ -685,14 +690,19 @@ def _init_postgresql():
                 id SERIAL PRIMARY KEY,
                 record_id TEXT UNIQUE NOT NULL,
                 session_id TEXT NOT NULL,
+                tenant_id TEXT,
                 user_id TEXT NOT NULL,
                 user_message TEXT NOT NULL,
                 assistant_message TEXT,
                 total_token_count INTEGER DEFAULT 0,
                 prompt_tokens INTEGER DEFAULT 0,
                 completion_tokens INTEGER DEFAULT 0,
+                cached_input_tokens INTEGER DEFAULT 0,
                 model TEXT,
+                provider TEXT,
                 execution_details TEXT,
+                agent_iterations INTEGER DEFAULT 0,
+                subagent_calls TEXT,
                 status TEXT DEFAULT 'completed',
                 error_message TEXT,
                 duration_ms INTEGER DEFAULT 0,

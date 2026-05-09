@@ -581,14 +581,19 @@ class ChatRecordDB:
     @staticmethod
     def create(
         session_id: str,
-        user_id: str,
-        user_message: str,
+        tenant_id: str = None,
+        user_id: str = None,
+        user_message: str = None,
         assistant_message: str = None,
         total_token_count: int = 0,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        cached_input_tokens: int = 0,
         model: str = None,
+        provider: str = None,
         execution_details: dict = None,
+        agent_iterations: int = 0,
+        subagent_calls: list = None,
         status: str = "completed",
         error_message: str = None,
         duration_ms: int = 0
@@ -602,16 +607,21 @@ class ChatRecordDB:
             try:
                 cursor.execute(f"""
                     INSERT INTO chat_records
-                    (record_id, session_id, user_id, user_message, assistant_message,
-                     total_token_count, prompt_tokens, completion_tokens, model,
-                     execution_details, status, error_message, duration_ms)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                    (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
+                     total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
+                     model, provider, execution_details, agent_iterations, subagent_calls,
+                     status, error_message, duration_ms)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder})
                 """, (
-                    record_id, session_id, user_id, user_message, assistant_message,
-                    total_token_count, prompt_tokens, completion_tokens, model,
+                    record_id, session_id, tenant_id, user_id, user_message, assistant_message,
+                    total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
+                    model, provider,
                     json.dumps(execution_details) if execution_details else None,
+                    agent_iterations,
+                    json.dumps(subagent_calls) if subagent_calls else None,
                     status, error_message, duration_ms
                 ))
                 conn.commit()
@@ -687,7 +697,8 @@ class ChatRecordDB:
                 SELECT
                     COALESCE(SUM(total_token_count), 0) as total,
                     COALESCE(SUM(prompt_tokens), 0) as prompt,
-                    COALESCE(SUM(completion_tokens), 0) as completion
+                    COALESCE(SUM(completion_tokens), 0) as completion,
+                    COALESCE(SUM(cached_input_tokens), 0) as cached
                 FROM chat_records
                 WHERE session_id = {placeholder}
             """, (session_id,))
@@ -696,9 +707,10 @@ class ChatRecordDB:
                 return {
                     "total_tokens": row["total"],
                     "prompt_tokens": row["prompt"],
-                    "completion_tokens": row["completion"]
+                    "completion_tokens": row["completion"],
+                    "cached_input_tokens": row["cached"]
                 }
-            return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
+            return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_input_tokens": 0}
 
     @staticmethod
     def delete(record_id: str) -> bool:
@@ -719,6 +731,63 @@ class ChatRecordDB:
             cursor.execute(f"DELETE FROM chat_records WHERE session_id = {placeholder}", (session_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    @staticmethod
+    def get_token_usage_by_tenant(
+        tenant_id: str,
+        start_date: str = None,
+        end_date: str = None,
+        group_by: str = "day"
+    ) -> List[Dict[str, Any]]:
+        """
+        按租户统计 token 用量。
+
+        Args:
+            tenant_id: 租户ID
+            start_date: 开始日期 (YYYY-MM-DD)
+            end_date: 结束日期 (YYYY-MM-DD)
+            group_by: 分组维度 (day/model/user)
+        """
+        where_clauses = ["tenant_id = %s"]
+        params: list = [tenant_id]
+
+        if start_date:
+            where_clauses.append("created_at >= %s")
+            params.append(start_date)
+        if end_date:
+            where_clauses.append("created_at < %s")
+            params.append(end_date + " 23:59:59")
+
+        where_sql = " AND ".join(where_clauses)
+
+        if group_by == "model":
+            group_expr = "model"
+            select_expr = "model"
+        elif group_by == "user":
+            group_expr = "user_id"
+            select_expr = "user_id"
+        else:
+            group_expr = "DATE(created_at)"
+            select_expr = "DATE(created_at) as date"
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT
+                    {select_expr},
+                    COUNT(*) as conversation_count,
+                    COALESCE(SUM(total_token_count), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cached_input_tokens), 0) as cached_tokens,
+                    COALESCE(SUM(duration_ms), 0) as total_duration_ms
+                FROM chat_records
+                WHERE {where_sql}
+                GROUP BY {group_expr}
+                ORDER BY {group_expr} DESC
+            """, params)
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
 # ============== 短信验证码 ==============

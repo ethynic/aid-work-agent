@@ -88,14 +88,19 @@ CREATE TABLE IF NOT EXISTS chat_records (
     id SERIAL PRIMARY KEY,
     record_id TEXT UNIQUE NOT NULL,
     session_id TEXT,
+    tenant_id TEXT,
     user_id TEXT,
     user_message TEXT,
     assistant_message TEXT,
     total_token_count INTEGER DEFAULT 0,
     prompt_tokens INTEGER DEFAULT 0,
     completion_tokens INTEGER DEFAULT 0,
+    cached_input_tokens INTEGER DEFAULT 0,
     model TEXT,
+    provider TEXT,
     execution_details TEXT,
+    agent_iterations INTEGER DEFAULT 0,
+    subagent_calls TEXT,
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
@@ -105,6 +110,8 @@ CREATE TABLE IF NOT EXISTS chat_records (
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
 -- 验证码表
@@ -500,14 +507,19 @@ CREATE TABLE IF NOT EXISTS chat_records (
     id SERIAL PRIMARY KEY,
     record_id TEXT UNIQUE NOT NULL,
     session_id TEXT,
+    tenant_id TEXT,
     user_id TEXT,
     user_message TEXT,
     assistant_message TEXT,
     total_token_count INTEGER DEFAULT 0,
     prompt_tokens INTEGER DEFAULT 0,
     completion_tokens INTEGER DEFAULT 0,
+    cached_input_tokens INTEGER DEFAULT 0,
     model TEXT,
+    provider TEXT,
     execution_details TEXT,
+    agent_iterations INTEGER DEFAULT 0,
+    subagent_calls TEXT,
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
@@ -516,6 +528,8 @@ CREATE TABLE IF NOT EXISTS chat_records (
 
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
 -- 验证码表
