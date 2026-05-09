@@ -120,6 +120,52 @@ def _check_tenant_expiration(tenant: dict) -> dict:
     }
 
 
+def _check_tenant_access(tenant: dict, user_role: str) -> dict:
+    """
+    统一检查租户状态和到期日期访问权限
+
+    Returns:
+        {
+            "can_access": bool,          # 是否允许访问
+            "reason": str | None,        # 拒绝原因（如果can_access为False）
+            "admin_only": bool,          # 是否仅平台管理员可访问
+            "status_check": bool,        # 状态检查结果
+            "expire_check": dict,        # 到期检查完整结果
+        }
+    """
+    # 检查租户状态
+    status_check = tenant.get("status") == "active"
+
+    # 检查到期日期
+    expire_check = _check_tenant_expiration(tenant)
+
+    # 平台管理员可以访问任何租户
+    if user_role == "platform_admin":
+        return {
+            "can_access": True,
+            "reason": None,
+            "admin_only": True,
+            "status_check": status_check,
+            "expire_check": expire_check
+        }
+
+    # 非平台管理员需要租户active且未过期
+    can_access = status_check and expire_check["can_login"]
+    reason = None
+    if not status_check:
+        reason = f"租户状态为{tenant.get('status')}，请联系平台管理员"
+    elif not expire_check["can_login"]:
+        reason = f"租户已过期（到期日期：{expire_check['expire_date']}），请联系平台管理员续费"
+
+    return {
+        "can_access": can_access,
+        "reason": reason,
+        "admin_only": False,
+        "status_check": status_check,
+        "expire_check": expire_check
+    }
+
+
 def _get_or_create_default_tenant() -> Optional[dict]:
     """获取或创建默认租户"""
     tenant = TenantDB.get_by_id(DEFAULT_TENANT_ID)
@@ -358,6 +404,15 @@ async def admin_login(request: AdminLoginRequest):
     tenant = None
     if user.get("tenant_id"):
         tenant = TenantDB.get_by_id(user["tenant_id"])
+        if tenant:
+            # 使用统一检查函数检查租户状态和到期日期
+            access_check = _check_tenant_access(tenant, role)
+            if not access_check["can_access"] and not access_check["admin_only"]:
+                # 非平台管理员访问非active/过期租户
+                return AdminLoginResponse(
+                    success=False,
+                    message=access_check["reason"] or "无权访问该租户"
+                )
 
     # 5. 生成 token（复用 tokens 表）
     token = secrets.token_urlsafe(32)
@@ -580,10 +635,16 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
         if tenant:
             # 检查租户到期状态
             expire_check = _check_tenant_expiration(tenant)
-            if not expire_check["can_login"]:
+            if not expire_check["can_login"] and role != "platform_admin":
                 return AdminLoginResponse(
                     success=False,
                     message=f"该租户已过期（到期日期：{expire_check['expire_date']}），请联系平台管理员续费"
+                )
+            # 检查租户状态（非平台管理员）
+            if tenant.get("status") != "active" and role != "platform_admin":
+                return AdminLoginResponse(
+                    success=False,
+                    message="该租户已停用"
                 )
             if expire_check["show_warning"]:
                 expire_warning = f"您的租户将于 {expire_check['expire_date']} 到期（剩余 {expire_check['days_remaining']} 天），请及时续费。"
@@ -684,6 +745,15 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     tenant = None
     if user.get("tenant_id"):
         tenant = TenantDB.get_by_id(user["tenant_id"])
+        if tenant:
+            # 使用统一检查函数检查租户状态和到期日期
+            access_check = _check_tenant_access(tenant, role)
+            if not access_check["can_access"] and not access_check["admin_only"]:
+                # 非平台管理员访问非active/过期租户
+                return AdminLoginResponse(
+                    success=False,
+                    message=access_check["reason"] or "无权访问该租户"
+                )
 
     # 5. 生成 token
     token = secrets.token_urlsafe(32)
@@ -758,17 +828,26 @@ async def get_tenant_public_info(tenant_id: str):
     tenant = TenantDB.get_by_id(tenant_id)
     if not tenant:
         return {"success": False, "message": "租户不存在"}
-    if tenant.get("status") != "active":
-        return {"success": False, "message": "该租户已停用"}
 
     # 检查租户到期状态
     expire_check = _check_tenant_expiration(tenant)
+
+    # 租户状态显示名称映射
+    status = tenant.get("status", "active")
+    status_display_map = {
+        "active": "正常",
+        "suspended": "停用",
+        "deactivated": "已删除"
+    }
+    status_display = status_display_map.get(status, "未知")
 
     return {
         "success": True,
         "tenant": {
             "tenant_id": tenant["tenant_id"],
             "company_name": tenant["company_name"],
+            "status": status,  # 新增
+            "status_display": status_display,  # 新增
         },
         "expire_info": {
             "is_expired": expire_check["is_expired"],
@@ -797,6 +876,24 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
     if target_tenant_id:
         tenant = TenantDB.get_by_id(target_tenant_id)
 
+    tenant_check = None
+    if tenant:
+        # 检查租户访问权限
+        access_check = _check_tenant_access(tenant, admin["role"])
+        if not access_check["can_access"] and not access_check["admin_only"]:
+            # 非平台管理员访问非active/过期租户，返回403
+            raise HTTPException(
+                status_code=403,
+                detail=access_check["reason"] or "无权访问该租户"
+            )
+        tenant_check = {
+            "is_active": access_check["status_check"],
+            "is_expired": access_check["expire_check"]["is_expired"],
+            "can_access": access_check["can_access"],
+            "reason": access_check["reason"],
+            "expire_info": access_check["expire_check"]
+        }
+
     return {
         "user": {
             "user_id": admin["user_id"],
@@ -809,5 +906,7 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
             "company_name": tenant["company_name"],
             "plan": tenant["plan"],
             "status": tenant["status"],
+            "expire_at": tenant.get("expire_at"),
         } if tenant else None,
+        "tenant_check": tenant_check,
     }

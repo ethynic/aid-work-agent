@@ -10,7 +10,12 @@ const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
 
 export async function getTenantPublicInfo(tenantId: string): Promise<{
   success: boolean
-  tenant?: { tenant_id: string; company_name: string }
+  tenant?: {
+    tenant_id: string
+    company_name: string
+    status: string  // 新增
+    status_display?: string  // 新增
+  }
   expire_info?: {
     is_expired: boolean
     expire_date: string | null

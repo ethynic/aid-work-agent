@@ -19,7 +19,8 @@ export interface TenantInfo {
   tenant_id: string
   company_name: string
   plan: string
-  status: number
+  status: string
+  expire_at?: string
 }
 
 const admin = ref<TenantAdmin | null>(null)
@@ -101,7 +102,33 @@ export function useTenantAuth() {
           // 平台管理员的 tenant 可能是 null，需要分开判断
           if (info?.user) {
             admin.value = info.user
-            tenant.value = info.tenant ? { ...info.tenant, status: Number(info.tenant.status) } : null
+            tenant.value = info.tenant ? { ...info.tenant, status: info.tenant.status } : null
+
+            // 检查租户状态和到期日期（仅对租户管理员和普通用户）
+            if (tenant.value && admin.value!.role !== 'platform_admin') {
+              // 检查租户状态
+              if (tenant.value.status !== 'active') {
+                console.warn(`Tenant ${tenant.value.tenant_id} is ${tenant.value.status}, forcing logout`)
+                clearStorage()
+                saasToken.value = null
+                admin.value = null
+                tenant.value = null
+                return
+              }
+
+              // 检查租户到期日期
+              if (tenant.value.expire_at) {
+                const now = new Date()
+                const expireDate = new Date(tenant.value.expire_at)
+                if (now > expireDate) {
+                  console.warn(`Tenant ${tenant.value.tenant_id} has expired, forcing logout`)
+                  clearStorage()
+                  saasToken.value = null
+                  admin.value = null
+                  tenant.value = null
+                }
+              }
+            }
           } else {
             // 响应格式异常，视为 token 无效
             clearStorage()

@@ -47,6 +47,35 @@
 
     <!-- 主内容区 -->
     <main class="flex-1 overflow-y-auto">
+      <!-- 平台管理员访问停用租户时的状态提示 -->
+      <div
+        v-if="showTenantStatusWarning"
+        :class="[
+          tenantStatusColorClass === 'red' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200',
+          'border-b px-6 py-3'
+        ]"
+      >
+        <div class="flex items-center gap-2" :class="tenantStatusColorClass === 'red' ? 'text-red-800' : 'text-amber-800'">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" :class="tenantStatusColorClass === 'red' ? 'text-red-600' : 'text-amber-600'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.346 16.5c-.77.833.192 2.5 1.732 2.5z" />
+          </svg>
+          <div class="flex-1">
+            <span class="font-medium">平台管理员代管模式：</span>
+            当前租户 <span class="font-semibold">{{ tenant?.company_name }}</span> 的状态为
+            <span :class="tenantStatusColorClass === 'red' ? 'font-bold text-red-900' : 'font-bold text-amber-900'">{{ tenantStatusLabel }}</span>，
+            您正在以平台管理员身份访问该租户。
+            <span v-if="tenant" class="ml-2">
+              (<router-link
+                :to="'/portal/tenants'"
+                class="underline hover:no-underline"
+                :class="tenantStatusColorClass === 'red' ? 'text-red-700 hover:text-red-900' : 'text-amber-700 hover:text-amber-900'"
+              >
+                前往平台管理后台修改状态
+              </router-link>)
+            </span>
+          </div>
+        </div>
+      </div>
       <router-view />
     </main>
   </div>
@@ -59,6 +88,7 @@ import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSubagentList } from '@/composables/useSubagentList'
 import MenuSidebar from '@/components/MenuSidebar.vue'
+import { TenantStatus } from '@/api/enums'
 
 const router = useRouter()
 const route = useRoute()
@@ -100,6 +130,43 @@ provide('collapseSidebar', () => {
 // 判断是否在 /t/:tenant_id 路由下（租户前台）
 const tenantId = computed(() => route.params.tenant_id as string)
 const isTenantRoute = computed(() => !!tenantId.value)
+
+// 平台管理员访问停用租户时的状态提示
+const showTenantStatusWarning = computed(() => {
+  return (
+    isLoggedIn.value &&
+    isTenantRoute.value &&
+    admin.value?.role === 'platform_admin' &&
+    tenant.value &&
+    tenant.value.status !== TenantStatus.ACTIVE
+  )
+})
+
+// 租户状态显示标签
+const tenantStatusLabel = computed(() => {
+  if (!tenant.value) return ''
+  switch (tenant.value.status) {
+    case TenantStatus.SUSPENDED:
+      return '停用'
+    case TenantStatus.DEACTIVATED:
+      return '已删除'
+    default:
+      return '未知状态'
+  }
+})
+
+// 租户状态颜色类
+const tenantStatusColorClass = computed(() => {
+  if (!tenant.value) return 'amber'
+  switch (tenant.value.status) {
+    case TenantStatus.SUSPENDED:
+      return 'amber'
+    case TenantStatus.DEACTIVATED:
+      return 'red'
+    default:
+      return 'amber'
+  }
+})
 
 // /portal 下的菜单（仅平台管理员）
 const portalMenuItems = [

@@ -5,6 +5,10 @@
         <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">{{ pageTitle.title }}</h1>
         <p class="text-sm text-slate-500 text-center mb-2">{{ pageTitle.subtitle }}</p>
 
+        <!-- 租户状态提示 -->
+        <div v-if="tenantStatusMessage" class="text-red-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-red-50 rounded border border-red-200">
+          {{ tenantStatusMessage }}
+        </div>
         <!-- 租户过期提示 -->
         <div v-if="tenantExpiredMessage" class="text-red-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-red-50 rounded border border-red-200">
           {{ tenantExpiredMessage }}
@@ -154,6 +158,7 @@ const isLoading = ref(false)
 const errorMessage = ref('')
 const tenantExpiredMessage = ref('')
 const tenantExpiringMessage = ref('')
+const tenantStatusMessage = ref('')
 
 // 获取图形验证码
 async function refreshCaptcha() {
@@ -197,11 +202,11 @@ async function handleLogin() {
     })
     if (res.success && res.token && res.user) {
       // 平台管理员的 tenant 可能为 null
-      const tenantInfo = res.tenant ? { ...res.tenant, status: Number(res.tenant.status) } : null
+      const tenantInfo = res.tenant ? { ...res.tenant, status: res.tenant.status } : null
       if (tenantInfo) {
         setLogin(res.token, res.user, tenantInfo)
       } else {
-        setLogin(res.token, res.user, { tenant_id: '', company_name: '', plan: 'free', status: 1 })
+        setLogin(res.token, res.user, { tenant_id: '', company_name: '', plan: 'free', status: 'active' })
       }
       // 显示到期警告
       if (res.expire_warning) {
@@ -245,6 +250,15 @@ onMounted(() => {
     getTenantPublicInfo(tenantId.value).then(res => {
       if (res.success && res.tenant) {
         tenantName.value = res.tenant.company_name
+      }
+      // 显示租户状态提示
+      if (res.tenant?.status && res.tenant.status !== 'active') {
+        const statusMap: Record<string, string> = {
+          'suspended': '停用',
+          'deactivated': '已删除'
+        }
+        const statusDisplay = res.tenant.status_display || statusMap[res.tenant.status] || '停用'
+        tenantStatusMessage.value = `该租户已${statusDisplay}，请联系平台管理员`
       }
       // 显示租户过期提示（不影响用户输入账号密码，登录时后端仍会验证）
       if (res.expire_info?.is_expired && res.expire_info.expire_date) {
