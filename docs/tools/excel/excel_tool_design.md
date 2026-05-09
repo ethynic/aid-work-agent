@@ -973,20 +973,14 @@ pip install markitdown  # 新增：Excel → Markdown
 
 | 现有功能 | 处置方式 |
 |----------|----------|
-| `src/skills/excel-data-assistant/` | **保留**。Skill 中的数据分析脚本（clean_data、aggregate_chart）仍有价值，但主入口切换为 Tool。Skill 可作为"数据分析增强包"保留，由 Tool 内部调用 |
+| `src/skills/excel-data-assistant/` | **已删除**。全部功能已迁移至 Excel Tool（export 替代 md_to_excel，analyze 替代 analyze_data，chart 替代 aggregate_chart，excel_lib 复用了 excel_utils 的编码检测和列宽计算逻辑） |
 | `src/tools/file/excel_reader.py` | **保留**。用于通用文件读取（FileReaderTool 链路），不冲突 |
 | `src/knowledge/parsers/excel_parser.py` | **不动**。知识库专用，独立链路 |
 | `src/skills/quote-export/` | **保留**。业务特定逻辑，不通用化 |
 
 ### 6.2 复用关系
 
-- `excel_lib.py` 可复用 `src/skills/excel-data-assistant/scripts/excel_utils.py` 中的：
-  - `read_data_file()` — CSV/Excel 统一读取
-  - `detect_csv_encoding()` / `detect_csv_delimiter()` — 编码/分隔符检测
-  - `infer_column_type()` — 列类型推断
-  - CJK 宽度计算逻辑
-
-- 这些函数应从 Skill 中提取到 `excel_lib.py`，Skill 改为从 Tool 导入（反向依赖）
+Excel Tool 开发时已参考 `excel_utils.py` 中的编码检测 fallback 策略和 CJK 宽度计算逻辑，直接在 `excel_lib.py` 和 `excel_reader.py` 中重新实现，无需保留 Skill 目录。
 
 ---
 
@@ -1325,7 +1319,7 @@ Agent 将模板内容展示给用户后，用户说明要填什么，再触发 `
 
 - Excel Tool 作为主入口后，`excel-data-assistant` Skill 的 `md_to_excel` 功能被 Tool 的 `export` 操作替代
 - Skill 的 `clean_data`、`aggregate_chart` 可保留为独立技能，或未来提取到 Tool 的 `analyze` 操作中
-- 避免功能重复导致用户困惑：在 Skill 的 SKILL.md 中注明"推荐使用 Excel 工具"
+- ~~excel-data-assistant Skill 已删除~~，全部功能由 Excel Tool 承接，无功能重复
 
 ### 10.5 编码处理
 

@@ -20,7 +20,7 @@ skills:
     - quote-generator
     - quote-export
     # word-processing 已迁移为 word_process 工具
-    - excel-data-assistant
+    # excel-data-assistant 已迁移为 excel_process 工具
     - paddleocr-doc-parsing
 context:
   max_input_tokens: 12000

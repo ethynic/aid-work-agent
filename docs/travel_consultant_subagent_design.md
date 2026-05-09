@@ -121,7 +121,7 @@ skills:
     - quote-generator
     - quote-export
     - word-processing
-    - excel-data-assistant
+    # excel-data-assistant 已迁移为 excel_process 工具
     - pdf
 ```
 
