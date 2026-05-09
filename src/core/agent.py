@@ -317,6 +317,10 @@ class Agent:
         from src.tools.word.word_process_tool import WordProcessTool
         self.tool_registry.register(WordProcessTool())
 
+        # 注册 Excel 电子表格处理工具
+        from src.tools.excel.excel_process_tool import ExcelProcessTool
+        self.tool_registry.register(ExcelProcessTool())
+
         # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool
