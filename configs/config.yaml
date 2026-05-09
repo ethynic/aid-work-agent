@@ -121,7 +121,7 @@ skills:
       - weather
       - article-writing
       - contract-approval
-      - word-processing
+      # word-processing 已迁移为 word_process 工具（src/tools/word/）
       - excel-data-assitant
       - trip-planner
       - quote-generator

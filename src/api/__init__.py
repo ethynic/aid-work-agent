@@ -2,6 +2,6 @@
 API 模块
 """
 
-from src.api import auth, session, customer, credentials
+from src.api import auth, session, customer, credentials, word
 
-__all__ = ['auth', 'session', 'customer', 'credentials']
+__all__ = ['auth', 'session', 'customer', 'credentials', 'word']

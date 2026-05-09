@@ -47,6 +47,7 @@ gradio>=4.0.0  # Modern web UI framework
 
 # Word Document Processing
 python-docx>=1.0.0  # Word document reading and processing
+markitdown[docx]>=0.1.0  # Word to Markdown conversion
 
 # Excel Document Processing
 openpyxl>=3.1.0  # Excel document reading and processing

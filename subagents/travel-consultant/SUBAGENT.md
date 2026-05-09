@@ -19,7 +19,7 @@ skills:
     - trip-planner
     - quote-generator
     - quote-export
-    - word-processing
+    # word-processing 已迁移为 word_process 工具
     - excel-data-assistant
     - paddleocr-doc-parsing
 context:

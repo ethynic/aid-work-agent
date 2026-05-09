@@ -76,6 +76,7 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     lsof \
     tree \
     fonts-noto-cjk \
+    pandoc \
     libglib2.0-0 \
     libnss3 \
     libnspr4 \

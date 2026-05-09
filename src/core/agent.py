@@ -313,6 +313,10 @@ class Agent:
         from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
         self.tool_registry.register(KnowledgeBaseTool())
 
+        # 注册 Word 文档处理工具
+        from src.tools.word.word_process_tool import WordProcessTool
+        self.tool_registry.register(WordProcessTool())
+
         # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool

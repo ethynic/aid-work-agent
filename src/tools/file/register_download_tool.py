@@ -98,8 +98,8 @@ class RegisterDownloadFileTool(BaseTool):
             if not display_name.lower().endswith(suffix):
                 display_name += suffix
 
-            # 复制文件到 uploads 目录
-            dest_path = upload_dir / f"{file_id}_{display_name}"
+            # 复制文件到 uploads 目录（以 file_id 为文件名，便于磁盘恢复匹配）
+            dest_path = upload_dir / f"{file_id}{suffix}"
             shutil.copy2(str(src), str(dest_path))
 
             file_size = dest_path.stat().st_size

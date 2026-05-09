@@ -281,20 +281,27 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _get_tenant_upload_dir() -> Path:
-    """获取当前租户的对话上传目录
-    有租户: storage/uploads/{tenant_id}/conversation/
-    无租户: storage/uploads/conversation/
+    """获取当前用户的文件上传目录
+
+    有租户有用户: storage/uploads/{tenant_id}/{user_id}/
+    有租户无用户: storage/uploads/{tenant_id}/
+    无租户有用户: storage/uploads/{user_id}/
+    无租户无用户: storage/uploads/conversation/
     """
-    from src.saas.context import get_current_tenant_id
+    from src.saas.context import get_current_tenant_id, get_current_user_id
     tenant_id = get_current_tenant_id()
-    if tenant_id:
-        # 租户对话上传文件放到 tenant_dir/conversation/
-        tenant_dir = UPLOAD_DIR / tenant_id / "conversation"
+    user_id = get_current_user_id()
+
+    if tenant_id and user_id:
+        upload_dir = UPLOAD_DIR / tenant_id / user_id
+    elif tenant_id:
+        upload_dir = UPLOAD_DIR / tenant_id
+    elif user_id:
+        upload_dir = UPLOAD_DIR / user_id
     else:
-        # 非租户模式：所有对话上传文件统一放到 conversation/
-        tenant_dir = UPLOAD_DIR / "conversation"
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    return tenant_dir
+        upload_dir = UPLOAD_DIR / "conversation"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
 
 # 已上传的文件存储 {file_id: file_info}
 uploaded_files: Dict[str, Dict[str, Any]] = {}
@@ -633,12 +640,19 @@ def _get_file_info(file_id: str) -> dict | None:
     if file_id in uploaded_files:
         return uploaded_files[file_id]
 
-    # 尝试从磁盘目录扫描恢复（包括租户子目录）
+    # 尝试从磁盘目录扫描恢复（包括租户/用户子目录，最多3层）
+    skip_dirs = {"knowledge", "wecom"}
     search_dirs = [UPLOAD_DIR]
     if UPLOAD_DIR.exists():
-        for d in UPLOAD_DIR.iterdir():
-            if d.is_dir() and d.name != "knowledge" and d.name != "wecom":
-                search_dirs.append(d)
+        for d1 in UPLOAD_DIR.iterdir():
+            if d1.is_dir() and d1.name not in skip_dirs:
+                search_dirs.append(d1)
+                for d2 in d1.iterdir():
+                    if d2.is_dir():
+                        search_dirs.append(d2)
+                        for d3 in d2.iterdir():
+                            if d3.is_dir():
+                                search_dirs.append(d3)
 
     for search_dir in search_dirs:
         if not search_dir.exists():
@@ -898,8 +912,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 if file_id in uploaded_files:
                     att["path"] = uploaded_files[file_id]["path"]
                 else:
-                    # 多 worker 兜底：扫描 UPLOAD_DIR 中以该 file_id 开头的文件
-                    matched = list(UPLOAD_DIR.glob(f"{file_id}.*"))
+                    # 多 worker 兜底：递归扫描 UPLOAD_DIR 中以该 file_id 开头的文件
+                    matched = list(UPLOAD_DIR.glob(f"**/{file_id}.*"))
                     if matched:
                         att["path"] = str(matched[0].absolute())
                 att["file_id"] = file_id
@@ -1300,6 +1314,10 @@ from src.api import chat_instances
 app.include_router(chat_instances.router)
 app.include_router(admin_subagent.router)
 app.include_router(subagent.router)
+
+# Word 文档处理 API
+from src.api import word as word_api
+app.include_router(word_api.router)
 
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances

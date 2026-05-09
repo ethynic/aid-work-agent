@@ -1,0 +1,304 @@
+"""
+Word 工具核心库
+
+从 skill/word-processing/scripts/word_lib.py 迁移，提供共享的基础功能：
+- 常量映射（字体、对齐、页面大小）
+- 样式操作（StyleManager）
+- 文件操作（WordFileHandler）
+- 跨 run 文本替换算法
+"""
+
+import json
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from docx import Document
+from docx.shared import Pt, Cm, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+
+# 常见中文字体映射
+CHINESE_FONTS = {
+    "宋体": "SimSun",
+    "黑体": "SimHei",
+    "仿宋": "FangSong",
+    "楷体": "KaiTi",
+    "SimSun": "SimSun",
+    "SimHei": "SimHei",
+    "FangSong": "FangSong",
+    "KaiTi": "KaiTi",
+    "微软雅黑": "Microsoft YaHei",
+    "Microsoft YaHei": "Microsoft YaHei",
+}
+
+# 对齐方式映射
+ALIGNMENT_MAP = {
+    "LEFT": WD_ALIGN_PARAGRAPH.LEFT,
+    "CENTER": WD_ALIGN_PARAGRAPH.CENTER,
+    "RIGHT": WD_ALIGN_PARAGRAPH.RIGHT,
+    "JUSTIFY": WD_ALIGN_PARAGRAPH.JUSTIFY,
+    "left": WD_ALIGN_PARAGRAPH.LEFT,
+    "center": WD_ALIGN_PARAGRAPH.CENTER,
+    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+    "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+}
+
+# 页面大小映射（宽 x 高，单位 Cm）
+PAGE_SIZES = {
+    "A4": (21.0, 29.7),
+    "A3": (29.7, 42.0),
+    "Letter": (21.59, 27.94),
+    "B5": (17.6, 25.0),
+}
+
+
+def resolve_font_name(name: str) -> str:
+    """解析字体名称，支持中文名映射"""
+    if not name:
+        return name
+    return CHINESE_FONTS.get(name, name)
+
+
+def resolve_alignment(align: str):
+    """解析对齐方式字符串为 python-docx 枚举值"""
+    if isinstance(align, str):
+        return ALIGNMENT_MAP.get(align, None)
+    return align
+
+
+def parse_color(color_str: str) -> Optional[RGBColor]:
+    """解析颜色字符串（支持 #RRGGBB 和纯 RRGGBB 格式）"""
+    if not color_str:
+        return None
+    color_str = color_str.lstrip("#")
+    if len(color_str) == 6:
+        try:
+            r, g, b = int(color_str[:2], 16), int(color_str[2:4], 16), int(color_str[4:6], 16)
+            return RGBColor(r, g, b)
+        except ValueError:
+            return None
+    return None
+
+
+def replace_text_cross_run(runs, target: str, replacement: str) -> int:
+    """
+    替换可能跨越多个 run 的文本。
+
+    Word 文档中一个逻辑句子可能被拆分为多个 run（编辑、格式变化等导致），
+    此函数拼接相邻 run 文本进行匹配，然后从后向前修改以保持索引稳定。
+    """
+    if not runs or not target:
+        return 0
+
+    concat = ""
+    char_map = []
+    for ri, run in enumerate(runs):
+        for ci, ch in enumerate(run.text):
+            char_map.append((ri, ci))
+            concat += ch
+
+    occurrences = []
+    pos = 0
+    while True:
+        idx = concat.find(target, pos)
+        if idx == -1:
+            break
+        occurrences.append(idx)
+        pos = idx + len(target)
+
+    if not occurrences:
+        return 0
+
+    for occ_idx in reversed(occurrences):
+        end_idx = occ_idx + len(target) - 1
+        run_start = char_map[occ_idx][0]
+        run_end = char_map[end_idx][0]
+        char_start = char_map[occ_idx][1]
+        char_end = char_map[end_idx][1]
+
+        if run_start == run_end:
+            run_text = runs[run_start].text
+            runs[run_start].text = (
+                run_text[:char_start] + replacement + run_text[char_end + 1:]
+            )
+        else:
+            runs[run_start].text = runs[run_start].text[:char_start] + replacement
+            for ri in range(run_start + 1, run_end):
+                runs[ri].text = ""
+            runs[run_end].text = runs[run_end].text[char_end + 1:]
+
+    return len(occurrences)
+
+
+class StyleManager:
+    """样式操作封装"""
+
+    @staticmethod
+    def apply_font(run, font_spec: Dict[str, Any]):
+        """对 run 应用字体规格"""
+        if not font_spec:
+            return
+
+        font = run.font
+
+        font_name = font_spec.get("font_name") or font_spec.get("fontName")
+        if font_name:
+            resolved = resolve_font_name(font_name)
+            font.name = resolved
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), resolved)
+
+        font_size = font_spec.get("font_size") or font_spec.get("fontSize") or font_spec.get("size")
+        if font_size is not None:
+            font.size = Pt(float(font_size))
+
+        bold = font_spec.get("bold")
+        if bold is not None:
+            font.bold = bool(bold)
+
+        italic = font_spec.get("italic")
+        if italic is not None:
+            font.italic = bool(italic)
+
+        underline = font_spec.get("underline")
+        if underline is not None:
+            font.underline = bool(underline)
+
+        color = font_spec.get("color") or font_spec.get("color_hex")
+        if color:
+            rgb = parse_color(color)
+            if rgb:
+                font.color.rgb = rgb
+
+    @staticmethod
+    def apply_paragraph_format(paragraph, para_spec: Dict[str, Any]):
+        """对段落应用格式规格"""
+        if not para_spec:
+            return
+
+        pf = paragraph.paragraph_format
+
+        alignment = para_spec.get("alignment")
+        if alignment:
+            resolved = resolve_alignment(alignment)
+            if resolved is not None:
+                pf.alignment = resolved
+
+        line_spacing = para_spec.get("line_spacing") or para_spec.get("lineSpacing")
+        if line_spacing is not None:
+            pf.line_spacing = float(line_spacing)
+
+        space_before = para_spec.get("space_before") or para_spec.get("spaceBefore")
+        if space_before is not None:
+            pf.space_before = Pt(float(space_before))
+
+        space_after = para_spec.get("space_after") or para_spec.get("spaceAfter")
+        if space_after is not None:
+            pf.space_after = Pt(float(space_after))
+
+        first_line_indent = para_spec.get("first_line_indent") or para_spec.get("firstLineIndent")
+        if first_line_indent is not None:
+            pf.first_line_indent = Cm(float(first_line_indent))
+
+    @staticmethod
+    def ensure_style(doc: Document, style_name: str, base_style: str = "Normal",
+                     font_props: Optional[Dict] = None,
+                     para_props: Optional[Dict] = None):
+        """确保文档中存在指定样式，不存在则创建"""
+        try:
+            styles = doc.styles
+            for s in styles:
+                if s.name == style_name:
+                    return s
+
+            style = styles.add_style(style_name, 1)  # WD_STYLE_TYPE.PARAGRAPH = 1
+            if base_style:
+                try:
+                    style.base_style = styles[base_style]
+                except KeyError:
+                    pass
+
+            if font_props:
+                StyleManager.apply_font(style.font, font_props)
+            if para_props:
+                StyleManager.apply_paragraph_format(style.paragraph_format, para_props)
+
+            return style
+        except Exception:
+            return None
+
+
+class WordFileHandler:
+    """Word 文件操作管理"""
+
+    @staticmethod
+    def save_temp(doc: Document, file_name: Optional[str] = None,
+                  output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """将文档保存到指定目录或用户会话目录。"""
+        if output_dir:
+            save_dir = Path(output_dir)
+        else:
+            save_dir = WordFileHandler.get_session_dir()
+
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        if not file_name:
+            file_name = f"document_{uuid.uuid4().hex[:8]}.docx"
+        elif not file_name.endswith(".docx"):
+            file_name += ".docx"
+
+        output_path = save_dir / file_name
+        doc.save(str(output_path))
+
+        file_size = output_path.stat().st_size
+        return {
+            "file_path": str(output_path.absolute()),
+            "file_size": file_size,
+        }
+
+    @staticmethod
+    def get_session_dir() -> Path:
+        """获取当前用户会话的文件存储目录。
+
+        目录结构: storage/uploads/{tenant_id}/conversation/
+        无租户时: storage/uploads/conversation/
+
+        与用户上传文件共用同一目录，生成的文件天然支持下载和预览。
+        """
+        try:
+            from src.main import _get_tenant_upload_dir
+            return _get_tenant_upload_dir()
+        except ImportError:
+            import tempfile
+            return Path(tempfile.mkdtemp(prefix="word_"))
+
+    @staticmethod
+    def copy_and_open(file_path: str) -> Tuple[Document, Dict[str, Any]]:
+        """打开文件（永不修改原文件）。"""
+        src = Path(file_path)
+        if not src.exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+
+        doc = Document(str(src))
+        info = {
+            "original_path": str(src.absolute()),
+            "original_name": src.name,
+            "original_size": src.stat().st_size,
+        }
+        return doc, info
+
+    @staticmethod
+    def resolve_path(file_path: str) -> str:
+        """解析文件路径（支持相对路径）"""
+        p = Path(file_path)
+        if p.exists():
+            return str(p.absolute())
+        # 尝试在 uploads 目录下查找
+        try:
+            from src.config.settings import settings
+            uploads = Path(settings.storage.uploads_dir) / file_path
+            if uploads.exists():
+                return str(uploads.absolute())
+        except (ImportError, AttributeError):
+            pass
+        return str(p.absolute())
