@@ -28,3 +28,6 @@
 1. 提交前执行 `git fetch` 拉取远程最新代码
 2. 检查是否有冲突，如有冲突先解决冲突再提交
 3. 提交后立即 `git push` 推送到远程
+
+## OpenSpec规范
+本项目开始逐步采用 OpenSpec 进行规格驱动开发。详细指令见 `openspec/AGENTS.md`。

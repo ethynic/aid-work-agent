@@ -200,7 +200,7 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
 
                 # 租户用户：检查租户到期日期，token 有效期不能超过租户到期日
                 user = UserDB.get_by_id(user_id)
-                if user and user.get("tenant_id"):
+                if user and user.get("tenant_id") and user.get("role") != "platform_admin":
                     tenant = TenantDB.get_by_id(user["tenant_id"])
                     if tenant and tenant.get("expire_at"):
                         tenant_expire_at = tenant["expire_at"]

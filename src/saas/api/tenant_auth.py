@@ -419,7 +419,7 @@ async def admin_login(request: AdminLoginRequest):
     # 根据租户到期日期动态设置 token 有效期
     now = datetime.now()
     token_expires = now + timedelta(days=7)
-    if tenant:
+    if tenant and role != "platform_admin":
         expire_check = _check_tenant_expiration(tenant)
         if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
             # 如果租户到期日期在7天内，token 有效期设置为到期日期
@@ -654,7 +654,7 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
     # 根据租户到期日期动态设置 token 有效期
     now = datetime.now()
     token_expires = now + timedelta(days=7)
-    if tenant:
+    if tenant and role != "platform_admin":
         expire_check = _check_tenant_expiration(tenant)
         if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
             # 如果租户到期日期在7天内，token 有效期设置为到期日期
@@ -760,7 +760,7 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     # 根据租户到期日期动态设置 token 有效期
     now = datetime.now()
     token_expires = now + timedelta(days=7)
-    if tenant:
+    if tenant and role != "platform_admin":
         expire_check = _check_tenant_expiration(tenant)
         if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
             # 如果租户到期日期在7天内，token 有效期设置为到期日期
