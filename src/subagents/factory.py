@@ -166,6 +166,7 @@ class AgentFactory:
     def create_standalone_subagent(
         name: str,
         session_id: str,
+        tenant_id: Optional[str] = None,
     ) -> Optional['Agent']:
         """
         创建子智能体独立模式（入口级绑定，直接作为主智能体处理请求）
@@ -178,6 +179,7 @@ class AgentFactory:
         Args:
             name: 子智能体名称
             session_id: 会话ID
+            tenant_id: 租户ID（用于加载租户定制 extra.md）
 
         Returns:
             Agent 实例，如果子智能体不存在返回 None
@@ -193,6 +195,7 @@ class AgentFactory:
             mode=AgentMode.STANDALONE,
             subagent_config=config,
             session_id=session_id,
+            tenant_id=tenant_id,
         )
 
     def list_available_agents(self) -> list:

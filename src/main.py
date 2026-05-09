@@ -29,7 +29,7 @@ from src.channels.wecom.adapter import WeComAdapter
 from src.channels.manager import channel_manager
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
-from src.api import admin_subagent, subagent
+from src.api import admin_subagent, subagent, subagent_extra, travel_quote
 from src.knowledge.api import router as knowledge_router
 from src.db.models import SessionDB, MessageDB
 from src.channels import callback as channels_api
@@ -427,15 +427,15 @@ async def chat(request: Request):
 
         # 通过租户实例管理器或默认路由获取 Agent
         agent = None
+        _tenant_id = getattr(request.state, 'tenant_id', None)
         instance_id = getattr(request.state, 'instance_id', None)
         if instance_id and settings.saas.enabled:
             from src.saas.services.instance_manager import instance_manager
             agent = instance_manager.get_agent(instance_id, subagent_name, session_id)
         if not agent:
-            agent = agent_router.get_agent(subagent_name, session_id)
+            agent = agent_router.get_agent(subagent_name, session_id, tenant_id=_tenant_id)
 
         # 注入 tenant_id（供租户 skills 按需加载使用）
-        _tenant_id = getattr(request.state, 'tenant_id', None)
         if _tenant_id and not agent._init_tenant_id:
             agent._init_tenant_id = _tenant_id
 
@@ -949,15 +949,15 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
     # 通过租户实例管理器或默认路由获取 Agent
     agent = None
+    _tenant_id = getattr(http_request.state, 'tenant_id', None)
     _instance_id = getattr(http_request.state, 'instance_id', None) if settings.saas.enabled else None
     if _instance_id:
         from src.saas.services.instance_manager import instance_manager
         agent = instance_manager.get_agent(_instance_id, request.subagent, session_id)
     if not agent:
-        agent = agent_router.get_agent(request.subagent, session_id)
+        agent = agent_router.get_agent(request.subagent, session_id, tenant_id=_tenant_id)
 
     # 注入 tenant_id（供租户 skills 按需加载使用）
-    _tenant_id = getattr(http_request.state, 'tenant_id', None)
     if _tenant_id and not agent._init_tenant_id:
         agent._init_tenant_id = _tenant_id
 
@@ -1317,6 +1317,8 @@ app.include_router(knowledge_router)
 from src.api import chat_instances
 app.include_router(chat_instances.router)
 app.include_router(admin_subagent.router)
+app.include_router(subagent_extra.router)
+app.include_router(travel_quote.router)
 app.include_router(subagent.router)
 
 # Word 文档处理 API

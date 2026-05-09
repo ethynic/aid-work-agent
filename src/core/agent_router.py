@@ -32,6 +32,7 @@ class AgentRouter:
         self,
         subagent_name: Optional[str],
         session_id: str,
+        tenant_id: Optional[str] = None,
     ) -> Agent:
         """
         根据子智能体名称获取对应的 Agent 实例
@@ -39,6 +40,7 @@ class AgentRouter:
         Args:
             subagent_name: 子智能体名称，None 表示使用主智能体
             session_id: 会话ID
+            tenant_id: 租户ID（用于加载租户定制 extra.md）
 
         Returns:
             Agent 实例
@@ -49,7 +51,7 @@ class AgentRouter:
         cache_key = f"{session_id}:{subagent_name}"
         if cache_key not in self._standalone_cache:
             from src.subagents.factory import AgentFactory
-            agent = AgentFactory.create_standalone_subagent(subagent_name, session_id)
+            agent = AgentFactory.create_standalone_subagent(subagent_name, session_id, tenant_id=tenant_id)
             if not agent:
                 logger.warning(
                     f"[AgentRouter] Subagent '{subagent_name}' not found, "

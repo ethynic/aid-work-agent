@@ -181,3 +181,193 @@ ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS agent_iterations INTEGER DEFAU
 ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS subagent_calls TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
+
+-- 2026-05-09，旅游报价定价数据表（10张）
+-- 区域/城市表
+CREATE TABLE IF NOT EXISTS bs_travel_quote_regions (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    aliases TEXT,
+    parent_name TEXT,
+    level TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_regions_tenant ON bs_travel_quote_regions(tenant_id, is_active);
+
+-- 车型与包车价格
+CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    region_name TEXT,
+    vehicle_type TEXT NOT NULL,
+    vehicle_type_label TEXT,
+    seats_min INT NOT NULL,
+    seats_max INT NOT NULL,
+    daily_rate DECIMAL(10,2) NOT NULL,
+    overtime_rate DECIMAL(10,2),
+    overkm_rate DECIMAL(10,2),
+    driver_meal_allowance DECIMAL(10,2),
+    driver_accommodation DECIMAL(10,2),
+    season_type TEXT DEFAULT 'default',
+    effective_from DATE,
+    effective_to DATE,
+    is_active BOOLEAN DEFAULT TRUE,
+    sort_order INT DEFAULT 0,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_vehicles_tenant ON bs_travel_quote_vehicles(tenant_id, is_active);
+
+-- 景点主表
+CREATE TABLE IF NOT EXISTS bs_travel_quote_attractions (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    region_name TEXT,
+    name TEXT NOT NULL,
+    category TEXT,
+    address TEXT,
+    open_time TEXT,
+    visit_duration_hours DECIMAL(4,1),
+    internal_transport_name TEXT,
+    internal_transport_price DECIMAL(10,2),
+    is_active BOOLEAN DEFAULT TRUE,
+    sort_order INT DEFAULT 0,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_attractions_tenant ON bs_travel_quote_attractions(tenant_id, is_active);
+
+-- 门票价格明细
+CREATE TABLE IF NOT EXISTS bs_travel_quote_tickets (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    attraction_id INT NOT NULL,
+    ticket_type TEXT NOT NULL,
+    ticket_type_label TEXT NOT NULL,
+    retail_price DECIMAL(10,2) NOT NULL,
+    agency_price DECIMAL(10,2),
+    group_price DECIMAL(10,2),
+    group_min_people INT,
+    season_type TEXT DEFAULT 'default',
+    effective_from DATE,
+    effective_to DATE,
+    is_active BOOLEAN DEFAULT TRUE,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_tickets_attraction ON bs_travel_quote_tickets(attraction_id, is_active);
+
+-- 酒店主表
+CREATE TABLE IF NOT EXISTS bs_travel_quote_hotels (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    region_name TEXT,
+    name TEXT NOT NULL,
+    star_rating TEXT,
+    star_rating_label TEXT,
+    address TEXT,
+    contact_phone TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    sort_order INT DEFAULT 0,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_hotels_tenant ON bs_travel_quote_hotels(tenant_id, is_active);
+
+-- 房型与价格
+CREATE TABLE IF NOT EXISTS bs_travel_quote_rooms (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    hotel_id INT NOT NULL,
+    room_type TEXT NOT NULL,
+    room_type_label TEXT NOT NULL,
+    max_occupancy INT NOT NULL,
+    bed_count INT,
+    retail_price DECIMAL(10,2) NOT NULL,
+    agency_price DECIMAL(10,2),
+    includes_breakfast BOOLEAN DEFAULT FALSE,
+    breakfast_count INT DEFAULT 0,
+    extra_bed_rate DECIMAL(10,2),
+    season_type TEXT DEFAULT 'default',
+    effective_from DATE,
+    effective_to DATE,
+    is_active BOOLEAN DEFAULT TRUE,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_rooms_hotel ON bs_travel_quote_rooms(hotel_id, is_active);
+
+-- 餐标价格
+CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    region_name TEXT,
+    meal_tier TEXT NOT NULL,
+    meal_tier_label TEXT NOT NULL,
+    meal_type TEXT NOT NULL,
+    meal_type_label TEXT NOT NULL,
+    price_per_person DECIMAL(10,2) NOT NULL,
+    pax_per_table INT DEFAULT 10,
+    dishes_standard TEXT,
+    season_type TEXT DEFAULT 'default',
+    effective_from DATE,
+    effective_to DATE,
+    is_active BOOLEAN DEFAULT TRUE,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_meals_tenant ON bs_travel_quote_meals(tenant_id, is_active);
+
+-- 导游费用
+CREATE TABLE IF NOT EXISTS bs_travel_quote_guides (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    region_name TEXT,
+    guide_type TEXT NOT NULL,
+    guide_type_label TEXT NOT NULL,
+    guide_level TEXT DEFAULT 'standard',
+    guide_level_label TEXT,
+    billing_method TEXT DEFAULT 'daily',
+    daily_rate DECIMAL(10,2),
+    trip_rate DECIMAL(10,2),
+    language_premium DECIMAL(10,2) DEFAULT 0,
+    peak_season_multiplier DECIMAL(3,2) DEFAULT 1.00,
+    season_type TEXT DEFAULT 'default',
+    is_active BOOLEAN DEFAULT TRUE,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_guides_tenant ON bs_travel_quote_guides(tenant_id, is_active);
+
+-- 其他固定费用
+CREATE TABLE IF NOT EXISTS bs_travel_quote_fees (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    fee_name TEXT NOT NULL,
+    fee_category TEXT NOT NULL,
+    billing_method TEXT NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    is_mandatory BOOLEAN DEFAULT FALSE,
+    is_active BOOLEAN DEFAULT TRUE,
+    sort_order INT DEFAULT 0,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_fees_tenant ON bs_travel_quote_fees(tenant_id, is_active);
+
+-- 淡旺季配置
+CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    season_type TEXT NOT NULL,
+    season_type_label TEXT NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    price_multiplier DECIMAL(3,2) DEFAULT 1.00,
+    is_active BOOLEAN DEFAULT TRUE,
+    remark TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_travel_seasons_tenant ON bs_travel_quote_seasons(tenant_id, is_active);

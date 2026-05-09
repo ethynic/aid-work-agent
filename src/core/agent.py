@@ -626,7 +626,7 @@ class Agent:
         Build system prompt for the agent
 
         MASTER：包含委派能力
-        SUBAGENT / STANDALONE：不包含委派能力，使用子智能体配置的约束
+        SUBAGENT / STANDALONE：不包含委派能力，使用子智能体配置的约束 + 租户定制 extra.md
         """
         if self.mode == AgentMode.MASTER:
             return self._build_base_system_prompt(include_delegation=True, user=user)
@@ -635,11 +635,49 @@ class Agent:
             subagent_constraint = ""
             if self.subagent_config and self.subagent_config.system_prompt:
                 subagent_constraint = self.subagent_config.system_prompt
+
+            # 加载租户定制 extra.md
+            extra_content = self._load_extra_md()
+            if extra_content:
+                subagent_constraint = subagent_constraint + "\n\n" + extra_content
+
             return self._build_base_system_prompt(
                 include_delegation=False,
                 subagent_constraint=subagent_constraint,
                 user=user
             )
+
+    def _load_extra_md(self) -> Optional[str]:
+        """加载租户定制的 extra.md 文件"""
+        if not self.subagent_config:
+            return None
+
+        # 解析 tenant_id
+        tenant_id = self._init_tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                pass
+
+        if not tenant_id or not self.subagent_config.dir_name:
+            return None
+
+        # 构建路径: storage/subagents/<dir_name>/extra_<tenant_id>.md
+        from pathlib import Path
+        extra_path = Path(f"storage/subagents/{self.subagent_config.dir_name}/extra_{tenant_id}.md")
+
+        try:
+            if extra_path.exists():
+                content = extra_path.read_text(encoding='utf-8').strip()
+                if content:
+                    logger.debug(f"Loaded extra.md for tenant {tenant_id}, subagent {self.subagent_config.dir_name}")
+                    return content
+        except Exception as e:
+            logger.warning(f"Failed to load extra.md from {extra_path}: {e}")
+
+        return None
     
     def _build_messages(
         self,
