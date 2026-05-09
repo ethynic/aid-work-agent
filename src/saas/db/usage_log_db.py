@@ -13,14 +13,7 @@ from src.db.database import get_db_connection
 
 
 class UsageLogDB:
-    """用量统计数据库访问类 - 从 chat_records 表聚合数据
-
-    chat_records 表 vs chat_messages 表：
-    - chat_records：存储完整对话记录，包含token消耗、执行详情等，用于计费和用量统计
-    - chat_messages：存储单条消息，用于前端展示和上下文构建
-
-    两个表存在内容冗余但设计合理，服务于不同的业务目的。
-    """
+    """用量统计数据库访问类 - 从 chat_records 表聚合数据"""
 
     @staticmethod
     def get_tenant_usage(
@@ -32,31 +25,28 @@ class UsageLogDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 从 users 表获取该租户的所有用户（排除平台管理员）
+            # 优先通过 chat_records.tenant_id 直接查询（更准确）
             cursor.execute("""
-                SELECT user_id FROM users
-                WHERE tenant_id = %s AND status = 'active' AND role != 'platform_admin'
-            """, (tenant_id,))
-            user_ids = [row["user_id"] for row in cursor.fetchall()]
-
-            if not user_ids:
-                return {"total_tokens": 0, "total_sessions": 0, "active_users": 0}
-
-            placeholders = ",".join("%s" for _ in user_ids)
-
-            # Token 总量
-            cursor.execute(f"""
                 SELECT
                     COALESCE(SUM(total_token_count), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cached_input_tokens), 0) as cached_tokens,
                     COUNT(DISTINCT session_id) as total_sessions,
-                    COUNT(DISTINCT user_id) as active_users
+                    COUNT(DISTINCT user_id) as active_users,
+                    COUNT(*) as total_conversations
                 FROM chat_records
-                WHERE user_id IN ({placeholders})
+                WHERE tenant_id = %s
                   AND created_at >= %s AND created_at <= %s
-            """, (*user_ids, start_date, end_date))
+            """, (tenant_id, start_date, end_date))
 
             row = cursor.fetchone()
-            return dict(row) if row else {"total_tokens": 0, "total_sessions": 0, "active_users": 0}
+            result = dict(row) if row else {"total_tokens": 0, "total_sessions": 0, "active_users": 0}
+            if result.get("total_tokens", 0) > 0 and result.get("total_sessions", 0) > 0:
+                result["avg_tokens_per_session"] = round(result["total_tokens"] / result["total_sessions"])
+            else:
+                result["avg_tokens_per_session"] = 0
+            return result
 
     @staticmethod
     def get_user_usage_detail(
@@ -68,23 +58,32 @@ class UsageLogDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 使用 users 表查询
             cursor.execute("""
                 SELECT
                     cr.user_id,
                     u.username,
                     COALESCE(SUM(cr.total_token_count), 0) as total_tokens,
+                    COALESCE(SUM(cr.prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(cr.completion_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cr.cached_input_tokens), 0) as cached_tokens,
                     COUNT(DISTINCT cr.session_id) as total_sessions,
+                    COUNT(*) as total_conversations,
                     MAX(cr.created_at) as last_active
-                FROM users u
-                JOIN chat_records cr ON cr.user_id = u.user_id
-                WHERE u.tenant_id = %s AND u.status = 'active' AND u.role != 'platform_admin'
+                FROM chat_records cr
+                LEFT JOIN users u ON cr.user_id = u.user_id
+                WHERE cr.tenant_id = %s
                   AND cr.created_at >= %s AND cr.created_at <= %s
                 GROUP BY cr.user_id, u.username
                 ORDER BY total_tokens DESC
             """, (tenant_id, start_date, end_date))
 
-            return [dict(row) for row in cursor.fetchall()]
+            results = [dict(row) for row in cursor.fetchall()]
+            for r in results:
+                if r.get("total_tokens", 0) > 0 and r.get("total_sessions", 0) > 0:
+                    r["avg_tokens_per_session"] = round(r["total_tokens"] / r["total_sessions"])
+                else:
+                    r["avg_tokens_per_session"] = 0
+            return results
 
     @staticmethod
     def get_token_trend(
@@ -92,33 +91,53 @@ class UsageLogDB:
         start_date: str,
         end_date: str,
     ) -> List[Dict[str, Any]]:
-        """获取每日 token 用量趋势"""
+        """获取每日 token 用量趋势（含 input/output/cached 分项）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-
-            # 使用 users 表获取租户用户
             cursor.execute("""
-                SELECT user_id FROM users
-                WHERE tenant_id = %s AND status = 'active' AND role != 'platform_admin'
-            """, (tenant_id,))
-            user_ids = [row["user_id"] for row in cursor.fetchall()]
-
-            if not user_ids:
-                return []
-
-            placeholders = ",".join("%s" for _ in user_ids)
-
-            cursor.execute(f"""
                 SELECT
                     DATE(created_at) as date,
                     COALESCE(SUM(total_token_count), 0) as tokens,
-                    COUNT(DISTINCT session_id) as sessions
+                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cached_input_tokens), 0) as cached_tokens,
+                    COUNT(DISTINCT session_id) as sessions,
+                    COUNT(*) as conversations
                 FROM chat_records
-                WHERE user_id IN ({placeholders})
+                WHERE tenant_id = %s
                   AND created_at >= %s AND created_at <= %s
                 GROUP BY DATE(created_at)
                 ORDER BY date
-            """, (*user_ids, start_date, end_date))
+            """, (tenant_id, start_date, end_date))
+
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def get_model_usage(
+        tenant_id: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        """获取按模型分组的用量统计"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    COALESCE(model, 'unknown') as model,
+                    COALESCE(provider, 'unknown') as provider,
+                    COUNT(*) as conversation_count,
+                    COALESCE(SUM(total_token_count), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cached_input_tokens), 0) as cached_tokens,
+                    COALESCE(SUM(duration_ms), 0) as total_duration_ms,
+                    AVG(agent_iterations) as avg_iterations
+                FROM chat_records
+                WHERE tenant_id = %s
+                  AND created_at >= %s AND created_at <= %s
+                GROUP BY model, provider
+                ORDER BY total_tokens DESC
+            """, (tenant_id, start_date, end_date))
 
             return [dict(row) for row in cursor.fetchall()]
 
@@ -133,6 +152,8 @@ class UsageLogDB:
                 SELECT
                     DATE(created_at) as date,
                     COALESCE(SUM(total_token_count), 0) as tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as output_tokens,
                     COUNT(DISTINCT session_id) as sessions
                 FROM chat_records
                 WHERE user_id = %s AND created_at >= %s

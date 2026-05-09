@@ -142,6 +142,7 @@ async def export_usage_report(
     summary = UsageLogDB.get_tenant_usage(tenant_id, start_date, end_date)
     trend = UsageLogDB.get_token_trend(tenant_id, start_date, end_date)
     users = UsageLogDB.get_user_usage_detail(tenant_id, start_date, end_date)
+    models = UsageLogDB.get_model_usage(tenant_id, start_date, end_date)
 
     return {
         "success": True,
@@ -151,6 +152,55 @@ async def export_usage_report(
         "summary": summary,
         "trend": trend,
         "user_details": users,
+        "model_usage": models,
+    }
+
+
+@router.get("/tokens/detail")
+async def get_token_detail(
+    request: Request,
+    days: int = Query(30, description="天数", ge=1, le=365),
+):
+    """获取 Token 用量明细趋势（含 input/output/cached 分项）"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+
+    end_date = datetime.now().strftime("%Y-%m-%d 23:59:59")
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+
+    trend = UsageLogDB.get_token_trend(tenant_id, start_date, end_date)
+    return {
+        "success": True,
+        "start_date": start_date,
+        "end_date": end_date,
+        "trend": trend,
+    }
+
+
+@router.get("/models")
+async def get_model_usage(
+    request: Request,
+    days: int = Query(30, description="天数", ge=1, le=365),
+):
+    """获取按模型分组的 Token 用量统计"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+
+    end_date = datetime.now().strftime("%Y-%m-%d 23:59:59")
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+
+    models = UsageLogDB.get_model_usage(tenant_id, start_date, end_date)
+    return {
+        "success": True,
+        "start_date": start_date,
+        "end_date": end_date,
+        "models": models,
     }
 
 

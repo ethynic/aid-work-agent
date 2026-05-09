@@ -30,7 +30,7 @@ ALTER TABLE scheduled_task_logs DROP CONSTRAINT IF EXISTS scheduled_task_logs_us
 ALTER TABLE user_email_settings DROP CONSTRAINT IF EXISTS user_email_settings_user_id_fkey;
 ALTER TABLE chunks DROP CONSTRAINT IF EXISTS chunks_doc_id_fkey;
 ALTER TABLE chunks_vec DROP CONSTRAINT IF EXISTS chunks_vec_chunk_id_fkey;
-ALTER TABLE chunks_fts DROP CONSTRAINT IF EXISTS chunks_fts_chunk_id_fkey;
+DO $$ BEGIN ALTER TABLE chunks_fts DROP CONSTRAINT IF EXISTS chunks_fts_chunk_id_fkey; EXCEPTION WHEN undefined_table THEN NULL; END $$;
 
 -- 移除 SaaS 表的外键约束
 ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_tenant_id_fkey;
@@ -172,3 +172,12 @@ BEGIN
             CHECK (status IN ('idle', 'busy'));
     END IF;
 END $$;
+
+-- 2026-05-09，chat_records 增加 token 统计和审计字段
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS cached_input_tokens INTEGER DEFAULT 0;
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS provider TEXT;
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS agent_iterations INTEGER DEFAULT 0;
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS subagent_calls TEXT;
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);

@@ -1317,6 +1317,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 request_id=response.get("request_id", ""),
                 user_id=user.user_id if user else "",
                 session_id=session_id,
+                tenant_id=getattr(self, '_init_tenant_id', '') or '',
                 model=self.llm.get_model_name(),
                 provider=self.llm.get_provider_name(),
                 has_tool_calls=bool(tool_calls),
@@ -1325,6 +1326,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 content_length=len(content) if content else 0,
                 usage=response.get("usage"),
             )
+
+            # 累加 token 用量到 SessionRecordService（纯内存操作，异常隔离）
+            try:
+                from src.services.session_record import SessionRecordManager
+                _record = SessionRecordManager.get_current_record()
+                if _record:
+                    _record.add_llm_usage(response.get("usage", {}))
+                    _record.increment_iterations()
+                    if not _record.provider:
+                        _record.set_model(self.llm.get_model_name())
+                        _record.set_provider(self.llm.get_provider_name())
+            except Exception:
+                logger.debug(f"Failed to record token usage", exc_info=True)
             
             if settings.app.llm_debug:
                 logger.debug(f"\n{'='*60}\n"
@@ -1964,7 +1978,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             final_summary = ""
             subagent_plan_created = False
             generated_content_list = []  # 存储所有生成的内容
-            
+            subagent_token_usage = {"input": 0, "output": 0, "cached": 0}
+
             while iteration < max_iterations:
                 iteration += 1
                 logger.info(f"[SUBAGENT] Iteration {iteration}")
@@ -2022,6 +2037,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     request_id=response.get("request_id", ""),
                     user_id="",
                     session_id=self.session_id or "",
+                    tenant_id=getattr(self, '_init_tenant_id', '') or '',
                     model=self.llm.get_model_name(),
                     provider=self.llm.get_provider_name(),
                     has_tool_calls=bool(tool_calls),
@@ -2030,6 +2046,24 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     content_length=len(content) if content else 0,
                     usage=response.get("usage"),
                 )
+
+                # 累加子智能体 token 用量到 SessionRecordService（纯内存操作，异常隔离）
+                try:
+                    from src.services.session_record import SessionRecordManager
+                    _record = SessionRecordManager.get_current_record()
+                    if _record:
+                        _record.add_llm_usage(response.get("usage", {}))
+                        _record.increment_iterations()
+                        if not _record.provider:
+                            _record.set_model(self.llm.get_model_name())
+                            _record.set_provider(self.llm.get_provider_name())
+                    # 同时累加到本地计数器（用于返回值）
+                    _usage = response.get("usage", {})
+                    subagent_token_usage["input"] += _usage.get("prompt_tokens", 0)
+                    subagent_token_usage["output"] += _usage.get("completion_tokens", 0)
+                    subagent_token_usage["cached"] += _usage.get("cached_tokens", 0)
+                except Exception:
+                    logger.debug(f"Failed to record subagent token usage", exc_info=True)
                 
                 # 打印LLM响应信息
                 if settings.app.llm_debug:
@@ -2322,8 +2356,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             return {
                 "result": final_result,
                 "summary": final_summary,
-                "generated_contents": generated_content_list,  # 包含所有生成的内容
-                "token_usage": {"input": 0, "output": 0}  # TODO: 实际统计
+                "generated_contents": generated_content_list,
+                "token_usage": subagent_token_usage
             }
             
         except Exception as e:

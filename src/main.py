@@ -864,6 +864,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
             logger.info(f"[并发控制调试] 自动锁定成功: instance_id={instance_id}, was_idle={lock_result.get('was_idle')}")
 
+    # 获取当前租户ID（所有分支共享）
+    from src.saas.context import get_current_tenant_id
+    chat_tenant_id = get_current_tenant_id()
+
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
         # 从用户第一条消息提取前20个字作为会话标题
@@ -872,8 +876,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
         # 从请求头获取用户身份后创建会话
         if current_user:
-            from src.saas.context import get_current_tenant_id
-            chat_tenant_id = get_current_tenant_id()
             session = SessionDB.create(
                 user_id=user_id,
                 title=title,
@@ -1036,9 +1038,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     record_service = SessionRecordManager.start_record(
                         session_id=session_id,
                         user_id=user_id,
-                        user_message=full_message
+                        user_message=full_message,
+                        tenant_id=chat_tenant_id
                     )
                     record_service.set_model(agent.llm.get_model_name())
+                    record_service.set_provider(agent.llm.get_provider_name())
 
                     # 包装成async回调
                     # 支持直接接收 dict 事件（子智能体的 tool_start/tool_result 等完整事件）

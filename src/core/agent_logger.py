@@ -58,6 +58,7 @@ def log_agent_iteration(
     request_id: str = "",
     user_id: str = "",
     session_id: str = "",
+    tenant_id: str = "",
     model: str = "",
     provider: str = "",
     has_tool_calls: bool = False,
@@ -69,20 +70,6 @@ def log_agent_iteration(
 ) -> None:
     """
     记录一次 Agent 迭代的 LLM 调用信息。
-
-    Args:
-        iteration: 循环轮次
-        request_id: LLM API 返回的请求ID
-        user_id: 用户ID
-        session_id: 会话ID
-        model: 模型名称
-        provider: 提供者名称
-        has_tool_calls: 是否包含工具调用
-        tool_calls_count: 工具调用数量
-        tool_names: 工具名称列表
-        content_length: 回复内容长度
-        usage: token 用量
-        duration_ms: 本次迭代耗时（毫秒）
     """
     try:
         record = {
@@ -91,6 +78,7 @@ def log_agent_iteration(
             "request_id": request_id,
             "user_id": user_id,
             "session_id": session_id,
+            "tenant_id": tenant_id,
             "model": model,
             "provider": provider,
             "has_tool_calls": has_tool_calls,

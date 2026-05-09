@@ -448,8 +448,30 @@ export async function getTokenTrend(days: number = 30): Promise<{
   return res.json()
 }
 
+export async function getTokenDetail(days: number = 30): Promise<{
+  success: boolean; start_date: string; end_date: string;
+  trend: { date: string; tokens: number; input_tokens: number; output_tokens: number; cached_tokens: number; sessions: number; conversations: number }[]
+}> {
+  const res = await fetch(`${API_BASE}/reports/tokens/detail?days=${days}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取 Token 明细失败')
+  return res.json()
+}
+
+export async function getModelUsage(days: number = 30): Promise<{
+  success: boolean; start_date: string; end_date: string;
+  models: { model: string; provider: string; conversation_count: number; total_tokens: number; input_tokens: number; output_tokens: number; cached_tokens: number; total_duration_ms: number; avg_iterations: number }[]
+}> {
+  const res = await fetch(`${API_BASE}/reports/models?days=${days}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取模型用量失败')
+  return res.json()
+}
+
 export async function getUserUsage(days: number = 30): Promise<{
-  success: boolean; users: { user_id: string; username: string; total_tokens: number; total_sessions: number; avg_tokens_per_session: number }[]
+  success: boolean; users: { user_id: string; username: string; total_tokens: number; input_tokens: number; output_tokens: number; cached_tokens: number; total_sessions: number; total_conversations: number; avg_tokens_per_session: number; last_active: string }[]
 }> {
   const res = await fetch(`${API_BASE}/reports/users?days=${days}`, {
     headers: getSaasAuthHeader()

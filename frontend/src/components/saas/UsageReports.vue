@@ -20,10 +20,22 @@
 
     <template v-else>
       <!-- 摘要卡片 -->
-      <div v-if="summary" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div v-if="summary" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
         <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">总 Token 消耗</div>
+          <div class="text-xs text-slate-500">总 Token</div>
           <div class="text-xl font-bold text-slate-800 mt-1">{{ formatNum(summary.total_tokens) }}</div>
+        </div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+          <div class="text-xs text-slate-500">Input Tokens</div>
+          <div class="text-xl font-bold text-blue-600 mt-1">{{ formatNum(summary.input_tokens) }}</div>
+        </div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+          <div class="text-xs text-slate-500">Output Tokens</div>
+          <div class="text-xl font-bold text-green-600 mt-1">{{ formatNum(summary.output_tokens) }}</div>
+        </div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+          <div class="text-xs text-slate-500">缓存命中</div>
+          <div class="text-xl font-bold text-amber-600 mt-1">{{ formatNum(summary.cached_tokens) }}</div>
         </div>
         <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
           <div class="text-xs text-slate-500">总会话数</div>
@@ -33,22 +45,18 @@
           <div class="text-xs text-slate-500">活跃用户</div>
           <div class="text-xl font-bold text-slate-800 mt-1">{{ summary.active_users }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">平均 Token / 会话</div>
-          <div class="text-xl font-bold text-slate-800 mt-1">{{ Math.round(summary.avg_tokens_per_session) }}</div>
-        </div>
       </div>
 
-      <!-- Token 趋势柱状图 -->
+      <!-- Token 趋势柱状图（含 input/output/cached 分项） -->
       <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
-        <h3 class="text-sm font-medium text-slate-700 mb-4">Token 消耗趋势</h3>
-        <div v-if="trend.length > 0" class="flex items-end gap-1 h-40">
-          <div v-for="(item, i) in trend" :key="i" class="flex-1 flex flex-col items-center justify-end h-full">
-            <div
-              class="w-full bg-cyan-400 rounded-t transition-all min-h-[2px]"
-              :style="{ height: (item.tokens / maxTokens * 100) + '%' }"
-              :title="`${item.date}: ${item.tokens}`"
-            ></div>
+        <h3 class="text-sm font-medium text-slate-700 mb-4">Token 消耗趋势（Input / Output / Cached）</h3>
+        <div v-if="trend.length > 0" class="flex items-end gap-1 h-48">
+          <div v-for="(item, i) in trend" :key="i" class="flex-1 flex flex-col items-center justify-end h-full gap-0">
+            <div class="w-full flex flex-col" style="min-height: 2px;">
+              <div class="w-full bg-green-400 rounded-t" :style="{ height: barHeight(item.output_tokens) }"></div>
+              <div class="w-full bg-blue-400" :style="{ height: barHeight(item.input_tokens) }"></div>
+              <div class="w-full bg-amber-300 rounded-b" :style="{ height: barHeight(item.cached_tokens) }"></div>
+            </div>
             <span v-if="trend.length <= 30 || i % Math.ceil(trend.length / 15) === 0"
               class="text-[10px] text-slate-400 mt-1 rotate-45 origin-left whitespace-nowrap">
               {{ item.date.slice(5) }}
@@ -56,6 +64,44 @@
           </div>
         </div>
         <div v-else class="text-center py-8 text-slate-400">暂无趋势数据</div>
+        <div class="flex items-center gap-4 mt-3 text-xs text-slate-500">
+          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-blue-400 rounded"></span> Input</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-green-400 rounded"></span> Output</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-amber-300 rounded"></span> Cached</span>
+        </div>
+      </div>
+
+      <!-- 按模型分组 -->
+      <div v-if="modelUsage.length > 0" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
+        <div class="px-5 py-3 border-b border-slate-200">
+          <h3 class="text-sm font-medium text-slate-700">按模型统计</h3>
+        </div>
+        <table class="w-full">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">模型</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">提供商</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">对话数</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Input</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Output</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Cached</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">总 Token</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">平均耗时</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr v-for="m in modelUsage" :key="m.model" class="hover:bg-slate-50">
+              <td class="px-4 py-2 text-sm text-slate-800">{{ m.model }}</td>
+              <td class="px-4 py-2 text-sm text-slate-600">{{ m.provider }}</td>
+              <td class="px-4 py-2 text-sm text-slate-600">{{ m.conversation_count }}</td>
+              <td class="px-4 py-2 text-sm text-blue-600">{{ formatNum(m.input_tokens) }}</td>
+              <td class="px-4 py-2 text-sm text-green-600">{{ formatNum(m.output_tokens) }}</td>
+              <td class="px-4 py-2 text-sm text-amber-600">{{ formatNum(m.cached_tokens) }}</td>
+              <td class="px-4 py-2 text-sm font-medium text-slate-800">{{ formatNum(m.total_tokens) }}</td>
+              <td class="px-4 py-2 text-sm text-slate-600">{{ m.conversation_count ? Math.round(m.total_duration_ms / m.conversation_count) : 0 }}ms</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <!-- 用户用量明细 -->
@@ -68,17 +114,23 @@
             <thead class="bg-slate-50">
               <tr>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">用户</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Token 消耗</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Input</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Output</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Cached</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">总 Token</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">会话数</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">平均 Token / 会话</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Token / 会话</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
               <tr v-for="u in userUsage" :key="u.user_id" class="hover:bg-slate-50">
                 <td class="px-4 py-2 text-sm text-slate-800">{{ u.username || u.user_id }}</td>
-                <td class="px-4 py-2 text-sm text-slate-600">{{ formatNum(u.total_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-blue-600">{{ formatNum(u.input_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-green-600">{{ formatNum(u.output_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-amber-600">{{ formatNum(u.cached_tokens) }}</td>
+                <td class="px-4 py-2 text-sm font-medium text-slate-800">{{ formatNum(u.total_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-slate-600">{{ u.total_sessions }}</td>
-                <td class="px-4 py-2 text-sm text-slate-600">{{ Math.round(u.avg_tokens_per_session) }}</td>
+                <td class="px-4 py-2 text-sm text-slate-600">{{ u.avg_tokens_per_session }}</td>
               </tr>
             </tbody>
           </table>
@@ -92,15 +144,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
-import { getUsageSummary, getTokenTrend, getUserUsage, exportReport } from '@/api/saasTenant'
+import { getUsageSummary, getTokenDetail, getModelUsage, getUserUsage, exportReport } from '@/api/saasTenant'
 
 const toast = useToast()
 
 const loading = ref(true)
 const days = ref(30)
 const summary = ref<any>(null)
-const trend = ref<{ date: string; tokens: number }[]>([])
+const trend = ref<{ date: string; tokens: number; input_tokens: number; output_tokens: number; cached_tokens: number }[]>([])
 const userUsage = ref<any[]>([])
+const modelUsage = ref<any[]>([])
 
 const maxTokens = computed(() => {
   if (trend.value.length === 0) return 1
@@ -108,21 +161,30 @@ const maxTokens = computed(() => {
 })
 
 function formatNum(n: number): string {
+  if (!n) return '0'
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
   return String(n)
 }
 
+function barHeight(value: number): string {
+  if (maxTokens.value === 0) return '0%'
+  return Math.max((value / maxTokens.value) * 100, 0.5) + '%'
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const [summaryRes, trendRes, usageRes] = await Promise.allSettled([
-      getUsageSummary(days.value <= 7 ? 'week' : days.value <= 30 ? 'month' : 'month'),
-      getTokenTrend(days.value),
+    const period = days.value <= 7 ? 'week' : 'month'
+    const [summaryRes, trendRes, modelRes, usageRes] = await Promise.allSettled([
+      getUsageSummary(period),
+      getTokenDetail(days.value),
+      getModelUsage(days.value),
       getUserUsage(days.value)
     ])
     if (summaryRes.status === 'fulfilled') summary.value = summaryRes.value.summary
     if (trendRes.status === 'fulfilled') trend.value = trendRes.value.trend || []
+    if (modelRes.status === 'fulfilled') modelUsage.value = modelRes.value.models || []
     if (usageRes.status === 'fulfilled') userUsage.value = usageRes.value.users || []
   } catch (e) {
     console.error('加载报告失败:', e)
