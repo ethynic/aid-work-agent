@@ -40,7 +40,14 @@ class KnowledgeBaseTool(BaseTool):
         return base
 
     def __init__(self):
-        self.retriever = self._init_retriever()
+        self._retriever = None  # 惰性初始化，首次使用时创建
+
+    @property
+    def retriever(self):
+        """惰性获取检索器实例"""
+        if self._retriever is None:
+            self._retriever = self._init_retriever()
+        return self._retriever
 
     def _init_retriever(self):
         """初始化检索器（适配 PostgreSQL）"""

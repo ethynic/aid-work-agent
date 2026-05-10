@@ -17,7 +17,7 @@ class TenantCreate(BaseModel):
     plan: str = Field("basic", description="套餐：basic/standard/premium")
     max_instances: Optional[int] = Field(None, description="最大实例数，None 使用默认值")
     max_users: Optional[int] = Field(None, description="最大用户数，None 使用默认值")
-    tenant_code: str = Field(..., regex='^[A-Za-z0-9]{4,8}$', description='租户代码（4-8位字母数字，不区分大小写）')
+    tenant_code: str = Field(..., pattern='^[A-Za-z0-9]{4,8}$', description='租户代码（4-8位字母数字，不区分大小写）')
     expire_at: Optional[str] = Field(None, description="到期日期（YYYY-MM-DD，空表示永久有效）")
 
 
@@ -32,7 +32,7 @@ class TenantUpdate(BaseModel):
     status: Optional[str] = Field(None, description="状态：active/suspended/deactivated")
     max_instances: Optional[int] = Field(None, description="最大实例数")
     max_users: Optional[int] = Field(None, description="最大用户数")
-    tenant_code: Optional[str] = Field(None, regex='^[A-Za-z0-9]{4,8}$', description='租户代码（4-8位字母数字，不区分大小写）')
+    tenant_code: Optional[str] = Field(None, pattern='^[A-Za-z0-9]{4,8}$', description='租户代码（4-8位字母数字，不区分大小写）')
     expire_at: Optional[str] = Field(None, description="到期日期（YYYY-MM-DD，空表示永久有效）")
 
 

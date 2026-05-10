@@ -266,76 +266,80 @@ def init_tables():
 
     with get_db_connection() as conn:
         cursor = conn
+        try:
+            # 匹配客户表
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
+                    id {id_column},
+                    customer_id TEXT UNIQUE NOT NULL,
+                    tenant_id TEXT,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    company_name TEXT,
+                    contact_name TEXT,
+                    email TEXT,
+                    country TEXT,
+                    language TEXT,
+                    industry TEXT,
+                    import_category TEXT,
+                    company_size TEXT,
+                    match_reason TEXT,
+                    match_date TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # 匹配客户表
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
-                id {id_column},
-                customer_id TEXT UNIQUE NOT NULL,
-                tenant_id TEXT,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                company_name TEXT,
-                contact_name TEXT,
-                email TEXT,
-                country TEXT,
-                language TEXT,
-                industry TEXT,
-                import_category TEXT,
-                company_size TEXT,
-                match_reason TEXT,
-                match_date TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+            # 客户邮件表
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS bs_trade_specialist_customer_emails (
+                    id {id_column},
+                    email_id TEXT UNIQUE NOT NULL,
+                    customer_id TEXT NOT NULL,
+                    tenant_id TEXT,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    email_subject TEXT,
+                    email_body TEXT,
+                    email_language TEXT DEFAULT 'en',
+                    send_time TEXT,
+                    send_status TEXT DEFAULT 'success',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # 客户邮件表
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS bs_trade_specialist_customer_emails (
-                id {id_column},
-                email_id TEXT UNIQUE NOT NULL,
-                customer_id TEXT NOT NULL,
-                tenant_id TEXT,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                email_subject TEXT,
-                email_body TEXT,
-                email_language TEXT DEFAULT 'en',
-                send_time TEXT,
-                send_status TEXT DEFAULT 'success',
-                error_message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+            # 索引
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_tenant
+                ON bs_trade_specialist_matched_customers(tenant_id, created_at DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_user
+                ON bs_trade_specialist_matched_customers(user_id, created_at DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_session
+                ON bs_trade_specialist_matched_customers(session_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_customer
+                ON bs_trade_specialist_customer_emails(customer_id, created_at DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_user
+                ON bs_trade_specialist_customer_emails(user_id, created_at DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_tenant
+                ON bs_trade_specialist_customer_emails(tenant_id, created_at DESC)
+            """)
 
-        # 索引
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_tenant
-            ON bs_trade_specialist_matched_customers(tenant_id, created_at DESC)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_user
-            ON bs_trade_specialist_matched_customers(user_id, created_at DESC)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_matched_customers_session
-            ON bs_trade_specialist_matched_customers(session_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_customer
-            ON bs_trade_specialist_customer_emails(customer_id, created_at DESC)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_user
-            ON bs_trade_specialist_customer_emails(user_id, created_at DESC)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_bs_trade_specialist_customer_emails_tenant
-            ON bs_trade_specialist_customer_emails(tenant_id, created_at DESC)
-        """)
-
-        conn.commit()
-        logger.info("客户管理表初始化完成")
+            conn.commit()
+            logger.info("客户管理表初始化完成")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"初始化客户管理表失败 (已回滚): {e}")
+            raise
 
 
 def save_customer(user_id: str, session_id: str, customer: Dict[str, Any]) -> Dict[str, Any]:

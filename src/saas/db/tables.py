@@ -11,6 +11,10 @@ from loguru import logger
 def init_saas_tables(conn):
     """初始化 PostgreSQL SaaS 多租户相关表"""
     cursor = conn.cursor()
+    # 关闭自动提交，使用显式事务
+    old_autocommit = conn.autocommit
+    conn.autocommit = False
+    try:
 
     # 1. 租户表
     cursor.execute("""
@@ -145,10 +149,17 @@ def init_saas_tables(conn):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
-        ON payment_orders(tenant_id, payment_status)
-    """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
+            ON payment_orders(tenant_id, payment_status)
+        """)
 
-    conn.commit()
-    logger.info("PostgreSQL SaaS multi-tenant tables initialized")
+        conn.commit()
+        logger.info("PostgreSQL SaaS multi-tenant tables initialized")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"Failed to initialize SaaS tables (rolling back): {e}")
+        raise  # 重新抛出，让调用方也能处理
+    finally:
+        # 恢复原来的 autocommit 设置
+        conn.autocommit = old_autocommit

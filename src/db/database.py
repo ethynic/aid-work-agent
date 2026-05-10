@@ -390,6 +390,12 @@ def _apply_db_updates(conn):
 
     cursor = conn.cursor()
 
+    # 先回滚任何可能存在的失败事务，确保从干净的状态开始
+    try:
+        conn.rollback()
+    except Exception:
+        pass  # 忽略回滚失败（可能没有活动事务）
+
     # 创建更新记录表（包含文件哈希）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS _db_update_applied (
@@ -997,6 +1003,11 @@ def _init_postgresql():
             init_saas_tables(conn)
         except Exception as e:
             logger.warning(f"Failed to initialize SaaS tables (saas module may not be configured): {e}")
+            # 回滚失败的事务，避免后续操作报错
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback SaaS transaction: {rollback_err}")
 
         # 初始化客户管理表（trade-customer skill）
         try:
