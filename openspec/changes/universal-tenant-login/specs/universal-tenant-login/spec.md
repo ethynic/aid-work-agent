@@ -1,15 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Universal tenant login portal
-The system SHALL provide a universal tenant login portal at the root URL (`/`) when demo mode is disabled (`DEMO_ENABLED=false`).
+The system SHALL provide a universal tenant login portal at the root URL (`/`) when demo mode is disabled.
 
 #### Scenario: Demo mode disabled shows tenant portal
-- **WHEN** demo mode is disabled (`DEMO_ENABLED=false`)
-- **THEN** the root URL (`/`) SHALL return an HTML page with a tenant code input form
+- **WHEN** demo mode is disabled (`VITE_DEMO_ENABLED=false`)
+- **THEN** the frontend application SHALL display a tenant code input form at the root URL (`/`)
 
-#### Scenario: Demo mode enabled shows simple response
-- **WHEN** demo mode is enabled (`DEMO_ENABLED=true`)
-- **THEN** the root URL (`/`) SHALL return a simple JSON response with system information
+#### Scenario: Demo mode enabled shows demo interface
+- **WHEN** demo mode is enabled (`VITE_DEMO_ENABLED=true`)
+- **THEN** the frontend application SHALL display the demo chat interface at the root URL (`/`)
 
 ### Requirement: Tenant code input and validation
 The system SHALL accept tenant codes via a web form and validate them before redirection.
@@ -23,8 +23,8 @@ The system SHALL accept tenant codes via a web form and validate them before red
 - **THEN** the system SHALL display an error message and keep the user on the portal page
 
 #### Scenario: Tenant code format validation
-- **WHEN** user enters a tenant code that does not match the required format (4-8 alphanumeric characters)
-- **THEN** the system SHALL provide immediate client-side validation feedback
+. **WHEN** user enters a tenant code that does not match the required format (4-8 alphanumeric characters)
+- **THEN** the frontend SHALL provide immediate client-side validation feedback
 
 #### Scenario: Case-insensitive tenant code login
 - **WHEN** user enters a tenant code in lowercase (e.g., "alibb") but it's stored in uppercase (e.g., "ALIBB")

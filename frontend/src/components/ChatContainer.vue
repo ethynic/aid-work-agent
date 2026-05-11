@@ -105,7 +105,7 @@
     </main>
 
     <!-- Login Modal -->
-    <LoginModal
+    <LoginModal v-if="isDemoMode"
       :visible="showLoginModal"
       @close="showLoginModal = false"
       @success="handleLoginSuccess"
@@ -149,6 +149,7 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { useSubagentList } from '@/composables/useSubagentList'
 import { useToast } from 'vue-toastification'
 import type { AgentItem } from '@/api/saasPermissions'
+const isDemoMode = import.meta.env.VITE_DEMO_ENABLED === 'true'
 const router = useRouter()
 const toast = useToast()
 
@@ -479,7 +480,7 @@ onMounted(async () => {
   await checkAndRedirectIfMainAgentUnavailable()
 
   // 检查登录状态
-  if (!effectiveIsLoggedIn.value) {
+  if (isDemoMode && !effectiveIsLoggedIn.value) {
     showLoginModal.value = true
   } else {
     // 已登录，加载会话列表
@@ -506,7 +507,7 @@ onUnmounted(() => {
 
 async function handleSend(content: string) {
   //console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
-  if (!effectiveIsLoggedIn.value) {
+  if (isDemoMode && !effectiveIsLoggedIn.value) {
     showLoginModal.value = true
     return
   }
@@ -591,7 +592,9 @@ function now(): string {
 
 async function handleLogout() {
   await doLogout()
-  showLoginModal.value = true
+  if (isDemoMode) {
+    showLoginModal.value = true
+  }
   // 登出时清空所有缓存：会话列表、消息、附件等
   clearSessionCache()
   clearSession()
@@ -618,7 +621,7 @@ function handleLoginSuccess() {
 
 // 监听登录状态变化
 watch(effectiveIsLoggedIn, async (loggedIn) => {
-  if (!loggedIn) {
+  if (isDemoMode && !loggedIn) {
     showLoginModal.value = true
   } else {
     await loadSessions()

@@ -23,8 +23,10 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'chat',
-      component: () => import('./components/ChatContainer.vue')
+      name: 'root',
+      component: () => import.meta.env.VITE_DEMO_ENABLED === 'true'
+        ? import('./components/ChatContainer.vue')
+        : import('./components/TenantEntry.vue')
     },
     {
       path: '/chat/:subagent',

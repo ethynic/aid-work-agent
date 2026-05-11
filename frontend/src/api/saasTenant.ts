@@ -176,6 +176,7 @@ export async function listTenants(): Promise<{ success: boolean; tenants: any[] 
 
 export interface TenantFormData {
   company_name: string
+  tenant_code: string
   contact_name?: string
   contact_phone?: string
   initial_admin_name?: string
