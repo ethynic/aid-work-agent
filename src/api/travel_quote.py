@@ -3,10 +3,13 @@
 提供区域、车辆、景点、酒店、餐标、导游、费用、淡旺季等定价数据的 CRUD 接口。
 """
 
+import io
 import re
+import tempfile
 from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -456,3 +459,216 @@ async def delete_season(record_id: int, request: Request):
     if not _crud_delete("bs_travel_quote_seasons", record_id, tid):
         raise HTTPException(status_code=404, detail="记录不存在")
     return {"success": True}
+
+
+# ============================================================
+# Excel 批量导入
+# ============================================================
+
+SHEET_TABLE_MAP = {
+    "区域": ("bs_travel_quote_regions", ["name", "aliases", "parent_name", "level"]),
+    "车辆": ("bs_travel_quote_vehicles", [
+        "region_name", "vehicle_type", "vehicle_type_label", "seats_min", "seats_max",
+        "daily_rate", "overtime_rate", "overkm_rate", "driver_meal_allowance",
+        "driver_accommodation", "season_type", "remark"
+    ]),
+    "景点": ("bs_travel_quote_attractions", [
+        "region_name", "name", "category", "address", "open_time",
+        "visit_duration_hours", "internal_transport_name", "internal_transport_price", "remark"
+    ]),
+    "门票": ("bs_travel_quote_tickets", [
+        "attraction_id", "ticket_type", "ticket_type_label", "retail_price",
+        "agency_price", "group_price", "group_min_people", "season_type", "remark"
+    ]),
+    "酒店": ("bs_travel_quote_hotels", [
+        "region_name", "name", "star_rating", "star_rating_label",
+        "address", "contact_phone", "remark"
+    ]),
+    "房型": ("bs_travel_quote_rooms", [
+        "hotel_id", "room_type", "room_type_label", "max_occupancy", "bed_count",
+        "retail_price", "agency_price", "includes_breakfast", "breakfast_count",
+        "extra_bed_rate", "season_type", "remark"
+    ]),
+    "餐标": ("bs_travel_quote_meals", [
+        "region_name", "meal_tier", "meal_tier_label", "meal_type", "meal_type_label",
+        "price_per_person", "pax_per_table", "dishes_standard", "season_type", "remark"
+    ]),
+    "导游": ("bs_travel_quote_guides", [
+        "region_name", "guide_type", "guide_type_label", "guide_level", "guide_level_label",
+        "billing_method", "daily_rate", "trip_rate", "language_premium",
+        "peak_season_multiplier", "season_type", "remark"
+    ]),
+    "费用": ("bs_travel_quote_fees", [
+        "fee_name", "fee_category", "billing_method", "unit_price",
+        "is_mandatory", "sort_order", "remark"
+    ]),
+    "淡旺季": ("bs_travel_quote_seasons", [
+        "season_type", "season_type_label", "start_date", "end_date",
+        "price_multiplier", "remark"
+    ]),
+}
+
+
+def _coerce_value(col_name: str, value: Any) -> Any:
+    """将 Excel 读取的值转换为数据库兼容类型"""
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return None
+
+    numeric_cols = {
+        "seats_min", "seats_max", "daily_rate", "overtime_rate", "overkm_rate",
+        "driver_meal_allowance", "driver_accommodation", "attraction_id", "hotel_id",
+        "retail_price", "agency_price", "group_price", "group_min_people",
+        "max_occupancy", "bed_count", "breakfast_count", "extra_bed_rate",
+        "price_per_person", "pax_per_table", "daily_rate", "trip_rate",
+        "language_premium", "peak_season_multiplier", "unit_price", "sort_order",
+        "price_multiplier", "visit_duration_hours",
+    }
+    bool_cols = {"includes_breakfast", "is_mandatory"}
+
+    if col_name in numeric_cols:
+        try:
+            val = float(value)
+            return int(val) if val == int(val) else val
+        except (ValueError, TypeError):
+            return None
+
+    if col_name in bool_cols:
+        if isinstance(value, bool):
+            return value
+        s = str(value).strip().lower()
+        if s in ("true", "1", "是", "yes"):
+            return True
+        return False
+
+    return str(value).strip()
+
+
+@router.get("/import/template")
+async def download_import_template():
+    """下载 Excel 导入模板（包含 10 个 Sheet 的列头）"""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    first = True
+    for sheet_name, (_, columns) in SHEET_TABLE_MAP.items():
+        if first:
+            ws = wb.active
+            ws.title = sheet_name
+            first = False
+        else:
+            ws = wb.create_sheet(title=sheet_name)
+        for col_idx, col_name in enumerate(columns, 1):
+            ws.cell(row=1, column=col_idx, value=col_name)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=travel_quote_template.xlsx"}
+    )
+
+
+@router.post("/import/excel")
+async def import_excel(request: Request, file: UploadFile = File(...)):
+    """上传 Excel 文件批量导入定价数据"""
+    import openpyxl
+
+    tid = _get_tenant_id(request)
+
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+
+    content = await file.read()
+    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+
+    results = []
+    total_imported = 0
+    total_skipped = 0
+
+    for sheet_name in wb.sheetnames:
+        if sheet_name not in SHEET_TABLE_MAP:
+            continue
+
+        table_name, expected_cols = SHEET_TABLE_MAP[sheet_name]
+        ws = wb[sheet_name]
+        rows_iter = ws.iter_rows(values_only=True)
+
+        # 读取列头
+        try:
+            header = next(rows_iter)
+        except StopIteration:
+            continue
+
+        header_list = [str(h).strip() if h else "" for h in header]
+        col_indices = {}
+        for col_name in expected_cols:
+            if col_name in header_list:
+                col_indices[col_name] = header_list.index(col_name)
+
+        if not col_indices:
+            continue
+
+        imported = 0
+        skipped = 0
+        errors = []
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for row_num, row in enumerate(rows_iter, start=2):
+                if not row or all(v is None or (isinstance(v, str) and v.strip() == "") for v in row):
+                    continue
+
+                data = {"tenant_id": tid}
+                for col_name, col_idx in col_indices.items():
+                    if col_idx < len(row):
+                        data[col_name] = _coerce_value(col_name, row[col_idx])
+
+                # 至少需要一个非空业务字段
+                business_fields = {k: v for k, v in data.items() if k != "tenant_id" and v is not None}
+                if not business_fields:
+                    skipped += 1
+                    continue
+
+                cols = list(data.keys())
+                vals = list(data.values())
+                placeholders = ", ".join(["%s"] * len(cols))
+                col_names = ", ".join(cols)
+
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})",
+                        tuple(vals)
+                    )
+                    imported += 1
+                except Exception as e:
+                    skipped += 1
+                    error_msg = sanitize_error_info(str(e))
+                    errors.append(f"第{row_num}行: {error_msg}")
+                    logger.warning(f"Import error in {sheet_name} row {row_num}: {error_msg}")
+
+            conn.commit()
+
+        total_imported += imported
+        total_skipped += skipped
+        results.append({
+            "sheet": sheet_name,
+            "table": table_name,
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors[:10]  # 最多返回 10 条错误
+        })
+
+    wb.close()
+    logger.info(f"[TravelQuoteImport] tenant={tid} imported={total_imported} skipped={total_skipped}")
+
+    return {
+        "success": True,
+        "data": {
+            "total_imported": total_imported,
+            "total_skipped": total_skipped,
+            "results": results
+        }
+    }

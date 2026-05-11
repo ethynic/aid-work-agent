@@ -1215,8 +1215,350 @@ DELETE    /api/v1/subagents/<name>/extra                 # 删除，恢复默认
 
 ## 12. 实施优先级
 
-| 优先级 | 模块 | 工作量 | 原因 |
-|--------|------|--------|------|
-| P0 | extra.md 租户定制系统 | 小 | 改 agent prompt 拼接逻辑 + 前端编辑器，所有租户定制立即可用 |
-| P1 | 定价数据表 + 数据导入 | 中 | 核心数据层 |
-| P2 | quote-generate skill | 大 | 查库+计算+模板导出全流程，核心 skill |
+| 优先级 | 模块 | 工作量 | 状态 | 原因 |
+|--------|------|--------|------|------|
+| P0 | extra.md 租户定制系统 | 小 | ✅ 完成 | 改 agent prompt 拼接逻辑 + 前端编辑器 |
+| P1 | 定价数据表 + 数据导入 | 中 | ✅ 完成 | 核心数据层 |
+| P2 | quote-generate skill | 大 | ✅ 完成 | 查库+计算+模板导出全流程 |
+| P3 | 前端业务数据管理页面 | 中 | 待实施 | 定价数据的可视化 CRUD 管理，见第 13 节 |
+
+---
+
+## 13. 前端业务数据管理页面
+
+### 13.1 设计目标
+
+为旅游子智能体提供可视化的定价数据管理页面。旅行社管理员通过侧边栏"业务数据"菜单进入，在新标签页中管理 10 张定价数据表。
+
+复用项目已有的业务页面架构：
+- `MenuSidebar.vue` — 自动渲染 SUBAGENT.md 中的 `business_pages` 配置
+- `BaseBusinessLayout.vue` — 业务页面的通用布局（标题栏 + 返回按钮 + 内容区）
+- `window.open(route, '_blank')` — 在新标签页打开
+
+### 13.2 业务页面规划
+
+10 张定价表按功能归类为 7 个管理页面：
+
+| 页面 ID | 标题 | 图标 | 路由 | 管理的表 |
+|---------|------|------|------|---------|
+| regions | 区域管理 | 🌍 | /travel-consultant/regions | bs_travel_quote_regions |
+| vehicles | 车辆价格 | 🚐 | /travel-consultant/vehicles | bs_travel_quote_vehicles |
+| attractions | 景点门票 | 🏔️ | /travel-consultant/attractions | bs_travel_quote_attractions + bs_travel_quote_tickets |
+| hotels | 酒店房型 | 🏨 | /travel-consultant/hotels | bs_travel_quote_hotels + bs_travel_quote_rooms |
+| meals | 餐标价格 | 🍽️ | /travel-consultant/meals | bs_travel_quote_meals |
+| guides | 导游费用 | 🧑‍🏫 | /travel-consultant/guides | bs_travel_quote_guides |
+| fees | 其他费用 | 💰 | /travel-consultant/fees | bs_travel_quote_fees + bs_travel_quote_seasons |
+
+**设计决策**：
+- 景点+门票合并为一个页面（门票是景点的子资源，用弹窗/折叠面板管理）
+- 酒店+房型合并为一个页面（房型是酒店的子资源）
+- 其他费用+淡旺季合并为一个页面（淡旺季配置简单，作为费用页的一个 Tab）
+- 区域、车辆、餐标、导游各独立一个页面
+
+### 13.3 SUBAGENT.md business_pages 配置
+
+在 `subagents/travel-consultant/SUBAGENT.md` 的 YAML frontmatter 中添加：
+
+```yaml
+business_pages:
+  - id: regions
+    title: 区域管理
+    icon: 🌍
+    route: /travel-consultant/regions
+  - id: vehicles
+    title: 车辆价格
+    icon: 🚐
+    route: /travel-consultant/vehicles
+  - id: attractions
+    title: 景点门票
+    icon: 🏔️
+    route: /travel-consultant/attractions
+  - id: hotels
+    title: 酒店房型
+    icon: 🏨
+    route: /travel-consultant/hotels
+  - id: meals
+    title: 餐标价格
+    icon: 🍽️
+    route: /travel-consultant/meals
+  - id: guides
+    title: 导游费用
+    icon: 🧑‍🏫
+    route: /travel-consultant/guides
+  - id: fees
+    title: 其他费用
+    icon: 💰
+    route: /travel-consultant/fees
+```
+
+### 13.4 前端路由配置
+
+在 `frontend/src/main.ts` 中添加两组路由（参考外贸获客智能体的模式）：
+
+**独立模式**：
+```ts
+{
+  path: '/travel-consultant',
+  name: 'travel-consultant',
+  component: () => import('./components/BaseBusinessLayout.vue'),
+  children: [
+    { path: 'regions', name: 'travel-consultant-regions', component: () => import('./components/travel/RegionManager.vue') },
+    { path: 'vehicles', name: 'travel-consultant-vehicles', component: () => import('./components/travel/VehicleManager.vue') },
+    { path: 'attractions', name: 'travel-consultant-attractions', component: () => import('./components/travel/AttractionManager.vue') },
+    { path: 'hotels', name: 'travel-consultant-hotels', component: () => import('./components/travel/HotelManager.vue') },
+    { path: 'meals', name: 'travel-consultant-meals', component: () => import('./components/travel/MealManager.vue') },
+    { path: 'guides', name: 'travel-consultant-guides', component: () => import('./components/travel/GuideManager.vue') },
+    { path: 'fees', name: 'travel-consultant-fees', component: () => import('./components/travel/FeeManager.vue') },
+  ]
+}
+```
+
+**租户模式**（嵌套在 `/t/:tenant_id` 路由组下）：
+```ts
+{
+  path: 'travel-consultant',
+  name: 'tenant-travel-consultant',
+  component: () => import('./components/BaseBusinessLayout.vue'),
+  children: [
+    { path: 'regions', name: 'tenant-travel-consultant-regions', component: () => import('./components/travel/RegionManager.vue') },
+    // ... 其余 6 个页面同上，name 加 tenant- 前缀
+  ]
+}
+```
+
+### 13.5 前端 API 客户端
+
+新建 `frontend/src/api/travelQuote.ts`，封装所有 `/api/v1/travel-quote/*` 接口调用。
+
+```typescript
+// 基础模式（参考 customer.ts）
+import { getAuthHeader } from './auth'
+
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/travel-quote`
+
+// 通用 CRUD 函数
+async function crudList(resource: string, params?: Record<string, string>) { ... }
+async function crudGet(resource: string, id: number) { ... }
+async function crudCreate(resource: string, data: any) { ... }
+async function crudUpdate(resource: string, id: number, data: any) { ... }
+async function crudDelete(resource: string, id: number) { ... }
+
+// 各资源的具体方法
+export const travelQuoteAPI = {
+  regions: { list, create, update, delete },
+  vehicles: { list, create, update, delete },
+  attractions: { list, create, update, delete },
+  tickets: { list(attractionId), create(attractionId, data), update, delete },
+  hotels: { list, create, update, delete },
+  rooms: { list(hotelId), create(hotelId, data), update, delete },
+  meals: { list, create, update, delete },
+  guides: { list, create, update, delete },
+  fees: { list, create, update, delete },
+  seasons: { list, create, update, delete },
+}
+```
+
+### 13.6 Vue 组件设计
+
+所有管理页面组件放在 `frontend/src/components/travel/` 目录下。
+
+#### 通用 CRUD 管理页面模式
+
+每个管理页面遵循统一的交互模式：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  [页面标题]                              [+ 新增] [区域▼筛选] │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ 数据表格（可编辑行 / 点击编辑按钮弹出表单）                ││
+│  │  名称 │ 字段1 │ 字段2 │ ... │ 操作（编辑/删除）          ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                             │
+│  [新增/编辑弹窗]                                             │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ 表单字段（根据各表结构动态渲染）                           ││
+│  │                              [取消] [保存]               ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 各页面组件说明
+
+**RegionManager.vue（区域管理）**
+- 表格列：区域名称、别名、上级区域、层级、状态
+- 筛选：层级（省/市/区县）
+- 操作：新增/编辑/删除
+
+**VehicleManager.vue（车辆价格）**
+- 表格列：车型、显示名、座位范围、日租金、超时费、超公里费、司机餐补、司机住宿费、季节类型
+- 筛选：区域名称、车型
+- 操作：新增/编辑/删除
+
+**AttractionManager.vue（景点门票）**
+- 主表格列：景点名称、区域、分类、地址、游览时长、景区交通、状态
+- 筛选：区域名称
+- 操作：新增/编辑/删除景点 + 点击行展开门票管理
+- 子表格（展开行）：票种、显示名、挂牌价、协议价、团体价、季节类型
+- 子操作：新增/编辑/删除门票
+
+**HotelManager.vue（酒店房型）**
+- 主表格列：酒店名称、区域、星级、地址、联系电话、状态
+- 筛选：区域名称
+- 操作：新增/编辑/删除酒店 + 点击行展开房型管理
+- 子表格（展开行）：房型、显示名、入住人数、床位数、门市价、协议价、含早、加床费、季节类型
+- 子操作：新增/编辑/删除房型
+
+**MealManager.vue（餐标价格）**
+- 表格列：区域、餐标档次、餐类、每人价格、每桌人数、菜品标准、季节类型
+- 筛选：区域名称、餐标档次
+- 操作：新增/编辑/删除
+
+**GuideManager.vue（导游费用）**
+- 表格列：区域、导游类型、级别、计费方式、日薪/整团费、外语加价、旺季倍率
+- 筛选：区域名称、导游类型
+- 操作：新增/编辑/删除
+
+**FeeManager.vue（其他费用 + 淡旺季）**
+- Tab 1「其他费用」：费用名称、分类、计费方式、单价、是否必含
+- Tab 2「淡旺季配置」：季节类型、显示名、开始日期、结束日期、价格倍率
+- 操作：新增/编辑/删除
+
+### 13.7 数据流
+
+```
+MenuSidebar 检测当前子智能体 = travel-consultant
+  → 读取 SUBAGENT.md 的 business_pages
+  → 渲染 7 个业务菜单项
+  → 用户点击 → window.open(route, '_blank')
+
+新标签页加载 Vue App
+  → BaseBusinessLayout.vue 包裹
+  → 匹配路由 → 加载对应 Manager 组件
+  → 组件 onMounted → 调用 travelQuoteAPI.*.list()
+  → API 请求 /api/v1/travel-quote/* （带 X-Tenant-Id）
+  → 后端 travel_quote.py 处理 CRUD
+  → 返回数据 → 渲染表格
+
+用户新增/编辑/删除
+  → 前端表单弹窗 → travelQuoteAPI.*.create/update/delete()
+  → 后端处理 → 返回结果 → 刷新列表
+```
+
+### 13.8 文件变更清单
+
+#### 后端变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `subagents/travel-consultant/SUBAGENT.md` | 修改 | YAML frontmatter 添加 `business_pages` 配置 |
+| `src/api/travel_quote.py` | 修改 | 新增 Excel 导入 API + 模板下载 API（见 13.12 节） |
+
+#### 前端新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `frontend/src/api/travelQuote.ts` | API 客户端，封装 10 个资源的 CRUD 调用 |
+| `frontend/src/components/travel/RegionManager.vue` | 区域管理页面 |
+| `frontend/src/components/travel/VehicleManager.vue` | 车辆价格管理页面 |
+| `frontend/src/components/travel/AttractionManager.vue` | 景点门票管理页面（含子表格门票管理） |
+| `frontend/src/components/travel/HotelManager.vue` | 酒店房型管理页面（含子表格房型管理） |
+| `frontend/src/components/travel/MealManager.vue` | 餐标价格管理页面 |
+| `frontend/src/components/travel/GuideManager.vue` | 导游费用管理页面 |
+| `frontend/src/components/travel/FeeManager.vue` | 其他费用 + 淡旺季管理页面（双 Tab） |
+
+#### 前端修改文件
+
+| 文件 | 说明 |
+|------|------|
+| `frontend/src/main.ts` | 添加 travel-consultant 路由（独立模式 + 租户模式） |
+
+### 13.9 实施顺序
+
+```
+Step 1: SUBAGENT.md 添加 business_pages → 侧边栏菜单立即可见
+Step 2: travelQuote.ts API 客户端 → 前端可调用后端接口
+Step 3: main.ts 添加路由 → 菜单点击后能加载对应组件
+Step 4: 逐个实现 7 个 Manager 组件（按使用频率排序）
+        4.1 RegionManager → 其他页面依赖区域数据做筛选
+        4.2 AttractionManager → 景点+门票，核心数据
+        4.3 HotelManager → 酒店+房型
+        4.4 VehicleManager → 车辆价格
+        4.5 MealManager → 餐标
+        4.6 GuideManager → 导游
+        4.7 FeeManager → 其他费用 + 淡旺季
+Step 5: 验证全流程（菜单渲染 → 页面打开 → CRUD 操作 → 数据持久化）
+```
+
+### 13.10 验证方式
+
+1. **菜单渲染**：进入旅游顾问对话页面，左侧边栏应出现"业务数据"分组，包含 7 个菜单项
+2. **页面打开**：点击每个菜单项，在新标签页中打开对应管理页面，显示 BaseBusinessLayout 头部 + 完整表格和操作按钮
+3. **CRUD 操作**：每个页面测试新增、编辑、删除，确认数据正确持久化到数据库
+4. **Excel 导入**：下载模板 → 填入数据 → 上传导入 → 列表自动刷新
+5. **租户隔离**：不同租户登录后只能看到自己租户的定价数据
+6. **关联数据**：景点页面展开门票管理、酒店页面展开房型管理，确认父子数据联动正确
+
+---
+
+### 13.11 已知问题修复：BaseBusinessLayout 渲染空白
+
+**问题**：`BaseBusinessLayout.vue` 第 29 行使用 `<slot></slot>` 而非 `<router-view />`。Vue Router 的嵌套子路由通过 `<router-view />` 渲染，`<slot>` 只在组件被手动嵌套时生效。导致所有业务数据页面打开后只有标题栏，内容区域为空。
+
+**修复**：将 `<slot></slot>` 改为 `<router-view />`。
+
+**影响范围**：所有使用 BaseBusinessLayout 作为路由父组件的页面（外贸获客 + 旅游顾问的所有业务数据页面）。
+
+---
+
+### 13.12 Excel 批量导入功能
+
+#### 设计思路
+
+旅行社已有大量定价数据存放在 Excel 中，需要批量导入到 10 张定价表。提供两个 API：
+- **下载模板**：返回包含 10 个 Sheet 的空 Excel 文件，每个 Sheet 预置列头
+- **上传导入**：读取上传的 Excel，按 Sheet 名匹配目标表，逐行插入
+
+#### API 设计
+
+**下载导入模板**：
+```
+GET /api/v1/travel-quote/import/template
+响应：直接返回 .xlsx 文件流
+```
+
+**上传 Excel 导入**：
+```
+POST /api/v1/travel-quote/import/excel
+请求：multipart/form-data，字段名 file
+响应：{ success: true, data: { results: [{ sheet: "区域", imported: 10, skipped: 2, errors: [...] }] } }
+```
+
+#### Sheet 名与表的映射
+
+| Sheet 名 | 目标表 | 关键列 |
+|----------|--------|--------|
+| 区域 | bs_travel_quote_regions | name, aliases, parent_name, level |
+| 车辆 | bs_travel_quote_vehicles | vehicle_type, vehicle_type_label, seats_min, seats_max, daily_rate |
+| 景点 | bs_travel_quote_attractions | name, region_name, category |
+| 门票 | bs_travel_quote_tickets | attraction_id, ticket_type, retail_price |
+| 酒店 | bs_travel_quote_hotels | name, region_name, star_rating |
+| 房型 | bs_travel_quote_rooms | hotel_id, room_type, retail_price |
+| 餐标 | bs_travel_quote_meals | meal_tier, meal_type, price_per_person |
+| 导游 | bs_travel_quote_guides | guide_type, daily_rate |
+| 费用 | bs_travel_quote_fees | fee_name, fee_category, unit_price |
+| 淡旺季 | bs_travel_quote_seasons | season_type, start_date, end_date |
+
+#### 前端交互
+
+每个管理页面顶部操作区新增两个按钮：
+- **"下载模板"** — 调用模板下载 API，保存为 travel_quote_template.xlsx
+- **"导入 Excel"** — 打开文件选择器（只接受 .xlsx），上传后显示导入结果弹窗（成功 N 条，跳过 N 条，失败原因列表），成功后自动刷新列表
+
+#### 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/api/travel_quote.py` | 修改 | 新增 GET /import/template 和 POST /import/excel |
+| `frontend/src/api/travelQuote.ts` | 修改 | 新增 downloadTemplate() 和 importExcel() |
+| 7 个 Manager.vue | 修改 | 操作区添加"下载模板"和"导入 Excel"按钮 |

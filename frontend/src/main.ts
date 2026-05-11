@@ -76,6 +76,21 @@ const router = createRouter({
         },
       ]
     },
+    // 旅游咨询顾问业务数据页面
+    {
+      path: '/travel-consultant',
+      name: 'travel-consultant',
+      component: () => import('./components/BaseBusinessLayout.vue'),
+      children: [
+        { path: 'regions', name: 'travel-consultant-regions', component: () => import('./components/travel/RegionManager.vue') },
+        { path: 'vehicles', name: 'travel-consultant-vehicles', component: () => import('./components/travel/VehicleManager.vue') },
+        { path: 'attractions', name: 'travel-consultant-attractions', component: () => import('./components/travel/AttractionManager.vue') },
+        { path: 'hotels', name: 'travel-consultant-hotels', component: () => import('./components/travel/HotelManager.vue') },
+        { path: 'meals', name: 'travel-consultant-meals', component: () => import('./components/travel/MealManager.vue') },
+        { path: 'guides', name: 'travel-consultant-guides', component: () => import('./components/travel/GuideManager.vue') },
+        { path: 'fees', name: 'travel-consultant-fees', component: () => import('./components/travel/FeeManager.vue') },
+      ]
+    },
     // SaaS 租户管理 Portal（仅平台管理员）
     {
       path: '/portal/login',
@@ -121,6 +136,21 @@ const router = createRouter({
               name: 'tenant-trade-specialist-customers',
               component: CustomerInfo
             },
+          ]
+        },
+        // 旅游咨询顾问业务数据页面
+        {
+          path: 'travel-consultant',
+          name: 'tenant-travel-consultant',
+          component: () => import('./components/BaseBusinessLayout.vue'),
+          children: [
+            { path: 'regions', name: 'tenant-travel-consultant-regions', component: () => import('./components/travel/RegionManager.vue') },
+            { path: 'vehicles', name: 'tenant-travel-consultant-vehicles', component: () => import('./components/travel/VehicleManager.vue') },
+            { path: 'attractions', name: 'tenant-travel-consultant-attractions', component: () => import('./components/travel/AttractionManager.vue') },
+            { path: 'hotels', name: 'tenant-travel-consultant-hotels', component: () => import('./components/travel/HotelManager.vue') },
+            { path: 'meals', name: 'tenant-travel-consultant-meals', component: () => import('./components/travel/MealManager.vue') },
+            { path: 'guides', name: 'tenant-travel-consultant-guides', component: () => import('./components/travel/GuideManager.vue') },
+            { path: 'fees', name: 'tenant-travel-consultant-fees', component: () => import('./components/travel/FeeManager.vue') },
           ]
         },
       ]

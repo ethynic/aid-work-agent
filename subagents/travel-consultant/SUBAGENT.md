@@ -18,6 +18,37 @@ skills:
   allowed:
     - quote-generate
     - paddleocr-doc-parsing
+
+# 业务数据页面配置
+business_pages:
+  - id: regions
+    title: 区域管理
+    icon: "\U0001F30D"
+    route: /travel-consultant/regions
+  - id: vehicles
+    title: 车辆价格
+    icon: "\U0001F690"
+    route: /travel-consultant/vehicles
+  - id: attractions
+    title: 景点门票
+    icon: "\U0001F3D4️"
+    route: /travel-consultant/attractions
+  - id: hotels
+    title: 酒店房型
+    icon: "\U0001F3E8"
+    route: /travel-consultant/hotels
+  - id: meals
+    title: 餐标价格
+    icon: "\U0001F37D️"
+    route: /travel-consultant/meals
+  - id: guides
+    title: 导游费用
+    icon: "\U0001F9D1‍\U0001F3EB"
+    route: /travel-consultant/guides
+  - id: fees
+    title: 其他费用
+    icon: "\U0001F4B0"
+    route: /travel-consultant/fees
 context:
   max_input_tokens: 12000
   max_output_tokens: 6000
