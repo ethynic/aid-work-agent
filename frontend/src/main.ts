@@ -119,6 +119,7 @@ const router = createRouter({
       children: [
         { path: '', name: 'tenant-chat', component: () => import('./components/ChatContainer.vue') },
         { path: 'login', name: 'tenant-login', component: () => import('./components/saas/TenantLogin.vue') },
+        { path: 'reset-password', name: 'tenant-reset-password', component: () => import('./components/saas/ResetPassword.vue') },
         { path: 'users', name: 'tenant-users', component: () => import('./components/saas/TenantUserManager.vue') },
         { path: 'knowledge', name: 'tenant-knowledge', component: () => import('./components/KnowledgeBase.vue') },
         { path: 'channels', name: 'tenant-channels', component: () => import('./components/saas/ChannelConfig.vue') },

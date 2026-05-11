@@ -293,6 +293,19 @@
         <ThemeSwitcher />
       </div>
 
+      <!-- 修改密码 - 租户模式已登录用户 -->
+      <div v-if="isTenantMode && tenantIsLoggedIn" class="flex-shrink-0 px-3 pb-2">
+        <button
+          @click="handleModifyPassword"
+          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+          </svg>
+          <span>修改密码</span>
+        </button>
+      </div>
+
       <!-- 退出登录 - 租户模式专用 -->
       <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
         <button
@@ -756,6 +769,13 @@ async function confirmRename() {
     showRenameModal.value = false
     renamingSessionId.value = null
     renameInput.value = ''
+  }
+}
+
+// 租户模式修改密码
+function handleModifyPassword() {
+  if (tenantId.value) {
+    router.push(`/t/${tenantId.value}/reset-password`)
   }
 }
 

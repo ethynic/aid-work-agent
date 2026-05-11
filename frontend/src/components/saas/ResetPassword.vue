@@ -2,8 +2,8 @@
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-8 pt-8 pb-6">
-        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">重置密码</h1>
-        <p class="text-sm text-slate-500 text-center mb-8">通过手机号重置登录密码</p>
+        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">{{ isLoggedInMode ? '修改密码' : '重置密码' }}</h1>
+        <p class="text-sm text-slate-500 text-center mb-8">{{ isLoggedInMode ? '验证身份后重置登录密码' : '通过手机号重置登录密码' }}</p>
 
         <!-- 步骤1：验证手机号和图形验证码 -->
         <div v-if="step === 1" class="space-y-4">
@@ -14,7 +14,8 @@
               type="tel"
               placeholder="请输入手机号"
               maxlength="11"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+              :disabled="isLoggedInMode"
+              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400 disabled:bg-slate-200 disabled:text-slate-500"
             />
           </div>
 
@@ -155,10 +156,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import { getCaptcha, sendResetPasswordCode, resetPassword } from '@/api/auth'
 
 const route = useRoute()
-const tenantId = computed(() => route.query.tenant_id as string || '')
+const { admin, logout } = useTenantAuth()
+
+// 判断是否为已登录用户修改密码模式（从租户前台侧边栏进入）
+const isLoggedInMode = computed(() => !!admin.value?.phone)
+const tenantId = computed(() =>
+  (route.params.tenant_id as string) || (route.query.tenant_id as string) || ''
+)
 const loginUrl = computed(() =>
   tenantId.value ? `/t/${tenantId.value}/login` : '/portal/login'
 )
@@ -284,6 +292,10 @@ async function handleResetPassword() {
     })
     if (res.success) {
       step.value = 'success'
+      // 已登录用户修改密码后清除登录态
+      if (isLoggedInMode.value) {
+        await logout()
+      }
       // 3秒后自动跳转到登录页
       setTimeout(() => {
         window.location.href = loginUrl.value
@@ -300,6 +312,10 @@ async function handleResetPassword() {
 
 onMounted(() => {
   refreshCaptcha()
+  // 已登录模式下预填充手机号
+  if (isLoggedInMode.value && admin.value?.phone) {
+    phone.value = admin.value.phone
+  }
 })
 
 onUnmounted(() => {
