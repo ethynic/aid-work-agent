@@ -176,7 +176,7 @@ const {
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init: initTenantAuth } = useTenantAuth()
-const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession } = useSession()
+const { currentSessionId, sessions, createNewSession, loadSessions, loadLatestSession, selectSession, renameSession, clearSessionCache: clearSessionListCache } = useSession()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 
 const route = useRoute()
@@ -599,6 +599,7 @@ async function handleLogout() {
   clearSessionCache()
   clearSession()
   clearAttachments()
+  clearSessionListCache()
   messages.value = []
 }
 
@@ -608,6 +609,7 @@ function handleLoginSuccess() {
   clearSessionCache()
   clearSession()
   clearAttachments()
+  clearSessionListCache()
   messages.value = []
   // 重新加载会话列表并自动打开最近会话
   loadSessions().then(async () => {

@@ -114,6 +114,21 @@ CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_i
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
+-- Token成本价表
+CREATE TABLE IF NOT EXISTS token_cost_prices (
+    id SERIAL PRIMARY KEY,
+    model_name TEXT UNIQUE NOT NULL,
+    input_price_per_m NUMERIC(10,4),
+    output_price_per_m NUMERIC(10,4),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 初始数据：qwen-plus 模型单价
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
+VALUES ('qwen-plus', 0.8, 2.0)
+ON CONFLICT (model_name) DO NOTHING;
+
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (
     id SERIAL PRIMARY KEY,

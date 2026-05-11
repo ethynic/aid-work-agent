@@ -838,37 +838,64 @@ class ChatRecordDB:
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # 按租户分组统计，排除测试数据
+            # 按租户分组统计，LEFT JOIN 成本价表计算费用，排除测试数据
+            # 同时用子查询标记有未配单价的租户
             cursor.execute("""
                 SELECT
-                    tenant_id,
+                    cr.tenant_id,
                     COUNT(*) as conversation_count,
-                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
-                    COALESCE(SUM(completion_tokens), 0) as output_tokens
-                FROM chat_records
-                WHERE created_at >= %s AND created_at <= %s
-                  AND NOT (prompt_tokens = 0 AND completion_tokens = 0)
-                GROUP BY tenant_id
+                    COALESCE(SUM(cr.prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(cr.completion_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cr.prompt_tokens * tcp.input_price_per_m / 1000000), 0) as input_cost,
+                    COALESCE(SUM(cr.completion_tokens * tcp.output_price_per_m / 1000000), 0) as output_cost,
+                    EXISTS(
+                        SELECT 1 FROM chat_records cr2
+                        LEFT JOIN token_cost_prices tcp2 ON cr2.model = tcp2.model_name
+                        WHERE cr2.tenant_id = cr.tenant_id
+                          AND cr2.created_at >= %s AND cr2.created_at <= %s
+                          AND NOT (cr2.prompt_tokens = 0 AND cr2.completion_tokens = 0)
+                          AND tcp2.model_name IS NULL
+                          AND cr2.model IS NOT NULL
+                    ) as has_unpriced_tokens
+                FROM chat_records cr
+                LEFT JOIN token_cost_prices tcp ON cr.model = tcp.model_name
+                WHERE cr.created_at >= %s AND cr.created_at <= %s
+                  AND NOT (cr.prompt_tokens = 0 AND cr.completion_tokens = 0)
+                GROUP BY cr.tenant_id
                 ORDER BY conversation_count DESC
-            """, (start_date, end_date))
-
+            """, (start_date, end_date, start_date, end_date))
             rows = cursor.fetchall()
+
             tenant_data = []
             total_input_tokens = 0
             total_output_tokens = 0
             total_conversations = 0
+            total_input_cost = 0.0
+            total_output_cost = 0.0
+            has_unpriced = False
 
             for row in rows:
                 if row["conversation_count"] > 0:
+                    input_cost = float(row["input_cost"]) if row["input_cost"] else 0.0
+                    output_cost = float(row["output_cost"]) if row["output_cost"] else 0.0
+                    tenant_unpriced = bool(row["has_unpriced_tokens"])
                     tenant_data.append({
                         "tenant_id": row["tenant_id"],
                         "input_tokens": row["input_tokens"],
                         "output_tokens": row["output_tokens"],
-                        "conversation_count": row["conversation_count"]
+                        "conversation_count": row["conversation_count"],
+                        "input_cost": input_cost,
+                        "output_cost": output_cost,
+                        "total_cost": round(input_cost + output_cost, 2),
+                        "has_unpriced_tokens": tenant_unpriced
                     })
                     total_input_tokens += row["input_tokens"]
                     total_output_tokens += row["output_tokens"]
                     total_conversations += row["conversation_count"]
+                    total_input_cost += input_cost
+                    total_output_cost += output_cost
+                    if tenant_unpriced:
+                        has_unpriced = True
 
             return {
                 "month": month_str,
@@ -876,7 +903,11 @@ class ChatRecordDB:
                     "total_input_tokens": total_input_tokens,
                     "total_output_tokens": total_output_tokens,
                     "total_conversations": total_conversations,
-                    "tenant_count": len(tenant_data)
+                    "tenant_count": len(tenant_data),
+                    "total_input_cost": round(total_input_cost, 2),
+                    "total_output_cost": round(total_output_cost, 2),
+                    "total_cost": round(total_input_cost + total_output_cost, 2),
+                    "has_unpriced_tokens": has_unpriced
                 },
                 "data": tenant_data
             }

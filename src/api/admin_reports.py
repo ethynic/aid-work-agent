@@ -97,7 +97,11 @@ async def get_platform_token_usage(
             "company_name": company_name,
             "input_tokens": tenant_item["input_tokens"],
             "output_tokens": tenant_item["output_tokens"],
-            "conversation_count": tenant_item["conversation_count"]
+            "conversation_count": tenant_item["conversation_count"],
+            "input_cost": tenant_item["input_cost"],
+            "output_cost": tenant_item["output_cost"],
+            "total_cost": tenant_item["total_cost"],
+            "has_unpriced_tokens": tenant_item["has_unpriced_tokens"]
         })
 
     # 4. 构建响应（使用 ChatRecordDB 返回的汇总信息）

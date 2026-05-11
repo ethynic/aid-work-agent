@@ -125,6 +125,8 @@ import { useToast } from 'vue-toastification'
 import { getCaptcha } from '@/api/auth'
 import { adminPasswordLogin, getTenantPublicInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useAgent } from '@/composables/useAgent'
+import { useSession } from '@/composables/useSession'
 
 const router = useRouter()
 const route = useRoute()
@@ -201,6 +203,14 @@ async function handleLogin() {
       ...(isPortalRoute.value ? { required_role: 'platform_admin' } : {})
     })
     if (res.success && res.token && res.user) {
+      // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）
+      const { clearSessionCache: clearAgentSessionCache, clearSession: clearAgentSession, clearAttachments } = useAgent()
+      const { clearSessionCache: clearSessionListCache } = useSession()
+      clearAgentSessionCache()
+      clearAgentSession()
+      clearAttachments()
+      clearSessionListCache()
+
       // 平台管理员的 tenant 可能为 null
       const tenantInfo = res.tenant ? { ...res.tenant, status: res.tenant.status } : null
       if (tenantInfo) {

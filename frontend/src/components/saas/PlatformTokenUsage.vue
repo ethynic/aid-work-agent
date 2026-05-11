@@ -19,7 +19,7 @@
 
     <template v-else>
       <!-- 汇总卡片 -->
-      <div v-if="summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div v-if="summary" class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
           <div class="text-xs text-slate-500">租户数量</div>
           <div class="text-xl font-bold text-slate-800 mt-1">{{ summary.tenant_count }}</div>
@@ -35,6 +35,13 @@
         <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
           <div class="text-xs text-slate-500">总对话次数</div>
           <div class="text-xl font-bold text-slate-800 mt-1">{{ summary.total_conversations }}</div>
+        </div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+          <div class="text-xs text-slate-500">
+            总成本 (元)
+            <span v-if="summary.has_unpriced_tokens" class="text-amber-500 text-[10px] ml-1">含未计价模型</span>
+          </div>
+          <div class="text-xl font-bold text-amber-600 mt-1">{{ formatCost(summary.total_cost) }}</div>
         </div>
       </div>
 
@@ -52,6 +59,7 @@
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">租户名称</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">输入Token数 (百万)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">输出Token数 (百万)</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Token成本 (元)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">对话次数</th>
               </tr>
             </thead>
@@ -62,6 +70,9 @@
                 <td class="px-4 py-2 text-sm text-slate-800">{{ item.company_name }}</td>
                 <td class="px-4 py-2 text-sm text-blue-600">{{ formatTokensToMillionsThreeDecimals(item.input_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-green-600">{{ formatTokensToMillionsThreeDecimals(item.output_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-amber-600">
+                  {{ formatCost(item.total_cost, item.has_unpriced_tokens) }}
+                </td>
                 <td class="px-4 py-2 text-sm text-slate-600">{{ item.conversation_count }}</td>
               </tr>
               <!-- 汇总行 -->
@@ -69,6 +80,9 @@
                 <td class="px-4 py-2 text-sm text-slate-800" colspan="3">总计</td>
                 <td class="px-4 py-2 text-sm text-blue-600">{{ formatTokensToMillionsThreeDecimals(summary.total_input_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-green-600">{{ formatTokensToMillionsThreeDecimals(summary.total_output_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-amber-600">
+                  {{ formatCost(summary.total_cost, summary.has_unpriced_tokens) }}
+                </td>
                 <td class="px-4 py-2 text-sm text-slate-600">{{ summary.total_conversations }}</td>
               </tr>
             </tbody>
@@ -120,6 +134,12 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+}
+
+function formatCost(cost: number, hasUnpricedTokens?: boolean): string {
+  if (cost > 0) return cost.toFixed(2)
+  if (hasUnpricedTokens) return '—'
+  return '0.00'
 }
 
 onMounted(() => loadData())

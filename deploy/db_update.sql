@@ -380,3 +380,17 @@ CREATE INDEX IF NOT EXISTS idx_tenants_tenant_code ON tenants(tenant_code);
 UPDATE tenants
 SET tenant_code = 't' || UPPER(RIGHT(tenant_id, 5))
 WHERE tenant_code IS NULL;
+
+-- 2026-05-11，新增 Token 成本价表，用于平台报表计算各模型 Token 消耗成本
+CREATE TABLE IF NOT EXISTS token_cost_prices (
+    id SERIAL PRIMARY KEY,
+    model_name TEXT UNIQUE NOT NULL,
+    input_price_per_m NUMERIC(10,4),
+    output_price_per_m NUMERIC(10,4),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
+VALUES ('qwen-plus', 0.8, 2.0)
+ON CONFLICT (model_name) DO NOTHING;

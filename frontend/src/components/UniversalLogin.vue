@@ -152,6 +152,8 @@ import { useToast } from 'vue-toastification'
 import { getCaptcha } from '@/api/auth'
 import { unifiedLogin } from '@/api/auth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useAgent } from '@/composables/useAgent'
+import { useSession } from '@/composables/useSession'
 
 const { setLogin } = useTenantAuth()
 const toast = useToast()
@@ -266,10 +268,13 @@ async function handleLogin() {
         setLogin(res.token, adminInfo, { tenant_id: '', company_name: '', plan: 'free', status: 'active' })
       }
 
-      // 显示成功消息
-      toast.success('登录成功', {
-        timeout: 2000
-      })
+      // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）
+      const { clearSessionCache: clearAgentSessionCache, clearSession: clearAgentSession, clearAttachments } = useAgent()
+      const { clearSessionCache: clearSessionListCache } = useSession()
+      clearAgentSessionCache()
+      clearAgentSession()
+      clearAttachments()
+      clearSessionListCache()
 
       // 跳转
       window.location.href = res.redirect_url
