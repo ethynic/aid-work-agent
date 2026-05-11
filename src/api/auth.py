@@ -6,7 +6,7 @@
 import secrets
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -67,6 +67,15 @@ class LoginRequest(BaseModel):
     captcha_id: str
 
 
+class UnifiedLoginRequest(BaseModel):
+    """统一登录请求（租户代码 + 手机号/用户名 + 密码 + 图形验证码）"""
+    tenant_code: str  # 租户代码（4-8位字母数字）
+    identifier: str   # 手机号或用户名
+    password: str     # 密码
+    captcha_code: str # 图形验证码
+    captcha_id: str   # 图形验证码ID
+
+
 class ResetPasswordRequest(BaseModel):
     """重置密码请求"""
     phone: str
@@ -86,6 +95,16 @@ class LoginResponse(BaseModel):
     token: Optional[str] = None
     user: Optional[dict] = None
     message: Optional[str] = None
+
+
+class UnifiedLoginResponse(BaseModel):
+    """统一登录响应"""
+    success: bool
+    token: Optional[str] = None
+    user: Optional[dict] = None
+    tenant_id: Optional[str] = None
+    redirect_url: Optional[str] = None
+    errors: Optional[List[Dict[str, str]]] = None  # [{"field": "...", "message": "..."}]
 
 
 class UserInfo(BaseModel):
@@ -433,6 +452,118 @@ async def login(request: Request, body: LoginRequest):
         success=True,
         token=token,
         user=get_user_info_with_admin(user)
+    )
+
+
+@router.post("/unified-login")
+async def unified_login(request: Request, body: UnifiedLoginRequest):
+    """统一登录接口：租户代码 + 手机号/用户名 + 密码 + 图形验证码
+
+    验证顺序：
+    1. 图形验证码
+    2. 租户代码（格式、存在性、状态）
+    3. 用户凭证（手机号/用户名 + 密码）
+    4. 用户-租户归属检查
+
+    所有验证错误统一收集，一次性返回。
+    """
+    from src.config.settings import settings
+    from src.saas.db.tenant_db import TenantDB
+    from src.saas.models.enums import TenantStatus
+
+    errors = []
+
+    # 1. 验证图形验证码
+    if not verify_captcha(body.captcha_id, body.captcha_code):
+        errors.append({"field": "captcha_code", "message": "图形验证码错误或已过期，过期时间5分钟"})
+
+    # 2. 验证租户代码格式
+    tenant_code = body.tenant_code.strip().upper()
+    import re
+    if not re.match(r'^[A-Z0-9]{4,8}$', tenant_code):
+        errors.append({"field": "tenant_code", "message": "租户代码格式无效（需4-8位字母数字）"})
+
+    # 如果格式错误，直接返回，不继续验证
+    if errors:
+        return UnifiedLoginResponse(success=False, errors=errors)
+
+    # 3. 查询租户
+    tenant = None
+    try:
+        tenant = TenantDB.get_by_code(tenant_code)
+    except Exception as e:
+        logger.error(f"查询租户失败: {e}")
+
+    if not tenant:
+        errors.append({"field": "tenant_code", "message": "租户代码不存在"})
+        return UnifiedLoginResponse(success=False, errors=errors)
+
+    # 4. 检查租户状态
+    status = tenant.get("status")
+    if status != TenantStatus.ACTIVE.value:
+        if status == TenantStatus.SUSPENDED.value:
+            errors.append({"field": "tenant_code", "message": "租户已被暂停，请联系管理员"})
+        elif status == TenantStatus.EXPIRED.value:
+            errors.append({"field": "tenant_code", "message": "租户已过期，请联系管理员续期"})
+        else:
+            errors.append({"field": "tenant_code", "message": f"租户状态异常：{status}"})
+
+    # 5. 检查租户是否已过期（expire_at字段）
+    expire_at = tenant.get("expire_at")
+    if expire_at:
+        try:
+            expire_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
+            if expire_date < datetime.now():
+                errors.append({"field": "tenant_code", "message": "租户已过期，请联系管理员续期"})
+        except Exception:
+            # 日期解析失败，忽略过期检查
+            pass
+
+    # 6. 验证用户凭证（复用现有逻辑）
+    identifier = body.identifier.strip()
+    user = None
+    is_phone = False
+
+    # 判断是否为手机号格式
+    if identifier.isdigit() and len(identifier) == 11:
+        user = UserDB.get_by_phone(identifier)
+        is_phone = True
+    else:
+        # 按用户名查找
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
+            row = cursor.fetchone()
+            if row:
+                user = dict(row)
+
+    if not user:
+        errors.append({"field": "identifier", "message": "用户不存在"})
+    else:
+        # 检查用户是否属于该租户
+        user_tenant_id = user.get("tenant_id")
+        if user_tenant_id != tenant["tenant_id"]:
+            errors.append({"field": "identifier", "message": "该用户不属于此租户"})
+
+        # 检查密码
+        password_hash = user.get("password_hash")
+        if not password_hash:
+            errors.append({"field": "password", "message": "密码未设置，请使用忘记密码功能重置"})
+        elif not verify_password(body.password, password_hash):
+            errors.append({"field": "password", "message": "手机号或密码有误"})
+
+    # 如果有错误，返回所有错误
+    if errors:
+        return UnifiedLoginResponse(success=False, errors=errors)
+
+    # 7. 登录成功
+    token = generate_token(user["user_id"])
+    return UnifiedLoginResponse(
+        success=True,
+        token=token,
+        user=get_user_info_with_admin(user),
+        tenant_id=tenant["tenant_id"],
+        redirect_url=f"/t/{tenant['tenant_id']}"
     )
 
 
