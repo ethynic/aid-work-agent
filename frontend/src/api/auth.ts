@@ -233,6 +233,46 @@ export async function login(request: NewLoginRequest): Promise<LoginResponse> {
   return res.json()
 }
 
+// ============== 统一登录 ==============
+
+export interface UnifiedLoginRequest {
+  tenant_code: string
+  identifier: string
+  password: string
+  captcha_code: string
+  captcha_id: string
+}
+
+export interface UnifiedLoginResponse {
+  success: boolean
+  token?: string
+  user?: {
+    user_id: string
+    username: string
+    phone?: string
+    avatar_url?: string
+  }
+  tenant_id?: string
+  redirect_url?: string
+  message?: string
+  errors?: Array<{
+    field: string
+    message: string
+  }>
+}
+
+/**
+ * 统一登录接口：租户代码 + 手机号/用户名 + 密码 + 图形验证码
+ */
+export async function unifiedLogin(request: UnifiedLoginRequest): Promise<UnifiedLoginResponse> {
+  const res = await fetch(`${API_BASE}/unified-login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return res.json()
+}
+
 // ============== 忘记密码 ==============
 
 export interface SendResetCodeRequest {
