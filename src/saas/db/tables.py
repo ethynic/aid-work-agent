@@ -16,8 +16,8 @@ def init_saas_tables(conn):
     conn.autocommit = False
     try:
 
-    # 1. 租户表
-    cursor.execute("""
+        # 1. 租户表
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS tenants (
             id SERIAL PRIMARY KEY,
             tenant_id TEXT UNIQUE NOT NULL,
@@ -35,18 +35,18 @@ def init_saas_tables(conn):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tenants_status
         ON tenants(status)
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tenants_tenant_code
         ON tenants(tenant_code)
-    """)
+        """)
 
-    # 4. 订阅表
-    cursor.execute("""
+        # 4. 订阅表
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
             id SERIAL PRIMARY KEY,
             subscription_id TEXT UNIQUE NOT NULL,
@@ -63,18 +63,18 @@ def init_saas_tables(conn):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant
         ON subscriptions(tenant_id, status)
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_user
         ON subscriptions(user_id, status)
-    """)
+        """)
 
-    # 5. 智能体实例表
-    cursor.execute("""
+        # 5. 智能体实例表
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS agent_instances (
             id SERIAL PRIMARY KEY,
             instance_id TEXT UNIQUE NOT NULL,
@@ -89,14 +89,14 @@ def init_saas_tables(conn):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant
         ON agent_instances(tenant_id, status)
-    """)
+        """)
 
-    # 8. 用户-数字员工授权表
-    cursor.execute("""
+        # 8. 用户+数字员工授权表
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_agent_permissions (
             id SERIAL PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -105,18 +105,18 @@ def init_saas_tables(conn):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, agent_id)
         )
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user
         ON user_agent_permissions(user_id)
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user
         ON user_agent_permissions(tenant_id, user_id)
-    """)
+        """)
 
-    # 6. 租户渠道配置表
-    cursor.execute("""
+        # 6. 租户渠道配置表
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS tenant_channel_configs (
             id SERIAL PRIMARY KEY,
             config_id TEXT UNIQUE NOT NULL,
@@ -127,14 +127,14 @@ def init_saas_tables(conn):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    cursor.execute("""
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant
         ON tenant_channel_configs(tenant_id, channel_type)
-    """)
+        """)
 
-    # 8. 支付订单表
-    cursor.execute("""
+        # 8. 支付订单表
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS payment_orders (
             id SERIAL PRIMARY KEY,
             order_id TEXT UNIQUE NOT NULL,
@@ -148,10 +148,10 @@ def init_saas_tables(conn):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
+        """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
-            ON payment_orders(tenant_id, payment_status)
+        CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
+        ON payment_orders(tenant_id, payment_status)
         """)
 
         conn.commit()

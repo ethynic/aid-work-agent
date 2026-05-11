@@ -494,6 +494,26 @@ export async function exportReport(days: number = 30): Promise<any> {
   return res.json()
 }
 
+/**
+ * 获取租户Token消耗明细报表
+ * @param month 月份，格式 YYYY-MM
+ * @param page 页码，从1开始
+ * @param pageSize 每页记录数，默认100
+ * @returns 租户Token消耗明细数据
+ */
+export async function getTenantTokenDetails(month: string, page: number = 1, pageSize: number = 100): Promise<any> {
+  const params = new URLSearchParams({
+    month,
+    page: page.toString(),
+    page_size: pageSize.toString()
+  })
+  const res = await fetch(`${API_BASE}/reports/token-details?${params}`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取Token消耗明细失败')
+  return res.json()
+}
+
 // ==================== 计费 ====================
 
 export async function getPlans(): Promise<{

@@ -168,8 +168,13 @@ function getCurrentTenantId(): string | null {
 }
 
 export function getAuthHeader(): Record<string, string> {
-  const isTenantMode = window.location.pathname.startsWith('/t/')
-  const tokenKey = isTenantMode ? 'saas_token' : 'demo_token'
+  const path = window.location.pathname
+  let tokenKey = 'demo_token' // 默认
+  if (path.startsWith('/t/')) {
+    tokenKey = 'saas_token'
+  } else if (path.startsWith('/portal')) {
+    tokenKey = 'portal_token'
+  }
   const token = localStorage.getItem(tokenKey)
   const headers: Record<string, string> = {}
   if (token) {

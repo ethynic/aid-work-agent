@@ -89,6 +89,7 @@ memory:
 auth:
   enabled: true
   default_role: employee
+  max_concurrent_tokens: 10
 
 # 平台管理员配置
 admin:

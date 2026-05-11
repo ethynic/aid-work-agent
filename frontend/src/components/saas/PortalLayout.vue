@@ -173,6 +173,7 @@ const portalMenuItems = [
   { path: '/portal', label: '仪表盘', icon: '📊' },
   { path: '/portal/tenants', label: '租户管理', icon: '🏢' },
   { path: '/portal/subagents', label: '数字员工管理', icon: '🤖' },
+  { path: '/portal/token-usage', label: '平台Token消耗', icon: '📊' },
 ]
 
 // 根据路由选择菜单

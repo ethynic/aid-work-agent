@@ -789,6 +789,191 @@ class ChatRecordDB:
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    @staticmethod
+    def parse_month_range(month_str: str) -> tuple[str, str]:
+        """
+        将YYYY-MM格式的月份字符串转换为时间范围
+
+        Args:
+            month_str: 月份字符串，如 "2026-05"
+
+        Returns:
+            (start_date, end_date): 格式为 "YYYY-MM-DD HH:MM:SS"
+        """
+        from datetime import datetime, timedelta
+
+        try:
+            # 解析月份
+            year_month = datetime.strptime(month_str, "%Y-%m")
+
+            # 计算月份的开始和结束
+            start_date = year_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if year_month.month == 12:
+                end_date = year_month.replace(year=year_month.year + 1, month=1, day=1)
+            else:
+                end_date = year_month.replace(month=year_month.month + 1, day=1)
+
+            # 减去1秒得到当月的最后一刻
+            end_date = end_date - timedelta(seconds=1)
+
+            return (
+                start_date.strftime("%Y-%m-%d %H:%M:%S"),
+                end_date.strftime("%Y-%m-%d %H:%M:%S")
+            )
+        except ValueError as e:
+            raise ValueError(f"无效的月份格式: {month_str}, 请使用 YYYY-MM 格式")
+
+    @staticmethod
+    def get_platform_token_usage(month_str: str) -> Dict[str, Any]:
+        """
+        获取平台Token消耗汇总报表（所有租户按月统计）
+
+        Args:
+            month_str: 月份字符串，格式 YYYY-MM
+
+        Returns:
+            包含汇总信息和租户列表的字典
+        """
+        start_date, end_date = ChatRecordDB.parse_month_range(month_str)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # 按租户分组统计，排除测试数据
+            cursor.execute("""
+                SELECT
+                    tenant_id,
+                    COUNT(*) as conversation_count,
+                    COALESCE(SUM(prompt_tokens), 0) as input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as output_tokens
+                FROM chat_records
+                WHERE created_at >= %s AND created_at <= %s
+                  AND NOT (prompt_tokens = 0 AND completion_tokens = 0)
+                GROUP BY tenant_id
+                ORDER BY conversation_count DESC
+            """, (start_date, end_date))
+
+            rows = cursor.fetchall()
+            tenant_data = []
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_conversations = 0
+
+            for row in rows:
+                if row["conversation_count"] > 0:
+                    tenant_data.append({
+                        "tenant_id": row["tenant_id"],
+                        "input_tokens": row["input_tokens"],
+                        "output_tokens": row["output_tokens"],
+                        "conversation_count": row["conversation_count"]
+                    })
+                    total_input_tokens += row["input_tokens"]
+                    total_output_tokens += row["output_tokens"]
+                    total_conversations += row["conversation_count"]
+
+            return {
+                "month": month_str,
+                "summary": {
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                    "total_conversations": total_conversations,
+                    "tenant_count": len(tenant_data)
+                },
+                "data": tenant_data
+            }
+
+    @staticmethod
+    def get_tenant_token_details(tenant_id: str, month_str: str, page: int = 1, page_size: int = 100) -> Dict[str, Any]:
+        """
+        获取租户Token消耗明细（分页）
+
+        Args:
+            tenant_id: 租户ID
+            month_str: 月份字符串，格式 YYYY-MM
+            page: 页码，从1开始
+            page_size: 每页记录数
+
+        Returns:
+            包含汇总信息和分页明细的字典
+        """
+        start_date, end_date = ChatRecordDB.parse_month_range(month_str)
+        offset = (page - 1) * page_size
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 查询明细数据
+            cursor.execute("""
+                SELECT
+                    record_id,
+                    user_message,
+                    prompt_tokens as input_tokens,
+                    completion_tokens as output_tokens,
+                    created_at
+                FROM chat_records
+                WHERE tenant_id = %s
+                  AND created_at >= %s AND created_at <= %s
+                  AND NOT (prompt_tokens = 0 AND completion_tokens = 0)
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """, (tenant_id, start_date, end_date, page_size, offset))
+
+            rows = cursor.fetchall()
+            details = []
+            for row in rows:
+                details.append({
+                    "record_id": row["record_id"],
+                    "user_message": row["user_message"] or "",
+                    "input_tokens": row["input_tokens"],
+                    "output_tokens": row["output_tokens"],
+                    "created_at": row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else ""
+                })
+
+            # 查询月度汇总
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_conversations,
+                    COALESCE(SUM(prompt_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as total_output_tokens
+                FROM chat_records
+                WHERE tenant_id = %s
+                  AND created_at >= %s AND created_at <= %s
+                  AND NOT (prompt_tokens = 0 AND completion_tokens = 0)
+            """, (tenant_id, start_date, end_date))
+
+            summary_row = cursor.fetchone()
+            total_conversations = summary_row["total_conversations"] if summary_row else 0
+            total_input_tokens = summary_row["total_input_tokens"] if summary_row else 0
+            total_output_tokens = summary_row["total_output_tokens"] if summary_row else 0
+
+            # 查询总记录数用于分页
+            cursor.execute("""
+                SELECT COUNT(*) as total_count
+                FROM chat_records
+                WHERE tenant_id = %s
+                  AND created_at >= %s AND created_at <= %s
+                  AND NOT (prompt_tokens = 0 AND completion_tokens = 0)
+            """, (tenant_id, start_date, end_date))
+
+            total_count_row = cursor.fetchone()
+            total_count = total_count_row["total_count"] if total_count_row else 0
+
+            return {
+                "month": month_str,
+                "tenant_id": tenant_id,
+                "summary": {
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                    "total_conversations": total_conversations
+                },
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total_count": total_count,
+                    "total_pages": (total_count + page_size - 1) // page_size if page_size > 0 else 0
+                },
+                "data": details
+            }
+
 
 # ============== 短信验证码 ==============
 

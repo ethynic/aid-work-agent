@@ -14,6 +14,7 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin, get_current_admin
 from src.saas.db.usage_log_db import UsageLogDB
+from src.db.models import ChatRecordDB
 from src.api.auth import get_current_user
 from src.config.settings import settings
 
@@ -201,6 +202,59 @@ async def get_model_usage(
         "start_date": start_date,
         "end_date": end_date,
         "models": models,
+    }
+
+
+@router.get("/token-details")
+async def get_tenant_token_details(
+    request: Request,
+    month: str = Query(..., description="月份，格式 YYYY-MM，如 2026-05"),
+    page: int = Query(1, description="页码，从1开始", ge=1),
+    page_size: int = Query(100, description="每页记录数，默认100", ge=1, le=200),
+):
+    """
+    获取租户Token消耗明细报表
+
+    仅租户管理员可访问，显示本租户在指定月份的Token消耗明细，支持分页。
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+
+    logger.info(f"租户管理员 {admin.get('user_id')} 请求Token消耗明细，月份: {month}, 租户: {tenant_id}")
+
+    try:
+        result = ChatRecordDB.get_tenant_token_details(tenant_id, month, page, page_size)
+    except ValueError as e:
+        return {
+            "success": False,
+            "month": month,
+            "summary": {},
+            "pagination": {},
+            "data": [],
+            "message": str(e)
+        }
+    except Exception as e:
+        logger.error(f"获取租户Token消耗明细失败: {e}")
+        return {
+            "success": False,
+            "month": month,
+            "summary": {},
+            "pagination": {},
+            "data": [],
+            "message": "获取报表数据时发生内部错误"
+        }
+
+    return {
+        "success": True,
+        "month": result["month"],
+        "tenant_id": result["tenant_id"],
+        "summary": result["summary"],
+        "pagination": result["pagination"],
+        "data": result["data"],
+        "message": f"共 {result['pagination']['total_count']} 条记录"
     }
 
 

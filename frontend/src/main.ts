@@ -26,7 +26,7 @@ const router = createRouter({
       name: 'root',
       component: () => import.meta.env.VITE_DEMO_ENABLED === 'true'
         ? import('./components/ChatContainer.vue')
-        : import('./components/TenantEntry.vue')
+        : import('./components/UniversalLogin.vue')
     },
     {
       path: '/chat/:subagent',
@@ -109,6 +109,7 @@ const router = createRouter({
         { path: '', name: 'portal-dashboard', component: () => import('./components/saas/TenantDashboard.vue') },
         { path: 'tenants', name: 'portal-tenants', component: () => import('./components/saas/TenantMgmt.vue') },
         { path: 'subagents', name: 'portal-subagents', component: () => import('./components/DigitalEmployeeManager.vue') },
+        { path: 'token-usage', name: 'portal-token-usage', component: () => import('./components/saas/PlatformTokenUsage.vue') },
       ]
     },
     // 租户入口 /t/:tenant_id（所有用户）
@@ -125,6 +126,7 @@ const router = createRouter({
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
         { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },
+        { path: 'token-usage', name: 'tenant-token-usage', component: () => import('./components/saas/TenantTokenUsage.vue') },
         // 外贸获客智能体业务数据页面
         {
           path: 'trade-specialist',

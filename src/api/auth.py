@@ -271,7 +271,9 @@ def get_current_user(request: Request) -> Optional[dict]:
         token = auth_header[7:]
         user_id = verify_token(token)
         if user_id:
-            return UserDB.get_by_id(user_id)
+            user = UserDB.get_by_id(user_id)
+            logger.debug(f"get_current_user user from DB: {user}")
+            return user
     return None
 
 

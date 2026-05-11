@@ -1633,6 +1633,10 @@ app.include_router(subagent.router)
 from src.api import word as word_api
 app.include_router(word_api.router)
 
+# 平台管理报表 API
+from src.api import admin_reports
+app.include_router(admin_reports.router)
+
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes
