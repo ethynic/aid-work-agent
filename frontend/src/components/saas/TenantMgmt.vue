@@ -14,7 +14,6 @@
       <table class="w-full">
         <thead class="bg-slate-50 border-b border-slate-200">
           <tr>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户ID</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户代码</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">企业名称</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">初始管理员手机号</th>
@@ -27,8 +26,11 @@
         </thead>
         <tbody class="divide-y divide-slate-100">
           <tr v-for="tenant in tenants" :key="tenant.tenant_id" class="hover:bg-slate-50">
-            <td class="px-4 py-3 text-sm text-slate-800 font-mono">{{ tenant.tenant_id }}</td>
-            <td class="px-4 py-3 text-sm text-slate-800 font-mono">{{ tenant.tenant_code || '-' }}</td>
+            <td class="px-4 py-3">
+              <a href="javascript:void(0)" @click="openDetailDialog(tenant)" class="text-cyan-600 hover:text-cyan-800 hover:underline font-mono text-sm">
+                {{ tenant.tenant_code || '-' }}
+              </a>
+            </td>
             <td class="px-4 py-3 text-sm text-slate-800">{{ tenant.company_name }}</td>
             <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.initial_admin_phone || '-' }}</td>
             <td class="px-4 py-3">
@@ -55,18 +57,6 @@
                   class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
                   未授权
                 </span>
-                <button
-                  @click="handleSyncInstances(tenant.tenant_id)"
-                  :disabled="syncingInstances === tenant.tenant_id"
-                  class="inline-flex items-center px-2 py-1 text-xs bg-cyan-100 text-cyan-700 hover:bg-cyan-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="根据配额创建/删除实例"
-                >
-                  <svg v-if="syncingInstances === tenant.tenant_id" class="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  创建实例
-                </button>
               </div>
             </td>
             <td class="px-4 py-3">
@@ -86,10 +76,6 @@
             </td>
             <td class="px-4 py-3">
               <div class="flex gap-2">
-                <button @click="openDetailDialog(tenant)"
-                  class="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200 transition-colors">
-                  详情
-                </button>
                 <button @click="openEditDialog(tenant)"
                   class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
                   编辑
@@ -645,24 +631,6 @@ async function copyTenantUrl(tenantId: string) {
   }
 }
 
-async function handleSyncInstances(tenantId: string) {
-  if (!confirm('确定要同步租户的数字员工实例吗？\n\n系统将根据当前配额创建或删除实例。\n已创建的实例名称格式为："数字员工名称 - 实例序号"。')) {
-    return
-  }
-  syncingInstances.value = tenantId
-  try {
-    const res = await syncTenantInstances(tenantId)
-    if (res.success) {
-      toast.success(res.message || '实例同步成功')
-    } else {
-      toast.error(res.message || '实例同步失败')
-    }
-  } catch (e: any) {
-    toast.error(e.message || '实例同步失败')
-  } finally {
-    syncingInstances.value = null
-  }
-}
 
 async function handleCheckInstances() {
   if (!currentTenant.value?.tenant_id) {
