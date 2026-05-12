@@ -96,6 +96,7 @@ class WecomConfig(BaseModel):
     media: WecomMediaConfig = Field(default_factory=WecomMediaConfig)
     rate_limit: WecomRateLimitConfig = Field(default_factory=WecomRateLimitConfig)
     retry: WecomRetryConfig = Field(default_factory=WecomRetryConfig)
+    welcome_message: str = ""
 
 
 class DingtalkConfig(BaseModel):

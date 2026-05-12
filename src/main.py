@@ -221,6 +221,23 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Memory cleanup error: {e}")
     asyncio.create_task(_memory_cleanup_loop())
 
+    # Start channel dedup cleanup background task
+    async def _dedup_cleanup_loop():
+        """后台定时清理过期消息去重记录"""
+        from src.channels.idempotency import MessageDeduplicator
+        dedup = MessageDeduplicator(ttl_seconds=300)
+        interval = 300  # 5 分钟
+        logger.info(f"Channel dedup cleanup task started, interval={interval}s")
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                cleaned = dedup.cleanup_expired()
+                if cleaned > 0:
+                    logger.info(f"Channel dedup cleanup: cleaned {cleaned} expired records")
+            except Exception as e:
+                logger.error(f"Channel dedup cleanup error: {e}")
+    asyncio.create_task(_dedup_cleanup_loop())
+
     # Start instance lock cleanup background task
     if settings.saas.enabled:
         async def _instance_lock_cleanup_loop():

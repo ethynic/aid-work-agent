@@ -12,7 +12,9 @@
 
 import asyncio
 import hashlib
+import re
 import time
+from collections import deque
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -80,6 +82,11 @@ class WeComAdapter(ChannelAdapter):
         # HTTP 连接池（延迟初始化）
         self._http_client: Optional[httpx.AsyncClient] = None
 
+        # 速率限制器
+        self._rate_limiter: Dict[str, deque] = {}
+        self._rate_limit_enabled = config.rate_limit.enabled
+        self._rate_limit_max = config.rate_limit.max_per_minute
+
     @property
     def channel_type(self) -> str:
         return "wecom"
@@ -100,6 +107,29 @@ class WeComAdapter(ChannelAdapter):
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
             logger.info("企业微信 HTTP 连接池已关闭")
+
+    def _check_rate_limit(self, user_id: str) -> bool:
+        """滑动窗口速率限制检查
+
+        Args:
+            user_id: 目标用户 ID
+
+        Returns:
+            True 表示允许通过，False 表示已超限
+        """
+        if not self._rate_limit_enabled:
+            return True
+
+        now = time.time()
+        window = self._rate_limiter.setdefault(user_id, deque())
+        # 移除 60 秒前的记录
+        while window and window[0] < now - 60:
+            window.popleft()
+        if len(window) >= self._rate_limit_max:
+            logger.warning(f"Rate limit exceeded for user {user_id}")
+            return False
+        window.append(now)
+        return True
 
     # ==================== Token 管理 ====================
 
@@ -193,7 +223,12 @@ class WeComAdapter(ChannelAdapter):
         message_type = MessageType.TEXT
 
         if msg_type == "text":
-            content["text"] = root.findtext("Content", "")
+            raw_text = root.findtext("Content", "")
+            # 清洗群聊 @前缀: "@应用名称 实际消息" -> "实际消息"
+            cleaned_text = re.sub(r"^@\S+\s+", "", raw_text)
+            if cleaned_text != raw_text:
+                logger.debug(f"清洗群聊 @前缀: '{raw_text}' -> '{cleaned_text}'")
+            content["text"] = cleaned_text
         elif msg_type == "image":
             message_type = MessageType.IMAGE
             content["pic_url"] = root.findtext("PicUrl", "")
@@ -267,6 +302,10 @@ class WeComAdapter(ChannelAdapter):
         Returns:
             是否全部发送成功
         """
+        if not self._check_rate_limit(user_id):
+            logger.warning(f"send_long_message 被速率限制拦截: user={user_id}")
+            return False
+
         max_bytes = self._msg_config.max_bytes
         parts = WeComMessageBuilder.split_long_message(
             text, max_bytes, self._msg_config.split_on_paragraph

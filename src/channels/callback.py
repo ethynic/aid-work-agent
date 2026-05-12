@@ -319,13 +319,35 @@ async def wecom_callback_post(request: Request):
             # 无加密模式: 使用原始 body
             decrypted_xml = body_str
 
+        # 校验消息接收方
+        msg_root = ET.fromstring(decrypted_xml)
+        to_user_name = msg_root.findtext("ToUserName", "")
+        if to_user_name and to_user_name != adapter.corp_id:
+            logger.warning(
+                f"ToUserName mismatch: expected {adapter.corp_id}, got {to_user_name}"
+            )
+            return PlainTextResponse("Invalid receiver", status_code=403)
+
         # 解析解密后的消息
         message = await adapter.parse_message({"body": decrypted_xml})
 
-        # 事件消息不处理（subscribe/unsubscribe 等）
+        # 事件消息处理
         if message.message_type == "event":
             event_type = message.content.get("event", "")
             logger.info(f"WeCom 事件: {event_type}, 用户: {message.user_id}")
+            if event_type == "subscribe":
+                welcome = (
+                    settings.channels.wecom.welcome_message
+                    or "你好！我是智能助手，可以帮你处理日常任务。\n"
+                       "直接发送消息即可开始对话。\n"
+                       "输入「帮助」查看支持的功能。"
+                )
+                asyncio.create_task(adapter.send_text(welcome, message.user_id))
+            return PlainTextResponse("success")
+
+        # 速率限制检查
+        if not adapter._check_rate_limit(message.user_id):
+            logger.warning(f"WeCom 消息被速率限制拦截: user={message.user_id}")
             return PlainTextResponse("success")
 
         # 去重检查

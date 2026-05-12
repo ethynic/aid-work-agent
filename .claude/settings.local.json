@@ -70,7 +70,8 @@
       "Bash(echo \"---EXIT:$?\")",
       "Bash(xargs grep:*)",
       "Bash(find:*)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "WebFetch(domain:developer.work.weixin.qq.com)"
     ]
   }
 }

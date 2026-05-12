@@ -4,6 +4,7 @@
 管理第三方渠道的会话信息
 """
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -92,6 +93,17 @@ class ChannelSessionManager:
         """生成会话ID"""
         return f"{channel_type}_{channel_user_id}"
 
+    @staticmethod
+    def _parse_json_field(value: Optional[str], default: Any = None) -> Any:
+        """解析数据库中的 JSON 字段，失败时 fallback"""
+        if value is None:
+            return default
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            # 兼容旧数据（str(dict) 格式）
+            return value
+
     def get_or_create_session(
         self,
         channel_type: str,
@@ -136,7 +148,10 @@ class ChannelSessionManager:
                 """, (now, now, session_id))
                 conn.commit()
 
-                return dict(row)
+                result = dict(row)
+                result["context_data"] = self._parse_json_field(result.get("context_data"), {})
+                result["metadata"] = self._parse_json_field(result.get("metadata"))
+                return result
             else:
                 # 创建新会话
                 title = f"{channel_type}会话"
@@ -161,7 +176,7 @@ class ChannelSessionManager:
                     now,
                     now,
                     now,
-                    str(metadata) if metadata else None,
+                    json.dumps(metadata, ensure_ascii=False) if metadata else None,
                 ))
                 conn.commit()
 
@@ -202,7 +217,12 @@ class ChannelSessionManager:
             """, (session_id,))
 
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            result = dict(row)
+            result["context_data"] = self._parse_json_field(result.get("context_data"), {})
+            result["metadata"] = self._parse_json_field(result.get("metadata"))
+            return result
 
     def update_session(
         self,
@@ -234,11 +254,11 @@ class ChannelSessionManager:
 
         if context_data is not None:
             updates.append("context_data = %s")
-            values.append(str(context_data))
+            values.append(json.dumps(context_data, ensure_ascii=False))
 
         if metadata is not None:
             updates.append("metadata = %s")
-            values.append(str(metadata))
+            values.append(json.dumps(metadata, ensure_ascii=False))
 
         values.append(session_id)
 
@@ -292,8 +312,8 @@ class ChannelSessionManager:
                 role,
                 content,
                 message_type,
-                str(attachments) if attachments else None,
-                str(metadata) if metadata else None,
+                json.dumps(attachments, ensure_ascii=False) if attachments else None,
+                json.dumps(metadata, ensure_ascii=False) if metadata else None,
                 now,
             ))
 
@@ -347,7 +367,13 @@ class ChannelSessionManager:
                 """, (session_id,))
 
             rows = cursor.fetchall()
-            return [dict(row) for row in reversed(rows)]
+            messages = []
+            for row in reversed(rows):
+                msg = dict(row)
+                msg["attachments"] = self._parse_json_field(msg.get("attachments"), [])
+                msg["metadata"] = self._parse_json_field(msg.get("metadata"))
+                messages.append(msg)
+            return messages
 
     def get_conversation_context(
         self,
