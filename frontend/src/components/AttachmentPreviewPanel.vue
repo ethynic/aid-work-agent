@@ -1,5 +1,5 @@
 <template>
-  <div class="w-[480px] max-w-[50vw] flex flex-col border-l border-gray-200 bg-white h-full flex-shrink-0">
+  <div class="w-full md:w-[480px] md:max-w-[50vw] flex flex-col border-l border-gray-200 bg-white h-full flex-shrink-0">
     <!-- Header -->
     <div class="flex items-center gap-2 px-4 py-3 border-b border-gray-200 bg-gray-50 flex-shrink-0">
       <!-- 文件图标 -->

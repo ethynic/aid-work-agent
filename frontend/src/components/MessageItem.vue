@@ -3,7 +3,7 @@
     :class="[
       'flex gap-3 p-4 rounded-2xl transition-all',
       message.role === 'user'
-        ? 'bg-primary-50 border border-primary-200 ml-12'
+        ? 'bg-primary-50 border border-primary-200 md:ml-12'
         : 'bg-white border border-gray-200'
     ]"
   >
@@ -90,7 +90,7 @@
               v-for="(msg, index) in displayMessages"
               :key="index"
               :class="[
-                'text-xs py-1 px-2 rounded text-gray-500',
+                'text-[10px] md:text-xs py-1 px-2 rounded text-gray-500',
                 getProgressClass(msg.type)
               ]"
             >

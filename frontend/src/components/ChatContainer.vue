@@ -6,13 +6,14 @@
       <MenuSidebar
         v-if="!isInPortalLayout"
         :is-collapsed="isSidebarCollapsed"
+        :is-mobile="isMobile"
         :current-subagent-id="currentSubagentId"
         :available-subagents="availableSubagents"
         @collapse="isSidebarCollapsed = true"
       />
 
       <!-- Right Content Area -->
-      <div class="flex-1 flex min-w-0">
+      <div class="flex-1 flex min-w-0 relative">
         <!-- Chat Area -->
         <div class="flex-1 flex flex-col min-w-0">
           <!-- Header Bar -->
@@ -95,11 +96,15 @@
 
         <!-- Attachment Preview Panel -->
         <Transition name="slide">
-          <AttachmentPreviewPanel
+          <div
             v-if="isPreviewOpen"
-            :attachment="previewAttachment"
-            @close="closePreview"
-          />
+            class="absolute inset-y-0 right-0 z-50 w-full md:static md:w-auto md:z-auto"
+          >
+            <AttachmentPreviewPanel
+              :attachment="previewAttachment"
+              @close="closePreview"
+            />
+          </div>
         </Transition>
       </div>
     </main>
@@ -147,11 +152,13 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { useSubagentList } from '@/composables/useSubagentList'
+import { useMobile } from '@/composables/useMobile'
 import { useToast } from 'vue-toastification'
 import type { AgentItem } from '@/api/saasPermissions'
 const isDemoMode = import.meta.env.VITE_DEMO_ENABLED === 'true'
 const router = useRouter()
 const toast = useToast()
+const { isMobile } = useMobile()
 
 // 从 PortalLayout 注入侧边栏状态（租户前台模式），非租户路由下使用默认值
 const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed', { value: false })

@@ -25,7 +25,7 @@
         <div v-if="shouldShowSelector" class="relative">
           <button
             @click="showSubagentDropdown = !showSubagentDropdown"
-            class="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white border border-primary-700 rounded-lg transition-colors shadow-sm min-w-[160px]"
+            class="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white border border-primary-700 rounded-lg transition-colors shadow-sm min-w-[120px] md:min-w-[160px]"
             :title="currentSubagentName"
           >
             <span class="text-sm font-medium text-white truncate flex-1">
@@ -82,7 +82,7 @@
           ></div>
         </div>
         <!-- 只读标签（单个选项时） -->
-        <div v-else-if="showReadonlyLabel" class="px-4 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg text-sm font-medium truncate min-w-[160px]">
+        <div v-else-if="showReadonlyLabel" class="px-4 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg text-sm font-medium truncate min-w-[120px] md:min-w-[160px]">
           {{ currentSubagentName }}
         </div>
       </div>
@@ -90,44 +90,46 @@
 
     <!-- Right Side - User Info & Actions -->
     <div v-if="isLoggedIn" class="flex items-center gap-3 flex-shrink-0">
-      <!-- User Name -->
-      <div class="flex items-center gap-2">
-        <span class="text-sm text-gray-600">{{ user?.username }}</span>
-        <button
-          v-if="showDemoLogout"
-          @click="$emit('logout')"
-          class="px-2 py-1 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-        >
-          退出
-        </button>
-      </div>
+      <div class="hidden md:flex items-center gap-3">
+        <!-- User Name -->
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-gray-600">{{ user?.username }}</span>
+          <button
+            v-if="showDemoLogout"
+            @click="$emit('logout')"
+            class="px-2 py-1 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+          >
+            退出
+          </button>
+        </div>
 
-      <!-- More Menu -->
-      <div class="relative">
-        <button
-          @click="showMenuDropdown = !showMenuDropdown"
-          class="px-2 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          更多
-        </button>
+        <!-- More Menu -->
+        <div class="relative">
+          <button
+            @click="showMenuDropdown = !showMenuDropdown"
+            class="px-2 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            更多
+          </button>
 
-        <!-- Dropdown Menu -->
+          <!-- Dropdown Menu -->
+          <div
+            v-if="showMenuDropdown"
+            class="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50"
+          >
+            <slot name="menu-items" :close-menu="closeMenu">
+              <slot name="extra-menu-items" :close-menu="closeMenu" />
+            </slot>
+          </div>
+        </div>
+
+        <!-- Click outside to close menu -->
         <div
           v-if="showMenuDropdown"
-          class="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50"
-        >
-          <slot name="menu-items" :close-menu="closeMenu">
-            <slot name="extra-menu-items" :close-menu="closeMenu" />
-          </slot>
-        </div>
+          class="fixed inset-0 z-40"
+          @click="showMenuDropdown = false"
+        ></div>
       </div>
-
-      <!-- Click outside to close menu -->
-      <div
-        v-if="showMenuDropdown"
-        class="fixed inset-0 z-40"
-        @click="showMenuDropdown = false"
-      ></div>
     </div>
   </header>
 </template>

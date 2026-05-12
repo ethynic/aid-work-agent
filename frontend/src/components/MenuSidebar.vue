@@ -1,8 +1,23 @@
 <template>
+  <!-- Mobile Backdrop -->
+  <div
+    v-if="isMobile && !isCollapsed"
+    class="fixed inset-0 bg-black/50 z-40"
+    @click="$emit('collapse')"
+  ></div>
+
   <aside
     :class="[
-      'h-full bg-white border-r border-gray-200 flex flex-col transition-all duration-300',
-      isCollapsed ? 'w-0 overflow-hidden' : 'w-72'
+      'bg-white border-r border-gray-200 flex flex-col',
+      isMobile
+        ? [
+            'fixed inset-y-0 left-0 z-50 w-72 transition-transform duration-300',
+            isCollapsed ? '-translate-x-full' : 'translate-x-0'
+          ]
+        : [
+            'h-full transition-all duration-300',
+            isCollapsed ? 'w-0 overflow-hidden' : 'w-72'
+          ]
     ]"
   >
     <!-- System Header - 系统名称区域 -->
@@ -42,7 +57,7 @@
       <template v-if="isTenantMode">
 
         <!-- 管理菜单（可折叠，仅租户管理员可见） -->
-        <div v-if="isTenantAdmin">
+        <div v-if="isTenantAdmin" class="hidden md:block">
           <!-- 管理菜单标题 -->
           <button
             @click="isAdminMenuExpanded = !isAdminMenuExpanded"
@@ -289,7 +304,7 @@
     <!-- 底部固定区域 -->
     <div class="mt-auto">
       <!-- Theme Switcher - 主题切换器 -->
-      <div class="flex-shrink-0 p-3 border-t border-gray-200">
+      <div class="flex-shrink-0 p-3 border-t border-gray-200 hidden md:block">
         <ThemeSwitcher />
       </div>
 
@@ -367,6 +382,8 @@ import type { SubagentListItem, BusinessPage } from '@/api/subagent'
 
 interface Props {
   isCollapsed: boolean
+  /** 是否移动端抽屉模式，默认 false */
+  isMobile?: boolean
   /** 是否显示历史会话区域，默认 true */
   showHistory?: boolean
   /** 是否显示新会话按钮，默认 true */
@@ -378,6 +395,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  isMobile: false,
   showHistory: true,
   showNewSession: true
 })

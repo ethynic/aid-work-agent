@@ -37,6 +37,7 @@
     <MenuSidebar
       v-else-if="isLoggedIn"
       :is-collapsed="sidebarCollapsed"
+      :is-mobile="isMobile"
       :show-history="true"
       :show-new-session="true"
       :current-subagent-id="currentSubagentId"
@@ -87,6 +88,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSubagentList } from '@/composables/useSubagentList'
+import { useMobile } from '@/composables/useMobile'
 import MenuSidebar from '@/components/MenuSidebar.vue'
 import { TenantStatus } from '@/api/enums'
 
@@ -94,6 +96,7 @@ const router = useRouter()
 const route = useRoute()
 const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
 const toast = useToast()
+const { isMobile } = useMobile()
 
 // 侧边栏折叠状态
 const sidebarCollapsed = ref(false)

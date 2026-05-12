@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-4xl mx-auto">
+  <div class="max-w-none md:max-w-4xl mx-auto">
     <div class="relative">
       <!-- 附件预览区 -->
       <div v-if="files.length > 0" class="mb-3 flex flex-wrap gap-2">
@@ -95,7 +95,7 @@
       </div>
 
       <!-- Hint -->
-      <div class="mt-2 text-xs text-gray-500 text-center">
+      <div class="mt-2 text-xs text-gray-500 text-center hidden md:block">
         <span>按</span>
         <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Enter</kbd>
         <span>发送</span>

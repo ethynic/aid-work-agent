@@ -1,6 +1,6 @@
 <template>
   <div class="h-full overflow-y-auto p-4 bg-gray-50" ref="containerRef">
-    <div class="max-w-4xl mx-auto space-y-6">
+    <div class="max-w-4xl mx-auto space-y-6 px-2 md:px-4">
       <!-- Empty State -->
       <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center">
         <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary-100 to-primary-200 flex items-center justify-center mb-6">

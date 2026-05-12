@@ -4,6 +4,7 @@
     <main class="flex-1 flex overflow-hidden">
       <MenuSidebar
         :is-collapsed="isSidebarCollapsed"
+        :is-mobile="isMobile"
         :current-subagent-id="currentSubagentId"
         :available-subagents="availableSubagents"
         @collapse="isSidebarCollapsed = true"
@@ -18,7 +19,7 @@
           @logout="handleLogout"
         />
 
-        <div class="flex-1 overflow-y-auto p-6">
+        <div class="flex-1 overflow-y-auto p-4 md:p-6">
           <div class="max-w-4xl mx-auto">
             <!-- Loading State -->
             <div v-if="isLoading" class="flex items-center justify-center py-12">
@@ -72,10 +73,32 @@
                           · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
                         </span>
                       </div>
-                      <div class="flex items-center gap-1 ml-3">
+                      <!-- Desktop: hover show -->
+                      <div class="hidden md:group-hover:flex items-center gap-1 ml-3">
                         <span class="text-xs text-gray-400">
                           {{ formatTime(session.updated_at) }}
                         </span>
+                        <button
+                          @click.stop="handleRenameSession(session)"
+                          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                          title="重命名"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button
+                          @click.stop="handleDeleteSession(session.session_id)"
+                          class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
+                          title="删除"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
+                      <!-- Mobile: always show -->
+                      <div class="flex md:hidden items-center gap-1 ml-3">
                         <button
                           @click.stop="handleRenameSession(session)"
                           class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
@@ -107,7 +130,7 @@
                 <button
                   :disabled="currentPage <= 1"
                   @click="goToPage(currentPage - 1)"
-                  class="px-3 py-1.5 text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  class="px-2 py-1 text-xs md:px-3 md:py-1.5 md:text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   上一页
                 </button>
@@ -129,7 +152,7 @@
                 <button
                   :disabled="currentPage >= totalPages"
                   @click="goToPage(currentPage + 1)"
-                  class="px-3 py-1.5 text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  class="px-2 py-1 text-xs md:px-3 md:py-1.5 md:text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   下一页
                 </button>
@@ -178,7 +201,7 @@
   </div>
 
   <!-- 租户模式：PortalLayout 已经提供侧边栏，只需要内容区域 -->
-  <div v-else class="p-6 bg-gray-50 min-h-full">
+  <div v-else class="p-4 md:p-6 bg-gray-50 min-h-full">
     <div class="max-w-4xl mx-auto">
       <!-- Loading State -->
       <div v-if="isLoading" class="flex items-center justify-center py-12">
@@ -232,10 +255,32 @@
                     · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
                   </span>
                 </div>
-                <div class="flex items-center gap-1 ml-3">
+                <!-- Desktop: hover show -->
+                <div class="hidden md:group-hover:flex items-center gap-1 ml-3">
                   <span class="text-xs text-gray-400">
                     {{ formatTime(session.updated_at) }}
                   </span>
+                  <button
+                    @click.stop="handleRenameSession(session)"
+                    class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                    title="重命名"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                  <button
+                    @click.stop="handleDeleteSession(session.session_id)"
+                    class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
+                    title="删除"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+                <!-- Mobile: always show -->
+                <div class="flex md:hidden items-center gap-1 ml-3">
                   <button
                     @click.stop="handleRenameSession(session)"
                     class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
@@ -346,9 +391,11 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAgent } from '@/composables/useAgent'
+import { useMobile } from '@/composables/useMobile'
 
 const router = useRouter()
 const route = useRoute()
+const { isMobile } = useMobile()
 const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout, init: initTenantAuth } = useTenantAuth()
 
