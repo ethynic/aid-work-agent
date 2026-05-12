@@ -1,10 +1,10 @@
 <template>
   <div
     :class="[
-      'flex gap-3 p-4 rounded-2xl transition-all',
+      'flex gap-3 p-4 rounded-2xl transition-all message-enter-active',
       message.role === 'user'
         ? 'bg-primary-50 border border-primary-200 md:ml-12'
-        : 'bg-white border border-gray-200'
+        : 'bg-white border border-gray-200 shadow-message'
     ]"
   >
     <!-- Avatar -->
@@ -65,7 +65,7 @@
         <!-- 展开/折叠按钮 -->
         <button
           @click="toggleExpanded"
-          class="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          class="flex items-center gap-1 p-2 -m-2 min-w-[44px] min-h-[44px] text-xs text-gray-400 hover:text-gray-600 transition-colors"
         >
           <svg
             :class="['w-3 h-3 transition-transform', isExpanded ? 'rotate-90' : '']"
@@ -90,7 +90,7 @@
               v-for="(msg, index) in displayMessages"
               :key="index"
               :class="[
-                'text-[10px] md:text-xs py-1 px-2 rounded text-gray-500',
+                'text-xs py-1 px-2 rounded text-gray-500',
                 getProgressClass(msg.type)
               ]"
             >

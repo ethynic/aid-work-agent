@@ -1,10 +1,10 @@
 <template>
-  <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4">
+  <header class="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4 shadow-sticky z-10">
     <div class="flex-1 flex items-center gap-3 min-w-0">
       <!-- Toggle Sidebar Button -->
       <button
         @click="$emit('toggle-sidebar')"
-        class="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+        class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
         title="切换侧边栏"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -45,7 +45,7 @@
           <!-- Dropdown Menu -->
           <div
             v-if="showSubagentDropdown"
-            class="absolute left-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-64 overflow-y-auto"
+            class="absolute left-0 top-full mt-2 w-[calc(100vw-2rem)] max-w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-64 overflow-y-auto"
           >
             <button
               v-for="agent in filteredAvailableSubagents"

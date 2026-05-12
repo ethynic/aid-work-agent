@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div class="h-dvh flex flex-col bg-gray-50">
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar - 仅在非 PortalLayout 模式下显示（避免重复） -->
@@ -78,11 +78,12 @@
             <MessageList
               :messages="messages"
               :is-processing="isProcessing"
+              @quick-prompt="handleSend"
             />
           </div>
 
           <!-- Input Area -->
-          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-4">
+          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-4 shadow-sticky z-10">
             <ChatInput
               @send="handleSend"
               @upload="handleUpload"

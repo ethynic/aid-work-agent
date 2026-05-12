@@ -17,7 +17,7 @@
           <span class="text-sm text-gray-600 max-w-32 truncate">{{ file.name }}</span>
           <button
             @click="emit('remove', file.file_id)"
-            class="text-gray-400 hover:text-danger-500 transition-colors"
+            class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 transition-colors"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -53,12 +53,13 @@
           <textarea
             ref="inputRef"
             v-model="inputText"
-            @keydown.enter.exact.prevent="handleSend"
+            @keydown.enter.exact="handleEnter"
             @keydown.shift.enter="newLine"
             @input="autoResize"
             :disabled="disabled"
-            placeholder="输入您的问题或任务，按Enter发送..."
+            :placeholder="isMobile ? '输入您的问题或任务...' : '输入您的问题或任务，按Enter发送...'"
             rows="1"
+            inputmode="text"
             class="box-border w-full min-h-[46px] max-h-[120px] px-4 py-2 bg-white border border-gray-300 rounded-xl text-gray-800 placeholder-gray-400 resize-none outline-none focus:border-primary-500 disabled:opacity-50 overflow-y-auto"
             :class="[isProcessing ? 'pr-12' : 'pr-4']"
           ></textarea>
@@ -81,7 +82,7 @@
           @click="handleSend"
           :disabled="!canSend || (!inputText.trim() && files.length === 0)"
           :class="[
-            'box-border h-[46px] px-5 rounded-xl font-medium transition-all flex items-center gap-2',
+            'box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2',
             canSend && (inputText.trim() || files.length > 0)
               ? 'bg-gradient-to-r from-primary-500 to-primary-700 text-white hover:from-primary-400 hover:to-primary-600 shadow-lg shadow-primary-500/25'
               : 'bg-gray-200 text-gray-400 cursor-not-allowed'
@@ -110,6 +111,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useMobile } from '@/composables/useMobile'
 import type { UploadedFile } from '@/api/agent'
 
 interface Props {
@@ -125,6 +127,7 @@ const emit = defineEmits<{
   (e: 'remove', file_id: string): void
 }>()
 
+const { isMobile } = useMobile()
 const inputText = ref('')
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -132,6 +135,17 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const canSend = computed(() => {
   return !props.disabled && !props.isProcessing
 })
+
+function handleEnter(e: KeyboardEvent) {
+  if (isMobile.value) {
+    // 移动端：Enter 换行，不阻止默认行为，仅触发自动调整高度
+    setTimeout(autoResize, 0)
+    return
+  }
+  // 桌面端：Enter 发送
+  e.preventDefault()
+  handleSend()
+}
 
 function handleSend() {
   if (!canSend.value) return
