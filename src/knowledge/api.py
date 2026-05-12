@@ -285,21 +285,16 @@ async def list_documents(
 
     - 支持分页查询
     - 返回 {items, total} 格式
+    - 仅做租户隔离，同一租户内所有用户共享可见
     """
-    user_id = None
-    current_user = auth.get_current_user(http_request) if http_request else None
-    if current_user:
-        user_id = current_user.get("user_id")
-
     tenant_id = get_current_tenant_id()
 
     documents = knowledge_service.list_documents(
-        user_id=user_id,
         tenant_id=tenant_id,
         limit=limit,
         offset=offset
     )
-    total = knowledge_service.count_documents(user_id=user_id, tenant_id=tenant_id)
+    total = knowledge_service.count_documents(tenant_id=tenant_id)
 
     return {
         "items": [DocumentResponse(**doc) for doc in documents],
