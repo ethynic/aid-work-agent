@@ -1207,3 +1207,45 @@ def get_captcha_image(captcha_id: str) -> Optional[str]:
         if row:
             return row["code"]
     return None
+
+
+# ============== Token 数据库访问 ==============
+
+class TokenDB:
+    """Token 数据库访问类"""
+
+    @staticmethod
+    def delete_by_tenant(tenant_id: str) -> int:
+        """删除指定租户下所有用户的 token，返回删除数量"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM tokens
+                WHERE user_id IN (SELECT user_id FROM users WHERE tenant_id = %s)
+            """, (tenant_id,))
+            conn.commit()
+            deleted = cursor.rowcount
+            if deleted > 0:
+                logger.info(f"Deleted {deleted} tokens for tenant {tenant_id}")
+            return deleted
+
+    @staticmethod
+    def update_expires_by_tenant(tenant_id: str, new_expire_at: datetime) -> int:
+        """
+        将指定租户下所有用户 token 的过期时间提前到 new_expire_at。
+        只更新那些 expires_at 比 new_expire_at 更晚的 token。
+        返回更新数量。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE tokens
+                SET expires_at = %s
+                WHERE user_id IN (SELECT user_id FROM users WHERE tenant_id = %s)
+                  AND expires_at > %s
+            """, (new_expire_at, tenant_id, new_expire_at))
+            conn.commit()
+            updated = cursor.rowcount
+            if updated > 0:
+                logger.info(f"Updated {updated} token expires_at for tenant {tenant_id} to {new_expire_at}")
+            return updated

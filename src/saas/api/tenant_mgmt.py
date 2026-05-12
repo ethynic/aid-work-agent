@@ -20,7 +20,7 @@ from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.tenant import TenantCreate, TenantUpdate
 from src.config.settings import settings
-from src.db.models import UserDB
+from src.db.models import UserDB, TokenDB
 from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/tenants", tags=["SaaS 企业管理"])
@@ -295,11 +295,60 @@ async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
                     body.initial_admin_phone,
                 )
 
-            response = {"success": True, "tenant": tenant}
+            # 处理 token 联动操作
+            token_messages: list[str] = []
+
+            # 1. 如果租户被禁用（status 变为 suspended/deactivated），删除该租户下所有用户 token
+            if "status" in updates:
+                new_status = updates["status"]
+                old_status = existing.get("status")
+                if new_status in {"suspended", "deactivated"} and old_status == "active":
+                    deleted = TokenDB.delete_by_tenant(tenant_id)
+                    if deleted > 0:
+                        token_messages.append(f"删除{deleted}个用户token")
+
+            # 2. 如果租户过期日期被改小，将该租户下用户 token 的 expires_at 相应提前
+            if "expire_at" in updates:
+                new_expire = updates["expire_at"]
+                old_expire = existing.get("expire_at")
+                should_adjust = False
+                if new_expire is not None:
+                    if old_expire is None:
+                        should_adjust = True
+                    else:
+                        # 统一转换为 datetime 比较
+                        if isinstance(old_expire, str):
+                            old_expire_str = old_expire.replace("T", " ")
+                            if " " in old_expire_str:
+                                old_expire_dt = datetime.strptime(old_expire_str, "%Y-%m-%d %H:%M:%S")
+                            else:
+                                old_expire_dt = datetime.strptime(old_expire_str, "%Y-%m-%d")
+                        else:
+                            old_expire_dt = old_expire
+                        if new_expire < old_expire_dt:
+                            should_adjust = True
+                if should_adjust:
+                    updated = TokenDB.update_expires_by_tenant(tenant_id, new_expire)
+                    if updated > 0:
+                        token_messages.append(f"修改{updated}个用户token的过期时间")
+
+            # 组装响应消息
+            parts: list[str] = []
             if admin_account:
-                response["message"] = "租户信息保存成功，且创建初始管理员账户 {}，初始密码为空，用户可以点击'忘记密码'通过短信验证码重置密码。".format(
-                    admin_account["phone"]
+                parts.append(
+                    "且创建初始管理员账户 {}，初始密码为空，用户可以点击'忘记密码'通过短信验证码重置密码。".format(
+                        admin_account["phone"]
+                    )
                 )
+            if token_messages:
+                parts.append("，".join(token_messages))
+
+            message = "租户信息保存成功"
+            if parts:
+                message += "，" + "，".join(parts)
+
+            response = {"success": True, "tenant": tenant, "message": message}
+            if admin_account:
                 response["admin_account"] = admin_account
             return response
         return {"success": False, "error": "更新失败", "debug": "TenantDB.update returned False"}
