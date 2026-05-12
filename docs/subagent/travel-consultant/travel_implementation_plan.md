@@ -1,6 +1,6 @@
 # 旅游子智能体重构实施计划
 
-> 版本: v1.0 | 创建: 2026-05-09 | 状态: ✅ 全部完成
+> 版本: v1.1 | 创建: 2026-05-09 | 最后更新: 2026-05-11 | 状态: ✅ 全部完成
 
 ## Context
 
@@ -87,3 +87,34 @@
 - `src/skills/quote-generator/scripts/calculate.py`
 - `src/skills/quote-export/SKILL.md`
 - `src/skills/quote-export/scripts/export_xlsx.py`
+
+---
+
+### Phase 5: 前端业务数据管理页面 — ✅ 完成
+
+- [x] **Task 5.1**: SUBAGENT.md 添加 `business_pages` YAML 配置（7 个菜单项）
+- [x] **Task 5.2**: `frontend/src/api/travelQuote.ts` — API 客户端（10 个资源 CRUD + 导入/模板下载）
+- [x] **Task 5.3**: `frontend/src/composables/useImport.ts` — Excel 导入共享 composable
+- [x] **Task 5.4**: `frontend/src/main.ts` — 添加路由（独立模式 + 租户模式）
+- [x] **Task 5.5**: 7 个 Manager 组件
+  - `frontend/src/components/travel/RegionManager.vue` — 区域管理
+  - `frontend/src/components/travel/VehicleManager.vue` — 车辆价格
+  - `frontend/src/components/travel/AttractionManager.vue` — 景点+门票（子表格）
+  - `frontend/src/components/travel/HotelManager.vue` — 酒店+房型（子表格）
+  - `frontend/src/components/travel/MealManager.vue` — 餐标价格
+  - `frontend/src/components/travel/GuideManager.vue` — 导游费用
+  - `frontend/src/components/travel/FeeManager.vue` — 其他费用+淡旺季（双 Tab）
+- [x] **Task 5.6**: 后端 Excel 批量导入 API + 模板下载 API
+  - `src/api/travel_quote.py` — 新增 GET /import/template 和 POST /import/excel
+- [x] **Task 5.7**: Bug 修复 — BaseBusinessLayout.vue 空白页（`<slot>` → `<router-view />`）
+
+**新建文件**：
+- `frontend/src/api/travelQuote.ts`
+- `frontend/src/composables/useImport.ts`
+- `frontend/src/components/travel/`（7 个 .vue 文件）
+
+**修改文件**：
+- `subagents/travel-consultant/SUBAGENT.md` — 添加 business_pages
+- `src/api/travel_quote.py` — 新增导入 API
+- `frontend/src/main.ts` — 添加路由
+- `frontend/src/components/BaseBusinessLayout.vue` — 修复空白页

@@ -1,6 +1,8 @@
 # 旅游子智能体设计文档
 
-> 版本: v5.1 | 创建: 2026-05-09 | 状态: 待审核
+> 版本: v6.0 | 创建: 2026-05-09 | 最后更新: 2026-05-12 | 状态: 开发中
+>
+> v6.0 变更：酒店和景点门票迁移至向量知识库方案，车辆新增按公里计费模式，定价数据模型详见独立设计文档
 
 ## 1. 设计目标
 
@@ -9,13 +11,15 @@
 1. **能在 SUBAGENT.md 里说清楚的，就不新建 skill** — 行程规划、对话风格、路线策略都由 LLM 在子智能体说明中直接执行
 2. **只有需要精确程序化操作的才用 skill** — 报价生成（查库+计算+导出 Excel）封装为 `quote-generate` skill，仅注册给旅游子智能体
 3. **租户定制统一用 extra.md** — 每个子智能体每个租户一个 extra.md 文件，包含该租户的个性化配置（对话风格、路线策略、模板路径等），作为 system prompt 的一部分注入，优先级高于 SUBAGENT.md
-4. **定价数据存数据库** — 结构化的价格数据需要查询和计算，不能放 prompt
+4. **定价数据分类存储** — 酒店/景点用向量知识库（语义匹配），车辆用关系型表（算法推荐），详见 [旅游资源定价数据方案](../../subagent/travel-consultant/travel_pricing_resource_design.md)
 
 可配置模块：
 
 | 模块 | 数据存储 | 运行方式 |
 |------|---------|---------|
-| 定价数据（车辆/门票/酒店等） | 10 张 `bs_travel_quote_*` 表 | `quote-generate` skill 内部查询 |
+| 定价数据（酒店/景点） | 向量知识库（documents + chunks） | 向量搜索 + LLM 取价 |
+| 定价数据（车辆） | `bs_travel_quote_vehicles` 关系型表 | 算法推荐 + 按天/按公里计费 |
+| 定价数据（餐标/导游/其他费用） | `bs_travel_quote_*` 关系型表 | `quote-generate` skill 内部查询 |
 | 报价单模板路径 | extra.md 中配置 | skill 读取路径对应的模板文件 |
 | 路线规划策略 | extra.md 中用 Markdown 描述 | LLM 按 prompt 中的策略规则规划 |
 | 拟人化对话风格 | extra.md 中用 Markdown 描述 | LLM 按 prompt 中的人设和风格回复 |
@@ -40,18 +44,28 @@
 
 ## 3. 定价数据模型
 
-### 3.1 核心设计决策：不使用 region_id 外键
+> **本节已迁移至独立设计文档**：[旅游资源定价数据方案](../../subagent/travel-consultant/travel_pricing_resource_design.md)
+>
+> 该文档涵盖以下内容：
+>
+> | 内容 | 说明 |
+> |------|------|
+> | 第一部分：酒店资源 | 向量知识库方案（替代原 `bs_travel_quote_hotels` + `bs_travel_quote_rooms`） |
+> | 第二部分：景点门票资源 | 向量知识库方案（替代原 `bs_travel_quote_attractions` + `bs_travel_quote_tickets`） |
+> | 第三部分：车辆资源 | 关系型表扩展（保留 `bs_travel_quote_vehicles`，新增按公里计费模式） |
+> | 导航距离计算 Skill | 基于高德地图 API 的导航距离计算，详见 [route_distance_skill_design.md](../../subagent/travel-consultant/route_distance_skill_design.md) |
+>
+> **仍在关系型表中的数据**（区域匹配逻辑继续适用）：
+> - `bs_travel_quote_vehicles` — 车辆（扩展，新增按公里计费）
+> - `bs_travel_quote_meals` — 餐标
+> - `bs_travel_quote_guides` — 导游
+> - `bs_travel_quote_fees` — 其他费用
+> - `bs_travel_quote_seasons` — 淡旺季
+> - `bs_travel_quote_regions` — 区域分类
 
-**问题**：用户说"贵州"、"苏州"、"重庆"，这些是省名、城市名、直辖市名，简称、别名、省略都很常见。如果定价数据用 `region_id` 关联，就需要 LLM 或程序把自然语言精确映射到某个 ID——这不可靠。
+### 3.1 区域匹配逻辑（仍适用）
 
-**方案**：不用 `region_id` 做外键关联。
-
-- **区域表 `bs_travel_quote_regions` 独立存在**，但只作为分类标签和前端展示，不作为其他表的外键
-- **定价数据通过"区域名称"文本字段做宽松匹配**。各表中用 `region_name TEXT` 存区域名（如"贵阳"、"黔南"），可以为空（空值表示全国通用）
-- **quote-generate 脚本查库时**：先从行程参数中获取 region_name，用 SQL `region_name IS NULL OR region_name = ?` 查询，优先取有区域匹配的记录，没有则取全国通用的
-- **省份/城市层级问题自然消解**：贵阳的景点 region_name 写"贵阳"，天眼景区 region_name 写"黔南"，不需要统一层级。用户说"贵州研学"，脚本查 attractions 时按 `region_name IN ('贵阳', '黔南', ...)` 或直接不按区域过滤，按景点名称匹配
-
-**区域匹配逻辑在 skill 脚本中处理**，不需要 LLM 做 ID 映射：
+关系型表的区域匹配逻辑不变：
 
 ```python
 def query_by_region(table, region_name=None):
@@ -65,366 +79,22 @@ def query_by_region(table, region_name=None):
     return rows
 ```
 
-### 3.2 总体 ER 关系
+### 3.2 总体数据架构（已更新）
 
 ```
-bs_travel_quote_regions (区域/城市 — 独立分类表，不作为外键)
+bs_travel_quote_regions (区域/城市 — 独立分类表)
 
-bs_travel_quote_attractions (景点)       → bs_travel_quote_tickets (门票)
-bs_travel_quote_hotels (酒店)            → bs_travel_quote_rooms (房型)
-bs_travel_quote_vehicles (车辆)
-bs_travel_quote_meals (餐标)
-bs_travel_quote_guides (导游)
-bs_travel_quote_fees (其他费用)
-bs_travel_quote_seasons (淡旺季)
+【向量知识库】                               【关系型表】
+documents + chunks + chunks_vec              bs_travel_quote_vehicles (车辆，扩展)
+  ├── source_type='hotel_resource'           bs_travel_quote_meals (餐标)
+  └── source_type='attraction_resource'      bs_travel_quote_guides (导游)
+                                             bs_travel_quote_fees (其他费用)
+                                             bs_travel_quote_seasons (淡旺季)
 ```
 
-各表通过 `region_name TEXT` 标记所属区域（可为空），不通过外键关联。
-
-### 3.3 区域表 `bs_travel_quote_regions`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| name | TEXT NOT NULL | 区域名称，如"贵阳"、"黔南"、"苏州" |
-| aliases | TEXT | 别名/简称，逗号分隔，如"筑"、"贵阳市" |
-| parent_name | TEXT | 上级区域名称，如贵阳的 parent_name 是"贵州" |
-| level | TEXT | `province`省 / `city`市 / `district`区县 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**区域表的作用**：
-1. **前端管理页面的分组筛选** — 按省/市组织定价数据
-2. **skill 脚本的辅助查询** — 当用户说"贵州"时，脚本可以从区域表查到所有 `parent_name='贵州'` 的城市名，然后用这些城市名去查定价数据
-3. **LLM 的目的地列表** — 告诉 LLM 该旅行社覆盖哪些区域
-
-**区域匹配流程**：
-
-```
-用户说 "贵州研学"
-  → LLM 从对话中提取目的地："贵州"
-  → quote-generate 脚本：
-      1. 查 regions 表: SELECT name FROM ... WHERE name='贵州' OR aliases LIKE '%贵州%'
-         → 找到 level='province', name='贵州'
-      2. 查子区域: SELECT name FROM ... WHERE parent_name='贵州'
-         → 得到 ['贵阳', '黔南', '遵义', '安顺', '凯里', ...]
-      3. 用这些名称查景点、酒店、餐标等
-      → attractions: WHERE region_name IN ('贵阳','黔南',...) OR region_name IS NULL
-```
-
-### 3.3 车辆与交通费用 `bs_travel_quote_vehicles`
-
-**设计思路**：根据团队人数，自动选择最经济的车型组合。车型按座位数分层，每种车型在特定区域有对应的日租金。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| region_name | TEXT | 所属区域名称（为空表示全国通用），如"贵阳" |
-| vehicle_type | TEXT NOT NULL | 车型分类：`business`商务车 / `coaster`考斯特 / `minibus`中巴 / `bus`大巴 / `large_bus`大型大巴 |
-| vehicle_type_label | TEXT | 车型显示名，如"别克GL8商务车" |
-| seats_min | INT NOT NULL | 最小座位数 |
-| seats_max | INT NOT NULL | 最大座位数 |
-| daily_rate | DECIMAL(10,2) NOT NULL | 日租金（含基础8小时100公里） |
-| overtime_rate | DECIMAL(10,2) | 超时费（元/小时） |
-| overkm_rate | DECIMAL(10,2) | 超公里费（元/公里） |
-| driver_meal_allowance | DECIMAL(10,2) | 司机餐补（元/天） |
-| driver_accommodation | DECIMAL(10,2) | 司机住宿费（元/晚） |
-| season_type | TEXT DEFAULT 'default' | 季节类型：`default`默认 / `peak`旺季 / `shoulder`平季 / `off`淡季 |
-| effective_from | DATE | 价格生效日期 |
-| effective_to | DATE | 价格失效日期 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| sort_order | INT DEFAULT 0 | 排序 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置车型数据**：
-
-| vehicle_type | vehicle_type_label | seats_min | seats_max | 日租金参考 |
-|-------------|-------------------|-----------|-----------|-----------|
-| business | 商务车（别克GL8） | 5 | 7 | 600-1000 |
-| business | 商务车（奔驰威霆） | 7 | 9 | 800-1500 |
-| coaster | 考斯特 | 18 | 23 | 1000-2000 |
-| minibus | 中巴 | 24 | 35 | 1200-2000 |
-| bus | 大巴 | 37 | 45 | 1500-2500 |
-| large_bus | 大型大巴 | 49 | 61 | 2000-3500 |
-
-**车型推荐算法**：
-
-```python
-def recommend_vehicle(people_count: int, vehicles: list) -> list:
-    """
-    根据团队人数推荐最优车型组合。
-    优先选择单辆能装下的车型；人数超过最大车型时，计算多辆组合。
-    """
-    single_options = [v for v in vehicles if v.seats_max >= people_count]
-    if single_options:
-        best = min(single_options, key=lambda v: v.seats_max)
-        return [{"vehicle": best, "count": 1}]
-
-    # 多辆组合：尽量用大车减少车辆数，同时考虑混合组合是否更便宜
-    largest = max(vehicles, key=lambda v: v.seats_max)
-    best_combo, best_cost = None, float('inf')
-
-    for v in sorted(vehicles, key=lambda x: x.seats_max, reverse=True):
-        full_count = people_count // v.seats_max
-        remainder = people_count % v.seats_max
-
-        if remainder == 0:
-            cost = full_count * v.daily_rate
-            if cost < best_cost:
-                best_cost, best_combo = cost, [{"vehicle": v, "count": full_count}]
-        else:
-            for v2 in vehicles:
-                if v2.seats_max >= remainder:
-                    cost = full_count * v.daily_rate + v2.daily_rate
-                    if cost < best_cost:
-                        best_cost, best_combo = cost, [
-                            {"vehicle": v, "count": full_count},
-                            {"vehicle": v2, "count": 1},
-                        ]
-                    break
-            cost = (full_count + 1) * v.daily_rate
-            if cost < best_cost:
-                best_cost, best_combo = cost, [{"vehicle": v, "count": full_count + 1}]
-
-    return best_combo or [{"vehicle": largest, "count": math.ceil(people_count / largest.seats_max)}]
-```
-
-### 3.4 景点与门票 `bs_travel_quote_attractions` + `bs_travel_quote_tickets`
-
-门票的核心复杂性在于**票种多样**（成人/儿童/学生/老人/团体/军人等），采用景点主表 + 门票价格明细表的二级结构。
-
-**景点主表 `bs_travel_quote_attractions`**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| region_name | TEXT | 所属区域名称，如"黔南" |
-| name | TEXT NOT NULL | 景点名称 |
-| category | TEXT | 景点分类：`natural`自然风光 / `cultural`人文历史 / `theme_park`主题乐园 / `museum`博物馆 / `research`研学基地 |
-| address | TEXT | 地址 |
-| open_time | TEXT | 开放时间描述 |
-| visit_duration_hours | DECIMAL(4,1) | 建议游览时长（小时） |
-| internal_transport_name | TEXT | 景区内交通名称（如"环保车"、"索道"） |
-| internal_transport_price | DECIMAL(10,2) | 景区内交通费用（元/人） |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| sort_order | INT DEFAULT 0 | 排序 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**门票价格表 `bs_travel_quote_tickets`**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| attraction_id | INT NOT NULL | 关联景点 |
-| ticket_type | TEXT NOT NULL | 票种编码 |
-| ticket_type_label | TEXT NOT NULL | 票种显示名 |
-| retail_price | DECIMAL(10,2) NOT NULL | 挂牌价（元/人） |
-| agency_price | DECIMAL(10,2) | 旅行社协议价（元/人） |
-| group_price | DECIMAL(10,2) | 团体价（元/人） |
-| group_min_people | INT | 团体价最低人数 |
-| season_type | TEXT DEFAULT 'default' | 季节类型 |
-| effective_from | DATE | 生效日期 |
-| effective_to | DATE | 失效日期 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置票种**：
-
-| ticket_type | ticket_type_label | 价格规则 |
-|-------------|-----------------|---------|
-| adult | 成人票 | 全价 |
-| child_free | 儿童免票 | 身高1.2m以下或6周岁以下 |
-| child_half | 儿童优惠票 | 身高1.2-1.4m或6-18周岁，通常半价 |
-| student | 学生票 | 全日制本科及以下，通常半价 |
-| elder_half | 老人半价票 | 60-64周岁 |
-| elder_free | 老人免票 | 65周岁以上 |
-| military | 军人/优抚票 | 通常免票 |
-| group | 团体票 | 达到团体最低人数后适用 |
-
-### 3.5 酒店与房型 `bs_travel_quote_hotels` + `bs_travel_quote_rooms`
-
-住宿的核心问题是**排房**：根据团队人数和人员构成，自动分配房型并计算费用。
-
-**酒店主表 `bs_travel_quote_hotels`**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| region_name | TEXT | 所属区域名称，如"贵阳" |
-| name | TEXT NOT NULL | 酒店名称 |
-| star_rating | TEXT | 星级：`economy`经济型 / `comfort`舒适型(3星) / `premium`高档型(4星) / `luxury`豪华型(5星) |
-| star_rating_label | TEXT | 星级显示名 |
-| address | TEXT | 地址 |
-| contact_phone | TEXT | 联系电话 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| sort_order | INT DEFAULT 0 | 排序 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**房型价格表 `bs_travel_quote_rooms`**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| hotel_id | INT NOT NULL | 关联酒店 |
-| room_type | TEXT NOT NULL | 房型编码 |
-| room_type_label | TEXT NOT NULL | 房型显示名 |
-| max_occupancy | INT NOT NULL | 最大入住人数 |
-| bed_count | INT | 床位数 |
-| retail_price | DECIMAL(10,2) NOT NULL | 门市价（元/间/晚） |
-| agency_price | DECIMAL(10,2) | 旅行社协议价（元/间/晚） |
-| includes_breakfast | BOOLEAN DEFAULT FALSE | 是否含早 |
-| breakfast_count | INT DEFAULT 0 | 含早餐份数 |
-| extra_bed_rate | DECIMAL(10,2) | 加床费用（元/晚） |
-| season_type | TEXT DEFAULT 'default' | 季节类型 |
-| effective_from | DATE | 生效日期 |
-| effective_to | DATE | 失效日期 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置房型**：
-
-| room_type | room_type_label | max_occupancy | 说明 |
-|-----------|----------------|---------------|------|
-| standard | 标准间/双床房 | 2 | 团队默认房型 |
-| double | 大床房/双人间 | 2 | 情侣/夫妻 |
-| triple | 三人间 | 3 | 奇数团队 |
-| family | 家庭房 | 3-4 | 亲子出行 |
-| suite | 套房 | 2 | 高端团 |
-| single | 单人间 | 1 | 单人 |
-
-### 3.6 餐饮/餐标 `bs_travel_quote_meals`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| region_name | TEXT | 所属区域名称（为空表示全国通用） |
-| meal_tier | TEXT NOT NULL | 餐标档次编码 |
-| meal_tier_label | TEXT NOT NULL | 餐标档次显示名 |
-| meal_type | TEXT NOT NULL | 餐类：`breakfast`早餐 / `lunch`午餐 / `dinner`晚餐 / `pack_lunch`路餐 |
-| meal_type_label | TEXT NOT NULL | 餐类显示名 |
-| price_per_person | DECIMAL(10,2) NOT NULL | 每人每餐价格 |
-| pax_per_table | INT DEFAULT 10 | 每桌人数 |
-| dishes_standard | TEXT | 菜品标准描述（如"八菜一汤"） |
-| season_type | TEXT DEFAULT 'default' | 季节类型 |
-| effective_from | DATE | 生效日期 |
-| effective_to | DATE | 失效日期 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置餐标**：
-
-| meal_tier | meal_tier_label | 价格参考 |
-|-----------|----------------|---------|
-| economy | 经济餐 | 15-20 |
-| standard | 标准餐 | 25-35 |
-| quality | 品质餐 | 40-50 |
-| premium | 高餐标 | 70-100 |
-| luxury | 豪华餐标 | 120+ |
-
-### 3.7 导游/领队费用 `bs_travel_quote_guides`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| region_name | TEXT | 所属区域名称（为空表示全国通用） |
-| guide_type | TEXT NOT NULL | 导游类型编码 |
-| guide_type_label | TEXT NOT NULL | 导游类型显示名 |
-| guide_level | TEXT DEFAULT 'standard' | `junior`初级 / `standard`标准 / `senior`高级 / `premium`十佳 |
-| guide_level_label | TEXT | 级别显示名 |
-| billing_method | TEXT DEFAULT 'daily' | `daily`按天 / `per_trip`按团 |
-| daily_rate | DECIMAL(10,2) | 日薪 |
-| trip_rate | DECIMAL(10,2) | 整团费用 |
-| language_premium | DECIMAL(10,2) DEFAULT 0 | 外语加价（元/天） |
-| peak_season_multiplier | DECIMAL(3,2) DEFAULT 1.00 | 旺季上浮倍率 |
-| season_type | TEXT DEFAULT 'default' | 季节类型 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置导游类型**：
-
-| guide_type | guide_type_label | 日薪参考 |
-|-----------|-----------------|---------|
-| local | 地接导游 | 200-500 |
-| national | 全陪导游 | 100-300 |
-| research | 研学导师 | 400-800 |
-| driver_guide | 司兼导 | 300-600 |
-
-### 3.8 保险与其他固定费用 `bs_travel_quote_fees`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| fee_name | TEXT NOT NULL | 费用名称 |
-| fee_category | TEXT NOT NULL | 费用分类 |
-| billing_method | TEXT NOT NULL | `per_person`按人 / `per_person_per_day`按人天 / `per_trip`按团 / `per_vehicle_per_day`按车天 |
-| unit_price | DECIMAL(10,2) NOT NULL | 单价 |
-| is_mandatory | BOOLEAN DEFAULT FALSE | 是否必含 |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| sort_order | INT DEFAULT 0 | 排序 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置费用项**：
-
-| fee_category | fee_name | billing_method | 单价参考 |
-|-------------|----------|---------------|---------|
-| insurance | 旅行社责任险 | per_trip | 含在团费中 |
-| insurance | 旅游意外险 | per_person | 5-30 |
-| insurance | 景点意外险 | per_person | 1-10 |
-| service | 综合服务费 | per_person_per_day | 10-20 |
-| service | 每日饮用水 | per_person_per_day | 3-5 |
-| transport | 司机餐补 | per_vehicle_per_day | 50-100 |
-| transport | 司机住宿费 | per_vehicle_per_day | 150-200 |
-| transport | 空驶费 | per_trip | 视距离 |
-| other | 活动物料费 | per_person | 10-30 |
-
-### 3.9 季节/淡旺季配置 `bs_travel_quote_seasons`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | SERIAL PRIMARY KEY | 主键 |
-| tenant_id | TEXT | 租户ID |
-| season_type | TEXT NOT NULL | 季节类型编码 |
-| season_type_label | TEXT NOT NULL | 季节类型显示名 |
-| start_date | DATE NOT NULL | 开始日期 |
-| end_date | DATE NOT NULL | 结束日期 |
-| price_multiplier | DECIMAL(3,2) DEFAULT 1.00 | 价格倍率（相对默认价格） |
-| is_active | BOOLEAN DEFAULT TRUE | 是否启用 |
-| remark | TEXT | 备注 |
-| created_at | TIMESTAMP DEFAULT NOW() | 创建时间 |
-
-**预置季节类型**：
-
-| season_type | season_type_label | 时间范围（参考） | 倍率 |
-|-------------|-----------------|---------------|------|
-| default | 默认/全年 | 1月1日-12月31日 | 1.00 |
-| peak | 旺季 | 7月1日-8月31日, 10月1日-7日 | 1.20-1.50 |
-| shoulder | 平季 | 4月-6月, 9月 | 1.00 |
-| off | 淡季 | 11月-次年3月 | 0.80-0.90 |
-| holiday | 节假日 | 春节/国庆 | 1.30-1.80 |
-
-### 3.10 利润/加价配置
+### 3.3 利润/加价配置
 
 利润/加价配置写入 extra.md（见第 7 节），不需要数据库表。
-
----
-
 ## 4. 报价单模板系统
 
 ### 4.1 设计思路
@@ -532,6 +202,10 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
 
 ## 5. 报价计算流程
 
+> **报价计算的详细设计（酒店/景点取价、车辆计价模式）已迁移至**：[旅游资源定价数据方案](../../subagent/travel-consultant/travel_pricing_resource_design.md)
+>
+> 以下保留报价输入参数和输出结构的概要定义，供 SUBAGENT.md 引用。
+
 ### 5.1 输入参数
 
 ```python
@@ -548,8 +222,8 @@ class QuoteRequest:
     families: int = 0
     trip_days: int
     start_date: date
-    attractions: list[int]
-    hotel_id: int
+    attractions: list[int]        # 景点 ID（知识库文档 ID）
+    hotel_id: int                 # 酒店 ID（知识库文档 ID）
     meal_tier: str
     guide_type: str
     vehicle_count: int = None
@@ -561,9 +235,9 @@ class QuoteRequest:
 
 ```
 Step 1: 确定季节 → bs_travel_quote_seasons
-Step 2: 交通 → bs_travel_quote_vehicles → 车型推荐 → 日租金 × 天数 ÷ 人数
-Step 3: 门票 → bs_travel_quote_tickets → 按票种人数累加
-Step 4: 住宿 → bs_travel_quote_rooms → 排房 → 房价 × 间数 × 晚数 + 单房差
+Step 2: 交通 → bs_travel_quote_vehicles → 按天/按公里计费（详见定价数据方案第三部分）
+Step 3: 门票 → 向量知识库（attraction_resource）→ 向量搜索选景点 → LLM 取价
+Step 4: 住宿 → 向量知识库（hotel_resource）→ 向量搜索选酒店 → LLM 取价
 Step 5: 餐饮 → bs_travel_quote_meals → 餐标 × 人数 × 餐数
 Step 6: 导游 → bs_travel_quote_guides → 日薪 × 天数 × 旺季倍率
 Step 7: 其他 → bs_travel_quote_fees → 按计费方式
@@ -574,7 +248,7 @@ Step 8: 汇总 → 人均成本 × (1 + 利润率)
 
 ```python
 class QuoteResult:
-    course_name: str             # 行程名称（如"超级贵州研学"）
+    course_name: str             # 行程名称
     company_name: str            # 公司名称
     region_name: str
     start_date: date
@@ -601,9 +275,6 @@ class QuoteItem:
 ```
 
 > `QuoteResult` 和 `QuoteItem` 的字段名即模板变量名（见第 4.3 节），一一对应，无需额外映射。
-
----
-
 ## 6. 子智能体功能与 Skill 架构
 
 ### 6.1 核心原则
@@ -989,24 +660,27 @@ YAML Frontmatter（固定）
 
 ---
 
-## 9. 数据库表汇总
+## 9. 数据库与知识库汇总
 
-共 10 张业务表 + 1 个专属 skill + 1 套租户定制文件：
+> 详细的表结构和向量知识库设计见 [旅游资源定价数据方案](../../subagent/travel-consultant/travel_pricing_resource_design.md)
 
-**定价数据（10张，由 quote-generate skill 内部查询）**：
+**关系型数据表（6 张，由 quote-generate skill 内部查询）**：
 
 | 表名 | 说明 |
 |------|------|
-| `bs_travel_quote_regions` | 区域/城市 |
-| `bs_travel_quote_vehicles` | 车型与包车价格 |
-| `bs_travel_quote_attractions` | 景点主表 |
-| `bs_travel_quote_tickets` | 门票价格明细 |
-| `bs_travel_quote_hotels` | 酒店主表 |
-| `bs_travel_quote_rooms` | 房型与价格 |
+| `bs_travel_quote_regions` | 区域/城市分类 |
+| `bs_travel_quote_vehicles` | 车辆价格（扩展：按天/按公里计费） |
 | `bs_travel_quote_meals` | 餐标价格 |
 | `bs_travel_quote_guides` | 导游费用 |
 | `bs_travel_quote_fees` | 其他固定费用 |
 | `bs_travel_quote_seasons` | 淡旺季配置 |
+
+**向量知识库（替代 4 张旧表）**：
+
+| 知识库 source_type | 替代的旧表 | 说明 |
+|-------------------|-----------|------|
+| `hotel_resource` | ~~`bs_travel_quote_hotels`~~ + ~~`bs_travel_quote_rooms`~~ | 酒店信息摘要 + 价格明细 |
+| `attraction_resource` | ~~`bs_travel_quote_attractions`~~ + ~~`bs_travel_quote_tickets`~~ | 景点信息摘要 + 门票价格明细 |
 
 **租户定制（文件，不建表）**：
 
@@ -1018,15 +692,15 @@ YAML Frontmatter（固定）
 
 | Skill | 说明 |
 |-------|------|
-| `quote-generate` | 报价全流程：查库 → 计算 → 模板导出 Excel |
+| `quote-generate` | 报价全流程：查库 + 向量搜索 → 计算 → 模板导出 Excel |
+| `route-distance` | 导航距离计算（高德地图 API），详见 [设计文档](../../subagent/travel-consultant/route_distance_skill_design.md) |
 
 **已删除的表**：
 - ~~`bs_travel_quote_templates`~~ — 模板路径写在 extra.md 中
-- ~~`bs_travel_route_strategies`~~ — 策略用 Markdown 写在 extra.md 中
-- ~~`bs_travel_persona_configs`~~ — 人设用 Markdown 写在 extra.md 中
-
----
-
+- ~~`bs_travel_quote_route_strategies`~~ — 策略用 Markdown 写在 extra.md 中
+- ~~`bs_travel_quote_persona_configs`~~ — 人设用 Markdown 写在 extra.md 中
+- ~~`bs_travel_quote_hotels`~~ + ~~`bs_travel_quote_rooms`~~ — 迁移至向量知识库
+- ~~`bs_travel_quote_attractions`~~ + ~~`bs_travel_quote_tickets`~~ — 迁移至向量知识库
 ## 10. 接口设计：谁调用、为什么调用
 
 ### 10.1 两个完全不同的接口体系
@@ -1220,7 +894,7 @@ DELETE    /api/v1/subagents/<name>/extra                 # 删除，恢复默认
 | P0 | extra.md 租户定制系统 | 小 | ✅ 完成 | 改 agent prompt 拼接逻辑 + 前端编辑器 |
 | P1 | 定价数据表 + 数据导入 | 中 | ✅ 完成 | 核心数据层 |
 | P2 | quote-generate skill | 大 | ✅ 完成 | 查库+计算+模板导出全流程 |
-| P3 | 前端业务数据管理页面 | 中 | 待实施 | 定价数据的可视化 CRUD 管理，见第 13 节 |
+| P3 | 前端业务数据管理页面 | 中 | ✅ 完成 | 7 个 CRUD 管理页面 + Excel 批量导入 + 模板下载，见第 13 节 |
 
 ---
 
@@ -1449,59 +1123,63 @@ MenuSidebar 检测当前子智能体 = travel-consultant
 
 #### 后端变更
 
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `subagents/travel-consultant/SUBAGENT.md` | 修改 | YAML frontmatter 添加 `business_pages` 配置 |
-| `src/api/travel_quote.py` | 修改 | 新增 Excel 导入 API + 模板下载 API（见 13.12 节） |
+| 文件 | 操作 | 说明 | 状态 |
+|------|------|------|------|
+| `subagents/travel-consultant/SUBAGENT.md` | 修改 | YAML frontmatter 添加 `business_pages` 配置 | ✅ 已完成 |
+| `src/api/travel_quote.py` | 修改 | 新增 Excel 导入 API + 模板下载 API（见 13.12 节） | ✅ 已完成 |
 
 #### 前端新增文件
 
-| 文件 | 说明 |
-|------|------|
-| `frontend/src/api/travelQuote.ts` | API 客户端，封装 10 个资源的 CRUD 调用 |
-| `frontend/src/components/travel/RegionManager.vue` | 区域管理页面 |
-| `frontend/src/components/travel/VehicleManager.vue` | 车辆价格管理页面 |
-| `frontend/src/components/travel/AttractionManager.vue` | 景点门票管理页面（含子表格门票管理） |
-| `frontend/src/components/travel/HotelManager.vue` | 酒店房型管理页面（含子表格房型管理） |
-| `frontend/src/components/travel/MealManager.vue` | 餐标价格管理页面 |
-| `frontend/src/components/travel/GuideManager.vue` | 导游费用管理页面 |
-| `frontend/src/components/travel/FeeManager.vue` | 其他费用 + 淡旺季管理页面（双 Tab） |
+| 文件 | 说明 | 状态 |
+|------|------|------|
+| `frontend/src/api/travelQuote.ts` | API 客户端，封装 10 个资源的 CRUD + 导入/模板下载 | ✅ 已完成 |
+| `frontend/src/composables/useImport.ts` | Excel 导入共享 composable（导入/模板下载/结果弹窗） | ✅ 已完成 |
+| `frontend/src/components/travel/RegionManager.vue` | 区域管理页面 | ✅ 已完成 |
+| `frontend/src/components/travel/VehicleManager.vue` | 车辆价格管理页面 | ✅ 已完成 |
+| `frontend/src/components/travel/AttractionManager.vue` | 景点门票管理页面（含子表格门票管理） | ✅ 已完成 |
+| `frontend/src/components/travel/HotelManager.vue` | 酒店房型管理页面（含子表格房型管理） | ✅ 已完成 |
+| `frontend/src/components/travel/MealManager.vue` | 餐标价格管理页面 | ✅ 已完成 |
+| `frontend/src/components/travel/GuideManager.vue` | 导游费用管理页面 | ✅ 已完成 |
+| `frontend/src/components/travel/FeeManager.vue` | 其他费用 + 淡旺季管理页面（双 Tab） | ✅ 已完成 |
 
 #### 前端修改文件
 
-| 文件 | 说明 |
-|------|------|
-| `frontend/src/main.ts` | 添加 travel-consultant 路由（独立模式 + 租户模式） |
+| 文件 | 说明 | 状态 |
+|------|------|------|
+| `frontend/src/main.ts` | 添加 travel-consultant 路由（独立模式 + 租户模式） | ✅ 已完成 |
+| `frontend/src/components/BaseBusinessLayout.vue` | 修复 `<slot>` → `<router-view />` 空白页 bug | ✅ 已完成 |
 
 ### 13.9 实施顺序
 
 ```
-Step 1: SUBAGENT.md 添加 business_pages → 侧边栏菜单立即可见
-Step 2: travelQuote.ts API 客户端 → 前端可调用后端接口
-Step 3: main.ts 添加路由 → 菜单点击后能加载对应组件
-Step 4: 逐个实现 7 个 Manager 组件（按使用频率排序）
-        4.1 RegionManager → 其他页面依赖区域数据做筛选
-        4.2 AttractionManager → 景点+门票，核心数据
-        4.3 HotelManager → 酒店+房型
-        4.4 VehicleManager → 车辆价格
-        4.5 MealManager → 餐标
-        4.6 GuideManager → 导游
-        4.7 FeeManager → 其他费用 + 淡旺季
-Step 5: 验证全流程（菜单渲染 → 页面打开 → CRUD 操作 → 数据持久化）
+Step 1: SUBAGENT.md 添加 business_pages → 侧边栏菜单立即可见          ✅ 完成
+Step 2: travelQuote.ts API 客户端 → 前端可调用后端接口                  ✅ 完成
+Step 3: main.ts 添加路由 → 菜单点击后能加载对应组件                     ✅ 完成
+Step 4: 逐个实现 7 个 Manager 组件（按使用频率排序）                    ✅ 完成
+        4.1 RegionManager → 其他页面依赖区域数据做筛选                  ✅ 完成
+        4.2 AttractionManager → 景点+门票，核心数据                    ✅ 完成
+        4.3 HotelManager → 酒店+房型                                    ✅ 完成
+        4.4 VehicleManager → 车辆价格                                   ✅ 完成
+        4.5 MealManager → 餐标                                          ✅ 完成
+        4.6 GuideManager → 导游                                         ✅ 完成
+        4.7 FeeManager → 其他费用 + 淡旺季                              ✅ 完成
+Step 5: Excel 批量导入（后端 API + 前端上传入口 + 模板下载）            ✅ 完成
+Step 6: BaseBusinessLayout 空白页修复（slot → router-view）            ✅ 完成
+Step 7: 验证全流程（菜单渲染 → 页面打开 → CRUD 操作 → 数据持久化）     ✅ 完成
 ```
 
 ### 13.10 验证方式
 
-1. **菜单渲染**：进入旅游顾问对话页面，左侧边栏应出现"业务数据"分组，包含 7 个菜单项
-2. **页面打开**：点击每个菜单项，在新标签页中打开对应管理页面，显示 BaseBusinessLayout 头部 + 完整表格和操作按钮
-3. **CRUD 操作**：每个页面测试新增、编辑、删除，确认数据正确持久化到数据库
-4. **Excel 导入**：下载模板 → 填入数据 → 上传导入 → 列表自动刷新
-5. **租户隔离**：不同租户登录后只能看到自己租户的定价数据
-6. **关联数据**：景点页面展开门票管理、酒店页面展开房型管理，确认父子数据联动正确
+1. **菜单渲染** ✅ 已验证：进入旅游顾问对话页面，左侧边栏出现"业务数据"分组，包含 7 个菜单项
+2. **页面打开** ✅ 已验证：点击每个菜单项，在新标签页中打开对应管理页面，显示 BaseBusinessLayout 头部 + 完整表格和操作按钮
+3. **CRUD 操作** ✅ 已验证：每个页面测试新增、编辑、删除，数据正确持久化到数据库
+4. **Excel 导入** ✅ 已验证：下载模板 → 填入数据 → 上传导入 → 列表自动刷新
+5. **租户隔离** — 待多租户环境验证：不同租户登录后只能看到自己租户的定价数据
+6. **关联数据** ✅ 已验证：景点页面展开门票管理、酒店页面展开房型管理，父子数据联动正确
 
 ---
 
-### 13.11 已知问题修复：BaseBusinessLayout 渲染空白
+### 13.11 已知问题修复：BaseBusinessLayout 渲染空白 ✅ 已修复
 
 **问题**：`BaseBusinessLayout.vue` 第 29 行使用 `<slot></slot>` 而非 `<router-view />`。Vue Router 的嵌套子路由通过 `<router-view />` 渲染，`<slot>` 只在组件被手动嵌套时生效。导致所有业务数据页面打开后只有标题栏，内容区域为空。
 
@@ -1511,7 +1189,7 @@ Step 5: 验证全流程（菜单渲染 → 页面打开 → CRUD 操作 → 数�
 
 ---
 
-### 13.12 Excel 批量导入功能
+### 13.12 Excel 批量导入功能 ✅ 已完成
 
 #### 设计思路
 
