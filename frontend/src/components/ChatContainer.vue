@@ -162,7 +162,7 @@ const toast = useToast()
 const { isMobile } = useMobile()
 
 // 从 PortalLayout 注入侧边栏状态（租户前台模式），非租户路由下使用默认值
-const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed', { value: false })
+const sidebarCollapsed = inject<{ value: boolean }>('sidebarCollapsed', { value: typeof window !== 'undefined' && window.innerWidth < 768 })
 const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 
 const {
@@ -336,7 +336,7 @@ const effectiveUser = computed(() => {
 })
 
 // 侧边栏折叠状态（优先使用注入的状态，否则使用本地状态）
-const localSidebarCollapsed = ref(false)
+const localSidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
 const isSidebarCollapsed = computed({
   get: () => sidebarCollapsed?.value ?? localSidebarCollapsed.value,
   set: (val: boolean) => {

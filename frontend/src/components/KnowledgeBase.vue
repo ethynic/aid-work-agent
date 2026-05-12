@@ -548,7 +548,7 @@ const pageSize = ref(10)
 const totalDocuments = ref(0)
 
 // Layout state
-const isSidebarCollapsed = ref(false)
+const isSidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
 
 // 判断是否为嵌套路由（作为PortalLayout的子路由）
 // 如果路由路径以 /t/ 开头，说明被PortalLayout包裹，不需要自己渲染MenuSidebar

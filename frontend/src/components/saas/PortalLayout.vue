@@ -98,8 +98,8 @@ const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
 const toast = useToast()
 const { isMobile } = useMobile()
 
-// 侧边栏折叠状态
-const sidebarCollapsed = ref(false)
+// 侧边栏折叠状态（手机端默认收起）
+const sidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
 
 // 可用数字员工列表（带缓存，避免重复请求）
 const { availableSubagents, loadAvailableSubagents } = useSubagentList()

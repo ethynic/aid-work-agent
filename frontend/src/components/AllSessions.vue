@@ -432,7 +432,7 @@ const {
 } = useSession()
 const { switchSession } = useAgent()
 
-const isSidebarCollapsed = ref(false)
+const isSidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
