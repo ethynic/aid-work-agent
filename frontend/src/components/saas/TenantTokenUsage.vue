@@ -50,6 +50,7 @@
             <thead class="bg-slate-50">
               <tr>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">序号</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">用户名</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">用户消息（前10字）</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">输入Token数 (百万)</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">输出Token数 (百万)</th>
@@ -59,6 +60,7 @@
             <tbody class="divide-y divide-slate-100">
               <tr v-for="(item, index) in data" :key="item.record_id" class="hover:bg-slate-50">
                 <td class="px-4 py-2 text-sm text-slate-600">{{ getRowNumber(index) }}</td>
+                <td class="px-4 py-2 text-sm text-slate-800">{{ item.username || item.user_id || '-' }}</td>
                 <td class="px-4 py-2 text-sm text-slate-800" :title="item.user_message">{{ formatMessagePreview(item.user_message) }}</td>
                 <td class="px-4 py-2 text-sm text-blue-600">{{ formatTokensToMillionsThreeDecimals(item.input_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-green-600">{{ formatTokensToMillionsThreeDecimals(item.output_tokens) }}</td>

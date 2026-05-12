@@ -935,16 +935,19 @@ class ChatRecordDB:
             # 查询明细数据
             cursor.execute("""
                 SELECT
-                    record_id,
-                    user_message,
-                    prompt_tokens as input_tokens,
-                    completion_tokens as output_tokens,
-                    created_at
-                FROM chat_records
-                WHERE tenant_id = %s
-                  AND created_at >= %s AND created_at <= %s
-                  AND NOT (prompt_tokens = 0 AND completion_tokens = 0)
-                ORDER BY created_at DESC
+                    cr.record_id,
+                    cr.user_id,
+                    u.username,
+                    cr.user_message,
+                    cr.prompt_tokens as input_tokens,
+                    cr.completion_tokens as output_tokens,
+                    cr.created_at
+                FROM chat_records cr
+                LEFT JOIN users u ON cr.user_id = u.user_id
+                WHERE cr.tenant_id = %s
+                  AND cr.created_at >= %s AND cr.created_at <= %s
+                  AND NOT (cr.prompt_tokens = 0 AND cr.completion_tokens = 0)
+                ORDER BY cr.created_at DESC
                 LIMIT %s OFFSET %s
             """, (tenant_id, start_date, end_date, page_size, offset))
 
@@ -953,6 +956,8 @@ class ChatRecordDB:
             for row in rows:
                 details.append({
                     "record_id": row["record_id"],
+                    "user_id": row["user_id"] or "",
+                    "username": row["username"] or "",
                     "user_message": row["user_message"] or "",
                     "input_tokens": row["input_tokens"],
                     "output_tokens": row["output_tokens"],
