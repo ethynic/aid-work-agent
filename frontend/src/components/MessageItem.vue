@@ -1,7 +1,7 @@
 <template>
   <div
     :class="[
-      'flex gap-3 p-4 rounded-2xl transition-all message-enter-active',
+      'flex gap-2 md:gap-3 p-3 md:p-4 rounded-2xl transition-all message-enter-active',
       message.role === 'user'
         ? 'bg-primary-50 border border-primary-200 md:ml-12'
         : 'bg-white border border-gray-200 shadow-message'
@@ -40,7 +40,7 @@
 
       <!-- Message Content (Markdown) -->
       <div
-        class="text-gray-700 leading-relaxed markdown-content prose prose-slate max-w-none"
+        class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
 

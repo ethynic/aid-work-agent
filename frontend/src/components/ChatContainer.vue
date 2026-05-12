@@ -83,7 +83,7 @@
           </div>
 
           <!-- Input Area -->
-          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-4 shadow-sticky z-10">
+          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-2 md:p-4 shadow-sticky z-10">
             <ChatInput
               @send="handleSend"
               @upload="handleUpload"
@@ -362,7 +362,7 @@ const pageTitle = computed(() => {
   const session = sessions.value.find(s => s.session_id === currentSessionId.value)
   // 只有当会话有自定义标题（非默认的"新会话"）时才显示"历史会话："前缀
   if (session?.title && session.title !== '新会话') {
-    return `历史会话：${session.title}`
+    return `会话：${session.title}`
   }
   return '新会话'
 })

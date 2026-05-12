@@ -324,7 +324,7 @@
     <!-- 底部固定区域 -->
     <div class="mt-auto">
       <!-- Theme Switcher - 主题切换器 -->
-      <div class="flex-shrink-0 p-3 border-t border-gray-200 hidden md:block">
+      <div class="flex-shrink-0 p-3 border-t border-gray-200">
         <ThemeSwitcher />
       </div>
 

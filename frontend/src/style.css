@@ -220,10 +220,18 @@ body {
 .markdown-content p {
   margin-bottom: 0.75rem;
 }
-
+/** 手机端对话区域答案内容的样式 */
 .markdown-content ul, .markdown-content ol {
-  margin-left: 1.5rem;
-  margin-bottom: 0.75rem;
+  margin-left: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 0.5rem;
+}
+/** PC端对话区域答案内容的样式 */
+@media (min-width: 768px) {
+  .markdown-content ul, .markdown-content ol {
+    margin-left: 1.5rem;
+    padding-left: 1.25rem;
+  }
 }
 
 .markdown-content li {
