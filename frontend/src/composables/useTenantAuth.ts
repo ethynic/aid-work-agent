@@ -93,7 +93,7 @@ export function useTenantAuth() {
           ? `${apiBase}/saas/auth/me?tenant_id=${encodeURIComponent(routeTenantId)}`
           : `${apiBase}/saas/auth/me`
         const response = await fetch(url, {
-          headers: { 'Authorization': `Bearer ${savedToken}` }
+          headers: getAuthHeader()
         })
 
         if (response.ok) {
@@ -141,7 +141,6 @@ export function useTenantAuth() {
         } else {
           // 其他错误（如 500、网络错误），保留 token，不清除存储
           // 标记为未验证状态，但允许后续重试
-          console.warn(`Token validation failed with status ${response.status}, keeping token for retry`)
           saasToken.value = savedToken
           admin.value = null
           tenant.value = null

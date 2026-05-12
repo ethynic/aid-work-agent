@@ -871,8 +871,11 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
 
     admin = require_admin(request)
     tenant = None
-    # 优先使用 admin 自带的 tenant_id，否则使用请求参数中的 tenant_id
-    target_tenant_id = admin.get("tenant_id") or tenant_id
+    # 平台管理员代管理：优先使用 URL 查询参数中的 tenant_id
+    if admin["role"] == "platform_admin" and tenant_id:
+        target_tenant_id = tenant_id
+    else:
+        target_tenant_id = admin.get("tenant_id") or tenant_id
     if target_tenant_id:
         tenant = TenantDB.get_by_id(target_tenant_id)
 
