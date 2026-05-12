@@ -419,7 +419,7 @@ const props = withDefaults(defineProps<Props>(), {
   showHistory: true,
   showNewSession: true
 })
-defineEmits<{
+const emit = defineEmits<{
   collapse: []
 }>()
 
@@ -718,6 +718,10 @@ async function handleNewSession() {
   } finally {
     isCreating.value = false
   }
+  // 手机端点击后自动收起左侧菜单
+  if (props.isMobile) {
+    emit('collapse')
+  }
 }
 
 // 选择会话
@@ -784,6 +788,10 @@ async function handleSelectSession(sessionId: string) {
   if (route.path !== targetPath) {
     router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
   }
+  // 手机端点击后自动收起左侧菜单
+  if (props.isMobile) {
+    emit('collapse')
+  }
 }
 
 // 删除会话
@@ -814,6 +822,10 @@ async function confirmRename() {
 function handleModifyPassword() {
   if (tenantId.value) {
     router.push(`/t/${tenantId.value}/reset-password`)
+  }
+  // 手机端点击后自动收起左侧菜单
+  if (props.isMobile) {
+    emit('collapse')
   }
 }
 
