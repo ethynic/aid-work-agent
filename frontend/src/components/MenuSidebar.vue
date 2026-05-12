@@ -544,9 +544,10 @@ const filteredSessions = computed(() => {
   return sessions.value
 })
 
-// 只显示前10个会话
+// 手机端显示6个避免滚动条，桌面端显示10个
 const recentSessions = computed(() => {
-  return filteredSessions.value.slice(0, 10)
+  const limit = props.isMobile ? 6 : 10
+  return filteredSessions.value.slice(0, limit)
 })
 
 // 判断当前是否在知识库页面
@@ -606,6 +607,10 @@ function goToAllSessions() {
     ? `/t/${tenantId.value}/all-sessions`
     : '/all-sessions'
   router.push(targetPath)
+  // 手机端点击后自动收缩左侧菜单
+  if (props.isMobile) {
+    emit('collapse')
+  }
 }
 
 // 监听登录状态，登录后加载会话

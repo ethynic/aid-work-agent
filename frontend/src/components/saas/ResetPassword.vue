@@ -1,6 +1,16 @@
 <template>
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
+      <!-- 关闭按钮 -->
+      <button
+        @click="handleClose"
+        class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors z-10"
+        aria-label="关闭"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
       <div class="px-8 pt-8 pb-6">
         <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">{{ isLoggedInMode ? '修改密码' : '重置密码' }}</h1>
         <p class="text-sm text-slate-500 text-center mb-8">{{ isLoggedInMode ? '验证身份后重置登录密码' : '通过手机号重置登录密码' }}</p>
@@ -50,7 +60,7 @@
             {{ isSendingCode ? '发送中...' : '发送短信验证码' }}
           </button>
 
-          <div class="text-center">
+          <div v-if="!isLoggedInMode" class="text-center">
             <router-link :to="loginUrl" class="text-sm text-cyan-500 hover:text-cyan-600">
               返回登录
             </router-link>
@@ -155,11 +165,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { getCaptcha, sendResetPasswordCode, resetPassword } from '@/api/auth'
 
 const route = useRoute()
+const router = useRouter()
 const { admin, logout } = useTenantAuth()
 
 // 判断是否为已登录用户修改密码模式（从租户前台侧边栏进入）
@@ -317,6 +328,15 @@ onMounted(() => {
     phone.value = admin.value.phone
   }
 })
+
+// 关闭页面
+function handleClose() {
+  if (isLoggedInMode.value) {
+    router.push(tenantId.value ? `/t/${tenantId.value}` : '/portal')
+  } else {
+    router.push(loginUrl.value)
+  }
+}
 
 onUnmounted(() => {
   if (cooldownTimer) clearInterval(cooldownTimer)
