@@ -42,7 +42,6 @@
       :show-new-session="true"
       :current-subagent-id="currentSubagentId"
       :available-subagents="availableSubagents"
-      class="bg-white border-r border-gray-200"
       @collapse="sidebarCollapsed = true"
     />
 

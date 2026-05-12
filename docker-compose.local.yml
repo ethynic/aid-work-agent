@@ -153,7 +153,7 @@ services:
     # 清空 Dockerfile 的 ENTRYPOINT，否则 command 不会生效
     # Dockerfile 默认使用 gunicorn，这里改为 uvicorn 用于本地开发
     entrypoint: []
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
 
   # Gradio UI 服务（可选）
   aid-agent-ui:

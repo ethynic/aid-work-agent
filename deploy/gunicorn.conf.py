@@ -26,10 +26,27 @@ timeout = int(os.environ.get("WORKER_TIMEOUT", 120))
 keepalive = 5
 
 # ── 日志 ───────────────────────────────────────────────
-# 输出到 stdout/stderr，方便 docker logs 查看
-accesslog  = "-"
+# 关闭 access log，避免 /health 健康检查刷屏（排错可借助 Nginx access log）
+accesslog  = None
 errorlog   = "-"
 loglevel   = os.environ.get("LOG_LEVEL", "info").lower()
+
+# 关闭 Uvicorn 自身的 access log（UvicornWorker 会独立初始化 uvicorn.access logger）
+try:
+    from uvicorn.workers import UvicornWorker
+    UvicornWorker.CONFIG_KWARGS["access_log"] = False
+except ImportError:
+    pass
+
+
+def post_worker_init(worker):
+    """Worker 初始化完成后执行：强制静默 uvicorn.access logger"""
+    import logging
+    uvicorn_access = logging.getLogger("uvicorn.access")
+    uvicorn_access.handlers = []
+    uvicorn_access.propagate = False
+    uvicorn_access.setLevel(logging.WARNING)
+    uvicorn_access.disabled = True
 
 # ── 内存泄漏防护 ────────────────────────────────────────
 # 每个 worker 处理 N 个请求后自动重启，防止长期运行内存膨胀
