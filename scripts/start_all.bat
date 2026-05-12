@@ -17,7 +17,7 @@ timeout /t 3 >nul
 start "" "C:\Users\Ric\AppData\Local\SourceTree\SourceTree.exe"
 timeout /t 1 >nul
 
-start "claude" wt.exe new-tab --title "claude" --startingDirectory "%CD%" -- claude
+start "claude" wt.exe new-tab --title "claude" --startingDirectory "%CD%" -- C:\Users\Ric\AppData\Roaming\npm\claude.cmd
 timeout /t 1 >nul
 
 start "Services" cmd /c ""%~dp0..\start_services.bat""
