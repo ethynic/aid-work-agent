@@ -201,9 +201,17 @@
   </div>
 
   <!-- 租户模式：PortalLayout 已经提供侧边栏，只需要内容区域 -->
-  <div v-else class="p-4 md:p-6 bg-gray-50 min-h-full">
-    <div class="max-w-4xl mx-auto">
-      <!-- Loading State -->
+  <div v-else class="h-dvh flex flex-col bg-gray-50">
+    <AppHeader
+      title="全部历史会话"
+      :is-logged-in="effectiveIsLoggedIn"
+      :user="effectiveUser"
+      @toggle-sidebar="handleToggleSidebar"
+      @logout="handleLogout"
+    />
+    <div class="flex-1 overflow-y-auto p-4 md:p-6">
+      <div class="max-w-4xl mx-auto">
+        <!-- Loading State -->
       <div v-if="isLoading" class="flex items-center justify-center py-12">
         <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -345,6 +353,7 @@
         共 {{ totalSessions }} 条会话，第 {{ currentPage }} / {{ totalPages }} 页
       </div>
     </div>
+    </div>
 
     <!-- Rename Modal -->
     <div
@@ -381,7 +390,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
@@ -433,6 +442,7 @@ const {
 const { switchSession } = useAgent()
 
 const isSidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const toggleSidebarFn = inject<() => void>('toggleSidebar', () => {})
 const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
@@ -593,6 +603,15 @@ async function handleLogout() {
     await demoLogout()
   }
   router.push(isTenantMode.value ? route.path.replace(/\/chat.*/, '') : '/')
+}
+
+// 处理侧边栏切换
+function handleToggleSidebar() {
+  if (toggleSidebarFn) {
+    toggleSidebarFn()
+  } else {
+    isSidebarCollapsed.value = !isSidebarCollapsed.value
+  }
 }
 
 // 计算可见页码（当页数多时只显示当前页附近几页）
