@@ -325,6 +325,10 @@ class Agent:
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
         self.tool_registry.register(PdfProcessTool())
 
+        # 注册 PPT 生成工具
+        from src.tools.ppt.ppt_process_tool import PptProcessTool
+        self.tool_registry.register(PptProcessTool())
+
         # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool
