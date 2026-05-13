@@ -696,6 +696,10 @@ const isHistorySessionActive = computed(() => {
 
 // 当前业务数据页面列表
 const currentBusinessPages = computed(() => {
+  // 如果用户只有一个可用数字员工，不管会话的 subagent_id 是什么，永远显示该数字员工的业务菜单
+  if (filteredAvailableSubagents.value.length === 1) {
+    return filteredAvailableSubagents.value[0].business_pages || []
+  }
   const subagentId = props.currentSubagentId || currentSubagent.value
   if (!subagentId) return []
   const subagent = filteredAvailableSubagents.value.find(
@@ -706,6 +710,10 @@ const currentBusinessPages = computed(() => {
 
 // 当前子智能体名称
 const currentSubagentName = computed(() => {
+  // 如果用户只有一个可用数字员工，不管会话的 subagent_id 是什么，永远显示该数字员工的名称
+  if (filteredAvailableSubagents.value.length === 1) {
+    return filteredAvailableSubagents.value[0].name || ''
+  }
   const subagentId = props.currentSubagentId || currentSubagent.value
   if (!subagentId) return ''
   const subagent = filteredAvailableSubagents.value.find(
