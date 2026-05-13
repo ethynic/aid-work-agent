@@ -123,7 +123,10 @@ const currentSubagentId = computed(() => {
 // 登录/登出或进入登录页时，自动收起侧边栏（避免手机端重新登录后菜单仍展开）
 watch(() => route.path, (path) => {
   if (path.endsWith('/login') || path.endsWith('/reset-password')) {
-    sidebarCollapsed.value = true
+    // 只在手机端强制收起侧边栏，PC 端保持展开
+    if (isMobile.value) {
+      sidebarCollapsed.value = true
+    }
   }
 })
 watch(isLoggedIn, (loggedIn, oldLoggedIn) => {
