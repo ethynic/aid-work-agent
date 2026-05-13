@@ -201,7 +201,7 @@
   </div>
 
   <!-- 租户模式：PortalLayout 已经提供侧边栏，只需要内容区域 -->
-  <div v-else class="h-dvh flex flex-col bg-gray-50">
+  <div v-else class="h-safe-screen flex flex-col bg-gray-50">
     <AppHeader
       title="全部历史会话"
       :is-logged-in="effectiveIsLoggedIn"

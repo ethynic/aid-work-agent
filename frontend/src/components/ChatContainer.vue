@@ -1,5 +1,5 @@
 <template>
-  <div class="h-dvh flex flex-col bg-gray-50">
+  <div class="h-safe-screen flex flex-col bg-gray-50">
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar - 仅在非 PortalLayout 模式下显示（避免重复） -->
@@ -83,7 +83,7 @@
           </div>
 
           <!-- Input Area -->
-          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-2 md:p-4 shadow-sticky z-10">
+          <div class="flex-shrink-0 border-t border-gray-200 bg-white p-2 md:p-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-sticky z-10">
             <ChatInput
               @send="handleSend"
               @upload="handleUpload"
