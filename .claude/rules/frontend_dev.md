@@ -56,7 +56,118 @@ export const knowledgeAPI = {
 ```
 
 ### 页面布局一致性规范
-从 `MenuSidebar` 导航进入的页面**必须**保留 `MenuSidebar` + `AppHeader` 布局。
+
+#### 标准页面框架
+所有从左侧菜单导航进入的页面，必须遵循统一的三区域布局：
+
+```
+┌─────────────────────────────────────────────┐
+│  ┌─────────┐  ┌───────────────────────────┐ │
+│  │         │  │ ┌─────┬────────┬────────┐ │ │
+│  │ 菜单栏   │  │ │ 汉堡 │  标题  │  更多  │ │ │  ← AppHeader
+│  │(可收缩)  │  │ └─────┴────────┴────────┘ │ │
+│  │         │  │                           │ │
+│  │         │  │      页面具体内容区域      │ │
+│  │         │  │                           │ │
+│  └─────────┘  └───────────────────────────┘ │
+└─────────────────────────────────────────────┘
+```
+
+**核心要求**：
+1. **左侧菜单栏**：由 `MenuSidebar`（租户前台）或 `PortalLayout` 中的固定菜单（平台管理后台）提供，支持收缩/展开
+2. **右侧上方标题栏**：必须使用 `AppHeader` 组件，包含：
+   - 左侧 **汉堡按钮**（`@toggle-sidebar`）：用于展开/收起左侧菜单栏
+   - 中间 **页面标题**
+   - 右侧 **"更多"菜单**：放置页面相关快捷操作（如返回对话、凭据管理等）
+3. **右侧中下方内容区**：放置页面具体内容
+
+#### 场景一：PortalLayout 子页面（租户前台 /t/:tenant_id/*）
+
+这些页面已被 `PortalLayout` 包裹，`MenuSidebar` 由布局统一渲染。**页面组件只需负责右侧区域**，但必须使用 `AppHeader`：
+
+```vue
+<template>
+  <div class="h-screen flex flex-col bg-gray-50">
+    <AppHeader
+      title="页面标题"
+      :is-logged-in="effectiveIsLoggedIn"
+      :user="effectiveUser"
+      @toggle-sidebar="handleToggleSidebar"
+      @logout="handleLogout"
+    >
+      <template #menu-items="{ closeMenu }">
+        <!-- 更多菜单项 -->
+        <button @click="goToChat(); closeMenu()">返回对话</button>
+      </template>
+    </AppHeader>
+
+    <div class="flex-1 overflow-y-auto p-6">
+      <!-- 页面具体内容 -->
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { inject } from 'vue'
+import AppHeader from '@/components/AppHeader.vue'
+
+// 从 PortalLayout 注入侧边栏控制
+const toggleSidebarFn = inject<() => void>('toggleSidebar')
+
+function handleToggleSidebar() {
+  if (toggleSidebarFn) toggleSidebarFn()
+}
+</script>
+```
+
+**参考实现**：`TenantSettings.vue`、`TenantUserManager.vue`、`ChannelConfig.vue`
+
+#### 场景二：独立页面（非 PortalLayout 子页面）
+
+这些页面需要自己渲染完整的 `MenuSidebar` + `AppHeader` 组合：
+
+```vue
+<template>
+  <div class="h-screen flex flex-col bg-gray-50">
+    <main class="flex-1 flex overflow-hidden">
+      <MenuSidebar
+        :is-collapsed="isSidebarCollapsed"
+        ...
+        @collapse="isSidebarCollapsed = true"
+      />
+      <div class="flex-1 flex flex-col min-w-0">
+        <AppHeader
+          title="页面标题"
+          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+          ...
+        />
+        <div class="flex-1 overflow-hidden p-6">
+          <!-- 页面具体内容 -->
+        </div>
+      </div>
+    </main>
+  </div>
+</template>
+```
+
+**参考实现**：`KnowledgeBase.vue`、`AllSessions.vue`
+
+#### 禁止项
+
+❌ **严禁页面自行实现标题栏替代 `AppHeader`**。以下做法会导致菜单栏收缩后无法展开，必须禁止：
+
+```vue
+<!-- ❌ 错误示例：自行实现标题栏，缺少汉堡按钮 -->
+<div class="p-6">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold">页面标题</h1>
+    <div>页面操作按钮...</div>
+  </div>
+  ...
+</div>
+```
+
+如果发现已有页面存在此问题，必须按上述标准模板重构。
 
 ### 枚举值定义规范
 **涉及到字段枚举值的判断代码，必须以 `frontend/src/api/enums.ts` 为准。**

@@ -1,8 +1,27 @@
 <template>
-  <div class="p-6">
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-slate-800">站点Token用量</h1>
-      <div class="flex items-center gap-3">
+  <div class="h-screen flex flex-col bg-gray-50">
+    <AppHeader
+      title="站点Token用量"
+      :is-logged-in="effectiveIsLoggedIn"
+      :user="effectiveUser"
+      @toggle-sidebar="handleToggleSidebar"
+      @logout="handleLogout"
+    >
+      <template #menu-items="{ closeMenu }">
+        <button
+          @click="goToChat(); closeMenu()"
+          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          返回对话
+        </button>
+      </template>
+    </AppHeader>
+
+    <div class="flex-1 overflow-y-auto p-6">
+      <div class="flex items-center gap-3 mb-6">
         <div class="flex items-center gap-2">
           <label class="text-sm text-slate-600">选择月份:</label>
           <input type="month" v-model="selectedMonth" @change="loadData(1)"
@@ -13,7 +32,6 @@
           刷新
         </button>
       </div>
-    </div>
 
     <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
 
@@ -99,15 +117,52 @@
       </div>
     </template>
   </div>
+</div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
+import AppHeader from '@/components/AppHeader.vue'
 import { getTenantTokenDetails } from '@/api/saasTenant'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 import { formatTokensToMillionsThreeDecimals, formatMessagePreview } from '@/utils/formatTokens'
 
+const route = useRoute()
+const router = useRouter()
 const toast = useToast()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+
+// 统一的登录状态检查
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
+
+// 统一的用户信息
+const effectiveUser = computed(() => {
+  return tenantAdmin.value ? {
+    user_id: tenantAdmin.value.user_id,
+    username: tenantAdmin.value.username,
+    phone: tenantAdmin.value.phone
+  } : null
+})
+
+// 从 PortalLayout 注入侧边栏状态
+const toggleSidebarFn = inject<() => void>('toggleSidebar')
+
+function handleToggleSidebar() {
+  if (toggleSidebarFn) {
+    toggleSidebarFn()
+  }
+}
+
+async function handleLogout() {
+  await tenantLogout()
+  router.push(`/t/${route.params.tenant_id}/login`)
+}
+
+function goToChat() {
+  router.push(`/t/${route.params.tenant_id}/chat`)
+}
 
 const loading = ref(true)
 const selectedMonth = ref(getDefaultMonth())
