@@ -34,6 +34,8 @@
       </div>
     </div>
 
+    <!-- Scrollable Content - 中间内容整体滚动 -->
+    <div class="flex-1 overflow-y-auto min-h-0">
     <!-- Navigation Menu - 导航菜单区域 -->
     <div class="flex-shrink-0 p-2 space-y-1">
       <!-- New Session Button -->
@@ -226,7 +228,7 @@
     </div>
 
     <!-- Session List - 会话列表 -->
-    <div v-show="showHistory && isHistoryExpanded" class="flex-1 overflow-y-auto px-2">
+    <div v-show="showHistory && isHistoryExpanded" class="px-2 pb-2">
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -326,38 +328,117 @@
       </div>
     </div>
 
-    <!-- 底部固定区域 -->
-    <div class="mt-auto">
-      <!-- Theme Switcher - 主题切换器 -->
+    </div>
+    <!-- 底部固定区域：用户菜单 -->
+    <div class="mt-auto relative">
       <div class="flex-shrink-0 p-3 border-t border-gray-200">
-        <ThemeSwitcher />
-      </div>
-
-      <!-- 修改密码 - 租户模式已登录用户 -->
-      <div v-if="isTenantMode && tenantIsLoggedIn" class="flex-shrink-0 px-3 pb-2">
         <button
-          @click="handleModifyPassword"
-          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
+          @click="showUserMenu = !showUserMenu"
+          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+          </svg>
+          <span class="truncate">{{ currentUsername }}</span>
+          <svg
+            class="w-4 h-4 ml-auto transition-transform"
+            :class="{ 'rotate-180': showUserMenu }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- User Dropdown Menu -->
+      <div
+        v-if="showUserMenu"
+        class="absolute left-3 right-3 bottom-full mb-2 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 max-h-80 overflow-y-auto"
+      >
+        <!-- 颜色主题 -->
+        <button
+          @click="showThemeSubmenu = !showThemeSubmenu"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+          </svg>
+          <span class="flex-1">颜色主题</span>
+          <svg
+            class="w-4 h-4 transition-transform"
+            :class="{ 'rotate-90': showThemeSubmenu }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+
+        <!-- 主题子菜单 -->
+        <div v-show="showThemeSubmenu" class="ml-4 space-y-0">
+          <button
+            v-for="theme in availableThemes"
+            :key="theme.name"
+            @click="handleSelectTheme(theme.name)"
+            :class="[
+              'w-full flex items-center gap-3 px-3 py-2 text-left text-sm transition-colors rounded',
+              currentTheme === theme.name
+                ? 'bg-primary-50 text-primary-700'
+                : 'text-gray-700 hover:bg-gray-50'
+            ]"
+          >
+            <div
+              class="w-4 h-4 rounded-full border border-gray-200 flex-shrink-0"
+              :style="{ backgroundColor: getThemePreviewColor(theme.name) }"
+            />
+            <span class="flex-1">{{ theme.label }}</span>
+            <svg
+              v-if="currentTheme === theme.name"
+              class="w-4 h-4 text-primary-600 flex-shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="my-1 border-t border-gray-100"></div>
+
+        <!-- 修改密码 -->
+        <button
+          v-if="isTenantMode && tenantIsLoggedIn"
+          @click="showUserMenu = false; handleModifyPassword()"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
           </svg>
           <span>修改密码</span>
         </button>
-      </div>
 
-      <!-- 退出登录 - 租户模式专用 -->
-      <div v-if="isTenantMode" class="flex-shrink-0 px-3 pb-3">
+        <!-- 退出登录 -->
         <button
-          @click="handleTenantLogout"
-          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          @click="handleLogout"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-red-50 hover:text-red-600 transition-colors"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>
           <span>退出登录</span>
         </button>
       </div>
+
+      <!-- Click outside to close -->
+      <div
+        v-if="showUserMenu"
+        class="fixed inset-0 z-40"
+        @click="showUserMenu = false"
+      />
     </div>
 
     <!-- Rename Modal -->
@@ -401,7 +482,7 @@ import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
-import ThemeSwitcher from './ThemeSwitcher.vue'
+import { useTheme, type ThemeName } from '@/composables/useTheme'
 
 import type { SubagentListItem, BusinessPage } from '@/api/subagent'
 
@@ -430,8 +511,55 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
-const { isLoggedIn: demoIsLoggedIn } = useDemoAuth()
+const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
+const { currentTheme, setTheme, getAvailableThemes } = useTheme()
+
+const showUserMenu = ref(false)
+const showThemeSubmenu = ref(false)
+const availableThemes = getAvailableThemes()
+
+const currentUsername = computed(() => {
+  if (isTenantMode.value && tenantAdmin.value) {
+    return tenantAdmin.value.username
+  }
+  if (demoUser.value) {
+    return demoUser.value.username
+  }
+  return '用户'
+})
+
+function handleSelectTheme(theme: ThemeName) {
+  setTheme(theme)
+}
+
+function getThemePreviewColor(themeName: ThemeName): string {
+  switch (themeName) {
+    case 'blue': return '#003A8C'
+    case 'gray': return '#2F3641'
+    case 'pine': return '#164E42'
+    case 'burgundy': return '#5C1A21'
+    case 'bamboo': return '#25B26B'
+    case 'iris': return '#8551F9'
+    case 'sunrise': return '#FF7D00'
+    case 'peony': return '#D91A80'
+    default: return '#003A8C'
+  }
+}
+
+function handleLogout() {
+  showUserMenu.value = false
+  if (isTenantMode.value) {
+    handleTenantLogout()
+  } else {
+    handleDemoLogout()
+  }
+}
+
+async function handleDemoLogout() {
+  await demoLogout()
+  router.push('/')
+}
 const {
   sessions,
   currentSessionId,

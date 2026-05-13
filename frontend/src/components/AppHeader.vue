@@ -88,21 +88,9 @@
       </div>
     </div>
 
-    <!-- Right Side - User Info & Actions -->
+    <!-- Right Side - Actions -->
     <div v-if="isLoggedIn" class="flex items-center gap-3 flex-shrink-0">
       <div class="hidden md:flex items-center gap-3">
-        <!-- User Name -->
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-gray-600">{{ user?.username }}</span>
-          <button
-            v-if="showDemoLogout"
-            @click="$emit('logout')"
-            class="px-2 py-1 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-          >
-            退出
-          </button>
-        </div>
-
         <!-- More Menu -->
         <div class="relative">
           <button
