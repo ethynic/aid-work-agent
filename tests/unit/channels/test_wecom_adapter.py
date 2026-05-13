@@ -79,6 +79,8 @@ def adapter():
         mock_channels.wecom.media.upload_dir = "/tmp/wecom_test"
         mock_channels.wecom.retry.max_attempts = 3
         mock_channels.wecom.retry.backoff_base = 1.0
+        mock_channels.wecom.rate_limit.enabled = True
+        mock_channels.wecom.rate_limit.max_per_minute = 5
         mock_settings.channels = mock_channels
 
         adapter = WeComAdapter()
@@ -170,3 +172,110 @@ class TestClose:
     async def test_close_without_client(self, adapter):
         adapter._http_client = None
         await adapter.close()  # 不应抛异常
+
+
+# 测试 XML 消息模板（带 @前缀）
+TEXT_XML_WITH_AT = """<xml>
+<MsgType>text</MsgType>
+<Content>@智能助手 你好</Content>
+<FromUserName>user123</FromUserName>
+<ToUserName>agent456</ToUserName>
+<CreateTime>1234567890</CreateTime>
+<MsgId>msg_at_001</MsgId>
+</xml>"""
+
+TEXT_XML_WITH_AT_MULTI_SPACE = """<xml>
+<MsgType>text</MsgType>
+<Content>@智能助手   你好</Content>
+<FromUserName>user123</FromUserName>
+<ToUserName>agent456</ToUserName>
+<CreateTime>1234567890</CreateTime>
+<MsgId>msg_at_002</MsgId>
+</xml>"""
+
+
+class TestAtPrefixCleaning:
+    """群聊 @前缀清洗测试"""
+
+    @pytest.mark.asyncio
+    async def test_clean_at_prefix_simple(self, adapter):
+        """@应用 消息 -> 消息"""
+        msg = await adapter.parse_message({"body": TEXT_XML_WITH_AT})
+        assert msg.text == "你好"
+        assert msg.message_type == MessageType.TEXT
+
+    @pytest.mark.asyncio
+    async def test_clean_at_prefix_multi_space(self, adapter):
+        """@应用   消息（多空格）-> 消息"""
+        msg = await adapter.parse_message({"body": TEXT_XML_WITH_AT_MULTI_SPACE})
+        assert msg.text == "你好"
+
+    @pytest.mark.asyncio
+    async def test_no_clean_for_normal_message(self, adapter):
+        """普通消息不变"""
+        msg = await adapter.parse_message({"body": TEXT_XML})
+        assert msg.text == "你好"
+
+    @pytest.mark.asyncio
+    async def test_message_without_at_prefix(self, adapter):
+        """不以 @ 开头的消息保持不变"""
+        xml = """<xml>
+        <MsgType>text</MsgType>
+        <Content>@开头但没有空格</Content>
+        <FromUserName>user123</FromUserName>
+        <ToUserName>agent456</ToUserName>
+        <CreateTime>1234567890</CreateTime>
+        <MsgId>msg_006</MsgId>
+        </xml>"""
+        msg = await adapter.parse_message({"body": xml})
+        # @开头但没有空白字符分隔，不应清洗
+        assert msg.text == "@开头但没有空格"
+
+
+class TestRateLimit:
+    """速率限制测试"""
+
+    def test_rate_limit_disabled(self, adapter):
+        """限流禁用时始终通过"""
+        adapter._rate_limit_enabled = False
+        assert adapter._check_rate_limit("user1") is True
+
+    def test_rate_limit_under_threshold(self, adapter):
+        """未达到阈值时通过"""
+        adapter._rate_limit_max = 5
+        adapter._rate_limiter.clear()
+        # 发送 4 次，未超限
+        for _ in range(4):
+            assert adapter._check_rate_limit("user1") is True
+
+    def test_rate_limit_at_threshold(self, adapter):
+        """达到阈值时拒绝"""
+        adapter._rate_limit_max = 3
+        adapter._rate_limiter.clear()
+        # 发送 3 次，第 4 次应被拒绝
+        for _ in range(3):
+            assert adapter._check_rate_limit("user1") is True
+        assert adapter._check_rate_limit("user1") is False
+
+    def test_rate_limit_per_user(self, adapter):
+        """限流按用户独立计算"""
+        adapter._rate_limit_max = 2
+        adapter._rate_limiter.clear()
+        # user1 达到限流
+        adapter._check_rate_limit("user1")
+        adapter._check_rate_limit("user1")
+        assert adapter._check_rate_limit("user1") is False
+        # user2 不受影响
+        assert adapter._check_rate_limit("user2") is True
+
+    def test_rate_limit_window_slide(self, adapter):
+        """滑动窗口：旧记录过期后恢复通过"""
+        from collections import deque
+        adapter._rate_limit_max = 2
+        adapter._rate_limiter.clear()
+        import time
+        # 模拟两条 70 秒前的记录
+        old_time = time.time() - 70
+        adapter._rate_limiter["user1"] = deque([old_time, old_time])
+        # 旧记录应在检查时自动清理，新请求通过
+        assert adapter._check_rate_limit("user1") is True

@@ -15,6 +15,26 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# ============================================================
+# 在导入 src 模块之前 mock 外部依赖，防止 master_agent 初始化失败
+# ============================================================
+
+# mock dashscope（embedding 模块需要）
+dashscope_mock = types.ModuleType("dashscope")
+dashscope_mock.TextEmbedding = MagicMock()
+sys.modules["dashscope"] = dashscope_mock
+
+# mock vector_db 包（防止 agent 初始化失败）
+vector_db_pkg = types.ModuleType("src.knowledge.vector_db")
+vector_db_pkg.__path__ = []  # 标记为包
+vector_db_pkg.__file__ = "src/knowledge/vector_db/__init__.py"
+vector_db_mod = types.ModuleType("src.knowledge.vector_db.vector_db")
+vector_db_mod.VectorDBSQLite = MagicMock()
+vector_db_mod.get_vector_db = MagicMock()
+vector_db_pkg.vector_db = vector_db_mod
+sys.modules["src.knowledge.vector_db"] = vector_db_pkg
+sys.modules["src.knowledge.vector_db.vector_db"] = vector_db_mod
+
 # 忽略旧的根目录测试文件（已迁移到 unit/integration/e2e 子目录）
 collect_ignore = sorted(str(p) for p in Path(__file__).parent.glob("test_*.py"))
 
