@@ -67,7 +67,7 @@
 + [x] 3.3 添加租户管理菜单项
   - 修改 `frontend/src/components/MenuSidebar.vue`
   - 在 `adminSubMenuItems` 计算属性中添加租户Token消耗明细菜单项
-  - 菜单项：路径 `${base}/token-usage`，标签 `站点Token用量报表`，图标 `📊`
+  - 菜单项：路径 `${base}/token-usage`，标签 `租户Token用量报表`，图标 `📊`
   - 确保仅租户管理员可见
 
 ## 4. 测试和验证
