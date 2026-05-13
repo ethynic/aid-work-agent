@@ -1,9 +1,8 @@
 <template>
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-      <div class="px-4 md:px-8 pt-8 pb-6">
-        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">统一登录</h1>
-        <p class="text-sm text-slate-500 text-center mb-2">请输入租户代码和账号信息</p>
+      <div class="px-4 md:px-8 pt-6 pb-6">
+        <h1 class="text-xl font-bold text-slate-800 text-center mt-4 mb-1">统一登录</h1>
 
         <!-- 租户状态提示 -->
         <div v-if="tenantStatusMessage" class="text-red-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-red-50 rounded border border-red-200">
@@ -18,7 +17,7 @@
           {{ tenantExpiringMessage }}
         </div>
 
-        <div class="space-y-4">
+        <div class="space-y-3">
           <!-- 租户代码输入 -->
           <div>
             <label class="block text-sm text-slate-600 mb-1">租户代码</label>
@@ -36,40 +35,14 @@
             </div>
           </div>
 
-          <!-- 账号类型切换 -->
-          <div class="flex gap-2 mb-4">
-            <button
-              @click="loginType = 'phone'"
-              :class="[
-                'flex-1 py-2 rounded-lg text-sm font-medium transition-colors',
-                loginType === 'phone'
-                  ? 'bg-cyan-500 text-white'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              ]"
-            >
-              手机号登录
-            </button>
-            <button
-              @click="loginType = 'username'"
-              :class="[
-                'flex-1 py-2 rounded-lg text-sm font-medium transition-colors',
-                loginType === 'username'
-                  ? 'bg-cyan-500 text-white'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              ]"
-            >
-              用户名登录
-            </button>
-          </div>
-
-          <!-- 手机号/用户名输入 -->
+          <!-- 手机号或用户名输入 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">{{ loginType === 'phone' ? '手机号' : '用户名' }}</label>
+            <label class="block text-sm text-slate-600 mb-1">手机号或用户名</label>
             <input
               v-model="identifier"
-              :type="loginType === 'phone' ? 'tel' : 'text'"
-              :placeholder="loginType === 'phone' ? '请输入手机号' : '请输入用户名'"
-              :autocomplete="loginType === 'phone' ? 'tel' : 'username'"
+              type="text"
+              placeholder="请输入手机号或用户名"
+              autocomplete="username"
               class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
               @input="clearError('identifier')"
             />
@@ -104,6 +77,7 @@
                 type="text"
                 placeholder="请输入图形验证码"
                 maxlength="4"
+                autocomplete="off"
                 class="flex-1 px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
                 @keyup.enter="handleLogin"
                 @input="clearError('captcha_code')"
@@ -160,7 +134,6 @@ const toast = useToast()
 
 // 表单数据
 const tenantCode = ref('')
-const loginType = ref<'phone' | 'username'>('phone')
 const identifier = ref('')
 const password = ref('')
 const captchaCode = ref('')
@@ -225,7 +198,7 @@ async function handleLogin() {
   }
 
   if (!identifier.value) {
-    fieldErrors.value.identifier = loginType.value === 'phone' ? '请输入手机号' : '请输入用户名'
+    fieldErrors.value.identifier = '请输入手机号或用户名'
     return
   }
 

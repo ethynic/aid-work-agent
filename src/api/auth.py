@@ -349,20 +349,18 @@ async def login(request: Request, body: LoginRequest):
 
     # 尝试通过手机号或用户名查找用户
     user = None
-    is_phone = False
+    is_phone = identifier.isdigit() and len(identifier) == 11
 
-    # 判断是否为手机号格式
-    if identifier.isdigit() and len(identifier) == 11:
-        user = UserDB.get_by_phone(identifier)
-        is_phone = True
-    else:
-        # 按用户名查找
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
-            row = cursor.fetchone()
-            if row:
-                user = dict(row)
+    # 同时匹配 username 或 phone，避免用户名是 11 位数字时误识别
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM users WHERE username = %s OR phone = %s LIMIT 1",
+            (identifier, identifier)
+        )
+        row = cursor.fetchone()
+        if row:
+            user = dict(row)
 
     # 演示模式：任意手机号 + mock_password 即可登录（自动注册）
     if demo_enabled and is_phone and body.password == mock_password:
@@ -524,20 +522,18 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
     # 6. 验证用户凭证（复用现有逻辑）
     identifier = body.identifier.strip()
     user = None
-    is_phone = False
+    is_phone = identifier.isdigit() and len(identifier) == 11
 
-    # 判断是否为手机号格式
-    if identifier.isdigit() and len(identifier) == 11:
-        user = UserDB.get_by_phone(identifier)
-        is_phone = True
-    else:
-        # 按用户名查找
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
-            row = cursor.fetchone()
-            if row:
-                user = dict(row)
+    # 同时匹配 username 或 phone，避免用户名是 11 位数字时误识别
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM users WHERE username = %s OR phone = %s LIMIT 1",
+            (identifier, identifier)
+        )
+        row = cursor.fetchone()
+        if row:
+            user = dict(row)
 
     if not user:
         errors.append({"field": "identifier", "message": "用户不存在"})
