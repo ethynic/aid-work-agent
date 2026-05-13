@@ -55,17 +55,6 @@ def get_db():
 # ============================================================
 
 TABLE_DEFINITIONS = {
-    "bs_travel_quote_regions": """
-        CREATE TABLE IF NOT EXISTS bs_travel_quote_regions (
-            id SERIAL PRIMARY KEY,
-            tenant_id TEXT,
-            name TEXT NOT NULL,
-            aliases TEXT,
-            parent_name TEXT,
-            level TEXT,
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )""",
     "bs_travel_quote_vehicles": """
         CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
             id SERIAL PRIMARY KEY,
@@ -80,82 +69,15 @@ TABLE_DEFINITIONS = {
             overkm_rate DECIMAL(10,2),
             driver_meal_allowance DECIMAL(10,2),
             driver_accommodation DECIMAL(10,2),
+            pricing_mode TEXT DEFAULT 'daily',
+            per_km_rate DECIMAL(10,2),
+            base_km DECIMAL(10,2),
+            base_fee DECIMAL(10,2),
             season_type TEXT DEFAULT 'default',
             effective_from DATE,
             effective_to DATE,
             is_active BOOLEAN DEFAULT TRUE,
             sort_order INT DEFAULT 0,
-            remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )""",
-    "bs_travel_quote_attractions": """
-        CREATE TABLE IF NOT EXISTS bs_travel_quote_attractions (
-            id SERIAL PRIMARY KEY,
-            tenant_id TEXT,
-            region_name TEXT,
-            name TEXT NOT NULL,
-            category TEXT,
-            address TEXT,
-            open_time TEXT,
-            visit_duration_hours DECIMAL(4,1),
-            internal_transport_name TEXT,
-            internal_transport_price DECIMAL(10,2),
-            is_active BOOLEAN DEFAULT TRUE,
-            sort_order INT DEFAULT 0,
-            remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )""",
-    "bs_travel_quote_tickets": """
-        CREATE TABLE IF NOT EXISTS bs_travel_quote_tickets (
-            id SERIAL PRIMARY KEY,
-            tenant_id TEXT,
-            attraction_id INT NOT NULL,
-            ticket_type TEXT NOT NULL,
-            ticket_type_label TEXT NOT NULL,
-            retail_price DECIMAL(10,2) NOT NULL,
-            agency_price DECIMAL(10,2),
-            group_price DECIMAL(10,2),
-            group_min_people INT,
-            season_type TEXT DEFAULT 'default',
-            effective_from DATE,
-            effective_to DATE,
-            is_active BOOLEAN DEFAULT TRUE,
-            remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )""",
-    "bs_travel_quote_hotels": """
-        CREATE TABLE IF NOT EXISTS bs_travel_quote_hotels (
-            id SERIAL PRIMARY KEY,
-            tenant_id TEXT,
-            region_name TEXT,
-            name TEXT NOT NULL,
-            star_rating TEXT,
-            star_rating_label TEXT,
-            address TEXT,
-            contact_phone TEXT,
-            is_active BOOLEAN DEFAULT TRUE,
-            sort_order INT DEFAULT 0,
-            remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )""",
-    "bs_travel_quote_rooms": """
-        CREATE TABLE IF NOT EXISTS bs_travel_quote_rooms (
-            id SERIAL PRIMARY KEY,
-            tenant_id TEXT,
-            hotel_id INT NOT NULL,
-            room_type TEXT NOT NULL,
-            room_type_label TEXT NOT NULL,
-            max_occupancy INT NOT NULL,
-            bed_count INT,
-            retail_price DECIMAL(10,2) NOT NULL,
-            agency_price DECIMAL(10,2),
-            includes_breakfast BOOLEAN DEFAULT FALSE,
-            breakfast_count INT DEFAULT 0,
-            extra_bed_rate DECIMAL(10,2),
-            season_type TEXT DEFAULT 'default',
-            effective_from DATE,
-            effective_to DATE,
-            is_active BOOLEAN DEFAULT TRUE,
             remark TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
@@ -234,38 +156,6 @@ def init_tables():
             conn.execute(ddl)
         conn.commit()
     logger.info("[quote-generate] 数据库表初始化完成")
-
-
-# ============================================================
-# 区域查询辅助
-# ============================================================
-
-def expand_region_names(tenant_id: str, region_name: str) -> List[str]:
-    """展开区域名称：如果是省份名，返回其下所有城市名；否则返回自身"""
-    with get_db() as conn:
-        # 先查是否是省份级
-        conn.execute(
-            "SELECT name FROM bs_travel_quote_regions WHERE tenant_id=%s AND is_active=true "
-            "AND (name=%s OR aliases LIKE %s)",
-            (tenant_id, region_name, f'%{region_name}%')
-        )
-        matched = conn.fetchall()
-        if not matched:
-            return [region_name]
-
-        # 检查匹配到的区域是否有子区域
-        parent_names = [r['name'] for r in matched]
-        placeholders = ','.join(['%s'] * len(parent_names))
-        conn.execute(
-            f"SELECT name FROM bs_travel_quote_regions WHERE tenant_id=%s AND is_active=true "
-            f"AND parent_name IN ({placeholders})",
-            (tenant_id, *parent_names)
-        )
-        children = conn.fetchall()
-
-        if children:
-            return [r['name'] for r in children] + parent_names
-        return parent_names
 
 
 # ============================================================
@@ -383,12 +273,28 @@ def recommend_vehicle(people_count: int, vehicles: List[Dict]) -> List[Dict]:
 
 def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
                            total_people: int, trip_days: int, season_type: str,
-                           vehicle_count: Optional[int]) -> Tuple[list, int]:
+                           vehicle_count: Optional[int],
+                           route_distance_km: Optional[float] = None) -> Tuple[list, int]:
     """计算交通费用"""
     vehicles = query_by_region("bs_travel_quote_vehicles", tenant_id, region_names, season_type)
     if not vehicles:
         return items, 0
 
+    # 按 pricing_mode 分组
+    per_km_vehicles = [v for v in vehicles if v.get('pricing_mode') == 'per_km']
+    daily_vehicles = [v for v in vehicles if v.get('pricing_mode') != 'per_km']
+
+    # 按公里计费：有 per_km 车辆且有距离数据
+    if per_km_vehicles and route_distance_km is not None:
+        return _calculate_per_km_cost(items, per_km_vehicles, total_people, route_distance_km)
+
+    # 按公里计费车辆无距离数据时，fallback 到按天计费（如果有 daily 车辆）
+    if per_km_vehicles and route_distance_km is None and daily_vehicles:
+        vehicles = daily_vehicles
+    elif per_km_vehicles and route_distance_km is None:
+        vehicles = per_km_vehicles  # 无 daily 车辆可用，仍走 daily 逻辑兜底
+
+    # 按天计费（原有逻辑）
     combo = recommend_vehicle(total_people, vehicles)
     total_vehicle_count = sum(c["count"] for c in combo)
 
@@ -421,14 +327,63 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
     return items, total_vehicle_count
 
 
+def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
+                           distance_km: float) -> Tuple[list, int]:
+    """按公里计费：base_fee + max(0, distance_km - base_km) * per_km_rate"""
+    combo = recommend_vehicle(total_people, vehicles)
+    total_vehicle_count = sum(c["count"] for c in combo)
+
+    for c in combo:
+        v = c["vehicle"]
+        count = c["count"]
+        per_km_rate = float(v.get('per_km_rate') or 0)
+        base_km = float(v.get('base_km') or 0)
+        base_fee = float(v.get('base_fee') or 0)
+
+        # 单辆费用 = base_fee + max(0, distance_km - base_km) * per_km_rate
+        extra_km = max(0, distance_km - base_km)
+        single_vehicle_cost = base_fee + extra_km * per_km_rate
+        total_cost = single_vehicle_cost * count
+        per_person = round(total_cost / total_people, 2)
+
+        remark_parts = []
+        if v.get('vehicle_type_label'):
+            remark_parts.append(v['vehicle_type_label'])
+        if count > 1:
+            remark_parts.append(f"{count}辆")
+        remark_parts.append(f"{v['seats_min']}-{v['seats_max']}座")
+        remark_parts.append(f"按公里计费({distance_km:.0f}km)")
+
+        items.append({
+            "category": "用车",
+            "name": v.get('vehicle_type_label') or v.get('vehicle_type', '旅游车辆'),
+            "unit_price": round(single_vehicle_cost, 2),
+            "quantity": count,
+            "unit": "辆",
+            "frequency": 1,
+            "freq_unit": "趟",
+            "subtotal": per_person,
+            "remark": "、".join(remark_parts),
+        })
+
+    return items, total_vehicle_count
+
+
 # ============================================================
 # 门票计算
 # ============================================================
 
 def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int],
                           adults: int, children_half: int, students: int, elders: int,
-                          total_people: int) -> list:
+                          total_people: int,
+                          attraction_doc_ids: Optional[List[int]] = None) -> list:
     """计算门票费用"""
+    # 知识库模式
+    if attraction_doc_ids:
+        return _calculate_ticket_cost_from_kb(items, tenant_id, attraction_doc_ids,
+                                               adults, children_half, students,
+                                               elders, total_people)
+
     if not attraction_ids:
         return items
 
@@ -536,13 +491,199 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
 
 
 # ============================================================
+# 住宿计算（知识库模式）
+# ============================================================
+
+def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
+                                   total_people: int, couples: int,
+                                   trip_days: int) -> Tuple[list, float]:
+    """从知识库获取酒店价格计算住宿费用"""
+    from hotel_retriever import HotelRetriever
+    retriever = HotelRetriever()
+
+    price_table = retriever.get_price_table(doc_id)
+    if not price_table:
+        logger.warning(f"[quote-generate] 酒店 doc_id={doc_id} 无价格表")
+        return items, 0
+
+    nights = trip_days - 1
+
+    # 解析价格表提取基础房价
+    # 价格表格式：每行 "房型 | 客户类型 | 价格 | 含早 | 适用日期：..."
+    lines = [l.strip() for l in price_table.split('\n') if l.strip() and '|' in l]
+
+    # 取第一个"团队"类型的价格作为默认房价
+    default_price = 0
+    for line in lines:
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 3 and '团队' in parts[1]:
+            price_str = parts[2].strip()
+            try:
+                default_price = float(price_str)
+                break
+            except ValueError:
+                continue
+
+    if default_price == 0:
+        # 如果没找到团队价，取第一个有效价格
+        for line in lines:
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 3:
+                try:
+                    default_price = float(parts[2].strip())
+                    break
+                except ValueError:
+                    continue
+
+    if default_price == 0:
+        logger.warning(f"[quote-generate] 酒店 doc_id={doc_id} 价格表无有效价格")
+        return items, 0
+
+    # 排房逻辑（与旧版相同）
+    couple_people = couples * 2
+    remaining = total_people - couple_people
+    standard_count = math.ceil(remaining / 2) if remaining > 0 else 0
+
+    total_room_cost = (standard_count + couples) * default_price * nights
+    per_person = round(total_room_cost / total_people, 2)
+
+    single_supplement = 0
+    if remaining > 0 and remaining % 2 == 1:
+        single_supplement = round(default_price * nights / total_people, 2)
+
+    items.append({
+        "category": "住宿",
+        "name": "酒店住宿",
+        "unit_price": default_price,
+        "quantity": standard_count + couples,
+        "unit": "间",
+        "frequency": nights,
+        "freq_unit": "晚",
+        "subtotal": per_person,
+        "remark": "两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
+    })
+
+    return items, single_supplement
+
+
+# ============================================================
+# 门票计算（知识库模式）
+# ============================================================
+
+def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
+                                    adults: int, children_half: int,
+                                    students: int, elders: int,
+                                    total_people: int) -> list:
+    """从知识库获取景点门票价格计算门票费用"""
+    from attraction_retriever import AttractionRetriever
+    retriever = AttractionRetriever()
+
+    for doc_id in doc_ids:
+        ticket_table = retriever.get_ticket_table(doc_id)
+        attraction_info = retriever.get_attraction_info(doc_id)
+
+        if not ticket_table:
+            continue
+
+        # 从 info 中提取景点名称
+        attraction_name = ""
+        if attraction_info:
+            for line in attraction_info.split('\n'):
+                if '景点名称' in line or '名称' in line:
+                    parts = line.split('：', 1)
+                    if len(parts) > 1:
+                        attraction_name = parts[-1].strip()
+                    break
+
+        # 解析门票价格表
+        lines = [l.strip() for l in ticket_table.split('\n') if l.strip() and '|' in l]
+
+        def find_price(ticket_keyword, customer_keyword='团队'):
+            """从价格表中查找指定票型的团队价"""
+            for line in lines:
+                parts = [p.strip() for p in line.split('|')]
+                if len(parts) >= 3:
+                    if ticket_keyword in parts[0] and customer_keyword in parts[1]:
+                        try:
+                            return float(parts[2].strip())
+                        except ValueError:
+                            pass
+            # 没找到团队价，取散客价
+            for line in lines:
+                parts = [p.strip() for p in line.split('|')]
+                if len(parts) >= 3 and ticket_keyword in parts[0]:
+                    try:
+                        return float(parts[2].strip())
+                    except ValueError:
+                        pass
+            return 0
+
+        # 成人票
+        if adults > 0:
+            price = find_price('成人')
+            if price > 0:
+                items.append({
+                    "category": "门票",
+                    "name": f"{attraction_name}(成人票)",
+                    "unit_price": price,
+                    "quantity": adults,
+                    "unit": "人",
+                    "frequency": 1,
+                    "freq_unit": "次",
+                    "subtotal": round(price * adults / total_people, 2),
+                    "remark": "团队价",
+                })
+
+        # 儿童票
+        if children_half > 0:
+            price = find_price('儿童')
+            if price > 0:
+                items.append({
+                    "category": "门票",
+                    "name": f"{attraction_name}(儿童票)",
+                    "unit_price": price,
+                    "quantity": children_half,
+                    "unit": "人",
+                    "frequency": 1,
+                    "freq_unit": "次",
+                    "subtotal": round(price * children_half / total_people, 2),
+                    "remark": "儿童票",
+                })
+
+        # 学生票
+        if students > 0:
+            price = find_price('学生')
+            if price > 0:
+                items.append({
+                    "category": "门票",
+                    "name": f"{attraction_name}(学生票)",
+                    "unit_price": price,
+                    "quantity": students,
+                    "unit": "人",
+                    "frequency": 1,
+                    "freq_unit": "次",
+                    "subtotal": round(price * students / total_people, 2),
+                    "remark": "学生票",
+                })
+
+        # 老人免票不收费
+
+    return items
+
+
+# ============================================================
 # 住宿计算
 # ============================================================
 
 def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
                          total_people: int, couples: int, trip_days: int,
-                         season_type: str) -> Tuple[list, float]:
+                         season_type: str, hotel_doc_id: Optional[int] = None) -> Tuple[list, float]:
     """计算住宿费用，返回 (items, 单房差)"""
+    # 知识库模式
+    if hotel_doc_id:
+        return _calculate_hotel_cost_from_kb(items, tenant_id, hotel_doc_id,
+                                              total_people, couples, trip_days)
+
     if not hotel_id:
         return items, 0
 
@@ -970,6 +1111,8 @@ def generate_quote(params: dict) -> dict:
     start_date = params.get('start_date', date.today().isoformat())
     attraction_ids = params.get('attraction_ids', [])
     hotel_id = params.get('hotel_id')
+    hotel_doc_id = params.get('hotel_doc_id')
+    attraction_doc_ids = params.get('attraction_doc_ids', [])
     meal_tier = params.get('meal_tier', 'standard')
     guide_type = params.get('guide_type', 'local')
     vehicle_count = params.get('vehicle_count')
@@ -978,19 +1121,40 @@ def generate_quote(params: dict) -> dict:
     course_name = params.get('course_name', '')
     company_name = params.get('company_name', '')
     template_path = params.get('template_path')
+    departure_city = params.get('departure_city', '')
+    destination = params.get('destination', '')
 
-    # Step 1: 展开区域
-    region_names = expand_region_names(tenant_id, region_name) if region_name else []
+    # Step 1: 区域名称
+    region_names = [region_name] if region_name else []
 
     # Step 2: 确定季节
     season_type, season_multiplier = determine_season(tenant_id, start_date)
+
+    # Step 2.5: 计算导航距离（用于按公里计费）
+    route_distance_km = None
+    if departure_city and destination:
+        try:
+            import subprocess as _sp
+            route_script = project_root / "src" / "skills" / "route-distance-1.0.0" / "scripts" / "route_distance.py"
+            _result = _sp.run(
+                [sys.executable, str(route_script)],
+                input=json.dumps({"origin": departure_city, "destination": destination}),
+                capture_output=True, text=True, timeout=30,
+            )
+            if _result.returncode == 0 and _result.stdout.strip():
+                _parsed = json.loads(_result.stdout.strip())
+                if _parsed.get('success'):
+                    route_distance_km = _parsed['distance_km']
+                    logger.info(f"[quote-generate] 导航距离: {departure_city} → {destination}, {route_distance_km}km")
+        except Exception as e:
+            logger.warning(f"[quote-generate] 导航距离计算失败: {e}")
 
     items = []
 
     # Step 3: 交通
     items, actual_vehicle_count = calculate_vehicle_cost(
         items, tenant_id, region_names, total_people, trip_days,
-        season_type, vehicle_count
+        season_type, vehicle_count, route_distance_km
     )
     if actual_vehicle_count == 0:
         actual_vehicle_count = vehicle_count or 1
@@ -998,12 +1162,14 @@ def generate_quote(params: dict) -> dict:
     # Step 4: 门票
     items = calculate_ticket_cost(
         items, tenant_id, attraction_ids,
-        adults, children_half, students, elders, total_people
+        adults, children_half, students, elders, total_people,
+        attraction_doc_ids=attraction_doc_ids
     )
 
     # Step 5: 住宿
     items, single_supplement = calculate_hotel_cost(
-        items, tenant_id, hotel_id, total_people, couples, trip_days, season_type
+        items, tenant_id, hotel_id, total_people, couples, trip_days, season_type,
+        hotel_doc_id=hotel_doc_id
     )
 
     # Step 6: 餐饮

@@ -3,10 +3,7 @@
     <div class="header-bar">
       <h2>餐标价格管理</h2>
       <div class="actions">
-        <select v-model="filterRegion" @change="loadData" class="filter-select">
-          <option value="">全部区域</option>
-          <option v-for="r in regionOptions" :key="r" :value="r">{{ r }}</option>
-        </select>
+        <input v-model="filterRegion" @change="loadData" class="filter-select" placeholder="筛选区域" />
         <select v-model="filterTier" @change="loadData" class="filter-select">
           <option value="">全部档次</option>
           <option value="economy">经济餐</option>
@@ -153,11 +150,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { meals, regions } from '@/api/travelQuote'
+import { meals } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 
 const items = ref<any[]>([])
-const regionOptions = ref<string[]>([])
 const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
@@ -181,10 +177,6 @@ async function loadData() {
     items.value = await meals.list(params)
   } catch (e) { console.error('加载餐标数据失败', e) }
   finally { loading.value = false }
-}
-
-async function loadRegions() {
-  try { const data = await regions.list(); regionOptions.value = [...new Set(data.map((r: any) => r.name).filter(Boolean))] } catch (e) { /* ignore */ }
 }
 
 function openCreate() {
@@ -213,7 +205,7 @@ async function handleDelete(item: any) {
   catch (e) { console.error('删除失败', e); alert('删除失败') }
 }
 
-onMounted(() => { loadData(); loadRegions() })
+onMounted(() => { loadData() })
 </script>
 
 <style scoped>

@@ -1,100 +1,136 @@
 <template>
   <div class="manager-container">
-    <div class="header-bar">
-      <h2>景点门票管理</h2>
-      <div class="actions">
-        <select v-model="filterRegion" @change="loadData" class="filter-select">
-          <option value="">全部区域</option>
-          <option v-for="r in regionOptions" :key="r" :value="r">{{ r }}</option>
-        </select>
-        <button class="btn-primary" @click="openCreate">+ 新增景点</button>
-        <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
-        <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
-          {{ importing ? '导入中...' : '导入 Excel' }}
-        </button>
-        <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
-      </div>
+    <!-- Tab 切换 -->
+    <div class="tab-bar">
+      <button :class="['tab-btn', activeTab === 'db' ? 'active' : '']" @click="activeTab = 'db'">数据库管理</button>
+      <button :class="['tab-btn', activeTab === 'kb' ? 'active' : '']" @click="activeTab = 'kb'">知识库搜索</button>
     </div>
 
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th style="width:30px"></th>
-          <th>景点名称</th>
-          <th>区域</th>
-          <th>分类</th>
-          <th>游览时长(h)</th>
-          <th>景区交通</th>
-          <th>交通费</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-if="loading"><td colspan="8" class="center">加载中...</td></tr>
-        <tr v-else-if="items.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
-        <template v-for="item in items" :key="item.id">
+    <!-- 数据库管理 Tab -->
+    <div v-show="activeTab === 'db'">
+      <div class="header-bar">
+        <h2>景点门票管理</h2>
+        <div class="actions">
+          <input v-model="filterRegion" @change="loadData" class="filter-select" placeholder="筛选区域" />
+          <button class="btn-primary" @click="openCreate">+ 新增景点</button>
+          <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
+          <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
+            {{ importing ? '导入中...' : '导入 Excel' }}
+          </button>
+          <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
+        </div>
+      </div>
+
+      <table class="data-table">
+        <thead>
           <tr>
-            <td>
-              <button class="btn-expand" @click="toggleExpand(item.id)">
-                {{ expandedId === item.id ? '▼' : '▶' }}
-              </button>
-            </td>
-            <td>{{ item.name }}</td>
-            <td>{{ item.region_name || '通用' }}</td>
-            <td>{{ item.category || '-' }}</td>
-            <td>{{ item.visit_duration_hours || '-' }}</td>
-            <td>{{ item.internal_transport_name || '-' }}</td>
-            <td>{{ item.internal_transport_price || '-' }}</td>
-            <td class="actions-cell">
-              <button class="btn-sm" @click="openEdit(item)">编辑</button>
-              <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
-            </td>
+            <th style="width:30px"></th>
+            <th>景点名称</th>
+            <th>区域</th>
+            <th>分类</th>
+            <th>游览时长(h)</th>
+            <th>景区交通</th>
+            <th>交通费</th>
+            <th>操作</th>
           </tr>
-          <!-- 门票子表格 -->
-          <tr v-if="expandedId === item.id">
-            <td colspan="8" class="sub-table-cell">
-              <div class="sub-table-wrap">
-                <div class="sub-header">
-                  <span>门票价格</span>
-                  <button class="btn-sm" @click="openTicketCreate(item.id, item.name)">+ 新增票种</button>
+        </thead>
+        <tbody>
+          <tr v-if="loading"><td colspan="8" class="center">加载中...</td></tr>
+          <tr v-else-if="items.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
+          <template v-for="item in items" :key="item.id">
+            <tr>
+              <td>
+                <button class="btn-expand" @click="toggleExpand(item.id)">
+                  {{ expandedId === item.id ? '▼' : '▶' }}
+                </button>
+              </td>
+              <td>{{ item.name }}</td>
+              <td>{{ item.region_name || '通用' }}</td>
+              <td>{{ item.category || '-' }}</td>
+              <td>{{ item.visit_duration_hours || '-' }}</td>
+              <td>{{ item.internal_transport_name || '-' }}</td>
+              <td>{{ item.internal_transport_price || '-' }}</td>
+              <td class="actions-cell">
+                <button class="btn-sm" @click="openEdit(item)">编辑</button>
+                <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
+              </td>
+            </tr>
+            <!-- 门票子表格 -->
+            <tr v-if="expandedId === item.id">
+              <td colspan="8" class="sub-table-cell">
+                <div class="sub-table-wrap">
+                  <div class="sub-header">
+                    <span>门票价格</span>
+                    <button class="btn-sm" @click="openTicketCreate(item.id, item.name)">+ 新增票种</button>
+                  </div>
+                  <table class="sub-table">
+                    <thead>
+                      <tr>
+                        <th>票种</th>
+                        <th>显示名</th>
+                        <th>挂牌价</th>
+                        <th>协议价</th>
+                        <th>团体价</th>
+                        <th>团体最低人数</th>
+                        <th>季节</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-if="ticketLoading"><td colspan="8" class="center">加载中...</td></tr>
+                      <tr v-else-if="currentTickets.length === 0"><td colspan="8" class="center">暂无票种</td></tr>
+                      <tr v-for="t in currentTickets" :key="t.id">
+                        <td>{{ t.ticket_type }}</td>
+                        <td>{{ t.ticket_type_label }}</td>
+                        <td>{{ t.retail_price }}</td>
+                        <td>{{ t.agency_price || '-' }}</td>
+                        <td>{{ t.group_price || '-' }}</td>
+                        <td>{{ t.group_min_people || '-' }}</td>
+                        <td>{{ t.season_type }}</td>
+                        <td class="actions-cell">
+                          <button class="btn-sm" @click="openTicketEdit(t)">编辑</button>
+                          <button class="btn-sm btn-danger" @click="handleTicketDelete(t)">删除</button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
-                <table class="sub-table">
-                  <thead>
-                    <tr>
-                      <th>票种</th>
-                      <th>显示名</th>
-                      <th>挂牌价</th>
-                      <th>协议价</th>
-                      <th>团体价</th>
-                      <th>团体最低人数</th>
-                      <th>季节</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-if="ticketLoading"><td colspan="8" class="center">加载中...</td></tr>
-                    <tr v-else-if="currentTickets.length === 0"><td colspan="8" class="center">暂无票种</td></tr>
-                    <tr v-for="t in currentTickets" :key="t.id">
-                      <td>{{ t.ticket_type }}</td>
-                      <td>{{ t.ticket_type_label }}</td>
-                      <td>{{ t.retail_price }}</td>
-                      <td>{{ t.agency_price || '-' }}</td>
-                      <td>{{ t.group_price || '-' }}</td>
-                      <td>{{ t.group_min_people || '-' }}</td>
-                      <td>{{ t.season_type }}</td>
-                      <td class="actions-cell">
-                        <button class="btn-sm" @click="openTicketEdit(t)">编辑</button>
-                        <button class="btn-sm btn-danger" @click="handleTicketDelete(t)">删除</button>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 知识库搜索 Tab -->
+    <div v-show="activeTab === 'kb'">
+      <div class="kb-search-bar">
+        <input v-model="kbSearchQuery" class="kb-search-input" placeholder="输入关键词搜索景点，如：黄果树 5A景区"
+               @keyup.enter="doSearchAttractionsKB" />
+        <button class="btn-primary" @click="doSearchAttractionsKB" :disabled="kbSearching">
+          {{ kbSearching ? '搜索中...' : '搜索' }}
+        </button>
+      </div>
+
+      <div v-if="kbResults.length === 0 && kbSearched" class="kb-empty">
+        未找到匹配的景点
+      </div>
+
+      <div v-if="kbResults.length === 0 && !kbSearched" class="kb-empty">
+        输入关键词搜索知识库中的景点
+      </div>
+
+      <div v-for="attraction in kbResults" :key="attraction.doc_id" class="kb-card">
+        <div class="kb-card-header">
+          <div>
+            <div class="kb-card-title">{{ attraction.title }}</div>
+            <div v-if="attraction.score != null" class="kb-card-score">相似度: {{ (attraction.score * 100).toFixed(1) }}%</div>
+          </div>
+          <button class="btn-sm" @click="showAttractionKBDetail(attraction.doc_id)">查看详情</button>
+        </div>
+        <div v-if="attraction.snippet" class="kb-card-snippet">{{ attraction.snippet }}</div>
+      </div>
+    </div>
 
     <!-- 景点弹窗 -->
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
@@ -219,6 +255,27 @@
       </div>
     </div>
 
+    <!-- 知识库景点详情弹窗 -->
+    <div v-if="attractionKBDetailVisible" class="modal-overlay" @click.self="attractionKBDetailVisible = false">
+      <div class="modal-content" style="width: 750px;">
+        <h3>景点知识库详情</h3>
+        <div v-if="attractionKBDetail.info" style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">景点信息</h4>
+          <pre class="kb-pre">{{ attractionKBDetail.info }}</pre>
+        </div>
+        <div v-if="attractionKBDetail.ticket_table">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">门票价格明细</h4>
+          <pre class="kb-pre">{{ attractionKBDetail.ticket_table }}</pre>
+        </div>
+        <div v-if="!attractionKBDetail.info && !attractionKBDetail.ticket_table" class="center" style="padding: 20px; color: #999;">
+          暂无详细信息
+        </div>
+        <div class="modal-actions">
+          <button class="btn-primary" @click="attractionKBDetailVisible = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 导入结果弹窗 -->
     <div v-if="showImportResult" class="modal-overlay" @click.self="showImportResult = false">
       <div class="modal-content">
@@ -240,11 +297,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { attractions, tickets, regions } from '@/api/travelQuote'
+import { attractions, tickets, searchAttractionsKB, getAttractionKB } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 
+// Tab 状态
+const activeTab = ref('db')
+
+// 数据库管理相关
 const items = ref<any[]>([])
-const regionOptions = ref<string[]>([])
 const loading = ref(false)
 const filterRegion = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -274,6 +334,14 @@ const ticketForm = ref({
   group_min_people: null as number | null, season_type: 'default', remark: ''
 })
 
+// 知识库搜索相关
+const kbSearchQuery = ref('')
+const kbSearching = ref(false)
+const kbResults = ref<any[]>([])
+const kbSearched = ref(false)
+const attractionKBDetailVisible = ref(false)
+const attractionKBDetail = ref<any>({})
+
 async function loadData() {
   loading.value = true
   try {
@@ -285,13 +353,6 @@ async function loadData() {
   } finally {
     loading.value = false
   }
-}
-
-async function loadRegions() {
-  try {
-    const data = await regions.list()
-    regionOptions.value = [...new Set(data.map((r: any) => r.name).filter(Boolean))]
-  } catch (e) { /* ignore */ }
 }
 
 async function toggleExpand(id: number) {
@@ -391,7 +452,33 @@ async function handleTicketDelete(t: any) {
   }
 }
 
-onMounted(() => { loadData(); loadRegions() })
+// 知识库搜索方法
+async function doSearchAttractionsKB() {
+  if (!kbSearchQuery.value.trim()) return
+  kbSearching.value = true
+  try {
+    kbResults.value = await searchAttractionsKB({ q: kbSearchQuery.value })
+    kbSearched.value = true
+  } catch (e) {
+    console.error('搜索景点失败', e)
+    kbResults.value = []
+    kbSearched.value = true
+  } finally {
+    kbSearching.value = false
+  }
+}
+
+async function showAttractionKBDetail(docId: number) {
+  try {
+    attractionKBDetail.value = await getAttractionKB(docId)
+    attractionKBDetailVisible.value = true
+  } catch (e) {
+    console.error('获取景点详情失败', e)
+    alert('获取景点详情失败')
+  }
+}
+
+onMounted(() => { loadData() })
 </script>
 
 <style scoped>
@@ -415,6 +502,7 @@ onMounted(() => { loadData(); loadRegions() })
 .sub-table th { background: #f3f4f6; font-weight: 500; }
 .btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .btn-primary:hover { background: #4338ca; }
+.btn-primary:disabled { background: #a5a5d4; cursor: not-allowed; }
 .btn-secondary { background: #f3f4f6; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
 .btn-sm { padding: 4px 10px; border: 1px solid #ddd; border-radius: 3px; background: white; cursor: pointer; font-size: 12px; }
 .btn-sm:hover { background: #f5f5f5; }
@@ -429,4 +517,23 @@ onMounted(() => { loadData(); loadRegions() })
 .form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #555; }
 .form-group input, .form-group select { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+/* Tab 样式 */
+.tab-bar { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
+.tab-btn { padding: 10px 24px; border: none; background: none; cursor: pointer; font-size: 14px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.2s, border-color 0.2s; }
+.tab-btn:hover { color: #4f46e5; }
+.tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; font-weight: 600; }
+
+/* 知识库搜索样式 */
+.kb-search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+.kb-search-input { flex: 1; max-width: 500px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+.kb-search-input:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.1); }
+.kb-empty { text-align: center; color: #999; padding: 40px; font-size: 14px; }
+.kb-card { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 12px; padding: 16px; transition: box-shadow 0.2s; }
+.kb-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.kb-card-header { display: flex; justify-content: space-between; align-items: center; }
+.kb-card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.kb-card-score { color: #999; font-size: 13px; }
+.kb-card-snippet { margin-top: 10px; font-size: 13px; color: #666; line-height: 1.5; }
+.kb-pre { background: #f5f7fa; padding: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6; margin: 0; font-family: inherit; }
 </style>

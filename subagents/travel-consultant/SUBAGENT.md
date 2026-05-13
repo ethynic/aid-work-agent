@@ -18,13 +18,10 @@ skills:
   allowed:
     - quote-generate
     - paddleocr-doc-parsing
+    - route-distance
 
 # 业务数据页面配置
 business_pages:
-  - id: regions
-    title: 区域管理
-    icon: "\U0001F30D"
-    route: /travel-consultant/regions
   - id: vehicles
     title: 车辆价格
     icon: "\U0001F690"

@@ -182,20 +182,7 @@ ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS subagent_calls TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
 
--- 2026-05-09，旅游报价定价数据表（10张）
--- 区域/城市表
-CREATE TABLE IF NOT EXISTS bs_travel_quote_regions (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT,
-    name TEXT NOT NULL,
-    aliases TEXT,
-    parent_name TEXT,
-    level TEXT,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_travel_regions_tenant ON bs_travel_quote_regions(tenant_id, is_active);
-
+-- 2026-05-09，旅游报价定价数据表（9张）
 -- 车型与包车价格
 CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
     id SERIAL PRIMARY KEY,
@@ -210,6 +197,10 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
     overkm_rate DECIMAL(10,2),
     driver_meal_allowance DECIMAL(10,2),
     driver_accommodation DECIMAL(10,2),
+    pricing_mode TEXT DEFAULT 'daily',
+    per_km_rate DECIMAL(10,2),
+    base_km DECIMAL(10,2),
+    base_fee DECIMAL(10,2),
     season_type TEXT DEFAULT 'default',
     effective_from DATE,
     effective_to DATE,
@@ -220,84 +211,9 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
 );
 CREATE INDEX IF NOT EXISTS idx_travel_vehicles_tenant ON bs_travel_quote_vehicles(tenant_id, is_active);
 
--- 景点主表
-CREATE TABLE IF NOT EXISTS bs_travel_quote_attractions (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT,
-    region_name TEXT,
-    name TEXT NOT NULL,
-    category TEXT,
-    address TEXT,
-    open_time TEXT,
-    visit_duration_hours DECIMAL(4,1),
-    internal_transport_name TEXT,
-    internal_transport_price DECIMAL(10,2),
-    is_active BOOLEAN DEFAULT TRUE,
-    sort_order INT DEFAULT 0,
-    remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_travel_attractions_tenant ON bs_travel_quote_attractions(tenant_id, is_active);
+-- 景点门票已迁移至向量知识库（source_type='attraction_resource'），旧表已删除
 
--- 门票价格明细
-CREATE TABLE IF NOT EXISTS bs_travel_quote_tickets (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT,
-    attraction_id INT NOT NULL,
-    ticket_type TEXT NOT NULL,
-    ticket_type_label TEXT NOT NULL,
-    retail_price DECIMAL(10,2) NOT NULL,
-    agency_price DECIMAL(10,2),
-    group_price DECIMAL(10,2),
-    group_min_people INT,
-    season_type TEXT DEFAULT 'default',
-    effective_from DATE,
-    effective_to DATE,
-    is_active BOOLEAN DEFAULT TRUE,
-    remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_travel_tickets_attraction ON bs_travel_quote_tickets(attraction_id, is_active);
-
--- 酒店主表
-CREATE TABLE IF NOT EXISTS bs_travel_quote_hotels (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT,
-    region_name TEXT,
-    name TEXT NOT NULL,
-    star_rating TEXT,
-    star_rating_label TEXT,
-    address TEXT,
-    contact_phone TEXT,
-    is_active BOOLEAN DEFAULT TRUE,
-    sort_order INT DEFAULT 0,
-    remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_travel_hotels_tenant ON bs_travel_quote_hotels(tenant_id, is_active);
-
--- 房型与价格
-CREATE TABLE IF NOT EXISTS bs_travel_quote_rooms (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT,
-    hotel_id INT NOT NULL,
-    room_type TEXT NOT NULL,
-    room_type_label TEXT NOT NULL,
-    max_occupancy INT NOT NULL,
-    bed_count INT,
-    retail_price DECIMAL(10,2) NOT NULL,
-    agency_price DECIMAL(10,2),
-    includes_breakfast BOOLEAN DEFAULT FALSE,
-    breakfast_count INT DEFAULT 0,
-    extra_bed_rate DECIMAL(10,2),
-    season_type TEXT DEFAULT 'default',
-    effective_from DATE,
-    effective_to DATE,
-    is_active BOOLEAN DEFAULT TRUE,
-    remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_travel_rooms_hotel ON bs_travel_quote_rooms(hotel_id, is_active);
+-- 酒店住宿已迁移至向量知识库（source_type='hotel_resource'），旧表已删除
 
 -- 餐标价格
 CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
@@ -394,3 +310,15 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
 VALUES ('qwen-plus', 0.8, 2.0)
 ON CONFLICT (model_name) DO NOTHING;
+
+-- 2026-5-12，车辆表新增按公里计费字段
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS pricing_mode TEXT DEFAULT 'daily';
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS per_km_rate DECIMAL(10,2);
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS base_km DECIMAL(10,2);
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS base_fee DECIMAL(10,2);
+
+-- 2026-5-13，酒店/景点迁移至向量知识库，删除旧表
+DROP TABLE IF EXISTS bs_travel_quote_rooms;
+DROP TABLE IF EXISTS bs_travel_quote_hotels;
+DROP TABLE IF EXISTS bs_travel_quote_tickets;
+DROP TABLE IF EXISTS bs_travel_quote_attractions;

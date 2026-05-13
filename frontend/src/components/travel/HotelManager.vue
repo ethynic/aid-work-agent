@@ -1,101 +1,137 @@
 <template>
   <div class="manager-container">
-    <div class="header-bar">
-      <h2>酒店房型管理</h2>
-      <div class="actions">
-        <select v-model="filterRegion" @change="loadData" class="filter-select">
-          <option value="">全部区域</option>
-          <option v-for="r in regionOptions" :key="r" :value="r">{{ r }}</option>
-        </select>
-        <button class="btn-primary" @click="openCreate">+ 新增酒店</button>
-        <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
-        <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
-          {{ importing ? '导入中...' : '导入 Excel' }}
-        </button>
-        <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
-      </div>
+    <!-- Tab 切换 -->
+    <div class="tab-bar">
+      <button :class="['tab-btn', activeTab === 'db' ? 'active' : '']" @click="activeTab = 'db'">数据库管理</button>
+      <button :class="['tab-btn', activeTab === 'kb' ? 'active' : '']" @click="activeTab = 'kb'">知识库搜索</button>
     </div>
 
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th style="width:30px"></th>
-          <th>酒店名称</th>
-          <th>区域</th>
-          <th>星级</th>
-          <th>地址</th>
-          <th>联系电话</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-if="loading"><td colspan="7" class="center">加载中...</td></tr>
-        <tr v-else-if="items.length === 0"><td colspan="7" class="center">暂无数据</td></tr>
-        <template v-for="item in items" :key="item.id">
+    <!-- 数据库管理 Tab -->
+    <div v-show="activeTab === 'db'">
+      <div class="header-bar">
+        <h2>酒店房型管理</h2>
+        <div class="actions">
+          <input v-model="filterRegion" @change="loadData" class="filter-select" placeholder="筛选区域" />
+          <button class="btn-primary" @click="openCreate">+ 新增酒店</button>
+          <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
+          <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
+            {{ importing ? '导入中...' : '导入 Excel' }}
+          </button>
+          <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
+        </div>
+      </div>
+
+      <table class="data-table">
+        <thead>
           <tr>
-            <td>
-              <button class="btn-expand" @click="toggleExpand(item.id)">
-                {{ expandedId === item.id ? '▼' : '▶' }}
-              </button>
-            </td>
-            <td>{{ item.name }}</td>
-            <td>{{ item.region_name || '通用' }}</td>
-            <td>{{ item.star_rating_label || item.star_rating || '-' }}</td>
-            <td>{{ item.address || '-' }}</td>
-            <td>{{ item.contact_phone || '-' }}</td>
-            <td class="actions-cell">
-              <button class="btn-sm" @click="openEdit(item)">编辑</button>
-              <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
-            </td>
+            <th style="width:30px"></th>
+            <th>酒店名称</th>
+            <th>区域</th>
+            <th>星级</th>
+            <th>地址</th>
+            <th>联系电话</th>
+            <th>操作</th>
           </tr>
-          <tr v-if="expandedId === item.id">
-            <td colspan="7" class="sub-table-cell">
-              <div class="sub-table-wrap">
-                <div class="sub-header">
-                  <span>房型价格</span>
-                  <button class="btn-sm" @click="openRoomCreate(item.id, item.name)">+ 新增房型</button>
+        </thead>
+        <tbody>
+          <tr v-if="loading"><td colspan="7" class="center">加载中...</td></tr>
+          <tr v-else-if="items.length === 0"><td colspan="7" class="center">暂无数据</td></tr>
+          <template v-for="item in items" :key="item.id">
+            <tr>
+              <td>
+                <button class="btn-expand" @click="toggleExpand(item.id)">
+                  {{ expandedId === item.id ? '▼' : '▶' }}
+                </button>
+              </td>
+              <td>{{ item.name }}</td>
+              <td>{{ item.region_name || '通用' }}</td>
+              <td>{{ item.star_rating_label || item.star_rating || '-' }}</td>
+              <td>{{ item.address || '-' }}</td>
+              <td>{{ item.contact_phone || '-' }}</td>
+              <td class="actions-cell">
+                <button class="btn-sm" @click="openEdit(item)">编辑</button>
+                <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
+              </td>
+            </tr>
+            <tr v-if="expandedId === item.id">
+              <td colspan="7" class="sub-table-cell">
+                <div class="sub-table-wrap">
+                  <div class="sub-header">
+                    <span>房型价格</span>
+                    <button class="btn-sm" @click="openRoomCreate(item.id, item.name)">+ 新增房型</button>
+                  </div>
+                  <table class="sub-table">
+                    <thead>
+                      <tr>
+                        <th>房型</th>
+                        <th>显示名</th>
+                        <th>入住人数</th>
+                        <th>床位数</th>
+                        <th>门市价</th>
+                        <th>协议价</th>
+                        <th>含早</th>
+                        <th>加床费</th>
+                        <th>季节</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-if="roomLoading"><td colspan="10" class="center">加载中...</td></tr>
+                      <tr v-else-if="currentRooms.length === 0"><td colspan="10" class="center">暂无房型</td></tr>
+                      <tr v-for="r in currentRooms" :key="r.id">
+                        <td>{{ r.room_type }}</td>
+                        <td>{{ r.room_type_label }}</td>
+                        <td>{{ r.max_occupancy }}</td>
+                        <td>{{ r.bed_count || '-' }}</td>
+                        <td>{{ r.retail_price }}</td>
+                        <td>{{ r.agency_price || '-' }}</td>
+                        <td>{{ r.includes_breakfast ? `${r.breakfast_count}份` : '无' }}</td>
+                        <td>{{ r.extra_bed_rate || '-' }}</td>
+                        <td>{{ r.season_type }}</td>
+                        <td class="actions-cell">
+                          <button class="btn-sm" @click="openRoomEdit(r)">编辑</button>
+                          <button class="btn-sm btn-danger" @click="handleRoomDelete(r)">删除</button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
-                <table class="sub-table">
-                  <thead>
-                    <tr>
-                      <th>房型</th>
-                      <th>显示名</th>
-                      <th>入住人数</th>
-                      <th>床位数</th>
-                      <th>门市价</th>
-                      <th>协议价</th>
-                      <th>含早</th>
-                      <th>加床费</th>
-                      <th>季节</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-if="roomLoading"><td colspan="10" class="center">加载中...</td></tr>
-                    <tr v-else-if="currentRooms.length === 0"><td colspan="10" class="center">暂无房型</td></tr>
-                    <tr v-for="r in currentRooms" :key="r.id">
-                      <td>{{ r.room_type }}</td>
-                      <td>{{ r.room_type_label }}</td>
-                      <td>{{ r.max_occupancy }}</td>
-                      <td>{{ r.bed_count || '-' }}</td>
-                      <td>{{ r.retail_price }}</td>
-                      <td>{{ r.agency_price || '-' }}</td>
-                      <td>{{ r.includes_breakfast ? `${r.breakfast_count}份` : '无' }}</td>
-                      <td>{{ r.extra_bed_rate || '-' }}</td>
-                      <td>{{ r.season_type }}</td>
-                      <td class="actions-cell">
-                        <button class="btn-sm" @click="openRoomEdit(r)">编辑</button>
-                        <button class="btn-sm btn-danger" @click="handleRoomDelete(r)">删除</button>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 知识库搜索 Tab -->
+    <div v-show="activeTab === 'kb'">
+      <div class="kb-search-bar">
+        <input v-model="kbSearchQuery" class="kb-search-input" placeholder="输入关键词搜索酒店，如：贵阳 4钻酒店"
+               @keyup.enter="doSearchHotelsKB" />
+        <button class="btn-primary" @click="doSearchHotelsKB" :disabled="kbSearching">
+          {{ kbSearching ? '搜索中...' : '搜索' }}
+        </button>
+      </div>
+
+      <div v-if="kbResults.length === 0 && kbSearched" class="kb-empty">
+        未找到匹配的酒店
+      </div>
+
+      <div v-if="kbResults.length === 0 && !kbSearched" class="kb-empty">
+        输入关键词搜索知识库中的酒店
+      </div>
+
+      <div v-for="hotel in kbResults" :key="hotel.doc_id" class="kb-card">
+        <div class="kb-card-header">
+          <div>
+            <div class="kb-card-title">{{ hotel.title }}</div>
+            <div v-if="hotel.score != null" class="kb-card-score">相似度: {{ (hotel.score * 100).toFixed(1) }}%</div>
+          </div>
+          <button class="btn-sm" @click="showHotelKBDetail(hotel.doc_id)">查看详情</button>
+        </div>
+        <div v-if="hotel.snippet" class="kb-card-snippet">{{ hotel.snippet }}</div>
+      </div>
+    </div>
 
     <!-- 酒店弹窗 -->
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
@@ -226,6 +262,27 @@
       </div>
     </div>
 
+    <!-- 知识库酒店详情弹窗 -->
+    <div v-if="hotelKBDetailVisible" class="modal-overlay" @click.self="hotelKBDetailVisible = false">
+      <div class="modal-content" style="width: 750px;">
+        <h3>酒店知识库详情</h3>
+        <div v-if="hotelKBDetail.info" style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">酒店信息</h4>
+          <pre class="kb-pre">{{ hotelKBDetail.info }}</pre>
+        </div>
+        <div v-if="hotelKBDetail.price_table">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">价格明细</h4>
+          <pre class="kb-pre">{{ hotelKBDetail.price_table }}</pre>
+        </div>
+        <div v-if="!hotelKBDetail.info && !hotelKBDetail.price_table" class="center" style="padding: 20px; color: #999;">
+          暂无详细信息
+        </div>
+        <div class="modal-actions">
+          <button class="btn-primary" @click="hotelKBDetailVisible = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 导入结果弹窗 -->
     <div v-if="showImportResult" class="modal-overlay" @click.self="showImportResult = false">
       <div class="modal-content">
@@ -247,11 +304,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { hotels, rooms, regions } from '@/api/travelQuote'
+import { hotels, rooms, searchHotelsKB, getHotelKB } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 
+// Tab 状态
+const activeTab = ref('db')
+
+// 数据库管理相关
 const items = ref<any[]>([])
-const regionOptions = ref<string[]>([])
 const loading = ref(false)
 const filterRegion = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -274,6 +334,14 @@ const roomForm = ref({
   breakfast_count: 0, extra_bed_rate: null as number | null, season_type: 'default', remark: ''
 })
 
+// 知识库搜索相关
+const kbSearchQuery = ref('')
+const kbSearching = ref(false)
+const kbResults = ref<any[]>([])
+const kbSearched = ref(false)
+const hotelKBDetailVisible = ref(false)
+const hotelKBDetail = ref<any>({})
+
 async function loadData() {
   loading.value = true
   try {
@@ -282,13 +350,6 @@ async function loadData() {
     items.value = await hotels.list(params)
   } catch (e) { console.error('加载酒店数据失败', e) }
   finally { loading.value = false }
-}
-
-async function loadRegions() {
-  try {
-    const data = await regions.list()
-    regionOptions.value = [...new Set(data.map((r: any) => r.name).filter(Boolean))]
-  } catch (e) { /* ignore */ }
 }
 
 async function toggleExpand(id: number) {
@@ -356,7 +417,33 @@ async function handleRoomDelete(r: any) {
   catch (e) { console.error('删除房型失败', e); alert('删除失败') }
 }
 
-onMounted(() => { loadData(); loadRegions() })
+// 知识库搜索方法
+async function doSearchHotelsKB() {
+  if (!kbSearchQuery.value.trim()) return
+  kbSearching.value = true
+  try {
+    kbResults.value = await searchHotelsKB({ q: kbSearchQuery.value })
+    kbSearched.value = true
+  } catch (e) {
+    console.error('搜索酒店失败', e)
+    kbResults.value = []
+    kbSearched.value = true
+  } finally {
+    kbSearching.value = false
+  }
+}
+
+async function showHotelKBDetail(docId: number) {
+  try {
+    hotelKBDetail.value = await getHotelKB(docId)
+    hotelKBDetailVisible.value = true
+  } catch (e) {
+    console.error('获取酒店详情失败', e)
+    alert('获取酒店详情失败')
+  }
+}
+
+onMounted(() => { loadData() })
 </script>
 
 <style scoped>
@@ -380,6 +467,7 @@ onMounted(() => { loadData(); loadRegions() })
 .sub-table th { background: #f3f4f6; font-weight: 500; }
 .btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
 .btn-primary:hover { background: #4338ca; }
+.btn-primary:disabled { background: #a5a5d4; cursor: not-allowed; }
 .btn-secondary { background: #f3f4f6; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
 .btn-sm { padding: 4px 10px; border: 1px solid #ddd; border-radius: 3px; background: white; cursor: pointer; font-size: 12px; }
 .btn-sm:hover { background: #f5f5f5; }
@@ -394,4 +482,23 @@ onMounted(() => { loadData(); loadRegions() })
 .form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #555; }
 .form-group input, .form-group select { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+/* Tab 样式 */
+.tab-bar { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
+.tab-btn { padding: 10px 24px; border: none; background: none; cursor: pointer; font-size: 14px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.2s, border-color 0.2s; }
+.tab-btn:hover { color: #4f46e5; }
+.tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; font-weight: 600; }
+
+/* 知识库搜索样式 */
+.kb-search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+.kb-search-input { flex: 1; max-width: 500px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+.kb-search-input:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.1); }
+.kb-empty { text-align: center; color: #999; padding: 40px; font-size: 14px; }
+.kb-card { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 12px; padding: 16px; transition: box-shadow 0.2s; }
+.kb-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.kb-card-header { display: flex; justify-content: space-between; align-items: center; }
+.kb-card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.kb-card-score { color: #999; font-size: 13px; }
+.kb-card-snippet { margin-top: 10px; font-size: 13px; color: #666; line-height: 1.5; }
+.kb-pre { background: #f5f7fa; padding: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6; margin: 0; font-family: inherit; }
 </style>

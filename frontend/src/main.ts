@@ -82,7 +82,6 @@ const router = createRouter({
       name: 'travel-consultant',
       component: () => import('./components/BaseBusinessLayout.vue'),
       children: [
-        { path: 'regions', name: 'travel-consultant-regions', component: () => import('./components/travel/RegionManager.vue') },
         { path: 'vehicles', name: 'travel-consultant-vehicles', component: () => import('./components/travel/VehicleManager.vue') },
         { path: 'attractions', name: 'travel-consultant-attractions', component: () => import('./components/travel/AttractionManager.vue') },
         { path: 'hotels', name: 'travel-consultant-hotels', component: () => import('./components/travel/HotelManager.vue') },
@@ -147,7 +146,6 @@ const router = createRouter({
           name: 'tenant-travel-consultant',
           component: () => import('./components/BaseBusinessLayout.vue'),
           children: [
-            { path: 'regions', name: 'tenant-travel-consultant-regions', component: () => import('./components/travel/RegionManager.vue') },
             { path: 'vehicles', name: 'tenant-travel-consultant-vehicles', component: () => import('./components/travel/VehicleManager.vue') },
             { path: 'attractions', name: 'tenant-travel-consultant-attractions', component: () => import('./components/travel/AttractionManager.vue') },
             { path: 'hotels', name: 'tenant-travel-consultant-hotels', component: () => import('./components/travel/HotelManager.vue') },

@@ -1,6 +1,6 @@
 """旅游报价定价数据管理 API
 
-提供区域、车辆、景点、酒店、餐标、导游、费用、淡旺季等定价数据的 CRUD 接口。
+提供车辆、景点、酒店、餐标、导游、费用、淡旺季等定价数据的 CRUD 接口。
 """
 
 import io
@@ -106,40 +106,6 @@ def _crud_delete(table: str, record_id: int, tenant_id: str) -> bool:
         cursor.execute(f"DELETE FROM {table} WHERE id = %s AND tenant_id = %s", (record_id, tenant_id))
         conn.commit()
         return cursor.rowcount > 0
-
-
-# ============================================================
-# 区域管理
-# ============================================================
-
-@router.get("/regions")
-async def list_regions(request: Request, region_name: str = Query(None)):
-    tid = _get_tenant_id(request)
-    filters = {"name": region_name} if region_name else None
-    return {"success": True, "data": _crud_list("bs_travel_quote_regions", tid, filters)}
-
-
-@router.post("/regions")
-async def create_region(request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    return {"success": True, "data": _crud_create("bs_travel_quote_regions", tid, body)}
-
-
-@router.put("/regions/{record_id}")
-async def update_region(record_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    result = _crud_update("bs_travel_quote_regions", record_id, tid, body)
-    if not result:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True, "data": result}
-
-
-@router.delete("/regions/{record_id}")
-async def delete_region(record_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    if not _crud_delete("bs_travel_quote_regions", record_id, tid):
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True}
 
 
 # ============================================================
@@ -466,11 +432,11 @@ async def delete_season(record_id: int, request: Request):
 # ============================================================
 
 SHEET_TABLE_MAP = {
-    "区域": ("bs_travel_quote_regions", ["name", "aliases", "parent_name", "level"]),
     "车辆": ("bs_travel_quote_vehicles", [
         "region_name", "vehicle_type", "vehicle_type_label", "seats_min", "seats_max",
         "daily_rate", "overtime_rate", "overkm_rate", "driver_meal_allowance",
-        "driver_accommodation", "season_type", "remark"
+        "driver_accommodation", "pricing_mode", "per_km_rate", "base_km", "base_fee",
+        "season_type", "remark"
     ]),
     "景点": ("bs_travel_quote_attractions", [
         "region_name", "name", "category", "address", "open_time",
@@ -672,3 +638,199 @@ async def import_excel(request: Request, file: UploadFile = File(...)):
             "results": results
         }
     }
+
+
+# ============================================================
+# 知识库模式：酒店/景点搜索
+# ============================================================
+
+@router.get("/search/hotels")
+async def search_hotels(request: Request, q: str = Query(..., min_length=1), top_k: int = Query(5)):
+    """向量搜索酒店"""
+    tenant_id = _get_tenant_id(request)
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from hotel_retriever import HotelRetriever
+        retriever = HotelRetriever()
+        results = retriever.search(tenant_id, q, top_k)
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"[TravelQuoteSearch] 酒店搜索失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+@router.get("/search/attractions")
+async def search_attractions(request: Request, q: str = Query(..., min_length=1), top_k: int = Query(5)):
+    """向量搜索景点"""
+    tenant_id = _get_tenant_id(request)
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from attraction_retriever import AttractionRetriever
+        retriever = AttractionRetriever()
+        results = retriever.search(tenant_id, q, top_k)
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"[TravelQuoteSearch] 景点搜索失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+# ============================================================
+# 知识库模式：酒店/景点文档详情
+# ============================================================
+
+@router.get("/kb/hotels/{doc_id}")
+async def get_hotel_kb(doc_id: int, request: Request):
+    """获取知识库中的酒店详情（信息摘要 + 价格表）"""
+    _get_tenant_id(request)  # 验证租户身份
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from hotel_retriever import HotelRetriever
+        retriever = HotelRetriever()
+        info = retriever.get_hotel_info(doc_id)
+        price_table = retriever.get_price_table(doc_id)
+
+        if not info:
+            raise HTTPException(status_code=404, detail="酒店文档不存在")
+
+        return {
+            "success": True,
+            "data": {
+                "doc_id": doc_id,
+                "info": info,
+                "price_table": price_table,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[TravelQuoteKB] 获取酒店详情失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+@router.get("/kb/attractions/{doc_id}")
+async def get_attraction_kb(doc_id: int, request: Request):
+    """获取知识库中的景点详情（信息摘要 + 门票价格表）"""
+    _get_tenant_id(request)  # 验证租户身份
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from attraction_retriever import AttractionRetriever
+        retriever = AttractionRetriever()
+        info = retriever.get_attraction_info(doc_id)
+        ticket_table = retriever.get_ticket_table(doc_id)
+
+        if not info:
+            raise HTTPException(status_code=404, detail="景点文档不存在")
+
+        return {
+            "success": True,
+            "data": {
+                "doc_id": doc_id,
+                "info": info,
+                "ticket_table": ticket_table,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[TravelQuoteKB] 获取景点详情失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+# ============================================================
+# 知识库模式：导入酒店/景点到向量知识库
+# ============================================================
+
+class ImportHotelKBRequest(BaseModel):
+    hotel_name: str = Field(..., description="酒店名称")
+    region: str = Field("", description="区域")
+    info_text: str = Field(..., description="酒店信息摘要（用于向量化）")
+    price_table_text: str = Field(..., description="价格明细表（不向量化）")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="额外元信息")
+
+
+class ImportAttractionKBRequest(BaseModel):
+    attraction_name: str = Field(..., description="景点名称")
+    region: str = Field("", description="区域")
+    info_text: str = Field(..., description="景点信息摘要（用于向量化）")
+    ticket_table_text: str = Field(..., description="门票价格表（不向量化）")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="额外元信息")
+
+
+@router.post("/import/hotels-kb")
+async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
+    """导入酒店到向量知识库"""
+    tenant_id = _get_tenant_id(request)
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from hotel_retriever import HotelRetriever
+        retriever = HotelRetriever()
+        doc_id = retriever.import_hotel(
+            tenant_id=tenant_id,
+            hotel_name=body.hotel_name,
+            region=body.region,
+            info_text=body.info_text,
+            price_table_text=body.price_table_text,
+            metadata=body.metadata,
+        )
+        return {"success": True, "data": {"doc_id": doc_id}}
+    except Exception as e:
+        logger.error(f"[TravelQuoteKB] 导入酒店失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+@router.post("/import/attractions-kb")
+async def import_attractions_kb(request: Request, body: ImportAttractionKBRequest):
+    """导入景点到向量知识库"""
+    tenant_id = _get_tenant_id(request)
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from attraction_retriever import AttractionRetriever
+        retriever = AttractionRetriever()
+        doc_id = retriever.import_attraction(
+            tenant_id=tenant_id,
+            attraction_name=body.attraction_name,
+            region=body.region,
+            info_text=body.info_text,
+            ticket_table_text=body.ticket_table_text,
+            metadata=body.metadata,
+        )
+        return {"success": True, "data": {"doc_id": doc_id}}
+    except Exception as e:
+        logger.error(f"[TravelQuoteKB] 导入景点失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}

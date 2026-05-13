@@ -3,10 +3,7 @@
     <div class="header-bar">
       <h2>车辆价格管理</h2>
       <div class="actions">
-        <select v-model="filterRegion" @change="loadData" class="filter-select">
-          <option value="">全部区域</option>
-          <option v-for="r in regionOptions" :key="r" :value="r">{{ r }}</option>
-        </select>
+        <input v-model="filterRegion" @change="loadData" class="filter-select" placeholder="筛选区域" />
         <button class="btn-primary" @click="openCreate">+ 新增车辆</button>
         <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
         <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
@@ -23,6 +20,7 @@
           <th>显示名</th>
           <th>区域</th>
           <th>座位范围</th>
+          <th>计价方式</th>
           <th>日租金</th>
           <th>超时费/时</th>
           <th>超公里费/km</th>
@@ -33,13 +31,14 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-if="loading"><td colspan="11" class="center">加载中...</td></tr>
-        <tr v-else-if="items.length === 0"><td colspan="11" class="center">暂无数据</td></tr>
+        <tr v-if="loading"><td colspan="12" class="center">加载中...</td></tr>
+        <tr v-else-if="items.length === 0"><td colspan="12" class="center">暂无数据</td></tr>
         <tr v-for="item in items" :key="item.id">
           <td>{{ item.vehicle_type }}</td>
           <td>{{ item.vehicle_type_label || '-' }}</td>
           <td>{{ item.region_name || '通用' }}</td>
           <td>{{ item.seats_min }}-{{ item.seats_max }}座</td>
+          <td>{{ item.pricing_mode === 'per_km' ? '按公里' : '按天' }}</td>
           <td>{{ item.daily_rate }}</td>
           <td>{{ item.overtime_rate || '-' }}</td>
           <td>{{ item.overkm_rate || '-' }}</td>
@@ -91,6 +90,29 @@
           <div class="form-group">
             <label>区域</label>
             <input v-model="form.region_name" placeholder="留空为全国通用" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>计价方式</label>
+            <select v-model="form.pricing_mode">
+              <option value="daily">按天</option>
+              <option value="per_km">按公里</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="form.pricing_mode === 'per_km'" class="form-row">
+          <div class="form-group">
+            <label>基础费用（元）</label>
+            <input v-model.number="form.base_fee" type="number" step="0.01" placeholder="起步价" />
+          </div>
+          <div class="form-group">
+            <label>基础公里数（km）</label>
+            <input v-model.number="form.base_km" type="number" step="0.1" placeholder="包含的公里数" />
+          </div>
+          <div class="form-group">
+            <label>超公里费率（元/km）</label>
+            <input v-model.number="form.per_km_rate" type="number" step="0.01" placeholder="超出部分的每公里费用" />
           </div>
         </div>
         <div class="form-row">
@@ -160,11 +182,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { vehicles, regions } from '@/api/travelQuote'
+import { vehicles } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 
 const items = ref<any[]>([])
-const regionOptions = ref<string[]>([])
 const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
@@ -177,6 +198,8 @@ const defaultForm = {
   seats_min: 5, seats_max: 7, daily_rate: 0,
   overtime_rate: null as number | null, overkm_rate: null as number | null,
   driver_meal_allowance: null as number | null, driver_accommodation: null as number | null,
+  pricing_mode: 'daily', per_km_rate: null as number | null,
+  base_km: null as number | null, base_fee: null as number | null,
   season_type: 'default', sort_order: 0, remark: ''
 }
 const form = ref({ ...defaultForm })
@@ -194,13 +217,6 @@ async function loadData() {
   }
 }
 
-async function loadRegions() {
-  try {
-    const data = await regions.list()
-    regionOptions.value = [...new Set(data.map((r: any) => r.name).filter(Boolean))]
-  } catch (e) { /* ignore */ }
-}
-
 function openCreate() {
   editingItem.value = null
   form.value = { ...defaultForm }
@@ -214,6 +230,8 @@ function openEdit(item: any) {
     region_name: item.region_name || '', seats_min: item.seats_min, seats_max: item.seats_max,
     daily_rate: item.daily_rate, overtime_rate: item.overtime_rate, overkm_rate: item.overkm_rate,
     driver_meal_allowance: item.driver_meal_allowance, driver_accommodation: item.driver_accommodation,
+    pricing_mode: item.pricing_mode || 'daily', per_km_rate: item.per_km_rate,
+    base_km: item.base_km, base_fee: item.base_fee,
     season_type: item.season_type || 'default', sort_order: item.sort_order || 0, remark: item.remark || ''
   }
   showModal.value = true
@@ -245,7 +263,7 @@ async function handleDelete(item: any) {
   }
 }
 
-onMounted(() => { loadData(); loadRegions() })
+onMounted(() => { loadData() })
 </script>
 
 <style scoped>
