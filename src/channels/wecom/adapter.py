@@ -26,7 +26,6 @@ from src.channels.base import ChannelAdapter
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.media import WeComMedia
 from src.channels.wecom.message_builder import WeComMessageBuilder
-from src.config.settings import settings
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -45,22 +44,39 @@ class WeComAdapter(ChannelAdapter):
 
     def __init__(
         self,
-        corp_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        secret: Optional[str] = None,
+        corp_id: str,
+        agent_id: str,
+        secret: str,
         token: Optional[str] = None,
         encoding_aes_key: Optional[str] = None,
+        *,
+        welcome_message: str = "",
+        max_bytes: int = 2048,
+        split_on_paragraph: bool = True,
+        default_type: str = "markdown",
+        max_attempts: int = 3,
+        backoff_base: float = 1.0,
+        rate_limit_enabled: bool = True,
+        rate_limit_max: int = 10,
+        media_upload_dir: str = "./storage/uploads/wecom",
     ):
-        config = settings.channels.wecom
-        self.corp_id = corp_id or config.corp_id
-        self.agent_id = agent_id or config.agent_id
-        self.secret = secret or config.secret
-        self.token = token or config.token
-        self.encoding_aes_key = encoding_aes_key or config.encoding_aes_key
+        self.corp_id = corp_id
+        self.agent_id = agent_id
+        self.secret = secret
+        self.token = token or ""
+        self.encoding_aes_key = encoding_aes_key or ""
+        self.welcome_message = welcome_message
 
         # 消息配置
-        self._msg_config = config.message
-        self._retry_config = config.retry
+        self._msg_config = {
+            "max_bytes": max_bytes,
+            "split_on_paragraph": split_on_paragraph,
+            "default_type": default_type,
+        }
+        self._retry_config = {
+            "max_attempts": max_attempts,
+            "backoff_base": backoff_base,
+        }
 
         # 加解密模块
         self.crypto: Optional[WeComCrypto] = None
@@ -71,7 +87,7 @@ class WeComAdapter(ChannelAdapter):
         # 媒体处理模块
         self.media = WeComMedia(
             access_token_getter=self.get_access_token,
-            upload_dir=config.media.upload_dir,
+            upload_dir=media_upload_dir,
         )
 
         # Token 管理
@@ -84,8 +100,8 @@ class WeComAdapter(ChannelAdapter):
 
         # 速率限制器
         self._rate_limiter: Dict[str, deque] = {}
-        self._rate_limit_enabled = config.rate_limit.enabled
-        self._rate_limit_max = config.rate_limit.max_per_minute
+        self._rate_limit_enabled = rate_limit_enabled
+        self._rate_limit_max = rate_limit_max
 
     @property
     def channel_type(self) -> str:
@@ -153,7 +169,7 @@ class WeComAdapter(ChannelAdapter):
 
     async def _refresh_access_token(self) -> str:
         """刷新 access_token（带重试）"""
-        max_retries = self._retry_config.max_attempts
+        max_retries = self._retry_config["max_attempts"]
 
         for attempt in range(max_retries):
             try:
@@ -181,7 +197,7 @@ class WeComAdapter(ChannelAdapter):
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait = self._retry_config.backoff_base * (2**attempt)
+                    wait = self._retry_config["backoff_base"] * (2**attempt)
                     logger.warning(
                         f"获取 access_token 重试 {attempt + 1}/{max_retries}，"
                         f"{wait}s 后重试: {e}"
@@ -306,15 +322,15 @@ class WeComAdapter(ChannelAdapter):
             logger.warning(f"send_long_message 被速率限制拦截: user={user_id}")
             return False
 
-        max_bytes = self._msg_config.max_bytes
+        max_bytes = self._msg_config["max_bytes"]
         parts = WeComMessageBuilder.split_long_message(
-            text, max_bytes, self._msg_config.split_on_paragraph
+            text, max_bytes, self._msg_config["split_on_paragraph"]
         )
 
         all_success = True
         for part in parts:
             msg_type = WeComMessageBuilder.detect_message_type(
-                part, self._msg_config.default_type
+                part, self._msg_config["default_type"]
             )
             msg_data = WeComMessageBuilder.build_msg_data(part, self.agent_id, msg_type)
             msg_data["touser"] = user_id
@@ -374,7 +390,7 @@ class WeComAdapter(ChannelAdapter):
         Returns:
             是否成功
         """
-        max_retries = self._retry_config.max_attempts
+        max_retries = self._retry_config["max_attempts"]
 
         for attempt in range(max_retries):
             try:
@@ -408,7 +424,7 @@ class WeComAdapter(ChannelAdapter):
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait = self._retry_config.backoff_base * (2**attempt)
+                    wait = self._retry_config["backoff_base"] * (2**attempt)
                     logger.warning(
                         f"发送消息重试 {attempt + 1}/{max_retries}，"
                         f"{wait}s 后重试: {e}"

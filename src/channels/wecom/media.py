@@ -12,9 +12,6 @@ from typing import Any, Callable, Awaitable, Optional, Tuple
 import httpx
 from loguru import logger
 
-from src.config.settings import settings
-
-
 class WeComMedia:
     """企业微信媒体文件管理"""
 
@@ -37,7 +34,7 @@ class WeComMedia:
             upload_dir: 媒体文件本地存储目录
         """
         self._get_access_token = access_token_getter
-        self.upload_dir = upload_dir or settings.channels.wecom.media.upload_dir
+        self.upload_dir = upload_dir or "./storage/uploads/wecom"
         os.makedirs(self.upload_dir, exist_ok=True)
 
     async def download_media(

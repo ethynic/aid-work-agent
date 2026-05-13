@@ -17,9 +17,6 @@ from loguru import logger
 
 from src.channels.base import ChannelAdapter
 from src.models.message import UnifiedMessage, UnifiedResponse, MessageType, ChannelType
-from src.config.settings import settings
-
-
 class FeishuAdapter(ChannelAdapter):
     """
     飞书适配器
@@ -33,8 +30,8 @@ class FeishuAdapter(ChannelAdapter):
 
     def __init__(
         self,
-        app_id: Optional[str] = None,
-        app_secret: Optional[str] = None,
+        app_id: str,
+        app_secret: str,
         verification_token: Optional[str] = None,
         encrypt_key: Optional[str] = None,
     ):
@@ -47,11 +44,10 @@ class FeishuAdapter(ChannelAdapter):
             verification_token: 回调验证Token
             encrypt_key: 加密密钥
         """
-        config = settings.channels.feishu
-        self.app_id = app_id or config.app_id
-        self.app_secret = app_secret or config.app_secret
-        self.verification_token = verification_token or config.verification_token
-        self.encrypt_key = encrypt_key or config.encrypt_key
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.verification_token = verification_token or ""
+        self.encrypt_key = encrypt_key or ""
 
         self._access_token: Optional[str] = None
         self._token_expires: int = 0

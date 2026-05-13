@@ -25,8 +25,6 @@ from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.core.agent_router import agent_router
 from src.models.message import UnifiedMessage
-from src.channels.wecom.adapter import WeComAdapter
-from src.channels.manager import channel_manager
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
@@ -144,10 +142,6 @@ setup_logging(
     log_dir="log/agent",
 )
 
-# WeCom adapter
-wecom_adapter = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
@@ -176,26 +170,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start scheduled task scheduler: {e}", exc_info=True)
     
-    # Initialize WeCom adapter
-    global wecom_adapter
-    if settings.channels.wecom.enabled and settings.channels.wecom.corp_id:
-        wecom_adapter = WeComAdapter()
-        channel_manager.register(wecom_adapter)
-        logger.info("WeCom adapter initialized")
-    
-    # Initialize Dingtalk adapter
-    if settings.channels.dingtalk.enabled and settings.channels.dingtalk.app_key:
-        from src.channels.dingtalk.adapter import DingtalkAdapter
-        dingtalk_adapter = DingtalkAdapter()
-        channel_manager.register(dingtalk_adapter)
-        logger.info("Dingtalk adapter initialized")
-    
-    # Initialize Feishu adapter
-    if settings.channels.feishu.enabled and settings.channels.feishu.app_id:
-        from src.channels.feishu.adapter import FeishuAdapter
-        feishu_adapter = FeishuAdapter()
-        channel_manager.register(feishu_adapter)
-        logger.info("Feishu adapter initialized")
 
     # Initialize SaaS instance manager
     if settings.saas.enabled:
@@ -277,12 +251,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # 关闭渠道适配器的 HTTP 连接池
-    if wecom_adapter:
-        try:
-            await wecom_adapter.close()
-        except Exception as e:
-            logger.error(f"关闭 WeCom 适配器失败: {e}")
 
 
 # ============== File Upload Configuration ==============

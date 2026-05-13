@@ -39,9 +39,7 @@
 
 1. 在应用详情页，找到「接收消息」→「设置 API 接收」
 2. 填写:
-   - **URL**: `https://<你的域名>/wecom/callback`
-     - 单租户: `https://your-domain.com/wecom/callback`
-     - 多租户 SaaS: `https://your-domain.com/t/{tenant_id}/wecom/callback`
+   - **URL**: `https://your-domain.com/t/{tenant_id}/wecom/callback`，例如 https://agent2.aidingyi.cn/t/tenant_1dc997a1806b/wecom/callback
    - **Token**: 点击「随机获取」（或自行输入 16+ 字符）
    - **EncodingAESKey**: 点击「随机获取」（43 字符 Base64）
 3. **顺序很重要**: 先在服务器配好环境变量并启动服务，再点「保存」。企业微信会立即发 GET 请求验证。

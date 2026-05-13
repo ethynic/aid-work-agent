@@ -49,13 +49,6 @@ class LLMConfig(BaseModel):
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
 
 
-class WecomMessageConfig(BaseModel):
-    """企业微信消息配置"""
-    default_type: str = "markdown"  # text | markdown
-    max_bytes: int = 2048
-    split_on_paragraph: bool = True
-
-
 class StorageConfig(BaseModel):
     """存储配置（所有业务数据集中于此，便于备份和迁移）"""
     base_dir: str = "storage"  # 存储根目录
@@ -64,64 +57,6 @@ class StorageConfig(BaseModel):
     # 注意：代码内部使用字节单位，.env 中配置使用 MB 单位
     max_knowledge_file_size: int = 50 * 1024 * 1024  # 知识库文件大小限制（默认 50MB），支持 .env 覆盖
     max_general_file_size: int = 20 * 1024 * 1024  # 通用上传文件大小限制（默认 20MB），支持 .env 覆盖
-
-
-class WecomMediaConfig(BaseModel):
-    """企业微信媒体配置"""
-    upload_dir: str = "./storage/uploads/wecom"  # 跟随 uploads 迁移到 storage
-    max_file_size: int = 20971520  # 20MB（WeCom 限制）
-
-
-class WecomRateLimitConfig(BaseModel):
-    """企业微信速率限制配置"""
-    enabled: bool = True
-    max_per_minute: int = 10
-
-
-class WecomRetryConfig(BaseModel):
-    """企业微信重试配置"""
-    max_attempts: int = 3
-    backoff_base: float = 1.0
-
-
-class WecomConfig(BaseModel):
-    """企业微信配置"""
-    enabled: bool = False
-    corp_id: str = ""
-    agent_id: str = ""
-    secret: str = ""
-    token: str = ""
-    encoding_aes_key: str = ""
-    message: WecomMessageConfig = Field(default_factory=WecomMessageConfig)
-    media: WecomMediaConfig = Field(default_factory=WecomMediaConfig)
-    rate_limit: WecomRateLimitConfig = Field(default_factory=WecomRateLimitConfig)
-    retry: WecomRetryConfig = Field(default_factory=WecomRetryConfig)
-    welcome_message: str = ""
-
-
-class DingtalkConfig(BaseModel):
-    """钉钉配置"""
-    enabled: bool = False
-    app_key: str = ""
-    app_secret: str = ""
-    token: str = ""
-    encoding_aes_key: str = ""
-
-
-class FeishuConfig(BaseModel):
-    """飞书配置"""
-    enabled: bool = False
-    app_id: str = ""
-    app_secret: str = ""
-    verification_token: str = ""
-    encrypt_key: str = ""
-
-
-class ChannelsConfig(BaseModel):
-    """渠道配置"""
-    wecom: WecomConfig = Field(default_factory=WecomConfig)
-    dingtalk: DingtalkConfig = Field(default_factory=DingtalkConfig)
-    feishu: FeishuConfig = Field(default_factory=FeishuConfig)
 
 
 class EmailToolConfig(BaseModel):
@@ -253,7 +188,6 @@ class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
@@ -350,55 +284,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
             provider_cfg["base_url"] = os.getenv("BASE_URL")
         if os.getenv("MODEL_CODE"):
             provider_cfg["model"] = os.getenv("MODEL_CODE")
-
-    if os.getenv("WECOM_CORP_ID"):
-        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["corp_id"] = os.getenv("WECOM_CORP_ID")
-    
-    if os.getenv("WECOM_AGENT_ID"):
-        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["agent_id"] = os.getenv("WECOM_AGENT_ID")
-    
-    if os.getenv("WECOM_SECRET"):
-        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["secret"] = os.getenv("WECOM_SECRET")
-
-    if os.getenv("WECOM_TOKEN"):
-        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["token"] = os.getenv("WECOM_TOKEN")
-
-    if os.getenv("WECOM_ENCODING_AES_KEY"):
-        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["encoding_aes_key"] = os.getenv("WECOM_ENCODING_AES_KEY")
-
-    if os.getenv("DINGTALK_APP_KEY"):
-        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["app_key"] = os.getenv("DINGTALK_APP_KEY")
-
-    if os.getenv("DINGTALK_APP_SECRET"):
-        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["app_secret"] = os.getenv("DINGTALK_APP_SECRET")
-
-    if os.getenv("DINGTALK_TOKEN"):
-        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["token"] = os.getenv("DINGTALK_TOKEN")
-
-    if os.getenv("DINGTALK_ENCODING_AES_KEY"):
-        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["encoding_aes_key"] = os.getenv("DINGTALK_ENCODING_AES_KEY")
-
-    if os.getenv("FEISHU_APP_ID"):
-        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["app_id"] = os.getenv("FEISHU_APP_ID")
-
-    if os.getenv("FEISHU_APP_SECRET"):
-        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["app_secret"] = os.getenv("FEISHU_APP_SECRET")
-
-    if os.getenv("FEISHU_VERIFICATION_TOKEN"):
-        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["verification_token"] = os.getenv("FEISHU_VERIFICATION_TOKEN")
-
-    if os.getenv("FEISHU_ENCRYPT_KEY"):
-        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["encrypt_key"] = os.getenv("FEISHU_ENCRYPT_KEY")
-
-    # 启用渠道
-    if os.getenv("WECOM_ENABLED", "").lower() in ("true", "1", "yes"):
-        yaml_config.setdefault("channels", {}).setdefault("wecom", {})["enabled"] = True
-
-    if os.getenv("DINGTALK_ENABLED", "").lower() in ("true", "1", "yes"):
-        yaml_config.setdefault("channels", {}).setdefault("dingtalk", {})["enabled"] = True
-
-    if os.getenv("FEISHU_ENABLED", "").lower() in ("true", "1", "yes"):
-        yaml_config.setdefault("channels", {}).setdefault("feishu", {})["enabled"] = True
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True

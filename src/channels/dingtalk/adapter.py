@@ -18,9 +18,6 @@ from loguru import logger
 
 from src.channels.base import ChannelAdapter
 from src.models.message import UnifiedMessage, UnifiedResponse, MessageType, ChannelType
-from src.config.settings import settings
-
-
 class DingtalkAdapter(ChannelAdapter):
     """
     钉钉适配器
@@ -34,8 +31,8 @@ class DingtalkAdapter(ChannelAdapter):
 
     def __init__(
         self,
-        app_key: Optional[str] = None,
-        app_secret: Optional[str] = None,
+        app_key: str,
+        app_secret: str,
         token: Optional[str] = None,
         encoding_aes_key: Optional[str] = None,
     ):
@@ -48,11 +45,10 @@ class DingtalkAdapter(ChannelAdapter):
             token: 回调Token
             encoding_aes_key: 加密密钥
         """
-        config = settings.channels.dingtalk
-        self.app_key = app_key or config.app_key
-        self.app_secret = app_secret or config.app_secret
-        self.token = token or config.token
-        self.encoding_aes_key = encoding_aes_key or config.encoding_aes_key
+        self.app_key = app_key
+        self.app_secret = app_secret
+        self.token = token or ""
+        self.encoding_aes_key = encoding_aes_key or ""
 
         self._access_token: Optional[str] = None
         self._token_expires: int = 0
