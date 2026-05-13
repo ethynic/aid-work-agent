@@ -139,7 +139,8 @@
     </div>
 
     <!-- 业务数据分组 - 在企业知识库之后，历史会话之前 -->
-    <div v-if="currentBusinessPages.length > 0" class="flex-shrink-0 p-2">
+    <!-- 手机端暂时隐藏：业务数据页面尚未适配手机端 -->
+    <div v-if="currentBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2">
       <div class="flex-shrink-0 px-2 py-2">
         <div class="flex items-center gap-3">
           <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
