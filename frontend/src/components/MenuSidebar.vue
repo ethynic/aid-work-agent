@@ -138,49 +138,50 @@
       </template>
     </div>
 
-    <!-- 业务数据分组 - 在企业知识库之后，历史会话之前 -->
+    <!-- 业务数据分组 - 按数字员工分组展示 -->
     <!-- 手机端暂时隐藏：业务数据页面尚未适配手机端 -->
-    <div v-if="currentBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2">
+    <div v-if="groupedBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2">
       <div class="flex-shrink-0 px-2 py-2">
         <div class="flex items-center gap-3">
           <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
         </div>
       </div>
-      <button
-        @click="toggleBusinessData"
-        class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
-      >
-        <div class="flex items-center gap-3">
-          <span class="text-base">📊</span>
-          <span>业务数据</span>
-        </div>
-        <svg
-          :class="['w-4 h-4 transition-transform', isBusinessDataExpanded ? 'rotate-180' : '']"
-          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
 
-      <div v-show="isBusinessDataExpanded" class="mt-1 ml-4 space-y-1">
-        <!-- 当前数字员工标签 -->
-        <div class="px-3 py-1 text-xs text-gray-400">
-          ── {{ currentSubagentName }} ──
-        </div>
-        <!-- 业务菜单项 -->
-        <div
-          v-for="page in currentBusinessPages"
-          :key="page.id"
-          :class="[
-            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm cursor-pointer',
-            route.path === page.route
-              ? 'bg-primary-50 text-primary-700 font-medium'
-              : 'text-gray-600 hover:bg-gray-50'
-          ]"
-          @click="navigateToBusinessPage(page)"
-        >
-          <span class="text-base">{{ page.icon }}</span>
-          <span>{{ page.title }}</span>
+      <!-- 各数字员工业务菜单分组 -->
+      <div class="space-y-1">
+        <div v-for="group in groupedBusinessPages" :key="group.subagent.agent_id">
+          <button
+            @click="toggleGroup(group.subagent.agent_id)"
+            class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
+          >
+            <div class="flex items-center gap-3">
+              <span class="text-base">📊</span>
+              <span>{{ getSubagentDisplayName(group.subagent) }}</span>
+            </div>
+            <svg
+              :class="['w-4 h-4 transition-transform', isGroupExpanded(group.subagent.agent_id) ? 'rotate-180' : '']"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          <div v-show="isGroupExpanded(group.subagent.agent_id)" class="mt-1 ml-4 space-y-1">
+            <div
+              v-for="page in group.pages"
+              :key="page.id"
+              :class="[
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm cursor-pointer',
+                route.path === page.route
+                  ? 'bg-primary-50 text-primary-700 font-medium'
+                  : 'text-gray-600 hover:bg-gray-50'
+              ]"
+              @click="navigateToBusinessPage(page)"
+            >
+              <span class="text-base">{{ page.icon }}</span>
+              <span>{{ page.title }}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -477,7 +478,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
@@ -590,15 +591,25 @@ const toggleHistoryExpanded = () => {
 
 
 
-// 业务数据分组折叠状态（持久化到 localStorage）
-const storageKey = 'aid_work_agent:business_data_expanded'
-const isBusinessDataExpanded = ref(
-  localStorage.getItem(storageKey) !== 'false'
-)
+// 业务菜单分组展开状态（按数字员工 agent_id）
+const expandedGroups = ref<Set<string>>(new Set())
 
-const toggleBusinessData = () => {
-  isBusinessDataExpanded.value = !isBusinessDataExpanded.value
-  localStorage.setItem(storageKey, String(isBusinessDataExpanded.value))
+function isGroupExpanded(agentId: string): boolean {
+  return expandedGroups.value.has(agentId)
+}
+
+function toggleGroup(agentId: string) {
+  const newSet = new Set(expandedGroups.value)
+  if (newSet.has(agentId)) {
+    newSet.delete(agentId)
+  } else {
+    newSet.add(agentId)
+  }
+  expandedGroups.value = newSet
+}
+
+function getSubagentDisplayName(s: SubagentListItem): string {
+  return s.display_name || s.name || ''
 }
 
 // 判断是否为租户模式（路由以 /t/ 开头）
@@ -694,33 +705,35 @@ const isHistorySessionActive = computed(() => {
   return !isKnowledgeBaseActive.value
 })
 
-// 当前业务数据页面列表
-const currentBusinessPages = computed(() => {
-  // 如果用户只有一个可用数字员工，不管会话的 subagent_id 是什么，永远显示该数字员工的业务菜单
-  if (filteredAvailableSubagents.value.length === 1) {
-    return filteredAvailableSubagents.value[0].business_pages || []
-  }
-  const subagentId = props.currentSubagentId || currentSubagent.value
-  if (!subagentId) return []
-  const subagent = filteredAvailableSubagents.value.find(
-    (s: SubagentListItem) => s.agent_id === subagentId
-  )
-  return subagent?.business_pages || []
+// 按数字员工分组的业务页面
+const groupedBusinessPages = computed(() => {
+  return filteredAvailableSubagents.value
+    .filter((s: SubagentListItem) => s.business_pages && s.business_pages.length > 0)
+    .map((s: SubagentListItem) => ({
+      subagent: s,
+      pages: s.business_pages!
+    }))
 })
 
-// 当前子智能体名称
-const currentSubagentName = computed(() => {
-  // 如果用户只有一个可用数字员工，不管会话的 subagent_id 是什么，永远显示该数字员工的名称
-  if (filteredAvailableSubagents.value.length === 1) {
-    return filteredAvailableSubagents.value[0].name || ''
-  }
+// 根据当前路由决定哪个分组应该展开
+const expandedSubagentId = computed<string | null>(() => {
   const subagentId = props.currentSubagentId || currentSubagent.value
-  if (!subagentId) return ''
-  const subagent = filteredAvailableSubagents.value.find(
-    (s: SubagentListItem) => s.agent_id === subagentId
+  if (!subagentId) return null
+  const matched = filteredAvailableSubagents.value.find(
+    (s: SubagentListItem) => s.agent_id === subagentId || s.subagent_type === subagentId
   )
-  return subagent?.name || ''
+  return matched?.agent_id || null
 })
+
+// 监听当前数字员工变化，重置展开状态
+watch(() => currentSubagent.value, () => {
+  const newSet = new Set<string>()
+  const expandedId = expandedSubagentId.value
+  if (expandedId) {
+    newSet.add(expandedId)
+  }
+  expandedGroups.value = newSet
+}, { immediate: true })
 
 // 跳转到业务数据页面（在新窗口打开）
 function navigateToBusinessPage(page: BusinessPage) {
