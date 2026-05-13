@@ -1,7 +1,7 @@
 <template>
   <div class="p-6">
     <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-slate-800">我的Token消耗明细</h1>
+      <h1 class="text-2xl font-bold text-slate-800">站点Token用量</h1>
       <div class="flex items-center gap-3">
         <div class="flex items-center gap-2">
           <label class="text-sm text-slate-600">选择月份:</label>
