@@ -77,6 +77,8 @@ tools:
     timeout: 30000  # 默认超时时间（毫秒）
     viewport_width: 1920
     viewport_height: 1080
+  maps:
+    amap_api_key: ${AMAP_API_KEY}
 
 # 记忆配置
 memory:
@@ -127,10 +129,12 @@ skills:
       - trip-planner
       - quote-generator
       - quote-export
+      - route-distance
   # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
   subagent:
     default_allowed:
       - paddleocr-doc-parsing
+      - route-distance
 
 # SaaS 多租户配置
 saas:

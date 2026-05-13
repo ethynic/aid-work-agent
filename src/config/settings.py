@@ -157,12 +157,18 @@ class BrowserToolConfig(BaseModel):
     viewport_height: int = 1080  # 视口高度
 
 
+class MapsToolConfig(BaseModel):
+    """地图工具配置"""
+    amap_api_key: str = ""
+
+
 class ToolsConfig(BaseModel):
     """工具配置"""
     email: EmailToolConfig = Field(default_factory=EmailToolConfig)
     ocr: OCRToolConfig = Field(default_factory=OCRToolConfig)
     search: SearchToolConfig = Field(default_factory=SearchToolConfig)
     browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
+    maps: MapsToolConfig = Field(default_factory=MapsToolConfig)
 
 
 class ShortTermMemoryConfig(BaseModel):
