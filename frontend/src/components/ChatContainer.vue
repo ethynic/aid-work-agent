@@ -603,6 +603,8 @@ async function handleLogout() {
   if (isDemoMode) {
     showLoginModal.value = true
   }
+  // 登出时收起侧边栏，避免重新登录后菜单仍展开
+  isSidebarCollapsed.value = true
   // 登出时清空所有缓存：会话列表、消息、附件等
   clearSessionCache()
   clearSession()

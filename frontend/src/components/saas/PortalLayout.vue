@@ -82,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, computed, ref, provide } from 'vue'
+import { onMounted, computed, ref, provide, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -118,6 +118,23 @@ const currentSubagentId = computed(() => {
     return segments[2]
   }
   return undefined
+})
+
+// 登录/登出或进入登录页时，自动收起侧边栏（避免手机端重新登录后菜单仍展开）
+watch(() => route.path, (path) => {
+  if (path.endsWith('/login') || path.endsWith('/reset-password')) {
+    sidebarCollapsed.value = true
+  }
+})
+watch(isLoggedIn, (loggedIn, oldLoggedIn) => {
+  if (!loggedIn) {
+    sidebarCollapsed.value = true
+  } else if (oldLoggedIn === false && loggedIn === true) {
+    // PC端登录成功后默认展开，手机端保持收起
+    if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+      sidebarCollapsed.value = false
+    }
+  }
 })
 
 // 提供侧边栏状态给子组件
