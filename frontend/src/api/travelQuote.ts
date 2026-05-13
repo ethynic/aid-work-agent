@@ -153,6 +153,32 @@ export const seasons = {
 // Excel 批量导入
 // ============================================================
 
+export interface HotelKBImportResult {
+  total_hotels: number
+  imported: number
+  skipped: number
+  errors: string[]
+  details: Array<{
+    sheet: string
+    total: number
+    imported: number
+    skipped: number
+  }>
+}
+
+export interface AttractionKBImportResult {
+  total_attractions: number
+  imported: number
+  skipped: number
+  errors: string[]
+  details: Array<{
+    sheet: string
+    total: number
+    imported: number
+    skipped: number
+  }>
+}
+
 export interface ImportResult {
   total_imported: number
   total_skipped: number
@@ -165,10 +191,66 @@ export interface ImportResult {
   }>
 }
 
+export interface VehicleImportResult {
+  imported: number
+  skipped: number
+  errors: string[]
+  details: Array<{
+    total: number
+    imported: number
+    skipped: number
+  }>
+}
+
 export async function importExcel(file: File): Promise<{ success: boolean; data: ImportResult }> {
   const formData = new FormData()
   formData.append('file', file)
   const res = await fetch(`${API_BASE}/import/excel`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+    body: formData
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '导入失败' }))
+    throw new Error(err.detail || '导入失败')
+  }
+  return res.json()
+}
+
+export async function importVehicleExcel(file: File): Promise<{ success: boolean; data: VehicleImportResult }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE}/import/vehicle-excel`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+    body: formData
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '导入失败' }))
+    throw new Error(err.detail || '导入失败')
+  }
+  return res.json()
+}
+
+export async function importHotelExcelKB(file: File): Promise<{ success: boolean; data: HotelKBImportResult }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE}/import/hotel-excel-kb`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+    body: formData
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '导入失败' }))
+    throw new Error(err.detail || '导入失败')
+  }
+  return res.json()
+}
+
+export async function importAttractionExcelKB(file: File): Promise<{ success: boolean; data: AttractionKBImportResult }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE}/import/attraction-excel-kb`, {
     method: 'POST',
     headers: { ...getAuthHeader() },
     body: formData
@@ -209,6 +291,34 @@ export async function searchHotelsKB(params: { q: string; top_k?: number }): Pro
   if (!res.ok) throw new Error('搜索酒店失败')
   const json = await res.json()
   return json.data || []
+}
+
+/** 列出所有酒店知识库文档 */
+export async function listHotelsKB(params?: { limit?: number; offset?: number }): Promise<{ total: number; items: any[] }> {
+  const sp: Record<string, string> = {}
+  if (params?.limit != null) sp.limit = String(params.limit)
+  if (params?.offset != null) sp.offset = String(params.offset)
+  const query = Object.keys(sp).length ? '?' + new URLSearchParams(sp).toString() : ''
+  const res = await fetch(`${API_BASE}/kb/hotels${query}`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('获取酒店列表失败')
+  const json = await res.json()
+  return json.data || { total: 0, items: [] }
+}
+
+/** 列出所有景点知识库文档 */
+export async function listAttractionsKB(params?: { limit?: number; offset?: number }): Promise<{ total: number; items: any[] }> {
+  const sp: Record<string, string> = {}
+  if (params?.limit != null) sp.limit = String(params.limit)
+  if (params?.offset != null) sp.offset = String(params.offset)
+  const query = Object.keys(sp).length ? '?' + new URLSearchParams(sp).toString() : ''
+  const res = await fetch(`${API_BASE}/kb/attractions${query}`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('获取景点列表失败')
+  const json = await res.json()
+  return json.data || { total: 0, items: [] }
 }
 
 /** 向量搜索景点 */

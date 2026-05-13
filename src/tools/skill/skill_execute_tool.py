@@ -150,7 +150,27 @@ class SkillExecuteTool(BaseTool):
             if isinstance(content_text, list):
                 import json
                 content_text = json.dumps(content_text, ensure_ascii=False)
-            stdin_content = str(content_text).encode("utf-8")
+
+            # 自动注入 tenant_id：从 session 获取真实 tenant_id 注入到 content JSON 中
+            import json as _json
+            try:
+                content_obj = _json.loads(content_text)
+                if isinstance(content_obj, dict):
+                    from src.db.models import SessionDB
+                    session_info = SessionDB.get_by_id(real_session_id) if real_session_id else None
+                    real_tenant_id = None
+                    if session_info:
+                        real_tenant_id = session_info.get("tenant_id")
+                    if real_tenant_id:
+                        old_val = content_obj.get("tenant_id", "")
+                        if old_val != real_tenant_id:
+                            logger.info(f"注入 tenant_id: {old_val} -> {real_tenant_id}")
+                            content_obj["tenant_id"] = real_tenant_id
+                            content_text = _json.dumps(content_obj, ensure_ascii=False)
+            except (_json.JSONDecodeError, TypeError):
+                pass  # 非 JSON 内容，跳过
+
+            stdin_content = str(content_text).encode("utf-8", errors="surrogatepass")
 
         try:
             # 后端日志：诊断实际提交给执行器的命令

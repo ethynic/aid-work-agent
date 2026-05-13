@@ -342,6 +342,9 @@ Follow the instructions in the skill above to complete the user's task."""
         try:
             # 获取当前进程的环境变量，确保子进程继承所有环境变量（包括 .env 加载的）
             env = os.environ.copy()
+            # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
+            env['PYTHONIOENCODING'] = 'utf-8'
+            env['PYTHONUTF8'] = '1'
 
             # 后端日志：诊断子进程执行
             is_trade_customer_cmd = "customer_manager" in command or "save-customer" in command or "save-customers" in command

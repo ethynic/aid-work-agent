@@ -1,9 +1,11 @@
 # 旅游资源向量知识库设计方案
 
-> 版本: v3.0 | 创建: 2026-05-12 | 状态: 待审核
+> 版本: v4.1 | 创建: 2026-05-12 | 状态: 待审核
 >
 > v3.0 变更：扩展至景点门票，统一向量知识库方案
 > v3.1 变更：车辆资源新增按公里计费模式，集成导航距离计算 Skill
+> v4.0 变更：quote-generate 技能重构为行程文本驱动模式，内部自动解析行程+检索资源
+> v4.1 变更：基于实际报价单模板的差缺分析，识别6项缺失要素
 
 ## 资源类型概览
 
@@ -1141,3 +1143,503 @@ LLM 映射时需要处理的常见转换：
 保留的关系型表：`bs_travel_quote_vehicles`、`bs_travel_quote_meals`、`bs_travel_quote_guides`、`bs_travel_quote_fees`、`bs_travel_quote_seasons`、`bs_travel_quote_regions`
 
 新增的 Skill：`route-distance`（导航距离计算，详见 [Skill 设计文档](route_distance_skill_design.md)）
+
+---
+
+# 第四部分：quote-generate 技能重构 — 行程文本驱动报价
+
+## C1. 当前问题
+
+当前 `quote-generate` 技能要求调用者（LLM 子智能体）手动收集并传入 20+ 个结构化参数（包括 `attraction_ids`、`hotel_id` 等数据库 ID）。
+
+问题：
+1. **LLM 不知道数据库 ID**——景点和酒店在旧表用自增 ID，在知识库用 doc_id，LLM 无法直接获取
+2. **参数收集过程冗长**——SUBAGENT.md 中参数清单占 20 行，调用示例复杂
+3. **与向量知识库方案不匹配**——向量搜索天然支持自然语言查询，但当前设计要求传入精确 ID
+
+## C2. 新设计：行程文本驱动
+
+### 核心思路
+
+**子智能体只需传入用户确认的行程方案全文，技能内部完成一切**：
+
+```
+用户确认的行程文本
+  → Step A: 调用 LLM 解析行程文本 → 提取结构化数据（景点名称、人数、偏好等）
+  → Step B: 用 Retriever 检索向量知识库 → 景点名称→doc_id，酒店偏好→doc_id
+  → Step C: 用 route-distance Skill 计算导航距离
+  → Step D: 调用现有的计价函数 → 计算各项费用
+  → Step E: 汇总 + 导出 Excel
+```
+
+### 输入参数（新）
+
+```json
+{
+  "tenant_id": "租户ID（必填）",
+  "itinerary_text": "用户确认的行程方案全文（必填）",
+  "start_date": "2026-07-01",
+  "profit_rate": null,
+  "course_name": "超级贵州研学",
+  "company_name": "贵州天悦旅行社",
+  "template_path": null
+}
+```
+
+从 20+ 个参数简化到 **7 个**。`itinerary_text` 是子智能体与客户确认好的行程方案文本。
+
+### 向后兼容
+
+当不传 `itinerary_text` 而是传入旧的结构化参数（`attraction_doc_ids`、`hotel_doc_id` 等）时，走旧的计价逻辑，确保平滑过渡。
+
+## C3. LLM 行程解析
+
+### parse_itinerary() 函数
+
+输入行程文本，调用 LLM 提取结构化数据：
+
+**LLM Prompt**：
+
+```
+你是一个旅游行程解析助手。请从以下行程方案文本中提取报价所需的关键信息。
+
+行程方案：
+{itinerary_text}
+
+请返回 JSON 格式，包含以下字段：
+{
+    "region_name": "主要目的地（省份或城市名）",
+    "total_people": 30,
+    "adults": 25,
+    "children_half": 5,
+    "students": 0,
+    "elders": 0,
+    "couples": 0,
+    "trip_days": 6,
+    "departure_city": "出发城市",
+    "destination": "主要目的地城市",
+    "attraction_names": ["黄果树瀑布", "小七孔", "天眼"],
+    "hotel_preference": "4钻酒店",
+    "meal_tier": "standard",
+    "guide_type": "local"
+}
+
+注意：
+1. 人数信息从文本中提取，如果没有明确说，adults 默认等于 total_people
+2. attraction_names 是景点名称列表（自然语言名称，不是 ID）
+3. hotel_preference 是酒店偏好描述（如"4钻"、"经济型"），不是酒店名
+4. meal_tier 和 guide_type 如果文本没提，用默认值 standard 和 local
+5. 只返回 JSON，不要其他文字
+```
+
+### _call_llm() 实现
+
+generate.py 运行在子进程中，直接调用 LLM SDK（与 embedding 相同的模式）：
+
+- Qwen 提供商：`dashscope.Generation.call()`
+- Zhipu 提供商：`zhipuai SDK`
+
+## C4. 资源检索
+
+### resolve_resources() 函数
+
+将 LLM 解析出的名称/偏好转换为具体的知识库 doc_id：
+
+```python
+def resolve_resources(parsed: dict, tenant_id: str) -> dict:
+    result = {}
+
+    # 景点：逐个名称在向量库中搜索，取 top-1
+    attraction_doc_ids = []
+    if parsed.get("attraction_names"):
+        retriever = AttractionRetriever()
+        for name in parsed["attraction_names"]:
+            matches = retriever.search(tenant_id, name, top_k=1)
+            if matches:
+                attraction_doc_ids.append(matches[0]["doc_id"])
+    result["attraction_doc_ids"] = attraction_doc_ids
+
+    # 酒店：用偏好描述在向量库中搜索
+    hotel_doc_id = None
+    if parsed.get("hotel_preference"):
+        retriever = HotelRetriever()
+        matches = retriever.search(tenant_id, parsed["hotel_preference"], top_k=1)
+        if matches:
+            hotel_doc_id = matches[0]["doc_id"]
+    result["hotel_doc_id"] = hotel_doc_id
+
+    return result
+```
+
+## C5. generate_quote() 主流程改造
+
+```python
+def generate_quote(params: dict) -> dict:
+    init_tables()
+    tenant_id = params.get('tenant_id', '')
+    itinerary_text = params.get('itinerary_text', '')
+
+    if itinerary_text:
+        # 新模式：行程文本驱动
+        parsed = parse_itinerary(itinerary_text)
+        resources = resolve_resources(parsed, tenant_id)
+
+        # 合并参数：params 中的显式参数优先
+        region_name = params.get('region_name') or parsed.get('region_name', '')
+        total_people = params.get('total_people') or parsed.get('total_people', 30)
+        adults = params.get('adults') or parsed.get('adults', total_people)
+        children_half = params.get('children_half') or parsed.get('children_half', 0)
+        students = params.get('students') or parsed.get('students', 0)
+        elders = params.get('elders') or parsed.get('elders', 0)
+        couples = params.get('couples') or parsed.get('couples', 0)
+        trip_days = params.get('trip_days') or parsed.get('trip_days', 1)
+        departure_city = parsed.get('departure_city', '')
+        destination = parsed.get('destination', '')
+        attraction_doc_ids = resources.get('attraction_doc_ids', [])
+        hotel_doc_id = resources.get('hotel_doc_id')
+        meal_tier = parsed.get('meal_tier', 'standard')
+        guide_type = parsed.get('guide_type', 'local')
+    else:
+        # 旧模式：向后兼容
+        region_name = params.get('region_name', '')
+        total_people = params.get('total_people', 30)
+        # ... 现有参数提取逻辑不变 ...
+        attraction_doc_ids = params.get('attraction_doc_ids', [])
+        hotel_doc_id = params.get('hotel_doc_id')
+        departure_city = params.get('departure_city', '')
+        destination = params.get('destination', '')
+
+    # 后续计价逻辑完全不变
+    region_names = expand_region_names(tenant_id, region_name) if region_name else []
+    season_type, season_multiplier = determine_season(tenant_id, start_date)
+    # ...
+```
+
+## C6. SUBAGENT.md 简化
+
+报价阶段（阶段四）的参数清单简化为：
+
+> **调用 quote-generate 技能时，只需传入**：
+> - `tenant_id`：租户 ID（系统获取）
+> - `itinerary_text`：客户确认的行程方案全文
+> - `start_date`：出发日期
+> - `company_name`：公司名称（从 extra.md 获取）
+> - `course_name`：行程名称（可选）
+>
+> **技能内部自动完成**：解析行程 → 搜索景点酒店 → 计算距离 → 生成报价
+
+## C7. 文件变更清单
+
+| 文件 | 改动 |
+|------|------|
+| `src/skills/quote-generate/scripts/generate.py` | 新增 `parse_itinerary()`、`resolve_resources()`、`_call_llm()`；改造 `generate_quote()` 入口 |
+| `src/skills/quote-generate/SKILL.md` | 重写输入参数说明（7 个参数） |
+| `subagents/travel-consultant/SUBAGENT.md` | 简化阶段四的参数清单和调用示例 |
+
+---
+
+# 第五部分：报价单模板差缺分析
+
+> 基于《超级贵州行程最终报价(30人).xls》实际模板，对比系统现有能力，识别缺失要素。
+
+## D1. 实际报价单结构
+
+```
+R0:  标题：贵州天悦旅行社有限公司研学报价表
+R1:  信息行：研学 课程名称=超级贵州 | 日期=超级贵州 | 人数=30
+R2:  表头：成本类别 | 项目 | 单价 | 数量 | 单位 | 次数 | 单位 | 费用小计 | 随队老师 | 备注
+R3:  用车 | 旅游大巴 | 9800 | 1辆 | 1次 | 326.67 | 0 | 全程6天研学团队用车，贵阳起止
+R4:  用餐 | 研学特色餐 | 40 | 1人 | 8餐 | 320 | 320 | 全程8个餐，不含第一天与最后一天晚餐
+R5:  住宿 | 贵阳酒店【携程4钻】| 320 | 2人 | 2夜 | 320 | 320 | 贵阳两晚
+R6:        | 安顺酒店【携程4钻】| 280 | 2人 | 1夜 | 140 | 140
+R7:        | 罗甸酒店【携程4钻】| 180 | 2人 | 1夜 | 90  | 90  | 天眼主题日入住
+R8:        | 西江酒店【携程4钻】| 428 | 2人 | 1夜 | 214 | 214
+R9:  门票/活动 | 天眼景区 | 110 | 1人 | 1次 | 110 | 110 | 含观光车+天文体验馆+天象影院、证书、保险
+R10:       | 天眼讲解费 | 400 | 1团 | 1次 | 13.33 | 0  | 南仁东纪念馆、天文科普馆
+R11:       | 天眼耳机 | 10 | 1人 | 1次 | 10  | 10
+R12:       | 天眼研学课程 | 30 | 1人 | 1次 | 30  | 0   | 发报机课程、观星、天眼模型任选一
+R13:       | 关岭化石 | 30 | 1人 | 1次 | 30  | 30  | 化石挖掘
+R14:       | 化石公园讲解费 | 200 | 1团 | 1次 | 6.67 | 0
+R15:       | 夜游黄果树 | 120 | 1人 | 1次 | 120 | 120 | 旺季选择夜游黄果树
+R16:       | 安顺屯堡/修房子 | 88 | 1人 | 1次 | 88  | 10  | 含门票，修缮房屋活动
+R17:       | 西江门票 | 60 | 1人 | 1次 | 60  | 120 | 符合免票政策人群为30
+R18:       | 西江研学课程 | 58 | 1人 | 1次 | 58  | 0   | 蜡染，苗歌，稻田捉鱼三选一
+R19:       | 青岩古镇 | 0 | 1人 | 1次 | 0   | 10
+R20:       | 坝陵河大桥 | 88 | 1人 | 1次 | 88  | 0   | 含上桥观光、桥梁博物馆、搭建桥梁
+R21: 其他费用 | 每日用水/保险 | 20 | 1人 | 1次 | 20  | 20  | 研学手册、道具等
+R22:       | 研学导师 | 400 | 2人 | 6天 | 160 | 0   | 研学老师2人1团
+R23:       | 司陪房 | 200 | 2人 | 5夜 | 66.67 | 0  | 1名司机，2名导师
+R24:       | 老师费用 | 1600 | 3人 | 1次 | 160 | -
+R25:       | 操作费 | 20 | 1人 | 6天 | 120 | -
+R26: 合计 | 人均成本 2551.33 | 随队老师 1514
+R29: 审核 | 成本审核员： | 研学负责人： | 财务部审核：
+R30:       | 日期： | 日期： | 日期：
+```
+
+## D2. 差缺要素分析
+
+### 已具备的能力 ✅
+
+| 报价单要素 | 系统现有能力 | 对应函数/模块 |
+|-----------|-------------|-------------|
+| 用车费用 | `calculate_vehicle_cost()` | 按天/按公里计费，推荐车型组合 |
+| 用餐费用 | `calculate_meal_cost()` | 按餐标、区域、天数计算 |
+| 景点门票 | `calculate_ticket_cost()` + `_calculate_ticket_cost_from_kb()` | 按票种、人群计价 |
+| 酒店住宿 | `calculate_hotel_cost()` + `_calculate_hotel_cost_from_kb()` | 排房逻辑，单房差 |
+| 其他费用（保险、操作费） | `calculate_other_fees()` | 多种计费方式 |
+| 利润计算 | `generate_quote()` 中的汇总 | cost → quote |
+| Excel 导出 | `export_with_template()` | 支持自定义模板 |
+
+### 缺失要素 ❌
+
+#### 缺失 1：「随队老师」独立计费列（严重）
+
+实际报价单有**两列费用**：
+- `费用小计`（col 7）：学生人均分摊
+- `随队老师`（col 8）：随队老师单独承担的费用
+
+例如：
+- 旅游大巴：费用小计 326.67，随队老师 0（老师跟学生同车不额外付费）
+- 研学特色餐：费用小计 320，随队老师 320（老师也吃饭，单独算）
+- 贵阳酒店：费用小计 320，随队老师 320（老师单独住）
+- 天眼景区：费用小计 110，随队老师 110（老师也买票）
+- 天眼讲解费：费用小计 13.33，随队老师 0（团费，老师不分摊）
+- 西江门票：费用小计 60，随队老师 120（老师不免票，双倍）
+
+**系统现状**：items 中只有一个 `subtotal` 字段，没有 `teacher_cost` 字段。
+
+**实现方案**：
+
+1. 在 item 数据结构中新增 `teacher_subtotal` 字段（随队老师费用小计）
+2. 每个计价函数新增 `teacher_count` 参数（随队老师人数，从行程中解析）
+3. 各项费用的老师计费规则不同：
+   - 用车：老师不额外付费（0）
+   - 用餐：老师同价（price × teacher_count）
+   - 住宿：老师单独排房
+   - 门票：部分景点老师免票（0），部分同价，部分特殊价
+   - 导游/司陪：老师不分摊（0）
+4. 导出 Excel 时输出两列
+
+#### 缺失 2：多城市不同酒店（严重）
+
+实际报价单有**4 家不同酒店**，按行程天数在不同城市入住：
+- 贵阳酒店 320元/2人/2夜
+- 安顺酒店 280元/2人/1夜
+- 罗甸酒店 180元/2人/1夜
+- 西江酒店 428元/2人/1夜
+
+**系统现状**：`calculate_hotel_cost()` 只支持**一家酒店**（单个 hotel_id），所有天都住同一家。
+
+**实现方案**：
+
+1. 报价参数从单个 `hotel_doc_id` 改为 `hotel_stays` 列表：
+   ```python
+   hotel_stays = [
+       {"hotel_doc_id": 101, "nights": 2, "city": "贵阳"},
+       {"hotel_doc_id": 102, "nights": 1, "city": "安顺"},
+       {"hotel_doc_id": 103, "nights": 1, "city": "罗甸"},
+       {"hotel_doc_id": 104, "nights": 1, "city": "西江"},
+   ]
+   ```
+2. LLM 解析行程时，从每天的安排中提取入住城市
+3. 为每个城市用 Retriever 搜索对应的酒店
+4. 逐城市计算住宿费用，每家酒店一行
+
+#### 缺失 3：门票/活动细项拆分（中等）
+
+实际报价单中，每个景点不是一行门票，而是**多行细项**：
+- 天眼景区：门票110 + 讲解费400/团 + 耳机10 + 研学课程30 = 4 行
+- 西江：门票60 + 研学课程58 = 2 行
+
+**系统现状**：`calculate_ticket_cost()` 每个景点只输出 1-2 行（成人票 + 儿童票），没有讲解费、研学课程、耳机等附加项目。
+
+**实现方案**：
+
+1. 门票价格明细表（chunk 1）中，增加对"附加服务"的分类：
+   - 基础门票（如"天眼景区门票 110元"）
+   - 附加服务（如"讲解费 400元/团"、"耳机 10元/人"、"研学课程 30元/人"）
+2. `_calculate_ticket_cost_from_kb()` 解析时区分 `per_person` 和 `per_group` 计费
+3. 每个附加服务单独输出一行 item
+
+#### 缺失 4：司陪房（中等）
+
+实际报价单有独立的"司陪房"行：200元 × 2人 × 5夜 = 66.67元/人。
+
+**系统现状**：`calculate_hotel_cost()` 的排房逻辑只考虑学生和夫妻，没有司陪房的逻辑。
+
+**实现方案**：
+1. 在 `calculate_hotel_cost()` 或独立函数中，根据司机人数和导师人数计算司陪房
+2. 司陪房费用不计入学生人均，而是计入"随队老师"列
+3. 需要从行程解析中提取"司机人数"和"导师人数"
+
+#### 缺失 5：核算区域 / 报价表头信息（轻微）
+
+实际报价单有：
+- 标题行：`{公司名}研学报价表`
+- 信息行：研学 课程名称=超级贵州 | 日期=xxx | 人数=30
+
+**系统现状**：`export_with_template()` 已支持 `{{company_name}}`、`{{course_name}}`、`{{total_people}}` 等占位符，但当前默认模板的格式与实际模板有差异。
+
+**实现方案**：
+1. 用这份实际 Excel 作为自定义模板上传
+2. 在模板中用 `{{#items}}...{{/items}}` 标记数据行区域
+3. 每行数据包含 `{{category}}`、`{{name}}`、`{{unit_price}}`、`{{quantity}}` 等占位符
+4. 新增 `{{teacher_subtotal}}` 占位符
+
+#### 缺失 6：底部审核/签章区域（轻微）
+
+实际报价单有：审核（成本审核员、研学负责人、财务部审核）+ 日期行。
+
+**系统现状**：默认模板没有审核区域。
+
+**实现方案**：在自定义模板中预留这些行即可，不需要代码改动。
+
+## D3. 优先级排序
+
+| 优先级 | 缺失项 | 影响 | 工作量 |
+|--------|--------|------|--------|
+| **P0** | 多城市不同酒店 | 无法生成多城市报价 | 中 |
+| **P0** | 随队老师独立计费列 | 报价单格式不符 | 中 |
+| **P1** | 门票/活动细项拆分 | 报价明细不够细 | 中 |
+| **P1** | 司陪房 | 少算一项费用 | 小 |
+| **P2** | 自定义模板适配 | 视觉格式差异 | 小 |
+| **P2** | 底部审核区域 | 签章区域 | 无需代码改动 |
+
+## D4. 实施建议
+
+### P0-1: 多城市不同酒店
+
+**改动文件**: `generate.py`
+
+1. `parse_itinerary()` 的 LLM prompt 中增加对每日行程和入住城市的提取：
+   ```json
+   "daily_plan": [
+     {"day": 1, "city": "贵阳", "attractions": ["黔灵山"]},
+     {"day": 2, "city": "贵阳", "attractions": ["天眼"]},
+     {"day": 3, "city": "安顺", "attractions": ["黄果树"]},
+     {"day": 4, "city": "安顺", "attractions": ["关岭化石"]},
+     {"day": 5, "city": "西江", "attractions": ["西江千户苗寨"]},
+     {"day": 6, "city": "贵阳", "attractions": ["青岩古镇"]}
+   ],
+   "hotel_stays": [
+     {"city": "贵阳", "nights": 2},
+     {"city": "安顺", "nights": 1},
+     {"city": "罗甸", "nights": 1},
+     {"city": "西江", "nights": 1}
+   ]
+   ```
+
+2. 新增 `calculate_hotel_stays()` 函数，替代原有 `calculate_hotel_cost()`：
+   ```python
+   def calculate_hotel_stays(items, tenant_id, hotel_stays, total_people, teacher_count):
+       for stay in hotel_stays:
+           city = stay["city"]
+           nights = stay["nights"]
+           # 用 Retriever 搜索该城市的酒店
+           matches = hotel_retriever.search(tenant_id, f"{city} 酒店", top_k=1)
+           if matches:
+               price_table = hotel_retriever.get_price_table(matches[0]["doc_id"])
+               price = parse_team_price(price_table)
+               # 排房：学生
+               student_rooms = math.ceil((total_people - teacher_count) / 2)
+               student_cost = student_rooms * price * nights / total_people
+               # 排房：老师
+               teacher_rooms = math.ceil(teacher_count / 2)
+               teacher_cost = teacher_rooms * price * nights
+               items.append({...})
+   ```
+
+### P0-2: 随队老师独立计费列
+
+**改动文件**: `generate.py`
+
+1. item 数据结构新增 `teacher_subtotal` 字段
+2. `generate_quote()` 参数新增 `teacher_count`（从行程中解析）
+3. 各计价函数新增老师计费逻辑：
+   - 用车：teacher_subtotal = 0（老师跟车不额外付费）
+   - 用餐：teacher_subtotal = price × teacher_count × meal_count
+   - 住宿：teacher_subtotal = teacher_rooms × price × nights
+   - 门票：teacher_subtotal = teacher_ticket_price × teacher_count（部分景点老师免票）
+   - 其他（导师、司陪）：teacher_subtotal = 0（不分摊到老师列）
+4. 汇总时同时输出 `teacher_total`
+
+### P1-1: 门票/活动细项拆分
+
+**改动文件**: `generate.py` 的 `_calculate_ticket_cost_from_kb()`
+
+1. 价格表解析时，按行分类：
+   - 含"人"或"张"的 → per_person 类型
+   - 含"团"的 → per_group 类型
+2. per_group 的费用（如讲解费 400元/团）单独输出一行：
+   ```python
+   items.append({
+       "name": "天眼讲解费",
+       "unit_price": 400,
+       "quantity": 1,
+       "unit": "团",
+       "subtotal": round(400 / total_people, 2),  # 学生人均分摊
+       "teacher_subtotal": 0,  # 老师不分摊团费
+   })
+   ```
+
+### P1-2: 司陪房
+
+**改动文件**: `generate.py`
+
+在 `calculate_hotel_stays()` 或 `calculate_other_fees()` 中增加司陪房计算：
+```python
+# 司陪房 = driver_count + guide_count 人，需要 ceil(N/2) 间房
+driver_guide_rooms = math.ceil((driver_count + guide_count) / 2)
+# 司陪房单价通常低于客房价，从酒店价格表或单独配置获取
+accompany_room_rate = 200  # 可配置
+accompany_cost = accompany_room_rate * driver_guide_rooms * total_nights
+```
+
+## D5. 输出结构对比
+
+### 当前 item 结构
+
+```python
+{
+    "category": "用车",
+    "name": "大巴",
+    "unit_price": 1800,
+    "quantity": 1,
+    "unit": "辆",
+    "frequency": 6,
+    "freq_unit": "天",
+    "subtotal": 360.00,
+    "remark": "含司机餐补"
+}
+```
+
+### 目标 item 结构（对齐实际报价单）
+
+```python
+{
+    "category": "用车",          # 成本类别
+    "name": "旅游大巴",           # 项目
+    "unit_price": 9800,          # 单价
+    "quantity": 1,               # 数量
+    "unit": "辆",                # 单位
+    "frequency": 1,              # 次数
+    "freq_unit": "次",           # 单位
+    "subtotal": 326.67,          # 费用小计（学生人均）
+    "teacher_subtotal": 0,       # ★ 新增：随队老师费用小计
+    "remark": "全程6天研学团队用车"  # 备注
+}
+```
+
+### 目标汇总结构
+
+```python
+{
+    "items": [...],
+    "cost_per_person": 2551.33,       # 学生人均成本
+    "teacher_total": 1514.00,         # ★ 新增：随队老师总费用
+    "total_cost": 2551.33 * 30,       # 学生总成本
+    "profit_rate": 0.15,
+    "quote_per_person": 2934.03,      # 学生人均报价
+    "quote_total": 2934.03 * 30,      # 学生总报价
+}
+```

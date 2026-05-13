@@ -62,22 +62,15 @@ TABLE_DEFINITIONS = {
             region_name TEXT,
             vehicle_type TEXT NOT NULL,
             vehicle_type_label TEXT,
-            seats_min INT NOT NULL,
             seats_max INT NOT NULL,
-            daily_rate DECIMAL(10,2) NOT NULL,
-            overtime_rate DECIMAL(10,2),
-            overkm_rate DECIMAL(10,2),
+            daily_rate DECIMAL(10,2),
+            pricing_mode TEXT DEFAULT 'per_km',
+            per_km_rate DECIMAL(10,2),
             driver_meal_allowance DECIMAL(10,2),
             driver_accommodation DECIMAL(10,2),
-            pricing_mode TEXT DEFAULT 'daily',
-            per_km_rate DECIMAL(10,2),
-            base_km DECIMAL(10,2),
-            base_fee DECIMAL(10,2),
-            season_type TEXT DEFAULT 'default',
             effective_from DATE,
             effective_to DATE,
             is_active BOOLEAN DEFAULT TRUE,
-            sort_order INT DEFAULT 0,
             remark TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
@@ -203,7 +196,7 @@ def query_by_region(table: str, tenant_id: str, region_names: List[str],
             conn.execute(
                 f"SELECT * FROM {table} WHERE tenant_id=%s AND is_active=true "
                 f"{season_filter} AND (region_name IN ({placeholders}) OR region_name IS NULL) "
-                f"{extra_where} ORDER BY region_name IS NULL, sort_order",
+                f"{extra_where} ORDER BY region_name IS NULL, id",
                 tuple(params)
             )
             rows = conn.fetchall()
@@ -221,7 +214,7 @@ def query_by_region(table: str, tenant_id: str, region_names: List[str],
 
         conn.execute(
             f"SELECT * FROM {table} WHERE tenant_id=%s AND is_active=true "
-            f"{season_filter} AND region_name IS NULL {extra_where} ORDER BY sort_order",
+            f"{season_filter} AND region_name IS NULL {extra_where} ORDER BY id",
             tuple(params)
         )
         return conn.fetchall()
@@ -276,7 +269,7 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
                            vehicle_count: Optional[int],
                            route_distance_km: Optional[float] = None) -> Tuple[list, int]:
     """计算交通费用"""
-    vehicles = query_by_region("bs_travel_quote_vehicles", tenant_id, region_names, season_type)
+    vehicles = query_by_region("bs_travel_quote_vehicles", tenant_id, region_names)
     if not vehicles:
         return items, 0
 
@@ -310,7 +303,7 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
             remark_parts.append(v['vehicle_type_label'])
         if count > 1:
             remark_parts.append(f"{count}辆")
-        remark_parts.append(f"{v['seats_min']}-{v['seats_max']}座")
+        remark_parts.append(f"{v['seats_max']}座")
 
         items.append({
             "category": "用车",
@@ -321,6 +314,7 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
             "frequency": trip_days,
             "freq_unit": "天",
             "subtotal": per_person,
+            "teacher_subtotal": 0,
             "remark": "、".join(remark_parts),
         })
 
@@ -329,7 +323,7 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
 
 def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
                            distance_km: float) -> Tuple[list, int]:
-    """按公里计费：base_fee + max(0, distance_km - base_km) * per_km_rate"""
+    """按公里计费：distance_km * per_km_rate"""
     combo = recommend_vehicle(total_people, vehicles)
     total_vehicle_count = sum(c["count"] for c in combo)
 
@@ -337,12 +331,8 @@ def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
         v = c["vehicle"]
         count = c["count"]
         per_km_rate = float(v.get('per_km_rate') or 0)
-        base_km = float(v.get('base_km') or 0)
-        base_fee = float(v.get('base_fee') or 0)
 
-        # 单辆费用 = base_fee + max(0, distance_km - base_km) * per_km_rate
-        extra_km = max(0, distance_km - base_km)
-        single_vehicle_cost = base_fee + extra_km * per_km_rate
+        single_vehicle_cost = distance_km * per_km_rate
         total_cost = single_vehicle_cost * count
         per_person = round(total_cost / total_people, 2)
 
@@ -351,7 +341,7 @@ def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
             remark_parts.append(v['vehicle_type_label'])
         if count > 1:
             remark_parts.append(f"{count}辆")
-        remark_parts.append(f"{v['seats_min']}-{v['seats_max']}座")
+        remark_parts.append(f"{v['seats_max']}座")
         remark_parts.append(f"按公里计费({distance_km:.0f}km)")
 
         items.append({
@@ -363,6 +353,7 @@ def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
             "frequency": 1,
             "freq_unit": "趟",
             "subtotal": per_person,
+            "teacher_subtotal": 0,
             "remark": "、".join(remark_parts),
         })
 
@@ -375,14 +366,16 @@ def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
 
 def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int],
                           adults: int, children_half: int, students: int, elders: int,
-                          total_people: int,
-                          attraction_doc_ids: Optional[List[int]] = None) -> list:
+                          total_people: int, teacher_count: int = 0,
+                          attraction_doc_ids: Optional[List[int]] = None,
+                          attraction_matches: Optional[list] = None) -> list:
     """计算门票费用"""
     # 知识库模式
     if attraction_doc_ids:
         return _calculate_ticket_cost_from_kb(items, tenant_id, attraction_doc_ids,
                                                adults, children_half, students,
-                                               elders, total_people)
+                                               elders, total_people, teacher_count,
+                                               attraction_matches=attraction_matches)
 
     if not attraction_ids:
         return items
@@ -410,6 +403,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     "frequency": 1,
                     "freq_unit": "次",
                     "subtotal": round(transport_total / total_people, 2),
+                    "teacher_subtotal": round(float(attr['internal_transport_price']) * teacher_count, 2),
                     "remark": "",
                 })
 
@@ -431,6 +425,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     "frequency": 1,
                     "freq_unit": "次",
                     "subtotal": 0,
+                    "teacher_subtotal": 0,
                     "remark": "价格待确认",
                 })
                 continue
@@ -450,6 +445,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     "frequency": 1,
                     "freq_unit": "次",
                     "subtotal": round(price * adults / total_people, 2),
+                    "teacher_subtotal": round(price * teacher_count, 2) if teacher_count > 0 else 0,
                     "remark": "协议价" if t.get('agency_price') else "挂牌价",
                 })
 
@@ -466,6 +462,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     "frequency": 1,
                     "freq_unit": "次",
                     "subtotal": round(price * children_half / total_people, 2),
+                    "teacher_subtotal": 0,
                     "remark": t['ticket_type_label'],
                 })
 
@@ -482,6 +479,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     "frequency": 1,
                     "freq_unit": "次",
                     "subtotal": round(price * students / total_people, 2),
+                    "teacher_subtotal": 0,
                     "remark": t['ticket_type_label'],
                 })
 
@@ -496,7 +494,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
 
 def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
                                    total_people: int, couples: int,
-                                   trip_days: int) -> Tuple[list, float]:
+                                   trip_days: int, teacher_count: int = 0) -> Tuple[list, float]:
     """从知识库获取酒店价格计算住宿费用"""
     from hotel_retriever import HotelRetriever
     retriever = HotelRetriever()
@@ -507,45 +505,24 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         return items, 0
 
     nights = trip_days - 1
-
-    # 解析价格表提取基础房价
-    # 价格表格式：每行 "房型 | 客户类型 | 价格 | 含早 | 适用日期：..."
-    lines = [l.strip() for l in price_table.split('\n') if l.strip() and '|' in l]
-
-    # 取第一个"团队"类型的价格作为默认房价
-    default_price = 0
-    for line in lines:
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) >= 3 and '团队' in parts[1]:
-            price_str = parts[2].strip()
-            try:
-                default_price = float(price_str)
-                break
-            except ValueError:
-                continue
-
-    if default_price == 0:
-        # 如果没找到团队价，取第一个有效价格
-        for line in lines:
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 3:
-                try:
-                    default_price = float(parts[2].strip())
-                    break
-                except ValueError:
-                    continue
+    default_price = _parse_team_price(price_table)
 
     if default_price == 0:
         logger.warning(f"[quote-generate] 酒店 doc_id={doc_id} 价格表无有效价格")
         return items, 0
 
-    # 排房逻辑（与旧版相同）
+    # 学生排房
+    students = total_people - teacher_count
     couple_people = couples * 2
-    remaining = total_people - couple_people
-    standard_count = math.ceil(remaining / 2) if remaining > 0 else 0
+    remaining = students - couple_people
+    standard_count = math.ceil(remaining / 2) + couples if remaining > 0 else couples
 
-    total_room_cost = (standard_count + couples) * default_price * nights
+    total_room_cost = standard_count * default_price * nights
     per_person = round(total_room_cost / total_people, 2)
+
+    # 老师排房
+    teacher_rooms = math.ceil(teacher_count / 2) if teacher_count > 0 else 0
+    teacher_cost = round(teacher_rooms * default_price * nights, 2)
 
     single_supplement = 0
     if remaining > 0 and remaining % 2 == 1:
@@ -555,13 +532,127 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         "category": "住宿",
         "name": "酒店住宿",
         "unit_price": default_price,
-        "quantity": standard_count + couples,
+        "quantity": standard_count,
         "unit": "间",
         "frequency": nights,
         "freq_unit": "晚",
         "subtotal": per_person,
+        "teacher_subtotal": teacher_cost,
         "remark": "两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
     })
+
+    return items, single_supplement
+
+
+def _parse_team_price(price_table: str) -> float:
+    """从知识库价格表文本中提取团队房价"""
+    if not price_table:
+        return 0
+    lines = [l.strip() for l in price_table.split('\n') if l.strip() and '|' in l]
+    # 优先取"团队"类型的价格
+    for line in lines:
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 3 and '团队' in parts[1]:
+            try:
+                return float(parts[2].strip())
+            except ValueError:
+                continue
+    # fallback：取第一个有效价格
+    for line in lines:
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 3:
+            try:
+                return float(parts[2].strip())
+            except ValueError:
+                continue
+    return 0
+
+
+def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
+                          total_people: int, teacher_count: int,
+                          couples: int) -> Tuple[list, float]:
+    """多城市分住不同酒店，每个城市一行 item"""
+    from hotel_retriever import HotelRetriever
+    retriever = HotelRetriever()
+    single_supplement = 0
+
+    for stay in hotel_stays:
+        city = stay.get("city", "")
+        nights = stay.get("nights", 1)
+        doc_id = stay.get("hotel_doc_id")
+
+        if not doc_id:
+            items.append({
+                "category": "住宿",
+                "name": f"{city}酒店（待确认）",
+                "unit_price": 0,
+                "quantity": 0,
+                "unit": "间",
+                "frequency": nights,
+                "freq_unit": "夜",
+                "subtotal": 0,
+                "teacher_subtotal": 0,
+                "remark": "酒店未匹配",
+            })
+            continue
+
+        price_table = retriever.get_price_table(doc_id)
+        price = _parse_team_price(price_table)
+
+        if price == 0:
+            items.append({
+                "category": "住宿",
+                "name": f"{city}酒店",
+                "unit_price": 0,
+                "quantity": 0,
+                "unit": "间",
+                "frequency": nights,
+                "freq_unit": "夜",
+                "subtotal": 0,
+                "teacher_subtotal": 0,
+                "remark": "价格表无有效价格",
+            })
+            continue
+
+        # 提取酒店名称
+        attraction_info = retriever.get_hotel_info(doc_id)
+        hotel_name = f"{city}酒店"
+        if attraction_info:
+            for line in attraction_info.split('\n'):
+                if '酒店名称' in line or '名称' in line:
+                    parts = line.split('：', 1)
+                    if len(parts) > 1:
+                        hotel_name = parts[-1].strip()
+                    break
+
+        # 学生排房
+        students = total_people - teacher_count
+        couple_people = couples * 2
+        remaining_students = students - couple_people
+        student_rooms = math.ceil(remaining_students / 2) + couples if remaining_students > 0 else couples
+        student_total_cost = student_rooms * price * nights
+        student_cost_per_person = round(student_total_cost / total_people, 2)
+
+        # 老师排房（老师2人一间）
+        teacher_rooms = math.ceil(teacher_count / 2) if teacher_count > 0 else 0
+        teacher_cost = round(teacher_rooms * price * nights, 2)
+
+        # 单房差
+        if remaining_students > 0 and remaining_students % 2 == 1:
+            single_supplement += round(price * nights / total_people, 2)
+
+        items.append({
+            "category": "住宿",
+            "name": hotel_name,
+            "unit_price": price,
+            "quantity": 2,
+            "unit": "人",
+            "frequency": nights,
+            "freq_unit": "夜",
+            "subtotal": student_cost_per_person,
+            "teacher_subtotal": teacher_cost,
+            "remark": f"{city}{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
+        })
 
     return items, single_supplement
 
@@ -573,102 +664,238 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
 def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
                                     adults: int, children_half: int,
                                     students: int, elders: int,
-                                    total_people: int) -> list:
-    """从知识库获取景点门票价格计算门票费用"""
+                                    total_people: int, teacher_count: int = 0,
+                                    attraction_matches: Optional[list] = None) -> list:
+    """从知识库获取景点门票价格计算门票费用（LLM 验证+提取）"""
     from attraction_retriever import AttractionRetriever
     retriever = AttractionRetriever()
 
+    # 构建 doc_id → 搜索名称的映射
+    doc_name_map = {}
+    if attraction_matches:
+        for m in attraction_matches:
+            doc_name_map[m["doc_id"]] = m.get("name", "")
+
     for doc_id in doc_ids:
-        ticket_table = retriever.get_ticket_table(doc_id)
+        search_name = doc_name_map.get(doc_id, "")
         attraction_info = retriever.get_attraction_info(doc_id)
+        ticket_table = retriever.get_ticket_table(doc_id)
+        project_table = retriever.get_project_table(doc_id)
 
         if not ticket_table:
             continue
 
-        # 从 info 中提取景点名称
-        attraction_name = ""
-        if attraction_info:
-            for line in attraction_info.split('\n'):
-                if '景点名称' in line or '名称' in line:
-                    parts = line.split('：', 1)
-                    if len(parts) > 1:
-                        attraction_name = parts[-1].strip()
-                    break
+        # 调用 LLM 验证景点并提取价格
+        extracted = _llm_extract_attraction_prices(
+            search_name=search_name,
+            attraction_info=attraction_info or "",
+            ticket_table=ticket_table,
+            project_table=project_table or "",
+            adults=adults, children_half=children_half,
+            students=students, teacher_count=teacher_count,
+            total_people=total_people,
+        )
 
-        # 解析门票价格表
-        lines = [l.strip() for l in ticket_table.split('\n') if l.strip() and '|' in l]
+        if not extracted:
+            # LLM 提取失败，fallback 到规则解析
+            _fallback_parse_ticket_table(items, doc_id, search_name,
+                                         ticket_table, project_table,
+                                         adults, children_half, students,
+                                         teacher_count, total_people,
+                                         attraction_info, retriever)
+            continue
 
-        def find_price(ticket_keyword, customer_keyword='团队'):
-            """从价格表中查找指定票型的团队价"""
-            for line in lines:
-                parts = [p.strip() for p in line.split('|')]
-                if len(parts) >= 3:
-                    if ticket_keyword in parts[0] and customer_keyword in parts[1]:
-                        try:
-                            return float(parts[2].strip())
-                        except ValueError:
-                            pass
-            # 没找到团队价，取散客价
-            for line in lines:
-                parts = [p.strip() for p in line.split('|')]
-                if len(parts) >= 3 and ticket_keyword in parts[0]:
+        attraction_name = extracted.get("name", search_name)
+        is_confirmed = extracted.get("confirmed", False)
+
+        if not is_confirmed:
+            logger.warning(f"[quote-generate] 景点验证不通过: 搜索='{search_name}', "
+                           f"知识库景点='{attraction_name}'，仍使用该数据")
+
+        # 门票项目
+        for ticket in extracted.get("tickets", []):
+            items.append({
+                "category": "门票",
+                "name": ticket.get("name", ""),
+                "unit_price": ticket.get("unit_price", 0),
+                "quantity": ticket.get("quantity", 1),
+                "unit": ticket.get("unit", "人"),
+                "frequency": ticket.get("frequency", 1),
+                "freq_unit": ticket.get("freq_unit", "次"),
+                "subtotal": ticket.get("subtotal", 0),
+                "teacher_subtotal": ticket.get("teacher_subtotal", 0),
+                "remark": ticket.get("remark", ""),
+            })
+
+        # 项目/服务
+        for proj in extracted.get("projects", []):
+            items.append({
+                "category": "门票",
+                "name": proj.get("name", ""),
+                "unit_price": proj.get("unit_price", 0),
+                "quantity": proj.get("quantity", 1),
+                "unit": proj.get("unit", "人"),
+                "frequency": proj.get("frequency", 1),
+                "freq_unit": proj.get("freq_unit", "次"),
+                "subtotal": proj.get("subtotal", 0),
+                "teacher_subtotal": proj.get("teacher_subtotal", 0),
+                "remark": proj.get("remark", ""),
+            })
+
+    return items
+
+
+def _llm_extract_attraction_prices(
+    search_name: str, attraction_info: str, ticket_table: str,
+    project_table: str, adults: int, children_half: int,
+    students: int, teacher_count: int, total_people: int,
+) -> Optional[dict]:
+    """调用 LLM 验证景点并提取门票+项目价格"""
+    prompt = f"""你是一个旅游报价助手。我正在搜索景点"{search_name}"，向量搜索返回了一个景点。请先确认这个景点是否就是我要找的，然后从中提取报价所需的门票和项目/服务价格。
+
+## 景点信息（来自向量搜索）
+{attraction_info}
+
+## 门票价格表
+{ticket_table}
+
+## 项目/服务价格表
+{project_table if project_table else "（无）"}
+
+## 团队人数信息
+- 学生人数: {adults}人（按成人票计价）
+- 儿童人数: {children_half}人
+- 学生票人数: {students}人
+- 随队老师: {teacher_count}人
+- 总人数: {total_people}人
+
+## 任务
+
+1. **先验证**：根据景点信息，判断搜索名称"{search_name}"和知识库中的景点是否是同一个。考虑别名、简称等因素。
+2. **提取门票价格**：从门票价格表中提取适用于上述人群的门票价格，每个票种一行。优先取"团队"价。如果找不到明确的人群对应票种，取最接近的。
+3. **提取项目/服务价格**：从项目/服务价格表中提取所有适用项目。区分按人计费和按团计费：
+   - 按人计费：subtotal = price × 人数 / total_people（学生人均分摊），teacher_subtotal = price × teacher_count
+   - 按团计费：subtotal = price / total_people（学生人均分摊），teacher_subtotal = 0
+
+请返回 JSON：
+{{
+    "confirmed": true,
+    "name": "景点正式名称",
+    "tickets": [
+        {{
+            "name": "景点名(成人票)",
+            "unit_price": 110,
+            "quantity": {adults},
+            "unit": "人",
+            "frequency": 1,
+            "freq_unit": "次",
+            "subtotal": {round(110 * adults / total_people, 2) if total_people > 0 else 0},
+            "teacher_subtotal": {round(110 * teacher_count, 2) if teacher_count > 0 else 0},
+            "remark": "团队价"
+        }}
+    ],
+    "projects": [
+        {{
+            "name": "讲解费",
+            "unit_price": 400,
+            "quantity": 1,
+            "unit": "团",
+            "frequency": 1,
+            "freq_unit": "次",
+            "subtotal": {round(400 / total_people, 2) if total_people > 0 else 0},
+            "teacher_subtotal": 0,
+            "remark": "按团计费"
+        }}
+    ]
+}}
+
+注意：
+- confirmed 为 true/false，表示景点是否匹配
+- tickets 中的 subtotal 是学生人均分摊（price × 人数 / total_people），teacher_subtotal 是老师承担的费用
+- projects 中按团计费的 subtotal = price / total_people，teacher_subtotal = 0
+- 如果项目/服务价格表为空，projects 返回空数组
+- 只返回 JSON，不要其他文字"""
+
+    try:
+        raw = _call_llm(prompt)
+        # 提取 JSON
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+        if json_match:
+            raw = json_match.group(1)
+        result = json.loads(raw.strip())
+        logger.info(f"[quote-generate] LLM景点提取: 搜索='{search_name}', 确认={result.get('confirmed')}, "
+                     f"门票{len(result.get('tickets', []))}项, 项目{len(result.get('projects', []))}项")
+        return result
+    except Exception as e:
+        logger.warning(f"[quote-generate] LLM景点价格提取失败: {e}")
+        return None
+
+
+def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
+                                  project_table, adults, children_half,
+                                  students, teacher_count, total_people,
+                                  attraction_info, retriever):
+    """LLM 提取失败时的规则 fallback 解析"""
+    attraction_name = search_name
+    if attraction_info:
+        for line in attraction_info.split('\n'):
+            if '景点名称' in line or '名称' in line:
+                parts = line.split('：', 1)
+                if len(parts) > 1:
+                    attraction_name = parts[-1].strip()
+                break
+
+    lines = [l.strip() for l in ticket_table.split('\n') if l.strip() and '|' in l]
+
+    def find_price(ticket_keyword, customer_keyword='团队'):
+        for line in lines:
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 3:
+                if ticket_keyword in parts[0] and customer_keyword in parts[1]:
                     try:
                         return float(parts[2].strip())
                     except ValueError:
                         pass
-            return 0
+        for line in lines:
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 3 and ticket_keyword in parts[0]:
+                try:
+                    return float(parts[2].strip())
+                except ValueError:
+                    pass
+        return 0
 
-        # 成人票
-        if adults > 0:
-            price = find_price('成人')
-            if price > 0:
-                items.append({
-                    "category": "门票",
-                    "name": f"{attraction_name}(成人票)",
-                    "unit_price": price,
-                    "quantity": adults,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": round(price * adults / total_people, 2),
-                    "remark": "团队价",
-                })
-
-        # 儿童票
-        if children_half > 0:
-            price = find_price('儿童')
-            if price > 0:
-                items.append({
-                    "category": "门票",
-                    "name": f"{attraction_name}(儿童票)",
-                    "unit_price": price,
-                    "quantity": children_half,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": round(price * children_half / total_people, 2),
-                    "remark": "儿童票",
-                })
-
-        # 学生票
-        if students > 0:
-            price = find_price('学生')
-            if price > 0:
-                items.append({
-                    "category": "门票",
-                    "name": f"{attraction_name}(学生票)",
-                    "unit_price": price,
-                    "quantity": students,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": round(price * students / total_people, 2),
-                    "remark": "学生票",
-                })
-
-        # 老人免票不收费
-
-    return items
+    if adults > 0:
+        price = find_price('成人')
+        if price > 0:
+            items.append({
+                "category": "门票", "name": f"{attraction_name}(成人票)",
+                "unit_price": price, "quantity": adults, "unit": "人",
+                "frequency": 1, "freq_unit": "次",
+                "subtotal": round(price * adults / total_people, 2),
+                "teacher_subtotal": round(price * teacher_count, 2) if teacher_count > 0 else 0,
+                "remark": "团队价",
+            })
+    if children_half > 0:
+        price = find_price('儿童')
+        if price > 0:
+            items.append({
+                "category": "门票", "name": f"{attraction_name}(儿童票)",
+                "unit_price": price, "quantity": children_half, "unit": "人",
+                "frequency": 1, "freq_unit": "次",
+                "subtotal": round(price * children_half / total_people, 2),
+                "teacher_subtotal": 0, "remark": "儿童票",
+            })
+    if students > 0:
+        price = find_price('学生')
+        if price > 0:
+            items.append({
+                "category": "门票", "name": f"{attraction_name}(学生票)",
+                "unit_price": price, "quantity": students, "unit": "人",
+                "frequency": 1, "freq_unit": "次",
+                "subtotal": round(price * students / total_people, 2),
+                "teacher_subtotal": 0, "remark": "学生票",
+            })
 
 
 # ============================================================
@@ -677,12 +904,14 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
 
 def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
                          total_people: int, couples: int, trip_days: int,
-                         season_type: str, hotel_doc_id: Optional[int] = None) -> Tuple[list, float]:
+                         season_type: str, hotel_doc_id: Optional[int] = None,
+                         teacher_count: int = 0) -> Tuple[list, float]:
     """计算住宿费用，返回 (items, 单房差)"""
     # 知识库模式
     if hotel_doc_id:
         return _calculate_hotel_cost_from_kb(items, tenant_id, hotel_doc_id,
-                                              total_people, couples, trip_days)
+                                              total_people, couples, trip_days,
+                                              teacher_count=teacher_count)
 
     if not hotel_id:
         return items, 0
@@ -741,6 +970,7 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
             "frequency": nights,
             "freq_unit": "晚",
             "subtotal": per_person,
+            "teacher_subtotal": round(math.ceil(teacher_count / 2) * room_price * nights, 2) if teacher_count > 0 else 0,
             "remark": f"两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
         })
 
@@ -753,7 +983,8 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
 
 def calculate_meal_cost(items: list, tenant_id: str, region_names: List[str],
                         total_people: int, trip_days: int,
-                        meal_tier: str, season_type: str) -> list:
+                        meal_tier: str, season_type: str,
+                        teacher_count: int = 0) -> list:
     """计算餐饮费用"""
     with get_db() as conn:
         params = [tenant_id, meal_tier]
@@ -795,6 +1026,7 @@ def calculate_meal_cost(items: list, tenant_id: str, region_names: List[str],
             m = meal_by_type[meal_type]
             price = float(m['price_per_person'])
             per_person = round(price * count, 2)
+            teacher_cost = round(price * teacher_count * count, 2) if teacher_count > 0 else 0
 
             items.append({
                 "category": "用餐",
@@ -805,6 +1037,7 @@ def calculate_meal_cost(items: list, tenant_id: str, region_names: List[str],
                 "frequency": count,
                 "freq_unit": "餐",
                 "subtotal": per_person,
+                "teacher_subtotal": teacher_cost,
                 "remark": f"{m.get('meal_tier_label', meal_tier)}，{m.get('dishes_standard', '')}",
             })
 
@@ -851,6 +1084,7 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
             "frequency": 1,
             "freq_unit": "次",
             "subtotal": round(cost, 2),
+            "teacher_subtotal": 0,
             "remark": "按团计费",
         })
     elif guide.get('daily_rate'):
@@ -868,6 +1102,7 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
             "frequency": trip_days,
             "freq_unit": "天",
             "subtotal": round(total, 2),
+            "teacher_subtotal": 0,
             "remark": guide.get('guide_level_label', '') + (" 旺季加价" if multiplier > 1 else ""),
         })
 
@@ -880,12 +1115,12 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
 
 def calculate_other_fees(items: list, tenant_id: str, total_people: int,
                          trip_days: int, vehicle_count: int,
-                         include_insurance: bool) -> list:
+                         include_insurance: bool, teacher_count: int = 0) -> list:
     """计算其他固定费用"""
     with get_db() as conn:
         conn.execute(
             "SELECT * FROM bs_travel_quote_fees WHERE tenant_id=%s AND is_active=true "
-            "ORDER BY sort_order",
+            "ORDER BY COALESCE(sort_order, id)",
             (tenant_id,)
         )
         fees = conn.fetchall()
@@ -900,14 +1135,19 @@ def calculate_other_fees(items: list, tenant_id: str, total_people: int,
 
         if method == 'per_person':
             subtotal = price
+            teacher_subtotal = round(price * teacher_count, 2) if teacher_count > 0 else 0
         elif method == 'per_person_per_day':
             subtotal = price * trip_days
+            teacher_subtotal = round(price * teacher_count * trip_days, 2) if teacher_count > 0 else 0
         elif method == 'per_trip':
             subtotal = round(price / total_people, 2)
+            teacher_subtotal = 0
         elif method == 'per_vehicle_per_day':
             subtotal = round(price * vehicle_count * trip_days / total_people, 2)
+            teacher_subtotal = 0
         else:
             subtotal = price
+            teacher_subtotal = 0
 
         items.append({
             "category": "其他",
@@ -918,6 +1158,7 @@ def calculate_other_fees(items: list, tenant_id: str, total_people: int,
             "frequency": trip_days if 'per_day' in method else 1,
             "freq_unit": "天" if 'per_day' in method else "次",
             "subtotal": round(subtotal, 2),
+            "teacher_subtotal": teacher_subtotal,
             "remark": fee.get('fee_category', ''),
         })
 
@@ -1029,13 +1270,13 @@ def _export_simple(quote_data: dict) -> str:
     CENTER = Alignment(horizontal='center', vertical='center', wrap_text=True)
     BORDER = Border(left=Side('thin'), right=Side('thin'), top=Side('thin'), bottom=Side('thin'))
 
-    col_widths = [12, 22, 10, 8, 6, 8, 6, 12, 30]
+    col_widths = [12, 22, 10, 8, 6, 8, 6, 12, 12, 30]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
     # 标题
-    ws.merge_cells(f'A{row}:I{row}')
+    ws.merge_cells(f'A{row}:J{row}')
     cell = ws.cell(row=row, column=1, value=f"{quote_data.get('company_name', '')}报价表")
     cell.font = TITLE_FONT
     cell.alignment = CENTER
@@ -1043,12 +1284,14 @@ def _export_simple(quote_data: dict) -> str:
 
     # 信息行
     info = f"课程：{quote_data.get('course_name', '')}    日期：{quote_data.get('start_date', '')}    人数：{quote_data.get('total_people', '')}人    天数：{quote_data.get('trip_days', '')}天"
-    ws.merge_cells(f'A{row}:I{row}')
+    if quote_data.get('teacher_count', 0) > 0:
+        info += f"    随队老师：{quote_data.get('teacher_count', 0)}人"
+    ws.merge_cells(f'A{row}:J{row}')
     ws.cell(row=row, column=1, value=info).font = DATA_FONT
     row += 2
 
     # 表头
-    headers = ['成本类别', '项目', '单价', '数量', '单位', '次数', '单位', '费用小计', '备注']
+    headers = ['成本类别', '项目', '单价', '数量', '单位', '次数', '单位', '费用小计', '随队老师', '备注']
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=row, column=col, value=h)
         c.font = HEADER_FONT
@@ -1058,6 +1301,7 @@ def _export_simple(quote_data: dict) -> str:
 
     # 数据行
     for item in quote_data.get('items', []):
+        teacher_val = item.get('teacher_subtotal', 0)
         vals = [
             item.get('category', ''),
             item.get('name', ''),
@@ -1067,6 +1311,7 @@ def _export_simple(quote_data: dict) -> str:
             item.get('frequency', 1),
             item.get('freq_unit', ''),
             item.get('subtotal', 0),
+            teacher_val if teacher_val != 0 else '-',
             item.get('remark', ''),
         ]
         for col, v in enumerate(vals, 1):
@@ -1085,10 +1330,163 @@ def _export_simple(quote_data: dict) -> str:
     c = ws.cell(row=row, column=8, value=quote_data.get('cost_per_person', 0))
     c.font = HEADER_FONT
     c.number_format = '#,##0.00'
+    c = ws.cell(row=row, column=9, value=quote_data.get('teacher_total', 0))
+    c.font = HEADER_FONT
+    c.number_format = '#,##0.00'
 
     dst = tempfile.mktemp(suffix='.xlsx')
     wb.save(dst)
     return dst
+
+
+# ============================================================
+# 主流程
+# ============================================================
+# LLM 行程解析（行程文本驱动模式）
+# ============================================================
+
+def _call_llm(prompt: str) -> str:
+    """调用 LLM（子进程安全，直接使用 SDK）"""
+    from src.config.settings import settings
+    provider = settings.llm.provider
+
+    if provider == 'qwen':
+        import dashscope
+        keys = settings.llm.qwen.get_effective_keys()
+        if not keys:
+            raise ValueError("QWEN API key 未配置")
+        dashscope.api_key = keys[0]
+        model = getattr(settings.llm.qwen, 'model', None) or 'qwen-plus'
+        resp = dashscope.Generation.call(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            result_format='message',
+        )
+        if resp.status_code == 200:
+            return resp.output.choices[0].message.content
+        raise RuntimeError(f"LLM 调用失败: {resp.message}")
+    elif provider == 'zhipu':
+        from zhipuai import ZhipuAI
+        keys = settings.llm.zhipu.get_effective_keys()
+        if not keys:
+            raise ValueError("ZhipuAI API key 未配置")
+        client = ZhipuAI(api_key=keys[0])
+        model = getattr(settings.llm.zhipu, 'model', None) or 'glm-4-flash'
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content
+    else:
+        raise ValueError(f"不支持的 LLM 提供商: {provider}")
+
+
+def parse_itinerary(itinerary_text: str) -> dict:
+    """调用 LLM 从行程文本中提取报价所需的参数"""
+    prompt = f"""你是一个旅游行程解析助手。请从以下行程方案文本中提取报价所需的关键信息。
+
+行程方案：
+{itinerary_text}
+
+请返回 JSON 格式，包含以下字段：
+{{
+    "region_name": "主要目的地（省份或城市名）",
+    "total_people": 30,
+    "adults": 25,
+    "children_half": 5,
+    "students": 0,
+    "elders": 0,
+    "couples": 0,
+    "teacher_count": 3,
+    "trip_days": 6,
+    "departure_city": "出发城市",
+    "destination": "主要目的地城市",
+    "attraction_names": ["黄果树瀑布", "小七孔"],
+    "hotel_preference": "4钻酒店",
+    "hotel_stays": [
+        {{"city": "贵阳", "nights": 2}},
+        {{"city": "安顺", "nights": 1}}
+    ],
+    "meal_tier": "standard",
+    "guide_type": "local"
+}}
+
+注意：
+1. 人数信息从文本中提取，如果没有明确说，adults 默认等于 total_people
+2. attraction_names 是景点名称列表（自然语言名称，不是 ID）
+3. hotel_preference 是酒店偏好描述（如"4钻"、"经济型"），不是酒店名
+4. hotel_stays 从每天的行程安排中提取：看每天住哪个城市，同一城市连续几晚合并为一项。nights 总和应等于 trip_days - 1
+5. teacher_count 是随队老师人数，如果文本没提，默认 0
+6. meal_tier 和 guide_type 如果文本没提，用默认值 standard 和 local
+7. 只返回 JSON，不要其他文字"""
+
+    raw = _call_llm(prompt)
+
+    # 提取 JSON（LLM 可能返回 markdown 代码块包裹的 JSON）
+    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+    if json_match:
+        raw = json_match.group(1)
+    return json.loads(raw.strip())
+
+
+def resolve_resources(parsed: dict, tenant_id: str) -> dict:
+    """将 LLM 解析出的名称/偏好转换为知识库 doc_id"""
+    logger.info(f"[quote-generate] resolve_resources tenant_id={tenant_id}")
+    result = {"attraction_doc_ids": [], "attraction_matches": [], "hotel_doc_id": None, "hotel_stays": []}
+
+    # 景点：逐个名称在向量库中搜索，保留名称-doc_id-搜索结果关联
+    if parsed.get("attraction_names"):
+        try:
+            from attraction_retriever import AttractionRetriever
+            retriever = AttractionRetriever()
+            for name in parsed["attraction_names"]:
+                matches = retriever.search(tenant_id, name, top_k=1)
+                if matches:
+                    result["attraction_doc_ids"].append(matches[0]["doc_id"])
+                    result["attraction_matches"].append({
+                        "name": name,
+                        "doc_id": matches[0]["doc_id"],
+                        "info": matches[0].get("info", ""),
+                    })
+                    logger.info(f"[quote-generate] 景点匹配: '{name}' → doc_id={matches[0]['doc_id']}")
+                else:
+                    logger.warning(f"[quote-generate] 景点未匹配: '{name}'")
+        except Exception as e:
+            logger.warning(f"[quote-generate] 景点检索失败: {e}")
+
+    # 酒店：按城市逐个检索
+    hotel_stays = parsed.get("hotel_stays", [])
+    hotel_pref = parsed.get("hotel_preference", "")
+
+    if hotel_stays:
+        try:
+            from hotel_retriever import HotelRetriever
+            retriever = HotelRetriever()
+            for stay in hotel_stays:
+                city = stay.get("city", "")
+                query = f"{city} 酒店 {hotel_pref}".strip()
+                matches = retriever.search(tenant_id, query, top_k=1)
+                stay["hotel_doc_id"] = matches[0]["doc_id"] if matches else None
+                if matches:
+                    logger.info(f"[quote-generate] 酒店匹配: '{city}' → doc_id={matches[0]['doc_id']}")
+                else:
+                    logger.warning(f"[quote-generate] 酒店未匹配: '{city}'")
+            result["hotel_stays"] = hotel_stays
+        except Exception as e:
+            logger.warning(f"[quote-generate] 酒店检索失败: {e}")
+    elif hotel_pref:
+        # fallback：无 hotel_stays 时用旧的单酒店模式
+        try:
+            from hotel_retriever import HotelRetriever
+            retriever = HotelRetriever()
+            matches = retriever.search(tenant_id, hotel_pref, top_k=1)
+            if matches:
+                result["hotel_doc_id"] = matches[0]["doc_id"]
+                logger.info(f"[quote-generate] 酒店匹配: '{hotel_pref}' → doc_id={matches[0]['doc_id']}")
+        except Exception as e:
+            logger.warning(f"[quote-generate] 酒店检索失败: {e}")
+
+    return result
 
 
 # ============================================================
@@ -1100,29 +1498,65 @@ def generate_quote(params: dict) -> dict:
     init_tables()
 
     tenant_id = params.get('tenant_id', '')
-    region_name = params.get('region_name', '')
-    total_people = params.get('total_people', 30)
-    adults = params.get('adults', total_people)
-    children_half = params.get('children_half', 0)
-    students = params.get('students', 0)
-    elders = params.get('elders', 0)
-    couples = params.get('couples', 0)
-    trip_days = params.get('trip_days', 1)
+    itinerary_text = params.get('itinerary_text', '')
     start_date = params.get('start_date', date.today().isoformat())
-    attraction_ids = params.get('attraction_ids', [])
-    hotel_id = params.get('hotel_id')
-    hotel_doc_id = params.get('hotel_doc_id')
-    attraction_doc_ids = params.get('attraction_doc_ids', [])
-    meal_tier = params.get('meal_tier', 'standard')
-    guide_type = params.get('guide_type', 'local')
-    vehicle_count = params.get('vehicle_count')
-    include_insurance = params.get('include_insurance', True)
     profit_rate = params.get('profit_rate', 0.15)
     course_name = params.get('course_name', '')
     company_name = params.get('company_name', '')
     template_path = params.get('template_path')
-    departure_city = params.get('departure_city', '')
-    destination = params.get('destination', '')
+
+    if itinerary_text:
+        # 新模式：行程文本驱动，LLM 解析 + 向量检索
+        logger.info(f"[quote-generate] 行程文本驱动模式，文本长度: {len(itinerary_text)}")
+        parsed = parse_itinerary(itinerary_text)
+        logger.info(f"[quote-generate] 行程解析结果: {json.dumps(parsed, ensure_ascii=False)}")
+
+        resources = resolve_resources(parsed, tenant_id)
+
+        region_name = parsed.get('region_name', '')
+        total_people = parsed.get('total_people', 30)
+        adults = parsed.get('adults', total_people)
+        children_half = parsed.get('children_half', 0)
+        students = parsed.get('students', 0)
+        elders = parsed.get('elders', 0)
+        couples = parsed.get('couples', 0)
+        teacher_count = parsed.get('teacher_count', 0)
+        trip_days = parsed.get('trip_days', 1)
+        departure_city = parsed.get('departure_city', '')
+        destination = parsed.get('destination', '')
+        attraction_ids = []
+        hotel_id = None
+        attraction_doc_ids = resources['attraction_doc_ids']
+        attraction_matches = resources.get('attraction_matches', [])
+        hotel_doc_id = resources.get('hotel_doc_id')
+        hotel_stays = resources.get('hotel_stays', [])
+        meal_tier = parsed.get('meal_tier', 'standard')
+        guide_type = parsed.get('guide_type', 'local')
+        vehicle_count = None
+        include_insurance = True
+    else:
+        # 旧模式：向后兼容，直接使用传入的结构化参数
+        region_name = params.get('region_name', '')
+        total_people = params.get('total_people', 30)
+        adults = params.get('adults', total_people)
+        children_half = params.get('children_half', 0)
+        students = params.get('students', 0)
+        elders = params.get('elders', 0)
+        couples = params.get('couples', 0)
+        teacher_count = params.get('teacher_count', 0)
+        trip_days = params.get('trip_days', 1)
+        attraction_ids = params.get('attraction_ids', [])
+        hotel_id = params.get('hotel_id')
+        hotel_doc_id = params.get('hotel_doc_id')
+        attraction_doc_ids = params.get('attraction_doc_ids', [])
+        attraction_matches = params.get('attraction_matches', [])
+        hotel_stays = params.get('hotel_stays', [])
+        meal_tier = params.get('meal_tier', 'standard')
+        guide_type = params.get('guide_type', 'local')
+        vehicle_count = params.get('vehicle_count')
+        include_insurance = params.get('include_insurance', True)
+        departure_city = params.get('departure_city', '')
+        destination = params.get('destination', '')
 
     # Step 1: 区域名称
     region_names = [region_name] if region_name else []
@@ -1163,19 +1597,26 @@ def generate_quote(params: dict) -> dict:
     items = calculate_ticket_cost(
         items, tenant_id, attraction_ids,
         adults, children_half, students, elders, total_people,
-        attraction_doc_ids=attraction_doc_ids
+        teacher_count=teacher_count,
+        attraction_doc_ids=attraction_doc_ids,
+        attraction_matches=attraction_matches
     )
 
-    # Step 5: 住宿
-    items, single_supplement = calculate_hotel_cost(
-        items, tenant_id, hotel_id, total_people, couples, trip_days, season_type,
-        hotel_doc_id=hotel_doc_id
-    )
+    # Step 5: 住宿（优先多城市模式，fallback 单酒店模式）
+    if hotel_stays:
+        items, single_supplement = calculate_hotel_stays(
+            items, tenant_id, hotel_stays, total_people, teacher_count, couples
+        )
+    else:
+        items, single_supplement = calculate_hotel_cost(
+            items, tenant_id, hotel_id, total_people, couples, trip_days, season_type,
+            hotel_doc_id=hotel_doc_id, teacher_count=teacher_count
+        )
 
     # Step 6: 餐饮
     items = calculate_meal_cost(
         items, tenant_id, region_names, total_people, trip_days,
-        meal_tier, season_type
+        meal_tier, season_type, teacher_count=teacher_count
     )
 
     # Step 7: 导游
@@ -1186,7 +1627,7 @@ def generate_quote(params: dict) -> dict:
     # Step 8: 其他费用
     items = calculate_other_fees(
         items, tenant_id, total_people, trip_days,
-        actual_vehicle_count, include_insurance
+        actual_vehicle_count, include_insurance, teacher_count=teacher_count
     )
 
     # 汇总
@@ -1194,6 +1635,7 @@ def generate_quote(params: dict) -> dict:
     total_cost = round(cost_per_person * total_people, 2)
     quote_per_person = round(cost_per_person * (1 + profit_rate), 2)
     quote_total = round(quote_per_person * total_people, 2)
+    teacher_total = round(sum(item.get('teacher_subtotal', 0) for item in items), 2)
 
     # 导出 Excel
     quote_data = {
@@ -1203,9 +1645,11 @@ def generate_quote(params: dict) -> dict:
         "start_date": start_date,
         "trip_days": trip_days,
         "total_people": total_people,
+        "teacher_count": teacher_count,
         "items": items,
         "total_cost": total_cost,
         "cost_per_person": cost_per_person,
+        "teacher_total": teacher_total,
         "single_supplement": single_supplement,
         "profit_rate": profit_rate,
         "quote_per_person": quote_per_person,
@@ -1219,14 +1663,25 @@ def generate_quote(params: dict) -> dict:
 
 
 def main():
-    """主入口：从 stdin 读取 JSON 参数"""
+    """主入口：从 stdin、命令行参数或环境变量读取 JSON 参数"""
     try:
-        if sys.stdin.isatty():
-            # 无 stdin 时尝试从命令行参数读取
+        params = None
+
+        # 1. 尝试从 stdin 读取（skill_execute 通过 content 参数传入）
+        # 显式以 UTF-8 读取字节流，避免 Windows 上 sys.stdin 使用 GBK 等默认编码
+        if not sys.stdin.isatty():
+            raw = sys.stdin.buffer.read()
+            stdin_data = raw.decode('utf-8', errors='replace').strip()
+            if stdin_data:
+                params = json.loads(stdin_data)
+
+        # 2. stdin 无数据时尝试从命令行参数读取
+        if params is None:
             import argparse
             parser = argparse.ArgumentParser()
             parser.add_argument('--params', help='JSON 参数字符串')
             parser.add_argument('--params-file', help='JSON 参数文件路径')
+            parser.add_argument('extra', nargs='*', help='位置参数（JSON 字符串）')
             args = parser.parse_args()
 
             if args.params:
@@ -1234,11 +1689,15 @@ def main():
             elif args.params_file:
                 with open(args.params_file, 'r', encoding='utf-8') as f:
                     params = json.load(f)
-            else:
-                print(json.dumps({"success": False, "error": "请通过 stdin 或 --params 提供参数"}, ensure_ascii=False))
-                sys.exit(1)
-        else:
-            params = json.load(sys.stdin)
+            elif args.extra:
+                # 兼容：LLM 可能把 JSON 直接拼在命令后面
+                extra_str = ' '.join(args.extra).strip()
+                if extra_str.startswith('{'):
+                    params = json.loads(extra_str)
+
+        if params is None:
+            print(json.dumps({"success": False, "error": "未收到参数，请通过 stdin(content参数) 或 --params 提供 JSON"}, ensure_ascii=False))
+            sys.exit(1)
 
         result = generate_quote(params)
 

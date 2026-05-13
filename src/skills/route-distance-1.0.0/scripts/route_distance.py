@@ -152,7 +152,7 @@ def main():
     # 从 stdin 读取 JSON
     input_data = {}
     try:
-        raw = sys.stdin.read()
+        raw = sys.stdin.buffer.read().decode('utf-8', errors='replace')
         if raw.strip():
             input_data = json.loads(raw)
     except json.JSONDecodeError as e:

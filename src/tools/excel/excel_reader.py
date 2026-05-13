@@ -117,6 +117,75 @@ def read_sheet(file_path: str, sheet_name: Optional[str] = None,
         return {"success": False, "error": f"读取 Excel 失败: {e}"}
 
 
+def read_all_sheets(file_path: str) -> Dict[str, Any]:
+    """
+    读取 Excel 所有 Sheet，返回字典行格式（与 hotel_excel_analysis.json 一致）。
+
+    Returns:
+        {
+            "sheet_names": ["贵阳酒店", "安顺酒店", ...],
+            "贵阳酒店": {
+                "max_row": 22, "max_col": 13,
+                "merged_cells": ["A23:A24", ...],
+                "headers": ["市内区域", "钻级", ...],
+                "rows": [{"市内区域": "云岩区", "钻级": "4钻", ...}, ...]
+            },
+            ...
+        }
+    """
+    src = Path(file_path)
+    if not src.exists():
+        return {"success": False, "error": f"文件不存在: {file_path}"}
+
+    file_type = ExcelFileHandler.detect_file_type(file_path)
+    if file_type not in ("xlsx",):
+        return {"success": False, "error": f"仅支持 .xlsx 格式，当前: {file_type}"}
+
+    try:
+        wb = openpyxl.load_workbook(str(src), data_only=True, read_only=True)
+        result: Dict[str, Any] = {"sheet_names": wb.sheetnames}
+
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            max_row = ws.max_row or 0
+            max_col = ws.max_column or 0
+
+            merged = []
+            if hasattr(ws, "merged_cells") and ws.merged_cells:
+                for mc in ws.merged_cells.ranges:
+                    merged.append(str(mc))
+
+            headers: List[str] = []
+            rows: List[Dict[str, Any]] = []
+
+            for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                values = [v if v is not None else "" for v in row]
+                if row_idx == 1:
+                    headers = [str(v).strip() if v else "" for v in values]
+                else:
+                    if any(v != "" and v is not None for v in values):
+                        row_dict = {}
+                        for col_idx, header in enumerate(headers):
+                            if col_idx < len(values):
+                                row_dict[header] = values[col_idx]
+                        rows.append(row_dict)
+
+            result[sheet_name] = {
+                "max_row": max_row,
+                "max_col": max_col,
+                "merged_cells": merged,
+                "headers": headers,
+                "rows": rows,
+            }
+
+        wb.close()
+        result["success"] = True
+        return result
+    except Exception as e:
+        logger.error(f"[ExcelReader] read_all_sheets 失败: {e}", exc_info=True)
+        return {"success": False, "error": f"读取 Excel 失败: {e}"}
+
+
 def _read_csv(file_path: str) -> Dict[str, Any]:
     """读取 CSV 文件"""
     try:

@@ -1,8 +1,8 @@
 ---
 name: quote-generate
-description: 研学旅游报价生成技能，查询定价数据库、计算各项费用、导出 Excel 报价单。当需要为研学旅游行程生成报价、计算费用、导出报价单时使用此技能。
+description: 研学旅游报价生成技能，传入用户确认的行程方案文本，自动解析行程、检索资源、计算费用、导出 Excel 报价单。
 metadata:
-  version: "1.0.0"
+  version: "2.0.0"
   author: aid-work-agent
 dependencies:
   - openpyxl>=3.1.0
@@ -12,7 +12,7 @@ dependencies:
 
 ## 适用场景
 
-当用户确认了行程方案，需要生成详细报价时使用此技能。一次调用完成：查库 → 计算 → 导出 Excel。
+当用户确认了行程方案，需要生成详细报价时使用此技能。一次调用完成：解析行程 → 检索资源 → 计算费用 → 导出 Excel。
 
 **触发词**："报价"、"费用多少"、"算一下价格"、"报价单"、"生成报价"、"导出报价单"
 
@@ -33,22 +33,8 @@ skill_execute(
 ```json
 {
   "tenant_id": "租户ID",
-  "region_name": "贵阳",
-  "total_people": 30,
-  "adults": 25,
-  "children": 0,
-  "children_half": 5,
-  "students": 0,
-  "elders": 0,
-  "couples": 2,
-  "trip_days": 6,
+  "itinerary_text": "30个初中生，6天贵州研学。D1 贵阳出发去平塘，开营。D2 天眼一整天，南仁东纪念馆、科普馆。D3 平塘到荔波，小七孔。D4 荔波溶洞科考。D5 回贵阳结营。住宿4钻酒店，标准餐。",
   "start_date": "2026-07-01",
-  "attraction_ids": [1, 3, 5, 7],
-  "hotel_id": 2,
-  "meal_tier": "standard",
-  "guide_type": "research",
-  "vehicle_count": null,
-  "include_insurance": true,
   "profit_rate": null,
   "course_name": "超级贵州研学",
   "company_name": "贵州天悦旅行社有限公司",
@@ -61,26 +47,27 @@ skill_execute(
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `tenant_id` | string | 是 | 租户ID |
-| `region_name` | string | 是 | 目的地区域（如"贵州"、"贵阳"） |
-| `total_people` | int | 是 | 总人数 |
-| `adults` | int | 是 | 成人数 |
-| `children` | int | 否 | 6岁以下儿童（免票） |
-| `children_half` | int | 否 | 6-18岁（半票） |
-| `students` | int | 否 | 学生数（半票） |
-| `elders` | int | 否 | 65岁以上老人（免票） |
-| `couples` | int | 否 | 夫妻对数（影响排房） |
-| `trip_days` | int | 是 | 行程天数 |
-| `start_date` | string | 是 | 出发日期 YYYY-MM-DD |
-| `attraction_ids` | int[] | 否 | 景点ID列表 |
-| `hotel_id` | int | 否 | 酒店ID |
-| `meal_tier` | string | 否 | 餐标档次编码（如 standard） |
-| `guide_type` | string | 否 | 导游类型编码（如 research） |
-| `vehicle_count` | int | 否 | 车辆数量（null 则自动推荐） |
-| `include_insurance` | bool | 否 | 是否包含保险，默认 true |
+| `itinerary_text` | string | 是 | 用户确认的行程方案全文，技能内部自动解析景点、人数、偏好等信息 |
+| `start_date` | string | 否 | 出发日期 YYYY-MM-DD，默认今天 |
 | `profit_rate` | float | 否 | 利润率（null 则使用 extra.md 中的配置，默认 0.15） |
 | `course_name` | string | 否 | 行程/课程名称 |
 | `company_name` | string | 否 | 公司名称 |
 | `template_path` | string | 否 | 报价单模板路径（null 使用默认模板） |
+
+### 技能内部处理流程
+
+```
+itinerary_text（行程文本）
+  → Step 1: 调用 LLM 解析行程 → 提取景点名称、人数、酒店偏好、天数等
+  → Step 2: 用 Retriever 检索向量知识库 → 景点名称→doc_id，酒店偏好→doc_id
+  → Step 3: 用 route-distance Skill 计算导航距离（按公里计费用）
+  → Step 4: 查询车辆/餐饮/导游/其他费用定价
+  → Step 5: 计算各项费用 → 汇总 → 导出 Excel
+```
+
+### 向后兼容
+
+如果传入旧的结构化参数（`attraction_doc_ids`、`hotel_doc_id` 等）而不传 `itinerary_text`，走旧的直接计价模式。
 
 ## 输出格式
 
@@ -94,6 +81,7 @@ skill_execute(
     "start_date": "2026-07-01",
     "trip_days": 6,
     "total_people": 30,
+    "teacher_count": 3,
     "items": [
       {
         "category": "用车",
@@ -104,11 +92,25 @@ skill_execute(
         "frequency": 6,
         "freq_unit": "天",
         "subtotal": 360.00,
+        "teacher_subtotal": 0,
         "remark": "含司机餐补"
+      },
+      {
+        "category": "住宿",
+        "name": "贵阳酒店",
+        "unit_price": 320,
+        "quantity": 2,
+        "unit": "人",
+        "frequency": 2,
+        "freq_unit": "夜",
+        "subtotal": 320.00,
+        "teacher_subtotal": 320.00,
+        "remark": "贵阳2晚"
       }
     ],
     "total_cost": 58000.00,
     "cost_per_person": 1933.33,
+    "teacher_total": 1514.00,
     "single_supplement": 320.00,
     "profit_rate": 0.15,
     "quote_per_person": 2223.33,
@@ -126,7 +128,7 @@ skill_execute(
 
 ## 注意事项
 
-- **所有参数从对话中收集齐备后一次性传入**，不需要分步调用
-- **脚本内部直接查询数据库获取定价**，不需要 LLM 预先查 knowledge_base_search
+- **只需传入行程文本**，技能内部自动完成解析、检索、计算全流程
+- **行程文本应该是客户已确认的完整方案**，包含景点、天数、人数等关键信息
 - **profit_rate 为 null 时使用默认 15%**，也可以在 extra.md 中配置
 - **template_path 为 null 时使用系统默认模板**

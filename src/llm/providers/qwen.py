@@ -94,7 +94,7 @@ class QwenProvider(BaseLLMProvider):
         parsed = None
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 response = await client.post(
                     self.api_url,
                     headers=self.headers,
@@ -188,7 +188,7 @@ class QwenProvider(BaseLLMProvider):
         full_content = ""
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 async with client.stream(
                     "POST",
                     self.api_url,

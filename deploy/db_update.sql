@@ -322,3 +322,14 @@ DROP TABLE IF EXISTS bs_travel_quote_rooms;
 DROP TABLE IF EXISTS bs_travel_quote_hotels;
 DROP TABLE IF EXISTS bs_travel_quote_tickets;
 DROP TABLE IF EXISTS bs_travel_quote_attractions;
+
+-- 2026-5-13，车辆表 daily_rate 去掉 NOT NULL（按公里计价时 daily_rate 为空）
+ALTER TABLE bs_travel_quote_vehicles ALTER COLUMN daily_rate DROP NOT NULL;
+
+-- 2026-5-13，车辆表简化：去掉 seats_min/overtime_rate/overkm_rate/base_km/base_fee，新增 seats_max
+ALTER TABLE bs_travel_quote_vehicles ALTER COLUMN seats_min DROP NOT NULL;
+ALTER TABLE bs_travel_quote_vehicles ALTER COLUMN pricing_mode SET DEFAULT 'per_km';
+
+-- 2026-5-13，车辆表删除 season_type 和 sort_order 字段
+ALTER TABLE bs_travel_quote_vehicles DROP COLUMN IF EXISTS season_type;
+ALTER TABLE bs_travel_quote_vehicles DROP COLUMN IF EXISTS sort_order;

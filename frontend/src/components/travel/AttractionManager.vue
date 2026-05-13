@@ -1,294 +1,97 @@
 <template>
   <div class="manager-container">
-    <!-- Tab 切换 -->
-    <div class="tab-bar">
-      <button :class="['tab-btn', activeTab === 'db' ? 'active' : '']" @click="activeTab = 'db'">数据库管理</button>
-      <button :class="['tab-btn', activeTab === 'kb' ? 'active' : '']" @click="activeTab = 'kb'">知识库搜索</button>
-    </div>
-
-    <!-- 数据库管理 Tab -->
-    <div v-show="activeTab === 'db'">
-      <div class="header-bar">
-        <h2>景点门票管理</h2>
-        <div class="actions">
-          <input v-model="filterRegion" @change="loadData" class="filter-select" placeholder="筛选区域" />
-          <button class="btn-primary" @click="openCreate">+ 新增景点</button>
-          <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
-          <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
-            {{ importing ? '导入中...' : '导入 Excel' }}
-          </button>
-          <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
-        </div>
-      </div>
-
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th style="width:30px"></th>
-            <th>景点名称</th>
-            <th>区域</th>
-            <th>分类</th>
-            <th>游览时长(h)</th>
-            <th>景区交通</th>
-            <th>交通费</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="loading"><td colspan="8" class="center">加载中...</td></tr>
-          <tr v-else-if="items.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
-          <template v-for="item in items" :key="item.id">
-            <tr>
-              <td>
-                <button class="btn-expand" @click="toggleExpand(item.id)">
-                  {{ expandedId === item.id ? '▼' : '▶' }}
-                </button>
-              </td>
-              <td>{{ item.name }}</td>
-              <td>{{ item.region_name || '通用' }}</td>
-              <td>{{ item.category || '-' }}</td>
-              <td>{{ item.visit_duration_hours || '-' }}</td>
-              <td>{{ item.internal_transport_name || '-' }}</td>
-              <td>{{ item.internal_transport_price || '-' }}</td>
-              <td class="actions-cell">
-                <button class="btn-sm" @click="openEdit(item)">编辑</button>
-                <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
-              </td>
-            </tr>
-            <!-- 门票子表格 -->
-            <tr v-if="expandedId === item.id">
-              <td colspan="8" class="sub-table-cell">
-                <div class="sub-table-wrap">
-                  <div class="sub-header">
-                    <span>门票价格</span>
-                    <button class="btn-sm" @click="openTicketCreate(item.id, item.name)">+ 新增票种</button>
-                  </div>
-                  <table class="sub-table">
-                    <thead>
-                      <tr>
-                        <th>票种</th>
-                        <th>显示名</th>
-                        <th>挂牌价</th>
-                        <th>协议价</th>
-                        <th>团体价</th>
-                        <th>团体最低人数</th>
-                        <th>季节</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-if="ticketLoading"><td colspan="8" class="center">加载中...</td></tr>
-                      <tr v-else-if="currentTickets.length === 0"><td colspan="8" class="center">暂无票种</td></tr>
-                      <tr v-for="t in currentTickets" :key="t.id">
-                        <td>{{ t.ticket_type }}</td>
-                        <td>{{ t.ticket_type_label }}</td>
-                        <td>{{ t.retail_price }}</td>
-                        <td>{{ t.agency_price || '-' }}</td>
-                        <td>{{ t.group_price || '-' }}</td>
-                        <td>{{ t.group_min_people || '-' }}</td>
-                        <td>{{ t.season_type }}</td>
-                        <td class="actions-cell">
-                          <button class="btn-sm" @click="openTicketEdit(t)">编辑</button>
-                          <button class="btn-sm btn-danger" @click="handleTicketDelete(t)">删除</button>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- 知识库搜索 Tab -->
-    <div v-show="activeTab === 'kb'">
-      <div class="kb-search-bar">
-        <input v-model="kbSearchQuery" class="kb-search-input" placeholder="输入关键词搜索景点，如：黄果树 5A景区"
-               @keyup.enter="doSearchAttractionsKB" />
-        <button class="btn-primary" @click="doSearchAttractionsKB" :disabled="kbSearching">
-          {{ kbSearching ? '搜索中...' : '搜索' }}
+    <div class="header-bar">
+      <h2>景点知识库</h2>
+      <div class="actions">
+        <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none"
+               @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
+        <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
+        <button class="btn-primary" :disabled="importing" @click="triggerFileInput(fileInput)">
+          {{ importing ? '导入中...' : '导入 Excel' }}
         </button>
       </div>
-
-      <div v-if="kbResults.length === 0 && kbSearched" class="kb-empty">
-        未找到匹配的景点
-      </div>
-
-      <div v-if="kbResults.length === 0 && !kbSearched" class="kb-empty">
-        输入关键词搜索知识库中的景点
-      </div>
-
-      <div v-for="attraction in kbResults" :key="attraction.doc_id" class="kb-card">
-        <div class="kb-card-header">
-          <div>
-            <div class="kb-card-title">{{ attraction.title }}</div>
-            <div v-if="attraction.score != null" class="kb-card-score">相似度: {{ (attraction.score * 100).toFixed(1) }}%</div>
-          </div>
-          <button class="btn-sm" @click="showAttractionKBDetail(attraction.doc_id)">查看详情</button>
-        </div>
-        <div v-if="attraction.snippet" class="kb-card-snippet">{{ attraction.snippet }}</div>
-      </div>
     </div>
 
-    <!-- 景点弹窗 -->
-    <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-      <div class="modal-content">
-        <h3>{{ editingItem ? '编辑景点' : '新增景点' }}</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>景点名称 *</label>
-            <input v-model="form.name" />
-          </div>
-          <div class="form-group">
-            <label>区域</label>
-            <input v-model="form.region_name" placeholder="如：黔南" />
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>分类</label>
-            <select v-model="form.category">
-              <option value="">无</option>
-              <option value="natural">自然风光</option>
-              <option value="cultural">人文历史</option>
-              <option value="theme_park">主题乐园</option>
-              <option value="museum">博物馆</option>
-              <option value="research">研学基地</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>游览时长(小时)</label>
-            <input v-model.number="form.visit_duration_hours" type="number" step="0.5" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label>地址</label>
-          <input v-model="form.address" />
-        </div>
-        <div class="form-group">
-          <label>开放时间</label>
-          <input v-model="form.open_time" placeholder="如：08:00-18:00" />
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>景区交通名称</label>
-            <input v-model="form.internal_transport_name" placeholder="如：环保车" />
-          </div>
-          <div class="form-group">
-            <label>景区交通费(元/人)</label>
-            <input v-model.number="form.internal_transport_price" type="number" step="0.01" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label>备注</label>
-          <input v-model="form.remark" />
-        </div>
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showModal = false">取消</button>
-          <button class="btn-primary" @click="handleSave">保存</button>
-        </div>
-      </div>
+    <!-- 搜索栏 -->
+    <div class="kb-search-bar">
+      <input v-model="searchQuery" class="kb-search-input" placeholder="输入关键词搜索景点，如：黄果树 5A景区"
+             @keyup.enter="doSearch" />
+      <button class="btn-primary" @click="doSearch" :disabled="searching">
+        {{ searching ? '搜索中...' : '搜索' }}
+      </button>
+      <button v-if="searched" class="btn-secondary" @click="clearSearch">显示全部</button>
     </div>
 
-    <!-- 门票弹窗 -->
-    <div v-if="showTicketModal" class="modal-overlay" @click.self="showTicketModal = false">
-      <div class="modal-content">
-        <h3>{{ editingTicket ? '编辑票种' : `新增票种 - ${ticketParentName}` }}</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>票种编码 *</label>
-            <select v-model="ticketForm.ticket_type">
-              <option value="adult">成人票</option>
-              <option value="child_free">儿童免票</option>
-              <option value="child_half">儿童优惠票</option>
-              <option value="student">学生票</option>
-              <option value="elder_half">老人半价票</option>
-              <option value="elder_free">老人免票</option>
-              <option value="military">军人/优抚票</option>
-              <option value="group">团体票</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>票种显示名 *</label>
-            <input v-model="ticketForm.ticket_type_label" />
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>挂牌价 *</label>
-            <input v-model.number="ticketForm.retail_price" type="number" step="0.01" />
-          </div>
-          <div class="form-group">
-            <label>协议价</label>
-            <input v-model.number="ticketForm.agency_price" type="number" step="0.01" />
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>团体价</label>
-            <input v-model.number="ticketForm.group_price" type="number" step="0.01" />
-          </div>
-          <div class="form-group">
-            <label>团体最低人数</label>
-            <input v-model.number="ticketForm.group_min_people" type="number" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label>季节类型</label>
-          <select v-model="ticketForm.season_type">
-            <option value="default">默认</option>
-            <option value="peak">旺季</option>
-            <option value="shoulder">平季</option>
-            <option value="off">淡季</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>备注</label>
-          <input v-model="ticketForm.remark" />
-        </div>
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showTicketModal = false">取消</button>
-          <button class="btn-primary" @click="handleTicketSave">保存</button>
-        </div>
-      </div>
+    <!-- 统计信息 -->
+    <div class="kb-stats">
+      <span v-if="!searched">共 {{ allAttractions.length }} 个景点</span>
+      <span v-else>搜索结果：{{ searchResults.length }} 个</span>
     </div>
 
-    <!-- 知识库景点详情弹窗 -->
-    <div v-if="attractionKBDetailVisible" class="modal-overlay" @click.self="attractionKBDetailVisible = false">
-      <div class="modal-content" style="width: 750px;">
-        <h3>景点知识库详情</h3>
-        <div v-if="attractionKBDetail.info" style="margin-bottom: 16px;">
-          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">景点信息</h4>
-          <pre class="kb-pre">{{ attractionKBDetail.info }}</pre>
+    <!-- 加载状态 -->
+    <div v-if="loading" class="kb-empty">加载中...</div>
+
+    <!-- 空状态 -->
+    <div v-else-if="currentList.length === 0 && searched" class="kb-empty">未找到匹配的景点</div>
+
+    <!-- 景点列表 -->
+    <div v-for="attraction in currentList" :key="attraction.doc_id" class="kb-card">
+      <div class="kb-card-header">
+        <div>
+          <div class="kb-card-title">{{ attraction.title }}</div>
+          <div class="kb-card-meta">
+            <span v-if="attraction.metadata?.region" class="meta-tag">{{ attraction.metadata.region }}</span>
+            <span v-if="attraction.metadata?.category_cn" class="meta-tag">{{ attraction.metadata.category_cn }}</span>
+            <span v-if="attraction.score != null" class="meta-score">相似度: {{ (attraction.score * 100).toFixed(1) }}%</span>
+          </div>
         </div>
-        <div v-if="attractionKBDetail.ticket_table">
-          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">门票价格明细</h4>
-          <pre class="kb-pre">{{ attractionKBDetail.ticket_table }}</pre>
-        </div>
-        <div v-if="!attractionKBDetail.info && !attractionKBDetail.ticket_table" class="center" style="padding: 20px; color: #999;">
-          暂无详细信息
-        </div>
-        <div class="modal-actions">
-          <button class="btn-primary" @click="attractionKBDetailVisible = false">关闭</button>
-        </div>
+        <button class="btn-sm" @click="showDetail(attraction.doc_id)">查看详情</button>
       </div>
+      <div v-if="attraction.source_file" class="kb-card-source">
+        来源文件：{{ attraction.source_file }}
+      </div>
+      <div v-if="attraction.info" class="kb-card-snippet">{{ attraction.info }}</div>
     </div>
 
-    <!-- 导入结果弹窗 -->
+    <!-- 导入知识库结果弹窗 -->
     <div v-if="showImportResult" class="modal-overlay" @click.self="showImportResult = false">
       <div class="modal-content">
-        <h3>导入结果</h3>
-        <p>成功导入 <strong>{{ importResult?.total_imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.total_skipped || 0 }}</strong> 条</p>
-        <div v-for="r in importResult?.results" :key="r.sheet" style="margin-bottom:8px;font-size:13px">
-          {{ r.sheet }}：导入 {{ r.imported }} 条，跳过 {{ r.skipped }} 条
-          <div v-if="r.errors.length" style="color:#dc2626;font-size:12px;margin-top:2px">
-            <div v-for="err in r.errors" :key="err">{{ err }}</div>
-          </div>
+        <h3>导入景点知识库结果</h3>
+        <p>共识别 <strong>{{ importResult?.total_attractions || 0 }}</strong> 个景点，成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 个，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 个</p>
+        <div v-for="r in importResult?.details" :key="r.sheet" style="margin-bottom:8px;font-size:13px">
+          {{ r.sheet }}：共 {{ r.total }} 个，导入 {{ r.imported }} 个，跳过 {{ r.skipped }} 个
+        </div>
+        <div v-if="importResult?.errors?.length" style="margin-top:12px;">
+          <div style="font-size:13px;color:#dc2626;margin-bottom:4px;">错误信息：</div>
+          <div v-for="err in importResult.errors.slice(0, 10)" :key="err" style="color:#dc2626;font-size:12px;">{{ err }}</div>
         </div>
         <div class="modal-actions">
           <button class="btn-primary" @click="showImportResult = false">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 景点详情弹窗 -->
+    <div v-if="detailVisible" class="modal-overlay" @click.self="detailVisible = false">
+      <div class="modal-content" style="width: 750px;">
+        <h3>{{ detailData.title }}</h3>
+        <div v-if="detailData.info" style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">景点信息</h4>
+          <pre class="kb-pre">{{ detailData.info }}</pre>
+        </div>
+        <div v-if="detailData.ticket_table" style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">门票价格</h4>
+          <pre class="kb-pre">{{ detailData.ticket_table }}</pre>
+        </div>
+        <div v-if="detailData.project_table" style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">项目/服务价格</h4>
+          <pre class="kb-pre">{{ detailData.project_table }}</pre>
+        </div>
+        <div v-if="!detailData.info && !detailData.ticket_table && !detailData.project_table" class="center" style="padding: 20px; color: #999;">
+          暂无详细信息
+        </div>
+        <div class="modal-actions">
+          <button class="btn-primary" @click="detailVisible = false">关闭</button>
         </div>
       </div>
     </div>
@@ -296,189 +99,71 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { attractions, tickets, searchAttractionsKB, getAttractionKB } from '@/api/travelQuote'
-import { useImport } from '@/composables/useImport'
+import { ref, computed, onMounted } from 'vue'
+import { searchAttractionsKB, listAttractionsKB, getAttractionKB } from '@/api/travelQuote'
+import { useAttractionKBImport } from '@/composables/useImport'
 
-// Tab 状态
-const activeTab = ref('db')
-
-// 数据库管理相关
-const items = ref<any[]>([])
-const loading = ref(false)
-const filterRegion = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
-const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useImport(loadData)
-const expandedId = ref<number | null>(null)
-const currentTickets = ref<any[]>([])
-const ticketLoading = ref(false)
+const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useAttractionKBImport(loadAll)
 
-// 景点表单
-const showModal = ref(false)
-const editingItem = ref<any>(null)
-const form = ref({
-  name: '', region_name: '', category: '', address: '', open_time: '',
-  visit_duration_hours: null as number | null,
-  internal_transport_name: '', internal_transport_price: null as number | null,
-  sort_order: 0, remark: ''
-})
+// 数据状态
+const loading = ref(false)
+const allAttractions = ref<any[]>([])
+const searchResults = ref<any[]>([])
+const searched = ref(false)
+const searching = ref(false)
+const searchQuery = ref('')
 
-// 门票表单
-const showTicketModal = ref(false)
-const editingTicket = ref<any>(null)
-const ticketParentId = ref(0)
-const ticketParentName = ref('')
-const ticketForm = ref({
-  ticket_type: 'adult', ticket_type_label: '', retail_price: 0,
-  agency_price: null as number | null, group_price: null as number | null,
-  group_min_people: null as number | null, season_type: 'default', remark: ''
-})
+// 详情弹窗
+const detailVisible = ref(false)
+const detailData = ref<any>({})
 
-// 知识库搜索相关
-const kbSearchQuery = ref('')
-const kbSearching = ref(false)
-const kbResults = ref<any[]>([])
-const kbSearched = ref(false)
-const attractionKBDetailVisible = ref(false)
-const attractionKBDetail = ref<any>({})
+const currentList = computed(() => searched.value ? searchResults.value : allAttractions.value)
 
-async function loadData() {
+async function loadAll() {
   loading.value = true
   try {
-    const params: any = {}
-    if (filterRegion.value) params.region_name = filterRegion.value
-    items.value = await attractions.list(params)
+    const result = await listAttractionsKB({ limit: 500 })
+    allAttractions.value = result.items || []
   } catch (e) {
-    console.error('加载景点数据失败', e)
+    console.error('加载景点列表失败', e)
   } finally {
     loading.value = false
   }
 }
 
-async function toggleExpand(id: number) {
-  if (expandedId.value === id) {
-    expandedId.value = null
-    return
-  }
-  expandedId.value = id
-  ticketLoading.value = true
+async function doSearch() {
+  if (!searchQuery.value.trim()) return
+  searching.value = true
   try {
-    currentTickets.value = await tickets.list(id)
-  } catch (e) {
-    console.error('加载门票失败', e)
-    currentTickets.value = []
-  } finally {
-    ticketLoading.value = false
-  }
-}
-
-function openCreate() {
-  editingItem.value = null
-  form.value = { name: '', region_name: '', category: '', address: '', open_time: '', visit_duration_hours: null, internal_transport_name: '', internal_transport_price: null, sort_order: 0, remark: '' }
-  showModal.value = true
-}
-
-function openEdit(item: any) {
-  editingItem.value = item
-  form.value = { name: item.name, region_name: item.region_name || '', category: item.category || '', address: item.address || '', open_time: item.open_time || '', visit_duration_hours: item.visit_duration_hours, internal_transport_name: item.internal_transport_name || '', internal_transport_price: item.internal_transport_price, sort_order: item.sort_order || 0, remark: item.remark || '' }
-  showModal.value = true
-}
-
-async function handleSave() {
-  try {
-    if (editingItem.value) {
-      await attractions.update(editingItem.value.id, form.value)
-    } else {
-      await attractions.create(form.value)
-    }
-    showModal.value = false
-    await loadData()
-  } catch (e) {
-    console.error('保存失败', e)
-    alert('保存失败')
-  }
-}
-
-async function handleDelete(item: any) {
-  if (!confirm(`确定删除景点「${item.name}」？关联的门票也会一并删除。`)) return
-  try {
-    await attractions.delete(item.id)
-    if (expandedId.value === item.id) expandedId.value = null
-    await loadData()
-  } catch (e) {
-    console.error('删除失败', e)
-    alert('删除失败')
-  }
-}
-
-// --- 门票操作 ---
-function openTicketCreate(attractionId: number, attractionName: string) {
-  editingTicket.value = null
-  ticketParentId.value = attractionId
-  ticketParentName.value = attractionName
-  ticketForm.value = { ticket_type: 'adult', ticket_type_label: '', retail_price: 0, agency_price: null, group_price: null, group_min_people: null, season_type: 'default', remark: '' }
-  showTicketModal.value = true
-}
-
-function openTicketEdit(t: any) {
-  editingTicket.value = t
-  ticketForm.value = { ticket_type: t.ticket_type, ticket_type_label: t.ticket_type_label, retail_price: t.retail_price, agency_price: t.agency_price, group_price: t.group_price, group_min_people: t.group_min_people, season_type: t.season_type || 'default', remark: t.remark || '' }
-  showTicketModal.value = true
-}
-
-async function handleTicketSave() {
-  try {
-    if (editingTicket.value) {
-      await tickets.update(editingTicket.value.id, ticketForm.value)
-    } else {
-      await tickets.create(ticketParentId.value, ticketForm.value)
-    }
-    showTicketModal.value = false
-    await tickets.list(ticketParentId.value).then(data => currentTickets.value = data)
-  } catch (e) {
-    console.error('保存门票失败', e)
-    alert('保存失败')
-  }
-}
-
-async function handleTicketDelete(t: any) {
-  if (!confirm(`确定删除票种「${t.ticket_type_label}」？`)) return
-  try {
-    await tickets.delete(t.id)
-    await tickets.list(ticketParentId.value).then(data => currentTickets.value = data)
-  } catch (e) {
-    console.error('删除门票失败', e)
-    alert('删除失败')
-  }
-}
-
-// 知识库搜索方法
-async function doSearchAttractionsKB() {
-  if (!kbSearchQuery.value.trim()) return
-  kbSearching.value = true
-  try {
-    kbResults.value = await searchAttractionsKB({ q: kbSearchQuery.value })
-    kbSearched.value = true
+    searchResults.value = await searchAttractionsKB({ q: searchQuery.value })
+    searched.value = true
   } catch (e) {
     console.error('搜索景点失败', e)
-    kbResults.value = []
-    kbSearched.value = true
+    searchResults.value = []
+    searched.value = true
   } finally {
-    kbSearching.value = false
+    searching.value = false
   }
 }
 
-async function showAttractionKBDetail(docId: number) {
+function clearSearch() {
+  searchQuery.value = ''
+  searched.value = false
+  searchResults.value = []
+}
+
+async function showDetail(docId: number) {
   try {
-    attractionKBDetail.value = await getAttractionKB(docId)
-    attractionKBDetailVisible.value = true
+    detailData.value = await getAttractionKB(docId)
+    detailVisible.value = true
   } catch (e) {
     console.error('获取景点详情失败', e)
     alert('获取景点详情失败')
   }
 }
 
-onMounted(() => { loadData() })
+onMounted(() => { loadAll() })
 </script>
 
 <style scoped>
@@ -486,54 +171,36 @@ onMounted(() => { loadData() })
 .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .header-bar h2 { margin: 0; font-size: 18px; }
 .actions { display: flex; gap: 10px; align-items: center; }
-.filter-select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.data-table th, .data-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
-.data-table th { background: #f5f7fa; font-weight: 600; }
-.data-table tr:hover { background: #fafbfc; }
-.center { text-align: center; color: #999; }
-.actions-cell { white-space: nowrap; }
-.btn-expand { background: none; border: none; cursor: pointer; font-size: 12px; padding: 2px 4px; }
-.sub-table-cell { padding: 0 !important; background: #f9fafb; }
-.sub-table-wrap { padding: 12px 20px 12px 40px; }
-.sub-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; font-size: 13px; }
-.sub-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.sub-table th, .sub-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-.sub-table th { background: #f3f4f6; font-weight: 500; }
-.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
 .btn-primary:hover { background: #4338ca; }
 .btn-primary:disabled { background: #a5a5d4; cursor: not-allowed; }
 .btn-secondary { background: #f3f4f6; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
 .btn-sm { padding: 4px 10px; border: 1px solid #ddd; border-radius: 3px; background: white; cursor: pointer; font-size: 12px; }
 .btn-sm:hover { background: #f5f5f5; }
-.btn-danger { color: #dc2626; border-color: #dc2626; }
-.btn-danger:hover { background: #fef2f2; }
+
+/* 搜索栏 */
+.kb-search-bar { display: flex; gap: 10px; margin-bottom: 12px; }
+.kb-search-input { flex: 1; max-width: 500px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+.kb-search-input:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.1); }
+.kb-stats { font-size: 13px; color: #888; margin-bottom: 16px; }
+.kb-empty { text-align: center; color: #999; padding: 40px; font-size: 14px; }
+
+/* 景点卡片 */
+.kb-card { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 12px; padding: 16px; transition: box-shadow 0.2s; }
+.kb-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.kb-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+.kb-card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.kb-card-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.meta-tag { background: #f3f4f6; color: #555; font-size: 12px; padding: 2px 8px; border-radius: 3px; }
+.meta-score { color: #999; font-size: 13px; }
+.kb-card-source { margin-top: 8px; font-size: 12px; color: #9ca3af; }
+.kb-card-snippet { margin-top: 10px; font-size: 13px; color: #666; line-height: 1.5; white-space: pre-line; max-height: 80px; overflow: hidden; }
+
+/* 弹窗 */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal-content { background: white; border-radius: 8px; padding: 24px; width: 600px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
 .modal-content h3 { margin: 0 0 20px; }
-.form-row { display: flex; gap: 12px; }
-.form-row .form-group { flex: 1; }
-.form-group { margin-bottom: 14px; }
-.form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #555; }
-.form-group input, .form-group select { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-
-/* Tab 样式 */
-.tab-bar { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 20px; }
-.tab-btn { padding: 10px 24px; border: none; background: none; cursor: pointer; font-size: 14px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.2s, border-color 0.2s; }
-.tab-btn:hover { color: #4f46e5; }
-.tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; font-weight: 600; }
-
-/* 知识库搜索样式 */
-.kb-search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
-.kb-search-input { flex: 1; max-width: 500px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-.kb-search-input:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.1); }
-.kb-empty { text-align: center; color: #999; padding: 40px; font-size: 14px; }
-.kb-card { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 12px; padding: 16px; transition: box-shadow 0.2s; }
-.kb-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-.kb-card-header { display: flex; justify-content: space-between; align-items: center; }
-.kb-card-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
-.kb-card-score { color: #999; font-size: 13px; }
-.kb-card-snippet { margin-top: 10px; font-size: 13px; color: #666; line-height: 1.5; }
 .kb-pre { background: #f5f7fa; padding: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6; margin: 0; font-family: inherit; }
+.center { text-align: center; color: #999; }
 </style>

@@ -433,10 +433,9 @@ async def delete_season(record_id: int, request: Request):
 
 SHEET_TABLE_MAP = {
     "车辆": ("bs_travel_quote_vehicles", [
-        "region_name", "vehicle_type", "vehicle_type_label", "seats_min", "seats_max",
-        "daily_rate", "overtime_rate", "overkm_rate", "driver_meal_allowance",
-        "driver_accommodation", "pricing_mode", "per_km_rate", "base_km", "base_fee",
-        "season_type", "remark"
+        "region_name", "vehicle_type", "vehicle_type_label", "seats_max",
+        "per_km_rate", "driver_meal_allowance",
+        "driver_accommodation", "pricing_mode", "remark"
     ]),
     "景点": ("bs_travel_quote_attractions", [
         "region_name", "name", "category", "address", "open_time",
@@ -641,6 +640,413 @@ async def import_excel(request: Request, file: UploadFile = File(...)):
 
 
 # ============================================================
+# 车辆 Excel 智能导入（LLM 解析）
+# ============================================================
+
+@router.post("/import/vehicle-excel")
+async def import_vehicle_excel(request: Request, file: UploadFile = File(...)):
+    """上传车辆价格 Excel，LLM 智能解析后导入到 bs_travel_quote_vehicles 表"""
+    tenant_id = _get_tenant_id(request)
+
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        import sys
+        from pathlib import Path
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+        if str(skill_dir) not in sys.path:
+            sys.path.insert(0, str(skill_dir))
+
+        from vehicle_excel_parser import VehicleExcelParser
+
+        parser = VehicleExcelParser()
+        all_parsed = await parser.parse_excel_sheets(tmp_path)
+
+        if not all_parsed:
+            return {
+                "success": True,
+                "data": {"imported": 0, "skipped": 0, "errors": ["未解析到有效车辆数据"], "details": []},
+            }
+
+        imported = 0
+        skipped = 0
+        errors = []
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for i, record in enumerate(all_parsed):
+                record["tenant_id"] = tenant_id
+
+                cols = list(record.keys())
+                vals = list(record.values())
+                placeholders = ", ".join(["%s"] * len(cols))
+                col_names = ", ".join(cols)
+
+                try:
+                    cursor.execute(
+                        f"INSERT INTO bs_travel_quote_vehicles ({col_names}) VALUES ({placeholders})",
+                        tuple(vals),
+                    )
+                    conn.commit()
+                    imported += 1
+                except Exception as e:
+                    conn.rollback()
+                    skipped += 1
+                    error_msg = sanitize_error_info(str(e))
+                    label = record.get("vehicle_type_label") or record.get("vehicle_type", f"#{i+1}")
+                    errors.append(f"{label}: {error_msg}")
+                    logger.warning(f"[VehicleExcelImport] 导入失败 {label}: {error_msg}")
+
+        logger.info(f"[VehicleExcelImport] tenant={tenant_id} imported={imported} skipped={skipped}")
+
+        return {
+            "success": True,
+            "data": {
+                "imported": imported,
+                "skipped": skipped,
+                "errors": errors[:20],
+                "details": [{"total": len(all_parsed), "imported": imported, "skipped": skipped}],
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[VehicleExcelImport] 导入失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+    finally:
+        import os
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ============================================================
+# 酒店 Excel → 知识库导入
+# ============================================================
+
+@router.post("/import/hotel-excel-kb")
+async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...)):
+    """上传酒店报价 Excel，逐 Sheet 解析后导入到向量知识库"""
+    tenant_id = _get_tenant_id(request)
+
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+
+    # 1. 保存到临时文件
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        # 2. 逐 Sheet 解析并立即写入知识库
+        import sys
+        from pathlib import Path
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+        if str(skill_dir) not in sys.path:
+            sys.path.insert(0, str(skill_dir))
+
+        from hotel_excel_parser import HotelExcelParser
+        from hotel_retriever import HotelRetriever
+
+        parser = HotelExcelParser()
+        retriever = HotelRetriever()
+        source_filename = file.filename or "unknown.xlsx"
+
+        imported = 0
+        skipped = 0
+        errors = []
+        sheet_stats: Dict[str, Dict] = {}
+
+        # 先扫描有效 Sheet
+        import openpyxl
+        wb = openpyxl.load_workbook(tmp_path, data_only=True, read_only=True)
+        valid_sheets = []
+        for sn in wb.sheetnames:
+            if sn.startswith("WpsReserved"):
+                continue
+            ws = wb[sn]
+            non_empty = sum(1 for row in ws.iter_rows(values_only=True) if any(v is not None for v in row))
+            if non_empty >= 2:
+                valid_sheets.append(sn)
+        wb.close()
+
+        total_sheets = len(valid_sheets)
+        logger.info(f"[HotelExcelImport] 共 {total_sheets} 个有效 Sheet，开始逐个解析并导入")
+
+        for idx, sheet_name in enumerate(valid_sheets, 1):
+            logger.info(f"[HotelExcelImport] 处理 Sheet {idx}/{total_sheets}: '{sheet_name}'")
+
+            try:
+                # 解析单个 Sheet
+                parsed = await parser.parse_sheet_by_name(tmp_path, sheet_name)
+            except Exception as e:
+                error_msg = sanitize_error_info(str(e))
+                errors.append(f"Sheet '{sheet_name}' 解析失败: {error_msg}")
+                logger.warning(f"[HotelExcelImport] Sheet '{sheet_name}' 解析失败: {error_msg}")
+                if sheet_name not in sheet_stats:
+                    sheet_stats[sheet_name] = {"total": 0, "imported": 0, "skipped": 0}
+                continue
+
+            if not parsed:
+                continue
+
+            # 逐条写入知识库
+            for hotel in parsed:
+                name = hotel.get("hotel_name", "").strip()
+                if not name:
+                    skipped += 1
+                    continue
+
+                region = hotel.get("region", "")
+                info_text = hotel.get("info_text", "")
+                price_table_text = hotel.get("price_table_text", "")
+                metadata = hotel.get("metadata", {}) or {}
+
+                if not info_text and not price_table_text:
+                    skipped += 1
+                    errors.append(f"{name}: 无有效数据")
+                    continue
+
+                # 查重
+                try:
+                    existing = retriever.search_by_name(tenant_id, name, top_k=1)
+                    if existing and any(name in r.get("title", "") for r in existing):
+                        skipped += 1
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    retriever.import_hotel(
+                        tenant_id=tenant_id,
+                        hotel_name=name,
+                        region=region,
+                        info_text=info_text,
+                        price_table_text=price_table_text,
+                        metadata=metadata,
+                        source_file=source_filename,
+                    )
+                    imported += 1
+
+                    stat_key = sheet_name
+                    if stat_key not in sheet_stats:
+                        sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
+                    sheet_stats[stat_key]["total"] += 1
+                    sheet_stats[stat_key]["imported"] += 1
+
+                except Exception as e:
+                    skipped += 1
+                    error_msg = sanitize_error_info(str(e))
+                    errors.append(f"{name}: {error_msg}")
+                    logger.warning(f"[HotelExcelImport] 导入失败 {name}: {error_msg}")
+
+                    stat_key = sheet_name
+                    if stat_key not in sheet_stats:
+                        sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
+                    sheet_stats[stat_key]["total"] += 1
+                    sheet_stats[stat_key]["skipped"] += 1
+
+        details = [{"sheet": k, **v} for k, v in sheet_stats.items()]
+
+        logger.info(
+            f"[HotelExcelImport] tenant={tenant_id} "
+            f"imported={imported} skipped={skipped}"
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "total_hotels": imported + skipped,
+                "imported": imported,
+                "skipped": skipped,
+                "errors": errors[:20],
+                "details": details,
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[HotelExcelImport] 导入失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+    finally:
+        import os
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ============================================================
+# 景点 Excel → 知识库导入
+# ============================================================
+
+@router.post("/import/attraction-excel-kb")
+async def import_attraction_excel_to_kb(request: Request, file: UploadFile = File(...)):
+    """上传景点报价 Excel，解析后导入到向量知识库"""
+    tenant_id = _get_tenant_id(request)
+
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+
+    # 1. 保存到临时文件
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        # 2. 逐 Sheet 解析并立即写入知识库
+        import sys
+        from pathlib import Path
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+        if str(skill_dir) not in sys.path:
+            sys.path.insert(0, str(skill_dir))
+
+        from attraction_excel_parser import AttractionExcelParser
+        from attraction_retriever import AttractionRetriever
+
+        parser = AttractionExcelParser()
+        retriever = AttractionRetriever()
+        source_filename = file.filename or "unknown.xlsx"
+
+        imported = 0
+        skipped = 0
+        errors = []
+        sheet_stats: Dict[str, Dict] = {}
+
+        # 先扫描有效 Sheet
+        import openpyxl
+        wb = openpyxl.load_workbook(tmp_path, data_only=True, read_only=True)
+        valid_sheets = []
+        for sn in wb.sheetnames:
+            if sn.startswith("WpsReserved"):
+                continue
+            ws = wb[sn]
+            non_empty = sum(1 for row in ws.iter_rows(values_only=True) if any(v is not None for v in row))
+            if non_empty >= 2:
+                valid_sheets.append(sn)
+        wb.close()
+
+        total_sheets = len(valid_sheets)
+        logger.info(f"[AttractionExcelImport] 共 {total_sheets} 个有效 Sheet，开始逐个解析并导入")
+
+        for idx, sheet_name in enumerate(valid_sheets, 1):
+            logger.info(f"[AttractionExcelImport] 处理 Sheet {idx}/{total_sheets}: '{sheet_name}'")
+
+            try:
+                # 解析单个 Sheet
+                parsed = await parser.parse_sheet_by_name(tmp_path, sheet_name)
+            except Exception as e:
+                error_msg = sanitize_error_info(str(e))
+                errors.append(f"Sheet '{sheet_name}' 解析失败: {error_msg}")
+                logger.warning(f"[AttractionExcelImport] Sheet '{sheet_name}' 解析失败: {error_msg}")
+                if sheet_name not in sheet_stats:
+                    sheet_stats[sheet_name] = {"total": 0, "imported": 0, "skipped": 0}
+                continue
+
+            if not parsed:
+                continue
+
+            # 逐条写入知识库
+            for attraction in parsed:
+                name = attraction.get("attraction_name", "").strip()
+                if not name:
+                    skipped += 1
+                    continue
+
+                region = attraction.get("region", "")
+                info_text = attraction.get("info_text", "")
+                ticket_table_text = attraction.get("ticket_table_text", "")
+                project_table_text = attraction.get("project_table_text", "")
+                metadata = attraction.get("metadata", {}) or {}
+
+                if not info_text and not ticket_table_text and not project_table_text:
+                    skipped += 1
+                    errors.append(f"{name}: 无有效数据")
+                    continue
+
+                # 查重
+                try:
+                    existing = retriever.search_by_name(tenant_id, name, top_k=1)
+                    if existing and any(name in r.get("title", "") for r in existing):
+                        skipped += 1
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    retriever.import_attraction(
+                        tenant_id=tenant_id,
+                        attraction_name=name,
+                        region=region,
+                        info_text=info_text,
+                        ticket_table_text=ticket_table_text,
+                        project_table_text=project_table_text,
+                        metadata=metadata,
+                        source_file=source_filename,
+                    )
+                    imported += 1
+
+                    stat_key = sheet_name
+                    if stat_key not in sheet_stats:
+                        sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
+                    sheet_stats[stat_key]["total"] += 1
+                    sheet_stats[stat_key]["imported"] += 1
+
+                except Exception as e:
+                    skipped += 1
+                    error_msg = sanitize_error_info(str(e))
+                    errors.append(f"{name}: {error_msg}")
+                    logger.warning(f"[AttractionExcelImport] 导入失败 {name}: {error_msg}")
+
+                    stat_key = sheet_name
+                    if stat_key not in sheet_stats:
+                        sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
+                    sheet_stats[stat_key]["total"] += 1
+                    sheet_stats[stat_key]["skipped"] += 1
+
+        details = [{"sheet": k, **v} for k, v in sheet_stats.items()]
+
+        logger.info(
+            f"[AttractionExcelImport] tenant={tenant_id} "
+            f"imported={imported} skipped={skipped}"
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "total_attractions": imported + skipped,
+                "imported": imported,
+                "skipped": skipped,
+                "errors": errors[:20],
+                "details": details,
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AttractionExcelImport] 导入失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+    finally:
+        import os
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ============================================================
 # 知识库模式：酒店/景点搜索
 # ============================================================
 
@@ -662,6 +1068,48 @@ async def search_hotels(request: Request, q: str = Query(..., min_length=1), top
         return {"success": True, "data": results}
     except Exception as e:
         logger.error(f"[TravelQuoteSearch] 酒店搜索失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+@router.get("/kb/hotels")
+async def list_hotels_kb(request: Request, limit: int = Query(200), offset: int = Query(0)):
+    """列出所有酒店知识库文档"""
+    tenant_id = _get_tenant_id(request)
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from hotel_retriever import HotelRetriever
+        retriever = HotelRetriever()
+        result = retriever.list_all(tenant_id, limit, offset)
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"[TravelQuoteKB] 列出酒店失败: {e}", exc_info=True)
+        return {"success": False, "error": sanitize_error_info(str(e))}
+
+
+@router.get("/kb/attractions")
+async def list_attractions_kb(request: Request, limit: int = Query(200), offset: int = Query(0)):
+    """列出所有景点知识库文档"""
+    tenant_id = _get_tenant_id(request)
+
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    try:
+        from attraction_retriever import AttractionRetriever
+        retriever = AttractionRetriever()
+        result = retriever.list_all(tenant_id, limit, offset)
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"[TravelQuoteKB] 列出景点失败: {e}", exc_info=True)
         return {"success": False, "error": sanitize_error_info(str(e))}
 
 
@@ -710,12 +1158,29 @@ async def get_hotel_kb(doc_id: int, request: Request):
         if not info:
             raise HTTPException(status_code=404, detail="酒店文档不存在")
 
+        # 获取文档元信息（标题、来源文件等）
+        from src.db.database import get_db_connection
+        doc_meta = {}
+        with get_db_connection() as conn:
+            conn.execute(
+                "SELECT title, file_path, metadata FROM documents WHERE id = %s",
+                (doc_id,)
+            )
+            row = conn.fetchone()
+            if row:
+                doc_meta = {
+                    "title": row["title"],
+                    "source_file": row["file_path"] or "",
+                    "metadata": row["metadata"] if isinstance(row["metadata"], dict) else {},
+                }
+
         return {
             "success": True,
             "data": {
                 "doc_id": doc_id,
                 "info": info,
                 "price_table": price_table,
+                **doc_meta,
             }
         }
     except HTTPException:
@@ -741,9 +1206,26 @@ async def get_attraction_kb(doc_id: int, request: Request):
         retriever = AttractionRetriever()
         info = retriever.get_attraction_info(doc_id)
         ticket_table = retriever.get_ticket_table(doc_id)
+        project_table = retriever.get_project_table(doc_id)
 
         if not info:
             raise HTTPException(status_code=404, detail="景点文档不存在")
+
+        # 获取文档元信息（标题、来源文件等）
+        from src.db.database import get_db_connection
+        doc_meta = {}
+        with get_db_connection() as conn:
+            conn.execute(
+                "SELECT title, file_path, metadata FROM documents WHERE id = %s",
+                (doc_id,)
+            )
+            row = conn.fetchone()
+            if row:
+                doc_meta = {
+                    "title": row["title"],
+                    "source_file": row["file_path"] or "",
+                    "metadata": row["metadata"] if isinstance(row["metadata"], dict) else {},
+                }
 
         return {
             "success": True,
@@ -751,6 +1233,8 @@ async def get_attraction_kb(doc_id: int, request: Request):
                 "doc_id": doc_id,
                 "info": info,
                 "ticket_table": ticket_table,
+                "project_table": project_table,
+                **doc_meta,
             }
         }
     except HTTPException:
