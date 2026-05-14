@@ -45,7 +45,7 @@ class ApiResponse(BaseModel):
 # ============================================================
 
 def _crud_list(table: str, tenant_id: str, filters: Dict[str, Any] = None,
-               order_by: str = "sort_order, id") -> List[Dict]:
+               order_by: str = "id") -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         where = "tenant_id = %s AND is_active = true"
