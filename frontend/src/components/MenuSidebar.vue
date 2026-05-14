@@ -176,7 +176,7 @@
                   ? 'bg-primary-50 text-primary-700 font-medium'
                   : 'text-gray-600 hover:bg-gray-50'
               ]"
-              @click="navigateToBusinessPage(page)"
+              @click="navigateToBusinessPage(page, group.subagent.agent_id)"
             >
               <span class="text-base">{{ page.icon }}</span>
               <span>{{ page.title }}</span>
@@ -478,7 +478,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '@/composables/useSession'
 import { useDemoAuth } from '@/composables/useDemoAuth'
@@ -725,8 +725,18 @@ const expandedSubagentId = computed<string | null>(() => {
   return matched?.agent_id || null
 })
 
+// 判断当前是否在对话界面（路由包含 /chat/）
+const isChatPage = computed(() => {
+  return route.path.includes('/chat/')
+})
+
 // 监听当前数字员工变化，重置展开状态
+// 只在对话界面时自动展开/收缩业务数据菜单；非对话界面不做自动展开/收缩动作
 watch(() => currentSubagent.value, () => {
+  // 非对话界面，保留用户手动展开/收缩状态，不做自动调整
+  if (!isChatPage.value) {
+    return
+  }
   const newSet = new Set<string>()
   const expandedId = expandedSubagentId.value
   if (expandedId) {
@@ -735,13 +745,30 @@ watch(() => currentSubagent.value, () => {
   expandedGroups.value = newSet
 }, { immediate: true })
 
-// 跳转到业务数据页面（在新窗口打开）
-function navigateToBusinessPage(page: BusinessPage) {
-  // 如果是租户模式，需要加上租户 ID 前缀
-  if (isTenantMode.value && tenantId.value) {
-    window.open(`/t/${tenantId.value}${page.route}`, '_blank')
+// 初始化时检查 URL 的 expand_menu 参数（新开业务数据页面时展开对应分组）
+onMounted(() => {
+  const expandMenu = route.query.expand_menu as string | undefined
+  if (expandMenu) {
+    const newSet = new Set(expandedGroups.value)
+    newSet.add(expandMenu)
+    expandedGroups.value = newSet
+  }
+})
+
+// 跳转到业务数据页面
+// 非对话界面：在本页打开；对话界面：新开页面并附带 expand_menu 参数以展开对应菜单
+function navigateToBusinessPage(page: BusinessPage, agentId: string) {
+  const path = isTenantMode.value && tenantId.value
+    ? `/t/${tenantId.value}${page.route}`
+    : page.route
+
+  if (isChatPage.value) {
+    // 对话界面：新开页面，带上 expand_menu 参数让新页面自动展开对应分组
+    const separator = path.includes('?') ? '&' : '?'
+    window.open(`${path}${separator}expand_menu=${encodeURIComponent(agentId)}`, '_blank')
   } else {
-    window.open(page.route, '_blank')
+    // 非对话界面：在本页打开
+    router.push(path)
   }
 }
 
