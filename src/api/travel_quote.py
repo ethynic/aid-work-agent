@@ -4,6 +4,7 @@
 """
 
 import io
+import json
 import re
 import tempfile
 from typing import Optional, Dict, Any, List
@@ -143,144 +144,203 @@ async def delete_vehicle(record_id: int, request: Request):
 
 
 # ============================================================
-# 景点管理
+# 景点知识库：删除和更新
 # ============================================================
 
-@router.get("/attractions")
-async def list_attractions(request: Request, region_name: str = Query(None)):
-    tid = _get_tenant_id(request)
-    filters = {"region_name": region_name} if region_name else None
-    return {"success": True, "data": _crud_list("bs_travel_quote_attractions", tid, filters)}
+def _delete_kb_doc(doc_id: int, source_type: str, tenant_id: str) -> bool:
+    """删除知识库文档（documents + chunks）"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM documents WHERE id = %s AND source_type = %s AND tenant_id = %s",
+                       (doc_id, source_type, tenant_id))
+        if not cursor.fetchone():
+            return False
+        # 先删向量（依赖 chunks id）
+        cursor.execute("SELECT id FROM chunks WHERE doc_id = %s", (doc_id,))
+        chunk_ids = [r["id"] for r in cursor.fetchall()]
+        if chunk_ids:
+            cursor.execute("DELETE FROM chunks_vec WHERE chunk_id = ANY(%s)", (chunk_ids,))
+        cursor.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
+        cursor.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+        conn.commit()
+        return True
 
 
-@router.post("/attractions")
-async def create_attraction(request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    return {"success": True, "data": _crud_create("bs_travel_quote_attractions", tid, body)}
+def _update_chunk_embedding(doc_id: int, chunk_index: int, text: str) -> None:
+    """更新 chunk 文本并重新计算向量嵌入"""
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+
+    from attraction_retriever import AttractionRetriever
+    retriever = AttractionRetriever()
+    embedding = retriever._embed(text)
+    embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM chunks WHERE doc_id = %s AND chunk_index = %s",
+                       (doc_id, chunk_index))
+        chunk_row = cursor.fetchone()
+        if chunk_row:
+            chunk_id = chunk_row["id"]
+            cursor.execute("UPDATE chunks_vec SET embedding = %s::vector WHERE chunk_id = %s",
+                           (embedding_str, chunk_id))
+            conn.commit()
 
 
-@router.put("/attractions/{record_id}")
-async def update_attraction(record_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    result = _crud_update("bs_travel_quote_attractions", record_id, tid, body)
-    if not result:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True, "data": result}
+@router.delete("/kb/attractions/{doc_id}")
+async def delete_attraction_kb(doc_id: int, request: Request):
+    """删除景点知识库文档"""
+    tenant_id = _get_tenant_id(request)
+    if not _delete_kb_doc(doc_id, "attraction_resource", tenant_id):
+        raise HTTPException(status_code=404, detail="景点文档不存在")
+    return {"success": True}
 
 
-@router.delete("/attractions/{record_id}")
-async def delete_attraction(record_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    if not _crud_delete("bs_travel_quote_attractions", record_id, tid):
-        raise HTTPException(status_code=404, detail="记录不存在")
+@router.delete("/kb/attractions")
+async def batch_delete_attractions_kb(request: Request, body: Dict[str, Any]):
+    """批量删除景点知识库文档"""
+    tenant_id = _get_tenant_id(request)
+    doc_ids = body.get("doc_ids", [])
+    if not doc_ids:
+        return {"success": True, "deleted": 0}
+    deleted = 0
+    for doc_id in doc_ids:
+        if _delete_kb_doc(doc_id, "attraction_resource", tenant_id):
+            deleted += 1
+    return {"success": True, "deleted": deleted}
+
+
+@router.put("/kb/attractions/{doc_id}")
+async def update_attraction_kb(doc_id: int, request: Request, body: Dict[str, Any]):
+    """更新景点知识库文档"""
+    tenant_id = _get_tenant_id(request)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, metadata FROM documents WHERE id = %s AND source_type = %s AND tenant_id = %s",
+                       (doc_id, "attraction_resource", tenant_id))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="景点文档不存在")
+
+        updates = []
+        params = []
+        if "title" in body:
+            updates.append("title = %s")
+            params.append(body["title"])
+        if "metadata" in body:
+            existing_meta = row["metadata"] or {}
+            if isinstance(existing_meta, str):
+                try:
+                    existing_meta = json.loads(existing_meta)
+                except (json.JSONDecodeError, TypeError):
+                    existing_meta = {}
+            merged = {**existing_meta, **body["metadata"]}
+            updates.append("metadata = %s")
+            params.append(json.dumps(merged, ensure_ascii=False))
+        if updates:
+            params.append(doc_id)
+            cursor.execute(f"UPDATE documents SET {', '.join(updates)} WHERE id = %s", params)
+
+        if "info" in body:
+            cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 0",
+                           (body["info"], doc_id))
+        if "ticket_table" in body:
+            cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 1",
+                           (body["ticket_table"], doc_id))
+        if "project_table" in body:
+            cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 2",
+                           (body["project_table"], doc_id))
+
+        conn.commit()
+
+    # 更新 info 后同步更新向量嵌入
+    if "info" in body:
+        try:
+            _update_chunk_embedding(doc_id, 0, body["info"])
+        except Exception as e:
+            logger.warning(f"更新景点向量嵌入失败 doc_id={doc_id}: {e}")
+
     return {"success": True}
 
 
 # ============================================================
-# 门票管理（嵌套在景点下）
+# 酒店知识库：删除和更新
 # ============================================================
 
-@router.get("/attractions/{attraction_id}/tickets")
-async def list_tickets(attraction_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    return {"success": True, "data": _crud_list("bs_travel_quote_tickets", tid, {"attraction_id": attraction_id})}
-
-
-@router.post("/attractions/{attraction_id}/tickets")
-async def create_tickets(attraction_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    if isinstance(body, list):
-        results = [_crud_create("bs_travel_quote_tickets", tid, {**t, "attraction_id": attraction_id}) for t in body]
-        return {"success": True, "data": results}
-    body["attraction_id"] = attraction_id
-    return {"success": True, "data": _crud_create("bs_travel_quote_tickets", tid, body)}
-
-
-@router.put("/tickets/{record_id}")
-async def update_ticket(record_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    result = _crud_update("bs_travel_quote_tickets", record_id, tid, body)
-    if not result:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True, "data": result}
-
-
-@router.delete("/tickets/{record_id}")
-async def delete_ticket(record_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    if not _crud_delete("bs_travel_quote_tickets", record_id, tid):
-        raise HTTPException(status_code=404, detail="记录不存在")
+@router.delete("/kb/hotels/{doc_id}")
+async def delete_hotel_kb(doc_id: int, request: Request):
+    """删除酒店知识库文档"""
+    tenant_id = _get_tenant_id(request)
+    if not _delete_kb_doc(doc_id, "hotel_resource", tenant_id):
+        raise HTTPException(status_code=404, detail="酒店文档不存在")
     return {"success": True}
 
 
-# ============================================================
-# 酒店管理
-# ============================================================
-
-@router.get("/hotels")
-async def list_hotels(request: Request, region_name: str = Query(None)):
-    tid = _get_tenant_id(request)
-    filters = {"region_name": region_name} if region_name else None
-    return {"success": True, "data": _crud_list("bs_travel_quote_hotels", tid, filters)}
-
-
-@router.post("/hotels")
-async def create_hotel(request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    return {"success": True, "data": _crud_create("bs_travel_quote_hotels", tid, body)}
+@router.delete("/kb/hotels")
+async def batch_delete_hotels_kb(request: Request, body: Dict[str, Any]):
+    """批量删除酒店知识库文档"""
+    tenant_id = _get_tenant_id(request)
+    doc_ids = body.get("doc_ids", [])
+    if not doc_ids:
+        return {"success": True, "deleted": 0}
+    deleted = 0
+    for doc_id in doc_ids:
+        if _delete_kb_doc(doc_id, "hotel_resource", tenant_id):
+            deleted += 1
+    return {"success": True, "deleted": deleted}
 
 
-@router.put("/hotels/{record_id}")
-async def update_hotel(record_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    result = _crud_update("bs_travel_quote_hotels", record_id, tid, body)
-    if not result:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True, "data": result}
+@router.put("/kb/hotels/{doc_id}")
+async def update_hotel_kb(doc_id: int, request: Request, body: Dict[str, Any]):
+    """更新酒店知识库文档"""
+    tenant_id = _get_tenant_id(request)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, metadata FROM documents WHERE id = %s AND source_type = %s AND tenant_id = %s",
+                       (doc_id, "hotel_resource", tenant_id))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="酒店文档不存在")
 
+        updates = []
+        params = []
+        if "title" in body:
+            updates.append("title = %s")
+            params.append(body["title"])
+        if "metadata" in body:
+            existing_meta = row["metadata"] or {}
+            if isinstance(existing_meta, str):
+                try:
+                    existing_meta = json.loads(existing_meta)
+                except (json.JSONDecodeError, TypeError):
+                    existing_meta = {}
+            merged = {**existing_meta, **body["metadata"]}
+            updates.append("metadata = %s")
+            params.append(json.dumps(merged, ensure_ascii=False))
+        if updates:
+            params.append(doc_id)
+            cursor.execute(f"UPDATE documents SET {', '.join(updates)} WHERE id = %s", params)
 
-@router.delete("/hotels/{record_id}")
-async def delete_hotel(record_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    if not _crud_delete("bs_travel_quote_hotels", record_id, tid):
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True}
+        if "info" in body:
+            cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 0",
+                           (body["info"], doc_id))
+        if "price_table" in body:
+            cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 1",
+                           (body["price_table"], doc_id))
 
+        conn.commit()
 
-# ============================================================
-# 房型管理（嵌套在酒店下）
-# ============================================================
+    # 更新 info 后同步更新向量嵌入
+    if "info" in body:
+        try:
+            _update_chunk_embedding(doc_id, 0, body["info"])
+        except Exception as e:
+            logger.warning(f"更新酒店向量嵌入失败 doc_id={doc_id}: {e}")
 
-@router.get("/hotels/{hotel_id}/rooms")
-async def list_rooms(hotel_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    return {"success": True, "data": _crud_list("bs_travel_quote_rooms", tid, {"hotel_id": hotel_id})}
-
-
-@router.post("/hotels/{hotel_id}/rooms")
-async def create_room(hotel_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    if isinstance(body, list):
-        results = [_crud_create("bs_travel_quote_rooms", tid, {**r, "hotel_id": hotel_id}) for r in body]
-        return {"success": True, "data": results}
-    body["hotel_id"] = hotel_id
-    return {"success": True, "data": _crud_create("bs_travel_quote_rooms", tid, body)}
-
-
-@router.put("/rooms/{record_id}")
-async def update_room(record_id: int, request: Request, body: Dict[str, Any]):
-    tid = _get_tenant_id(request)
-    result = _crud_update("bs_travel_quote_rooms", record_id, tid, body)
-    if not result:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    return {"success": True, "data": result}
-
-
-@router.delete("/rooms/{record_id}")
-async def delete_room(record_id: int, request: Request):
-    tid = _get_tenant_id(request)
-    if not _crud_delete("bs_travel_quote_rooms", record_id, tid):
-        raise HTTPException(status_code=404, detail="记录不存在")
     return {"success": True}
 
 

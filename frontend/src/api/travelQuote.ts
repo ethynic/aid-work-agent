@@ -62,47 +62,71 @@ export const vehicles = {
 }
 
 // ============================================================
-// 景点管理
+// 景点知识库：删除和更新
 // ============================================================
 
-export const attractions = {
-  list: (params?: { region_name?: string }) => crudList('attractions', params),
-  create: (data: any) => crudCreate('attractions', data),
-  update: (id: number, data: any) => crudUpdate('attractions', id, data),
-  delete: (id: number) => crudDelete('attractions', id)
+export async function deleteAttractionKB(docId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/kb/attractions/${docId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('删除景点失败')
+}
+
+export async function batchDeleteAttractionsKB(docIds: number[]): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_BASE}/kb/attractions`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ doc_ids: docIds })
+  })
+  if (!res.ok) throw new Error('批量删除景点失败')
+  const json = await res.json()
+  return { deleted: json.deleted || 0 }
+}
+
+export async function updateAttractionKB(docId: number, data: { title?: string; info?: string; ticket_table?: string; project_table?: string; metadata?: Record<string, any> }): Promise<any> {
+  const res = await fetch(`${API_BASE}/kb/attractions/${docId}`, {
+    method: 'PUT',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('更新景点失败')
+  const json = await res.json()
+  return json.data
 }
 
 // ============================================================
-// 门票管理（嵌套在景点下）
+// 酒店知识库：删除和更新
 // ============================================================
 
-export const tickets = {
-  list: (attractionId: number) => crudList(`attractions/${attractionId}/tickets`),
-  create: (attractionId: number, data: any) => crudCreate(`attractions/${attractionId}/tickets`, data),
-  update: (id: number, data: any) => crudUpdate('tickets', id, data),
-  delete: (id: number) => crudDelete('tickets', id)
+export async function deleteHotelKB(docId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/kb/hotels/${docId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('删除酒店失败')
 }
 
-// ============================================================
-// 酒店管理
-// ============================================================
-
-export const hotels = {
-  list: (params?: { region_name?: string }) => crudList('hotels', params),
-  create: (data: any) => crudCreate('hotels', data),
-  update: (id: number, data: any) => crudUpdate('hotels', id, data),
-  delete: (id: number) => crudDelete('hotels', id)
+export async function batchDeleteHotelsKB(docIds: number[]): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_BASE}/kb/hotels`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ doc_ids: docIds })
+  })
+  if (!res.ok) throw new Error('批量删除酒店失败')
+  const json = await res.json()
+  return { deleted: json.deleted || 0 }
 }
 
-// ============================================================
-// 房型管理（嵌套在酒店下）
-// ============================================================
-
-export const rooms = {
-  list: (hotelId: number) => crudList(`hotels/${hotelId}/rooms`),
-  create: (hotelId: number, data: any) => crudCreate(`hotels/${hotelId}/rooms`, data),
-  update: (id: number, data: any) => crudUpdate('rooms', id, data),
-  delete: (id: number) => crudDelete('rooms', id)
+export async function updateHotelKB(docId: number, data: { title?: string; info?: string; price_table?: string; metadata?: Record<string, any> }): Promise<any> {
+  const res = await fetch(`${API_BASE}/kb/hotels/${docId}`, {
+    method: 'PUT',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('更新酒店失败')
+  const json = await res.json()
+  return json.data
 }
 
 // ============================================================
