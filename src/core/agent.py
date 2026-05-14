@@ -313,6 +313,10 @@ class Agent:
         from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
         self.tool_registry.register(KnowledgeBaseTool())
 
+        # 注册景点知识库搜索工具
+        from src.tools.knowledge.attraction_search_tool import AttractionSearchTool
+        self.tool_registry.register(AttractionSearchTool())
+
         # 注册 Word 文档处理工具
         from src.tools.word.word_process_tool import WordProcessTool
         self.tool_registry.register(WordProcessTool())
@@ -1214,6 +1218,20 @@ class Agent:
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user.user_id)
+
+        # 注入 tenant_id 到需要租户隔离的工具（子智能体线程中 ContextVar 不可用）
+        _resolve_tenant_id = self._init_tenant_id
+        if not _resolve_tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                _resolve_tenant_id = get_current_tenant_id()
+            except Exception:
+                pass
+        if _resolve_tenant_id:
+            for tool_name in ("attraction_search",):
+                tool = self.tool_registry.get_tool(tool_name)
+                if tool and hasattr(tool, 'set_tenant_id'):
+                    tool.set_tenant_id(_resolve_tenant_id)
         
         # Add timestamp context to help LLM understand current time
         current_time = datetime.now()
@@ -1963,6 +1981,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
         # 按需加载租户自定义 skills
         self._ensure_tenant_skills_loaded()
+
+        # 注入 tenant_id 到需要租户隔离的工具（子智能体线程中 ContextVar 不可用）
+        if self._init_tenant_id:
+            for tool_name in ("attraction_search",):
+                tool = self.tool_registry.get_tool(tool_name)
+                if tool and hasattr(tool, 'set_tenant_id'):
+                    tool.set_tenant_id(self._init_tenant_id)
 
         # 进度消息辅助函数
         async def send_progress(message: str):
