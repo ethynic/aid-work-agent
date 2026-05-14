@@ -111,6 +111,7 @@ def log_skill_execute(
     stderr: str = "",
     error: str = "",
     duration: float = 0,
+    input_content: str = "",
 ) -> None:
     """
     记录 skill_execute 的执行结果。
@@ -126,6 +127,7 @@ def log_skill_execute(
         stderr: 标准错误（超出 2000 字符会截断）
         error: 错误信息
         duration: 执行耗时（秒）
+        input_content: 传给子进程 stdin 的输入内容（超出 2000 字符会截断）
     """
     try:
         record = {
@@ -134,6 +136,7 @@ def log_skill_execute(
             "command": command[:500] if command else "",
             "session_id": session_id,
             "user_id": user_id,
+            "input_content": input_content[:2000] if input_content else "",
             "success": success,
             "exit_code": exit_code,
             "stdout": stdout[:2000] if stdout else "",

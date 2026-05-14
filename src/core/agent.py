@@ -1680,6 +1680,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         stderr=skill_exec_result.get("stderr", ""),
                         error=skill_exec_result.get("error", ""),
                         duration=skill_exec_result.get("duration", 0),
+                        input_content=str(content) if content else "",
                     )
 
                     # 发送技能执行完成进度
@@ -2288,6 +2289,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             stderr=skill_exec_result.get("stderr", ""),
                             error=skill_exec_result.get("error", ""),
                             duration=skill_exec_result.get("duration", 0),
+                            input_content=str(content) if content else "",
                         )
                         # 发送工具执行结果
                         await send_tool_result(tool_name, skill_exec_result, skill_exec_result.get("success", True))

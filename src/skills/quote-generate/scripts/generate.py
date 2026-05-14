@@ -1404,8 +1404,8 @@ def parse_itinerary(itinerary_text: str) -> dict:
     "attraction_names": ["黄果树瀑布", "小七孔"],
     "hotel_preference": "4钻酒店",
     "hotel_stays": [
-        {{"city": "贵阳", "nights": 2}},
-        {{"city": "安顺", "nights": 1}}
+        {{"city": "贵阳", "area": "南明区", "nights": 2}},
+        {{"city": "安顺", "area": "西秀区", "nights": 1}}
     ],
     "meal_tier": "standard",
     "guide_type": "local"
@@ -1415,7 +1415,7 @@ def parse_itinerary(itinerary_text: str) -> dict:
 1. 人数信息从文本中提取，如果没有明确说，adults 默认等于 total_people
 2. attraction_names 是景点名称列表（自然语言名称，不是 ID）
 3. hotel_preference 是酒店偏好描述（如"4钻"、"经济型"），不是酒店名
-4. hotel_stays 从每天的行程安排中提取：看每天住哪个城市，同一城市连续几晚合并为一项。nights 总和应等于 trip_days - 1
+4. hotel_stays 从每天的行程安排中提取：看每天住哪个城市，同一城市连续几晚合并为一项。nights 总和应等于 trip_days - 1。area 是酒店所在区/县（如"南明区"、"西秀区"），如果无法确定具体区县则为空字符串
 5. teacher_count 是随队老师人数，如果文本没提，默认 0
 6. meal_tier 和 guide_type 如果文本没提，用默认值 standard 和 local
 7. 只返回 JSON，不要其他文字"""
@@ -1454,7 +1454,7 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
         except Exception as e:
             logger.warning(f"[quote-generate] 景点检索失败: {e}")
 
-    # 酒店：按城市逐个检索
+    # 酒店：按城市逐个检索，利用区域信息缩小范围
     hotel_stays = parsed.get("hotel_stays", [])
     hotel_pref = parsed.get("hotel_preference", "")
 
@@ -1464,13 +1464,14 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
             retriever = HotelRetriever()
             for stay in hotel_stays:
                 city = stay.get("city", "")
-                query = f"{city} 酒店 {hotel_pref}".strip()
+                area = stay.get("area", "")
+                query = f"{city} {area} 酒店 {hotel_pref}".strip()
                 matches = retriever.search(tenant_id, query, top_k=1)
                 stay["hotel_doc_id"] = matches[0]["doc_id"] if matches else None
                 if matches:
-                    logger.info(f"[quote-generate] 酒店匹配: '{city}' → doc_id={matches[0]['doc_id']}")
+                    logger.info(f"[quote-generate] 酒店匹配: '{city} {area}' → doc_id={matches[0]['doc_id']}")
                 else:
-                    logger.warning(f"[quote-generate] 酒店未匹配: '{city}'")
+                    logger.warning(f"[quote-generate] 酒店未匹配: '{city} {area}'")
             result["hotel_stays"] = hotel_stays
         except Exception as e:
             logger.warning(f"[quote-generate] 酒店检索失败: {e}")
@@ -1507,7 +1508,6 @@ def generate_quote(params: dict) -> dict:
 
     if itinerary_text:
         # 新模式：行程文本驱动，LLM 解析 + 向量检索
-        logger.info(f"[quote-generate] 行程文本驱动模式，文本长度: {len(itinerary_text)}")
         parsed = parse_itinerary(itinerary_text)
         logger.info(f"[quote-generate] 行程解析结果: {json.dumps(parsed, ensure_ascii=False)}")
 
