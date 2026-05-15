@@ -712,7 +712,8 @@ class Agent:
         messages = []
 
         history = self.memory.get_context(session_id)
-        logger.debug(f"[DEBUG] _build_messages: session_id={session_id}, history_count={len(history)}")
+        history_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in history]
+        logger.info(f"[DEBUG] _build_messages: session_id={session_id}, history_count={len(history)}, msgs={history_roles}")
 
         # 追踪待处理的 tool_call_ids
         pending_tool_calls = set()
@@ -813,7 +814,10 @@ class Agent:
         # 最终清理：确保 messages 列表中不存在相邻的 assistant(tool_calls) + 非 tool 消息
         # 如果仍有断裂，移除断裂的 tool_calls
         self._repair_message_sequence(messages)
-        
+
+        result_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in messages]
+        logger.info(f"[DEBUG] _build_messages result: session_id={session_id}, count={len(messages)}, msgs={result_roles}")
+
         return messages
     
     def _repair_message_sequence(self, messages: List[Dict[str, Any]]) -> None:
@@ -1197,7 +1201,8 @@ class Agent:
         # ========== 临时调试日志 ==========
 
         # 恢复历史会话上下文：如果该 session 的 memory 为空，从 DB 加载历史消息
-        if self.memory.get_message_count(session_id) == 0:
+        mem_count_before = self.memory.get_message_count(session_id)
+        if mem_count_before == 0:
             try:
                 from src.db.models import MessageDB
                 logger.info(f"[DEBUG] Memory empty, loading history from DB, session_id={session_id}")
@@ -1216,9 +1221,17 @@ class Agent:
                         for msg in db_messages
                     ]
                     self.memory.load_history(session_id, history_messages)
-                    logger.info(f"[DEBUG] Loaded {len(history_messages)} history messages for session {session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
+                    loaded_roles = [f"{m['role']}:{m['content'][:30]}" for m in history_messages]
+                    logger.info(
+                        f"[DEBUG] Loaded {len(history_messages)} history messages for session {session_id}, "
+                        f"time_since_start={time.time() - _debug_start_time:.3f}s | msgs={loaded_roles}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to load history for session {session_id}: {e}")
+        else:
+            existing = self.memory.get_context(session_id)
+            existing_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in existing]
+            logger.info(f"[DEBUG] Memory already has {mem_count_before} msgs for session {session_id} | msgs={existing_roles}")
 
         # 设置工具的 user_id / tenant_id
         if user:
