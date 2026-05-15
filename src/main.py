@@ -1175,11 +1175,30 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         )
                         # 保存AI回复（包含执行详情，但不作为模型上下文）
                         if full_response:
+                            # 从 progress 事件中提取下载文件信息
+                            downloadable_files = []
+                            for event in results.get('progress', []):
+                                if (event.get("type") == "tool_result"
+                                    and event.get("toolName") == "register_download_file"
+                                    and event.get("success") is True):
+                                    result = event.get("result", {})
+                                    if result.get("file_id"):
+                                        downloadable_files.append({
+                                            "file_id": result["file_id"],
+                                            "file_name": result.get("file_name", "未命名文件"),
+                                            "file_size": result.get("file_size", 0),
+                                            "download_url": result.get("download_url", ""),
+                                            "mime_type": result.get("mime_type", ""),
+                                        })
+
+                            assistant_metadata = {"progressMessages": results.get('progress', [])}
+                            if downloadable_files:
+                                assistant_metadata["downloadableFiles"] = downloadable_files
                             MessageDB.create(
                                 session_id=session_id,
                                 role="assistant",
                                 content=full_response,
-                                metadata={"progressMessages": results.get('progress', [])}  # 执行详情仅用于显示
+                                metadata=assistant_metadata
                             )
 
                 except asyncio.CancelledError:

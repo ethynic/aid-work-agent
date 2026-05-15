@@ -84,7 +84,8 @@ export function useAgent() {
           content: m.content,
           timestamp: new Date(m.created_at.endsWith('Z') ? m.created_at : m.created_at + 'Z').getTime(),
           progressMessages: m.metadata?.progressMessages || [],
-          attachments: m.metadata?.attachments || undefined
+          attachments: m.metadata?.attachments || undefined,
+          downloadableFiles: m.metadata?.downloadableFiles || undefined
         })) || []
         // 如果数据库也没有消息，确保缓存中也没有，避免下次误读
         if (!result.messages || result.messages.length === 0) {
@@ -195,6 +196,25 @@ export function useAgent() {
         (toolName, result, success) => {
           const toolDisplayName = getToolDisplayName(toolName, {})
           if (success) {
+            // 提取下载文件信息到助手消息
+            if (toolName === 'register_download_file' && result?.file_id) {
+              const lastMsg = messages.value[messages.value.length - 1]
+              if (lastMsg && lastMsg.role === 'assistant') {
+                if (!lastMsg.downloadableFiles) {
+                  lastMsg.downloadableFiles = []
+                }
+                // 按 file_id 去重
+                if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
+                  lastMsg.downloadableFiles.push({
+                    file_id: result.file_id,
+                    file_name: result.file_name || '未命名文件',
+                    file_size: result.file_size || 0,
+                    download_url: result.download_url || `/api/files/${result.file_id}/download`,
+                    mime_type: result.mime_type || '',
+                  })
+                }
+              }
+            }
             // 根据不同工具显示不同结果预览
             if (toolName === 'web_search') {
               const results = result?.results || []
@@ -211,6 +231,9 @@ export function useAgent() {
               addProgress(`✅ ${toolDisplayName}完成\n📄 ${preview}`, 'tool_result', toolName, undefined, result)
             } else if (toolName === 'browser_open') {
               addProgress(`✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
+            } else if (toolName === 'register_download_file') {
+              const fileName = result?.file_name || '文件'
+              addProgress(`✅ 已生成文件「${fileName}」，可在下方下载`, 'tool_result', toolName, undefined, result)
             } else {
               addProgress(`✅ ${toolDisplayName}执行完成`, 'tool_result', toolName, undefined, result)
             }

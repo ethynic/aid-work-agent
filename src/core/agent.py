@@ -114,8 +114,13 @@ class Agent:
         # 主智能体的 pending clarifications: {session_id: {subagent_name, execution_id, task_description, question}}
         self._pending_clarifications: Dict[str, Dict[str, Any]] = {}
 
-        # 共享组件
-        self.llm = llm_gateway
+        # 共享组件 — 子智能体可覆盖 LLM 提供者
+        if subagent_config and hasattr(subagent_config, 'llm_provider') and subagent_config.llm_provider:
+            from src.llm.gateway import LLMGateway
+            self.llm = LLMGateway(provider_name=subagent_config.llm_provider)
+            logger.info(f"Agent using override LLM provider: {subagent_config.llm_provider}")
+        else:
+            self.llm = llm_gateway
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
         self.prompt_manager = PromptManager()
@@ -764,20 +769,23 @@ class Agent:
                             tc_ids.add(tc_id)
                     
                     # 添加带 tool_calls 的 assistant 消息
-                    messages.append({
+                    asst_msg = {
                         "role": "assistant",
                         "content": content,
                         "tool_calls": tool_calls
-                    })
+                    }
+                    if msg.get("reasoning_content"):
+                        asst_msg["reasoning_content"] = msg["reasoning_content"]
+                    messages.append(asst_msg)
                     assistant_tc_indices.append(len(messages) - 1)
                     pending_tool_calls = tc_ids
                 else:
                     # 普通 assistant message，跳过空 content
                     if content:
-                        messages.append({
-                            "role": "assistant",
-                            "content": content
-                        })
+                        asst_msg = {"role": "assistant", "content": content}
+                        if msg.get("reasoning_content"):
+                            asst_msg["reasoning_content"] = msg["reasoning_content"]
+                        messages.append(asst_msg)
             else:
                 # system 消息转为 user 消息（LLM API 不允许对话序列中插入 system）
                 # 跳过空 content 的消息
@@ -1212,12 +1220,17 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Failed to load history for session {session_id}: {e}")
 
-        # 设置邮件工具的 user_id，使工具能从数据库读取用户邮箱配置
+        # 设置工具的 user_id / tenant_id
         if user:
             for tool_name in ("email_send", "email_read", "email_list_folders"):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user.user_id)
+
+            # 注入 user_id 到文件下载工具
+            download_tool = self.tool_registry.get_tool("register_download_file")
+            if download_tool and hasattr(download_tool, 'set_user_id'):
+                download_tool.set_user_id(user.user_id)
 
         # 注入 tenant_id 到需要租户隔离的工具（子智能体线程中 ContextVar 不可用）
         _resolve_tenant_id = self._init_tenant_id
@@ -1232,6 +1245,9 @@ class Agent:
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(_resolve_tenant_id)
+            # 注入 tenant_id 到文件下载工具
+            if download_tool and hasattr(download_tool, 'set_tenant_id'):
+                download_tool.set_tenant_id(_resolve_tenant_id)
         
         # Add timestamp context to help LLM understand current time
         current_time = datetime.now()
@@ -1458,7 +1474,15 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         self._compress_skill_context(session_id, active_skill_name, auto_summary)
                 
                 # Store assistant response in memory
-                self.memory.add(session_id, "assistant", content)
+                reasoning = response.get("reasoning_content")
+                if reasoning:
+                    self.memory.add_message(session_id, {
+                        "role": "assistant",
+                        "content": content,
+                        "reasoning_content": reasoning,
+                    })
+                else:
+                    self.memory.add(session_id, "assistant", content)
 
                 # 发送最终回复进度
                 await send_progress("✅ 任务完成，正在生成回复...")
@@ -1472,8 +1496,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             assistant_message = {
                 "role": "assistant",
                 "content": content,
-                "tool_calls": tool_calls
+                "tool_calls": tool_calls,
             }
+            if response.get("reasoning_content"):
+                assistant_message["reasoning_content"] = response["reasoning_content"]
             messages.append(assistant_message)
             
             # Save assistant message with tool calls to memory
@@ -2165,11 +2191,14 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     break
                 
                 # 添加助手消息
-                messages.append({
+                assistant_msg = {
                     "role": "assistant",
                     "content": content,
                     "tool_calls": tool_calls
-                })
+                }
+                if response.get("reasoning_content"):
+                    assistant_msg["reasoning_content"] = response["reasoning_content"]
+                messages.append(assistant_msg)
                 
                 # 执行工具调用
                 pending_skill_compressions = []  # 收集需要延迟执行的 Skill 压缩

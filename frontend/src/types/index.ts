@@ -8,12 +8,21 @@ export interface AttachmentInfo {
   type: 'image' | 'file'
 }
 
+export interface DownloadableFile {
+  file_id: string
+  file_name: string
+  file_size: number
+  download_url: string
+  mime_type?: string
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
   progressMessages?: ProgressMessage[]  // 执行详情（不传给模型，只用于显示）
   attachments?: AttachmentInfo[]  // 附件列表
+  downloadableFiles?: DownloadableFile[]  // 可下载文件列表
 }
 
 export interface ProgressMessage {

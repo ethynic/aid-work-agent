@@ -16,7 +16,7 @@
 import shutil
 import uuid
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -30,6 +30,22 @@ class RegisterDownloadFileInput(BaseModel):
     display_name: str = Field(..., description="用户看到的文件名，例如：会议纪要.docx")
 
 
+def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Path:
+    """根据 tenant_id 和 user_id 确定文件存储目录（不依赖 ContextVar）"""
+    from src.main import UPLOAD_DIR
+
+    if tenant_id and user_id:
+        upload_dir = UPLOAD_DIR / tenant_id / user_id
+    elif tenant_id:
+        upload_dir = UPLOAD_DIR / tenant_id
+    elif user_id:
+        upload_dir = UPLOAD_DIR / user_id
+    else:
+        upload_dir = UPLOAD_DIR / "conversation"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
+
+
 class RegisterDownloadFileTool(BaseTool):
     """注册下载文件工具"""
 
@@ -39,17 +55,17 @@ class RegisterDownloadFileTool(BaseTool):
     category = "file"
     InputModel = RegisterDownloadFileInput
 
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        """
-        注册文件到下载系统。
+    def __init__(self):
+        self._user_id: Optional[str] = None
+        self._tenant_id: Optional[str] = None
 
-        流程：
-        1. 验证文件存在
-        2. 生成唯一 file_id
-        3. 复制到 uploads/ 目录
-        4. 注册到 main.uploaded_files 字典
-        5. 返回 file_id 和下载 URL
-        """
+    def set_user_id(self, user_id: str):
+        self._user_id = user_id
+
+    def set_tenant_id(self, tenant_id: str):
+        self._tenant_id = tenant_id
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
         file_path = kwargs.get("file_path", "")
         display_name = kwargs.get("display_name", "")
 
@@ -65,13 +81,10 @@ class RegisterDownloadFileTool(BaseTool):
             return {"success": False, "error": f"路径不是文件: {file_path}"}
 
         try:
-            # 延迟导入，避免循环依赖
-            from src.main import uploaded_files, UPLOAD_DIR, _get_tenant_upload_dir
+            from src.main import uploaded_files
 
-            # 生成 file_id
             file_id = f"file_{uuid.uuid4().hex[:12]}"
 
-            # MIME 类型映射
             suffix = src.suffix.lower()
             mime_type_map = {
                 '.pdf': 'application/pdf',
@@ -91,20 +104,17 @@ class RegisterDownloadFileTool(BaseTool):
             }
             mime_type = mime_type_map.get(suffix, 'application/octet-stream')
 
-            # 获取租户感知的上传目录
-            upload_dir = _get_tenant_upload_dir()
+            # 优先使用注入的 user_id/tenant_id，fallback 到 ContextVar
+            upload_dir = _resolve_upload_dir(self._tenant_id, self._user_id)
 
-            # 确保文件名有正确后缀
             if not display_name.lower().endswith(suffix):
                 display_name += suffix
 
-            # 复制文件到 uploads 目录（以 file_id 为文件名，便于磁盘恢复匹配）
             dest_path = upload_dir / f"{file_id}{suffix}"
             shutil.copy2(str(src), str(dest_path))
 
             file_size = dest_path.stat().st_size
 
-            # 注册到 uploaded_files
             file_info = {
                 "file_id": file_id,
                 "name": display_name,
@@ -125,6 +135,7 @@ class RegisterDownloadFileTool(BaseTool):
                 "file_name": display_name,
                 "file_size": file_size,
                 "download_url": download_url,
+                "mime_type": mime_type,
                 "message": f"文件已注册，用户可通过 {download_url} 下载",
             }
 

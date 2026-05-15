@@ -100,14 +100,27 @@
           </div>
         </div>
       </div>
+
+      <!-- 下载文件卡片（仅助手消息显示） -->
+      <div
+        v-if="message.role === 'assistant' && downloadableFiles.length > 0"
+        class="mt-3 space-y-2"
+      >
+        <DownloadFileCard
+          v-for="file in downloadableFiles"
+          :key="file.file_id"
+          :file="file"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { ChatMessage, AttachmentInfo, ProgressMessage } from '@/types'
+import type { ChatMessage, AttachmentInfo, DownloadableFile, ProgressMessage } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
+import DownloadFileCard from './DownloadFileCard.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 
@@ -190,6 +203,11 @@ const legacyAttachments = computed<{ name: string }[]>(() => {
   const match = props.message.content.match(/\[附件:\s*(.*?)\]/)
   if (!match) return []
   return match[1].split(',').map(name => ({ name: name.trim() })).filter(a => a.name)
+})
+
+// 可下载文件列表（LLM 生成的文件）
+const downloadableFiles = computed<DownloadableFile[]>(() => {
+  return props.message.downloadableFiles || []
 })
 
 // 用于渲染的内容（移除附件标注文本和文件路径上下文，避免重复显示）
