@@ -11,7 +11,7 @@ app:
 
 # LLM配置
 llm:
-  provider: zhipu  # qwen | zhipu | kimi | ...
+  provider: zhipu  # qwen | zhipu | deepseek | ...
   qwen:
     # 统一环境变量：在 .env 中设置 API_KEYS=key1,key2,key3
     api_keys: ${API_KEYS}
@@ -26,6 +26,12 @@ llm:
     base_url: ${BASE_URL}
     max_concurrent_per_key: 2   # 每个 Key 最大并发数
     queue_timeout: 30            # 等待可用 Key 的超时秒数
+  deepseek:
+    api_keys: ${DEEPSEEK_API_KEYS}
+    model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}
+    base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+    max_concurrent_per_key: 2
+    queue_timeout: 30
 
 # 工具配置
 tools:

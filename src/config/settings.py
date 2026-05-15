@@ -47,6 +47,7 @@ class LLMConfig(BaseModel):
     provider: str = "zhipu"
     qwen: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
+    deepseek: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
 
 
 class StorageConfig(BaseModel):

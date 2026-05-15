@@ -166,6 +166,7 @@ class SubagentLoader:
             system_prompt=frontmatter.get("system_prompt", body.strip()),
             delegatable_to=frontmatter.get("delegatable_to", []),
             allow_delegation=frontmatter.get("allow_delegation", True),
+            llm_provider=frontmatter.get("llm_provider", None),
             business_pages=frontmatter.get("business_pages", None),
             path=str(path),
             dir=str(path.parent),

@@ -78,6 +78,9 @@ class SubagentConfig(BaseModel):
     path: Optional[str] = Field(default=None, description="配置文件路径")
     dir: Optional[str] = Field(default=None, description="配置目录路径")
 
+    # LLM 配置覆盖
+    llm_provider: Optional[str] = Field(default=None, description="覆盖 LLM 提供者（如 deepseek），为空则使用全局默认")
+
     # 业务数据页面配置
     business_pages: Optional[List[Dict[str, Any]]] = Field(default=None, description="业务数据页面列表")
 

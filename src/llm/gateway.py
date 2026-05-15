@@ -14,6 +14,7 @@ from loguru import logger
 from src.config.settings import settings
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
+from .providers.deepseek import DeepSeekProvider
 from .providers.qwen import QwenProvider
 from .providers.zhipu import ZhipuProvider
 
@@ -24,6 +25,8 @@ def _build_key_pool(provider_name: str) -> KeyPool:
         cfg = settings.llm.qwen
     elif provider_name == "zhipu":
         cfg = settings.llm.zhipu
+    elif provider_name == "deepseek":
+        cfg = settings.llm.deepseek
     else:
         raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
@@ -55,6 +58,12 @@ def _build_provider(provider_name: str, api_key: str) -> BaseLLMProvider:
             model=settings.llm.zhipu.model,
             base_url=settings.llm.zhipu.base_url,
         )
+    elif provider_name == "deepseek":
+        return DeepSeekProvider(
+            api_key=api_key,
+            model=settings.llm.deepseek.model,
+            base_url=settings.llm.deepseek.base_url,
+        )
     raise ValueError(f"不支持的LLM提供者: {provider_name}")
 
 
@@ -73,6 +82,7 @@ class LLMGateway:
     PROVIDERS = {
         "qwen": QwenProvider,
         "zhipu": ZhipuProvider,
+        "deepseek": DeepSeekProvider,
     }
 
     def __init__(self, provider_name: Optional[str] = None):
@@ -312,6 +322,8 @@ class LLMGateway:
             return settings.llm.qwen.model
         elif self.provider_name == "zhipu":
             return settings.llm.zhipu.model
+        elif self.provider_name == "deepseek":
+            return settings.llm.deepseek.model
         return "unknown"
 
     def key_pool_stats(self) -> List[dict]:
