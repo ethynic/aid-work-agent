@@ -290,6 +290,14 @@ def get_db_connection() -> Generator[Any, None, None]:
         def rollback(self):
             self._conn.rollback()
 
+        @property
+        def autocommit(self):
+            return self._conn.autocommit
+
+        @autocommit.setter
+        def autocommit(self, value):
+            self._conn.autocommit = value
+
         def close(self):
             pass  # 不实际关闭，由上下文管理器处理
 
