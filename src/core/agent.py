@@ -712,7 +712,15 @@ class Agent:
         messages = []
 
         history = self.memory.get_context(session_id)
-        history_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in history]
+        history_roles = []
+        for m in history:
+            role = m.get('role', '?')
+            content = m.get('content', '')
+            if not isinstance(content, str):
+                content = str(content)[:30]
+            else:
+                content = content[:30]
+            history_roles.append(f"{role}:{content}")
         logger.info(f"[DEBUG] _build_messages: session_id={session_id}, history_count={len(history)}, msgs={history_roles}")
 
         # 追踪待处理的 tool_call_ids
@@ -815,7 +823,15 @@ class Agent:
         # 如果仍有断裂，移除断裂的 tool_calls
         self._repair_message_sequence(messages)
 
-        result_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in messages]
+        result_roles = []
+        for m in messages:
+            role = m.get('role', '?')
+            content = m.get('content', '')
+            if not isinstance(content, str):
+                content = str(content)[:30]
+            else:
+                content = content[:30]
+            result_roles.append(f"{role}:{content}")
         logger.info(f"[DEBUG] _build_messages result: session_id={session_id}, count={len(messages)}, msgs={result_roles}")
 
         return messages
@@ -1221,7 +1237,14 @@ class Agent:
                         for msg in db_messages
                     ]
                     self.memory.load_history(session_id, history_messages)
-                    loaded_roles = [f"{m['role']}:{m['content'][:30]}" for m in history_messages]
+                    loaded_roles = []
+                    for m in history_messages:
+                        content = m.get('content', '')
+                        if not isinstance(content, str):
+                            content = str(content)[:30]
+                        else:
+                            content = content[:30]
+                        loaded_roles.append(f"{m['role']}:{content}")
                     logger.info(
                         f"[DEBUG] Loaded {len(history_messages)} history messages for session {session_id}, "
                         f"time_since_start={time.time() - _debug_start_time:.3f}s | msgs={loaded_roles}"
@@ -1230,7 +1253,15 @@ class Agent:
                 logger.warning(f"Failed to load history for session {session_id}: {e}")
         else:
             existing = self.memory.get_context(session_id)
-            existing_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in existing]
+            existing_roles = []
+            for m in existing:
+                role = m.get('role', '?')
+                content = m.get('content', '')
+                if not isinstance(content, str):
+                    content = str(content)[:30]
+                else:
+                    content = content[:30]
+                existing_roles.append(f"{role}:{content}")
             logger.info(f"[DEBUG] Memory already has {mem_count_before} msgs for session {session_id} | msgs={existing_roles}")
 
         # 设置工具的 user_id / tenant_id

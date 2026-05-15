@@ -104,11 +104,20 @@ class SkillCompleteTool(BaseTool):
             if not messages:
                 return
 
+            def _safe_preview(msg: dict) -> str:
+                role = msg.get('role', '?')
+                content = msg.get('content', '')
+                if not isinstance(content, str):
+                    content = str(content)[:30]
+                else:
+                    content = content[:30]
+                return f"{role}:{content}"
+
             original_count = len(messages)
             msg_count_before = session.message_count_before
 
             # 诊断日志：压缩前记录所有消息摘要
-            before_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in messages]
+            before_roles = [_safe_preview(m) for m in messages]
             logger.info(
                 f"[SKILL_COMPRESS_DIAG] 开始压缩 | session={session_id} | "
                 f"skill={skill_name} | msg_count_before={msg_count_before} | "
@@ -125,7 +134,7 @@ class SkillCompleteTool(BaseTool):
                 if msg.get("role") == "user"
             ]
             if preserved_user_messages:
-                preserved_roles = [f"user:{m.get('content', '')[:30]}" for m in preserved_user_messages]
+                preserved_roles = [_safe_preview(m) for m in preserved_user_messages]
                 logger.info(
                     f"[SKILL_COMPRESS_DIAG] 保留并发用户消息 | "
                     f"count={len(preserved_user_messages)} | msgs={preserved_roles}"
@@ -143,7 +152,7 @@ class SkillCompleteTool(BaseTool):
             new_messages = deque(before_skill + [summary_message] + preserved_user_messages)
             self._memory_cache[session_id] = new_messages
 
-            after_roles = [f"{m.get('role', '?')}:{m.get('content', '')[:30]}" for m in new_messages]
+            after_roles = [_safe_preview(m) for m in new_messages]
             logger.info(
                 f"[SKILL_COMPRESS_DIAG] 压缩完成 | session={session_id} | "
                 f"original={original_count} | after={len(new_messages)} | "
