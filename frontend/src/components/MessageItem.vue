@@ -60,6 +60,18 @@
         />
       </div>
 
+      <!-- 下载文件卡片（仅助手消息显示，在执行详情上方） -->
+      <div
+        v-if="message.role === 'assistant' && downloadableFiles.length > 0"
+        class="mt-3 flex flex-wrap gap-2"
+      >
+        <DownloadFileCard
+          v-for="file in downloadableFiles"
+          :key="file.file_id"
+          :file="file"
+        />
+      </div>
+
       <!-- 执行详情（仅 AI 回复显示） -->
       <div v-if="message.role === 'assistant' && hasProgress" class="mt-2">
         <!-- 展开/折叠按钮 -->
@@ -99,18 +111,6 @@
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- 下载文件卡片（仅助手消息显示） -->
-      <div
-        v-if="message.role === 'assistant' && downloadableFiles.length > 0"
-        class="mt-3 space-y-2"
-      >
-        <DownloadFileCard
-          v-for="file in downloadableFiles"
-          :key="file.file_id"
-          :file="file"
-        />
       </div>
     </div>
   </div>

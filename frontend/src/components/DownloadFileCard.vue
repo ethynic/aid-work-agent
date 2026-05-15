@@ -2,8 +2,9 @@
   <a
     :href="file.download_url"
     download
-    class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 bg-gray-50
-           hover:bg-blue-50 hover:border-blue-300 transition-colors cursor-pointer group no-underline"
+    class="inline-flex items-center gap-3 p-3 rounded-lg border border-gray-200 bg-gray-50
+           hover:bg-blue-50 hover:border-blue-300 transition-colors cursor-pointer group no-underline
+           w-full md:w-auto md:min-w-[240px] md:max-w-[320px]"
   >
     <div
       class="w-9 h-9 rounded flex items-center justify-center flex-shrink-0"
