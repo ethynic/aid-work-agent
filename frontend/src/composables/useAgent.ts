@@ -82,7 +82,7 @@ export function useAgent() {
         messages.value = result.messages?.map(m => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
-          timestamp: new Date(m.created_at.endsWith('Z') ? m.created_at : m.created_at + 'Z').getTime(),
+          timestamp: new Date(m.created_at).getTime(),
           progressMessages: m.metadata?.progressMessages || [],
           attachments: m.metadata?.attachments || undefined,
           downloadableFiles: m.metadata?.downloadableFiles || undefined
