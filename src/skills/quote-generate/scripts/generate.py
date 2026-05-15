@@ -1883,8 +1883,8 @@ def generate_quote(params: dict) -> dict:
     quote_total = round(quote_per_person * total_people, 2)
     teacher_total = round(sum(item.get('teacher_subtotal') or 0 for item in items), 2)
 
-    # 导出 Excel
-    quote_data = {
+    # 导出 Excel（内部数据包含完整字段，用于模板渲染）
+    internal_data = {
         "course_name": course_name,
         "company_name": company_name,
         "region_name": region_name,
@@ -1902,9 +1902,24 @@ def generate_quote(params: dict) -> dict:
         "quote_total": quote_total,
     }
 
-    file_path = export_with_template(quote_data, template_path)
+    file_path = export_with_template(internal_data, template_path)
 
-    quote_data["file_path"] = os.path.abspath(file_path)
+    # 返回给调用方的数据：不暴露成本、利润等内部信息
+    quote_data = {
+        "course_name": course_name,
+        "company_name": company_name,
+        "region_name": region_name,
+        "start_date": start_date,
+        "trip_days": trip_days,
+        "total_people": total_people,
+        "teacher_count": teacher_count,
+        "items": items,
+        "cost_per_person": quote_per_person,
+        "total_cost": quote_total,
+        "teacher_total": round(sum(item.get('teacher_subtotal') or 0 for item in items), 2),
+        "quote_total": quote_total,
+        "file_path": os.path.abspath(file_path),
+    }
     return quote_data
 
 

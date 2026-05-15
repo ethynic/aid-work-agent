@@ -108,12 +108,8 @@ itinerary_text（行程文本）
         "remark": "贵阳2晚"
       }
     ],
-    "total_cost": 58000.00,
-    "cost_per_person": 1933.33,
+    "cost_per_person": 2223.33,
     "teacher_total": 1514.00,
-    "single_supplement": 320.00,
-    "profit_rate": 0.15,
-    "quote_per_person": 2223.33,
     "quote_total": 66700.00,
     "file_path": "/tmp/quote_xxx.xlsx"
   }
