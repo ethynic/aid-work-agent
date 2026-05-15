@@ -267,7 +267,8 @@ def recommend_vehicle(people_count: int, vehicles: List[Dict]) -> List[Dict]:
 def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
                            total_people: int, trip_days: int, season_type: str,
                            vehicle_count: Optional[int],
-                           route_distance_km: Optional[float] = None) -> Tuple[list, int]:
+                           route_distance_km: Optional[float] = None,
+                           leg_details: list = None) -> Tuple[list, int]:
     """计算交通费用"""
     vehicles = query_by_region("bs_travel_quote_vehicles", tenant_id, region_names)
     if not vehicles:
@@ -279,7 +280,8 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
 
     # 按公里计费：有 per_km 车辆且有距离数据
     if per_km_vehicles and route_distance_km is not None:
-        return _calculate_per_km_cost(items, per_km_vehicles, total_people, route_distance_km)
+        return _calculate_per_km_cost(items, per_km_vehicles, total_people,
+                                      route_distance_km, leg_details)
 
     # 按公里计费车辆无距离数据时，fallback 到按天计费（如果有 daily 车辆）
     if per_km_vehicles and route_distance_km is None and daily_vehicles:
@@ -304,6 +306,9 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
         if count > 1:
             remark_parts.append(f"{count}辆")
         remark_parts.append(f"{v['seats_max']}座")
+        if leg_details:
+            total_route_km = sum(l["distance_km"] for l in leg_details)
+            remark_parts.append(f"参考里程约{total_route_km:.0f}km")
 
         items.append({
             "category": "用车",
@@ -320,9 +325,96 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
 
     return items, total_vehicle_count
 
+# ============================================================
+# 多段路线距离计算
+# ============================================================
+
+def _calculate_multi_leg_distance(daily_routes: list, region: str = "") -> Tuple[float, list]:
+    """根据每日行程路线，逐段调用高德 API 计算总距离
+
+    Args:
+        daily_routes: LLM 解析的每日路线，格式 [{"day": 1, "legs": [{"from": "A", "to": "B"}]}]
+        region: 省份前缀，提高模糊地址解析准确度
+
+    Returns:
+        (total_km, leg_details) 其中 leg_details 含每段明细
+    """
+    route_script = project_root / "src" / "skills" / "route-distance-1.0.0" / "scripts" / "route_distance.py"
+    total_km = 0.0
+    leg_details = []
+
+    for day_route in daily_routes:
+        day_num = day_route.get("day", 0)
+        legs = day_route.get("legs", [])
+
+        for leg in legs:
+            origin = leg.get("from", "").strip()
+            destination = leg.get("to", "").strip()
+
+            if not origin or not destination:
+                continue
+            if origin == destination:
+                continue
+
+            try:
+                import subprocess as _sp
+                payload = {"origin": origin, "destination": destination}
+                if region:
+                    payload["region"] = region
+
+                _result = _sp.run(
+                    [sys.executable, str(route_script)],
+                    input=json.dumps(payload),
+                    capture_output=True, text=True, timeout=30,
+                )
+                if _result.returncode == 0 and _result.stdout.strip():
+                    _parsed = json.loads(_result.stdout.strip())
+                    if _parsed.get('success'):
+                        leg_km = _parsed['distance_km']
+                        leg_details.append({
+                            "day": day_num,
+                            "from": origin,
+                            "to": destination,
+                            "distance_km": leg_km,
+                        })
+                        total_km += leg_km
+                        logger.info(f"[quote-generate] D{day_num}: {origin} → {destination}, {leg_km}km")
+                    else:
+                        logger.warning(f"[quote-generate] D{day_num} {origin}→{destination} 计算失败: {_parsed.get('error')}")
+                else:
+                    logger.warning(f"[quote-generate] D{day_num} {origin}→{destination} 子进程失败")
+            except Exception as e:
+                logger.warning(f"[quote-generate] D{day_num} {origin}→{destination} 异常: {e}")
+
+    return round(total_km, 1), leg_details
+
+
+def _format_leg_details_remark(leg_details: list) -> str:
+    """将多段路线明细格式化为 remark 文本"""
+    if not leg_details:
+        return ""
+
+    # 按天分组
+    day_groups = {}
+    for leg in leg_details:
+        d = leg["day"]
+        if d not in day_groups:
+            day_groups[d] = []
+        day_groups[d].append(leg)
+
+    parts = []
+    for day_num in sorted(day_groups.keys()):
+        legs = day_groups[day_num]
+        day_km = sum(l["distance_km"] for l in legs)
+        leg_strs = [f"{l['from']}→{l['to']}({l['distance_km']:.0f}km)" for l in legs]
+        parts.append(f"D{day_num}{'、'.join(leg_strs)}")
+
+    return ", ".join(parts)
+
 
 def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
-                           distance_km: float) -> Tuple[list, int]:
+                           distance_km: float,
+                           leg_details: list = None) -> Tuple[list, int]:
     """按公里计费：distance_km * per_km_rate"""
     combo = recommend_vehicle(total_people, vehicles)
     total_vehicle_count = sum(c["count"] for c in combo)
@@ -342,7 +434,11 @@ def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
         if count > 1:
             remark_parts.append(f"{count}辆")
         remark_parts.append(f"{v['seats_max']}座")
-        remark_parts.append(f"按公里计费({distance_km:.0f}km)")
+        if leg_details:
+            route_detail = _format_leg_details_remark(leg_details)
+            remark_parts.append(f"按公里计费({distance_km:.0f}km: {route_detail})")
+        else:
+            remark_parts.append(f"按公里计费({distance_km:.0f}km)")
 
         items.append({
             "category": "用车",
@@ -1407,6 +1503,23 @@ def parse_itinerary(itinerary_text: str) -> dict:
         {{"city": "贵阳", "area": "南明区", "nights": 2}},
         {{"city": "安顺", "area": "西秀区", "nights": 1}}
     ],
+    "daily_routes": [
+        {{
+            "day": 1,
+            "legs": [
+                {{"from": "贵阳市区", "to": "平塘天文小镇"}},
+                {{"from": "平塘天文小镇", "to": "平塘酒店"}}
+            ]
+        }},
+        {{
+            "day": 2,
+            "legs": [
+                {{"from": "平塘酒店", "to": "天眼景区"}},
+                {{"from": "天眼景区", "to": "南仁东纪念馆"}},
+                {{"from": "南仁东纪念馆", "to": "平塘酒店"}}
+            ]
+        }}
+    ],
     "meal_tier": "standard",
     "guide_type": "local"
 }}
@@ -1418,7 +1531,8 @@ def parse_itinerary(itinerary_text: str) -> dict:
 4. hotel_stays 从每天的行程安排中提取：看每天住哪个城市，同一城市连续几晚合并为一项。nights 总和应等于 trip_days - 1。area 是酒店所在区/县（如"南明区"、"西秀区"），如果无法确定具体区县则为空字符串
 5. teacher_count 是随队老师人数，如果文本没提，默认 0
 6. meal_tier 和 guide_type 如果文本没提，用默认值 standard 和 local
-7. 只返回 JSON，不要其他文字"""
+7. daily_routes 从每天行程中提取每段用车的路线节点。legs 数组中每项表示一段行程（从哪里到哪里）。一天可能有多段：如从酒店出发到景点A、景点A到景点B、最后回酒店。from 和 to 尽量写具体地点名称（如"荔波小七孔"而非"荔波"），方便计算准确距离。如果某段行程的 from 和 to 是同一个地点则不要列出来（没有移动就没有用车）。daily_routes 的长度应等于 trip_days
+8. 只返回 JSON，不要其他文字"""
 
     raw = _call_llm(prompt)
 
@@ -1566,7 +1680,26 @@ def generate_quote(params: dict) -> dict:
 
     # Step 2.5: 计算导航距离（用于按公里计费）
     route_distance_km = None
-    if departure_city and destination:
+    leg_details = None
+    daily_routes = parsed.get('daily_routes', []) if itinerary_text else []
+
+    if daily_routes:
+        # 新模式：按每日行程多段计算
+        try:
+            route_distance_km, leg_details = _calculate_multi_leg_distance(
+                daily_routes, region=region_name
+            )
+            if leg_details:
+                logger.info(f"[quote-generate] 多段距离: {route_distance_km}km, {len(leg_details)}段")
+            else:
+                route_distance_km = None
+        except Exception as e:
+            logger.warning(f"[quote-generate] 多段距离计算失败: {e}")
+            route_distance_km = None
+            leg_details = None
+
+    # 回退：单次距离计算（旧模式或 daily_routes 为空）
+    if route_distance_km is None and departure_city and destination:
         try:
             import subprocess as _sp
             route_script = project_root / "src" / "skills" / "route-distance-1.0.0" / "scripts" / "route_distance.py"
@@ -1579,7 +1712,7 @@ def generate_quote(params: dict) -> dict:
                 _parsed = json.loads(_result.stdout.strip())
                 if _parsed.get('success'):
                     route_distance_km = _parsed['distance_km']
-                    logger.info(f"[quote-generate] 导航距离: {departure_city} → {destination}, {route_distance_km}km")
+                    logger.info(f"[quote-generate] 单段距离: {departure_city} → {destination}, {route_distance_km}km")
         except Exception as e:
             logger.warning(f"[quote-generate] 导航距离计算失败: {e}")
 
@@ -1588,7 +1721,7 @@ def generate_quote(params: dict) -> dict:
     # Step 3: 交通
     items, actual_vehicle_count = calculate_vehicle_cost(
         items, tenant_id, region_names, total_people, trip_days,
-        season_type, vehicle_count, route_distance_km
+        season_type, vehicle_count, route_distance_km, leg_details
     )
     if actual_vehicle_count == 0:
         actual_vehicle_count = vehicle_count or 1
