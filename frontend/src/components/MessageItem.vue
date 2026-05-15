@@ -213,6 +213,8 @@ const downloadableFiles = computed<DownloadableFile[]>(() => {
 // 用于渲染的内容（移除附件标注文本和文件路径上下文，避免重复显示）
 const displayContent = computed(() => {
   let content = props.message.content
+  // 移除过程标签包裹的内容（工具中间产出，仅在执行详情中展示）
+  content = content.replace(/<!--process-->[\s\S]*?<!--\/process-->\n?/g, '')
   // 移除末尾的 [附件: ...] 标注
   content = content.replace(/\n\n\[附件:.*?\]$/s, '')
   // 移除后端追加的文件路径上下文（供 LLM 使用的，不需要展示给用户）

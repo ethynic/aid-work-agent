@@ -1813,7 +1813,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     # 如果子智能体生成了内容（content_generate），实时展示给用户
                     if delegation_result.get("generated_contents"):
                         for content in delegation_result["generated_contents"]:
-                            yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
+                            yield f"\n<!--process-->\n📝 **内容生成结果：**\n\n{content}\n\n<!--/process-->\n"
 
 
                     # 标记任务完成（澄清状态不标记为失败）
@@ -1892,7 +1892,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             content = result.get("content", "")
                             logger.info(f"[CONTENT_GEN] success={success}, content_len={len(content) if content else 0}")
                             if success and content:
-                                yield f"\n📝 **内容生成结果：**\n\n{content}\n\n"
+                                yield f"\n<!--process-->\n📝 **内容生成结果：**\n\n{content}\n\n<!--/process-->\n"
                         else:
                             logger.warning(f"[CONTENT_GEN] Unexpected result type: {type(result)}")
 
