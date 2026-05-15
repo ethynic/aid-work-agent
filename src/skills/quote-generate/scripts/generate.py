@@ -489,17 +489,17 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
 
             # 景区内交通
             if attr.get('internal_transport_price') and attr['internal_transport_price'] > 0:
-                transport_total = float(attr['internal_transport_price']) * total_people
+                transport_price = float(attr['internal_transport_price'])
                 items.append({
                     "category": "门票",
                     "name": f"{attr['name']}({attr.get('internal_transport_name', '景区交通')})",
-                    "unit_price": float(attr['internal_transport_price']),
+                    "unit_price": transport_price,
                     "quantity": total_people,
                     "unit": "人",
                     "frequency": 1,
                     "freq_unit": "次",
-                    "subtotal": round(transport_total / total_people, 2),
-                    "teacher_subtotal": round(float(attr['internal_transport_price']) * teacher_count, 2),
+                    "subtotal": transport_price,
+                    "teacher_subtotal": round(transport_price * teacher_count, 2),
                     "remark": "",
                 })
 
@@ -512,18 +512,6 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
             tickets = conn.fetchall()
 
             if not tickets:
-                items.append({
-                    "category": "门票",
-                    "name": f"{attr['name']}(门票待确认)",
-                    "unit_price": 0,
-                    "quantity": total_people,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": 0,
-                    "teacher_subtotal": 0,
-                    "remark": "价格待确认",
-                })
                 continue
 
             ticket_map = {t['ticket_type']: t for t in tickets}
@@ -532,52 +520,55 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
             if adults > 0 and 'adult' in ticket_map:
                 t = ticket_map['adult']
                 price = float(t.get('agency_price') or t['retail_price'])
-                items.append({
-                    "category": "门票",
-                    "name": f"{attr['name']}({t['ticket_type_label']})",
-                    "unit_price": price,
-                    "quantity": adults,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": round(price * adults / total_people, 2),
-                    "teacher_subtotal": round(price * teacher_count, 2) if teacher_count > 0 else 0,
-                    "remark": "协议价" if t.get('agency_price') else "挂牌价",
-                })
+                if price > 0:
+                    items.append({
+                        "category": "门票",
+                        "name": f"{attr['name']}({t['ticket_type_label']})",
+                        "unit_price": price,
+                        "quantity": adults,
+                        "unit": "人",
+                        "frequency": 1,
+                        "freq_unit": "次",
+                        "subtotal": price,
+                        "teacher_subtotal": round(price * teacher_count, 2) if teacher_count > 0 else 0,
+                        "remark": "协议价" if t.get('agency_price') else "挂牌价",
+                    })
 
             # 儿童半票
             if children_half > 0 and 'child_half' in ticket_map:
                 t = ticket_map['child_half']
                 price = float(t.get('agency_price') or t['retail_price'])
-                items.append({
-                    "category": "门票",
-                    "name": f"{attr['name']}({t['ticket_type_label']})",
-                    "unit_price": price,
-                    "quantity": children_half,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": round(price * children_half / total_people, 2),
-                    "teacher_subtotal": 0,
-                    "remark": t['ticket_type_label'],
-                })
+                if price > 0:
+                    items.append({
+                        "category": "门票",
+                        "name": f"{attr['name']}({t['ticket_type_label']})",
+                        "unit_price": price,
+                        "quantity": children_half,
+                        "unit": "人",
+                        "frequency": 1,
+                        "freq_unit": "次",
+                        "subtotal": price,
+                        "teacher_subtotal": 0,
+                        "remark": t['ticket_type_label'],
+                    })
 
             # 学生票
             if students > 0 and 'student' in ticket_map:
                 t = ticket_map['student']
                 price = float(t.get('agency_price') or t['retail_price'])
-                items.append({
-                    "category": "门票",
-                    "name": f"{attr['name']}({t['ticket_type_label']})",
-                    "unit_price": price,
-                    "quantity": students,
-                    "unit": "人",
-                    "frequency": 1,
-                    "freq_unit": "次",
-                    "subtotal": round(price * students / total_people, 2),
-                    "teacher_subtotal": 0,
-                    "remark": t['ticket_type_label'],
-                })
+                if price > 0:
+                    items.append({
+                        "category": "门票",
+                        "name": f"{attr['name']}({t['ticket_type_label']})",
+                        "unit_price": price,
+                        "quantity": students,
+                        "unit": "人",
+                        "frequency": 1,
+                        "freq_unit": "次",
+                        "subtotal": price,
+                        "teacher_subtotal": 0,
+                        "remark": t['ticket_type_label'],
+                    })
 
             # 老人免票不收费
 
@@ -607,20 +598,16 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         logger.warning(f"[quote-generate] 酒店 doc_id={doc_id} 价格表无有效价格")
         return items, 0
 
-    # 学生排房
+    # subtotal = 单价 ÷ 每间人数 × 住几晚 = 每人住宿成本
+    # quantity: 每间房住几人（标间=2，大床房=2，三人间=3）
+    pax_per_room = 2
+    subtotal = round(default_price / pax_per_room * nights, 2)
+    teacher_cost = round(subtotal * teacher_count, 2)
+
+    single_supplement = 0
     students = total_people - teacher_count
     couple_people = couples * 2
     remaining = students - couple_people
-    standard_count = math.ceil(remaining / 2) + couples if remaining > 0 else couples
-
-    total_room_cost = standard_count * default_price * nights
-    per_person = round(total_room_cost / total_people, 2)
-
-    # 老师排房
-    teacher_rooms = math.ceil(teacher_count / 2) if teacher_count > 0 else 0
-    teacher_cost = round(teacher_rooms * default_price * nights, 2)
-
-    single_supplement = 0
     if remaining > 0 and remaining % 2 == 1:
         single_supplement = round(default_price * nights / total_people, 2)
 
@@ -628,11 +615,11 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         "category": "住宿",
         "name": "酒店住宿",
         "unit_price": default_price,
-        "quantity": standard_count,
-        "unit": "间",
+        "quantity": pax_per_room,
+        "unit": "人",
         "frequency": nights,
         "freq_unit": "晚",
-        "subtotal": per_person,
+        "subtotal": subtotal,
         "teacher_subtotal": teacher_cost,
         "remark": "两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
     })
@@ -721,19 +708,15 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
                         hotel_name = parts[-1].strip()
                     break
 
-        # 学生排房
+        # subtotal = 单价 ÷ 每间人数 × 住几晚 = 每人住宿成本
+        pax_per_room = 2
+        subtotal = round(price / pax_per_room * nights, 2)
+        teacher_cost = round(subtotal * teacher_count, 2)
+
+        # 单房差
         students = total_people - teacher_count
         couple_people = couples * 2
         remaining_students = students - couple_people
-        student_rooms = math.ceil(remaining_students / 2) + couples if remaining_students > 0 else couples
-        student_total_cost = student_rooms * price * nights
-        student_cost_per_person = round(student_total_cost / total_people, 2)
-
-        # 老师排房（老师2人一间）
-        teacher_rooms = math.ceil(teacher_count / 2) if teacher_count > 0 else 0
-        teacher_cost = round(teacher_rooms * price * nights, 2)
-
-        # 单房差
         if remaining_students > 0 and remaining_students % 2 == 1:
             single_supplement += round(price * nights / total_people, 2)
 
@@ -741,11 +724,11 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
             "category": "住宿",
             "name": hotel_name,
             "unit_price": price,
-            "quantity": 2,
+            "quantity": pax_per_room,
             "unit": "人",
             "frequency": nights,
             "freq_unit": "夜",
-            "subtotal": student_cost_per_person,
+            "subtotal": subtotal,
             "teacher_subtotal": teacher_cost,
             "remark": f"{city}{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
         })
@@ -805,41 +788,70 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
                                          attraction_info, retriever)
             continue
 
-        attraction_name = extracted.get("name", search_name)
+        attraction_name = extracted.get("name") or search_name
         is_confirmed = extracted.get("confirmed", False)
 
         if not is_confirmed:
             logger.warning(f"[quote-generate] 景点验证不通过: 搜索='{search_name}', "
                            f"知识库景点='{attraction_name}'，仍使用该数据")
 
-        # 门票项目
-        for ticket in extracted.get("tickets", []):
+        # 门票：根据票种匹配人数，计算 subtotal
+        ticket_type_map = {
+            "adult": adults,
+            "child_half": children_half,
+            "student": students,
+            "elder": elders,
+        }
+        for ticket in extracted.get("tickets") or []:
+            unit_price = float(ticket.get("unit_price") or 0)
+            if unit_price == 0:
+                continue
+            ticket_type = ticket.get("ticket_type", "adult")
+            quantity = ticket_type_map.get(ticket_type, adults)
+            teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 and ticket_type == "adult" else 0
+
             items.append({
                 "category": "门票",
-                "name": ticket.get("name", ""),
-                "unit_price": ticket.get("unit_price", 0),
-                "quantity": ticket.get("quantity", 1),
-                "unit": ticket.get("unit", "人"),
-                "frequency": ticket.get("frequency", 1),
-                "freq_unit": ticket.get("freq_unit", "次"),
-                "subtotal": ticket.get("subtotal", 0),
-                "teacher_subtotal": ticket.get("teacher_subtotal", 0),
-                "remark": ticket.get("remark", ""),
+                "name": ticket.get("name") or f"{attraction_name}(门票)",
+                "unit_price": unit_price,
+                "quantity": quantity,
+                "unit": "人",
+                "frequency": 1,
+                "freq_unit": "次",
+                "subtotal": unit_price,
+                "teacher_subtotal": teacher_subtotal,
+                "remark": ticket.get("remark") or "",
             })
 
-        # 项目/服务
-        for proj in extracted.get("projects", []):
+        # 项目/服务：根据计费方式计算 subtotal（每人费用）
+        for proj in extracted.get("projects") or []:
+            unit_price = float(proj.get("unit_price") or 0)
+            if unit_price == 0:
+                continue
+            billing = proj.get("billing_method", "per_person")
+
+            if billing == "per_group":
+                quantity = 1
+                unit = "团"
+                subtotal = round(unit_price / total_people, 2) if total_people > 0 else 0
+                teacher_subtotal = 0
+            else:
+                quantity = total_people
+                unit = "人"
+                subtotal = unit_price
+                teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 else 0
+
             items.append({
                 "category": "门票",
-                "name": proj.get("name", ""),
-                "unit_price": proj.get("unit_price", 0),
-                "quantity": proj.get("quantity", 1),
-                "unit": proj.get("unit", "人"),
-                "frequency": proj.get("frequency", 1),
-                "freq_unit": proj.get("freq_unit", "次"),
-                "subtotal": proj.get("subtotal", 0),
-                "teacher_subtotal": proj.get("teacher_subtotal", 0),
-                "remark": proj.get("remark", ""),
+                "name": proj.get("name") or "",
+                "unit_price": unit_price,
+                "quantity": quantity,
+                "unit": unit,
+                "frequency": 1,
+                "freq_unit": "次",
+                "subtotal": subtotal,
+                "teacher_subtotal": teacher_subtotal,
+                "remark": proj.get("remark") or "",
             })
 
     return items
@@ -851,7 +863,7 @@ def _llm_extract_attraction_prices(
     students: int, teacher_count: int, total_people: int,
     mentioned_activities: list = None,
 ) -> Optional[dict]:
-    """调用 LLM 验证景点并提取门票+项目价格"""
+    """调用 LLM 验证景点并提取门票+项目原始价格（不做计算）"""
     # 构建项目提取指令
     if mentioned_activities:
         activities_str = "、".join(mentioned_activities)
@@ -859,7 +871,7 @@ def _llm_extract_attraction_prices(
     else:
         project_instruction = """3. **提取项目/服务价格**：行程中未提到该景点的具体项目，projects 返回空数组[]。"""
 
-    prompt = f"""你是一个旅游报价助手。我正在搜索景点"{search_name}"，向量搜索返回了一个景点。请先确认这个景点是否就是我要找的，然后从中提取报价所需的门票和项目/服务价格。
+    prompt = f"""你是一个旅游报价数据提取助手。我正在搜索景点"{search_name}"，向量搜索返回了一个景点。请先确认这个景点是否就是我要找的，然后从中**只提取原始价格数据**，不要做任何计算。
 
 ## 景点信息（来自向量搜索）
 {attraction_info}
@@ -870,21 +882,11 @@ def _llm_extract_attraction_prices(
 ## 项目/服务价格表
 {project_table if project_table else "（无）"}
 
-## 团队人数信息
-- 学生人数: {adults}人（按成人票计价）
-- 儿童人数: {children_half}人
-- 学生票人数: {students}人
-- 随队老师: {teacher_count}人
-- 总人数: {total_people}人
-
 ## 任务
 
 1. **先验证**：根据景点信息，判断搜索名称"{search_name}"和知识库中的景点是否是同一个。考虑别名、简称等因素。
-2. **提取门票价格**：从门票价格表中提取适用于上述人群的门票价格，每个票种一行。优先取"团队"价。如果找不到明确的人群对应票种，取最接近的。
+2. **提取门票价格**：从门票价格表中提取适用于以下人群的门票**原始单价**，优先取"团队"价。需要提取的票种：成人票（{adults}人）、儿童票（{children_half}人）、学生票（{students}人）。
 {project_instruction}
-   区分按人计费和按团计费：
-   - 按人计费：subtotal = price × 人数 / total_people（学生人均分摊），teacher_subtotal = price × teacher_count
-   - 按团计费：subtotal = price / total_people（学生人均分摊），teacher_subtotal = 0
 
 请返回 JSON：
 {{
@@ -894,22 +896,37 @@ def _llm_extract_attraction_prices(
         {{
             "name": "景点名(成人票)",
             "unit_price": 110,
-            "quantity": {adults},
-            "unit": "人",
-            "frequency": 1,
-            "freq_unit": "次",
-            "subtotal": {round(110 * adults / total_people, 2) if total_people > 0 else 0},
-            "teacher_subtotal": {round(110 * teacher_count, 2) if teacher_count > 0 else 0},
+            "ticket_type": "adult",
+            "remark": "团队价"
+        }},
+        {{
+            "name": "景点名(学生票)",
+            "unit_price": 80,
+            "ticket_type": "student",
             "remark": "团队价"
         }}
     ],
-    "projects": []
+    "projects": [
+        {{
+            "name": "讲解费",
+            "unit_price": 400,
+            "billing_method": "per_group",
+            "remark": "按团计费"
+        }},
+        {{
+            "name": "研学课程",
+            "unit_price": 30,
+            "billing_method": "per_person",
+            "remark": ""
+        }}
+    ]
 }}
 
 注意：
 - confirmed 为 true/false，表示景点是否匹配
-- tickets 中的 subtotal 是学生人均分摊（price × 人数 / total_people），teacher_subtotal 是老师承担的费用
-- projects 中按团计费的 subtotal = price / total_people，teacher_subtotal = 0
+- unit_price 是价格表中的**原始单价**，不要计算
+- ticket_type 为 adult/child_half/student/elder
+- billing_method 为 per_person（按人计费）或 per_group（按团计费）
 - 如果项目/服务价格表为空，projects 返回空数组
 - 只返回 JSON，不要其他文字"""
 
@@ -921,7 +938,7 @@ def _llm_extract_attraction_prices(
             raw = json_match.group(1)
         result = json.loads(raw.strip())
         logger.info(f"[quote-generate] LLM景点提取: 搜索='{search_name}', 确认={result.get('confirmed')}, "
-                     f"门票{len(result.get('tickets', []))}项, 项目{len(result.get('projects', []))}项")
+                     f"门票{len(result.get('tickets') or [])}项, 项目{len(result.get('projects') or [])}项")
         return result
     except Exception as e:
         logger.warning(f"[quote-generate] LLM景点价格提取失败: {e}")
@@ -969,7 +986,7 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
                 "category": "门票", "name": f"{attraction_name}(成人票)",
                 "unit_price": price, "quantity": adults, "unit": "人",
                 "frequency": 1, "freq_unit": "次",
-                "subtotal": round(price * adults / total_people, 2),
+                "subtotal": price,
                 "teacher_subtotal": round(price * teacher_count, 2) if teacher_count > 0 else 0,
                 "remark": "团队价",
             })
@@ -980,7 +997,7 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
                 "category": "门票", "name": f"{attraction_name}(儿童票)",
                 "unit_price": price, "quantity": children_half, "unit": "人",
                 "frequency": 1, "freq_unit": "次",
-                "subtotal": round(price * children_half / total_people, 2),
+                "subtotal": price,
                 "teacher_subtotal": 0, "remark": "儿童票",
             })
     if students > 0:
@@ -990,7 +1007,7 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
                 "category": "门票", "name": f"{attraction_name}(学生票)",
                 "unit_price": price, "quantity": students, "unit": "人",
                 "frequency": 1, "freq_unit": "次",
-                "subtotal": round(price * students / total_people, 2),
+                "subtotal": price,
                 "teacher_subtotal": 0, "remark": "学生票",
             })
 
@@ -1038,22 +1055,14 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
 
         room_price = float(default_room.get('agency_price') or default_room['retail_price'])
 
-        # 夫妻用大床房
-        couple_room = double_rooms[0] if double_rooms else None
-        couple_room_price = float(couple_room.get('agency_price') or couple_room['retail_price']) if couple_room else room_price
-
-        # 计算排房
-        couple_people = couples * 2
-        remaining = total_people - couple_people
-
-        # 标间数
-        standard_count = math.ceil(remaining / 2) if remaining > 0 else 0
-
-        # 总房费
-        total_room_cost = (standard_count * room_price + couples * couple_room_price) * nights
-        per_person = round(total_room_cost / total_people, 2)
+        # subtotal = 单价 ÷ 每间人数 × 住几晚 = 每人住宿成本
+        pax_per_room = 2
+        subtotal = round(room_price / pax_per_room * nights, 2)
+        teacher_cost = round(subtotal * teacher_count, 2)
 
         # 单房差：如果剩余人是奇数
+        couple_people = couples * 2
+        remaining = total_people - couple_people
         single_supplement = 0
         if remaining > 0 and remaining % 2 == 1:
             single_supplement = round(room_price * nights / total_people, 2)
@@ -1062,12 +1071,12 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
             "category": "住宿",
             "name": f"{default_room.get('room_type_label', '标准间')}",
             "unit_price": room_price,
-            "quantity": standard_count + couples,
-            "unit": "间",
+            "quantity": pax_per_room,
+            "unit": "人",
             "frequency": nights,
             "freq_unit": "晚",
-            "subtotal": per_person,
-            "teacher_subtotal": round(math.ceil(teacher_count / 2) * room_price * nights, 2) if teacher_count > 0 else 0,
+            "subtotal": subtotal,
+            "teacher_subtotal": teacher_cost,
             "remark": f"两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
         })
 
@@ -1489,13 +1498,13 @@ def parse_itinerary(itinerary_text: str) -> dict:
 {{
     "region_name": "主要目的地（省份或城市名）",
     "total_people": 30,
-    "adults": 25,
-    "children_half": 5,
-    "students": 0,
+    "adults": 0,
+    "children_half": 0,
+    "students": 30,
     "elders": 0,
     "couples": 0,
     "teacher_count": 3,
-    "trip_days": 6,
+    "trip_days": 4,
     "departure_city": "出发城市",
     "destination": "主要目的地城市",
     "daily_attractions": [
@@ -1546,7 +1555,16 @@ def parse_itinerary(itinerary_text: str) -> dict:
 }}
 
 注意：
-1. 人数信息从文本中提取，如果没有明确说，adults 默认等于 total_people
+1. **人数分配规则（必须严格遵守）**：
+   - total_people = adults + children_half + students + elders（不含 teacher_count）
+   - adults = 普通成人游客（非学生、非儿童、非老人），按成人票计费
+   - students = 学生群体（初中生、高中生、大学生等），按学生票计费
+   - children_half = 需要购买儿童半票的儿童人数
+   - elders = 老人人数
+   - teacher_count = 随队老师/领队人数，老师**不计入** adults 和 students，是独立字段
+   - **关键**：如果行程明确说"XX名学生"或"XX名初一/初三/高一学生"，这些全是 students，不是 adults。adults 应为 0
+   - **关键**：students + adults + children_half + elders 必须等于 total_people（不含 teacher_count）。如果30人中全部是学生且没提其他成人，则 students=30, adults=0
+   - **关键**：老师不要放入 adults 中！如果文本说"30人初三学生+3名老师"，total_people=30, students=30, adults=0, teacher_count=3
 2. daily_attractions 从每天行程中提取当天要去的景点和具体游玩项目。name 是景点名称。activities 是该景点中计划体验的具体项目/活动名称（如"发报机课程"、"蜡染体验"、"讲解"等），行程文本明确提到的才填写。如果行程只提到参观景点没提具体项目，activities 填空数组[]。不要编造行程中未提到的项目
 3. hotel_preference 是酒店偏好描述（如"4钻"、"经济型"），不是酒店名
 4. hotel_stays 从每天的行程安排中提取：看每天住哪个城市，同一城市连续几晚合并为一项。nights 总和应等于 trip_days - 1。area 是酒店所在区/县（如"南明区"、"西秀区"），如果无法确定具体区县则为空字符串
@@ -1598,18 +1616,32 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
         try:
             from attraction_retriever import AttractionRetriever
             retriever = AttractionRetriever()
+            seen_doc_ids = set()
             for name in attraction_names:
                 matches = retriever.search(tenant_id, name, top_k=1)
                 if matches:
+                    doc_id = matches[0]["doc_id"]
                     match_info = {
                         "name": name,
-                        "doc_id": matches[0]["doc_id"],
+                        "doc_id": doc_id,
                         "info": matches[0].get("info", ""),
                         "activities": attraction_activities_map.get(name, []),
                     }
-                    result["attraction_doc_ids"].append(matches[0]["doc_id"])
+                    # 去重：同一 doc_id 只处理一次，合并 activities
+                    if doc_id in seen_doc_ids:
+                        for existing in result["attraction_matches"]:
+                            if existing["doc_id"] == doc_id:
+                                existing_activities = set(existing["activities"])
+                                for act in match_info["activities"]:
+                                    if act not in existing_activities:
+                                        existing["activities"].append(act)
+                                        existing_activities.add(act)
+                        logger.info(f"[quote-generate] 景点合并: '{name}' → doc_id={doc_id} (已有，合并activities)")
+                        continue
+                    seen_doc_ids.add(doc_id)
+                    result["attraction_doc_ids"].append(doc_id)
                     result["attraction_matches"].append(match_info)
-                    logger.info(f"[quote-generate] 景点匹配: '{name}' → doc_id={matches[0]['doc_id']}, "
+                    logger.info(f"[quote-generate] 景点匹配: '{name}' → doc_id={doc_id}, "
                                 f"activities={match_info['activities']}")
                 else:
                     logger.warning(f"[quote-generate] 景点未匹配: '{name}'")
@@ -1675,17 +1707,47 @@ def generate_quote(params: dict) -> dict:
 
         resources = resolve_resources(parsed, tenant_id)
 
-        region_name = parsed.get('region_name', '')
-        total_people = parsed.get('total_people', 30)
-        adults = parsed.get('adults', total_people)
-        children_half = parsed.get('children_half', 0)
-        students = parsed.get('students', 0)
-        elders = parsed.get('elders', 0)
-        couples = parsed.get('couples', 0)
-        teacher_count = parsed.get('teacher_count', 0)
-        trip_days = parsed.get('trip_days', 1)
-        departure_city = parsed.get('departure_city', '')
-        destination = parsed.get('destination', '')
+        region_name = parsed.get('region_name') or ''
+        total_people = parsed.get('total_people') or 30
+        adults = parsed.get('adults') or 0
+        children_half = parsed.get('children_half') or 0
+        students = parsed.get('students') or 0
+        elders = parsed.get('elders') or 0
+        couples = parsed.get('couples') or 0
+        teacher_count = parsed.get('teacher_count') or 0
+        trip_days = parsed.get('trip_days') or 1
+        departure_city = parsed.get('departure_city') or ''
+        destination = parsed.get('destination') or ''
+
+        # 人数校验：adults + students + children_half + elders 应等于 total_people
+        # teacher_count 是额外人数，不参与上面的合计
+        pax_sum = adults + students + children_half + elders
+        if pax_sum != total_people:
+            if pax_sum > total_people and students > 0 and adults > 0:
+                # LLM 常见错误：把学生也算进 adults，导致重复计数
+                corrected_adults = max(0, total_people - students - children_half - elders)
+                logger.warning(
+                    f"[quote-generate] 人数校验修正: adults {adults}→{corrected_adults}, "
+                    f"students={students}, children_half={children_half}, elders={elders}, "
+                    f"total_people={total_people}, 原始合计={pax_sum}"
+                )
+                adults = corrected_adults
+            elif pax_sum < total_people:
+                adults += total_people - pax_sum
+                logger.warning(
+                    f"[quote-generate] 人数不足，补充 adults: adults→{adults}, total_people={total_people}"
+                )
+
+        # 另一种常见错误：LLM 把 teacher_count 混入 adults
+        # 表现：adults 数量恰好等于 teacher_count，且 students < total_people
+        if adults > 0 and adults == teacher_count and students > 0 and students < total_people:
+            corrected_students = total_people
+            logger.warning(
+                f"[quote-generate] 疑似老师混入adults: adults={adults}==teacher_count={teacher_count}, "
+                f"students={students}→{corrected_students}, adults→0"
+            )
+            students = corrected_students
+            adults = 0
         attraction_ids = []
         hotel_id = None
         attraction_doc_ids = resources['attraction_doc_ids']
@@ -1698,27 +1760,27 @@ def generate_quote(params: dict) -> dict:
         include_insurance = True
     else:
         # 旧模式：向后兼容，直接使用传入的结构化参数
-        region_name = params.get('region_name', '')
-        total_people = params.get('total_people', 30)
-        adults = params.get('adults', total_people)
-        children_half = params.get('children_half', 0)
-        students = params.get('students', 0)
-        elders = params.get('elders', 0)
-        couples = params.get('couples', 0)
-        teacher_count = params.get('teacher_count', 0)
-        trip_days = params.get('trip_days', 1)
-        attraction_ids = params.get('attraction_ids', [])
+        region_name = params.get('region_name') or ''
+        total_people = params.get('total_people') or 30
+        adults = params.get('adults') or 0
+        children_half = params.get('children_half') or 0
+        students = params.get('students') or 0
+        elders = params.get('elders') or 0
+        couples = params.get('couples') or 0
+        teacher_count = params.get('teacher_count') or 0
+        trip_days = params.get('trip_days') or 1
+        attraction_ids = params.get('attraction_ids') or []
         hotel_id = params.get('hotel_id')
         hotel_doc_id = params.get('hotel_doc_id')
-        attraction_doc_ids = params.get('attraction_doc_ids', [])
-        attraction_matches = params.get('attraction_matches', [])
-        hotel_stays = params.get('hotel_stays', [])
-        meal_tier = params.get('meal_tier', 'standard')
-        guide_type = params.get('guide_type', 'local')
+        attraction_doc_ids = params.get('attraction_doc_ids') or []
+        attraction_matches = params.get('attraction_matches') or []
+        hotel_stays = params.get('hotel_stays') or []
+        meal_tier = params.get('meal_tier') or 'standard'
+        guide_type = params.get('guide_type') or 'local'
         vehicle_count = params.get('vehicle_count')
-        include_insurance = params.get('include_insurance', True)
-        departure_city = params.get('departure_city', '')
-        destination = params.get('destination', '')
+        include_insurance = params.get('include_insurance') is not False
+        departure_city = params.get('departure_city') or ''
+        destination = params.get('destination') or ''
 
     # Step 1: 区域名称
     region_names = [region_name] if region_name else []
@@ -1811,12 +1873,15 @@ def generate_quote(params: dict) -> dict:
         actual_vehicle_count, include_insurance, teacher_count=teacher_count
     )
 
+    # 过滤价格为0的项目（不体现在报价单中）
+    items = [item for item in items if (item.get('subtotal') or 0) > 0 or (item.get('unit_price') or 0) > 0]
+
     # 汇总
-    cost_per_person = round(sum(item['subtotal'] for item in items), 2)
+    cost_per_person = round(sum(item.get('subtotal') or 0 for item in items), 2)
     total_cost = round(cost_per_person * total_people, 2)
     quote_per_person = round(cost_per_person * (1 + profit_rate), 2)
     quote_total = round(quote_per_person * total_people, 2)
-    teacher_total = round(sum(item.get('teacher_subtotal', 0) for item in items), 2)
+    teacher_total = round(sum(item.get('teacher_subtotal') or 0 for item in items), 2)
 
     # 导出 Excel
     quote_data = {
@@ -1891,8 +1956,10 @@ def main():
         print(json.dumps({"success": False, "error": f"JSON 解析错误: {e}"}, ensure_ascii=False))
         sys.exit(1)
     except Exception as e:
-        logger.error(f"[quote-generate] 报价生成失败: {e}", exc_info=True)
-        print(json.dumps({"success": False, "error": str(e)}, ensure_ascii=False))
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"[quote-generate] 报价生成失败: {e}\n{tb}")
+        print(json.dumps({"success": False, "error": str(e), "traceback": tb}, ensure_ascii=False))
         sys.exit(1)
 
 
