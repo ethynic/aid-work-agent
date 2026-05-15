@@ -1210,59 +1210,52 @@ class Agent:
         # 按需加载租户自定义 skills
         self._ensure_tenant_skills_loaded()
 
-        # ========== 临时调试日志 ==========
+        # ========== 临时调试日志（多 Worker 排查） ==========
         import time
+        import os
         _debug_start_time = time.time()
-        logger.info(f"[DEBUG] process_message called, session_id={session_id}, input_length={len(user_input)}")
+        logger.info(
+            f"[DEBUG] process_message called, session_id={session_id}, "
+            f"input_length={len(user_input)}, pid={os.getpid()}"
+        )
         # ========== 临时调试日志 ==========
 
-        # 恢复历史会话上下文：如果该 session 的 memory 为空，从 DB 加载历史消息
-        mem_count_before = self.memory.get_message_count(session_id)
-        if mem_count_before == 0:
-            try:
-                from src.db.models import MessageDB
-                logger.info(f"[DEBUG] Memory empty, loading history from DB, session_id={session_id}")
-                db_messages = MessageDB.list_by_session(
-                    session_id,
-                    limit=self.memory.short_term.max_messages,
-                    roles=["user", "assistant"],
+        # 每次处理前都从 DB 重建 memory，解决 Gunicorn 多 Worker 内存隔离导致的缓存不同步
+        try:
+            from src.db.models import MessageDB
+            db_messages = MessageDB.list_by_session(
+                session_id,
+                limit=self.memory.short_term.max_messages,
+                roles=["user", "assistant"],
+            )
+            # 清除可能过时的内存数据，用 DB 最新历史重建
+            self.memory.clear(session_id)
+            if db_messages:
+                history_messages = [
+                    {
+                        "role": msg["role"],
+                        "content": msg["content"] or "",
+                        "timestamp": msg.get("created_at", ""),
+                    }
+                    for msg in db_messages
+                ]
+                self.memory.load_history(session_id, history_messages)
+                loaded_roles = []
+                for m in history_messages:
+                    content = m.get('content', '')
+                    if not isinstance(content, str):
+                        content = str(content)[:30]
+                    else:
+                        content = content[:30]
+                    loaded_roles.append(f"{m['role']}:{content}")
+                logger.info(
+                    f"[DEBUG] Rebuilt memory from DB for session {session_id}, pid={os.getpid()}, "
+                    f"loaded={len(history_messages)} msgs | {loaded_roles}"
                 )
-                if db_messages:
-                    history_messages = [
-                        {
-                            "role": msg["role"],
-                            "content": msg["content"] or "",
-                            "timestamp": msg.get("created_at", ""),
-                        }
-                        for msg in db_messages
-                    ]
-                    self.memory.load_history(session_id, history_messages)
-                    loaded_roles = []
-                    for m in history_messages:
-                        content = m.get('content', '')
-                        if not isinstance(content, str):
-                            content = str(content)[:30]
-                        else:
-                            content = content[:30]
-                        loaded_roles.append(f"{m['role']}:{content}")
-                    logger.info(
-                        f"[DEBUG] Loaded {len(history_messages)} history messages for session {session_id}, "
-                        f"time_since_start={time.time() - _debug_start_time:.3f}s | msgs={loaded_roles}"
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to load history for session {session_id}: {e}")
-        else:
-            existing = self.memory.get_context(session_id)
-            existing_roles = []
-            for m in existing:
-                role = m.get('role', '?')
-                content = m.get('content', '')
-                if not isinstance(content, str):
-                    content = str(content)[:30]
-                else:
-                    content = content[:30]
-                existing_roles.append(f"{role}:{content}")
-            logger.info(f"[DEBUG] Memory already has {mem_count_before} msgs for session {session_id} | msgs={existing_roles}")
+            else:
+                logger.info(f"[DEBUG] No DB history for session {session_id}, pid={os.getpid()}, memory cleared")
+        except Exception as e:
+            logger.warning(f"[DEBUG] Failed to rebuild memory from DB for session {session_id}: {e}")
 
         # 设置工具的 user_id / tenant_id
         if user:
