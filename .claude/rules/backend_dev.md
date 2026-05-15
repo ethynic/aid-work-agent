@@ -72,6 +72,22 @@ async def get_data():
 
 > **磁盘/数据库是共享的，内存是隔离的。** 任何依赖内存状态且跨请求的读写操作，都必须考虑多 worker 一致性。
 
+### 禁止依赖内存变量存储跨请求状态
+
+**原则**：所有需要在多个 HTTP 请求之间保持的状态，**禁止**使用进程内变量（如 `dict`、`set`、`list`）存储。
+
+| ❌ 禁止（内存变量） | ✅ 正确（共享存储） |
+|-------------------|-------------------|
+| `self._pending_clarifications: dict = {}` | `redis_client.hset("pending_clarification:{sid}", ...)` |
+| `self.cancelled_sessions: set = set()` | `redis_client.sadd("cancelled_session:{sid}", ...)` |
+| `uploaded_files: dict = {}` | `redis_client.hset("uploaded_file:{fid}", ...)` |
+| `self._plans: dict = {}` | `redis_client.set("execution_plan:{sid}", ...)` |
+| `self._task_records: dict = {}` | `redis_client.hset("task_record:{eid}", ...)` |
+
+**判断标准**：如果该变量在代码注释中被描述为"跨请求共享"、"全局缓存"或"内存缓存"，则必须使用 Redis 或数据库替代。
+
+**降级策略**：使用 `src.core.redis_client.RedisClient`，在 Redis 不可用时自动降级到内存，并记录 `logger.warning`。
+
 ## API 接口命名规范
 接口名称应与 Python 方法名保持一致，使用具体、有明确指向性的命名：
 

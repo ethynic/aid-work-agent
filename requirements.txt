@@ -71,6 +71,9 @@ APScheduler>=3.10.0  # Background task scheduling
 # Database
 psycopg2-binary>=2.9.0  # PostgreSQL database driver
 
+# Redis
+redis>=5.0.0  # Redis client for shared cross-worker state
+
 # Security
 bcrypt>=4.1.0  # Password hashing
 

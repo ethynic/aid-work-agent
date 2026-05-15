@@ -117,6 +117,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Redis 缓存服务
+  redis:
+    image: redis:7-alpine
+    container_name: aid-agent-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    # 资源限制（Redis 轻量，给少量资源即可）
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.1"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # FastAPI 服务（默认）
   aid-agent-api:
     build:
@@ -146,6 +179,8 @@ services:
       start_period: 60s
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     # 提供完整的交互式终端支持（方向键、命令历史、路径提示符）
     stdin_open: true
@@ -187,3 +222,4 @@ networks:
 
 volumes:
   postgres_data:
+  redis_data:

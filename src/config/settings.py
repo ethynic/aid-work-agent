@@ -119,6 +119,16 @@ class MemoryConfig(BaseModel):
     cleanup_interval: int = 300  # 过期会话清理间隔（秒）
 
 
+class RedisConfig(BaseModel):
+    """Redis 配置"""
+    enabled: bool = False
+    host: str = "localhost"
+    port: int = 6379
+    password: str = ""
+    db: int = 0
+    ssl: bool = False
+
+
 class AuthConfig(BaseModel):
     """认证配置"""
     enabled: bool = True

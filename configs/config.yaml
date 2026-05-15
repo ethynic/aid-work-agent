@@ -66,6 +66,15 @@ memory:
     ttl: 3600
   cleanup_interval: 300  # 过期会话清理间隔（秒），默认5分钟
 
+# Redis 配置
+redis:
+  enabled: ${REDIS_ENABLED:-false}
+  host: ${REDIS_HOST:-localhost}
+  port: ${REDIS_PORT:-6379}
+  password: ${REDIS_PASSWORD:-}
+  db: ${REDIS_DB:-0}
+  ssl: ${REDIS_SSL:-false}
+
 # 认证配置
 auth:
   enabled: true

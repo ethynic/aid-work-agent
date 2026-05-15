@@ -23,6 +23,7 @@ from enum import Enum
 
 from src.config.settings import settings
 from src.core.agent_logger import log_agent_iteration, log_skill_execute
+from src.core.redis_client import redis_client
 from src.llm.gateway import llm_gateway
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
@@ -111,8 +112,7 @@ class Agent:
 
         # 子智能体澄清相关状态
         self._clarification_missing_info = []
-        # 主智能体的 pending clarifications: {session_id: {subagent_name, execution_id, task_description, question}}
-        self._pending_clarifications: Dict[str, Dict[str, Any]] = {}
+        # pending clarifications 已迁移到 Redis: pending_clarification:{session_id}, TTL=3600s
 
         # 共享组件 — 子智能体可覆盖 LLM 提供者
         if subagent_config and hasattr(subagent_config, 'llm_provider') and subagent_config.llm_provider:
@@ -209,7 +209,29 @@ class Agent:
             self._filter_tools_by_config()
 
             logger.info(f"Subagent initialized: {subagent_config.name if subagent_config else 'unknown'}")
-    
+
+    # ==================== Pending Clarification (Redis) ====================
+
+    def _pending_clarification_key(self, session_id: str) -> str:
+        return redis_client.make_key("pending_clarification", session_id)
+
+    def _save_pending_clarification(self, session_id: str, data: Dict[str, Any]) -> None:
+        """保存待澄清上下文到 Redis Hash"""
+        key = self._pending_clarification_key(session_id)
+        for field, value in data.items():
+            redis_client.hset(key, field, value)
+        redis_client.expire(key, 3600)
+
+    def _get_pending_clarification(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """从 Redis Hash 读取待澄清上下文"""
+        key = self._pending_clarification_key(session_id)
+        return redis_client.hgetall(key) or None
+
+    def _clear_pending_clarification(self, session_id: str) -> None:
+        """清除 Redis 中的待澄清上下文"""
+        key = self._pending_clarification_key(session_id)
+        redis_client.delete(key)
+
     def _ensure_tenant_skills_loaded(self):
         """按需加载租户自定义 skills
 
@@ -721,7 +743,7 @@ class Agent:
             else:
                 content = content[:30]
             history_roles.append(f"{role}:{content}")
-        logger.info(f"[DEBUG] _build_messages: session_id={session_id}, history_count={len(history)}, msgs={history_roles}")
+        logger.debug(f"_build_messages: session_id={session_id}, history_count={len(history)}, msgs={history_roles}")
 
         # 追踪待处理的 tool_call_ids
         pending_tool_calls = set()
@@ -832,7 +854,7 @@ class Agent:
             else:
                 content = content[:30]
             result_roles.append(f"{role}:{content}")
-        logger.info(f"[DEBUG] _build_messages result: session_id={session_id}, count={len(messages)}, msgs={result_roles}")
+        logger.debug(f"_build_messages result: session_id={session_id}, count={len(messages)}, msgs={result_roles}")
 
         return messages
     
@@ -1014,16 +1036,17 @@ class Agent:
                     question = record.clarification_request or "需要补充信息"
                     logger.info(f"[AGENT] Subagent '{subagent_name}' requesting clarification: {question[:100]}...")
                     
-                    # 保存 pending clarification 上下文，供用户回复后使用
-                    if not hasattr(self, '_pending_clarifications'):
-                        self._pending_clarifications = {}  # session_id -> clarification context
-                    self._pending_clarifications[session_id or "default"] = {
-                        "subagent_name": subagent_name,
-                        "execution_id": response.execution_id,
-                        "task_description": task_description,
-                        "question": question,
-                        "missing_info": record.clarification_answer,  # 暂时存空，后续用 answer_clarification 更新
-                    }
+                    # 保存 pending clarification 上下文到 Redis，供用户回复后使用
+                    self._save_pending_clarification(
+                        session_id or "default",
+                        {
+                            "subagent_name": subagent_name,
+                            "execution_id": response.execution_id,
+                            "task_description": task_description,
+                            "question": question,
+                            "missing_info": record.clarification_answer or "",  # 暂时存空，后续用 answer_clarification 更新
+                        },
+                    )
                     
                     return {
                         "success": False,
@@ -1130,7 +1153,7 @@ class Agent:
                 })
 
         # 后端日志：检查是否有待处理的澄清请求
-        pending_clarification = self._pending_clarifications.get(session_id)
+        pending_clarification = self._get_pending_clarification(session_id)
         if pending_clarification and self.is_master:
             # 用户正在回复子智能体的澄清请求
             clarification = pending_clarification
@@ -1139,9 +1162,9 @@ class Agent:
             original_question = clarification["question"]
             
             logger.info(f"[AGENT] User replying to clarification from '{subagent_name}': {user_input[:100]}...")
-            
+
             # 清除 pending 状态
-            self._pending_clarifications.pop(session_id, None)
+            self._clear_pending_clarification(session_id)
             
             # 构建增强的任务描述：原始任务 + 澄清问题和用户回答
             enhanced_task = (
@@ -1188,12 +1211,15 @@ class Agent:
                 # 如果 re-delegate 后又需要澄清，再次保存 pending 状态
                 new_question = redelegate_result.get("question", "需要补充信息")
                 logger.info(f"[AGENT] Subagent '{subagent_name}' requesting clarification again: {new_question[:100]}...")
-                self._pending_clarifications[session_id] = {
-                    "subagent_name": subagent_name,
-                    "execution_id": redelegate_result.get("execution_id", ""),
-                    "task_description": enhanced_task,
-                    "question": new_question,
-                }
+                self._save_pending_clarification(
+                    session_id,
+                    {
+                        "subagent_name": subagent_name,
+                        "execution_id": redelegate_result.get("execution_id", ""),
+                        "task_description": enhanced_task,
+                        "question": new_question,
+                    },
+                )
                 await send_clarification(subagent_name, new_question)
                 yield f"\n❓ **{subagent_name}** 需要进一步补充信息：{new_question}\n请提供以上信息以继续执行任务。"
             else:
@@ -1209,16 +1235,6 @@ class Agent:
 
         # 按需加载租户自定义 skills
         self._ensure_tenant_skills_loaded()
-
-        # ========== 临时调试日志（多 Worker 排查） ==========
-        import time
-        import os
-        _debug_start_time = time.time()
-        logger.info(
-            f"[DEBUG] process_message called, session_id={session_id}, "
-            f"input_length={len(user_input)}, pid={os.getpid()}"
-        )
-        # ========== 临时调试日志 ==========
 
         # 每次处理前都从 DB 重建 memory，解决 Gunicorn 多 Worker 内存隔离导致的缓存不同步
         try:
@@ -1248,14 +1264,14 @@ class Agent:
                     else:
                         content = content[:30]
                     loaded_roles.append(f"{m['role']}:{content}")
-                logger.info(
-                    f"[DEBUG] Rebuilt memory from DB for session {session_id}, pid={os.getpid()}, "
+                logger.debug(
+                    f"Rebuilt memory from DB for session {session_id}, "
                     f"loaded={len(history_messages)} msgs | {loaded_roles}"
                 )
             else:
-                logger.info(f"[DEBUG] No DB history for session {session_id}, pid={os.getpid()}, memory cleared")
+                logger.debug(f"No DB history for session {session_id}, memory cleared")
         except Exception as e:
-            logger.warning(f"[DEBUG] Failed to rebuild memory from DB for session {session_id}: {e}")
+            logger.warning(f"Failed to rebuild memory from DB for session {session_id}: {e}")
 
         # 设置工具的 user_id / tenant_id
         if user:

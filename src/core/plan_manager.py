@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.models.plan import ExecutionPlan, Task, TaskStatus
+from src.core.redis_client import redis_client
 
 
 class PlanManager:
@@ -45,10 +46,34 @@ class PlanManager:
         self.plans_dir = plans_dir
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         
-        # 内存中的计划缓存 {session_id: ExecutionPlan}
-        self._plans: Dict[str, ExecutionPlan] = {}
-        
         logger.info(f"PlanManager initialized with plans_dir: {self.plans_dir}")
+
+    # ==================== Redis Plan Storage ====================
+
+    def _plan_key(self, session_id: str) -> str:
+        return redis_client.make_key("execution_plan", session_id)
+
+    def _save_plan(self, session_id: str, plan: ExecutionPlan) -> None:
+        """将计划序列化并保存到 Redis"""
+        key = self._plan_key(session_id)
+        data = plan.model_dump(mode="json")
+        redis_client.set(key, data, ex=3600)
+
+    def _load_plan(self, session_id: str) -> Optional[ExecutionPlan]:
+        """从 Redis 加载并反序列化计划"""
+        key = self._plan_key(session_id)
+        data = redis_client.get(key)
+        if data:
+            try:
+                return ExecutionPlan.model_validate(data)
+            except Exception as e:
+                logger.warning(f"[PlanManager] Failed to validate plan for {session_id}: {e}")
+        return None
+
+    def _delete_plan(self, session_id: str) -> None:
+        """从 Redis 删除计划"""
+        key = self._plan_key(session_id)
+        redis_client.delete(key)
     
     def create_plan(
         self,
@@ -114,8 +139,8 @@ class PlanManager:
             execution_mode=execution_mode,
         )
         
-        # 存储到内存
-        self._plans[session_id] = plan
+        # 存储到 Redis
+        self._save_plan(session_id, plan)
         
         # 持久化到MD文件
         self._save_plan_to_markdown(
@@ -140,7 +165,7 @@ class PlanManager:
         Returns:
             执行计划或None
         """
-        return self._plans.get(session_id)
+        return self._load_plan(session_id)
     
     def update_task_status(
         self,
@@ -163,16 +188,16 @@ class PlanManager:
         Returns:
             是否更新成功
         """
-        plan = self._plans.get(session_id)
+        plan = self._load_plan(session_id)
         if not plan:
             logger.warning(f"No plan found for session {session_id}")
             return False
-        
+
         task = plan.get_task(task_id)
         if not task:
             logger.warning(f"No task found with id {task_id}")
             return False
-        
+
         # 更新状态
         if status == TaskStatus.RUNNING:
             task.start()
@@ -182,14 +207,17 @@ class PlanManager:
             task.fail(error or "Unknown error")
         else:
             task.status = status
-        
+
         plan.updated_at = datetime.now()
-        
+
+        # 写回 Redis
+        self._save_plan(session_id, plan)
+
         # 更新MD文件
         self._update_plan_markdown(session_id, plan)
-        
+
         logger.info(f"Updated task {task_id} status to {status}")
-        
+
         return True
     
     def mark_task_running(self, session_id: str, task_id: str) -> bool:
@@ -228,7 +256,7 @@ class PlanManager:
         Returns:
             下一个可执行的任务或None
         """
-        plan = self._plans.get(session_id)
+        plan = self._load_plan(session_id)
         if not plan:
             return None
         
@@ -244,7 +272,7 @@ class PlanManager:
         Returns:
             进度报告
         """
-        plan = self._plans.get(session_id)
+        plan = self._load_plan(session_id)
         if not plan:
             return {"error": "No plan found"}
         
@@ -538,7 +566,7 @@ class PlanManager:
         Returns:
             是否为简单任务
         """
-        plan = self._plans.get(session_id)
+        plan = self._load_plan(session_id)
         if not plan:
             return True
         
@@ -554,7 +582,7 @@ class PlanManager:
         Returns:
             计划摘要文本
         """
-        plan = self._plans.get(session_id)
+        plan = self._load_plan(session_id)
         if not plan:
             return "暂无执行计划"
         

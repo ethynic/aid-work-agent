@@ -17,6 +17,7 @@ from loguru import logger
 
 from src.models.subagent import SubagentConfig, DelegationResponse
 from src.subagents.protocol import SubagentTaskRecord, get_task_record_key
+from src.core.redis_client import redis_client
 
 if TYPE_CHECKING:
     from src.memory.short_term import ShortTermMemory
@@ -79,7 +80,35 @@ class SubagentExecutor:
         _max_workers = min(32, (os.cpu_count() or 1) * 2)
         self._concurrency_sem = asyncio.Semaphore(_max_workers)
         logger.info(f"[SUBAGENT] Concurrency limit set to {_max_workers}")
-    
+
+    # ==================== Task Record (Redis) ====================
+
+    def _task_record_key(self, execution_id: str) -> str:
+        return redis_client.make_key("task_record", execution_id)
+
+    def _save_task_record(self, record: SubagentTaskRecord) -> None:
+        """保存任务记录到 Redis Hash"""
+        key = self._task_record_key(record.execution_id)
+        data = record.model_dump(mode="json")
+        redis_client.hset(key, "data", data)
+        redis_client.expire(key, 7200)
+
+    def _load_task_record(self, execution_id: str) -> Optional[SubagentTaskRecord]:
+        """从 Redis Hash 加载任务记录"""
+        key = self._task_record_key(execution_id)
+        data = redis_client.hget(key, "data")
+        if data:
+            try:
+                return SubagentTaskRecord.model_validate(data)
+            except Exception as e:
+                logger.warning(f"[SUBAGENT] Failed to validate task record {execution_id}: {e}")
+        return None
+
+    def _delete_task_record(self, execution_id: str) -> None:
+        """从 Redis 删除任务记录"""
+        key = self._task_record_key(execution_id)
+        redis_client.delete(key)
+
     def _create_execution_id(self) -> str:
         """生成唯一的执行ID"""
         return f"exec_{uuid.uuid4().hex[:12]}"
@@ -112,12 +141,10 @@ class SubagentExecutor:
             task_description=task_description,
             task_parameters=task_parameters,
         )
-        
-        # 存储到本地记录
-        if not hasattr(self, '_task_records'):
-            self._task_records: Dict[str, SubagentTaskRecord] = {}
-        self._task_records[execution_id] = record
-        
+
+        # 存储到 Redis
+        self._save_task_record(record)
+
         return record
     
     def _get_task_record(self, execution_id: str) -> Optional[SubagentTaskRecord]:
@@ -130,11 +157,8 @@ class SubagentExecutor:
         Returns:
             任务记录，不存在返回None
         """
-        key = get_task_record_key(execution_id)
-        # 从memory中获取记录
-        # 这里需要根据实际的memory实现来调整
-        # 暂时使用简单的字典存储
-        return getattr(self, '_task_records', {}).get(execution_id)
+        # 从 Redis 获取记录
+        return self._load_task_record(execution_id)
     
     def _update_task_record(self, record: SubagentTaskRecord) -> None:
         """
@@ -143,13 +167,8 @@ class SubagentExecutor:
         Args:
             record: 任务记录
         """
-        # 存储到memory
-        key = get_task_record_key(record.execution_id)
-        
-        # 确保task_records字典存在
-        if not hasattr(self, '_task_records'):
-            self._task_records: Dict[str, SubagentTaskRecord] = {}
-        self._task_records[record.execution_id] = record
+        # 存储到 Redis
+        self._save_task_record(record)
     
     async def delegate(
         self,

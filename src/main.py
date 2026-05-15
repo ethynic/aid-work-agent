@@ -24,6 +24,7 @@ from src.config.settings import settings
 from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.core.agent_router import agent_router
+from src.core.redis_client import redis_client
 from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
@@ -43,7 +44,7 @@ class SSEConnectionManager:
         # session_id -> {"history": [], "sse_queues": []}
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.sse_connections: Dict[str, List[queue.Queue]] = {}
-        self.cancelled_sessions: set[str] = set()  # 被用户主动取消的会话
+        # 取消标记已迁移到 Redis: key=cancelled_session:{session_id}, TTL=300s
         self.lock = threading.Lock()
 
     def get_or_create_session(self, session_id: str = None) -> str:
@@ -75,21 +76,25 @@ class SSEConnectionManager:
                 except ValueError:
                     pass
 
+    def _cancelled_key(self, session_id: str) -> str:
+        return redis_client.make_key("cancelled_session", session_id)
+
     def cancel_session(self, session_id: str) -> None:
         """标记会话为已取消，停止后续生成"""
-        with self.lock:
-            self.cancelled_sessions.add(session_id)
-            logger.info(f"Session cancelled by user: {session_id}")
+        key = self._cancelled_key(session_id)
+        redis_client.sadd(key, session_id)
+        redis_client.expire(key, 300)
+        logger.info(f"Session cancelled by user: {session_id}")
 
     def is_cancelled(self, session_id: str) -> bool:
         """检查会话是否已被取消"""
-        with self.lock:
-            return session_id in self.cancelled_sessions
+        key = self._cancelled_key(session_id)
+        return redis_client.sismember(key, session_id)
 
     def clear_cancelled(self, session_id: str) -> None:
         """清除取消标记（生成完成后）"""
-        with self.lock:
-            self.cancelled_sessions.discard(session_id)
+        key = self._cancelled_key(session_id)
+        redis_client.delete(key)
 
     def broadcast(self, session_id: str, event: Dict[str, Any]):
         with self.lock:
@@ -288,8 +293,7 @@ def _get_tenant_upload_dir() -> Path:
     upload_dir.mkdir(parents=True, exist_ok=True)
     return upload_dir
 
-# 已上传的文件存储 {file_id: file_info}
-uploaded_files: Dict[str, Dict[str, Any]] = {}
+# 已上传的文件元数据已迁移到 Redis: uploaded_file:{file_id}, TTL=86400s
 
 
 # Create FastAPI app
@@ -619,8 +623,8 @@ async def upload_file(file: UploadFile = File(...)):
         }
         mime_type = mime_type_map.get(suffix, 'application/octet-stream')
 
-        # 保存文件信息
-        uploaded_files[file_id] = {
+        # 保存文件信息到 Redis
+        file_info = {
             "file_id": file_id,
             "name": file.filename or "unknown",
             "path": str(file_path.absolute()),
@@ -628,6 +632,10 @@ async def upload_file(file: UploadFile = File(...)):
             "mime_type": mime_type,
             "type": "image" if mime_type.startswith("image/") else "file"
         }
+        key = redis_client.make_key("uploaded_file", file_id)
+        for field, value in file_info.items():
+            redis_client.hset(key, field, value)
+        redis_client.expire(key, 86400)
 
         logger.info(f"文件上传成功: {file.filename}, file_id: {file_id}, size: {file_size}")
 
@@ -637,7 +645,7 @@ async def upload_file(file: UploadFile = File(...)):
             "name": file.filename,
             "size": file_size,
             "mime_type": mime_type,
-            "type": uploaded_files[file_id]["type"]
+            "type": file_info["type"]
         })
 
     except Exception as e:
@@ -686,8 +694,9 @@ async def delete_uploaded_file(file_id: str):
                     logger.info(f"已清理空目录: {parent_dir}")
             except OSError:
                 pass
-        # Also remove from in-memory dict if present
-        uploaded_files.pop(file_id, None)
+        # Also remove from Redis if present
+        key = redis_client.make_key("uploaded_file", file_id)
+        redis_client.delete(key)
 
         return JSONResponse({
             "success": True,
@@ -704,11 +713,20 @@ async def delete_uploaded_file(file_id: str):
 
 def _get_file_info(file_id: str) -> dict | None:
     """
-    获取文件信息：优先从内存字典获取，若不存在则尝试从磁盘恢复。
-    服务重启后 uploaded_files 会清空，但文件仍在磁盘上。
+    获取文件信息：优先从 Redis 获取，若不存在则尝试从磁盘恢复。
+    服务重启后 Redis 中仍有数据（TTL=86400s），但文件也可能仍在磁盘上。
     """
-    if file_id in uploaded_files:
-        return uploaded_files[file_id]
+    # 优先从 Redis 获取
+    key = redis_client.make_key("uploaded_file", file_id)
+    cached = redis_client.hgetall(key)
+    if cached:
+        # 转换数值类型
+        if "size" in cached:
+            try:
+                cached["size"] = int(cached["size"])
+            except (ValueError, TypeError):
+                pass
+        return cached
 
     # 尝试从磁盘目录扫描恢复（包括租户/用户子目录，最多3层）
     skip_dirs = {"knowledge", "wecom"}
@@ -753,8 +771,10 @@ def _get_file_info(file_id: str) -> dict | None:
                     "mime_type": mime_type,
                     "type": "image" if mime_type.startswith("image/") else "file"
                 }
-                # 缓存回内存，避免重复磁盘扫描
-                uploaded_files[file_id] = file_info
+                # 缓存回 Redis，避免重复磁盘扫描
+                for field, value in file_info.items():
+                    redis_client.hset(key, field, value)
+                redis_client.expire(key, 86400)
                 return file_info
 
     return None
@@ -976,15 +996,15 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "mime_type": f.get("mime_type", ""),
             }
 
-            # 如果提供了 file_id，使用 uploaded_files 中的实际路径
-            # 兜底：多 worker 内存隔离时 uploaded_files 可能无此 file_id，
-            # 此时根据 file_id 直接在 UPLOAD_DIR 中查找文件
+            # 如果提供了 file_id，使用 Redis 中存储的实际路径
+            # 兜底：Redis 中可能无此 file_id，此时根据 file_id 直接在 UPLOAD_DIR 中查找文件
             file_id = f.get("file_id")
             if file_id:
-                if file_id in uploaded_files:
-                    att["path"] = uploaded_files[file_id]["path"]
+                file_info = _get_file_info(file_id)
+                if file_info:
+                    att["path"] = file_info["path"]
                 else:
-                    # 多 worker 兜底：递归扫描 UPLOAD_DIR 中以该 file_id 开头的文件
+                    # 兜底：递归扫描 UPLOAD_DIR 中以该 file_id 开头的文件
                     matched = list(UPLOAD_DIR.glob(f"**/{file_id}.*"))
                     if matched:
                         att["path"] = str(matched[0].absolute())
