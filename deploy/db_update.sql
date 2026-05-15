@@ -333,3 +333,8 @@ ALTER TABLE bs_travel_quote_vehicles ALTER COLUMN pricing_mode SET DEFAULT 'per_
 -- 2026-5-13，车辆表删除 season_type 和 sort_order 字段
 ALTER TABLE bs_travel_quote_vehicles DROP COLUMN IF EXISTS season_type;
 ALTER TABLE bs_travel_quote_vehicles DROP COLUMN IF EXISTS sort_order;
+
+-- 2026-5-14，景点区域搜索：为 documents.metadata 添加 GIN 索引（部分索引，仅景点资源）
+CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin
+ON documents USING GIN ((metadata::jsonb))
+WHERE source_type = 'attraction_resource';
