@@ -519,7 +519,10 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
             # 成人票
             if adults > 0 and 'adult' in ticket_map:
                 t = ticket_map['adult']
-                price = float(t.get('agency_price') or t['retail_price'])
+                # 报价用挂牌价（较高的价格），没有挂牌价才用渠道价
+                price = float(t.get('retail_price') or 0)
+                if price == 0:
+                    price = float(t.get('agency_price') or 0)
                 if price > 0:
                     items.append({
                         "category": "门票",
@@ -531,13 +534,15 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                         "freq_unit": "次",
                         "subtotal": price,
                         "teacher_subtotal": round(price * teacher_count, 2) if teacher_count > 0 else 0,
-                        "remark": "协议价" if t.get('agency_price') else "挂牌价",
+                        "remark": "挂牌价" if t.get('retail_price') else "渠道价",
                     })
 
             # 儿童半票
             if children_half > 0 and 'child_half' in ticket_map:
                 t = ticket_map['child_half']
-                price = float(t.get('agency_price') or t['retail_price'])
+                price = float(t.get('retail_price') or 0)
+                if price == 0:
+                    price = float(t.get('agency_price') or 0)
                 if price > 0:
                     items.append({
                         "category": "门票",
@@ -555,7 +560,9 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
             # 学生票
             if students > 0 and 'student' in ticket_map:
                 t = ticket_map['student']
-                price = float(t.get('agency_price') or t['retail_price'])
+                price = float(t.get('retail_price') or 0)
+                if price == 0:
+                    price = float(t.get('agency_price') or 0)
                 if price > 0:
                     items.append({
                         "category": "门票",
@@ -885,7 +892,7 @@ def _llm_extract_attraction_prices(
 ## 任务
 
 1. **先验证**：根据景点信息，判断搜索名称"{search_name}"和知识库中的景点是否是同一个。考虑别名、简称等因素。
-2. **提取门票价格**：从门票价格表中提取适用于以下人群的门票**原始单价**，优先取"团队"价。需要提取的票种：成人票（{adults}人）、儿童票（{children_half}人）、学生票（{students}人）。
+2. **提取门票价格**：从门票价格表中提取适用于以下人群的门票**原始单价**，优先取"挂牌价"（较高的价格，即面向终端客户的售价）。如果挂牌价缺失才取"团队价"或"渠道价"（较低的价格）。需要提取的票种：成人票（{adults}人）、儿童票（{children_half}人）、学生票（{students}人）。
 {project_instruction}
 
 请返回 JSON：
@@ -1053,7 +1060,9 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
         if not default_room:
             return items, 0
 
-        room_price = float(default_room.get('agency_price') or default_room['retail_price'])
+        room_price = float(default_room.get('retail_price') or 0)
+        if room_price == 0:
+            room_price = float(default_room.get('agency_price') or default_room['retail_price'])
 
         # subtotal = 单价 ÷ 每间人数 × 住几晚 = 每人住宿成本
         pax_per_room = 2
@@ -1433,7 +1442,7 @@ def _export_simple(quote_data: dict) -> str:
     c = ws.cell(row=row, column=1, value='合计')
     c.font = HEADER_FONT
     c.alignment = CENTER
-    c = ws.cell(row=row, column=8, value=quote_data.get('cost_per_person', 0))
+    c = ws.cell(row=row, column=8, value=quote_data.get('quote_per_person', 0))
     c.font = HEADER_FONT
     c.number_format = '#,##0.00'
     c = ws.cell(row=row, column=9, value=quote_data.get('teacher_total', 0))
@@ -1914,10 +1923,9 @@ def generate_quote(params: dict) -> dict:
         "total_people": total_people,
         "teacher_count": teacher_count,
         "items": items,
-        "cost_per_person": quote_per_person,
-        "total_cost": quote_total,
+        "price_per_person": quote_per_person,
+        "total_price": quote_total,
         "teacher_total": round(sum(item.get('teacher_subtotal') or 0 for item in items), 2),
-        "quote_total": quote_total,
         "file_path": os.path.abspath(file_path),
     }
     return quote_data
