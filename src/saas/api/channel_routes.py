@@ -61,7 +61,7 @@ async def _process_tenant_channel_message(
         return "error: no channel config"
 
     # 2. 查找绑定了此渠道的实例
-    instances = AgentInstanceDB.list_running_by_tenant(tenant_id)
+    instances = AgentInstanceDB.list_by_tenant(tenant_id)
     target_instance = None
     for inst in instances:
         if inst.get("bound_channel_type") == channel_type:
@@ -320,7 +320,7 @@ async def tenant_wecom_callback_post(tenant_id: str, request: Request):
             return PlainTextResponse("success")
 
         # 查找绑定了此渠道的实例
-        instances = AgentInstanceDB.list_running_by_tenant(tenant_id)
+        instances = AgentInstanceDB.list_by_tenant(tenant_id)
         target_instance = None
         for inst in instances:
             if inst.get("bound_channel_type") == "wecom":
