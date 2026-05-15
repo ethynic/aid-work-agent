@@ -1375,10 +1375,8 @@ class Agent:
                 enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
         
         self.memory.add(session_id, "user", enhanced_input)
-        logger.info(f"[DEBUG] Added user message to memory, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
 
         messages = self._build_messages(session_id)
-        logger.info(f"[DEBUG] Built messages, msg_count={len(messages)}, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
         system_prompt = self._build_system_prompt(user)
         
         if auto_loaded_skill:
@@ -1401,10 +1399,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         
         max_iterations = 20  # Prevent infinite loops
         iteration = 0
-        logger.info(f"[DEBUG] Entering agent loop, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
 
         while iteration < max_iterations:
-            logger.info(f"[DEBUG] Agent loop iteration {iteration}, session_id={session_id}, time_since_start={time.time() - _debug_start_time:.3f}s")
             iteration += 1
             logger.debug(f"Agent iteration {iteration}")
             
