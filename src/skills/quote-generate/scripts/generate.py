@@ -766,14 +766,17 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
     from attraction_retriever import AttractionRetriever
     retriever = AttractionRetriever()
 
-    # 构建 doc_id → 搜索名称的映射
+    # 构建 doc_id → 搜索名称和 activities 的映射
     doc_name_map = {}
+    doc_activities_map = {}
     if attraction_matches:
         for m in attraction_matches:
             doc_name_map[m["doc_id"]] = m.get("name", "")
+            doc_activities_map[m["doc_id"]] = m.get("activities", [])
 
     for doc_id in doc_ids:
         search_name = doc_name_map.get(doc_id, "")
+        mentioned_activities = doc_activities_map.get(doc_id, [])
         attraction_info = retriever.get_attraction_info(doc_id)
         ticket_table = retriever.get_ticket_table(doc_id)
         project_table = retriever.get_project_table(doc_id)
@@ -790,6 +793,7 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
             adults=adults, children_half=children_half,
             students=students, teacher_count=teacher_count,
             total_people=total_people,
+            mentioned_activities=mentioned_activities,
         )
 
         if not extracted:
@@ -845,8 +849,16 @@ def _llm_extract_attraction_prices(
     search_name: str, attraction_info: str, ticket_table: str,
     project_table: str, adults: int, children_half: int,
     students: int, teacher_count: int, total_people: int,
+    mentioned_activities: list = None,
 ) -> Optional[dict]:
     """调用 LLM 验证景点并提取门票+项目价格"""
+    # 构建项目提取指令
+    if mentioned_activities:
+        activities_str = "、".join(mentioned_activities)
+        project_instruction = f"""3. **提取项目/服务价格**：行程中在该景点计划体验的具体项目为：{activities_str}。请从项目/服务价格表中**只提取这些提到的项目**对应的价格，用模糊匹配（如"发报机课程"匹配"研学课程"、如"蜡染"匹配"蜡染体验"）。如果某个提到的项目在价格表中找不到匹配项，说明该项目不收费，不要添加。**不要添加价格表中存在但行程未提到的项目。**"""
+    else:
+        project_instruction = """3. **提取项目/服务价格**：行程中未提到该景点的具体项目，projects 返回空数组[]。"""
+
     prompt = f"""你是一个旅游报价助手。我正在搜索景点"{search_name}"，向量搜索返回了一个景点。请先确认这个景点是否就是我要找的，然后从中提取报价所需的门票和项目/服务价格。
 
 ## 景点信息（来自向量搜索）
@@ -869,7 +881,8 @@ def _llm_extract_attraction_prices(
 
 1. **先验证**：根据景点信息，判断搜索名称"{search_name}"和知识库中的景点是否是同一个。考虑别名、简称等因素。
 2. **提取门票价格**：从门票价格表中提取适用于上述人群的门票价格，每个票种一行。优先取"团队"价。如果找不到明确的人群对应票种，取最接近的。
-3. **提取项目/服务价格**：从项目/服务价格表中提取所有适用项目。区分按人计费和按团计费：
+{project_instruction}
+   区分按人计费和按团计费：
    - 按人计费：subtotal = price × 人数 / total_people（学生人均分摊），teacher_subtotal = price × teacher_count
    - 按团计费：subtotal = price / total_people（学生人均分摊），teacher_subtotal = 0
 
@@ -890,19 +903,7 @@ def _llm_extract_attraction_prices(
             "remark": "团队价"
         }}
     ],
-    "projects": [
-        {{
-            "name": "讲解费",
-            "unit_price": 400,
-            "quantity": 1,
-            "unit": "团",
-            "frequency": 1,
-            "freq_unit": "次",
-            "subtotal": {round(400 / total_people, 2) if total_people > 0 else 0},
-            "teacher_subtotal": 0,
-            "remark": "按团计费"
-        }}
-    ]
+    "projects": []
 }}
 
 注意：
@@ -1497,7 +1498,27 @@ def parse_itinerary(itinerary_text: str) -> dict:
     "trip_days": 6,
     "departure_city": "出发城市",
     "destination": "主要目的地城市",
-    "attraction_names": ["黄果树瀑布", "小七孔"],
+    "daily_attractions": [
+        {{
+            "day": 1,
+            "attractions": [
+                {{"name": "平塘天文小镇", "activities": ["开营仪式"]}}
+            ]
+        }},
+        {{
+            "day": 2,
+            "attractions": [
+                {{"name": "天眼景区", "activities": ["FAST观景台参观", "天文科普讲座"]}},
+                {{"name": "南仁东纪念馆", "activities": []}}
+            ]
+        }},
+        {{
+            "day": 3,
+            "attractions": [
+                {{"name": "小七孔景区", "activities": ["卧龙潭", "翠谷瀑布"]}}
+            ]
+        }}
+    ],
     "hotel_preference": "4钻酒店",
     "hotel_stays": [
         {{"city": "贵阳", "area": "南明区", "nights": 2}},
@@ -1526,7 +1547,7 @@ def parse_itinerary(itinerary_text: str) -> dict:
 
 注意：
 1. 人数信息从文本中提取，如果没有明确说，adults 默认等于 total_people
-2. attraction_names 是景点名称列表（自然语言名称，不是 ID）
+2. daily_attractions 从每天行程中提取当天要去的景点和具体游玩项目。name 是景点名称。activities 是该景点中计划体验的具体项目/活动名称（如"发报机课程"、"蜡染体验"、"讲解"等），行程文本明确提到的才填写。如果行程只提到参观景点没提具体项目，activities 填空数组[]。不要编造行程中未提到的项目
 3. hotel_preference 是酒店偏好描述（如"4钻"、"经济型"），不是酒店名
 4. hotel_stays 从每天的行程安排中提取：看每天住哪个城市，同一城市连续几晚合并为一项。nights 总和应等于 trip_days - 1。area 是酒店所在区/县（如"南明区"、"西秀区"），如果无法确定具体区县则为空字符串
 5. teacher_count 是随队老师人数，如果文本没提，默认 0
@@ -1548,21 +1569,48 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
     logger.info(f"[quote-generate] resolve_resources tenant_id={tenant_id}")
     result = {"attraction_doc_ids": [], "attraction_matches": [], "hotel_doc_id": None, "hotel_stays": []}
 
-    # 景点：逐个名称在向量库中搜索，保留名称-doc_id-搜索结果关联
-    if parsed.get("attraction_names"):
+    # 景点：从 daily_attractions 收集唯一景点，保留名称→doc_id→activities 关联
+    # 兼容：如果 LLM 未返回 daily_attractions 但返回了 attraction_names，走旧逻辑
+    attraction_names = []
+    attraction_activities_map = {}  # name -> [activities]
+
+    daily_attractions = parsed.get("daily_attractions", [])
+    if daily_attractions:
+        for day_info in daily_attractions:
+            for attr in day_info.get("attractions", []):
+                name = attr.get("name", "").strip()
+                if not name:
+                    continue
+                if name not in attraction_activities_map:
+                    attraction_activities_map[name] = []
+                    attraction_names.append(name)
+                # 合并不同天提到的同一景点的 activities（去重）
+                existing = set(attraction_activities_map[name])
+                for act in attr.get("activities", []):
+                    act = act.strip()
+                    if act and act not in existing:
+                        attraction_activities_map[name].append(act)
+                        existing.add(act)
+    elif parsed.get("attraction_names"):
+        attraction_names = parsed["attraction_names"]
+
+    if attraction_names:
         try:
             from attraction_retriever import AttractionRetriever
             retriever = AttractionRetriever()
-            for name in parsed["attraction_names"]:
+            for name in attraction_names:
                 matches = retriever.search(tenant_id, name, top_k=1)
                 if matches:
-                    result["attraction_doc_ids"].append(matches[0]["doc_id"])
-                    result["attraction_matches"].append({
+                    match_info = {
                         "name": name,
                         "doc_id": matches[0]["doc_id"],
                         "info": matches[0].get("info", ""),
-                    })
-                    logger.info(f"[quote-generate] 景点匹配: '{name}' → doc_id={matches[0]['doc_id']}")
+                        "activities": attraction_activities_map.get(name, []),
+                    }
+                    result["attraction_doc_ids"].append(matches[0]["doc_id"])
+                    result["attraction_matches"].append(match_info)
+                    logger.info(f"[quote-generate] 景点匹配: '{name}' → doc_id={matches[0]['doc_id']}, "
+                                f"activities={match_info['activities']}")
                 else:
                     logger.warning(f"[quote-generate] 景点未匹配: '{name}'")
         except Exception as e:
