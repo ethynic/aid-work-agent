@@ -43,6 +43,9 @@ def _find_pandoc() -> str:
 
 # ============== 公共 API ==============
 
+# 默认 Pandoc 参考文档路径
+_DEFAULT_REFERENCE_DOC = Path(__file__).parent / "assets" / "reference" / "default.docx"
+
 
 def convert(md_text: str, template: Optional[str] = None,
             title: str = "", author: str = "") -> Document:
@@ -51,20 +54,25 @@ def convert(md_text: str, template: Optional[str] = None,
     Args:
         md_text: Markdown 文本内容
         template: 可选 .docx 模板文件路径（传给 Pandoc --reference-doc），
-                  传入非路径字符串时忽略
+                  传入非路径字符串时使用内置默认参考文档
         title: 文档标题
         author: 文档作者
     """
     normalized = normalize_markdown(md_text)
 
-    # 判断 template 是否为 .docx 文件路径
+    # 确定 reference-doc：优先用指定的，否则用内置默认
     reference_doc = None
     if template and template.endswith(".docx") and Path(template).exists():
         reference_doc = template
+    elif _DEFAULT_REFERENCE_DOC.exists():
+        reference_doc = str(_DEFAULT_REFERENCE_DOC)
 
     doc = _pandoc_convert(normalized, reference_doc=reference_doc,
                           title=title, author=author)
     _ensure_cjk_fonts(doc)
+    # 从 reference doc 模板复制表格内联格式（边框、底色、字体）
+    if reference_doc:
+        _apply_template_table_style(doc, reference_doc)
     return doc
 
 
@@ -118,9 +126,12 @@ def _ensure_block_spacing(text: str) -> str:
         is_block_start = bool(
             re.match(r'^#{1,6}\s', stripped)
             or re.match(r'^```', stripped)
-            or re.match(r'^\|', stripped)
             or re.match(r'^[-*_]{3,}$', stripped)
         )
+        # 表格行：仅在不紧跟前一个表格行时视为块开始
+        is_table_row = stripped.startswith('|')
+        if is_table_row and not (result and result[-1].strip().startswith('|')):
+            is_block_start = True
 
         # 块元素前需要空行
         if is_block_start and not prev_is_blank:
@@ -142,6 +153,10 @@ def _ensure_block_spacing(text: str) -> str:
     return '\n'.join(result)
 
 
+# 匹配 Markdown 表格分隔行，支持 ASCII 连字符(-)和 Unicode 破折号(—–―)
+_SEPARATOR_RE = re.compile(r'^[\|\s\-:—–―]+$')
+
+
 def _fix_tables(text: str) -> str:
     """修复表格：缺分隔行时自动补齐，列数不一致时补空单元格。"""
     lines = text.split('\n')
@@ -152,7 +167,7 @@ def _fix_tables(text: str) -> str:
         stripped = lines[i].strip()
 
         # 检测表格块开始（行首有 | 且不是分隔行）
-        if stripped.startswith('|') and not re.match(r'^[\|\s\-:]+$', stripped):
+        if stripped.startswith('|') and not _SEPARATOR_RE.match(stripped):
             table_lines = [stripped]
             j = i + 1
 
@@ -184,7 +199,7 @@ def _repair_table(table_lines: list) -> list:
     # 检查第二行是否为分隔行
     has_separator = (
         len(table_lines) > 1
-        and re.match(r'^[\|\s\-:]+$', table_lines[1].strip())
+        and _SEPARATOR_RE.match(table_lines[1].strip())
     )
 
     if not has_separator:
@@ -194,14 +209,12 @@ def _repair_table(table_lines: list) -> list:
 
     # 统一所有数据行的列数
     fixed = [table_lines[0]]  # header
-    if has_separator:
-        fixed.append(table_lines[1])
-    else:
-        fixed.append('|' + '|'.join([' --- '] * col_count) + '|')
+    # 始终使用标准 ASCII 分隔行，确保 Pandoc 能正确解析
+    fixed.append('|' + '|'.join([' --- '] * col_count) + '|')
 
     data_start = 1 if has_separator else 1  # 数据从第2行开始（已插入分隔行）
     for row in table_lines[data_start + (0 if has_separator else 0):]:
-        if re.match(r'^[\|\s\-:]+$', row.strip()):
+        if _SEPARATOR_RE.match(row.strip()):
             continue  # 跳过分隔行
         cells = [c.strip() for c in row.strip('|').split('|')]
         # 补齐或截断
@@ -329,3 +342,109 @@ def _ensure_cjk_fonts(doc: Document, cjk_font: str = "SimSun") -> None:
         for row in table.rows:
             for cell in row.cells:
                 _fix_runs(cell.paragraphs)
+
+
+def _apply_template_table_style(doc: Document, reference_doc_path: str) -> None:
+    """从 reference doc 模板中提取表格格式，应用到输出文档的所有表格。
+
+    提取的内容包括：表格边框、表头底色/字体、数据行格式。
+    Pandoc --reference-doc 只复制样式定义，不复制内联的边框和单元格格式，
+    因此需要此后处理步骤。
+    """
+    from copy import deepcopy
+    from lxml import etree
+
+    if not Path(reference_doc_path).exists():
+        logger.warning(f"[TableStyle] Reference doc not found: {reference_doc_path}")
+        return
+
+    try:
+        ref_doc = Document(reference_doc_path)
+    except Exception as e:
+        logger.warning(f"[TableStyle] Failed to load reference doc: {e}")
+        return
+
+    # 从模板中找第一个有多行数据的表格作为格式模板
+    ref_table = None
+    for t in ref_doc.tables:
+        if len(t.rows) >= 2:
+            ref_table = t
+            break
+
+    if ref_table is None:
+        logger.warning("[TableStyle] No table with >= 2 rows found in reference doc")
+        return
+
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+
+    # 提取模板表格级别的格式（边框、对齐等）
+    ref_tblPr = ref_table._tbl.tblPr
+    ref_borders = ref_tblPr.find('w:tblBorders', ns) if ref_tblPr is not None else None
+
+    # 提取表头行格式
+    ref_header_row = ref_table.rows[0]
+    ref_header_cells = ref_header_row.cells
+
+    # 提取数据行格式（用第2行，因为第1行是表头）
+    ref_data_row = ref_table.rows[1] if len(ref_table.rows) > 1 else None
+
+    for table in doc.tables:
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement('w:tblPr')
+            tbl.insert(0, tblPr)
+
+        # 应用表格级边框
+        if ref_borders is not None:
+            existing = tblPr.find(qn('w:tblBorders'))
+            if existing is not None:
+                tblPr.remove(existing)
+            tblPr.append(deepcopy(ref_borders))
+
+        # 逐行应用格式
+        for ri, row in enumerate(table.rows):
+            is_header = (ri == 0)
+            ref_cells = ref_header_cells if is_header else (ref_data_row.cells if ref_data_row else None)
+            if ref_cells is None:
+                continue
+
+            for ci, cell in enumerate(row.cells):
+                # 取模板中对应列的单元格，列不够时取最后一列
+                ref_ci = min(ci, len(ref_cells) - 1)
+                ref_tcPr = ref_cells[ref_ci]._tc.tcPr
+                if ref_tcPr is None:
+                    continue
+
+                # 复制单元格属性（底色、宽度等），保留原有内容
+                new_tcPr = deepcopy(ref_tcPr)
+                old_tcPr = cell._tc.tcPr
+                if old_tcPr is not None:
+                    cell._tc.remove(old_tcPr)
+                # tcPr 必须在第一个段落之前
+                cell._tc.insert(0, new_tcPr)
+
+                # 表头行：应用字体样式
+                if is_header:
+                    ref_paras = ref_cells[ref_ci].paragraphs
+                    if ref_paras:
+                        ref_para_format = ref_paras[0].paragraph_format
+                        for para in cell.paragraphs:
+                            if ref_para_format.alignment is not None:
+                                para.paragraph_format.alignment = ref_para_format.alignment
+                        # 从模板表头的 run 中提取字体属性
+                        ref_runs = ref_paras[0].runs
+                        if ref_runs:
+                            ref_run = ref_runs[0]
+                            for para in cell.paragraphs:
+                                for run in para.runs:
+                                    if ref_run.font.name:
+                                        run.font.name = ref_run.font.name
+                                    if ref_run.font.size:
+                                        run.font.size = ref_run.font.size
+                                    if ref_run.font.bold:
+                                        run.font.bold = ref_run.font.bold
+                                    if ref_run.font.color and ref_run.font.color.rgb:
+                                        run.font.color.rgb = ref_run.font.color.rgb
+
+    logger.info(f"[TableStyle] Applied template table style from {reference_doc_path}")
