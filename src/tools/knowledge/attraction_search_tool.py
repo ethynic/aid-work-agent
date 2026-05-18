@@ -119,6 +119,20 @@ class AttractionSearchTool(BaseTool):
                 """, (embedding_str, tenant_id, top_k))
                 rows = cursor.fetchall()
 
+            # 批量查询 chunk_index=2 的项目/服务信息，避免 N+1
+            doc_ids = [row["doc_id"] for row in rows]
+            project_table_map = {}
+            if doc_ids:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    placeholders = ",".join(["%s"] * len(doc_ids))
+                    cursor.execute(f"""
+                        SELECT doc_id, text FROM chunks
+                        WHERE doc_id IN ({placeholders}) AND chunk_index = 2
+                    """, doc_ids)
+                    for pt_row in cursor.fetchall():
+                        project_table_map[pt_row["doc_id"]] = pt_row["text"] or ""
+
             formatted = []
             for row in rows:
                 meta = row["metadata"]
@@ -133,6 +147,7 @@ class AttractionSearchTool(BaseTool):
                     "doc_id": row["doc_id"],
                     "title": row["title"],
                     "info": info[:500],
+                    "project_table": project_table_map.get(row["doc_id"], ""),
                     "score": round(1.0 - float(row["distance"]), 4),
                     "region": meta.get("region", ""),
                     "category": meta.get("category", ""),

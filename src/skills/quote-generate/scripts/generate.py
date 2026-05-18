@@ -792,7 +792,8 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
                                          ticket_table, project_table,
                                          adults, children_half, students,
                                          teacher_count, total_people,
-                                         attraction_info, retriever)
+                                         attraction_info, retriever,
+                                         mentioned_activities)
             continue
 
         attraction_name = extracted.get("name") or search_name
@@ -955,7 +956,8 @@ def _llm_extract_attraction_prices(
 def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
                                   project_table, adults, children_half,
                                   students, teacher_count, total_people,
-                                  attraction_info, retriever):
+                                  attraction_info, retriever,
+                                  mentioned_activities=None):
     """LLM 提取失败时的规则 fallback 解析"""
     attraction_name = search_name
     if attraction_info:
@@ -1017,6 +1019,80 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
                 "subtotal": price,
                 "teacher_subtotal": 0, "remark": "学生票",
             })
+
+    # 项目/服务匹配：解析 project_table，用 mentioned_activities 做关键词模糊匹配
+    if project_table and mentioned_activities:
+        _fallback_match_projects(
+            items, attraction_name, project_table,
+            mentioned_activities, total_people, teacher_count
+        )
+
+
+def _fallback_match_projects(items, attraction_name, project_table,
+                              mentioned_activities, total_people, teacher_count):
+    """Fallback 项目/服务匹配：解析 project_table 文本，用关键词模糊匹配"""
+    if not mentioned_activities:
+        return
+
+    lines = [l.strip() for l in project_table.split('\n') if l.strip() and '|' in l]
+    if not lines:
+        return
+
+    for activity in mentioned_activities:
+        best_match = None
+        best_score = 0
+
+        for line in lines:
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) < 3:
+                continue
+            project_name = parts[0]
+            # 计算关键词重叠得分
+            act_chars = set(activity)
+            name_chars = set(project_name)
+            overlap = len(act_chars & name_chars)
+            if overlap > best_score:
+                best_score = overlap
+                best_match = parts
+
+        if not best_match or best_score < 2:
+            continue
+
+        try:
+            unit_price = float(best_match[2].strip())
+        except ValueError:
+            continue
+        if unit_price == 0:
+            continue
+
+        project_name = best_match[0].strip()
+        # 判断计费方式：列中有"团"或"组"按团计费
+        billing_hint = "|".join(best_match[1:]).lower()
+        if "团" in billing_hint or "组" in billing_hint:
+            quantity = 1
+            unit = "团"
+            subtotal = round(unit_price / total_people, 2) if total_people > 0 else 0
+            teacher_subtotal = 0
+        else:
+            quantity = total_people
+            unit = "人"
+            subtotal = unit_price
+            teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 else 0
+
+        items.append({
+            "category": "门票",
+            "name": project_name,
+            "unit_price": unit_price,
+            "quantity": quantity,
+            "unit": unit,
+            "frequency": 1,
+            "freq_unit": "次",
+            "subtotal": subtotal,
+            "teacher_subtotal": teacher_subtotal,
+            "remark": "",
+        })
+        logger.info(f"[quote-generate] fallback项目匹配: 活动='{activity}' → 匹配='{project_name}', "
+                     f"单价={unit_price}, 计费={'按团' if unit == '团' else '按人'}")
 
 
 # ============================================================
