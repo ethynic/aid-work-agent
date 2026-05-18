@@ -35,6 +35,12 @@ RUN python -c "import apscheduler; print('apscheduler loaded OK:', apscheduler._
      pip install --no-cache-dir 'APScheduler>=3.10.0' -i https://pypi.org/simple/ && \
      python -c "import apscheduler; print('apscheduler loaded OK:', apscheduler.__version__)")
 
+# 确保 redis 安装成功
+RUN python -c "import redis; print('redis loaded OK:', redis.__version__)" || \
+    (echo "ERROR: redis not installed, reinstalling from pypi.org..." && \
+     pip install --no-cache-dir 'redis>=5.0.0' -i https://pypi.org/simple/ && \
+     python -c "import redis; print('redis loaded OK:', redis.__version__)")
+
 # ============== 阶段2：运行阶段 ==============
 FROM python:3.11-slim
 
