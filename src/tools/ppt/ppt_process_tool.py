@@ -199,7 +199,7 @@ class PptProcessTool(BaseTool):
     async def _register_download(self, file_path: str, display_name: str) -> Dict[str, str]:
         """注册文件到下载系统。"""
         try:
-            from src.main import uploaded_files
+            from src.core.redis_client import redis_client
             import uuid
 
             src = Path(file_path)
@@ -213,7 +213,7 @@ class PptProcessTool(BaseTool):
             if not display_name.lower().endswith(".pptx"):
                 display_name += ".pptx"
 
-            uploaded_files[file_id] = {
+            file_info = {
                 "file_id": file_id,
                 "name": display_name,
                 "path": str(src.absolute()),
@@ -221,6 +221,10 @@ class PptProcessTool(BaseTool):
                 "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 "type": "file",
             }
+            key = redis_client.make_key("uploaded_file", file_id)
+            for field, value in file_info.items():
+                redis_client.hset(key, field, value)
+            redis_client.expire(key, 86400)
 
             logger.info(f"文件已注册: file_id={file_id}, name={display_name}, size={file_size}")
             return {

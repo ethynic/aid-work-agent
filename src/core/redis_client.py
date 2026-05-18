@@ -108,6 +108,7 @@ class RedisClient:
         self._client = None
         self._fallback = _InMemoryFallback()
         self._connected = False
+        self._key_prefix = ""
         self._lock = threading.Lock()
         self._connect()
 
@@ -131,6 +132,7 @@ class RedisClient:
             password = getattr(redis_cfg, 'password', None) or None
             db = int(getattr(redis_cfg, 'db', 0))
             ssl = getattr(redis_cfg, 'ssl', False)
+            self._key_prefix = getattr(redis_cfg, 'key_prefix', '') or ''
 
             import redis as redis_lib
             self._client = redis_lib.Redis(
@@ -337,14 +339,15 @@ class RedisClient:
 
     # ============== 工厂方法 ==============
 
-    @staticmethod
-    def make_key(prefix: str, identifier: str) -> str:
-        """按规范生成 Redis Key
+    def make_key(self, prefix: str, identifier: str) -> str:
+        """按规范生成 Redis Key，自动拼接全局 key_prefix 实现多实例隔离
 
-        格式：{prefix}:{identifier}
-        例如：cancelled_session:abc123
+        格式：{key_prefix}:{prefix}:{identifier}   （key_prefix 为空时省略）
+        例如：key_prefix="prod", prefix="cancelled_session", identifier="abc123"
+             → "prod:cancelled_session:abc123"
         """
-        return f"{prefix}:{identifier}"
+        parts = [self._key_prefix, prefix, identifier] if self._key_prefix else [prefix, identifier]
+        return ":".join(parts)
 
 
 # 全局 Redis 客户端实例

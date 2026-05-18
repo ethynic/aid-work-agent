@@ -39,6 +39,21 @@ except ImportError:
     pass
 
 
+def when_ready(server):
+    """启动前保护检查：多 worker 模式下 Redis 为必选项"""
+    if server.cfg.workers > 1:
+        redis_enabled = os.environ.get("REDIS_ENABLED", "").lower()
+        if redis_enabled not in ("true", "1", "yes"):
+            import sys
+            sys.stderr.write(
+                "\n[CRITICAL] 启动被拒绝：多 worker 模式下 Redis 是强依赖组件。\n"
+                "当前配置 workers={}，但 REDIS_ENABLED 未设为 true。\n"
+                "请将 REDIS_ENABLED 设为 true，或将 WORKERS 调整为 1。\n\n"
+                .format(server.cfg.workers)
+            )
+            sys.exit(1)
+
+
 def post_worker_init(worker):
     """Worker 初始化完成后执行：强制静默 uvicorn.access logger"""
     import logging

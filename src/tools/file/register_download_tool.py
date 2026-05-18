@@ -81,7 +81,7 @@ class RegisterDownloadFileTool(BaseTool):
             return {"success": False, "error": f"路径不是文件: {file_path}"}
 
         try:
-            from src.main import uploaded_files
+            from src.core.redis_client import redis_client
 
             file_id = f"file_{uuid.uuid4().hex[:12]}"
 
@@ -123,7 +123,10 @@ class RegisterDownloadFileTool(BaseTool):
                 "mime_type": mime_type,
                 "type": "image" if mime_type.startswith("image/") else "file",
             }
-            uploaded_files[file_id] = file_info
+            key = redis_client.make_key("uploaded_file", file_id)
+            for field, value in file_info.items():
+                redis_client.hset(key, field, value)
+            redis_client.expire(key, 86400)
 
             download_url = f"/api/files/{file_id}/download"
 
@@ -139,9 +142,6 @@ class RegisterDownloadFileTool(BaseTool):
                 "message": f"文件已注册，用户可通过 {download_url} 下载",
             }
 
-        except ImportError as e:
-            logger.error(f"无法导入 main 模块: {e}")
-            return {"success": False, "error": f"无法访问下载系统: {e}"}
         except Exception as e:
             logger.error(f"注册下载文件失败: {e}")
             return {"success": False, "error": f"注册失败: {str(e)}"}

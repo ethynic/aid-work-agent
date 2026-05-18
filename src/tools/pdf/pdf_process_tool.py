@@ -457,7 +457,7 @@ class PdfProcessTool(BaseTool):
     async def _register_download(self, file_path: str, display_name: str) -> Dict[str, str]:
         """自动注册文件到下载系统。"""
         try:
-            from src.main import uploaded_files
+            from src.core.redis_client import redis_client
             import uuid
 
             src = Path(file_path)
@@ -482,7 +482,7 @@ class PdfProcessTool(BaseTool):
 
             file_size = src.stat().st_size
 
-            uploaded_files[file_id] = {
+            file_info = {
                 "file_id": file_id,
                 "name": display_name,
                 "path": str(src.absolute()),
@@ -490,6 +490,10 @@ class PdfProcessTool(BaseTool):
                 "mime_type": mime_type,
                 "type": "image" if mime_type.startswith("image/") else "file",
             }
+            key = redis_client.make_key("uploaded_file", file_id)
+            for field, value in file_info.items():
+                redis_client.hset(key, field, value)
+            redis_client.expire(key, 86400)
 
             logger.info(f"文件已注册: file_id={file_id}, name={display_name}, size={file_size}")
             return {

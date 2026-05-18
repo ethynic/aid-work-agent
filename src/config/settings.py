@@ -127,6 +127,7 @@ class RedisConfig(BaseModel):
     password: str = ""
     db: int = 0
     ssl: bool = False
+    key_prefix: str = ""  # Key 前缀，多实例共享同一 Redis 时用于隔离
 
 
 class AuthConfig(BaseModel):
@@ -208,6 +209,7 @@ class Settings(BaseModel):
     cors: CorsConfig = Field(default_factory=CorsConfig)
     sms: SmsConfig = Field(default_factory=SmsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -236,6 +238,10 @@ class _AttrDict:
                     _AttrDict(item) if isinstance(item, dict) else item
                     for item in value
                 ])
+            elif isinstance(value, str) and value.lower() == "false":
+                setattr(self, key, False)
+            elif isinstance(value, str) and value.lower() == "true":
+                setattr(self, key, True)
             else:
                 setattr(self, key, value)
 
@@ -329,6 +335,33 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config["password_rule"] = os.getenv("PASSWORD_RULE")
     if os.getenv("PASSWORD_MSG"):
         yaml_config["password_msg"] = os.getenv("PASSWORD_MSG")
+
+    # Redis 配置：环境变量覆盖，并确保布尔值类型正确
+    redis_cfg = yaml_config.setdefault("redis", {})
+    if os.getenv("REDIS_ENABLED") is not None:
+        redis_cfg["enabled"] = os.getenv("REDIS_ENABLED", "").lower() in ("true", "1", "yes")
+    if os.getenv("REDIS_HOST") is not None:
+        redis_cfg["host"] = os.getenv("REDIS_HOST")
+    if os.getenv("REDIS_PORT") is not None:
+        try:
+            redis_cfg["port"] = int(os.getenv("REDIS_PORT"))
+        except ValueError:
+            pass
+    if os.getenv("REDIS_PASSWORD") is not None:
+        redis_cfg["password"] = os.getenv("REDIS_PASSWORD")
+    if os.getenv("REDIS_DB") is not None:
+        try:
+            redis_cfg["db"] = int(os.getenv("REDIS_DB"))
+        except ValueError:
+            pass
+    if os.getenv("REDIS_SSL") is not None:
+        redis_cfg["ssl"] = os.getenv("REDIS_SSL", "").lower() in ("true", "1", "yes")
+    if os.getenv("REDIS_KEY_PREFIX") is not None:
+        redis_cfg["key_prefix"] = os.getenv("REDIS_KEY_PREFIX")
+    # 修复 config.yaml 中 ${...} 替换后遗留的字符串布尔值
+    for bool_key in ("enabled", "ssl"):
+        if bool_key in redis_cfg and isinstance(redis_cfg[bool_key], str):
+            redis_cfg[bool_key] = redis_cfg[bool_key].lower() in ("true", "1", "yes")
 
     # 短信配置
     if os.getenv("SMS_CHANNEL"):
