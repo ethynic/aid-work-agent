@@ -37,8 +37,17 @@ from src.services.session_record import SessionRecordManager
 
 # ============== SSE Session Management ==============
 
+# 全局 worker 标识，用于 Redis pub/sub 去重
+_WORKER_ID = f"{os.getpid()}_{threading.current_thread().ident}"
+
+
 class SSEConnectionManager:
-    """管理SSE连接和会话"""
+    """管理SSE连接和会话
+
+    多 worker 环境下通过 Redis Pub/Sub 实现跨 worker 消息广播，
+    使前端 SSE 连接到 Worker A 时，Worker B 生成的消息也能送达。
+    建议部署层同时配置 sticky session 以获得最佳体验。
+    """
 
     def __init__(self):
         # session_id -> {"history": [], "sse_queues": []}
@@ -46,6 +55,57 @@ class SSEConnectionManager:
         self.sse_connections: Dict[str, List[queue.Queue]] = {}
         # 取消标记已迁移到 Redis: key=cancelled_session:{session_id}, TTL=300s
         self.lock = threading.Lock()
+        # Redis Pub/Sub
+        self._redis_channel = "sse_broadcast"
+        self._redis_pubsub = None
+        self._redis_listener_thread: Optional[threading.Thread] = None
+        self._start_redis_listener()
+
+    def _start_redis_listener(self):
+        """启动 Redis 订阅监听线程，接收其他 worker 的广播消息"""
+        if not redis_client._connected:
+            return
+        try:
+            pubsub = redis_client.subscribe(self._redis_channel)
+            if pubsub:
+                pubsub.subscribe(self._redis_channel)
+                self._redis_pubsub = pubsub
+                self._redis_listener_thread = threading.Thread(
+                    target=self._redis_listen_loop, daemon=True
+                )
+                self._redis_listener_thread.start()
+                logger.info("[SSE] Redis broadcast listener started")
+        except Exception as e:
+            logger.warning(f"[SSE] Failed to start Redis listener: {e}")
+
+    def _redis_listen_loop(self):
+        """Redis 订阅循环（daemon 线程）"""
+        try:
+            for message in self._redis_pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        data = json.loads(message["data"])
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    # 忽略自己发出的消息，避免本地重复广播
+                    if data.get("worker_id") == _WORKER_ID:
+                        continue
+                    session_id = data.get("session_id")
+                    event = data.get("event")
+                    if session_id and event:
+                        self._local_broadcast(session_id, event)
+        except Exception as e:
+            logger.warning(f"[SSE] Redis listener error: {e}")
+
+    def _local_broadcast(self, session_id: str, event: Dict[str, Any]):
+        """向当前 worker 的本地 SSE 客户端推送消息"""
+        with self.lock:
+            queues = self.sse_connections.get(session_id, []).copy()
+        for q in queues:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                pass
 
     def get_or_create_session(self, session_id: str = None) -> str:
         with self.lock:
@@ -97,13 +157,20 @@ class SSEConnectionManager:
         redis_client.delete(key)
 
     def broadcast(self, session_id: str, event: Dict[str, Any]):
-        with self.lock:
-            queues = self.sse_connections.get(session_id, []).copy()
-        for q in queues:
-            try:
-                q.put_nowait(event)
-            except queue.Full:
-                pass
+        # 本地广播
+        self._local_broadcast(session_id, event)
+        # 通过 Redis 广播给其他 worker
+        try:
+            redis_client.publish(
+                self._redis_channel,
+                json.dumps(
+                    {"session_id": session_id, "event": event, "worker_id": _WORKER_ID},
+                    default=str,
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"[SSE] Redis broadcast failed: {e}")
 
     def add_to_history(self, session_id: str, role: str, content: str):
         with self.lock:

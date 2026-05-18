@@ -110,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useMobile } from '@/composables/useMobile'
 import type { UploadedFile } from '@/api/agent'
 
@@ -134,6 +134,15 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const canSend = computed(() => {
   return !props.disabled && !props.isProcessing
+})
+
+// 前端日志：输入框从禁用恢复时自动聚焦，提升用户体验
+watch(() => props.disabled, (newVal, oldVal) => {
+  if (oldVal === true && newVal === false) {
+    nextTick(() => {
+      inputRef.value?.focus()
+    })
+  }
 })
 
 function handleEnter(e: KeyboardEvent) {

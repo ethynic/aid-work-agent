@@ -96,6 +96,62 @@ class _InMemoryFallback:
                 return [k for k in self._data.keys() if k.startswith(prefix)]
             return [k for k in self._data.keys() if k == pattern]
 
+    # ============== Sorted Set 降级操作 ==============
+
+    def zadd(self, key: str, mapping: dict) -> int:
+        with self._lock:
+            if key not in self._data:
+                self._data[key] = []
+            items = self._data[key]
+            for member, score in mapping.items():
+                items = [(m, s) for m, s in items if m != member]
+                items.append((member, float(score)))
+            self._data[key] = items
+            return len(mapping)
+
+    def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
+        with self._lock:
+            if key not in self._data:
+                return 0
+            original_len = len(self._data[key])
+            self._data[key] = [
+                (m, s) for m, s in self._data[key]
+                if not (float(min_score) <= s <= float(max_score))
+            ]
+            return original_len - len(self._data[key])
+
+    def zcard(self, key: str) -> int:
+        with self._lock:
+            return len(self._data.get(key, []))
+
+    def zrange(self, key: str, start: int, end: int) -> List[str]:
+        with self._lock:
+            items = self._data.get(key, [])
+            sorted_items = sorted(items, key=lambda x: x[1])
+            if end == -1:
+                selected = sorted_items[start:]
+            else:
+                selected = sorted_items[start:end + 1]
+            return [m for m, s in selected]
+
+    def publish(self, channel: str, message: str) -> int:
+        # 内存降级不支持 pub/sub，静默忽略
+        return 0
+
+    def acquire_lock(self, key: str, value: str, ex: int = 60) -> bool:
+        with self._lock:
+            if key in self._data:
+                return False
+            self._data[key] = value
+            return True
+
+    def release_lock(self, key: str, value: str) -> bool:
+        with self._lock:
+            if self._data.get(key) == value:
+                del self._data[key]
+                return True
+            return False
+
 
 class RedisClient:
     """
@@ -336,6 +392,108 @@ class RedisClient:
         except Exception as e:
             logger.warning(f"[Redis] keys 失败 [{pattern}]: {e}")
             return []
+
+    # ============== Sorted Set 操作 ==============
+
+    def zadd(self, key: str, mapping: dict) -> int:
+        """添加成员到 Sorted Set，score 为 float"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return backend.zadd(key, mapping)
+            return self._fallback.zadd(key, mapping)
+        except Exception as e:
+            logger.warning(f"[Redis] zadd 失败 [{key}]: {e}")
+            return 0
+
+    def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
+        """按 score 范围移除成员"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return backend.zremrangebyscore(key, min_score, max_score)
+            return self._fallback.zremrangebyscore(key, min_score, max_score)
+        except Exception as e:
+            logger.warning(f"[Redis] zremrangebyscore 失败 [{key}]: {e}")
+            return 0
+
+    def zcard(self, key: str) -> int:
+        """获取 Sorted Set 成员数"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return backend.zcard(key)
+            return self._fallback.zcard(key)
+        except Exception as e:
+            logger.warning(f"[Redis] zcard 失败 [{key}]: {e}")
+            return 0
+
+    def zrange(self, key: str, start: int, end: int) -> List[str]:
+        """获取 Sorted Set 范围内的成员（按 score 升序）"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                result = backend.zrange(key, start, end)
+                return [r.decode('utf-8') if isinstance(r, bytes) else r for r in result]
+            return self._fallback.zrange(key, start, end)
+        except Exception as e:
+            logger.warning(f"[Redis] zrange 失败 [{key}]: {e}")
+            return []
+
+    # ============== 分布式锁 ==============
+
+    def acquire_lock(self, key: str, value: str, ex: int = 60) -> bool:
+        """尝试获取分布式锁（setnx + expire）"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                acquired = backend.set(key, value, nx=True, ex=ex)
+                return bool(acquired)
+            return self._fallback.acquire_lock(key, value, ex)
+        except Exception as e:
+            logger.warning(f"[Redis] acquire_lock 失败 [{key}]: {e}")
+            return False
+
+    def release_lock(self, key: str, value: str) -> bool:
+        """释放分布式锁（只有持有正确 value 才释放）"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                lua_script = """
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    return redis.call("del", KEYS[1])
+                else
+                    return 0
+                end
+                """
+                result = backend.eval(lua_script, 1, key, value)
+                return bool(result)
+            return self._fallback.release_lock(key, value)
+        except Exception as e:
+            logger.warning(f"[Redis] release_lock 失败 [{key}]: {e}")
+            return False
+
+    # ============== Pub/Sub ==============
+
+    def publish(self, channel: str, message: str) -> int:
+        """发布消息到频道"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return backend.publish(channel, message)
+            return self._fallback.publish(channel, message)
+        except Exception as e:
+            logger.warning(f"[Redis] publish 失败 [{channel}]: {e}")
+            return 0
+
+    def subscribe(self, channel: str):
+        """订阅频道，返回 pubsub 对象（仅原生 Redis）"""
+        if self._connected and self._client:
+            try:
+                return self._client.pubsub()
+            except Exception as e:
+                logger.warning(f"[Redis] subscribe 失败 [{channel}]: {e}")
+        return None
 
     # ============== 工厂方法 ==============
 

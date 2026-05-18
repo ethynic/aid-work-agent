@@ -1,6 +1,8 @@
 """定时任务调度管理器"""
 
 import asyncio
+import os
+import threading
 import traceback
 from datetime import datetime
 from typing import Optional, Dict
@@ -13,9 +15,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from src.scheduler.db import ScheduledTaskDB
 from src.scheduler.executor import ScheduledTaskExecutor
+from src.core.redis_client import redis_client
 
 # 全局单例
 _executor = ScheduledTaskExecutor()
+# 分布式锁 key
+_SCHEDULER_LOCK_KEY = "scheduled_task_manager:lock"
 
 
 class ScheduledTaskManager:
@@ -25,12 +30,24 @@ class ScheduledTaskManager:
         self._scheduler: Optional[BackgroundScheduler] = None
         self._jobs: Dict[str, str] = {}  # task_id -> apscheduler job_id
         self._running = False
+        self._lock_value: Optional[str] = None
 
     def start(self):
         """启动调度器（应用启动时调用）"""
         if self._running:
             logger.warning("后端日志：定时任务调度器已在运行中")
             return
+
+        # 多 worker 环境下使用 Redis 分布式锁避免重复启动
+        try:
+            self._lock_value = f"{os.getpid()}:{threading.current_thread().ident}"
+            acquired = redis_client.acquire_lock(_SCHEDULER_LOCK_KEY, self._lock_value, ex=300)
+            if not acquired:
+                logger.info("后端日志：定时任务调度器已在其他 worker 中运行，当前 worker 跳过启动")
+                return
+        except Exception as e:
+            logger.warning(f"后端日志：分布式锁获取失败，继续启动调度器: {e}")
+            self._lock_value = None
 
         self._scheduler = BackgroundScheduler(
             timezone="Asia/Shanghai",
@@ -65,6 +82,15 @@ class ScheduledTaskManager:
             self._scheduler = None
         self._running = False
         self._jobs.clear()
+
+        # 释放分布式锁
+        if self._lock_value:
+            try:
+                redis_client.release_lock(_SCHEDULER_LOCK_KEY, self._lock_value)
+            except Exception:
+                pass
+            self._lock_value = None
+
         logger.info("后端日志：定时任务调度器已关闭")
 
     def register_task(self, task: dict) -> Optional[str]:
