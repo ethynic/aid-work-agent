@@ -7,6 +7,7 @@
 
 from typing import List, Any
 from loguru import logger
+from src.core.cache_utils import CacheKeys, delete_cached
 
 
 class UserAgentPermissionDB:
@@ -33,6 +34,8 @@ class UserAgentPermissionDB:
 
         conn.commit()
         logger.info(f"User {user_id} agent permissions updated: {len(agent_ids)} agents")
+        # 清除用户数字员工列表缓存
+        delete_cached(CacheKeys.USER_AGENTS, user_id)
 
     @staticmethod
     def add_permission(conn: Any, user_id: str, tenant_id: str, agent_id: str) -> None:

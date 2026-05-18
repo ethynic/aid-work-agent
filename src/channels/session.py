@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.models.message import ChannelType
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
 
 
 class ChannelSessionManager:
@@ -113,7 +114,7 @@ class ChannelSessionManager:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        获取或创建渠道会话
+        获取或创建渠道会话（优先从 Redis 缓存读取，TTL 10分钟）
 
         Args:
             channel_type: 渠道类型
@@ -127,6 +128,11 @@ class ChannelSessionManager:
         """
         session_id = self._generate_session_id(channel_type, channel_user_id)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 优先从缓存获取
+        cached = get_cached(CacheKeys.CHANNEL_SESSION, channel_type, channel_user_id)
+        if cached is not None:
+            return cached
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -151,6 +157,7 @@ class ChannelSessionManager:
                 result = dict(row)
                 result["context_data"] = self._parse_json_field(result.get("context_data"), {})
                 result["metadata"] = self._parse_json_field(result.get("metadata"))
+                set_cached(CacheKeys.CHANNEL_SESSION, channel_type, channel_user_id, value=result, ttl=600)
                 return result
             else:
                 # 创建新会话
@@ -180,7 +187,7 @@ class ChannelSessionManager:
                 ))
                 conn.commit()
 
-                return {
+                result = {
                     "session_id": session_id,
                     "channel_type": channel_type,
                     "channel_user_id": channel_user_id,
@@ -192,6 +199,8 @@ class ChannelSessionManager:
                     "updated_at": now,
                     "last_message_at": now,
                 }
+                set_cached(CacheKeys.CHANNEL_SESSION, channel_type, channel_user_id, value=result, ttl=600)
+                return result
 
     def get_session(
         self,
@@ -199,7 +208,7 @@ class ChannelSessionManager:
         channel_user_id: str,
     ) -> Optional[Dict[str, Any]]:
         """
-        获取渠道会话
+        获取渠道会话（优先从 Redis 缓存读取，TTL 10分钟）
 
         Args:
             channel_type: 渠道类型
@@ -208,6 +217,11 @@ class ChannelSessionManager:
         Returns:
             会话信息字典
         """
+        # 优先从缓存获取
+        cached = get_cached(CacheKeys.CHANNEL_SESSION, channel_type, channel_user_id)
+        if cached is not None:
+            return cached
+
         session_id = self._generate_session_id(channel_type, channel_user_id)
 
         with get_db_connection() as conn:
@@ -222,6 +236,8 @@ class ChannelSessionManager:
             result = dict(row)
             result["context_data"] = self._parse_json_field(result.get("context_data"), {})
             result["metadata"] = self._parse_json_field(result.get("metadata"))
+            # 写入缓存
+            set_cached(CacheKeys.CHANNEL_SESSION, channel_type, channel_user_id, value=result, ttl=600)
             return result
 
     def update_session(

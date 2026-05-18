@@ -10,6 +10,21 @@ from loguru import logger
 
 from src.db.database import get_db_connection
 from src.saas.models.enums import SubscriptionStatus
+from src.core.cache_utils import CacheKeys, delete_cached, delete_cached_pattern, invalidate_user_cache
+
+
+def invalidate_subscription_cache(tenant_id: str, affected_agent_ids: list = None):
+    """清除订阅变更相关的缓存"""
+    # 清除租户下所有数字员工的配额缓存
+    count = delete_cached_pattern(CacheKeys.AGENT_QUOTA, tenant_id, "")
+    if affected_agent_ids:
+        for agent_id in affected_agent_ids:
+            delete_cached(CacheKeys.AGENT_QUOTA, tenant_id, agent_id)
+    # 清除订阅统计缓存
+    delete_cached(CacheKeys.TENANT_SUB_COUNT, tenant_id)
+    # 清除租户统计缓存（包含 active_subscriptions）
+    delete_cached(CacheKeys.TENANT_STATS, tenant_id)
+    logger.debug(f"后端日志：清除订阅缓存 tenant={tenant_id}, 共 {count} 条配额缓存")
 
 
 class SubscriptionDB:
@@ -267,6 +282,8 @@ class SubscriptionDB:
 
         conn.commit()
         logger.info(f"Tenant {tenant_id} subscriptions updated: {len(agent_ids)} agents, removed {len(removed_agents)}, quotas updated")
+        # 清除权限相关缓存
+        invalidate_subscription_cache(tenant_id, list(new_agents) + list(removed_agents))
 
     @staticmethod
     def delete_all_for_tenant(conn: Any, tenant_id: str) -> None:
@@ -279,6 +296,9 @@ class SubscriptionDB:
         cursor.execute("DELETE FROM user_agent_permissions WHERE tenant_id = %s", (tenant_id,))
         conn.commit()
         logger.info(f"Deleted all subscriptions and permissions for tenant {tenant_id}")
+        # 清除租户相关缓存（权限 + 统计）
+        delete_cached_pattern(CacheKeys.AGENT_QUOTA, tenant_id, "")
+        delete_cached(CacheKeys.TENANT_SUB_COUNT, tenant_id)
 
     @staticmethod
     def remove_agent_from_all_tenants(conn: Any, agent_id: str) -> None:

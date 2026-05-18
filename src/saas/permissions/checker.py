@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 from src.db.database import get_db_connection
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.core.agent import master_agent
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
 
 
 def is_platform_admin(user: dict) -> bool:
@@ -27,7 +28,7 @@ def get_tenant_id_from_user(user: dict) -> Optional[str]:
 
 def get_agent_quota(tenant_id: str, agent_id: str) -> Tuple[bool, int]:
     """
-    获取租户对某个数字员工的访问权限和当前实例配额
+    获取租户对某个数字员工的访问权限和当前实例配额（优先从 Redis 缓存读取，TTL 5分钟）
 
     Args:
         tenant_id: 租户ID
@@ -36,6 +37,10 @@ def get_agent_quota(tenant_id: str, agent_id: str) -> Tuple[bool, int]:
     Returns:
         (has_access: bool, instance_quota: int)
     """
+    cached = get_cached(CacheKeys.AGENT_QUOTA, tenant_id, agent_id)
+    if cached is not None:
+        return cached.get("has_access", False), cached.get("instance_quota", 0)
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -50,7 +55,11 @@ def get_agent_quota(tenant_id: str, agent_id: str) -> Tuple[bool, int]:
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """, (tenant_id, agent_id))
         row = cursor.fetchone()
-        return bool(row["has_access"]), int(row["instance_quota"])
+        has_access = bool(row["has_access"])
+        quota = int(row["instance_quota"])
+        set_cached(CacheKeys.AGENT_QUOTA, tenant_id, agent_id,
+                    value={"has_access": has_access, "instance_quota": quota}, ttl=300)
+        return has_access, quota
 
 
 def check_agent_access(agent_id: str, user: dict) -> bool:
@@ -97,7 +106,7 @@ def check_agent_access(agent_id: str, user: dict) -> bool:
 
 
 def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
-    """获取当前用户允许访问的所有数字员工ID
+    """获取当前用户允许访问的所有数字员工ID（优先从 Redis 缓存读取，TTL 5分钟）
 
     Args:
         user: 当前用户信息，包含 user_id, role, tenant_id 字段
@@ -123,6 +132,16 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
             return list(registry.list_subagents())
         return []
 
+    user_id = user.get("user_id")
+    if not user_id:
+        return []
+
+    # 普通用户：优先从缓存获取
+    if not is_tenant_admin(user) and not is_platform_admin(user):
+        cached = get_cached(CacheKeys.USER_AGENTS, user_id)
+        if cached is not None:
+            return cached
+
     with get_db_connection() as conn:
         # 获取租户有有效订阅的列表
         cursor = conn.cursor()
@@ -144,12 +163,12 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
             return tenant_allowed
 
         # 普通用户 → 取交集（用户允许且租户有订阅）
-        user_id = user.get("user_id")
-        if not user_id:
-            return []
-
         user_allowed = set(UserAgentPermissionDB.get_allowed_agents(conn, user_id))
-        return [aid for aid in tenant_allowed if aid in user_allowed]
+        result = [aid for aid in tenant_allowed if aid in user_allowed]
+
+        # 写入缓存
+        set_cached(CacheKeys.USER_AGENTS, user_id, value=result, ttl=300)
+        return result
 
 
 def count_tenant_subscribed_agents(tenant_id: str) -> int:

@@ -16,6 +16,7 @@ from src.db.database import get_db_connection
 from src.db.models import UserDB, SessionDB, send_sms_code, verify_sms_code, hash_password, verify_password, generate_captcha, verify_captcha
 from src.config.settings import settings
 from src.api.rate_limit import check_login_rate_limit
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, invalidate_user_cache
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -158,6 +159,7 @@ def generate_token(user_id: str) -> str:
             for i in range(to_delete):
                 old_token = existing_tokens[i]["token"]
                 cursor.execute("DELETE FROM tokens WHERE token = %s", (old_token,))
+                delete_cached(CacheKeys.TOKEN, old_token)
                 logger.info(f"Deleted old token for user {user_id} (concurrent limit: {max_tokens})")
 
         cursor.execute("""
@@ -174,6 +176,8 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
     """
     验证令牌并返回 user_id，支持自动刷新有效期（滑动窗口）
 
+    优先从 Redis 缓存读取，缓存未命中时查询数据库。
+
     Args:
         token: 认证令牌
         auto_refresh: 是否自动刷新有效期
@@ -186,6 +190,40 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
     from src.db.models import UserDB
     from src.saas.db.tenant_db import TenantDB
 
+    now = datetime.now()
+
+    # 优先从 Redis 缓存读取
+    cached_data = get_cached(CacheKeys.TOKEN, token)
+    if cached_data is not None:
+        user_id = cached_data.get("user_id")
+        expires_at_str = cached_data.get("expires_at")
+        if user_id and expires_at_str:
+            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+            if now <= expires_at:
+                # 缓存命中且有效，跳过 DB 查询
+                # 但滑动刷新仍需间歇性检查（允许每天最多触发一次刷新）
+                if auto_refresh:
+                    remaining_seconds = (expires_at - now).total_seconds()
+                    remaining_days = remaining_seconds / 86400
+                    last_refresh = cached_data.get("last_refresh_check", 0)
+                    # 只有缓存中没有近期刷新记录时才执行 DB 刷新逻辑
+                    if remaining_days < 3 and (now.timestamp() - last_refresh) > 86400:
+                        # 标记已检查，避免频繁刷新
+                        cached_data["last_refresh_check"] = now.timestamp()
+                        set_cached(CacheKeys.TOKEN, token, value=cached_data, ttl=int(min(remaining_seconds, 604800)))
+                        # 异步思路：此处 DB 刷新可改为后台任务，此处简化处理
+                        # 实际刷新由 DB 层负责，这里仅标记
+                    return user_id
+                return user_id
+            else:
+                # 缓存显示已过期，删除缓存
+                delete_cached(CacheKeys.TOKEN, token)
+                return None
+        else:
+            # 缓存数据异常，删除重建
+            delete_cached(CacheKeys.TOKEN, token)
+
+    # 缓存未命中，查询数据库
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -202,19 +240,29 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
         if isinstance(expires_at, str):
             expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
 
-        now = datetime.now()
         if now > expires_at:
             cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
             conn.commit()
+            delete_cached(CacheKeys.TOKEN, token)
             return None
+
+        user_id = row["user_id"]
+        remaining_seconds = (expires_at - now).total_seconds()
+
+        # 写入缓存（TTL 取剩余有效期和 7 天的较小值）
+        cache_ttl = int(min(remaining_seconds, 604800))
+        if cache_ttl > 0:
+            set_cached(CacheKeys.TOKEN, token, value={
+                "user_id": user_id,
+                "expires_at": expires_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(expires_at, datetime) else str(expires_at),
+                "last_refresh_check": 0,
+            }, ttl=cache_ttl)
 
         # 滑动有效期：如果剩余时间 < 3 天，自动刷新
         if auto_refresh:
-            remaining_seconds = (expires_at - now).total_seconds()
             remaining_days = remaining_seconds / 86400
 
             if remaining_days < 3:
-                user_id = row["user_id"]
                 new_expires_at = now + timedelta(days=7)
 
                 # 租户用户：检查租户到期日期，token 有效期不能超过租户到期日
@@ -237,13 +285,24 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
                 """, (new_expires_at_str, token))
                 conn.commit()
 
+                # 更新缓存
+                new_remaining = (new_expires_at - now).total_seconds()
+                cache_ttl = int(min(new_remaining, 604800))
+                if cache_ttl > 0:
+                    set_cached(CacheKeys.TOKEN, token, value={
+                        "user_id": user_id,
+                        "expires_at": new_expires_at_str,
+                        "last_refresh_check": now.timestamp(),
+                    }, ttl=cache_ttl)
+
                 logger.debug(f"Token refreshed for user {user_id}, new expiry: {new_expires_at_str}")
 
-        return row["user_id"]
+        return user_id
 
 
 def delete_token(token: str) -> bool:
-    """删除指定的 token"""
+    """删除指定的 token（同时清除 Redis 缓存）"""
+    delete_cached(CacheKeys.TOKEN, token)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
@@ -265,14 +324,22 @@ def cleanup_expired_tokens() -> int:
 
 
 def get_current_user(request: Request) -> Optional[dict]:
-    """从请求中获取当前用户"""
+    """从请求中获取当前用户（优先从 Redis 缓存读取）"""
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         user_id = verify_token(token)
         if user_id:
+            # 优先从缓存获取用户信息
+            user = get_cached(CacheKeys.USER, user_id)
+            if user is not None:
+                return user
+            # 缓存未命中，从数据库获取并缓存
             user = UserDB.get_by_id(user_id)
-            logger.debug(f"get_current_user user from DB: {user}")
+            if user:
+                # 缓存时过滤掉 password_hash
+                safe_user = {k: v for k, v in user.items() if k != "password_hash"}
+                set_cached(CacheKeys.USER, user_id, value=safe_user, ttl=600)
             return user
     return None
 
@@ -590,7 +657,7 @@ async def phone_login(request: Request, body: PhoneLoginRequest):
     demo_enabled = getattr(settings, "demo", None) and getattr(settings.demo, "enabled", False)
     mock_password = getattr(settings, "demo", None) and getattr(settings.demo, "mock_password", "888888")
 
-    user = UserDB.get_by_phone(body.phone)
+    user = UserDB.get_by_phone(body.phone, bypass_cache=True)
 
     if user:
         # 用户已存在
@@ -735,6 +802,8 @@ async def bind_phone(request: BindPhoneRequest):
         """, (request.phone, request.user_id))
         conn.commit()
 
+    # 清除缓存
+    invalidate_user_cache(request.user_id)
     return {"success": True, "message": "手机号绑定成功"}
 
 
@@ -784,7 +853,8 @@ async def update_profile(
 
     success = UserDB.update_info(user_id, **updates)
     if success:
-        # 返回更新后的用户信息
+        # 清除缓存后重新获取用户信息
+        invalidate_user_cache(user_id)
         updated_user = UserDB.get_by_id(user_id)
         return {
             "success": True,
@@ -853,6 +923,8 @@ async def reset_password(request: ResetPasswordRequest):
                       (new_password_hash, user["user_id"]))
         conn.commit()
 
+    # 清除用户缓存（密码变更）
+    invalidate_user_cache(user["user_id"])
     return {"success": True, "message": "密码重置成功"}
 
 

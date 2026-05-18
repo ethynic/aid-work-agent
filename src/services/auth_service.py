@@ -32,7 +32,7 @@ def authenticate_user(identifier: str, password: str, *,
 
     # 1. 查找用户
     if is_phone:
-        user = UserDB.get_by_phone(identifier)
+        user = UserDB.get_by_phone(identifier, bypass_cache=True)
     else:
         with get_db_connection() as conn:
             cursor = conn.cursor()

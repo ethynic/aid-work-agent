@@ -11,6 +11,7 @@ from loguru import logger
 from src.db.database import get_db_connection
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.enums import TenantStatus
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, invalidate_tenant_cache
 
 
 class TenantDB:
@@ -64,7 +65,11 @@ class TenantDB:
 
     @staticmethod
     def get_by_id(tenant_id: str) -> Optional[Dict[str, Any]]:
-        """根据 tenant_id 获取租户"""
+        """根据 tenant_id 获取租户（优先从 Redis 缓存读取，TTL 30分钟）"""
+        cached = get_cached(CacheKeys.TENANT, tenant_id)
+        if cached is not None:
+            return cached
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM tenants WHERE tenant_id = %s", (tenant_id,))
@@ -74,12 +79,18 @@ class TenantDB:
                 d["settings"] = json.loads(d["settings"]) if d.get("settings") else {}
                 # 添加已授权数字员工数量
                 d["agent_count"] = SubscriptionDB.count_active_subscriptions(conn, tenant_id)
+                set_cached(CacheKeys.TENANT, tenant_id, value=d, ttl=1800)
                 return d
             return None
 
     @staticmethod
     def get_by_code(tenant_code: str) -> Optional[Dict[str, Any]]:
-        """根据 tenant_code 获取租户（大小写不敏感）"""
+        """根据 tenant_code 获取租户（大小写不敏感，优先从 Redis 缓存读取，TTL 30分钟）"""
+        code_upper = tenant_code.upper()
+        cached = get_cached(CacheKeys.TENANT_CODE, code_upper)
+        if cached is not None:
+            return cached
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM tenants WHERE UPPER(tenant_code) = UPPER(%s)", (tenant_code,))
@@ -89,6 +100,8 @@ class TenantDB:
                 d["settings"] = json.loads(d["settings"]) if d.get("settings") else {}
                 # 添加已授权数字员工数量
                 d["agent_count"] = SubscriptionDB.count_active_subscriptions(conn, d["tenant_id"])
+                set_cached(CacheKeys.TENANT_CODE, code_upper, value=d, ttl=1800)
+                set_cached(CacheKeys.TENANT, d["tenant_id"], value=d, ttl=1800)
                 return d
             return None
 
@@ -132,7 +145,14 @@ class TenantDB:
 
             cursor.execute(f"UPDATE tenants SET {set_clause} WHERE tenant_id = %s", (*values, tenant_id))
             conn.commit()
-            return cursor.rowcount > 0
+            result = cursor.rowcount > 0
+            if result:
+                # 清除租户所有缓存
+                invalidate_tenant_cache(tenant_id)
+                # 如果更改了 tenant_code，还需要清除旧的 tenant_code 缓存和新 code 的缓存
+                if "tenant_code" in updates:
+                    delete_cached(CacheKeys.TENANT_CODE, updates["tenant_code"])
+            return result
 
     @staticmethod
     def list_tenants(status: Optional[str] = None, page: int = 1, page_size: int = 20) -> dict:
@@ -185,12 +205,17 @@ class TenantDB:
             conn.commit()
             if cursor.rowcount > 0:
                 logger.info(f"Tenant deleted: {tenant_id}")
+                invalidate_tenant_cache(tenant_id)
                 return True
             return False
 
     @staticmethod
     def get_stats(tenant_id: str) -> Dict[str, Any]:
-        """获取租户统计信息"""
+        """获取租户统计信息（优先从 Redis 缓存读取，TTL 60秒）"""
+        cached = get_cached(CacheKeys.TENANT_STATS, tenant_id)
+        if cached is not None:
+            return cached
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -222,9 +247,11 @@ class TenantDB:
             )
             active_subscriptions = cursor.fetchone()["count"]
 
-            return {
+            result = {
                 "instance_count": instance_count,
                 "user_count": user_count,
                 "admin_count": admin_count,
                 "active_subscriptions": active_subscriptions,
             }
+            set_cached(CacheKeys.TENANT_STATS, tenant_id, value=result, ttl=60)
+            return result

@@ -17,6 +17,7 @@ from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.models.enums import UserStatus
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, invalidate_user_cache
 
 
 # ============== 密码哈希 ==============
@@ -90,23 +91,49 @@ class UserDB:
 
     @staticmethod
     def get_by_id(user_id: str) -> Optional[Dict[str, Any]]:
-        """根据用户ID获取用户"""
+        """根据用户ID获取用户（优先从 Redis 缓存读取）"""
+        # 优先从缓存获取
+        cached = get_cached(CacheKeys.USER, user_id)
+        if cached is not None:
+            return cached
+
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE user_id = {placeholder}", (user_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            user = dict(row) if row else None
+            if user:
+                # 缓存时过滤敏感字段
+                safe_user = {k: v for k, v in user.items() if k != "password_hash"}
+                set_cached(CacheKeys.USER, user_id, value=safe_user, ttl=600)
+            return user
 
     @staticmethod
-    def get_by_phone(phone: str) -> Optional[Dict[str, Any]]:
-        """根据手机号获取用户"""
+    def get_by_phone(phone: str, bypass_cache: bool = False) -> Optional[Dict[str, Any]]:
+        """根据手机号获取用户（优先从 Redis 缓存读取）
+
+        Args:
+            phone: 手机号
+            bypass_cache: 绕过缓存，直接查询数据库（登录等需要 password_hash 的场景）
+        """
+        if not bypass_cache:
+            # 优先从缓存获取
+            cached = get_cached(CacheKeys.USER, f"phone:{phone}")
+            if cached is not None:
+                return cached
+
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM users WHERE phone = {placeholder}", (phone,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            user = dict(row) if row else None
+            if user and not bypass_cache:
+                # 缓存时不存 password_hash
+                safe_user = {k: v for k, v in user.items() if k != "password_hash"}
+                set_cached(CacheKeys.USER, f"phone:{phone}", value=safe_user, ttl=600)
+            return user
 
     @staticmethod
     def get_by_phone_in_tenant(phone: str, tenant_id: str) -> Optional[Dict[str, Any]]:
@@ -187,7 +214,11 @@ class UserDB:
             cursor.execute(f"UPDATE users SET {set_clause}, updated_at = {ts} WHERE user_id = {placeholder}",
                           values)
             conn.commit()
-            return cursor.rowcount > 0
+            result = cursor.rowcount > 0
+            if result:
+                # 清除用户缓存，下次查询从数据库重新加载
+                invalidate_user_cache(user_id)
+            return result
 
     # 别名方法，保持向后兼容
     update = update_info
@@ -306,6 +337,8 @@ class SessionDB:
                 conn.commit()
 
                 logger.info(f"Chat session created: {session_id} for user: {user_id}, tenant: {tenant_id}, subagent: {subagent_id}")
+                # 清除用户的会话列表缓存
+                delete_cached_pattern(CacheKeys.USER_SESSIONS, user_id, "")
                 return SessionDB.get_by_id(session_id)
             except Exception as e:
                 logger.error(f"Failed to create chat session: {e}")
@@ -313,7 +346,11 @@ class SessionDB:
 
     @staticmethod
     def get_by_id(session_id: str) -> Optional[Dict[str, Any]]:
-        """根据会话ID获取会话"""
+        """根据会话ID获取会话（优先从 Redis 缓存读取，TTL 5分钟）"""
+        cached = get_cached(CacheKeys.SESSION, session_id)
+        if cached is not None:
+            return cached
+
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -323,12 +360,13 @@ class SessionDB:
                 result = dict(row)
                 if result.get("context_data"):
                     result["context_data"] = json.loads(result["context_data"])
+                set_cached(CacheKeys.SESSION, session_id, value=result, ttl=300)
                 return result
             return None
 
     @staticmethod
     def list_by_user(user_id: str, page: int = 1, page_size: int = 20, tenant_id: str = None) -> Dict[str, Any]:
-        """获取用户的会话列表（分页）
+        """获取用户的会话列表（分页，优先从 Redis 缓存读取，TTL 30秒）
 
         Args:
             user_id: 用户ID
@@ -336,6 +374,11 @@ class SessionDB:
             page_size: 每页数量
             tenant_id: 租户ID，传入时仅返回该租户下的会话；不传则返回所有会话（兼容非SaaS模式）
         """
+        tid = tenant_id or "none"
+        cached = get_cached(CacheKeys.USER_SESSIONS, user_id, tid, str(page), str(page_size))
+        if cached is not None:
+            return cached
+
         offset = (page - 1) * page_size
         placeholder = "%s"
         with get_db_connection() as conn:
@@ -371,12 +414,15 @@ class SessionDB:
                 if result.get("context_data"):
                     result["context_data"] = json.loads(result["context_data"])
                 sessions.append(result)
-            return {
+            paginated = {
                 "sessions": sessions,
                 "total": total,
                 "page": page,
                 "page_size": page_size
             }
+            set_cached(CacheKeys.USER_SESSIONS, user_id, tid, str(page), str(page_size),
+                       value=paginated, ttl=30)
+            return paginated
 
     @staticmethod
     def update_title(session_id: str, title: str) -> bool:
@@ -391,7 +437,10 @@ class SessionDB:
                 WHERE session_id = {placeholder}
             """, (title, session_id))
             conn.commit()
-            return cursor.rowcount > 0
+            result = cursor.rowcount > 0
+            if result:
+                delete_cached(CacheKeys.SESSION, session_id)
+            return result
 
     @staticmethod
     def update_context(session_id: str, context_data: dict) -> bool:
@@ -406,7 +455,10 @@ class SessionDB:
                 WHERE session_id = {placeholder}
             """, (json.dumps(context_data), session_id))
             conn.commit()
-            return cursor.rowcount > 0
+            result = cursor.rowcount > 0
+            if result:
+                delete_cached(CacheKeys.SESSION, session_id)
+            return result
 
     @staticmethod
     def update_subagent_id(session_id: str, subagent_id: Optional[str]) -> bool:
@@ -421,11 +473,14 @@ class SessionDB:
                 WHERE session_id = {placeholder}
             """, (subagent_id, session_id))
             conn.commit()
-            return cursor.rowcount > 0
+            result = cursor.rowcount > 0
+            if result:
+                delete_cached(CacheKeys.SESSION, session_id)
+            return result
 
     @staticmethod
     def touch(session_id: str) -> bool:
-        """更新会话时间戳"""
+        """更新会话时间戳（仅更新 updated_at，不失效会话缓存，避免频繁查库）"""
         placeholder = "%s"
         ts = get_current_timestamp()
         with get_db_connection() as conn:
@@ -449,6 +504,14 @@ class SessionDB:
                 cursor.execute(f"DELETE FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
                 conn.commit()
                 logger.info(f"Chat session deleted: {session_id}")
+                # 获取 user_id 用于清除会话列表缓存
+                cursor.execute(f"SELECT user_id FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
+                session_row = cursor.fetchone()
+                # 清除会话和消息缓存
+                delete_cached(CacheKeys.SESSION, session_id)
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+                if session_row:
+                    delete_cached_pattern(CacheKeys.USER_SESSIONS, session_row["user_id"], "")
                 return True
             except Exception as e:
                 logger.error(f"Failed to delete chat session: {e}")
@@ -484,6 +547,8 @@ class MessageDB:
                 conn.commit()
 
                 SessionDB.touch(session_id)
+                # 清除消息缓存（新消息追加后缓存失效）
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
                 return MessageDB.get_by_id(message_id)
             except Exception as e:
                 logger.error(f"Failed to create chat message: {e}")
@@ -510,13 +575,19 @@ class MessageDB:
         limit: int = 100,
         roles: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """获取会话的所有消息
+        """获取会话的所有消息（优先从 Redis 缓存读取，TTL 60秒）
 
         Args:
             session_id: 会话 ID
             limit: 最大返回数量
             roles: 可选，只返回指定角色的消息（如 ["user", "assistant"]）
         """
+        # 生成缓存 key（角色不同会影响结果）
+        roles_str = "_".join(sorted(roles)) if roles else "all"
+        cached = get_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str)
+        if cached is not None:
+            return cached
+
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -547,6 +618,10 @@ class MessageDB:
                                 pm["content"] = pm.pop("data")
                     result["metadata"] = metadata
                 messages.append(result)
+
+            # 写入缓存（TTL 60 秒，消息变化频率较高）
+            set_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str,
+                       value=messages, ttl=60)
             return messages
 
     @staticmethod
@@ -740,7 +815,7 @@ class ChatRecordDB:
         group_by: str = "day"
     ) -> List[Dict[str, Any]]:
         """
-        按租户统计 token 用量。
+        按租户统计 token 用量（优先从 Redis 缓存读取，TTL 10分钟）
 
         Args:
             tenant_id: 租户ID
@@ -748,6 +823,12 @@ class ChatRecordDB:
             end_date: 结束日期 (YYYY-MM-DD)
             group_by: 分组维度 (day/model/user)
         """
+        sd = start_date or "none"
+        ed = end_date or "none"
+        cached = get_cached(CacheKeys.TOKEN_USAGE, tenant_id, sd, ed, group_by)
+        if cached is not None:
+            return cached
+
         where_clauses = ["tenant_id = %s"]
         params: list = [tenant_id]
 
@@ -787,7 +868,9 @@ class ChatRecordDB:
                 ORDER BY {group_expr} DESC
             """, params)
             columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            set_cached(CacheKeys.TOKEN_USAGE, tenant_id, sd, ed, group_by, value=result, ttl=600)
+            return result
 
     @staticmethod
     def parse_month_range(month_str: str) -> tuple[str, str]:
@@ -826,7 +909,7 @@ class ChatRecordDB:
     @staticmethod
     def get_platform_token_usage(month_str: str) -> Dict[str, Any]:
         """
-        获取平台Token消耗汇总报表（所有租户按月统计）
+        获取平台Token消耗汇总报表（所有租户按月统计，优先从 Redis 缓存读取，TTL 1小时）
 
         Args:
             month_str: 月份字符串，格式 YYYY-MM
@@ -834,6 +917,11 @@ class ChatRecordDB:
         Returns:
             包含汇总信息和租户列表的字典
         """
+        # 按月缓存，月度数据不变
+        cached = get_cached(CacheKeys.PLATFORM_USAGE, month_str)
+        if cached is not None:
+            return cached
+
         start_date, end_date = ChatRecordDB.parse_month_range(month_str)
 
         with get_db_connection() as conn:
@@ -897,7 +985,7 @@ class ChatRecordDB:
                     if tenant_unpriced:
                         has_unpriced = True
 
-            return {
+            result = {
                 "month": month_str,
                 "summary": {
                     "total_input_tokens": total_input_tokens,
@@ -911,11 +999,13 @@ class ChatRecordDB:
                 },
                 "data": tenant_data
             }
+            set_cached(CacheKeys.PLATFORM_USAGE, month_str, value=result, ttl=3600)
+            return result
 
     @staticmethod
     def get_tenant_token_details(tenant_id: str, month_str: str, page: int = 1, page_size: int = 100) -> Dict[str, Any]:
         """
-        获取租户Token消耗明细（分页）
+        获取租户Token消耗明细（分页，优先从 Redis 缓存读取，TTL 10分钟）
 
         Args:
             tenant_id: 租户ID
@@ -926,6 +1016,11 @@ class ChatRecordDB:
         Returns:
             包含汇总信息和分页明细的字典
         """
+        # 优先从缓存获取
+        cached = get_cached(CacheKeys.TENANT_USAGE, tenant_id, month_str, str(page), str(page_size))
+        if cached is not None:
+            return cached
+
         start_date, end_date = ChatRecordDB.parse_month_range(month_str)
         offset = (page - 1) * page_size
 
@@ -993,7 +1088,7 @@ class ChatRecordDB:
             total_count_row = cursor.fetchone()
             total_count = total_count_row["total_count"] if total_count_row else 0
 
-            return {
+            result = {
                 "month": month_str,
                 "tenant_id": tenant_id,
                 "summary": {
@@ -1009,6 +1104,9 @@ class ChatRecordDB:
                 },
                 "data": details
             }
+            set_cached(CacheKeys.TENANT_USAGE, tenant_id, month_str, str(page), str(page_size),
+                       value=result, ttl=600)
+            return result
 
 
 # ============== 短信验证码 ==============
