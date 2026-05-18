@@ -310,6 +310,9 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
 VALUES ('qwen-plus', 0.8, 2.0)
 ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
+VALUES ('deepseek-v4-flash', 1.0, 2.0)
+ON CONFLICT (model_name) DO NOTHING;
 
 -- 2026-5-12，车辆表新增按公里计费字段
 ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS pricing_mode TEXT DEFAULT 'daily';
