@@ -2,7 +2,7 @@
 租户级渠道回调路由
 
 路由：/t/{tenant_id}/wecom/callback 等
-从 URL path 取 tenant_id → 查渠道配置构造 adapter → 查实例 → 处理消息。
+从 URL path 取 tenant_id → 查渠道配置构造 adapter → 处理消息。
 
 多租户 WeCom 集成关键点:
 - GET  /t/{tenant_id}/wecom/callback: 验签 + 解密 echostr
@@ -51,8 +51,7 @@ async def _process_tenant_channel_message(
 
     流程：
     1. 查租户渠道配置 → 构造 adapter
-    2. 查绑定了此渠道的 agent_instance → 获取 agent
-    3. 解析消息 → 通过 instance 的 agent 处理
+    2. 解析消息 → 通过 agent_router 获取 agent 处理
     """
     # 1. 创建渠道适配器
     adapter, config_id = ChannelFactory.create_from_tenant_config(tenant_id, channel_type)
@@ -60,19 +59,7 @@ async def _process_tenant_channel_message(
         logger.error(f"No channel config for tenant {tenant_id}/{channel_type}")
         return "error: no channel config"
 
-    # 2. 查找绑定了此渠道的实例
-    instances = AgentInstanceDB.list_by_tenant(tenant_id)
-    target_instance = None
-    for inst in instances:
-        if inst.get("bound_channel_type") == channel_type:
-            target_instance = inst
-            break
-
-    if not target_instance:
-        logger.warning(f"No running instance bound to {channel_type} for tenant {tenant_id}")
-        return "success"
-
-    # 3. 解析消息
+    # 2. 解析消息
     try:
         message = await adapter.parse_message({"body": raw_body_str})
     except Exception as e:
@@ -83,7 +70,7 @@ async def _process_tenant_channel_message(
     if hasattr(message, 'message_type') and message.message_type == "event":
         return "success"
 
-    # 4. 自动注册用户
+    # 3. 自动注册用户
     try:
         from src.saas.services.auto_register import ensure_user_registered
         user_id = await ensure_user_registered(channel_type, message.user_id, tenant_id)
@@ -91,22 +78,18 @@ async def _process_tenant_channel_message(
         logger.warning(f"Auto-register failed for {channel_type}:{message.user_id}: {e}")
         user_id = None
 
-    # 5. 获取或创建会话
+    # 4. 获取或创建会话
     session = channel_session_manager.get_or_create_session(
         channel_type=channel_type,
         channel_user_id=message.user_id,
     )
     session_id = session["session_id"]
 
-    # 6. 通过 instance_manager 获取 agent
-    from src.saas.services.instance_manager import instance_manager
-    agent = instance_manager.get_agent(target_instance["instance_id"], None, session_id)
+    # 5. 获取 agent
+    from src.core.agent_router import agent_router
+    agent = agent_router.get_agent(None, session_id)
 
-    if not agent:
-        from src.core.agent_router import agent_router
-        agent = agent_router.get_agent(None, session_id)
-
-    # 7. 处理消息
+    # 6. 处理消息
     try:
         response_text = await agent.process_message_sync(
             user_input=message.text,
@@ -116,7 +99,7 @@ async def _process_tenant_channel_message(
         logger.error(f"Agent error for tenant {tenant_id}: {e}")
         return "error"
 
-    # 8. 发送响应
+    # 7. 发送响应
     try:
         from src.models.message import UnifiedResponse
         response = UnifiedResponse.from_text(
@@ -134,7 +117,6 @@ async def _process_tenant_channel_message(
 async def _process_tenant_wecom_background(
     tenant_id: str,
     message,
-    target_instance: dict,
 ) -> None:
     """
     租户级 WeCom 消息后台异步处理
@@ -178,13 +160,8 @@ async def _process_tenant_wecom_background(
         )
 
         # 获取 agent
-        from src.saas.services.instance_manager import instance_manager
-        agent = instance_manager.get_agent(
-            target_instance["instance_id"], None, session_id
-        )
-        if not agent:
-            from src.core.agent_router import agent_router
-            agent = agent_router.get_agent(None, session_id)
+        from src.core.agent_router import agent_router
+        agent = agent_router.get_agent(None, session_id)
 
         # Agent 处理
         response_text = await agent.process_message_sync(
@@ -319,21 +296,9 @@ async def tenant_wecom_callback_post(tenant_id: str, request: Request):
             logger.debug(f"[Tenant WeCom] 重复消息: tenant={tenant_id}, msg={message.message_id}")
             return PlainTextResponse("success")
 
-        # 查找绑定了此渠道的实例
-        instances = AgentInstanceDB.list_by_tenant(tenant_id)
-        target_instance = None
-        for inst in instances:
-            if inst.get("bound_channel_type") == "wecom":
-                target_instance = inst
-                break
-
-        if not target_instance:
-            logger.warning(f"[Tenant WeCom] 无运行实例: tenant={tenant_id}")
-            return PlainTextResponse("success")
-
         # 立即返回 "success"，后台异步处理
         asyncio.create_task(
-            _process_tenant_wecom_background(tenant_id, message, target_instance)
+            _process_tenant_wecom_background(tenant_id, message)
         )
 
         return PlainTextResponse("success")
