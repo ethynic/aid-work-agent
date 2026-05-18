@@ -893,7 +893,7 @@ def _llm_extract_attraction_prices(
 ## 任务
 
 1. **先验证**：根据景点信息，判断搜索名称"{search_name}"和知识库中的景点是否是同一个。考虑别名、简称等因素。
-2. **提取门票价格**：从门票价格表中提取适用于以下人群的门票**原始单价**，优先取"挂牌价"（较高的价格，即面向终端客户的售价）。如果挂牌价缺失才取"团队价"或"渠道价"（较低的价格）。需要提取的票种：成人票（{adults}人）、儿童票（{children_half}人）、学生票（{students}人）。
+2. **提取门票价格**：从门票价格表中提取**所有存在的门票类型的原始单价**，不管对应人数是否为0。优先取"挂牌价"（较高的价格，即面向终端客户的售价），如果挂牌价缺失才取"团队价"或"渠道价"（较低的价格）。团队构成：成人{adults}人、儿童{children_half}人、学生{students}人。注意：即使某票种人数为0，只要价格表中存在该票种就必须提取。如果门票价格表只有一个不区分票种的统一价格，ticket_type 使用"adult"。
 {project_instruction}
 
 请返回 JSON：
@@ -933,9 +933,11 @@ def _llm_extract_attraction_prices(
 注意：
 - confirmed 为 true/false，表示景点是否匹配
 - unit_price 是价格表中的**原始单价**，不要计算
-- ticket_type 为 adult/child_half/student/elder
+- ticket_type 为 adult/child_half/student/elder。如果价格表只有统一价格不区分票种，用"adult"
 - billing_method 为 per_person（按人计费）或 per_group（按团计费）
+- 如果门票价格表为空，tickets 返回空数组
 - 如果项目/服务价格表为空，projects 返回空数组
+- **门票和项目是两个独立的价格表，不要混淆。门票是进入景区的费用，项目是景区内的体验/课程/活动**
 - 只返回 JSON，不要其他文字"""
 
     try:
