@@ -89,7 +89,15 @@ def setup_logging(
             serialize=True,
             encoding="utf-8",
         )
-    
+
+    # 注册数据库错误日志 sink（仅 ERROR 级别）
+    try:
+        from src.core.error_log_sink import register_error_log_sink
+        register_error_log_sink()
+    except Exception as e:
+        # sink 注册失败不影响主程序
+        logger.warning(f"错误日志数据库 sink 注册失败: {e}")
+
     logger.info(f"日志系统初始化完成，日志级别: {log_level}")
 
 

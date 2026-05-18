@@ -109,6 +109,7 @@ const router = createRouter({
         { path: 'tenants', name: 'portal-tenants', component: () => import('./components/saas/TenantMgmt.vue') },
         { path: 'subagents', name: 'portal-subagents', component: () => import('./components/DigitalEmployeeManager.vue') },
         { path: 'token-usage', name: 'portal-token-usage', component: () => import('./components/saas/PlatformTokenUsage.vue') },
+        { path: 'error-logs', name: 'portal-error-logs', component: () => import('./components/saas/ErrorLogs.vue') },
       ]
     },
     // 租户入口 /t/:tenant_id（所有用户）

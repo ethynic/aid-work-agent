@@ -114,6 +114,22 @@ CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_i
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant_id, user_id, updated_at DESC);
 
+-- 错误日志表（平台级，记录系统错误，仅平台管理员可见）
+CREATE TABLE IF NOT EXISTS log_error (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    module TEXT,           -- 错误来源模块（如 agent.py:process_message:1234）
+    error_type TEXT,       -- 异常类型（如 ValueError、HTTPException）
+    message TEXT NOT NULL, -- 错误消息
+    traceback TEXT,        -- 完整堆栈
+    status TEXT DEFAULT 'unprocessed',  -- unprocessed / processed / ignored
+    processed_by TEXT,    -- 处理人
+    processed_at TIMESTAMP -- 处理时间
+);
+
+CREATE INDEX IF NOT EXISTS idx_log_error_timestamp ON log_error(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_log_error_status ON log_error(status);
+
 -- Token成本价表
 CREATE TABLE IF NOT EXISTS token_cost_prices (
     id SERIAL PRIMARY KEY,
@@ -646,6 +662,22 @@ CREATE TABLE IF NOT EXISTS scheduled_task_logs (
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(user_id, created_at DESC);
+
+-- 错误日志表（测试库）
+CREATE TABLE IF NOT EXISTS log_error (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    module TEXT,
+    error_type TEXT,
+    message TEXT NOT NULL,
+    traceback TEXT,
+    status TEXT DEFAULT 'unprocessed',
+    processed_by TEXT,
+    processed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_log_error_timestamp ON log_error(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_log_error_status ON log_error(status);
 
 -- 向量表
 CREATE TABLE IF NOT EXISTS chunks_vec (
