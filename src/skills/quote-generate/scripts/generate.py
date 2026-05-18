@@ -491,7 +491,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
             if attr.get('internal_transport_price') and attr['internal_transport_price'] > 0:
                 transport_price = float(attr['internal_transport_price'])
                 items.append({
-                    "category": "门票",
+                    "category": "门票/项目",
                     "name": f"{attr['name']}({attr.get('internal_transport_name', '景区交通')})",
                     "unit_price": transport_price,
                     "quantity": total_people,
@@ -525,7 +525,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     price = float(t.get('agency_price') or 0)
                 if price > 0:
                     items.append({
-                        "category": "门票",
+                        "category": "门票/项目",
                         "name": f"{attr['name']}({t['ticket_type_label']})",
                         "unit_price": price,
                         "quantity": adults,
@@ -545,7 +545,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     price = float(t.get('agency_price') or 0)
                 if price > 0:
                     items.append({
-                        "category": "门票",
+                        "category": "门票/项目",
                         "name": f"{attr['name']}({t['ticket_type_label']})",
                         "unit_price": price,
                         "quantity": children_half,
@@ -565,7 +565,7 @@ def calculate_ticket_cost(items: list, tenant_id: str, attraction_ids: List[int]
                     price = float(t.get('agency_price') or 0)
                 if price > 0:
                     items.append({
-                        "category": "门票",
+                        "category": "门票/项目",
                         "name": f"{attr['name']}({t['ticket_type_label']})",
                         "unit_price": price,
                         "quantity": students,
@@ -819,7 +819,7 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
             teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 and ticket_type == "adult" else 0
 
             items.append({
-                "category": "门票",
+                "category": "门票/项目",
                 "name": ticket.get("name") or f"{attraction_name}(门票)",
                 "unit_price": unit_price,
                 "quantity": quantity,
@@ -850,7 +850,7 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
                 teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 else 0
 
             items.append({
-                "category": "门票",
+                "category": "门票/项目",
                 "name": proj.get("name") or "",
                 "unit_price": unit_price,
                 "quantity": quantity,
@@ -992,7 +992,7 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
         price = find_price('成人')
         if price > 0:
             items.append({
-                "category": "门票", "name": f"{attraction_name}(成人票)",
+                "category": "门票/项目", "name": f"{attraction_name}(成人票)",
                 "unit_price": price, "quantity": adults, "unit": "人",
                 "frequency": 1, "freq_unit": "次",
                 "subtotal": price,
@@ -1003,7 +1003,7 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
         price = find_price('儿童')
         if price > 0:
             items.append({
-                "category": "门票", "name": f"{attraction_name}(儿童票)",
+                "category": "门票/项目", "name": f"{attraction_name}(儿童票)",
                 "unit_price": price, "quantity": children_half, "unit": "人",
                 "frequency": 1, "freq_unit": "次",
                 "subtotal": price,
@@ -1013,7 +1013,7 @@ def _fallback_parse_ticket_table(items, doc_id, search_name, ticket_table,
         price = find_price('学生')
         if price > 0:
             items.append({
-                "category": "门票", "name": f"{attraction_name}(学生票)",
+                "category": "门票/项目", "name": f"{attraction_name}(学生票)",
                 "unit_price": price, "quantity": students, "unit": "人",
                 "frequency": 1, "freq_unit": "次",
                 "subtotal": price,
@@ -1080,7 +1080,7 @@ def _fallback_match_projects(items, attraction_name, project_table,
             teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 else 0
 
         items.append({
-            "category": "门票",
+            "category": "门票/项目",
             "name": project_name,
             "unit_price": unit_price,
             "quantity": quantity,
@@ -1361,7 +1361,20 @@ def calculate_other_fees(items: list, tenant_id: str, total_people: int,
 # ============================================================
 
 def export_with_template(quote_data: dict, template_path: str) -> str:
-    """使用模板导出报价单 Excel"""
+    """使用模板导出报价单 Excel
+
+    模板结构:
+      Row N:   {{#items}}
+      Row N+1: 模板数据行（含 {{category}}, {{name}} 等占位符，可能有跨列合并如备注 J:L）
+      Row N+2: {{/items}}
+      Row N+3: 合计行（含 {{quote_per_person}} 等）
+
+    处理流程:
+      1. 记录模板行和合计行的格式、合并范围
+      2. 从下往上删除 {{/items}}、模板行、{{#items}}（合计行自动上移）
+      3. 在合计行之前插入数据行
+      4. 填充数据并恢复合并单元格（备注列跨列、成本类别跨行）
+    """
     try:
         import openpyxl
         from openpyxl.cell.cell import MergedCell
@@ -1392,58 +1405,166 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
                 items_end_row = cell.row
 
     if items_start_row and items_end_row:
-        # 提取模板行的值和格式
-        template_row_range = items_start_row + 1
-        template_cells = []
+        template_data_row = items_start_row + 1
+
+        # 收集模板行每个单元格的值和格式
+        template_cell_map = {}
+        has_teacher_placeholder = False
         for col in range(1, ws.max_column + 1):
-            c = ws.cell(row=template_row_range, column=col)
+            c = ws.cell(row=template_data_row, column=col)
             if isinstance(c, MergedCell):
-                template_cells.append(None)
                 continue
-            template_cells.append({
+            template_cell_map[col] = {
                 "value": c.value,
                 "font": copy(c.font),
                 "alignment": copy(c.alignment),
                 "border": copy(c.border),
                 "fill": copy(c.fill),
                 "number_format": c.number_format,
+            }
+            if c.value and isinstance(c.value, str) and '{{teacher_subtotal}}' in c.value:
+                has_teacher_placeholder = True
+
+        template_row_height = ws.row_dimensions[template_data_row].height
+
+        # 记录模板行中跨列合并的范围（如备注列 J:L）
+        row_merge_ranges = []
+        for merge in list(ws.merged_cells.ranges):
+            if merge.min_row == template_data_row and merge.max_row == template_data_row:
+                row_merge_ranges.append((merge.min_col, merge.max_col))
+
+        # 如果模板没有 {{teacher_subtotal}} 占位符，找到硬编码为 0 的随队老师列
+        teacher_col = None
+        if not has_teacher_placeholder:
+            # 随队老师列是 {{subtotal}} 旁边值为 0 的列
+            subtotal_col = None
+            for col, info in template_cell_map.items():
+                if info["value"] and isinstance(info["value"], str) and '{{subtotal}}' in str(info["value"]):
+                    subtotal_col = col
+                    break
+            if subtotal_col:
+                # 随队老师列在 subtotal 列右边紧邻
+                candidate = subtotal_col + 1
+                if candidate in template_cell_map:
+                    val = template_cell_map[candidate]["value"]
+                    if val == 0 or val == 0.0:
+                        teacher_col = candidate
+
+        # 找到成本类别列号
+        category_col = None
+        for col, info in template_cell_map.items():
+            if info["value"] and '{{category}}' in str(info["value"]):
+                category_col = col
+                break
+
+        # 记录所有非模板行的合并单元格（如表头、审核区域）
+        # 这些合并单元格在删除/插入行后需要重新应用
+        saved_merges = []
+        for merge in list(ws.merged_cells.ranges):
+            # 跳过模板数据行的合并（已经记录在 row_merge_ranges 中）
+            if merge.min_row == template_data_row and merge.max_row == template_data_row:
+                continue
+            saved_merges.append({
+                "min_row": merge.min_row,
+                "max_row": merge.max_row,
+                "min_col": merge.min_col,
+                "max_col": merge.max_col,
             })
 
-        # 记录模板行高度
-        template_row_height = ws.row_dimensions[template_row_range].height
+        # 先取消所有合并单元格，避免 delete_rows / insert_rows 时合并范围错乱
+        for merge in list(ws.merged_cells.ranges):
+            ws.unmerge_cells(str(merge))
 
-        # 删除标记行和模板行
+        # 从下往上删除: {{/items}}, 模板数据行, {{#items}}
         ws.delete_rows(items_end_row)
+        ws.delete_rows(template_data_row)
         ws.delete_rows(items_start_row)
-        # template_row_range 在 items_start_row 下一行，删除 items_start_row 后它变成了 items_start_row
-        ws.delete_rows(items_start_row)
+        # 删除 3 行后合计行上移到 items_start_row
+        total_row_new = items_start_row
 
-        # 插入数据行（从模板行复制格式）
-        insert_row = items_start_row
+        # 准备数据行
         items_list = [item for item in quote_data.get('items', [])
                        if (item.get('quantity') or 0) > 0]
-        for i, item in enumerate(items_list):
-            ws.insert_rows(insert_row + 1)
+        num_items = len(items_list)
+
+        if num_items > 0:
+            # 在合计行之前插入数据行
+            ws.insert_rows(total_row_new, amount=num_items)
             if template_row_height:
-                ws.row_dimensions[insert_row + 1].height = template_row_height
-            for col_idx, template_info in enumerate(template_cells, 1):
-                if template_info is None:
+                for r in range(total_row_new, total_row_new + num_items):
+                    ws.row_dimensions[r].height = template_row_height
+
+            # 填充每行数据
+            for i, item in enumerate(items_list):
+                row_num = total_row_new + i
+                for col_num, tmpl in template_cell_map.items():
+                    cell = ws.cell(row=row_num, column=col_num)
+                    if isinstance(cell, MergedCell):
+                        continue
+                    cell.font = copy(tmpl["font"])
+                    cell.alignment = copy(tmpl["alignment"])
+                    cell.border = copy(tmpl["border"])
+                    cell.fill = copy(tmpl["fill"])
+                    cell.number_format = tmpl["number_format"]
+                    val = tmpl["value"]
+                    if isinstance(val, str) and '{{' in val:
+                        val = _replace_placeholders(val, item)
+                    # 特殊处理：随队老师列模板硬编码为 0，需替换为实际值
+                    if col_num == teacher_col:
+                        val = item.get('teacher_subtotal', 0)
+                    cell.value = val
+
+                # 恢复该行的跨列合并（如备注 J:L）
+                for min_col, max_col in row_merge_ranges:
+                    cl_start = get_column_letter(min_col)
+                    cl_end = get_column_letter(max_col)
+                    ws.merge_cells(f"{cl_start}{row_num}:{cl_end}{row_num}")
+
+            # 合计行现在在所有数据行之后
+            updated_total_row = total_row_new + num_items
+
+            # 合并成本类别列（连续相同类别合并）
+            if category_col and num_items > 1:
+                cat_letter = get_column_letter(category_col)
+                categories = [item.get('category', '') for item in items_list]
+                i = 0
+                while i < len(categories):
+                    cat = categories[i]
+                    j = i + 1
+                    while j < len(categories) and categories[j] == cat:
+                        j += 1
+                    if j - i > 1:
+                        ws.merge_cells(
+                            f"{cat_letter}{total_row_new + i}:"
+                            f"{cat_letter}{total_row_new + j - 1}"
+                        )
+                    i = j
+
+            # 恢复非模板行的合并单元格（表头、合计行、审核区域等）
+            # 行号调整：items 区域删除了 3 行（N, N+1, N+2），然后插入了 num_items 行
+            # items_start_row 之前：不变
+            # items_end_row 之后：先上移 3 行，再下移 num_items 行，净偏移 num_items - 3
+            row_offset = num_items - 3
+            for sm in saved_merges:
+                orig_min_row = sm["min_row"]
+                orig_max_row = sm["max_row"]
+
+                if orig_min_row < items_start_row:
+                    # 在 items 区域之前（如表头），行号不变
+                    new_min_row = orig_min_row
+                    new_max_row = orig_max_row
+                elif orig_min_row > items_end_row:
+                    # 在 items 区域之后（如合计行、审核区域），需要调整行号
+                    new_min_row = orig_min_row + row_offset
+                    new_max_row = orig_max_row + row_offset
+                else:
+                    # 在 items 区域内（不应有，已跳过）
                     continue
-                # 复制格式到 insert_row + 1（新插入的空行）
-                new_cell = ws.cell(row=insert_row + 1, column=col_idx)
-                new_cell.font = copy(template_info["font"])
-                new_cell.alignment = copy(template_info["alignment"])
-                new_cell.border = copy(template_info["border"])
-                new_cell.fill = copy(template_info["fill"])
-                new_cell.number_format = template_info["number_format"]
-                # 替换占位符
-                val = template_info["value"]
-                if val and isinstance(val, str) and '{{' in val:
-                    val = _replace_placeholders(val, item)
-                new_cell.value = val
-            insert_row += 1
+
+                cl_start = get_column_letter(sm["min_col"])
+                cl_end = get_column_letter(sm["max_col"])
+                ws.merge_cells(f"{cl_start}{new_min_row}:{cl_end}{new_max_row}")
     else:
-        # 无标记行，只替换汇总变量
         pass
 
     # 替换所有 {{变量名}}
