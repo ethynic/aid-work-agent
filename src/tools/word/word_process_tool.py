@@ -67,6 +67,7 @@ TOOL_DESCRIPTION = """Word文档处理工具。所有与Word文档(.docx)相关�
 - 将用户的原始需求描述和相关内容放在 context 中
 - 如果需要将对话内容转为Word，context 中必须包含完整的 Markdown 文本
 - 用户上传的附件路径放在 file_paths 中
+- 生成Word时无需指定模板路径，系统会自动使用内置默认模板。不要向用户索要模板路径。
 工具会自动判断并执行合适的操作。"""
 
 
