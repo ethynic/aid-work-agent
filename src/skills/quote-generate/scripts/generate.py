@@ -1721,6 +1721,23 @@ def _call_llm(prompt: str) -> str:
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.choices[0].message.content
+    elif provider == 'deepseek':
+        import httpx
+        keys = settings.llm.deepseek.get_effective_keys()
+        if not keys:
+            raise ValueError("DeepSeek API key 未配置")
+        model = getattr(settings.llm.deepseek, 'model', None) or 'deepseek-chat'
+        base_url = getattr(settings.llm.deepseek, 'base_url', None) or 'https://api.deepseek.com'
+        api_url = f"{base_url.rstrip('/')}/chat/completions"
+        resp = httpx.post(
+            api_url,
+            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        return result["choices"][0]["message"]["content"]
     else:
         raise ValueError(f"不支持的 LLM 提供商: {provider}")
 
