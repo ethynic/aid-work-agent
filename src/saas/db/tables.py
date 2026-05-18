@@ -124,6 +124,7 @@ def init_saas_tables(conn):
             channel_type TEXT NOT NULL,
             config TEXT NOT NULL,
             verified INTEGER DEFAULT 0,
+            subagent_type TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )

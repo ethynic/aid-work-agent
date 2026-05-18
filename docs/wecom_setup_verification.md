@@ -39,7 +39,7 @@
 
 1. 在应用详情页，找到「接收消息」→「设置 API 接收」
 2. 填写:
-   - **URL**: `https://your-domain.com/t/{tenant_id}/wecom/callback`，例如 https://agent2.aidingyi.cn/t/tenant_1dc997a1806b/wecom/callback
+   - **URL**: `https://your-domain.com/t/{tenant_id}/wecom/callback/{config_id}`，例如 https://agent2.aidingyi.cn/t/tenant_1dc997a1806b/wecom/callback/chan_a1b2c3d4e5f6（config_id 在渠道配置页面创建后显示）
    - **Token**: 点击「随机获取」（或自行输入 16+ 字符） JgYuzLoE42tD3MUCtnZPysh5lmd
    - **EncodingAESKey**: 点击「随机获取」（43 字符 Base64） hUHJd3LTJDb3q9RlDIQ7GdjGlUQmDe73OgIaS9CHt3y
 3. **顺序很重要**: 先在服务器配好环境变量并启动服务，再点「保存」。企业微信会立即发 GET 请求验证。
@@ -197,7 +197,7 @@ tail -f logs/app.log | grep -i "wecom\|WeCom"
 | 3 | 多 worker（Gunicorn）部署时消息去重失效 | 可能收到重复回复 | 单 worker 部署（`--workers 1`） |
 | 4 | 速率限制配置未生效 | 理论上无限制，存在被滥用的风险 | 在 Nginx 层做限流 |
 | 5 | 会话 metadata 序列化不规范 | `str(dict)` 存入数据库，读取时可能异常 | 避免在 metadata 中存储复杂结构 |
-| 6 | 未校验消息的 `ToUserName` / `AgentID` | 存在被其他应用消息误触发的风险 | 确保回调 URL 不泄露 |
+| 6 | ~~未校验消息的 `ToUserName` / `AgentID`~~ | ~~存在被其他应用消息误触发的风险~~ | 已通过回调 URL 包含 config_id 解决，每个应用独立回调地址 |
 
 ---
 

@@ -337,6 +337,9 @@ ALTER TABLE bs_travel_quote_vehicles ALTER COLUMN pricing_mode SET DEFAULT 'per_
 ALTER TABLE bs_travel_quote_vehicles DROP COLUMN IF EXISTS season_type;
 ALTER TABLE bs_travel_quote_vehicles DROP COLUMN IF EXISTS sort_order;
 
+-- 2026-5-18，tenant_channel_configs 增加 subagent_type 字段，支持渠道配置关联数字员工
+ALTER TABLE tenant_channel_configs ADD COLUMN IF NOT EXISTS subagent_type TEXT;
+
 -- 2026-5-14，景点区域搜索：为 documents.metadata 添加 GIN 索引（部分索引，仅景点资源）
 CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin
 ON documents USING GIN ((metadata::jsonb))

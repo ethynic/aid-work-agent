@@ -19,6 +19,7 @@ class ChannelConfigDB:
         tenant_id: str,
         channel_type: str,
         config: dict,
+        subagent_type: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """创建渠道配置"""
         config_id = f"chan_{uuid.uuid4().hex[:12]}"
@@ -27,11 +28,12 @@ class ChannelConfigDB:
             cursor = conn.cursor()
             try:
                 cursor.execute("""
-                    INSERT INTO tenant_channel_configs (config_id, tenant_id, channel_type, config)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO tenant_channel_configs (config_id, tenant_id, channel_type, config, subagent_type)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, (
                     config_id, tenant_id, channel_type,
                     json.dumps(config, ensure_ascii=False),
+                    subagent_type,
                 ))
                 conn.commit()
                 logger.info(f"Channel config created: {config_id} ({channel_type})")
@@ -76,15 +78,15 @@ class ChannelConfigDB:
             return results
 
     @staticmethod
-    def update(config_id: str, config: dict) -> bool:
+    def update(config_id: str, config: dict, subagent_type: Optional[str] = None) -> bool:
         """更新渠道配置"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE tenant_channel_configs
-                SET config = %s, updated_at = CURRENT_TIMESTAMP
+                SET config = %s, subagent_type = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE config_id = %s
-            """, (json.dumps(config, ensure_ascii=False), config_id))
+            """, (json.dumps(config, ensure_ascii=False), subagent_type, config_id))
             conn.commit()
             return cursor.rowcount > 0
 

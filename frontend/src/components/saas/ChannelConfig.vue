@@ -66,6 +66,9 @@
             >
               {{ ch.verified ? '已验证' : '未验证' }}
             </span>
+            <span v-if="ch.subagent_type" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+              🤖 {{ subagentTypeLabel(ch.subagent_type) }}
+            </span>
           </div>
           <div class="flex items-center gap-2">
             <button @click="showGuide(ch)" class="text-xs px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">配置指南</button>
@@ -77,8 +80,8 @@
         <!-- 回调地址展示 -->
         <div v-if="tenant" class="bg-slate-50 rounded-lg p-3 text-sm">
           <span class="text-slate-500">回调地址：</span>
-          <code class="text-cyan-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type) }}</code>
-          <button @click="copyUrl(getCallbackUrl(ch.channel_type))" class="ml-2 text-xs text-slate-400 hover:text-cyan-600 transition-colors">{{ copied ? '已复制' : '复制' }}</button>
+          <code class="text-cyan-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
+          <button @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id))" class="ml-2 text-xs text-slate-400 hover:text-cyan-600 transition-colors">{{ copied ? '已复制' : '复制' }}</button>
         </div>
       </div>
     </div>
@@ -135,6 +138,19 @@
                 class="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-200"
               />
               <p v-if="field.hint" class="mt-1 text-xs text-slate-400">{{ field.hint }}</p>
+            </div>
+
+            <!-- 关联数字员工 -->
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">关联数字员工</label>
+              <select
+                v-model="form.subagent_type"
+                class="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-200"
+              >
+                <option value="">不绑定（默认）</option>
+                <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+              </select>
+              <p class="mt-1 text-xs text-slate-400">选择该渠道消息由哪个数字员工处理，不选则使用通用智能体</p>
             </div>
           </div>
 
@@ -234,7 +250,7 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -304,6 +320,7 @@ function openScheduledTasks() {
 }
 const loading = ref(true)
 const channels = ref<any[]>([])
+const availableSubagents = ref<string[]>([])
 const showForm = ref(false)
 const submitting = ref(false)
 const formError = ref('')
@@ -312,9 +329,10 @@ const copied = ref(false)
 const showGuideModal = ref(false)
 const guideChannel = ref('wecom')
 
-const form = ref<{ channel_type: string; config: Record<string, string> }>({
+const form = ref<{ channel_type: string; config: Record<string, string>; subagent_type: string }>({
   channel_type: 'wecom',
-  config: {}
+  config: {},
+  subagent_type: ''
 })
 
 // ==================== 渠道类型定义 ====================
@@ -450,12 +468,25 @@ const fullGuide = computed(() => fullGuideMap[guideChannel.value] || { steps: []
 
 // ==================== 回调地址 ====================
 
-function getCallbackUrl(channelType: string): string {
+function getCallbackUrl(channelType: string, configId?: string): string {
   const base = window.location.origin
   if (tenant.value) {
-    return `${base}/t/${tenant.value.tenant_id}/${channelType}/callback`
+    if (configId) {
+      return `${base}/t/${tenant.value.tenant_id}/${channelType}/callback/${configId}`
+    }
+    return `${base}/t/${tenant.value.tenant_id}/${channelType}/callback/{config_id}`
   }
   return `${base}/${channelType}/callback`
+}
+
+function subagentTypeLabel(type: string): string {
+  // 将目录名转为人可读标签
+  const map: Record<string, string> = {
+    'travel-consultant': '旅游咨询顾问',
+    'trade-specialist': '外贸获客智能体',
+    'contract-archive-review': '合同档案审查',
+  }
+  return map[type] || type
 }
 
 function copyUrl(url: string) {
@@ -469,14 +500,14 @@ function copyUrl(url: string) {
 
 function openAddChannel() {
   editingId.value = null
-  form.value = { channel_type: 'wecom', config: {} }
+  form.value = { channel_type: 'wecom', config: {}, subagent_type: '' }
   formError.value = ''
   showForm.value = true
 }
 
 function editChannel(ch: any) {
   editingId.value = ch.config_id
-  form.value = { channel_type: ch.channel_type, config: { ...ch.config } }
+  form.value = { channel_type: ch.channel_type, config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
   formError.value = ''
   showForm.value = true
 }
@@ -498,14 +529,27 @@ async function loadChannels() {
   }
 }
 
+async function loadAvailableSubagents() {
+  try {
+    const res = await getAvailableSubagents()
+    availableSubagents.value = res.subagents || []
+  } catch (e) {
+    console.error('加载数字员工列表失败:', e)
+  }
+}
+
 async function handleSubmit() {
   submitting.value = true
   formError.value = ''
   try {
+    const payload = {
+      config: form.value.config,
+      subagent_type: form.value.subagent_type || undefined
+    }
     if (editingId.value) {
-      await updateChannel(editingId.value, { config: form.value.config })
+      await updateChannel(editingId.value, payload)
     } else {
-      await createChannel(form.value)
+      await createChannel({ ...payload, channel_type: form.value.channel_type })
     }
     showForm.value = false
     await loadChannels()
@@ -541,5 +585,8 @@ async function handleDelete(configId: string) {
   }
 }
 
-onMounted(() => loadChannels())
+onMounted(() => {
+  loadChannels()
+  loadAvailableSubagents()
+})
 </script>

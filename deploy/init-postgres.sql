@@ -418,6 +418,7 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     channel_type TEXT,
     config TEXT,
     verified INTEGER DEFAULT 0,
+    subagent_type TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -790,6 +791,7 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     channel_type TEXT,
     config TEXT,
     verified INTEGER DEFAULT 0,
+    subagent_type TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

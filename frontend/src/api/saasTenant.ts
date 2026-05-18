@@ -308,7 +308,7 @@ export async function listChannels(): Promise<{ success: boolean; channels: any[
   return res.json()
 }
 
-export async function createChannel(data: { channel_type: string; config: Record<string, string> }): Promise<any> {
+export async function createChannel(data: { channel_type: string; config: Record<string, string>; subagent_type?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/channels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
@@ -318,7 +318,7 @@ export async function createChannel(data: { channel_type: string; config: Record
   return res.json()
 }
 
-export async function updateChannel(configId: string, data: { config: Record<string, string> }): Promise<any> {
+export async function updateChannel(configId: string, data: { config: Record<string, string>; subagent_type?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/channels/${configId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
@@ -334,6 +334,14 @@ export async function deleteChannel(configId: string): Promise<{ success: boolea
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('删除渠道失败')
+  return res.json()
+}
+
+export async function getAvailableSubagents(): Promise<{ success: boolean; subagents: string[] }> {
+  const res = await fetch(`${API_BASE}/channels/available-subagents`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取数字员工列表失败')
   return res.json()
 }
 

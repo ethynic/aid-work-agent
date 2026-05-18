@@ -13,18 +13,18 @@
 
 ## 3. 前端页面
 
-- [ ] 3.1 `ChannelConfig.vue` — 渠道配置表单新增"关联数字员工"下拉选择框（选项来自租户已订阅的数字员工列表，含"不绑定"默认选项）
-- [ ] 3.2 `ChannelConfig.vue` — 每个渠道配置展示独立回调 URL（`/t/{tenant_id}/wecom/callback/{config_id}`），支持一键复制
+- [x] 3.1 `ChannelConfig.vue` — 渠道配置表单新增"关联数字员工"下拉选择框（选项来自租户已订阅的数字员工列表，含"不绑定"默认选项）
+- [x] 3.2 `ChannelConfig.vue` — 每个渠道配置展示独立回调 URL（`/t/{tenant_id}/wecom/callback/{config_id}`），支持一键复制
 - [x] 3.3 新增 API：获取租户可用的数字员工列表（复用 `SubscriptionDB.get_allowed_subagent_types`）
 
 ## 4. 测试
 
-- [ ] 4.1 单元测试：`ChannelConfigDB` 的新增/查询包含 `subagent_type` 字段
-- [ ] 4.2 单元测试：`ChannelFactory` 按 `config_id` 精确查找
-- [ ] 4.3 集成测试：多应用回调路由正确解密和路由
+- [x] 4.1 单元测试：`ChannelConfigDB` 的新增/查询包含 `subagent_type` 字段
+- [x] 4.2 单元测试：`ChannelFactory` 按 `config_id` 精确查找
+- [x] 4.3 集成测试：多应用回调路由正确解密和路由
 - [ ] 4.4 手动测试：按 `docs/wecom_setup_verification.md` 配置两个自建应用，验证各自路由到对应数字员工
 
 ## 5. 部署与文档
 
-- [ ] 5.1 更新 `docs/wecom_setup_verification.md`，回调 URL 示例更新为新格式
-- [ ] 5.2 前端构建验证：`cd frontend && npm run build`
+- [x] 5.1 更新 `docs/wecom_setup_verification.md`，回调 URL 示例更新为新格式
+- [x] 5.2 前端构建验证：`cd frontend && npm run build`

@@ -12,8 +12,10 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
+from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.services.channel_factory import ChannelFactory
 from src.config.settings import settings
+from src.db.database import get_db_connection
 
 router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
 
@@ -21,10 +23,12 @@ router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
 class ChannelConfigCreateRequest(BaseModel):
     channel_type: str = Field(..., description="渠道类型：wecom/dingtalk/feishu")
     config: dict = Field(..., description="渠道凭证配置")
+    subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant），不填则不绑定")
 
 
 class ChannelConfigUpdateRequest(BaseModel):
     config: dict = Field(..., description="渠道凭证配置")
+    subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant）")
 
 
 # 各渠道类型必填字段
@@ -86,12 +90,13 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
         tenant_id=admin["tenant_id"],
         channel_type=body.channel_type,
         config=body.config,
+        subagent_type=body.subagent_type,
     )
 
     if not config:
         raise HTTPException(status_code=500, detail="创建渠道配置失败")
 
-    logger.info(f"Channel config created: {config['config_id']} ({body.channel_type})")
+    logger.info(f"Channel config created: {config['config_id']} ({body.channel_type}, subagent={body.subagent_type})")
     return {"success": True, "channel": config}
 
 
@@ -109,7 +114,7 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
     if existing["tenant_id"] != admin["tenant_id"]:
         raise HTTPException(status_code=403, detail="无权操作此配置")
 
-    success = ChannelConfigDB.update(config_id, body.config)
+    success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type)
     if success:
         updated = ChannelConfigDB.get_by_id(config_id)
         return {"success": True, "channel": updated}
@@ -155,3 +160,21 @@ async def verify_channel(config_id: str, request: Request):
     except Exception as e:
         ChannelConfigDB.set_verified(config_id, False)
         return {"success": False, "message": f"验证失败: {str(e)}", "verified": False}
+
+
+@router.get("/available-subagents")
+async def get_available_subagents(request: Request):
+    """获取当前租户可用的数字员工列表（用于渠道配置关联）"""
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+
+    try:
+        with get_db_connection() as conn:
+            subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
+        return {"success": True, "subagents": subagent_types}
+    except Exception as e:
+        logger.error(f"获取可用数字员工列表失败: {e}")
+        return {"success": False, "subagents": [], "message": str(e)}

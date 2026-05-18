@@ -52,36 +52,49 @@ class ChannelFactory:
         return adapter_class(**config)
 
     @classmethod
-    def create_from_tenant_config(cls, tenant_id: str, channel_type: str):
+    def create_from_tenant_config(cls, tenant_id: str, channel_type: str, config_id: Optional[str] = None):
         """
         从租户 DB 配置创建适配器
 
         Args:
             tenant_id: 租户 ID
             channel_type: 渠道类型
+            config_id: 渠道配置 ID（可选，传入时按 ID 精确查找）
 
         Returns:
-            (adapter, config_id) 或 (None, None)
+            (adapter, config_id, subagent_type) 或 (None, None, None)
         """
+        # 按 config_id 精确查找
+        if config_id:
+            cfg = ChannelConfigDB.get_by_id(config_id)
+            if cfg and cfg.get("tenant_id") == tenant_id and cfg.get("channel_type") == channel_type:
+                try:
+                    adapter = cls.create_adapter(channel_type, cfg["config"])
+                    return adapter, cfg["config_id"], cfg.get("subagent_type")
+                except Exception as e:
+                    logger.error(f"Failed to create adapter for config {config_id}: {e}")
+                    return None, None, None
+            return None, None, None
+
+        # 兼容：未传 config_id 时取第一个已验证的配置
         configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type)
         if not configs:
-            return None, None
+            return None, None, None
 
-        # 取第一个已验证的配置
         for cfg in configs:
             if cfg.get("verified"):
                 try:
                     adapter = cls.create_adapter(channel_type, cfg["config"])
-                    return adapter, cfg["config_id"]
+                    return adapter, cfg["config_id"], cfg.get("subagent_type")
                 except Exception as e:
                     logger.error(f"Failed to create adapter for tenant {tenant_id}/{channel_type}: {e}")
-                    return None, None
+                    return None, None, None
 
         # 如果没有已验证的，取第一个
         cfg = configs[0]
         try:
             adapter = cls.create_adapter(channel_type, cfg["config"])
-            return adapter, cfg["config_id"]
+            return adapter, cfg["config_id"], cfg.get("subagent_type")
         except Exception as e:
             logger.error(f"Failed to create adapter for tenant {tenant_id}/{channel_type}: {e}")
-            return None, None
+            return None, None, None
