@@ -1,20 +1,17 @@
 # 旅游资源向量知识库设计方案
 
-> 版本: v4.1 | 创建: 2026-05-12 | 状态: 待审核
+> 版本: v5.0 | 创建: 2026-05-12 | 最后更新: 2026-05-18 | 状态: 已完成
 >
-> v3.0 变更：扩展至景点门票，统一向量知识库方案
-> v3.1 变更：车辆资源新增按公里计费模式，集成导航距离计算 Skill
-> v4.0 变更：quote-generate 技能重构为行程文本驱动模式，内部自动解析行程+检索资源
-> v4.1 变更：基于实际报价单模板的差缺分析，识别6项缺失要素
+> v5.0 变更：对齐实际实现（景点 3 chunk 结构、门票/项目独立 LLM 提取、teacher_subtotal、多城市酒店）
 
 ## 资源类型概览
 
 本方案覆盖两类旅游资源，统一使用向量知识库方案：
 
-| 资源类型 | source_type | 旧表（删除） | Chunk 0（向量化） | Chunk 1（不向量化） |
-|----------|-------------|-------------|-------------------|-------------------|
-| 酒店 | `hotel_resource` | bs_travel_quote_hotels + rooms | 酒店信息摘要 | 价格明细表 |
-| 景点门票 | `attraction_resource` | bs_travel_quote_attractions + tickets | 景点信息摘要 | 门票价格明细表 |
+| 资源类型 | source_type | 旧表（已删除） | Chunk 0（向量化） | Chunk 1（不向量化） | Chunk 2（不向量化） |
+|----------|-------------|-------------|-------------------|-------------------|-------------------|
+| 酒店 | `hotel_resource` | bs_travel_quote_hotels + rooms | 酒店信息摘要 | 价格明细表 | — |
+| 景点门票 | `attraction_resource` | bs_travel_quote_attractions + tickets | 景点信息摘要 | 门票价格明细表 | 游玩项目价格表 |
 
 两者共享同一套基础设施（documents + chunks + chunks_vec），只是 source_type 不同。
 
@@ -509,12 +506,13 @@ def calculate_hotel_cost(items, tenant_id, hotel_doc_id, total_people,
 
 与酒店完全相同的向量知识库方案。
 
-每个景点 = 一个 document（source_type='attraction_resource'），包含 **2 个 chunk**：
+每个景点 = 一个 document（source_type='attraction_resource'），包含 **3 个 chunk**：
 
 | Chunk | 内容 | 向量化 | 用途 |
 |-------|------|--------|------|
 | **Chunk 0：景点信息摘要** | 景点名称（含别名）、区域、类别、地址、游玩时长、景区交通 | **是** | 向量匹配选景点 |
-| **Chunk 1：门票价格明细表** | 一行一个价格：票种、适用人群、价格、适用日期 | **否** | LLM 取价 |
+| **Chunk 1：门票价格明细表** | 一行一个价格：票种、适用人群、价格、适用日期 | **否** | LLM 提取门票价格 |
+| **Chunk 2：游玩项目价格表** | 一行一个项目：项目名、价格、计费方式 | **否** | LLM 匹配行程中的游玩活动 |
 
 ### 与酒店方案的区别
 
@@ -618,26 +616,28 @@ Level 3：LLM 精选 + 取价
 class AttractionRetriever:
     """景点门票专用检索器"""
 
-    async def search_by_name(self, tenant_id, name_query, top_k=5):
-        """精确名称/别名匹配"""
-        # ILIKE 搜索 Chunk 0 中的景点名称和别名
+    def search_by_name(self, tenant_id, name_query, top_k=5):
+        """精确名称/别名匹配（ILIKE）"""
         ...
 
-    async def search_by_vector(self, tenant_id, query, top_k=5):
-        """向量语义搜索"""
-        # 在 attraction_resource 文档中搜索 chunk_index=0
+    def search_by_vector(self, tenant_id, query, top_k=5):
+        """向量语义搜索（chunk_index=0）"""
         ...
 
-    async def search(self, tenant_id, query, top_k=5):
+    def search(self, tenant_id, query, top_k=5):
         """组合搜索：名称匹配优先 → 向量搜索"""
-        ...
-
-    def get_ticket_table(self, doc_id):
-        """取出景点的门票价格明细表（chunk_index=1）"""
         ...
 
     def get_attraction_info(self, doc_id):
         """取出景点信息摘要（chunk_index=0）"""
+        ...
+
+    def get_ticket_table(self, doc_id):
+        """取出门票价格明细表（chunk_index=1）"""
+        ...
+
+    def get_project_table(self, doc_id):
+        """取出游玩项目价格表（chunk_index=2）"""
         ...
 ```
 
@@ -753,29 +753,49 @@ LLM 解析：
 
 ---
 
-## A7. generate.py 改造
+## A7. attraction.py 实现（已完成）
+
+景点门票和游玩项目的费用计算封装在 `attraction.py` 中，统一入口 `calculate_attraction_cost()`。
+
+### 核心设计
+
+1. **按 doc_id 去重**：同一景点在不同天出现时合并，不重复计价
+2. **门票和项目分别用独立 LLM prompt 提取**：门票走 `_llm_extract_tickets()`，项目走 `_llm_extract_projects()`
+3. **价格取挂牌价**：价格表每行多个数字时取第一个（挂牌价），用于对外报价
+4. **人数分配由代码决定**：LLM 只提取价格和票型（adult/student/child_half/elder），代码根据团队构成分配人数
+5. **团队构成 fallback**：当 LLM 标记的票型（如 adult）对应人数为 0 时，自动 reassign 到团队主要客群
+6. **同票型去重**：用 `seen_ticket_types` 集合确保每种票型只出一条，防止旺季/淡季重复
 
 ```python
-def calculate_ticket_cost(items, tenant_id, attraction_doc_ids, adults, children_half,
-                          students, elders, total_people, start_date):
-    """
-    计算门票费用（知识库方案）
-    attraction_doc_ids: 知识库中的文档 ID 列表
-    """
-    for doc_id in attraction_doc_ids:
-        # 1. 取出景点信息摘要（chunk_index=0）
-        info = attraction_retriever.get_attraction_info(doc_id)
+def calculate_attraction_cost(items, tenant_id, attraction_matches,
+                              adults, children_half, students, elders,
+                              total_people, teacher_count=0,
+                              attraction_ids=None):
+    """统一入口：门票 + 游玩项目"""
+    # 按 doc_id 去重
+    unique_attractions = _merge_attractions(attraction_matches)
 
-        # 2. 取出门票价格明细表（chunk_index=1）
-        ticket_table = attraction_retriever.get_ticket_table(doc_id)
+    for ua in unique_attractions:
+        items = _process_single_attraction(items, ua, ...)
 
-        # 3. 调用 LLM 从价格明细表中计算费用
-        parsed = llm_parse_ticket(ticket_table, start_date,
-                                   adults, children_half, students, elders, total_people)
+    return items
 
-        # 4. 添加到 items
-        for ticket_item in parsed['items']:
-            items.append(ticket_item)
+
+def _process_single_attraction(items, ua, ...):
+    """处理单个景点"""
+    # 获取 3 个 chunk
+    attraction_info = retriever.get_attraction_info(ua.doc_id)
+    ticket_table = retriever.get_ticket_table(ua.doc_id)
+    project_table = retriever.get_project_table(ua.doc_id)
+
+    # Step 1: 门票提取（LLM 独立 prompt）
+    tickets = _llm_extract_tickets(ua.name, attraction_info, ticket_table, ...)
+    items = _build_ticket_items(items, attraction_name, tickets, ..., teacher_count)
+
+    # Step 2: 游玩项目匹配（仅当行程中有 activities 时）
+    if ua.activities and project_table:
+        projects = _llm_extract_projects(ua.name, attraction_info, project_table, ua.activities, ...)
+        items = _build_project_items(items, attraction_name, projects, total_people, teacher_count)
 
     return items
 ```
@@ -784,24 +804,20 @@ def calculate_ticket_cost(items, tenant_id, attraction_doc_ids, adults, children
 
 ## A8. 文件变更清单（景点门票部分）
 
-### 新增文件
+### 新增/已实现文件
 
 | 文件 | 说明 |
 |------|------|
-| `src/skills/quote-generate/scripts/attraction_retriever.py` | 景点检索器 |
+| `src/skills/quote-generate/scripts/attraction.py` | 门票 + 游玩项目费用计算（统一入口） |
+| `src/skills/quote-generate/scripts/attraction_retriever.py` | 景点向量检索器（3 chunk 读取） |
 
-### 修改文件
+### 已删除的旧代码
 
-| 文件 | 改动 |
-|------|------|
-| `src/skills/quote-generate/scripts/import_attractions.py` | 新建：导入脚本 |
-| `src/skills/quote-generate/scripts/generate.py` | 删除 attractions/tickets DDL，重写 calculate_ticket_cost() |
-| `src/api/travel_quote.py` | 删除 attractions/tickets CRUD，新增知识库导入端点 |
-| `deploy/init-postgres.sql` | 删除 attractions/tickets DDL |
-| `deploy/db_update.sql` | 添加 DROP TABLE |
-| `subagents/travel-consultant/SUBAGENT.md` | 更新 |
-| `frontend/src/components/travel/AttractionManager.vue` | 改造 |
-| `frontend/src/api/travelQuote.ts` | 删除 tickets API |
+| 旧文件/代码 | 说明 |
+|------------|------|
+| `generate.py` 中的 attractions/tickets DDL | 不再需要本地建表 |
+| `generate.py` 中的 `calculate_ticket_cost()` | 替换为 `attraction.py` 中的 `calculate_attraction_cost()` |
+| `bs_travel_quote_attractions` + `bs_travel_quote_tickets` 表 | 迁移至向量知识库（3 chunk 结构） |
 
 ---
 
@@ -1146,9 +1162,9 @@ LLM 映射时需要处理的常见转换：
 
 ---
 
-# 第四部分：quote-generate 技能重构 — 行程文本驱动报价
+# 第四部分：quote-generate 技能重构 — 行程文本驱动报价（已完成）
 
-## C1. 当前问题
+## C1. 设计目标（已实现）
 
 当前 `quote-generate` 技能要求调用者（LLM 子智能体）手动收集并传入 20+ 个结构化参数（包括 `attraction_ids`、`hotel_id` 等数据库 ID）。
 
@@ -1157,7 +1173,7 @@ LLM 映射时需要处理的常见转换：
 2. **参数收集过程冗长**——SUBAGENT.md 中参数清单占 20 行，调用示例复杂
 3. **与向量知识库方案不匹配**——向量搜索天然支持自然语言查询，但当前设计要求传入精确 ID
 
-## C2. 新设计：行程文本驱动
+## C2. 已实现：行程文本驱动
 
 ### 核心思路
 
@@ -1194,42 +1210,42 @@ LLM 映射时需要处理的常见转换：
 
 ## C3. LLM 行程解析
 
-### parse_itinerary() 函数
+### parse_itinerary() 函数（itinerary_parser.py）
 
 输入行程文本，调用 LLM 提取结构化数据：
 
-**LLM Prompt**：
+**返回字段**：
 
-```
-你是一个旅游行程解析助手。请从以下行程方案文本中提取报价所需的关键信息。
-
-行程方案：
-{itinerary_text}
-
-请返回 JSON 格式，包含以下字段：
+```json
 {
-    "region_name": "主要目的地（省份或城市名）",
-    "total_people": 30,
-    "adults": 25,
-    "children_half": 5,
-    "students": 0,
+    "region_name": "贵州",
+    "total_people": 21,
+    "adults": 0,
+    "children_half": 0,
+    "students": 20,
     "elders": 0,
     "couples": 0,
+    "teacher_count": 1,
     "trip_days": 6,
-    "departure_city": "出发城市",
-    "destination": "主要目的地城市",
-    "attraction_names": ["黄果树瀑布", "小七孔", "天眼"],
+    "departure_city": "贵阳",
+    "destination": "平塘",
+    "daily_attractions": [
+        {"day": 1, "attractions": [{"name": "平塘天文小镇", "activities": ["开营仪式", "团队建设"]}]},
+        {"day": 2, "attractions": [{"name": "中国天眼科普基地", "activities": ["专业讲解导览", "天文互动体验", "FAST观景台参观", "天文小课堂", "夜游望远镜观星"]}]}
+    ],
     "hotel_preference": "4钻酒店",
+    "hotel_stays": [
+        {"city": "平塘", "area": "", "nights": 2},
+        {"city": "荔波", "area": "", "nights": 1},
+        {"city": "贵阳", "area": "", "nights": 2}
+    ],
+    "daily_routes": [
+        {"day": 1, "legs": [{"from": "贵阳站", "to": "平塘天文小镇"}]},
+        {"day": 3, "legs": [{"from": "平塘天文小镇", "to": "天空之桥研学基地"}, {"from": "天空之桥研学基地", "to": "荔波"}]}
+    ],
     "meal_tier": "standard",
     "guide_type": "local"
 }
-
-注意：
-1. 人数信息从文本中提取，如果没有明确说，adults 默认等于 total_people
-2. attraction_names 是景点名称列表（自然语言名称，不是 ID）
-3. hotel_preference 是酒店偏好描述（如"4钻"、"经济型"），不是酒店名
-4. meal_tier 和 guide_type 如果文本没提，用默认值 standard 和 local
-5. 只返回 JSON，不要其他文字
 ```
 
 ### _call_llm() 实现
@@ -1239,39 +1255,34 @@ generate.py 运行在子进程中，直接调用 LLM SDK（与 embedding 相同�
 - Qwen 提供商：`dashscope.Generation.call()`
 - Zhipu 提供商：`zhipuai SDK`
 
-## C4. 资源检索
+## C4. 资源检索（resource_resolver.py，已实现）
 
-### resolve_resources() 函数
-
-将 LLM 解析出的名称/偏好转换为具体的知识库 doc_id：
+将 LLM 解析出的名称/偏好转换为知识库 doc_id，并携带匹配的活动列表：
 
 ```python
 def resolve_resources(parsed: dict, tenant_id: str) -> dict:
-    result = {}
-
-    # 景点：逐个名称在向量库中搜索，取 top-1
-    attraction_doc_ids = []
-    if parsed.get("attraction_names"):
-        retriever = AttractionRetriever()
-        for name in parsed["attraction_names"]:
-            matches = retriever.search(tenant_id, name, top_k=1)
-            if matches:
-                attraction_doc_ids.append(matches[0]["doc_id"])
-    result["attraction_doc_ids"] = attraction_doc_ids
-
-    # 酒店：用偏好描述在向量库中搜索
-    hotel_doc_id = None
-    if parsed.get("hotel_preference"):
-        retriever = HotelRetriever()
-        matches = retriever.search(tenant_id, parsed["hotel_preference"], top_k=1)
-        if matches:
-            hotel_doc_id = matches[0]["doc_id"]
-    result["hotel_doc_id"] = hotel_doc_id
-
-    return result
+    """返回：
+    {
+        "attraction_matches": [
+            {"name": "平塘天文小镇", "doc_id": 443, "activities": ["开营仪式", "团队建设"], "info": "..."},
+            {"name": "中国天眼科普基地", "doc_id": 442, "activities": [...], "info": "..."},
+            ...
+        ],
+        "hotel_doc_id": 538,
+        "hotel_stays": [
+            {"city": "平塘", "area": "", "nights": 2, "hotel_doc_id": 538},
+            {"city": "荔波", "area": "", "nights": 1, "hotel_doc_id": 532},
+            {"city": "贵阳", "area": "", "nights": 2, "hotel_doc_id": 489}
+        ]
+    }
+    """
 ```
 
-## C5. generate_quote() 主流程改造
+**景点匹配**：逐个 `daily_attractions` 条目在向量库中搜索（名称匹配优先 → 向量语义搜索），取 top-1，并聚合该景点在所有天的 activities。
+
+**酒店匹配**：为每个 `hotel_stays` 条目按城市搜索酒店（`"{city} 酒店 {hotel_preference}"`），将 `hotel_doc_id` 回填到 hotel_stays 中。
+
+## C5. generate_quote() 主流程（已实现）
 
 ```python
 def generate_quote(params: dict) -> dict:
@@ -1283,36 +1294,44 @@ def generate_quote(params: dict) -> dict:
         # 新模式：行程文本驱动
         parsed = parse_itinerary(itinerary_text)
         resources = resolve_resources(parsed, tenant_id)
-
-        # 合并参数：params 中的显式参数优先
-        region_name = params.get('region_name') or parsed.get('region_name', '')
-        total_people = params.get('total_people') or parsed.get('total_people', 30)
-        adults = params.get('adults') or parsed.get('adults', total_people)
-        children_half = params.get('children_half') or parsed.get('children_half', 0)
-        students = params.get('students') or parsed.get('students', 0)
-        elders = params.get('elders') or parsed.get('elders', 0)
-        couples = params.get('couples') or parsed.get('couples', 0)
-        trip_days = params.get('trip_days') or parsed.get('trip_days', 1)
-        departure_city = parsed.get('departure_city', '')
-        destination = parsed.get('destination', '')
-        attraction_doc_ids = resources.get('attraction_doc_ids', [])
-        hotel_doc_id = resources.get('hotel_doc_id')
-        meal_tier = parsed.get('meal_tier', 'standard')
-        guide_type = parsed.get('guide_type', 'local')
+        # 从 parsed + resources 提取所有参数
+        region_name = parsed.get('region_name', '')
+        total_people = parsed.get('total_people', 30)
+        adults = parsed.get('adults', 0)
+        students = parsed.get('students', 0)
+        teacher_count = parsed.get('teacher_count', 0)
+        attraction_matches = resources.get('attraction_matches', [])
+        hotel_stays = resources.get('hotel_stays', [])
+        # ... 其余参数 ...
     else:
-        # 旧模式：向后兼容
-        region_name = params.get('region_name', '')
-        total_people = params.get('total_people', 30)
-        # ... 现有参数提取逻辑不变 ...
-        attraction_doc_ids = params.get('attraction_doc_ids', [])
-        hotel_doc_id = params.get('hotel_doc_id')
-        departure_city = params.get('departure_city', '')
-        destination = params.get('destination', '')
+        # 旧模式：向后兼容（直接从 params 读取结构化参数）
+        pass
 
-    # 后续计价逻辑完全不变
-    region_names = expand_region_names(tenant_id, region_name) if region_name else []
+    # 人数校验
+    adults, students = _validate_headcount(...)
+
+    # 计价流程
     season_type, season_multiplier = determine_season(tenant_id, start_date)
-    # ...
+    route_distance_km, leg_details = _calculate_route_distance(...)
+    items, actual_vehicle_count = calculate_vehicle_cost(...)
+    items = calculate_attraction_cost(items, tenant_id, attraction_matches, ...)
+    if hotel_stays:
+        items, single_supplement = calculate_hotel_stays(items, ...)
+    else:
+        items, single_supplement = calculate_hotel_cost(items, ...)
+    items = calculate_meal_cost(...)
+    items = calculate_guide_cost(...)
+    items = calculate_other_fees(...)
+
+    # 过滤 + 汇总
+    items = [item for item in items if item.get('subtotal', 0) > 0 or item.get('unit_price', 0) > 0]
+    cost_per_person = round(sum(item.get('subtotal', 0) for item in items), 2)
+    quote_per_person = round(cost_per_person * (1 + profit_rate), 2)
+    teacher_total = round(sum(item.get('teacher_subtotal', 0) for item in items), 2)
+
+    # 导出 Excel
+    file_path = export_with_template(internal_data, template_path)
+    return { items, price_per_person, total_price, teacher_total, file_path, ... }
 ```
 
 ## C6. SUBAGENT.md 简化
@@ -1328,19 +1347,34 @@ def generate_quote(params: dict) -> dict:
 >
 > **技能内部自动完成**：解析行程 → 搜索景点酒店 → 计算距离 → 生成报价
 
-## C7. 文件变更清单
+## C7. 文件变更清单（已实现）
 
-| 文件 | 改动 |
-|------|------|
-| `src/skills/quote-generate/scripts/generate.py` | 新增 `parse_itinerary()`、`resolve_resources()`、`_call_llm()`；改造 `generate_quote()` 入口 |
-| `src/skills/quote-generate/SKILL.md` | 重写输入参数说明（7 个参数） |
-| `subagents/travel-consultant/SUBAGENT.md` | 简化阶段四的参数清单和调用示例 |
+| 文件 | 改动 | 状态 |
+|------|------|------|
+| `src/skills/quote-generate/scripts/generate.py` | 主流程编排，新增 `_validate_headcount()`、`_calculate_route_distance()` | ✅ |
+| `src/skills/quote-generate/scripts/itinerary_parser.py` | 新建：LLM 行程文本解析 | ✅ |
+| `src/skills/quote-generate/scripts/resource_resolver.py` | 新建：景点/酒店向量检索 | ✅ |
+| `src/skills/quote-generate/scripts/attraction.py` | 新建：门票 + 游玩项目费用计算 | ✅ |
+| `src/skills/quote-generate/scripts/attraction_retriever.py` | 新建：景点向量检索器（3 chunk） | ✅ |
+| `src/skills/quote-generate/scripts/hotel.py` | 新建：住宿费用计算（支持多城市 + teacher_subtotal） | ✅ |
+| `src/skills/quote-generate/scripts/hotel_retriever.py` | 新建：酒店向量检索器（2 chunk） | ✅ |
+| `src/skills/quote-generate/scripts/vehicle.py` | 新建：交通费用（按天/按公里 + 多段距离） | ✅ |
+| `src/skills/quote-generate/scripts/meal.py` | 新建：餐饮费用 | ✅ |
+| `src/skills/quote-generate/scripts/guide.py` | 新建：导游费用 | ✅ |
+| `src/skills/quote-generate/scripts/other_fees.py` | 新建：其他费用 | ✅ |
+| `src/skills/quote-generate/scripts/season.py` | 新建：淡旺季判定 | ✅ |
+| `src/skills/quote-generate/scripts/db.py` | 新建：数据库表初始化 + 查询 | ✅ |
+| `src/skills/quote-generate/scripts/excel_export.py` | 新建：Excel 模板导出 | ✅ |
+| `src/skills/quote-generate/scripts/llm_client.py` | 新建：LLM 调用封装 | ✅ |
+| `src/skills/quote-generate/SKILL.md` | 重写输入参数说明（7 个参数） | ✅ |
+| `subagents/travel-consultant/SUBAGENT.md` | 简化阶段四的参数清单和调用示例 | ✅ |
 
 ---
 
-# 第五部分：报价单模板差缺分析
+# 第五部分：报价单模板差缺分析（已实现）
 
-> 基于《超级贵州行程最终报价(30人).xls》实际模板，对比系统现有能力，识别缺失要素。
+> 基于《超级贵州行程最终报价(30人).xls》实际模板，对比系统现有能力。
+> 以下缺失项已在代码中全部实现。
 
 ## D1. 实际报价单结构
 
@@ -1390,256 +1424,60 @@ R30:       | 日期： | 日期： | 日期：
 | 利润计算 | `generate_quote()` 中的汇总 | cost → quote |
 | Excel 导出 | `export_with_template()` | 支持自定义模板 |
 
-### 缺失要素 ❌
+### 已实现的要素 ✅
 
-#### 缺失 1：「随队老师」独立计费列（严重）
+> 以下要素在 v5.0 重构中已全部实现，原"缺失要素"状态更新如下：
 
-实际报价单有**两列费用**：
-- `费用小计`（col 7）：学生人均分摊
-- `随队老师`（col 8）：随队老师单独承担的费用
+| 要素 | 状态 | 实现方式 |
+|------|------|----------|
+| 随队老师独立计费列 | ✅ 已实现 | item 新增 `teacher_subtotal` 字段，各计价函数均支持 `teacher_count` 参数，Excel 输出两列 |
+| 多城市不同酒店 | ✅ 已实现 | `hotel_stays` 列表 + `calculate_hotel_stays()` 函数，逐城市向量搜索酒店 |
+| 门票/活动细项拆分 | ✅ 已实现 | 景点 chunk 2 存游玩项目价格表，`_llm_extract_projects()` 独立提取，`_build_project_items()` 按人/团计费 |
+| 司陪房 | ⚠️ 部分实现 | 酒店排房已考虑 teacher_count，司陪房独立费用暂由 `calculate_other_fees()` 覆盖 |
+| 报价表头信息 | ✅ 已实现 | `export_with_template()` 支持 company_name、course_name、total_people 等占位符 |
+| 底部审核区域 | ✅ 已实现 | 通过自定义 Excel 模板预留，无需代码改动 |
 
-例如：
-- 旅游大巴：费用小计 326.67，随队老师 0（老师跟学生同车不额外付费）
-- 研学特色餐：费用小计 320，随队老师 320（老师也吃饭，单独算）
-- 贵阳酒店：费用小计 320，随队老师 320（老师单独住）
-- 天眼景区：费用小计 110，随队老师 110（老师也买票）
-- 天眼讲解费：费用小计 13.33，随队老师 0（团费，老师不分摊）
-- 西江门票：费用小计 60，随队老师 120（老师不免票，双倍）
+## D3. 实施记录
 
-**系统现状**：items 中只有一个 `subtotal` 字段，没有 `teacher_cost` 字段。
+> 以下所有项目已在 v5.0 重构中实现。
 
-**实现方案**：
+| 原优先级 | 要素 | 实现状态 | 实现模块 |
+|----------|------|----------|----------|
+| P0 | 多城市不同酒店 | ✅ 已实现 | `hotel.py: calculate_hotel_stays()` + `resource_resolver.py` 逐城市搜索 |
+| P0 | 随队老师独立计费列 | ✅ 已实现 | 各计价函数新增 `teacher_count` 参数，item 含 `teacher_subtotal` 字段 |
+| P1 | 门票/活动细项拆分 | ✅ 已实现 | `attraction.py: _llm_extract_projects()` + `_build_project_items()` 独立提取游玩项目 |
+| P1 | 司陪房 | ⚠️ 部分实现 | 酒店排房考虑 teacher_count，独立司陪房费用由 `other_fees.py` 覆盖 |
+| P2 | 自定义模板适配 | ✅ 已实现 | `excel_export.py: export_with_template()` 支持占位符 |
+| P2 | 底部审核区域 | ✅ 已实现 | 通过自定义 Excel 模板预留 |
 
-1. 在 item 数据结构中新增 `teacher_subtotal` 字段（随队老师费用小计）
-2. 每个计价函数新增 `teacher_count` 参数（随队老师人数，从行程中解析）
-3. 各项费用的老师计费规则不同：
-   - 用车：老师不额外付费（0）
-   - 用餐：老师同价（price × teacher_count）
-   - 住宿：老师单独排房
-   - 门票：部分景点老师免票（0），部分同价，部分特殊价
-   - 导游/司陪：老师不分摊（0）
-4. 导出 Excel 时输出两列
+## D4. 当前 item 数据结构
 
-#### 缺失 2：多城市不同酒店（严重）
-
-实际报价单有**4 家不同酒店**，按行程天数在不同城市入住：
-- 贵阳酒店 320元/2人/2夜
-- 安顺酒店 280元/2人/1夜
-- 罗甸酒店 180元/2人/1夜
-- 西江酒店 428元/2人/1夜
-
-**系统现状**：`calculate_hotel_cost()` 只支持**一家酒店**（单个 hotel_id），所有天都住同一家。
-
-**实现方案**：
-
-1. 报价参数从单个 `hotel_doc_id` 改为 `hotel_stays` 列表：
-   ```python
-   hotel_stays = [
-       {"hotel_doc_id": 101, "nights": 2, "city": "贵阳"},
-       {"hotel_doc_id": 102, "nights": 1, "city": "安顺"},
-       {"hotel_doc_id": 103, "nights": 1, "city": "罗甸"},
-       {"hotel_doc_id": 104, "nights": 1, "city": "西江"},
-   ]
-   ```
-2. LLM 解析行程时，从每天的安排中提取入住城市
-3. 为每个城市用 Retriever 搜索对应的酒店
-4. 逐城市计算住宿费用，每家酒店一行
-
-#### 缺失 3：门票/活动细项拆分（中等）
-
-实际报价单中，每个景点不是一行门票，而是**多行细项**：
-- 天眼景区：门票110 + 讲解费400/团 + 耳机10 + 研学课程30 = 4 行
-- 西江：门票60 + 研学课程58 = 2 行
-
-**系统现状**：`calculate_ticket_cost()` 每个景点只输出 1-2 行（成人票 + 儿童票），没有讲解费、研学课程、耳机等附加项目。
-
-**实现方案**：
-
-1. 门票价格明细表（chunk 1）中，增加对"附加服务"的分类：
-   - 基础门票（如"天眼景区门票 110元"）
-   - 附加服务（如"讲解费 400元/团"、"耳机 10元/人"、"研学课程 30元/人"）
-2. `_calculate_ticket_cost_from_kb()` 解析时区分 `per_person` 和 `per_group` 计费
-3. 每个附加服务单独输出一行 item
-
-#### 缺失 4：司陪房（中等）
-
-实际报价单有独立的"司陪房"行：200元 × 2人 × 5夜 = 66.67元/人。
-
-**系统现状**：`calculate_hotel_cost()` 的排房逻辑只考虑学生和夫妻，没有司陪房的逻辑。
-
-**实现方案**：
-1. 在 `calculate_hotel_cost()` 或独立函数中，根据司机人数和导师人数计算司陪房
-2. 司陪房费用不计入学生人均，而是计入"随队老师"列
-3. 需要从行程解析中提取"司机人数"和"导师人数"
-
-#### 缺失 5：核算区域 / 报价表头信息（轻微）
-
-实际报价单有：
-- 标题行：`{公司名}研学报价表`
-- 信息行：研学 课程名称=超级贵州 | 日期=xxx | 人数=30
-
-**系统现状**：`export_with_template()` 已支持 `{{company_name}}`、`{{course_name}}`、`{{total_people}}` 等占位符，但当前默认模板的格式与实际模板有差异。
-
-**实现方案**：
-1. 用这份实际 Excel 作为自定义模板上传
-2. 在模板中用 `{{#items}}...{{/items}}` 标记数据行区域
-3. 每行数据包含 `{{category}}`、`{{name}}`、`{{unit_price}}`、`{{quantity}}` 等占位符
-4. 新增 `{{teacher_subtotal}}` 占位符
-
-#### 缺失 6：底部审核/签章区域（轻微）
-
-实际报价单有：审核（成本审核员、研学负责人、财务部审核）+ 日期行。
-
-**系统现状**：默认模板没有审核区域。
-
-**实现方案**：在自定义模板中预留这些行即可，不需要代码改动。
-
-## D3. 优先级排序
-
-| 优先级 | 缺失项 | 影响 | 工作量 |
-|--------|--------|------|--------|
-| **P0** | 多城市不同酒店 | 无法生成多城市报价 | 中 |
-| **P0** | 随队老师独立计费列 | 报价单格式不符 | 中 |
-| **P1** | 门票/活动细项拆分 | 报价明细不够细 | 中 |
-| **P1** | 司陪房 | 少算一项费用 | 小 |
-| **P2** | 自定义模板适配 | 视觉格式差异 | 小 |
-| **P2** | 底部审核区域 | 签章区域 | 无需代码改动 |
-
-## D4. 实施建议
-
-### P0-1: 多城市不同酒店
-
-**改动文件**: `generate.py`
-
-1. `parse_itinerary()` 的 LLM prompt 中增加对每日行程和入住城市的提取：
-   ```json
-   "daily_plan": [
-     {"day": 1, "city": "贵阳", "attractions": ["黔灵山"]},
-     {"day": 2, "city": "贵阳", "attractions": ["天眼"]},
-     {"day": 3, "city": "安顺", "attractions": ["黄果树"]},
-     {"day": 4, "city": "安顺", "attractions": ["关岭化石"]},
-     {"day": 5, "city": "西江", "attractions": ["西江千户苗寨"]},
-     {"day": 6, "city": "贵阳", "attractions": ["青岩古镇"]}
-   ],
-   "hotel_stays": [
-     {"city": "贵阳", "nights": 2},
-     {"city": "安顺", "nights": 1},
-     {"city": "罗甸", "nights": 1},
-     {"city": "西江", "nights": 1}
-   ]
-   ```
-
-2. 新增 `calculate_hotel_stays()` 函数，替代原有 `calculate_hotel_cost()`：
-   ```python
-   def calculate_hotel_stays(items, tenant_id, hotel_stays, total_people, teacher_count):
-       for stay in hotel_stays:
-           city = stay["city"]
-           nights = stay["nights"]
-           # 用 Retriever 搜索该城市的酒店
-           matches = hotel_retriever.search(tenant_id, f"{city} 酒店", top_k=1)
-           if matches:
-               price_table = hotel_retriever.get_price_table(matches[0]["doc_id"])
-               price = parse_team_price(price_table)
-               # 排房：学生
-               student_rooms = math.ceil((total_people - teacher_count) / 2)
-               student_cost = student_rooms * price * nights / total_people
-               # 排房：老师
-               teacher_rooms = math.ceil(teacher_count / 2)
-               teacher_cost = teacher_rooms * price * nights
-               items.append({...})
-   ```
-
-### P0-2: 随队老师独立计费列
-
-**改动文件**: `generate.py`
-
-1. item 数据结构新增 `teacher_subtotal` 字段
-2. `generate_quote()` 参数新增 `teacher_count`（从行程中解析）
-3. 各计价函数新增老师计费逻辑：
-   - 用车：teacher_subtotal = 0（老师跟车不额外付费）
-   - 用餐：teacher_subtotal = price × teacher_count × meal_count
-   - 住宿：teacher_subtotal = teacher_rooms × price × nights
-   - 门票：teacher_subtotal = teacher_ticket_price × teacher_count（部分景点老师免票）
-   - 其他（导师、司陪）：teacher_subtotal = 0（不分摊到老师列）
-4. 汇总时同时输出 `teacher_total`
-
-### P1-1: 门票/活动细项拆分
-
-**改动文件**: `generate.py` 的 `_calculate_ticket_cost_from_kb()`
-
-1. 价格表解析时，按行分类：
-   - 含"人"或"张"的 → per_person 类型
-   - 含"团"的 → per_group 类型
-2. per_group 的费用（如讲解费 400元/团）单独输出一行：
-   ```python
-   items.append({
-       "name": "天眼讲解费",
-       "unit_price": 400,
-       "quantity": 1,
-       "unit": "团",
-       "subtotal": round(400 / total_people, 2),  # 学生人均分摊
-       "teacher_subtotal": 0,  # 老师不分摊团费
-   })
-   ```
-
-### P1-2: 司陪房
-
-**改动文件**: `generate.py`
-
-在 `calculate_hotel_stays()` 或 `calculate_other_fees()` 中增加司陪房计算：
-```python
-# 司陪房 = driver_count + guide_count 人，需要 ceil(N/2) 间房
-driver_guide_rooms = math.ceil((driver_count + guide_count) / 2)
-# 司陪房单价通常低于客房价，从酒店价格表或单独配置获取
-accompany_room_rate = 200  # 可配置
-accompany_cost = accompany_room_rate * driver_guide_rooms * total_nights
-```
-
-## D5. 输出结构对比
-
-### 当前 item 结构
+> 已实现的目标结构（原"输出结构对比"已无对比意义，直接记录当前结构）。
 
 ```python
 {
-    "category": "用车",
-    "name": "大巴",
-    "unit_price": 1800,
-    "quantity": 1,
-    "unit": "辆",
-    "frequency": 6,
-    "freq_unit": "天",
-    "subtotal": 360.00,
-    "remark": "含司机餐补"
+    "category": "门票",             # 成本类别：用车/门票/住宿/餐饮/导游/其他
+    "name": "天眼景区联票",          # 项目名称
+    "unit_price": 140.00,           # 单价
+    "quantity": 21,                 # 数量
+    "unit": "人",                   # 单位
+    "subtotal": 98.00,              # 费用小计（学生人均）
+    "teacher_subtotal": 140.00,     # 随队老师费用小计
+    "remark": ""                    # 备注
 }
 ```
 
-### 目标 item 结构（对齐实际报价单）
-
-```python
-{
-    "category": "用车",          # 成本类别
-    "name": "旅游大巴",           # 项目
-    "unit_price": 9800,          # 单价
-    "quantity": 1,               # 数量
-    "unit": "辆",                # 单位
-    "frequency": 1,              # 次数
-    "freq_unit": "次",           # 单位
-    "subtotal": 326.67,          # 费用小计（学生人均）
-    "teacher_subtotal": 0,       # ★ 新增：随队老师费用小计
-    "remark": "全程6天研学团队用车"  # 备注
-}
-```
-
-### 目标汇总结构
+### 汇总结构
 
 ```python
 {
     "items": [...],
     "cost_per_person": 2551.33,       # 学生人均成本
-    "teacher_total": 1514.00,         # ★ 新增：随队老师总费用
-    "total_cost": 2551.33 * 30,       # 学生总成本
+    "teacher_total": 1514.00,         # 随队老师总费用
+    "total_cost": cost_per_person * total_people,
+    "single_supplement": 0,           # 单房差
     "profit_rate": 0.15,
-    "quote_per_person": 2934.03,      # 学生人均报价
-    "quote_total": 2934.03 * 30,      # 学生总报价
+    "quote_per_person": cost_per_person * (1 + profit_rate),
+    "quote_total": quote_per_person * total_people,
 }
 ```

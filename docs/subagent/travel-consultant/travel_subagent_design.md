@@ -208,40 +208,44 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
 
 ### 5.1 输入参数
 
+> 重构后的 `quote-generate` 技能支持**行程文本驱动**模式，LLM 子智能体只需传入用户确认的行程方案全文，技能内部完成行程解析、资源检索、计价、导出全流程。
+
+**新模式（推荐）**：传入 `itinerary_text`，技能内部自动解析：
+
 ```python
-class QuoteRequest:
-    tenant_id: str
-    region_name: str               # 区域名称，如"贵州"、"贵阳"
-    total_people: int
-    adults: int
-    children: int               # 6岁以下免票
-    children_half: int           # 6-18岁半票
-    students: int
-    elders: int                  # 65岁以上
-    couples: int = 0
-    families: int = 0
-    trip_days: int
-    start_date: date
-    attractions: list[int]        # 景点 ID（知识库文档 ID）
-    hotel_id: int                 # 酒店 ID（知识库文档 ID）
-    meal_tier: str
-    guide_type: str
-    vehicle_count: int = None
-    include_insurance: bool = True
-    profit_rate: float = None
+{
+    "tenant_id": "租户ID（必填）",
+    "itinerary_text": "用户确认的行程方案全文（必填，Markdown 表格格式）",
+    "start_date": "2026-07-01",
+    "profit_rate": 0.15,
+    "course_name": "超级贵州研学",
+    "company_name": "贵州天悦旅行社",
+    "template_path": None  # 可选，自定义 Excel 模板路径
+}
 ```
+
+**旧模式（向后兼容）**：不传 `itinerary_text` 而传入结构化参数时走旧逻辑，参数包括 `region_name`、`total_people`、`adults`、`students`、`children_half`、`elders`、`couples`、`trip_days`、`attraction_ids`、`hotel_id`、`attraction_matches`、`hotel_stays`、`meal_tier`、`guide_type`、`vehicle_count`、`include_insurance`、`departure_city`、`destination` 等。
 
 ### 5.2 计算流程
 
+**新模式完整流程**：
+
 ```
-Step 1: 确定季节 → bs_travel_quote_seasons
-Step 2: 交通 → bs_travel_quote_vehicles → 按天/按公里计费（详见定价数据方案第三部分）
-Step 3: 门票 → 向量知识库（attraction_resource）→ 向量搜索选景点 → LLM 取价
-Step 4: 住宿 → 向量知识库（hotel_resource）→ 向量搜索选酒店 → LLM 取价
-Step 5: 餐饮 → bs_travel_quote_meals → 餐标 × 人数 × 餐数
-Step 6: 导游 → bs_travel_quote_guides → 日薪 × 天数 × 旺季倍率
-Step 7: 其他 → bs_travel_quote_fees → 按计费方式
-Step 8: 汇总 → 人均成本 × (1 + 利润率)
+Step 0: 行程解析 → parse_itinerary(itinerary_text) → LLM 提取结构化数据
+Step 0.5: 资源检索 → resolve_resources(parsed, tenant_id) → 景点/酒店向量搜索匹配
+Step 1: 区域名称
+Step 2: 确定季节 → bs_travel_quote_seasons
+Step 3: 导航距离 → calculate_multi_leg_distance / calculate_single_leg_distance（高德地图 API）
+Step 4: 交通 → bs_travel_quote_vehicles → 按天/按公里计费，支持多段距离
+Step 5: 景点门票 + 游玩项目 → calculate_attraction_cost()（统一入口）
+         ├─ 门票：LLM 从 chunk 1 提取 → _build_ticket_items（含去重和团队构成 fallback）
+         └─ 项目：LLM 从 chunk 2 匹配行程活动 → _build_project_items（按人/按团计费）
+Step 6: 住宿 → calculate_hotel_stays()（多城市）或 calculate_hotel_cost()（单酒店）
+         → 向量搜索选酒店 → LLM/规则取价 → 排房 + 单房差
+Step 7: 餐饮 → bs_travel_quote_meals → 餐标 × 人数 × 餐数
+Step 8: 导游 → bs_travel_quote_guides → 日薪 × 天数 × 旺季倍率
+Step 9: 其他费用 → bs_travel_quote_fees → 保险、综合服务费等
+Step 10: 过滤价格为 0 的项目 → 汇总 → 人均成本 × (1 + 利润率) → 导出 Excel
 ```
 
 ### 5.3 输出结构
@@ -254,23 +258,22 @@ class QuoteResult:
     start_date: date
     trip_days: int
     total_people: int
+    teacher_count: int           # 随队老师人数
     items: list[QuoteItem]
-    total_cost: decimal          # 整团成本
-    cost_per_person: decimal     # 人均成本
-    single_supplement: decimal   # 单房差
-    profit_rate: float
-    quote_per_person: decimal    # 人均报价
-    quote_total: decimal         # 整团报价
+    price_per_person: decimal    # 人均报价（含利润）
+    total_price: decimal         # 整团报价
+    teacher_total: decimal       # 随队老师总费用
 
 class QuoteItem:
-    category: str
-    name: str
-    unit_price: decimal
-    quantity: int
-    unit: str
-    frequency: int
-    freq_unit: str
-    subtotal: decimal
+    category: str                # 成本类别：用车/门票·项目/住宿/餐饮/导游/其他费用
+    name: str                    # 项目名称
+    unit_price: decimal          # 单价
+    quantity: int                # 数量
+    unit: str                    # 数量单位：人/辆/间/团
+    frequency: int               # 次数
+    freq_unit: str               # 次数单位：天/次/夜
+    subtotal: decimal            # 费用小计（学生人均）
+    teacher_subtotal: decimal    # 随队老师费用小计（0 表示老师不额外付费）
     remark: str
 ```
 
@@ -314,74 +317,67 @@ travel-consultant (子智能体)
 
 ### 6.4 quote-generate Skill 内部流程
 
+脚本拆分为 14 个独立模块，职责清晰：
+
 ```
-LLM 调用 skill_execute({
-  skill: "quote-generate",
-  command: "python scripts/generate.py",
-  content: JSON 行程参数
-})
+src/skills/quote-generate/scripts/
+├── generate.py           # 主流程编排（入口）
+├── itinerary_parser.py   # LLM 行程文本解析
+├── resource_resolver.py  # 景点/酒店向量检索
+├── attraction.py         # 门票 + 游玩项目费用计算
+├── attraction_retriever.py  # 景点向量检索器
+├── hotel.py              # 住宿费用计算（支持多城市）
+├── hotel_retriever.py    # 酒店向量检索器
+├── vehicle.py            # 交通费用计算（按天/按公里 + 多段距离）
+├── meal.py               # 餐饮费用计算
+├── guide.py              # 导游费用计算
+├── other_fees.py         # 其他费用（保险、综合服务费等）
+├── season.py             # 淡旺季判定
+├── db.py                 # 数据库表初始化 + 查询
+├── excel_export.py       # Excel 模板导出
+└── llm_client.py         # LLM 调用封装
+```
+
+**主流程**：
+
+```
+generate.py generate_quote(params)
     │
-    ▼
-┌──────────────────────────────────────────────────┐
-│  generate.py 脚本内部流程（纯 Python，不再调用 LLM）│
-│                                                    │
-│  1. 解析行程参数                                    │
-│     - 人数、天数、出发日期、景点ID列表               │
-│     - 酒店ID、餐标、导游类型、利润率                 │
-│                                                    │
-│  2. 确定季节 → 查 bs_travel_quote_seasons           │
-│                                                    │
-│  3. 查询各项定价数据                                │
-│     - vehicles → 车型推荐 + 日租金                  │
-│     - tickets  → 按票种统计人数                     │
-│     - rooms    → 排房 + 房价                        │
-│     - meals    → 餐标 × 人数 × 餐数                 │
-│     - guides   → 日薪 × 天数                        │
-│     - fees     → 按计费方式计算                      │
-│                                                    │
-│  4. 计算各项费用小计 + 人均 + 整团                   │
-│                                                    │
-│  5. 从 extra.md 读取模板路径 → 加载 Excel 模板文件    │
-│     → 填充数据 → 输出 xlsx                          │
-│                                                    │
-│  6. 返回 JSON: { items, total, file_path }         │
-└──────────────────────────────────────────────────┘
+    ├─ if itinerary_text:
+    │    parse_itinerary(text)          → LLM 解析行程文本 → 结构化数据
+    │    resolve_resources(parsed)      → 向量检索匹配景点/酒店
+    │    _validate_headcount()          → 人数校验与修正
+    │    _calculate_route_distance()    → 多段导航距离计算（高德 API）
     │
-    ▼
-LLM 收到报价明细 + 文件路径
-  → 组织文字回复给用户
-  → 调用 register_download_file 注册下载
+    ├─ determine_season()              → 淡旺季判定
+    ├─ calculate_vehicle_cost()        → 交通（按天/按公里）
+    ├─ calculate_attraction_cost()     → 门票 + 游玩项目（LLM 提取 + 去重）
+    ├─ calculate_hotel_stays/cost()    → 住宿（多城市/单酒店）
+    ├─ calculate_meal_cost()           → 餐饮
+    ├─ calculate_guide_cost()          → 导游
+    ├─ calculate_other_fees()          → 其他费用
+    │
+    ├─ 过滤价格为 0 的项目
+    ├─ 汇总（含 teacher_total）
+    └─ export_with_template()          → Excel 导出
 ```
 
 ### 6.5 Skill 输入参数
 
-LLM 通过 `skill_execute` 的 `content` 参数传入 JSON：
+LLM 通过 `skill_execute` 的 `content` 参数传入 JSON。推荐使用行程文本驱动模式：
 
 ```json
 {
   "tenant_id": "tenant_xxx",
-  "region_name": "贵阳",
-  "total_people": 30,
-  "adults": 25,
-  "children": 0,
-  "children_half": 5,
-  "students": 0,
-  "elders": 0,
-  "couples": 2,
-  "trip_days": 6,
+  "itinerary_text": "## 贵州天眼+荔波6天5晚研学行程\n\n**出发日期**：2026年7月1日\n\n**团队构成**：20名初中生 + 1位带队老师\n\n| 天数 | 时段 | 行程安排 | 游玩项目 | 备注 |\n|------|------|----------|----------|------|\n| D1 | 下午 | 贵阳接站 | — | |\n...",
   "start_date": "2026-07-01",
-  "attraction_ids": [1, 3, 5, 7],
-  "hotel_id": 2,
-  "meal_tier": "standard",
-  "guide_type": "research",
-  "vehicle_count": null,
-  "include_insurance": true,
-  "profit_rate": null,
-  "course_name": "超级贵州研学"
+  "company_name": "贵州天悦旅行社有限公司",
+  "course_name": "超级贵州研学",
+  "profit_rate": 0.15
 }
 ```
 
-> LLM 从对话中收集这些参数，所有信息齐备后才调用 skill。参数含义在 SUBAGENT.md 中说明。
+> 子智能体只需传入 `itinerary_text`（用户确认的行程方案全文，Markdown 表格格式），技能内部自动完成行程解析、资源检索、计价、导出。从 20+ 个参数简化到 7 个。
 
 ### 6.6 Skill 输出结构
 
@@ -389,22 +385,25 @@ LLM 通过 `skill_execute` 的 `content` 参数传入 JSON：
 {
   "success": true,
   "data": {
+    "course_name": "超级贵州研学",
+    "company_name": "贵州天悦旅行社有限公司",
+    "region_name": "贵州",
+    "start_date": "2026-07-01",
+    "trip_days": 6,
+    "total_people": 21,
+    "teacher_count": 1,
     "items": [
-      {"category": "用车", "name": "大巴(45座)", "unit_price": 1800, "quantity": 1, "unit": "辆", "frequency": 6, "freq_unit": "天", "subtotal": 360.00, "remark": "含司机餐补"},
-      {"category": "门票", "name": "天眼观景台(成人)", "unit_price": 88, "quantity": 25, "unit": "人", "frequency": 1, "freq_unit": "次", "subtotal": 73.33, "remark": "协议价"},
-      {"category": "住宿", "name": "贵阳4钻酒店(标间)", "unit_price": 320, "quantity": 15, "unit": "间", "frequency": 5, "freq_unit": "晚", "subtotal": 266.67, "remark": "两人一间"}
+      {"category": "用车", "name": "38座大巴", "unit_price": 2255.85, "quantity": 1, "unit": "辆", "frequency": 1, "freq_unit": "趟", "subtotal": 107.42, "teacher_subtotal": 0, "remark": "38座大巴·38座含司机，含燃油过路费"},
+      {"category": "门票/项目", "name": "天文体验馆+天眼摆渡车+南仁东事迹馆(学生票)", "unit_price": 140.0, "quantity": 21, "unit": "人", "frequency": 1, "freq_unit": "次", "subtotal": 140.0, "teacher_subtotal": 140.0, "remark": "挂牌价"},
+      {"category": "住宿", "name": "平塘天悦酒店", "unit_price": 268.0, "quantity": 2, "unit": "人", "frequency": 1, "freq_unit": "夜", "subtotal": 134.0, "teacher_subtotal": 134.0, "remark": "平塘1晚"}
     ],
-    "total_cost": 58000.00,
-    "cost_per_person": 1933.33,
-    "profit_rate": 0.15,
-    "quote_per_person": 2223.33,
-    "quote_total": 66700.00,
-    "file_path": "/tmp/quote_20260709_xxx.xlsx"
+    "price_per_person": 2461.53,
+    "total_price": 51692.13,
+    "teacher_total": 1964.0,
+    "file_path": "/tmp/xxx.xlsx"
   }
 }
 ```
-
-> LLM 收到后，用自然语言组织回复给用户，展示报价明细，并注册下载文件。
 
 ---
 
@@ -669,18 +668,18 @@ YAML Frontmatter（固定）
 | 表名 | 说明 |
 |------|------|
 | `bs_travel_quote_regions` | 区域/城市分类 |
-| `bs_travel_quote_vehicles` | 车辆价格（扩展：按天/按公里计费） |
+| `bs_travel_quote_vehicles` | 车辆价格（扩展：按天/按公里计费，支持多段导航距离） |
 | `bs_travel_quote_meals` | 餐标价格 |
 | `bs_travel_quote_guides` | 导游费用 |
 | `bs_travel_quote_fees` | 其他固定费用 |
 | `bs_travel_quote_seasons` | 淡旺季配置 |
 
-**向量知识库（替代 4 张旧表）**：
+**向量知识库**：
 
-| 知识库 source_type | 替代的旧表 | 说明 |
+| 知识库 source_type | Chunk 结构 | 说明 |
 |-------------------|-----------|------|
-| `hotel_resource` | ~~`bs_travel_quote_hotels`~~ + ~~`bs_travel_quote_rooms`~~ | 酒店信息摘要 + 价格明细 |
-| `attraction_resource` | ~~`bs_travel_quote_attractions`~~ + ~~`bs_travel_quote_tickets`~~ | 景点信息摘要 + 门票价格明细 |
+| `hotel_resource` | Chunk 0（向量化）：酒店信息摘要；Chunk 1：价格明细表 | 替代原 hotels + rooms 表 |
+| `attraction_resource` | Chunk 0（向量化）：景点信息摘要；Chunk 1：门票价格表；Chunk 2：游玩项目价格表 | 替代原 attractions + tickets 表 |
 
 **租户定制（文件，不建表）**：
 
@@ -748,37 +747,38 @@ LLM 调用 skill_execute({
 
 skill 的 Python 脚本 `generate.py` 接收 JSON 参数后，内部完成：
 
-1. **查库**：根据 `region_name`、`attraction_ids`、`hotel_id` 等参数，查询对应的 `bs_travel_quote_*` 表获取定价数据
-2. **计算**：按照第 5 节的计算流程，自动完成车型推荐、排房、费用计算
-3. **导出**：加载报价模板，填充数据，生成 xlsx 文件
-4. **返回**：返回报价明细 JSON + 文件路径
+1. **行程解析**（新模式）：调用 LLM 从 `itinerary_text` 提取结构化数据（人数、景点、酒店偏好、路线等）
+2. **资源检索**（新模式）：用 AttractionRetriever / HotelRetriever 向量搜索匹配景点和酒店
+3. **计价**：按第 5 节流程完成交通、门票、住宿、餐饮、导游、其他费用的计算
+4. **导出**：加载报价模板，填充数据，生成 xlsx 文件
+5. **返回**：返回报价明细 JSON + 文件路径
 
-> 整个过程是纯 Python 逻辑，不再调用 LLM。定价数据查询、费用计算、Excel 生成都由脚本完成，保证数据准确性。
+> 门票和住宿的价格取用会调用 LLM（从知识库 chunk 文本中提取价格），其余为纯 Python 逻辑。
 
 #### 10.2.3 调用全景流程
 
 ```
-用户消息: "帮我做个30人贵州6天的报价"
+用户消息: "帮我做个20个学生去贵州天眼+荔波6天的报价"
     │
     ▼
 Agent.process_message()
     │
-    ├─ 第1-5轮: LLM 通过对话收集报价所需信息
-    │    （人数、天数、景点偏好、住宿要求等）
+    ├─ 第1-5轮: LLM 通过对话确认行程方案
     │    必要时调用 knowledge_base_search 了解景点信息
     │
-    ├─ 第6轮: 信息齐备后，LLM 调用 skill_execute({skill: "quote-generate", ...})
+    ├─ 第6轮: 行程确认后，LLM 调用 skill_execute({skill: "quote-generate", ...})
     │    │
-    │    ▼ generate.py 内部流程
-    │    ├─ 查 bs_travel_quote_seasons → 确定季节
-    │    ├─ 查 bs_travel_quote_vehicles → 车型推荐
-    │    ├─ 查 bs_travel_quote_tickets → 门票价格
-    │    ├─ 查 bs_travel_quote_rooms → 排房计算
-    │    ├─ 查 bs_travel_quote_meals → 餐标
-    │    ├─ 查 bs_travel_quote_guides → 导游费用
-    │    ├─ 查 bs_travel_quote_fees → 其他费用
-    │    ├─ 计算汇总 → 人均 + 整团
-    │    └─ 加载模板 → 生成 Excel → 返回结果
+    │    ▼ generate.py 内部流程（14 个模块协作）
+    │    ├─ itinerary_parser.py → LLM 解析行程文本
+    │    ├─ resource_resolver.py → 向量检索匹配景点/酒店
+    │    ├─ vehicle.py → 车型推荐 + 按公里计费（调用高德 API）
+    │    ├─ attraction.py → LLM 提取门票 + 游玩项目
+    │    ├─ hotel.py → 多城市酒店取价 + 排房
+    │    ├─ meal.py → 餐标
+    │    ├─ guide.py → 导游费用
+    │    ├─ other_fees.py → 保险等
+    │    ├─ 汇总 → 人均 + 整团 + 老师费用
+    │    └─ excel_export.py → 生成 Excel
     │
     ├─ 第7轮: LLM 收到报价明细，组织文字回复给用户
     │
