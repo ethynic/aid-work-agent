@@ -815,7 +815,10 @@ def _calculate_ticket_cost_from_kb(items, tenant_id: str, doc_ids: list,
             if unit_price == 0:
                 continue
             ticket_type = ticket.get("ticket_type", "adult")
-            quantity = ticket_type_map.get(ticket_type, adults)
+            quantity = ticket_type_map.get(ticket_type, 0)
+            # 跳过无对应人群的票种（如 adults=0 时的成人票）
+            if quantity == 0:
+                continue
             teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 and ticket_type == "adult" else 0
 
             items.append({
@@ -875,7 +878,11 @@ def _llm_extract_attraction_prices(
     # 构建项目提取指令
     if mentioned_activities:
         activities_str = "、".join(mentioned_activities)
-        project_instruction = f"""3. **提取项目/服务价格**：行程中在该景点计划体验的具体项目为：{activities_str}。请从项目/服务价格表中**只提取这些提到的项目**对应的价格，用模糊匹配（如"发报机课程"匹配"研学课程"、如"蜡染"匹配"蜡染体验"）。如果某个提到的项目在价格表中找不到匹配项，说明该项目不收费，不要添加。**不要添加价格表中存在但行程未提到的项目。**"""
+        project_instruction = f"""3. **提取项目/服务价格**：行程中在该景点计划体验的具体项目为：{activities_str}。请从项目/服务价格表中**用模糊语义匹配**找到对应的价格。匹配规则：
+- 核心词匹配：提取项目描述中的关键名词，在价格表中找包含相同或相似名词的项目（如"登台俯瞰天眼全貌"匹配"FAST观测体验"，"夜游望远镜观星"匹配"夜明望远镜观测"，"天文小课堂"匹配"天文小课堂"）
+- 同义词匹配：如"观景"≈"观测"≈"参观"，"课程"≈"课堂"≈"体验"
+- 如果某个提到的活动在价格表中找不到任何匹配项，该项目不收费，不要添加
+- **不要添加价格表中存在但行程未提到的项目**"""
     else:
         project_instruction = """3. **提取项目/服务价格**：行程中未提到该景点的具体项目，projects 返回空数组[]。"""
 
