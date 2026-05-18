@@ -1364,7 +1364,9 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
     """使用模板导出报价单 Excel"""
     try:
         import openpyxl
+        from openpyxl.cell.cell import MergedCell
         from openpyxl.utils import get_column_letter
+        from copy import copy
     except ImportError:
         return _export_simple(quote_data)
 
@@ -1390,27 +1392,55 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
                 items_end_row = cell.row
 
     if items_start_row and items_end_row:
-        # 提取模板行
+        # 提取模板行的值和格式
         template_row_range = items_start_row + 1
         template_cells = []
         for col in range(1, ws.max_column + 1):
-            template_cells.append(ws.cell(row=template_row_range, column=col).value)
+            c = ws.cell(row=template_row_range, column=col)
+            if isinstance(c, MergedCell):
+                template_cells.append(None)
+                continue
+            template_cells.append({
+                "value": c.value,
+                "font": copy(c.font),
+                "alignment": copy(c.alignment),
+                "border": copy(c.border),
+                "fill": copy(c.fill),
+                "number_format": c.number_format,
+            })
 
-        # 删除标记行
+        # 记录模板行高度
+        template_row_height = ws.row_dimensions[template_row_range].height
+
+        # 删除标记行和模板行
         ws.delete_rows(items_end_row)
         ws.delete_rows(items_start_row)
+        # template_row_range 在 items_start_row 下一行，删除 items_start_row 后它变成了 items_start_row
+        ws.delete_rows(items_start_row)
 
-        # 插入数据行
+        # 插入数据行（从模板行复制格式）
         insert_row = items_start_row
-        for i, item in enumerate(quote_data.get('items', [])):
-            # 插入新行（从最后一行复制格式）
+        items_list = [item for item in quote_data.get('items', [])
+                       if (item.get('quantity') or 0) > 0]
+        for i, item in enumerate(items_list):
             ws.insert_rows(insert_row + 1)
-            for col_idx, template_val in enumerate(template_cells, 1):
-                cell = ws.cell(row=insert_row, column=col_idx)
-                val = template_val
+            if template_row_height:
+                ws.row_dimensions[insert_row + 1].height = template_row_height
+            for col_idx, template_info in enumerate(template_cells, 1):
+                if template_info is None:
+                    continue
+                # 复制格式到 insert_row + 1（新插入的空行）
+                new_cell = ws.cell(row=insert_row + 1, column=col_idx)
+                new_cell.font = copy(template_info["font"])
+                new_cell.alignment = copy(template_info["alignment"])
+                new_cell.border = copy(template_info["border"])
+                new_cell.fill = copy(template_info["fill"])
+                new_cell.number_format = template_info["number_format"]
+                # 替换占位符
+                val = template_info["value"]
                 if val and isinstance(val, str) and '{{' in val:
                     val = _replace_placeholders(val, item)
-                cell.value = val
+                new_cell.value = val
             insert_row += 1
     else:
         # 无标记行，只替换汇总变量
@@ -1419,6 +1449,8 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
     # 替换所有 {{变量名}}
     for row in ws.iter_rows():
         for cell in row:
+            if isinstance(cell, MergedCell):
+                continue
             if cell.value and isinstance(cell.value, str) and '{{' in str(cell.value):
                 cell.value = _replace_placeholders(str(cell.value), quote_data)
 
