@@ -1274,6 +1274,7 @@ class Agent:
             logger.warning(f"Failed to rebuild memory from DB for session {session_id}: {e}")
 
         # 设置工具的 user_id / tenant_id
+        download_tool = None
         if user:
             for tool_name in ("email_send", "email_read", "email_list_folders"):
                 tool = self.tool_registry.get_tool(tool_name)
