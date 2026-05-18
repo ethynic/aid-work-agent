@@ -51,13 +51,12 @@ class KnowledgeBaseTool(BaseTool):
 
     def _init_retriever(self):
         """初始化检索器（适配 PostgreSQL）"""
-        # 从配置获取 Qwen API Key（支持 key 池）
-        from src.config.settings import settings
-        qwen_keys = settings.llm.qwen.get_effective_keys()
-        qwen_api_key = qwen_keys[0] if qwen_keys else ""
+        # 从配置获取 Embedding API Key（支持独立配置，适配不同 LLM 提供者）
+        from src.config.settings import get_embedding_api_key
+        embedding_api_key = get_embedding_api_key()
 
         vector_db = get_vector_db(dimension=1024)
-        embedding_client = TextEmbeddingV3Client(api_key=qwen_api_key)
+        embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
 
         # 不传 conn 参数，让 VectorDB 和 HybridRetriever 使用连接池管理连接
         return HybridRetriever(

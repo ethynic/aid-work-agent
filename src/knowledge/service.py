@@ -155,11 +155,10 @@ class KnowledgeBaseService:
                 raise ValueError("文档内容为空或无法提取文本")
 
             # 3. 向量化（批量）
-            qwen_keys = settings.llm.qwen.get_effective_keys()
-            if not qwen_keys:
-                raise ValueError("QWEN API key 未配置，请检查 API_KEYS 环境变量")
+            from src.config.settings import get_embedding_api_key
+            embedding_api_key = get_embedding_api_key()
             # TODO: 后续支持 key 池轮询或并发控制，避免单 key 限流
-            embedding_client = TextEmbeddingV3Client(api_key=qwen_keys[0])
+            embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
             chunk_texts = [c["text"] for c in chunks]
             embeddings = await embedding_client.embed_batch(chunk_texts)
 
@@ -433,17 +432,19 @@ class KnowledgeBaseService:
             from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
             from src.knowledge.vector_db.vector_db import get_vector_db
 
-            qwen_keys = settings.llm.qwen.get_effective_keys()
-            if not qwen_keys:
+            from src.config.settings import get_embedding_api_key
+            try:
+                embedding_api_key = get_embedding_api_key()
+            except ValueError as e:
                 return {
                     "success": False,
-                    "error": "API key 未配置",
+                    "error": "Embedding API key 未配置，请设置环境变量 EMBEDDING_API_KEY",
                     "results": [],
                     "count": 0
                 }
 
             with self._get_db_connection() as conn:
-                embedding_client = TextEmbeddingV3Client(api_key=qwen_keys[0])
+                embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
                 vector_db = get_vector_db(dimension=1024, conn=conn)
 
                 retriever = HybridRetriever(

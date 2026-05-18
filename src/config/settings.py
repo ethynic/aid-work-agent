@@ -392,3 +392,37 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
 # 全局配置实例
 settings = create_settings()
+
+
+def get_embedding_api_key() -> str:
+    """
+    获取 Embedding API Key。
+
+    优先级：
+    1. 环境变量 EMBEDDING_API_KEY（专用 embedding key，用于 LLM 提供者不支持 embedding 的场景）
+    2. settings.llm.qwen 的 api_keys（向后兼容，原有逻辑）
+    3. 报错提示用户配置
+
+    DeepSeek 等提供者不支持 Embedding API，此时需通过 EMBEDDING_API_KEY 单独指定
+    embedding 服务的 API Key（如通义千问的 DashScope API Key）。
+
+    Returns:
+        Embedding API Key 字符串
+    """
+    # 优先级 1：专用 EMBEDDING_API_KEY 环境变量
+    key = os.getenv("EMBEDDING_API_KEY", "").strip()
+    if key:
+        return key
+
+    # 优先级 2：向后兼容，尝试从 qwen provider 获取
+    qwen_keys = settings.llm.qwen.get_effective_keys()
+    if qwen_keys:
+        return qwen_keys[0]
+
+    # 没有可用的 embedding key
+    raise ValueError(
+        "Embedding API Key 未配置。"
+        "请设置环境变量 EMBEDDING_API_KEY（推荐，用于当 LLM 提供者不支持 Embedding 时），"
+        "或确保 LLM_PROVIDER 对应的 QWEN API Key 已正确配置。"
+        "例如 DeepSeek 不支持 Embedding API，需要单独配置通义千问的 API Key。"
+    )

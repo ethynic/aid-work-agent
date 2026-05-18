@@ -52,22 +52,17 @@ class AttractionSearchTool(BaseTool):
     def _get_embedding_client(self):
         if self._embedding_client is None:
             from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
-            from src.config.settings import settings
+            from src.config.settings import get_embedding_api_key
 
-            qwen_keys = settings.llm.qwen.get_effective_keys()
-            if not qwen_keys:
-                raise ValueError("QWEN API key 未配置")
-            self._embedding_client = TextEmbeddingV3Client(api_key=qwen_keys[0])
+            embedding_api_key = get_embedding_api_key()
+            self._embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
         return self._embedding_client
 
     def _embed(self, text: str) -> List[float]:
         import dashscope
-        from src.config.settings import settings
+        from src.config.settings import get_embedding_api_key
 
-        qwen_keys = settings.llm.qwen.get_effective_keys()
-        if not qwen_keys:
-            raise ValueError("QWEN API key 未配置")
-        dashscope.api_key = qwen_keys[0]
+        dashscope.api_key = get_embedding_api_key()
 
         resp = dashscope.TextEmbedding.call(
             model="text-embedding-v3",
