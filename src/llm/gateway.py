@@ -133,7 +133,7 @@ class LLMGateway:
             raise
         except Exception as e:
             call_duration = time.time() - call_start
-            logger.error(f"[LLM] _call_with_pool error, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s, error: {e}", exc_info=True)
+            logger.error(f"[LLM] _call_with_pool error, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
             raise
 
     async def _stream_with_pool(self, fn_name: str, **kwargs) -> AsyncGenerator[str, None]:
@@ -228,7 +228,7 @@ class LLMGateway:
             
         except Exception as e:
             chat_duration = time.time() - chat_start
-            logger.error(f"[LLM] chat() failed, duration={chat_duration:.2f}s, error: {e}", exc_info=True)
+            logger.error(f"[LLM] chat() failed, duration={chat_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
             raise
 
     async def stream_chat(
@@ -309,7 +309,7 @@ class LLMGateway:
             
         except Exception as e:
             cwt_duration = time.time() - cwt_start
-            logger.error(f"[LLM] chat_with_tools() failed, duration={cwt_duration:.2f}s, error: {e}", exc_info=True)
+            logger.error(f"[LLM] chat_with_tools() failed, duration={cwt_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
             raise
 
     def get_provider_name(self) -> str:

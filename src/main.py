@@ -1300,11 +1300,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         SessionRecordManager.get_current_record().mark_error("Cancelled by user")
                         SessionRecordManager.end_record()
                 except Exception as e:
-                    import traceback
-                    error_trace = traceback.format_exc()
                     results['error'] = str(e)
-                    logger.error(f"[SSE-Thread] Agent thread error, session_id={session_id}, error: {e}")
-                    logger.error(f"[SSE-Thread] Traceback:\n{error_trace}")
+                    logger.error(f"[SSE-Thread] Agent thread error, session_id={session_id}, error: {type(e).__name__}: {e}", exc_info=True)
                     # 记录错误
                     if SessionRecordManager.get_current_record():
                         SessionRecordManager.get_current_record().mark_error(str(e))

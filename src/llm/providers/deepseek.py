@@ -101,7 +101,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek API请求失败: {}", e)
+            logger.error("DeepSeek API请求失败: {}: {}", type(e).__name__, e)
             raise RuntimeError(f"DeepSeek API请求失败: {e.response.text}") from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -113,7 +113,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek 调用异常: {}", e)
+            logger.error("DeepSeek 调用异常: {}: {}", type(e).__name__, e)
             raise
 
     async def stream_chat(
@@ -188,7 +188,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek 流式API请求失败: {}", e)
+            logger.error("DeepSeek 流式API请求失败: {}: {}", type(e).__name__, e)
             raise RuntimeError(f"DeepSeek 流式API请求失败: {e.response.text}") from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -200,7 +200,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error("DeepSeek 流式调用异常: {}", e)
+            logger.error("DeepSeek 流式调用异常: {}: {}", type(e).__name__, e)
             raise
 
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:

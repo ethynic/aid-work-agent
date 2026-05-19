@@ -129,7 +129,7 @@ class QwenProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问API请求失败: {e}")
+            logger.error(f"通义千问API请求失败: {type(e).__name__}: {e}")
             raise RuntimeError(f"通义千问API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -141,7 +141,7 @@ class QwenProvider(BaseLLMProvider):
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问调用异常: {e}")
+            logger.error(f"通义千问调用异常: {type(e).__name__}: {e}")
             raise
 
     async def stream_chat(
@@ -232,7 +232,7 @@ class QwenProvider(BaseLLMProvider):
                 error=f"HTTP {e.response.status_code}: {e.response.text[:2000]}",
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问流式API请求失败: {e}")
+            logger.error(f"通义千问流式API请求失败: {type(e).__name__}: {e}")
             raise RuntimeError(f"通义千问流式API请求失败: {e.response.text}")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -244,7 +244,7 @@ class QwenProvider(BaseLLMProvider):
                 error=str(e),
                 duration_ms=round(duration_ms, 2),
             )
-            logger.error(f"通义千问流式调用异常: {e}")
+            logger.error(f"通义千问流式调用异常: {type(e).__name__}: {e}")
             raise
 
     def _parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:

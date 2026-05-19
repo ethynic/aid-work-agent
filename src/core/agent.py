@@ -1449,7 +1449,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 raise
             except Exception as e:
                 llm_call_duration = time.time() - llm_call_start
-                logger.error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {e}", exc_info=True)
+                logger.error(f"[AGENT] LLM call FAILED, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s, error: {type(e).__name__}: {e}", exc_info=True)
                 raise
             
             tool_calls = response.get("tool_calls", [])
