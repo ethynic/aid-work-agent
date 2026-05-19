@@ -24,8 +24,8 @@ from src.tools.base import BaseTool
 class FileWriteInput(BaseModel):
     """文本文件生成参数"""
 
-    content: str = Field(
-        ...,
+    content: Optional[str] = Field(
+        None,
         description="文件内容文本。需符合对应文件类型的语法规范（如 Markdown、HTML、JSON 等）",
     )
     file_path: Optional[str] = Field(
@@ -51,6 +51,22 @@ class FileWriteInput(BaseModel):
         None,
         description="注册下载时的显示文件名（可选），默认使用 file_path 中的文件名。"
         "file_path 未提供时建议设置此参数，否则使用自动生成的临时文件名",
+    )
+    generate_prompt: Optional[str] = Field(
+        None,
+        description="内容生成指令。提供此参数时，工具内部调用 LLM 生成文件内容，无需再提供 content。"
+        "应包含：角色定义、任务描述、输入素材、输出格式要求、质量标准。"
+        "适用于生成 HTML 报告、Markdown 文档等长文本场景。",
+    )
+    content_type: Optional[str] = Field(
+        None,
+        description="内容类型标签，辅助 LLM 生成。已知预设："
+        "report、article、outline、email、market_report。"
+        "仅在使用 generate_prompt 时生效。",
+    )
+    language: Optional[str] = Field(
+        "zh",
+        description="生成内容的语言，默认中文",
     )
 
 
@@ -151,27 +167,37 @@ class FileWriteTool(BaseTool):
     """文本文件生成工具"""
 
     name = "file_write"
-    description = """生成文本文件并注册到下载系统。支持 Markdown、HTML、TXT、CSV、JSON、XML、YAML、CSS、JS 等文本格式。
-根据文件后缀名自动处理编码和格式。生成后自动创建下载链接，用户可在前端下载。
-file_path 可选：不提供时自动写入系统临时目录并通过 file_extension 指定格式。
-如果目标目录不存在会自动创建。默认不覆盖已存在的文件。支持 Windows 和 Linux 路径格式。"""
+    description = """生成文本文件并注册到下载系统。支持 Markdown、HTML、TXT、CSV、JSON 等格式。
+
+两种使用方式：
+1. 直接提供内容：file_write(content="完整内容", file_path="report.md")
+2. 内部生成内容：file_write(file_path="report.html", generate_prompt="生成指令...")
+   → 工具内部调用 LLM 生成内容，直接写入文件，不暴露生成内容到对话上下文
+
+方式 2 适合生成长文本（HTML 报告、长文档等），避免生成内容占用过多上下文窗口。
+生成后自动创建下载链接，用户可在前端下载/预览。"""
     display_name = "生成文本文件"
     category = "file"
     InputModel = FileWriteInput
 
     usage_guide = """生成文本文件时：
-方式一（推荐，简单）：只传内容和格式
+
+方式一（直接写入）：提供现成内容
   file_write(content="完整内容", file_extension="md")
   → 自动生成临时文件，用户可直接下载
 
-方式二（控制路径）：指定完整路径
-  file_write(file_path="output/report.md", content="完整内容")
-  → 文件保存到 storage/output/report.md
+方式二（内部生成）：让工具调用 LLM 生成内容
+  file_write(file_path="report.html", generate_prompt="根据以下材料生成封面页 HTML：...")
+  → 工具内部调 LLM 生成，内容不进入对话上下文，节省 token
+
+方式三（控制路径 + 内部生成）：
+  file_write(file_path="output/report.html", generate_prompt="...", content_type="report")
+  → 指定路径和内容类型辅助生成
 
 注意：
-- 两种方式都会自动注册下载，用户都能在前端下载，无需再调 register_download_file
-- 确保 content 符合文件后缀对应的语法（如 JSON 格式正确、HTML 标签闭合等）
-- 如需覆盖已有文件，设置 overwrite=True
+- 所有方式都会自动注册下载，用户都能在前端下载/预览
+- 方式 2/3 的 generate_prompt 越详细，生成质量越高
+- 如果同时提供 content 和 generate_prompt，优先使用 content（直接写入）
 - 路径支持 Windows 和 Linux 格式"""
 
     def __init__(self):
@@ -225,6 +251,76 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
 
         return p
 
+    async def _generate_content(
+        self, prompt: str, content_type: str, language: str
+    ) -> str:
+        """内部调用 LLM 生成内容"""
+        from src.llm.gateway import llm_gateway
+
+        system_prompt = (
+            "你是一个专业的内容生成助手。请严格遵循用户指令生成高质量内容。\n"
+            "规则：\n"
+            "1. 直接输出最终内容，不要添加说明性文字\n"
+            "2. 确保输出符合指定的文件格式要求\n"
+            "3. 内容必须完整，不要截断或使用省略号\n"
+        )
+
+        type_guidance = {
+            "report": "\n你是一个专业的报告撰写专家。请生成结构清晰的专业报告。",
+            "article": "\n你是一个资深的内容创作者。请撰写高质量的内容。",
+            "email": "\n你是一个专业的商务邮件撰写专家。请撰写专业、自然的商务邮件。",
+            "market_report": "\n你是一个专业的市场分析师。请生成专业的市场分析报告。",
+            "outline": "\n你是一个专业的内容策划师。请生成结构清晰的大纲。",
+        }
+
+        if content_type in type_guidance:
+            system_prompt += type_guidance[content_type]
+
+        language_map = {
+            "zh": "请使用简体中文",
+            "en": "Please respond in English",
+            "ru": "Пожалуйста, отвечайте на русском языке",
+            "de": "Bitte antworten Sie auf Deutsch",
+            "ja": "日本語でお答えください",
+            "ko": "한국어로 답변해 주세요",
+            "es": "Por favor responda en español",
+        }
+        if language in language_map:
+            system_prompt += f"。{language_map[language]}。"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        response = await llm_gateway.chat(
+            messages=messages, temperature=0.7, max_tokens=4096
+        )
+
+        if isinstance(response, dict):
+            return response.get("content", "")
+        return str(response)
+
+    def _validate_content(self, content: str, suffix: str) -> tuple:
+        """校验生成内容是否符合文件后缀要求的格式"""
+        if suffix in (".html", ".htm"):
+            content_lower = content.lower().strip()
+            if not (
+                "<html" in content_lower
+                or "<!doctype" in content_lower
+                or "<body" in content_lower
+            ):
+                return False, "生成内容不是有效的 HTML（缺少 <html> 或 <!DOCTYPE> 标签）"
+        elif suffix == ".json":
+            try:
+                json.loads(content)
+            except json.JSONDecodeError:
+                return False, "生成内容不是有效的 JSON"
+        elif suffix == ".csv":
+            if "," not in content and "\t" not in content:
+                return False, "生成内容不像是 CSV 格式（未检测到分隔符）"
+        return True, ""
+
     def _register_download(
         self, file_path: Path, display_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -273,7 +369,10 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
         }
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        content = kwargs.get("content", "")
+        content = kwargs.get("content")
+        generate_prompt = kwargs.get("generate_prompt")
+        content_type = kwargs.get("content_type") or ""
+        language = kwargs.get("language") or "zh"
         file_path = kwargs.get("file_path")
         file_extension = kwargs.get("file_extension")
         encoding = kwargs.get("encoding") or "utf-8"
@@ -281,20 +380,19 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
         register_download = kwargs.get("register_download", True)
         display_name = kwargs.get("display_name")
 
-        # 1. 参数校验
-        if not content:
-            return {"success": False, "error": "未提供文件内容"}
+        # 1. 参数互斥：content 优先
+        use_generation = False
+        if content:
+            # 直接写入模式
+            pass
+        elif generate_prompt:
+            # 内部生成模式
+            use_generation = True
+        else:
+            return {"success": False, "error": "未提供文件内容（content 和 generate_prompt 至少提供一个）"}
 
-        # 2. 内容大小检查
-        content_size = len(content.encode(encoding))
-        if content_size > 10 * 1024 * 1024:
-            return {
-                "success": False,
-                "error": f"文件内容过大 ({content_size} 字节)，上限 10MB",
-            }
-
+        # 2. 路径解析
         try:
-            # 3. 路径解析
             if file_path:
                 path = self._resolve_and_validate_path(file_path)
             else:
@@ -304,26 +402,48 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
                 fd, temp_path = tempfile.mkstemp(suffix=f".{ext}", prefix="agent_")
                 os.close(fd)
                 path = Path(temp_path)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
 
-            # 4. 后缀检查
-            suffix = path.suffix.lower()
-            if suffix in FORBIDDEN_EXTENSIONS:
-                if not file_path and path.exists():
-                    path.unlink(missing_ok=True)
-                return {"success": False, "error": f"不允许生成 {suffix} 类型的文件"}
+        # 3. 后缀检查
+        suffix = path.suffix.lower()
+        if suffix in FORBIDDEN_EXTENSIONS:
+            if not file_path and path.exists():
+                path.unlink(missing_ok=True)
+            return {"success": False, "error": f"不允许生成 {suffix} 类型的文件"}
 
-            if suffix not in TEXT_EXTENSIONS:
-                logger.warning(f"文件后缀 {suffix} 不在文本白名单中，将以纯文本写入")
+        if suffix not in TEXT_EXTENSIONS:
+            logger.warning(f"文件后缀 {suffix} 不在文本白名单中，将以纯文本写入")
 
-            # 5. 覆盖检查
-            if file_path and path.exists() and not overwrite:
+        # 4. 覆盖检查
+        if file_path and path.exists() and not overwrite:
+            return {
+                "success": False,
+                "error": f"文件已存在: {path}。如需覆盖请设置 overwrite=True",
+            }
+
+        try:
+            # 5. 内部生成模式：调 LLM 生成内容
+            if use_generation:
+                generated_content = await self._generate_with_retry(
+                    generate_prompt, content_type, language, suffix
+                )
+                if generated_content is None:
+                    # 生成失败，_generate_with_retry 已记录错误
+                    return {"success": False, "error": "内容生成失败，请检查 generate_prompt 或稍后重试"}
+                content = generated_content
+                logger.info(f"内容生成成功: {len(content)} 字符")
+
+            # 6. 内容大小检查
+            content_size = len(content.encode(encoding))
+            if content_size > 10 * 1024 * 1024:
                 return {
                     "success": False,
-                    "error": f"文件已存在: {path}。如需覆盖请设置 overwrite=True",
+                    "error": f"文件内容过大 ({content_size} 字节)，上限 10MB",
                 }
 
-            # 6. JSON 格式校验
-            if suffix == ".json":
+            # 7. JSON 格式校验（直接写入模式）
+            if suffix == ".json" and not use_generation:
                 try:
                     json.loads(content)
                 except json.JSONDecodeError as e:
@@ -331,14 +451,14 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
                         path.unlink(missing_ok=True)
                     return {"success": False, "error": f"JSON 格式错误: {e}"}
 
-            # 7. 创建目录并写入文件
+            # 8. 创建目录并写入文件
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding=encoding)
 
             file_size = path.stat().st_size
             logger.info(f"文件已生成: {path} ({file_size} bytes)")
 
-            # 8. 构建返回结果
+            # 9. 构建返回结果
             result = {
                 "success": True,
                 "file_path": str(path),
@@ -346,10 +466,10 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
                 "file_size": file_size,
                 "encoding": encoding,
                 "is_temp": not bool(file_path),
-                "message": f"文件已生成: {path.name}",
+                "message": f"文件已生成: {path.name}" + (" (内部生成)" if use_generation else ""),
             }
 
-            # 9. 注册到下载系统
+            # 10. 注册到下载系统
             if register_download:
                 download_info = self._register_download(path, display_name)
                 if download_info.get("success"):
@@ -367,3 +487,40 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
         except Exception as e:
             logger.error(f"生成文件失败: {e}")
             return {"success": False, "error": f"生成文件失败: {str(e)}"}
+
+    async def _generate_with_retry(
+        self, prompt: str, content_type: str, language: str, suffix: str
+    ) -> Optional[str]:
+        """带格式校验和重试的内容生成"""
+        max_retries = 1
+        current_prompt = prompt
+
+        for attempt in range(max_retries + 1):
+            try:
+                generated = await self._generate_content(
+                    current_prompt, content_type, language
+                )
+            except Exception as e:
+                logger.error(f"LLM 内容生成异常 (attempt {attempt}): {e}")
+                return None
+
+            if not generated.strip():
+                logger.warning(f"LLM 返回空内容 (attempt {attempt})")
+                return None
+
+            valid, error_msg = self._validate_content(generated, suffix)
+            if valid:
+                return generated
+
+            if attempt < max_retries:
+                current_prompt = (
+                    f"{prompt}\n\n【注意】上次生成的内容格式不正确：{error_msg}。"
+                    f"请确保输出符合 {suffix} 格式要求。"
+                )
+                logger.warning(f"内容格式校验失败，正在重试: {error_msg}")
+            else:
+                logger.error(f"内容格式校验失败（已重试）: {error_msg}")
+                # 校验失败但仍返回内容，让调用方决定
+                return generated
+
+        return None
