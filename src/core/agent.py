@@ -1548,8 +1548,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 await send_progress("✅ 任务完成，正在生成回复...")
 
                 # Yield the final response
-                if content:
-                    yield content
+                # DeepSeek 思考模式下 content 可能为空，但 reasoning_content 有内容
+                yield_content = content or reasoning or ""
+                if yield_content:
+                    yield yield_content
                 break
             
             # Add assistant message with tool calls to history
