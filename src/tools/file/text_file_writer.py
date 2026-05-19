@@ -194,17 +194,29 @@ file_path 可选：不提供时自动写入系统临时目录并通过 file_exte
         return base
 
     def _resolve_and_validate_path(self, file_path: str) -> Path:
-        """解析并验证文件路径，兼容 Windows 和 Linux"""
-        p = Path(file_path)
+        """解析并验证文件路径，兼容 Windows 和 Linux
 
-        if ".." in p.parts:
-            raise ValueError("文件路径不允许包含 '..'")
+        先将相对路径挂在允许的输出目录下，再解析规范化，
+        最后检查最终路径是否在允许范围内，防止目录穿越攻击。
+        """
+        p = Path(file_path)
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        allowed_base = (project_root / "storage" / "output").resolve()
 
         if not p.is_absolute():
-            project_root = Path(__file__).resolve().parent.parent.parent.parent
-            p = project_root / "storage" / "output" / p
+            p = allowed_base / p
 
+        # resolve() 会规范化 .. 和符号链接，得到最终的真实路径
         p = p.resolve()
+
+        # 安全检查：确保解析后的路径在允许的输出目录内
+        try:
+            p.relative_to(allowed_base)
+        except ValueError:
+            raise ValueError(
+                f"文件路径超出允许范围，文件只能生成在 {allowed_base} 目录下。"
+                f"请使用不含 '..' 的相对路径，如 'report.md' 或 'output/report.md'"
+            )
 
         filename = p.name
         forbidden_chars = set('<>:"|?*\0')
