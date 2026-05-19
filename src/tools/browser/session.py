@@ -1,10 +1,11 @@
 """浏览器会话管理
 
-管理 BrowserSession 实例的生命周期。
+管理 BrowserSession 实例的生命周期，同时保存浏览器任务的上下文信息，
+支持多轮交互（如登录验证码流程）。
 """
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -74,8 +75,42 @@ class BrowserSession:
         return self.browser is not None and self.page is not None
 
 
+class BrowserTaskContext:
+    """浏览器任务上下文，用于在多轮交互之间保存状态"""
+
+    def __init__(self):
+        self.task: str = ""
+        self.steps: List[Dict[str, Any]] = []
+        self.ask_user_question: str = ""
+        self.collected_content: List[str] = []
+        self.last_url: Optional[str] = None
+        self.same_url_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task": self.task,
+            "steps": self.steps,
+            "ask_user_question": self.ask_user_question,
+            "collected_content": self.collected_content,
+            "last_url": self.last_url,
+            "same_url_count": self.same_url_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "BrowserTaskContext":
+        ctx = cls()
+        ctx.task = data.get("task", "")
+        ctx.steps = data.get("steps", [])
+        ctx.ask_user_question = data.get("ask_user_question", "")
+        ctx.collected_content = data.get("collected_content", [])
+        ctx.last_url = data.get("last_url")
+        ctx.same_url_count = data.get("same_url_count", 0)
+        return ctx
+
+
 # 全局浏览器会话管理
 _browser_sessions: Dict[str, BrowserSession] = {}
+_browser_task_contexts: Dict[str, BrowserTaskContext] = {}
 
 
 def get_browser_session(session_id: str, headless: Optional[bool] = None) -> BrowserSession:
@@ -92,6 +127,8 @@ def close_browser_session(session_id: str):
         if session.is_running():
             asyncio.create_task(session.close())
         del _browser_sessions[session_id]
+    if session_id in _browser_task_contexts:
+        del _browser_task_contexts[session_id]
 
 
 def has_browser_session(session_id: str) -> bool:
@@ -102,3 +139,19 @@ def has_browser_session(session_id: str) -> bool:
 def get_all_session_ids() -> list:
     """获取所有活跃会话 ID"""
     return list(_browser_sessions.keys())
+
+
+def save_task_context(session_id: str, context: BrowserTaskContext):
+    """保存浏览器任务上下文"""
+    _browser_task_contexts[session_id] = context
+
+
+def get_task_context(session_id: str) -> Optional[BrowserTaskContext]:
+    """获取浏览器任务上下文"""
+    return _browser_task_contexts.get(session_id)
+
+
+def clear_task_context(session_id: str):
+    """清除浏览器任务上下文"""
+    if session_id in _browser_task_contexts:
+        del _browser_task_contexts[session_id]
