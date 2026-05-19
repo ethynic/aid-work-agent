@@ -1,108 +1,581 @@
 """
 PDF 生成模块
 
-使用 Pandoc + WeasyPrint 生成 PDF（支持 Markdown/HTML/DOCX → PDF）。
+使用 markdown + fpdf2 生成 PDF（Markdown/HTML → PDF）。
+纯 Python 实现，不依赖 Pandoc、LaTeX 或系统库。
 """
 
 import os
-import subprocess
+import re
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from src.tools.pdf.pdf_lib import PdfFileHandler
 
+# 蓝色主题色值
+_BLUE_PRIMARY = (41, 98, 168)       # #2962A8 主蓝色
+_BLUE_DARK = (25, 60, 110)          # #193C6E 深蓝（标题）
+_BLUE_HEADER_BG = (41, 98, 168)     # 表头背景
+_BLUE_HEADER_TEXT = (255, 255, 255) # 表头文字白色
+_STRIPE_BG = (235, 242, 250)        # 斑马纹浅蓝
+_BORDER_COLOR = (180, 200, 220)     # 边框浅蓝灰
 
-def _find_pandoc() -> str:
-    """查找 Pandoc 可执行文件路径。"""
-    # 复用 Word 工具已有的查找逻辑
+
+class _HtmlTableParser(HTMLParser):
+    """从 HTML 中提取 <table> 数据，返回非表格 HTML 片段和表格数据列表。"""
+
+    def __init__(self):
+        super().__init__()
+        self.fragments: List[Dict] = []
+        self._current_table: Optional[List[List[str]]] = None
+        self._current_row: Optional[List[str]] = None
+        self._current_cell: Optional[str] = None
+        self._non_table_html: List[str] = []
+        self._in_table = False
+        self._in_thead = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._in_table = True
+            self._current_table = []
+            return
+        if tag == "thead":
+            self._in_thead = True
+            return
+        if tag == "tbody":
+            return
+        if tag in ("tr",):
+            self._current_row = []
+            return
+        if tag in ("td", "th"):
+            self._current_cell = ""
+            return
+        # 非 table 内容中的标签
+        if not self._in_table:
+            attr_str = ""
+            for k, v in attrs:
+                attr_str += f' {k}="{v}"'
+            self._non_table_html.append(f"<{tag}{attr_str}>")
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            self._in_table = False
+            self._in_thead = False
+            if self._current_table:
+                self.fragments.append({"type": "table", "data": self._current_table})
+            self._current_table = None
+            return
+        if tag == "thead":
+            self._in_thead = False
+            return
+        if tag == "tbody":
+            return
+        if tag == "tr":
+            if self._current_row is not None:
+                if self._current_table is not None:
+                    self._current_table.append(self._current_row)
+            self._current_row = None
+            return
+        if tag in ("td", "th"):
+            if self._current_cell is not None and self._current_row is not None:
+                self._current_row.append(self._current_cell.strip())
+            self._current_cell = None
+            return
+        if not self._in_table:
+            self._non_table_html.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self._in_table:
+            if self._current_cell is not None:
+                self._current_cell += data
+        else:
+            self._non_table_html.append(data)
+
+    def get_result(self) -> List[Dict]:
+        """返回 [{type: "html", content: str}, {type: "table", data: [[...]]}, ...]"""
+        result = []
+        if self._non_table_html:
+            html_chunk = "".join(self._non_table_html).strip()
+            if html_chunk:
+                result.append({"type": "html", "content": html_chunk})
+            self._non_table_html = []
+        for frag in self.fragments:
+            result.append(frag)
+        return result
+
+
+def _split_html_by_tables(html: str) -> List[Dict]:
+    """将 HTML 拆分为交替的 HTML 片段和表格数据。"""
+    parser = _HtmlTableParser()
+    parser.feed(html)
+    result = parser.get_result()
+    # 处理末尾残留的非表格 HTML
+    if parser._non_table_html:
+        html_chunk = "".join(parser._non_table_html).strip()
+        if html_chunk:
+            result.append({"type": "html", "content": html_chunk})
+    return result
+
+
+def _strip_html_tags(text: str) -> str:
+    """移除简单的 HTML 标签，保留文本。"""
+    text = re.sub(r'<br\s*/?>', '\n', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'&amp;', '&', text)
+    text = re.sub(r'&lt;', '<', text)
+    text = re.sub(r'&gt;', '>', text)
+    return text.strip()
+
+
+def _preprocess_markdown(md_text: str) -> str:
+    """规范化 LLM 生成的 Markdown 文本，修复常见格式问题。"""
+    text = md_text
+    text = _fix_literal_newlines(text)
+    text = _ensure_block_spacing(text)
+    text = _fix_tables(text)
+    text = _close_code_fences(text)
+    text = _clean_control_chars(text)
+    return text
+
+
+def _fix_literal_newlines(text: str) -> str:
+    """将字面量 \\n（反斜杠+n）替换为真正的换行符，跳过代码块内部。"""
+    parts = re.split(r'(```.*?```)', text, flags=re.DOTALL)
+    for i in range(0, len(parts), 2):
+        parts[i] = parts[i].replace('\\n', '\n')
+    return ''.join(parts)
+
+
+def _ensure_block_spacing(text: str) -> str:
+    """确保标题、代码块、表格、分隔线前后有空行。"""
+    lines = text.split('\n')
+    result = []
+    prev_is_blank = True
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        is_block_start = bool(
+            re.match(r'^#{1,6}\s', stripped)
+            or re.match(r'^```', stripped)
+            or re.match(r'^[-*_]{3,}$', stripped)
+        )
+        is_table_row = stripped.startswith('|')
+        if is_table_row and not (result and result[-1].strip().startswith('|')):
+            is_block_start = True
+
+        if is_block_start and not prev_is_blank:
+            result.append('')
+
+        result.append(line)
+        prev_is_blank = (stripped == '')
+
+        if (re.match(r'^#{1,6}\s', stripped)
+                or re.match(r'^```', stripped)
+                or re.match(r'^[-*_]{3,}$', stripped)):
+            if i + 1 < len(lines) and lines[i + 1].strip():
+                result.append('')
+                prev_is_blank = True
+
+        i += 1
+
+    return '\n'.join(result)
+
+
+_SEPARATOR_RE = re.compile(r'^[\|\s\-:—–―]+$')
+
+
+def _fix_tables(text: str) -> str:
+    """修复表格：缺分隔行时自动补齐，列数不一致时补空单元格。"""
+    lines = text.split('\n')
+    result = []
+    i = 0
+
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        if stripped.startswith('|') and not _SEPARATOR_RE.match(stripped):
+            table_lines = [stripped]
+            j = i + 1
+
+            while j < len(lines) and lines[j].strip().startswith('|'):
+                table_lines.append(lines[j].strip())
+                j += 1
+
+            table_lines = _repair_table(table_lines)
+            result.extend(table_lines)
+            i = j
+        else:
+            result.append(lines[i])
+            i += 1
+
+    return '\n'.join(result)
+
+
+def _repair_table(table_lines: list) -> list:
+    """修复单个表格块。"""
+    if not table_lines:
+        return table_lines
+
+    header = table_lines[0]
+    header_cells = [c.strip() for c in header.strip('|').split('|')]
+    col_count = len(header_cells)
+
+    has_separator = (
+        len(table_lines) > 1
+        and _SEPARATOR_RE.match(table_lines[1].strip())
+    )
+
+    fixed = [table_lines[0]]
+    fixed.append('|' + '|'.join([' --- '] * col_count) + '|')
+
+    data_start = 2 if has_separator else 1
+    for row in table_lines[data_start:]:
+        if _SEPARATOR_RE.match(row.strip()):
+            continue
+        cells = [c.strip() for c in row.strip('|').split('|')]
+        if len(cells) < col_count:
+            cells.extend([''] * (col_count - len(cells)))
+        elif len(cells) > col_count:
+            cells = cells[:col_count]
+        fixed.append('|' + '|'.join(cells) + '|')
+
+    return fixed
+
+
+def _close_code_fences(text: str) -> str:
+    """自动闭合未关闭的代码块。"""
+    lines = text.split('\n')
+    fence_count = 0
+    for line in lines:
+        if re.match(r'^```', line.strip()):
+            fence_count += 1
+
+    if fence_count % 2 == 1:
+        lines.append('```')
+
+    return '\n'.join(lines)
+
+
+def _clean_control_chars(text: str) -> str:
+    """移除控制字符（保留换行和制表符）。"""
+    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+
+def _md_to_html(md_text: str) -> str:
+    """Markdown → HTML，使用 markdown 库。"""
+    import markdown
+
+    extensions = [
+        "tables",
+        "fenced_code",
+        "toc",
+        "smarty",
+        "sane_lists",
+    ]
+    return markdown.markdown(
+        md_text,
+        extensions=extensions,
+    )
+
+
+def _find_chinese_font() -> Optional[str]:
+    """查找系统中可用的中文字体文件路径。"""
+    import shutil
+
+    # Windows 常见中文字体路径
+    if os.name == 'nt':
+        win_dir = os.environ.get('WINDIR', r'C:\Windows')
+        candidates = [
+            os.path.join(win_dir, 'Fonts', 'msyh.ttc'),      # 微软雅黑
+            os.path.join(win_dir, 'Fonts', 'msyhbd.ttc'),     # 微软雅黑粗体
+            os.path.join(win_dir, 'Fonts', 'simhei.ttf'),     # 黑体
+            os.path.join(win_dir, 'Fonts', 'simsun.ttc'),     # 宋体
+            os.path.join(win_dir, 'Fonts', 'simfang.ttf'),    # 仿宋
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+
+    # Linux 常见路径
+    linux_candidates = [
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+    ]
+    for path in linux_candidates:
+        if os.path.exists(path):
+            return path
+
+    # macOS
+    mac_candidates = [
+        '/System/Library/Fonts/PingFang.ttc',
+        '/System/Library/Fonts/STHeiti Light.ttc',
+        '/Library/Fonts/Arial Unicode.ttf',
+    ]
+    for path in mac_candidates:
+        if os.path.exists(path):
+            return path
+
+    # 尝试 fc-list（Linux/macOS）
     try:
-        from src.tools.word.md_to_word import _find_pandoc as word_find_pandoc
-        return word_find_pandoc()
-    except (ImportError, AttributeError):
+        result = shutil.which('fc-list')
+        if result:
+            import subprocess
+            output = subprocess.check_output(
+                ['fc-list', ':lang=zh', 'file'],
+                stderr=subprocess.DEVNULL
+            ).decode('utf-8', errors='ignore')
+            for line in output.strip().split('\n'):
+                line = line.strip().rstrip(':')
+                if line and os.path.exists(line):
+                    return line
+    except Exception:
         pass
 
-    pandoc_path = os.environ.get("PANDOC_PATH", "")
-    if pandoc_path and Path(pandoc_path).exists():
-        return pandoc_path
-
-    import shutil
-    found = shutil.which("pandoc")
-    if found:
-        return found
-
-    raise FileNotFoundError("Pandoc 未安装或不在 PATH 中")
+    return None
 
 
-def _get_default_css() -> str:
-    """获取内置 CSS 样式文件路径。"""
-    css_path = os.path.join(os.path.dirname(__file__), "default.css")
-    return css_path if Path(css_path).exists() else ""
+def _init_pdf(title: str = "") -> tuple:
+    """初始化 FPDF 实例并注册中文字体，返回 (pdf, font_name)。"""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+
+    font_path = _find_chinese_font()
+    font_name = 'Helvetica'
+    if font_path:
+        pdf.add_font('zh', '', font_path, uni=True)
+        # 尝试注册粗体
+        bold_variants = [
+            font_path.replace('.ttc', 'bd.ttc').replace('.ttf', 'bd.ttf'),
+            font_path.replace('-Regular', '-Bold'),
+            font_path.replace('msyh.ttc', 'msyhbd.ttc'),
+            font_path.replace('simsun.ttc', 'simhei.ttf'),
+        ]
+        bold_registered = False
+        for bv in bold_variants:
+            if os.path.exists(bv):
+                pdf.add_font('zh', 'B', bv, uni=True)
+                bold_registered = True
+                break
+        if not bold_registered:
+            # 使用同字体模拟粗体
+            pdf.add_font('zh', 'B', font_path, uni=True)
+        font_name = 'zh'
+
+    pdf.set_font(font_name, size=11)
+    pdf.add_page()
+
+    # 文档标题 — 蓝色主题
+    if title:
+        pdf.set_font(font_name, 'B', size=18)
+        pdf.set_text_color(*_BLUE_DARK)
+        pdf.cell(0, 14, title, new_x="LMARGIN", new_y="NEXT", align='C')
+        # 蓝色分割线
+        pdf.set_draw_color(*_BLUE_PRIMARY)
+        pdf.set_line_width(0.8)
+        pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.w - pdf.r_margin, pdf.get_y() + 2)
+        pdf.ln(8)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font(font_name, size=11)
+
+    return pdf, font_name
+
+
+class _OddRowFillMode:
+    """自定义斑马纹：只填充奇数行（跳过表头行）。"""
+    @staticmethod
+    def should_fill_cell(i, j):
+        return i > 0 and i % 2 == 0
+
+
+def _render_table_native(pdf, font_name: str, table_data: List[List[str]]) -> None:
+    """用 fpdf2 原生 table API 渲染带样式的表格。"""
+    from fpdf.fonts import FontFace
+
+    if not table_data:
+        return
+
+    # 清理 HTML 标签
+    clean_data = []
+    for row in table_data:
+        clean_data.append([_strip_html_tags(cell) for cell in row])
+
+    # 表头样式：蓝色背景 + 白色粗体文字
+    headings_style = FontFace(
+        emphasis='B',
+        color=_BLUE_HEADER_TEXT,
+        fill_color=_BLUE_HEADER_BG,
+    )
+
+    pdf.set_font(font_name, size=10)
+    pdf.set_draw_color(*_BORDER_COLOR)
+    pdf.set_line_width(0.3)
+
+    num_cols = len(clean_data[0]) if clean_data else 0
+    if num_cols == 0:
+        return
+
+    with pdf.table(
+        headings_style=headings_style,
+        cell_fill_color=_STRIPE_BG,
+        cell_fill_mode=_OddRowFillMode(),
+        borders_layout="HORIZONTAL_LINES",
+        text_align="LEFT",
+        padding=(4, 4, 3, 4),
+        line_height=1.4 * pdf.font_size,
+    ) as table:
+        for i, row_data in enumerate(clean_data):
+            row = table.row()
+            for j, cell_text in enumerate(row_data):
+                if j >= num_cols:
+                    break
+                row.cell(cell_text)
+
+    pdf.ln(4)
+
+
+def _render_html_content(pdf, font_name: str, html: str) -> None:
+    """用 fpdf2 原生 API + write_html 渲染非表格 HTML 内容，蓝色主题。
+
+    策略：提取 h1~h3 和 p 标签用原生 API 渲染（保证蓝色主题），
+    其余内容（列表、代码块等）用 write_html 兜底。
+    """
+    # 按 block 级标签拆分 HTML
+    blocks = re.split(r'(<(?:h[1-6]|p)\b[^>]*>.*?</(?:h[1-6]|p)>)', html, flags=re.DOTALL)
+
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
+
+        # 检测 h1~h6 标签
+        h_match = re.match(r'<(h[1-6])\b[^>]*>(.*?)</\1>', block, re.DOTALL)
+        if h_match:
+            level = int(h_match.group(1)[1])
+            text = _strip_html_tags(h_match.group(2))
+            if not text:
+                continue
+            sizes = {1: 18, 2: 14, 3: 12, 4: 11, 5: 11, 6: 10}
+            pdf.set_font(font_name, 'B', size=sizes.get(level, 11))
+            pdf.set_text_color(*_BLUE_PRIMARY)
+            pdf.multi_cell(0, sizes.get(level, 11) * 0.7, text, new_x="LMARGIN", new_y="NEXT")
+            # h2 加底部蓝色线条
+            if level == 2:
+                pdf.set_draw_color(*_BLUE_PRIMARY)
+                pdf.set_line_width(0.5)
+                pdf.line(pdf.l_margin, pdf.get_y() + 1, pdf.w - pdf.r_margin, pdf.get_y() + 1)
+                pdf.ln(3)
+            else:
+                pdf.ln(2)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font(font_name, size=11)
+            continue
+
+        # 检测 p 标签
+        p_match = re.match(r'<p\b[^>]*>(.*?)</p>', block, re.DOTALL)
+        if p_match:
+            inner = p_match.group(1)
+            text = _strip_html_tags(inner)
+            if not text:
+                continue
+            # 检查是否包含 <strong>（加粗关键词）
+            if '<strong>' in inner:
+                _render_rich_paragraph(pdf, font_name, inner)
+            else:
+                pdf.set_font(font_name, size=11)
+                pdf.set_text_color(0, 0, 0)
+                pdf.multi_cell(0, 6.5, text, new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(2)
+            continue
+
+        # 其余内容（ul/ol/li/pre/blockquote 等）用 write_html 兜底
+        pdf.set_font(font_name, size=11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.write_html(block, table_line_separators=False)
+        pdf.ln(2)
+
+
+def _render_rich_paragraph(pdf, font_name: str, html_inner: str) -> None:
+    """渲染包含 <strong> 标签的段落，加粗部分用蓝色。"""
+    # 按 <strong>...</strong> 拆分
+    parts = re.split(r'(<strong>.*?</strong>)', html_inner, flags=re.DOTALL)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font(font_name, size=11)
+
+    for part in parts:
+        strong_match = re.match(r'<strong>(.*?)</strong>', part, re.DOTALL)
+        if strong_match:
+            text = _strip_html_tags(strong_match.group(1))
+            pdf.set_font(font_name, 'B', size=11)
+            pdf.set_text_color(*_BLUE_DARK)
+            pdf.write(6.5, text)
+            pdf.set_font(font_name, size=11)
+            pdf.set_text_color(0, 0, 0)
+        else:
+            text = _strip_html_tags(part)
+            if text:
+                pdf.write(6.5, text)
+
+    pdf.ln(8)
+
+
+def _create_pdf_with_html(html_body: str, output_path: str, title: str = "") -> None:
+    """使用 fpdf2 从 HTML 内容生成 PDF，表格用原生 API 渲染。"""
+    pdf, font_name = _init_pdf(title)
+
+    # 将 HTML 拆分为：普通 HTML 片段 + 表格数据
+    parts = _split_html_by_tables(html_body)
+
+    for part in parts:
+        if part["type"] == "html":
+            _render_html_content(pdf, font_name, part["content"])
+        elif part["type"] == "table":
+            _render_table_native(pdf, font_name, part["data"])
+
+    pdf.output(output_path)
 
 
 def md_to_pdf(md_text: str, output_name: Optional[str] = None,
               css: Optional[str] = None, title: str = "") -> Dict[str, Any]:
-    """Markdown → PDF，通过 Pandoc + WeasyPrint。
+    """Markdown → PDF，通过 markdown + fpdf2。
 
     Args:
         md_text: Markdown 文本内容
         output_name: 输出文件名
-        css: 自定义 CSS 文件路径
+        css: 自定义 CSS 文件路径（保留参数兼容接口）
         title: 文档标题
 
     Returns:
         {"success": True, "file_path": str, "file_size": int}
     """
-    # 复用 Word 工具的 markdown 预处理逻辑
     try:
-        from src.tools.word.md_to_word import normalize_markdown
-        md_text = normalize_markdown(md_text)
-    except ImportError:
-        pass
+        # 预处理 Markdown
+        cleaned_md = _preprocess_markdown(md_text)
 
-    try:
+        # Markdown → HTML
+        body_html = _md_to_html(cleaned_md)
+
+        # fpdf2 → PDF
         with tempfile.TemporaryDirectory() as tmpdir:
-            input_path = os.path.join(tmpdir, "input.md")
             output_path = os.path.join(tmpdir, "output.pdf")
-
-            Path(input_path).write_text(md_text, encoding="utf-8")
-
-            cmd = [
-                _find_pandoc(),
-                input_path, "-o", output_path,
-                "-f", "markdown+pipe_tables+raw_html+autolink_bare_uris",
-                "--wrap=none",
-            ]
-
-            # 尝试使用 WeasyPrint 引擎
-            try:
-                import weasyprint  # noqa: F401
-                cmd.extend(["--pdf-engine=weasyprint"])
-            except ImportError:
-                pass
-
-            if title:
-                cmd.extend(["-V", f"title={title}"])
-
-            # CSS 样式
-            css_file = css or _get_default_css()
-            if css_file and Path(css_file).exists():
-                cmd.extend(["--css", css_file])
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            _create_pdf_with_html(body_html, output_path, title=title)
 
             if not Path(output_path).exists():
-                error_detail = result.stderr[:500] if result.stderr else "未知错误"
-                logger.error(f"[PdfWriter] md_to_pdf 失败: {error_detail}")
-                return {
-                    "success": False,
-                    "error": "PDF 生成失败",
-                    "debug": error_detail,
-                }
+                return {"success": False, "error": "PDF 生成失败：fpdf2 未输出文件"}
 
-            # 保存到会话目录
             save_result = PdfFileHandler.save_temp(
                 source_path=output_path,
                 file_name=output_name or "document.pdf",
@@ -110,48 +583,21 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
             save_result["success"] = True
             return save_result
 
-    except FileNotFoundError as e:
-        return {"success": False, "error": str(e)}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "PDF 生成超时（120秒）"}
     except Exception as e:
-        logger.error(f"[PdfWriter] md_to_pdf 异常: {e}", exc_info=True)
+        logger.error(f"[PdfWriter] md_to_pdf 失败: {e}", exc_info=True)
         return {"success": False, "error": f"生成PDF失败: {e}"}
 
 
-def html_to_pdf(html_text: str, output_name: Optional[str] = None) -> Dict[str, Any]:
-    """HTML → PDF。
-
-    优先使用 Pandoc 路径，失败时回退到 WeasyPrint 直接调用。
-    """
-    try:
-        return _html_to_pdf_via_pandoc(html_text, output_name)
-    except Exception:
-        return _html_to_pdf_via_weasyprint(html_text, output_name)
-
-
-def _html_to_pdf_via_pandoc(html_text: str, output_name: Optional[str] = None) -> Dict[str, Any]:
-    """通过 Pandoc 将 HTML 转为 PDF。"""
+def html_to_pdf(html_text: str, output_name: Optional[str] = None,
+                css: Optional[str] = None) -> Dict[str, Any]:
+    """HTML → PDF，使用 fpdf2。"""
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            input_path = os.path.join(tmpdir, "input.html")
             output_path = os.path.join(tmpdir, "output.pdf")
-
-            Path(input_path).write_text(html_text, encoding="utf-8")
-
-            cmd = [_find_pandoc(), input_path, "-o", output_path]
-
-            try:
-                import weasyprint  # noqa: F401
-                cmd.append("--pdf-engine=weasyprint")
-            except ImportError:
-                pass
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            _create_pdf_with_html(html_text, output_path)
 
             if not Path(output_path).exists():
-                error_detail = result.stderr[:500] if result.stderr else "未知错误"
-                raise RuntimeError(f"Pandoc HTML→PDF 失败: {error_detail}")
+                return {"success": False, "error": "PDF 生成失败：fpdf2 未输出文件"}
 
             save_result = PdfFileHandler.save_temp(
                 source_path=output_path,
@@ -160,31 +606,8 @@ def _html_to_pdf_via_pandoc(html_text: str, output_name: Optional[str] = None) -
             save_result["success"] = True
             return save_result
 
-    except FileNotFoundError as e:
-        raise RuntimeError(str(e))
-
-
-def _html_to_pdf_via_weasyprint(html_text: str, output_name: Optional[str] = None) -> Dict[str, Any]:
-    """直接使用 WeasyPrint 将 HTML 转为 PDF（Pandoc 路径的备选）。"""
-    try:
-        from weasyprint import HTML
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = os.path.join(tmpdir, "output.pdf")
-
-            HTML(string=html_text).write_pdf(output_path)
-
-            save_result = PdfFileHandler.save_temp(
-                source_path=output_path,
-                file_name=output_name or "document.pdf",
-            )
-            save_result["success"] = True
-            return save_result
-
-    except ImportError:
-        return {"success": False, "error": "WeasyPrint 未安装，无法生成 PDF"}
     except Exception as e:
-        logger.error(f"[PdfWriter] WeasyPrint 转换失败: {e}", exc_info=True)
+        logger.error(f"[PdfWriter] html_to_pdf 失败: {e}", exc_info=True)
         return {"success": False, "error": f"HTML转PDF失败: {e}"}
 
 
@@ -213,6 +636,7 @@ def docx_to_pdf(file_path: str, output_name: Optional[str] = None) -> Dict[str, 
 def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = None) -> Dict[str, Any]:
     """通过 LibreOffice 将 DOCX 转为 PDF。"""
     import shutil
+    import subprocess
 
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
@@ -226,7 +650,6 @@ def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = No
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
-            # LibreOffice 输出文件名与输入文件名相同，扩展名改为 .pdf
             pdf_name = Path(file_path).stem + ".pdf"
             output_path = os.path.join(tmpdir, pdf_name)
 
@@ -248,12 +671,19 @@ def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = No
 
 
 def _docx_to_pdf_via_pandoc(file_path: str, output_name: Optional[str] = None) -> Dict[str, Any]:
-    """通过 Pandoc 将 DOCX 转为 PDF。"""
+    """通过 Pandoc 将 DOCX 转为 PDF（docx_to_pdf 的回退路径）。"""
+    import shutil
+    import subprocess
+
+    pandoc = shutil.which("pandoc")
+    if not pandoc:
+        return {"success": False, "error": "Pandoc 未安装"}
+
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "output.pdf")
 
-            cmd = [_find_pandoc(), file_path, "-o", output_path]
+            cmd = [pandoc, file_path, "-o", output_path]
 
             try:
                 import weasyprint  # noqa: F401
