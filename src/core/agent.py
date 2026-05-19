@@ -1360,6 +1360,7 @@ class Agent:
 
         # 设置工具的 user_id / tenant_id
         download_tool = None
+        file_write_tool = None
         if user:
             for tool_name in ("email_send", "email_read", "email_list_folders"):
                 tool = self.tool_registry.get_tool(tool_name)
