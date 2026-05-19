@@ -105,7 +105,7 @@
         v-if="previewType === 'html' && attachment?.file_id"
         :src="getFileUrl(attachment.file_id)"
         class="w-full h-full border-0"
-        sandbox="allow-same-origin"
+        sandbox="allow-same-origin allow-scripts"
         @load="loading = false"
       ></iframe>
 
