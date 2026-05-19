@@ -64,6 +64,12 @@ memory:
   short_term:
     max_messages: 100
     ttl: 3600
+  long_term:
+    enabled: true           # 是否启用长期记忆
+    storage_dir: "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下
+    summary_cron: "0 2 * * *"        # 每日自动总结执行时间
+    max_users_per_run: 50            # 单次总结最多处理用户数
+    max_inject_tokens: 2000          # 注入上下文的最大 token 数
   cleanup_interval: 300  # 过期会话清理间隔（秒），默认5分钟
 
 # Redis 配置

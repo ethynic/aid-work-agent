@@ -1511,6 +1511,10 @@ app.include_router(admin_reports.router)
 from src.api import admin_error_logs
 app.include_router(admin_error_logs.router)
 
+# 长期记忆 API
+from src.api import memory as memory_api
+app.include_router(memory_api.router)
+
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes

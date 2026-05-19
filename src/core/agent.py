@@ -13,6 +13,7 @@ The agent uses LLM for:
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -633,8 +634,8 @@ class Agent:
         if user:
             user_info_section = f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
 
-        # 长期记忆注入点（Phase 3 预留）
-        long_term_memory = ""
+        # 长期记忆注入：从用户记忆文件加载
+        long_term_memory = self._load_long_term_memory(user)
 
         if include_delegation:
             template_name = "master_agent.md"
@@ -719,7 +720,89 @@ class Agent:
             logger.warning(f"Failed to load extra.md from {extra_path}: {e}")
 
         return None
-    
+
+    def _load_long_term_memory(self, user: Optional[User] = None) -> str:
+        """
+        加载用户长期记忆，格式化为注入系统提示词的文本。
+
+        Returns:
+            格式化的记忆文本，或空字符串（未启用/无用户/无记忆时）
+        """
+        if not settings.memory.long_term.enabled:
+            return ""
+
+        if not user:
+            return ""
+
+        try:
+            tenant_id = self._get_effective_tenant_id()
+            from src.memory.long_term import LongTermMemory
+            ltm = LongTermMemory(storage_dir=settings.memory.long_term.storage_dir)
+            return ltm.get_memory_for_injection(
+                tenant_id=tenant_id,
+                user_id=user.user_id,
+                max_tokens=settings.memory.long_term.max_inject_tokens,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load long-term memory for user {user.user_id}: {e}")
+            return ""
+
+    def _get_effective_tenant_id(self) -> Optional[str]:
+        """获取当前有效的 tenant_id"""
+        tenant_id = self._init_tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                pass
+        return tenant_id
+
+    async def _handle_remember_intent(self, user_input: str, user: Optional[User]) -> None:
+        """
+        检测用户"记住"意图，将内容写入长期记忆文件。
+
+        支持的表达方式：帮我记住...、记住...、以后记住...、记一下...
+        """
+        if not settings.memory.long_term.enabled or not user:
+            return
+
+        # 检测"记住"类意图
+        remember_patterns = [
+            r'^帮我记住[：:\s]*(.+)',
+            r'^记住[：:\s]*(.+)',
+            r'^以后记住[：:\s]*(.+)',
+            r'^记一下[：:\s]*(.+)',
+            r'^请记住[：:\s]*(.+)',
+            r'^帮我记[：:\s]*(.+)',
+        ]
+
+        content_to_remember = None
+        for pattern in remember_patterns:
+            match = re.match(pattern, user_input.strip(), re.IGNORECASE)
+            if match:
+                content_to_remember = match.group(1).strip()
+                break
+
+        if not content_to_remember:
+            return
+
+        try:
+            tenant_id = self._get_effective_tenant_id()
+            from src.memory.long_term import LongTermMemory
+            ltm = LongTermMemory(storage_dir=settings.memory.long_term.storage_dir)
+
+            ltm.merge_memory(
+                tenant_id=tenant_id,
+                user_id=user.user_id,
+                new_sections={
+                    "用户明确要求记住的事项": [content_to_remember]
+                },
+            )
+            logger.info(f"Remembered for user {user.user_id}: {content_to_remember[:50]}")
+        except Exception as e:
+            logger.warning(f"Failed to save 'remember' intent: {e}")
+
     def _build_messages(
         self,
         session_id: str
@@ -1386,6 +1469,9 @@ class Agent:
                 enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
         
         self.memory.add(session_id, "user", enhanced_input)
+
+        # 检测用户"记住"意图，写入长期记忆
+        await self._handle_remember_intent(user_input, user)
 
         messages = self._build_messages(session_id)
         system_prompt = self._build_system_prompt(user)

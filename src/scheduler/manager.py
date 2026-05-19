@@ -70,7 +70,55 @@ class ScheduledTaskManager:
 
         self._scheduler.start()
         self._running = True
+
+        # 注册系统级定时任务：每日记忆总结
+        self._register_system_jobs()
+
         logger.info(f"后端日志：定时任务调度器已启动，已注册 {registered_count} 个活跃任务")
+
+    def _register_system_jobs(self):
+        """注册系统级定时任务"""
+        try:
+            from src.config.settings import settings
+            if not settings.memory.long_term.enabled:
+                return
+
+            cron_expr = settings.memory.long_term.summary_cron or "0 2 * * *"
+            parts = cron_expr.split()
+            trigger = CronTrigger(
+                minute=parts[0] if len(parts) > 0 else "0",
+                hour=parts[1] if len(parts) > 1 else "2",
+                day=parts[2] if len(parts) > 2 else "*",
+                month=parts[3] if len(parts) > 3 else "*",
+                day_of_week=parts[4] if len(parts) > 4 else "*",
+                timezone="Asia/Shanghai",
+            )
+            self._scheduler.add_job(
+                self._run_memory_summarizer,
+                trigger,
+                id="job_system_memory_summarizer",
+                name="Daily Memory Summarizer",
+                max_instances=1,
+            )
+            logger.info(f"后端日志：已注册每日记忆总结任务 (cron={cron_expr})")
+        except Exception as e:
+            logger.error(f"后端日志：注册记忆总结任务失败: {e}")
+
+    def _run_memory_summarizer(self):
+        """执行每日记忆总结（APScheduler 回调）"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            from src.memory.memory_summarizer import run_memory_summarization
+            stats = loop.run_until_complete(run_memory_summarization())
+            logger.info(f"后端日志：每日记忆总结完成: {stats}")
+        except Exception as e:
+            logger.error(f"后端日志：每日记忆总结失败: {e}", exc_info=True)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
 
     def shutdown(self):
         """优雅关闭"""

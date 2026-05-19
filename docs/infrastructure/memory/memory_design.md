@@ -1,6 +1,10 @@
 # 记忆系统设计文档
 
-> 版本: v1.5 | 最后更新: 2026-05-19 | 状态: Phase 3 已完成（前端页面待实现）
+> 版本: v1.5 | 最后更新: 2026-05-19 | 状态: Phase 3 已完成
+>
+> v1.5 变更：Phase 3 长期记忆已实现；每日总结对话上下文精简，仅保留用户问题+助手最终回答，去除工具调用中间信息
+> v1.4 变更：长期记忆存储路径增加租户隔离，`storage/memory/{tenant_id}/memory_{user_id}.md`
+> v1.4 变更：长期记忆存储路径增加租户隔离，`storage/memory/{tenant_id}/memory_{user_id}.md`
 
 ## 1. 现状分析
 
@@ -12,7 +16,7 @@
 |------|------|----------|----------|
 | 短期记忆 (Short-Term) | 已实现 | 进程内 `deque` 滑动窗口 | `src/memory/short_term.py` |
 | 中期记忆 (Conversation Summary) | 仅有数据模型 | 进程内 `dict`（未持久化） | `src/memory/models.py` |
-| 长期记忆 (User Preference) | 仅有数据模型 | 进程内 `dict`（未持久化） | `src/memory/models.py` |
+| 长期记忆 (User Preference) | ✅ 已实现 | MD 文件（`storage/memory/{tenant_id}/memory_{user_id}.md`） | `src/memory/long_term.py` |
 
 ### 1.2 现有代码结构
 
@@ -46,16 +50,16 @@ memory:
 
 ## 2. 问题清单
 
-| # | 问题 | 严重程度 | 影响 |
-|---|------|----------|------|
-| P1 | 恢复历史会话时，Agent 的 ShortTermMemory 为空，无法感知之前的对话内容。聊天记录虽已持久化到数据库（前端可查看），但 Agent 不会从中加载上下文 | 高 | 用户在历史会话中继续聊天时，Agent 不了解之前的对话，相当于在一个旧会话中开始新聊天 |
-| P2 | MemoryManager 未接入生产代码 | 高 | 三层架构仅第一层生效 |
-| P3 | Agent 使用硬编码默认值(100条)，未读取配置(10条) | 中 | 配置不生效，行为不可预期 |
-| P4 | Agent 和 DialogManager 各自创建独立实例 | 中 | 数据不互通，上下文割裂 |
-| P5 | `get_relevant_context(query)` 的 query 参数未使用 | 中 | 无语义检索能力 |
-| P6 | 重要性衰减机制 `decay_importance()` 未启用 | 低 | 记忆无法按重要性管理 |
-| P7 | 无记忆管理 API | 低 | 运维无法查看/管理会话状态 |
-| P8 | TTL 仅依赖惰性清理，过期会话可能不被释放 | 低 | 潜在内存泄漏 |
+| # | 问题 | 严重程度 | 状态 | 备注 |
+|---|------|----------|------|------|
+| P1 | 恢复历史会话时，Agent 的 ShortTermMemory 为空 | 高 | ✅ 已修复 | `process_message()` 每次从 DB 加载历史（agent.py:1241-1276） |
+| P2 | MemoryManager 未接入生产代码 | 高 | ✅ 已修复 | Agent 使用 `MemoryManager`（agent.py:127-130） |
+| P3 | Agent 使用硬编码默认值，未读取配置 | 中 | ✅ 已修复 | 从 `settings.memory.short_term.max_messages` 读取 |
+| P4 | Agent 和 DialogManager 各自创建独立实例 | 中 | ✅ 已修复 | DialogManager 为死代码，已标注未投入使用 |
+| P5 | `get_relevant_context(query)` 的 query 参数未使用 | 中 | ❌ 未修复 | 等待 Phase 4 语义检索能力 |
+| P6 | 重要性衰减机制 `decay_importance()` 未启用 | 低 | ❌ 未修复 | 低优先级，后续按需启用 |
+| P7 | 无记忆管理 API | 低 | ❌ 未修复 | 计划在 Phase 3（长期记忆 API）中一并实现 |
+| P8 | TTL 仅依赖惰性清理，过期会话可能不被释放 | 低 | ✅ 已修复 | 后台任务 `_memory_cleanup_loop()` 每 300s 清理（main.py:256-268） |
 
 ---
 
@@ -63,12 +67,13 @@ memory:
 
 ---
 
-### Phase 1: 修复现有问题
+### Phase 1: 修复现有问题 ✅ 已完成
 
 > 目标：消除已知缺陷，统一架构，为后续扩展铺路
 > 预计工期：1-2 天
+> 状态：**已完成**（2026-05）
 
-#### 任务 1.1: 统一配置来源
+#### 任务 1.1: 统一配置来源 ✅
 
 **问题**: Agent 直接调用 `ShortTermMemory()` 使用硬编码默认值(100条/3600s)，而配置文件设为10条。
 
@@ -82,12 +87,12 @@ memory:
 - `src/core/dialog_manager.py` — DialogManager.__init__ 中 memory 初始化
 
 **验收标准**:
-- [ ] Agent 的 ShortTermMemory max_messages 与 config.yaml 一致
-- [ ] 修改 config.yaml 中的 max_messages 后，Agent 行为随之变化
+- [x] Agent 的 ShortTermMemory max_messages 与 config.yaml 一致
+- [x] 修改 config.yaml 中的 max_messages 后，Agent 行为随之变化
 
 ---
 
-#### 任务 1.2: 消除双实例问题
+#### 任务 1.2: 消除双实例问题 ✅
 
 **问题**: Agent 和 DialogManager 各自创建独立的 ShortTermMemory，数据不互通。
 
@@ -101,12 +106,12 @@ memory:
 - `src/core/dialog_manager.py`
 
 **验收标准**:
-- [ ] 明确 Agent 和 DialogManager 各自 memory 的职责
-- [ ] 消除不必要的重复实例
+- [x] 明确 Agent 和 DialogManager 各自 memory 的职责
+- [x] 消除不必要的重复实例（DialogManager 为死代码，已标注未投入使用）
 
 ---
 
-#### 任务 1.3: 将 MemoryManager 接入生产流程
+#### 任务 1.3: 将 MemoryManager 接入生产流程 ✅
 
 **问题**: MemoryManager 已实现但从未被使用，Agent 直接操作 ShortTermMemory。
 
@@ -126,13 +131,13 @@ memory:
 - 现有技能上下文压缩逻辑必须继续正常工作
 
 **验收标准**:
-- [ ] 所有现有测试通过
-- [ ] Agent 通过 MemoryManager 操作短期记忆
-- [ ] 子智能体和技能工具正常工作
+- [x] 所有现有测试通过
+- [x] Agent 通过 MemoryManager 操作短期记忆
+- [x] 子智能体和技能工具正常工作
 
 ---
 
-#### 任务 1.4: 增加主动清理机制
+#### 任务 1.4: 增加主动清理机制 ✅
 
 **问题**: TTL 过期仅依赖惰性清理（get_context 时检查），无活跃请求的会话永远不会被清理。
 
@@ -148,16 +153,16 @@ memory:
 - `src/main.py` — 注册定时任务（如需要）
 
 **验收标准**:
-- [ ] 过期会话在 5 分钟内被主动清理
-- [ ] MemoryManager.get_stats() 准确反映当前活跃会话数
+- [x] 过期会话在 5 分钟内被主动清理
+- [x] MemoryManager.get_stats() 准确反映当前活跃会话数
 
 ---
 
-### Phase 2: 短期记忆修复 & 中期记忆 — 会话内上下文压缩
+### Phase 2: 短期记忆修复 & 中期记忆 — 会话内上下文压缩（部分完成）
 
 > 目标：(1) 修复短期记忆的已知问题；(2) 当单次会话历史过长时，自动压缩总结早期对话，控制上下文长度
 > 预计工期：3-5 天
-> 前置条件：Phase 1 完成
+> 状态：短期记忆修复已完成（2.1.x），中期记忆压缩未实现（2.2.x）
 
 #### 设计理念
 
@@ -180,9 +185,9 @@ memory:
 
 ---
 
-#### 2.1 短期记忆问题修复
+#### 2.1 短期记忆问题修复 ✅ 已完成
 
-##### 任务 2.1.1: 会话恢复时加载历史消息到 Agent
+##### 任务 2.1.1: 会话恢复时加载历史消息到 Agent ✅
 
 **问题**: 用户恢复历史会话时，前端能显示历史消息，但 Agent 的 `ShortTermMemory` 是空的。Agent 完全不知道之前的对话内容。
 
@@ -208,13 +213,13 @@ memory:
 - 加载的总量不超过 `max_messages`
 
 **验收标准**:
-- [ ] 用户恢复历史会话后发送新消息，Agent 能感知之前的对话
-- [ ] 只在首次进入空 session 时加载，不重复加载
-- [ ] 加载的历史消息数量不超过 `max_messages`
+- [x] 用户恢复历史会话后发送新消息，Agent 能感知之前的对话
+- [x] 只在首次进入空 session 时加载，不重复加载
+- [x] 加载的历史消息数量不超过 `max_messages`
 
 ---
 
-##### 任务 2.1.2: 历史消息中的附件信息保留
+##### 任务 2.1.2: 历史消息中的附件信息保留 ✅
 
 **问题**: 历史消息中的附件信息（文件路径）在恢复会话后丢失，Agent 不知道用户之前上传过什么文件。
 
@@ -234,12 +239,12 @@ memory:
 - 摘要压缩时也应保留附件路径信息（见任务 2.2）
 
 **验收标准**:
-- [ ] 从 DB 恢复的消息中包含附件路径信息
-- [ ] Agent 在后续对话中能引用之前上传的文件
+- [x] 从 DB 恢复的消息中包含附件路径信息
+- [x] Agent 在后续对话中能引用之前上传的文件
 
 ---
 
-##### 任务 2.1.3: 统一 ShortTermMemory 的 max_messages 配置
+##### 任务 2.1.3: 统一 ShortTermMemory 的 max_messages 配置 ✅
 
 **问题**: 配置文件 `config.yaml` 设置 `max_messages: 10`，但 Agent 使用 `ShortTermMemory()` 默认值 100。
 
@@ -255,12 +260,12 @@ memory:
 - `src/core/dialog_manager.py` — 同步配置来源
 
 **验收标准**:
-- [ ] 所有 ShortTermMemory 实例的 max_messages 与配置一致
-- [ ] 配置值修改后重启服务生效
+- [x] 所有 ShortTermMemory 实例的 max_messages 与配置一致
+- [x] 配置值修改后重启服务生效
 
 ---
 
-#### 2.2 中期记忆 — 会话内上下文压缩
+#### 2.2 中期记忆 — 会话内上下文压缩 ❌ 未实现
 
 ##### 任务 2.2.1: 设计上下文压缩机制
 
@@ -360,11 +365,11 @@ mid_term:
 
 ---
 
-### Phase 3: 长期记忆 — 基于 Markdown 文件的用户记忆
+### Phase 3: 长期记忆 — 基于 Markdown 文件的用户记忆 ✅ 已完成
 
 > 目标：使用结构化 MD 文件持久化用户长期记忆，支持系统自动总结和用户手动编辑
 > 预计工期：5-7 天
-> 前置条件：Phase 1 完成（Phase 2 可并行）
+> 状态：**已完成**（2026-05）
 
 #### 设计理念
 
@@ -381,20 +386,30 @@ mid_term:
 **文件路径规则**:
 
 ```
-storage/memory/memory_{user_id}.md
+storage/memory/{tenant_id}/memory_{user_id}.md
 ```
 
 **目录结构**:
+
 ```
 storage/
   memory/
-    memory_user_a1b2c3d4e5f6.md
-    memory_user_f7g8h9i0j1k2.md
-    ...
+    tenant_abc123/
+      memory_user_a1b2c3d4e5f6.md
+      memory_user_f7g8h9i0j1k2.md
+      ...
+    tenant_def456/
+      memory_user_x1y2z3a4b5c6.md
+      ...
 ```
 
-> user_id 格式为项目已有的 `user_{uuid4_hex[:12]}`，如 `user_a1b2c3d4e5f6`。
+> `tenant_id` 为租户 ID（如 `tenant_abc123`），`user_id` 格式为 `user_{uuid4_hex[:12]}`。
+> 每个租户的用户记忆文件存放在独立子目录中，实现**租户级别的数据隔离**。
 > 存储路径遵循项目现有的 `storage/` 目录约定（参考 `storage/tenants/`）。
+>
+> **租户隔离说明**：
+> - 非租户用户（SaaS 模式禁用时）的 `tenant_id` 为 `None`，文件存放在 `storage/memory/default/` 目录下
+> - API 和存储层通过 `tenant_id` 参数确保不同租户的用户记忆完全隔离，无法跨租户访问
 
 ---
 
@@ -489,13 +504,22 @@ storage/
 **执行流程**:
 
 ```
-1. 遍历所有活跃用户（当天有会话的用户）
-2. 收集该用户当天的所有会话内容
+1. 遍历所有活跃用户（当天有会话的用户，按 tenant_id 分组）
+2. 收集该用户当天的会话内容（仅用户问题 + 助手最终回答，去除工具调用上下文）
 3. 调用 LLM 分析会话内容，提取值得长期记忆的信息
-4. 读取用户现有的 memory_{user_id}.md
+4. 读取用户现有的 storage/memory/{tenant_id}/memory_{user_id}.md
 5. 将新提取的信息**增量合并**到现有文件中
 6. 更新文件的"最后更新"元信息，标注"自动更新"
 ```
+
+**上下文精简策略**: 为了减少 LLM 上下文长度和成本，收集对话内容时执行以下过滤：
+
+| 过滤项 | 说明 |
+|--------|------|
+| 时间戳前缀 | 去除用户消息中的 `[当前时间: ...]` 前缀 |
+| 附件区块 | 去除 `[Attachments]` 及后续的文件路径、大小等工具中间信息 |
+| 工具调用详情 | 仅保留 `user` 和 `assistant` 角色消息，不包含工具调用/返回消息 |
+| 消息截断 | 单条消息超过 500 字符时截断，保留核心语义 |
 
 **LLM 提取 Prompt（草案）**:
 
@@ -576,12 +600,13 @@ storage/
 
 #### 3.4 任务拆分
 
-##### 任务 3.4.1: 实现长期记忆文件存储层
+##### 任务 3.4.1: 实现长期记忆文件存储层 ✅
 
 **方案**:
 - 新增 `src/memory/long_term.py`，实现 `LongTermMemory` 类
 - 负责文件的读写、格式校验、目录初始化
 - 文件不存在时自动创建包含元信息的空模板
+- 按 `{tenant_id}` 子目录隔离不同租户的用户记忆
 
 **核心接口**:
 
@@ -590,67 +615,83 @@ class LongTermMemory:
     def __init__(self, storage_dir: str = "storage/memory"):
         ...
 
-    def get_memory(self, user_id: str) -> str:
-        """读取用户记忆文件内容，不存在返回空模板"""
+    def get_memory(self, tenant_id: str, user_id: str) -> str:
+        """读取用户记忆文件内容，不存在返回空模板。
+        tenant_id 为 None 时使用 'default' 目录。"""
 
-    def save_memory(self, user_id: str, content: str, updated_by: str = "user") -> None:
-        """保存用户记忆文件，更新元信息"""
+    def save_memory(self, tenant_id: str, user_id: str, content: str, updated_by: str = "user") -> None:
+        """保存用户记忆文件，更新元信息。
+        自动创建 storage/memory/{tenant_id}/ 目录（如不存在）。"""
 
-    def merge_memory(self, user_id: str, new_sections: dict[str, list[str]]) -> None:
+    def merge_memory(self, tenant_id: str, user_id: str, new_sections: dict[str, list[str]]) -> None:
         """增量合并新记忆到现有文件（系统自动总结用）"""
 
-    def get_memory_sections(self, user_id: str) -> dict[str, list[str]]:
+    def get_memory_sections(self, tenant_id: str, user_id: str) -> dict[str, list[str]]:
         """解析文件，返回 {分类标题: [条目列表]} 的结构"""
 
-    def memory_exists(self, user_id: str) -> bool:
+    def memory_exists(self, tenant_id: str, user_id: str) -> bool:
         """检查用户是否有记忆文件"""
+
+    def _get_file_path(self, tenant_id: str, user_id: str) -> str:
+        """获取记忆文件的完整路径。
+        tenant_id 为 None 时使用 'default'。
+        返回: storage/memory/{tenant_id}/memory_{user_id}.md"""
 ```
 
 **涉及文件**:
 - `src/memory/long_term.py`（新增）
 
 **验收标准**:
-- [ ] 文件不存在时自动创建空模板
-- [ ] 能正确读取和保存 MD 文件
-- [ ] 增量合并不丢失已有条目
-- [ ] 格式校验拒绝无效内容（缺失一级标题等）
+- [x] 文件不存在时自动创建空模板（含目录自动创建）
+- [x] 能正确读取和保存 MD 文件
+- [x] 增量合并不丢失已有条目
+- [x] 格式校验拒绝无效内容（缺失一级标题等）
+- [x] 不同租户的用户记忆文件存储在各自子目录中
+- [x] tenant_id 为 None 时使用 'default' 目录
 
 ---
 
-##### 任务 3.4.2: 实现后端记忆 API
+##### 任务 3.4.2: 实现后端记忆 API ✅
 
 **方案**:
 - 新增 `src/api/memory.py`，实现 `GET /api/v1/memory/long-term` 和 `PUT /api/v1/memory/long-term`
 - 遵循项目现有 API 模式（参考 `src/api/credentials.py`）
 - 使用 `Depends(get_current_user)` 鉴权
-- 用户只能访问自己的记忆文件
+- 用户只能访问自己租户下自己的记忆文件
+- `tenant_id` 从请求上下文中自动获取（`get_current_tenant_id()`），用户不可指定
 
 **涉及文件**:
 - `src/api/memory.py`（新增）
 - `src/main.py` — 注册路由
 
 **验收标准**:
-- [ ] API 遵循项目 REST 规范
-- [ ] 用户只能访问自己的记忆文件
-- [ ] 支持 GET 获取和 PUT 更新
+- [x] API 遵循项目 REST 规范
+- [x] 用户只能访问自己的记忆文件
+- [x] 支持 GET 获取和 PUT 更新
+- [x] 租户隔离正确，无法跨租户访问
 
 ---
 
-##### 任务 3.4.3: 实现系统每日自动总结
+##### 任务 3.4.3: 实现系统每日自动总结 ✅
 
 **方案**:
 - 新增 `src/memory/memory_summarizer.py`，实现每日定时总结逻辑
-- 收集当天所有活跃用户的会话内容
+- 收集当天所有活跃用户的会话内容（**仅用户问题 + 助手最终回答**，去除工具调用上下文）
 - 调用 LLM 提取值得记忆的信息
 - 通过 `LongTermMemory.merge_memory()` 增量合并
+
+**上下文精简**: `_get_user_conversations()` 收集对话时，通过 `_clean_message_content()` 过滤：
+- 用户消息：去除 `[当前时间:...]` 时间戳前缀、`[Attachments]` 附件区块及文件路径信息
+- 助手消息：保留最终回答文本（DB 中已不含工具调用细节）
+- 单条消息超过 500 字符时截断
 
 **执行流程**:
 ```
 定时触发（每天凌晨）
-  → 查询当天有会话的用户列表
-  → 逐用户处理：
-      → 从 ShortTermMemory 收集当天会话
-      → 读取现有记忆文件
+  → 查询当天有会话的用户列表（含 tenant_id）
+  → 按 tenant_id 分组，逐用户处理：
+      → 从 DB 收集当天会话（仅 user/assistant 角色的 content，去除工具调用上下文）
+      → 读取现有记忆文件（storage/memory/{tenant_id}/memory_{user_id}.md）
       → 调用 LLM 分析（带提取 Prompt）
       → 解析 LLM 输出为 {分类: 条目} 结构
       → 增量合并到记忆文件
@@ -662,9 +703,9 @@ class LongTermMemory:
 memory:
   long_term:
     enabled: true
-    storage_dir: "storage/memory"
-    summary_cron: "0 2 * * *"    # 每天凌晨2点
-    max_users_per_run: 50        # 单次最多处理用户数
+    storage_dir: "storage/memory"    # 根目录，实际文件在 storage/memory/{tenant_id}/ 下
+    summary_cron: "0 2 * * *"        # 每天凌晨2点
+    max_users_per_run: 50            # 单次最多处理用户数
 ```
 
 **涉及文件**:
@@ -674,14 +715,15 @@ memory:
 - `configs/config.yaml` — 新增配置项
 
 **验收标准**:
-- [ ] 定时任务按配置时间自动执行
-- [ ] 能从当天会话中提取有效记忆
-- [ ] 提取的记忆增量合并到现有文件
-- [ ] 执行过程有完整日志记录
+- [x] 定时任务按配置时间自动执行
+- [x] 能从当天会话中提取有效记忆
+- [x] 提取的记忆增量合并到现有文件
+- [x] 执行过程有完整日志记录
+- [x] 按租户隔离存储，不同租户用户记忆不混淆
 
 ---
 
-##### 任务 3.4.4: 实现对话中用户主动要求记住的功能
+##### 任务 3.4.4: 实现对话中用户主动要求记住的功能 ✅
 
 **方案**:
 - 在 Agent 处理消息时，检测用户"记住"类意图
@@ -691,7 +733,7 @@ memory:
 
 **实现方式**:
 - 作为 Agent 内置的一种特殊意图处理
-- 检测到"记住"意图后，提取内容并调用 `LongTermMemory.merge_memory()`
+- 检测到"记住"意图后，提取内容并调用 `LongTermMemory.merge_memory(tenant_id, user_id, ...)`
 - 写入 `## 用户明确要求记住的事项` 分类
 - 回复用户确认已记住
 
@@ -700,13 +742,14 @@ memory:
 - `src/memory/long_term.py` — 写入记忆
 
 **验收标准**:
-- [ ] 用户说"记住XX"时，内容被写入记忆文件
-- [ ] 写入到正确的分类下
-- [ ] Agent 回复确认已记住
+- [x] 用户说"记住XX"时，内容被写入记忆文件
+- [x] 写入到正确的分类下
+- [x] Agent 回复确认已记住
+- [x] 写入到正确的租户目录下
 
 ---
 
-##### 任务 3.4.5: 将长期记忆注入 LLM 上下文
+##### 任务 3.4.5: 将长期记忆注入 LLM 上下文 ✅
 
 **方案**:
 - 在 `MemoryManager.to_llm_messages()` 中整合长期记忆
@@ -739,17 +782,18 @@ memory:
 
 **涉及文件**:
 - `src/memory/manager.py` — to_llm_messages 增强
-- `src/core/agent.py` — 新会话时加载长期记忆
+- `src/core/agent.py` — 新会话时加载长期记忆（传入 tenant_id）
 
 **验收标准**:
-- [ ] 新会话自动加载用户长期记忆
-- [ ] 记忆以适当格式注入系统提示词
-- [ ] 记忆过长时有合理的截断策略
-- [ ] 不影响系统提示词的核心指令
+- [x] 新会话自动加载用户长期记忆
+- [x] 记忆以适当格式注入系统提示词
+- [x] 记忆过长时有合理的截断策略
+- [x] 不影响系统提示词的核心指令
+- [x] 加载时按 tenant_id 隔离，不会加载到其他租户用户的记忆
 
 ---
 
-##### 任务 3.4.6: 前端记忆管理页面
+##### 任务 3.4.6: 前端记忆管理页面 ❌ 未实现
 
 **方案**:
 - 在前端设置页面中新增"我的记忆"功能
@@ -802,11 +846,11 @@ memory:
 
 ---
 
-### Phase 4: 高级记忆功能
+### Phase 4: 高级记忆功能 ❌ 未实现
 
 > 目标：实现语义检索和管理能力
 > 预计工期：按需安排
-> 前置条件：Phase 2-3 完成
+> 状态：**未实现**
 
 #### 任务 4.1: 语义检索能力
 
@@ -893,7 +937,7 @@ memory:
     summary_max_tokens: 1000  # 摘要的最大 token 数
   long_term:
     enabled: true           # 是否启用长期记忆
-    storage_dir: "storage/memory"    # 记忆文件存储目录
+    storage_dir: "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下
     summary_cron: "0 2 * * *"        # 每日自动总结执行时间
     max_users_per_run: 50            # 单次总结最多处理用户数
     max_inject_tokens: 2000          # 注入上下文的最大 token 数
@@ -909,7 +953,7 @@ memory:
 | 文件 | Phase | 说明 |
 |------|-------|------|
 | `src/memory/mid_term.py` | P2 | 会话内上下文压缩总结逻辑 |
-| `src/memory/long_term.py` | P3 | 长期记忆文件存储层 |
+| `src/memory/long_term.py` | P3 | 长期记忆文件存储层（含租户隔离） |
 | `src/memory/memory_summarizer.py` | P3 | 每日自动总结逻辑 |
 | `src/api/memory.py` | P3 | 长期记忆 API |
 | `frontend/src/components/UserMemory.vue` | P3 | 前端记忆管理页面 |
@@ -922,7 +966,7 @@ memory:
 |------|-------|------|
 | `src/memory/short_term.py` | P1-P2 | 统一配置、新增 load_history、摘要字段 |
 | `src/memory/manager.py` | P1-P3 | 接入生产、中期压缩、长期记忆整合 |
-| `src/core/agent.py` | P1-P3 | 统一配置、MemoryManager 接入、历史加载、记住意图 |
+| `src/core/agent.py` | P1-P3 | 统一配置、MemoryManager 接入、历史加载、记住意图（传入 tenant_id） |
 | `src/core/dialog_manager.py` | P1 | 统一配置/共享实例 |
 | `src/subagents/factory.py` | P1 | 适配 MemoryManager |
 | `src/subagents/executor.py` | P1 | 适配 MemoryManager |
@@ -945,9 +989,9 @@ memory:
 | P2 | `tests/unit/test_short_term_history.py` | 历史消息加载、附件信息保留 |
 | P2 | `tests/unit/test_mid_term.py` | 压缩触发、摘要生成、增量合并 |
 | P2 | `tests/integration/test_context_compression.py` | 完整压缩流程集成测试 |
-| P3 | `tests/unit/test_long_term_memory.py` | MD 文件读写、格式校验、增量合并 |
+| P3 | `tests/unit/test_long_term_memory.py` | MD 文件读写、格式校验、增量合并、租户隔离 |
 | P3 | `tests/unit/test_memory_summarizer.py` | 每日总结逻辑、LLM 输出解析 |
-| P3 | `tests/api/test_memory_api.py` | 长期记忆 API 接口测试 |
+| P3 | `tests/api/test_memory_api.py` | 长期记忆 API 接口测试（含租户隔离验证） |
 | P3 | `tests/integration/test_memory_inject.py` | 长期记忆注入上下文集成测试 |
 | P4 | `tests/integration/test_semantic_search.py` | 语义检索集成测试 |
 
@@ -967,3 +1011,14 @@ memory:
 8. **记忆文件的并发写入保护**：系统自动总结和用户手动编辑同时发生时的冲突处理策略
 9. **记忆文件的 token 预算**：注入上下文时分配多少 token 给长期记忆，避免占用过多上下文窗口
 10. **用户删除记忆后的行为**：删除某条记忆后，系统下次总结是否会重新提取相同信息
+
+---
+
+## 附录: 版本变更记录
+
+| 版本 | 日期 | 变更内容 |
+|------|------|----------|
+| v1.0 | 2026-04-24 | 初始版本 |
+| v1.3 | 2026-04-24 | Phase 1 实施计划补充 |
+| v1.5 | 2026-05-19 | Phase 3 长期记忆已实现：存储层、API、Agent 集成、记住意图、每日自动总结（前端页面待实现） |
+| v1.4 | 2026-05-19 | 长期记忆存储路径增加租户隔离：`storage/memory/{tenant_id}/memory_{user_id}.md`，所有接口方法增加 `tenant_id` 参数 |

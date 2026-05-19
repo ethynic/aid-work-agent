@@ -113,9 +113,19 @@ class ShortTermMemoryConfig(BaseModel):
     ttl: int = 3600
 
 
+class LongTermMemoryConfig(BaseModel):
+    """长期记忆配置"""
+    enabled: bool = False
+    storage_dir: str = "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下
+    summary_cron: str = "0 2 * * *"        # 每日自动总结执行时间
+    max_users_per_run: int = 50            # 单次总结最多处理用户数
+    max_inject_tokens: int = 2000          # 注入上下文的最大 token 数
+
+
 class MemoryConfig(BaseModel):
     """记忆配置"""
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
+    long_term: LongTermMemoryConfig = Field(default_factory=LongTermMemoryConfig)
     cleanup_interval: int = 300  # 过期会话清理间隔（秒）
 
 
