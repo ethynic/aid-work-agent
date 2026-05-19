@@ -101,6 +101,8 @@ class RegisterDownloadFileTool(BaseTool):
                 '.jpeg': 'image/jpeg',
                 '.gif': 'image/gif',
                 '.zip': 'application/zip',
+                '.html': 'text/html',
+                '.htm': 'text/html',
             }
             mime_type = mime_type_map.get(suffix, 'application/octet-stream')
 

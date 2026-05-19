@@ -1,5 +1,16 @@
 <template>
-  <div class="w-full md:w-[480px] md:max-w-[50vw] flex flex-col border-l border-gray-200 bg-white h-full flex-shrink-0 pb-[env(safe-area-inset-bottom)]">
+  <div
+    ref="panelRef"
+    class="w-full md:max-w-[80vw] flex flex-col bg-white h-full flex-shrink-0 pb-[env(safe-area-inset-bottom)] relative"
+    :style="panelStyle"
+  >
+    <!-- 拖拽调整宽度的手柄 -->
+    <div
+      class="hidden md:block absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-primary-300 active:bg-primary-400 transition-colors group"
+      @mousedown="startResize"
+    >
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-8 bg-gray-300 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+    </div>
     <!-- Header -->
     <div class="flex items-center gap-2 px-4 py-3 border-b border-gray-200 bg-gray-50 flex-shrink-0">
       <!-- 文件图标 -->
@@ -89,6 +100,15 @@
         @load="loading = false"
       ></iframe>
 
+      <!-- HTML Preview -->
+      <iframe
+        v-if="previewType === 'html' && attachment?.file_id"
+        :src="getFileUrl(attachment.file_id)"
+        class="w-full h-full border-0"
+        sandbox="allow-same-origin"
+        @load="loading = false"
+      ></iframe>
+
       <!-- Text/Code Preview -->
       <div v-if="previewType === 'text' || previewType === 'markdown'" class="p-4">
         <div
@@ -147,6 +167,40 @@ const error = ref<string | null>(null)
 const textContent = ref('')
 const textLanguage = ref('plaintext')
 const docxContainer = ref<HTMLDivElement | null>(null)
+const panelRef = ref<HTMLDivElement | null>(null)
+const panelWidth = ref(480)
+
+const panelStyle = computed(() => ({
+  width: `${panelWidth.value}px`,
+  minWidth: '320px',
+  borderLeft: '1px solid #e5e7eb',
+}))
+
+// 拖拽调整宽度
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = panelWidth.value
+
+  function onMouseMove(ev: MouseEvent) {
+    // 面板在右侧，向左拖 = 变宽，向右拖 = 变窄
+    const delta = startX - ev.clientX
+    const newWidth = Math.min(Math.max(startWidth + delta, 320), window.innerWidth * 0.8)
+    panelWidth.value = newWidth
+  }
+
+  function onMouseUp() {
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
 
 // 判断预览类型
 const previewType = computed(() => {
@@ -164,8 +218,11 @@ const previewType = computed(() => {
   // Markdown
   if (ext === 'md' || ext === 'markdown') return 'markdown'
 
+  // HTML
+  if (ext === 'html' || ext === 'htm' || mime === 'text/html') return 'html'
+
   // 文本/代码
-  const textExts = ['txt', 'json', 'csv', 'js', 'ts', 'py', 'vue', 'html', 'css', 'xml', 'yaml', 'yml', 'sh', 'bat', 'sql', 'log', 'ini', 'conf', 'md']
+  const textExts = ['txt', 'json', 'csv', 'js', 'ts', 'py', 'vue', 'css', 'xml', 'yaml', 'yml', 'sh', 'bat', 'sql', 'log', 'ini', 'conf', 'md']
   const textMimes = ['text/', 'application/json', 'application/javascript', 'application/xml']
   if (textExts.includes(ext) || textMimes.some(m => mime.startsWith(m))) return 'text'
 
@@ -266,8 +323,8 @@ watch(() => props.attachment, (newAtt) => {
 
   if (!newAtt) return
 
-  // 图片和 PDF 设置 loading
-  if (previewType.value === 'image' || previewType.value === 'pdf') {
+  // 图片、PDF、HTML 设置 loading
+  if (previewType.value === 'image' || previewType.value === 'pdf' || previewType.value === 'html') {
     loading.value = true
   }
 

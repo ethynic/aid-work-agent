@@ -1,217 +1,364 @@
-# 竞品研究子智能体 — 深度研究报告
+# 竞品研究子智能体 — 设计文档
 
-> 版本: v1.0 | 创建: 2026-05-06 | 状态: 待审核
+> 版本: v2.0 | 创建: 2026-05-06 | 更新: 2026-05-19 | 状态: 待审核
 
-## 一、研究背景
+## 一、设计思路
 
-竞品分析（Competitive Intelligence, CI）是企业战略决策的核心环节。传统竞品分析依赖人工收集、整理、分析，耗时长、覆盖面窄、更新滞后。AI 驱动的竞品分析工具已成为市场热点，Crayon、Klue、Contify、Kompyte 等专业平台年收入已达数千万美元级别。
+### 核心理念
 
-本报告基于对主流竞品分析工具、学术研究和行业实践的综合调研，明确竞品研究子智能体应具备的核心功能、数据来源、分析模型和输出格式，为后续开发提供设计依据。
+竞品研究子智能体的核心是**深度搜索研究**。用户指定竞品后，子智能体通过多轮、多角度的互联网搜索，系统性地收集竞品信息，将中间成果保存为材料文件，最终基于这些材料生成结构化的竞品分析报告。
+
+```
+用户指定竞品
+    │
+    ▼
+┌─────────────────────────────────┐
+│  阶段一：深度搜索研究             │
+│  多轮多角度搜索竞品信息           │
+│  每轮搜索结果整理为材料文件       │
+└─────────────┬───────────────────┘
+              │ 中间材料文件（.md）
+              ▼
+┌─────────────────────────────────┐
+│  阶段二：竞品分析报告生成         │
+│  基于材料文件，逐页生成 HTML 报告 │
+│  每页可独立预览                   │
+└─────────────────────────────────┘
+```
+
+### 与 v1.0 设计的关键区别
+
+| 维度 | v1.0 设计 | v2.0 设计（本次） |
+|------|-----------|-------------------|
+| **核心驱动** | 数据库管理竞品列表，多模块架构 | 深度搜索研究驱动，搜索 → 材料 → 报告 |
+| **数据存储** | 三张数据库表（竞品表、情报表、报告表） | 文件系统（Markdown 材料文件 + HTML 报告） |
+| **报告格式** | Markdown / Word / Excel | HTML（逐页生成，可在前端 iframe 中预览） |
+| **信息来源** | 持续爬虫监控 | 按需深度搜索，多轮递进 |
+| **交互模式** | CRUD 管理竞品列表 | 对话式触发研究任务 |
+| **复杂度** | 5 个功能模块 | 2 个阶段，流程简洁 |
 
 ---
 
-## 二、市场现有工具调研
+## 二、深度搜索研究流程
 
-### 2.1 专业竞品分析平台
+### 2.1 研究阶段概览
 
-| 平台 | 定位 | 核心能力 | 数据来源 | 自动化程度 |
-|------|------|----------|----------|-----------|
-| **Crayon** | B2B 竞争情报平台 | AI 竞品变化检测与告警；自动生成销售话术和 Battle Card；扫描销售通话录音中的竞品提及 | 竞品网站、新闻、社交媒体、定价页、CRM 数据、通话录音 | 高 — 持续监控 + AI 内容生成 |
-| **Klue** | 战斗卡与销售赋能 | 自动生成并持续更新的 Battle Card；竞品优劣势画像；CRM 集成；竞品问答 Chatbot | 竞品网站、新闻、社交媒体、招聘信息、定价页、赢单/输单数据 | 高 — 自动更新 Battle Card + 实时告警 |
-| **Contify** | AI 原生市场情报 | 监控 20 万+ 信息源；行业情报自动化；自动生成情报简报和每日快讯；竞争格局映射 | 新闻、新闻稿、企业博客、社交媒体、行业出版物、网站、监管文件 | 极高 — 最广泛的自动化覆盖 |
-| **Kompyte** | 销售导向竞品追踪 | 竞品网站变更实时检测；自动 Battle Card；销售团队告警；Chrome 浏览器插件 | 竞品网站（变更检测）、社交媒体、新闻、定价页 | 高 — 实时变更检测 |
-| **AlphaSense** | 金融与公开文件深度搜索 | AI 驱动的财务文件搜索；财报电话会议分析；SEC 文件分析；专家网络访问 | SEC 文件、财报、投资者演示、分析师报告、专家访谈 | 中高 — 深度研究而非广度监控 |
+```
+用户输入竞品名称/产品名
+    │
+    ▼
+Step 1: 基础信息搜索（3-5 轮搜索）
+    ├── 公司概况、发展历程
+    ├── 产品线与核心功能
+    ├── 目标客户与市场定位
+    └── 定价策略
+    │
+    ▼  → 保存材料：01_基础信息.md
+    │
+Step 2: 产品深度分析（3-5 轮搜索）
+    ├── 核心功能详解
+    ├── 技术架构与差异化
+    ├── 用户界面/体验分析
+    └── 产品更新与路线图
+    │
+    ▼  → 保存材料：02_产品分析.md
+    │
+Step 3: 市场与口碑（3-5 轮搜索）
+    ├── 用户评价与口碑（知乎、小红书、G2 等）
+    ├── 媒体报道与分析师观点
+    ├── 社交媒体动态
+    └── 客户案例与合作
+    │
+    ▼  → 保存材料：03_市场口碑.md
+    │
+Step 4: 竞争态势（2-3 轮搜索）
+    ├── 行业竞争格局
+    ├── 与我方产品的直接对比
+    ├── 优劣势对比
+    └── 威胁与机会
+    │
+    ▼  → 保存材料：04_竞争态势.md
+    │
+Step 5: 最新动态（2-3 轮搜索）
+    ├── 近期新闻与融资
+    ├── 招聘信息（推测战略方向）
+    ├── 产品最新更新
+    └── 高管变动
+    │
+    ▼  → 保存材料：05_最新动态.md
+    │
+    ▼
+汇总所有材料 → 进入报告生成阶段
+```
 
-### 2.2 数字营销/SEO 分析工具
+### 2.2 搜索策略
 
-| 平台 | 核心能力 |
-|------|----------|
-| **SEMrush** | 关键词差距分析、流量分析、广告支出追踪、外链分析、内容缺口识别 |
-| **SimilarWeb** | 流量估算、受众画像、流量来源、互动指标、行业基准对比 |
-| **Ahrefs** | 内容差距分析、关键词追踪、竞品外链画像、排名差距识别 |
+每轮搜索遵循以下原则：
 
-### 2.3 新兴 AI 原生竞品分析 Agent
+| 原则 | 说明 |
+|------|------|
+| **多角度** | 同一主题用不同关键词搜索 2-3 次，确保覆盖面 |
+| **递进式** | 先广度搜索获取概况，再深度搜索特定方面 |
+| **交叉验证** | 关键数据（定价、功能）至少从 2 个来源确认 |
+| **溯源记录** | 每条信息标注来源 URL 和搜索时间 |
+| **中文优先** | 国内竞品优先搜索中文信息源，国际竞品补充英文搜索 |
 
-| 平台 | 核心能力 |
-|------|----------|
-| **Jitterbit Competitive Pricing Agent** | 实时竞品价格监控、利润优化建议、收入机会识别 |
-| **Relevance AI CI Agent** | 监控竞品、分析市场定位、追踪定价、对比功能、生成销售情报报告 |
-| **Beam.ai** | 从数据收集到决策分析的多步骤 Agent 工作流 |
+**搜索工具选择**：
 
-### 2.4 国内市场
+| 场景 | 工具 | 说明 |
+|------|------|------|
+| 快速信息检索 | `web_search` | Tavily 搜索，返回结构化结果 |
+| 深度页面内容采集 | `browser_automation` | 打开具体页面获取完整内容 |
+| 中文搜索补充 | `use_skill("baidu-search")` | 百度 AI 搜索，适合国内竞品 |
 
-| 工具/平台 | 说明 |
-|----------|------|
-| **墨刀 AI Agent** | 面向产品经理的全生命周期 AI Agent，含竞品分析功能，可自动生成原型和 PRD |
-| **腾讯云 AI 分析** | AI 驱动的竞品分析框架 |
-| **飞书/钉钉集成方案** | 企业 AI Agent 平台支持多源数据集成 |
+### 2.3 材料文件格式
 
-### 2.7 关键洞察
+每份材料文件是 Markdown 格式，存储在会话专属目录中：
 
-从上述工具中可以提炼出以下共性：
+```
+storage/competitor_research/{session_id}/
+├── 01_基础信息.md
+├── 02_产品分析.md
+├── 03_市场口碑.md
+├── 04_竞争态势.md
+├── 05_最新动态.md
+└── meta.json          # 研究元数据
+```
 
-1. **数据采集自动化**是基础能力，所有平台都强调持续监控而非一次性分析
-2. **Battle Card（战斗卡）** 是最普遍的输出格式，几乎每个平台都支持
-3. **销售赋能**是竞品分析的主要应用场景，而非纯战略研究
-4. **实时告警**是差异化功能，从季度报告转向实时监控
-5. **AI 生成内容**（报告、分析、建议）正在替代人工分析师的重复工作
+**材料文件示例（01_基础信息.md）**：
+
+```markdown
+# 竞品基础信息 — 飞书
+
+> 搜索时间: 2026-05-19 14:30 | 竞品: 飞书 (Feishu)
+
+## 公司概况
+
+- **所属公司**: 字节跳动
+- **成立时间**: 2016 年（Lark 国际版）
+- **定位**: 企业协作平台（IM + 文档 + 会议 + 项目管理）
+- **目标客户**: 中大型企业，尤其是互联网/科技公司
+- **市场份额**: 国内企业协作工具市场排名第二（来源：艾瑞咨询 2025）
+
+> 来源: https://www.feishu.cn/about | 搜索时间: 2026-05-19
+
+## 产品线
+
+1. **飞书 Office**: 即时通讯 + 文档 + 日历 + 会议
+2. **飞书 OKR**: 目标管理
+3. **飞书人事**: HR 管理
+4. **飞书审批**: 工作流引擎
+5. **飞书项目**: 项目管理
+
+> 来源: https://www.feishu.cn/product | 搜索时间: 2026-05-19
+
+## 定价策略
+
+| 版本 | 价格 | 适用规模 |
+|------|------|----------|
+| 免费版 | 0 元 | 50 人以下小团队 |
+| 商业版 | 360 元/人/年 | 中型企业 |
+| 旗舰版 | 联系销售 | 大型企业 |
+
+> 来源: https://www.feishu.cn/pricing | 搜索时间: 2026-05-19
+> 交叉验证: https://www.zhihu.com/question/xxx | 与官网定价一致
+```
+
+**meta.json 格式**：
+
+```json
+{
+  "competitor_name": "飞书",
+  "our_product": "XX协作平台",
+  "created_at": "2026-05-19T14:30:00",
+  "status": "researching",
+  "completed_steps": ["基础信息", "产品分析"],
+  "pending_steps": ["市场口碑", "竞争态势", "最新动态"]
+}
+```
 
 ---
 
-## 三、竞品分析工作流（行业标准）
+## 三、HTML 报告生成
 
-根据 Contify 五步法和 Competitive Intelligence Alliance 的 CI 循环，标准竞品分析流程为：
+### 3.1 逐页生成机制
+
+报告采用**逐页生成**模式：每生成一页 HTML，立即注册为可下载文件，用户可以在前端预览。不需要等全部页面生成完毕。
 
 ```
-Step 1: 定向 — 确定分析对象
-  ├── 定义关键情报问题（KIQ）
-  ├── 识别直接竞品（3-5 个核心竞品）
-  ├── 识别间接竞品和新兴竞品
-  └── 评估已有信息基础
-
-Step 2: 数据采集 — 多源信息收集
-  ├── 外部：网站、新闻、社交媒体、财报、招聘、专利、评价
-  ├── 内部：CRM 赢单/输单数据、销售反馈、客户访谈
-  └── 持续性：非一次性，需要持续监控
-
-Step 3: 分析处理 — 原始数据转化为可行动情报
-  ├── 应用分析框架（SWOT、PESTLE、波特五力等）
-  ├── 识别模式、威胁和机会
-  └── 回答核心问题：这说明了什么市场趋势？我们错过了什么机会？
-
-Step 4: 报告输出 — 以利益相关者友好的格式交付
-  ├── Battle Card、竞品画像、对比矩阵
-  ├── 告警通知、情报简报
-  └── 集成到工作流工具（企业微信、钉钉、飞书）
-
-Step 5: 行动转化 — 情报驱动决策
-  ├── 领导层：战略规划、业务方向
-  ├── 市场部：营销优化、差异化定位
-  ├── 销售部：Battle Card、异议处理、竞品定位
-  └── 产品部：功能优先级、路线图调整
-
-循环往复 → 评估效果 → 优化 KIQ → 改进自动化
+材料文件汇总
+    │
+    ▼
+生成封面页 → register_download_file → 用户可预览第 1 页
+    │
+    ▼
+生成公司概况页 → register_download_file → 用户可预览第 2 页
+    │
+    ▼
+生成产品分析页 → register_download_file → 用户可预览第 3 页
+    │
+    ▼
+... 逐页继续
+    │
+    ▼
+生成汇总结论页 → register_download_file → 用户可预览最后一页
 ```
+
+### 3.2 报告页面结构
+
+| 页码 | 标题 | 内容来源 |
+|------|------|----------|
+| 第 1 页 | **封面** | 竞品名称、研究日期、我方产品名 |
+| 第 2 页 | **公司概况** | 01_基础信息.md → 公司背景、发展历程、规模 |
+| 第 3 页 | **产品功能分析** | 02_产品分析.md → 核心功能、差异化、技术架构 |
+| 第 4 页 | **定价策略** | 01_基础信息.md → 定价对比、性价比分析 |
+| 第 5 页 | **用户口碑与评价** | 03_市场口碑.md → 情感分布、高频关键词 |
+| 第 6 页 | **竞争态势分析** | 04_竞争态势.md → SWOT、优劣势对比 |
+| 第 7 页 | **最新动态** | 05_最新动态.md → 近期新闻、战略方向推断 |
+| 第 8 页 | **总结与建议** | 全部材料 → 综合建议、行动项 |
+
+> 页数可根据竞品复杂度灵活调整。简单竞品可合并为 4-5 页，复杂竞品可拆分为 10+ 页。
+
+### 3.3 HTML 页面设计规范
+
+每个 HTML 页面是**独立的完整 HTML 文件**，包含内联 CSS，可直接在浏览器中打开。
+
+**设计要求**：
+- **内联样式**：所有 CSS 内联在 `<style>` 标签中，不依赖外部资源
+- **响应式**：适配不同屏幕宽度
+- **专业排版**：适合打印，A4 页面比例
+- **统一风格**：所有页面共享相同的设计系统（配色、字体、间距）
+
+**配色方案**（蓝色商务风）：
+
+```css
+:root {
+  --primary: #1a56db;
+  --primary-light: #e8eefb;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --border: #e5e7eb;
+  --bg-page: #ffffff;
+  --bg-section: #f9fafb;
+  --accent-green: #059669;
+  --accent-red: #dc2626;
+  --accent-yellow: #d97706;
+}
+```
+
+**页面模板结构**：
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>竞品分析报告 - {页面标题} - {竞品名称}</title>
+  <style>
+    /* 通用样式（所有页面共享） */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text-primary);
+      background: var(--bg-page);
+      padding: 48px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    /* ... 其他样式 ... */
+  </style>
+</head>
+<body>
+  <!-- 页面头部 -->
+  <header>
+    <div class="report-meta">竞品分析报告 | {竞品名称} | 第 {N} 页</div>
+    <h1>{页面标题}</h1>
+  </header>
+
+  <!-- 正文内容 -->
+  <main>
+    {具体内容，由 LLM 根据材料生成}
+  </main>
+
+  <!-- 页面底部 -->
+  <footer>
+    <p>生成时间: {timestamp} | 仅供内部参考</p>
+  </footer>
+</body>
+</html>
+```
+
+### 3.4 文件命名与存储
+
+```
+storage/competitor_research/{session_id}/report/
+├── cover.html              # 封面
+├── company_overview.html   # 公司概况
+├── product_analysis.html   # 产品分析
+├── pricing.html            # 定价策略
+├── user_reviews.html       # 用户口碑
+├── competition.html        # 竞争态势
+├── latest_news.html        # 最新动态
+└── summary.html            # 总结建议
+```
+
+每个 HTML 文件通过 `register_download_file` 注册后，前端可通过 `/api/files/{file_id}` 在 iframe 中预览。
 
 ---
 
-## 四、功能模块设计
+## 四、前端预览支持
 
-基于上述调研，竞品研究子智能体应具备以下功能模块：
+### 4.1 现状
 
-### 4.1 功能全景图
+当前前端 `AttachmentPreviewPanel.vue` 将 HTML 文件作为文本（源码）显示，不支持渲染预览。需要新增 HTML 渲染预览能力。
 
-```
-竞品研究子智能体
-│
-├── 模块一：竞品管理
-│     ├── 竞品列表维护（增删改查）
-│     ├── 竞品分类（直接/间接/潜在/替代品）
-│     ├── 竞品画像生成（公司概况、产品线、目标市场）
-│     └── 竞品关系图谱
-│
-├── 模块二：信息采集
-│     ├── 网站信息采集（官网、产品页、定价页、博客）
-│     ├── 新闻与媒体报道监控
-│     ├── 社交媒体动态追踪
-│     ├── 用户评价与口碑分析（应用商店、评论平台）
-│     ├── 招聘信息分析（推测战略方向）
-│     └── 财务公开信息收集（上市公司）
-│
-├── 模块三：分析引擎
-│     ├── SWOT 分析（自动生成）
-│     ├── 产品功能对比矩阵
-│     ├── 定价对比与基准分析
-│     ├── 市场定位映射（2×2 矩阵）
-│     ├── 用户评价情感分析
-│     ├── 波特五力分析
-│     └── 趋势检测与机会识别
-│
-├── 模块四：报告输出
-│     ├── Battle Card（战斗卡）生成
-│     ├── 竞品深度报告（Word/PDF）
-│     ├── 对比分析表格（Excel）
-│     ├── 竞品动态快讯（每日/每周摘要）
-│     └── 定制化分析报告
-│
-└── 模块五：持续监控
-      ├── 定价变更检测与告警
-      ├── 产品更新追踪
-      ├── 重大新闻推送
-      └── 定期竞品情报简报
+### 4.2 改动方案
+
+在 `AttachmentPreviewPanel.vue` 中新增 HTML 预览类型：
+
+```vue
+<!-- HTML 报告预览 -->
+<iframe
+  v-if="previewType === 'html'"
+  :src="getFileUrl(attachment.file_id)"
+  class="w-full h-full border-0"
+  sandbox="allow-same-origin"
+  @load="loading = false"
+/>
 ```
 
-### 4.2 各模块功能详细说明
+**previewType 判断调整**：
 
-#### 模块一：竞品管理
+```typescript
+// 将 'html' 从 textExts 中移除，新增 html 类型
+const htmlExts = ['html', 'htm']
 
-| 功能 | 说明 | 用户交互方式 |
-|------|------|-------------|
-| 竞品列表维护 | 维护需关注的竞品列表，支持增删改查 | 对话："添加竞品 XXX"、"移除竞品 YYY" |
-| 竞品分类 | 按竞争关系分类：直接竞品、间接竞品、潜在进入者、替代品 | 自动建议分类 + 用户确认 |
-| 竞品画像 | 生成单个竞品的全景画像（公司概况、产品线、目标客户、差异化定位） | 对话："生成 XXX 的竞品画像" |
-| 竞品关系图谱 | 展示竞品之间的关联关系（同母公司、合作伙伴、投资关系） | 前端可视化（未来扩展） |
+// previewType 计算属性中增加：
+if (htmlExts.includes(ext)) return 'html'
+```
 
-#### 模块二：信息采集
+**后端 MIME 类型补充**：在 `register_download_tool.py` 的 `mime_type_map` 和 `main.py` 的 MIME 映射中添加：
 
-| 功能 | 数据来源 | 采集方式 | 适用工具 |
-|------|----------|----------|----------|
-| 网站信息采集 | 竞品官网、产品页、定价页、博客 | Web Search + Browser Automation | WebSearchTool, BrowserAutomationTool |
-| 新闻媒体报道 | 行业新闻、公关稿、分析师报告 | Web Search + RSS | WebSearchTool |
-| 社交媒体动态 | 微信公众号、微博、LinkedIn、X/Twitter | Web Search | WebSearchTool |
-| 用户评价口碑 | 应用商店、知乎、小红书、G2、Capterra | Web Search + Browser | WebSearchTool, BrowserAutomationTool |
-| 招聘信息 | 招聘网站 JD 分析 | Web Search | WebSearchTool |
-| 财务公开信息 | 上市公司年报、财报、招股书 | Web Search + 文件解析 | WebSearchTool, ExcelReaderTool |
+```python
+'.html': 'text/html',
+'.htm': 'text/html',
+```
 
-**采集原则**：
-- 优先使用项目已有的 `WebSearchTool` 和 `BrowserAutomationTool`
-- 不做持续爬虫，采用"按需采集 + 定期刷新"模式
-- 每次采集记录来源 URL 和采集时间，确保可溯源
+### 4.3 安全考虑
 
-#### 模块三：分析引擎
-
-| 分析类型 | 说明 | 输出格式 |
-|----------|------|----------|
-| **SWOT 分析** | 基于采集数据自动生成竞品的 S/W/O/T 四维分析 | 结构化文本（表格） |
-| **功能对比矩阵** | 逐功能点对比我方与竞品的产品能力 | 对比表格 |
-| **定价对比** | 竞品定价策略对比、性价比分析 | 对比表格 + 柱状图描述 |
-| **市场定位映射** | 在价格-功能/高端-性价比等维度上的二维定位图 | 2×2 矩阵描述 |
-| **情感分析** | 用户评价的正负面情感分布、高频关键词 | 情感分布统计 |
-| **波特五力** | 行业竞争态势分析 | 结构化文本 |
-| **趋势分析** | 竞品近期动态趋势、战略方向推断 | 趋势摘要 |
-
-**分析原则**：
-- 所有分析必须基于采集到的实际数据，不编造信息
-- 每条结论标注数据来源
-- 不确定的结论明确标注置信度
-
-#### 模块四：报告输出
-
-| 报告类型 | 说明 | 输出格式 |
-|----------|------|----------|
-| **Battle Card（战斗卡）** | 单页竞品速览，供销售团队使用。包含：竞品概述、核心优劣势、我方差异化优势、常见异议应对话术 | 结构化卡片 |
-| **竞品深度报告** | 全面深入的单竞品分析报告（10-15 页），涵盖公司背景、产品分析、市场策略、SWOT、建议 | Markdown / Word |
-| **对比分析表** | 多竞品并排对比（功能、价格、口碑等维度） | 表格 / Excel |
-| **竞品动态快讯** | 每日/每周竞品重要动态摘要 | 简短文本 |
-| **定制化报告** | 用户指定分析维度和竞品范围的自定义报告 | 按需格式 |
-
-#### 模块五：持续监控
-
-| 监控类型 | 说明 | 触发方式 |
-|----------|------|----------|
-| 定价变更 | 竞品定价页面变化检测 | 定时任务 |
-| 产品更新 | 新功能发布、版本更新 | 定时任务 |
-| 重大新闻 | 融资、并购、高管变动、战略发布 | 定时任务 |
-| 定期简报 | 每周自动生成竞品情报摘要 | 定时任务 |
+- iframe 使用 `sandbox="allow-same-origin"` 属性，禁止 HTML 中的脚本执行和外部请求
+- 生成的 HTML 报告不包含 JavaScript，纯 CSS + HTML 渲染
+- 文件通过后端 `/api/files/{file_id}` 路由提供，已有的鉴权机制保护访问
 
 ---
 
-## 五、技术架构设计
+## 五、技术架构
 
-### 5.1 与现有系统集成
+### 5.1 系统集成
 
 ```
-用户（企业微信/钉钉/飞书/Web）
+用户（对话）
     │
     ▼
 主智能体 (Agent)
@@ -219,101 +366,37 @@ Step 5: 行动转化 — 情报驱动决策
     ├── delegate_to_subagent("competitor-research")
     │     │
     │     ▼
-    │   竞品研究子智能体
+    │   竞品研究子智能体 (subagents/competitor-research/)
     │     │
-    │     ├── Skill: competitor-research（核心技能）
-    │     │     ├── 竞品管理（CRUD + 画像生成）
-    │     │     ├── 信息采集（多源数据收集）
-    │     │     ├── 分析引擎（SWOT/对比/情感分析）
-    │     │     ├── 报告生成（Battle Card/深度报告/快讯）
-    │     │     └── 持续监控（定时任务 + 告警）
+    │     ├── 阶段一：深度搜索研究
+    │     │     ├── web_search → 多轮搜索竞品信息
+    │     │     ├── browser_automation → 深度页面内容采集
+    │     │     ├── use_skill("baidu-search") → 中文搜索补充
+    │     │     └── 材料整理 → 保存到 storage/ 目录
+    │     │
+    │     ├── 阶段二：报告生成
+    │     │     ├── content_generate → 基于 LLM 逐页生成 HTML
+    │     │     └── register_download_file → 注册每页为可预览文件
     │     │
     │     └── 使用的工具
-    │           ├── WebSearchTool — 互联网搜索
-    │           ├── BrowserAutomationTool — 网页内容采集
-    │           ├── ExcelReaderTool — 数据文件读取
-    │           ├── ContentGenerateTool — LLM 长文生成
-    │           └── KnowledgeBaseTool — 行业知识检索
+    │           ├── web_search — 互联网搜索
+    │           ├── browser_automation — 深度页面采集
+    │           ├── content_generate — LLM 长文生成
+    │           └── register_download_file — 文件注册
     │
-    └── 定时任务调度
-          ├── 每周竞品情报简报
-          ├── 定价变更检测
-          └── 重大新闻推送
+     └── 前端
+           └── AttachmentPreviewPanel — HTML iframe 预览
 ```
 
-### 5.2 数据存储设计
-
-#### 5.2.1 竞品基础信息表
-
-```sql
-CREATE TABLE IF NOT EXISTS bs_competitor_research_competitors (
-    id SERIAL PRIMARY KEY,
-    competitor_id TEXT UNIQUE NOT NULL,     -- 竞品唯一标识
-    tenant_id TEXT,                          -- 租户 ID
-    user_id TEXT NOT NULL,                   -- 创建人
-    name TEXT NOT NULL,                      -- 竞品名称
-    company TEXT,                            -- 所属公司
-    website TEXT,                            -- 官网 URL
-    category TEXT DEFAULT 'direct',          -- 分类：direct/indirect/potential/substitute
-    description TEXT,                        -- 竞品描述
-    status TEXT DEFAULT 'active',            -- 状态：active/archived
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-#### 5.2.2 竞品情报记录表
-
-```sql
-CREATE TABLE IF NOT EXISTS bs_competitor_research_intel (
-    id SERIAL PRIMARY KEY,
-    intel_id TEXT UNIQUE NOT NULL,           -- 情报唯一标识
-    tenant_id TEXT,
-    competitor_id TEXT NOT NULL REFERENCES bs_competitor_research_competitors(competitor_id),
-    intel_type TEXT NOT NULL,                -- 情报类型：news/pricing/product/hiring/financial/social/review
-    title TEXT,                              -- 标题
-    content TEXT,                            -- 内容
-    source_url TEXT,                         -- 来源 URL
-    source_name TEXT,                        -- 来源名称
-    collected_at TIMESTAMP,                  -- 采集时间
-    analysis_result TEXT,                    -- 分析结果（JSON）
-    importance TEXT DEFAULT 'normal',        -- 重要程度：high/normal/low
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-#### 5.2.3 分析报告表
-
-```sql
-CREATE TABLE IF NOT EXISTS bs_competitor_research_reports (
-    id SERIAL PRIMARY KEY,
-    report_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT,
-    user_id TEXT NOT NULL,
-    report_type TEXT NOT NULL,               -- 报告类型：battle_card/deep_dive/comparison/briefing/custom
-    title TEXT NOT NULL,                     -- 报告标题
-    content TEXT NOT NULL,                   -- 报告内容（Markdown）
-    competitor_ids TEXT,                     -- 关联的竞品 ID（逗号分隔）
-    status TEXT DEFAULT 'draft',             -- 状态：draft/published/archived
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### 5.3 技能拆分建议
-
-竞品研究作为一个 Skill 还是多个 Skill？
+### 5.2 Skill 拆分
 
 **推荐方案：单个 Skill（competitor-research）**
 
-理由：
-- 竞品管理的各个功能之间强关联（管理竞品 → 采集信息 → 分析 → 生成报告）
-- 用户交互是统一的对话式，不需要在不同 Skill 之间切换
-- 单个 Skill 的 SKILL.md 可以包含完整的系统提示词指导大模型完成全流程
+竞品研究作为一个完整的 Skill，包含深度搜索和报告生成两个阶段。理由：
 
-如果未来功能膨胀，可拆分为：
-- `competitor-manage`：竞品管理 + 信息采集
-- `competitor-analysis`：深度分析 + 报告生成
+- 两个阶段强关联（搜索结果直接用于报告生成）
+- 用户交互是统一对话式
+- 单个 SKILL.md 可以包含完整的搜索策略和报告模板
 
 ---
 
@@ -323,155 +406,188 @@ CREATE TABLE IF NOT EXISTS bs_competitor_research_reports (
 
 | 场景 | 用户输入示例 | 智能体行为 |
 |------|-------------|-----------|
-| 添加竞品 | "帮我跟踪 XX 公司的产品" | 搜索 XX 公司信息 → 生成初始画像 → 存入竞品列表 |
-| 竞品画像 | "生成 XX 的竞品画像" | 多源采集 → 生成全景画像 |
-| SWOT 分析 | "分析 XX 公司的 SWOT" | 采集数据 → 生成 SWOT 分析 |
-| 功能对比 | "对比我们和 XX 的产品功能" | 采集双方产品信息 → 生成对比矩阵 |
-| 定价分析 | "XX 的定价策略是怎样的" | 采集定价信息 → 生成定价对比 |
-| 生成 Battle Card | "给我一份 XX 的战斗卡" | 综合已有情报 → 生成 Battle Card |
-| 竞品动态 | "XX 最近有什么新动态" | 搜索最新信息 → 生成动态快讯 |
-| 深度报告 | "出一份 XX 的深度竞品报告" | 全流程执行 → 生成完整报告 |
-| 监控告警 | "如果 XX 降价了通知我" | 设定监控规则 → 定时检测 → 推送告警 |
+| **完整研究** | "帮我研究一下飞书这个竞品" | 启动深度搜索 → 逐页生成报告 |
+| **指定范围** | "只分析飞书的产品功能和定价" | 只搜索指定方面 → 生成对应报告页 |
+| **对比研究** | "对比分析飞书和钉钉" | 分别搜索两个竞品 → 生成对比报告 |
+| **追加研究** | "再深入研究一下飞书的用户口碑" | 追加搜索 → 追加材料 → 追加报告页 |
+| **预览报告** | （前端自动） | 每页生成后自动可预览 |
 
 ### 6.2 多轮对话示例
 
 ```
-用户：帮我分析一下飞书这个竞品
+用户：帮我研究一下飞书这个竞品
 
-智能体：好的，我来为你收集飞书的相关信息。
-[调用 WebSearchTool 搜索飞书产品信息]
-[调用 WebSearchTool 搜索飞书最新动态]
-[调用 WebSearchTool 搜索飞书用户评价]
+智能体：好的，我将从以下几个方面深度研究飞书：
+1. 公司基础信息与产品线
+2. 产品功能深度分析
+3. 用户口碑与市场评价
+4. 与我方产品的竞争态势
+5. 最新动态与战略方向
 
-已完成信息收集，以下是飞书概览：
-- 所属公司：字节跳动
-- 定位：企业协作平台（IM + 文档 + 会议 + 项目管理）
-- 目标客户：中大型企业，尤其是互联网/科技公司
-- 核心功能：即时通讯、在线文档、视频会议、OKR、审批流程
-- 定价模式：免费版 + 商业版（人均 360 元/年起）+ 旗舰版
+我将逐项搜索并整理材料，过程中你可以随时查看已生成的报告页面。
 
-你想要进一步了解哪方面？我可以：
-1. 生成 SWOT 分析
-2. 与钉钉/企业微信做功能对比
-3. 生成 Battle Card
-4. 分析用户口碑
-5. 生成完整的深度报告
+开始第一步：搜索飞书的基础信息...
+[调用 web_search 搜索 "飞书 产品介绍 官网"]
+[调用 web_search 搜索 "飞书 字节跳动 公司概况"]
+[调用 web_search 搜索 "飞书 定价 版本对比"]
 
-用户：和钉钉做个功能对比吧
+已完成基础信息搜索，材料已保存。
+正在生成第一页报告...
 
-智能体：好的，我来对比飞书和钉钉的核心功能...
-[采集钉钉产品信息]
-[生成功能对比矩阵]
+📄 第 1 页「公司概况」已生成，你可以在右侧预览。
 
-以下是飞书 vs 钉钉的核心功能对比：
+继续搜索产品功能分析...
+[调用 web_search 搜索 "飞书 核心功能 产品分析"]
+[调用 browser_automation 打开飞书产品页采集详细信息]
+...
 
-| 功能维度 | 飞书 | 钉钉 |
-|---------|------|------|
-| 即时通讯 | ★★★★★ 界面简洁，消息搜索强 | ★★★★ 功能完善，但界面较重 |
-| 文档协作 | ★★★★★ 原生在线文档，体验流畅 | ★★★☆ 集成第三方，体验一般 |
-| ... | ... | ... |
+📄 第 2 页「产品功能分析」已生成。
 
-需要我导出为表格，或者进一步分析吗？
+...（继续后续步骤）
+
+全部报告已生成完毕，共 8 页：
+1. 封面
+2. 公司概况 ✅
+3. 产品功能分析 ✅
+4. 定价策略 ✅
+5. 用户口碑与评价 ✅
+6. 竞争态势分析 ✅
+7. 最新动态 ✅
+8. 总结与建议 ✅
+
+你可以在右侧逐页预览，也可以下载完整报告。
+```
+
+### 6.3 追加研究示例
+
+```
+用户：再帮我深入分析一下飞书的用户口碑，特别是知乎上的评价
+
+智能体：好的，我来重点搜索知乎上关于飞书的用户评价。
+[调用 web_search 搜索 "飞书 知乎 评价 优缺点"]
+[调用 web_search 搜索 "飞书 使用体验 吐槽"]
+[调用 browser_automation 打开知乎相关帖子采集详细内容]
+
+已收集到 15 条知乎用户评价，更新了口碑材料。
+📄 第 5 页「用户口碑与评价」已更新，你可以重新预览。
 ```
 
 ---
 
-## 七、与其他子智能体的关系
+## 七、SUBAGENT.md 核心结构
 
-### 7.1 与 CRM 子智能体的协同
+```yaml
+---
+name: 竞品研究专家
+description: 基于深度搜索研究竞品，生成可预览的 HTML 竞品分析报告
+version: 1.0.0
+author: system
+capabilities:
+  - deep_web_research
+  - competitor_analysis
+  - report_generation
+  - html_report
+triggers:
+  keywords:
+    - 竞品
+    - 竞品分析
+    - 竞品研究
+    - 竞品报告
+    - 竞争对手
+    - 对手分析
+tools:
+  inherit: true
+skills:
+  allowed:
+    - baidu-search
+context:
+  max_input_tokens: 12000
+  max_output_tokens: 6000
+---
+```
 
-| 协同场景 | 说明 |
-|----------|------|
-| 竞争态势与客户关联 | CRM 子智能体的客户流失分析中发现竞品因素时，可触发竞品研究子智能体进行针对性分析 |
-| Battle Card 赋能销售 | 竞品研究生成的 Battle Card 可供 CRM 子智能体在客户跟进时引用 |
-| 赢单/输单反馈 | CRM 的赢单/输单数据可为竞品分析提供内部视角 |
+**Markdown Body 核心内容（概要）**：
 
-### 7.2 与知识库的关系
-
-| 协同场景 | 说明 |
-|----------|------|
-| 行业知识支撑 | 知识库中的行业报告、分析文章可为竞品分析提供背景知识 |
-| 分析结果沉淀 | 竞品分析报告可入库，作为后续对话的知识来源 |
+1. **身份定义**：竞品研究分析师，擅长通过深度搜索收集和分析竞品信息
+2. **工作流**：两阶段（深度搜索研究 → HTML 报告生成）
+3. **搜索策略**：5 个研究维度，每个维度 3-5 轮搜索，交叉验证
+4. **材料管理**：每完成一个维度的搜索，整理为 Markdown 材料文件保存
+5. **报告生成**：逐页生成 HTML，每页调用 `content_generate` + `register_download_file`
+6. **HTML 模板**：提供完整的 CSS 样式系统和页面结构模板
+7. **行为约束**：不编造信息、标注来源、不确定的结论标注置信度
 
 ---
 
 ## 八、实施优先级
 
-### Phase 1：MVP（核心功能，2-3 周）
+### Phase 1：核心流程（2-3 周）
 
 | 功能 | 说明 | 优先级 |
 |------|------|--------|
-| 竞品管理 | 添加/删除/查看竞品列表 | P0 |
-| 竞品信息采集 | 基于搜索的多源信息收集 | P0 |
-| SWOT 分析 | 自动生成单个竞品的 SWOT | P0 |
-| 功能对比矩阵 | 两个产品的功能并排对比 | P0 |
-| Battle Card 生成 | 单页竞品速览 | P0 |
-| 竞品深度报告 | 完整的竞品分析报告 | P1 |
+| 深度搜索流程 | 5 维度多轮搜索，材料文件保存 | P0 |
+| HTML 报告逐页生成 | 基于 content_generate 逐页生成，register_download_file 注册 | P0 |
+| 前端 HTML 预览 | AttachmentPreviewPanel 新增 HTML iframe 预览 | P0 |
+| SUBAGENT.md 编写 | 完整的子智能体定义和提示词 | P0 |
+| 后端 MIME 类型 | 补充 .html 的 MIME 映射 | P0 |
 
-### Phase 2：增强功能（2 周）
-
-| 功能 | 说明 | 优先级 |
-|------|------|--------|
-| 定价对比分析 | 竞品定价策略对比 | P1 |
-| 用户评价情感分析 | 从评价中提取正负面情感 | P1 |
-| 竞品动态快讯 | 最近动态摘要 | P1 |
-| 市场定位映射 | 2×2 定位图分析 | P2 |
-| 波特五力分析 | 行业竞争态势 | P2 |
-
-### Phase 3：持续监控与自动化（2 周）
+### Phase 2：增强功能（1-2 周）
 
 | 功能 | 说明 | 优先级 |
 |------|------|--------|
-| 定价变更检测 | 竞品定价页面变化检测 | P2 |
-| 重大新闻告警 | 竞品重大事件推送 | P2 |
-| 定期情报简报 | 每周自动生成竞品动态摘要 | P2 |
-| 定制化报告模板 | 用户自定义报告格式 | P3 |
+| 追加研究 | 在已有报告基础上追加搜索维度 | P1 |
+| 对比报告 | 两个竞品的并排对比分析 | P1 |
+| 报告导出 | 支持将 HTML 报告合并导出为 PDF | P2 |
+| 自定义模板 | 用户指定报告的维度和格式 | P2 |
 
-### Phase 4：高级功能（按需）
+### Phase 3：高级功能（按需）
 
 | 功能 | 说明 | 优先级 |
 |------|------|--------|
-| 招聘信息分析 | 从 JD 推测竞品战略方向 | P3 |
-| 财务数据分析 | 上市公司财报分析 | P3 |
-| 趋势预测 | 基于历史数据预测竞品动向 | P3 |
-| 竞品关系图谱 | 展示竞品之间的投资/合作/竞争关系 | P3 |
+| 历史报告管理 | 查看、对比历次研究报告 | P3 |
+| 定期刷新 | 定期重新搜索更新报告 | P3 |
+| 多竞品矩阵 | 3+ 竞品的综合对比矩阵 | P3 |
 
 ---
 
 ## 九、设计原则
 
-1. **数据驱动**：所有分析结论必须基于实际采集到的数据，不编造、不推测无依据的结论
-2. **可溯源**：每条情报和分析结论都标注来源 URL 和采集时间
-3. **渐进增强**：先实现核心分析能力（信息采集 + 报告生成），再扩展监控和自动化
-4. **租户隔离**：竞品列表、情报数据、分析报告严格按 tenant_id 隔离
-5. **复用现有工具**：优先使用项目已有的 WebSearchTool、BrowserAutomationTool、ContentGenerateTool 等
-6. **对话式交互**：所有功能通过自然语言对话触发，不需要学习特殊命令
-7. **结构化输出**：分析结果以表格、矩阵等结构化格式呈现，便于阅读和导出
+1. **搜索驱动**：一切分析基于实际搜索结果，不编造、不推测无依据的结论
+2. **可溯源**：每条信息标注来源 URL 和搜索时间
+3. **渐进产出**：逐页生成、逐页可预览，用户不需要等全部完成
+4. **文件存储**：材料文件和报告文件都存文件系统，不引入新的数据库表
+5. **复用现有工具**：web_search、browser_automation、content_generate、register_download_file
+6. **对话式交互**：所有功能通过自然语言对话触发
+7. **安全预览**：HTML 报告在 sandbox iframe 中预览，不执行脚本
 
 ---
 
-## 十、风险与注意事项
+## 十、文件变更清单
+
+### 新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `subagents/competitor-research/SUBAGENT.md` | 子智能体定义 |
+| `src/skills/competitor-research-1.0.0/SKILL.md` | 竞品研究技能定义（搜索策略 + 报告模板） |
+| `src/skills/competitor-research-1.0.0/scripts/research_helper.py` | 材料文件管理辅助脚本（保存/读取材料文件、生成 meta.json） |
+
+### 修改文件
+
+| 文件 | 改动范围 | 说明 |
+|------|----------|------|
+| `frontend/src/components/AttachmentPreviewPanel.vue` | 新增 `previewType === 'html'` 分支 | HTML iframe 预览 |
+| `src/tools/file/register_download_tool.py` | mime_type_map 添加 `.html` | HTML 文件 MIME 类型 |
+| `src/main.py` | MIME 映射添加 `.html` | 文件服务返回正确的 MIME 类型 |
+
+---
+
+## 十一、风险与注意事项
 
 | 风险 | 说明 | 缓解措施 |
 |------|------|----------|
-| 数据准确性 | 互联网信息可能过时或不准确 | 标注信息来源和时间，对关键数据交叉验证 |
-| 采集频率 | 过于频繁的搜索可能被搜索引擎限制 | 采用合理间隔，优先利用已有情报 |
-| 分析深度 | LLM 分析可能停留在表面 | 通过多轮采集 + 结构化分析框架提升深度 |
-| 数据量 | 竞品情报数据可能快速增长 | 设置数据保留策略，定期归档旧数据 |
-| 租户差异 | 不同行业的竞品分析需求差异大 | 保持通用框架，通过 prompt 引导适应不同场景 |
-
----
-
-## 参考来源
-
-- [Crayon — 竞争情报平台](https://www.crayon.co/)
-- [Crayon 2025 竞争情报现状报告](https://www.crayon.co/state-of-competitive-intelligence)
-- [Klue — 如何用 AI 做竞品分析](https://klue.com/blog/how-to-do-competitive-analysis-with-ai)
-- [Contify — 五步构建竞争情报流程](https://www.contify.com/resources/blog/competitive-intelligence-process/)
-- [Competitive Intelligence Alliance — CI 循环](https://www.competitiveintelligencealliance.io/the-competitive-intelligence-cycle/)
-- [Contify — 最佳竞争情报工具](https://www.contify.com/resources/blog/best-competitive-intelligence-tools/)
-- [SuperAGI — AI 竞品分析工具对比](https://web.superagi.com/comparing-the-best-ai-competitor-analysis-tools-ahrefs-search-atlas-and-crayon-in-2025/)
-- [Noimosai — 2026 五大竞品分析自主 AI Agent](https://noimosai.com/en/blog/5-best-autonomous-ai-agents-for-competitor-analysis-in-2026-automate-your-market-intelligence)
-- [Autobound — 15 大竞争情报工具 2026](https://www.autobound.ai/blog/top-15-competitive-intelligence-tools-2026)
-- [Jitterbit — 竞品定价 AI Agent](https://www.jitterbit.com/ai/jitterbit-competitive-pricing-agent/)
-- [ArXiv — Agent 设计模式目录](https://arxiv.org/html/2405.10467v4)
+| 搜索耗时 | 5 维度 × 3-5 轮搜索 = 15-25 次 API 调用 | 逐维度推进，每完成一个维度即向用户报告进度 |
+| 数据准确性 | 互联网信息可能过时或不准确 | 标注来源和时间，关键数据交叉验证 |
+| HTML 渲染安全 | 恶意 HTML 可能执行脚本 | sandbox iframe + 生成的 HTML 不含 JavaScript |
+| LLM 生成质量 | content_generate 产出的 HTML 格式可能不稳定 | 在提示词中提供严格的 HTML 模板和 CSS 样式 |
+| 上下文窗口 | 大量搜索结果可能超出 LLM 上下文 | 搜索结果先整理为材料文件，报告生成时只加载对应维度的材料 |
+| 并发写入 | 多个搜索结果同时写入同一材料文件 | 单线程顺序执行（Agent 循环是顺序的） |
