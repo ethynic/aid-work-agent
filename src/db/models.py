@@ -17,7 +17,7 @@ from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.models.enums import UserStatus
-from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, invalidate_user_cache
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern, invalidate_user_cache
 
 
 # ============== 密码哈希 ==============
