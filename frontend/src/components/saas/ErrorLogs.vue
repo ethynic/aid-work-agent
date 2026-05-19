@@ -309,19 +309,11 @@ async function doCleanup() {
 function copyToClipboard() {
   if (!selectedLog.value) return
 
-  const text = `错误日志 #${selectedLog.value.id}
-时间: ${formatDateTime(selectedLog.value.timestamp)}
-模块: ${selectedLog.value.module || '-'}
-类型: ${selectedLog.value.error_type || '-'}
-状态: ${getStatusLabel(selectedLog.value.status)}
-
+  const text = `模块: ${selectedLog.value.module || '-'}
 消息:
 ${selectedLog.value.message}
-
 堆栈:
-${selectedLog.value.traceback || '(无)'}
-
-${selectedLog.value.processed_by ? `处理人: ${selectedLog.value.processed_by}\n处理时间: ${formatDateTime(selectedLog.value.processed_at)}` : ''}
+${selectedLog.value.traceback || '-'}
 `
 
   navigator.clipboard.writeText(text).then(() => {

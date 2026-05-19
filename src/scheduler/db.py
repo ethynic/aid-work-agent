@@ -150,8 +150,8 @@ class ScheduledTaskDB:
             cursor.execute(f"""
                 UPDATE scheduled_tasks
                 SET total_runs = total_runs + 1,
-                    success_count = success_count + CASE WHEN {placeholder} THEN 1 ELSE 0 END,
-                    fail_count = fail_count + CASE WHEN {placeholder} THEN 1 ELSE 0 END,
+                    success_count = success_count + {placeholder},
+                    fail_count = fail_count + {placeholder},
                     last_run_at = {placeholder},
                     updated_at = {placeholder}
                 WHERE task_id = {placeholder}
