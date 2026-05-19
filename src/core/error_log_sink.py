@@ -3,15 +3,14 @@
 
 自定义 Loguru sink，将 ERROR 级别日志异步写入数据库 log_error 表。
 - 仅记录 ERROR 及以上级别日志
-- 异步写入，不阻塞主流程
+- 由 loguru enqueue 机制在独立线程中消费，不阻塞主流程
 - 写入失败不影响文件日志（降级方案）
 - 支持敏感信息过滤
 """
 
-import asyncio
 import re
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -36,9 +35,12 @@ def sanitize_error_info(error_msg: str) -> str:
     return error_msg
 
 
-async def error_log_sink(message: Any) -> None:
+def error_log_sink(message: Any) -> None:
     """
     Loguru 自定义 Sink，将 ERROR 级别日志写入数据库。
+
+    此函数由 loguru enqueue 机制在独立线程中调用，
+    直接同步写入 DB，不依赖 asyncio event loop。
 
     Args:
         message: Loguru 的 Message 对象（包含完整日志信息）
@@ -65,25 +67,20 @@ async def error_log_sink(message: Any) -> None:
         # 提取完整堆栈
         traceback = None
         if exception and exception.traceback:
-            # 使用 format_exception 来格式化堆栈
             import traceback as tb_module
-            if exception.traceback:
-                traceback = "".join(tb_module.format_exception(
-                    type(exception.value),
-                    exception.value,
-                    exception.traceback
-                ))
+            traceback = "".join(tb_module.format_exception(
+                type(exception.value),
+                exception.value,
+                exception.traceback
+            ))
 
         # 过滤敏感信息
         message_text = sanitize_error_info(message_text)
         if traceback:
             traceback = sanitize_error_info(traceback)
 
-        # 使用线程池执行数据库写入（避免阻塞 async 事件循环）
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            _write_to_db,
+        # 直接在消费线程中同步写入数据库
+        _write_to_db(
             module,
             error_type,
             message_text,
@@ -99,7 +96,7 @@ async def error_log_sink(message: Any) -> None:
 
 def _write_to_db(module: str, error_type: str, message: str, traceback: str, timestamp: datetime) -> None:
     """
-    同步写入数据库（在线程池中执行）。
+    同步写入数据库。
 
     注意：必须保证此函数不抛出任何异常，否则会导致 logger 崩溃。
     """
@@ -125,7 +122,7 @@ def register_error_log_sink() -> None:
     logger.add(
         error_log_sink,
         level="ERROR",  # 仅处理 ERROR 及以上级别
-        enqueue=True,   # 使用队列，异步处理
+        enqueue=True,   # 使用队列，在独立线程中处理
         catch=True,     # 捕获异常，不影响主程序
     )
     logger.info("错误日志数据库 sink 已注册")
