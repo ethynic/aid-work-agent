@@ -304,6 +304,7 @@ class Agent:
         from src.tools.file.file_reader_tool import FileReaderTool, FileListTool
         from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.file.register_download_tool import RegisterDownloadFileTool
+        from src.tools.file.text_file_writer import FileWriteTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
         from src.tools.network.http_api import HttpApiTool
 
@@ -324,6 +325,7 @@ class Agent:
         self.tool_registry.register(FileListTool())
         self.tool_registry.register(UploadToRemoteTool())
         self.tool_registry.register(RegisterDownloadFileTool())
+        self.tool_registry.register(FileWriteTool())
         
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
@@ -1286,6 +1288,11 @@ class Agent:
             if download_tool and hasattr(download_tool, 'set_user_id'):
                 download_tool.set_user_id(user.user_id)
 
+            # 注入 user_id 到文本文件生成工具
+            file_write_tool = self.tool_registry.get_tool("file_write")
+            if file_write_tool and hasattr(file_write_tool, 'set_user_id'):
+                file_write_tool.set_user_id(user.user_id)
+
         # 注入 tenant_id 到需要租户隔离的工具（子智能体线程中 ContextVar 不可用）
         _resolve_tenant_id = self._init_tenant_id
         if not _resolve_tenant_id:
@@ -1302,6 +1309,9 @@ class Agent:
             # 注入 tenant_id 到文件下载工具
             if download_tool and hasattr(download_tool, 'set_tenant_id'):
                 download_tool.set_tenant_id(_resolve_tenant_id)
+            # 注入 tenant_id 到文本文件生成工具
+            if file_write_tool and hasattr(file_write_tool, 'set_tenant_id'):
+                file_write_tool.set_tenant_id(_resolve_tenant_id)
         
         # Add timestamp context to help LLM understand current time
         current_time = datetime.now()

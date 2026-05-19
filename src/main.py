@@ -685,6 +685,8 @@ async def upload_file(file: UploadFile = File(...)):
             '.jpg': 'image/jpeg',
             '.jpeg': 'image/jpeg',
             '.gif': 'image/gif',
+            '.html': 'text/html',
+            '.htm': 'text/html',
             '.mp3': 'audio/mpeg',
             '.mp4': 'video/mp4',
         }
@@ -826,6 +828,8 @@ def _get_file_info(file_id: str) -> dict | None:
                     '.jpg': 'image/jpeg',
                     '.jpeg': 'image/jpeg',
                     '.gif': 'image/gif',
+                    '.html': 'text/html',
+                    '.htm': 'text/html',
                     '.mp3': 'audio/mpeg',
                     '.mp4': 'video/mp4',
                 }
@@ -1264,15 +1268,16 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         if full_response:
                             # 从 progress 事件中提取下载文件信息
                             downloadable_files = []
+                            download_tool_names = {"register_download_file", "file_write"}
                             for event in results.get('progress', []):
                                 if (event.get("type") == "tool_result"
-                                    and event.get("toolName") == "register_download_file"
+                                    and event.get("toolName") in download_tool_names
                                     and event.get("success") is True):
                                     result = event.get("result", {})
                                     if result.get("file_id"):
                                         downloadable_files.append({
                                             "file_id": result["file_id"],
-                                            "file_name": result.get("file_name", "未命名文件"),
+                                            "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
                                             "file_size": result.get("file_size", 0),
                                             "download_url": result.get("download_url", ""),
                                             "mime_type": result.get("mime_type", ""),

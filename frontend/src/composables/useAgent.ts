@@ -197,7 +197,8 @@ export function useAgent() {
           const toolDisplayName = getToolDisplayName(toolName, {})
           if (success) {
             // 提取下载文件信息到助手消息
-            if (toolName === 'register_download_file' && result?.file_id) {
+            const downloadToolNames = ['register_download_file', 'file_write']
+            if (downloadToolNames.includes(toolName) && result?.file_id) {
               const lastMsg = messages.value[messages.value.length - 1]
               if (lastMsg && lastMsg.role === 'assistant') {
                 if (!lastMsg.downloadableFiles) {
@@ -207,7 +208,7 @@ export function useAgent() {
                 if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
                   lastMsg.downloadableFiles.push({
                     file_id: result.file_id,
-                    file_name: result.file_name || '未命名文件',
+                    file_name: result.download_file_name || result.file_name || '未命名文件',
                     file_size: result.file_size || 0,
                     download_url: result.download_url || `/api/files/${result.file_id}/download`,
                     mime_type: result.mime_type || '',
