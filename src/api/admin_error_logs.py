@@ -96,10 +96,10 @@ def _get_error_logs_from_db(
 
         # 查询总数
         cursor.execute(f"""
-            SELECT COUNT(*) FROM log_error
+            SELECT COUNT(*) AS cnt FROM log_error
             WHERE {where_clause}
         """, params)
-        total = cursor.fetchone()[0]
+        total = cursor.fetchone()['cnt']
 
         # 查询数据（按时间倒序）
         cursor.execute(f"""
@@ -112,11 +112,10 @@ def _get_error_logs_from_db(
         """, params)
 
         rows = cursor.fetchall()
-        columns = [desc[0] for desc in cursor.description]
 
         data = []
         for row in rows:
-            row_dict = dict(zip(columns, row))
+            row_dict = dict(row)
             # 格式化时间
             if row_dict.get('timestamp'):
                 row_dict['timestamp'] = str(row_dict['timestamp'])
