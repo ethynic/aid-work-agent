@@ -915,9 +915,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     current_user = auth.get_current_user(http_request)
     user_id = current_user["user_id"] if current_user else "anonymous"
 
-    # 调试日志：记录请求关键信息
-    logger.info(f"[并发控制调试] chat_stream 请求: subagent={request.subagent}, instance_id={request.instance_id}, session_id={request.session_id}, user_id={user_id}")
-
     # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
     if request.subagent and current_user and current_user.get("tenant_id") != "demo":
         from src.saas.permissions.checker import check_agent_access
@@ -931,7 +928,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
     # 并发控制：验证并自动锁定实例（如果提供了 instance_id）
     instance_id = request.instance_id
-    logger.info(f"[并发控制调试] 前置条件检查: instance_id={instance_id}, saas.enabled={settings.saas.enabled}, current_user={current_user is not None}")
     # TODO: 临时修改 - 屏蔽实例并发控制
     # 当 instance_id 为空时，跳过实例并发控制检查
     # 未来需要恢复实例并发控制逻辑
@@ -957,12 +953,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "error": "实例不存在",
             }, status_code=404)
 
-        logger.info(f"[并发控制调试] 实例状态: instance_id={instance_id}, status={instance.get('status')}, current_session_id={instance.get('current_session_id')}, locked_at={instance.get('locked_at')}")
-
         # 检查实例当前是否被其他会话占用
         if instance["current_session_id"] is not None and instance["current_session_id"] != request.session_id:
-            logger.warning(f"[并发控制调试] 实例被占用, instance_id={instance_id}, current_session={instance.get('current_session_id')}, current_user={instance.get('current_user_id')}")
-
             # 获取当前使用者的用户名
             holder_username = "其他用户"
             is_same_user = False
@@ -997,14 +989,12 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
         # 自动锁定空闲实例
         if instance["current_session_id"] is None:
-            logger.info(f"[并发控制调试] 实例空闲，自动锁定: instance_id={instance_id}, session_id={request.session_id}, user_id={user_id}")
             lock_result = InstanceService.try_lock_instance(
                 instance_id=instance_id,
                 session_id=request.session_id,
                 user_id=user_id,
             )
             if not lock_result.get("success") and not lock_result.get("was_idle"):
-                logger.warning(f"[并发控制调试] 自动锁定失败: instance_id={instance_id}, result={lock_result}")
                 # 锁定失败（竞态情况），通过 SSE 返回友好提示（带 busy 标志）
                 instance_name = instance.get("instance_name") or instance.get("display_name") or "数字员工"
                 busy_message = f"[{instance_name}] 正在被其他用户占用，请稍后再试或选择其他数字员工"
@@ -1023,7 +1013,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
 
                 return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
-            logger.info(f"[并发控制调试] 自动锁定成功: instance_id={instance_id}, was_idle={lock_result.get('was_idle')}")
 
     # 获取当前租户ID（所有分支共享）
     from src.saas.context import get_current_tenant_id
