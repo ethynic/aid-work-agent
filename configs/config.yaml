@@ -162,3 +162,13 @@ scheduler:
   execution_timeout: 300
   coalesce_missed: true
   misfire_grace_time: 300
+
+# 企业微信渠道配置
+wecom:
+  waiting_indicator:
+    enabled: true
+    delay_seconds: 5
+    messages:
+      - "正在思考中..."
+      - "收到，让我想一想..."
+      - "正在处理，请稍候..."

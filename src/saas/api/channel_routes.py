@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import random
 import time
 import xml.etree.ElementTree as ET
 from typing import Optional
@@ -175,11 +176,31 @@ async def _process_tenant_wecom_background(
         from src.core.agent_router import agent_router
         agent = agent_router.get_agent(subagent_type, session_id)
 
-        # Agent 处理
-        response_text = await agent.process_message_sync(
-            user_input=message.text,
-            session_id=session_id,
+        # 延迟等待提示：Agent 处理超过阈值时发送等待消息
+        from src.config.settings import settings
+        indicator_config = settings.wecom.waiting_indicator
+
+        agent_task = asyncio.create_task(
+            agent.process_message_sync(
+                user_input=message.text,
+                session_id=session_id,
+            )
         )
+
+        if indicator_config.enabled and indicator_config.messages:
+            await asyncio.sleep(indicator_config.delay_seconds)
+            if not agent_task.done():
+                indicator_msg = random.choice(indicator_config.messages)
+                try:
+                    await adapter.send_waiting_indicator(message.user_id, indicator_msg)
+                    logger.debug(
+                        f"[Tenant WeCom] 等待提示已发送: user={message.user_id}, "
+                        f"delay={indicator_config.delay_seconds}s"
+                    )
+                except Exception as e:
+                    logger.warning(f"[Tenant WeCom] 等待提示发送失败: {e}")
+
+        response_text = await agent_task
 
         # 记录助手回复
         channel_session_manager.add_message(

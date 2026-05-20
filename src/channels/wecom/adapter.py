@@ -380,6 +380,16 @@ class WeComAdapter(ChannelAdapter):
         msg_data["touser"] = user_id
         return await self._send_with_retry(msg_data)
 
+    async def send_waiting_indicator(self, user_id: str, message: str) -> bool:
+        """
+        发送等待提示消息（纯文本，绕过应用层速率限制）。
+
+        此方法故意不调用 _check_rate_limit()，因为：
+        1. 等待提示是系统消息，不应计入用户消息配额
+        2. 即使用户已触发速率限制，等待提示也应发出（改善 UX）
+        """
+        return await self.send_text(message, user_id)
+
     async def _send_with_retry(self, msg_data: Dict[str, Any]) -> bool:
         """
         发送消息（带重试和 token 刷新）
