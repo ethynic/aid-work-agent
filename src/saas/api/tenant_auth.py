@@ -461,8 +461,8 @@ async def admin_login(request: AdminLoginRequest):
 
 
 @router.post("/login/password")
-async def admin_password_login(http_request: Request, request: AdminPasswordLoginRequest):
-    """管理员密码+图形验证码登录"""
+async def password_login(http_request: Request, request: AdminPasswordLoginRequest):
+    """密码+图形验证码登录"""
     from src.db.models import UserDB
     from src.db.database import get_db_connection
     import secrets
@@ -489,7 +489,7 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
     is_phone = False
 
     if identifier.isdigit() and len(identifier) == 11:
-        user = UserDB.get_by_phone(identifier)
+        user = UserDB.get_by_phone(identifier, bypass_cache=True)  # 登录需要 password_hash，必须绕过缓存
         is_phone = True
     else:
         # 按用户名查找
@@ -533,6 +533,10 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
             debug=debug_info
         )
 
+    # 临时调试：打印用户信息
+    logger.debug(f"临时调试：password_login 获取到的 user 信息: user_id={user.get('user_id')}, phone={user.get('phone')}, username={user.get('username')}, role={user.get('role')}, tenant_id={user.get('tenant_id')}, password_hash={user.get('password_hash')}, password_hash类型={type(user.get('password_hash'))}, password_hash bool={bool(user.get('password_hash'))}")
+    logger.debug(f"临时调试：user 所有 keys: {list(user.keys())}")
+
     # 4. 平台管理员登录
     qb_token_pass = False
     if is_phone and admin_phones:   # 以手机号登录
@@ -550,6 +554,8 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
 
     if not qb_token_pass:   # 校验密码
         password_hash = user.get("password_hash")
+        # 临时调试：打印 password_hash 详情
+        logger.debug(f"临时调试：password_hash 值={repr(password_hash)}, 类型={type(password_hash)}, len={len(password_hash) if password_hash else 0}, bool={bool(password_hash)}")
         if not password_hash:
             # 先检查是否是平台管理员，如果不是则提示使用平台管理员账号登录
             role = user.get("role", "user")
@@ -569,14 +575,14 @@ async def admin_password_login(http_request: Request, request: AdminPasswordLogi
         from src.db.models import hash_password, verify_password
         input_password_hash = hash_password(request.password)
         password_verified = verify_password(request.password, password_hash)
-        debug_info = (
-            f"password_hash_in_db={password_hash}, "
-            f"input_password_hash={input_password_hash}, "
-            f"verify_result={password_verified}"
-        )
-        logger.warning(f"用户密码验证失败: {debug_info}")
 
         if not password_verified:
+            debug_info = (
+                f"password_hash_in_db={password_hash}, "
+                f"input_password_hash={input_password_hash}, "
+                f"verify_result={password_verified}"
+            )
+            logger.warning(f"用户密码验证失败: {debug_info}")
             return AdminLoginResponse(
                 success=False,
                 message="手机号或密码有误",
