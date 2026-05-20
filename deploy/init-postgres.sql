@@ -104,11 +104,13 @@ CREATE TABLE IF NOT EXISTS chat_records (
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
+    source_type TEXT DEFAULT 'chat',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_chat_records_session ON chat_records(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_records_source_type ON chat_records(source_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_user ON chat_records(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);

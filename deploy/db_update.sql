@@ -182,6 +182,10 @@ ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS subagent_calls TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_time ON chat_records(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_model ON chat_records(tenant_id, model, created_at DESC);
 
+-- 2026-05-20，chat_records 增加 source_type 区分聊天来源（chat/wecom/dingtalk/feishu）
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'chat';
+CREATE INDEX IF NOT EXISTS idx_chat_records_source_type ON chat_records(source_type, created_at DESC);
+
 -- 2026-05-09，旅游报价定价数据表（9张）
 -- 车型与包车价格
 CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (

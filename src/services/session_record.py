@@ -87,11 +87,12 @@ class SessionRecordService:
     """
 
     def __init__(self, session_id: str, user_id: str, user_message: str,
-                 tenant_id: str = None):
+                 tenant_id: str = None, source_type: str = "chat"):
         self.session_id = session_id
         self.tenant_id = tenant_id
         self.user_id = user_id
         self.user_message = user_message
+        self.source_type = source_type
 
         # 执行详情
         self.execution_details = ExecutionDetails()
@@ -257,7 +258,8 @@ class SessionRecordService:
                 subagent_calls=self.subagent_calls if self.subagent_calls else None,
                 status=self.status,
                 error_message=self.error_message,
-                duration_ms=self.get_duration_ms()
+                duration_ms=self.get_duration_ms(),
+                source_type=self.source_type
             )
 
             if record:
@@ -294,14 +296,16 @@ class SessionRecordManager:
         session_id: str,
         user_id: str,
         user_message: str,
-        tenant_id: str = None
+        tenant_id: str = None,
+        source_type: str = "chat"
     ) -> SessionRecordService:
         """开始一条新的记录"""
         cls._local.record_service = SessionRecordService(
             session_id=session_id,
             user_id=user_id,
             user_message=user_message,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            source_type=source_type
         )
         return cls._local.record_service
 

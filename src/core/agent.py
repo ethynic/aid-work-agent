@@ -1621,7 +1621,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             # 累加 token 用量到 SessionRecordService（纯内存操作，异常隔离）
             try:
                 from src.services.session_record import SessionRecordManager
-                _record = SessionRecordManager.get_current_record()
+                _record = getattr(self, '_explicit_record_service', None) or SessionRecordManager.get_current_record()
                 if _record:
                     _record.add_llm_usage(response.get("usage", {}))
                     _record.increment_iterations()
@@ -1630,7 +1630,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         _record.set_provider(self.llm.get_provider_name())
             except Exception:
                 logger.debug(f"Failed to record token usage", exc_info=True)
-            
+
             if settings.app.llm_debug:
                 logger.debug(f"\n{'='*60}\n"
                             f"[LLM_DEBUG] LLM Response - Iteration {iteration}\n"
@@ -2222,13 +2222,33 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         user_input: str,
         session_id: str,
         user: Optional[User] = None,
-        attachments: Optional[List[Dict[str, Any]]] = None
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        record_service=None,
+        progress_callback=None
     ) -> str:
-        """Process message and return complete response"""
-        response_parts = []
-        async for chunk in self.process_message(user_input, session_id, user, attachments):
-            response_parts.append(chunk)
-        return "".join(response_parts)
+        """Process message and return complete response
+
+        Args:
+            record_service: Optional SessionRecordService for token tracking.
+                When provided (e.g. from channel routes running in asyncio),
+                the agent accumulates token usage to this service instead of
+                relying on thread-local SessionRecordManager.
+            progress_callback: Optional async callback for progress events
+                (tool_start, tool_result, etc.)
+        """
+        # Store explicit record_service so the inner process_message()
+        # can access it without relying on thread-local storage
+        self._explicit_record_service = record_service
+        try:
+            response_parts = []
+            async for chunk in self.process_message(
+                user_input, session_id, user, attachments,
+                progress_callback=progress_callback
+            ):
+                response_parts.append(chunk)
+            return "".join(response_parts)
+        finally:
+            self._explicit_record_service = None
     
     def _update_task_record(self, record) -> None:
         """
@@ -2413,7 +2433,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # 累加子智能体 token 用量到 SessionRecordService（纯内存操作，异常隔离）
                 try:
                     from src.services.session_record import SessionRecordManager
-                    _record = SessionRecordManager.get_current_record()
+                    _record = getattr(self, '_explicit_record_service', None) or SessionRecordManager.get_current_record()
                     if _record:
                         _record.add_llm_usage(response.get("usage", {}))
                         _record.increment_iterations()

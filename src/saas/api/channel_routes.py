@@ -28,6 +28,7 @@ from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.services.channel_factory import ChannelFactory
 from src.channels.session import channel_session_manager
 from src.channels.idempotency import MessageDeduplicator
+from src.services.session_record import SessionRecordManager
 
 router = APIRouter(tags=["租户渠道回调"])
 
@@ -88,21 +89,58 @@ async def _process_tenant_channel_message(
     )
     session_id = session["session_id"]
 
-    # 5. 获取 agent（根据渠道配置的 subagent_type 路由）
+    # 5. 保存用户消息到 channel_messages
+    if message.text:
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="user",
+            content=message.text,
+            message_type=message.message_type if hasattr(message, 'message_type') else "text",
+            metadata=getattr(message, 'raw_message', None),
+            tenant_id=tenant_id,
+        )
+
+    # 6. 获取 agent（根据渠道配置的 subagent_type 路由）
     from src.core.agent_router import agent_router
     agent = agent_router.get_agent(subagent_type, session_id)
 
-    # 6. 处理消息
+    # 7. 开始记录 token 消耗
+    record_service = SessionRecordManager.start_record(
+        session_id=session_id,
+        user_id=user_id or message.user_id,
+        user_message=message.text,
+        tenant_id=tenant_id,
+        source_type=channel_type,  # "wecom" / "dingtalk" / "feishu"
+    )
+    record_service.set_model(agent.llm.get_model_name())
+    record_service.set_provider(agent.llm.get_provider_name())
+
+    # 8. 处理消息
     try:
         response_text = await agent.process_message_sync(
             user_input=message.text,
             session_id=session_id,
+            record_service=record_service,
         )
+        record_service.complete(response_text)
     except Exception as e:
         logger.error(f"Agent error for tenant {tenant_id}: {e}")
+        record_service.mark_error(str(e))
+        SessionRecordManager.end_record()
         return "error"
 
-    # 7. 发送响应
+    SessionRecordManager.end_record()
+
+    # 9. 保存助手回复到 channel_messages
+    channel_session_manager.add_message(
+        session_id=session_id,
+        role="assistant",
+        content=response_text,
+        message_type="text",
+        tenant_id=tenant_id,
+    )
+
+    # 10. 发送响应
     try:
         from src.models.message import UnifiedResponse
         response = UnifiedResponse.from_text(
@@ -142,9 +180,10 @@ async def _process_tenant_wecom_background(
             return
 
         # 自动注册用户
+        user_id = None
         try:
             from src.saas.services.auto_register import ensure_user_registered
-            await ensure_user_registered("wecom", message.user_id, tenant_id)
+            user_id = await ensure_user_registered("wecom", message.user_id, tenant_id)
         except Exception as e:
             logger.warning(f"[Tenant WeCom] 自动注册失败: {e}")
 
@@ -176,6 +215,17 @@ async def _process_tenant_wecom_background(
         from src.core.agent_router import agent_router
         agent = agent_router.get_agent(subagent_type, session_id)
 
+        # 开始记录 token 消耗
+        record_service = SessionRecordManager.start_record(
+            session_id=session_id,
+            user_id=user_id,
+            user_message=message.text,
+            tenant_id=tenant_id,
+            source_type="wecom",
+        )
+        record_service.set_model(agent.llm.get_model_name())
+        record_service.set_provider(agent.llm.get_provider_name())
+
         # 延迟等待提示：Agent 处理超过阈值时发送等待消息
         from src.config.settings import settings
         indicator_config = settings.wecom.waiting_indicator
@@ -184,6 +234,7 @@ async def _process_tenant_wecom_background(
             agent.process_message_sync(
                 user_input=message.text,
                 session_id=session_id,
+                record_service=record_service,
             )
         )
 
@@ -201,6 +252,8 @@ async def _process_tenant_wecom_background(
                     logger.warning(f"[Tenant WeCom] 等待提示发送失败: {e}")
 
         response_text = await agent_task
+        record_service.complete(response_text)
+        SessionRecordManager.end_record()
 
         # 记录助手回复
         channel_session_manager.add_message(
@@ -216,6 +269,14 @@ async def _process_tenant_wecom_background(
 
     except Exception as e:
         logger.error(f"[Tenant WeCom] 后台处理失败: tenant={tenant_id}, error={e}")
+        # 标记 record 为失败
+        try:
+            _record = SessionRecordManager.get_current_record()
+            if _record:
+                _record.mark_error(str(e))
+                SessionRecordManager.end_record()
+        except Exception:
+            pass
         # 尝试发送错误提示
         try:
             if adapter and message.user_id:

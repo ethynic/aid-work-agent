@@ -671,7 +671,8 @@ class ChatRecordDB:
         subagent_calls: list = None,
         status: str = "completed",
         error_message: str = None,
-        duration_ms: int = 0
+        duration_ms: int = 0,
+        source_type: str = "chat"
     ) -> Optional[Dict[str, Any]]:
         """创建新的会话记录"""
         record_id = generate_record_id()
@@ -685,11 +686,11 @@ class ChatRecordDB:
                     (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                      total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
                      model, provider, execution_details, agent_iterations, subagent_calls,
-                     status, error_message, duration_ms)
+                     status, error_message, duration_ms, source_type)
                     VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder})
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (
                     record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                     total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
@@ -697,7 +698,7 @@ class ChatRecordDB:
                     json.dumps(execution_details) if execution_details else None,
                     agent_iterations,
                     json.dumps(subagent_calls) if subagent_calls else None,
-                    status, error_message, duration_ms
+                    status, error_message, duration_ms, source_type
                 ))
                 conn.commit()
 

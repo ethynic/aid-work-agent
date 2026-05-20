@@ -147,9 +147,14 @@ def _get_active_users() -> List[Tuple[Optional[str], str]]:
                 FROM chat_sessions s
                 WHERE s.created_at >= %s::date
                    OR s.updated_at >= %s::date
-                ORDER BY s.user_id
+                UNION
+                SELECT DISTINCT cs.tenant_id, cs.user_id
+                FROM channel_sessions cs
+                WHERE cs.created_at >= %s
+                   OR cs.updated_at >= %s
+                ORDER BY user_id
                 """,
-                (today, today),
+                (today, today, today, today),
             )
             rows = cursor.fetchall()
             return [(row[0], row[1]) for row in rows if row[1]]
@@ -186,6 +191,24 @@ def _get_user_conversations(tenant_id: Optional[str], user_id: str) -> str:
                 (user_id, today, tomorrow),
             )
             rows = cursor.fetchall()
+
+            # 同时查询渠道消息（channel 表日期为 TEXT 类型，使用字符串比较）
+            cursor.execute(
+                """
+                SELECT m.role, m.content
+                FROM channel_messages m
+                JOIN channel_sessions s ON m.session_id = s.session_id
+                WHERE s.user_id = %s
+                  AND m.created_at >= %s
+                  AND m.created_at < %s
+                  AND m.role IN ('user', 'assistant')
+                ORDER BY m.created_at ASC
+                LIMIT 200
+                """,
+                (user_id, today, tomorrow),
+            )
+            channel_rows = cursor.fetchall()
+            rows.extend(channel_rows)
 
             if not rows:
                 return ""
