@@ -158,6 +158,7 @@ async def _process_tenant_channel_message(
 async def _process_tenant_wecom_background(
     tenant_id: str,
     message,
+    config_id: Optional[str] = None,
     subagent_type: Optional[str] = None,
 ) -> None:
     """
@@ -174,7 +175,7 @@ async def _process_tenant_wecom_background(
     try:
         # 适配器已在调用方创建并通过 message 的 raw_message 间接使用
         # 这里需要独立的 adapter 用于发送回复
-        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom")
+        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom", config_id=config_id)
         if not adapter:
             logger.error(f"[Tenant WeCom] adapter 不可用: tenant={tenant_id}")
             return
@@ -265,7 +266,16 @@ async def _process_tenant_wecom_background(
         )
 
         # 发送回复（自动拆分长消息）
-        await adapter.send_long_message(response_text, message.user_id)
+        logger.info(
+            f"[Tenant WeCom] 开始发送回复: user={message.user_id}, "
+            f"content_len={len(response_text) if response_text else 0}, "
+            f"session_id={session_id}"
+        )
+        send_result = await adapter.send_long_message(response_text, message.user_id)
+        logger.info(
+            f"[Tenant WeCom] 回复发送{'成功' if send_result else '失败'}: "
+            f"user={message.user_id}, session_id={session_id}"
+        )
 
     except Exception as e:
         logger.error(f"[Tenant WeCom] 后台处理失败: tenant={tenant_id}, error={e}")
@@ -398,7 +408,7 @@ async def tenant_wecom_callback_post(tenant_id: str, config_id: str, request: Re
 
         # 立即返回 "success"，后台异步处理
         asyncio.create_task(
-            _process_tenant_wecom_background(tenant_id, message, subagent_type=subagent_type)
+            _process_tenant_wecom_background(tenant_id, message, config_id=config_id, subagent_type=subagent_type)
         )
 
         return PlainTextResponse("success")

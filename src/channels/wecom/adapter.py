@@ -429,7 +429,7 @@ class WeComAdapter(ChannelAdapter):
                     )
                     return False
 
-                logger.debug(f"消息发送成功: user={msg_data.get('touser')}")
+                logger.info(f"企业微信消息发送成功: user={msg_data.get('touser')}, msgtype={msg_data.get('msgtype')}, content_len={len(msg_data.get('text', {}).get('content', msg_data.get('markdown', {}).get('content', '')))}")
                 return True
 
             except Exception as e:
