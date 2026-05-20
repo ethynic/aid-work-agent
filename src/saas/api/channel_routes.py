@@ -86,6 +86,7 @@ async def _process_tenant_channel_message(
         channel_type=channel_type,
         channel_user_id=message.user_id,
         tenant_id=tenant_id,
+        subagent_id=subagent_type or "",
     )
     session_id = session["session_id"]
 
@@ -193,6 +194,7 @@ async def _process_tenant_wecom_background(
             channel_type="wecom",
             channel_user_id=message.user_id,
             tenant_id=tenant_id,
+            subagent_id=subagent_type or "",
         )
         session_id = session["session_id"]
 

@@ -25,9 +25,9 @@ class ChannelSessionManager:
     会话包含：聊天记录、用户信息、渠道信息。
 
     租户隔离：
-    - session_id 由 tenant_id + channel_type + channel_user_id 组成，确保跨租户唯一
+    - session_id 由 tenant_id + channel_type + channel_user_id + subagent_id 组成，确保跨租户跨智能体唯一
     - 所有查询均包含 tenant_id 过滤
-    - 缓存 key 包含 tenant_id
+    - 缓存 key 包含 tenant_id 和 subagent_id
     """
 
     _instance = None
@@ -56,6 +56,7 @@ class ChannelSessionManager:
                     tenant_id TEXT NOT NULL DEFAULT '',
                     channel_type TEXT NOT NULL,
                     channel_user_id TEXT NOT NULL,
+                    subagent_id TEXT,
                     channel_chat_id TEXT,
                     user_id TEXT,
                     username TEXT,
@@ -83,10 +84,10 @@ class ChannelSessionManager:
                 )
             """)
 
-            # 索引：按租户+渠道+用户查找会话
+            # 索引：按租户+渠道+用户+智能体查找会话
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel
-                ON channel_sessions(tenant_id, channel_type, channel_user_id)
+                ON channel_sessions(tenant_id, channel_type, channel_user_id, subagent_id)
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_channel_messages_session
@@ -98,9 +99,9 @@ class ChannelSessionManager:
         self._initialized = True
         logger.info("PostgreSQL: channel_sessions 表初始化完成")
 
-    def _generate_session_id(self, tenant_id: str, channel_type: str, channel_user_id: str) -> str:
-        """生成会话ID（包含租户信息，确保跨租户唯一）"""
-        return f"{tenant_id}_{channel_type}_{channel_user_id}"
+    def _generate_session_id(self, tenant_id: str, channel_type: str, channel_user_id: str, subagent_id: str = "") -> str:
+        """生成会话ID（包含租户和智能体信息，确保跨租户跨智能体唯一）"""
+        return f"{tenant_id}_{channel_type}_{channel_user_id}_{subagent_id}"
 
     @staticmethod
     def _parse_json_field(value: Optional[str], default: Any = None) -> Any:
@@ -121,6 +122,7 @@ class ChannelSessionManager:
         user_info: Optional[Dict[str, Any]] = None,
         channel_chat_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        subagent_id: str = "",
     ) -> Dict[str, Any]:
         """
         获取或创建渠道会话（优先从 Redis 缓存读取，TTL 10分钟）
@@ -132,26 +134,27 @@ class ChannelSessionManager:
             user_info: 用户信息
             channel_chat_id: 渠道会话/群ID
             metadata: 额外元数据
+            subagent_id: 关联的子智能体ID
 
         Returns:
             会话信息字典
         """
-        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id)
+        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id, subagent_id)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 优先从缓存获取（缓存 key 包含 tenant_id）
-        cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id)
+        # 优先从缓存获取（缓存 key 包含 tenant_id 和 subagent_id）
+        cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id)
         if cached is not None:
             return cached
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 按租户+渠道+用户查找已存在的会话
+            # 按租户+渠道+用户+智能体查找已存在的会话
             cursor.execute("""
                 SELECT * FROM channel_sessions
-                WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s
-            """, (tenant_id, channel_type, channel_user_id))
+                WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s AND subagent_id = %s
+            """, (tenant_id, channel_type, channel_user_id, subagent_id))
 
             row = cursor.fetchone()
 
@@ -167,7 +170,7 @@ class ChannelSessionManager:
                 result = dict(row)
                 result["context_data"] = self._parse_json_field(result.get("context_data"), {})
                 result["metadata"] = self._parse_json_field(result.get("metadata"))
-                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, value=result, ttl=600)
+                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
                 return result
             else:
                 # 创建新会话
@@ -177,15 +180,16 @@ class ChannelSessionManager:
 
                 cursor.execute("""
                     INSERT INTO channel_sessions
-                    (session_id, tenant_id, channel_type, channel_user_id, channel_chat_id,
-                     user_id, username, title, context_data, created_at, updated_at,
+                    (session_id, tenant_id, channel_type, channel_user_id, subagent_id,
+                     channel_chat_id, user_id, username, title, context_data, created_at, updated_at,
                      last_message_at, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     session_id,
                     tenant_id,
                     channel_type,
                     channel_user_id,
+                    subagent_id,
                     channel_chat_id,
                     user_info.get("user_id") if user_info else None,
                     user_info.get("name") if user_info else None,
@@ -203,6 +207,7 @@ class ChannelSessionManager:
                     "tenant_id": tenant_id,
                     "channel_type": channel_type,
                     "channel_user_id": channel_user_id,
+                    "subagent_id": subagent_id,
                     "channel_chat_id": channel_chat_id,
                     "user_id": user_info.get("user_id") if user_info else None,
                     "username": user_info.get("name") if user_info else None,
@@ -213,7 +218,7 @@ class ChannelSessionManager:
                     "updated_at": now,
                     "last_message_at": now,
                 }
-                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, value=result, ttl=600)
+                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
                 return result
 
     def get_session(
@@ -221,6 +226,7 @@ class ChannelSessionManager:
         channel_type: str,
         channel_user_id: str,
         tenant_id: str = "",
+        subagent_id: str = "",
     ) -> Optional[Dict[str, Any]]:
         """
         获取渠道会话（优先从 Redis 缓存读取，TTL 10分钟）
@@ -229,16 +235,17 @@ class ChannelSessionManager:
             channel_type: 渠道类型
             channel_user_id: 渠道用户ID
             tenant_id: 租户ID
+            subagent_id: 关联的子智能体ID
 
         Returns:
             会话信息字典
         """
         # 优先从缓存获取
-        cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id)
+        cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id)
         if cached is not None:
             return cached
 
-        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id)
+        session_id = self._generate_session_id(tenant_id, channel_type, channel_user_id, subagent_id)
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -253,7 +260,7 @@ class ChannelSessionManager:
             result["context_data"] = self._parse_json_field(result.get("context_data"), {})
             result["metadata"] = self._parse_json_field(result.get("metadata"))
             # 写入缓存
-            set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, value=result, ttl=600)
+            set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
             return result
 
     def update_session(
@@ -308,12 +315,12 @@ class ChannelSessionManager:
             # 更新成功后清除缓存，确保下次读取获取最新数据
             if success:
                 cursor.execute("""
-                    SELECT tenant_id, channel_type, channel_user_id
+                    SELECT tenant_id, channel_type, channel_user_id, subagent_id
                     FROM channel_sessions WHERE session_id = %s
                 """, (session_id,))
                 row = cursor.fetchone()
                 if row:
-                    delete_cached(CacheKeys.CHANNEL_SESSION, row[0], row[1], row[2])
+                    delete_cached(CacheKeys.CHANNEL_SESSION, row[0], row[1], row[2], row[3])
 
             return success
 

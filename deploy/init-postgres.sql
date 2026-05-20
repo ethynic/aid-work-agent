@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS channel_sessions (
     tenant_id TEXT NOT NULL DEFAULT '',
     channel_type TEXT NOT NULL,
     channel_user_id TEXT NOT NULL,
+    subagent_id TEXT,
     channel_chat_id TEXT,
     user_id TEXT,
     username TEXT,

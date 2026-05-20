@@ -59,15 +59,16 @@ def mock_db():
                     tenant_id=params[1],
                     channel_type=params[2],
                     channel_user_id=params[3],
-                    channel_chat_id=params[4],
-                    user_id=params[5],
-                    username=params[6],
-                    title=params[7],
-                    context_data=params[8],
-                    created_at=params[9],
-                    updated_at=params[10],
-                    last_message_at=params[11],
-                    metadata=params[12],
+                    subagent_id=params[4],
+                    channel_chat_id=params[5],
+                    user_id=params[6],
+                    username=params[7],
+                    title=params[8],
+                    context_data=params[9],
+                    created_at=params[10],
+                    updated_at=params[11],
+                    last_message_at=params[12],
+                    metadata=params[13],
                 )
                 memory_store["sessions"][params[0]] = row
                 cursor.rowcount = 1
@@ -97,20 +98,22 @@ def mock_db():
                     cursor._fetch_rows = [memory_store["sessions"][sid]]
                 cursor.rowcount = 1 if cursor._fetch_rows else 0
 
-            elif "select tenant_id, channel_type, channel_user_id from channel_sessions" in sql_lower:
+            elif "select tenant_id, channel_type, channel_user_id" in sql_lower:
                 # update_session 清除缓存时查询租户信息
                 sid = params[0]
                 if sid in memory_store["sessions"]:
                     row = memory_store["sessions"][sid]
-                    cursor._fetch_rows = [(row["tenant_id"], row["channel_type"], row["channel_user_id"])]
+                    cursor._fetch_rows = [(row["tenant_id"], row["channel_type"], row["channel_user_id"], row.get("subagent_id", ""))]
                 cursor.rowcount = 1 if cursor._fetch_rows else 0
 
             elif "select * from channel_sessions where tenant_id" in sql_lower:
                 tid, ctype, cuid = params[0], params[1], params[2]
+                said = params[3] if len(params) > 3 else ""
                 for row in memory_store["sessions"].values():
                     if (row.get("tenant_id") == tid and
                         row["channel_type"] == ctype and
-                        row["channel_user_id"] == cuid):
+                        row["channel_user_id"] == cuid and
+                        row.get("subagent_id", "") == said):
                         cursor._fetch_rows = [row]
                         break
 
@@ -255,12 +258,13 @@ class TestMetadataRoundTrip:
         """兼容旧的 str(dict) 格式：fallback 到原样返回"""
         old_metadata_str = "{'source': 'wecom', 'old': True}"
         old_attachments_str = "[{'file': 'old.pdf'}]"
-        legacy_sid = f"{TEST_TENANT}_wecom_legacy_user"
+        legacy_sid = session_manager._generate_session_id(TEST_TENANT, "wecom", "legacy_user")
         row = dict(
             session_id=legacy_sid,
             tenant_id=TEST_TENANT,
             channel_type="wecom",
             channel_user_id="legacy_user",
+            subagent_id="",
             channel_chat_id=None,
             user_id=None,
             username=None,
@@ -311,11 +315,64 @@ class TestTenantIsolation:
         assert "tenant_b" in s2["session_id"]
 
     def test_session_id_format(self, session_manager, mock_db):
-        """验证 session_id 格式包含租户信息"""
+        """验证 session_id 格式包含租户和智能体信息"""
+        sid = session_manager._generate_session_id("mytenant", "wecom", "user001", "travel-agent")
+        assert sid == "mytenant_wecom_user001_travel-agent"
+
+    def test_session_id_format_empty_subagent(self, session_manager, mock_db):
+        """空 subagent_id 时 session_id 格式"""
         sid = session_manager._generate_session_id("mytenant", "wecom", "user001")
-        assert sid == "mytenant_wecom_user001"
+        assert sid == "mytenant_wecom_user001_"
 
     def test_empty_tenant_session_id_format(self, session_manager, mock_db):
         """空 tenant_id 时 session_id 格式"""
         sid = session_manager._generate_session_id("", "wecom", "user001")
-        assert sid == "_wecom_user001"
+        assert sid == "_wecom_user001_"
+
+
+class TestSubagentIsolation:
+    """子智能体隔离测试"""
+
+    def test_different_subagents_get_different_sessions(self, session_manager, mock_db):
+        """同一租户同一用户的不同智能体获得不同会话"""
+        s1 = session_manager.get_or_create_session(
+            channel_type="wecom",
+            channel_user_id="user123",
+            tenant_id=TEST_TENANT,
+            subagent_id="travel-agent",
+        )
+        s2 = session_manager.get_or_create_session(
+            channel_type="wecom",
+            channel_user_id="user123",
+            tenant_id=TEST_TENANT,
+            subagent_id="trade-agent",
+        )
+        assert s1["session_id"] != s2["session_id"]
+        assert "travel-agent" in s1["session_id"]
+        assert "trade-agent" in s2["session_id"]
+
+    def test_same_subagent_gets_same_session(self, session_manager, mock_db):
+        """同一租户同一用户同一智能体获得相同会话"""
+        s1 = session_manager.get_or_create_session(
+            channel_type="wecom",
+            channel_user_id="user123",
+            tenant_id=TEST_TENANT,
+            subagent_id="travel-agent",
+        )
+        s2 = session_manager.get_or_create_session(
+            channel_type="wecom",
+            channel_user_id="user123",
+            tenant_id=TEST_TENANT,
+            subagent_id="travel-agent",
+        )
+        assert s1["session_id"] == s2["session_id"]
+
+    def test_subagent_id_stored_in_session(self, session_manager, mock_db):
+        """subagent_id 正确存入并读取"""
+        session = session_manager.get_or_create_session(
+            channel_type="wecom",
+            channel_user_id="user123",
+            tenant_id=TEST_TENANT,
+            subagent_id="travel-agent",
+        )
+        assert session["subagent_id"] == "travel-agent"

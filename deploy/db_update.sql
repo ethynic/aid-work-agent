@@ -370,6 +370,12 @@ CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessio
 DELETE FROM channel_messages WHERE tenant_id = '';
 DELETE FROM channel_sessions WHERE tenant_id = '';
 
+-- 2026-5-20，channel_sessions 增加 subagent_id 字段，区分同一用户与不同智能体的对话
+ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
+-- 更新索引：包含 subagent_id
+DROP INDEX IF EXISTS idx_channel_sessions_tenant_channel;
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id, subagent_id);
+
 -- 2026-5-14，景点区域搜索：为 documents.metadata 添加 GIN 索引（部分索引，仅景点资源）
 CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin
 ON documents USING GIN ((metadata::jsonb))

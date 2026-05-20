@@ -22,15 +22,19 @@ async def list_channel_sessions(
     channel_type: Optional[str] = None,
     user_id: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    subagent_id: Optional[str] = None,
     limit: int = 50,
 ):
-    """列出会话（支持租户过滤）"""
+    """列出会话（支持租户和智能体过滤）"""
     sessions = channel_session_manager.list_sessions(
         channel_type=channel_type,
         user_id=user_id,
         tenant_id=tenant_id,
         limit=limit,
     )
+    # 如果需要按 subagent_id 过滤
+    if subagent_id:
+        sessions = [s for s in sessions if s.get("subagent_id") == subagent_id]
     return JSONResponse({"sessions": sessions, "count": len(sessions)})
 
 
@@ -39,10 +43,11 @@ async def get_channel_session(
     channel_type: str,
     channel_user_id: str,
     tenant_id: str = Query(""),
+    subagent_id: str = Query(""),
 ):
     """获取会话详情"""
     session = channel_session_manager.get_session(
-        channel_type, channel_user_id, tenant_id=tenant_id
+        channel_type, channel_user_id, tenant_id=tenant_id, subagent_id=subagent_id
     )
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
