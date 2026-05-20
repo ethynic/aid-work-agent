@@ -30,7 +30,77 @@ class TestBuildMarkdown:
         content = "# 标题\n\n**粗体**"
         msg = WeComMessageBuilder.build_markdown(content, "1000001")
         assert msg["msgtype"] == "markdown"
+        # build_markdown 会自动将 # 标题转换为 **粗体**，避免企业微信中标题字体过大
+        assert msg["markdown"]["content"] == "**标题**\n\n**粗体**"
+
+    def test_build_markdown_no_headings(self):
+        """没有 # 标题的 Markdown 内容保持不变"""
+        content = "这是**粗体**和*斜体*文本"
+        msg = WeComMessageBuilder.build_markdown(content, "1000001")
         assert msg["markdown"]["content"] == content
+
+    def test_build_markdown_multiple_headings(self):
+        """多个层级的标题都被转换为粗体"""
+        content = "# 一级\n\n## 二级\n\n### 三级\n\n正文"
+        msg = WeComMessageBuilder.build_markdown(content, "1000001")
+        expected = "**一级**\n\n**二级**\n\n**三级**\n\n正文"
+        assert msg["markdown"]["content"] == expected
+
+
+class TestNormalizeMarkdownHeadings:
+    """Markdown 标题转换为粗体测试"""
+
+    def test_normalize_single_h1(self):
+        result = WeComMessageBuilder.normalize_markdown_headings("# 标题")
+        assert result == "**标题**"
+
+    def test_normalize_h2(self):
+        result = WeComMessageBuilder.normalize_markdown_headings("## 二级标题")
+        assert result == "**二级标题**"
+
+    def test_normalize_h3(self):
+        result = WeComMessageBuilder.normalize_markdown_headings("### 三级标题")
+        assert result == "**三级标题**"
+
+    def test_normalize_all_levels(self):
+        """# 到 ###### 各层级标题都被转换"""
+        for i in range(1, 7):
+            prefix = "#" * i
+            result = WeComMessageBuilder.normalize_markdown_headings(f"{prefix} 标题内容")
+            assert result == "**标题内容**"
+
+    def test_normalize_no_heading(self):
+        """没有标题的文本不变"""
+        content = "普通文本，没有标题"
+        result = WeComMessageBuilder.normalize_markdown_headings(content)
+        assert result == content
+
+    def test_normalize_heading_with_body(self):
+        """标题后面跟随正文"""
+        content = "# 标题\n\n这是正文内容"
+        result = WeComMessageBuilder.normalize_markdown_headings(content)
+        expected = "**标题**\n\n这是正文内容"
+        assert result == expected
+
+    def test_normalize_heading_in_middle(self):
+        """标题出现在文本中间"""
+        content = "前面文字\n\n## 标题\n\n后面文字"
+        result = WeComMessageBuilder.normalize_markdown_headings(content)
+        expected = "前面文字\n\n**标题**\n\n后面文字"
+        assert result == expected
+
+    def test_normalize_bold_not_affected(self):
+        """粗体文本不受影响"""
+        content = "这是**粗体**文本，不是标题"
+        result = WeComMessageBuilder.normalize_markdown_headings(content)
+        assert result == content
+
+    def test_normalize_code_not_header(self):
+        """# 不在行首时不算标题（如代码中的 # 注释）"""
+        content = "   # 缩进的井号不是标题"
+        result = WeComMessageBuilder.normalize_markdown_headings(content)
+        # 前面有空格，不是行首的 #，不应被转换
+        assert content in result  # 原内容保持不变
 
 
 class TestBuildTextCard:

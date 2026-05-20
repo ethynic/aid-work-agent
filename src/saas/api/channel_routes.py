@@ -79,10 +79,11 @@ async def _process_tenant_channel_message(
         logger.warning(f"Auto-register failed for {channel_type}:{message.user_id}: {e}")
         user_id = None
 
-    # 4. 获取或创建会话
+    # 4. 获取或创建会话（带租户隔离）
     session = channel_session_manager.get_or_create_session(
         channel_type=channel_type,
         channel_user_id=message.user_id,
+        tenant_id=tenant_id,
     )
     session_id = session["session_id"]
 
@@ -146,10 +147,11 @@ async def _process_tenant_wecom_background(
         except Exception as e:
             logger.warning(f"[Tenant WeCom] 自动注册失败: {e}")
 
-        # 创建/获取会话
+        # 创建/获取会话（带租户隔离）
         session = channel_session_manager.get_or_create_session(
             channel_type="wecom",
             channel_user_id=message.user_id,
+            tenant_id=tenant_id,
         )
         session_id = session["session_id"]
 
@@ -161,6 +163,7 @@ async def _process_tenant_wecom_background(
                 content=message.text,
                 message_type=message.message_type,
                 metadata=message.raw_message,
+                tenant_id=tenant_id,
             )
 
         # 获取对话上下文
@@ -184,6 +187,7 @@ async def _process_tenant_wecom_background(
             role="assistant",
             content=response_text,
             message_type="text",
+            tenant_id=tenant_id,
         )
 
         # 发送回复（自动拆分长消息）

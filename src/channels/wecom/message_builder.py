@@ -30,13 +30,45 @@ class WeComMessageBuilder:
         }
 
     @staticmethod
+    def normalize_markdown_headings(content: str) -> str:
+        """
+        将 Markdown # 标题转换为粗体文本，避免企业微信中标题字体过大
+
+        企业微信的 markdown 消息类型中 # 标题渲染字体偏大（约 20px），
+        不适合正文阅读。此方法将各层级标题转换为 **粗体** 文本：
+
+        - # 标题  → **标题**
+        - ## 标题 → **标题**
+        - ### 标题 → **标题**
+        - 以此类推
+
+        转换前会在标题前保留一个空行（如果前面有内容），保持段落间距。
+        """
+        def replace_heading(match: re.Match) -> str:
+            prefix = match.group(1)   # 空行前缀
+            heading_content = match.group(3).strip()
+            return f"{prefix}**{heading_content}**"
+
+        # 匹配行首的 # 标题（行首可能有多个 # 和一个空格）
+        # 分组: (空行前缀)(#号+空格)(标题内容)
+        return re.sub(
+            r"(\n*)^(#{1,6})\s+(.+)",
+            replace_heading,
+            content,
+            flags=re.MULTILINE,
+        )
+
+    @staticmethod
     def build_markdown(content: str, agent_id: str) -> Dict[str, Any]:
         """
         构建 Markdown 消息
 
         注意: WeCom 的 markdown 类型仅支持有限的 markdown 子集，
-        不支持表格、代码块等复杂格式。
+        不支持表格、代码块等复杂格式。发送前会自动将 # 标题转换为粗体，
+        避免企业微信中标题字体过大。
         """
+        # 预处理：将 # 标题转换为粗体，避免企业微信中标题字体过大
+        content = WeComMessageBuilder.normalize_markdown_headings(content)
         return {
             "touser": "",
             "msgtype": "markdown",

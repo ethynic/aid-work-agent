@@ -170,6 +170,9 @@ class AppConfig(BaseModel):
     llm_debug: bool = False
     host: str = "0.0.0.0"
     port: int = 8000
+    # 对外可访问的基础 URL，用于构造文件下载链接等完整 URL
+    # 生产环境应设置为实际域名，如 "https://your-domain.com"
+    public_base_url: str = ""
 
 
 class SaasConfig(BaseModel):
@@ -314,6 +317,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True
+    if os.getenv("PUBLIC_BASE_URL"):
+        yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
 
     # 文件上传大小限制（.env 中单位为 MB，代码内部转换为字节）
     if os.getenv("STORAGE_MAX_KNOWLEDGE_FILE_SIZE"):

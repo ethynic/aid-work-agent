@@ -7,7 +7,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from src.channels.session import channel_session_manager
@@ -21,21 +21,29 @@ router = APIRouter(tags=["渠道回调"])
 async def list_channel_sessions(
     channel_type: Optional[str] = None,
     user_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     limit: int = 50,
 ):
-    """列出会话"""
+    """列出会话（支持租户过滤）"""
     sessions = channel_session_manager.list_sessions(
         channel_type=channel_type,
         user_id=user_id,
+        tenant_id=tenant_id,
         limit=limit,
     )
     return JSONResponse({"sessions": sessions, "count": len(sessions)})
 
 
 @router.get("/api/channels/sessions/{channel_type}/{channel_user_id}")
-async def get_channel_session(channel_type: str, channel_user_id: str):
+async def get_channel_session(
+    channel_type: str,
+    channel_user_id: str,
+    tenant_id: str = Query(""),
+):
     """获取会话详情"""
-    session = channel_session_manager.get_session(channel_type, channel_user_id)
+    session = channel_session_manager.get_session(
+        channel_type, channel_user_id, tenant_id=tenant_id
+    )
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
@@ -48,7 +56,10 @@ async def get_channel_session(channel_type: str, channel_user_id: str):
 
 
 @router.delete("/api/channels/sessions/{session_id}")
-async def delete_channel_session(session_id: str):
-    """删除会话"""
-    success = channel_session_manager.delete_session(session_id)
+async def delete_channel_session(
+    session_id: str,
+    tenant_id: Optional[str] = None,
+):
+    """删除会话（可选租户校验）"""
+    success = channel_session_manager.delete_session(session_id, tenant_id=tenant_id)
     return JSONResponse({"success": success})

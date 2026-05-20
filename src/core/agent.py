@@ -803,6 +803,54 @@ class Agent:
         except Exception as e:
             logger.warning(f"Failed to save 'remember' intent: {e}")
 
+    def _load_channel_history(
+        self,
+        session_id: str,
+        current_user_input: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        从 channel_messages 表加载渠道（企业微信/钉钉/飞书）的对话历史。
+
+        仅在 chat_messages 表无数据时作为 fallback 使用。
+        渠道处理器会预先将当前用户消息存入 channel_messages，
+        因此需要跳过最后一条 user 消息以避免重复。
+        """
+        try:
+            from src.channels.session import channel_session_manager
+            # 多加载一条，用于判断最后一条是否是当前用户消息
+            channel_msgs = channel_session_manager.get_messages(
+                session_id,
+                limit=self.memory.short_term.max_messages + 1,
+            )
+            if not channel_msgs:
+                return []
+
+            # channel_messages 按 created_at DESC 排序，反转为 ASC
+            channel_msgs.reverse()
+
+            # 如果最后一条是 user 消息，说明是渠道处理器预先存入的当前消息，
+            # 需要移除（process_message 后续会通过 memory.add 添加 enhanced 版本）
+            if channel_msgs and channel_msgs[-1].get("role") == "user":
+                last_content = channel_msgs[-1].get("content", "")
+                if last_content == current_user_input:
+                    channel_msgs.pop()
+
+            # 截断到 max_messages
+            if len(channel_msgs) > self.memory.short_term.max_messages:
+                channel_msgs = channel_msgs[-self.memory.short_term.max_messages:]
+
+            return [
+                {
+                    "role": msg["role"],
+                    "content": msg["content"] or "",
+                    "timestamp": msg.get("created_at", ""),
+                }
+                for msg in channel_msgs
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to load channel history for session {session_id}: {e}")
+            return []
+
     def _build_messages(
         self,
         session_id: str
@@ -1354,7 +1402,17 @@ class Agent:
                     f"loaded={len(history_messages)} msgs | {loaded_roles}"
                 )
             else:
-                logger.debug(f"No DB history for session {session_id}, memory cleared")
+                # 渠道消息（企业微信/钉钉/飞书）存储在 channel_messages 表，
+                # 与 chat_messages 是独立的表，需 fallback 查询
+                history_messages = self._load_channel_history(session_id, user_input)
+                if history_messages:
+                    self.memory.load_history(session_id, history_messages)
+                    logger.info(
+                        f"Loaded {len(history_messages)} channel history messages "
+                        f"for session {session_id}"
+                    )
+                else:
+                    logger.debug(f"No DB history for session {session_id}, memory cleared")
         except Exception as e:
             logger.warning(f"Failed to rebuild memory from DB for session {session_id}: {e}")
 
@@ -1408,6 +1466,8 @@ class Agent:
         enhanced_input = timestamp_context + user_input
         auto_loaded_skill = None
         uploaded_files_info = []
+        # 追踪工具执行过程中生成的文件（用于确保下载链接出现在最终回复中）
+        generated_files = []  # list of {"file_name": str, "download_url": str}
         session_workspace = None
         
         if attachments:
@@ -1638,6 +1698,41 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # DeepSeek 思考模式下 content 可能为空，但 reasoning_content 有内容
                 yield_content = content or reasoning or ""
                 if yield_content:
+                    # 确保工具生成的文件下载链接出现在最终回复中
+                    if generated_files:
+                        base_url = (
+                            settings.app.public_base_url.rstrip("/")
+                            if settings.app.public_base_url
+                            else ""
+                        )
+                        # 收集回复中尚未包含的下载链接
+                        missing_files = []
+                        for gf in generated_files:
+                            dl_url = gf["download_url"]
+                            # 检查文件ID或URL是否已在回复中提及
+                            if dl_url not in yield_content:
+                                # 提取 file_id 作为备选检查
+                                file_id_match = dl_url.split("/")[-2] if "/" in dl_url else ""
+                                if file_id_match and file_id_match not in yield_content:
+                                    missing_files.append(gf)
+                        if missing_files:
+                            file_links = []
+                            for gf in missing_files:
+                                full_url = (
+                                    f"{base_url}{gf['download_url']}"
+                                    if base_url
+                                    else gf["download_url"]
+                                )
+                                file_links.append(
+                                    f"- [{gf['file_name']}]({full_url})"
+                                )
+                            download_section = (
+                                "\n\n📎 **生成的文件：**\n" + "\n".join(file_links)
+                            )
+                            yield_content = yield_content + download_section
+                            logger.info(
+                                f"后端日志：追加了 {len(missing_files)} 个文件下载链接到最终回复"
+                            )
                     yield yield_content
                 break
             
@@ -2049,6 +2144,23 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         "tool_call_id": tool_id,
                         "content": result
                     })
+                    # 后端日志：追踪工具生成的文件，确保下载链接出现在最终回复中
+                    if isinstance(result, dict) and result.get("download_url") and result.get("success"):
+                        file_name = (
+                            result.get("file_name")
+                            or result.get("display_name")
+                            or result.get("download_file_name")
+                            or result.get("name")
+                            or "生成的文件"
+                        )
+                        generated_files.append({
+                            "file_name": file_name,
+                            "download_url": result["download_url"],
+                        })
+                        logger.info(
+                            f"后端日志：工具 {tool_name} 生成了文件: "
+                            f"file_name={file_name}, download_url={result['download_url']}"
+                        )
                     result_preview = str(result)[:200] if result else "None"
                     logger.debug(f"Tool result: {result_preview}...")
 

@@ -356,6 +356,16 @@ CREATE TABLE IF NOT EXISTS log_error (
 CREATE INDEX IF NOT EXISTS idx_log_error_timestamp ON log_error(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_log_error_status ON log_error(status);
 
+-- 2026-5-19，channel_sessions 和 channel_messages 增加 tenant_id 字段，支持租户隔离
+ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
+-- 更新索引：替换旧的 idx_channel_sessions_channel 为包含 tenant_id 的新索引
+DROP INDEX IF EXISTS idx_channel_sessions_channel;
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
+-- 清除旧数据（旧 session_id 不含 tenant_id，且无 tenant_id 字段值，无法区分租户）
+DELETE FROM channel_messages WHERE tenant_id = '';
+DELETE FROM channel_sessions WHERE tenant_id = '';
+
 -- 2026-5-14，景点区域搜索：为 documents.metadata 添加 GIN 索引（部分索引，仅景点资源）
 CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin
 ON documents USING GIN ((metadata::jsonb))
