@@ -560,6 +560,7 @@ async def chat(request: Request):
             agent_user = User(
                 user_id=current_user["user_id"],
                 name=current_user.get("username", current_user.get("phone", "unknown")),
+                phone=current_user.get("phone"),
             )
 
         # Generate session ID if not provided
@@ -1184,6 +1185,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         agent_user = User(
                             user_id=current_user["user_id"],
                             name=current_user.get("username", current_user.get("phone", "unknown")),
+                            phone=current_user.get("phone"),
                         )
                     record_service = SessionRecordManager.start_record(
                         session_id=session_id,
@@ -1491,6 +1493,10 @@ app.include_router(subagent.router)
 # Word 文档处理 API
 from src.api import word as word_api
 app.include_router(word_api.router)
+
+# 子智能体环境变量管理 API
+from src.api import subagent_env_var
+app.include_router(subagent_env_var.router)
 
 # 平台管理报表 API
 from src.api import admin_reports

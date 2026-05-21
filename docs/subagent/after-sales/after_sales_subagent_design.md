@@ -1,7 +1,6 @@
 # 售后服务通用子智能体 — 设计文档
 
-> 版本: v1.1 | 创建日期: 2026-05-06 | 状态: 待审核
-> v1.1 变更：用户身份识别改为复用长期记忆系统，删除 `inject_user_profile` 方案
+> 创建日期: 2026-05-06 | 状态: 开发中（Phase 1-2 后端已完成）
 
 ---
 
@@ -23,17 +22,18 @@
 本智能体作为**通用售后服务引擎**，需要服务不同企业：
 
 1. **用户身份感知**：通过长期记忆系统自动感知当前用户的个人信息（姓名、手机号、习惯等），无需用户重复提供
-2. **企业系统对接**：每个企业的订单系统、售后系统各不相同，需要一种可插拔的外部系统集成机制
-3. **统一对话流程**：无论底层对接哪个企业系统，用户侧的对话体验保持一致
+2. **用户身份映射**：本系统的用户身份（user_id、手机号）需要映射到第三方企业系统的用户身份，Agent 才能以正确的身份调用外部 API
+3. **企业系统对接**：每个企业的订单系统、售后系统各不相同，需要一种可插拔的外部系统集成机制
+4. **统一对话流程**：无论底层对接哪个企业系统，用户侧的对话体验保持一致
 
 ### 1.3 与现有子智能体的对比
 
 | 维度 | 现有子智能体（外贸/合同/旅游） | 售后服务子智能体 |
 |------|------|------|
-| 数据来源 | LLM 生成 + 内部数据库 | **外部企业系统 API** |
-| 系统集成 | 硬编码特定系统（EAS） | **可插拔适配器模式** |
-| 用户身份 | 不依赖用户信息 | **通过长期记忆感知用户信息** |
-| 多租户定制 | 无 | **每租户不同的 API 适配器** |
+| 数据来源 | LLM 生成 + 内部数据库 | 外部企业系统 API（通过 http_api 工具） |
+| 系统集成 | 硬编码特定系统（EAS） | JSON 配置驱动，LLM + http_api 直接调用 |
+| 用户身份 | 不依赖用户信息 | 通过长期记忆感知用户信息，通过身份映射关联外部系统用户 |
+| 多租户定制 | 无 | 每租户不同的 API 端点配置 + 身份映射策略 |
 
 ---
 
@@ -43,27 +43,65 @@
 
 | 能力 | 现有组件 | 适用性 |
 |------|----------|--------|
-| 子智能体定义与加载 | `SubagentLoader` + `SUBAGENT.md` | ✅ 完全适用，售后服务智能体按标准格式定义 |
-| 技能系统 | `SkillLoader` + `SkillRegistry` + `SkillExecutor` | ✅ 可将售后流程封装为 skill |
+| 子智能体定义与加载 | `SubagentLoader` + `SUBAGENT.md` | ✅ 完全适用 |
+| 技能系统 | `SkillLoader` + `SkillRegistry` + `SkillExecutor` | ✅ 售后流程封装为 skill |
 | 用户身份传递 | `agent.process_message(user=User(...))` | ✅ Web 聊天已传递 user_id |
-| 用户长期记忆 | `LongTermMemory` + `memory_{user_id}.md`（Phase 3 设计） | ✅ 用户信息通过长期记忆自动注入上下文，售后智能体直接消费 |
+| 用户长期记忆 | `LongTermMemory` + `memory_{user_id}.md`（Phase 3 设计） | ✅ 自动注入用户信息 |
 | 租户上下文 | `TenantContextMiddleware` + `get_current_tenant_id()` | ✅ 每租户隔离 |
-| 凭据加密存储 | `encryption_manager` + Fernet | ✅ 可复用加密机制 |
+| 凭据加密存储 | `encryption_manager` + Fernet | ✅ 可复用加密机制（后续按需启用） |
 | 业务数据表规范 | `bs_` 前缀 + `tenant_id` 隔离 | ✅ 售后数据表遵循此规范 |
 | SaaS 订阅控制 | `SubscriptionDB.get_allowed_subagent_types()` | ✅ 售后智能体作为子智能体类型注册 |
 | 工具系统 | `BaseTool` + `ToolRegistry` + `ToolExecutor` | ✅ 可定义售后专用工具 |
+| HTTP API 调用 | `HttpApiTool`（`src/tools/network/http_api.py`） | ✅ 直接复用，支持环境变量替换 |
 | 渠道接入 | WeCom / DingTalk / Feishu 适配器 | ✅ 用户可通过 IM 直接售后 |
 | 定时任务 | `CreateScheduledTaskTool` | ✅ 可用于售后跟进提醒 |
 
-### 2.2 缺失的基础设施（需新建）
+### 2.2 需新建的基础设施
 
-| 缺失能力 | 影响 | 解决方案 |
-|----------|------|----------|
-| **外部 API 适配器机制** | 无法连接不同企业的订单/售后系统 | 新建 `ExternalAdapter` 适配器框架 |
-| **租户级 API 凭据管理** | 无法按租户存储外部系统 API Key/Secret | 新建 `tenant_api_credentials` 表 |
-| **售后工单数据表** | 无售后工单持久化 | 新建 `bs_after_sales_*` 系列表 |
+| 需新建能力 | 解决方案 |
+|-----------|----------|
+| API 端点配置 | 通用技能 `after-sales-api`（读取租户配置文件）+ 租户配置文件 `storage/tenants/{tid}/after-sales-api.md`（管理员在智能体管理页面编辑） |
+| 用户身份映射 | 手机号映射（MVP）+ 外部 ID 映射表（后续） |
+| 租户级 API 凭据管理 | 新建 `subagent_env_vars` 表（子智能体环境变量，按租户和子智能体隔离），通过环境变量注入 http_api 工具 |
+| 售后工单数据表 | 新建 `bs_after_sales_*` 系列表 |
 
-> **关于用户身份识别**：不做独立方案，复用记忆系统 Phase 3 的长期记忆（`memory_{user_id}.md`）。用户信息（姓名、手机号、偏好等）已由每日自动总结沉淀到长期记忆中，Agent 在新会话时自动加载为上下文。售后智能体无需额外机制即可感知用户身份。
+> **用户身份现状**：`users` 表已有 `phone`、`wx_openid` 等字段，但 Agent 构造 `User` 对象时只传了 `user_id` 和 `name`（`main.py:558-563`）。需要扩展 `User` 模型并增加身份注入逻辑。
+
+### 2.3 设计决策：通用技能 + 租户配置文件
+
+**核心决策**：技能逻辑和配置数据分离。
+
+- `after-sales-api` 是一个**通用技能**，注册在售后子智能体中，所有租户共用
+- 每个租户的 API 说明文本保存在 `storage/tenants/{tenant_id}/after-sales-api.md`
+- 技能的唯一职责：读取当前租户的 API 说明文件内容，返回给 LLM
+
+**理由**：
+
+| 维度 | 每租户复制一份 skill | 通用技能 + 租户配置文件 |
+|------|---------------------|------------------------|
+| 技能维护 | 改一处需同步 N 个租户副本 | 改一处生效所有租户 |
+| 逻辑复用 | 每份副本逻辑完全相同，浪费 | 一份代码，N 份配置 |
+| 配置管理 | 复用 skill 管理 API | 专用配置 API，体验更好 |
+| 存储开销 | N 个完整的 SKILL.md + scripts | 1 个 skill + N 个纯文本 MD |
+
+**工作流程**：
+
+```
+1. 租户管理员在售后智能体管理页面编辑 API 说明
+   → 保存到 storage/tenants/{tid}/after-sales-api.md
+
+2. 售后子智能体处理用户消息
+   → LLM 调用 use_skill("after-sales-api") 加载技能
+   → 技能指导 LLM 执行 skill_execute 读取当前租户的 API 配置
+   → LLM 获得 API 说明文本
+   → LLM 根据说明 + http_api 工具调用外部系统
+   → LLM 理解响应，生成自然语言回复
+```
+
+**已有的基础设施支持**：
+- `use_skill` + `skill_execute` — 加载技能 + 执行脚本
+- `get_current_tenant_id()` — 获取当前租户 ID
+- 租户存储目录 `storage/tenants/{tid}/` — 已有目录结构
 
 ---
 
@@ -78,288 +116,608 @@
 售后服务子智能体（SUBAGENT.md）
   │
   ├─ [用户身份感知] ← 长期记忆 memory_{user_id}.md
-  │     （姓名、手机号、偏好、习惯等，由记忆系统 Phase 3 自动注入上下文）
+  │     （姓名、偏好、习惯等，由记忆系统 Phase 3 自动注入上下文）
+  │
+  ├─ [用户身份映射] ← identity_mapping 配置 + DB
+  │     │
+  │     ├─ 手机号映射（MVP）
+  │     │     users.phone → 第三方系统 API 的用户查询参数
+  │     │
+  │     └─ 外部 ID 映射表（后续）
+  │           user_external_identities 表 → 精确的外部系统用户 ID
   │
   ├─ [意图识别] ← LLM 判断用户诉求类型
   │
-  ├─ [外部系统查询] ← ExternalAdapterRegistry
+  ├─ [外部系统调用] ← http_api 工具 + after-sales-api skill
   │     │
-  │     ├─ 适配器 A（企业A的订单系统）
-  │     ├─ 适配器 B（企业B的 ERP 系统）
-  │     └─ 适配器 C（通用 REST API）
+  │     ├─ LLM 通过 use_skill("after-sales-api") 加载 API 调用知识
+  │     ├─ LLM 根据 skill 知识 + 用户身份信息 组装请求参数
+  │     ├─ http_api 工具发起真实 HTTP 请求
+  │     ├─ 凭据和地址通过 ${VAR_NAME} 环境变量注入
+  │     │
+  │     ├─ 企业A 的订单系统 API
+  │     ├─ 企业B 的 ERP 系统 API
+  │     └─ 通用 REST API
   │
-  ├─ [售后工具调用] ← after_sales_tools
-  │     ├─ query_order          查询订单
-  │     ├─ create_return        创建退货
-  │     ├─ query_return_status  查询退货进度
-  │     ├─ create_ticket        创建工单
+  ├─ [售后内部操作] ← after_sales_tools
+  │     ├─ create_ticket        创建内部工单
   │     └─ query_ticket         查询工单
   │
   └─ [回复生成] ← LLM 整合查询结果，生成专业回复
 ```
 
-### 3.2 外部系统适配器设计（核心新增组件）
+### 3.2 外部系统对接设计
 
-#### 3.2.1 适配器注册表
+#### 3.2.1 核心思路
 
-每个租户可以配置自己的外部系统适配器。适配器是一个 **JSON 配置 + Python 脚本**的组合，存储在租户的 skill 目录中。
+复用已有的 `http_api` 工具（`src/tools/network/http_api.py`）。LLM 根据注入的 API 配置自动组装请求参数，直接调用 `http_api` 工具与外部系统交互。LLM 本身就是"适配器引擎"——阅读 API 配置、组装请求、理解响应。
 
-**存储路径**：
+#### 3.2.2 API 配置 — 通用技能 + 租户配置文件
+
+技能逻辑和配置数据分离。`after-sales-api` 是一个通用技能，所有租户共用，唯一的职责是读取当前租户的 API 说明文件。每个租户的 API 说明保存在独立的 MD 文件中，由租户管理员在智能体管理页面配置。
+
+**文件布局**：
+
 ```
-storage/tenants/{tenant_id}/adapters/
-  after_sales/
-    adapter.json          ← 适配器配置
-    adapter.py            ← 适配器脚本（可选，用于复杂逻辑）
+src/skills/after-sales-api-1.0.0/
+  SKILL.md                     ← 通用技能定义（所有租户共用）
+  scripts/
+    load_api_config.py          ← 读取当前租户的 after-sales-api.md 并返回内容
+
+storage/tenants/{tenant_id}/
+  after-sales-api.md            ← 租户的 API 说明文本（管理员编辑此文件）
 ```
 
-**adapter.json 配置格式**：
+**SKILL.md（通用技能）**：
 
+```markdown
+---
+name: after-sales-api
+description: >
+  售后服务外部系统 API 配置加载技能。读取当前租户配置的外部系统 API 说明，
+  供 LLM 了解如何调用外部售后系统的接口。使用 http_api 工具发起实际请求。
+metadata:
+  openclaw:
+    emoji: "🔌"
+    requires:
+      bins: ["python"]
+---
+
+# 售后服务外部系统 API 配置
+
+## 如何使用此技能
+
+当你需要调用外部售后系统 API（查询订单、退货、工单等）时：
+
+1. 先执行以下命令加载当前租户的 API 配置：
+
+```bash
+python scripts/load_api_config.py
+```
+
+2. 脚本会返回当前租户配置的外部系统 API 说明文本（Markdown 格式）
+3. 仔细阅读返回的 API 说明，了解：
+   - 外部系统的 Base URL 和认证方式
+   - 用户身份映射策略（通常为手机号映射）
+   - 可用的 API 端点、请求格式和响应格式
+4. 根据说明使用 http_api 工具调用外部系统
+5. URL 和 headers 中的 ${VAR_NAME} 环境变量会自动替换为实际值
+
+## 注意事项
+
+- 每次对话中首次需要调用外部 API 时，都要先执行脚本获取最新配置
+- 调用需要用户身份的 API 时，从系统注入的 [用户身份] 区块获取手机号等信息
+- 写操作（创建退货、创建工单等）前，先向用户确认信息再调用
+- 如果脚本返回"未配置"，说明该租户尚未配置外部系统，使用内部工单工具代替
+```
+
+**租户配置文件默认模板（after-sales-api.md）**：
+
+租户首次开通售后智能体时，自动生成一份默认模板，管理员需根据企业实际情况修改：
+
+```markdown
+# 外部系统 API 说明
+
+> ⚠️ 这是默认模板，请根据你企业的实际 API 修改以下内容。
+> 修改后立即生效，下次对话时智能体将使用新配置。
+
+## 基本信息
+
+- **系统名称**：企业售后系统（请修改）
+- **Base URL**：`${TENANT_AFTER_SALES_BASE_URL}`
+- **认证方式**：Bearer Token
+- **认证 Header**：`Authorization: Bearer ${TENANT_AFTER_SALES_API_KEY}`
+- **通用 Header**：`Content-Type: application/json`
+
+## 用户身份映射
+
+- **映射策略**：手机号映射
+- **说明**：通过用户手机号作为第三方系统的用户标识。查询订单、创建退货等操作需要传手机号来识别用户。
+
+## API 端点列表
+
+### 1. 查询订单列表
+
+GET ${TENANT_AFTER_SALES_BASE_URL}/orders?phone={手机号}&page=1&page_size=10
+
+**请求参数**：phone（用户手机号）、page（页码）、page_size（每页数量）
+
+**响应示例**：
 ```json
 {
-  "name": "企业A售后系统",
-  "description": "对接企业A的 ERP 售后模块",
-  "version": "1.0.0",
-  "type": "after_sales",
-
-  "base_url": "https://erp.company-a.com/api/v1",
-  "auth_type": "bearer",
-  "credentials_ref": "after_sales_api",
-
-  "apis": {
-    "query_order": {
-      "method": "GET",
-      "path": "/orders/{order_id}",
-      "params": {
-        "order_id": {"source": "tool_arg", "required": true, "description": "订单号"},
-        "phone": {"source": "user_profile", "field": "phone", "description": "用户手机号（用于验证）"}
-      },
-      "response_mapping": {
-        "order_id": "$.data.orderNo",
-        "status": "$.data.status",
-        "items": "$.data.items[*].{name: productName, qty: quantity, price: unitPrice}",
-        "total_amount": "$.data.totalAmount",
-        "created_at": "$.data.createTime"
-      }
-    },
-    "list_orders": {
-      "method": "GET",
-      "path": "/orders",
-      "params": {
-        "phone": {"source": "user_profile", "field": "phone", "required": true},
-        "page": {"source": "tool_arg", "default": 1},
-        "page_size": {"source": "tool_arg", "default": 10}
-      },
-      "response_mapping": {
-        "orders": "$.data.list[*].{id: orderNo, status: status, amount: totalAmount, date: createTime}",
-        "total": "$.data.total"
-      }
-    },
-    "create_return": {
-      "method": "POST",
-      "path": "/returns",
-      "body": {
-        "order_id": {"source": "tool_arg", "required": true},
-        "reason": {"source": "tool_arg", "required": true},
-        "items": {"source": "tool_arg", "required": true},
-        "contact_phone": {"source": "user_profile", "field": "phone"}
-      },
-      "response_mapping": {
-        "return_id": "$.data.returnNo",
-        "status": "$.data.status"
-      }
-    },
-    "query_return": {
-      "method": "GET",
-      "path": "/returns/{return_id}",
-      "params": {
-        "return_id": {"source": "tool_arg", "required": true}
-      },
-      "response_mapping": {
-        "return_id": "$.data.returnNo",
-        "status": "$.data.status",
-        "progress": "$.data.progressSteps[*].{step: name, done: completed}",
-        "refund_amount": "$.data.refundAmount"
-      }
-    },
-    "create_ticket": {
-      "method": "POST",
-      "path": "/tickets",
-      "body": {
-        "order_id": {"source": "tool_arg"},
-        "category": {"source": "tool_arg", "required": true},
-        "description": {"source": "tool_arg", "required": true},
-        "contact_phone": {"source": "user_profile", "field": "phone"},
-        "contact_name": {"source": "user_profile", "field": "username"}
-      },
-      "response_mapping": {
-        "ticket_id": "$.data.ticketNo",
-        "status": "$.data.status"
-      }
-    },
-    "query_ticket": {
-      "method": "GET",
-      "path": "/tickets/{ticket_id}",
-      "params": {
-        "ticket_id": {"source": "tool_arg", "required": true}
-      },
-      "response_mapping": {
-        "ticket_id": "$.data.ticketNo",
-        "status": "$.data.status",
-        "replies": "$.data.replies[*].{content: content, time: createTime, from: source}"
-      }
-    }
+  "code": 0,
+  "data": {
+    "list": [{"orderNo": "ORD20260501001", "status": "delivered", "totalAmount": 1299.00}],
+    "total": 1
   }
 }
 ```
 
-#### 3.2.2 参数来源（Source）设计
+### 2. 查询订单详情
 
-`params` 和 `body` 中的 `source` 字段定义了参数值的来源：
+GET ${TENANT_AFTER_SALES_BASE_URL}/orders/{订单号}
 
-| Source 值 | 说明 | 示例 |
-|-----------|------|------|
-| `tool_arg` | 来自工具调用参数（LLM 提供） | `order_id`, `reason` |
-| `user_profile` | 来自用户长期记忆（自动注入） | `phone`, `username` |
-| `credential` | 来自租户 API 凭据（自动注入） | `api_key`, `token` |
-| `static` | 静态值（配置中写死） | `version: "2.0"` |
-| `context` | 来自对话上下文（之前工具结果） | `session_id` |
-
-> `user_profile` 的值从 `memory_{user_id}.md` 的 `## 个人介绍` 分类解析。如果长期记忆中没有对应信息，回退到 `UserDB` 查询。
-
-#### 3.2.3 适配器类型
-
-适配器有两种实现方式，根据企业系统的复杂度选择：
-
-**方式一：声明式适配器（adapter.json）**
-
-适用于标准的 REST API，只需配置 API 端点和字段映射，无需写代码。
-
-- 适配器引擎（`ExternalAdapterEngine`）根据 `adapter.json` 配置自动发起 HTTP 请求
-- 支持 JSONPath 响应映射，将外部系统响应转换为统一格式
-- 认证方式支持：`bearer`（API Key in Header）、`basic`（用户名密码）、`oauth2`（Token 刷新）、`hmac`（签名认证）
-
-**方式二：脚本式适配器（adapter.json + adapter.py）**
-
-适用于复杂的非标准接口（如 SOAP、需要签名计算、需要多次请求组合等）。
-
-- `adapter.json` 中声明 `"script": "adapter.py"`
-- `adapter.py` 是一个 Python 脚本，通过 CLI 接收参数，输出 JSON 结果
-- 脚本通过 `skill_execute` 机制运行（复用现有的 `SkillExecutor`）
-- 与现有 skill 脚本的运行方式一致
-
-```python
-# adapter.py 示例
-import sys
-import json
-import httpx
-import hashlib
-import time
-
-def main():
-    args = json.loads(sys.argv[1])
-
-    if args["action"] == "query_order":
-        # 自定义签名逻辑
-        timestamp = str(int(time.time()))
-        sign = hashlib.md5(f"{args['api_key']}{timestamp}".encode()).hexdigest()
-
-        resp = httpx.get(
-            f"{args['base_url']}/orders/{args['order_id']}",
-            headers={"X-Api-Key": args["api_key"], "X-Timestamp": timestamp, "X-Sign": sign}
-        )
-        data = resp.json()
-
-        # 输出统一格式
-        print(json.dumps({
-            "success": True,
-            "data": {
-                "order_id": data["orderNo"],
-                "status": data["statusCode"],
-                "items": data.get("items", [])
-            }
-        }, ensure_ascii=False))
-
-if __name__ == "__main__":
-    main()
+**响应示例**：
+```json
+{
+  "code": 0,
+  "data": {
+    "orderNo": "ORD20260501001", "status": "delivered", "totalAmount": 1299.00,
+    "items": [{"productName": "商品A", "quantity": 2, "unitPrice": 649.50}],
+    "createTime": "2026-05-01 10:00:00"
+  }
+}
 ```
 
-#### 3.2.4 认证方式支持
+### 3. 创建退货申请
 
-| 认证类型 | 配置方式 | 实现 |
-|----------|----------|------|
-| `bearer` | `{"auth_type": "bearer", "credentials_ref": "xxx"}` | API Key 放入 `Authorization: Bearer {key}` |
-| `basic` | `{"auth_type": "basic", "credentials_ref": "xxx"}` | `Authorization: Basic base64(user:pass)` |
-| `api_key` | `{"auth_type": "api_key", "header_name": "X-Api-Key", "credentials_ref": "xxx"}` | API Key 放入指定 Header |
-| `oauth2` | `{"auth_type": "oauth2", "token_url": "...", "credentials_ref": "xxx"}` | 自动刷新 Token |
-| `hmac` | 由脚本适配器自行处理 | 灵活支持各种签名算法 |
+POST ${TENANT_AFTER_SALES_BASE_URL}/returns
 
-### 3.3 租户 API 凭据管理（新增组件）
+**请求体**：`{"order_id": "订单号", "reason": "退货原因", "items": "涉及商品", "contact_phone": "用户手机号"}`
+
+**响应示例**：`{"code": 0, "data": {"returnNo": "RET20260501001", "status": "pending"}}`
+
+### 4. 查询退货/退款进度
+
+GET ${TENANT_AFTER_SALES_BASE_URL}/returns/{退货单号}
+
+### 5. 创建售后工单
+
+POST ${TENANT_AFTER_SALES_BASE_URL}/tickets
+
+**请求体**：`{"order_id": "订单号(可选)", "category": "分类", "description": "描述", "contact_phone": "手机号", "contact_name": "姓名"}`
+
+### 6. 查询工单详情
+
+GET ${TENANT_AFTER_SALES_BASE_URL}/tickets/{工单号}
+
+## 调用注意事项
+
+1. 环境变量自动替换：${TENANT_AFTER_SALES_BASE_URL} 和 ${TENANT_AFTER_SALES_API_KEY}
+2. 用户手机号从 [用户身份] 区块获取
+3. 写操作前先向用户确认
+```
+
+#### 3.2.3 配置加载机制
+
+**两步加载**：LLM 先加载技能（获取"怎么读配置"的指引），再执行脚本（获取"实际配置内容"）。
+
+```
+1. LLM 遇到需要调用外部 API 的场景
+   → 调用 use_skill("after-sales-api")
+   → SKILL.md 内容注入对话上下文（告诉 LLM 要先执行脚本）
+
+2. LLM 按指引执行脚本
+   → skill_execute("python scripts/load_api_config.py")
+   → 脚本根据当前 tenant_id 读取 after-sales-api.md
+   → 返回 API 说明文本
+
+3. LLM 阅读 API 说明，组装 http_api 调用参数
+   → 调用 http_api 执行请求
+   → 理解响应，生成自然语言回复
+```
+
+**租户管理员配置流程**：
+1. 在售后智能体管理页面，找到"外部系统配置"区域
+2. 页面显示 MD 编辑器，内容为 `storage/tenants/{tenant_id}/after-sales-api.md`
+3. 修改 base_url、API 端点、请求/响应格式等
+4. 保存 → 文件直接写入磁盘
+5. 下次对话即时生效（无需重启）
+
+> **设计原则**：API 配置文件由 `after-sales-api` skill 的 `load_api_config.py` 脚本按需读取，
+> 不需要专门的后端 API 端点。前端通过通用的租户文件管理接口操作配置文件。
+
+#### 3.2.4 LLM 调用流程
+
+```
+用户: "帮我查一下订单 ORD20260501001 的状态"
+  │
+  ▼
+Agent 识别意图 → 需要查询外部系统
+  │
+  ▼
+Agent 调用 use_skill("after-sales-api") 加载技能指引:
+  → SKILL.md 告诉 Agent：先执行脚本获取 API 配置
+  │
+  ▼
+Agent 调用 skill_execute("python scripts/load_api_config.py"):
+  → 脚本读取 storage/tenants/{current_tid}/after-sales-api.md
+  → 返回 API 说明文本（base_url、端点列表、响应格式等）
+  │
+  ▼
+Agent 根据 API 说明，调用 http_api 工具:
+  {
+    "method": "GET",
+    "url": "${TENANT_AFTER_SALES_BASE_URL}/orders/ORD20260501001",
+    "headers": {
+      "Authorization": "Bearer ${TENANT_AFTER_SALES_API_KEY}"
+    }
+  }
+  │
+  ▼
+http_api 工具执行:
+  - ${TENANT_AFTER_SALES_API_KEY} 替换为环境变量中的实际 API Key
+  - ${TENANT_AFTER_SALES_BASE_URL} 替换为环境变量中的实际 Base URL
+  - 发起 HTTP GET 请求
+  - 返回 JSON 响应
+  │
+  ▼
+Agent 理解 JSON 响应，生成自然语言回复:
+  "您的订单 ORD20260501001 已签收，包含 2 件商品A，总价 1299 元。"
+```
+
+#### 3.2.5 环境变量管理 — 按子智能体隔离的环境变量注入方案
+
+凭据和配置通过 `http_api` 工具内置的环境变量替换机制注入。环境变量存储在 `subagent_env_vars` 表中，**按租户和子智能体隔离**，每个子智能体只获取自己的环境变量。
+
+**设计原则**：
+
+- **简单直接**：管理员创建 `var_name=var_value` 键值对，`var_name` 即为环境变量名，无需额外的映射配置
+- **按子智能体隔离**：每个子智能体只获取自己的环境变量，不会看到其他子智能体的变量
+- **双模式注入**：无论子智能体以 STANDALONE 模式（`process_message()`）还是委派模式（`execute_as_subagent()`）运行，环境变量都会被正确注入
+
+**环境变量配置示例**（管理后台配置）：
+
+```
+子智能体: after-sales
+  ┌─────────────────────────────────────┬─────────────────────────────────────┐
+  │ 变量名 (var_name)                   │ 变量值 (var_value)                  │
+  ├─────────────────────────────────────┼─────────────────────────────────────┤
+  │ TENANT_AFTER_SALES_API_KEY          │ sk-xxxxxxxxxxxx                     │
+  │ TENANT_AFTER_SALES_BASE_URL         │ https://erp.company.com/api/v1      │
+  └─────────────────────────────────────┴─────────────────────────────────────┘
+```
+
+**注入机制**（适用于所有子智能体，非售后专用）：
+
+1. **STANDALONE 模式**：Agent 在 `process_message()` 中根据 `tenant_id` 和当前子智能体名称，调用 `SubagentEnvVarDB.get_vars(tenant_id, subagent_name)` 获取该子智能体的环境变量，注入到 `os.environ`
+2. **委派模式**：`SubagentExecutor` 在 `execute_as_subagent()` 中，根据传入的 `tenant_id` 和子智能体名称，同样调用 `SubagentEnvVarDB.get_vars()` 获取并注入环境变量
+3. `http_api` 工具执行时，`${VAR_NAME}` 自动替换为环境变量值
+4. 请求完成后清除所有临时注入的环境变量（通过 `_injected_env_vars` 字典记录已注入的变量名）
+
+**不同子智能体的变量天然隔离**：
+
+```
+子智能体: after-sales 的变量:
+  TENANT_AFTER_SALES_API_KEY = "sk-xxx"
+  TENANT_AFTER_SALES_BASE_URL = "https://..."
+
+子智能体: erp-assistant 的变量:
+  TENANT_ERP_API_KEY = "sk-yyy"
+  TENANT_ERP_API_SECRET = "secret-zzz"
+```
+
+> **注意**：此方案在多 worker 环境下需注意环境变量的进程隔离。如果并发量大，可考虑给 `http_api` 工具增加凭据注入参数（如 `credentials` 字段），避免使用全局环境变量。
+
+### 3.3 子智能体环境变量管理
 
 #### 3.3.1 数据库表设计
 
+> **表名说明**：`subagent_env_vars` 是**系统级环境变量管理表**，不属于某个子智能体的业务数据，因此不以 `bs_` 开头。它按租户和子智能体维度存储环境变量，每个子智能体只能获取自己的变量。
+
 ```sql
--- 租户外部 API 凭据表
-CREATE TABLE IF NOT EXISTS tenant_api_credentials (
+-- 子智能体环境变量表（系统表，非业务表）
+CREATE TABLE IF NOT EXISTS subagent_env_vars (
     id SERIAL PRIMARY KEY,
-    credential_id TEXT UNIQUE NOT NULL,        -- 凭据ID: tac_{uuid12}
     tenant_id TEXT NOT NULL,                   -- 租户ID
-    adapter_type TEXT NOT NULL,                -- 适配器类型: after_sales / erp / crm 等
-    credential_name TEXT NOT NULL,             -- 凭据名称（如"企业A ERP API"）
-    auth_type TEXT NOT NULL DEFAULT 'bearer',  -- 认证方式: bearer/basic/api_key/oauth2
-    api_key_encrypted TEXT,                     -- 加密存储的 API Key
-    api_secret_encrypted TEXT,                  -- 加密存储的 API Secret
-    extra_config JSON,                          -- 额外配置（如 token_url, scope 等）
-    status TEXT NOT NULL DEFAULT 'active',      -- active/inactive
+    subagent_name TEXT NOT NULL,               -- 子智能体目录名（如 after-sales）
+    var_name TEXT NOT NULL,                    -- 环境变量名（如 TENANT_AFTER_SALES_API_KEY）
+    var_value TEXT NOT NULL,                   -- 环境变量值（明文存储）
+    description TEXT,                          -- 变量说明（如"售后系统 API Key"）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- 同一租户的同一子智能体下，变量名唯一
+    CONSTRAINT uq_subagent_env_var UNIQUE (tenant_id, subagent_name, var_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subagent_env_vars_tenant ON subagent_env_vars(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_env_vars_subagent ON subagent_env_vars(tenant_id, subagent_name);
+```
+
+**设计说明**：
+
+| 设计决策 | 说明 |
+|----------|------|
+| `var_name` 即环境变量名 | 管理员直接设置环境变量名，如 `TENANT_AFTER_SALES_API_KEY`，无需额外的映射层 |
+| 按子智能体隔离 | `subagent_name` 字段确保每个子智能体只获取自己的变量 |
+| 明文存储 | 当前阶段使用明文存储，后续可按需增加加密 |
+| 唯一约束 | 同一租户的同一子智能体下变量名不能重复 |
+
+**数据示例**：
+
+| tenant_id | subagent_name | var_name | var_value | description |
+|-----------|---------------|----------|-----------|-------------|
+| tenant_A | after-sales | TENANT_AFTER_SALES_API_KEY | sk-xxxxxxxx | 售后系统 API Key |
+| tenant_A | after-sales | TENANT_AFTER_SALES_BASE_URL | https://erp.company.com/api/v1 | 售后系统 Base URL |
+| tenant_A | erp-assistant | TENANT_ERP_API_KEY | sk-yyyyyyyy | ERP 系统 API Key |
+| tenant_B | after-sales | TENANT_AFTER_SALES_API_KEY | sk-zzzzzzzz | 售后系统 API Key |
+
+#### 3.3.2 环境变量管理类
+
+```python
+# src/db/subagent_env_var.py
+
+class SubagentEnvVarDB:
+    """子智能体环境变量管理"""
+
+    @staticmethod
+    def create(tenant_id: str, subagent_name: str, var_name: str,
+               var_value: str, description: str = None) -> str:
+        """创建环境变量"""
+
+    @staticmethod
+    def get_vars(tenant_id: str, subagent_name: str) -> Dict[str, str]:
+        """获取指定租户和子智能体的所有环境变量，返回 {var_name: var_value}"""
+
+    @staticmethod
+    def get_by_id(var_id: int) -> Optional[Dict]:
+        """获取单个环境变量"""
+
+    @staticmethod
+    def list_by_tenant(tenant_id: str) -> List[Dict]:
+        """列出租户所有环境变量（按子智能体分组）"""
+
+    @staticmethod
+    def list_by_subagent(tenant_id: str, subagent_name: str) -> List[Dict]:
+        """列出指定子智能体的所有环境变量"""
+
+    @staticmethod
+    def update(var_id: int, **kwargs) -> bool:
+        """更新环境变量"""
+
+    @staticmethod
+    def delete(var_id: int) -> bool:
+        """删除环境变量"""
+
+    @staticmethod
+    def upsert(tenant_id: str, subagent_name: str, var_name: str,
+               var_value: str, description: str = None) -> str:
+        """创建或更新环境变量（存在则更新，不存在则创建）"""
+```
+
+#### 3.3.3 环境变量管理 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/saas/tenant/subagent-env-vars` | 列出当前租户的所有环境变量 |
+| GET | `/api/saas/tenant/subagent-env-vars/{subagent_name}` | 列出指定子智能体的环境变量 |
+| POST | `/api/saas/tenant/subagent-env-vars` | 创建环境变量 |
+| PUT | `/api/saas/tenant/subagent-env-vars/{var_id}` | 更新环境变量 |
+| DELETE | `/api/saas/tenant/subagent-env-vars/{var_id}` | 删除环境变量 |
+
+### 3.4 用户身份映射
+
+#### 3.4.1 问题分析
+
+Agent 调用外部售后系统 API 时，面临身份鸿沟：
+
+```
+本系统                         第三方企业系统
+┌──────────────────┐           ┌──────────────────┐
+│ user_id: user_x1 │    →→→    │ 员工工号: EMP00123 │
+│ phone: 138xxxx   │           │ 或客户ID: C4567   │
+│ name: 张三       │           │ 手机号: 138xxxx   │
+└──────────────────┘           └──────────────────┘
+```
+
+本系统 `users` 表有 `user_id`、`phone`、`wx_openid` 等字段，但外部系统用不同的标识体系。需要在 Agent 调用 API 前，将本系统用户身份转换为外部系统能识别的用户身份。
+
+#### 3.4.2 现有用户信息盘点
+
+| 信息 | 存储位置 | Agent 是否可见 | 可用于身份映射 |
+|------|----------|---------------|---------------|
+| `user_id` | `users` 表，Agent `User` 对象 | ✅ 可见 | ❌ 第三方系统不认识 |
+| `phone` | `users` 表 | ❌ Agent 只收到 `user_id` + `name` | ✅ 国内企业系统通用标识 |
+| `username` | `users` 表 | ❌ 未传递到 Agent | ⚠️ 部分场景可用 |
+| `wx_openid` | `users` 表 | ❌ 未传递到 Agent | ⚠️ 企业微信场景可用 |
+| `tenant_id` | `users` 表，请求 ContextVar | ✅ 可见 | ✅ 用于租户隔离 |
+
+**当前问题**：Agent 构造 `User` 对象时只填了 `user_id` 和 `name`（`main.py:558-563`），手机号等关键映射字段丢失。
+
+#### 3.4.3 手机号映射（MVP，优先实现）
+
+**核心思路**：国内企业系统（ERP、CRM、售后）几乎都以手机号作为用户唯一标识或查询条件。Agent 调用外部 API 时，将当前用户的手机号作为参数传入。
+
+**实现方式**：
+
+1. **SKILL.md 声明映射策略**（在"用户身份映射"章节）：
+
+```markdown
+## 用户身份映射
+
+- **映射策略**：手机号映射
+- **说明**：通过用户手机号作为第三方系统的用户标识。
+```
+
+2. **Agent 处理消息前，从 DB 查询用户手机号注入上下文**：
+
+```
+Agent.process_message(user=User(user_id="user_x1"))
+  │
+  ├─ 从 users 表查询该用户的 phone（一次 DB 查询）
+  │   → phone = "13800138000"
+  │
+  ├─ 注入到 system prompt 的 [用户身份] 区块：
+  │   "当前用户手机号：13800138000，姓名：张三"
+  │
+  ▼
+LLM 读取 skill 中的身份映射说明 + [用户身份] 区块
+  → 调用 http_api 时将手机号填入对应参数
+```
+
+3. **LLM 自行决定手机号放在哪个参数位置**：SKILL.md 中的 API 描述会提示 LLM 哪些参数需要用户手机号，LLM 从 system prompt 的 [用户身份] 区块读取后填入。
+
+**手机号获取优先级**：
+
+| 来源 | 说明 | 优先级 |
+|------|------|--------|
+| `users` 表 `phone` 字段 | 注册时绑定，最可靠 | 主方案 |
+| 长期记忆 `memory_{user_id}.md` | 从对话中提取的手机号 | 补充 |
+| 对话中询问用户 | 以上均无时的兜底 | 最后手段 |
+
+**优势**：
+- 零额外基础设施：不需要新建映射表，复用 `users` 表已有字段
+- 国内企业系统覆盖率高：绝大多数 ERP/CRM/售后系统支持手机号查询
+- LLM 天然理解：手机号是自然语言，LLM 能准确填入 API 参数
+- 配置简单：SKILL.md 的"用户身份映射"章节即可声明
+
+**局限**：
+- 部分企业系统用员工工号而非手机号做标识 → 需要外部 ID 映射表
+- 手机号可能变更（换号），但实际频率很低
+
+#### 3.4.4 外部 ID 映射表（后续迭代）
+
+**核心思路**：为每个租户建立"本系统用户 → 外部系统用户"的精确映射关系。适用于企业系统使用员工工号、客户ID 等非手机号标识的场景。
+
+**数据库表设计**：
+
+> **表名说明**：`user_external_identities` 是**系统级用户身份基础设施表**，不属于某个子智能体的业务数据，因此不以 `bs_` 开头。它存储本系统用户与外部系统用户的映射关系，供所有需要身份映射的子智能体共用。
+
+```sql
+-- 用户外部身份映射表（系统表，非业务表，供所有子智能体共用）
+CREATE TABLE IF NOT EXISTS user_external_identities (
+    id SERIAL PRIMARY KEY,
+    mapping_id TEXT UNIQUE NOT NULL,          -- 映射ID: uei_{uuid12}
+    tenant_id TEXT NOT NULL,                  -- 租户ID
+    user_id TEXT NOT NULL,                    -- 本系统用户ID
+    system_name TEXT NOT NULL,                -- 外部系统名称（如 "erp_system_a"）
+    external_user_id TEXT NOT NULL,           -- 外部系统的用户ID（如 "EMP00123"）
+    external_username TEXT,                   -- 外部系统的用户名（如 "zhangsan"）
+    external_phone TEXT,                      -- 外部系统的手机号（用于交叉验证）
+    metadata JSON,                            -- 扩展字段（部门、职位等）
+    status TEXT NOT NULL DEFAULT 'active',    -- active/inactive
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_tenant_api_cred_tenant ON tenant_api_credentials(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_tenant_api_cred_type ON tenant_api_credentials(adapter_type);
+-- 同一用户在同一外部系统中只能有一个有效映射
+CREATE UNIQUE INDEX IF NOT EXISTS idx_uei_tenant_user_system
+    ON user_external_identities(tenant_id, user_id, system_name)
+    WHERE status = 'active';
+-- 同一外部系统中，external_user_id 不重复
+CREATE UNIQUE INDEX IF NOT EXISTS idx_uei_tenant_ext_id
+    ON user_external_identities(tenant_id, system_name, external_user_id)
+    WHERE status = 'active';
 ```
 
-#### 3.3.2 凭据管理类
+**映射关系示例**：
 
-```python
-# src/db/tenant_api_credential.py
+| tenant_id | user_id | system_name | external_user_id | external_username |
+|-----------|---------|-------------|------------------|-------------------|
+| tenant_A | user_x1 | erp_system | EMP00123 | 张三 |
+| tenant_A | user_x1 | crm_system | C4567 | zhangsan |
+| tenant_A | user_x2 | erp_system | EMP00456 | 李四 |
 
-class TenantApiCredentialDB:
-    """租户外部 API 凭据管理"""
+**SKILL.md 配置**（"用户身份映射"章节）：
 
-    @staticmethod
-    def create(tenant_id, adapter_type, credential_name, auth_type,
-               api_key, api_secret=None, extra_config=None) -> str:
-        """创建凭据（加密存储）"""
+```markdown
+## 用户身份映射
 
-    @staticmethod
-    def get_by_id(credential_id: str) -> Optional[Dict]:
-        """获取凭据（解密）"""
-
-    @staticmethod
-    def get_by_tenant_and_type(tenant_id: str, adapter_type: str) -> Optional[Dict]:
-        """按租户和适配器类型获取凭据（解密）"""
-
-    @staticmethod
-    def list_by_tenant(tenant_id: str) -> List[Dict]:
-        """列出租户所有凭据（脱敏）"""
-
-    @staticmethod
-    def update(credential_id: str, **kwargs) -> bool:
-        """更新凭据"""
-
-    @staticmethod
-    def delete(credential_id: str) -> bool:
-        """删除凭据（软删除）"""
+- **映射策略**：外部 ID 映射
+- **外部系统名称**：erp_system
+- **说明**：通过外部系统映射表查找用户在 ERP 系统中的员工工号。
 ```
 
-#### 3.3.3 凭据管理 API
+**Agent 调用流程**：
 
-| 方法 | 路径 | 说明 |
+```
+Agent.process_message(user=User(user_id="user_x1"))
+  │
+  ├─ 读取 SKILL.md 中"用户身份映射"章节
+  │   → 映射策略 = "external_id", 外部系统 = "erp_system"
+  │
+  ├─ 查询 user_external_identities 表:
+  │   WHERE tenant_id = 'tenant_A'
+  │     AND user_id = 'user_x1'
+  │     AND system_name = 'erp_system'
+  │     AND status = 'active'
+  │   → external_user_id = "EMP00123"
+  │
+  ├─ 注入到 system prompt:
+  │   "当前用户在外部系统 erp_system 中的ID: EMP00123"
+  │
+  ▼
+LLM 调用 http_api 时使用 EMP00123 作为用户标识
+```
+
+**数据录入方式**：
+
+| 方式 | 适用场景 |
+|------|----------|
+| 管理后台手动录入 | 用户量小，一对一映射 |
+| CSV 批量导入 | 企业初始化时批量建立映射 |
+| 自动匹配（首次登录时通过手机号匹配） | 外部系统也用手机号时的自动关联 |
+
+#### 3.4.5 身份映射演进路线
+
+```
+阶段一（MVP）
+  ├─ 手机号映射（strategy: "phone"）
+  │   - 从 users 表获取 phone，注入 system prompt
+  │   - 零额外基础设施
+  │   - 覆盖大多数国内企业系统场景
+  │
+  ▼
+阶段二
+  ├─ 新建 user_external_identities 表
+  ├─ 外部 ID 映射（strategy: "external_id"）
+  │   - 支持员工工号、客户ID 等非手机号标识
+  │   - 管理后台录入 / CSV 导入
+  │
+  ▼
+阶段三（远期）
+  ├─ OAuth 2.0 / OIDC 用户授权
+  │   - 用户首次使用时授权 Agent 访问外部系统
+  │   - 平台安全存储 refresh_token
+  │   - 完整的审计追踪和权限控制
+```
+
+#### 3.4.6 身份信息注入实现细节
+
+无论哪种映射策略，核心实现都是**在 Agent 处理消息前，将用户身份信息注入 system prompt**：
+
+**注入位置**：`agent.py` 中 `process_message()` 方法，构建 system prompt 时。
+
+**注入内容格式**：
+
+```
+[用户身份]
+姓名：张三
+手机号：13800138000
+外部系统ID（erp_system）：EMP00123   ← 仅 external_id 策略时有此行
+
+说明：调用外部 API 时，根据 SKILL.md 中"用户身份映射"章节的配置，
+使用上述信息作为用户身份标识。
+```
+
+**代码改动**：
+
+| 文件 | 改动 | 说明 |
 |------|------|------|
-| GET | `/api/saas/tenant/api-credentials` | 列出当前租户的 API 凭据（脱敏） |
-| POST | `/api/saas/tenant/api-credentials` | 创建 API 凭据 |
-| PUT | `/api/saas/tenant/api-credentials/{credential_id}` | 更新 API 凭据 |
-| DELETE | `/api/saas/tenant/api-credentials/{credential_id}` | 删除 API 凭据 |
+| `src/core/agent.py` | `process_message()` 中增加用户身份查询和注入 | 从 DB 查 phone / 从映射表查 external_id，追加到 system prompt |
+| `src/models/user.py` | `User` 模型增加 `phone` 字段 | 让 `process_message()` 能传递手机号到 Agent |
+| `src/main.py` | 构造 `User` 对象时填入 `phone` | 从 `current_user` dict 中取 phone 传给 User |
 
 ---
 
@@ -371,19 +729,21 @@ class TenantApiCredentialDB:
 subagents/after-sales/
   SUBAGENT.md                              ← 子智能体定义
 
-src/skills/after-sales-core-1.0.0/
-  SKILL.md                                 ← 售后核心技能
+src/skills/after-sales-api-1.0.0/
+  SKILL.md                                 ← 通用技能：指引 LLM 读取租户 API 配置
   scripts/
-    adapter_engine.py                       ← 声明式适配器引擎
-    after_sales_tool.py                     ← 售后工具脚本
+    load_api_config.py                      ← 读取当前租户的 after-sales-api.md 并返回内容
 
-src/tools/after_sales/
-  after_sales_query_tool.py                ← 售后查询工具（注册到 ToolRegistry）
-  after_sales_action_tool.py              ← 售后操作工具（退换货、工单）
+src/skills/after-sales-core-1.0.0/
+  SKILL.md                                 ← 售后核心技能（内部工单/退换货 CLI 命令说明）
+  scripts/
+    after_sales_tool.py                     ← 售后 CLI 脚本（init_tables + 工单/退换货 CRUD）
 
 src/db/
-  tenant_api_credential.py                 ← 租户 API 凭据（新增）
-  after_sales_db.py                        ← 售后数据表（新增）
+  subagent_env_var.py                      ← 子智能体环境变量管理
+
+storage/tenants/{tenant_id}/
+  after-sales-api.md                        ← 租户的 API 说明文本（管理员在智能体管理页面编辑）
 ```
 
 ### 4.2 SUBAGENT.md 定义
@@ -412,11 +772,11 @@ triggers:
 tools:
   inherit: true
   additional:
-    - after_sales_query
-    - after_sales_action
+    - http_api               # 调用外部售后系统 API（查询订单、退换货等）
 skills:
   allowed:
-    - after-sales-core
+    - after-sales-core       # 内部工单/退换货 CLI 操作（降级方案）
+    - after-sales-api       # 外部系统 API 调用知识（租户定制）
 context:
   max_input_tokens: 10000
   max_output_tokens: 4000
@@ -426,302 +786,202 @@ context:
 **System Prompt 要点**（写在 `---` 之后的 body 中）：
 
 1. **身份定位**：你是专业的售后服务助手，帮助用户解决订单和商品相关问题
-2. **用户信息感知**：自动识别当前用户身份，无需用户重复提供手机号等基本信息
-3. **标准化流程**：
-   - 订单查询 → 确认订单 → 查看详情
-   - 退换货 → 确认订单和商品 → 了解原因 → 创建申请 → 跟进进度
-   - 商品使用问题 → 了解问题 → 提供指导 → 必要时创建工单
-   - 复杂问题 → 创建工单 → 转人工处理
-4. **安全规则**：不直接展示 API 原始响应，用自然语言总结后回复用户
+2. **用户信息感知**：自动识别当前用户身份（从长期记忆中获取），无需用户重复提供手机号等基本信息
+3. **外部系统调用**：使用 `http_api` 工具调用外部系统 API（订单查询、退换货等），根据注入的 API 配置组装请求
+4. **标准化流程**：
+   - 订单查询 → 调用外部 API 查询 → 用自然语言总结回复
+   - 退换货 → 确认订单和商品 → 了解原因 → 调用外部 API 创建申请 → 跟进进度
+   - 商品使用问题 → 了解问题 → 提供指导 → 必要时通过 after-sales-core 技能创建工单
+   - 复杂问题 → 通过 after-sales-core 技能创建内部工单 → 转人工处理
+5. **安全规则**：不直接展示 API 原始响应，用自然语言总结后回复用户
 
 ### 4.3 工具设计
 
-#### 4.3.1 售后查询工具（after_sales_query）
+#### 4.3.1 外部系统调用 — 复用 http_api 工具
 
-```python
-class AfterSalesQueryTool(BaseTool):
-    """售后查询工具"""
+LLM 根据注入的 API 配置，直接调用 `http_api` 工具与外部售后系统交互：
 
-    name = "after_sales_query"
-    description = "查询用户的售后相关信息，包括订单、退换货进度、工单状态等"
-    display_name = "售后查询"
+- **查询订单**：LLM 调用 `http_api(method="GET", url="...", headers={"Authorization": "Bearer ${TENANT_AFTER_SALES_API_KEY}"})`
+- **创建退货**：LLM 调用 `http_api(method="POST", url="...", body={...})`
+- **查询退货进度**：LLM 调用 `http_api(method="GET", url="...")`
 
-    class InputModel(BaseModel):
-        query_type: str = Field(
-            ...,
-            description="查询类型：order_detail(订单详情), order_list(订单列表), return_status(退货进度), ticket_status(工单状态)"
-        )
-        identifier: str = Field(
-            ...,
-            description="查询标识：订单号、退货单号或工单号"
-        )
+无需为每种操作开发专用工具类。LLM 根据 SKILL.md 中的端点描述和响应示例，自行组装正确的请求参数和理解响应内容。
+
+#### 4.3.2 内部工单/退换货操作 — after-sales-core 技能 CLI
+
+> **设计决策**：内部工单和退换货操作不做成独立工具，而是封装在 `after-sales-core` 技能的 CLI 脚本中。这与 `trade-customer` 技能的 `customer_manager.py` 模式一致——LLM 通过 `use_skill` 加载技能知识，再通过 `skill_execute` 执行脚本命令。
+
+**理由**：
+- 工具是给 LLM 直接调用的原子操作，而工单/退换货涉及多步业务逻辑（参数校验、DB 写入、结果格式化），更适合封装在脚本中
+- 减少工具数量，降低 LLM 选择工具的复杂度
+- 与项目已有的 skill-based 模式一致（`trade-customer`、`competitor-research` 等都用这种方式）
+
+**CLI 命令**（通过 `skill_execute` 调用）：
+
+```bash
+# 创建内部工单
+python scripts/after_sales_tool.py create-ticket --user-id USER --description "问题" --category return [--order-id ORDER] [--priority normal]
+
+# 查询工单
+python scripts/after_sales_tool.py query-ticket --ticket-id ast_xxxx
+
+# 列出用户工单
+python scripts/after_sales_tool.py list-tickets --user-id USER [--status open]
+
+# 创建退换货记录
+python scripts/after_sales_tool.py create-return --user-id USER --order-id ORDER --type return --reason "原因" [--items JSON]
+
+# 查询退换货记录
+python scripts/after_sales_tool.py query-returns --user-id USER [--order-id ORDER]
 ```
 
-#### 4.3.2 售后操作工具（after_sales_action）
+**调用链路**：
 
-```python
-class AfterSalesActionTool(BaseTool):
-    """售后操作工具"""
-
-    name = "after_sales_action"
-    description = "执行售后操作，包括创建退换货申请、创建工单等"
-    display_name = "售后操作"
-
-    class InputModel(BaseModel):
-        action_type: str = Field(
-            ...,
-            description="操作类型：create_return(创建退货), create_exchange(创建换货), create_ticket(创建工单)"
-        )
-        order_id: Optional[str] = Field(None, description="关联的订单号")
-        reason: Optional[str] = Field(None, description="退换货原因")
-        items: Optional[str] = Field(None, description="涉及的商品（JSON 字符串）")
-        description: Optional[str] = Field(None, description="问题描述（工单用）")
-        category: Optional[str] = Field(None, description="问题分类")
+```
+LLM 识别需要创建内部工单
+  → 调用 use_skill("after-sales-core") 加载技能知识
+  → 调用 skill_execute("python scripts/after_sales_tool.py create-ticket --user-id ... --description ... --category ...")
+  → 脚本执行 DB 操作，返回 JSON 结果
+  → LLM 理解结果，生成自然语言回复
 ```
 
-### 4.4 用户身份感知 — 复用长期记忆系统
+**脚本特点**：
+- 自动初始化数据库表（`init_tables()`）
+- 支持子进程独立运行（自动初始化 PostgreSQL 连接池）
+- 返回标准 JSON 格式：`{"success": bool, ...}`
 
-#### 设计思路
+### 4.4 用户身份感知与映射
 
-售后服务智能体**不做独立的用户信息注入机制**。用户身份识别完全复用记忆系统 Phase 3 的长期记忆设计：
+#### 身份感知 — 复用长期记忆系统
 
-- **长期记忆文件**：`storage/memory/memory_{user_id}.md`，记录用户的个人信息、习惯、偏好等
-- **信息来源**：每日自动总结从当天会话中提取用户特征（姓名、手机号、职位、习惯等）
+用户的基本信息（姓名、偏好等）通过长期记忆系统自动注入 Agent 上下文：
+
+- **长期记忆文件**：`storage/memory/{tenant_id}/memory_{user_id}.md`，记录用户的个人信息、习惯、偏好等（按租户隔离存储）
 - **上下文注入**：Agent 在新会话时自动加载用户长期记忆到 system prompt 的 `[用户记忆]` 区块
 
-这意味着售后服务智能体不需要做任何特殊处理——当长期记忆系统上线后，所有子智能体（包括售后服务）都能自动感知用户信息。
+#### 身份映射 — 手机号注入
 
-#### 长期记忆中与售后服务相关的信息
-
-长期记忆的 `## 个人介绍` 分类会沉淀用户的姓名、手机号等信息。这些信息在售后服务场景中会被适配器引擎使用：
+手机号通过 DB 查询注入 system prompt 的 `[用户身份]` 区块：
 
 ```
-# 用户记忆（memory_user_xxxx.md）
+长期记忆注入:
+  [用户记忆] 区块 → 姓名、偏好、习惯等
 
-## 个人介绍
-
-- 姓名：张三
-- 手机号：13800138000
-- 职位：采购经理
-- 公司：XX科技
-
-## 工作习惯
-
-- 常用快递：顺丰
-- 偏好简短的回复
+手机号注入:
+  [用户身份] 区块 → 手机号: 13800138000
+                    外部系统ID: EMP00123（如有映射）
 ```
 
-当售后工具调用外部 API 时，适配器引擎的参数来源 `source: "user_profile"` 将从长期记忆中提取用户手机号等信息，自动填充到 API 请求参数中（如 `contact_phone`、`contact_name`）。
-
-#### 长期记忆 → 适配器参数 的数据流
+#### 完整数据流：用户身份 → 外部 API 调用
 
 ```
 用户发消息 "我要退货"
   │
   ▼
 Agent.process_message()
-  ├─ 加载长期记忆 → system prompt 中注入 [用户记忆] 区块
-  │   （包含 "手机号：13800138000"）
+  ├─ 从 users 表查询 phone（一次 DB 查询）
+  │   → phone = "13800138000"
+  ├─ 注入 [用户身份] 区块到 system prompt
+  │   "手机号：13800138000"
+  ├─ 加载长期记忆 → [用户记忆] 区块
+  │   "姓名：张三，职位：采购经理"
   │
   ▼
-LLM 决定调用 after_sales_action(create_return, order_id="ORD123", reason="质量问题")
+LLM 识别需要调用外部 API
+  ├─ 调用 use_skill("after-sales-api") → 加载技能指引
+  ├─ 执行 skill_execute("python scripts/load_api_config.py")
+  │   → 脚本读取 storage/tenants/{tid}/after-sales-api.md
+  │   → 返回 API 配置文本
   │
   ▼
-AfterSalesActionTool.execute()
-  ├─ 从 system prompt 上下文中提取用户信息
-  │   （或从 LongTermMemory.get_memory(user_id) 读取）
-  │
-  ▼
-ExternalAdapterEngine.execute(
-    action="create_return",
-    tool_args={"order_id": "ORD123", "reason": "质量问题"},
-    user_profile={"phone": "13800138000", "name": "张三"}  ← 来自长期记忆
+LLM 阅读 API 配置 + 用户身份信息，调用 http_api:
+  http_api(
+    method="POST",
+    url="${TENANT_AFTER_SALES_BASE_URL}/returns",
+    headers={"Authorization": "Bearer ${TENANT_AFTER_SALES_API_KEY}"},
+    body={
+      "order_id": "ORD123",
+      "reason": "质量问题",
+      "contact_phone": "13800138000",  ← LLM 从 [用户身份] 区块获取
+      "contact_name": "张三"            ← LLM 从 [用户记忆] 区块获取
+    }
   )
   │
   ▼
-外部 API 调用: POST /returns
-  body: {
-    "order_id": "ORD123",
-    "reason": "质量问题",
-    "contact_phone": "13800138000",  ← 自动填充
-    "contact_name": "张三"            ← 自动填充
-  }
+http_api 工具执行 → 环境变量替换 → 返回 JSON 响应
+  │
+  ▼
+LLM 理解响应，生成回复
 ```
 
-#### user_profile 数据来源的两种方式
+#### 用户身份信息的获取优先级
 
-| 方式 | 说明 | 优先级 |
-|------|------|--------|
-| **长期记忆解析** | 从 `memory_{user_id}.md` 的 `## 个人介绍` 分类解析结构化字段 | 主方案 |
-| **UserDB 回退** | 如果长期记忆中没有手机号等信息，从 `users` 表回退查询 | 兜底 |
+| 信息 | 来源 | 获取方式 | 优先级 |
+|------|------|----------|--------|
+| 手机号 | `users` 表 `phone` 字段 | `process_message()` 中 DB 查询 | 主方案 |
+| 手机号 | 长期记忆 `## 个人介绍` | 自动注入的 [用户记忆] 区块 | 补充 |
+| 手机号 | 对话中询问用户 | LLM 主动询问 | 兜底 |
+| 姓名 | 长期记忆 `## 个人介绍` | 自动注入的 [用户记忆] 区块 | 主方案 |
+| 外部系统 ID | `user_external_identities` 表 | `process_message()` 中 DB 查询 | 仅 external_id 策略 |
 
-适配器引擎中 `user_profile` 参数解析逻辑：
+### 4.5 环境变量注入与 http_api 调用链路
 
-```python
-def _get_user_profile(self, user_id: str) -> dict:
-    """获取用户信息用于适配器参数填充"""
-    profile = {}
-
-    # 1. 尝试从长期记忆解析
-    try:
-        from src.memory.long_term import LongTermMemory
-        ltm = LongTermMemory()
-        sections = ltm.get_memory_sections(user_id)
-        if "个人介绍" in sections:
-            for item in sections["个人介绍"]:
-                if "手机号" in item or "电话" in item:
-                    profile["phone"] = item.split("：")[-1].strip()
-                if "姓名" in item:
-                    profile["name"] = item.split("：")[-1].strip()
-    except Exception:
-        pass
-
-    # 2. 回退到 UserDB
-    if not profile.get("phone") or not profile.get("name"):
-        from src.db.models import UserDB
-        user = UserDB.get_by_id(user_id)
-        if user:
-            profile.setdefault("phone", user.get("phone", ""))
-            profile.setdefault("name", user.get("username", ""))
-
-    return profile
-```
-
-#### 对记忆系统 Phase 3 的补充建议
-
-为了更好地支持售后等业务场景的自动化用户识别，建议在长期记忆的每日总结 Prompt 中增加以下提取规则：
+#### 完整处理流程
 
 ```
-提取规则补充：
-7. 用户的联系方式（手机号、邮箱、微信号等），用于业务场景自动填充
-8. 用户的常用地址（如果有提到），用于物流和售后场景
+子智能体运行（两种模式触发环境变量注入）:
+
+模式 A: STANDALONE — Agent.process_message() 直接处理
+  │
+  ├─ 获取 tenant_id（从请求上下文）
+  ├─ 获取当前子智能体名称（subagent_name）
+  │
+  ├─ [1] 环境变量注入（STANDALONE 模式）
+  │   从 subagent_env_vars 表读取该租户该子智能体的环境变量:
+  │     SubagentEnvVarDB.get_vars(tenant_id, subagent_name)
+  │     → {"TENANT_AFTER_SALES_API_KEY": "sk-xxxx",
+  │        "TENANT_AFTER_SALES_BASE_URL": "https://erp.company.com/api/v1"}
+  │   注入到 os.environ，记录到 _injected_env_vars:
+  │     os.environ["TENANT_AFTER_SALES_API_KEY"] = "sk-xxxx"
+  │     os.environ["TENANT_AFTER_SALES_BASE_URL"] = "https://erp.company.com/api/v1"
+  │
+  ├─ [2] 身份解析 + 上下文组装
+  │   ...（同上）
+  │
+  ▼
+  LLM 处理对话，调用 http_api 工具...
+  │
+  ▼
+  处理完成后清除注入的环境变量:
+    for var_name in _injected_env_vars:
+        os.environ.pop(var_name, None)
+
+模式 B: 委派模式 — SubagentExecutor.execute_as_subagent()
+  │
+  ├─ executor.py 将 tenant_id 传递给子智能体 Agent 构造函数
+  │
+  ├─ [1] 环境变量注入（委派模式）
+  │   子智能体 Agent 在 execute_as_subagent() 中:
+  │     SubagentEnvVarDB.get_vars(tenant_id, subagent_name)
+  │     → 只加载当前子智能体的环境变量
+  │   注入到 os.environ，记录到 _injected_env_vars
+  │
+  ├─ [2] 处理任务...
+  │
+  ▼
+  处理完成后清除注入的环境变量:
+    for var_name in _injected_env_vars:
+        os.environ.pop(var_name, None)
 ```
 
-同时在 `## 个人介绍` 分类的条目格式中，建议使用结构化的键值对格式，便于程序化解析：
+> **通用性说明**：此环境变量注入机制不是售后子智能体专用的。任何子智能体运行时，都会自动注入其租户配置的、属于该子智能体的环境变量。环境变量按 `subagent_name` 隔离，不同子智能体的变量互不干扰。
 
-```markdown
-## 个人介绍
+### 4.6 无外部系统时的降级策略
 
-- 姓名：张三
-- 手机号：13800138000
-- 邮箱：zhangsan@company.com
-- 职位：采购经理
-- 部门：供应链管理部
-- 公司：XX科技有限公司
-- 常用地址：北京市朝阳区XX路XX号
-```
-
-### 4.5 适配器引擎（核心组件）
-
-#### 4.5.1 ExternalAdapterEngine
-
-```python
-# src/skills/after-sales-core-1.0.0/scripts/adapter_engine.py
-
-class ExternalAdapterEngine:
-    """外部系统适配器引擎
-
-    职责：
-    1. 加载租户的 adapter.json 配置
-    2. 根据 action 查找对应的 API 定义
-    3. 组装请求参数（合并 tool_arg / user_profile / credential）
-    4. 发起 HTTP 请求
-    5. 解析响应（JSONPath 映射）
-    6. 返回统一格式的结果
-    """
-
-    def __init__(self, tenant_id: str, adapter_type: str = "after_sales"):
-        self.tenant_id = tenant_id
-        self.adapter_type = adapter_type
-        self.config = self._load_config()
-        self.credentials = self._load_credentials()
-
-    def execute(self, action: str, tool_args: dict, user_profile: dict) -> dict:
-        """执行一个适配器动作"""
-        api_def = self.config["apis"][action]
-
-        # 1. 组装参数
-        params = self._resolve_params(api_def, tool_args, user_profile)
-
-        # 2. 发起请求
-        response = self._make_request(api_def, params)
-
-        # 3. 映射响应
-        result = self._map_response(api_def.get("response_mapping"), response)
-
-        return {"success": True, "data": result}
-
-    def _load_config(self) -> dict:
-        """加载 adapter.json"""
-        config_path = f"storage/tenants/{self.tenant_id}/adapters/{self.adapter_type}/adapter.json"
-        # 支持回退到平台默认配置
-        if not os.path.exists(config_path):
-            config_path = f"adapters/{self.adapter_type}/adapter.json"  # 内置默认
-        with open(config_path) as f:
-            return json.load(f)
-
-    def _load_credentials(self) -> dict:
-        """从 DB 加载解密后的凭据"""
-        cred = TenantApiCredentialDB.get_by_tenant_and_type(
-            self.tenant_id, self.adapter_type
-        )
-        if cred:
-            return {
-                "api_key": cred.get("api_key"),
-                "api_secret": cred.get("api_secret"),
-            }
-        return {}
-
-    def _resolve_params(self, api_def, tool_args, user_profile) -> dict:
-        """解析参数来源，组装最终参数"""
-        resolved = {}
-        source_map = {
-            "tool_arg": tool_args,
-            "user_profile": user_profile,
-            "credential": self.credentials,
-        }
-        # ... 遍历 api_def 的 params/body，根据 source 解析值
-        return resolved
-
-    def _make_request(self, api_def, params) -> dict:
-        """发起 HTTP 请求"""
-        # 根据 auth_type 设置认证头
-        # 根据 method 调用 GET/POST
-        # 返回 JSON 响应
-
-    def _map_response(self, mapping: dict, response: dict) -> dict:
-        """用 JSONPath 映射响应到统一格式"""
-        # ... JSONPath 解析
-```
-
-#### 4.5.2 工具调用链路
-
-```
-Agent.process_message()
-  → LLM 决定调用 after_sales_query 工具
-    → AfterSalesQueryTool.execute(query_type="order_detail", identifier="ORD123")
-      → 从 tenant_id 获取适配器配置
-      → ExternalAdapterEngine(tenant_id).execute(
-            action="query_order",
-            tool_args={"order_id": "ORD123"},
-            user_profile={"phone": "13800138000", "username": "张三"}
-        )
-        → 读取 adapter.json
-        → 从 DB 读取 API 凭据
-        → 组装 HTTP 请求
-        → 调用外部 API
-        → 映射响应
-      → 返回统一格式结果
-    → 工具结果返回 Agent
-  → LLM 基于结果生成回复
-```
-
-### 4.6 无适配器时的降级策略
-
-当租户未配置外部系统适配器时，售后服务智能体应提供基础功能：
+当租户未配置外部系统时，售后服务智能体应提供基础功能：
 
 1. **对话式引导**：通过对话收集用户信息（订单号、问题描述等）
-2. **创建内部工单**：将售后请求记录到 `bs_after_sales_tickets` 表
+2. **创建内部工单**：使用 `use_skill("after-sales-core")` + `skill_execute` 调用 CLI 脚本，将售后请求记录到 `bs_after_sales_tickets` 表
 3. **知识库查询**：使用 `knowledge_base_search` 工具查询商品使用指南
 4. **人工转接提示**：告知用户联系人工客服
 
@@ -729,10 +989,12 @@ Agent.process_message()
 
 ## 5. 数据库设计
 
-### 5.1 售后工单表
+> **表名规范**：售后子智能体目录名为 `after-sales`，按规范业务表前缀为 `bs_after_sales_`。业务数据表均包含 `tenant_id` 字段实现租户隔离。系统级基础设施表（`subagent_env_vars`、`user_external_identities`）不以 `bs_` 开头。
+
+### 5.1 售后工单表（业务表）
 
 ```sql
--- 售后工单（无外部系统时的内部工单）
+-- 表名: bs_after_sales_tickets（子智能体 after-sales 的 tickets 业务表）
 CREATE TABLE IF NOT EXISTS bs_after_sales_tickets (
     id SERIAL PRIMARY KEY,
     ticket_id TEXT UNIQUE NOT NULL,           -- 工单ID: ast_{uuid12}
@@ -750,20 +1012,21 @@ CREATE TABLE IF NOT EXISTS bs_after_sales_tickets (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 工单沟通记录
+-- 表名: bs_after_sales_ticket_messages（子智能体 after-sales 的 ticket_messages 业务表）
 CREATE TABLE IF NOT EXISTS bs_after_sales_ticket_messages (
     id SERIAL PRIMARY KEY,
-    ticket_id TEXT NOT NULL REFERENCES bs_after_sales_tickets(ticket_id),
+    tenant_id TEXT,                           -- 租户ID
+    ticket_id TEXT NOT NULL,                  -- 关联的工单ID（应用层校验）
     sender_type TEXT NOT NULL,                -- user/agent/staff（用户/智能体/人工客服）
     content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-### 5.2 退换货记录表
+### 5.2 退换货记录表（业务表）
 
 ```sql
--- 退换货记录（内部记录，同步到外部系统）
+-- 表名: bs_after_sales_returns（子智能体 after-sales 的 returns 业务表）
 CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
     id SERIAL PRIMARY KEY,
     return_id TEXT UNIQUE NOT NULL,           -- 退货单号: ret_{uuid12}
@@ -782,9 +1045,15 @@ CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
 );
 ```
 
-### 5.3 表初始化
+### 5.3 用户外部身份映射表（后续迭代，系统表）
 
-遵循项目规范，在 skill 加载时通过 `init_tables()` 自动创建。
+> 此表为远期方案预留，MVP 阶段不实现。
+
+表结构见 3.4.4 节。
+
+### 5.4 表初始化
+
+遵循项目规范，业务表在 skill 加载时通过 `init_tables()` 自动创建。`user_external_identities` 表在实际使用时再创建。
 
 ---
 
@@ -795,24 +1064,24 @@ CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
 | 文件 | 说明 |
 |------|------|
 | `subagents/after-sales/SUBAGENT.md` | 子智能体定义 |
-| `src/skills/after-sales-core-1.0.0/SKILL.md` | 售后核心技能定义 |
-| `src/skills/after-sales-core-1.0.0/scripts/adapter_engine.py` | 适配器引擎 |
-| `src/skills/after-sales-core-1.0.0/scripts/after_sales_tool.py` | 售后工具脚本（CLI 入口） |
-| `src/tools/after_sales/after_sales_query_tool.py` | 售后查询工具 |
-| `src/tools/after_sales/after_sales_action_tool.py` | 售后操作工具 |
-| `src/db/tenant_api_credential.py` | 租户 API 凭据管理 |
-| `src/db/after_sales_db.py` | 售后数据表操作 |
-| `src/api/tenant_api_credential.py` | 租户 API 凭据管理 API |
+| `src/skills/after-sales-api-1.0.0/SKILL.md` | 通用技能：指引 LLM 读取租户 API 配置 |
+| `src/skills/after-sales-api-1.0.0/scripts/load_api_config.py` | 读取租户 after-sales-api.md 并返回内容 |
+| `src/skills/after-sales-core-1.0.0/SKILL.md` | 售后核心技能定义（CLI 命令说明） |
+| `src/skills/after-sales-core-1.0.0/scripts/after_sales_tool.py` | 售后 CLI 脚本（init_tables + 工单/退换货 CRUD） |
+| `src/db/subagent_env_var.py` | 子智能体环境变量管理 |
+| `src/api/subagent_env_var.py` | 子智能体环境变量管理 API |
 
 ### 6.2 修改文件
 
 | 文件 | 改动 | 说明 |
 |------|------|------|
-| `src/core/agent.py` | `_register_builtin_tools()` | 注册售后工具 |
-| `src/main.py` | 路由注册 | 注册 API 凭据管理路由 |
-| `deploy/init-postgres.sql` | 表结构 | 增加 `tenant_api_credentials` 表 |
-| `deploy/db_update.sql` | 增量变更 | 记录新增表和字段 |
-| `src/saas/models/enums.py` | 枚举 | 增加售后相关枚举值 |
+| `src/main.py` | 路由注册 + User 构造 | 注册子智能体环境变量管理 API 和配置管理路由；构造 `User` 对象时填入 `phone` 字段 |
+| `src/models/user.py` | User 模型 | 增加 `phone` 可选字段 |
+| `src/core/agent.py` | `process_message()` + `execute_as_subagent()` | 新增 `[用户身份]` 区块注入 + 子智能体环境变量注入/清理（基于 `SubagentEnvVarDB.get_vars(tenant_id, subagent_name)`，按子智能体隔离注入） |
+| `src/core/skill_loader.py` | `_init_skill_tables()` | 增加 after-sales-core 表初始化 |
+| `src/db/database.py` | `_init_postgresql()` | 增加 after-sales-core 表初始化 |
+| `src/saas/api/agent_instances.py` | 实例创建 | 通用实例管理，不含任何售后专用逻辑 |
+| `deploy/db_update.sql` | 增量变更 | 新增 `subagent_env_vars` + `bs_after_sales_*` 表 |
 
 ---
 
@@ -838,28 +1107,42 @@ CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
 │  │  [保存]                                       │  │
 │  └───────────────────────────────────────────────┘  │
 │                                                     │
-│  ⚙️ 高级配置（适配器）                                 │
+│  ⚙️ 外部系统 API 配置                                 │
 │                                                     │
 │  ┌───────────────────────────────────────────────┐  │
-│  │  适配器类型: [声明式（JSON配置）▼]               │  │
-│  │                                               │  │
-│  │  API 端点配置（JSON）:                          │  │
+│  │  API 调用说明（Markdown 格式）:                  │  │
 │  │  ┌─────────────────────────────────────────┐  │  │
-│  │  │ {                                       │  │  │
-│  │  │   "apis": {                             │  │  │
-│  │  │     "query_order": {                    │  │  │
-│  │  │       "method": "GET",                  │  │  │
-│  │  │       "path": "/orders/{order_id}"      │  │  │
-│  │  │     }                                   │  │  │
-│  │  │   }                                     │  │  │
-│  │  │ }                                       │  │  │
+│  │  │ # 外部系统 API 说明                       │  │  │
+│  │  │                                         │  │  │
+│  │  │ ## 基本信息                              │  │  │
+│  │  │ - 系统名称: 企业售后系统                   │  │  │
+│  │  │ - Base URL: ${TENANT_AFTER_SALES_...}   │  │  │
+│  │  │ - 认证方式: Bearer Token                 │  │  │
+│  │  │                                         │  │  │
+│  │  │ ## API 端点列表                          │  │  │
+│  │  │ ### 1. 查询订单列表                      │  │  │
+│  │  │ GET ${BASE_URL}/orders?phone=...        │  │  │
+│  │  │ ...                                     │  │  │
 │  │  └─────────────────────────────────────────┘  │  │
 │  │                                               │  │
-│  │  [保存配置] [重置为默认]                         │  │
+│  │  [保存配置] [重置为默认模板]                     │  │
 │  └───────────────────────────────────────────────┘  │
 │                                                     │
 │  📊 连接状态                                         │
-│  ✅ 上次测试连接成功 (2026-05-06 10:30)               │
+│  ✅ 上次测试连接成功 (2026-05-19 10:30)               │
+│                                                     │
+│  👤 用户身份映射                                      │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  映射方式  [手机号映射 ▼]                        │  │
+│  │                                               │  │
+│  │  ℹ️ 手机号映射：使用用户注册时的手机号作为          │  │
+│  │     第三方系统的用户标识，无需额外配置。            │  │
+│  │                                               │  │
+│  │  当前已有手机号的用户: 128/156                    │  │
+│  │                                               │  │
+│  │  [查看未绑定手机号的用户]                         │  │
+│  └───────────────────────────────────────────────┘  │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
@@ -886,9 +1169,9 @@ business_pages:
 
 | 安全措施 | 说明 |
 |----------|------|
-| API Key 加密存储 | 使用 `encryption_manager` Fernet 加密，数据库中不存明文 |
-| 凭据脱敏返回 | 列表接口返回 `****` 替代真实密钥 |
-| 租户隔离 | 凭据查询必须带 `tenant_id`，防止跨租户访问 |
+| 环境变量按子智能体隔离 | 每个子智能体只能获取自己的环境变量，防止跨子智能体泄露 |
+| 租户隔离 | 环境变量查询必须带 `tenant_id`，防止跨租户访问 |
+| 处理完成即清理 | 环境变量注入后通过 `_injected_env_vars` 记录，请求处理完成后立即清除 |
 | 响应过滤 | 工具返回结果不包含外部 API 原始响应中的敏感字段 |
 
 ### 8.2 操作安全
@@ -904,58 +1187,72 @@ business_pages:
 
 ## 9. 开发阶段规划
 
-### Phase 1: 基础框架（预计 3-5 天）
+### Phase 1: 基础框架 + 用户身份映射（预计 3-4 天）
 
-1. 创建售后服务子智能体定义（SUBAGENT.md）
-2. 实现 `SubagentConfig.inject_user_profile` 字段和用户信息注入
-3. 创建 `after_sales_query` 和 `after_sales_action` 工具（基础框架，不含外部 API 调用）
-4. 创建售后数据表（`bs_after_sales_tickets`、`bs_after_sales_returns`）
-5. 创建 `tenant_api_credentials` 表和凭据管理 CRUD
-6. 手动测试：在无外部系统时，通过对话创建内部工单
+1. 创建售后服务子智能体定义（SUBAGENT.md）✅
+2. 创建售后核心技能 CLI 脚本（`after-sales-core` 技能，含工单/退换货 CRUD）✅
+3. 创建售后数据表（`bs_after_sales_tickets`、`bs_after_sales_returns`）✅
+4. 创建 `subagent_env_vars` 表和环境变量管理 CRUD ✅
+5. **用户身份映射（手机号方案）**：✅
+   - `User` 模型增加 `phone` 字段
+   - `main.py` 构造 `User` 时从 `current_user` 填入 `phone`
+   - `agent.py` 的 `process_message()` 中增加 `[用户身份]` 区块注入
+6. **子智能体环境变量注入机制**：✅
+   - `agent.py` 的 `process_message()` 和 `execute_as_subagent()` 中基于 `SubagentEnvVarDB.get_vars(tenant_id, subagent_name)` 实现按子智能体隔离的环境变量注入
+   - 所有子智能体运行时自动注入该租户配置的、属于该子智能体的环境变量
+7. 手动测试：在无外部系统时，通过对话创建内部工单；验证 Agent 能感知用户手机号
 
-### Phase 2: 适配器引擎（预计 3-5 天）
+### Phase 2: 外部系统集成（预计 2-3 天）
 
-1. 实现 `ExternalAdapterEngine` 声明式适配器
-2. 实现参数解析和 JSONPath 响应映射
-3. 工具与适配器引擎集成
-4. 创建示例适配器配置（用于测试）
-5. 手动测试：配置测试 API，验证查询和操作流程
+1. 创建 `after-sales-api` 通用技能 SKILL.md + `load_api_config.py` 脚本 ✅
+2. 创建默认 API 配置模板，租户开通时自动生成 `after-sales-api.md` ✅
+3. ~~实现凭据注入到环境变量的机制~~ → 已在 Phase 1 中作为通用机制实现 ✅
+4. 实现 API 配置管理（由 `after-sales-api` skill 的 `load_api_config.py` 按需读取，前端直接操作文件）✅
+5. 手动测试：配置 mock API，验证 LLM 能通过 use_skill → skill_execute → http_api 完整链路调用外部系统
 
 ### Phase 3: 前端 & 管理（预计 2-3 天）
 
 1. 租户管理端 API 凭据配置页面
-2. 售后业务数据页面（工单列表、退换货记录）
-3. 连接测试功能
-4. 适配器配置编辑器（JSON 编辑器 + 校验）
+2. API 端点配置编辑器（JSON 编辑器 + 校验 + 身份映射策略选择）
+3. 售后业务数据页面（工单列表、退换货记录）
+4. 连接测试功能（使用 http_api 工具测试连接）
 
-### Phase 4: 生产化（预计 2-3 天）
+### Phase 4: 生产化（预计 1-2 天）
 
-1. 脚本式适配器支持
-2. 错误处理和降级策略完善
-3. 操作审计日志
-4. 压力测试和性能优化
-5. 文档和部署脚本
+1. 错误处理和降级策略完善
+2. 操作审计日志
+3. 多 worker 环境变量隔离方案（如改为 http_api 支持直接传 credentials 参数）
+4. 文档和部署脚本
+
+### 后续迭代（远期）
+
+1. 新建 `user_external_identities` 表，支持外部 ID 映射（员工工号等非手机号标识）
+2. 管理后台用户身份映射管理页面（手动录入 / CSV 导入）
+3. OAuth 2.0 / OIDC 用户授权模式
 
 ---
 
 ## 10. 待讨论事项
 
-1. **用户信息注入粒度**：是否所有子智能体都需要 `inject_user_profile`？还是只对特定子智能体生效？建议：按需配置，默认不注入。
+1. **渠道用户的身份映射**：当前渠道（企业微信/钉钉/飞书）回调 `user=None`（`channel_routes.py:94-98`），Agent 完全没有用户身份。需要先解决渠道用户到本系统用户的映射（auto_register.py 的弱映射需要加强），才能在 IM 渠道提供售后服务。
 
-2. **适配器配置管理方式**：
-   - 方案 A：租户管理端 UI 编辑 JSON 配置（灵活但门槛高）
-   - 方案 B：预置几种常见 ERP/电商系统的适配器模板，租户选择模板后填入地址和密钥（易用但覆盖有限）
-   - 建议：先实现方案 A（JSON 编辑），后续迭代增加方案 B（模板选择）
+2. **手机号缺失时的体验**：部分用户可能未绑定手机号。当 `users.phone` 为空时，Agent 应在对话中主动询问用户手机号，并提示用户在个人设置中绑定手机号。是否需要提供绑定手机号的快捷入口？
 
-3. **外部 API 超时与重试**：企业内网 API 可能较慢，需要合理的超时配置和重试策略。建议默认超时 10 秒，不重试（避免重复操作）。
+3. **API 配置管理方式**：
+   - 采用 SKILL.md 方案：租户管理员通过 Markdown 编辑器修改 API 调用知识
+   - 公共模板提供通用 REST API 描述，租户根据自己企业的实际 API 修改
+   - 优势：复用已有的 skill 管理接口（`/api/saas/skills/`），无需额外开发
+   - 后续迭代可增加预置模板选择（如"淘宝/京东/通用 ERP"模板），降低配置门槛
 
-4. **多租户适配器隔离**：不同租户的 `adapter.json` 和 `adapter.py` 互相隔离，需要沙箱执行脚本来防止安全问题。
+4. **外部 API 超时与重试**：企业内网 API 可能较慢。`http_api` 工具默认超时 30 秒，可通过参数调整。建议写操作不重试（避免重复），读操作可适当超时延长。
 
-5. **人工转接机制**：当智能体无法解决时，如何转接到人工客服？是否需要对接工单系统的客服分配功能？
+5. **多 worker 环境变量隔离**：当前方案通过 `os.environ` 注入环境变量，使用 `_injected_env_vars` 字典记录已注入的变量并在处理完成后清理。多 worker 并发时同一进程内的不同请求可能冲突。后续可考虑给 `http_api` 工具增加直接传 credentials 的参数。
 
-6. **售后知识库**：是否需要为每个租户维护商品使用指南的知识库？还是统一使用平台的商品信息？
+6. **人工转接机制**：当智能体无法解决时，如何转接到人工客服？是否需要对接工单系统的客服分配功能？
 
-7. **消息渠道的用户身份绑定**：当前渠道（企业微信/钉钉/飞书）回调不携带应用 `user_id`，需要解决渠道用户与应用用户的映射关系。
+7. **售后知识库**：是否需要为每个租户维护商品使用指南的知识库？还是统一使用平台的商品信息？
+
+8. **LLM 调用 http_api 的可靠性**：LLM 可能组装错误的 URL 或 body。需要在 system prompt 中给出清晰的 API 配置和 example_response，并在响应错误时引导 LLM 重试。
 
 ---
 
@@ -964,18 +1261,23 @@ business_pages:
 | 组件 | 复用方式 |
 |------|----------|
 | 子智能体加载/注册/执行 | 完全复用，按标准格式定义 SUBAGENT.md |
-| Skill 系统 | 完全复用，售后核心逻辑封装为 skill |
-| Tool 系统 | 扩展，新增售后专用工具 |
-| 凭据加密 | 复用 `encryption_manager` |
+| Skill 系统 | 完全复用，售后核心逻辑和 API 配置读取分别封装为 skill |
+| http_api 工具 | 完全复用，无需开发新工具即可调用外部 API |
+| skill_execute | 复用，执行 load_api_config.py 脚本读取租户配置 |
+| 内部工单/退换货操作 | 封装在 after-sales-core 技能的 CLI 脚本中，非独立工具 |
+| 凭据加密 | 复用 `encryption_manager`（后续按需启用） |
 | SaaS 订阅控制 | 复用，售后服务作为新的 subagent_type |
 | 数据表规范 | 复用，`bs_` 前缀 + `tenant_id` 隔离 |
+| 用户手机号 | 复用 `users` 表已有 `phone` 字段 |
 
 ## 附录 B: 术语表
 
 | 术语 | 说明 |
 |------|------|
-| 适配器 (Adapter) | 连接外部企业系统的可配置中间件 |
-| 声明式适配器 | 通过 JSON 配置描述 API 接口，无需编码 |
-| 脚本式适配器 | 通过 Python 脚本实现复杂接口逻辑 |
+| API 配置 (SKILL.md) | 描述外部系统 API 端点的 Markdown 文件，租户可定制 |
+| http_api 工具 | 已有的 HTTP 请求工具，支持环境变量替换和多种请求方式 |
 | 外部系统 | 企业内部的订单管理、ERP、售后管理系统 |
 | 工单 (Ticket) | 用户发起的售后请求记录 |
+| 身份映射 (Identity Mapping) | 将本系统用户身份对应到第三方企业系统用户身份的机制 |
+| 手机号映射 | MVP 方案，通过用户手机号作为外部系统的用户标识 |
+| 外部 ID 映射 | 通过映射表精确关联本系统用户与外部系统用户的标识 |

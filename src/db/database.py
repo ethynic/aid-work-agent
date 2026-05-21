@@ -1017,18 +1017,8 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback SaaS transaction: {rollback_err}")
 
-        # 初始化客户管理表（trade-customer skill）
-        try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location(
-                "customer_manager",
-                str(Path(__file__).parent.parent / "skills" / "trade-customer-1.0.0" / "scripts" / "customer_manager.py")
-            )
-            customer_manager = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(customer_manager)
-            customer_manager.init_tables()
-        except Exception as e:
-            logger.warning(f"Failed to initialize customer tables: {e}")
+        # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
+        # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 
         # 执行增量数据库更新（db_update.sql）
         _apply_db_updates(conn)

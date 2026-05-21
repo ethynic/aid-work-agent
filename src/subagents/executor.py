@@ -231,7 +231,15 @@ class SubagentExecutor:
         
         # 导入Agent类（避免循环导入）
         from src.core.agent import Agent
-        
+
+        # 解析 tenant_id（子智能体线程中 ContextVar 可能不可用，需在主线程提前获取）
+        tenant_id = None
+        try:
+            from src.saas.context import get_current_tenant_id
+            tenant_id = get_current_tenant_id()
+        except Exception:
+            pass
+
         # 创建子智能体实例
         logger.info(f"[SUBAGENT] Creating subagent Agent instance...")
         subagent_instance = Agent(
@@ -240,6 +248,7 @@ class SubagentExecutor:
             session_id=session_id,
             execution_id=execution_id,
             parent_plan_manager=self.parent_plan_manager,
+            tenant_id=tenant_id,
         )
         self._subagent_instances[execution_id] = subagent_instance
         logger.info(f"[SUBAGENT] Subagent Agent instance created")

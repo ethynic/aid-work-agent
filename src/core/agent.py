@@ -13,6 +13,7 @@ The agent uses LLM for:
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -331,7 +332,7 @@ class Agent:
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
         self.tool_registry.register(HttpApiTool())
-        
+
         # 注册定时任务工具
         from src.tools.scheduler.scheduled_task_tool import CreateScheduledTaskTool, ManageScheduledTaskTool
         self._create_scheduled_task_tool = CreateScheduledTaskTool()
@@ -633,6 +634,8 @@ class Agent:
         user_info_section = ""
         if user:
             user_info_section = f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
+            if user.phone:
+                user_info_section += f"手机号：{user.phone}\n"
 
         # 长期记忆注入：从用户记忆文件加载
         long_term_memory = self._load_long_term_memory(user)
@@ -1454,6 +1457,24 @@ class Agent:
             # 注入 tenant_id 到文本文件生成工具
             if file_write_tool and hasattr(file_write_tool, 'set_tenant_id'):
                 file_write_tool.set_tenant_id(_resolve_tenant_id)
+
+        # 子智能体环境变量注入：从 subagent_env_vars 表读取，设置为 os.environ，供 http_api 工具的 ${VAR} 替换
+        _injected_env_vars = {}
+        if _resolve_tenant_id and self.mode != AgentMode.MASTER and self.subagent_config:
+            try:
+                from src.db.subagent_env_var import SubagentEnvVarDB
+                subagent_name = self.subagent_config.dir_name
+                env_vars = SubagentEnvVarDB.get_vars(_resolve_tenant_id, subagent_name)
+                for var in env_vars:
+                    var_name = var["var_name"]
+                    var_value = var.get("var_value", "")
+                    if var_name and var_value:
+                        os.environ[var_name] = var_value
+                        _injected_env_vars[var_name] = True
+                if _injected_env_vars:
+                    logger.debug(f"[ENV] Injected {len(_injected_env_vars)} env vars for subagent {subagent_name}")
+            except Exception as e:
+                logger.warning(f"环境变量注入失败: {e}")
         
         # Add timestamp context to help LLM understand current time
         current_time = datetime.now()
@@ -2216,6 +2237,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         if iteration >= max_iterations:
             logger.warning(f"Reached max iterations ({max_iterations})")
             yield "I apologize, but the task is taking too long. Please try again or break it into smaller steps."
+
+        # 清除子智能体临时注入的环境变量
+        for var_name in _injected_env_vars:
+            os.environ.pop(var_name, None)
     
     async def process_message_sync(
         self,
@@ -2295,6 +2320,24 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(self._init_tenant_id)
+
+        # 注入子智能体环境变量（从 subagent_env_vars 表读取，设置为 os.environ）
+        _injected_env_vars = {}
+        if self._init_tenant_id and self.subagent_config:
+            try:
+                from src.db.subagent_env_var import SubagentEnvVarDB
+                subagent_name = self.subagent_config.dir_name
+                env_vars = SubagentEnvVarDB.get_vars(self._init_tenant_id, subagent_name)
+                for var in env_vars:
+                    var_name = var["var_name"]
+                    var_value = var.get("var_value", "")
+                    if var_name and var_value:
+                        os.environ[var_name] = var_value
+                        _injected_env_vars[var_name] = True
+                if _injected_env_vars:
+                    logger.info(f"[SUBAGENT] Injected {len(_injected_env_vars)} env vars for {subagent_name}")
+            except Exception as e:
+                logger.warning(f"[SUBAGENT] 环境变量注入失败: {e}")
 
         # 进度消息辅助函数
         async def send_progress(message: str):
@@ -2756,6 +2799,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 "summary": f"Failed: {e}",
                 "error": str(e)
             }
+        finally:
+            # 清理注入的环境变量
+            for var_name in _injected_env_vars:
+                os.environ.pop(var_name, None)
 
 
 # Global agent instance (默认为主智能体)

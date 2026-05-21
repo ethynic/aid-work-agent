@@ -504,6 +504,20 @@ CREATE TABLE IF NOT EXISTS user_agent_permissions (
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
 
+-- 子智能体环境变量表（通用，按租户+子智能体隔离）
+CREATE TABLE IF NOT EXISTS subagent_env_vars (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    var_name TEXT NOT NULL,
+    var_value TEXT,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_env_unique ON subagent_env_vars(tenant_id, subagent_name, var_name);
+CREATE INDEX IF NOT EXISTS idx_subagent_env_tenant ON subagent_env_vars(tenant_id, subagent_name);
+
 
 -- 输出初始化完成信息
 DO $$
@@ -892,6 +906,20 @@ CREATE TABLE IF NOT EXISTS user_agent_permissions (
 );
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_user ON user_agent_permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_agent_permissions_tenant_user ON user_agent_permissions(tenant_id, user_id);
+
+-- 子智能体环境变量表（通用，按租户+子智能体隔离）
+CREATE TABLE IF NOT EXISTS subagent_env_vars (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    var_name TEXT NOT NULL,
+    var_value TEXT,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_env_unique ON subagent_env_vars(tenant_id, subagent_name, var_name);
+CREATE INDEX IF NOT EXISTS idx_subagent_env_tenant ON subagent_env_vars(tenant_id, subagent_name);
 
 
 -- ============================================================

@@ -380,3 +380,81 @@ CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessio
 CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin
 ON documents USING GIN ((metadata::jsonb))
 WHERE source_type = 'attraction_resource';
+
+-- ============================================================================
+-- 2026-5-21，售后服务子智能体：子智能体环境变量表 + 售后业务表
+-- ============================================================================
+
+-- 子智能体环境变量表（系统表，非业务表，供所有子智能体共用）
+-- 替代原先的 tenant_api_credentials 表，通用化设计：任何子智能体都可定义自己的环境变量
+CREATE TABLE IF NOT EXISTS subagent_env_vars (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    var_name TEXT NOT NULL,
+    var_value TEXT,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_env_unique ON subagent_env_vars(tenant_id, subagent_name, var_name);
+CREATE INDEX IF NOT EXISTS idx_subagent_env_tenant ON subagent_env_vars(tenant_id, subagent_name);
+
+-- 旧表 tenant_api_credentials 已废弃，由 subagent_env_vars 替代
+-- CREATE TABLE IF NOT EXISTS tenant_api_credentials (...);
+
+-- 售后工单表
+CREATE TABLE IF NOT EXISTS bs_after_sales_tickets (
+    id SERIAL PRIMARY KEY,
+    ticket_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT NOT NULL,
+    session_id TEXT,
+    order_id TEXT,
+    category TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    priority TEXT NOT NULL DEFAULT 'normal',
+    description TEXT NOT NULL,
+    resolution TEXT,
+    external_ticket_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ast_tenant ON bs_after_sales_tickets(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_ast_user ON bs_after_sales_tickets(user_id, status);
+
+-- 工单消息表
+CREATE TABLE IF NOT EXISTS bs_after_sales_ticket_messages (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    ticket_id TEXT NOT NULL,
+    sender_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_astm_ticket ON bs_after_sales_ticket_messages(tenant_id, ticket_id);
+
+-- 退换货记录表
+CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
+    id SERIAL PRIMARY KEY,
+    return_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT NOT NULL,
+    session_id TEXT,
+    order_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    items JSON,
+    status TEXT NOT NULL DEFAULT 'pending',
+    external_return_id TEXT,
+    refund_amount NUMERIC(10,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_asr_tenant ON bs_after_sales_returns(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_asr_user ON bs_after_sales_returns(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_asr_order ON bs_after_sales_returns(order_id);

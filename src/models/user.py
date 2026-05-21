@@ -74,6 +74,7 @@ class User(BaseModel):
     avatar: Optional[str] = Field(None, description="头像URL")
     channel_user_id: Optional[str] = Field(None, description="渠道用户ID")
     channel_type: Optional[str] = Field(None, description="渠道类型")
+    phone: Optional[str] = Field(None, description="用户手机号")
     permissions: List[str] = Field(default_factory=list, description="权限列表")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")

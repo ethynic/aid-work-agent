@@ -4,6 +4,7 @@ description: >
   外贸客户信息管理技能，用于保存外贸获客过程中匹配到的客户信息，
   跟踪邮件发送记录。包括客户信息的增删改查、邮件发送历史记录等功能。
   使用场景：外贸客户开发、客户信息持久化、邮件营销跟踪。
+init_script: customer_manager.py
 metadata:
   openclaw:
     emoji: "📋"

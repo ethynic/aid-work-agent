@@ -91,6 +91,9 @@ class Skill:
     # 环境变量声明
     env: List[Dict[str, Any]] = field(default_factory=list)
 
+    # 数据库表初始化脚本（相对于 scripts/ 目录，如 "after_sales_tool.py"）
+    init_script: Optional[str] = None
+
     # 依赖项
     dependencies: List[SkillDependency] = field(default_factory=list)
 
@@ -276,6 +279,7 @@ class SkillLoader:
             agent=frontmatter.get("agent"),
             env=env_vars,
             dependencies=dependencies,
+            init_script=frontmatter.get("init_script"),
         )
         
         # 扫描资源文件
@@ -334,21 +338,33 @@ class SkillLoader:
         self._init_skill_tables()
 
     def _init_skill_tables(self):
-        """初始化需要数据库表的 skill"""
-        # trade-customer skill 需要 bs_trade_specialist_matched_customers 表
-        if "trade-customer" in self.skills:
+        """初始化需要数据库表的 skill（通用机制）
+
+        遍历所有已加载的 skill，检查其 SKILL.md 中是否声明了 init_script。
+        如果声明了，自动 importlib 加载该脚本并调用 init_tables()。
+        """
+        for name, skill in self.skills.items():
+            if not skill.init_script:
+                continue
             try:
                 import importlib.util
+                script_path = skill.dir / "scripts" / skill.init_script
+                if not script_path.exists():
+                    logger.warning(f"Skill '{name}' init_script not found: {script_path}")
+                    continue
                 spec = importlib.util.spec_from_file_location(
-                    "customer_manager",
-                    str(self.skills_dir / "trade-customer-1.0.0" / "scripts" / "customer_manager.py")
+                    f"{name}_init",
+                    str(script_path),
                 )
-                customer_manager = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(customer_manager)
-                customer_manager.init_tables()
-                logger.info("trade-customer skill tables initialized")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                if hasattr(module, "init_tables"):
+                    module.init_tables()
+                    logger.info(f"Skill '{name}' tables initialized via {skill.init_script}")
+                else:
+                    logger.warning(f"Skill '{name}' init_script has no init_tables() function")
             except Exception as e:
-                logger.warning(f"Failed to initialize trade-customer tables: {e}")
+                logger.warning(f"Failed to initialize tables for skill '{name}': {e}")
     
     def get_skill_descriptions(self) -> str:
         """
