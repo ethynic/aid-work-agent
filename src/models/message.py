@@ -17,6 +17,7 @@ class ChannelType(str, Enum):
     DINGTALK = "dingtalk"
     FEISHU = "feishu"
     WEB = "web"
+    WECOM_KF = "wecom_kf"
 
 
 class MessageType(str, Enum):

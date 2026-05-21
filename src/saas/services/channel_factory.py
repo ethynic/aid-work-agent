@@ -22,6 +22,7 @@ class ChannelFactory:
     # 渠道类型 → 适配器类（延迟导入）
     _ADAPTER_CLASSES = {
         "wecom": "src.channels.wecom.adapter.WeComAdapter",
+        "wecom_kf": "src.channels.wecom_kf.adapter.WeComKfAdapter",
         "dingtalk": "src.channels.dingtalk.adapter.DingtalkAdapter",
         "feishu": "src.channels.feishu.adapter.FeishuAdapter",
     }
