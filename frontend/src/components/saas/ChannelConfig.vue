@@ -153,7 +153,7 @@
               <p class="mt-1 text-xs text-slate-400">选择该渠道消息由哪个数字员工处理，不选则使用通用智能体</p>
             </div>
 
-            <!-- SCRM 特有：客服账号配置 -->
+            <!-- 微信客服特有：客服账号配置 -->
             <div v-if="form.channel_type === 'wecom_kf'" class="pt-4 border-t border-slate-200">
               <div class="flex items-center justify-between mb-3">
                 <label class="text-sm font-medium text-slate-700">客服账号配置</label>
@@ -378,7 +378,7 @@ const copied = ref(false)
 const showGuideModal = ref(false)
 const guideChannel = ref('wecom')
 
-// SCRM 特有：客服账号配置
+// 微信客服特有：客服账号配置
 const kfAccounts = ref<Array<{
   name: string
   open_kfid: string
@@ -413,13 +413,13 @@ const form = ref<{ channel_type: string; config: Record<string, string>; subagen
 
 const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '💬' },
-  { value: 'wecom_kf', label: '企业微信 SCRM', icon: '' },
+  { value: 'wecom_kf', label: '企业微信客服', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
 ]
 
 function channelTypeLabel(type: string) {
-  const map: Record<string, string> = { wecom: '企业微信', wecom_kf: '企业微信 SCRM', dingtalk: '钉钉', feishu: '飞书' }
+  const map: Record<string, string> = { wecom: '企业微信', wecom_kf: '企业微信客服', dingtalk: '钉钉', feishu: '飞书' }
   return map[type] || type
 }
 
@@ -470,7 +470,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
   },
   wecom_kf: {
-    title: '企业微信 SCRM 接入步骤',
+    title: '企业微信客服接入步骤',
     steps: [
       '前往企业微信管理后台 →「应用管理」→「微信客服」→ 确认已开启',
       '创建自建应用，记录 CorpID 和 Secret（不需要 AgentId）',
@@ -528,7 +528,7 @@ const fullGuideMap: Record<string, { steps: { title: string; desc: string; locat
   wecom_kf: {
     steps: [
       { title: '开启微信客服功能', desc: '登录企业微信管理后台，进入「应用管理」→「微信客服」，确认微信客服功能已开启。', location: '应用管理 → 微信客服' },
-      { title: '创建自建应用', desc: '进入「应用管理」→「自建」→ 创建应用。记录 CorpID（「我的企业」→「企业信息」）和 Secret（应用详情页）。SCRM 场景不需要 AgentId。', location: '应用管理 → 自建' },
+      { title: '创建自建应用', desc: '进入「应用管理」→「自建」→ 创建应用。记录 CorpID（「我的企业」→「企业信息」）和 Secret（应用详情页）。微信客服场景不需要 AgentId。', location: '应用管理 → 自建' },
       { title: '设置微信客服 API 管理', desc: '进入「微信客服」→「通过 API 管理」，开启「通过 API 管理微信客服账号」，将步骤 2 的自建应用设为「可调用接口的应用」。', location: '微信客服 → 通过 API 管理' },
       { title: '创建客服账号', desc: '进入「微信客服」→「客服账号」→ 添加客服账号。创建后通过 API 获取 open_kfid（格式如 wkAAAA）。可创建多个客服账号绑定不同子智能体。', location: '微信客服 → 客服账号' },
       { title: '配置回调 URL', desc: '在「微信客服」→「API」中找到回调配置，填写回调 URL、Token、EncodingAESKey。注意：需先在本页面保存凭证后再到企微后台点保存。', location: '微信客服 → API → 回调配置' },
@@ -665,7 +665,7 @@ async function handleSubmit() {
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
-    // SCRM 特有：序列化客服账号配置
+    // 微信客服特有：序列化客服账号配置
     if (form.value.channel_type === 'wecom_kf' && kfAccounts.value.length > 0) {
       payload.config.kf_account = kfAccounts.value.map(kf => {
         const obj: Record<string, any> = {

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
 
 
 class ChannelConfigCreateRequest(BaseModel):
-    channel_type: str = Field(..., description="渠道类型：wecom/dingtalk/feishu")
+    channel_type: str = Field(..., description="渠道类型：wecom/wecom_kf/dingtalk/feishu")
     config: dict = Field(..., description="渠道凭证配置")
     subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant），不填则不绑定")
 
@@ -37,6 +37,12 @@ _REQUIRED_FIELDS = {
         "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
         "agent_id": "应用AgentId（在应用详情页获取）",
         "secret": "应用Secret（在应用详情页获取）",
+        "token": "回调Token（设置API接收时配置）",
+        "encoding_aes_key": "回调EncodingAESKey（设置API接收时配置，43字符Base64）",
+    },
+    "wecom_kf": {
+        "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
+        "secret": "应用Secret（自建应用的 Secret，微信客服无独立 Secret）",
         "token": "回调Token（设置API接收时配置）",
         "encoding_aes_key": "回调EncodingAESKey（设置API接收时配置，43字符Base64）",
     },
@@ -74,7 +80,7 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
 
     admin = require_admin(request)
 
-    if body.channel_type not in ("wecom", "dingtalk", "feishu"):
+    if body.channel_type not in ("wecom", "wecom_kf", "dingtalk", "feishu"):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
     # 验证必填字段
