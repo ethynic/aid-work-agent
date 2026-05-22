@@ -58,31 +58,30 @@
       <div v-for="ch in channels" :key="ch.config_id" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
-            <span class="text-lg">{{ channelIcon(ch.channel_type) }}</span>
-            <span class="font-semibold text-slate-800">{{ channelTypeLabel(ch.channel_type) }}</span>
-            <span class="text-xs text-slate-400 font-mono">{{ ch.id }}</span>
+            <span class="text-sm text-slate-800 font-mono">{{ ch.id }}</span>
+            <span class="text-slate-800">{{ channelTypeLabel(ch.channel_type) }}</span>
             <span
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+              class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
               :class="ch.verified ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'"
             >
               {{ ch.verified ? '已验证' : '未验证' }}
             </span>
-            <span v-if="ch.subagent_type" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+            <span v-if="ch.subagent_type" class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
               🤖 {{ subagentTypeLabel(ch.subagent_type) }}
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <button @click="showGuide(ch)" class="text-xs px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">配置指南</button>
-            <button @click="handleVerify(ch.config_id)" class="text-xs px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors">验证连接</button>
-            <button @click="editChannel(ch)" class="text-xs px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors">编辑</button>
-            <button @click="handleDelete(ch.config_id)" class="text-xs px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors">删除</button>
+            <button @click="showGuide(ch)" class="text-sm px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">配置指南</button>
+            <button @click="handleVerify(ch.config_id)" class="text-sm px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors">验证连接</button>
+            <button @click="editChannel(ch)" class="text-sm px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors">编辑</button>
+            <button @click="handleDelete(ch.config_id)" class="text-sm px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors">删除</button>
           </div>
         </div>
         <!-- 回调地址展示 -->
         <div v-if="tenant" class="bg-slate-50 rounded-lg p-3 text-sm">
           <span class="text-slate-500">回调地址：</span>
           <code class="text-cyan-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
-          <button @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id))" class="ml-2 text-xs text-slate-400 hover:text-cyan-600 transition-colors">{{ copied ? '已复制' : '复制' }}</button>
+          <button @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id))" class="ml-2 text-sm text-slate-400 hover:text-cyan-600 transition-colors">{{ copied ? '已复制' : '复制' }}</button>
         </div>
       </div>
     </div>
