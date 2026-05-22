@@ -81,7 +81,7 @@
         <div v-if="tenant" class="bg-slate-50 rounded-lg p-3 text-sm">
           <span class="text-slate-500">回调地址：</span>
           <code class="text-cyan-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
-          <button @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id))" class="ml-2 text-sm text-slate-400 hover:text-cyan-600 transition-colors">{{ copied ? '已复制' : '复制' }}</button>
+          <button @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)" class="ml-2 text-sm text-slate-400 hover:text-cyan-600 transition-colors">{{ copied[ch.config_id] ? '已复制' : '复制' }}</button>
         </div>
       </div>
     </div>
@@ -209,7 +209,7 @@
             <p class="text-xs text-cyan-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
             <div class="flex items-center gap-2">
               <code class="flex-1 bg-white px-3 py-2 rounded text-sm text-cyan-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
-              <button @click="copyUrl(getCallbackUrl(form.channel_type))" class="px-3 py-2 bg-cyan-100 text-cyan-700 rounded text-xs hover:bg-cyan-200 transition-colors whitespace-nowrap">{{ copied ? '已复制' : '复制' }}</button>
+              <button @click="copyUrl(getCallbackUrl(form.channel_type), 'form')" class="px-3 py-2 bg-cyan-100 text-cyan-700 rounded text-xs hover:bg-cyan-200 transition-colors whitespace-nowrap">{{ copied['form'] ? '已复制' : '复制' }}</button>
             </div>
           </div>
 
@@ -253,7 +253,7 @@
             <p class="text-sm text-slate-500 mb-3">在 {{ channelTypeLabel(guideChannel) }} 后台配置接收消息时，URL 填入：</p>
             <div class="flex items-center gap-2">
               <code class="flex-1 bg-white px-4 py-3 rounded-lg text-cyan-700 font-mono text-sm select-all break-all border border-slate-200">{{ getCallbackUrl(guideChannel) }}</code>
-              <button @click="copyUrl(getCallbackUrl(guideChannel))" class="px-4 py-3 bg-cyan-500 text-white rounded-lg text-sm hover:bg-cyan-600 transition-colors whitespace-nowrap">{{ copied ? '已复制' : '复制' }}</button>
+              <button @click="copyUrl(getCallbackUrl(guideChannel), 'guide')" class="px-4 py-3 bg-cyan-500 text-white rounded-lg text-sm hover:bg-cyan-600 transition-colors whitespace-nowrap">{{ copied['guide'] ? '已复制' : '复制' }}</button>
             </div>
           </div>
 
@@ -374,7 +374,7 @@ const showForm = ref(false)
 const submitting = ref(false)
 const formError = ref('')
 const editingId = ref<string | null>(null)
-const copied = ref(false)
+const copied = ref<Record<string, boolean>>({})
 const showGuideModal = ref(false)
 const guideChannel = ref('wecom')
 
@@ -594,10 +594,12 @@ function subagentTypeLabel(type: string): string {
   return map[type] || type
 }
 
-function copyUrl(url: string) {
+function copyUrl(url: string, id?: string) {
   navigator.clipboard.writeText(url).then(() => {
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 2000)
+    if (id) {
+      copied.value[id] = true
+      setTimeout(() => { copied.value[id] = false }, 2000)
+    }
   })
 }
 
@@ -615,8 +617,8 @@ function editChannel(ch: any) {
   editingId.value = ch.config_id
   form.value = { channel_type: ch.channel_type, config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
   formError.value = ''
-  // 解析已有的客服账号配置
-  if (ch.config.kf_account && Array.isArray(ch.config.kf_account)) {
+  // 解析已有的客服账号配置（仅企业微信客服渠道）
+  if (ch.channel_type === 'wecom_kf' && ch.config.kf_account && Array.isArray(ch.config.kf_account)) {
     kfAccounts.value = ch.config.kf_account.map((kf: any) => ({
       name: kf.name || '',
       open_kfid: kf.open_kfid || '',
