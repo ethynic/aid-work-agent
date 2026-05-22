@@ -82,6 +82,7 @@ class ResetPasswordRequest(BaseModel):
     phone: str
     sms_code: str
     new_password: str
+    tenant_id: Optional[str] = None
 
 
 class SendResetCodeRequest(BaseModel):
@@ -89,6 +90,7 @@ class SendResetCodeRequest(BaseModel):
     phone: str
     captcha_code: str
     captcha_id: str
+    tenant_id: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
@@ -880,8 +882,13 @@ async def send_reset_password_code(request: SendResetCodeRequest):
     if len(request.phone) != 11 or not request.phone.isdigit():
         return {"success": False, "message": "手机号格式不正确"}
 
-    # 检查用户是否存在
-    user = UserDB.get_by_phone(request.phone)
+    # 检查用户是否存在（租户前台登录时优先按手机号+租户查找）
+    if request.tenant_id:
+        user = UserDB.get_by_phone_in_tenant(request.phone, request.tenant_id)
+    else:
+        user = None
+    if not user:
+        user = UserDB.get_by_phone(request.phone)
     if not user:
         return {"success": False, "message": "该手机号未注册"}
 
@@ -910,8 +917,13 @@ async def reset_password(request: ResetPasswordRequest):
     if not re.match(password_rule, request.new_password):
         return {"success": False, "message": f"密码不符合规则：{password_msg}"}
 
-    # 更新用户密码
-    user = UserDB.get_by_phone(request.phone)
+    # 更新用户密码（租户前台登录时优先按手机号+租户查找）
+    if request.tenant_id:
+        user = UserDB.get_by_phone_in_tenant(request.phone, request.tenant_id)
+    else:
+        user = None
+    if not user:
+        user = UserDB.get_by_phone(request.phone)
     if not user:
         return {"success": False, "message": "用户不存在"}
 

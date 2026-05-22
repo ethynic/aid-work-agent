@@ -233,7 +233,8 @@ async function handleSendCode() {
     const res = await sendResetPasswordCode({
       phone: phone.value,
       captcha_code: captchaCode.value,
-      captcha_id: captchaId.value
+      captcha_id: captchaId.value,
+      tenant_id: tenantId.value || undefined
     })
     if (res.success) {
       step.value = 2
@@ -299,7 +300,8 @@ async function handleResetPassword() {
     const res = await resetPassword({
       phone: phone.value,
       sms_code: smsCode.value,
-      new_password: newPassword.value
+      new_password: newPassword.value,
+      tenant_id: tenantId.value || undefined
     })
     if (res.success) {
       step.value = 'success'

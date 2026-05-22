@@ -55,27 +55,3 @@ class TenantResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
-# ============== 租户管理员 ==============
-
-class TenantAdminCreate(BaseModel):
-    """创建管理员请求"""
-    phone: str = Field(..., min_length=11, max_length=11, description="手机号")
-    name: Optional[str] = Field(None, max_length=50, description="管理员姓名")
-    role: str = Field("admin", description="角色：owner/admin/viewer")
-
-
-class TenantAdminLoginRequest(BaseModel):
-    """管理员登录请求（手机号+验证码）"""
-    phone: str = Field(..., min_length=11, max_length=11, description="手机号")
-    code: str = Field(..., min_length=4, max_length=6, description="短信验证码")
-
-
-class TenantAdminResponse(BaseModel):
-    """管理员响应"""
-    admin_id: str
-    tenant_id: str
-    phone: str
-    name: Optional[str] = None
-    role: str
-    sso_provider: Optional[str] = None
-    created_at: Optional[str] = None

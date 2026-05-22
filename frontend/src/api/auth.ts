@@ -284,12 +284,14 @@ export interface SendResetCodeRequest {
   phone: string
   captcha_code: string
   captcha_id: string
+  tenant_id?: string
 }
 
 export interface ResetPasswordRequest {
   phone: string
   sms_code: string
   new_password: string
+  tenant_id?: string
 }
 
 /**

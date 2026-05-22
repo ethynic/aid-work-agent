@@ -31,32 +31,6 @@ export async function getTenantPublicInfo(tenantId: string): Promise<{
 
 // ==================== 认证 ====================
 
-export async function sendAdminSmsCode(phone: string): Promise<{ success: boolean; message?: string; expires_in?: number }> {
-  const res = await fetch(`${API_BASE}/auth/send_admin_sms`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone })
-  })
-  if (!res.ok) throw new Error('发送验证码失败')
-  return res.json()
-}
-
-export async function adminLogin(phone: string, code: string): Promise<{
-  success: boolean
-  token?: string
-  user?: { user_id: string; phone: string; username: string; role: string }
-  tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
-  message?: string
-}> {
-  const res = await fetch(`${API_BASE}/auth/admin_login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone, code })
-  })
-  if (!res.ok) throw new Error('登录失败')
-  return res.json()
-}
-
 export interface AdminPasswordLoginRequest {
   identifier: string
   password: string
@@ -107,30 +81,6 @@ export async function adminLogout(): Promise<void> {
   localStorage.removeItem(tokenKey)
   localStorage.removeItem(adminKey)
   localStorage.removeItem(tenantKey)
-}
-
-export async function getAdminInfo(tenantId?: string): Promise<{
-  user?: { user_id: string; phone: string; username: string; role: string }
-  tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
-} | null> {
-  const path = window.location.pathname
-  let tokenKey: string
-  if (path.startsWith('/portal')) {
-    tokenKey = 'portal_token'
-  } else if (path.startsWith('/t/')) {
-    tokenKey = 'saas_token'
-  } else {
-    tokenKey = 'saas_token'
-  }
-
-  const token = localStorage.getItem(tokenKey)
-  if (!token) return null
-  const url = tenantId ? `${API_BASE}/auth/me?tenant_id=${encodeURIComponent(tenantId)}` : `${API_BASE}/auth/me`
-  const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` }
-  })
-  if (!res.ok) return null
-  return res.json()
 }
 
 // ==================== 租户信息 ====================

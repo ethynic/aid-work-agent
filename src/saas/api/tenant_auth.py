@@ -14,8 +14,7 @@ SaaS 管理员认证 API
 from typing import Optional
 
 import uuid
-import secrets
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -247,16 +246,6 @@ def _ensure_config_admin(phone: str, role: str = "platform_admin") -> Optional[d
 
 # ============== 请求/响应模型 ==============
 
-class SendSmsRequest(BaseModel):
-    phone: str = Field(..., min_length=11, max_length=11, description="手机号")
-
-
-class AdminLoginRequest(BaseModel):
-    phone: str = Field(..., min_length=11, max_length=11, description="手机号")
-    code: str = Field(..., min_length=4, max_length=6, description="短信验证码")
-    required_role: Optional[str] = Field(None, description="要求的角色：platform_admin=平台管理员才能登录（平台管理后台专用）")
-
-
 class AdminPasswordLoginRequest(BaseModel):
     """管理员密码+图形验证码登录请求"""
     identifier: str = Field(..., description="手机号或用户名")
@@ -281,13 +270,6 @@ class AdminLoginResponse(BaseModel):
     message: Optional[str] = None
     debug: Optional[str] = None
     expire_warning: Optional[str] = None
-
-
-def _check_saas_enabled():
-    """检查 SaaS 模式是否启用，未启用时返回友好响应"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式，无法访问"}
-    return None
 
 
 # ============== 认证依赖 ==============
@@ -358,121 +340,6 @@ def require_admin(request: Request) -> dict:
 
 
 # ============== API 端点 ==============
-
-@router.post("/send_admin_sms")
-async def send_admin_sms(request: SendSmsRequest):
-    """发送管理员短信验证码"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式，无法访问"}
-
-    from src.saas.services.sms import send_admin_sms_code
-
-    if send_admin_sms_code(request.phone):
-        return {"success": True, "message": "验证码已发送", "expires_in": 300}
-    return {"success": False, "message": "验证码发送失败"}
-
-
-@router.post("/admin_login")
-async def admin_login(request: AdminLoginRequest):
-    """管理员手机号+验证码登录"""
-    from src.db.models import UserDB
-    from src.db.database import get_db_connection
-    import secrets
-    from datetime import datetime, timedelta
-
-    # 检查 SaaS 是否启用
-    if not settings.saas.enabled:
-        return AdminLoginResponse(success=False, message="未启用 SaaS 模式，无法访问")
-
-    from src.saas.services.sms import verify_admin_sms_code
-
-    # 1. 验证验证码
-    if not verify_admin_sms_code(request.phone, request.code):
-        return AdminLoginResponse(success=False, message="验证码错误或已过期，过期时间5分钟")
-
-    # 2. 查找用户
-    user = UserDB.get_by_phone(request.phone)
-    if not user:
-        # 3. 检查是否是配置中的管理员手机号，尝试自动创建
-        user = _ensure_config_admin(request.phone, "platform_admin")
-        if not user:
-            return AdminLoginResponse(success=False, message="该手机号未注册为管理员")
-
-    # 4. 检查是否是管理员
-    role = user.get("role", "user")
-
-    # 如果指定了 required_role，严格校验角色
-    if request.required_role == "platform_admin":
-        # 平台管理后台专用：只允许平台管理员登录
-        if role != "platform_admin":
-            return AdminLoginResponse(success=False, message="请使用平台管理员账号登录")
-    else:
-        # 普通管理员登录场景
-        if role not in ("platform_admin", "tenant_admin"):
-            return AdminLoginResponse(success=False, message="该手机号不是管理员")
-
-    if user.get("status", "active") != "active":
-        return AdminLoginResponse(success=False, message="账号已停用")
-
-    # 6. 获取租户信息
-    tenant = None
-    if user.get("tenant_id"):
-        tenant = TenantDB.get_by_id(user["tenant_id"])
-        if tenant:
-            # 使用统一检查函数检查租户状态和到期日期
-            access_check = _check_tenant_access(tenant, role)
-            if not access_check["can_access"] and not access_check["admin_only"]:
-                # 非平台管理员访问非active/过期租户
-                return AdminLoginResponse(
-                    success=False,
-                    message=access_check["reason"] or "无权访问该租户"
-                )
-
-    # 5. 生成 token（复用 tokens 表）
-    token = secrets.token_urlsafe(32)
-    # 根据租户到期日期动态设置 token 有效期
-    now = datetime.now()
-    token_expires = now + timedelta(days=7)
-    if tenant and role != "platform_admin":
-        expire_check = _check_tenant_expiration(tenant)
-        if expire_check["expire_date"] and expire_check["days_remaining"] is not None:
-            # 如果租户到期日期在7天内，token 有效期设置为到期日期
-            if expire_check["days_remaining"] < 7:
-                expire_at = tenant.get("expire_at")
-                if isinstance(expire_at, str):
-                    expire_at = datetime.fromisoformat(expire_at)
-                token_expires = expire_at
-                logger.info(f"Tenant {tenant['tenant_id']} expires in {expire_check['days_remaining']} days, setting token expiry to {token_expires}")
-
-    expires_at = token_expires.strftime("%Y-%m-%d %H:%M:%S")
-
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO tokens (token, user_id, expires_at)
-            VALUES (%s, %s, %s)
-        """, (token, user["user_id"], expires_at))
-        conn.commit()
-
-    logger.info(f"Admin login: {user['user_id']} ({request.phone}) -> role {role}, tenant {user.get('tenant_id')}")
-
-    return AdminLoginResponse(
-        success=True,
-        token=token,
-        user={
-            "user_id": user["user_id"],
-            "phone": user["phone"],
-            "username": user.get("username"),
-            "role": role,
-        },
-        tenant={
-            "tenant_id": tenant["tenant_id"],
-            "company_name": tenant["company_name"],
-            "plan": tenant["plan"],
-            "status": tenant["status"],
-        } if tenant else None,
-    )
-
 
 @router.post("/password_login")
 async def password_login(http_request: Request, request: AdminPasswordLoginRequest):
