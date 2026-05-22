@@ -42,6 +42,7 @@
           <th class="col-check">
             <input type="checkbox" :checked="allSelected" @change="toggleAll" />
           </th>
+          <th class="w-16">序号</th>
           <th>酒店名称</th>
           <th>区域</th>
           <th>等级</th>
@@ -51,12 +52,13 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-if="loading"><td colspan="7" class="center">加载中...</td></tr>
-        <tr v-else-if="currentList.length === 0"><td colspan="7" class="center">暂无数据</td></tr>
-        <tr v-for="item in currentList" :key="item.doc_id">
+        <tr v-if="loading"><td colspan="8" class="center">加载中...</td></tr>
+        <tr v-else-if="currentList.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
+        <tr v-for="(item, index) in currentList" :key="item.doc_id">
           <td class="col-check">
             <input type="checkbox" :value="item.doc_id" v-model="selectedArr" />
           </td>
+          <td>{{ (currentPage - 1) * PAGE_SIZE + index + 1 }}</td>
           <td class="col-title">{{ item.title }}</td>
           <td>{{ item.metadata?.sub_region || '-' }}</td>
           <td>{{ item.metadata?.diamond_level || '-' }}</td>

@@ -185,6 +185,7 @@
                 <table class="w-full">
                   <thead class="sticky top-0 bg-gray-50 border-b border-gray-200">
                     <tr>
+                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">序号</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">文档名称</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-96">摘要</th>
                       <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
@@ -196,10 +197,11 @@
                   </thead>
                   <tbody class="divide-y divide-gray-100">
                     <tr
-                      v-for="doc in filteredDocuments"
+                      v-for="(doc, index) in filteredDocuments"
                       :key="doc.id"
                       class="hover:bg-gray-50 transition-colors"
                     >
+                      <td class="px-6 py-4 text-sm text-gray-500">{{ (currentPage - 1) * pageSize + index + 1 }}</td>
                       <td class="px-6 py-4">
                         <div class="flex items-center gap-3">
                           <!-- File Icon -->

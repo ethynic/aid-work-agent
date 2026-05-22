@@ -33,6 +33,7 @@
       <table class="data-table">
         <thead>
           <tr>
+            <th class="w-16">序号</th>
             <th>费用名称</th>
             <th>分类</th>
             <th>计费方式</th>
@@ -44,9 +45,10 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-if="feeLoading"><td colspan="8" class="center">加载中...</td></tr>
-          <tr v-else-if="feeItems.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
-          <tr v-for="item in feeItems" :key="item.id">
+          <tr v-if="feeLoading"><td colspan="9" class="center">加载中...</td></tr>
+          <tr v-else-if="feeItems.length === 0"><td colspan="9" class="center">暂无数据</td></tr>
+          <tr v-for="(item, index) in feeItems" :key="item.id">
+            <td>{{ index + 1 }}</td>
             <td>{{ item.fee_name }}</td>
             <td>{{ item.fee_category }}</td>
             <td>{{ billingLabel(item.billing_method) }}</td>
@@ -130,6 +132,7 @@
       <table class="data-table">
         <thead>
           <tr>
+            <th class="w-16">序号</th>
             <th>季节类型</th>
             <th>显示名</th>
             <th>开始日期</th>
@@ -140,9 +143,10 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-if="seasonLoading"><td colspan="7" class="center">加载中...</td></tr>
-          <tr v-else-if="seasonItems.length === 0"><td colspan="7" class="center">暂无数据</td></tr>
-          <tr v-for="item in seasonItems" :key="item.id">
+          <tr v-if="seasonLoading"><td colspan="8" class="center">加载中...</td></tr>
+          <tr v-else-if="seasonItems.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
+          <tr v-for="(item, index) in seasonItems" :key="item.id">
+            <td>{{ index + 1 }}</td>
             <td>{{ item.season_type }}</td>
             <td>{{ item.season_type_label }}</td>
             <td>{{ item.start_date }}</td>
@@ -344,6 +348,7 @@ onMounted(() => { loadFees() })
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table th, .data-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
 .data-table th { background: #f5f7fa; font-weight: 600; }
+.data-table th.w-16, .data-table td.w-16 { width: 60px; }
 .data-table tr:hover { background: #fafbfc; }
 .center { text-align: center; color: #999; }
 .actions-cell { white-space: nowrap; }

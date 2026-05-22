@@ -24,6 +24,7 @@
     <table class="data-table">
       <thead>
         <tr>
+          <th class="w-16">序号</th>
           <th>区域</th>
           <th>餐标档次</th>
           <th>餐类</th>
@@ -36,9 +37,10 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-if="loading"><td colspan="9" class="center">加载中...</td></tr>
-        <tr v-else-if="items.length === 0"><td colspan="9" class="center">暂无数据</td></tr>
-        <tr v-for="item in items" :key="item.id">
+        <tr v-if="loading"><td colspan="10" class="center">加载中...</td></tr>
+        <tr v-else-if="items.length === 0"><td colspan="10" class="center">暂无数据</td></tr>
+        <tr v-for="(item, index) in items" :key="item.id">
+          <td>{{ index + 1 }}</td>
           <td>{{ item.region_name || '通用' }}</td>
           <td>{{ item.meal_tier_label || item.meal_tier }}</td>
           <td>{{ item.meal_type_label || item.meal_type }}</td>

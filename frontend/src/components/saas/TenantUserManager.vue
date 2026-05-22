@@ -62,6 +62,7 @@
       <table class="w-full">
         <thead class="bg-slate-50 border-b border-slate-200">
           <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase w-16">序号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">用户名</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">手机号</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">部门</th>
@@ -71,7 +72,8 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
-          <tr v-for="u in users" :key="u.mapping_id" class="hover:bg-slate-50">
+          <tr v-for="(u, index) in users" :key="u.mapping_id" class="hover:bg-slate-50">
+            <td class="px-4 py-3 text-sm text-slate-500">{{ index + 1 }}</td>
             <td class="px-4 py-3 text-sm text-slate-800">{{ u.username || '-' }}</td>
             <td class="px-4 py-3 text-sm text-slate-600">{{ u.phone || '-' }}</td>
             <td class="px-4 py-3 text-sm text-slate-600">{{ u.department || '-' }}</td>
