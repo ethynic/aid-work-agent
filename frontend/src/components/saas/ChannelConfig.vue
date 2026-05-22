@@ -59,7 +59,7 @@
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
             <span class="text-sm text-slate-800 font-mono">{{ ch.id }}</span>
-            <span class="text-slate-800">{{ channelTypeLabel(ch.channel_type) }}</span>
+            <span class="text-sm text-slate-800">{{ channelTypeLabel(ch.channel_type) }}</span>
             <span
               class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
               :class="ch.verified ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'"
@@ -421,11 +421,6 @@ const channelTypes = [
 function channelTypeLabel(type: string) {
   const map: Record<string, string> = { wecom: '企业微信', wecom_kf: '企业微信 SCRM', dingtalk: '钉钉', feishu: '飞书' }
   return map[type] || type
-}
-
-function channelIcon(type: string) {
-  const map: Record<string, string> = { wecom: '💬', wecom_kf: '', dingtalk: '📌', feishu: '🐦' }
-  return map[type] || '🔗'
 }
 
 // ==================== 字段定义（含获取位置说明） ====================
