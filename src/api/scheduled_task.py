@@ -200,7 +200,7 @@ async def cancel_task(request: Request, task_id: str):
         )
 
 
-@router.post("/{task_id}/run")
+@router.post("/{task_id}/trigger_task")
 async def trigger_task(request: Request, task_id: str):
     """手动触发执行一次"""
     try:
@@ -303,7 +303,7 @@ async def get_task_logs(request: Request, task_id: str, limit: int = 20):
         )
 
 
-@router.get("/logs/all")
+@router.get("/get_user_logs")
 async def get_user_logs(request: Request, limit: int = 50):
     """获取当前用户的所有执行日志"""
     try:

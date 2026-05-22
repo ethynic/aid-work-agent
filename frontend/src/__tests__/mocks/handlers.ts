@@ -33,7 +33,7 @@ export const handlers = [
     return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }),
 
-  http.post('/api/auth/logout', () => {
+  http.post('/api/auth/admin_logout', () => {
     return HttpResponse.json({ success: true })
   }),
 

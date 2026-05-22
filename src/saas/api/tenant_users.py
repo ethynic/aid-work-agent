@@ -129,7 +129,7 @@ async def create_user(request: Request, body: UserCreateRequest):
     return {"success": True, "user": user}
 
 
-@router.post("/batch")
+@router.post("/batch_import_users")
 async def batch_import_users(request: Request, file: UploadFile = File(...), tenant_id: Optional[str] = None):
     """
     批量导入用户（CSV 上传）

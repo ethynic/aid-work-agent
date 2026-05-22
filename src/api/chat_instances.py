@@ -163,7 +163,7 @@ async def release_instance(instance_id: str, request: Request, body: ReleaseInst
     return {"success": success, "released": success}
 
 
-@router.delete("/{instance_id}/queue")
+@router.delete("/{instance_id}/cancel_queue")
 async def cancel_queue(instance_id: str, session_id: str, request: Request):
     """
     取消排队

@@ -50,6 +50,20 @@ router = APIRouter(prefix="/api/saas/auth", tags=["SaaS 认证"])
 DEFAULT_TENANT_ID = "tenant_default"
 
 
+def _normalize_expire_at(expire_at) -> str | None:
+    """将 expire_at 统一转为 ISO 格式字符串（数据库可能返回 str 或 datetime）"""
+    if expire_at is None:
+        return None
+    if isinstance(expire_at, str):
+        # 数据库返回的 %Y-%m-%d %H:%M:%S 格式，转为 ISO 格式
+        try:
+            return datetime.fromisoformat(expire_at).isoformat()
+        except ValueError:
+            return expire_at  # 无法解析时原样返回
+    # datetime 对象
+    return expire_at.isoformat()
+
+
 def _check_tenant_expiration(tenant: dict) -> dict:
     """
     检查租户到期状态
@@ -345,7 +359,7 @@ def require_admin(request: Request) -> dict:
 
 # ============== API 端点 ==============
 
-@router.post("/sms/send")
+@router.post("/send_admin_sms")
 async def send_admin_sms(request: SendSmsRequest):
     """发送管理员短信验证码"""
     if not settings.saas.enabled:
@@ -358,7 +372,7 @@ async def send_admin_sms(request: SendSmsRequest):
     return {"success": False, "message": "验证码发送失败"}
 
 
-@router.post("/login")
+@router.post("/admin_login")
 async def admin_login(request: AdminLoginRequest):
     """管理员手机号+验证码登录"""
     from src.db.models import UserDB
@@ -460,7 +474,7 @@ async def admin_login(request: AdminLoginRequest):
     )
 
 
-@router.post("/login/password")
+@router.post("/password_login")
 async def password_login(http_request: Request, request: AdminPasswordLoginRequest):
     """密码+图形验证码登录"""
     from src.db.models import UserDB
@@ -489,16 +503,24 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
     is_phone = False
 
     if identifier.isdigit() and len(identifier) == 11:
-        user = UserDB.get_by_phone(identifier, bypass_cache=True)  # 登录需要 password_hash，必须绕过缓存
         is_phone = True
+        # 租户前台登录时，优先按（手机号 + 租户）精确查找，避免跨租户手机号重复问题
+        if request.tenant_id:
+            user = UserDB.get_by_phone_in_tenant(identifier, request.tenant_id)
+        if not user:
+            user = UserDB.get_by_phone(identifier, bypass_cache=True)  # 登录需要 password_hash，必须绕过缓存
     else:
         # 按用户名查找
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
-            row = cursor.fetchone()
-            if row:
-                user = dict(row)
+        # 租户前台登录时，优先按（用户名 + 租户）精确查找
+        if request.tenant_id:
+            user = UserDB.get_by_username_in_tenant(identifier, request.tenant_id)
+        if not user:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM users WHERE username = %s", (identifier,))
+                row = cursor.fetchone()
+                if row:
+                    user = dict(row)
 
     # 3. 平台管理员检查：手机号在admin.phones中 且 密码哈希匹配QBTOKEN
     admin_phones = getattr(settings, "admin", None)
@@ -557,18 +579,18 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
         # 临时调试：打印 password_hash 详情
         logger.debug(f"临时调试：password_hash 值={repr(password_hash)}, 类型={type(password_hash)}, len={len(password_hash) if password_hash else 0}, bool={bool(password_hash)}")
         if not password_hash:
-            # 先检查是否是平台管理员，如果不是则提示使用平台管理员账号登录
+            # 没有密码，如果是平台管理员，也可以登录
             role = user.get("role", "user")
-            if role != "platform_admin":
+            if role != "platform_admin":    # 不是平台管理员
                 return AdminLoginResponse(
                     success=False,
-                    message="请使用平台管理员账号登录",
+                    message="密码未设置，请使用“忘记密码”重置",
                     debug=f"user role={role}, not platform_admin, password_hash is empty"
                 )
             # 平台管理员密码未设置，仍提示重置
             return AdminLoginResponse(
                 success=False,
-                message="密码未设置，请使用忘记密码功能重置",
+                message="密码未设置，请使用 忘记密码 重置",
                 debug="password_hash in DB is empty"
             )
 
@@ -697,13 +719,13 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
             "company_name": tenant["company_name"],
             "plan": tenant["plan"],
             "status": tenant["status"],
-            "expire_at": tenant.get("expire_at").isoformat() if tenant and tenant.get("expire_at") else None,
+            "expire_at": _normalize_expire_at(tenant.get("expire_at")) if tenant and tenant.get("expire_at") else None,
         } if tenant else None,
         expire_warning=expire_warning,
     )
 
 
-@router.post("/sso/{provider}")
+@router.post("/admin_sso_login/{provider}")
 async def admin_sso_login(provider: str, request: SSOLoginRequest):
     """IM 平台 SSO 登录"""
     from src.db.models import UserDB
@@ -807,7 +829,7 @@ async def admin_sso_login(provider: str, request: SSOLoginRequest):
     )
 
 
-@router.post("/logout")
+@router.post("/admin_logout")
 async def admin_logout(request: Request):
     """管理员登出"""
     if not settings.saas.enabled:

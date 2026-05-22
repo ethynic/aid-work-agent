@@ -134,7 +134,7 @@ async def list_orders(request: Request):
     return {"success": True, "orders": orders}
 
 
-@router.post("/pay/{order_id}")
+@router.post("/initiate_payment/{order_id}")
 async def initiate_payment(order_id: str, request: Request, body: PayOrderRequest):
     """发起支付（返回支付链接）"""
     if not settings.saas.enabled:
@@ -174,7 +174,7 @@ async def initiate_payment(order_id: str, request: Request, body: PayOrderReques
     }
 
 
-@router.post("/pay/callback")
+@router.post("/payment_callback")
 async def payment_callback(body: PayCallbackRequest):
     """
     支付回调
@@ -191,7 +191,7 @@ async def payment_callback(body: PayCallbackRequest):
     return {"success": False, "message": "支付处理失败（订单不存在或已处理）"}
 
 
-@router.get("/usage")
+@router.get("/get_usage")
 async def get_usage(request: Request):
     """获取当前租户的 token 用量"""
     if not settings.saas.enabled:

@@ -101,7 +101,7 @@ export async function cleanupOldErrorLogs(): Promise<CleanupResponse> {
     ...getAuthHeader()
   }
 
-  const response = await fetch(`${API_BASE}/api/admin/error-logs/cleanup`, {
+  const response = await fetch(`${API_BASE}/api/admin/error-logs/cleanup_old_error_logs`, {
     method: 'DELETE',
     headers
   })

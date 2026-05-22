@@ -32,7 +32,7 @@ export async function getTenantPublicInfo(tenantId: string): Promise<{
 // ==================== 认证 ====================
 
 export async function sendAdminSmsCode(phone: string): Promise<{ success: boolean; message?: string; expires_in?: number }> {
-  const res = await fetch(`${API_BASE}/auth/sms/send`, {
+  const res = await fetch(`${API_BASE}/auth/send_admin_sms`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ phone })
@@ -48,7 +48,7 @@ export async function adminLogin(phone: string, code: string): Promise<{
   tenant?: { tenant_id: string; company_name: string; plan: string; status: string }
   message?: string
 }> {
-  const res = await fetch(`${API_BASE}/auth/login`, {
+  const res = await fetch(`${API_BASE}/auth/admin_login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ phone, code })
@@ -74,7 +74,7 @@ export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Pr
   message?: string
   expire_warning?: string
 }> {
-  const res = await fetch(`${API_BASE}/auth/login/password`, {
+  const res = await fetch(`${API_BASE}/auth/password_login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -99,7 +99,7 @@ export async function adminLogout(): Promise<void> {
 
   const token = localStorage.getItem(tokenKey)
   if (token) {
-    await fetch(`${API_BASE}/auth/logout`, {
+    await fetch(`${API_BASE}/auth/admin_logout`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -165,7 +165,7 @@ export async function getTenantStats(): Promise<{
 }
 
 export async function listTenants(): Promise<{ success: boolean; tenants: any[] }> {
-  const res = await fetch(`${API_BASE}/tenants/list`, {
+  const res = await fetch(`${API_BASE}/tenants/list_tenants`, {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取租户列表失败')
@@ -382,7 +382,7 @@ export async function batchImportUsers(file: File): Promise<{
 }> {
   const formData = new FormData()
   formData.append('file', file)
-  const res = await fetch(`${API_BASE}/users/batch`, {
+  const res = await fetch(`${API_BASE}/users/batch_import_users`, {
     method: 'POST',
     headers: getSaasAuthHeader(),
     body: formData
@@ -445,7 +445,7 @@ export async function deleteSkill(skillName: string): Promise<{ success: boolean
 // ==================== 用量报告 ====================
 
 export async function getUsageSummary(period: string = 'month'): Promise<any> {
-  const res = await fetch(`${API_BASE}/reports/summary?period=${period}`, {
+  const res = await fetch(`${API_BASE}/reports/get_usage_summary?period=${period}`, {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取用量摘要失败')
@@ -495,7 +495,7 @@ export async function getUserUsage(days: number = 30): Promise<{
 }
 
 export async function exportReport(days: number = 30): Promise<any> {
-  const res = await fetch(`${API_BASE}/reports/export?days=${days}`, {
+  const res = await fetch(`${API_BASE}/reports/export_usage_report?days=${days}`, {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('导出报告失败')
@@ -553,7 +553,7 @@ export async function createSubscription(data: { plan: string; billing_cycle: st
 export async function payOrder(orderId: string, paymentMethod: string = 'wechat'): Promise<{
   success: boolean; order_id: string; amount: number; payment_method: string; payment_url?: string
 }> {
-  const res = await fetch(`${API_BASE}/billing/pay/${orderId}`, {
+  const res = await fetch(`${API_BASE}/billing/initiate_payment/${orderId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
     body: JSON.stringify({ payment_method: paymentMethod })
@@ -565,7 +565,7 @@ export async function payOrder(orderId: string, paymentMethod: string = 'wechat'
 export async function getUsage(): Promise<{
   success: boolean; usage: { subscription_id: string; plan_name: string; token_quota: number; tokens_used: number; tokens_remaining: number; usage_percentage: number }[]
 }> {
-  const res = await fetch(`${API_BASE}/billing/usage`, {
+  const res = await fetch(`${API_BASE}/billing/get_usage`, {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取用量信息失败')

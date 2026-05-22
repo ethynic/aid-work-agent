@@ -21,7 +21,7 @@ from src.config.settings import settings
 router = APIRouter(prefix="/api/saas/reports", tags=["SaaS 使用报告"])
 
 
-@router.get("/summary")
+@router.get("/get_usage_summary")
 async def get_usage_summary(
     request: Request,
     period: str = Query("month", description="统计维度：day/week/month"),
@@ -125,7 +125,7 @@ async def get_session_stats(
     }
 
 
-@router.get("/export")
+@router.get("/export_usage_report")
 async def export_usage_report(
     request: Request,
     days: int = Query(30, description="天数", ge=1, le=365),

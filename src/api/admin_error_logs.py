@@ -255,7 +255,7 @@ async def update_error_log_status(
     return {"success": True, "message": "状态已更新"}
 
 
-@router.delete("/cleanup", response_model=CleanupResponse)
+@router.delete("/cleanup_old_error_logs", response_model=CleanupResponse)
 async def cleanup_old_error_logs(request: Request):
     """
     清理旧错误日志（30天前）

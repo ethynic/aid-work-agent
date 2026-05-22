@@ -162,7 +162,7 @@ async def get_tenant_stats(request: Request):
     return {"success": True, "stats": stats}
 
 
-@router.get("/list")
+@router.get("/list_tenants")
 async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
     """获取租户列表（仅平台管理员，分页）"""
     if not settings.saas.enabled:

@@ -122,7 +122,7 @@ export async function cancelTask(taskId: string): Promise<ApiResponse> {
 }
 
 export async function triggerTask(taskId: string): Promise<ApiResponse> {
-  const res = await fetch(`${API_BASE}/${taskId}/run`, {
+  const res = await fetch(`${API_BASE}/${taskId}/trigger_task`, {
     method: 'POST',
     headers: { ...getAuthHeader() }
   })
@@ -147,7 +147,7 @@ export async function getTaskLogs(taskId: string, limit: number = 20): Promise<A
 }
 
 export async function getAllLogs(limit: number = 50): Promise<ApiResponse<{ logs: TaskLog[]; total: number }>> {
-  const res = await fetch(`${API_BASE}/logs/all?limit=${limit}`, { headers: { ...getAuthHeader() } })
+  const res = await fetch(`${API_BASE}/get_user_logs?limit=${limit}`, { headers: { ...getAuthHeader() } })
   if (!res.ok) throw new Error('Failed to fetch all logs')
   return res.json()
 }

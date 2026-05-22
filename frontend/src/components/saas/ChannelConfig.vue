@@ -60,6 +60,7 @@
           <div class="flex items-center gap-3">
             <span class="text-lg">{{ channelIcon(ch.channel_type) }}</span>
             <span class="font-semibold text-slate-800">{{ channelTypeLabel(ch.channel_type) }}</span>
+            <span class="text-xs text-slate-400 font-mono">{{ ch.id }}</span>
             <span
               class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
               :class="ch.verified ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'"

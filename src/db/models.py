@@ -172,14 +172,6 @@ class UserDB:
             return dict(row) if row else None
 
     @staticmethod
-    def verify_login(phone: str, password: str) -> Optional[Dict[str, Any]]:
-        """验证手机号密码登录"""
-        user = UserDB.get_by_phone(phone)
-        if user and verify_password(password, user.get("password_hash", "")):
-            return user
-        return None
-
-    @staticmethod
     def update_wx_openid(user_id: str, wx_openid: str) -> bool:
         """绑定微信openid"""
         placeholder = "%s"
