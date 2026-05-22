@@ -152,6 +152,55 @@
               </select>
               <p class="mt-1 text-xs text-slate-400">选择该渠道消息由哪个数字员工处理，不选则使用通用智能体</p>
             </div>
+
+            <!-- SCRM 特有：客服账号配置 -->
+            <div v-if="form.channel_type === 'wecom_kf'" class="pt-4 border-t border-slate-200">
+              <div class="flex items-center justify-between mb-3">
+                <label class="text-sm font-medium text-slate-700">客服账号配置</label>
+                <button @click="addKfAccount" class="text-xs text-cyan-600 hover:text-cyan-700 font-medium">+ 添加客服账号</button>
+              </div>
+              <div v-if="kfAccounts.length === 0" class="text-xs text-slate-400 bg-slate-50 rounded-lg p-4 text-center">
+                尚未配置客服账号，请先添加
+              </div>
+              <div v-for="(kf, idx) in kfAccounts" :key="idx" class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-3">
+                <div class="flex items-center justify-between mb-3">
+                  <span class="text-sm font-medium text-slate-700">客服账号 #{{ idx + 1 }}</span>
+                  <button @click="removeKfAccount(idx)" class="text-xs text-red-400 hover:text-red-600">删除</button>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">客服账号名称</label>
+                    <input v-model="kf.name" type="text" placeholder="售前咨询" class="w-full px-2.5 py-2 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-cyan-400" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">open_kfid</label>
+                    <input v-model="kf.open_kfid" type="text" placeholder="wkAAAA" class="w-full px-2.5 py-2 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-cyan-400" />
+                    <p class="mt-0.5 text-xs text-slate-400">格式如 wkAAAA，通过企微 API 获取</p>
+                  </div>
+                  <div class="col-span-2">
+                    <label class="block text-xs font-medium text-slate-600 mb-1">绑定子智能体</label>
+                    <select v-model="kf.subagent_type" class="w-full px-2.5 py-2 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-cyan-400">
+                      <option value="">不绑定（使用渠道默认）</option>
+                      <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+                    </select>
+                  </div>
+                  <div class="col-span-2">
+                    <label class="block text-xs font-medium text-slate-600 mb-1">欢迎语</label>
+                    <input v-model="kf.welcome_message" type="text" placeholder="您好，我是 AI 智能客服，请问有什么可以帮您？" class="w-full px-2.5 py-2 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-cyan-400" />
+                  </div>
+                  <div class="col-span-2">
+                    <label class="block text-xs font-medium text-slate-600 mb-1">人工接待人员（企微 userid）</label>
+                    <input v-model="kf.human_servicers" type="text" placeholder="zhangsan, lisi" class="w-full px-2.5 py-2 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-cyan-400" />
+                    <p class="mt-0.5 text-xs text-slate-400">多个用逗号分隔</p>
+                  </div>
+                  <div class="col-span-2">
+                    <label class="block text-xs font-medium text-slate-600 mb-1">转人工关键词</label>
+                    <input v-model="kf.human_transfer_keywords" type="text" placeholder="人工服务, 转人工, 人工客服" class="w-full px-2.5 py-2 bg-white border border-slate-300 rounded text-sm focus:outline-none focus:border-cyan-400" />
+                    <p class="mt-0.5 text-xs text-slate-400">多个用逗号分隔，不设置则使用默认值</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- 回调地址提示 -->
@@ -329,6 +378,31 @@ const copied = ref(false)
 const showGuideModal = ref(false)
 const guideChannel = ref('wecom')
 
+// SCRM 特有：客服账号配置
+const kfAccounts = ref<Array<{
+  name: string
+  open_kfid: string
+  subagent_type: string
+  welcome_message: string
+  human_servicers: string
+  human_transfer_keywords: string
+}>>([])
+
+function addKfAccount() {
+  kfAccounts.value.push({
+    name: '',
+    open_kfid: '',
+    subagent_type: '',
+    welcome_message: '',
+    human_servicers: '',
+    human_transfer_keywords: '',
+  })
+}
+
+function removeKfAccount(idx: number) {
+  kfAccounts.value.splice(idx, 1)
+}
+
 const form = ref<{ channel_type: string; config: Record<string, string>; subagent_type: string }>({
   channel_type: 'wecom',
   config: {},
@@ -339,17 +413,18 @@ const form = ref<{ channel_type: string; config: Record<string, string>; subagen
 
 const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '💬' },
-  { value: 'dingtalk', label: '钉钉', icon: '📌' },
-  { value: 'feishu', label: '飞书', icon: '🐦' },
+  { value: 'wecom_kf', label: '企业微信 SCRM', icon: '' },
+  { value: 'dingtalk', label: '钉钉', icon: '' },
+  { value: 'feishu', label: '飞书', icon: '' },
 ]
 
 function channelTypeLabel(type: string) {
-  const map: Record<string, string> = { wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书' }
+  const map: Record<string, string> = { wecom: '企业微信', wecom_kf: '企业微信 SCRM', dingtalk: '钉钉', feishu: '飞书' }
   return map[type] || type
 }
 
 function channelIcon(type: string) {
-  const map: Record<string, string> = { wecom: '💬', dingtalk: '📌', feishu: '🐦' }
+  const map: Record<string, string> = { wecom: '💬', wecom_kf: '', dingtalk: '📌', feishu: '🐦' }
   return map[type] || '🔗'
 }
 
@@ -362,6 +437,12 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     { key: 'secret', label: '应用 Secret', placeholder: '', hint: '点击「查看」获取', location: '「应用管理」→ 应用详情页' },
     { key: 'token', label: '回调 Token', placeholder: '', hint: '设置 API 接收时自行设定或随机生成', location: '「接收消息」→「设置 API 接收」' },
     { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「接收消息」→「设置 API 接收」' },
+  ],
+  wecom_kf: [
+    { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
+    { key: 'secret', label: '应用 Secret', placeholder: '', hint: '自建应用的 Secret（微信客服无独立 Secret）', location: '「应用管理」→ 自建应用详情页' },
+    { key: 'token', label: '回调 Token', placeholder: '', hint: '设置 API 接收时自行设定或随机生成', location: '「微信客服」→「API」→ 回调配置' },
+    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「微信客服」→「API」→ 回调配置' },
   ],
   dingtalk: [
     { key: 'app_key', label: 'App Key', placeholder: '', location: '「基础信息」页面' },
@@ -389,6 +470,18 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '记录 CorpID、AgentId、Secret',
       '在应用详情页找到「接收消息」→ 点击「设置 API 接收」',
       '将下方回调地址填入 URL 栏，生成 Token 和 EncodingAESKey',
+      '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
+    ],
+    docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
+  },
+  wecom_kf: {
+    title: '企业微信 SCRM 接入步骤',
+    steps: [
+      '前往企业微信管理后台 →「应用管理」→「微信客服」→ 确认已开启',
+      '创建自建应用，记录 CorpID 和 Secret（不需要 AgentId）',
+      '在「微信客服」→「通过 API 管理」中开启并授权自建应用',
+      '创建客服账号，记录 open_kfid',
+      '将下方回调地址填入「微信客服」→「API」→ 回调配置',
       '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
     ],
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
@@ -435,6 +528,23 @@ const fullGuideMap: Record<string, { steps: { title: string; desc: string; locat
     faq: [
       { q: '回调 URL 验证失败？', a: '确保服务器已启动、凭证已在本页面保存、SSL 证书有效。先在本页面保存，再到企业微信后台点保存。' },
       { q: '用户发消息没有回复？', a: '检查可信 IP 是否已配置、应用可见范围是否包含该用户、Agent 实例是否已启动并绑定企业微信渠道。' },
+    ],
+  },
+  wecom_kf: {
+    steps: [
+      { title: '开启微信客服功能', desc: '登录企业微信管理后台，进入「应用管理」→「微信客服」，确认微信客服功能已开启。', location: '应用管理 → 微信客服' },
+      { title: '创建自建应用', desc: '进入「应用管理」→「自建」→ 创建应用。记录 CorpID（「我的企业」→「企业信息」）和 Secret（应用详情页）。SCRM 场景不需要 AgentId。', location: '应用管理 → 自建' },
+      { title: '设置微信客服 API 管理', desc: '进入「微信客服」→「通过 API 管理」，开启「通过 API 管理微信客服账号」，将步骤 2 的自建应用设为「可调用接口的应用」。', location: '微信客服 → 通过 API 管理' },
+      { title: '创建客服账号', desc: '进入「微信客服」→「客服账号」→ 添加客服账号。创建后通过 API 获取 open_kfid（格式如 wkAAAA）。可创建多个客服账号绑定不同子智能体。', location: '微信客服 → 客服账号' },
+      { title: '配置回调 URL', desc: '在「微信客服」→「API」中找到回调配置，填写回调 URL、Token、EncodingAESKey。注意：需先在本页面保存凭证后再到企微后台点保存。', location: '微信客服 → API → 回调配置' },
+      { title: '配置可信 IP', desc: '在应用详情页找到「企业可信IP」，添加服务器公网 IP。', location: '应用详情 → 企业可信IP' },
+      { title: '设置接待方式', desc: '进入「微信客服」→「客服账号」→ 选择客服账号 → 设置「接待方式」为「机器人+人工接待」。设置为「仅人工接待」时消息不会通过 API 推送。', location: '微信客服 → 客服账号 → 接待方式' },
+      { title: '保存并验证', desc: '先在本页面保存凭证配置，再回到企业微信后台点击「保存」完成验证。' },
+    ],
+    faq: [
+      { q: '回调 URL 验证失败？', a: '确保服务器已启动、凭证已在本页面保存、SSL 证书有效。先在本页面保存，再到企业微信后台点保存。' },
+      { q: '收不到客户消息？', a: '确认「通过 API 管理微信客服账号」已开启、自建应用在「可调用接口的应用」列表中、客服账号接待方式设为「机器人+人工接待」。' },
+      { q: 'Agent 回复发送失败？', a: '确认使用的是自建应用的 Secret（不是微信客服的 Secret，微信客服没有独立 Secret）、token 未过期、未超过 5 条消息限制。' },
     ],
   },
   dingtalk: {
@@ -501,6 +611,7 @@ function copyUrl(url: string) {
 function openAddChannel() {
   editingId.value = null
   form.value = { channel_type: 'wecom', config: {}, subagent_type: '' }
+  kfAccounts.value = []
   formError.value = ''
   showForm.value = true
 }
@@ -509,6 +620,19 @@ function editChannel(ch: any) {
   editingId.value = ch.config_id
   form.value = { channel_type: ch.channel_type, config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
   formError.value = ''
+  // 解析已有的客服账号配置
+  if (ch.config.kf_account && Array.isArray(ch.config.kf_account)) {
+    kfAccounts.value = ch.config.kf_account.map((kf: any) => ({
+      name: kf.name || '',
+      open_kfid: kf.open_kfid || '',
+      subagent_type: kf.subagent_type || '',
+      welcome_message: kf.welcome_message || '',
+      human_servicers: Array.isArray(kf.human_servicers) ? kf.human_servicers.join(', ') : (kf.human_servicers || ''),
+      human_transfer_keywords: Array.isArray(kf.human_transfer_keywords) ? kf.human_transfer_keywords.join(', ') : (kf.human_transfer_keywords || ''),
+    }))
+  } else {
+    kfAccounts.value = []
+  }
   showForm.value = true
 }
 
@@ -542,14 +666,32 @@ async function handleSubmit() {
   submitting.value = true
   formError.value = ''
   try {
-    const payload = {
-      config: form.value.config,
+    const payload: Record<string, any> = {
+      config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
+    // SCRM 特有：序列化客服账号配置
+    if (form.value.channel_type === 'wecom_kf' && kfAccounts.value.length > 0) {
+      payload.config.kf_account = kfAccounts.value.map(kf => {
+        const obj: Record<string, any> = {
+          name: kf.name,
+          open_kfid: kf.open_kfid,
+          subagent_type: kf.subagent_type || undefined,
+        }
+        if (kf.welcome_message) obj.welcome_message = kf.welcome_message
+        if (kf.human_servicers) {
+          obj.human_servicers = kf.human_servicers.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+        }
+        if (kf.human_transfer_keywords) {
+          obj.human_transfer_keywords = kf.human_transfer_keywords.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+        }
+        return obj
+      })
+    }
     if (editingId.value) {
-      await updateChannel(editingId.value, payload)
+      await updateChannel(editingId.value, payload as any)
     } else {
-      await createChannel({ ...payload, channel_type: form.value.channel_type })
+      await createChannel({ channel_type: form.value.channel_type, config: payload.config, subagent_type: payload.subagent_type } as any)
     }
     showForm.value = false
     await loadChannels()
