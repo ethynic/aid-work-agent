@@ -13,9 +13,10 @@ worker_class = "uvicorn.workers.UvicornWorker"
 
 # ── Worker 数量 ────────────────────────────────────────
 # 推荐公式：2×CPU核数 + 1
-# 当前服务器：4 核 → workers = 9
+# 当前服务器：4 核 → 原本 workers = 9
+# 5 用户场景降低到 3，减少内存和磁盘 IO 压力
 # 可通过环境变量 WORKERS 覆盖
-workers = int(os.environ.get("WORKERS", 9))
+workers = int(os.environ.get("WORKERS", 3))
 
 # ── 超时 ───────────────────────────────────────────────
 # LLM 调用耗时较长，timeout 不能设太小；建议 ≥ 120s

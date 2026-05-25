@@ -89,15 +89,24 @@ class MessageDeduplicator:
         cutoff = time.time() - self._ttl
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                DELETE FROM channel_message_dedup
-                WHERE created_at < %s
-            """, (cutoff,))
-            conn.commit()
-            cleaned = cursor.rowcount
-            if cleaned > 0:
-                logger.debug(f"清理过期去重记录: {cleaned} 条")
-            return cleaned
+            try:
+                cursor.execute("""
+                    DELETE FROM channel_message_dedup
+                    WHERE created_at < %s
+                """, (cutoff,))
+                conn.commit()
+                cleaned = cursor.rowcount
+                if cleaned > 0:
+                    logger.debug(f"清理过期去重记录: {cleaned} 条")
+                return cleaned
+            except psycopg2.OperationalError as e:
+                conn.rollback()
+                logger.warning(f"清理过期去重记录失败（连接问题）: {e}")
+                return 0
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"清理过期去重记录异常: {e}")
+                return 0
 
     def clear(self):
         """清空所有去重记录"""

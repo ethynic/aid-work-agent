@@ -15,16 +15,16 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-aid_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
       # 生产优化参数
-      # 最大连接数（默认100，生产+测试共用建议200-300）
-      POSTGRES_MAX_CONNECTIONS: 200
-      # 共享缓冲区（建议为物理内存的25%，需 <= shm_size）
-      POSTGRES_SHARED_BUFFERS: 256MB
-      # 有效缓存大小（建议为物理内存的75%）
-      POSTGRES_EFFECTIVE_CACHE_SIZE: 1536MB
-      # 工作内存（每个排序/哈希操作可用内存）
-      POSTGRES_WORK_MEM: 16MB
-      # 维护工作内存（VACUUM/CREATE INDEX等操作可用内存）
-      POSTGRES_MAINTENANCE_WORK_MEM: 128MB
+      # 最大连接数（5用户场景，30足够；降低连接数减少内存开销）
+      POSTGRES_MAX_CONNECTIONS: 30
+      # 共享缓冲区（256MB→128MB，5用户够用，减少内存占用）
+      POSTGRES_SHARED_BUFFERS: 128MB
+      # 有效缓存大小
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1024MB
+      # 工作内存（16MB→4MB，每个排序/哈希操作，减少并发时的总内存消耗）
+      POSTGRES_WORK_MEM: 4MB
+      # 维护工作内存（128MB→64MB）
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
       # WAL 配置（无需复制，使用 minimal 减少 WAL 开销）
       POSTGRES_WAL_LEVEL: minimal
       POSTGRES_MAX_WAL_SIZE: 1GB
@@ -46,15 +46,15 @@ services:
     command:
       - "postgres"
       - "-c"
-      - "max_connections=200"
+      - "max_connections=30"
       - "-c"
-      - "shared_buffers=256MB"
+      - "shared_buffers=128MB"
       - "-c"
-      - "effective_cache_size=1536MB"
+      - "effective_cache_size=1024MB"
       - "-c"
-      - "work_mem=16MB"
+      - "work_mem=4MB"
       - "-c"
-      - "maintenance_work_mem=128MB"
+      - "maintenance_work_mem=64MB"
       - "-c"
       - "wal_level=minimal"
       # 禁用 WAL 发送者（minimal 模式不支持复制，必须设为0）
@@ -111,16 +111,19 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    # 生产环境资源限制
+    # 生产环境资源限制（5用户场景，降低配置减少磁盘IO压力）
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: "2.0"
-        reservations:
           memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 1G
           cpus: "0.5"
-    shm_size: 512mb
+    shm_size: 1g
+    # tmpfs 内存盘：PostgreSQL 临时文件（排序/哈希/临时表）写入内存，避免磁盘 IO
+    tmpfs:
+      - /pg_temp:mode=1777,size=1024m
     logging:
       driver: json-file
       options:

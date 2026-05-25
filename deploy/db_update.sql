@@ -691,3 +691,13 @@ CREATE INDEX IF NOT EXISTS idx_cf_funnel_tenant ON bs_customer_followup_conversi
 CREATE INDEX IF NOT EXISTS idx_cf_funnel_lead ON bs_customer_followup_conversion_funnel(lead_id);
 CREATE INDEX IF NOT EXISTS idx_cf_funnel_stage ON bs_customer_followup_conversion_funnel(tenant_id, to_stage);
 CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, changed_at);
+
+-- ============================================================================
+-- 2026-05-25 性能优化：加速过期锁清理查询 + PostgreSQL 容器参数优化
+-- ============================================================================
+
+-- 1. agent_instances 复合索引：加速 lock cleanup 查询
+-- 原查询：WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
+CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
+ON agent_instances(lock_expires_at)
+WHERE current_session_id IS NOT NULL;

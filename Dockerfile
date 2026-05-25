@@ -52,8 +52,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     SERVER_MODE=fastapi \
     # 时区配置
     TZ=Asia/Shanghai \
-    # Gunicorn worker 数量（4核服务器 = 2×4+1 = 9）
-    WORKERS=9 \
+    # Gunicorn worker 数量（5用户场景，3个足够，减少内存和磁盘IO）
+    WORKERS=3 \
     # Gunicorn worker 超时（秒）
     WORKER_TIMEOUT=120
 

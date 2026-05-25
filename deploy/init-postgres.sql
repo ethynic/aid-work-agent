@@ -440,6 +440,9 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
+ON agent_instances(lock_expires_at)
+WHERE current_session_id IS NOT NULL;
 
 -- 实例等待队列表
 CREATE TABLE IF NOT EXISTS agent_instance_queue (
@@ -843,6 +846,9 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
+ON agent_instances(lock_expires_at)
+WHERE current_session_id IS NOT NULL;
 
 -- 实例等待队列表
 CREATE TABLE IF NOT EXISTS agent_instance_queue (

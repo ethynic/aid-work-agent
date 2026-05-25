@@ -24,9 +24,9 @@ except ImportError:
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost/aid_work_agent")
 DATABASE_ECHO = os.getenv("DATABASE_ECHO", "false").lower() == "true"
 
-# PostgreSQL 连接池配置
-DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
-DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+# PostgreSQL 连接池配置（5用户场景，降低到 5，减少并发连接数）
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
 
 # 模块级连接池
 _pg_connection_pool = None
@@ -90,11 +90,13 @@ def init_postgres_pool(minconn: int = None, maxconn: int = None):
         password=DB_CONFIG["password"],
         # TCP keepalive：防止空闲连接被防火墙/服务器断开
         keepalives=1,
-        keepalives_idle=60,      # 空闲60秒后开始发送keepalive
-        keepalives_interval=10,  # 每10秒重试
-        keepalives_count=6,      # 6次无响应则断开
-        # 连接超时
-        connect_timeout=10,
+        keepalives_idle=30,      # 空闲30秒后开始发送keepalive（降低到60→30）
+        keepalives_interval=5,   # 每5秒重试（降低到10→5）
+        keepalives_count=3,      # 3次无响应则断开（降低到6→3）
+        # 连接超时（降低到5秒，避免长时间阻塞）
+        connect_timeout=5,
+        # 语句超时（30秒保护，防止慢查询堆积）
+        options="-c statement_timeout=30000",
         # 应用名称（方便在 pg_stat_activity 中识别）
         application_name="aid-work-agent"
     )
@@ -106,11 +108,16 @@ def get_postgres_pool():
     return _pg_connection_pool
 
 
-def get_pooled_connection(max_retries: int = 3):
-    """从连接池获取连接，并检查连接有效性"""
+def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connection:
+    """从连接池获取连接，并检查连接有效性
+
+    Args:
+        max_retries: 最大重试次数，默认 2 次（减少阻塞时间）
+    """
     if _pg_connection_pool is None:
         raise RuntimeError("PostgreSQL 连接池未初始化，请先调用 init_postgres_pool()")
 
+    last_error = None
     for attempt in range(max_retries):
         conn = _pg_connection_pool.getconn()
 
@@ -121,16 +128,16 @@ def get_pooled_connection(max_retries: int = 3):
                 _pg_connection_pool.putconn(conn, close=True)
                 continue
             # 用轻量查询检测连接是否真的活着
-            # conn.isolation_level 不发网络请求，无法检测服务端断开
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             cursor.close()
-        except (psycopg2.OperationalError, psycopg2.InterfaceError):
-            logger.warning("PostgreSQL 连接失效，重新获取 (attempt %d/%d)", attempt + 1, max_retries)
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            logger.warning("PostgreSQL 连接失效，重新获取 (attempt %d/%d): %s", attempt + 1, max_retries, e)
             try:
                 _pg_connection_pool.putconn(conn, close=True)
             except Exception:
                 pass
+            last_error = e
             continue
         except Exception as e:
             logger.warning("PostgreSQL 连接检查异常: %s，重新获取 (attempt %d/%d)", e, attempt + 1, max_retries)
@@ -138,11 +145,13 @@ def get_pooled_connection(max_retries: int = 3):
                 _pg_connection_pool.putconn(conn, close=True)
             except Exception:
                 pass
+            last_error = e
             continue
 
         return conn
 
-    raise RuntimeError(f"获取数据库连接失败：连续 {max_retries} 次获取到无效连接")
+    # 所有重试都失败，抛出最后一个错误
+    raise RuntimeError(f"获取数据库连接失败：连续 {max_retries} 次获取到无效连接") from (last_error or Exception("unknown"))
 
 
 def return_pooled_connection(conn, close: bool = False):
@@ -504,19 +513,23 @@ def _apply_db_updates(conn):
     logger.info(f"数据库更新文件有变化，尝试获取 advisory lock (key={lock_key})")
 
     # 使用 pg_try_advisory_lock 非阻塞尝试，如果失败则等待
-    max_retries = 30
+    max_retries = 10  # 降低到 10 次（原 30 次），减少等待时间
     retry_interval = 1  # 秒
     locked = False
     for retry in range(max_retries):
-        cursor.execute("SELECT pg_try_advisory_lock(%s) AS locked", (lock_key,))
-        result = cursor.fetchone()
-        if result is None:
-            logger.warning("pg_try_advisory_lock 查询返回空结果，视为未获取锁")
+        try:
+            cursor.execute("SELECT pg_try_advisory_lock(%s) AS locked", (lock_key,))
+            result = cursor.fetchone()
+            if result is None:
+                logger.warning("pg_try_advisory_lock 查询返回空结果，视为未获取锁")
+                locked = False
+            else:
+                locked = result['locked']
+            if locked:
+                break
+        except Exception as lock_err:
+            logger.warning(f"尝试获取 advisory lock 时发生错误 (重试 {retry+1}/{max_retries}): {lock_err}")
             locked = False
-        else:
-            locked = result['locked']
-        if locked:
-            break
         logger.info(f"等待 advisory lock (重试 {retry+1}/{max_retries})")
         time.sleep(retry_interval)
     else:
