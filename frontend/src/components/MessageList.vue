@@ -38,18 +38,11 @@
         />
         
         <!-- Typing Indicator -->
-        <div v-if="isProcessing && messages[messages.length - 1]?.role === 'user'" class="flex gap-3 p-4 rounded-2xl bg-white border border-gray-200">
-          <div class="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center flex-shrink-0">
-            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <div class="flex-1 space-y-2">
-            <div class="flex gap-1">
-              <span class="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
-              <span class="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
-              <span class="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
-            </div>
+        <div v-if="isProcessing && messages[messages.length - 1]?.role === 'user'" class="typing-indicator">
+          <div class="flex gap-1.5 py-2">
+            <span class="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
+            <span class="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
+            <span class="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
           </div>
         </div>
       </template>
@@ -92,3 +85,13 @@ function scrollToBottom() {
   }
 }
 </script>
+
+<style scoped>
+.typing-indicator {
+  background-color: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 4px 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+</style>

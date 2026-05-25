@@ -1,44 +1,38 @@
 <template>
+  <!-- 用户消息：右对齐，左侧留缩进，无头像 -->
   <div
-    :class="[
-      'flex gap-2 md:gap-3 p-3 md:p-4 rounded-2xl transition-all message-enter-active',
-      message.role === 'user'
-        ? 'bg-primary-50 border border-primary-200 md:ml-12'
-        : 'bg-white border border-gray-200 shadow-message'
-    ]"
+    v-if="message.role === 'user'"
+    class="message-enter-active message-user-wrapper"
   >
-    <!-- Avatar -->
-    <div
-      :class="[
-        'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
-        message.role === 'user'
-          ? 'bg-gradient-to-br from-primary-400 to-primary-600'
-          : 'bg-gradient-to-br from-gray-400 to-gray-500'
-      ]"
-    >
-      <svg v-if="message.role === 'user'" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-      </svg>
-      <svg v-else class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-      </svg>
-    </div>
+    <div class="message-user-bubble bg-primary-600">
+      <div class="message-user-content text-white">
+        <div class="leading-relaxed" v-html="renderedContent"></div>
 
-    <!-- Content -->
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2 mb-1">
-        <span class="text-sm font-medium text-gray-700">
-          {{ message.role === 'user' ? '你' : 'AI助手' }}
-        </span>
-        <span v-if="timestamp" class="text-xs text-gray-400">
-          {{ formatTime(timestamp) }}
-        </span>
-        <span v-if="isProcessing" class="text-xs text-primary-400 animate-pulse">
-          生成中...
-        </span>
+        <!-- 附件标签 -->
+        <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
+          <AttachmentChip
+            v-for="att in displayAttachments"
+            :key="att.file_id"
+            :attachment="att"
+            @preview="handlePreview(att)"
+          />
+          <AttachmentChip
+            v-for="(att, idx) in legacyAttachments"
+            :key="'legacy-' + idx"
+            :attachment="att"
+            :clickable="false"
+          />
+        </div>
       </div>
+    </div>
+  </div>
 
-      <!-- Message Content (Markdown) -->
+  <!-- AI消息：全宽，无头像，无缩进 -->
+  <div
+    v-else
+    class="message-enter-active message-ai-wrapper"
+  >
+    <div class="message-ai-content">
       <div
         class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
         v-html="renderedContent"
@@ -60,11 +54,8 @@
         />
       </div>
 
-      <!-- 下载文件卡片（仅助手消息显示，在执行详情上方） -->
-      <div
-        v-if="message.role === 'assistant' && downloadableFiles.length > 0"
-        class="mt-3 flex flex-wrap gap-2"
-      >
+      <!-- 下载文件卡片 -->
+      <div v-if="downloadableFiles.length > 0" class="mt-3 flex flex-wrap gap-2">
         <DownloadFileCard
           v-for="file in downloadableFiles"
           :key="file.file_id"
@@ -72,9 +63,8 @@
         />
       </div>
 
-      <!-- 执行详情（仅 AI 回复显示） -->
-      <div v-if="message.role === 'assistant' && hasProgress" class="mt-2">
-        <!-- 展开/折叠按钮 -->
+      <!-- 执行详情 -->
+      <div v-if="hasProgress" class="mt-2">
         <button
           @click="toggleExpanded"
           class="flex items-center gap-1 p-2 -m-2 min-w-[44px] min-h-[44px] text-xs text-gray-400 hover:text-gray-600 transition-colors"
@@ -90,7 +80,6 @@
           <span>{{ isExpanded ? '收起' : '展开' }}执行详情 {{ totalCount }}条</span>
         </button>
 
-        <!-- 执行详情内容 -->
         <div
           :class="[
             'mt-1 overflow-hidden transition-all',
@@ -111,6 +100,12 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <div v-if="isProcessing" class="flex items-center gap-2 mt-2">
+        <span class="text-xs text-primary-400 animate-pulse">
+          生成中...
+        </span>
       </div>
     </div>
   </div>
@@ -137,7 +132,6 @@ const { openPreview } = useAttachmentPreview()
 
 const isExpanded = ref(false)
 
-const timestamp = computed(() => props.message.timestamp)
 const hasProgress = computed(() => {
   return props.message.progressMessages && props.message.progressMessages.length > 0
 })
@@ -175,7 +169,6 @@ function getProgressIcon(type: string): string {
 }
 
 function formatProgressContent(msg: ProgressMessage): string {
-  // 扁平格式：顶层 type 就是 tool_start/tool_result
   if (msg.type === 'tool_start' && msg.toolName) {
     return `🔧 需要调用工具【${msg.toolName}】`
   }
@@ -184,12 +177,10 @@ function formatProgressContent(msg: ProgressMessage): string {
     return success ? `✅ ${msg.toolName}执行完成` : `❌ ${msg.toolName}执行失败`
   }
 
-  // content 始终为 string（ProgressMessage 类型定义），移除 emoji 并截断
   const cleaned = msg.content.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
   return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned
 }
 
-// 结构化附件列表（来自 attachments 字段）
 const displayAttachments = computed<AttachmentInfo[]>(() => {
   if (props.message.attachments && props.message.attachments.length > 0) {
     return props.message.attachments
@@ -197,7 +188,6 @@ const displayAttachments = computed<AttachmentInfo[]>(() => {
   return []
 })
 
-// 旧消息兼容：从内容中解析 [附件: ...] 文本
 const legacyAttachments = computed<{ name: string }[]>(() => {
   if (displayAttachments.value.length > 0) return []
   const match = props.message.content.match(/\[附件:\s*(.*?)\]/)
@@ -205,34 +195,73 @@ const legacyAttachments = computed<{ name: string }[]>(() => {
   return match[1].split(',').map(name => ({ name: name.trim() })).filter(a => a.name)
 })
 
-// 可下载文件列表（LLM 生成的文件）
 const downloadableFiles = computed<DownloadableFile[]>(() => {
   return props.message.downloadableFiles || []
 })
 
-// 用于渲染的内容（移除附件标注文本和文件路径上下文，避免重复显示）
 const displayContent = computed(() => {
   let content = props.message.content
-  // 移除过程标签包裹的内容（工具中间产出，仅在执行详情中展示）
   content = content.replace(/<!--process-->[\s\S]*?<!--\/process-->\n?/g, '')
-  // 移除末尾的 [附件: ...] 标注
   content = content.replace(/\n\n\[附件:.*?\]$/s, '')
-  // 移除后端追加的文件路径上下文（供 LLM 使用的，不需要展示给用户）
   content = content.replace(/\n\n【已上传文件路径】[\s\S]*?请使用上述路径读取文件内容。/, '')
   return content
 })
 
 const renderedContent = computed(() => {
-  // 使用 marked 渲染 Markdown，支持标题、表格、粗体、斜体、代码块、列表等
   return renderMarkdown(displayContent.value)
 })
 
 function handlePreview(attachment: AttachmentInfo) {
   openPreview(attachment)
 }
-
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp)
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-}
 </script>
+
+<style scoped>
+/* 用户消息：右对齐气泡 */
+.message-user-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding-left: 48px;
+}
+
+.message-user-bubble {
+  max-width: 85%;
+  border: none;
+  border-radius: 16px 16px 4px 16px;
+  padding: 10px 14px;
+  transition: all 0.2s;
+}
+
+.message-user-content {
+  word-break: break-word;
+}
+
+/* AI消息：全宽，无缩进 */
+.message-ai-wrapper {
+  width: 100%;
+}
+
+.message-ai-content {
+  background-color: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* 桌面端适配 */
+@media (min-width: 768px) {
+  .message-user-wrapper {
+    padding-left: 96px;
+  }
+
+  .message-user-bubble {
+    max-width: 70%;
+    padding: 12px 16px;
+  }
+
+  .message-ai-content {
+    padding: 14px 20px;
+  }
+}
+</style>
