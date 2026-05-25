@@ -368,6 +368,10 @@ class Agent:
         from src.tools.transfer_to_human import TransferToHumanTool
         self.tool_registry.register(TransferToHumanTool())
 
+        # 注册 AI 外呼工具（Mock 实现）
+        from src.tools.phone.ai_call_tool import AICallTool
+        self.tool_registry.register(AICallTool())
+
         # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool
@@ -1729,41 +1733,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # DeepSeek 思考模式下 content 可能为空，但 reasoning_content 有内容
                 yield_content = content or reasoning or ""
                 if yield_content:
-                    # 确保工具生成的文件下载链接出现在最终回复中
-                    if generated_files:
-                        base_url = (
-                            settings.app.public_base_url.rstrip("/")
-                            if settings.app.public_base_url
-                            else ""
-                        )
-                        # 收集回复中尚未包含的下载链接
-                        missing_files = []
-                        for gf in generated_files:
-                            dl_url = gf["download_url"]
-                            # 检查文件ID或URL是否已在回复中提及
-                            if dl_url not in yield_content:
-                                # 提取 file_id 作为备选检查
-                                file_id_match = dl_url.split("/")[-2] if "/" in dl_url else ""
-                                if file_id_match and file_id_match not in yield_content:
-                                    missing_files.append(gf)
-                        if missing_files:
-                            file_links = []
-                            for gf in missing_files:
-                                full_url = (
-                                    f"{base_url}{gf['download_url']}"
-                                    if base_url
-                                    else gf["download_url"]
-                                )
-                                file_links.append(
-                                    f"- [{gf['file_name']}]({full_url})"
-                                )
-                            download_section = (
-                                "\n\n📎 **生成的文件：**\n" + "\n".join(file_links)
-                            )
-                            yield_content = yield_content + download_section
-                            logger.info(
-                                f"后端日志：追加了 {len(missing_files)} 个文件下载链接到最终回复"
-                            )
                     yield yield_content
                 break
             
