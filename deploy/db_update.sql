@@ -458,3 +458,236 @@ CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
 CREATE INDEX IF NOT EXISTS idx_asr_tenant ON bs_after_sales_returns(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_asr_user ON bs_after_sales_returns(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_asr_order ON bs_after_sales_returns(order_id);
+
+-- ============================================================
+-- 2026-5-25，投诉处理智能体相关表
+-- ============================================================
+
+-- 投诉主表
+CREATE TABLE IF NOT EXISTS bs_complaint_handling_complaints (
+    id SERIAL PRIMARY KEY,
+    complaint_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT NOT NULL,
+    session_id TEXT,
+    order_id TEXT,
+    customer_name TEXT,
+    contact_info TEXT,
+    category TEXT NOT NULL,
+    sub_category TEXT,
+    tags TEXT,
+    customer_emotion TEXT,
+    emotion_intensity REAL,
+    urgency TEXT NOT NULL DEFAULT 'normal',
+    status TEXT NOT NULL DEFAULT 'open',
+    escalation_level INT DEFAULT 0,
+    description TEXT NOT NULL,
+    resolution TEXT,
+    escalated_to TEXT,
+    escalation_reason TEXT,
+    escalated_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP,
+    first_response_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_complaints_tenant_status ON bs_complaint_handling_complaints (tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_complaints_user_status ON bs_complaint_handling_complaints (user_id, status);
+CREATE INDEX IF NOT EXISTS idx_complaints_urgency ON bs_complaint_handling_complaints (urgency, status);
+CREATE INDEX IF NOT EXISTS idx_complaints_category ON bs_complaint_handling_complaints (category);
+CREATE INDEX IF NOT EXISTS idx_complaints_created ON bs_complaint_handling_complaints (created_at DESC);
+
+-- 投诉交互记录
+CREATE TABLE IF NOT EXISTS bs_complaint_handling_interactions (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    complaint_id TEXT NOT NULL,
+    interaction_type TEXT NOT NULL DEFAULT 'message',
+    sender_type TEXT NOT NULL,
+    sender_name TEXT,
+    content TEXT NOT NULL,
+    metadata TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_interactions_complaint ON bs_complaint_handling_interactions (complaint_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_interactions_tenant ON bs_complaint_handling_interactions (tenant_id);
+
+-- 历史案例解决方案库
+CREATE TABLE IF NOT EXISTS bs_complaint_handling_case_solutions (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    complaint_id TEXT UNIQUE NOT NULL,
+    category TEXT NOT NULL,
+    sub_category TEXT,
+    problem_summary TEXT NOT NULL,
+    root_cause TEXT,
+    solution TEXT NOT NULL,
+    resolution_time_hours REAL,
+    customer_satisfied BOOLEAN,
+    compensation_type TEXT,
+    compensation_amount NUMERIC(12,2),
+    effective BOOLEAN DEFAULT true,
+    tags TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_solutions_category ON bs_complaint_handling_case_solutions (category);
+CREATE INDEX IF NOT EXISTS idx_case_solutions_tenant ON bs_complaint_handling_case_solutions (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_case_solutions_effective ON bs_complaint_handling_case_solutions (effective, category);
+
+-- 跟进任务表
+CREATE TABLE IF NOT EXISTS bs_complaint_handling_followups (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    complaint_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    assigned_to TEXT,
+    due_date TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'pending',
+    completed_at TIMESTAMP,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_followups_complaint ON bs_complaint_handling_followups (complaint_id, status);
+CREATE INDEX IF NOT EXISTS idx_followups_due ON bs_complaint_handling_followups (due_date, status);
+CREATE INDEX IF NOT EXISTS idx_followups_tenant ON bs_complaint_handling_followups (tenant_id);
+
+-- ============================================
+-- 2026-05-25 客户跟进智能体 - 5 张业务表
+-- ============================================
+
+-- 1. 线索主表
+CREATE TABLE IF NOT EXISTS bs_customer_followup_leads (
+    id SERIAL PRIMARY KEY,
+    lead_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT,
+    company_name TEXT,
+    contact_name TEXT,
+    phone TEXT,
+    email TEXT,
+    source TEXT,
+    industry TEXT,
+    region TEXT,
+    address TEXT,
+    product_interest TEXT,
+    budget_range TEXT,
+    estimated_deal_amount NUMERIC(12,2),
+    description TEXT,
+    stage TEXT DEFAULT 'new',
+    stage_entered_at TIMESTAMP,
+    score INTEGER DEFAULT 0,
+    assigned_to TEXT,
+    assigned_at TIMESTAMP,
+    assignment_rule TEXT,
+    status TEXT DEFAULT 'active',
+    lost_reason TEXT,
+    next_followup_at TIMESTAMP,
+    last_followup_at TIMESTAMP,
+    followup_count INTEGER DEFAULT 0,
+    import_batch TEXT,
+    external_id TEXT,
+    tags TEXT[] DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cf_leads_tenant ON bs_customer_followup_leads(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cf_leads_assigned ON bs_customer_followup_leads(tenant_id, assigned_to);
+CREATE INDEX IF NOT EXISTS idx_cf_leads_stage ON bs_customer_followup_leads(tenant_id, stage);
+CREATE INDEX IF NOT EXISTS idx_cf_leads_status ON bs_customer_followup_leads(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_cf_leads_next_followup ON bs_customer_followup_leads(tenant_id, next_followup_at);
+CREATE INDEX IF NOT EXISTS idx_cf_leads_external ON bs_customer_followup_leads(external_id);
+CREATE INDEX IF NOT EXISTS idx_cf_leads_tags ON bs_customer_followup_leads USING GIN(tags);
+
+-- 2. 跟进记录表
+CREATE TABLE IF NOT EXISTS bs_customer_followup_records (
+    id SERIAL PRIMARY KEY,
+    record_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    lead_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    followup_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    followup_at TIMESTAMP DEFAULT NOW(),
+    duration_minutes INTEGER,
+    outcome TEXT,
+    next_action TEXT,
+    next_followup_at TIMESTAMP,
+    quality_score INTEGER,
+    call_id TEXT,
+    call_transcript TEXT,
+    call_sentiment TEXT,
+    call_summary TEXT,
+    attachments JSONB DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cf_records_tenant ON bs_customer_followup_records(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cf_records_lead ON bs_customer_followup_records(lead_id);
+CREATE INDEX IF NOT EXISTS idx_cf_records_user ON bs_customer_followup_records(tenant_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_cf_records_date ON bs_customer_followup_records(tenant_id, followup_at);
+
+-- 3. 销售人员表
+CREATE TABLE IF NOT EXISTS bs_customer_followup_sales_reps (
+    id SERIAL PRIMARY KEY,
+    rep_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    department TEXT,
+    role TEXT DEFAULT 'sales',
+    active_lead_count INTEGER DEFAULT 0,
+    max_leads INTEGER DEFAULT 50,
+    is_active BOOLEAN DEFAULT TRUE,
+    skills TEXT[] DEFAULT '{}',
+    region TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cf_reps_tenant ON bs_customer_followup_sales_reps(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cf_reps_user ON bs_customer_followup_sales_reps(user_id);
+CREATE INDEX IF NOT EXISTS idx_cf_reps_active ON bs_customer_followup_sales_reps(tenant_id, is_active);
+
+-- 4. 分配规则表
+CREATE TABLE IF NOT EXISTS bs_customer_followup_assign_rules (
+    id SERIAL PRIMARY KEY,
+    rule_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    priority INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    conditions JSONB DEFAULT '{}',
+    target_rep_ids TEXT[] DEFAULT '{}',
+    auto_assign BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cf_rules_tenant ON bs_customer_followup_assign_rules(tenant_id);
+
+-- 5. 转化漏斗事件表（仅追加）
+CREATE TABLE IF NOT EXISTS bs_customer_followup_conversion_funnel (
+    id SERIAL PRIMARY KEY,
+    funnel_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    lead_id TEXT NOT NULL,
+    from_stage TEXT,
+    to_stage TEXT NOT NULL,
+    changed_at TIMESTAMP DEFAULT NOW(),
+    changed_by TEXT,
+    days_in_previous_stage INTEGER,
+    note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cf_funnel_tenant ON bs_customer_followup_conversion_funnel(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cf_funnel_lead ON bs_customer_followup_conversion_funnel(lead_id);
+CREATE INDEX IF NOT EXISTS idx_cf_funnel_stage ON bs_customer_followup_conversion_funnel(tenant_id, to_stage);
+CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, changed_at);

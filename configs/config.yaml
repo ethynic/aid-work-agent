@@ -164,6 +164,17 @@ scheduler:
   misfire_grace_time: 300
 
 # 企业微信渠道配置
+# 通知服务配置
+notification:
+  enabled: true
+  default_channel: "email"
+  channels:
+    email:
+      enabled: true
+    webhook:
+      enabled: false
+      default_url: ""
+
 wecom:
   waiting_indicator:
     enabled: true

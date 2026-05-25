@@ -90,6 +90,47 @@ const router = createRouter({
         { path: 'fees', name: 'travel-consultant-fees', component: () => import('./components/travel/FeeManager.vue') },
       ]
     },
+    // 客户跟进智能体业务数据页面
+    {
+      path: '/customer-followup',
+      name: 'customer-followup',
+      component: () => import('./components/BaseBusinessLayout.vue'),
+      children: [
+        {
+          path: 'leads',
+          name: 'customer-followup-leads',
+          component: () => import('./components/followup/LeadManager.vue')
+        },
+        {
+          path: 'followup-records',
+          name: 'customer-followup-followup-records',
+          component: () => import('./components/followup/FollowupRecords.vue')
+        },
+        {
+          path: 'sales-reps',
+          name: 'customer-followup-sales-reps',
+          component: () => import('./components/followup/SalesRepManager.vue')
+        },
+      ]
+    },
+    // 投诉处理智能体业务数据页面
+    {
+      path: '/complaint',
+      name: 'complaint',
+      component: () => import('./components/BaseBusinessLayout.vue'),
+      children: [
+        {
+          path: 'list',
+          name: 'complaint-list',
+          component: () => import('./components/complaint/ComplaintList.vue')
+        },
+        {
+          path: 'stats',
+          name: 'complaint-stats',
+          component: () => import('./components/complaint/ComplaintStats.vue')
+        },
+      ]
+    },
     // SaaS 租户管理 Portal（仅平台管理员）
     {
       path: '/portal/login',
@@ -153,6 +194,47 @@ const router = createRouter({
             { path: 'meals', name: 'tenant-travel-consultant-meals', component: () => import('./components/travel/MealManager.vue') },
             { path: 'guides', name: 'tenant-travel-consultant-guides', component: () => import('./components/travel/GuideManager.vue') },
             { path: 'fees', name: 'tenant-travel-consultant-fees', component: () => import('./components/travel/FeeManager.vue') },
+          ]
+        },
+        // 客户跟进智能体业务数据页面
+        {
+          path: 'customer-followup',
+          name: 'tenant-customer-followup',
+          component: () => import('./components/BaseBusinessLayout.vue'),
+          children: [
+            {
+              path: 'leads',
+              name: 'tenant-customer-followup-leads',
+              component: () => import('./components/followup/LeadManager.vue')
+            },
+            {
+              path: 'followup-records',
+              name: 'tenant-customer-followup-followup-records',
+              component: () => import('./components/followup/FollowupRecords.vue')
+            },
+            {
+              path: 'sales-reps',
+              name: 'tenant-customer-followup-sales-reps',
+              component: () => import('./components/followup/SalesRepManager.vue')
+            },
+          ]
+        },
+        // 投诉处理智能体业务数据页面
+        {
+          path: 'complaint',
+          name: 'tenant-complaint',
+          component: () => import('./components/BaseBusinessLayout.vue'),
+          children: [
+            {
+              path: 'list',
+              name: 'tenant-complaint-list',
+              component: () => import('./components/complaint/ComplaintList.vue')
+            },
+            {
+              path: 'stats',
+              name: 'tenant-complaint-stats',
+              component: () => import('./components/complaint/ComplaintStats.vue')
+            },
           ]
         },
       ]
