@@ -1116,7 +1116,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         """SSE事件生成器"""
         sse_start_time = datetime.now()
         logger.info(f"[SSE] event_generator started, session_id={session_id}")
-        
+
+        # 清除可能残留的取消标记（上次请求被取消后新请求到来时，旧线程的 finally 可能尚未执行）
+        sse_manager.clear_cancelled(session_id)
+
         try:
             # 发送初始连接成功消息
             try:
@@ -1220,7 +1223,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                                 session_id=session_id,
                                 user=agent_user,
                                 attachments=attachments,
-                                progress_callback=async_progress_callback
+                                progress_callback=async_progress_callback,
+                                cancel_check=lambda: sse_manager.is_cancelled(session_id)
                             ):
                                 # 每接收一个chunk就检查一次是否被取消
                                 if sse_manager.is_cancelled(session_id):
@@ -1234,7 +1238,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     loop.run_until_complete(consume_generator())
                     loop.close()
 
-                    # 如果未被取消，保存会话记录
+                    # 将结果放入 results，不直接保存到 DB
+                    # 消息保存由 SSE 主循环在确认客户端收到响应后执行
                     full_response = "".join(results['chunks'])
                     results['full_response'] = full_response
                     if not sse_manager.is_cancelled(session_id) and full_response:
@@ -1243,46 +1248,13 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                             record_service.mark_error(results['error'])
                         SessionRecordManager.end_record()
 
-                        # 同时保存消息到 chat_messages 表（用于前端显示历史消息）
-                        # 保存用户消息
-                        user_metadata = {"progressMessages": []}
-                        # 将附件信息保存到 metadata，以便前端历史消息能显示附件
-                        if request.files:
-                            user_metadata["attachments"] = request.files
-                        MessageDB.create(
-                            session_id=session_id,
-                            role="user",
-                            content=full_message,
-                            metadata=user_metadata
-                        )
-                        # 保存AI回复（包含执行详情，但不作为模型上下文）
-                        if full_response:
-                            # 从 progress 事件中提取下载文件信息
-                            downloadable_files = []
-                            download_tool_names = {"register_download_file", "file_write"}
-                            for event in results.get('progress', []):
-                                if (event.get("type") == "tool_result"
-                                    and event.get("toolName") in download_tool_names
-                                    and event.get("success") is True):
-                                    result = event.get("result", {})
-                                    if result.get("file_id"):
-                                        downloadable_files.append({
-                                            "file_id": result["file_id"],
-                                            "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                                            "file_size": result.get("file_size", 0),
-                                            "download_url": result.get("download_url", ""),
-                                            "mime_type": result.get("mime_type", ""),
-                                        })
-
-                            assistant_metadata = {"progressMessages": results.get('progress', [])}
-                            if downloadable_files:
-                                assistant_metadata["downloadableFiles"] = downloadable_files
-                            MessageDB.create(
-                                session_id=session_id,
-                                role="assistant",
-                                content=full_response,
-                                metadata=assistant_metadata
-                            )
+                        # 准备待保存的消息数据（不立即保存，由 SSE 主循环负责）
+                        results['pending_save'] = {
+                            'full_message': full_message,
+                            'full_response': full_response,
+                            'request_files': request.files,
+                            'progress_events': results.get('progress', []),
+                        }
 
                 except asyncio.CancelledError:
                     logger.info(f"[SSE-Thread] Agent generation was cancelled by user: session_id={session_id}")
@@ -1346,8 +1318,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                             last_progress_count += 1
                             
                         except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                            # 客户端已断开，优雅退出
+                            # 客户端已断开，标记取消并退出
                             logger.warning(f"[SSE] Client disconnected during progress yield, session_id={session_id}, error: {e}")
+                            sse_manager.cancel_session(session_id)
                             completed.set()
                             break
                         except Exception as e:
@@ -1367,8 +1340,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                             
                         except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                            # 客户端已断开，优雅退出
+                            # 客户端已断开，标记取消并退出
                             logger.warning(f"[SSE] Client disconnected during chunk yield, session_id={session_id}, error: {e}")
+                            sse_manager.cancel_session(session_id)
                             completed.set()
                             break
                         except Exception as e:
@@ -1391,8 +1365,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     yield f"data: {json.dumps({'type': 'error', 'data': results['error'], 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
                 except (BrokenPipeError, ConnectionResetError, OSError) as e:
                     logger.warning(f"[SSE] Client disconnected before error message sent, session_id={session_id}, error: {e}")
-            
-            # 保存完整响应到历史
+
+            # 保存完整响应到内存历史（不影响 DB）
             full_response = results.get('full_response', "".join(results['chunks']))
             sse_manager.add_to_history(session_id, "assistant", full_response)
 
@@ -1411,7 +1385,55 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 sse_duration = (datetime.now() - sse_start_time).total_seconds()
                 logger.info(f"[SSE] Stream completed successfully, session_id={session_id}, duration={sse_duration:.2f}s, chunks={len(results['chunks'])}, progress={len(results['progress'])}")
             except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                # 客户端已断开，complete 没发出。generator 将被 Starlette 丢弃，后面的保存代码不会执行。
                 logger.warning(f"[SSE] Client disconnected before complete message sent, session_id={session_id}, error: {e}")
+                return  # 提前退出 generator，不保存消息
+
+            # ✅ complete 事件成功发送给客户端后，才保存消息到 DB
+            # 如果客户端中途断开（点停止），上面的 yield 会抛异常导致 return，这段不会执行
+            pending = results.get('pending_save')
+            if pending and not results.get('error'):
+                try:
+                    # 保存用户消息
+                    user_metadata = {"progressMessages": []}
+                    if pending['request_files']:
+                        user_metadata["attachments"] = pending['request_files']
+                    MessageDB.create(
+                        session_id=session_id,
+                        role="user",
+                        content=pending['full_message'],
+                        metadata=user_metadata
+                    )
+                    # 保存AI回复
+                    if pending['full_response']:
+                        downloadable_files = []
+                        download_tool_names = {"register_download_file", "file_write"}
+                        for event in pending.get('progress_events', []):
+                            if (event.get("type") == "tool_result"
+                                and event.get("toolName") in download_tool_names
+                                and event.get("success") is True):
+                                result = event.get("result", {})
+                                if result.get("file_id"):
+                                    downloadable_files.append({
+                                        "file_id": result["file_id"],
+                                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                                        "file_size": result.get("file_size", 0),
+                                        "download_url": result.get("download_url", ""),
+                                        "mime_type": result.get("mime_type", ""),
+                                    })
+
+                        assistant_metadata = {"progressMessages": pending.get('progress_events', [])}
+                        if downloadable_files:
+                            assistant_metadata["downloadableFiles"] = downloadable_files
+                        MessageDB.create(
+                            session_id=session_id,
+                            role="assistant",
+                            content=pending['full_response'],
+                            metadata=assistant_metadata
+                        )
+                    logger.info(f"[SSE] Messages saved to DB, session_id={session_id}")
+                except Exception as e:
+                    logger.error(f"[SSE] Failed to save messages: {e}", exc_info=True)
             
         except Exception as e:
             import traceback

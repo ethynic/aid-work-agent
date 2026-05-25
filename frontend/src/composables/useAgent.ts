@@ -26,6 +26,9 @@ const currentFiles = ref<UploadedFile[]>([])
 // 全局唯一的 SSE 管理器
 const sseManager = new SSEManager()
 
+// 用户主动取消标记（区分 abort 和正常完成）
+let _cancelledByUser = false
+
 // Per-session 消息缓存：切换会话时保存当前会话的实时消息快照
 const sessionMessagesCache = new Map<string, ChatMessage[]>()
 
@@ -178,7 +181,12 @@ export function useAgent() {
         },
         // onComplete
         () => {
-          addProgress('✅ 任务完成', 'complete')
+          if (_cancelledByUser) {
+            addProgress('⚠️ 已停止', 'error')
+            _cancelledByUser = false
+          } else {
+            addProgress('✅ 任务完成', 'complete')
+          }
           isProcessing.value = false
         },
         // onError
@@ -387,6 +395,8 @@ export function useAgent() {
     console.log(`[${now()}] [abortStreaming] called, isProcessing=`, isProcessing.value, 'sessionId=', sessionId.value)
     if (isProcessing.value && sessionId.value) {
       console.log(`[${now()}] [abortStreaming] aborting current connection and notify backend`)
+      // 标记为用户主动取消，让 onComplete 显示取消状态
+      _cancelledByUser = true
       // 先断开前端连接
       sseManager.disconnect()
       // 通知后端取消生成，避免继续消耗token

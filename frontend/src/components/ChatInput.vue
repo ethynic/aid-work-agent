@@ -77,13 +77,25 @@
           </div>
         </div>
 
+        <!-- Stop Button -->
+        <button
+          v-if="isProcessing"
+          @click="emit('stop')"
+          class="box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:border-red-300"
+        >
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+          <span class="hidden sm:inline">停止</span>
+        </button>
         <!-- Send Button -->
         <button
+          v-else
           @click="handleSend"
-          :disabled="!canSend || (!inputText.trim() && files.length === 0)"
+          :disabled="!inputText.trim() && files.length === 0"
           :class="[
             'box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2',
-            canSend && (inputText.trim() || files.length > 0)
+            inputText.trim() || files.length > 0
               ? 'bg-gradient-to-r from-primary-500 to-primary-700 text-white hover:from-primary-400 hover:to-primary-600 shadow-lg shadow-primary-500/25'
               : 'bg-gray-200 text-gray-400 cursor-not-allowed'
           ]"
@@ -125,6 +137,7 @@ const emit = defineEmits<{
   (e: 'send', content: string): void
   (e: 'upload', file: File): void
   (e: 'remove', file_id: string): void
+  (e: 'stop'): void
 }>()
 
 const { isMobile } = useMobile()
@@ -133,7 +146,7 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const canSend = computed(() => {
-  return !props.disabled && !props.isProcessing
+  return !props.disabled
 })
 
 // 前端日志：输入框从禁用恢复时自动聚焦，提升用户体验
@@ -149,6 +162,11 @@ function handleEnter(e: KeyboardEvent) {
   if (isMobile.value) {
     // 移动端：Enter 换行，不阻止默认行为，仅触发自动调整高度
     setTimeout(autoResize, 0)
+    return
+  }
+  // 处理中不允许 Enter 发送
+  if (props.isProcessing) {
+    e.preventDefault()
     return
   }
   // 桌面端：Enter 发送

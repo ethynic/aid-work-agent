@@ -88,6 +88,7 @@
               @send="handleSend"
               @upload="handleUpload"
               @remove="handleRemoveFile"
+              @stop="abortStreaming"
               :disabled="isProcessing"
               :is-processing="isProcessing"
               :files="currentFiles"

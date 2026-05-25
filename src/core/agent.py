@@ -1226,6 +1226,7 @@ class Agent:
         user: Optional[User] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         progress_callback: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Process a user message and yield response chunks
@@ -1586,6 +1587,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         while iteration < max_iterations:
             iteration += 1
             logger.debug(f"Agent iteration {iteration}")
+
+            # 检查用户是否已取消
+            if cancel_check and cancel_check():
+                logger.info(f"[AGENT] Cancelled by user at iteration {iteration}, session_id={session_id}")
+                return
             
             tools = self._get_tools()
             
@@ -1782,6 +1788,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 tool_name = tc["name"]
                 tool_args = tc["arguments"]
                 tool_id = tc["id"]
+
+                # 每个工具执行前检查取消
+                if cancel_check and cancel_check():
+                    logger.info(f"[AGENT] Cancelled by user before tool {tool_name}, session_id={session_id}")
+                    return
 
                 # 获取工具的用户友好名称
                 tool_display_name = self._get_tool_display_name(tool_name, tool_args)
