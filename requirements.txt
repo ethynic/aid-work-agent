@@ -43,7 +43,7 @@ dashscope>=1.14.0  # Qwen SDK
 tavily-python>=0.3.0  # Tavily AI Search API
 
 # Browser Automation
-playwright>=1.40.0  # Browser automation framework
+playwright>=1.59.0  # Browser automation framework (1.59+ for Screencast API)
 markdownify>=0.11.6  # HTML to Markdown conversion
 
 # Gradio UI
@@ -77,6 +77,9 @@ psycopg2-binary>=2.9.0  # PostgreSQL database driver
 
 # Redis
 redis>=5.0.0  # Redis client for shared cross-worker state
+
+# MCP Server
+mcp>=1.27.0  # Model Context Protocol SDK
 
 # Security
 bcrypt>=4.1.0  # Password hashing

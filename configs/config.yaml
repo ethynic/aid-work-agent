@@ -163,6 +163,21 @@ scheduler:
   coalesce_missed: true
   misfire_grace_time: 300
 
+# MCP Server 配置（Model Context Protocol）
+mcp:
+  enabled: ${MCP_ENABLED:-false}
+  transport: ${MCP_TRANSPORT:-sse}   # stdio | sse | streamable-http
+  host: ${MCP_HOST:-0.0.0.0}
+  port: ${MCP_PORT:-8765}
+  auth:
+    enabled: ${MCP_AUTH_ENABLED:-true}
+    api_keys: []                     # API Key 列表，或通过环境变量 MCP_API_KEYS 设置（逗号分隔）
+  tools: []                          # 暴露的 skill/tool 列表，示例：
+  #  - skill: trade-customer
+  #    commands: [save-customer, search-customers]
+  #  - skill: baidu-search
+  #    commands: [search]
+
 # 企业微信渠道配置
 # 通知服务配置
 notification:

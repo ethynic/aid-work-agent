@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "aid-work-agent": {
+      "command": "python",
+      "args": ["-m", "src.mcp.server"],
+      "cwd": "/path/to/aid-work-agent",
+      "env": {
+        "MCP_ENABLED": "true",
+        "MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}
