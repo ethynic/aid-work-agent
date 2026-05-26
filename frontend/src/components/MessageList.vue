@@ -30,11 +30,12 @@
 
       <!-- Messages -->
       <template v-else>
-        <MessageItem 
-          v-for="(message, index) in messages" 
+        <MessageItem
+          v-for="(message, index) in messages"
           :key="index"
           :message="message"
           :is-processing="isProcessing && index === messages.length - 1 && message.role === 'assistant'"
+          :input-hint-state="isProcessing && index === messages.length - 1 && message.role === 'assistant' ? inputHintState : 'idle'"
         />
         
         <!-- Typing Indicator -->
@@ -52,12 +53,13 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
-import type { ChatMessage } from '@/types'
+import type { ChatMessage, InputHintState } from '@/types'
 import MessageItem from './MessageItem.vue'
 
 interface Props {
   messages: ChatMessage[]
   isProcessing: boolean
+  inputHintState: InputHintState
 }
 
 const props = defineProps<Props>()

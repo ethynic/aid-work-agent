@@ -78,6 +78,7 @@
             <MessageList
               :messages="messages"
               :is-processing="isProcessing"
+              :input-hint-state="inputHintState"
               @quick-prompt="handleSend"
             />
           </div>
@@ -180,7 +181,8 @@ const {
   clearAttachments,
   abortStreaming,
   sessionId: agentSessionId,
-  endSession
+  endSession,
+  inputHintState
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()

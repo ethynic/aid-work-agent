@@ -33,7 +33,14 @@
     class="message-enter-active message-ai-wrapper"
   >
     <div class="message-ai-content">
+      <!-- AI 正在输入提示（白框内无内容时显示） -->
+      <div v-if="showInputHint" class="flex items-center gap-2">
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse"></span>
+        <span class="text-xs text-muted">{{ inputHintState === 'thinking' ? '对方正在输入中...' : '对方正在输入中...' }}</span>
+      </div>
+
       <div
+        v-else
         class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
@@ -63,8 +70,8 @@
         />
       </div>
 
-      <!-- 执行详情 -->
-      <div v-if="hasProgress" class="mt-2">
+      <!-- 执行详情（仅 debug 模式显示） -->
+      <div v-if="isDebugEnabled && hasProgress" class="mt-2">
         <button
           @click="toggleExpanded"
           class="flex items-center gap-1 p-2 -m-2 min-w-[44px] min-h-[44px] text-xs text-gray-400 hover:text-gray-600 transition-colors"
@@ -101,36 +108,43 @@
           </div>
         </div>
       </div>
-
-      <div v-if="isProcessing" class="flex items-center gap-2 mt-2">
-        <span class="text-xs text-primary-400 animate-pulse">
-          生成中...
-        </span>
-      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { ChatMessage, AttachmentInfo, DownloadableFile, ProgressMessage } from '@/types'
+import type { ChatMessage, AttachmentInfo, DownloadableFile, InputHintState, ProgressMessage } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
 import DownloadFileCard from './DownloadFileCard.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
+import { useDebugMode } from '@/composables/useDebugMode'
 
 interface Props {
   message: ChatMessage
   isProcessing?: boolean
+  inputHintState?: InputHintState
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  isProcessing: false
+  isProcessing: false,
+  inputHintState: 'idle'
 })
 
 const { openPreview } = useAttachmentPreview()
+const { isDebugEnabled } = useDebugMode()
 
 const isExpanded = ref(false)
+
+const showInputHint = computed(() => {
+  return (
+    props.message.role === 'assistant' &&
+    props.isProcessing &&
+    !props.message.content &&
+    (props.inputHintState === 'thinking' || props.inputHintState === 'working')
+  )
+})
 
 const hasProgress = computed(() => {
   return props.message.progressMessages && props.message.progressMessages.length > 0

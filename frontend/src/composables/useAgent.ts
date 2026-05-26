@@ -1,5 +1,5 @@
 import { ref, onUnmounted } from 'vue'
-import type { ChatMessage, ProgressMessage } from '@/types'
+import type { ChatMessage, InputHintState, ProgressMessage } from '@/types'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
 import { useDemoAuth } from './useDemoAuth'
@@ -19,6 +19,9 @@ const busyMessage = ref('')
 const busyInstanceId = ref('')
 const isSameUser = ref(false)
 const pendingMessage = ref('') // 等待排队发送的消息
+
+// "正在输入"提示状态
+const inputHintState = ref<InputHintState>('idle')
 
 // 当前附件列表
 const currentFiles = ref<UploadedFile[]>([])
@@ -147,6 +150,7 @@ export function useAgent() {
     error.value = null
     currentResponse.value = ''
     progressMessages.value = []
+    inputHintState.value = 'thinking'
 
     // 添加空的助手消息占位
     const assistantMessageIndex = messages.value.length
@@ -178,6 +182,9 @@ export function useAgent() {
           if (assistantMessageIndex < messages.value.length) {
             messages.value[assistantMessageIndex].content = currentResponse.value
           }
+          if (inputHintState.value !== 'responding') {
+            inputHintState.value = 'responding'
+          }
         },
         // onComplete
         () => {
@@ -188,17 +195,20 @@ export function useAgent() {
             addProgress('✅ 任务完成', 'complete')
           }
           isProcessing.value = false
+          inputHintState.value = 'idle'
         },
         // onError
         (err) => {
           error.value = err.message
           addProgress(`❌ 错误: ${err.message}`, 'error')
           isProcessing.value = false
+          inputHintState.value = 'idle'
         },
         // onToolStart - 工具开始执行
         (toolName, toolArgs) => {
           const toolDisplayName = getToolDisplayName(toolName, toolArgs)
           addProgress(`🔧 需要调用工具【${toolDisplayName}】`, 'tool_start', toolName, toolArgs)
+          inputHintState.value = 'working'
         },
         // onToolResult - 工具执行结果
         (toolName, result, success) => {
@@ -254,6 +264,7 @@ export function useAgent() {
         // onThinking - LLM思考中
         (data) => {
           addProgress(`🤔 ${data}`, 'thinking')
+          inputHintState.value = 'thinking'
         },
         // onClarification - 子智能体需要用户补充信息
         (subagentName, question) => {
@@ -275,6 +286,7 @@ export function useAgent() {
       error.value = (err as Error).message
       addProgress(`❌ 连接错误: ${(err as Error).message}`, 'error')
       isProcessing.value = false
+      inputHintState.value = 'idle'
     }
   }
 
@@ -351,6 +363,17 @@ export function useAgent() {
     }
     progressMessages.value.push(newMsg)
 
+    // 输出到前端 console，方便调试
+    const ts = new Date().toLocaleTimeString()
+    const label = `[Agent ${type}]`
+    if (type === 'error') {
+      console.error(`${ts} ${label}`, content, { toolName, toolArgs, result })
+    } else if (type === 'tool_result' || type === 'tool_start') {
+      console.info(`${ts} ${label}`, content, { toolName, toolArgs, result })
+    } else {
+      console.log(`${ts} ${label}`, content)
+    }
+
     // 同时更新 AI 消息占位中的 progressMessages（用于 MessageItem 显示）
     const lastMsg = messages.value[messages.value.length - 1]
     if (lastMsg && lastMsg.role === 'assistant' && lastMsg.progressMessages) {
@@ -412,6 +435,7 @@ export function useAgent() {
         // 即使后端通知失败，前端仍然中止
       }
       isProcessing.value = false
+      inputHintState.value = 'idle'
       console.log(`[${now()}] [abortStreaming] done, isProcessing=`, isProcessing.value)
     }
   }
@@ -502,6 +526,8 @@ export function useAgent() {
     removeAttachment,
     clearAttachments,
     abortStreaming,
+    // "正在输入"提示
+    inputHintState,
     // 排队相关
     isBusy,
     busyMessage,
