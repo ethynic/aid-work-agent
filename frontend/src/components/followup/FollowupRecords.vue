@@ -314,11 +314,11 @@ const filters = ref({
 // --- 样式辅助 ---
 function typeBadgeClass(type: string): string {
   const map: Record<string, string> = {
-    phone: 'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-400',
-    email: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-    visit: 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400',
-    wechat: 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400',
-    ai_call: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    phone: 'bg-info-100 text-info-700',
+    email: 'bg-purple-100 text-purple-700',
+    visit: 'bg-success-100 text-success-700',
+    wechat: 'bg-success-100 text-success-700',
+    ai_call: 'bg-amber-100 text-amber-700',
     other: 'bg-canvas text-muted',
   }
   return map[type] || map.other
@@ -326,18 +326,18 @@ function typeBadgeClass(type: string): string {
 
 function outcomeBadgeClass(outcome: string): string {
   const map: Record<string, string> = {
-    positive: 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400',
+    positive: 'bg-success-100 text-success-700',
     neutral: 'bg-canvas text-muted',
-    negative: 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-400',
-    no_response: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    negative: 'bg-danger-100 text-danger-700',
+    no_response: 'bg-amber-100 text-amber-700',
   }
   return map[outcome] || map.neutral
 }
 
 function scoreBadgeClass(score: number): string {
-  if (score >= 8) return 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400'
-  if (score >= 5) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-  return 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-400'
+  if (score >= 8) return 'bg-success-100 text-success-700'
+  if (score >= 5) return 'bg-amber-100 text-amber-700'
+  return 'bg-danger-100 text-danger-700'
 }
 
 // --- 日期格式化 ---

@@ -233,7 +233,7 @@
             <!-- Resolution -->
             <div v-if="detail.resolution">
               <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">处理结果</h3>
-              <p class="text-sm text-muted bg-emerald-50 dark:bg-emerald-900/10 rounded-lg p-3 border border-emerald-200 dark:border-emerald-800/30">{{ detail.resolution }}</p>
+              <p class="text-sm text-muted bg-emerald-50 rounded-lg p-3 border border-emerald-200">{{ detail.resolution }}</p>
             </div>
 
             <!-- Interactions -->
@@ -331,56 +331,56 @@ const visiblePages = computed(() => {
 })
 
 const statsCards = computed(() => [
-  { key: 'total', label: '总投诉', value: total.value, iconBg: 'bg-surface-hover dark:bg-muted/50', iconColor: 'text-default dark:text-muted', iconPath: 'M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z' },
-  { key: 'open', label: '待处理', value: complaints.value.filter(c => c.status === 'open').length, iconBg: 'bg-info-100 dark:bg-blue-900/30', iconColor: 'text-info-600 dark:text-blue-400', iconPath: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z' },
-  { key: 'escalated', label: '已升级', value: complaints.value.filter(c => c.status === 'escalated').length, iconBg: 'bg-danger-100 dark:bg-red-900/30', iconColor: 'text-danger-600 dark:text-red-400', iconPath: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z' },
-  { key: 'resolved', label: '已解决', value: complaints.value.filter(c => c.status === 'resolved' || c.status === 'closed').length, iconBg: 'bg-emerald-100 dark:bg-emerald-900/30', iconColor: 'text-emerald-600 dark:text-emerald-400', iconPath: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { key: 'total', label: '总投诉', value: total.value, iconBg: 'bg-surface-hover', iconColor: 'text-default', iconPath: 'M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z' },
+  { key: 'open', label: '待处理', value: complaints.value.filter(c => c.status === 'open').length, iconBg: 'bg-info-100', iconColor: 'text-info-600', iconPath: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { key: 'escalated', label: '已升级', value: complaints.value.filter(c => c.status === 'escalated').length, iconBg: 'bg-danger-100', iconColor: 'text-danger-600', iconPath: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z' },
+  { key: 'resolved', label: '已解决', value: complaints.value.filter(c => c.status === 'resolved' || c.status === 'closed').length, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', iconPath: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
 ])
 
 // --- Methods ---
 function statusBadgeClass(status: string) {
   const map: Record<string, string> = {
-    open: 'bg-info-100 text-info-700 dark:bg-blue-900/40 dark:text-blue-300',
-    classifying: 'bg-surface-hover text-default dark:bg-muted dark:text-default',
-    in_progress: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-    resolved: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
-    closed: 'bg-surface-hover text-muted dark:bg-muted dark:text-muted',
-    escalated: 'bg-danger-100 text-danger-700 dark:bg-red-900/40 dark:text-red-300',
+    open: 'bg-info-100 text-info-700',
+    classifying: 'bg-surface-hover text-default',
+    in_progress: 'bg-amber-100 text-amber-700',
+    resolved: 'bg-emerald-100 text-emerald-700',
+    closed: 'bg-surface-hover text-muted',
+    escalated: 'bg-danger-100 text-danger-700',
   }
   return map[status] || 'bg-surface-hover text-default'
 }
 
 function urgencyBadgeClass(urgency: string) {
   const map: Record<string, string> = {
-    normal: 'bg-surface-hover text-default dark:bg-muted dark:text-default',
-    high: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-    urgent: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-    critical: 'bg-danger-100 text-danger-700 dark:bg-red-900/40 dark:text-red-300',
+    normal: 'bg-surface-hover text-default',
+    high: 'bg-amber-100 text-amber-700',
+    urgent: 'bg-orange-100 text-orange-700',
+    critical: 'bg-danger-100 text-danger-700',
   }
   return map[urgency] || 'bg-surface-hover text-default'
 }
 
 function emotionClass(emotion: string) {
   const map: Record<string, string> = {
-    neutral: 'text-muted', dissatisfied: 'text-amber-600 dark:text-amber-400',
-    angry: 'text-danger-600 dark:text-red-400', furious: 'text-danger-700 dark:text-red-300 font-medium',
+    neutral: 'text-muted', dissatisfied: 'text-amber-600',
+    angry: 'text-danger-600', furious: 'text-danger-700 font-medium',
   }
   return map[emotion] || 'text-muted'
 }
 
 function senderTypeClass(type: string) {
   const map: Record<string, string> = {
-    customer: 'text-info-600 dark:text-blue-400', agent: 'text-emerald-600 dark:text-emerald-400',
-    system: 'text-muted', supervisor: 'text-purple-600 dark:text-purple-400',
+    customer: 'text-info-600', agent: 'text-emerald-600',
+    system: 'text-muted', supervisor: 'text-purple-600',
   }
   return map[type] || 'text-muted'
 }
 
 function followupStatusClass(status: string) {
   const map: Record<string, string> = {
-    pending: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-    in_progress: 'bg-info-100 text-info-700 dark:bg-blue-900/40 dark:text-blue-300',
-    done: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+    pending: 'bg-amber-100 text-amber-700',
+    in_progress: 'bg-info-100 text-info-700',
+    done: 'bg-emerald-100 text-emerald-700',
     skipped: 'bg-surface-hover text-muted',
   }
   return map[status] || 'bg-surface-hover text-muted'

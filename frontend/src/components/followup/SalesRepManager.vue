@@ -50,7 +50,7 @@
             </div>
             <span
               class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium"
-              :class="rep.is_active ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400' : 'bg-canvas text-muted'"
+              :class="rep.is_active ? 'bg-success-100 text-success-700' : 'bg-canvas text-muted'"
             >
               {{ rep.is_active ? '活跃' : '停用' }}
             </span>
@@ -85,7 +85,7 @@
             <button
               v-if="rep.is_active"
               @click="handleDeactivateRep(rep)"
-              class="text-xs px-2 py-1 rounded border border-danger-200 text-danger-600 hover:bg-danger-50 dark:border-danger-800 dark:hover:bg-danger-900/20 transition-colors"
+              class="text-xs px-2 py-1 rounded border border-danger-200 text-danger-600 hover:bg-danger-50 transition-colors"
             >
               停用
             </button>
@@ -118,7 +118,7 @@
             >
               <td class="px-4 py-3 text-default">{{ rule.name }}</td>
               <td class="px-4 py-3">
-                <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-400">
+                <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-info-100 text-info-700">
                   {{ ruleTypeLabels[rule.rule_type] || rule.rule_type }}
                 </span>
               </td>
@@ -126,7 +126,7 @@
               <td class="px-4 py-3">
                 <span
                   class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium"
-                  :class="rule.is_active ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400' : 'bg-canvas text-muted'"
+                  :class="rule.is_active ? 'bg-success-100 text-success-700' : 'bg-canvas text-muted'"
                 >
                   {{ rule.is_active ? '启用' : '停用' }}
                 </span>

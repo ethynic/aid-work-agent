@@ -31,11 +31,11 @@
         </div>
         <div class="rounded-xl border border-default bg-canvas p-4">
           <p class="text-xs font-medium text-muted uppercase tracking-wider">待处理</p>
-          <p class="text-2xl font-bold mt-1 tabular-nums text-amber-600 dark:text-amber-400">{{ (stats?.status_distribution?.open || 0) + (stats?.status_distribution?.in_progress || 0) }}</p>
+          <p class="text-2xl font-bold mt-1 tabular-nums text-amber-600">{{ (stats?.status_distribution?.open || 0) + (stats?.status_distribution?.in_progress || 0) }}</p>
         </div>
         <div class="rounded-xl border border-default bg-canvas p-4">
           <p class="text-xs font-medium text-muted uppercase tracking-wider">已升级</p>
-          <p class="text-2xl font-bold mt-1 tabular-nums text-danger-600 dark:text-red-400">{{ stats?.status_distribution?.escalated || 0 }}</p>
+          <p class="text-2xl font-bold mt-1 tabular-nums text-danger-600">{{ stats?.status_distribution?.escalated || 0 }}</p>
         </div>
         <div class="rounded-xl border border-default bg-canvas p-4">
           <p class="text-xs font-medium text-muted uppercase tracking-wider">平均处理时长</p>

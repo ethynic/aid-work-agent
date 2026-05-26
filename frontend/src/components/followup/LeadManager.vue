@@ -180,7 +180,7 @@
                   </button>
                   <button
                     @click="confirmDelete(lead)"
-                    class="p-1.5 rounded-md text-muted hover:text-danger-500 hover:bg-danger-50 dark:hover:bg-danger-900/20 transition-colors"
+                    class="p-1.5 rounded-md text-muted hover:text-danger-500 hover:bg-danger-50 transition-colors"
                     title="删除"
                   >
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
@@ -416,9 +416,9 @@ const visiblePages = computed(() => {
 const statsCards = computed(() => {
   const byStage = dashboard.value?.by_stage || {}
   return [
-    { key: 'new', label: '新线索', value: byStage['new'] || 0, subtext: '', iconBg: 'bg-info-100 dark:bg-info-900/30', iconColor: 'text-info-600 dark:text-info-400', iconPath: 'M12 4.5v15m0 0l6.75-6.75M12 19.5l-6.75-6.75' },
-    { key: 'contacting', label: '联系中', value: byStage['contacting'] || 0, subtext: '', iconBg: 'bg-amber-100 dark:bg-amber-900/30', iconColor: 'text-amber-600 dark:text-amber-400', iconPath: 'M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155' },
-    { key: 'won', label: '已成交', value: byStage['won'] || 0, subtext: '', iconBg: 'bg-success-100 dark:bg-success-900/30', iconColor: 'text-success-600 dark:text-success-400', iconPath: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+    { key: 'new', label: '新线索', value: byStage['new'] || 0, subtext: '', iconBg: 'bg-info-100', iconColor: 'text-info-600', iconPath: 'M12 4.5v15m0 0l6.75-6.75M12 19.5l-6.75-6.75' },
+    { key: 'contacting', label: '联系中', value: byStage['contacting'] || 0, subtext: '', iconBg: 'bg-amber-100', iconColor: 'text-amber-600', iconPath: 'M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155' },
+    { key: 'won', label: '已成交', value: byStage['won'] || 0, subtext: '', iconBg: 'bg-success-100', iconColor: 'text-success-600', iconPath: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
     { key: 'total', label: '总活跃', value: dashboard.value?.total_active || 0, subtext: `${dashboard.value?.overdue_followups || 0} 条逾期跟进`, iconBg: 'bg-canvas', iconColor: 'text-muted', iconPath: 'M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.148 2.148A12.061 12.061 0 0116.5 7.605' },
   ]
 })
@@ -426,13 +426,13 @@ const statsCards = computed(() => {
 // --- Methods ---
 function stageBadgeClass(stage: string) {
   const map: Record<string, string> = {
-    new: 'bg-info-100 text-info-700 dark:bg-info-900/40 dark:text-info-300',
-    contacting: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-    qualified: 'bg-success-100 text-success-700 dark:bg-success-900/40 dark:text-success-300',
-    proposal: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
-    negotiation: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-    won: 'bg-success-100 text-success-700 dark:bg-success-900/40 dark:text-success-300',
-    lost: 'bg-danger-100 text-danger-700 dark:bg-danger-900/40 dark:text-danger-300',
+    new: 'bg-info-100 text-info-700',
+    contacting: 'bg-amber-100 text-amber-700',
+    qualified: 'bg-success-100 text-success-700',
+    proposal: 'bg-purple-100 text-purple-700',
+    negotiation: 'bg-orange-100 text-orange-700',
+    won: 'bg-success-100 text-success-700',
+    lost: 'bg-danger-100 text-danger-700',
   }
   return map[stage] || 'bg-canvas text-muted'
 }
@@ -452,7 +452,7 @@ function getStagePipelineClass(stageKey: string, currentStage: string) {
 
 function outcomeClass(outcome: string) {
   const map: Record<string, string> = {
-    positive: 'text-success-600 dark:text-success-400',
+    positive: 'text-success-600',
     neutral: 'text-muted',
     negative: 'text-danger-500',
     no_response: 'text-muted',

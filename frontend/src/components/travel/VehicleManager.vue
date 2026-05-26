@@ -3,127 +3,104 @@
     <div class="flex justify-between items-center mb-5">
       <h2 class="m-0 text-lg">车辆价格管理</h2>
       <div class="flex gap-2.5 items-center">
-        <input v-model="filterRegion" @change="loadData" class="px-2.5 py-1.5 border border-default rounded text-sm" placeholder="筛选区域" />
-        <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="openCreate">+ 新增车辆</button>
-        <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" :disabled="importing" @click="triggerFileInput(fileInput)">
+        <BaseInput v-model="filterRegion" placeholder="筛选区域" size="sm" @keyup.enter="loadData" />
+        <BaseButton @click="openCreate">+ 新增车辆</BaseButton>
+        <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
-        </button>
+        </BaseButton>
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
       </div>
     </div>
 
-    <table class="w-full border-collapse text-[13px]">
-      <thead>
-        <tr>
-          <th class="w-16 p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">序号</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">车型</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">显示名</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">区域</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">座位数</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">计价方式</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">每公里费用</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">司机餐补</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">司机住宿</th>
-          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-if="loading"><td colspan="10" class="p-2 text-center text-muted">加载中...</td></tr>
-        <tr v-else-if="items.length === 0"><td colspan="10" class="p-2 text-center text-muted">暂无数据</td></tr>
-        <tr v-for="(item, index) in items" :key="item.id" class="hover:bg-surface-hover">
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ index + 1 }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.vehicle_type }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.vehicle_type_label || '-' }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.region_name || '通用' }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.seats_max }}座</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.pricing_mode === 'per_km' ? '按公里' : '按天' }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.per_km_rate || '-' }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.driver_meal_allowance || '-' }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.driver_accommodation || '-' }}</td>
-          <td class="p-2 px-2.5 text-left border-b border-gray-200 whitespace-nowrap">
-            <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer" @click="openEdit(item)">编辑</button>
-            <button class="text-danger-600 hover:bg-danger-50 px-2.5 py-1 rounded text-[13px] border border-danger-600 cursor-pointer" @click="handleDelete(item)">删除</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <BaseTable :columns="columns" :data="items" row-key="id">
+      <template #index="{ index }">{{ index + 1 }}</template>
+      <template #vehicle_type="{ row }">{{ row.vehicle_type }}</template>
+      <template #vehicle_type_label="{ row }">{{ row.vehicle_type_label || '-' }}</template>
+      <template #region_name="{ row }">{{ row.region_name || '通用' }}</template>
+      <template #seats_max="{ row }">{{ row.seats_max }}座</template>
+      <template #pricing_mode="{ row }">{{ row.pricing_mode === 'per_km' ? '按公里' : '按天' }}</template>
+      <template #per_km_rate="{ row }">{{ row.per_km_rate || '-' }}</template>
+      <template #driver_meal_allowance="{ row }">{{ row.driver_meal_allowance || '-' }}</template>
+      <template #driver_accommodation="{ row }">{{ row.driver_accommodation || '-' }}</template>
+      <template #actions="{ row }">
+        <div class="flex gap-2">
+          <BaseButton intent="ghost" size="sm" @click="openEdit(row)">编辑</BaseButton>
+          <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
+        </div>
+      </template>
+      <template v-if="loading" #empty>加载中...</template>
+    </BaseTable>
 
-    <div v-if="showModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showModal = false">
-      <div class="bg-white rounded-lg p-6 w-[600px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
-        <h3 class="m-0 mb-5">{{ editingItem ? '编辑车辆' : '新增车辆' }}</h3>
-        <div class="flex gap-3">
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">车型编码 *</label>
-            <select v-model="form.vehicle_type" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
-              <option value="business">商务车</option>
-              <option value="coaster">考斯特</option>
-              <option value="minibus">中巴</option>
-              <option value="bus">大巴</option>
-              <option value="large_bus">大型大巴</option>
-            </select>
-          </div>
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">车型显示名 *</label>
-            <input v-model="form.vehicle_type_label" placeholder="如：别克GL8商务车" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-          </div>
+    <BaseModal v-model="showModal" :title="editingItem ? '编辑车辆' : '新增车辆'" size="lg">
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">车型编码 <span class="text-danger-500">*</span></label>
+          <BaseSelect v-model="form.vehicle_type">
+            <option value="business">商务车</option>
+            <option value="coaster">考斯特</option>
+            <option value="minibus">中巴</option>
+            <option value="bus">大巴</option>
+            <option value="large_bus">大型大巴</option>
+          </BaseSelect>
         </div>
-        <div class="flex gap-3">
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">座位数 *</label>
-            <input v-model.number="form.seats_max" type="number" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-          </div>
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">区域</label>
-            <input v-model="form.region_name" placeholder="留空为全国通用" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-          </div>
-        </div>
-        <div class="flex gap-3">
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">计价方式</label>
-            <select v-model="form.pricing_mode" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
-              <option value="per_km">按公里</option>
-              <option value="daily">按天</option>
-            </select>
-          </div>
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">每公里费用（元/km）</label>
-            <input v-model.number="form.per_km_rate" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-          </div>
-        </div>
-        <div class="flex gap-3">
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">司机餐补（元/天）</label>
-            <input v-model.number="form.driver_meal_allowance" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-          </div>
-          <div class="flex-1 mb-3.5">
-            <label class="block mb-1 text-[13px] text-muted">司机住宿费（元/晚）</label>
-            <input v-model.number="form.driver_accommodation" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-          </div>
-        </div>
-        <div class="mb-3.5">
-          <label class="block mb-1 text-[13px] text-muted">备注</label>
-          <input v-model="form.remark" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
-        </div>
-        <div class="flex justify-end gap-2.5 mt-5">
-          <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="showModal = false">取消</button>
-          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="handleSave">保存</button>
+        <div>
+          <label class="text-sm text-muted mb-1 block">车型显示名 <span class="text-danger-500">*</span></label>
+          <BaseInput v-model="form.vehicle_type_label" placeholder="如：别克GL8商务车" />
         </div>
       </div>
-    </div>
+      <div class="grid grid-cols-2 gap-4 mt-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">座位数 <span class="text-danger-500">*</span></label>
+          <input v-model.number="form.seats_max" type="number" class="w-full rounded-lg border border-default bg-white px-3 py-2 text-sm text-default transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500" />
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">区域</label>
+          <BaseInput v-model="form.region_name" placeholder="留空为全国通用" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4 mt-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">计价方式</label>
+          <BaseSelect v-model="form.pricing_mode">
+            <option value="per_km">按公里</option>
+            <option value="daily">按天</option>
+          </BaseSelect>
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">每公里费用（元/km）</label>
+          <input v-model.number="form.per_km_rate" type="number" class="w-full rounded-lg border border-default bg-white px-3 py-2 text-sm text-default transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4 mt-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">司机餐补（元/天）</label>
+          <input v-model.number="form.driver_meal_allowance" type="number" class="w-full rounded-lg border border-default bg-white px-3 py-2 text-sm text-default transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500" />
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">司机住宿费（元/晚）</label>
+          <input v-model.number="form.driver_accommodation" type="number" class="w-full rounded-lg border border-default bg-white px-3 py-2 text-sm text-default transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500" />
+        </div>
+      </div>
+      <div class="mt-4">
+        <label class="text-sm text-muted mb-1 block">备注</label>
+        <BaseInput v-model="form.remark" />
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showModal = false">取消</BaseButton>
+        <BaseButton @click="handleSave">保存</BaseButton>
+      </template>
+    </BaseModal>
 
     <!-- 导入结果弹窗 -->
-    <div v-if="showImportResult" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showImportResult = false">
-      <div class="bg-white rounded-lg p-6 w-[600px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
-        <h3 class="m-0 mb-5">导入结果</h3>
-        <p>成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
-        <div v-if="importResult?.errors?.length" class="text-danger-600 text-xs mt-2">
-          <div v-for="err in importResult.errors" :key="err">{{ err }}</div>
-        </div>
-        <div class="flex justify-end gap-2.5 mt-5">
-          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="showImportResult = false">确定</button>
-        </div>
+    <BaseModal v-model="showImportResult" title="导入结果" size="md">
+      <p>成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
+      <div v-if="importResult?.errors?.length" class="text-danger-600 text-xs mt-2">
+        <div v-for="err in importResult.errors" :key="err">{{ err }}</div>
       </div>
-    </div>
+      <template #footer>
+        <BaseButton @click="showImportResult = false">确定</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -131,6 +108,23 @@
 import { ref, onMounted } from 'vue'
 import { vehicles } from '@/api/travelQuote'
 import { useVehicleImport } from '@/composables/useImport'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
+const columns = [
+  { key: 'index', label: '序号', width: '60px' },
+  { key: 'vehicle_type', label: '车型' },
+  { key: 'vehicle_type_label', label: '显示名' },
+  { key: 'region_name', label: '区域' },
+  { key: 'seats_max', label: '座位数' },
+  { key: 'pricing_mode', label: '计价方式' },
+  { key: 'per_km_rate', label: '每公里费用' },
+  { key: 'driver_meal_allowance', label: '司机餐补' },
+  { key: 'driver_accommodation', label: '司机住宿' },
+  { key: 'actions', label: '操作', width: '140px' },
+]
 
 const items = ref<any[]>([])
 const loading = ref(false)
@@ -208,4 +202,3 @@ async function handleDelete(item: any) {
 
 onMounted(() => { loadData() })
 </script>
-
