@@ -314,6 +314,46 @@ def create_order(args):
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (tenant_id, order_id, None, "draft", args.user_id, "订单创建", now))
 
+            # 预留库存（尝试为每个商品的 SKU 预留库存）
+            reservation_results = []
+            skip_reserve = getattr(args, "skip_inventory", False)
+            if not skip_reserve:
+                from datetime import timedelta as _td
+                expires_at = now + _td(minutes=60)
+                for item in items:
+                    sku = item.get("product_sku")
+                    qty = int(item.get("quantity", 1))
+                    if not sku or qty <= 0:
+                        continue
+                    # 检查库存表是否存在并有足够库存
+                    cursor.execute("""
+                        SELECT quantity_total, quantity_reserved
+                        FROM bs_order_processing_inventory
+                        WHERE tenant_id = %s AND product_sku = %s
+                        FOR UPDATE
+                    """, (tenant_id, sku))
+                    inv_row = cursor.fetchone()
+                    if inv_row:
+                        available = inv_row[0] - inv_row[1]
+                        if available >= qty:
+                            reservation_id = _generate_id("rsv")
+                            cursor.execute("""
+                                UPDATE bs_order_processing_inventory
+                                SET quantity_reserved = quantity_reserved + %s,
+                                    quantity_available = quantity_available - %s,
+                                    updated_at = %s
+                                WHERE tenant_id = %s AND product_sku = %s
+                            """, (qty, qty, now, tenant_id, sku))
+                            cursor.execute("""
+                                INSERT INTO bs_order_processing_inventory_reservations
+                                (reservation_id, tenant_id, order_id, product_sku, quantity, status, expires_at, created_at, updated_at)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """, (reservation_id, tenant_id, order_id, sku, qty, "active", expires_at, now, now))
+                            reservation_results.append({"sku": sku, "reserved": qty, "reservation_id": reservation_id})
+                        else:
+                            reservation_results.append({"sku": sku, "reserved": 0, "error": f"库存不足，可用 {available}，需要 {qty}"})
+                    # 如果库存表中没有该 SKU 记录，跳过预留（不阻断订单创建）
+
             conn.commit()
 
         return {
@@ -325,6 +365,7 @@ def create_order(args):
             "shipping_fee": shipping_fee,
             "final_amount": final_amount,
             "item_count": len(items),
+            "inventory_reservations": reservation_results if reservation_results else None,
             "created_at": now.isoformat(),
         }
     except Exception as e:
@@ -682,6 +723,29 @@ def cancel_order(args):
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (tenant_id, args.order_id, current_status, "cancelled", None, reason or "订单取消", now))
 
+            # 释放该订单的所有活跃库存预留
+            cursor.execute("""
+                SELECT reservation_id, product_sku, quantity
+                FROM bs_order_processing_inventory_reservations
+                WHERE order_id = %s AND status = 'active'
+            """, (args.order_id,))
+            reservations = cursor.fetchall()
+            released_count = 0
+            for rsv in reservations:
+                cursor.execute("""
+                    UPDATE bs_order_processing_inventory_reservations
+                    SET status = 'released', updated_at = %s
+                    WHERE reservation_id = %s
+                """, (now, rsv[0]))
+                cursor.execute("""
+                    UPDATE bs_order_processing_inventory
+                    SET quantity_reserved = quantity_reserved - %s,
+                        quantity_available = quantity_available + %s,
+                        updated_at = %s
+                    WHERE tenant_id = %s AND product_sku = %s
+                """, (rsv[2], rsv[2], now, tenant_id, rsv[1]))
+                released_count += 1
+
             conn.commit()
 
         return {
@@ -689,6 +753,7 @@ def cancel_order(args):
             "order_id": args.order_id,
             "previous_status": current_status,
             "status": "cancelled",
+            "inventory_released": released_count,
             "updated_at": now.isoformat(),
         }
     except Exception as e:
@@ -1122,6 +1187,7 @@ def main():
     p.add_argument("--source", default="internal", help="订单来源")
     p.add_argument("--tenant-id", default=None, help="租户ID")
     p.add_argument("--session-id", default=None, help="会话ID")
+    p.add_argument("--skip-inventory", action="store_true", default=False, help="跳过库存预留")
 
     # get-order
     p = subparsers.add_parser("get-order", help="查询订单详情")
