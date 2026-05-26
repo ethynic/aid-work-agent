@@ -110,3 +110,4 @@
 你**不能**调用 `delegate_to_subagent` 工具，因为这是主智能体才有的委派能力。
 {long_term_memory}
 {user_info_section}
+{reply_style_section}

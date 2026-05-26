@@ -168,6 +168,7 @@ class SubagentLoader:
             allow_delegation=frontmatter.get("allow_delegation", True),
             llm_provider=frontmatter.get("llm_provider", None),
             business_pages=frontmatter.get("business_pages", None),
+            reply_style=frontmatter.get("reply_style", None),
             path=str(path),
             dir=str(path.parent),
         )
@@ -261,6 +262,8 @@ class SubagentLoader:
             frontmatter["skills"] = config.skills
         if config.context:
             frontmatter["context"] = config.context
+        if config.reply_style:
+            frontmatter["reply_style"] = config.reply_style
         if config.business_pages:
             frontmatter["business_pages"] = config.business_pages
 

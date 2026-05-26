@@ -9,6 +9,10 @@ app:
   host: "0.0.0.0"
   port: 8000
 
+# 智能体全局配置
+agent:
+  reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md
+
 # LLM配置
 llm:
   provider: zhipu  # qwen | zhipu | deepseek | ...

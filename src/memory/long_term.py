@@ -141,6 +141,52 @@ class LongTermMemory:
         file_path = self._get_file_path(tenant_id, user_id)
         return file_path.exists()
 
+    def get_reply_style(self, tenant_id: Optional[str], user_id: str) -> Optional[str]:
+        """
+        读取用户记忆中的回复风格设置。
+
+        记忆文件中 "用户明确要求记住的事项" 分类下，
+        格式为 "回复风格：{style_id}" 的条目会被识别。
+
+        Returns:
+            风格 ID 字符串，不存在返回 None
+        """
+        sections = self.get_memory_sections(tenant_id, user_id)
+        # 在 "用户明确要求记住的事项" 和 "工作习惯" 中查找
+        for section_name in ("用户明确要求记住的事项", "工作习惯"):
+            items = sections.get(section_name, [])
+            for item in items:
+                match = re.match(r'^回复风格[：:]\s*(.+)', item)
+                if match:
+                    return match.group(1).strip()
+        return None
+
+    def set_reply_style(self, tenant_id: Optional[str], user_id: str, style_id: str) -> None:
+        """
+        写入用户记忆的回复风格设置。
+
+        在 "用户明确要求记住的事项" 分类下添加/更新 "回复风格：{style_id}" 条目。
+        """
+        sections = self.get_memory_sections(tenant_id, user_id)
+        section_name = "用户明确要求记住的事项"
+
+        items = sections.get(section_name, [])
+        new_items = []
+        replaced = False
+        for item in items:
+            if re.match(r'^回复风格[：:]', item):
+                new_items.append(f"回复风格：{style_id}")
+                replaced = True
+            else:
+                new_items.append(item)
+
+        if not replaced:
+            new_items.append(f"回复风格：{style_id}")
+
+        sections[section_name] = new_items
+        content = self._assemble_content(sections)
+        self.save_memory(tenant_id, user_id, content, updated_by="user")
+
     def get_memory_for_injection(
         self,
         tenant_id: Optional[str],

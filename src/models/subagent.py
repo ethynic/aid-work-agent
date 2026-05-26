@@ -81,6 +81,9 @@ class SubagentConfig(BaseModel):
     # LLM 配置覆盖
     llm_provider: Optional[str] = Field(default=None, description="覆盖 LLM 提供者（如 deepseek），为空则使用全局默认")
 
+    # 回复风格
+    reply_style: Optional[str] = Field(default=None, description="回复风格ID（对应 src/prompts/styles/ 下的文件名）")
+
     # 业务数据页面配置
     business_pages: Optional[List[Dict[str, Any]]] = Field(default=None, description="业务数据页面列表")
 

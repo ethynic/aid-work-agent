@@ -32,6 +32,7 @@ from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
 from src.memory.manager import MemoryManager
 from src.prompts import PromptManager
+from src.prompts.style_manager import StyleManager
 from src.models.message import UnifiedMessage
 from src.models.user import User
 from src.models.plan import TaskStatus
@@ -126,6 +127,7 @@ class Agent:
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
         self.prompt_manager = PromptManager()
+        self.style_manager = StyleManager()
         self.memory = MemoryManager(
             max_short_term_messages=settings.memory.short_term.max_messages,
             short_term_ttl=settings.memory.short_term.ttl,
@@ -634,7 +636,7 @@ class Agent:
 
 ---
 
-## 专业领域约束
+## 角色设定与行为约束
 
 {subagent_constraint}
 """
@@ -648,6 +650,16 @@ class Agent:
         # 长期记忆注入：从用户记忆文件加载
         long_term_memory = self._load_long_term_memory(user)
 
+        # 回复风格注入
+        reply_style_section = ""
+        style_id = self._resolve_reply_style(user)
+        if style_id:
+            style_content = self.style_manager.get_style(style_id)
+            if style_content:
+                reply_style_section = f"\n\n---\n\n## 回复风格\n\n{style_content}"
+            else:
+                logger.warning(f"Reply style '{style_id}' not found, skipping")
+
         if include_delegation:
             template_name = "master_agent.md"
             variables = {
@@ -660,6 +672,7 @@ class Agent:
                 "subagent_constraint_section": subagent_constraint_section,
                 "long_term_memory": long_term_memory,
                 "user_info_section": user_info_section,
+                "reply_style_section": reply_style_section,
             }
         else:
             template_name = "subagent_base.md"
@@ -670,6 +683,7 @@ class Agent:
                 "subagent_constraint_section": subagent_constraint_section,
                 "long_term_memory": long_term_memory,
                 "user_info_section": user_info_section,
+                "reply_style_section": reply_style_section,
             }
 
         return self.prompt_manager.render(template_name, variables)
@@ -692,7 +706,7 @@ class Agent:
             # 加载租户定制 extra.md
             extra_content = self._load_extra_md()
             if extra_content:
-                subagent_constraint = subagent_constraint + "\n\n" + extra_content
+                subagent_constraint = subagent_constraint + "\n\n## 租户定制需求\n\n" + extra_content
 
             return self._build_base_system_prompt(
                 include_delegation=False,
@@ -758,6 +772,39 @@ class Agent:
             logger.warning(f"Failed to load long-term memory for user {user.user_id}: {e}")
             return ""
 
+    def _resolve_reply_style(self, user: Optional[User] = None) -> Optional[str]:
+        """
+        解析当前应使用的回复风格（优先级从高到低）：
+        1. 用户长期记忆中的 reply_style（用户主动设定，最高优先）
+        2. 子智能体/独立模式且配置了 reply_style
+        3. 全局默认（config.yaml 中 agent.reply_style）
+        """
+        # 优先级 0（最高）：用户长期记忆中的 reply_style
+        if user and settings.memory.long_term.enabled:
+            try:
+                tenant_id = self._get_effective_tenant_id()
+                from src.memory.long_term import LongTermMemory
+                ltm = LongTermMemory(storage_dir=settings.memory.long_term.storage_dir)
+                user_style = ltm.get_reply_style(
+                    tenant_id=tenant_id,
+                    user_id=user.user_id,
+                )
+                if user_style:
+                    return user_style
+            except Exception as e:
+                logger.warning(f"Failed to read user reply_style from memory: {e}")
+
+        # 优先级 1：子智能体/独立模式且配置了 reply_style
+        if self.mode != AgentMode.MASTER and self.subagent_config:
+            if self.subagent_config.reply_style:
+                return self.subagent_config.reply_style
+
+        # 优先级 2：全局默认
+        agent_cfg = getattr(settings, 'agent', None)
+        if agent_cfg:
+            return getattr(agent_cfg, 'reply_style', None)
+        return None
+
     def _get_effective_tenant_id(self) -> Optional[str]:
         """获取当前有效的 tenant_id"""
         tenant_id = self._init_tenant_id
@@ -803,6 +850,30 @@ class Agent:
             from src.memory.long_term import LongTermMemory
             ltm = LongTermMemory(storage_dir=settings.memory.long_term.storage_dir)
 
+            # 检测回复风格设定意图
+            style_match = re.match(
+                r'^回复风格[是为用]\s*(.+)',
+                content_to_remember,
+                re.IGNORECASE,
+            )
+            if not style_match:
+                style_match = re.match(
+                    r'^(.+?)风格(?:回复|回答|交流)?',
+                    content_to_remember,
+                    re.IGNORECASE,
+                )
+            if style_match:
+                raw_style = style_match.group(1).strip()
+                # 模糊匹配风格 ID
+                available = self.style_manager.list_styles()
+                matched_id = self._fuzzy_match_style(raw_style, available)
+                if matched_id:
+                    ltm.set_reply_style(tenant_id=tenant_id, user_id=user.user_id, style_id=matched_id)
+                    logger.info(f"User {user.user_id} set reply style to: {matched_id}")
+                    return
+                else:
+                    logger.warning(f"User tried to set unknown reply style: {raw_style}, available: {available}")
+
             ltm.merge_memory(
                 tenant_id=tenant_id,
                 user_id=user.user_id,
@@ -813,6 +884,30 @@ class Agent:
             logger.info(f"Remembered for user {user.user_id}: {content_to_remember[:50]}")
         except Exception as e:
             logger.warning(f"Failed to save 'remember' intent: {e}")
+
+    def _fuzzy_match_style(self, raw: str, available: list) -> Optional[str]:
+        """模糊匹配风格 ID：精确匹配 > 包含匹配"""
+        raw_lower = raw.lower().strip()
+        # 精确匹配
+        if raw_lower in available:
+            return raw_lower
+        # 包含匹配（用户说"拟人"匹配 "human-like"）
+        style_aliases = {
+            "拟人": "human-like",
+            "拟人化": "human-like",
+            "像人": "human-like",
+            "像真人": "human-like",
+            "专业": "professional",
+            "极简": "concise",
+            "简洁": "concise",
+            "详尽": "detailed",
+            "详细": "detailed",
+        }
+        for alias, style_id in style_aliases.items():
+            if alias in raw_lower:
+                if style_id in available:
+                    return style_id
+        return None
 
     def _load_channel_history(
         self,
