@@ -1,5 +1,79 @@
 # 前端开发指南
 
+## 组件变体系统
+
+项目使用 `tailwind-variants` 建立统一的组件样式变体系统。
+
+### 变体定义
+
+所有组件样式变体定义在 `frontend/src/variants/` 目录：
+
+| 文件 | 用途 |
+|------|------|
+| `variants/button.ts` | 按钮（primary/secondary/danger/ghost × sm/md/lg） |
+| `variants/input.ts` | 输入框（default/error/success × sm/md/lg） |
+| `variants/select.ts` | 下拉选择 |
+| `variants/card.ts` | 卡片容器（多插槽） |
+| `variants/badge.ts` | 徽章/标签（primary/success/warning/danger/info/neutral） |
+| `variants/table.ts` | 表格（多插槽） |
+| `variants/modal.ts` | 模态框（sm/md/lg/xl，多插槽） |
+| `variants/pagination.ts` | 分页 |
+
+### 基础 UI 组件
+
+所有基础组件在 `frontend/src/components/ui/` 目录，是最薄的渲染壳：
+
+| 组件 | 用途 |
+|------|------|
+| `BaseButton.vue` | 按钮 — 通过 `intent`/`size` 控制样式 |
+| `BaseInput.vue` | 输入框 — 支持 `v-model`、`state` |
+| `BaseSelect.vue` | 下拉选择 — 支持 `v-model` |
+| `BaseCard.vue` | 卡片容器 — 支持 `title`、`header/footer` 插槽 |
+| `BaseBadge.vue` | 徽章 — 通过 `intent` 控制颜色 |
+| `BaseModal.vue` | 模态框 — 支持 `v-model`、`size`、`scrollable` |
+| `BaseTable.vue` | 表格 — 通过 `columns`/`data` + 具名插槽 |
+| `BasePagination.vue` | 分页 — 支持 `v-model:currentPage` |
+
+### 使用原则
+
+1. **新页面必须使用 Base* 组件**，不允许自行定义 `.btn-primary`、`.data-table` 等 CSS 类
+2. **颜色必须使用语义 token**（`primary-*`、`danger-*`、`bg-surface` 等）
+3. 详细的页面模式规范见 [page_patterns.md](./page_patterns.md)
+
+## 颜色使用规范
+
+**所有颜色必须使用语义 token，禁止硬编码颜色值。**
+
+### 可用的语义 token
+
+| 用途 | Token 类名 | 说明 |
+|------|-----------|------|
+| 主色调 | `primary-50` ~ `primary-950` | 品牌色，用于主要操作 |
+| 成功 | `success-50` ~ `success-950` | 成功状态 |
+| 警告 | `warning-50` ~ `warning-950` | 警告状态 |
+| 危险 | `danger-50` ~ `danger-950` | 错误/删除操作 |
+| 信息 | `info-50` ~ `info-950` | 提示信息 |
+| 中性灰 | `gray-50` ~ `gray-950` | 通用灰色 |
+| 页面背景 | `bg-canvas` | 页面底色 |
+| 卡片背景 | `bg-surface` | 白色面板 |
+| 悬停背景 | `bg-surface-hover` | 行悬停 |
+| 主文字 | `text-default` | 正文 |
+| 次要文字 | `text-muted` | 辅助文字 |
+| 边框 | `border-default` | 默认边框 |
+| 悬停边框 | `border-hover` | 悬停边框 |
+
+### 禁止的硬编码颜色
+
+| 禁止 | 替代为 |
+|------|--------|
+| `slate-*` | `gray-*` / 语义 token |
+| `cyan-*` | `primary-*` |
+| `red-*` | `danger-*` |
+| `green-*` | `success-*` |
+| `blue-*` | `info-*` / `primary-*` |
+| `orange-*` | `warning-*` |
+| 自定义 CSS 变量（`var(--bg-primary)` 等） | 使用上述语义 token |
+
 ## 🎨 UI/UX 设计与审查工作流
 
 当任务涉及前端页面生成、UI 组件开发或界面优化时，严格遵循以下双技能协作流程：

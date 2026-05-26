@@ -1,10 +1,10 @@
 <template>
-  <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+  <div class="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
       <!-- 关闭按钮 -->
       <button
         @click="handleClose"
-        class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors z-10"
+        class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-default hover:bg-surface-hover transition-colors z-10"
         aria-label="关闭"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -12,42 +12,42 @@
         </svg>
       </button>
       <div class="px-8 pt-8 pb-6">
-        <h1 class="text-2xl font-bold text-slate-800 text-center mb-1">{{ isLoggedInMode ? '修改密码' : '重置密码' }}</h1>
-        <p class="text-sm text-slate-500 text-center mb-8">{{ isLoggedInMode ? '验证身份后重置登录密码' : '通过手机号重置登录密码' }}</p>
+        <h1 class="text-2xl font-bold text-default text-center mb-1">{{ isLoggedInMode ? '修改密码' : '重置密码' }}</h1>
+        <p class="text-sm text-muted text-center mb-8">{{ isLoggedInMode ? '验证身份后重置登录密码' : '通过手机号重置登录密码' }}</p>
 
         <!-- 步骤1：验证手机号和图形验证码 -->
         <div v-if="step === 1" class="space-y-4">
           <div>
-            <label class="block text-sm text-slate-600 mb-1">手机号</label>
+            <label class="block text-sm text-default mb-1">手机号</label>
             <input
               v-model="phone"
               type="tel"
               placeholder="请输入手机号"
               maxlength="11"
               :disabled="isLoggedInMode"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400 disabled:bg-slate-200 disabled:text-slate-500"
+              class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400 disabled:bg-gray-200 disabled:text-muted"
             />
           </div>
 
           <!-- 图形验证码 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">图形验证码</label>
+            <label class="block text-sm text-default mb-1">图形验证码</label>
             <div class="flex gap-2">
               <input
                 v-model="captchaCode"
                 type="text"
                 placeholder="请输入图形验证码"
                 maxlength="4"
-                class="flex-1 px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                class="flex-1 px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
                 @keyup.enter="handleSendCode"
               />
               <div
-                class="w-24 h-12 bg-slate-200 rounded-lg cursor-pointer flex items-center justify-center select-none overflow-hidden"
+                class="w-24 h-12 bg-gray-200 rounded-lg cursor-pointer flex items-center justify-center select-none overflow-hidden"
                 @click="refreshCaptcha"
                 title="点击刷新"
               >
                 <img v-if="captchaSvg" :src="'data:image/svg+xml;base64,' + captchaSvg" alt="验证码" class="w-full h-full" />
-                <span v-else class="text-slate-400 text-sm">加载中</span>
+                <span v-else class="text-muted text-sm">加载中</span>
               </div>
             </div>
           </div>
@@ -55,13 +55,13 @@
           <button
             @click="handleSendCode"
             :disabled="isSendingCode"
-            class="w-full py-3 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg font-medium transition-colors"
+            class="w-full py-3 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
           >
             {{ isSendingCode ? '发送中...' : '发送短信验证码' }}
           </button>
 
           <div v-if="!isLoggedInMode" class="text-center">
-            <router-link :to="loginUrl" class="text-sm text-cyan-500 hover:text-cyan-600">
+            <router-link :to="loginUrl" class="text-sm text-primary-500 hover:text-primary-600">
               返回登录
             </router-link>
           </div>
@@ -70,7 +70,7 @@
         <!-- 步骤2：输入短信验证码和新密码 -->
         <div v-else class="space-y-4">
           <div>
-            <label class="block text-sm text-slate-600 mb-1">短信验证码</label>
+            <label class="block text-sm text-default mb-1">短信验证码</label>
             <div class="flex gap-2">
               <input
                 v-model="smsCode"
@@ -80,13 +80,13 @@
                 placeholder="请输入短信验证码"
                 maxlength="6"
                 autocomplete="one-time-code"
-                class="flex-1 px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                class="flex-1 px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
                 @keyup.enter="handleResetPassword"
               />
               <button
                 @click="resendSmsCode"
                 :disabled="cooldown > 0"
-                class="px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-cyan-500 hover:bg-slate-200 disabled:text-slate-400 transition-colors whitespace-nowrap"
+                class="px-4 py-3 bg-surface-hover border border-hover rounded-lg text-primary-500 hover:bg-gray-200 disabled:text-muted transition-colors whitespace-nowrap"
               >
                 {{ cooldown > 0 ? `${cooldown}s` : '重新发送' }}
               </button>
@@ -94,25 +94,25 @@
           </div>
 
           <div>
-            <label class="block text-sm text-slate-600 mb-1">新密码</label>
+            <label class="block text-sm text-default mb-1">新密码</label>
             <input
               v-model="newPassword"
               type="password"
               placeholder="请输入新密码"
               autocomplete="new-password"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+              class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
               @keyup.enter="handleResetPassword"
             />
           </div>
 
           <div>
-            <label class="block text-sm text-slate-600 mb-1">确认密码</label>
+            <label class="block text-sm text-default mb-1">确认密码</label>
             <input
               v-model="confirmPassword"
               type="password"
               placeholder="请再次输入新密码"
               autocomplete="new-password"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+              class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
               @keyup.enter="handleResetPassword"
             />
           </div>
@@ -125,13 +125,13 @@
           <button
             @click="handleResetPassword"
             :disabled="isLoading"
-            class="w-full py-3 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg font-medium transition-colors"
+            class="w-full py-3 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
           >
             {{ isLoading ? '处理中...' : '确认重置' }}
           </button>
 
           <div class="text-center">
-            <a href="#" @click.prevent="step = 1" class="text-sm text-cyan-500 hover:text-cyan-600">
+            <a href="#" @click.prevent="step = 1" class="text-sm text-primary-500 hover:text-primary-600">
               上一步
             </a>
           </div>
@@ -139,20 +139,20 @@
 
         <!-- 成功提示 -->
         <div v-if="step === 'success'" class="text-center py-8">
-          <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="w-16 h-16 bg-success-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-success-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 class="text-xl font-bold text-slate-800 mb-2">密码重置成功</h2>
-          <p class="text-sm text-slate-500 mb-6">密码重置成功，3秒后自动跳转到登录页</p>
+          <h2 class="text-xl font-bold text-default mb-2">密码重置成功</h2>
+          <p class="text-sm text-muted mb-6">密码重置成功，3秒后自动跳转到登录页</p>
           <!-- Toast 提示 -->
-          <div class="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-3 bg-green-500 text-white rounded-lg shadow-lg z-50">
+          <div class="fixed top-8 left-1/2 -translate-x-1/2 px-6 py-3 bg-success-500 text-white rounded-lg shadow-lg z-50">
             密码重置成功，3秒后自动跳转到登录页
           </div>
         </div>
 
-        <div v-if="errorMessage" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+        <div v-if="errorMessage" class="mt-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">
           {{ errorMessage }}
         </div>
       </div>

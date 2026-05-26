@@ -1,38 +1,38 @@
 <template>
   <div class="p-6">
     <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-slate-800">租户管理</h1>
+      <h1 class="text-2xl font-bold text-default">租户管理</h1>
       <button @click="openAddDialog"
-        class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
+        class="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg text-sm font-medium transition-colors">
         新增租户
       </button>
     </div>
 
-    <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+    <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
-    <div v-else class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <div v-else class="bg-white rounded-xl shadow-sm border border-default overflow-hidden">
       <table class="w-full">
-        <thead class="bg-slate-50 border-b border-slate-200">
+        <thead class="bg-canvas border-b border-default">
           <tr>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户代码</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">企业名称</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">初始管理员手机号</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">到期日期</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">数字员工授权</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">租户入口网址</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">租户代码</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">企业名称</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">初始管理员手机号</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">状态</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">到期日期</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">数字员工授权</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">租户入口网址</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">操作</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-100">
-          <tr v-for="tenant in tenants" :key="tenant.tenant_id" class="hover:bg-slate-50">
+        <tbody class="divide-y divide-default">
+          <tr v-for="tenant in tenants" :key="tenant.tenant_id" class="hover:bg-canvas">
             <td class="px-4 py-3">
-              <a href="javascript:void(0)" @click="openDetailDialog(tenant)" class="text-cyan-600 hover:text-cyan-800 hover:underline font-mono text-sm">
+              <a href="javascript:void(0)" @click="openDetailDialog(tenant)" class="text-primary-600 hover:text-primary-700 hover:underline font-mono text-sm">
                 {{ tenant.tenant_code || '-' }}
               </a>
             </td>
-            <td class="px-4 py-3 text-sm text-slate-800">{{ tenant.company_name }}</td>
-            <td class="px-4 py-3 text-sm text-slate-600">{{ tenant.initial_admin_phone || '-' }}</td>
+            <td class="px-4 py-3 text-sm text-default">{{ tenant.company_name }}</td>
+            <td class="px-4 py-3 text-sm text-default">{{ tenant.initial_admin_phone || '-' }}</td>
             <td class="px-4 py-3">
               <span
                 :class="getStatusClass(tenant.status)"
@@ -45,16 +45,16 @@
               <span v-if="tenant.expire_at" :class="getExpireStatusClass(tenant.expire_at)" class="text-sm">
                 {{ formatExpireDate(tenant.expire_at) }}
               </span>
-              <span v-else class="text-sm text-slate-400">永久有效</span>
+              <span v-else class="text-sm text-muted">永久有效</span>
             </td>
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
                 <span v-if="tenant.agent_count > 0"
-                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-success-100 text-success-700">
                   {{ tenant.agent_count }} 个已授权
                 </span>
                 <span v-else
-                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-danger-100 text-danger-700">
                   未授权
                 </span>
               </div>
@@ -62,11 +62,11 @@
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
                 <a :href="getTenantUrl(tenant.tenant_id)" target="_blank"
-                  class="text-cyan-600 hover:text-cyan-800 hover:underline text-sm">
+                  class="text-primary-600 hover:text-primary-700 hover:underline text-sm">
                   {{ getTenantUrl(tenant.tenant_id) }}
                 </a>
                 <button @click="copyTenantUrl(tenant.tenant_id)"
-                  class="p-1 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded transition-colors"
+                  class="p-1 text-muted hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
                   title="复制网址">
                   <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -77,11 +77,11 @@
             <td class="px-4 py-3">
               <div class="flex gap-2">
                 <button @click="openEditDialog(tenant)"
-                  class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                  class="text-xs px-2 py-1 bg-info-100 text-info-700 rounded hover:bg-info-200 transition-colors">
                   编辑
                 </button>
                 <button @click="handleDelete(tenant)"
-                  class="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors">
+                  class="text-xs px-2 py-1 bg-danger-100 text-danger-700 rounded hover:bg-danger-200 transition-colors">
                   删除
                 </button>
               </div>
@@ -90,7 +90,7 @@
         </tbody>
       </table>
 
-      <div v-if="tenants.length === 0" class="text-center py-12 text-slate-500">
+      <div v-if="tenants.length === 0" class="text-center py-12 text-muted">
         暂无租户数据
       </div>
     </div>
@@ -99,20 +99,20 @@
     <div v-if="showFormDialog" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showFormDialog = false"></div>
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
-        <h3 class="text-lg font-bold text-slate-800 mb-4">{{ isEdit ? '编辑租户' : '新增租户' }}</h3>
+        <h3 class="text-lg font-bold text-default mb-4">{{ isEdit ? '编辑租户' : '新增租户' }}</h3>
         <!-- 标签页 -->
-        <div class="flex border-b border-slate-200 mb-4">
+        <div class="flex border-b border-default mb-4">
           <button
             @click="activeTab = 'basic'"
             :class="['px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-              activeTab === 'basic' ? 'border-cyan-500 text-cyan-600' : 'border-transparent text-slate-500 hover:text-slate-700']"
+              activeTab === 'basic' ? 'border-primary-500 text-primary-600' : 'border-transparent text-muted hover:text-default']"
           >
             基本信息
           </button>
           <button
             @click="activeTab = 'agents'"
             :class="['px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-              activeTab === 'agents' ? 'border-cyan-500 text-cyan-600' : 'border-transparent text-slate-500 hover:text-slate-700']"
+              activeTab === 'agents' ? 'border-primary-500 text-primary-600' : 'border-transparent text-muted hover:text-default']"
           >
             数字员工授权
             <span v-if="selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span>
@@ -121,110 +121,110 @@
         <!-- 基本信息标签页 -->
         <div v-if="activeTab === 'basic'" class="space-y-4 min-h-[640px]">
           <div>
-            <label class="block text-sm text-slate-600 mb-1">企业名称 <span class="text-red-500">*</span></label>
+            <label class="block text-sm text-default mb-1">企业名称 <span class="text-danger-500">*</span></label>
             <input v-model="formData.company_name" type="text" placeholder="请输入企业名称" maxlength="100"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">租户代码 <span class="text-red-500">*</span></label>
+            <label class="block text-sm text-default mb-1">租户代码 <span class="text-danger-500">*</span></label>
             <input v-model="formData.tenant_code" type="text" placeholder="4-8位字母数字" maxlength="8"
               @input="validateTenantCodeFormat"
               @blur="checkTenantCodeUnique"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
-            <div class="text-xs text-red-500 mt-1" v-if="tenantCodeError">{{ tenantCodeError }}</div>
-            <p class="text-xs text-slate-500 mt-1">4-8位字母数字组合，不区分大小写，创建后不可修改</p>
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
+            <div class="text-xs text-danger-500 mt-1" v-if="tenantCodeError">{{ tenantCodeError }}</div>
+            <p class="text-xs text-muted mt-1">4-8位字母数字组合，不区分大小写，创建后不可修改</p>
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">联系人</label>
+            <label class="block text-sm text-default mb-1">联系人</label>
             <input v-model="formData.contact_name" type="text" placeholder="请输入联系人姓名" maxlength="50"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">联系电话</label>
+            <label class="block text-sm text-default mb-1">联系电话</label>
             <input v-model="formData.contact_phone" type="tel" placeholder="请输入联系电话" maxlength="20"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
-          <div class="pt-2 border-t border-slate-200">
-            <p class="text-sm font-medium text-slate-700 mb-3">初始管理员（可选）</p>
+          <div class="pt-2 border-t border-default">
+            <p class="text-sm font-medium text-default mb-3">初始管理员（可选）</p>
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">初始管理员姓名</label>
+            <label class="block text-sm text-default mb-1">初始管理员姓名</label>
             <input v-model="formData.initial_admin_name" type="text" placeholder="请输入管理员姓名" maxlength="50"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">初始管理员手机号</label>
+            <label class="block text-sm text-default mb-1">初始管理员手机号</label>
             <input v-model="formData.initial_admin_phone" type="tel" placeholder="请输入11位手机号" maxlength="11"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">套餐</label>
+            <label class="block text-sm text-default mb-1">套餐</label>
             <select v-model="formData.plan"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
               <option value="basic">基础版 (basic)</option>
               <option value="standard">标准版 (standard)</option>
               <option value="premium">高级版 (premium)</option>
             </select>
           </div>
           <div v-if="isEdit">
-            <label class="block text-sm text-slate-600 mb-1">状态</label>
+            <label class="block text-sm text-default mb-1">状态</label>
             <select v-model="formData.status"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
               <option value="active">正常</option>
               <option value="suspended">停用</option>
               <option value="deactivated">已删除</option>
             </select>
           </div>
           <div v-if="isEdit">
-            <label class="block text-sm text-slate-600 mb-1">到期日期</label>
+            <label class="block text-sm text-default mb-1">到期日期</label>
             <input v-model="formData.expire_at" type="date" placeholder="不设置则永久有效"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
-            <p class="text-xs text-slate-500 mt-1">到期当天 23:59:59 前仍可登录，清空则永久有效</p>
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
+            <p class="text-xs text-muted mt-1">到期当天 23:59:59 前仍可登录，清空则永久有效</p>
           </div>
         </div>
         <!-- 数字员工授权标签页 -->
         <div v-if="activeTab === 'agents'" class="overflow-y-auto min-h-[640px]">
-          <div v-if="loadingAgents" class="text-center py-6 text-slate-500 text-sm">加载中...</div>
-          <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-slate-500 text-sm">暂无可用数字员工</div>
+          <div v-if="loadingAgents" class="text-center py-6 text-muted text-sm">加载中...</div>
+          <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-muted text-sm">暂无可用数字员工</div>
           <div v-else class="space-y-2 py-2">
-            <div v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-slate-50 rounded">
+            <div v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-canvas rounded">
               <input
                 type="checkbox"
                 :checked="selectedAgentIds.includes(agent.agent_id)"
                 @change="toggleAgentSelection(agent.agent_id)"
-                class="w-4 h-4 text-cyan-600 border-slate-300 rounded focus:ring-cyan-500"
+                class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
               />
               <div class="ml-3 flex-1">
-                <div class="text-sm font-medium text-slate-800">{{ agent.name }}</div>
-                <div v-if="agent.description" class="text-xs text-slate-500">{{ agent.description }}</div>
+                <div class="text-sm font-medium text-default">{{ agent.name }}</div>
+                <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
               </div>
               <div class="flex items-center gap-2 ml-2">
-                <span class="text-xs text-slate-500 whitespace-nowrap">实例数</span>
+                <span class="text-xs text-muted whitespace-nowrap">实例数</span>
                 <input
                   type="number"
                   :value="selectedAgentQuotas[agent.agent_id] || 1"
                   @input="updateAgentQuota(agent.agent_id, parseInt(($event.target as HTMLInputElement).value) || 1)"
                   min="1"
                   step="1"
-                  class="w-16 px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:border-cyan-400"
+                  class="w-16 px-2 py-1 text-sm border border-hover rounded focus:outline-none focus:border-primary-400"
                 />
               </div>
               <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
-                :class="agent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'">
+                :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
                 {{ agent.type === 'builtin' ? '内置' : '定制' }}
               </span>
             </div>
           </div>
           <!-- 实例检查和创建按钮 -->
-          <div class="pt-4 mt-4 border-t border-slate-200">
-            <div class="text-xs text-slate-500 mb-2">
+          <div class="pt-4 mt-4 border-t border-default">
+            <div class="text-xs text-muted mb-2">
               💡 提示：点击"检查实例"先保存设置并查看实例数与配额的匹配情况，点击"创建实例"将自动保存授权设置并根据配额创建/删除实例。
             </div>
             <div class="flex gap-2">
               <button
                 @click="handleCheckInstances"
                 :disabled="checkingInstances || syncingInstances === currentTenant?.tenant_id"
-                class="flex-1 px-4 py-2 bg-green-500 hover:bg-green-600 disabled:bg-slate-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+                class="flex-1 px-4 py-2 bg-success-500 hover:bg-success-600 disabled:bg-surface-hover text-white rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 <svg v-if="checkingInstances" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -235,7 +235,7 @@
               <button
                 @click="handleSyncInstancesInEdit"
                 :disabled="syncingInstances === currentTenant?.tenant_id || checkingInstances"
-                class="flex-1 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+                class="flex-1 px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 <svg v-if="syncingInstances === currentTenant?.tenant_id" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -246,10 +246,10 @@
             </div>
           </div>
         </div>
-        <div v-if="formError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ formError }}</div>
+        <div v-if="formError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ formError }}</div>
         <div class="flex gap-3 mt-6">
-          <button @click="showFormDialog = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
-          <button @click="handleSubmit" :disabled="submitting" class="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors">
+          <button @click="showFormDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">取消</button>
+          <button @click="handleSubmit" :disabled="submitting" class="flex-1 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg transition-colors">
             {{ submitting ? '处理中...' : '确认' }}
           </button>
         </div>
@@ -260,74 +260,74 @@
     <div v-if="showDetailDialog" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showDetailDialog = false"></div>
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
-        <h3 class="text-lg font-bold text-slate-800 mb-4">租户详情</h3>
+        <h3 class="text-lg font-bold text-default mb-4">租户详情</h3>
         <div class="space-y-3">
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">租户ID</span>
-            <span class="text-sm text-slate-800 font-mono">{{ currentTenant?.tenant_id }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">租户ID</span>
+            <span class="text-sm text-default font-mono">{{ currentTenant?.tenant_id }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">租户代码</span>
-            <span class="text-sm text-slate-800 font-mono">{{ currentTenant?.tenant_code || '-' }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">租户代码</span>
+            <span class="text-sm text-default font-mono">{{ currentTenant?.tenant_code || '-' }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">企业名称</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.company_name }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">企业名称</span>
+            <span class="text-sm text-default">{{ currentTenant?.company_name }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">联系人</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.contact_name || '-' }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">联系人</span>
+            <span class="text-sm text-default">{{ currentTenant?.contact_name || '-' }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">联系电话</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.contact_phone || '-' }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">联系电话</span>
+            <span class="text-sm text-default">{{ currentTenant?.contact_phone || '-' }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">初始管理员</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.initial_admin_name || '-' }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">初始管理员</span>
+            <span class="text-sm text-default">{{ currentTenant?.initial_admin_name || '-' }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">管理员手机</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.initial_admin_phone || '-' }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">管理员手机</span>
+            <span class="text-sm text-default">{{ currentTenant?.initial_admin_phone || '-' }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">套餐</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.plan }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">套餐</span>
+            <span class="text-sm text-default">{{ currentTenant?.plan }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">最大实例数</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.max_instances }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">最大实例数</span>
+            <span class="text-sm text-default">{{ currentTenant?.max_instances }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">最大用户数</span>
-            <span class="text-sm text-slate-800">{{ currentTenant?.max_users }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">最大用户数</span>
+            <span class="text-sm text-default">{{ currentTenant?.max_users }}</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">状态</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">状态</span>
             <span :class="getStatusClass(currentTenant?.status)" class="text-sm font-medium">
               {{ getStatusLabel(currentTenant?.status) }}
             </span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">到期日期</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">到期日期</span>
             <span v-if="currentTenant?.expire_at" :class="getExpireStatusClass(currentTenant.expire_at)" class="text-sm font-medium">
               {{ formatExpireDate(currentTenant.expire_at) }}
             </span>
-            <span v-else class="text-sm text-slate-500">永久有效</span>
+            <span v-else class="text-sm text-muted">永久有效</span>
           </div>
-          <div class="flex border-b border-slate-100 pb-2">
-            <span class="w-24 text-sm text-slate-500">创建时间</span>
-            <span class="text-sm text-slate-800">{{ formatDate(currentTenant?.created_at) }}</span>
+          <div class="flex border-b border-default pb-2">
+            <span class="w-24 text-sm text-muted">创建时间</span>
+            <span class="text-sm text-default">{{ formatDate(currentTenant?.created_at) }}</span>
           </div>
           <div class="flex">
-            <span class="w-24 text-sm text-slate-500">更新时间</span>
-            <span class="text-sm text-slate-800">{{ formatDate(currentTenant?.updated_at) }}</span>
+            <span class="w-24 text-sm text-muted">更新时间</span>
+            <span class="text-sm text-default">{{ formatDate(currentTenant?.updated_at) }}</span>
           </div>
         </div>
         <div class="flex gap-3 mt-6">
-          <button @click="showDetailDialog = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">关闭</button>
+          <button @click="showDetailDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">关闭</button>
           <button @click="openEditDialog(currentTenant); showDetailDialog = false"
-            class="flex-1 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors">编辑</button>
+            class="flex-1 py-2 bg-info-500 hover:bg-info-600 text-white rounded-lg transition-colors">编辑</button>
         </div>
       </div>
     </div>
@@ -402,15 +402,15 @@ function formatExpireDate(dateStr: string | undefined) {
 }
 
 function getExpireStatusClass(dateStr: string | undefined): string {
-  if (!dateStr) return 'text-slate-600'
+  if (!dateStr) return 'text-default'
 
   const expireDate = new Date(dateStr)
   const now = new Date()
   const diffDays = Math.ceil((expireDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 
-  if (diffDays < 0) return 'text-red-600 font-medium'
-  if (diffDays < 15) return 'text-orange-600 font-medium'
-  return 'text-slate-600'
+  if (diffDays < 0) return 'text-danger-600 font-medium'
+  if (diffDays < 15) return 'text-warning-600 font-medium'
+  return 'text-default'
 }
 
 function openAddDialog() {
@@ -605,8 +605,8 @@ function getStatusClass(status: number | string | undefined): string {
   if (status === undefined || status === null) return 'bg-gray-100 text-gray-600'
   const strStatus = String(status)
   const info = TenantStatusMap[strStatus as TenantStatus]
-  if (info?.color === 'green') return 'bg-green-100 text-green-700'
-  if (info?.color === 'red') return 'bg-red-100 text-red-700'
+  if (info?.color === 'green') return 'bg-success-100 text-success-700'
+  if (info?.color === 'red') return 'bg-danger-100 text-danger-700'
   return 'bg-gray-100 text-gray-600'
 }
 

@@ -1,15 +1,15 @@
 <template>
-  <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+  <div class="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-4 md:px-8 pt-6 pb-6">
-        <h1 class="text-xl font-bold text-slate-800 text-center mt-4 mb-1">统一登录</h1>
+        <h1 class="text-xl font-bold text-default text-center mt-4 mb-1">统一登录</h1>
 
         <!-- 租户状态提示 -->
-        <div v-if="tenantStatusMessage" class="text-red-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-red-50 rounded border border-red-200">
+        <div v-if="tenantStatusMessage" class="text-danger-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-danger-50 rounded border border-danger-200">
           {{ tenantStatusMessage }}
         </div>
         <!-- 租户过期提示 -->
-        <div v-if="tenantExpiredMessage" class="text-red-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-red-50 rounded border border-red-200">
+        <div v-if="tenantExpiredMessage" class="text-danger-500 text-sm text-center font-medium mb-6 py-2 px-3 bg-danger-50 rounded border border-danger-200">
           {{ tenantExpiredMessage }}
         </div>
         <!-- 租户即将过期提示 -->
@@ -20,57 +20,57 @@
         <div class="space-y-3">
           <!-- 租户代码输入 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">租户代码</label>
+            <label class="block text-sm text-default mb-1">租户代码</label>
             <input
               v-model="tenantCode"
               type="text"
               placeholder="例如：ALIBB"
               maxlength="8"
               autocomplete="off"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+              class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
               @input="clearError('tenant_code')"
             />
-            <div v-if="fieldErrors.tenant_code" class="text-red-500 text-sm mt-1">
+            <div v-if="fieldErrors.tenant_code" class="text-danger-500 text-sm mt-1">
               {{ fieldErrors.tenant_code }}
             </div>
           </div>
 
           <!-- 手机号或用户名输入 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">手机号或用户名</label>
+            <label class="block text-sm text-default mb-1">手机号或用户名</label>
             <input
               v-model="identifier"
               type="text"
               placeholder="请输入手机号或用户名"
               autocomplete="username"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+              class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
               @input="clearError('identifier')"
             />
-            <div v-if="fieldErrors.identifier" class="text-red-500 text-sm mt-1">
+            <div v-if="fieldErrors.identifier" class="text-danger-500 text-sm mt-1">
               {{ fieldErrors.identifier }}
             </div>
           </div>
 
           <!-- 密码输入 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">密码</label>
+            <label class="block text-sm text-default mb-1">密码</label>
             <input
               v-model="password"
               type="password"
               placeholder="请输入密码"
               autocomplete="current-password"
-              class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+              class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
               @keyup.enter="handleLogin"
               @input="clearError('password')"
             />
-            <div v-if="fieldErrors.password" class="text-red-500 text-sm mt-1">
+            <div v-if="fieldErrors.password" class="text-danger-500 text-sm mt-1">
               {{ fieldErrors.password }}
             </div>
           </div>
 
           <!-- 图形验证码 -->
           <div>
-            <label class="block text-sm text-slate-600 mb-1">图形验证码</label>
+            <label class="block text-sm text-default mb-1">图形验证码</label>
             <div class="flex gap-2">
               <input
                 v-model="captchaCode"
@@ -78,20 +78,20 @@
                 placeholder="请输入图形验证码"
                 maxlength="4"
                 autocomplete="off"
-                class="flex-1 px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                class="flex-1 px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
                 @keyup.enter="handleLogin"
                 @input="clearError('captcha_code')"
               />
               <div
-                class="w-24 h-12 bg-slate-200 rounded-lg cursor-pointer flex items-center justify-center select-none overflow-hidden"
+                class="w-24 h-12 bg-gray-200 rounded-lg cursor-pointer flex items-center justify-center select-none overflow-hidden"
                 @click="refreshCaptcha"
                 title="点击刷新"
               >
                 <img v-if="captchaSvg" :src="'data:image/svg+xml;base64,' + captchaSvg" alt="验证码" class="w-full h-full" />
-                <span v-else class="text-slate-400 text-sm">加载中</span>
+                <span v-else class="text-muted text-sm">加载中</span>
               </div>
             </div>
-            <div v-if="fieldErrors.captcha_code" class="text-red-500 text-sm mt-1">
+            <div v-if="fieldErrors.captcha_code" class="text-danger-500 text-sm mt-1">
               {{ fieldErrors.captcha_code }}
             </div>
           </div>
@@ -99,20 +99,20 @@
           <button
             @click="handleLogin"
             :disabled="isLoading"
-            class="w-full py-3 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg font-medium transition-colors"
+            class="w-full py-3 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
           >
             {{ isLoading ? '登录中...' : '登录' }}
           </button>
 
           <!-- 忘记密码链接 -->
           <div class="text-center">
-            <a href="#" class="text-sm text-cyan-500 hover:text-cyan-600" @click.prevent="showForgetPassword">
+            <a href="#" class="text-sm text-primary-500 hover:text-primary-600" @click.prevent="showForgetPassword">
               忘记密码？
             </a>
           </div>
         </div>
 
-        <div v-if="errorMessage" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+        <div v-if="errorMessage" class="mt-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">
           {{ errorMessage }}
         </div>
       </div>

@@ -1,11 +1,11 @@
 <template>
-  <div class="h-screen flex bg-slate-100">
+  <div class="h-screen flex bg-surface-hover">
     <!-- 管理后台菜单 - 仅 /portal 路由下显示 -->
-    <aside v-if="!isTenantRoute" class="w-60 bg-slate-900 text-white flex flex-col flex-shrink-0">
+    <aside v-if="!isTenantRoute" class="w-60 bg-gray-900 text-white flex flex-col flex-shrink-0">
       <!-- 企业信息 -->
-      <div class="p-4 border-b border-slate-700">
+      <div class="p-4 border-b border-gray-700">
         <h2 class="text-lg font-bold truncate">{{ tenant?.company_name || '管理后台' }}</h2>
-        <p class="text-sm text-slate-400 mt-1">{{ admin?.username || admin?.phone || '' }}</p>
+        <p class="text-sm text-muted mt-1">{{ admin?.username || admin?.phone || '' }}</p>
       </div>
 
       <!-- 导航菜单 -->
@@ -14,8 +14,8 @@
           v-for="item in currentMenuItems"
           :key="item.path"
           :to="item.path"
-          class="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-slate-800"
-          :class="isActive(item.path) ? 'bg-slate-800 text-cyan-400 border-r-2 border-cyan-400' : 'text-slate-300'"
+          class="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-gray-800"
+          :class="isActive(item.path) ? 'bg-gray-800 text-primary-400 border-r-2 border-primary-400' : 'text-gray-300'"
         >
           <span class="text-base">{{ item.icon }}</span>
           <span>{{ item.label }}</span>
@@ -23,10 +23,10 @@
       </nav>
 
       <!-- 底部操作 -->
-      <div class="p-4 border-t border-slate-700">
+      <div class="p-4 border-t border-gray-700">
         <button
           @click="handleLogout"
-          class="w-full py-2 text-sm text-slate-400 hover:text-white transition-colors"
+          class="w-full py-2 text-sm text-muted hover:text-white transition-colors"
         >
           退出登录
         </button>
@@ -51,24 +51,24 @@
       <div
         v-if="showTenantStatusWarning"
         :class="[
-          tenantStatusColorClass === 'red' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200',
+          tenantStatusColorClass === 'red' ? 'bg-danger-50 border-danger-200' : 'bg-amber-50 border-amber-200',
           'border-b px-6 py-3'
         ]"
       >
-        <div class="flex items-center gap-2" :class="tenantStatusColorClass === 'red' ? 'text-red-800' : 'text-amber-800'">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" :class="tenantStatusColorClass === 'red' ? 'text-red-600' : 'text-amber-600'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div class="flex items-center gap-2" :class="tenantStatusColorClass === 'red' ? 'text-danger-700' : 'text-amber-800'">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" :class="tenantStatusColorClass === 'red' ? 'text-danger-600' : 'text-amber-600'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.346 16.5c-.77.833.192 2.5 1.732 2.5z" />
           </svg>
           <div class="flex-1">
             <span class="font-medium">平台管理员代管模式：</span>
             当前租户 <span class="font-semibold">{{ tenant?.company_name }}</span> 的状态为
-            <span :class="tenantStatusColorClass === 'red' ? 'font-bold text-red-900' : 'font-bold text-amber-900'">{{ tenantStatusLabel }}</span>，
+            <span :class="tenantStatusColorClass === 'red' ? 'font-bold text-danger-700' : 'font-bold text-amber-900'">{{ tenantStatusLabel }}</span>，
             您正在以平台管理员身份访问该租户。
             <span v-if="tenant" class="ml-2">
               (<router-link
                 :to="'/portal/tenants'"
                 class="underline hover:no-underline"
-                :class="tenantStatusColorClass === 'red' ? 'text-red-700 hover:text-red-900' : 'text-amber-700 hover:text-amber-900'"
+                :class="tenantStatusColorClass === 'red' ? 'text-danger-700 hover:text-danger-700' : 'text-amber-700 hover:text-amber-900'"
               >
                 前往平台管理后台修改状态
               </router-link>)

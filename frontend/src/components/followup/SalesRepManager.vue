@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-full bg-[var(--bg-primary)] text-[var(--text-primary)] transition-colors duration-200">
+  <div class="min-h-full bg-surface text-default transition-colors duration-200">
     <!-- Header -->
     <div class="px-6 pt-6 pb-4">
       <div class="flex items-center justify-between mb-6">
@@ -7,18 +7,18 @@
           <h1 class="text-xl font-bold tracking-tight" style="font-family: 'Noto Sans SC', 'DM Sans', sans-serif;">
             销售人员管理
           </h1>
-          <p class="text-sm text-[var(--text-tertiary)] mt-0.5">销售团队与分配规则管理</p>
+          <p class="text-sm text-muted mt-0.5">销售团队与分配规则管理</p>
         </div>
         <div class="flex items-center gap-3">
           <button
             @click="showRuleModal = true"
-            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-default bg-canvas text-muted hover:bg-surface-hover transition-colors"
           >
             新增规则
           </button>
           <button
             @click="openAddRepModal"
-            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-[var(--accent-primary)] text-white hover:brightness-110 transition-all shadow-sm"
+            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all shadow-sm"
           >
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
             添加销售
@@ -29,39 +29,39 @@
 
     <!-- Sales Reps Section -->
     <div class="px-6 pb-4">
-      <h2 class="text-sm font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-3">销售人员</h2>
-      <div v-if="loading" class="text-center py-12 text-[var(--text-tertiary)]">
+      <h2 class="text-sm font-semibold text-muted uppercase tracking-wider mb-3">销售人员</h2>
+      <div v-if="loading" class="text-center py-12 text-muted">
         <div class="flex items-center justify-center gap-2">
           <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
           加载中...
         </div>
       </div>
-      <div v-else-if="reps.length === 0" class="text-center py-12 text-[var(--text-tertiary)]">暂无销售人员</div>
+      <div v-else-if="reps.length === 0" class="text-center py-12 text-muted">暂无销售人员</div>
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
           v-for="rep in reps"
           :key="rep.rep_id"
-          class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 hover:border-[var(--accent-primary)]/30 transition-colors"
+          class="rounded-xl border border-default bg-canvas p-4 hover:border-primary-300 transition-colors"
         >
           <div class="flex items-start justify-between mb-3">
             <div>
-              <p class="font-medium text-[var(--text-primary)]">{{ rep.name }}</p>
-              <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ rep.department || '-' }} / {{ roleLabels[rep.role] || rep.role }}</p>
+              <p class="font-medium text-default">{{ rep.name }}</p>
+              <p class="text-xs text-muted mt-0.5">{{ rep.department || '-' }} / {{ roleLabels[rep.role] || rep.role }}</p>
             </div>
             <span
               class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium"
-              :class="rep.is_active ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'"
+              :class="rep.is_active ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400' : 'bg-canvas text-muted'"
             >
               {{ rep.is_active ? '活跃' : '停用' }}
             </span>
           </div>
-          <div class="grid grid-cols-2 gap-2 text-xs text-[var(--text-secondary)] mb-3">
+          <div class="grid grid-cols-2 gap-2 text-xs text-muted mb-3">
             <div>
-              <span class="text-[var(--text-tertiary)]">负责区域:</span> {{ rep.region || '-' }}
+              <span class="text-muted">负责区域:</span> {{ rep.region || '-' }}
             </div>
             <div>
-              <span class="text-[var(--text-tertiary)]">活跃线索:</span>
-              <span class="font-medium" :class="rep.active_lead_count >= rep.max_leads ? 'text-red-500' : 'text-[var(--text-primary)]'">
+              <span class="text-muted">活跃线索:</span>
+              <span class="font-medium" :class="rep.active_lead_count >= rep.max_leads ? 'text-danger-500' : 'text-default'">
                 {{ rep.active_lead_count }}/{{ rep.max_leads }}
               </span>
             </div>
@@ -70,22 +70,22 @@
             <span
               v-for="skill in rep.skills"
               :key="skill"
-              class="px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-primary)] border border-[var(--border-primary)] text-[var(--text-tertiary)]"
+              class="px-1.5 py-0.5 rounded text-[10px] bg-surface border border-default text-muted"
             >
               {{ skill }}
             </span>
           </div>
-          <div class="flex items-center justify-end gap-1 border-t border-[var(--border-primary)] pt-3">
+          <div class="flex items-center justify-end gap-1 border-t border-default pt-3">
             <button
               @click="openEditRepModal(rep)"
-              class="text-xs px-2 py-1 rounded border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+              class="text-xs px-2 py-1 rounded border border-default text-muted hover:bg-surface-hover transition-colors"
             >
               编辑
             </button>
             <button
               v-if="rep.is_active"
               @click="handleDeactivateRep(rep)"
-              class="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20 transition-colors"
+              class="text-xs px-2 py-1 rounded border border-danger-200 text-danger-600 hover:bg-danger-50 dark:border-danger-800 dark:hover:bg-danger-900/20 transition-colors"
             >
               停用
             </button>
@@ -96,46 +96,46 @@
 
     <!-- Assign Rules Section -->
     <div class="px-6 pb-6">
-      <h2 class="text-sm font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-3">分配规则</h2>
-      <div v-if="rules.length === 0" class="text-center py-8 text-[var(--text-tertiary)]">暂无分配规则</div>
-      <div v-else class="rounded-xl border border-[var(--border-primary)] overflow-hidden bg-[var(--bg-secondary)]">
+      <h2 class="text-sm font-semibold text-muted uppercase tracking-wider mb-3">分配规则</h2>
+      <div v-if="rules.length === 0" class="text-center py-8 text-muted">暂无分配规则</div>
+      <div v-else class="rounded-xl border border-default overflow-hidden bg-canvas">
         <table class="w-full text-sm">
           <thead>
-            <tr class="border-b border-[var(--border-primary)] bg-[var(--bg-primary)]/50">
-              <th class="text-left px-4 py-3 font-medium text-[var(--text-tertiary)] text-xs uppercase tracking-wider">规则名称</th>
-              <th class="text-left px-4 py-3 font-medium text-[var(--text-tertiary)] text-xs uppercase tracking-wider">类型</th>
-              <th class="text-left px-4 py-3 font-medium text-[var(--text-tertiary)] text-xs uppercase tracking-wider">优先级</th>
-              <th class="text-left px-4 py-3 font-medium text-[var(--text-tertiary)] text-xs uppercase tracking-wider">状态</th>
-              <th class="text-left px-4 py-3 font-medium text-[var(--text-tertiary)] text-xs uppercase tracking-wider">自动分配</th>
-              <th class="text-right px-4 py-3 font-medium text-[var(--text-tertiary)] text-xs uppercase tracking-wider">操作</th>
+            <tr class="border-b border-default bg-surface/50">
+              <th class="text-left px-4 py-3 font-medium text-muted text-xs uppercase tracking-wider">规则名称</th>
+              <th class="text-left px-4 py-3 font-medium text-muted text-xs uppercase tracking-wider">类型</th>
+              <th class="text-left px-4 py-3 font-medium text-muted text-xs uppercase tracking-wider">优先级</th>
+              <th class="text-left px-4 py-3 font-medium text-muted text-xs uppercase tracking-wider">状态</th>
+              <th class="text-left px-4 py-3 font-medium text-muted text-xs uppercase tracking-wider">自动分配</th>
+              <th class="text-right px-4 py-3 font-medium text-muted text-xs uppercase tracking-wider">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr
               v-for="rule in rules"
               :key="rule.rule_id"
-              class="border-b border-[var(--border-primary)] last:border-0 hover:bg-[var(--bg-hover)] transition-colors"
+              class="border-b border-default last:border-0 hover:bg-surface-hover transition-colors"
             >
-              <td class="px-4 py-3 text-[var(--text-primary)]">{{ rule.name }}</td>
+              <td class="px-4 py-3 text-default">{{ rule.name }}</td>
               <td class="px-4 py-3">
-                <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-400">
                   {{ ruleTypeLabels[rule.rule_type] || rule.rule_type }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-[var(--text-secondary)] tabular-nums">{{ rule.priority }}</td>
+              <td class="px-4 py-3 text-muted tabular-nums">{{ rule.priority }}</td>
               <td class="px-4 py-3">
                 <span
                   class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium"
-                  :class="rule.is_active ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'"
+                  :class="rule.is_active ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400' : 'bg-canvas text-muted'"
                 >
                   {{ rule.is_active ? '启用' : '停用' }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-[var(--text-secondary)]">{{ rule.auto_assign ? '是' : '否' }}</td>
+              <td class="px-4 py-3 text-muted">{{ rule.auto_assign ? '是' : '否' }}</td>
               <td class="px-4 py-3 text-right">
                 <button
                   @click="handleToggleRule(rule)"
-                  class="text-xs px-2 py-1 rounded border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+                  class="text-xs px-2 py-1 rounded border border-default text-muted hover:bg-surface-hover transition-colors"
                 >
                   {{ rule.is_active ? '停用' : '启用' }}
                 </button>
@@ -152,30 +152,30 @@
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       @click.self="showRepModal = false"
     >
-      <div class="bg-[var(--bg-secondary)] rounded-xl border border-[var(--border-primary)] shadow-2xl w-full max-w-[500px] max-h-[85vh] overflow-y-auto mx-4">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--border-primary)]">
-          <h2 class="text-base font-bold text-[var(--text-primary)]">{{ editingRep ? '编辑销售人员' : '添加销售人员' }}</h2>
-          <button @click="showRepModal = false" class="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
+      <div class="bg-canvas rounded-xl border border-default shadow-2xl w-full max-w-[500px] max-h-[85vh] overflow-y-auto mx-4">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-default">
+          <h2 class="text-base font-bold text-default">{{ editingRep ? '编辑销售人员' : '添加销售人员' }}</h2>
+          <button @click="showRepModal = false" class="text-muted hover:text-default transition-colors">
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
         <div class="px-6 py-4 space-y-4">
           <div>
-            <label class="block text-xs text-[var(--text-tertiary)] mb-1">系统用户ID <span class="text-red-500">*</span></label>
-            <input v-model="repForm.user_id" :disabled="!!editingRep" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" placeholder="输入用户ID" />
+            <label class="block text-xs text-muted mb-1">系统用户ID <span class="text-danger-500">*</span></label>
+            <input v-model="repForm.user_id" :disabled="!!editingRep" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" placeholder="输入用户ID" />
           </div>
           <div>
-            <label class="block text-xs text-[var(--text-tertiary)] mb-1">姓名 <span class="text-red-500">*</span></label>
-            <input v-model="repForm.name" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" placeholder="输入姓名" />
+            <label class="block text-xs text-muted mb-1">姓名 <span class="text-danger-500">*</span></label>
+            <input v-model="repForm.name" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" placeholder="输入姓名" />
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="block text-xs text-[var(--text-tertiary)] mb-1">部门</label>
-              <input v-model="repForm.department" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" placeholder="部门" />
+              <label class="block text-xs text-muted mb-1">部门</label>
+              <input v-model="repForm.department" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" placeholder="部门" />
             </div>
             <div>
-              <label class="block text-xs text-[var(--text-tertiary)] mb-1">角色</label>
-              <select v-model="repForm.role" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]">
+              <label class="block text-xs text-muted mb-1">角色</label>
+              <select v-model="repForm.role" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600">
                 <option value="sales">销售</option>
                 <option value="manager">经理</option>
                 <option value="director">总监</option>
@@ -184,18 +184,18 @@
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="block text-xs text-[var(--text-tertiary)] mb-1">最大线索配额</label>
-              <input v-model.number="repForm.max_leads" type="number" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" />
+              <label class="block text-xs text-muted mb-1">最大线索配额</label>
+              <input v-model.number="repForm.max_leads" type="number" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" />
             </div>
             <div>
-              <label class="block text-xs text-[var(--text-tertiary)] mb-1">负责区域</label>
-              <input v-model="repForm.region" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" placeholder="如：华东" />
+              <label class="block text-xs text-muted mb-1">负责区域</label>
+              <input v-model="repForm.region" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" placeholder="如：华东" />
             </div>
           </div>
         </div>
-        <div class="px-6 py-4 border-t border-[var(--border-primary)] flex justify-end gap-2">
-          <button @click="showRepModal = false" class="text-sm px-4 py-2 rounded-lg border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors">取消</button>
-          <button @click="handleSaveRep" class="text-sm px-4 py-2 rounded-lg bg-[var(--accent-primary)] text-white hover:brightness-110 transition-all">保存</button>
+        <div class="px-6 py-4 border-t border-default flex justify-end gap-2">
+          <button @click="showRepModal = false" class="text-sm px-4 py-2 rounded-lg border border-default text-muted hover:bg-surface-hover transition-colors">取消</button>
+          <button @click="handleSaveRep" class="text-sm px-4 py-2 rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all">保存</button>
         </div>
       </div>
     </div>
@@ -206,22 +206,22 @@
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       @click.self="showRuleModal = false"
     >
-      <div class="bg-[var(--bg-secondary)] rounded-xl border border-[var(--border-primary)] shadow-2xl w-full max-w-[500px] max-h-[85vh] overflow-y-auto mx-4">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--border-primary)]">
-          <h2 class="text-base font-bold text-[var(--text-primary)]">新增分配规则</h2>
-          <button @click="showRuleModal = false" class="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
+      <div class="bg-canvas rounded-xl border border-default shadow-2xl w-full max-w-[500px] max-h-[85vh] overflow-y-auto mx-4">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-default">
+          <h2 class="text-base font-bold text-default">新增分配规则</h2>
+          <button @click="showRuleModal = false" class="text-muted hover:text-default transition-colors">
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
         <div class="px-6 py-4 space-y-4">
           <div>
-            <label class="block text-xs text-[var(--text-tertiary)] mb-1">规则名称 <span class="text-red-500">*</span></label>
-            <input v-model="ruleForm.name" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" placeholder="如：华东区负载均衡" />
+            <label class="block text-xs text-muted mb-1">规则名称 <span class="text-danger-500">*</span></label>
+            <input v-model="ruleForm.name" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" placeholder="如：华东区负载均衡" />
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="block text-xs text-[var(--text-tertiary)] mb-1">规则类型 <span class="text-red-500">*</span></label>
-              <select v-model="ruleForm.rule_type" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]">
+              <label class="block text-xs text-muted mb-1">规则类型 <span class="text-danger-500">*</span></label>
+              <select v-model="ruleForm.rule_type" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600">
                 <option value="load_balance">负载均衡</option>
                 <option value="round_robin">轮询分配</option>
                 <option value="region_based">按区域分配</option>
@@ -229,20 +229,20 @@
               </select>
             </div>
             <div>
-              <label class="block text-xs text-[var(--text-tertiary)] mb-1">优先级</label>
-              <input v-model.number="ruleForm.priority" type="number" class="w-full text-sm rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-3 py-2 outline-none focus:ring-1 focus:ring-[var(--accent-primary)]" />
+              <label class="block text-xs text-muted mb-1">优先级</label>
+              <input v-model.number="ruleForm.priority" type="number" class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" />
             </div>
           </div>
           <div>
-            <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+            <label class="flex items-center gap-2 text-sm text-muted">
               <input v-model="ruleForm.auto_assign" type="checkbox" class="rounded" />
               自动分配
             </label>
           </div>
         </div>
-        <div class="px-6 py-4 border-t border-[var(--border-primary)] flex justify-end gap-2">
-          <button @click="showRuleModal = false" class="text-sm px-4 py-2 rounded-lg border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors">取消</button>
-          <button @click="handleSaveRule" class="text-sm px-4 py-2 rounded-lg bg-[var(--accent-primary)] text-white hover:brightness-110 transition-all">保存</button>
+        <div class="px-6 py-4 border-t border-default flex justify-end gap-2">
+          <button @click="showRuleModal = false" class="text-sm px-4 py-2 rounded-lg border border-default text-muted hover:bg-surface-hover transition-colors">取消</button>
+          <button @click="handleSaveRule" class="text-sm px-4 py-2 rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all">保存</button>
         </div>
       </div>
     </div>
@@ -407,27 +407,3 @@ onMounted(() => {
   loadRules()
 })
 </script>
-
-<style scoped>
-:root {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-hover: #f1f5f9;
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-tertiary: #94a3b8;
-  --border-primary: #e2e8f0;
-  --accent-primary: #2563eb;
-}
-
-.dark {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-hover: #334155;
-  --text-primary: #f1f5f9;
-  --text-secondary: #cbd5e1;
-  --text-tertiary: #64748b;
-  --border-primary: #334155;
-  --accent-primary: #3b82f6;
-}
-</style>

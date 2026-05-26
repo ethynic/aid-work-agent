@@ -23,94 +23,94 @@
     <div class="flex-1 overflow-y-auto p-6">
       <div class="flex items-center gap-3 mb-6">
         <div class="flex items-center gap-2">
-          <label class="text-sm text-slate-600">选择月份:</label>
+          <label class="text-sm text-default">选择月份:</label>
           <input type="month" v-model="selectedMonth" @change="loadData(1)"
-            class="px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500">
+            class="px-3 py-1.5 border border-hover rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
         </div>
         <button @click="loadData(1)" :disabled="loading"
-          class="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-sm hover:bg-cyan-600 transition-colors disabled:opacity-50">
+          class="px-3 py-1.5 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-700 transition-colors disabled:opacity-50">
           刷新
         </button>
       </div>
 
-    <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+    <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <template v-else>
       <!-- 汇总卡片 -->
       <div v-if="summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">总对话次数</div>
-          <div class="text-xl font-bold text-slate-800 mt-1">{{ summary.total_conversations }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">总对话次数</div>
+          <div class="text-xl font-bold text-default mt-1">{{ summary.total_conversations }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">输入Token总数 (百万)</div>
-          <div class="text-xl font-bold text-blue-600 mt-1">{{ formatTokensToMillionsThreeDecimals(summary.total_input_tokens) }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">输入Token总数 (百万)</div>
+          <div class="text-xl font-bold text-info-600 mt-1">{{ formatTokensToMillionsThreeDecimals(summary.total_input_tokens) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">输出Token总数 (百万)</div>
-          <div class="text-xl font-bold text-green-600 mt-1">{{ formatTokensToMillionsThreeDecimals(summary.total_output_tokens) }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">输出Token总数 (百万)</div>
+          <div class="text-xl font-bold text-success-600 mt-1">{{ formatTokensToMillionsThreeDecimals(summary.total_output_tokens) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">平均每对话Token数</div>
-          <div class="text-xl font-bold text-slate-800 mt-1">
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">平均每对话Token数</div>
+          <div class="text-xl font-bold text-default mt-1">
             {{ summary.total_conversations > 0 ? formatTokensToMillionsThreeDecimals((summary.total_input_tokens + summary.total_output_tokens) / summary.total_conversations) : '0.000' }}
           </div>
         </div>
       </div>
 
       <!-- 对话明细表格 -->
-      <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
-        <div class="px-5 py-3 border-b border-slate-200">
-          <h3 class="text-sm font-medium text-slate-700">对话明细 ({{ selectedMonth }})</h3>
+      <div class="bg-white rounded-xl shadow-sm border border-default overflow-hidden mb-6">
+        <div class="px-5 py-3 border-b border-default">
+          <h3 class="text-sm font-medium text-default">对话明细 ({{ selectedMonth }})</h3>
         </div>
         <div v-if="data.length > 0">
           <table class="w-full">
-            <thead class="bg-slate-50">
+            <thead class="bg-canvas">
               <tr>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">序号</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">用户名</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">用户消息（前10字）</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">输入Token数 (百万)</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">输出Token数 (百万)</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">创建时间</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">序号</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">用户名</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">用户消息（前10字）</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">输入Token数 (百万)</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">输出Token数 (百万)</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">创建时间</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-slate-100">
-              <tr v-for="(item, index) in data" :key="item.record_id" class="hover:bg-slate-50">
-                <td class="px-4 py-2 text-sm text-slate-600">{{ getRowNumber(index) }}</td>
-                <td class="px-4 py-2 text-sm text-slate-800">{{ item.username || item.user_id || '-' }}</td>
-                <td class="px-4 py-2 text-sm text-slate-800" :title="item.user_message">{{ formatMessagePreview(item.user_message) }}</td>
-                <td class="px-4 py-2 text-sm text-blue-600">{{ formatTokensToMillionsThreeDecimals(item.input_tokens) }}</td>
-                <td class="px-4 py-2 text-sm text-green-600">{{ formatTokensToMillionsThreeDecimals(item.output_tokens) }}</td>
-                <td class="px-4 py-2 text-sm text-slate-600">{{ formatDateTime(item.created_at) }}</td>
+            <tbody class="divide-y divide-default">
+              <tr v-for="(item, index) in data" :key="item.record_id" class="hover:bg-surface-hover">
+                <td class="px-4 py-2 text-sm text-default">{{ getRowNumber(index) }}</td>
+                <td class="px-4 py-2 text-sm text-default">{{ item.username || item.user_id || '-' }}</td>
+                <td class="px-4 py-2 text-sm text-default" :title="item.user_message">{{ formatMessagePreview(item.user_message) }}</td>
+                <td class="px-4 py-2 text-sm text-info-600">{{ formatTokensToMillionsThreeDecimals(item.input_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-success-600">{{ formatTokensToMillionsThreeDecimals(item.output_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-default">{{ formatDateTime(item.created_at) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div v-else class="text-center py-8 text-slate-400">暂无数据</div>
+        <div v-else class="text-center py-8 text-muted">暂无数据</div>
       </div>
 
       <!-- 分页控件 -->
       <div v-if="pagination && pagination.total_pages > 1" class="flex items-center justify-between">
-        <div class="text-sm text-slate-500">
+        <div class="text-sm text-muted">
           共 {{ pagination.total_count }} 条记录，第 {{ pagination.page }} 页 / 共 {{ pagination.total_pages }} 页
         </div>
         <div class="flex items-center gap-1">
           <button @click="loadData(1)" :disabled="pagination.page === 1"
-            class="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed">
+            class="px-3 py-1.5 text-sm border border-hover rounded-lg hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
             首页
           </button>
           <button @click="loadData(pagination.page - 1)" :disabled="pagination.page === 1"
-            class="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed">
+            class="px-3 py-1.5 text-sm border border-hover rounded-lg hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
             上一页
           </button>
-          <span class="px-3 py-1.5 text-sm text-slate-700">第 {{ pagination.page }} 页</span>
+          <span class="px-3 py-1.5 text-sm text-default">第 {{ pagination.page }} 页</span>
           <button @click="loadData(pagination.page + 1)" :disabled="pagination.page >= pagination.total_pages"
-            class="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed">
+            class="px-3 py-1.5 text-sm border border-hover rounded-lg hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
             下一页
           </button>
           <button @click="loadData(pagination.total_pages)" :disabled="pagination.page === pagination.total_pages"
-            class="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed">
+            class="px-3 py-1.5 text-sm border border-hover rounded-lg hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
             末页
           </button>
         </div>

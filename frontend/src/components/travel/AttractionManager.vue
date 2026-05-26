@@ -1,32 +1,32 @@
 <template>
-  <div class="manager-container">
-    <div class="header-bar">
-      <h2>景点知识库</h2>
-      <div class="actions">
+  <div class="p-5 max-w-[1400px] mx-auto">
+    <div class="flex justify-between items-center mb-5">
+      <h2 class="m-0 text-lg">景点知识库</h2>
+      <div class="flex gap-2.5 items-center">
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none"
                @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
-        <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
-        <button class="btn-primary" :disabled="importing" @click="triggerFileInput(fileInput)">
+        <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="handleDownloadTemplate">下载模板</button>
+        <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
         </button>
       </div>
     </div>
 
     <!-- 搜索栏 -->
-    <div class="kb-search-bar">
-      <input v-model="searchQuery" class="kb-search-input" placeholder="输入关键词搜索景点，如：黄果树 5A景区"
+    <div class="flex gap-2.5 mb-3 items-center">
+      <input v-model="searchQuery" class="flex-1 max-w-[500px] px-3 py-2 border border-default rounded text-sm box-border focus:outline-none focus:border-primary-600 focus:ring-2 focus:ring-primary-600/10" placeholder="输入关键词搜索景点，如：黄果树 5A景区"
              @keyup.enter="doSearch" />
-      <button class="btn-primary" @click="doSearch" :disabled="searching">
+      <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:bg-primary-300 disabled:cursor-not-allowed" @click="doSearch" :disabled="searching">
         {{ searching ? '搜索中...' : '搜索' }}
       </button>
-      <button v-if="searched" class="btn-secondary" @click="clearSearch">显示全部</button>
-      <button v-if="selectedIds.size > 0" class="btn-danger" @click="handleBatchDelete">
+      <button v-if="searched" class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="clearSearch">显示全部</button>
+      <button v-if="selectedIds.size > 0" class="text-danger-600 hover:bg-danger-50 px-4 py-2 rounded-lg text-sm font-medium border border-danger-600" @click="handleBatchDelete">
         批量删除 ({{ selectedIds.size }})
       </button>
     </div>
 
     <!-- 统计信息 -->
-    <div class="kb-stats">
+    <div class="text-[13px] text-muted mb-4">
       <template v-if="!searched">
         共 {{ total }} 个景点，当前第 {{ currentPage }}/{{ totalPages }} 页
       </template>
@@ -36,129 +36,129 @@
     </div>
 
     <!-- 表格 -->
-    <table class="data-table">
+    <table class="w-full border-collapse text-[13px]">
       <thead>
         <tr>
-          <th class="col-check">
+          <th class="w-10 p-2 text-center border-b border-gray-200 bg-surface font-semibold text-default">
             <input type="checkbox" :checked="allSelected" @change="toggleAll" />
           </th>
-          <th class="w-16">序号</th>
-          <th>景点名称</th>
-          <th>区域</th>
-          <th>类型</th>
-          <th>来源文件</th>
-          <th>摘要</th>
-          <th class="col-actions">操作</th>
+          <th class="w-16 p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">序号</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">景点名称</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">区域</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">类型</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">来源文件</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">摘要</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap min-w-[150px]">操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-if="loading"><td colspan="8" class="center">加载中...</td></tr>
-        <tr v-else-if="currentList.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
-        <tr v-for="(item, index) in currentList" :key="item.doc_id">
-          <td class="col-check">
+        <tr v-if="loading"><td colspan="8" class="p-2 text-center text-muted">加载中...</td></tr>
+        <tr v-else-if="currentList.length === 0"><td colspan="8" class="p-2 text-center text-muted">暂无数据</td></tr>
+        <tr v-for="(item, index) in currentList" :key="item.doc_id" class="hover:bg-surface-hover">
+          <td class="w-10 p-2 text-center border-b border-gray-200">
             <input type="checkbox" :value="item.doc_id" v-model="selectedArr" />
           </td>
-          <td>{{ (currentPage - 1) * PAGE_SIZE + index + 1 }}</td>
-          <td class="col-title">{{ item.title }}</td>
-          <td>{{ item.metadata?.region || '-' }}</td>
-          <td>{{ item.metadata?.category_cn || '-' }}</td>
-          <td class="col-source">{{ item.source_file || '-' }}</td>
-          <td class="col-snippet">{{ (item.info || '').slice(0, 60) }}{{ (item.info || '').length > 60 ? '...' : '' }}</td>
-          <td class="col-actions">
-            <button class="btn-sm" @click="showDetail(item.doc_id)">详情</button>
-            <button class="btn-sm" @click="openEdit(item)">编辑</button>
-            <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ (currentPage - 1) * PAGE_SIZE + index + 1 }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200 min-w-[120px] font-medium">{{ item.title }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.metadata?.region || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.metadata?.category_cn || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200 max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap text-muted">{{ item.source_file || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200 max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap text-muted">{{ (item.info || '').slice(0, 60) }}{{ (item.info || '').length > 60 ? '...' : '' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200 whitespace-nowrap min-w-[150px]">
+            <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer" @click="showDetail(item.doc_id)">详情</button>
+            <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer" @click="openEdit(item)">编辑</button>
+            <button class="text-danger-600 hover:bg-danger-50 px-2.5 py-1 rounded text-[13px] border border-danger-600 cursor-pointer" @click="handleDelete(item)">删除</button>
           </td>
         </tr>
       </tbody>
     </table>
 
     <!-- 分页 -->
-    <div v-if="!searched && totalPages > 1" class="pagination">
-      <button class="btn-sm" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">上一页</button>
+    <div v-if="!searched && totalPages > 1" class="flex gap-1.5 items-center mt-4 justify-center">
+      <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">上一页</button>
       <template v-for="p in pageNumbers" :key="p">
-        <button v-if="p === '...'" class="btn-sm btn-page" disabled>...</button>
-        <button v-else class="btn-sm btn-page" :class="{ active: p === currentPage }" @click="goPage(p as number)">{{ p }}</button>
+        <button v-if="p === '...'" class="px-2.5 py-1 border border-default rounded bg-white text-[13px] disabled:opacity-50" disabled>...</button>
+        <button v-else class="px-2.5 py-1 rounded text-[13px] cursor-pointer" :class="p === currentPage ? 'bg-primary-600 text-white border border-primary-600' : 'border border-default bg-white hover:bg-gray-50'" @click="goPage(p as number)">{{ p }}</button>
       </template>
-      <button class="btn-sm" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">下一页</button>
+      <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">下一页</button>
     </div>
 
     <!-- 编辑弹窗 -->
-    <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-      <div class="modal-content" style="width: 700px;">
-        <h3>编辑景点</h3>
-        <div class="form-group">
-          <label>景点名称</label>
-          <input v-model="form.title" placeholder="景点名称" />
+    <div v-if="showModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showModal = false">
+      <div class="bg-white rounded-lg p-6 w-[700px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
+        <h3 class="m-0 mb-5">编辑景点</h3>
+        <div class="mb-3.5">
+          <label class="block mb-1 text-[13px] text-muted">景点名称</label>
+          <input v-model="form.title" placeholder="景点名称" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>区域</label>
-            <input v-model="form.region" placeholder="如：贵阳、安顺" />
+        <div class="flex gap-3">
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">区域</label>
+            <input v-model="form.region" placeholder="如：贵阳、安顺" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
-          <div class="form-group">
-            <label>类型</label>
-            <input v-model="form.category_cn" placeholder="如：自然景观、人文景观" />
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">类型</label>
+            <input v-model="form.category_cn" placeholder="如：自然景观、人文景观" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
         </div>
-        <div class="form-group">
-          <label>景点信息</label>
-          <textarea v-model="form.info" rows="8" placeholder="景点详细信息" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;font-family:inherit;"></textarea>
+        <div class="mb-3.5">
+          <label class="block mb-1 text-[13px] text-muted">景点信息</label>
+          <textarea v-model="form.info" rows="8" placeholder="景点详细信息" class="w-full p-2 border border-default rounded text-[13px] box-border font-inherit"></textarea>
         </div>
-        <div class="form-group">
-          <label>门票价格</label>
-          <textarea v-model="form.ticket_table" rows="6" placeholder="门票价格信息" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;font-family:inherit;"></textarea>
+        <div class="mb-3.5">
+          <label class="block mb-1 text-[13px] text-muted">门票价格</label>
+          <textarea v-model="form.ticket_table" rows="6" placeholder="门票价格信息" class="w-full p-2 border border-default rounded text-[13px] box-border font-inherit"></textarea>
         </div>
-        <div class="form-group">
-          <label>项目/服务价格</label>
-          <textarea v-model="form.project_table" rows="6" placeholder="项目或服务价格信息" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;font-family:inherit;"></textarea>
+        <div class="mb-3.5">
+          <label class="block mb-1 text-[13px] text-muted">项目/服务价格</label>
+          <textarea v-model="form.project_table" rows="6" placeholder="项目或服务价格信息" class="w-full p-2 border border-default rounded text-[13px] box-border font-inherit"></textarea>
         </div>
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showModal = false">取消</button>
-          <button class="btn-primary" @click="handleSave">保存</button>
+        <div class="flex justify-end gap-2.5 mt-5">
+          <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="showModal = false">取消</button>
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="handleSave">保存</button>
         </div>
       </div>
     </div>
 
     <!-- 景点详情弹窗 -->
-    <div v-if="detailVisible" class="modal-overlay" @click.self="detailVisible = false">
-      <div class="modal-content" style="width: 750px;">
-        <h3>{{ detailData.title }}</h3>
-        <div v-if="detailData.info" style="margin-bottom: 16px;">
-          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">景点信息</h4>
-          <pre class="kb-pre">{{ detailData.info }}</pre>
+    <div v-if="detailVisible" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="detailVisible = false">
+      <div class="bg-white rounded-lg p-6 w-[750px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
+        <h3 class="m-0 mb-5">{{ detailData.title }}</h3>
+        <div v-if="detailData.info" class="mb-4">
+          <h4 class="m-0 mb-2 text-sm text-muted">景点信息</h4>
+          <pre class="bg-surface p-3 rounded whitespace-pre-wrap break-words text-[13px] leading-relaxed m-0 font-inherit">{{ detailData.info }}</pre>
         </div>
-        <div v-if="detailData.ticket_table" style="margin-bottom: 16px;">
-          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">门票价格</h4>
-          <pre class="kb-pre">{{ detailData.ticket_table }}</pre>
+        <div v-if="detailData.ticket_table" class="mb-4">
+          <h4 class="m-0 mb-2 text-sm text-muted">门票价格</h4>
+          <pre class="bg-surface p-3 rounded whitespace-pre-wrap break-words text-[13px] leading-relaxed m-0 font-inherit">{{ detailData.ticket_table }}</pre>
         </div>
-        <div v-if="detailData.project_table" style="margin-bottom: 16px;">
-          <h4 style="margin: 0 0 8px; font-size: 14px; color: #555;">项目/服务价格</h4>
-          <pre class="kb-pre">{{ detailData.project_table }}</pre>
+        <div v-if="detailData.project_table" class="mb-4">
+          <h4 class="m-0 mb-2 text-sm text-muted">项目/服务价格</h4>
+          <pre class="bg-surface p-3 rounded whitespace-pre-wrap break-words text-[13px] leading-relaxed m-0 font-inherit">{{ detailData.project_table }}</pre>
         </div>
-        <div v-if="!detailData.info && !detailData.ticket_table && !detailData.project_table" class="center" style="padding: 20px; color: #999;">
+        <div v-if="!detailData.info && !detailData.ticket_table && !detailData.project_table" class="p-5 text-center text-muted">
           暂无详细信息
         </div>
-        <div class="modal-actions">
-          <button class="btn-primary" @click="detailVisible = false">关闭</button>
+        <div class="flex justify-end gap-2.5 mt-5">
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="detailVisible = false">关闭</button>
         </div>
       </div>
     </div>
 
     <!-- 导入知识库结果弹窗 -->
-    <div v-if="showImportResult" class="modal-overlay" @click.self="showImportResult = false">
-      <div class="modal-content">
-        <h3>导入景点知识库结果</h3>
+    <div v-if="showImportResult" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showImportResult = false">
+      <div class="bg-white rounded-lg p-6 w-[600px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
+        <h3 class="m-0 mb-5">导入景点知识库结果</h3>
         <p>共识别 <strong>{{ importResult?.total_attractions || 0 }}</strong> 个景点，成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 个，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 个</p>
-        <div v-for="r in importResult?.details" :key="r.sheet" style="margin-bottom:8px;font-size:13px">
+        <div v-for="r in importResult?.details" :key="r.sheet" class="mb-2 text-[13px]">
           {{ r.sheet }}：共 {{ r.total }} 个，导入 {{ r.imported }} 个，跳过 {{ r.skipped }} 个
         </div>
-        <div v-if="importResult?.errors?.length" style="margin-top:12px;">
-          <div style="font-size:13px;color:#dc2626;margin-bottom:4px;">错误信息：</div>
-          <div v-for="err in importResult.errors.slice(0, 10)" :key="err" style="color:#dc2626;font-size:12px;">{{ err }}</div>
+        <div v-if="importResult?.errors?.length" class="mt-3">
+          <div class="text-[13px] text-danger-600 mb-1">错误信息：</div>
+          <div v-for="err in importResult.errors.slice(0, 10)" :key="err" class="text-danger-600 text-xs">{{ err }}</div>
         </div>
-        <div class="modal-actions">
-          <button class="btn-primary" @click="showImportResult = false">确定</button>
+        <div class="flex justify-end gap-2.5 mt-5">
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="showImportResult = false">确定</button>
         </div>
       </div>
     </div>
@@ -370,49 +370,3 @@ async function handleBatchDelete() {
 onMounted(() => { loadAll() })
 </script>
 
-<style scoped>
-.manager-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
-.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.header-bar h2 { margin: 0; font-size: 18px; }
-.actions { display: flex; gap: 10px; align-items: center; }
-
-.kb-search-bar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; }
-.kb-search-input { flex: 1; max-width: 500px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-.kb-search-input:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.1); }
-.kb-stats { font-size: 13px; color: #888; margin-bottom: 16px; }
-
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.data-table th, .data-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
-.data-table th { background: #f5f7fa; font-weight: 600; color: #333; white-space: nowrap; }
-.data-table tr:hover { background: #fafbfc; }
-.col-check { width: 40px; text-align: center; }
-.col-title { min-width: 120px; font-weight: 500; }
-.col-source { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ca3af; }
-.col-snippet { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #666; }
-.col-actions { white-space: nowrap; min-width: 150px; }
-.center { text-align: center; color: #999; }
-
-.pagination { display: flex; gap: 6px; align-items: center; margin-top: 16px; justify-content: center; }
-.btn-page.active { background: #4f46e5; color: white; border-color: #4f46e5; }
-
-.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-.btn-primary:hover { background: #4338ca; }
-.btn-primary:disabled { background: #a5a5d4; cursor: not-allowed; }
-.btn-secondary { background: #f3f4f6; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-.btn-sm { padding: 4px 10px; border: 1px solid #ddd; border-radius: 3px; background: white; cursor: pointer; font-size: 13px; }
-.btn-sm:hover { background: #f5f5f5; }
-.btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-danger { color: #dc2626; border-color: #dc2626; background: white; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-.btn-danger:hover { background: #fef2f2; }
-
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal-content { background: white; border-radius: 8px; padding: 24px; width: 600px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
-.modal-content h3 { margin: 0 0 20px; }
-.form-row { display: flex; gap: 12px; }
-.form-row .form-group { flex: 1; }
-.form-group { margin-bottom: 14px; }
-.form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #555; }
-.form-group input, .form-group select { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-.kb-pre { background: #f5f7fa; padding: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.6; margin: 0; font-family: inherit; }
-</style>

@@ -1,141 +1,141 @@
 <template>
   <div class="p-6">
     <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-slate-800">用量报告</h1>
+      <h1 class="text-2xl font-bold text-default">用量报告</h1>
       <div class="flex items-center gap-2">
         <button v-for="d in [7, 30, 90]" :key="d"
           @click="days = d; loadData()"
           class="px-3 py-1.5 rounded-lg text-sm transition-colors"
-          :class="days === d ? 'bg-cyan-500 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'">
+          :class="days === d ? 'bg-primary-500 text-white' : 'bg-surface-hover text-default hover:bg-default'">
           {{ d }}天
         </button>
         <button @click="handleExport"
-          class="px-3 py-1.5 bg-slate-200 text-slate-600 hover:bg-slate-300 rounded-lg text-sm transition-colors">
+          class="px-3 py-1.5 bg-surface-hover text-default hover:bg-default rounded-lg text-sm transition-colors">
           导出
         </button>
       </div>
     </div>
 
-    <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+    <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <template v-else>
       <!-- 摘要卡片 -->
       <div v-if="summary" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">总 Token</div>
-          <div class="text-xl font-bold text-slate-800 mt-1">{{ formatNum(summary.total_tokens) }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">总 Token</div>
+          <div class="text-xl font-bold text-default mt-1">{{ formatNum(summary.total_tokens) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">Input Tokens</div>
-          <div class="text-xl font-bold text-blue-600 mt-1">{{ formatNum(summary.input_tokens) }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">Input Tokens</div>
+          <div class="text-xl font-bold text-info-600 mt-1">{{ formatNum(summary.input_tokens) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">Output Tokens</div>
-          <div class="text-xl font-bold text-green-600 mt-1">{{ formatNum(summary.output_tokens) }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">Output Tokens</div>
+          <div class="text-xl font-bold text-success-600 mt-1">{{ formatNum(summary.output_tokens) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">缓存命中</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">缓存命中</div>
           <div class="text-xl font-bold text-amber-600 mt-1">{{ formatNum(summary.cached_tokens) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">总会话数</div>
-          <div class="text-xl font-bold text-slate-800 mt-1">{{ formatNum(summary.total_sessions) }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">总会话数</div>
+          <div class="text-xl font-bold text-default mt-1">{{ formatNum(summary.total_sessions) }}</div>
         </div>
-        <div class="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
-          <div class="text-xs text-slate-500">活跃用户</div>
-          <div class="text-xl font-bold text-slate-800 mt-1">{{ summary.active_users }}</div>
+        <div class="bg-white rounded-xl shadow-sm p-4 border border-default">
+          <div class="text-xs text-muted">活跃用户</div>
+          <div class="text-xl font-bold text-default mt-1">{{ summary.active_users }}</div>
         </div>
       </div>
 
       <!-- Token 趋势柱状图（含 input/output/cached 分项） -->
-      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
-        <h3 class="text-sm font-medium text-slate-700 mb-4">Token 消耗趋势（Input / Output / Cached）</h3>
+      <div class="bg-white rounded-xl shadow-sm border border-default p-5 mb-6">
+        <h3 class="text-sm font-medium text-default mb-4">Token 消耗趋势（Input / Output / Cached）</h3>
         <div v-if="trend.length > 0" class="flex items-end gap-1 h-48">
           <div v-for="(item, i) in trend" :key="i" class="flex-1 flex flex-col items-center justify-end h-full gap-0">
             <div class="w-full flex flex-col" style="min-height: 2px;">
-              <div class="w-full bg-green-400 rounded-t" :style="{ height: barHeight(item.output_tokens) }"></div>
-              <div class="w-full bg-blue-400" :style="{ height: barHeight(item.input_tokens) }"></div>
+              <div class="w-full bg-success-400 rounded-t" :style="{ height: barHeight(item.output_tokens) }"></div>
+              <div class="w-full bg-info-400" :style="{ height: barHeight(item.input_tokens) }"></div>
               <div class="w-full bg-amber-300 rounded-b" :style="{ height: barHeight(item.cached_tokens) }"></div>
             </div>
             <span v-if="trend.length <= 30 || i % Math.ceil(trend.length / 15) === 0"
-              class="text-[10px] text-slate-400 mt-1 rotate-45 origin-left whitespace-nowrap">
+              class="text-[10px] text-muted mt-1 rotate-45 origin-left whitespace-nowrap">
               {{ item.date.slice(5) }}
             </span>
           </div>
         </div>
-        <div v-else class="text-center py-8 text-slate-400">暂无趋势数据</div>
-        <div class="flex items-center gap-4 mt-3 text-xs text-slate-500">
-          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-blue-400 rounded"></span> Input</span>
-          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-green-400 rounded"></span> Output</span>
+        <div v-else class="text-center py-8 text-muted">暂无趋势数据</div>
+        <div class="flex items-center gap-4 mt-3 text-xs text-muted">
+          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-info-400 rounded"></span> Input</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-success-400 rounded"></span> Output</span>
           <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 bg-amber-300 rounded"></span> Cached</span>
         </div>
       </div>
 
       <!-- 按模型分组 -->
-      <div v-if="modelUsage.length > 0" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
-        <div class="px-5 py-3 border-b border-slate-200">
-          <h3 class="text-sm font-medium text-slate-700">按模型统计</h3>
+      <div v-if="modelUsage.length > 0" class="bg-white rounded-xl shadow-sm border border-default overflow-hidden mb-6">
+        <div class="px-5 py-3 border-b border-default">
+          <h3 class="text-sm font-medium text-default">按模型统计</h3>
         </div>
         <table class="w-full">
-          <thead class="bg-slate-50">
+          <thead class="bg-canvas">
             <tr>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">模型</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">提供商</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">对话数</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Input</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Output</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Cached</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">总 Token</th>
-              <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">平均耗时</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">模型</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">提供商</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">对话数</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">Input</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">Output</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">Cached</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">总 Token</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-muted">平均耗时</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr v-for="m in modelUsage" :key="m.model" class="hover:bg-slate-50">
-              <td class="px-4 py-2 text-sm text-slate-800">{{ m.model }}</td>
-              <td class="px-4 py-2 text-sm text-slate-600">{{ m.provider }}</td>
-              <td class="px-4 py-2 text-sm text-slate-600">{{ m.conversation_count }}</td>
-              <td class="px-4 py-2 text-sm text-blue-600">{{ formatNum(m.input_tokens) }}</td>
-              <td class="px-4 py-2 text-sm text-green-600">{{ formatNum(m.output_tokens) }}</td>
+          <tbody class="divide-y divide-default">
+            <tr v-for="m in modelUsage" :key="m.model" class="hover:bg-surface-hover">
+              <td class="px-4 py-2 text-sm text-default">{{ m.model }}</td>
+              <td class="px-4 py-2 text-sm text-default">{{ m.provider }}</td>
+              <td class="px-4 py-2 text-sm text-default">{{ m.conversation_count }}</td>
+              <td class="px-4 py-2 text-sm text-info-600">{{ formatNum(m.input_tokens) }}</td>
+              <td class="px-4 py-2 text-sm text-success-600">{{ formatNum(m.output_tokens) }}</td>
               <td class="px-4 py-2 text-sm text-amber-600">{{ formatNum(m.cached_tokens) }}</td>
-              <td class="px-4 py-2 text-sm font-medium text-slate-800">{{ formatNum(m.total_tokens) }}</td>
-              <td class="px-4 py-2 text-sm text-slate-600">{{ m.conversation_count ? Math.round(m.total_duration_ms / m.conversation_count) : 0 }}ms</td>
+              <td class="px-4 py-2 text-sm font-medium text-default">{{ formatNum(m.total_tokens) }}</td>
+              <td class="px-4 py-2 text-sm text-default">{{ m.conversation_count ? Math.round(m.total_duration_ms / m.conversation_count) : 0 }}ms</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <!-- 用户用量明细 -->
-      <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="px-5 py-3 border-b border-slate-200">
-          <h3 class="text-sm font-medium text-slate-700">用户用量明细</h3>
+      <div class="bg-white rounded-xl shadow-sm border border-default overflow-hidden">
+        <div class="px-5 py-3 border-b border-default">
+          <h3 class="text-sm font-medium text-default">用户用量明细</h3>
         </div>
         <div v-if="userUsage.length > 0">
           <table class="w-full">
-            <thead class="bg-slate-50">
+            <thead class="bg-canvas">
               <tr>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">用户</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Input</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Output</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Cached</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">总 Token</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">会话数</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500">Token / 会话</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">用户</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">Input</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">Output</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">Cached</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">总 Token</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">会话数</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted">Token / 会话</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-slate-100">
-              <tr v-for="u in userUsage" :key="u.user_id" class="hover:bg-slate-50">
-                <td class="px-4 py-2 text-sm text-slate-800">{{ u.username || u.user_id }}</td>
-                <td class="px-4 py-2 text-sm text-blue-600">{{ formatNum(u.input_tokens) }}</td>
-                <td class="px-4 py-2 text-sm text-green-600">{{ formatNum(u.output_tokens) }}</td>
+            <tbody class="divide-y divide-default">
+              <tr v-for="u in userUsage" :key="u.user_id" class="hover:bg-surface-hover">
+                <td class="px-4 py-2 text-sm text-default">{{ u.username || u.user_id }}</td>
+                <td class="px-4 py-2 text-sm text-info-600">{{ formatNum(u.input_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-success-600">{{ formatNum(u.output_tokens) }}</td>
                 <td class="px-4 py-2 text-sm text-amber-600">{{ formatNum(u.cached_tokens) }}</td>
-                <td class="px-4 py-2 text-sm font-medium text-slate-800">{{ formatNum(u.total_tokens) }}</td>
-                <td class="px-4 py-2 text-sm text-slate-600">{{ u.total_sessions }}</td>
-                <td class="px-4 py-2 text-sm text-slate-600">{{ u.avg_tokens_per_session }}</td>
+                <td class="px-4 py-2 text-sm font-medium text-default">{{ formatNum(u.total_tokens) }}</td>
+                <td class="px-4 py-2 text-sm text-default">{{ u.total_sessions }}</td>
+                <td class="px-4 py-2 text-sm text-default">{{ u.avg_tokens_per_session }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div v-else class="text-center py-8 text-slate-400">暂无用户用量数据</div>
+        <div v-else class="text-center py-8 text-muted">暂无用户用量数据</div>
       </div>
     </template>
   </div>

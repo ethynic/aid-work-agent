@@ -5,9 +5,9 @@
       <TransitionGroup name="toast">
         <div v-for="toast in toasts" :key="toast.id"
           :class="['px-4 py-2 rounded-lg shadow-lg text-sm flex items-center gap-2',
-            toast.type === 'success' ? 'bg-green-500 text-white' : '',
-            toast.type === 'error' ? 'bg-red-500 text-white' : '',
-            toast.type === 'info' ? 'bg-blue-500 text-white' : ''
+            toast.type === 'success' ? 'bg-success-500 text-white' : '',
+            toast.type === 'error' ? 'bg-danger-500 text-white' : '',
+            toast.type === 'info' ? 'bg-info-500 text-white' : ''
           ]">
           <svg v-if="toast.type === 'success'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
@@ -46,16 +46,16 @@
           <!-- Left: List -->
           <div class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto">
           <!-- 未授权警告 -->
-          <div v-if="hasNoAllowedAgents" class="p-4 m-3 bg-red-50 border border-red-200 rounded-lg">
-            <p class="text-sm font-bold text-red-700 mb-1">未授权使用数字员工</p>
-            <p class="text-xs text-red-600">当前账号未被授权使用任何数字员工，请联系企业管理员申请授权。</p>
+          <div v-if="hasNoAllowedAgents" class="p-4 m-3 bg-danger-50 border border-danger-200 rounded-lg">
+            <p class="text-sm font-bold text-danger-700 mb-1">未授权使用数字员工</p>
+            <p class="text-xs text-danger-600">当前账号未被授权使用任何数字员工，请联系企业管理员申请授权。</p>
           </div>
         <!-- Builtin -->
         <div class="p-3">
           <div class="text-sm font-bold text-gray-500 mb-2">内置 ({{ builtinList.length }})</div>
           <div v-for="item in builtinList" :key="item.agent_id"
             @click="selectAgent(item)"
-            :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
+            :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-info-50 text-info-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
           >
             <div class="text-sm font-medium truncate">{{ item.name }}</div>
             <div class="text-xs text-gray-400 truncate mt-0.5">{{ item.description || '无描述' }}</div>
@@ -66,7 +66,7 @@
           <div class="text-sm font-bold text-gray-500 mb-2">定制 ({{ customList.length }})</div>
           <div v-for="item in customList" :key="item.agent_id"
             @click="selectAgent(item)"
-            :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
+            :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-info-50 text-info-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
           >
             <div class="text-sm font-medium truncate">{{ item.name }}</div>
             <div class="text-xs text-gray-400 truncate mt-0.5">{{ item.description || '无描述' }}</div>
@@ -93,7 +93,7 @@
           <div class="flex items-center justify-between mb-6 flex-shrink-0">
             <div>
               <h2 class="text-base font-semibold text-gray-800">{{ detail?.name }}</h2>
-              <span :class="['inline-block mt-1 px-2 py-0.5 text-xs rounded-full', selectedAgent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700']">
+              <span :class="['inline-block mt-1 px-2 py-0.5 text-xs rounded-full', selectedAgent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700']">
                 {{ selectedAgent.type === 'builtin' ? '内置' : '定制' }}
               </span>
             </div>
@@ -129,7 +129,7 @@
             <div>
               <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">可用技能</label>
               <div v-if="detail?.skills?.allowed?.length" class="flex flex-wrap gap-1">
-                <span v-for="skill in detail.skills.allowed" :key="skill" class="px-2 py-0.5 text-xs bg-green-50 text-green-700 rounded border border-green-200">{{ skill }}</span>
+                <span v-for="skill in detail.skills.allowed" :key="skill" class="px-2 py-0.5 text-xs bg-success-50 text-success-700 rounded border border-green-200">{{ skill }}</span>
               </div>
               <span v-else class="text-sm text-gray-400">（空）</span>
             </div>
@@ -170,15 +170,15 @@
               <label class="block text-sm font-medium text-gray-500 mb-1">能力标签</label>
               <div class="flex flex-wrap gap-1 mb-1">
                 <span v-for="(cap, idx) in editForm.capabilities" :key="idx"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-blue-50 text-blue-700 rounded">
+                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-info-50 text-info-700 rounded">
                   {{ cap }}
-                  <button @click="editForm.capabilities.splice(idx, 1)" class="hover:text-red-500">&times;</button>
+                  <button @click="editForm.capabilities.splice(idx, 1)" class="hover:text-danger-500">&times;</button>
                 </span>
               </div>
               <div class="flex gap-2">
                 <input v-model="newCapability" @keydown.enter.prevent="addCapability" type="text" placeholder="输入后回车添加"
                   class="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
-                <button @click="addCapability" class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">添加</button>
+                <button @click="addCapability" class="px-3 py-1.5 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">添加</button>
               </div>
             </div>
 
@@ -194,12 +194,12 @@
                   <span v-for="(tool, idx) in editForm.tools.list" :key="tool"
                     class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-purple-50 text-purple-700 rounded border border-purple-200">
                     {{ tool }}
-                    <button @click="editForm.tools.list.splice(idx, 1)" class="hover:text-red-500">&times;</button>
+                    <button @click="editForm.tools.list.splice(idx, 1)" class="hover:text-danger-500">&times;</button>
                   </span>
                   <span v-if="!editForm.tools.list?.length" class="text-sm text-gray-400">（空）</span>
                 </div>
                 <button @click="showingTools = !showingTools"
-                  class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">
+                  class="px-3 py-1.5 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
                   {{ showingTools ? '收起工具列表' : '选择工具' }}
                 </button>
                 <div v-if="showingTools" class="mt-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
@@ -221,15 +221,15 @@
               <label class="block text-sm font-medium text-gray-500 mb-1">可用技能</label>
               <div class="flex flex-wrap gap-1 mb-1">
                 <span v-for="(skill, idx) in editForm.skills.allowed" :key="skill"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-green-50 text-green-700 rounded border border-green-200">
+                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-success-50 text-success-700 rounded border border-green-200">
                   {{ skill }}
-                  <button @click="editForm.skills.allowed.splice(idx, 1)" class="hover:text-red-500">&times;</button>
+                  <button @click="editForm.skills.allowed.splice(idx, 1)" class="hover:text-danger-500">&times;</button>
                 </span>
                 <span v-if="!editForm.skills.allowed?.length" class="text-sm text-gray-400">（空）</span>
               </div>
               <div class="mt-2">
                 <button @click="showingSkills = !showingSkills"
-                  class="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">
+                  class="px-3 py-1.5 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
                   {{ showingSkills ? '收起技能列表' : '选择技能' }}
                 </button>
               </div>
@@ -251,8 +251,8 @@
               <div class="flex items-center justify-between mb-1 flex-shrink-0">
                 <label class="block text-sm font-medium text-gray-500">系统提示词 (Markdown)</label>
                 <div class="flex gap-1">
-                  <button @click="promptMode = 'edit'" :class="['px-2 py-1 text-xs rounded', promptMode === 'edit' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:bg-gray-100']">编辑</button>
-                  <button @click="promptMode = 'preview'" :class="['px-2 py-1 text-xs rounded', promptMode === 'preview' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:bg-gray-100']">预览</button>
+                  <button @click="promptMode = 'edit'" :class="['px-2 py-1 text-xs rounded', promptMode === 'edit' ? 'bg-info-100 text-info-700' : 'text-gray-400 hover:bg-gray-100']">编辑</button>
+                  <button @click="promptMode = 'preview'" :class="['px-2 py-1 text-xs rounded', promptMode === 'preview' ? 'bg-info-100 text-info-700' : 'text-gray-400 hover:bg-gray-100']">预览</button>
                 </div>
               </div>
               <textarea v-if="promptMode === 'edit'" v-model="editForm.system_prompt" placeholder="## 角色定义&#10;&#10;你是一个..."
@@ -267,7 +267,7 @@
               {{ aiEnhancing ? 'AI 完善中...' : 'AI 完善' }}
             </button>
             <button @click="saveAgent" class="px-4 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">保存</button>
-            <button v-if="!isNewMode && selectedAgent?.type === 'custom'" @click="deleteCurrentAgent" class="px-3 py-1.5 text-sm text-red-600 bg-red-50 hover:bg-red-100 rounded-lg">删除</button>
+            <button v-if="!isNewMode && selectedAgent?.type === 'custom'" @click="deleteCurrentAgent" class="px-3 py-1.5 text-sm text-danger-600 bg-danger-50 hover:bg-danger-100 rounded-lg">删除</button>
             <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg ml-auto">另存为</button>
           </div>
         </div>
@@ -311,7 +311,7 @@
           </div>
           <div class="flex-1 flex flex-col min-w-0">
             <div class="text-sm font-medium text-gray-500 mb-1">优化后（AI 建议）</div>
-            <pre class="flex-1 bg-blue-50 rounded-lg p-3 text-xs text-gray-700 overflow-auto whitespace-pre-wrap font-mono">{{ aiCompareEnhanced }}</pre>
+            <pre class="flex-1 bg-info-50 rounded-lg p-3 text-xs text-gray-700 overflow-auto whitespace-pre-wrap font-mono">{{ aiCompareEnhanced }}</pre>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-4 flex-shrink-0">

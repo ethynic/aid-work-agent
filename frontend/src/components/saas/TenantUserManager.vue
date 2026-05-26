@@ -45,41 +45,41 @@
         <div></div>
         <div class="flex gap-2">
           <button @click="showImport = true"
-            class="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-lg text-sm font-medium transition-colors">
+            class="px-4 py-2 border border-hover text-default hover:bg-surface-hover rounded-lg text-sm font-medium transition-colors">
             CSV 导入
           </button>
           <button @click="openAddUser"
-            class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors">
+            class="px-4 py-2 bg-primary-500 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition-colors">
             添加用户
           </button>
         </div>
       </div>
 
-      <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+      <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <!-- 用户列表 -->
-    <div v-else-if="users.length > 0" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <div v-else-if="users.length > 0" class="bg-white rounded-xl shadow-sm border border-default overflow-hidden">
       <table class="w-full">
-        <thead class="bg-slate-50 border-b border-slate-200">
+        <thead class="bg-canvas border-b border-default">
           <tr>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase w-16">序号</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">用户名</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">手机号</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">部门</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">角色</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">数字员工授权</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase w-16">序号</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">用户名</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">手机号</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">部门</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">角色</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">数字员工授权</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-muted uppercase">操作</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-100">
-          <tr v-for="(u, index) in users" :key="u.mapping_id" class="hover:bg-slate-50">
-            <td class="px-4 py-3 text-sm text-slate-500">{{ index + 1 }}</td>
-            <td class="px-4 py-3 text-sm text-slate-800">{{ u.username || '-' }}</td>
-            <td class="px-4 py-3 text-sm text-slate-600">{{ u.phone || '-' }}</td>
-            <td class="px-4 py-3 text-sm text-slate-600">{{ u.department || '-' }}</td>
+        <tbody class="divide-y divide-default">
+          <tr v-for="(u, index) in users" :key="u.mapping_id" class="hover:bg-surface-hover">
+            <td class="px-4 py-3 text-sm text-muted">{{ index + 1 }}</td>
+            <td class="px-4 py-3 text-sm text-default">{{ u.username || '-' }}</td>
+            <td class="px-4 py-3 text-sm text-default">{{ u.phone || '-' }}</td>
+            <td class="px-4 py-3 text-sm text-default">{{ u.department || '-' }}</td>
             <td class="px-4 py-3">
               <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-                :class="u.role === 'tenant_admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'">
+                :class="u.role === 'tenant_admin' ? 'bg-purple-100 text-purple-700' : 'bg-surface-hover text-default'">
                 {{ u.role === 'tenant_admin' ? '管理员' : '普通用户' }}
               </span>
             </td>
@@ -89,22 +89,22 @@
                 默认全部
               </span>
               <span v-else-if="u.agent_count > 0"
-                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-success-100 text-success-700">
                 {{ u.agent_count }} 个已授权
               </span>
               <span v-else
-                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-danger-100 text-danger-700">
                 未授权
               </span>
             </td>
             <td class="px-4 py-3">
               <div class="flex gap-2">
                 <button @click="openPermissionDialog(u)"
-                  class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                  class="text-xs px-2 py-1 bg-info-100 text-info-700 rounded hover:bg-info-200 transition-colors">
                   授权
                 </button>
                 <button @click="handleRemove(u.user_id)"
-                  class="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors">
+                  class="text-xs px-2 py-1 bg-danger-100 text-danger-700 rounded hover:bg-danger-200 transition-colors">
                   删除
                 </button>
               </div>
@@ -114,7 +114,7 @@
       </table>
     </div>
 
-    <div v-else class="text-center py-12 text-slate-500">
+    <div v-else class="text-center py-12 text-muted">
       <p class="text-lg mb-2">暂无企业用户</p>
       <p class="text-sm">点击"添加用户"或"CSV 导入"添加用户</p>
     </div>
@@ -124,36 +124,36 @@
     <div v-if="showAdd" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showAdd = false"></div>
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
-        <h3 class="text-lg font-bold text-slate-800 mb-4">添加用户</h3>
+        <h3 class="text-lg font-bold text-default mb-4">添加用户</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-sm text-slate-600 mb-1">用户名 <span class="text-red-500">*</span></label>
+            <label class="block text-sm text-default mb-1">用户名 <span class="text-danger-500">*</span></label>
             <input v-model="addForm.username" type="text" placeholder="请输入用户名"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">手机号 <span class="text-red-500">*</span></label>
+            <label class="block text-sm text-default mb-1">手机号 <span class="text-danger-500">*</span></label>
             <input v-model="addForm.phone" type="tel" placeholder="请输入11位手机号"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">部门</label>
+            <label class="block text-sm text-default mb-1">部门</label>
             <input v-model="addForm.department" type="text" placeholder="选填"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="block text-sm text-slate-600 mb-1">角色</label>
+            <label class="block text-sm text-default mb-1">角色</label>
             <select v-model="addForm.role"
-              class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400">
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
               <option value="user">普通用户</option>
               <option value="tenant_admin">管理员</option>
             </select>
           </div>
         </div>
-        <div v-if="addError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ addError }}</div>
+        <div v-if="addError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ addError }}</div>
         <div class="flex gap-3 mt-6">
-          <button @click="showAdd = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
-          <button @click="handleAddUser" :disabled="adding" class="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors">
+          <button @click="showAdd = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-surface-hover transition-colors">取消</button>
+          <button @click="handleAddUser" :disabled="adding" class="flex-1 py-2 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg transition-colors">
             {{ adding ? '添加中...' : '确认' }}
           </button>
         </div>
@@ -164,22 +164,22 @@
     <div v-if="showImport" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showImport = false"></div>
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
-        <h3 class="text-lg font-bold text-slate-800 mb-4">CSV 批量导入</h3>
+        <h3 class="text-lg font-bold text-default mb-4">CSV 批量导入</h3>
         <div class="mb-4">
-          <p class="text-sm text-slate-500 mb-2">CSV 格式：phone（必填，11位数字）, username（选填）</p>
+          <p class="text-sm text-muted mb-2">CSV 格式：phone（必填，11位数字）, username（选填）</p>
           <input type="file" accept=".csv" @change="onFileSelect" ref="fileInput"
-            class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-cyan-50 file:text-cyan-700 hover:file:bg-cyan-100" />
+            class="w-full text-sm text-muted file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100" />
         </div>
-        <div v-if="importResult" class="mb-4 p-3 bg-slate-50 rounded-lg text-sm">
-          <p class="text-green-600">成功导入：{{ importResult.imported }} / {{ importResult.total }}</p>
-          <p v-if="importResult.errors?.length" class="text-red-600 mt-1">
+        <div v-if="importResult" class="mb-4 p-3 bg-canvas rounded-lg text-sm">
+          <p class="text-success-600">成功导入：{{ importResult.imported }} / {{ importResult.total }}</p>
+          <p v-if="importResult.errors?.length" class="text-danger-600 mt-1">
             <span v-for="(err, i) in importResult.errors" :key="i">{{ err }}<br /></span>
           </p>
         </div>
-        <div v-if="importError" class="mb-4 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{{ importError }}</div>
+        <div v-if="importError" class="mb-4 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ importError }}</div>
         <div class="flex gap-3">
-          <button @click="showImport = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">关闭</button>
-          <button @click="handleImport" :disabled="!importFile || importing" class="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors">
+          <button @click="showImport = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-surface-hover transition-colors">关闭</button>
+          <button @click="handleImport" :disabled="!importFile || importing" class="flex-1 py-2 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg transition-colors">
             {{ importing ? '导入中...' : '开始导入' }}
           </button>
         </div>
@@ -190,39 +190,39 @@
     <div v-if="showPermissionDialog" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showPermissionDialog = false"></div>
       <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6 max-h-[80vh] overflow-y-auto">
-        <h3 class="text-lg font-bold text-slate-800 mb-4">
+        <h3 class="text-lg font-bold text-default mb-4">
           数字员工授权 - {{ currentUser?.username || currentUser?.phone }}
         </h3>
-        <div v-if="loadingAgents" class="text-center py-6 text-slate-500 text-sm">加载中...</div>
-        <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-slate-500 text-sm">
+        <div v-if="loadingAgents" class="text-center py-6 text-muted text-sm">加载中...</div>
+        <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-muted text-sm">
           当前租户未授权任何数字员工，无法给用户授权
         </div>
         <div v-else class="space-y-2 py-2">
-          <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-slate-50 rounded cursor-pointer">
+          <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-surface-hover rounded cursor-pointer">
             <input
               type="checkbox"
               :checked="selectedAgentIds.includes(agent.agent_id)"
               @change="toggleAgentSelection(agent.agent_id)"
-              class="w-4 h-4 text-cyan-600 border-slate-300 rounded focus:ring-cyan-500"
+              class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
             />
             <div class="ml-3 flex-1">
-              <div class="text-sm font-medium text-slate-800">{{ agent.name }}</div>
-              <div v-if="agent.description" class="text-xs text-slate-500">{{ agent.description }}</div>
+              <div class="text-sm font-medium text-default">{{ agent.name }}</div>
+              <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
             </div>
             <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
-              :class="agent.type === 'builtin' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'">
+              :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
               {{ agent.type === 'builtin' ? '内置' : '定制' }}
             </span>
           </label>
         </div>
-        <div v-if="permissionError" class="mt-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
+        <div v-if="permissionError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">
           {{ permissionError }}
         </div>
         <div class="flex gap-3 mt-6">
-          <button @click="showPermissionDialog = false" class="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
+          <button @click="showPermissionDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-surface-hover transition-colors">
             取消
           </button>
-          <button @click="saveUserPermissions" :disabled="savingPermissions" class="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg transition-colors">
+          <button @click="saveUserPermissions" :disabled="savingPermissions" class="flex-1 py-2 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg transition-colors">
             {{ savingPermissions ? '保存中...' : '确认保存' }}
           </button>
         </div>

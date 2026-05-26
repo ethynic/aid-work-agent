@@ -3,7 +3,7 @@
   <button
     v-if="isPreviewable"
     class="inline-flex items-center gap-3 p-3 rounded-lg border border-gray-200 bg-gray-50
-           hover:bg-blue-50 hover:border-blue-300 transition-colors cursor-pointer group
+           hover:bg-info-50 hover:border-blue-300 transition-colors cursor-pointer group
            w-full md:w-auto md:min-w-[240px] md:max-w-[320px]"
     @click="handleClick"
   >
@@ -15,7 +15,7 @@
     </div>
 
     <div class="flex-1 min-w-0">
-      <div class="text-sm font-medium text-gray-800 truncate group-hover:text-blue-700">
+      <div class="text-sm font-medium text-gray-800 truncate group-hover:text-info-700">
         {{ file.file_name }}
       </div>
       <div class="text-xs text-gray-400 mt-0.5">
@@ -24,7 +24,7 @@
       </div>
     </div>
 
-    <div class="flex-shrink-0 text-gray-400 group-hover:text-blue-600 transition-colors">
+    <div class="flex-shrink-0 text-gray-400 group-hover:text-info-600 transition-colors">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -40,7 +40,7 @@
     :href="file.download_url"
     download
     class="inline-flex items-center gap-3 p-3 rounded-lg border border-gray-200 bg-gray-50
-           hover:bg-blue-50 hover:border-blue-300 transition-colors cursor-pointer group no-underline
+           hover:bg-info-50 hover:border-blue-300 transition-colors cursor-pointer group no-underline
            w-full md:w-auto md:min-w-[240px] md:max-w-[320px]"
   >
     <div
@@ -51,7 +51,7 @@
     </div>
 
     <div class="flex-1 min-w-0">
-      <div class="text-sm font-medium text-gray-800 truncate group-hover:text-blue-700">
+      <div class="text-sm font-medium text-gray-800 truncate group-hover:text-info-700">
         {{ file.file_name }}
       </div>
       <div class="text-xs text-gray-400 mt-0.5">
@@ -60,7 +60,7 @@
       </div>
     </div>
 
-    <div class="flex-shrink-0 text-gray-400 group-hover:text-blue-600 transition-colors">
+    <div class="flex-shrink-0 text-gray-400 group-hover:text-info-600 transition-colors">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586
@@ -123,9 +123,9 @@ const iconEmoji = computed(() => {
 const iconBgClass = computed(() => {
   const name = props.file.file_name.toLowerCase()
   if (['html', 'htm'].includes(ext.value)) return 'bg-orange-100'
-  if (name.endsWith('.pdf')) return 'bg-red-100'
-  if (name.endsWith('.doc') || name.endsWith('.docx')) return 'bg-blue-100'
-  if (name.endsWith('.xls') || name.endsWith('.xlsx')) return 'bg-green-100'
+  if (name.endsWith('.pdf')) return 'bg-danger-100'
+  if (name.endsWith('.doc') || name.endsWith('.docx')) return 'bg-info-100'
+  if (name.endsWith('.xls') || name.endsWith('.xlsx')) return 'bg-success-100'
   if (name.endsWith('.ppt') || name.endsWith('.pptx')) return 'bg-orange-100'
   return 'bg-gray-100'
 })

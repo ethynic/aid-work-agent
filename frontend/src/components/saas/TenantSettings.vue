@@ -41,39 +41,39 @@
 
     <!-- Main Content -->
     <div class="flex-1 overflow-y-auto p-6">
-      <h1 class="text-2xl font-bold text-slate-800 mb-6">企业设置</h1>
+      <h1 class="text-2xl font-bold text-default mb-6">企业设置</h1>
 
-      <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+      <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
       <div v-else class="max-w-lg">
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        <div class="bg-white rounded-xl shadow-sm border border-default p-6">
           <div class="space-y-4">
             <div>
-              <label class="block text-sm text-slate-600 mb-1">企业名称</label>
+              <label class="block text-sm text-default mb-1">企业名称</label>
               <input v-model="form.company_name" type="text"
-                class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+                class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
             </div>
             <div>
-              <label class="block text-sm text-slate-600 mb-1">联系人</label>
+              <label class="block text-sm text-default mb-1">联系人</label>
               <input v-model="form.contact_name" type="text"
-                class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+                class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
             </div>
             <div>
-              <label class="block text-sm text-slate-600 mb-1">联系电话</label>
+              <label class="block text-sm text-default mb-1">联系电话</label>
               <input v-model="form.contact_phone" type="tel"
-                class="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:border-cyan-400" />
+                class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
             </div>
           </div>
 
           <div v-if="message" class="mt-4 p-3 rounded-lg text-sm"
-            :class="messageType === 'success' ? 'bg-green-50 border border-green-200 text-green-600' : 'bg-red-50 border border-red-200 text-red-600'">
+            :class="messageType === 'success' ? 'bg-success-50 border border-success-200 text-success-600' : 'bg-danger-50 border border-danger-200 text-danger-600'">
             {{ message }}
           </div>
 
           <button
             @click="handleSave"
             :disabled="saving"
-            class="mt-6 w-full py-2.5 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg font-medium transition-colors"
+            class="mt-6 w-full py-2.5 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg font-medium transition-colors"
           >
             {{ saving ? '保存中...' : '保存设置' }}
           </button>

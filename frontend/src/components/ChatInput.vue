@@ -81,7 +81,7 @@
         <button
           v-if="isProcessing"
           @click="emit('stop')"
-          class="box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:border-red-300"
+          class="box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 hover:border-red-300"
         >
           <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
             <rect x="6" y="6" width="12" height="12" rx="2" />

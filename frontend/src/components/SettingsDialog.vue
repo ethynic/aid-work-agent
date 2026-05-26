@@ -23,11 +23,11 @@
               :class="[
                 'w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left',
                 activeTab === tab.key
-                  ? 'bg-blue-50 text-blue-700 font-medium border-r-2 border-blue-600'
+                  ? 'bg-info-50 text-info-700 font-medium border-r-2 border-blue-600'
                   : 'text-gray-600 hover:bg-gray-100 hover:text-gray-800'
               ]"
             >
-              <component :is="tab.icon" :class="['w-4 h-4 flex-shrink-0', activeTab === tab.key ? 'text-blue-600' : 'text-gray-400']" />
+              <component :is="tab.icon" :class="['w-4 h-4 flex-shrink-0', activeTab === tab.key ? 'text-info-600' : 'text-gray-400']" />
               {{ tab.label }}
             </button>
           </nav>
@@ -94,8 +94,8 @@
             <div v-if="activeTab === 'email'">
               <!-- Email Bound Status -->
               <div v-if="emailBound && !showEmailForm" class="space-y-4">
-                <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                  <div class="flex items-center gap-2 text-green-700">
+                <div class="bg-success-50 border border-green-200 rounded-lg p-4">
+                  <div class="flex items-center gap-2 text-success-700">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -115,7 +115,7 @@
                   <button @click="showEmailForm = true" class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                     修改配置
                   </button>
-                  <button @click="handleDeleteEmail" :disabled="emailDeleting" class="px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm hover:bg-red-50 disabled:opacity-50 transition-colors">
+                  <button @click="handleDeleteEmail" :disabled="emailDeleting" class="px-4 py-2 border border-red-300 text-danger-600 rounded-lg text-sm hover:bg-danger-50 disabled:opacity-50 transition-colors">
                     {{ emailDeleting ? '删除中...' : '解除绑定' }}
                   </button>
                 </div>
@@ -123,7 +123,7 @@
 
               <!-- Email Form (create / edit) -->
               <div v-else class="space-y-4">
-                <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+                <div class="bg-info-50 border border-blue-200 rounded-lg p-3 text-sm text-info-700">
                   保存时系统会向您的邮箱发送一封测试邮件，验证通过后才会保存配置。
                 </div>
 
@@ -183,7 +183,7 @@
                 </div>
 
                 <!-- Error Message -->
-                <div v-if="emailError" class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600">
+                <div v-if="emailError" class="bg-danger-50 border border-danger-200 rounded-lg p-3 text-sm text-danger-600">
                   {{ emailError }}
                 </div>
 

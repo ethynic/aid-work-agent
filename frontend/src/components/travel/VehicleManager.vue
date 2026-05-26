@@ -1,60 +1,60 @@
 <template>
-  <div class="manager-container">
-    <div class="header-bar">
-      <h2>车辆价格管理</h2>
-      <div class="actions">
-        <input v-model="filterRegion" @change="loadData" class="filter-select" placeholder="筛选区域" />
-        <button class="btn-primary" @click="openCreate">+ 新增车辆</button>
-        <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
+  <div class="p-5 max-w-[1400px] mx-auto">
+    <div class="flex justify-between items-center mb-5">
+      <h2 class="m-0 text-lg">车辆价格管理</h2>
+      <div class="flex gap-2.5 items-center">
+        <input v-model="filterRegion" @change="loadData" class="px-2.5 py-1.5 border border-default rounded text-sm" placeholder="筛选区域" />
+        <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="openCreate">+ 新增车辆</button>
+        <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
         </button>
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
       </div>
     </div>
 
-    <table class="data-table">
+    <table class="w-full border-collapse text-[13px]">
       <thead>
         <tr>
-          <th class="w-16">序号</th>
-          <th>车型</th>
-          <th>显示名</th>
-          <th>区域</th>
-          <th>座位数</th>
-          <th>计价方式</th>
-          <th>每公里费用</th>
-          <th>司机餐补</th>
-          <th>司机住宿</th>
-          <th>操作</th>
+          <th class="w-16 p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">序号</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">车型</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">显示名</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">区域</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">座位数</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">计价方式</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">每公里费用</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">司机餐补</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">司机住宿</th>
+          <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default whitespace-nowrap">操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-if="loading"><td colspan="10" class="center">加载中...</td></tr>
-        <tr v-else-if="items.length === 0"><td colspan="10" class="center">暂无数据</td></tr>
-        <tr v-for="(item, index) in items" :key="item.id">
-          <td>{{ index + 1 }}</td>
-          <td>{{ item.vehicle_type }}</td>
-          <td>{{ item.vehicle_type_label || '-' }}</td>
-          <td>{{ item.region_name || '通用' }}</td>
-          <td>{{ item.seats_max }}座</td>
-          <td>{{ item.pricing_mode === 'per_km' ? '按公里' : '按天' }}</td>
-          <td>{{ item.per_km_rate || '-' }}</td>
-          <td>{{ item.driver_meal_allowance || '-' }}</td>
-          <td>{{ item.driver_accommodation || '-' }}</td>
-          <td class="actions-cell">
-            <button class="btn-sm" @click="openEdit(item)">编辑</button>
-            <button class="btn-sm btn-danger" @click="handleDelete(item)">删除</button>
+        <tr v-if="loading"><td colspan="10" class="p-2 text-center text-muted">加载中...</td></tr>
+        <tr v-else-if="items.length === 0"><td colspan="10" class="p-2 text-center text-muted">暂无数据</td></tr>
+        <tr v-for="(item, index) in items" :key="item.id" class="hover:bg-surface-hover">
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ index + 1 }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.vehicle_type }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.vehicle_type_label || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.region_name || '通用' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.seats_max }}座</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.pricing_mode === 'per_km' ? '按公里' : '按天' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.per_km_rate || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.driver_meal_allowance || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.driver_accommodation || '-' }}</td>
+          <td class="p-2 px-2.5 text-left border-b border-gray-200 whitespace-nowrap">
+            <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer" @click="openEdit(item)">编辑</button>
+            <button class="text-danger-600 hover:bg-danger-50 px-2.5 py-1 rounded text-[13px] border border-danger-600 cursor-pointer" @click="handleDelete(item)">删除</button>
           </td>
         </tr>
       </tbody>
     </table>
 
-    <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-      <div class="modal-content">
-        <h3>{{ editingItem ? '编辑车辆' : '新增车辆' }}</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>车型编码 *</label>
-            <select v-model="form.vehicle_type">
+    <div v-if="showModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showModal = false">
+      <div class="bg-white rounded-lg p-6 w-[600px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
+        <h3 class="m-0 mb-5">{{ editingItem ? '编辑车辆' : '新增车辆' }}</h3>
+        <div class="flex gap-3">
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">车型编码 *</label>
+            <select v-model="form.vehicle_type" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
               <option value="business">商务车</option>
               <option value="coaster">考斯特</option>
               <option value="minibus">中巴</option>
@@ -62,65 +62,65 @@
               <option value="large_bus">大型大巴</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>车型显示名 *</label>
-            <input v-model="form.vehicle_type_label" placeholder="如：别克GL8商务车" />
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">车型显示名 *</label>
+            <input v-model="form.vehicle_type_label" placeholder="如：别克GL8商务车" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>座位数 *</label>
-            <input v-model.number="form.seats_max" type="number" />
+        <div class="flex gap-3">
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">座位数 *</label>
+            <input v-model.number="form.seats_max" type="number" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
-          <div class="form-group">
-            <label>区域</label>
-            <input v-model="form.region_name" placeholder="留空为全国通用" />
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">区域</label>
+            <input v-model="form.region_name" placeholder="留空为全国通用" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>计价方式</label>
-            <select v-model="form.pricing_mode">
+        <div class="flex gap-3">
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">计价方式</label>
+            <select v-model="form.pricing_mode" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
               <option value="per_km">按公里</option>
               <option value="daily">按天</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>每公里费用（元/km）</label>
-            <input v-model.number="form.per_km_rate" type="number" step="0.01" />
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">每公里费用（元/km）</label>
+            <input v-model.number="form.per_km_rate" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>司机餐补（元/天）</label>
-            <input v-model.number="form.driver_meal_allowance" type="number" step="0.01" />
+        <div class="flex gap-3">
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">司机餐补（元/天）</label>
+            <input v-model.number="form.driver_meal_allowance" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
-          <div class="form-group">
-            <label>司机住宿费（元/晚）</label>
-            <input v-model.number="form.driver_accommodation" type="number" step="0.01" />
+          <div class="flex-1 mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">司机住宿费（元/晚）</label>
+            <input v-model.number="form.driver_accommodation" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
         </div>
-        <div class="form-group">
-          <label>备注</label>
-          <input v-model="form.remark" />
+        <div class="mb-3.5">
+          <label class="block mb-1 text-[13px] text-muted">备注</label>
+          <input v-model="form.remark" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
         </div>
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showModal = false">取消</button>
-          <button class="btn-primary" @click="handleSave">保存</button>
+        <div class="flex justify-end gap-2.5 mt-5">
+          <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="showModal = false">取消</button>
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="handleSave">保存</button>
         </div>
       </div>
     </div>
 
     <!-- 导入结果弹窗 -->
-    <div v-if="showImportResult" class="modal-overlay" @click.self="showImportResult = false">
-      <div class="modal-content">
-        <h3>导入结果</h3>
+    <div v-if="showImportResult" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showImportResult = false">
+      <div class="bg-white rounded-lg p-6 w-[600px] max-w-[90vw] max-h-[85vh] overflow-y-auto">
+        <h3 class="m-0 mb-5">导入结果</h3>
         <p>成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
-        <div v-if="importResult?.errors?.length" style="color:#dc2626;font-size:12px;margin-top:8px">
+        <div v-if="importResult?.errors?.length" class="text-danger-600 text-xs mt-2">
           <div v-for="err in importResult.errors" :key="err">{{ err }}</div>
         </div>
-        <div class="modal-actions">
-          <button class="btn-primary" @click="showImportResult = false">确定</button>
+        <div class="flex justify-end gap-2.5 mt-5">
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="showImportResult = false">确定</button>
         </div>
       </div>
     </div>
@@ -209,32 +209,3 @@ async function handleDelete(item: any) {
 onMounted(() => { loadData() })
 </script>
 
-<style scoped>
-.manager-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
-.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.header-bar h2 { margin: 0; font-size: 18px; }
-.actions { display: flex; gap: 10px; align-items: center; }
-.filter-select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.data-table th, .data-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
-.data-table th { background: #f5f7fa; font-weight: 600; color: #333; }
-.data-table tr:hover { background: #fafbfc; }
-.center { text-align: center; color: #999; }
-.actions-cell { white-space: nowrap; }
-.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
-.btn-primary:hover { background: #4338ca; }
-.btn-secondary { background: #f3f4f6; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
-.btn-sm { padding: 4px 10px; border: 1px solid #ddd; border-radius: 3px; background: white; cursor: pointer; font-size: 13px; }
-.btn-sm:hover { background: #f5f5f5; }
-.btn-danger { color: #dc2626; border-color: #dc2626; }
-.btn-danger:hover { background: #fef2f2; }
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal-content { background: white; border-radius: 8px; padding: 24px; width: 600px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
-.modal-content h3 { margin: 0 0 20px; }
-.form-row { display: flex; gap: 12px; }
-.form-row .form-group { flex: 1; }
-.form-group { margin-bottom: 14px; }
-.form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #555; }
-.form-group input, .form-group select { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-</style>

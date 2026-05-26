@@ -1,10 +1,10 @@
 <template>
-  <div class="flex-shrink-0 border-t border-slate-200 bg-white">
+  <div class="flex-shrink-0 border-t border-default bg-white">
     <div class="max-w-4xl mx-auto">
       <!-- Header -->
       <button 
         @click="isExpanded = !isExpanded"
-        class="w-full px-4 py-2 flex items-center justify-between text-sm text-slate-500 hover:text-slate-700 transition-colors"
+        class="w-full px-4 py-2 flex items-center justify-between text-sm text-muted hover:text-default transition-colors"
       >
         <div class="flex items-center gap-2">
           <svg 
@@ -16,12 +16,12 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
           <span>执行详情</span>
-          <span class="px-2 py-0.5 bg-slate-200 rounded-full text-xs">
+          <span class="px-2 py-0.5 bg-gray-200 rounded-full text-xs">
             {{ visibleMessages.length }} 条
           </span>
         </div>
-        <span v-if="isProcessing" class="flex items-center gap-1 text-cyan-400">
-          <span class="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></span>
+        <span v-if="isProcessing" class="flex items-center gap-1 text-primary-400">
+          <span class="w-1.5 h-1.5 bg-primary-400 rounded-full animate-pulse"></span>
           处理中
         </span>
       </button>
@@ -94,18 +94,18 @@ watch(
 function getClassByType(type: ProgressMessage['type']): string {
   switch (type) {
     case 'error':
-      return 'bg-red-50 text-red-700 border-l-2 border-red-500'
+      return 'bg-danger-50 text-danger-700 border-l-2 border-red-500'
     case 'complete':
-      return 'bg-green-50 text-green-700 border-l-2 border-green-500'
+      return 'bg-success-50 text-success-700 border-l-2 border-green-500'
     case 'thinking':
       return 'bg-purple-50 text-purple-700 border-l-2 border-purple-500'
     case 'tool_start':
-      return 'bg-cyan-50 text-cyan-700 border-l-2 border-cyan-500'
+      return 'bg-primary-50 text-primary-700 border-l-2 border-primary-500'
     case 'tool_result':
       // 根据成功失败状态返回不同样式
-      return 'bg-cyan-50 text-cyan-700 border-l-2 border-cyan-500'
+      return 'bg-primary-50 text-primary-700 border-l-2 border-primary-500'
     default:
-      return 'bg-slate-100 text-slate-700 border-l-2 border-cyan-500'
+      return 'bg-surface-hover text-default border-l-2 border-primary-500'
   }
 }
 

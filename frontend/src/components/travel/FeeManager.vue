@@ -1,81 +1,81 @@
 <template>
-  <div class="manager-container">
-    <div class="header-bar">
-      <h2>费用与淡旺季管理</h2>
+  <div class="p-5 max-w-[1400px] mx-auto">
+    <div class="flex justify-between items-center mb-5">
+      <h2 class="m-0 text-lg">费用与淡旺季管理</h2>
     </div>
 
     <!-- Tab 切换 -->
-    <div class="tab-bar">
-      <button :class="['tab-btn', { active: activeTab === 'fees' }]" @click="activeTab = 'fees'">其他费用</button>
-      <button :class="['tab-btn', { active: activeTab === 'seasons' }]" @click="activeTab = 'seasons'">淡旺季配置</button>
+    <div class="flex mb-5 border-b-2 border-gray-200">
+      <button :class="['px-5 py-2.5 bg-transparent border-none border-b-2 border-transparent -mb-0.5 cursor-pointer text-sm', activeTab === 'fees' ? 'text-primary-600 border-b-primary-600 font-semibold' : 'text-muted hover:text-default']" @click="activeTab = 'fees'">其他费用</button>
+      <button :class="['px-5 py-2.5 bg-transparent border-none border-b-2 border-transparent -mb-0.5 cursor-pointer text-sm', activeTab === 'seasons' ? 'text-primary-600 border-b-primary-600 font-semibold' : 'text-muted hover:text-default']" @click="activeTab = 'seasons'">淡旺季配置</button>
     </div>
 
     <!-- 其他费用 Tab -->
     <div v-if="activeTab === 'fees'">
-      <div class="header-bar">
+      <div class="flex justify-between items-center mb-5">
         <div></div>
-        <div class="actions">
-          <select v-model="filterCategory" @change="loadFees" class="filter-select">
+        <div class="flex gap-2.5 items-center">
+          <select v-model="filterCategory" @change="loadFees" class="px-2.5 py-1.5 border border-default rounded text-sm">
             <option value="">全部分类</option>
             <option value="insurance">保险</option>
             <option value="service">服务费</option>
             <option value="transport">交通</option>
             <option value="other">其他</option>
           </select>
-          <button class="btn-primary" @click="openFeeCreate">+ 新增费用</button>
-          <button class="btn-secondary" @click="handleDownloadTemplate">下载模板</button>
-          <button class="btn-secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="openFeeCreate">+ 新增费用</button>
+          <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="handleDownloadTemplate">下载模板</button>
+          <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" :disabled="importing" @click="triggerFileInput(fileInput)">
             {{ importing ? '导入中...' : '导入 Excel' }}
           </button>
           <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
         </div>
       </div>
-      <table class="data-table">
+      <table class="w-full border-collapse text-[13px]">
         <thead>
           <tr>
-            <th class="w-16">序号</th>
-            <th>费用名称</th>
-            <th>分类</th>
-            <th>计费方式</th>
-            <th>单价</th>
-            <th>是否必含</th>
-            <th>排序</th>
-            <th>备注</th>
-            <th>操作</th>
+            <th class="w-16 p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">序号</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">费用名称</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">分类</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">计费方式</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">单价</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">是否必含</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">排序</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">备注</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="feeLoading"><td colspan="9" class="center">加载中...</td></tr>
-          <tr v-else-if="feeItems.length === 0"><td colspan="9" class="center">暂无数据</td></tr>
-          <tr v-for="(item, index) in feeItems" :key="item.id">
-            <td>{{ index + 1 }}</td>
-            <td>{{ item.fee_name }}</td>
-            <td>{{ item.fee_category }}</td>
-            <td>{{ billingLabel(item.billing_method) }}</td>
-            <td>{{ item.unit_price }}</td>
-            <td>{{ item.is_mandatory ? '是' : '否' }}</td>
-            <td>{{ item.sort_order }}</td>
-            <td>{{ item.remark || '-' }}</td>
-            <td class="actions-cell">
-              <button class="btn-sm" @click="openFeeEdit(item)">编辑</button>
-              <button class="btn-sm btn-danger" @click="handleFeeDelete(item)">删除</button>
+          <tr v-if="feeLoading"><td colspan="9" class="p-2 text-center text-muted">加载中...</td></tr>
+          <tr v-else-if="feeItems.length === 0"><td colspan="9" class="p-2 text-center text-muted">暂无数据</td></tr>
+          <tr v-for="(item, index) in feeItems" :key="item.id" class="hover:bg-surface-hover">
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ index + 1 }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.fee_name }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.fee_category }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ billingLabel(item.billing_method) }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.unit_price }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.is_mandatory ? '是' : '否' }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.sort_order }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.remark || '-' }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200 whitespace-nowrap">
+              <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer" @click="openFeeEdit(item)">编辑</button>
+              <button class="text-danger-600 hover:bg-danger-50 px-2.5 py-1 rounded text-[13px] border border-danger-600 cursor-pointer" @click="handleFeeDelete(item)">删除</button>
             </td>
           </tr>
         </tbody>
       </table>
 
       <!-- 费用弹窗 -->
-      <div v-if="showFeeModal" class="modal-overlay" @click.self="showFeeModal = false">
-        <div class="modal-content">
-          <h3>{{ editingFee ? '编辑费用' : '新增费用' }}</h3>
-          <div class="form-row">
-            <div class="form-group">
-              <label>费用名称 *</label>
-              <input v-model="feeForm.fee_name" />
+      <div v-if="showFeeModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showFeeModal = false">
+        <div class="bg-white rounded-lg p-6 w-[560px] max-w-[90vw]">
+          <h3 class="m-0 mb-5">{{ editingFee ? '编辑费用' : '新增费用' }}</h3>
+          <div class="flex gap-3">
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">费用名称 *</label>
+              <input v-model="feeForm.fee_name" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
             </div>
-            <div class="form-group">
-              <label>费用分类 *</label>
-              <select v-model="feeForm.fee_category">
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">费用分类 *</label>
+              <select v-model="feeForm.fee_category" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
                 <option value="insurance">保险</option>
                 <option value="service">服务费</option>
                 <option value="transport">交通</option>
@@ -83,41 +83,41 @@
               </select>
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>计费方式 *</label>
-              <select v-model="feeForm.billing_method">
+          <div class="flex gap-3">
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">计费方式 *</label>
+              <select v-model="feeForm.billing_method" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
                 <option value="per_person">按人</option>
                 <option value="per_person_per_day">按人天</option>
                 <option value="per_trip">按团</option>
                 <option value="per_vehicle_per_day">按车天</option>
               </select>
             </div>
-            <div class="form-group">
-              <label>单价 *</label>
-              <input v-model.number="feeForm.unit_price" type="number" step="0.01" />
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">单价 *</label>
+              <input v-model.number="feeForm.unit_price" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>是否必含</label>
-              <select v-model="feeForm.is_mandatory">
+          <div class="flex gap-3">
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">是否必含</label>
+              <select v-model="feeForm.is_mandatory" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border">
                 <option :value="false">否</option>
                 <option :value="true">是</option>
               </select>
             </div>
-            <div class="form-group">
-              <label>排序</label>
-              <input v-model.number="feeForm.sort_order" type="number" />
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">排序</label>
+              <input v-model.number="feeForm.sort_order" type="number" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
             </div>
           </div>
-          <div class="form-group">
-            <label>备注</label>
-            <input v-model="feeForm.remark" />
+          <div class="mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">备注</label>
+            <input v-model="feeForm.remark" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
-          <div class="modal-actions">
-            <button class="btn-secondary" @click="showFeeModal = false">取消</button>
-            <button class="btn-primary" @click="handleFeeSave">保存</button>
+          <div class="flex justify-end gap-2.5 mt-5">
+            <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="showFeeModal = false">取消</button>
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="handleFeeSave">保存</button>
           </div>
         </div>
       </div>
@@ -125,95 +125,95 @@
 
     <!-- 淡旺季配置 Tab -->
     <div v-if="activeTab === 'seasons'">
-      <div class="header-bar">
+      <div class="flex justify-between items-center mb-5">
         <div></div>
-        <button class="btn-primary" @click="openSeasonCreate">+ 新增季节</button>
+        <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="openSeasonCreate">+ 新增季节</button>
       </div>
-      <table class="data-table">
+      <table class="w-full border-collapse text-[13px]">
         <thead>
           <tr>
-            <th class="w-16">序号</th>
-            <th>季节类型</th>
-            <th>显示名</th>
-            <th>开始日期</th>
-            <th>结束日期</th>
-            <th>价格倍率</th>
-            <th>备注</th>
-            <th>操作</th>
+            <th class="w-16 p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">序号</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">季节类型</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">显示名</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">开始日期</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">结束日期</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">价格倍率</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">备注</th>
+            <th class="p-2 px-2.5 text-left border-b border-gray-200 bg-surface font-semibold text-default">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="seasonLoading"><td colspan="8" class="center">加载中...</td></tr>
-          <tr v-else-if="seasonItems.length === 0"><td colspan="8" class="center">暂无数据</td></tr>
-          <tr v-for="(item, index) in seasonItems" :key="item.id">
-            <td>{{ index + 1 }}</td>
-            <td>{{ item.season_type }}</td>
-            <td>{{ item.season_type_label }}</td>
-            <td>{{ item.start_date }}</td>
-            <td>{{ item.end_date }}</td>
-            <td>{{ item.price_multiplier }}</td>
-            <td>{{ item.remark || '-' }}</td>
-            <td class="actions-cell">
-              <button class="btn-sm" @click="openSeasonEdit(item)">编辑</button>
-              <button class="btn-sm btn-danger" @click="handleSeasonDelete(item)">删除</button>
+          <tr v-if="seasonLoading"><td colspan="8" class="p-2 text-center text-muted">加载中...</td></tr>
+          <tr v-else-if="seasonItems.length === 0"><td colspan="8" class="p-2 text-center text-muted">暂无数据</td></tr>
+          <tr v-for="(item, index) in seasonItems" :key="item.id" class="hover:bg-surface-hover">
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ index + 1 }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.season_type }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.season_type_label }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.start_date }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.end_date }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.price_multiplier }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200">{{ item.remark || '-' }}</td>
+            <td class="p-2 px-2.5 text-left border-b border-gray-200 whitespace-nowrap">
+              <button class="px-2.5 py-1 border border-default rounded bg-white text-[13px] hover:bg-gray-50 cursor-pointer" @click="openSeasonEdit(item)">编辑</button>
+              <button class="text-danger-600 hover:bg-danger-50 px-2.5 py-1 rounded text-[13px] border border-danger-600 cursor-pointer" @click="handleSeasonDelete(item)">删除</button>
             </td>
           </tr>
         </tbody>
       </table>
 
       <!-- 季节弹窗 -->
-      <div v-if="showSeasonModal" class="modal-overlay" @click.self="showSeasonModal = false">
-        <div class="modal-content">
-          <h3>{{ editingSeason ? '编辑季节' : '新增季节' }}</h3>
-          <div class="form-row">
-            <div class="form-group">
-              <label>季节类型编码 *</label>
-              <input v-model="seasonForm.season_type" placeholder="如：peak, off" />
+      <div v-if="showSeasonModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showSeasonModal = false">
+        <div class="bg-white rounded-lg p-6 w-[560px] max-w-[90vw]">
+          <h3 class="m-0 mb-5">{{ editingSeason ? '编辑季节' : '新增季节' }}</h3>
+          <div class="flex gap-3">
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">季节类型编码 *</label>
+              <input v-model="seasonForm.season_type" placeholder="如：peak, off" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
             </div>
-            <div class="form-group">
-              <label>季节显示名 *</label>
-              <input v-model="seasonForm.season_type_label" placeholder="如：旺季、淡季" />
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>开始日期 *</label>
-              <input v-model="seasonForm.start_date" type="date" />
-            </div>
-            <div class="form-group">
-              <label>结束日期 *</label>
-              <input v-model="seasonForm.end_date" type="date" />
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">季节显示名 *</label>
+              <input v-model="seasonForm.season_type_label" placeholder="如：旺季、淡季" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
             </div>
           </div>
-          <div class="form-group">
-            <label>价格倍率</label>
-            <input v-model.number="seasonForm.price_multiplier" type="number" step="0.01" />
+          <div class="flex gap-3">
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">开始日期 *</label>
+              <input v-model="seasonForm.start_date" type="date" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
+            </div>
+            <div class="flex-1 mb-3.5">
+              <label class="block mb-1 text-[13px] text-muted">结束日期 *</label>
+              <input v-model="seasonForm.end_date" type="date" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
+            </div>
           </div>
-          <div class="form-group">
-            <label>备注</label>
-            <input v-model="seasonForm.remark" />
+          <div class="mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">价格倍率</label>
+            <input v-model.number="seasonForm.price_multiplier" type="number" step="0.01" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
           </div>
-          <div class="modal-actions">
-            <button class="btn-secondary" @click="showSeasonModal = false">取消</button>
-            <button class="btn-primary" @click="handleSeasonSave">保存</button>
+          <div class="mb-3.5">
+            <label class="block mb-1 text-[13px] text-muted">备注</label>
+            <input v-model="seasonForm.remark" class="w-full px-2.5 py-1.5 border border-default rounded text-sm box-border" />
+          </div>
+          <div class="flex justify-end gap-2.5 mt-5">
+            <button class="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-medium" @click="showSeasonModal = false">取消</button>
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="handleSeasonSave">保存</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- 导入结果弹窗 -->
-    <div v-if="showImportResult" class="modal-overlay" @click.self="showImportResult = false">
-      <div class="modal-content">
-        <h3>导入结果</h3>
+    <div v-if="showImportResult" class="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" @click.self="showImportResult = false">
+      <div class="bg-white rounded-lg p-6 w-[560px] max-w-[90vw]">
+        <h3 class="m-0 mb-5">导入结果</h3>
         <p>成功导入 <strong>{{ importResult?.total_imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.total_skipped || 0 }}</strong> 条</p>
-        <div v-for="r in importResult?.results" :key="r.sheet" style="margin-bottom:8px;font-size:13px">
+        <div v-for="r in importResult?.results" :key="r.sheet" class="mb-2 text-[13px]">
           {{ r.sheet }}：导入 {{ r.imported }} 条，跳过 {{ r.skipped }} 条
-          <div v-if="r.errors.length" style="color:#dc2626;font-size:12px;margin-top:2px">
+          <div v-if="r.errors.length" class="text-danger-600 text-xs mt-0.5">
             <div v-for="err in r.errors" :key="err">{{ err }}</div>
           </div>
         </div>
-        <div class="modal-actions">
-          <button class="btn-primary" @click="showImportResult = false">确定</button>
+        <div class="flex justify-end gap-2.5 mt-5">
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium" @click="showImportResult = false">确定</button>
         </div>
       </div>
     </div>
@@ -335,37 +335,3 @@ watch(activeTab, (tab) => {
 onMounted(() => { loadFees() })
 </script>
 
-<style scoped>
-.manager-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
-.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.header-bar h2 { margin: 0; font-size: 18px; }
-.actions { display: flex; gap: 10px; align-items: center; }
-.filter-select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-.tab-bar { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; }
-.tab-btn { padding: 10px 20px; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer; font-size: 14px; color: #666; }
-.tab-btn:hover { color: #333; }
-.tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; font-weight: 600; }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.data-table th, .data-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
-.data-table th { background: #f5f7fa; font-weight: 600; }
-.data-table th.w-16, .data-table td.w-16 { width: 60px; }
-.data-table tr:hover { background: #fafbfc; }
-.center { text-align: center; color: #999; }
-.actions-cell { white-space: nowrap; }
-.btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-.btn-primary:hover { background: #4338ca; }
-.btn-secondary { background: #f3f4f6; color: #333; border: 1px solid #ddd; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-.btn-sm { padding: 4px 10px; border: 1px solid #ddd; border-radius: 3px; background: white; cursor: pointer; font-size: 12px; }
-.btn-sm:hover { background: #f5f5f5; }
-.btn-danger { color: #dc2626; border-color: #dc2626; }
-.btn-danger:hover { background: #fef2f2; }
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal-content { background: white; border-radius: 8px; padding: 24px; width: 560px; max-width: 90vw; }
-.modal-content h3 { margin: 0 0 20px; }
-.form-row { display: flex; gap: 12px; }
-.form-row .form-group { flex: 1; }
-.form-group { margin-bottom: 14px; }
-.form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #555; }
-.form-group input, .form-group select { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-</style>

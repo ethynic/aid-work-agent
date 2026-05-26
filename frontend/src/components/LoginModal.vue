@@ -8,7 +8,7 @@
       <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
         <div class="p-8">
           <!-- Tabs -->
-          <div class="flex border-b border-slate-200 mb-6">
+          <div class="flex border-b border-default mb-6">
             <button
               v-for="tab in tabs"
               :key="tab.key"
@@ -16,8 +16,8 @@
               :class="[
                 'px-4 py-2 text-sm font-medium transition-colors',
                 currentTab === tab.key
-                  ? 'text-cyan-500 border-b-2 border-cyan-500'
-                  : 'text-slate-500 hover:text-slate-700'
+                  ? 'text-primary-500 border-b-2 border-primary-500'
+                  : 'text-muted hover:text-default'
               ]"
             >
               {{ tab.label }}
@@ -28,41 +28,41 @@
           <div class="space-y-4">
             <!-- Phone - Fixed Position -->
             <div>
-              <label class="block text-sm text-slate-600 mb-1">手机号</label>
+              <label class="block text-sm text-default mb-1">手机号</label>
               <input
                 v-model="currentPhone"
                 type="tel"
                 placeholder="请输入手机号"
-                class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
               />
             </div>
 
             <!-- Password / Code - Dynamic Position -->
             <div v-if="currentTab === 'password'">
-              <label class="block text-sm text-slate-600 mb-1">密码</label>
+              <label class="block text-sm text-default mb-1">密码</label>
               <input
                 v-model="phoneForm.password"
                 type="password"
                 placeholder="请输入密码"
-                class="w-full px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                class="w-full px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
                 @keyup.enter="handlePasswordLogin"
               />
             </div>
             <div v-else>
-              <label class="block text-sm text-slate-600 mb-1">验证码</label>
+              <label class="block text-sm text-default mb-1">验证码</label>
               <div class="flex gap-2">
                 <input
                   v-model="codeForm.code"
                   type="text"
                   placeholder="请输入验证码"
                   maxlength="6"
-                  class="flex-1 px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                  class="flex-1 px-4 py-3 bg-surface-hover border border-hover rounded-lg text-default placeholder:text-muted focus:outline-none focus:border-primary-400"
                   @keyup.enter="handleCodeLogin"
                 />
                 <button
                   @click="handleSendCode"
                   :disabled="codeCooldown > 0 || isSendingCode"
-                  class="px-4 py-3 bg-slate-100 border border-slate-300 rounded-lg text-cyan-500 hover:bg-slate-200 disabled:text-slate-400 transition-colors whitespace-nowrap"
+                  class="px-4 py-3 bg-surface-hover border border-hover rounded-lg text-primary-500 hover:bg-gray-200 disabled:text-muted transition-colors whitespace-nowrap"
                 >
                   {{ codeCooldown > 0 ? `${codeCooldown}s` : (isSendingCode ? '发送中...' : '获取验证码') }}
                 </button>
@@ -71,29 +71,29 @@
 
             <!-- Hint Text - Dynamic Position (only shown when VITE_SHOW_TEST_HINT=true) -->
             <template v-if="showTestHint">
-              <p v-if="currentTab === 'password'" class="text-sm text-slate-400">测试环境默认密码为：888888</p>
-              <p v-else class="text-sm text-slate-400 mt-1">测试环境验证码固定为：888888</p>
+              <p v-if="currentTab === 'password'" class="text-sm text-muted">测试环境默认密码为：888888</p>
+              <p v-else class="text-sm text-muted mt-1">测试环境验证码固定为：888888</p>
             </template>
 
             <!-- Login Button - Fixed Position -->
             <button
               @click="currentTab === 'password' ? handlePasswordLogin() : handleCodeLogin()"
               :disabled="isLoading"
-              class="w-full py-3 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white rounded-lg font-medium transition-colors"
+              class="w-full py-3 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
             >
               {{ isLoading ? '登录中...' : '登录' }}
             </button>
           </div>
 
           <!-- Error Message -->
-          <div v-if="errorMessage" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+          <div v-if="errorMessage" class="mt-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">
             {{ errorMessage }}
           </div>
 
           <!-- Close Button -->
           <button
             @click="$emit('close')"
-            class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
+            class="absolute top-4 right-4 text-muted hover:text-default transition-colors"
           >
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />

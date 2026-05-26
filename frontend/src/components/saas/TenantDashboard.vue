@@ -1,45 +1,45 @@
 <template>
   <div class="p-6">
-    <h1 class="text-2xl font-bold text-slate-800 mb-6">仪表盘</h1>
+    <h1 class="text-2xl font-bold text-default mb-6">仪表盘</h1>
 
     <!-- 加载状态 -->
-    <div v-if="loading" class="text-center py-12 text-slate-500">加载中...</div>
+    <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <!-- 统计卡片 -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <div class="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
-        <div class="text-sm text-slate-500 mb-1">智能体实例</div>
-        <div class="text-3xl font-bold text-slate-800">{{ stats.total_instances }}</div>
-        <div class="text-xs text-slate-400 mt-1">{{ stats.active_instances }} 个运行中</div>
+      <div class="bg-white rounded-xl shadow-sm p-5 border border-default">
+        <div class="text-sm text-muted mb-1">智能体实例</div>
+        <div class="text-3xl font-bold text-default">{{ stats.total_instances }}</div>
+        <div class="text-xs text-muted mt-1">{{ stats.active_instances }} 个运行中</div>
       </div>
-      <div class="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
-        <div class="text-sm text-slate-500 mb-1">企业用户</div>
-        <div class="text-3xl font-bold text-slate-800">{{ stats.total_users }}</div>
-        <div class="text-xs text-slate-400 mt-1">已注册用户</div>
+      <div class="bg-white rounded-xl shadow-sm p-5 border border-default">
+        <div class="text-sm text-muted mb-1">企业用户</div>
+        <div class="text-3xl font-bold text-default">{{ stats.total_users }}</div>
+        <div class="text-xs text-muted mt-1">已注册用户</div>
       </div>
-      <div class="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
-        <div class="text-sm text-slate-500 mb-1">Token 用量</div>
-        <div class="text-3xl font-bold text-slate-800">{{ formatTokens(stats.total_tokens_used) }}</div>
+      <div class="bg-white rounded-xl shadow-sm p-5 border border-default">
+        <div class="text-sm text-muted mb-1">Token 用量</div>
+        <div class="text-3xl font-bold text-default">{{ formatTokens(stats.total_tokens_used) }}</div>
         <div class="mt-2" v-if="billingUsage.length > 0">
-          <div class="w-full bg-slate-200 rounded-full h-2">
+          <div class="w-full bg-gray-200 rounded-full h-2">
             <div
               class="h-2 rounded-full transition-all"
-              :class="billingUsage[0].usage_percentage > 80 ? 'bg-red-500' : 'bg-cyan-500'"
+              :class="billingUsage[0].usage_percentage > 80 ? 'bg-danger-500' : 'bg-primary-500'"
               :style="{ width: Math.min(billingUsage[0].usage_percentage, 100) + '%' }"
             ></div>
           </div>
-          <div class="text-xs text-slate-400 mt-1">{{ billingUsage[0].tokens_used }} / {{ billingUsage[0].token_quota }}</div>
+          <div class="text-xs text-muted mt-1">{{ billingUsage[0].tokens_used }} / {{ billingUsage[0].token_quota }}</div>
         </div>
       </div>
-      <div class="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
-        <div class="text-sm text-slate-500 mb-1">活跃订阅</div>
-        <div class="text-3xl font-bold text-slate-800">{{ activeSubscriptions }}</div>
-        <div class="text-xs text-slate-400 mt-1">当前套餐数</div>
+      <div class="bg-white rounded-xl shadow-sm p-5 border border-default">
+        <div class="text-sm text-muted mb-1">活跃订阅</div>
+        <div class="text-3xl font-bold text-default">{{ activeSubscriptions }}</div>
+        <div class="text-xs text-muted mt-1">当前套餐数</div>
       </div>
     </div>
 
     <!-- 错误信息 -->
-    <div v-if="error" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+    <div v-if="error" class="mt-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">
       {{ error }}
     </div>
   </div>
