@@ -15,29 +15,38 @@ echo "=========================================="
 git config --global --add safe.directory /var/www/agent2 2>/dev/null || true
 
 # 1. 拉取代码
-echo "[1/3] 拉取最新代码..."
+echo "[1/4] 拉取最新代码..."
 cd "/var/www/agent2"
+OLD_HEAD=$(git rev-parse HEAD)
 #git pull origin master
 git fetch --all
 git reset --hard origin/master
+NEW_HEAD=$(git rev-parse HEAD)
 # 设置需要写入权限的目录
 sudo chmod -R 777 .
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
-# 2. 更新前端
-echo "[2/3] 更新前端..."
-# 使用 Docker 中的 node:18-alpine 构建
-sudo rm -rf frontend/dist/*
+# 2. 判断前端是否需要编译
+if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+    FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
+else
+    FRONTEND_CHANGED=0
+fi
 
-sudo docker run --rm -v /var/www/agent2/frontend:/app -w /app node:22-alpine npm install
-sudo docker run --rm -v /var/www/agent2/frontend:/app -w /app node:22-alpine npm run build
+if [ "$FRONTEND_CHANGED" -gt 0 ]; then
+    echo "[2/4] 更新前端（检测到前端代码变更）..."
+    sudo rm -rf frontend/dist/*
+    sudo docker run --rm -v /var/www/agent2/frontend:/app -w /app node:22-alpine npm install
+    sudo docker run --rm -v /var/www/agent2/frontend:/app -w /app node:22-alpine npm run build
+else
+    echo "[2/4] 前端代码无变更，跳过编译。"
+fi
 
 # 3. 重启后端容器（代码已通过 volume 挂载，无需重建）
-echo "[3/3] 重启后端服务..."
+echo "[3/4] 重启后端服务..."
 sudo docker compose -f docker-compose.test.yml down
 sudo docker compose -f docker-compose.test.yml up -d
 
 echo ""
-echo "=========================================="
-echo "  更新完成！"
+echo "[4/4] 更新完成！"
 echo "=========================================="
