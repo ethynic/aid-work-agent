@@ -186,7 +186,7 @@
                   </div>
                   <div class="col-span-2">
                     <label class="block text-xs font-medium text-default mb-1">欢迎语</label>
-                    <input v-model="kf.welcome_message" type="text" placeholder="您好，我是 AI 智能客服，请问有什么可以帮您？" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                    <input v-model="kf.welcome_message" type="text" placeholder="您好，请问有什么可以帮您？" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
                   </div>
                   <div class="col-span-2">
                     <label class="block text-xs font-medium text-default mb-1">人工接待人员（企微 userid）</label>
