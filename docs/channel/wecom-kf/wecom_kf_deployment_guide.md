@@ -34,14 +34,14 @@
 | **服务对象** | 企业内部员工 | 外部微信客户 |
 | **客户入口** | 工作台点击应用 | 微信中点击客服链接/扫二维码 |
 | **消息通道** | 应用消息 API | 微信客服 API |
-| **回调地址** | `/t/{tenant_id}/wecom/callback/{config_id}` | `/t/{tenant_id}/wecom-kf/callback/{config_id}` |
+| **回调地址** | `/t/{tenant_id}/wecom/callback/{config_id}` | `/t/{tenant_id}/wecom_kf/callback/{config_id}` |
 
 ### 回调地址
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| **GET** | `/t/{tenant_id}/wecom-kf/callback/{config_id}` | 验证回调 URL 有效性 |
-| **POST** | `/t/{tenant_id}/wecom-kf/callback/{config_id}` | 接收消息和事件推送 |
+| **GET** | `/t/{tenant_id}/wecom_kf/callback/{config_id}` | 验证回调 URL 有效性 |
+| **POST** | `/t/{tenant_id}/wecom_kf/callback/{config_id}` | 接收消息和事件推送 |
 
 系统会立即返回 `"success"`（毫秒级），消息处理在后台异步执行，不受企微 5 秒响应要求的限制。
 
@@ -108,7 +108,7 @@
 
 1. 在「微信客服」→「API」中找到回调配置
 2. 填写以下信息：
-   - **URL**：`https://your-domain.com/t/{tenant_id}/wecom-kf/callback/{config_id}`
+   - **URL**：`https://your-domain.com/t/{tenant_id}/wecom_kf/callback/{config_id}`
      - `your-domain.com`：替换为实际域名
      - `tenant_id`：租户 ID（在 Our Agent 管理后台查看）
      - `config_id`：渠道配置 ID（先在 Our Agent 后台创建渠道配置后获得）
@@ -131,7 +131,7 @@
 
 ---
 
-## 4. Our Agent 管理后台配置
+## 4. 本项目管理后台配置
 
 ### 4.1 添加微信客服渠道
 
@@ -185,7 +185,7 @@
 
 1. 配置保存后，系统自动生成回调 URL：
    ```
-   https://your-domain.com/t/{tenant_id}/wecom-kf/callback/{config_id}
+   https://your-domain.com/t/{tenant_id}/wecom_kf/callback/{config_id}
    ```
 2. 复制该回调 URL
 3. 回到企业微信管理后台（步骤 5），将回调 URL 粘贴到「URL」栏
@@ -315,7 +315,7 @@ server {
     }
 
     # 微信客服回调（新增）
-    location ~ ^/t/([^/]+)/wecom-kf/callback/([^/]+)$ {
+    location ~ ^/t/([^/]+)/wecom_kf/callback/([^/]+)$ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -382,7 +382,7 @@ sudo nginx -t && sudo nginx -s reload
 
 | 检查项 | 排查方法 |
 |--------|---------|
-| 回调 URL 格式 | 确认格式为 `/t/{tenant_id}/wecom-kf/callback/{config_id}` |
+| 回调 URL 格式 | 确认格式为 `/t/{tenant_id}/wecom_kf/callback/{config_id}` |
 | HTTPS 证书 | 浏览器访问域名，确认证书有效 |
 | 服务是否运行 | `curl https://your-domain.com/health` |
 | Nginx 代理 | 检查 Nginx 日志是否有 502/504 |
@@ -461,7 +461,7 @@ sudo nginx -t && sudo nginx -s reload
 |--------|------------|-------------|
 | Secret 来源 | 自建应用的 Secret | 自建应用的 Secret |
 | 是否需要 AgentId | 需要 | **不需要** |
-| 回调 URL 路径 | `/wecom/callback/...` | `/wecom-kf/callback/...` |
+| 回调 URL 路径 | `/wecom/callback/...` | `/wecom_kf/callback/...` |
 | 接待方式 | 无需设置 | **必须设为「智能助手接待」** |
 | 消息格式 | 支持 Markdown | **不支持 Markdown** |
 | 回复限制 | 无 | 48 小时 + 5 条/次 |

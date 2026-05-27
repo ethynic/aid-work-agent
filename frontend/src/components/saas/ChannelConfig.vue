@@ -412,7 +412,7 @@ const form = ref<{ channel_type: string; config: Record<string, string>; subagen
 // ==================== 渠道类型定义 ====================
 
 const channelTypes = [
-  { value: 'wecom', label: '企业微信', icon: '💬' },
+  { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },

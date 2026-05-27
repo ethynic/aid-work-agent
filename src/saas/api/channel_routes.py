@@ -471,7 +471,7 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
 
 # ==================== WeCom KF 租户回调 ====================
 
-@router.get("/t/{tenant_id}/wecom-kf/callback/{config_id}")
+@router.get("/t/{tenant_id}/wecom_kf/callback/{config_id}")
 async def tenant_wecom_kf_callback_get(
     tenant_id: str,
     config_id: str,
@@ -503,7 +503,7 @@ async def tenant_wecom_kf_callback_get(
     return PlainTextResponse(echostr)
 
 
-@router.post("/t/{tenant_id}/wecom-kf/callback/{config_id}")
+@router.post("/t/{tenant_id}/wecom_kf/callback/{config_id}")
 async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request: Request):
     """微信客服消息回调"""
     try:

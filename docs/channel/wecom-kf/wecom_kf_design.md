@@ -81,7 +81,7 @@
     ▼
 企业微信服务器
     │
-    │ ① 回调推送（POST /t/{tenant_id}/wecom-kf/callback/{config_id}）
+    │ ① 回调推送（POST /t/{tenant_id}/wecom_kf/callback/{config_id}）
     ▼
 Our Agent 后端（FastAPI）
     │
@@ -427,11 +427,11 @@ Agent 检测到手机号（或通过专门工具提取）
 
 ```python
 # 微信客服回调
-@router.get("/t/{tenant_id}/wecom-kf/callback/{config_id}")
+@router.get("/t/{tenant_id}/wecom_kf/callback/{config_id}")
 async def wecom_kf_verify(request: Request, tenant_id: str, config_id: str):
     """企业微信验证回调URL有效性"""
 
-@router.post("/t/{tenant_id}/wecom-kf/callback/{config_id}")
+@router.post("/t/{tenant_id}/wecom_kf/callback/{config_id}")
 async def wecom_kf_callback(request: Request, tenant_id: str, config_id: str):
     """企业微信微信客服消息回调"""
 ```
@@ -525,7 +525,7 @@ class ChannelType(str, Enum):
 │                                                     │
 │  回调 URL（复制到企微后台）：                        │
 │  ┌─────────────────────────────────────────────┐    │
-│  │ https://your-domain.com/t/xxx/wecom-kf/...  │ [复制] │
+│  │ https://your-domain.com/t/xxx/wecom_kf/...  │ [复制] │
 │  └─────────────────────────────────────────────┘    │
 │                                                     │
 │  ═══ 客服账号配置 ═══                               │
