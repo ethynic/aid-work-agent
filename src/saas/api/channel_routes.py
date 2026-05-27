@@ -530,6 +530,8 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         query_params = dict(request.query_params)
         if not msg_signature_param:
             msg_signature_param = query_params.get("msg_signature", "")
+        if not timestamp_param:
+            timestamp_param = query_params.get("timestamp", str(int(time.time())))
         if not nonce_param:
             nonce_param = query_params.get("nonce", "")
 
