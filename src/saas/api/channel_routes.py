@@ -43,6 +43,53 @@ def _get_tenant_dedup(tenant_id: str) -> MessageDeduplicator:
     return _tenant_dedup_cache[tenant_id]
 
 
+def _merge_consecutive_user_messages(msg_list: list) -> list:
+    """
+    合并同一批次中同一用户连续发送的文本消息。
+
+    WeCom 客服规则：用户每发一条消息，企业可回复 5 条。
+    如果用户快速连发多条消息，系统逐条回复会耗尽 5 条限额（errcode=95001）。
+    将同一用户连续的文本消息合并为一条可避免此问题。
+
+    非文本消息（图片、语音等）不合并，保持独立处理。
+    """
+    if not msg_list:
+        return []
+
+    merged = []
+    current_group = [msg_list[0]]
+
+    for msg in msg_list[1:]:
+        prev = current_group[-1]
+        same_user = msg.get("external_userid") == prev.get("external_userid")
+        both_text = msg.get("msgtype") == "text" and prev.get("msgtype") == "text"
+
+        if same_user and both_text:
+            current_group.append(msg)
+        else:
+            merged.append(_build_merged_message(current_group))
+            current_group = [msg]
+
+    merged.append(_build_merged_message(current_group))
+    return merged
+
+
+def _build_merged_message(group: list) -> dict:
+    """将一组消息合并为一条。单条消息直接返回。"""
+    if len(group) == 1:
+        return group[0]
+
+    lines = []
+    for msg in group:
+        content = msg.get("text", {}).get("content", "")
+        if content:
+            lines.append(content)
+
+    merged_msg = group[-1].copy()
+    merged_msg["text"] = {"content": "\n".join(lines)}
+    return merged_msg
+
+
 async def _process_tenant_channel_message(
     tenant_id: str,
     channel_type: str,
@@ -633,6 +680,8 @@ async def _process_tenant_wecom_kf_messages(
                 logger.error(f"[WeCom KF] sync_msg 失败: errcode={result.get('errcode')}")
                 return
 
+            # 预处理：过滤非客户消息 + 去重，得到有效消息列表
+            valid_msgs = []
             for msg in result.get("msg_list", []):
                 msg_id = msg.get("msgid", "")
                 msg_origin = msg.get("origin", "")
@@ -652,6 +701,18 @@ async def _process_tenant_wecom_kf_messages(
                 if await dedup.is_duplicate(msg_id):
                     logger.info(f"[WeCom KF] 重复消息已跳过: msgid={msg_id}")
                     continue
+
+                valid_msgs.append(msg)
+
+            # 同一批次内合并同一用户的连续文本消息，避免逐条回复耗尽 WeCom 5条限额
+            merged_msgs = _merge_consecutive_user_messages(valid_msgs)
+            if len(merged_msgs) < len(valid_msgs):
+                logger.info(
+                    f"[WeCom KF] 消息合并: {len(valid_msgs)} -> {len(merged_msgs)}"
+                )
+
+            for msg in merged_msgs:
+                msg_id = msg.get("msgid", "")
 
                 # 设置当前客服上下文（供发送消息使用）
                 adapter.current_open_kfid = open_kfid
