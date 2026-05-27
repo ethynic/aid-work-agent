@@ -144,6 +144,11 @@ class WeComKfApiClient:
         """
         body = {"cursor": cursor, "limit": min(limit, 1000), "voice_format": voice_format}
         result = await self._request("POST", "/cgi-bin/kf/sync_msg", json_body=body)
+        logger.info(
+            f"微信客服 sync_msg 响应: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}, "
+            f"msg_count={len(result.get('msg_list', []))}, has_more={result.get('has_more')}, "
+            f"next_cursor={result.get('next_cursor', '')[:20]}..."
+        )
         return result
 
     # ==================== 消息发送 ====================

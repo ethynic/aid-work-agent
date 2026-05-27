@@ -509,6 +509,10 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
     try:
         body = await request.body()
         body_str = body.decode()
+        logger.info(
+            f"[Tenant WeCom KF] 收到POST回调: tenant={tenant_id}, config={config_id}, "
+            f"body_len={len(body_str)}, query_params={dict(request.query_params)}"
+        )
 
         adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
         if not adapter:
@@ -547,18 +551,30 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         event = callback_root.findtext("Event", "")
         change_type = callback_root.findtext("ChangeType", "")
         open_kfid = callback_root.findtext("OpenKfId", "")
+        logger.info(
+            f"[Tenant WeCom KF] 回调解析: event={event}, change_type={change_type}, "
+            f"open_kfid={open_kfid}, tenant={tenant_id}"
+        )
 
         # 消息事件 → 后台异步拉取并处理
         if event == "change_type" and change_type == "kf_msg_or_event":
+            logger.info(f"[Tenant WeCom KF] 创建后台任务拉取消息: open_kfid={open_kfid}")
             asyncio.create_task(
                 _process_tenant_wecom_kf_messages(tenant_id, config_id, open_kfid, adapter)
             )
         # 会话状态变更 → 更新本地状态
         elif event == "change_type" and change_type == "session_status_change":
+            logger.info(f"[Tenant WeCom KF] 会话状态变更事件: open_kfid={open_kfid}")
             await _handle_kf_session_status_change(callback_root, tenant_id)
         # 进入会话 → 发送欢迎语
         elif event == "enter_session":
+            logger.info(f"[Tenant WeCom KF] 进入会话事件: open_kfid={open_kfid}")
             await _handle_kf_enter_session(callback_root, adapter)
+        else:
+            logger.warning(
+                f"[Tenant WeCom KF] 未知事件类型: event={event}, change_type={change_type}, "
+                f"decrypted_xml前200字符={decrypted_xml[:200]}"
+            )
 
         return PlainTextResponse("success")
 
@@ -579,6 +595,10 @@ async def _process_tenant_wecom_kf_messages(
         from src.channels.wecom_kf.context import set_kf_context
         from src.models.message import UnifiedResponse
 
+        logger.info(
+            f"[WeCom KF] 后台处理开始: tenant={tenant_id}, config={config_id}, open_kfid={open_kfid}"
+        )
+
         # 查找客服账号配置
         kf_config = adapter.get_kf_config(open_kfid)
         if not kf_config:
@@ -586,29 +606,49 @@ async def _process_tenant_wecom_kf_messages(
             return
 
         subagent_type = kf_config.get("subagent_type", "")
+        logger.info(f"[WeCom KF] 客服配置: subagent_type={subagent_type}, open_kfid={open_kfid}")
 
         # 使用 cursor 分页拉取消息
         cursor = adapter.cursor_manager.get_cursor(open_kfid)
         has_more = True
+        total_messages = 0
+        processed_messages = 0
 
         while has_more:
+            logger.info(f"[WeCom KF] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
             result = await adapter.api_client.sync_msg(cursor=cursor, limit=100)
+            errcode = result.get("errcode", 0)
+            errmsg = result.get("errmsg", "")
+            has_more = result.get("has_more", 0) == 1
+            cursor = result.get("next_cursor", "")
+            msg_count = len(result.get("msg_list", []))
+            total_messages += msg_count
+            logger.info(
+                f"[WeCom KF] sync_msg返回: errcode={errcode}, errmsg={errmsg}, "
+                f"msg_count={msg_count}, has_more={has_more}"
+            )
             if result.get("errcode", 0) != 0:
                 logger.error(f"[WeCom KF] sync_msg 失败: errcode={result.get('errcode')}")
                 return
-            has_more = result.get("has_more", 0) == 1
-            cursor = result.get("next_cursor", "")
 
             for msg in result.get("msg_list", []):
+                msg_id = msg.get("msgid", "")
+                msg_origin = msg.get("origin", "")
+                msg_type = msg.get("msgtype", "")
+                logger.debug(
+                    f"[WeCom KF] 消息: msgid={msg_id}, origin={msg_origin}, "
+                    f"msgtype={msg_type}, open_kfid={open_kfid}"
+                )
+
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
+                    logger.debug(f"[WeCom KF] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
                     continue
-
-                msg_id = msg.get("msgid", "")
 
                 # 消息去重
                 dedup = _get_tenant_dedup(tenant_id)
                 if await dedup.is_duplicate(msg_id):
+                    logger.info(f"[WeCom KF] 重复消息已跳过: msgid={msg_id}")
                     continue
 
                 # 设置当前客服上下文（供发送消息使用）
@@ -616,6 +656,10 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 解析消息
                 unified_msg = await adapter.parse_message(msg)
+                logger.info(
+                    f"[WeCom KF] 解析消息: msgid={msg_id}, user={unified_msg.user_id}, "
+                    f"text_len={len(unified_msg.text or '')}, msgtype={msg.get('msgtype')}"
+                )
 
                 # 获取或创建会话
                 session = channel_session_manager.get_or_create_session(
@@ -704,10 +748,21 @@ async def _process_tenant_wecom_kf_messages(
                     reply_to=unified_msg.user_id,
                     message_id=f"resp_{msg_id}",
                 )
-                await adapter.send_message(response)
+                send_result = await adapter.send_message(response)
+                logger.info(
+                    f"[WeCom KF] 回复发送{'成功' if send_result else '失败'}: "
+                    f"msgid={msg_id}, user={unified_msg.user_id}, "
+                    f"text_len={len(response_text) if response_text else 0}"
+                )
+                processed_messages += 1
 
             # 更新 cursor
             adapter.cursor_manager.set_cursor(open_kfid, cursor)
+
+        logger.info(
+            f"[WeCom KF] 后台处理完成: tenant={tenant_id}, open_kfid={open_kfid}, "
+            f"total_messages={total_messages}, processed_messages={processed_messages}"
+        )
 
     except Exception as e:
         logger.error(f"[WeCom KF] 后台处理失败: tenant={tenant_id}, error={e}")
