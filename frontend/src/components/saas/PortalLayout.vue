@@ -221,6 +221,11 @@ async function handleLogout() {
 }
 
 onMounted(async () => {
+  // 登录页和重置密码页不需要初始化 auth 和加载数据
+  const routeName = route.name as string
+  if (routeName && (routeName.includes('login') || routeName.includes('reset-password'))) {
+    return
+  }
   await init()
   if (!isLoggedIn.value) {
     // 根据当前路由跳转到对应登录页

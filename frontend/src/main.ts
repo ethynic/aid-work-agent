@@ -243,8 +243,12 @@ const router = createRouter({
 })
 
 // 全局路由守卫：确保 auth 状态在任何页面刷新时都能初始化
-router.beforeEach(async () => {
-  const path = window.location.pathname
+router.beforeEach(async (to) => {
+  const path = to.path
+  // 登录页和重置密码页不需要验证 auth 状态
+  if (path.endsWith('/login') || path.endsWith('/reset-password')) {
+    return
+  }
   if (path.startsWith('/t/') || path.startsWith('/portal')) {
     const { init, isInitialized } = useTenantAuth()
     if (!isInitialized.value) {
