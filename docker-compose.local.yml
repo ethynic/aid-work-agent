@@ -2,154 +2,6 @@
 # 支持 FastAPI 和 Gradio 两种部署模式
 
 services:
-  # PostgreSQL 数据库服务（包含 pgvector 扩展）
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: aid-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-aid_work_agent}
-      POSTGRES_USER: ${POSTGRES_USER:-aid_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
-      # 优化参数
-      POSTGRES_MAX_CONNECTIONS: 200
-      POSTGRES_SHARED_BUFFERS: 256MB
-      POSTGRES_EFFECTIVE_CACHE_SIZE: 1536MB
-      POSTGRES_WORK_MEM: 16MB
-      POSTGRES_MAINTENANCE_WORK_MEM: 128MB
-      # WAL 配置（本地开发无需复制，使用 minimal 减少 WAL 开销）
-      POSTGRES_WAL_LEVEL: minimal
-      POSTGRES_MAX_WAL_SIZE: 1GB
-      POSTGRES_MIN_WAL_SIZE: 256MB
-      # 检查点配置
-      POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
-      # 随机页成本（SSD设为1.1，HDD设为4）
-      POSTGRES_RANDOM_PAGE_COST: 1.1
-      # 连接超时防护
-      POSTGRES_IDLE_IN_TRANSACTION_SESSION_TIMEOUT: 60000
-      POSTGRES_IDLE_SESSION_TIMEOUT: 300000
-      # 日志配置
-      POSTGRES_LOG_MIN_DURATION_STATEMENT: 1000
-      POSTGRES_LOG_CHECKPOINTS: "on"
-      POSTGRES_LOG_CONNECTIONS: "on"
-      POSTGRES_LOG_DISCONNECTIONS: "on"
-      # 时区
-      TZ: Asia/Shanghai
-    command:
-      - "postgres"
-      - "-c"
-      - "max_connections=200"
-      - "-c"
-      - "shared_buffers=256MB"
-      - "-c"
-      - "effective_cache_size=1536MB"
-      - "-c"
-      - "work_mem=16MB"
-      - "-c"
-      - "maintenance_work_mem=128MB"
-      - "-c"
-      - "wal_level=minimal"
-      # 禁用 WAL 发送者（minimal 模式不支持复制，必须设为0）
-      - "-c"
-      - "max_wal_senders=0"
-      - "-c"
-      - "max_wal_size=1GB"
-      - "-c"
-      - "min_wal_size=256MB"
-      - "-c"
-      - "checkpoint_completion_target=0.9"
-      - "-c"
-      - "random_page_cost=1.1"
-      - "-c"
-      - "log_min_duration_statement=1000"
-      - "-c"
-      - "log_checkpoints=on"
-      - "-c"
-      - "log_connections=on"
-      - "-c"
-      - "log_disconnections=on"
-      - "-c"
-      - "log_timezone=Asia/Shanghai"
-      - "-c"
-      - "timezone=Asia/Shanghai"
-      - "-c"
-      - "idle_in_transaction_session_timeout=60000"
-      - "-c"
-      - "idle_session_timeout=300000"
-      - "-c"
-      - "tcp_keepalives_idle=60"
-      - "-c"
-      - "tcp_keepalives_interval=10"
-      - "-c"
-      - "tcp_keepalives_count=6"
-      # 语句超时：防止单条 SQL 长时间占用连接（30秒）
-      - "-c"
-      - "statement_timeout=30000"
-      # 锁等待超时：防止死锁导致连接永远阻塞（10秒）
-      - "-c"
-      - "lock_timeout=10000"
-    ports:
-      - "${POSTGRES_PORT:-5433}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./deploy/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - aid-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aid_user} -d ${POSTGRES_DB:-aid_work_agent}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    # 资源限制
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: "2.0"
-        reservations:
-          memory: 2G
-          cpus: "0.5"
-    shm_size: 512mb
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # Redis 缓存服务
-  redis:
-    image: redis:7-alpine
-    container_name: aid-agent-redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    networks:
-      - aid-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-    # 资源限制（Redis 轻量，给少量资源即可）
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.5"
-        reservations:
-          memory: 64M
-          cpus: "0.1"
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   # FastAPI 服务（默认）
   aid-agent-api:
     build:
@@ -177,11 +29,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     # 提供完整的交互式终端支持（方向键、命令历史、路径提示符）
     stdin_open: true
     tty: true
@@ -212,14 +59,7 @@ services:
       - aid-network
     profiles:
       - ui
-    depends_on:
-      postgres:
-        condition: service_healthy
 
 networks:
   aid-network:
     driver: bridge
-
-volumes:
-  postgres_data:
-  redis_data:

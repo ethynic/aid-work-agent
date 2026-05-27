@@ -41,6 +41,17 @@ RUN python -c "import redis; print('redis loaded OK:', redis.__version__)" || \
      pip install --no-cache-dir 'redis>=5.0.0' -i https://pypi.org/simple/ && \
      python -c "import redis; print('redis loaded OK:', redis.__version__)")
 
+# MCP 单独安装（zhipuai 限制 pyjwt<2.9，mcp 要求 pyjwt>=2.10，分开装绕过冲突）
+RUN pip install --no-cache-dir --no-deps 'mcp>=1.27.0' -i https://mirrors.cloud.tencent.com/pypi/simple && \
+    pip install --no-cache-dir \
+      'pyjwt>=2.10.1' \
+      'httpx-sse>=0.4' \
+      'jsonschema>=4.20' \
+      'pydantic-settings>=2.5' \
+      'sse-starlette>=1.6' \
+      -i https://mirrors.cloud.tencent.com/pypi/simple && \
+    python -c "import mcp; print('mcp loaded OK, version:', mcp.__version__ if hasattr(mcp, '__version__') else 'unknown')"
+
 # ============== 阶段2：运行阶段 ==============
 FROM python:3.11-slim
 

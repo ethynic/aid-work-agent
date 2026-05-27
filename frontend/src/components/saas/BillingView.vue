@@ -132,6 +132,12 @@ function formatNum(n: number): string {
 }
 
 async function loadData() {
+  // 未登录时不调用需要认证的 API，根据路由使用正确的 token key
+  const tokenKey = window.location.pathname.startsWith('/portal') ? 'portal_token' : 'saas_token'
+  if (!localStorage.getItem(tokenKey)) {
+    loading.value = false
+    return
+  }
   loading.value = true
   try {
     const [plansRes, subsRes, usageRes] = await Promise.allSettled([
