@@ -557,7 +557,7 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         )
 
         # 消息事件 → 后台异步拉取并处理
-        if event == "change_type" and change_type == "kf_msg_or_event":
+        if event == "kf_msg_or_event":
             logger.info(f"[Tenant WeCom KF] 创建后台任务拉取消息: open_kfid={open_kfid}")
             asyncio.create_task(
                 _process_tenant_wecom_kf_messages(tenant_id, config_id, open_kfid, adapter)
