@@ -616,7 +616,7 @@ async def _process_tenant_wecom_kf_messages(
 
         while has_more:
             logger.info(f"[WeCom KF] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
-            result = await adapter.api_client.sync_msg(cursor=cursor, limit=100)
+            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100)
             errcode = result.get("errcode", 0)
             errmsg = result.get("errmsg", "")
             has_more = result.get("has_more", 0) == 1

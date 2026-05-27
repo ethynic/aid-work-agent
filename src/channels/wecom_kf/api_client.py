@@ -125,11 +125,12 @@ class WeComKfApiClient:
 
     # ==================== 消息同步 ====================
 
-    async def sync_msg(self, cursor: str = "", limit: int = 100, voice_format: int = 0) -> Dict[str, Any]:
+    async def sync_msg(self, open_kfid: str, cursor: str = "", limit: int = 100, voice_format: int = 0) -> Dict[str, Any]:
         """
         拉取消息列表。
 
         Args:
+            open_kfid: 客服账号 ID
             cursor: 上一次拉取的 next_cursor，首次为空
             limit: 本次拉取的消息条数，最大 1000
             voice_format: 语音消息格式，0=amr，1=mp3
@@ -142,7 +143,7 @@ class WeComKfApiClient:
                 "next_cursor": "..."
             }
         """
-        body = {"cursor": cursor, "limit": min(limit, 1000), "voice_format": voice_format}
+        body = {"open_kfid": open_kfid, "cursor": cursor, "limit": min(limit, 1000), "voice_format": voice_format}
         result = await self._request("POST", "/cgi-bin/kf/sync_msg", json_body=body)
         logger.info(
             f"微信客服 sync_msg 响应: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}, "
