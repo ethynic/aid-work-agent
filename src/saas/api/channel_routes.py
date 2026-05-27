@@ -414,7 +414,7 @@ async def tenant_wecom_callback_post(tenant_id: str, config_id: str, request: Re
         root = ET.fromstring(body_str)
         encrypt = root.findtext("Encrypt", "")
         msg_signature = root.findtext("MsgSignature", "")
-        timestamp = root.findtext("TimeStamp", str(int(time.time())))
+        timestamp = root.findtext("TimeStamp", "")
         nonce = root.findtext("Nonce", "")
 
         # 获取查询参数中的签名（WeCom 可能在 query 或 XML 中传签名）
@@ -570,7 +570,7 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         root = ET.fromstring(body_str)
         encrypt = root.findtext("Encrypt", "")
         msg_signature_param = root.findtext("MsgSignature", "")
-        timestamp_param = root.findtext("TimeStamp", str(int(time.time())))
+        timestamp_param = root.findtext("TimeStamp", "")
         nonce_param = root.findtext("Nonce", "")
 
         # 获取查询参数中的签名
