@@ -135,9 +135,11 @@ COPY --chown=appuser:appgroup . .
 # 创建必要的目录（日志等）
 RUN mkdir -p log/agent && chown -R appuser:appgroup log
 
-# 安装 Playwright 浏览器（使用国内镜像）- 默认跳过，如需浏览器功能取消注释
-# RUN playwright install chromium --with-deps -i https://playwright.aimir.cn/simple || \
-#     playwright install chromium --with-deps
+# 安装 Playwright Chromium 浏览器（表格渲染为图片）
+# PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
+RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
+    playwright install chromium --with-deps || \
+    playwright install chromium --with-deps
 
 # 切换到非 root 用户
 USER appuser

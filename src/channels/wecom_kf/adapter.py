@@ -12,6 +12,7 @@
 """
 import asyncio
 import hashlib
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -22,7 +23,13 @@ from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.message_builder import WeComMessageBuilder
 from src.channels.wecom_kf.api_client import WeComKfApiClient
 from src.channels.wecom_kf.cursor import CursorManager
-from src.channels.wecom_kf.message import markdown_to_plain_text, parse_kf_message
+from src.channels.wecom_kf.message import (
+    markdown_to_plain_text,
+    parse_kf_message,
+    segment_markdown,
+    table_to_plain_text,
+)
+from src.channels.wecom_kf.renderer import WeComKfRenderer
 from src.core.redis_client import redis_client
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
@@ -73,6 +80,11 @@ class WeComKfAdapter(ChannelAdapter):
         # 当前回调上下文中的客服账号 ID（由回调 handler 设置）
         self.current_open_kfid: str = ""
 
+        # 表格渲染器（懒加载）
+        self._renderer: Optional[WeComKfRenderer] = None
+        self._render_enabled: bool = kwargs.get("render_tables", True)
+        self._media_upload_dir: str = media_upload_dir
+
     @property
     def channel_type(self) -> str:
         return "wecom_kf"
@@ -103,25 +115,54 @@ class WeComKfAdapter(ChannelAdapter):
         """
         return parse_kf_message(raw_message)
 
+    @property
+    def renderer(self) -> WeComKfRenderer:
+        if self._renderer is None:
+            self._renderer = WeComKfRenderer(upload_dir=self._media_upload_dir)
+        return self._renderer
+
     # ==================== 消息发送 ====================
 
     async def send_message(self, message: UnifiedResponse) -> bool:
         """
         发送统一响应消息。
 
-        流程：markdown → 纯文本 → 拆分 → 逐条发送
+        流程：markdown → 分段 → 逐块选择最优方式发送
+          - text 块 → 增强纯文本 → 拆分 → text 消息
+          - table 块 → 渲染图片 → 上传 → image 消息（降级为纯文本）
+          - link 块 → link 消息（降级为纯文本 URL）
         """
         text = message.text
         if not text:
             return True
 
+        # 如果渲染功能关闭，走原有的纯文本全流程
+        if not self._render_enabled:
+            return await self._send_as_plain_text(text, message.reply_to)
+
+        blocks = segment_markdown(text)
+        all_success = True
+        for block in blocks:
+            if block.type == "text":
+                success = await self._send_text_block(block.content, message.reply_to)
+            elif block.type == "table":
+                success = await self._send_table_as_image(block.content, message.reply_to)
+            elif block.type == "link":
+                success = await self._send_link_message(block, message.reply_to)
+            else:
+                success = True
+            if not success:
+                all_success = False
+        return all_success
+
+    async def _send_as_plain_text(self, text: str, user_id: str) -> bool:
+        """纯文本全流程（禁用渲染时的降级路径）。"""
         plain_text = markdown_to_plain_text(text)
         parts = self._split_message(plain_text)
-
         all_success = True
         for part in parts:
             result = await self.api_client.send_msg(
-                touser=message.reply_to,
+                touser=user_id,
                 open_kfid=self.current_open_kfid,
                 msgtype="text",
                 content={"content": part},
@@ -129,6 +170,72 @@ class WeComKfAdapter(ChannelAdapter):
             if result.get("errcode", 0) != 0:
                 all_success = False
         return all_success
+
+    async def _send_text_block(self, text_content: str, user_id: str) -> bool:
+        """发送文本块：增强纯文本 → 拆分 → text 消息。"""
+        plain = markdown_to_plain_text(text_content)
+        if not plain.strip():
+            return True
+        parts = self._split_message(plain)
+        all_success = True
+        for part in parts:
+            result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="text",
+                content={"content": part},
+            )
+            if result.get("errcode", 0) != 0:
+                all_success = False
+        return all_success
+
+    async def _send_table_as_image(self, markdown_table: str, user_id: str) -> bool:
+        """将表格渲染为图片并发送，失败时降级为纯文本。"""
+        try:
+            image_path = await self.renderer.render_table(markdown_table)
+            if image_path and os.path.exists(image_path):
+                upload_result = await self.api_client.upload_media(image_path, "image")
+                media_id = upload_result.get("media_id")
+                if media_id:
+                    send_result = await self.api_client.send_msg(
+                        touser=user_id,
+                        open_kfid=self.current_open_kfid,
+                        msgtype="image",
+                        content={"media_id": media_id},
+                    )
+                    if send_result.get("errcode", 0) == 0:
+                        return True
+                    logger.warning(f"表格图片发送失败: {send_result.get('errmsg')}")
+        except Exception as e:
+            logger.warning(f"表格渲染/上传失败，降级为纯文本: {e}")
+
+        # 降级：纯文本表格
+        fallback_text = table_to_plain_text(markdown_table)
+        return await self._send_text_block(fallback_text, user_id)
+
+    async def _send_link_message(self, block, user_id: str) -> bool:
+        """发送 link 消息卡片，失败时降级为纯文本 URL。"""
+        url = block.meta.get("url", block.content)
+        title = block.meta.get("title", url)
+        try:
+            result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="link",
+                content={
+                    "title": title,
+                    "url": url,
+                },
+            )
+            if result.get("errcode", 0) == 0:
+                return True
+            logger.warning(f"link 消息发送失败: {result.get('errmsg')}")
+        except Exception as e:
+            logger.warning(f"link 消息发送异常，降级为纯文本: {e}")
+
+        # 降级：纯文本 URL
+        fallback_text = f"{title}: {url}"
+        return await self._send_text_block(fallback_text, user_id)
 
     async def send_welcome_message(self, code: str, welcome_text: str) -> bool:
         """
@@ -233,6 +340,8 @@ class WeComKfAdapter(ChannelAdapter):
 
     async def close(self):
         """关闭 HTTP 连接池"""
+        if self._renderer:
+            await self._renderer.close()
         await self.api_client.close()
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
