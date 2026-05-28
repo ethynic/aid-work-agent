@@ -190,7 +190,7 @@
                   </div>
                   <div class="col-span-2">
                     <label class="block text-xs font-medium text-default mb-1">人工接待人员（企微 userid）</label>
-                    <input v-model="kf.human_servicers" type="text" placeholder="zhangsan, lisi" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                    <input v-model="kf.servicer_userid_list" type="text" placeholder="zhangsan, lisi" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
                     <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
                   </div>
                   <div class="col-span-2">
@@ -384,7 +384,7 @@ const kfAccounts = ref<Array<{
   open_kfid: string
   subagent_type: string
   welcome_message: string
-  human_servicers: string
+  servicer_userid_list: string
   human_transfer_keywords: string
 }>>([])
 
@@ -394,7 +394,7 @@ function addKfAccount() {
     open_kfid: '',
     subagent_type: '',
     welcome_message: '',
-    human_servicers: '',
+    servicer_userid_list: '',
     human_transfer_keywords: '',
   })
 }
@@ -624,7 +624,7 @@ function editChannel(ch: any) {
       open_kfid: kf.open_kfid || '',
       subagent_type: kf.subagent_type || '',
       welcome_message: kf.welcome_message || '',
-      human_servicers: Array.isArray(kf.human_servicers) ? kf.human_servicers.join(', ') : (kf.human_servicers || ''),
+      servicer_userid_list: Array.isArray(kf.servicer_userid_list) ? kf.servicer_userid_list.join(', ') : (kf.servicer_userid_list || ''),
       human_transfer_keywords: Array.isArray(kf.human_transfer_keywords) ? kf.human_transfer_keywords.join(', ') : (kf.human_transfer_keywords || ''),
     }))
   } else {
@@ -676,8 +676,8 @@ async function handleSubmit() {
           subagent_type: kf.subagent_type || undefined,
         }
         if (kf.welcome_message) obj.welcome_message = kf.welcome_message
-        if (kf.human_servicers) {
-          obj.human_servicers = kf.human_servicers.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+        if (kf.servicer_userid_list) {
+          obj.servicer_userid_list = kf.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
         }
         if (kf.human_transfer_keywords) {
           obj.human_transfer_keywords = kf.human_transfer_keywords.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
