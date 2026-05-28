@@ -397,7 +397,7 @@ class ChannelSessionManager:
             before_message_id: 分页基准消息ID
 
         Returns:
-            消息列表
+            消息列表（按 created_at ASC 时间正序）
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -409,20 +409,20 @@ class ChannelSessionManager:
                     WHERE session_id = {placeholder} AND created_at < (
                         SELECT created_at FROM channel_messages WHERE message_id = {placeholder}
                     )
-                    ORDER BY created_at DESC
+                    ORDER BY created_at ASC
                     LIMIT {limit}
                 """, (session_id, before_message_id))
             else:
                 cursor.execute(f"""
                     SELECT * FROM channel_messages
                     WHERE session_id = {placeholder}
-                    ORDER BY created_at DESC
+                    ORDER BY created_at ASC
                     LIMIT {limit}
                 """, (session_id,))
 
             rows = cursor.fetchall()
             messages = []
-            for row in reversed(rows):
+            for row in rows:
                 msg = dict(row)
                 msg["attachments"] = self._parse_json_field(msg.get("attachments"), [])
                 msg["metadata"] = self._parse_json_field(msg.get("metadata"))

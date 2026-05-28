@@ -931,8 +931,8 @@ class Agent:
             if not channel_msgs:
                 return []
 
-            # channel_messages 按 created_at DESC 排序，反转为 ASC
-            channel_msgs.reverse()
+            # get_messages 已返回 ASC（时间正序，SQL 中 ORDER BY created_at ASC）
+            # 无需反转，无需截断（SQL 中 LIMIT 已控制数量）
 
             # 如果最后一条是 user 消息，说明是渠道处理器预先存入的当前消息，
             # 需要移除（process_message 后续会通过 memory.add 添加 enhanced 版本）
@@ -940,10 +940,6 @@ class Agent:
                 last_content = channel_msgs[-1].get("content", "")
                 if last_content == current_user_input:
                     channel_msgs.pop()
-
-            # 截断到 max_messages
-            if len(channel_msgs) > self.memory.short_term.max_messages:
-                channel_msgs = channel_msgs[-self.memory.short_term.max_messages:]
 
             return [
                 {
