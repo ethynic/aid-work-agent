@@ -35,13 +35,13 @@
   </button>
 
   <!-- 不可预览文件：点击下载 -->
-  <a
+  <button
     v-else
-    :href="file.download_url"
-    download
     class="inline-flex items-center gap-3 p-3 rounded-lg border border-gray-200 bg-gray-50
-           hover:bg-info-50 hover:border-blue-300 transition-colors cursor-pointer group no-underline
+           hover:bg-info-50 hover:border-blue-300 transition-colors cursor-pointer group
            w-full md:w-auto md:min-w-[240px] md:max-w-[320px]"
+    :disabled="downloading"
+    @click="handleDownload"
   >
     <div
       class="w-9 h-9 rounded flex items-center justify-center flex-shrink-0"
@@ -61,23 +61,57 @@
     </div>
 
     <div class="flex-shrink-0 text-gray-400 group-hover:text-info-600 transition-colors">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg v-if="!downloading" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586
                  a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
       </svg>
+      <svg v-else class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
     </div>
-  </a>
+  </button>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { DownloadableFile, AttachmentInfo } from '@/types'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
 const props = defineProps<{ file: DownloadableFile }>()
 
 const { openPreview } = useAttachmentPreview()
+
+const downloading = ref(false)
+
+async function handleDownload() {
+  if (downloading.value) return
+  downloading.value = true
+  try {
+    const url = props.file.download_url.startsWith('/')
+      ? `${window.location.origin}${props.file.download_url}`
+      : props.file.download_url
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`下载失败: ${response.status}`)
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = props.file.file_name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+  } catch (e) {
+    console.error('文件下载失败:', e)
+    // fallback: 在新窗口打开下载链接
+    window.open(props.file.download_url, '_blank')
+  } finally {
+    downloading.value = false
+  }
+}
 
 const ext = computed(() => {
   const name = props.file.file_name.toLowerCase()
