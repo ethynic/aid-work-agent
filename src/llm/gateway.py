@@ -76,6 +76,7 @@ class LLMGateway:
     - Key 池：多 API Key 轮询，Semaphore 控制每 Key 并发
     - 统一接口：屏蔽不同提供者的差异
     - 错误处理：统一的异常处理
+    - Failover：主 provider 失败时自动切换到备用 provider
     """
 
     # 提供者注册表
@@ -96,11 +97,27 @@ class LLMGateway:
         if self.provider_name not in self.PROVIDERS:
             raise ValueError(f"不支持的LLM提供者: {self.provider_name}")
 
-        self._key_pool: KeyPool = _build_key_pool(self.provider_name)
-        logger.info(
-            f"LLM网关初始化完成，提供者: {self.provider_name}，"
-            f"Key 池统计: {self._key_pool.stats()}"
+        self._failover_enabled = (
+            hasattr(settings.llm, 'failover')
+            and settings.llm.failover.enabled
         )
+
+        if self._failover_enabled:
+            from .failover import FailoverGateway
+            self._failover = FailoverGateway(
+                primary_name=self.provider_name,
+                fallback_names=settings.llm.failover.providers,
+            )
+            logger.info(
+                f"LLM网关初始化完成（Failover 模式），主提供者: {self.provider_name}，"
+                f"备用: {settings.llm.failover.providers}"
+            )
+        else:
+            self._key_pool: KeyPool = _build_key_pool(self.provider_name)
+            logger.info(
+                f"LLM网关初始化完成，提供者: {self.provider_name}，"
+                f"Key 池统计: {self._key_pool.stats()}"
+            )
 
     # ------------------------------------------------------------------
     # 内部：从 Key 池获取 Provider 并执行调用
@@ -210,17 +227,27 @@ class LLMGateway:
         import time
         chat_start = time.time()
         logger.info(f"[LLM] chat() called, provider={self.provider_name}, messages_count={len(messages)}, has_tools={tools is not None}")
-        
+
         try:
-            result = await self._call_with_pool(
-                "chat",
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs,
-            )
+            if self._failover_enabled:
+                result = await self._failover.chat(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
+            else:
+                result = await self._call_with_pool(
+                    "chat",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
             
             chat_duration = time.time() - chat_start
             logger.info(f"[LLM] chat() completed, duration={chat_duration:.2f}s, has_content={bool(result.get('content'))}, has_tool_calls={bool(result.get('tool_calls'))}")
@@ -254,14 +281,25 @@ class LLMGateway:
         Yields:
             流式输出的文本片段
         """
-        async for chunk in self._stream_with_pool(
-            "stream_chat",
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
+        async for chunk in (
+            self._failover.stream_chat(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+            if self._failover_enabled
+            else self._stream_with_pool(
+                "stream_chat",
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
         ):
             yield chunk
 
@@ -296,12 +334,20 @@ class LLMGateway:
             if system_prompt:
                 messages = [{"role": "system", "content": system_prompt}] + messages
 
-            result = await self.chat(
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                **kwargs,
-            )
+            if self._failover_enabled:
+                result = await self._failover.chat(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    **kwargs,
+                )
+            else:
+                result = await self.chat(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    **kwargs,
+                )
             
             cwt_duration = time.time() - cwt_start
             logger.info(f"[LLM] chat_with_tools() completed, duration={cwt_duration:.2f}s")
@@ -328,6 +374,8 @@ class LLMGateway:
 
     def key_pool_stats(self) -> List[dict]:
         """返回 Key 池使用统计（用于监控）"""
+        if self._failover_enabled:
+            return self._failover.health_status()
         return self._key_pool.stats()
 
 

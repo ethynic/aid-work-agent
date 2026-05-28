@@ -42,12 +42,41 @@ class LLMProviderConfig(BaseModel):
         return self.api_keys
 
 
+class CircuitBreakerConfig(BaseModel):
+    """熔断器配置"""
+    failure_threshold: int = 3    # 连续失败 N 次触发熔断
+    recovery_timeout: float = 60  # 熔断恢复时间（秒）
+
+
+class RetryConfig(BaseModel):
+    """重试配置"""
+    max_retries: int = 2          # 同一 provider 内重试次数（含首次调用）
+    retry_delay: float = 1.0      # 重试间隔（秒），指数退避基数
+
+
+class FailoverAlertConfig(BaseModel):
+    """Failover 告警配置"""
+    enabled: bool = True
+    channel: str = "webhook"      # 告警渠道：webhook / email
+    cooldown: int = 300           # 同一 provider 告警冷却时间（秒）
+
+
+class FailoverConfig(BaseModel):
+    """Failover 配置"""
+    enabled: bool = False
+    providers: List[str] = Field(default_factory=list)  # failover 优先级链
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
+    alert: FailoverAlertConfig = Field(default_factory=FailoverAlertConfig)
+
+
 class LLMConfig(BaseModel):
     """LLM配置"""
     provider: str = "zhipu"
     qwen: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     zhipu: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     deepseek: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
+    failover: FailoverConfig = Field(default_factory=FailoverConfig)
 
 
 class StorageConfig(BaseModel):
@@ -320,6 +349,7 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
         # 统一环境变量：API_KEYS、BASE_URL、MODEL_CODE
         # 根据 LLM_PROVIDER 的值，写入对应 provider 的配置
+        # 例如 LLM_PROVIDER=deepseek 时，API_KEYS 写入 llm.deepseek 配置
         provider_cfg = yaml_config.setdefault("llm", {}).setdefault(provider, {})
         if os.getenv("API_KEYS"):
             provider_cfg["api_keys"] = os.getenv("API_KEYS")
@@ -327,6 +357,34 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
             provider_cfg["base_url"] = os.getenv("BASE_URL")
         if os.getenv("MODEL_CODE"):
             provider_cfg["model"] = os.getenv("MODEL_CODE")
+
+    # 各 provider 独立环境变量覆盖（用于 failover 备用 provider 或子智能体指定）
+    # DeepSeek
+    ds_cfg = yaml_config.setdefault("llm", {}).setdefault("deepseek", {})
+    if os.getenv("DEEPSEEK_API_KEYS"):
+        ds_cfg["api_keys"] = os.getenv("DEEPSEEK_API_KEYS")
+    if os.getenv("DEEPSEEK_MODEL_CODE"):
+        ds_cfg["model"] = os.getenv("DEEPSEEK_MODEL_CODE")
+    if os.getenv("DEEPSEEK_BASE_URL"):
+        ds_cfg["base_url"] = os.getenv("DEEPSEEK_BASE_URL")
+
+    # Qwen
+    qwen_cfg = yaml_config.setdefault("llm", {}).setdefault("qwen", {})
+    if os.getenv("QWEN_API_KEYS"):
+        qwen_cfg["api_keys"] = os.getenv("QWEN_API_KEYS")
+    if os.getenv("QWEN_MODEL_CODE"):
+        qwen_cfg["model"] = os.getenv("QWEN_MODEL_CODE")
+    if os.getenv("QWEN_BASE_URL"):
+        qwen_cfg["base_url"] = os.getenv("QWEN_BASE_URL")
+
+    # Zhipu
+    zhipu_cfg = yaml_config.setdefault("llm", {}).setdefault("zhipu", {})
+    if os.getenv("ZHIPU_API_KEYS"):
+        zhipu_cfg["api_keys"] = os.getenv("ZHIPU_API_KEYS")
+    if os.getenv("ZHIPU_MODEL_CODE"):
+        zhipu_cfg["model"] = os.getenv("ZHIPU_MODEL_CODE")
+    if os.getenv("ZHIPU_BASE_URL"):
+        zhipu_cfg["base_url"] = os.getenv("ZHIPU_BASE_URL")
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True

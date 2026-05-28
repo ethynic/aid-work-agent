@@ -14,28 +14,42 @@ agent:
   reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md
 
 # LLM配置
+# 主 provider 通过 LLM_PROVIDER + API_KEYS + MODEL_CODE + BASE_URL 四个环境变量统一控制
+# 各备用 provider 有独立环境变量（如 DEEPSEEK_*、QWEN_*），用于 failover
 llm:
-  provider: zhipu  # qwen | zhipu | deepseek | ...
+  provider: ${LLM_PROVIDER:-deepseek}
   qwen:
-    # 统一环境变量：在 .env 中设置 API_KEYS=key1,key2,key3
-    api_keys: ${API_KEYS}
-    model: ${MODEL_CODE}
-    base_url: ${BASE_URL}
-    max_concurrent_per_key: 2   # 每个 Key 最大并发数
-    queue_timeout: 30            # 等待可用 Key 的超时秒数
+    api_keys: ${QWEN_API_KEYS:-}
+    model: ${QWEN_MODEL_CODE:-qwen-plus}
+    base_url: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    max_concurrent_per_key: 2
+    queue_timeout: 30
   zhipu:
-    # 统一环境变量：在 .env 中设置 API_KEYS=key1,key2,key3
-    api_keys: ${API_KEYS}
-    model: ${MODEL_CODE}
-    base_url: ${BASE_URL}
-    max_concurrent_per_key: 2   # 每个 Key 最大并发数
-    queue_timeout: 30            # 等待可用 Key 的超时秒数
+    api_keys: ${ZHIPU_API_KEYS:-}
+    model: ${ZHIPU_MODEL_CODE:-glm-4}
+    base_url: ${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+    max_concurrent_per_key: 2
+    queue_timeout: 30
   deepseek:
-    api_keys: ${DEEPSEEK_API_KEYS}
+    api_keys: ${DEEPSEEK_API_KEYS:-}
     model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}
     base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
     max_concurrent_per_key: 2
     queue_timeout: 30
+  failover:
+    enabled: true               # 是否启用 failover（生产环境建议 true）
+    providers:                    # failover 优先级链（不含主 provider）
+      - qwen
+    retry:
+      max_retries: 2              # 同一 provider 内重试次数
+      retry_delay: 1.0            # 重试间隔（秒）
+    circuit_breaker:
+      failure_threshold: 3        # 连续失败 N 次触发熔断
+      recovery_timeout: 60        # 熔断恢复时间（秒）
+    alert:
+      enabled: true               # 是否启用告警
+      channel: webhook            # 告警渠道
+      cooldown: 300               # 告警冷却时间（秒）
 
 # 工具配置
 tools:
