@@ -853,6 +853,12 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 检查会话是否已在人工接待中，避免 AI 重复处理
                 session_metadata = session.get("metadata") or {}
+                logger.info(
+                    f"[WeCom KF] 会话状态检查: session_id={session_id}, "
+                    f"service_state={session_metadata.get('service_state')}, "
+                    f"exit_human_timeout_failed_at={session_metadata.get('exit_human_timeout_failed_at', 'N/A')}, "
+                    f"has_metadata_keys={list(session_metadata.keys()) if session_metadata else 'None'}"
+                )
                 if session_metadata.get("service_state") == 3:
                     # 如果之前超时退出人工失败，尝试查询微信侧实际状态来校准
                     if session_metadata.get("exit_human_timeout_failed_at"):
@@ -917,6 +923,34 @@ async def _process_tenant_wecom_kf_messages(
                     "kf_config": kf_config,
                     "session_id": session_id,
                 })
+
+                # 发送前校验微信远程会话状态，防止本地状态与远程不一致导致 95018
+                try:
+                    remote_state = await adapter.api_client.get_service_state(
+                        open_kfid, unified_msg.user_id
+                    )
+                    remote_service_state = remote_state.get("service_state")
+                    logger.info(
+                        f"[WeCom KF] 远程状态校验: session_id={session_id}, "
+                        f"local_service_state={session_metadata.get('service_state')}, "
+                        f"remote_service_state={remote_service_state}"
+                    )
+                    if remote_service_state != 1:
+                        logger.warning(
+                            f"[WeCom KF] 远程状态不允许机器人发送消息，跳过处理: "
+                            f"session_id={session_id}, remote_state={remote_service_state}"
+                        )
+                        # 同步本地状态到远程实际状态
+                        channel_session_manager.update_session(
+                            session_id=session_id,
+                            metadata={"service_state": remote_service_state},
+                        )
+                        continue
+                except Exception as e:
+                    logger.warning(
+                        f"[WeCom KF] 远程状态校验失败，继续处理: "
+                        f"session_id={session_id}, error={e}"
+                    )
 
                 # 检查隐藏命令
                 from src.core.hidden_commands import is_hidden_command, execute_hidden_command
