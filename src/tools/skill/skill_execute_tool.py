@@ -156,17 +156,62 @@ class SkillExecuteTool(BaseTool):
             try:
                 content_obj = _json.loads(content_text)
                 if isinstance(content_obj, dict):
-                    from src.db.models import SessionDB
-                    session_info = SessionDB.get_by_id(real_session_id) if real_session_id else None
                     real_tenant_id = None
-                    if session_info:
-                        real_tenant_id = session_info.get("tenant_id")
+                    session_source = None
+
+                    # 方式1：从 chat_sessions 表查询（Web端会话）
+                    if real_session_id:
+                        from src.db.models import SessionDB
+                        session_info = SessionDB.get_by_id(real_session_id)
+                        if session_info:
+                            real_tenant_id = session_info.get("tenant_id")
+                            if real_tenant_id:
+                                session_source = "chat_sessions"
+
+                    # 方式2：从 channel_sessions 表查询（企业微信/钉钉/飞书等渠道会话）
+                    if not real_tenant_id and real_session_id:
+                        try:
+                            from src.channels.session import channel_session_manager
+                            from src.db.database import get_db_connection
+                            with get_db_connection() as conn:
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    "SELECT tenant_id FROM channel_sessions WHERE session_id = %s",
+                                    (real_session_id,)
+                                )
+                                row = cursor.fetchone()
+                                if row and row.get("tenant_id"):
+                                    real_tenant_id = row["tenant_id"]
+                                    session_source = "channel_sessions"
+                        except Exception:
+                            pass
+
+                    # 方式3：从 session_id 格式解析 tenant_id（fallback）
+                    # session_id 格式: {tenant_id}_{channel_type}_{channel_user_id}_{subagent_id}
+                    if not real_tenant_id and real_session_id:
+                        known_channels = ["wecom_kf", "wecom", "dingtalk", "feishu", "web"]
+                        for ch in known_channels:
+                            marker = f"_{ch}_"
+                            if marker in real_session_id:
+                                idx = real_session_id.index(marker)
+                                real_tenant_id = real_session_id[:idx]
+                                session_source = "session_id_parsed"
+                                break
+
                     if real_tenant_id:
                         old_val = content_obj.get("tenant_id", "")
                         if old_val != real_tenant_id:
-                            logger.info(f"注入 tenant_id: {old_val} -> {real_tenant_id}")
+                            logger.info(
+                                f"[skill_execute] 注入 tenant_id: '{old_val}' -> '{real_tenant_id}' "
+                                f"(来源: {session_source}, session_id={real_session_id})"
+                            )
                             content_obj["tenant_id"] = real_tenant_id
                             content_text = _json.dumps(content_obj, ensure_ascii=False)
+                    else:
+                        logger.warning(
+                            f"[skill_execute] 未能获取 tenant_id，content 中 tenant_id 将为空 "
+                            f"(session_id={real_session_id}, content_tenant_id={content_obj.get('tenant_id', '')})"
+                        )
             except (_json.JSONDecodeError, TypeError):
                 pass  # 非 JSON 内容，跳过
 
