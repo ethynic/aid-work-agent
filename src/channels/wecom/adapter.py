@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 
-from src.channels.base import ChannelAdapter
+from src.channels.base import ChannelAdapter, build_public_url, format_file_size
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.media import WeComMedia
 from src.channels.wecom.message_builder import WeComMessageBuilder
@@ -295,17 +295,29 @@ class WeComAdapter(ChannelAdapter):
         """
         发送企业微信消息（自动选择消息类型和拆分）
 
-        Args:
-            message: UnifiedResponse，text 字段为消息内容
-
-        Returns:
-            是否发送成功
+        文本消息走 send_long_message，随后逐个发送 downloadable_files 为 textcard。
         """
-        text = message.text
-        if not text:
-            return True
+        all_success = True
 
-        return await self.send_long_message(text, message.reply_to)
+        # 1. 发送文本
+        text = message.text
+        if text:
+            all_success = await self.send_long_message(text, message.reply_to)
+
+        # 2. 发送可下载文件卡片
+        for file_info in message.downloadable_files:
+            url = build_public_url(file_info.download_url)
+            success = await self.send_textcard(
+                title=f"{file_info.file_name}",
+                description=f"点击下载 ({format_file_size(file_info.file_size)})",
+                url=url,
+                user_id=message.reply_to,
+                btntxt="下载",
+            )
+            if not success:
+                all_success = False
+
+        return all_success
 
     async def send_long_message(self, text: str, user_id: str) -> bool:
         """

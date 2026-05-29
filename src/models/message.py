@@ -106,16 +106,26 @@ class UnifiedMessage(BaseModel):
         }
 
 
+class DownloadableFileInfo(BaseModel):
+    """可下载文件信息"""
+    file_id: str = Field(..., description="文件ID")
+    file_name: str = Field(default="未命名文件", description="文件名")
+    file_size: int = Field(default=0, description="文件大小（字节）")
+    download_url: str = Field(default="", description="下载URL")
+    mime_type: str = Field(default="", description="MIME类型")
+
+
 class UnifiedResponse(BaseModel):
     """
     统一响应格式
-    
+
     Agent响应转换为这个格式，再由渠道适配器转换为各平台格式
     """
     message_id: str = Field(..., description="消息唯一ID")
     reply_to: str = Field(..., description="回复的消息ID")
     content: Dict[str, Any] = Field(default_factory=dict, description="响应内容")
     attachments: List[Attachment] = Field(default_factory=list, description="附件列表")
+    downloadable_files: List[DownloadableFileInfo] = Field(default_factory=list, description="可下载文件列表")
     timestamp: datetime = Field(default_factory=datetime.now, description="响应时间戳")
     
     @property

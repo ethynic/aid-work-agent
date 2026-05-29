@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 
-from src.channels.base import ChannelAdapter
+from src.channels.base import ChannelAdapter, build_public_url, format_file_size
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.message_builder import WeComMessageBuilder
 from src.channels.wecom_kf.api_client import WeComKfApiClient
@@ -141,28 +141,45 @@ class WeComKfAdapter(ChannelAdapter):
           - text 块 → 增强纯文本 → 拆分 → text 消息
           - table 块 → 渲染图片 → 上传 → image 消息（降级为纯文本）
           - link 块 → link 消息（降级为纯文本 URL）
+        随后逐个发送 downloadable_files 为 link 消息。
         """
-        text = message.text
-        if not text:
-            return True
-
-        # 如果渲染功能关闭，走原有的纯文本全流程
-        if not self._render_enabled:
-            return await self._send_as_plain_text(text, message.reply_to)
-
-        blocks = segment_markdown(text)
         all_success = True
-        for block in blocks:
-            if block.type == "text":
-                success = await self._send_text_block(block.content, message.reply_to)
-            elif block.type == "table":
-                success = await self._send_table_as_image(block.content, message.reply_to)
-            elif block.type == "link":
-                success = await self._send_link_message(block, message.reply_to)
+        text = message.text
+
+        if text:
+            # 如果渲染功能关闭，走原有的纯文本全流程
+            if not self._render_enabled:
+                all_success = await self._send_as_plain_text(text, message.reply_to)
             else:
-                success = True
-            if not success:
+                blocks = segment_markdown(text)
+                for block in blocks:
+                    if block.type == "text":
+                        success = await self._send_text_block(block.content, message.reply_to)
+                    elif block.type == "table":
+                        success = await self._send_table_as_image(block.content, message.reply_to)
+                    elif block.type == "link":
+                        success = await self._send_link_message(block, message.reply_to)
+                    else:
+                        success = True
+                    if not success:
+                        all_success = False
+
+        # 发送可下载文件链接
+        for file_info in message.downloadable_files:
+            url = build_public_url(file_info.download_url)
+            result = await self.api_client.send_msg(
+                touser=message.reply_to,
+                open_kfid=self.current_open_kfid,
+                msgtype="link",
+                content={
+                    "title": file_info.file_name,
+                    "desc": f"点击下载 ({format_file_size(file_info.file_size)})",
+                    "url": url,
+                },
+            )
+            if result.get("errcode", 0) != 0:
                 all_success = False
+
         return all_success
 
     async def _send_as_plain_text(self, text: str, user_id: str) -> bool:

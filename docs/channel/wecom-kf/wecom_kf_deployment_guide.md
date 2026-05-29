@@ -466,3 +466,9 @@ sudo nginx -t && sudo nginx -s reload
 | 消息格式 | 支持 Markdown | **不支持 Markdown** |
 | 回复限制 | 无 | 48 小时 + 5 条/次 |
 | 文件发送 | 原生文件消息 | 图文链接卡片（初期） |
+
+appid: 1000006
+secret: m2xD-CgtYrWopJM3eUDmqiqa1vnjNU4j5YVgneHpE2g
+corpid: ww2ed7298c926e081c
+token: KAkzLCcWsRiiHPKzWu7hbkJyAW5iF
+EncodingAESKey: VLbBVkTKkAtfmyfW4TAaX5olkXm5aTixvB5q2PfVHCR

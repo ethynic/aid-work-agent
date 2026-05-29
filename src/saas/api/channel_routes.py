@@ -177,12 +177,30 @@ async def _process_tenant_channel_message(
     record_service.set_model(agent.llm.get_model_name())
     record_service.set_provider(agent.llm.get_provider_name())
 
-    # 9. 处理消息
+    # 9. 处理消息（通过 progress_callback 捕获可下载文件）
+    downloadable_files = []
+
+    async def collect_files_callback(event):
+        if (isinstance(event, dict)
+            and event.get("type") == "tool_result"
+            and event.get("toolName") in ("register_download_file", "file_write")
+            and event.get("success") is True):
+            result = event.get("result", {}) or {}
+            if result.get("file_id"):
+                downloadable_files.append({
+                    "file_id": result["file_id"],
+                    "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                    "file_size": result.get("file_size", 0),
+                    "download_url": result.get("download_url", ""),
+                    "mime_type": result.get("mime_type", ""),
+                })
+
     try:
         response_text = await agent.process_message_sync(
             user_input=message.text,
             session_id=session_id,
             record_service=record_service,
+            progress_callback=collect_files_callback,
         )
         record_service.complete(response_text)
     except Exception as e:
@@ -204,11 +222,12 @@ async def _process_tenant_channel_message(
 
     # 10. 发送响应
     try:
-        from src.models.message import UnifiedResponse
-        response = UnifiedResponse.from_text(
-            text=response_text,
-            reply_to=message.user_id,
+        from src.models.message import UnifiedResponse, DownloadableFileInfo
+        response = UnifiedResponse(
             message_id=f"resp_{message.message_id}",
+            reply_to=message.user_id,
+            content={"text": response_text},
+            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
         )
         await adapter.send_message(response)
     except Exception as e:
@@ -302,11 +321,29 @@ async def _process_tenant_wecom_background(
         from src.config.settings import settings
         indicator_config = settings.wecom.waiting_indicator
 
+        downloadable_files = []
+
+        async def collect_files_callback(event):
+            if (isinstance(event, dict)
+                and event.get("type") == "tool_result"
+                and event.get("toolName") in ("register_download_file", "file_write")
+                and event.get("success") is True):
+                result = event.get("result", {}) or {}
+                if result.get("file_id"):
+                    downloadable_files.append({
+                        "file_id": result["file_id"],
+                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                        "file_size": result.get("file_size", 0),
+                        "download_url": result.get("download_url", ""),
+                        "mime_type": result.get("mime_type", ""),
+                    })
+
         agent_task = asyncio.create_task(
             agent.process_message_sync(
                 user_input=message.text,
                 session_id=session_id,
                 record_service=record_service,
+                progress_callback=collect_files_callback,
             )
         )
 
@@ -336,13 +373,20 @@ async def _process_tenant_wecom_background(
             tenant_id=tenant_id,
         )
 
-        # 发送回复（自动拆分长消息）
+        # 发送回复（通过 UnifiedResponse，包含 downloadable_files）
         logger.info(
             f"[Tenant WeCom] 开始发送回复: user={message.user_id}, "
             f"content_len={len(response_text) if response_text else 0}, "
             f"session_id={session_id}"
         )
-        send_result = await adapter.send_long_message(response_text, message.user_id)
+        from src.models.message import UnifiedResponse, DownloadableFileInfo
+        response = UnifiedResponse(
+            message_id=f"resp_{message.message_id}",
+            reply_to=message.user_id,
+            content={"text": response_text},
+            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
+        )
+        send_result = await adapter.send_message(response)
         logger.info(
             f"[Tenant WeCom] 回复发送{'成功' if send_result else '失败'}: "
             f"user={message.user_id}, session_id={session_id}"
@@ -829,12 +873,30 @@ async def _process_tenant_wecom_kf_messages(
                 record_service.set_model(agent.llm.get_model_name())
                 record_service.set_provider(agent.llm.get_provider_name())
 
-                # 处理消息
+                # 处理消息（通过 progress_callback 捕获可下载文件）
+                downloadable_files = []
+
+                async def collect_files_callback(event):
+                    if (isinstance(event, dict)
+                        and event.get("type") == "tool_result"
+                        and event.get("toolName") in ("register_download_file", "file_write")
+                        and event.get("success") is True):
+                        result = event.get("result", {}) or {}
+                        if result.get("file_id"):
+                            downloadable_files.append({
+                                "file_id": result["file_id"],
+                                "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                                "file_size": result.get("file_size", 0),
+                                "download_url": result.get("download_url", ""),
+                                "mime_type": result.get("mime_type", ""),
+                            })
+
                 try:
                     response_text = await agent.process_message_sync(
                         user_input=unified_msg.text or "[非文本消息]",
                         session_id=session_id,
                         record_service=record_service,
+                        progress_callback=collect_files_callback,
                     )
                     record_service.complete(response_text)
                 except Exception as e:
@@ -854,11 +916,13 @@ async def _process_tenant_wecom_kf_messages(
                     tenant_id=tenant_id,
                 )
 
-                # 发送回复
-                response = UnifiedResponse.from_text(
-                    text=response_text,
-                    reply_to=unified_msg.user_id,
+                # 发送回复（包含 downloadable_files）
+                from src.models.message import DownloadableFileInfo
+                response = UnifiedResponse(
                     message_id=f"resp_{msg_id}",
+                    reply_to=unified_msg.user_id,
+                    content={"text": response_text},
+                    downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
                 )
                 send_result = await adapter.send_message(response)
                 logger.info(

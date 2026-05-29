@@ -7,7 +7,30 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from loguru import logger
+
+from src.config.settings import settings
 from src.models.message import UnifiedMessage, UnifiedResponse
+
+
+def build_public_url(download_url: str) -> str:
+    """将相对路径转为完整的公开 URL，供渠道端文件下载使用"""
+    if download_url.startswith("http://") or download_url.startswith("https://"):
+        return download_url
+    base = settings.app.public_base_url or ""
+    if not base:
+        logger.warning("public_base_url 未配置，渠道端文件链接可能不可访问")
+    return f"{base.rstrip('/')}{download_url}"
+
+
+def format_file_size(size: int) -> str:
+    """格式化文件大小为可读字符串"""
+    if size < 1024:
+        return f"{size}B"
+    elif size < 1024 * 1024:
+        return f"{size / 1024:.1f}KB"
+    else:
+        return f"{size / (1024 * 1024):.1f}MB"
 
 
 class ChannelAdapter(ABC):
