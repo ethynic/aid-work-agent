@@ -854,15 +854,46 @@ async def _process_tenant_wecom_kf_messages(
                 # 检查会话是否已在人工接待中，避免 AI 重复处理
                 session_metadata = session.get("metadata") or {}
                 if session_metadata.get("service_state") == 3:
-                    # 先检查是否要退出人工服务
-                    if adapter.should_exit_human(unified_msg.text or "", kf_config):
-                        await _exit_kf_human_service(adapter, open_kfid, unified_msg.user_id, session_id)
+                    # 如果之前超时退出人工失败，尝试查询微信侧实际状态来校准
+                    if session_metadata.get("exit_human_timeout_failed_at"):
+                        try:
+                            state_result = await adapter.api_client.get_service_state(
+                                open_kfid, unified_msg.user_id
+                            )
+                            actual_state = state_result.get("service_state")
+                            if actual_state != 3:
+                                logger.info(
+                                    f"[WeCom KF] 超时失败会话已恢复: 微信侧状态={actual_state}, "
+                                    f"更新本地状态: session_id={session_id}"
+                                )
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": actual_state},
+                                )
+                                # 状态已更新，继续走 AI 处理流程
+                            else:
+                                # 微信侧仍是人工状态，跳过 AI 处理
+                                logger.info(
+                                    f"[WeCom KF] 超时失败会话仍在人工接待中，跳过AI处理: "
+                                    f"session_id={session_id}"
+                                )
+                                continue
+                        except Exception as e:
+                            logger.warning(
+                                f"[WeCom KF] 查询微信侧会话状态失败，跳过AI处理: "
+                                f"session_id={session_id}, error={e}"
+                            )
+                            continue
+                    else:
+                        # 先检查是否要退出人工服务
+                        if adapter.should_exit_human(unified_msg.text or "", kf_config):
+                            await _exit_kf_human_service(adapter, open_kfid, unified_msg.user_id, session_id)
+                            continue
+                        logger.info(
+                            f"[WeCom KF] 会话已在人工接待中，跳过AI处理: "
+                            f"session_id={session_id}, user={unified_msg.user_id}"
+                        )
                         continue
-                    logger.info(
-                        f"[WeCom KF] 会话已在人工接待中，跳过AI处理: "
-                        f"session_id={session_id}, user={unified_msg.user_id}"
-                    )
-                    continue
 
                 # 自动注册用户
                 user_id = None

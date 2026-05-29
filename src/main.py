@@ -343,6 +343,7 @@ async def lifespan(app: FastAPI):
                             FROM channel_sessions
                             WHERE channel_type = 'wecom_kf'
                               AND metadata LIKE '%"service_state"%3%'
+                              AND metadata NOT LIKE '%"exit_human_timeout_failed_at"%'
                         """)
                         rows = cursor.fetchall()
 
@@ -413,13 +414,17 @@ async def lifespan(app: FastAPI):
                                     f"session_id={session_id}"
                                 )
                             else:
-                                # 即使微信API调用失败，也更新本地状态为1，避免死循环反复重试
+                                # 微信API调用失败（如95016不允许状态转换），保留 service_state=3
+                                # 并标记失败时间戳，避免死循环反复重试
                                 channel_session_manager.update_session(
                                     session_id=session_id,
-                                    metadata={"service_state": 1},
+                                    metadata={
+                                        "service_state": 3,
+                                        "exit_human_timeout_failed_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                    },
                                 )
                                 logger.error(
-                                    f"[WeCom KF] 超时退出人工服务失败，本地状态已更新: "
+                                    f"[WeCom KF] 超时退出人工服务失败，保留人工状态避免远程不一致: "
                                     f"session_id={session_id}"
                                 )
                             await adapter.close()
