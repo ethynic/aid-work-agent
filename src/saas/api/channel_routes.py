@@ -148,11 +148,17 @@ async def _process_tenant_channel_message(
             tenant_id=tenant_id,
         )
 
-    # 6. 获取 agent（根据渠道配置的 subagent_type 路由）
+    # 6. 检查隐藏命令
+    from src.core.hidden_commands import is_hidden_command, execute_hidden_command
+    if message.text and is_hidden_command(message.text):
+        await execute_hidden_command(message.text, session_id, tenant_id)
+        return "success"
+
+    # 7. 获取 agent（根据渠道配置的 subagent_type 路由）
     from src.core.agent_router import agent_router
     agent = agent_router.get_agent(subagent_type, session_id)
 
-    # 7. 开始记录 token 消耗
+    # 8. 开始记录 token 消耗
     record_service = SessionRecordManager.start_record(
         session_id=session_id,
         user_id=user_id or message.user_id,
@@ -163,7 +169,7 @@ async def _process_tenant_channel_message(
     record_service.set_model(agent.llm.get_model_name())
     record_service.set_provider(agent.llm.get_provider_name())
 
-    # 8. 处理消息
+    # 9. 处理消息
     try:
         response_text = await agent.process_message_sync(
             user_input=message.text,
@@ -179,7 +185,7 @@ async def _process_tenant_channel_message(
 
     SessionRecordManager.end_record()
 
-    # 9. 保存助手回复到 channel_messages
+    # 10. 保存助手回复到 channel_messages
     channel_session_manager.add_message(
         session_id=session_id,
         role="assistant",
@@ -244,6 +250,12 @@ async def _process_tenant_wecom_background(
             subagent_id=subagent_type or "",
         )
         session_id = session["session_id"]
+
+        # 检查隐藏命令
+        from src.core.hidden_commands import is_hidden_command, execute_hidden_command
+        if message.text and is_hidden_command(message.text):
+            await execute_hidden_command(message.text, session_id, tenant_id)
+            return
 
         # 记录用户消息
         if message.text:
@@ -749,6 +761,12 @@ async def _process_tenant_wecom_kf_messages(
                     "kf_config": kf_config,
                     "session_id": session_id,
                 })
+
+                # 检查隐藏命令
+                from src.core.hidden_commands import is_hidden_command, execute_hidden_command
+                if is_hidden_command(unified_msg.text or ""):
+                    await execute_hidden_command(unified_msg.text or "", session_id, tenant_id)
+                    continue
 
                 # 保存用户消息
                 if unified_msg.text:

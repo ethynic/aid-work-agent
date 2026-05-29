@@ -541,6 +541,30 @@ class ChannelSessionManager:
 
             return cursor.rowcount > 0
 
+    def delete_messages(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
+        """
+        仅删除会话中的消息，保留会话本身。
 
-# 全局会话管理器
+        Args:
+            session_id: 会话ID
+            tenant_id: 租户ID（可选，提供时额外校验租户归属）
+
+        Returns:
+            是否成功
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            if tenant_id:
+                cursor.execute("""
+                    DELETE FROM channel_messages WHERE session_id = %s AND tenant_id = %s
+                """, (session_id, tenant_id))
+            else:
+                cursor.execute("""
+                    DELETE FROM channel_messages WHERE session_id = %s
+                """, (session_id,))
+
+            conn.commit()
+            logger.info(f"后端日志：channel_messages 已清空: session_id={session_id}")
+            return cursor.rowcount > 0# 全局会话管理器
 channel_session_manager = ChannelSessionManager()
