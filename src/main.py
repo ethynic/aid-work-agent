@@ -413,8 +413,13 @@ async def lifespan(app: FastAPI):
                                     f"session_id={session_id}"
                                 )
                             else:
+                                # 即使微信API调用失败，也更新本地状态为1，避免死循环反复重试
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": 1},
+                                )
                                 logger.error(
-                                    f"[WeCom KF] 超时退出人工服务失败: "
+                                    f"[WeCom KF] 超时退出人工服务失败，本地状态已更新: "
                                     f"session_id={session_id}"
                                 )
                             await adapter.close()

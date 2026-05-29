@@ -194,7 +194,10 @@ class SkillExecuteTool(BaseTool):
                 logger.info(f"后端日志：[trade-customer诊断] stdout: {stdout_preview}")
             if result.stderr:
                 stderr_preview = result.stderr[:300] if len(result.stderr) > 300 else result.stderr
-                logger.warning(f"后端日志：[trade-customer诊断] stderr: {stderr_preview}")
+                if not result.success:
+                    logger.warning(f"后端日志：[trade-customer诊断] stderr: {stderr_preview}")
+                else:
+                    logger.info(f"后端日志：[trade-customer诊断] stderr (command succeeded): {stderr_preview}")
             if not result.success:
                 logger.error(f"后端日志：[trade-customer诊断] 命令执行失败! error={result.error}, stderr={result.stderr[:500] if result.stderr else '无'}")
 

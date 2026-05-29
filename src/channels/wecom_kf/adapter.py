@@ -330,7 +330,23 @@ class WeComKfAdapter(ChannelAdapter):
             external_userid=external_userid,
             service_state=1,  # 智能助手接待
         )
-        return result.get("errcode", 0) == 0
+        if result.get("errcode", 0) == 0:
+            return True
+
+        # errcode=95016: not allow transition state，说明微信侧状态已不是人工接待
+        # 查询实际状态，如果确实已不在人工状态，视为成功
+        if result.get("errcode") == 95016:
+            state_result = await self.api_client.get_service_state(open_kfid, external_userid)
+            actual_state = state_result.get("service_state")
+            if actual_state != 3:
+                logger.info(
+                    f"微信客服会话已不在人工接待状态: "
+                    f"open_kfid={open_kfid}, external_userid={external_userid}, "
+                    f"actual_state={actual_state}"
+                )
+                return True
+
+        return False
 
     # ==================== 用户信息 ====================
 
