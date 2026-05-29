@@ -505,6 +505,43 @@ class ChannelSessionManager:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
+    def update_session_by_channel_user(
+        self,
+        tenant_id: str,
+        channel_type: str,
+        channel_user_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        按渠道用户更新所有匹配会话的 metadata。
+
+        Returns:
+            更新的会话数量
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE channel_sessions
+                SET metadata = %s, updated_at = %s
+                WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s
+            """, (json.dumps(metadata, ensure_ascii=False) if metadata else None, now,
+                 tenant_id, channel_type, channel_user_id))
+            conn.commit()
+            updated_count = cursor.rowcount
+
+            if updated_count > 0:
+                cursor.execute("""
+                    SELECT subagent_id FROM channel_sessions
+                    WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s
+                """, (tenant_id, channel_type, channel_user_id))
+                for row in cursor.fetchall():
+                    delete_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type,
+                                  channel_user_id, row["subagent_id"] or "")
+
+            return updated_count
+
     def delete_session(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
         """
         删除会话

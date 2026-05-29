@@ -884,8 +884,35 @@ async def _process_tenant_wecom_kf_messages(
                                     f"session_id={session_id}"
                                 )
                                 continue
+                            elif actual_state in (0, 4):
+                                # 微信侧状态为未处理(0)或已结束(4)，尝试切回智能助手
+                                logger.info(
+                                    f"[WeCom KF] 超时失败会话微信侧状态={actual_state}，"
+                                    f"尝试切回智能助手: session_id={session_id}"
+                                )
+                                recover_result = await adapter.api_client.trans_service_state(
+                                    open_kfid=open_kfid,
+                                    external_userid=unified_msg.user_id,
+                                    service_state=1,
+                                )
+                                if recover_result.get("errcode", 0) == 0:
+                                    channel_session_manager.update_session(
+                                        session_id=session_id,
+                                        metadata={"service_state": 1},
+                                    )
+                                    logger.info(
+                                        f"[WeCom KF] 超时失败会话已恢复为智能助手: "
+                                        f"session_id={session_id}"
+                                    )
+                                    # 继续正常 AI 处理（不 continue）
+                                else:
+                                    logger.warning(
+                                        f"[WeCom KF] 超时失败会话切回智能助手失败: "
+                                        f"session_id={session_id}, errcode={recover_result.get('errcode')}"
+                                    )
+                                    continue
                             else:
-                                # 微信侧是其他状态（2=待接入池, 4=已结束），不允许机器人发消息
+                                # 微信侧是待接入池(2)，不允许机器人发消息
                                 logger.warning(
                                     f"[WeCom KF] 超时失败会话微信侧状态={actual_state}，"
                                     f"不允许发送消息: session_id={session_id}"
@@ -936,16 +963,44 @@ async def _process_tenant_wecom_kf_messages(
                         f"remote_service_state={remote_service_state}"
                     )
                     if remote_service_state != 1:
-                        logger.warning(
-                            f"[WeCom KF] 远程状态不允许机器人发送消息，跳过处理: "
-                            f"session_id={session_id}, remote_state={remote_service_state}"
-                        )
-                        # 同步本地状态到远程实际状态
-                        channel_session_manager.update_session(
-                            session_id=session_id,
-                            metadata={"service_state": remote_service_state},
-                        )
-                        continue
+                        # 远程状态 0(未处理)或 4(已结束)：尝试切回智能助手
+                        if remote_service_state in (0, 4):
+                            logger.info(
+                                f"[WeCom KF] 远程状态={remote_service_state}，尝试切回智能助手: "
+                                f"session_id={session_id}"
+                            )
+                            recover_result = await adapter.api_client.trans_service_state(
+                                open_kfid=open_kfid,
+                                external_userid=unified_msg.user_id,
+                                service_state=1,
+                            )
+                            if recover_result.get("errcode", 0) == 0:
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": 1},
+                                )
+                                logger.info(
+                                    f"[WeCom KF] 远程状态已恢复为智能助手: "
+                                    f"session_id={session_id}"
+                                )
+                                # 继续正常 AI 处理（不 continue）
+                            else:
+                                logger.warning(
+                                    f"[WeCom KF] 远程状态切回智能助手失败: "
+                                    f"session_id={session_id}, errcode={recover_result.get('errcode')}"
+                                )
+                                continue
+                        else:
+                            logger.warning(
+                                f"[WeCom KF] 远程状态不允许机器人发送消息，跳过处理: "
+                                f"session_id={session_id}, remote_state={remote_service_state}"
+                            )
+                            # 同步本地状态到远程实际状态
+                            channel_session_manager.update_session(
+                                session_id=session_id,
+                                metadata={"service_state": remote_service_state},
+                            )
+                            continue
                 except Exception as e:
                     logger.warning(
                         f"[WeCom KF] 远程状态校验失败，继续处理: "
@@ -1099,22 +1154,20 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
         service_state = int(callback_root.findtext("ServiceState", "0"))
         servicer_userid = callback_root.findtext("ServicerUserId", "")
 
-        session_id = f"{tenant_id}_wecom_kf_{external_userid}_"
-        try:
-            channel_session_manager.update_session(
-                session_id=session_id,
-                metadata={
-                    "service_state": service_state,
-                    "open_kfid": open_kfid,
-                    "servicer_userid": servicer_userid,
-                },
-            )
-        except Exception:
-            pass  # session 可能尚未创建
+        updated_count = channel_session_manager.update_session_by_channel_user(
+            tenant_id=tenant_id,
+            channel_type="wecom_kf",
+            channel_user_id=external_userid,
+            metadata={
+                "service_state": service_state,
+                "open_kfid": open_kfid,
+                "servicer_userid": servicer_userid,
+            },
+        )
 
         logger.info(
             f"[WeCom KF] 会话状态变更: open_kfid={open_kfid}, "
-            f"user={external_userid}, state={service_state}"
+            f"user={external_userid}, state={service_state}, updated_sessions={updated_count}"
         )
     except Exception as e:
         logger.error(f"[WeCom KF] session_status_change 处理异常: {e}")
