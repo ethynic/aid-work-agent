@@ -1059,6 +1059,11 @@ async def _transfer_kf_to_human(
             return
 
         servicer_userid = servicer_list[0]
+
+        # 先发送转接确认消息，再执行转接（转接后机器人不能再发消息）
+        adapter.current_open_kfid = open_kfid
+        await adapter.send_text("正在为您转接人工客服，请稍候...", external_userid)
+
         result = await adapter.transfer_to_human(open_kfid, external_userid, servicer_userid)
 
         if result:
@@ -1067,10 +1072,6 @@ async def _transfer_kf_to_human(
                 metadata={"service_state": 3, "transferred_to": servicer_userid},
             )
             logger.info(f"[WeCom KF] 已转接人工: servicer={servicer_userid}")
-
-            # 发送转接确认消息
-            adapter.current_open_kfid = open_kfid
-            await adapter.send_text("正在为您转接人工客服，请稍候...", external_userid)
         else:
             logger.error(f"[WeCom KF] 转接失败: open_kfid={open_kfid}")
     except Exception as e:
