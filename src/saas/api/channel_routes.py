@@ -746,6 +746,15 @@ async def _process_tenant_wecom_kf_messages(
                 )
                 session_id = session["session_id"]
 
+                # 检查会话是否已在人工接待中，避免 AI 重复处理
+                session_metadata = session.get("metadata") or {}
+                if session_metadata.get("service_state") == 3:
+                    logger.info(
+                        f"[WeCom KF] 会话已在人工接待中，跳过AI处理: "
+                        f"session_id={session_id}, user={unified_msg.user_id}"
+                    )
+                    continue
+
                 # 自动注册用户
                 user_id = None
                 try:

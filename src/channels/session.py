@@ -320,7 +320,7 @@ class ChannelSessionManager:
                 """, (session_id,))
                 row = cursor.fetchone()
                 if row:
-                    delete_cached(CacheKeys.CHANNEL_SESSION, row[0], row[1], row[2], row[3])
+                    delete_cached(CacheKeys.CHANNEL_SESSION, row["tenant_id"], row["channel_type"], row["channel_user_id"], row["subagent_id"])
 
             return success
 
