@@ -698,6 +698,56 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         return PlainTextResponse("error", status_code=500)
 
 
+async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
+    """
+    自动填入 open_kfid：查找当前租户下 open_kfid 未设置的 wecom_kf 配置，
+    如果只有 1 条匹配，将 open_kfid 写入该配置的 kf_account 中第一条记录。
+    """
+    try:
+        configs = ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
+        if not configs:
+            logger.warning(f"[WeCom KF] auto_fill_open_kfid: 租户 {tenant_id} 无 wecom_kf 配置")
+            return
+
+        # 筛选 open_kfid 未设置的配置（kf_account 中至少有一条 open_kfid 为空）
+        candidates = []
+        for cfg in configs:
+            kf_accounts = cfg.get("config", {}).get("kf_account", [])
+            if kf_accounts:
+                for kf in kf_accounts:
+                    if not kf.get("open_kfid"):
+                        candidates.append((cfg["config_id"], cfg["config"], kf_accounts))
+                        break
+
+        if len(candidates) == 0:
+            logger.info(
+                f"[WeCom KF] auto_fill_open_kfid: 租户 {tenant_id} 所有配置的 open_kfid 均已设置"
+            )
+            return
+
+        if len(candidates) > 1:
+            logger.warning(
+                f"[WeCom KF] auto_fill_open_kfid: 租户 {tenant_id} 存在 {len(candidates)} 条 "
+                f"open_kfid 未设置的 wecom_kf 配置，无法自动填入"
+            )
+            return
+
+        config_id, config_dict, kf_accounts = candidates[0]
+        # 填入第一条 open_kfid 为空的记录
+        for kf in kf_accounts:
+            if not kf.get("open_kfid"):
+                kf["open_kfid"] = open_kfid
+                break
+
+        ChannelConfigDB.update(config_id, config_dict)
+        logger.info(
+            f"[WeCom KF] auto_fill_open_kfid: 已将 open_kfid={open_kfid} "
+            f"自动填入 tenant={tenant_id} config={config_id}"
+        )
+    except Exception as e:
+        logger.error(f"[WeCom KF] auto_fill_open_kfid 异常: {e}", exc_info=True)
+
+
 async def _process_tenant_wecom_kf_messages(
     tenant_id: str, config_id: str, open_kfid: str, adapter
 ) -> None:
@@ -718,6 +768,7 @@ async def _process_tenant_wecom_kf_messages(
         kf_config = adapter.get_kf_config(open_kfid)
         if not kf_config:
             logger.warning(f"[WeCom KF] 未知的 open_kfid: {open_kfid}")
+            await _auto_fill_open_kfid(tenant_id, open_kfid)
             return
 
         subagent_type = kf_config.get("subagent_type", "")

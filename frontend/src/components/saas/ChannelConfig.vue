@@ -174,8 +174,8 @@
                   </div>
                   <div>
                     <label class="block text-xs font-medium text-default mb-1">open_kfid</label>
-                    <input v-model="kf.open_kfid" type="text" placeholder="wkAAAA" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
-                    <p class="mt-0.5 text-xs text-muted">格式如 wkAAAA，通过企微 API 获取</p>
+                    <input v-model="kf.open_kfid" type="text" placeholder="首次接收消息时自动填入" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                    <p class="mt-0.5 text-xs text-muted">首次接收消息时自动填入，无需手动填写</p>
                   </div>
                   <div class="col-span-2">
                     <label class="block text-xs font-medium text-default mb-1">绑定子智能体</label>
