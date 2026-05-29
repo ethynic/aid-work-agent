@@ -861,21 +861,28 @@ async def _process_tenant_wecom_kf_messages(
                                 open_kfid, unified_msg.user_id
                             )
                             actual_state = state_result.get("service_state")
-                            if actual_state != 3:
+                            if actual_state == 1:
+                                # 微信侧已是智能助手接待，更新本地状态，继续 AI 处理
                                 logger.info(
-                                    f"[WeCom KF] 超时失败会话已恢复: 微信侧状态={actual_state}, "
-                                    f"更新本地状态: session_id={session_id}"
+                                    f"[WeCom KF] 超时失败会话已恢复为智能助手: "
+                                    f"session_id={session_id}"
                                 )
                                 channel_session_manager.update_session(
                                     session_id=session_id,
-                                    metadata={"service_state": actual_state},
+                                    metadata={"service_state": 1},
                                 )
-                                # 状态已更新，继续走 AI 处理流程
-                            else:
+                            elif actual_state == 3:
                                 # 微信侧仍是人工状态，跳过 AI 处理
                                 logger.info(
                                     f"[WeCom KF] 超时失败会话仍在人工接待中，跳过AI处理: "
                                     f"session_id={session_id}"
+                                )
+                                continue
+                            else:
+                                # 微信侧是其他状态（2=待接入池, 4=已结束），不允许机器人发消息
+                                logger.warning(
+                                    f"[WeCom KF] 超时失败会话微信侧状态={actual_state}，"
+                                    f"不允许发送消息: session_id={session_id}"
                                 )
                                 continue
                         except Exception as e:
