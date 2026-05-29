@@ -316,6 +316,118 @@ async def lifespan(app: FastAPI):
                     await asyncio.sleep(error_cooldown)
         asyncio.create_task(_instance_lock_cleanup_loop())
 
+        # Start wecom_kf human service timeout check — 每 60 秒检查
+        async def _wecom_kf_timeout_check_loop():
+            """后台定时检查微信客服人工会话超时，自动退出人工服务"""
+            import json
+            from datetime import datetime, timedelta
+
+            from src.channels.session import channel_session_manager
+            from src.db.database import get_db_connection
+
+            interval = 60
+            default_timeout_minutes = 8
+            logger.info(
+                f"WeCom KF timeout check task started, "
+                f"interval={interval}s, default_timeout={default_timeout_minutes}min"
+            )
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    # 查询所有 wecom_kf 且 service_state=3 的会话
+                    with get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT session_id, tenant_id, channel_chat_id, channel_user_id,
+                                   last_message_at, metadata
+                            FROM channel_sessions
+                            WHERE channel_type = 'wecom_kf'
+                              AND metadata LIKE '%"service_state"%3%'
+                        """)
+                        rows = cursor.fetchall()
+
+                    if not rows:
+                        continue
+
+                    now = datetime.now()
+                    for row in rows:
+                        try:
+                            session = dict(row)
+                            session_id = session["session_id"]
+                            tenant_id = session["tenant_id"]
+                            open_kfid = session.get("channel_chat_id", "")
+                            external_userid = session["channel_user_id"]
+                            last_message_at_str = session.get("last_message_at")
+
+                            if not last_message_at_str or not open_kfid or not tenant_id:
+                                continue
+
+                            last_msg_time = datetime.strptime(last_message_at_str, "%Y-%m-%d %H:%M:%S")
+                            elapsed_minutes = (now - last_msg_time).total_seconds() / 60
+
+                            # 从租户渠道配置获取超时时间
+                            from src.saas.db.channel_config_db import ChannelConfigDB
+                            configs = ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
+                            timeout_minutes = default_timeout_minutes
+                            for cfg in configs:
+                                kf_accounts = cfg.get("config", {}).get("kf_account", [])
+                                for kf in kf_accounts:
+                                    if kf.get("open_kfid") == open_kfid:
+                                        timeout_minutes = kf.get("exit_human_timeout_minutes", default_timeout_minutes)
+                                        break
+
+                            if elapsed_minutes < timeout_minutes:
+                                continue
+
+                            logger.info(
+                                f"[WeCom KF] 人工会话超时: session_id={session_id}, "
+                                f"elapsed={elapsed_minutes:.1f}min, threshold={timeout_minutes}min"
+                            )
+
+                            # 创建 adapter 并退出人工服务
+                            from src.saas.services.channel_factory import ChannelFactory
+                            adapter, _, _ = ChannelFactory.create_from_tenant_config(
+                                tenant_id, "wecom_kf"
+                            )
+                            if adapter is None:
+                                logger.warning(
+                                    f"[WeCom KF] 超时检查：无法创建 adapter: "
+                                    f"tenant_id={tenant_id}"
+                                )
+                                continue
+
+                            adapter.current_open_kfid = open_kfid
+                            result = await adapter.transfer_to_agent(open_kfid, external_userid)
+                            if result:
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": 1},
+                                )
+                                await adapter.send_text(
+                                    f"人工服务已超时（超过{timeout_minutes}分钟无新消息），"
+                                    f"已自动切换回智能助手接待。",
+                                    external_userid,
+                                )
+                                logger.info(
+                                    f"[WeCom KF] 超时退出人工服务成功: "
+                                    f"session_id={session_id}"
+                                )
+                            else:
+                                logger.error(
+                                    f"[WeCom KF] 超时退出人工服务失败: "
+                                    f"session_id={session_id}"
+                                )
+                            await adapter.close()
+
+                        except Exception as e:
+                            logger.error(
+                                f"[WeCom KF] 超时检查处理单个会话异常: "
+                                f"session_id={session.get('session_id', 'unknown')}: {e}"
+                            )
+                except Exception as e:
+                    logger.error(f"[WeCom KF] 超时检查异常: {e}")
+        asyncio.create_task(_wecom_kf_timeout_check_loop())
+
     yield
 
     # On shutdown

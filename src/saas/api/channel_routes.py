@@ -151,7 +151,15 @@ async def _process_tenant_channel_message(
     # 6. 检查隐藏命令
     from src.core.hidden_commands import is_hidden_command, execute_hidden_command
     if message.text and is_hidden_command(message.text):
-        await execute_hidden_command(message.text, session_id, tenant_id)
+        reply_text = await execute_hidden_command(message.text, session_id, tenant_id)
+        if reply_text:
+            from src.models.message import UnifiedResponse
+            response = UnifiedResponse.from_text(
+                text=reply_text,
+                reply_to=message.user_id,
+                message_id=f"resp_{message.message_id}",
+            )
+            await adapter.send_message(response)
         return "success"
 
     # 7. 获取 agent（根据渠道配置的 subagent_type 路由）
@@ -254,7 +262,9 @@ async def _process_tenant_wecom_background(
         # 检查隐藏命令
         from src.core.hidden_commands import is_hidden_command, execute_hidden_command
         if message.text and is_hidden_command(message.text):
-            await execute_hidden_command(message.text, session_id, tenant_id)
+            reply_text = await execute_hidden_command(message.text, session_id, tenant_id)
+            if reply_text:
+                await adapter.send_text(reply_text, message.user_id)
             return
 
         # 记录用户消息
@@ -749,6 +759,10 @@ async def _process_tenant_wecom_kf_messages(
                 # 检查会话是否已在人工接待中，避免 AI 重复处理
                 session_metadata = session.get("metadata") or {}
                 if session_metadata.get("service_state") == 3:
+                    # 先检查是否要退出人工服务
+                    if adapter.should_exit_human(unified_msg.text or "", kf_config):
+                        await _exit_kf_human_service(adapter, open_kfid, unified_msg.user_id, session_id)
+                        continue
                     logger.info(
                         f"[WeCom KF] 会话已在人工接待中，跳过AI处理: "
                         f"session_id={session_id}, user={unified_msg.user_id}"
@@ -774,7 +788,15 @@ async def _process_tenant_wecom_kf_messages(
                 # 检查隐藏命令
                 from src.core.hidden_commands import is_hidden_command, execute_hidden_command
                 if is_hidden_command(unified_msg.text or ""):
-                    await execute_hidden_command(unified_msg.text or "", session_id, tenant_id)
+                    reply_text = await execute_hidden_command(unified_msg.text or "", session_id, tenant_id)
+                    if reply_text:
+                        from src.models.message import UnifiedResponse
+                        response = UnifiedResponse.from_text(
+                            text=reply_text,
+                            reply_to=unified_msg.user_id,
+                            message_id=f"resp_{msg_id}",
+                        )
+                        await adapter.send_message(response)
                     continue
 
                 # 保存用户消息
@@ -938,3 +960,25 @@ async def _transfer_kf_to_human(
             logger.error(f"[WeCom KF] 转接失败: open_kfid={open_kfid}")
     except Exception as e:
         logger.error(f"[WeCom KF] 转人工异常: {e}")
+
+
+async def _exit_kf_human_service(
+    adapter, open_kfid: str, external_userid: str, session_id: str
+) -> None:
+    """退出人工服务，切回智能助手接待"""
+    try:
+        result = await adapter.transfer_to_agent(open_kfid, external_userid)
+
+        if result:
+            channel_session_manager.update_session(
+                session_id=session_id,
+                metadata={"service_state": 1},
+            )
+            logger.info(f"[WeCom KF] 已退出人工服务: open_kfid={open_kfid}, user={external_userid}")
+
+            adapter.current_open_kfid = open_kfid
+            await adapter.send_text("已退出人工服务，回到智能助手接待。", external_userid)
+        else:
+            logger.error(f"[WeCom KF] 退出人工服务失败: open_kfid={open_kfid}")
+    except Exception as e:
+        logger.error(f"[WeCom KF] 退出人工服务异常: {e}")

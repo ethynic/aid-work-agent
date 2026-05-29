@@ -12,14 +12,15 @@
 from typing import Optional, Dict, Any, Callable, Awaitable
 
 
-# 隐藏命令处理器类型：async def handler(session_id, tenant_id) -> None
-Handler = Callable[[str, str], Awaitable[None]]
+# 隐藏命令处理器类型：async def handler(session_id, tenant_id) -> str
+Handler = Callable[[str, str], Awaitable[str]]
 
 
-async def _handle_new_session(session_id: str, tenant_id: str) -> None:
+async def _handle_new_session(session_id: str, tenant_id: str) -> str:
     """清空当前会话的 channel_messages"""
     from src.channels.session import channel_session_manager
     channel_session_manager.delete_messages(session_id)
+    return "会话上下文已清空，开始新会话。"
 
 
 HIDDEN_COMMANDS: Dict[str, Handler] = {
@@ -32,16 +33,15 @@ def is_hidden_command(text: str) -> bool:
     return text.strip() in HIDDEN_COMMANDS
 
 
-async def execute_hidden_command(text: str, session_id: str, tenant_id: str = "") -> bool:
+async def execute_hidden_command(text: str, session_id: str, tenant_id: str = "") -> Optional[str]:
     """
     执行隐藏命令。
 
     Returns:
-        True 如果匹配并执行了隐藏命令，False 如果不是命令
+        命令执行后的回复文本，如果不是命令则返回 None
     """
     cmd = text.strip()
     handler = HIDDEN_COMMANDS.get(cmd)
     if handler:
-        await handler(session_id, tenant_id)
-        return True
-    return False
+        return await handler(session_id, tenant_id)
+    return None

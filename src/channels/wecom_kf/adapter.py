@@ -37,6 +37,9 @@ from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 # 人工转接关键词默认值（租户配置未设置时使用）
 _DEFAULT_HUMAN_KEYWORDS = ["人工服务", "转人工", "人工客服", "找真人"]
 
+# 退出人工关键词默认值（租户配置未设置时使用）
+_DEFAULT_EXIT_HUMAN_KEYWORDS = ["退出人工", "返回智能助手", "结束人工", "退出人工服务"]
+
 
 class WeComKfAdapter(ChannelAdapter):
     """微信客服适配器"""
@@ -103,6 +106,13 @@ class WeComKfAdapter(ChannelAdapter):
         if not text:
             return False
         keywords = kf_config.get("human_transfer_keywords") or _DEFAULT_HUMAN_KEYWORDS
+        return any(kw in text for kw in keywords)
+
+    def should_exit_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
+        """判断消息是否匹配退出人工关键词"""
+        if not text:
+            return False
+        keywords = kf_config.get("exit_human_keywords") or _DEFAULT_EXIT_HUMAN_KEYWORDS
         return any(kw in text for kw in keywords)
 
     # ==================== 消息解析 ====================
@@ -293,6 +303,15 @@ class WeComKfAdapter(ChannelAdapter):
             external_userid=external_userid,
             service_state=3,  # 人工接待
             servicer_userid=servicer_userid,
+        )
+        return result.get("errcode", 0) == 0
+
+    async def transfer_to_agent(self, open_kfid: str, external_userid: str) -> bool:
+        """退出人工服务，切回智能助手接待"""
+        result = await self.api_client.trans_service_state(
+            open_kfid=open_kfid,
+            external_userid=external_userid,
+            service_state=1,  # 智能助手接待
         )
         return result.get("errcode", 0) == 0
 
