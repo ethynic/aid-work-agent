@@ -767,7 +767,7 @@ async def _process_tenant_wecom_kf_messages(
         # 查找客服账号配置
         kf_config = adapter.get_kf_config(open_kfid)
         if not kf_config:
-            logger.warning(f"[WeCom KF] 未知的 open_kfid: {open_kfid}")
+            logger.info(f"[WeCom KF] 新的 open_kfid: {open_kfid}，尝试自动填入配置")
             await _auto_fill_open_kfid(tenant_id, open_kfid)
             return
 

@@ -92,6 +92,77 @@ class WeComKfAdapter(ChannelAdapter):
     def channel_type(self) -> str:
         return "wecom_kf"
 
+    # ==================== 默认缩略图 ====================
+
+    def _generate_default_thumb(self) -> bytes:
+        """生成 64x64 PNG 缩略图（纯色带文字），纯代码生成无外部依赖。"""
+        size = 64
+        # 最小 PNG: IHDR+IDAT+IEND
+        def chunk(chunk_type: bytes, data: bytes) -> bytes:
+            c = chunk_type + data
+            crc = self._crc32(c)
+            return (len(data)).to_bytes(4, "big") + c + crc.to_bytes(4, "big")
+
+        # IHDR
+        ihdr = (
+            size.to_bytes(4, "big") + size.to_bytes(4, "big")
+            + b"\x08\x02\x00\x00\x00"  # 8-bit RGB
+        )
+        # IDAT: 64x64 蓝色像素 (zlib 压缩)
+        raw = b""
+        for y in range(size):
+            raw += b"\x00"  # filter none
+            for x in range(size):
+                # 中心区域白色方块
+                if 16 <= x < 48 and 16 <= y < 48:
+                    raw += b"\xff\xff\xff"
+                else:
+                    raw += b"\x1a\x6d\xff"  # 蓝色
+        import zlib
+        compressed = zlib.compress(raw)
+
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", compressed)
+            + chunk(b"IEND", b"")
+        )
+
+    @staticmethod
+    def _crc32(data: bytes) -> int:
+        """CRC32 计算（纯 Python，无 zlib.crc32 兼容性问题）。"""
+        crc = 0xFFFFFFFF
+        for byte in data:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 1:
+                    crc = (crc >> 1) ^ 0xEDB88320
+                else:
+                    crc >>= 1
+        return crc ^ 0xFFFFFFFF
+
+    async def _get_default_thumb_media_id(self) -> str:
+        """获取默认缩略图的 media_id，带缓存（1小时内有效）。"""
+        cache_key = "wecom_kf:default_thumb_media_id"
+        cached = redis_client.get(cache_key)
+        if cached:
+            return cached
+
+        png_data = self._generate_default_thumb()
+        thumb_path = os.path.join(self._media_upload_dir, "_default_thumb.png")
+        os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
+        with open(thumb_path, "wb") as f:
+            f.write(png_data)
+
+        result = await self.api_client.upload_media(thumb_path, "image")
+        media_id = result.get("media_id", "")
+        if media_id:
+            redis_client.set(cache_key, media_id, ex=3500)
+            logger.info(f"默认缩略图已上传并缓存: media_id={media_id[:20]}...")
+        else:
+            logger.warning(f"默认缩略图上传失败: {result.get('errmsg')}")
+        return media_id
+
     # ==================== 客服配置查询 ====================
 
     def get_kf_config(self, open_kfid: str) -> Optional[Dict[str, Any]]:
@@ -165,17 +236,29 @@ class WeComKfAdapter(ChannelAdapter):
                         all_success = False
 
         # 发送可下载文件链接
+        thumb_media_id = ""
+        if message.downloadable_files:
+            thumb_media_id = await self._get_default_thumb_media_id()
         for file_info in message.downloadable_files:
             url = build_public_url(file_info.download_url)
+            # 无缩略图时降级为纯文本链接
+            if not thumb_media_id:
+                fallback = f"{file_info.file_name}: {url}"
+                success = await self._send_text_block(fallback, message.reply_to)
+                if not success:
+                    all_success = False
+                continue
+            content = {
+                "title": file_info.file_name,
+                "desc": f"点击下载 ({format_file_size(file_info.file_size)})",
+                "url": url,
+                "thumb_media_id": thumb_media_id,
+            }
             result = await self.api_client.send_msg(
                 touser=message.reply_to,
                 open_kfid=self.current_open_kfid,
                 msgtype="link",
-                content={
-                    "title": file_info.file_name,
-                    "desc": f"点击下载 ({format_file_size(file_info.file_size)})",
-                    "url": url,
-                },
+                content=content,
             )
             if result.get("errcode", 0) != 0:
                 all_success = False
@@ -244,6 +327,11 @@ class WeComKfAdapter(ChannelAdapter):
         """发送 link 消息卡片，失败时降级为纯文本 URL。"""
         url = block.meta.get("url", block.content)
         title = block.meta.get("title", url)
+        thumb_media_id = await self._get_default_thumb_media_id()
+        # 无缩略图时直接降级为纯文本
+        if not thumb_media_id:
+            fallback_text = f"{title}: {url}"
+            return await self._send_text_block(fallback_text, user_id)
         try:
             result = await self.api_client.send_msg(
                 touser=user_id,
@@ -252,6 +340,7 @@ class WeComKfAdapter(ChannelAdapter):
                 content={
                     "title": title,
                     "url": url,
+                    "thumb_media_id": thumb_media_id,
                 },
             )
             if result.get("errcode", 0) == 0:
