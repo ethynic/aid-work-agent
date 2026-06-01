@@ -154,15 +154,20 @@ async def update_system_style(style_id: str, request: Request, body: StyleUpdate
     description = body.description if body.description is not None else existing.get("description")
     content = body.content or existing["content"]
 
-    style = ReplyStyleDB.create_new_version(
-        style_id=style_id,
-        tenant_id=SYSTEM_TENANT,
-        name=name,
-        content=content,
-        description=description,
-    )
+    try:
+        style = ReplyStyleDB.create_new_version(
+            style_id=style_id,
+            tenant_id=SYSTEM_TENANT,
+            name=name,
+            content=content,
+            description=description,
+        )
+    except Exception as e:
+        logger.error(f"Failed to update system style {style_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"更新风格失败: {e}")
+
     if not style:
-        raise HTTPException(status_code=500, detail="更新风格失败")
+        raise HTTPException(status_code=500, detail="更新风格失败：创建新版本后未找到激活记录")
 
     _trigger_reload()
     return {"success": True, "style": _format_style(style)}
@@ -314,15 +319,20 @@ async def update_style(style_id: str, request: Request, body: StyleUpdateRequest
     description = body.description if body.description is not None else existing.get("description")
     content = body.content or existing["content"]
 
-    style = ReplyStyleDB.create_new_version(
-        style_id=style_id,
-        tenant_id=actual_tenant,
-        name=name,
-        content=content,
-        description=description,
-    )
+    try:
+        style = ReplyStyleDB.create_new_version(
+            style_id=style_id,
+            tenant_id=actual_tenant,
+            name=name,
+            content=content,
+            description=description,
+        )
+    except Exception as e:
+        logger.error(f"Failed to update tenant style {style_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"更新风格失败: {e}")
+
     if not style:
-        raise HTTPException(status_code=500, detail="更新风格失败")
+        raise HTTPException(status_code=500, detail="更新风格失败：创建新版本后未找到激活记录")
 
     _trigger_reload()
     return {"success": True, "style": _format_style(style)}

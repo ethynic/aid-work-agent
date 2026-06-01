@@ -96,10 +96,11 @@ class ReplyStyleDB:
             try:
                 # 获取当前最大版本号
                 cursor.execute(
-                    "SELECT COALESCE(MAX(version), 0) FROM reply_styles WHERE style_id = %s AND tenant_id = %s",
+                    "SELECT COALESCE(MAX(version), 0) AS max_ver FROM reply_styles WHERE style_id = %s AND tenant_id = %s",
                     (style_id, tenant_id),
                 )
-                max_version = cursor.fetchone()[0]
+                row = cursor.fetchone()
+                max_version = row["max_ver"] if isinstance(row, dict) else row[0]
                 new_version = max_version + 1
 
                 # 将旧版本设为 inactive
@@ -117,8 +118,9 @@ class ReplyStyleDB:
                 logger.info(f"Reply style updated: {style_id} tenant={tenant_id} version={new_version}")
                 return ReplyStyleDB.get_active(style_id, tenant_id)
             except Exception as e:
-                logger.error(f"Failed to create new version: {e}")
-                return None
+                conn.rollback()
+                logger.error(f"Failed to create new version: type={type(e).__name__} value={e!r} args={e.args}", exc_info=True)
+                raise
 
     @staticmethod
     def delete_all_versions(style_id: str, tenant_id: str) -> bool:
