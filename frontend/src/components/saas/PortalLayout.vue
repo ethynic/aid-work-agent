@@ -196,6 +196,7 @@ const portalMenuItems = [
   { path: '/portal/tenants', label: '租户管理', icon: '🏢' },
   { path: '/portal/subagents', label: '数字员工管理', icon: '🤖' },
   { path: '/portal/token-usage', label: '平台Token消耗', icon: '📊' },
+  { path: '/portal/monitoring', label: '追踪查看', icon: '🔍' },
   { path: '/portal/error-logs', label: '错误日志', icon: '⚠️' },
   { path: '/portal/reply-styles', label: '回复风格', icon: '💬' },
 ]

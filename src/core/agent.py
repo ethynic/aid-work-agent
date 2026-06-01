@@ -1635,7 +1635,20 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 
                 llm_call_duration = time.time() - llm_call_start
                 logger.info(f"[AGENT] LLM call completed, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
-                
+
+                # 追踪：yield LLM 调用事件（含完整 messages 上下文）
+                yield make_event("llm_call",
+                    request_id=response.get("request_id", ""),
+                    model=self.llm.get_model_name(),
+                    provider=self.llm.get_provider_name(),
+                    usage=response.get("usage", {}),
+                    duration_ms=int(llm_call_duration * 1000),
+                    messages=messages,
+                    tools=tools,
+                    system_prompt=system_prompt,
+                    response_content=response.get("content", ""),
+                )
+
             except asyncio.TimeoutError as e:
                 llm_call_duration = time.time() - llm_call_start
                 logger.error(f"[AGENT] LLM call TIMEOUT, session_id={session_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
@@ -2425,7 +2438,20 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     
                     llm_call_duration = time.time() - llm_call_start
                     logger.info(f"[SUBAGENT] LLM call completed, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")
-                    
+
+                    # 追踪：emit LLM 调用事件
+                    await _emit_async(make_event("llm_call",
+                        request_id=response.get("request_id", ""),
+                        model=self.llm.get_model_name(),
+                        provider=self.llm.get_provider_name(),
+                        usage=response.get("usage", {}),
+                        duration_ms=int(llm_call_duration * 1000),
+                        messages=messages,
+                        tools=tools,
+                        system_prompt=system_prompt,
+                        response_content=response.get("content", ""),
+                    ))
+
                 except asyncio.TimeoutError as e:
                     llm_call_duration = time.time() - llm_call_start
                     logger.error(f"[SUBAGENT] LLM call TIMEOUT, execution_id={self.execution_id}, iteration={iteration}, duration={llm_call_duration:.2f}s")

@@ -29,6 +29,7 @@ from src.core.redis_client import redis_client
 from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
+from src.api import monitor as monitor_api
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
 from src.api import customer_followup, complaint_handling
 from src.knowledge.api import router as knowledge_router
@@ -230,6 +231,16 @@ async def lifespan(app: FastAPI):
     # Initialize database (may use PostgreSQL)
     init_database()
     logger.info("Database initialized")
+
+    # Initialize logs database pool (observability, optional)
+    try:
+        from src.db.database import init_logs_pool, init_logs_tables
+        logs_ok = init_logs_pool()
+        if logs_ok:
+            init_logs_tables()
+            logger.info("Logs database pool initialized")
+    except Exception as e:
+        logger.warning(f"Logs database pool init failed (non-critical): {e}")
 
     # Initialize channel session manager (triggers lazy table creation)
     from src.channels.session import channel_session_manager
@@ -445,6 +456,13 @@ async def lifespan(app: FastAPI):
 
     # Close PostgreSQL connection pool
     close_postgres_pool()
+
+    # Close logs database pool
+    try:
+        from src.db.database import close_logs_pool
+        close_logs_pool()
+    except Exception:
+        pass
 
     # Cleanup SaaS instances
     if settings.saas.enabled:
@@ -1277,6 +1295,22 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         record_service.set_model(agent.llm.get_model_name())
         record_service.set_provider(agent.llm.get_provider_name())
 
+        # 追踪收集器（旁路收集，不阻塞主流程）
+        trace_collector = None
+        try:
+            from src.core.trace_collector import TraceCollector
+            subagent_id = getattr(agent, '_subagent_id', None) or request.subagent
+            trace_collector = TraceCollector(
+                session_id=session_id,
+                tenant_id=chat_tenant_id,
+                user_id=record_user_id,
+                input_msg=full_message,
+                source_type='chat',
+                subagent_id=subagent_id,
+            )
+        except Exception as e:
+            logger.debug(f"Trace collector init skipped: {e}")
+
         response_parts = []
         progress_events = []
         error_occurred = None
@@ -1319,9 +1353,18 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         record_service.handle_progress_event(event)
                         progress_events.append(event)
 
+                    # 旁路收集追踪数据（同步调用，< 1ms）
+                    if trace_collector:
+                        try:
+                            trace_collector.on_event(event)
+                        except Exception:
+                            pass
+
             except asyncio.CancelledError:
                 logger.info(f"[SSE] Agent cancelled by user, session_id={session_id}")
                 error_occurred = "Cancelled by user"
+                if trace_collector:
+                    trace_collector.on_event({"type": "cancelled"})
                 try:
                     yield f"data: {json.dumps({'type': 'cancelled', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
                 except (BrokenPipeError, ConnectionResetError, OSError):
@@ -1332,6 +1375,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             except Exception as e:
                 logger.error(f"[SSE] Agent error, session_id={session_id}, error: {type(e).__name__}: {e}", exc_info=True)
                 error_occurred = str(e)
+                if trace_collector:
+                    trace_collector.on_error(str(e))
                 try:
                     yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
                 except (BrokenPipeError, ConnectionResetError, OSError):
@@ -1345,6 +1390,13 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             if not error_occurred and full_response:
                 record_service.complete(full_response)
                 SessionRecordManager.end_record()
+
+            # 完成追踪（从 record_service 获取 LLM 数据，异步持久化）
+            if trace_collector:
+                try:
+                    trace_collector.on_complete(record_service)
+                except Exception as e:
+                    logger.debug(f"Trace complete failed: {e}")
 
             # 发送完成消息
             try:
@@ -1503,6 +1555,7 @@ app.include_router(admin_reports.router)
 # 平台错误日志管理 API
 from src.api import admin_error_logs
 app.include_router(admin_error_logs.router)
+app.include_router(monitor_api.router)
 
 # 长期记忆 API
 from src.api import memory as memory_api

@@ -152,6 +152,9 @@ const router = createRouter({
         { path: 'token-usage', name: 'portal-token-usage', component: () => import('./components/saas/PlatformTokenUsage.vue') },
         { path: 'error-logs', name: 'portal-error-logs', component: () => import('./components/saas/ErrorLogs.vue') },
         { path: 'reply-styles', name: 'portal-reply-styles', component: () => import('./components/saas/SystemReplyStyleManager.vue') },
+        { path: 'monitoring', name: 'portal-monitoring', component: () => import('./components/saas/TraceBrowser.vue') },
+        { path: 'monitoring/:session_id', name: 'portal-session-traces', component: () => import('./components/saas/SessionTraces.vue') },
+        { path: 'monitoring/trace/:trace_id', name: 'portal-trace-detail', component: () => import('./components/saas/TraceDetail.vue') },
       ]
     },
     // 租户入口 /t/:tenant_id（所有用户）

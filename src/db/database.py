@@ -28,8 +28,14 @@ DATABASE_ECHO = os.getenv("DATABASE_ECHO", "false").lower() == "true"
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
 
+# 追踪库配置（可观测性数据，独立数据库）
+LOGS_DATABASE_URL = os.getenv("LOGS_DATABASE_URL", "")
+LOGS_DB_POOL_MIN = int(os.getenv("LOGS_DB_POOL_MIN", "1"))
+LOGS_DB_POOL_MAX = int(os.getenv("LOGS_DB_POOL_MAX", "3"))
+
 # 模块级连接池
 _pg_connection_pool = None
+_logs_connection_pool = None
 
 # 数据库类型（默认 PostgreSQL）
 DB_TYPE = "postgresql"
@@ -172,6 +178,124 @@ def close_postgres_pool():
         _pg_connection_pool.closeall()
         _pg_connection_pool = None
         logger.info("PostgreSQL 连接池已关闭")
+
+
+def _get_logs_db_config() -> dict:
+    """解析追踪库数据库配置"""
+    if not LOGS_DATABASE_URL:
+        return None
+    parsed = urlparse(LOGS_DATABASE_URL)
+    return {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 5432,
+        "database": parsed.path.lstrip("/"),
+        "user": parsed.username,
+        "password": parsed.password,
+    }
+
+
+def init_logs_pool():
+    """初始化追踪库连接池（独立于业务库）"""
+    global _logs_connection_pool
+
+    if not LOGS_DATABASE_URL:
+        logger.info("追踪库未配置 (LOGS_DATABASE_URL)，跳过初始化")
+        return False
+
+    if psycopg2 is None or pg_pool is None:
+        logger.warning("psycopg2 未安装，跳过追踪库初始化")
+        return False
+
+    config = _get_logs_db_config()
+    if not config:
+        return False
+
+    try:
+        _logs_connection_pool = pg_pool.ThreadedConnectionPool(
+            minconn=LOGS_DB_POOL_MIN,
+            maxconn=LOGS_DB_POOL_MAX,
+            host=config["host"],
+            port=config["port"],
+            database=config["database"],
+            user=config["user"],
+            password=config["password"],
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=5,
+            keepalives_count=3,
+            connect_timeout=5,
+            options="-c statement_timeout=30000",
+            application_name="aid-work-agent-logs",
+        )
+        logger.info(f"追踪库连接池初始化完成: {config['host']}:{config['port']}/{config['database']}")
+        return True
+    except Exception as e:
+        logger.warning(f"追踪库连接池初始化失败（不影响业务）: {e}")
+        _logs_connection_pool = None
+        return False
+
+
+def close_logs_pool():
+    """关闭追踪库连接池"""
+    global _logs_connection_pool
+    if _logs_connection_pool:
+        _logs_connection_pool.closeall()
+        _logs_connection_pool = None
+        logger.info("追踪库连接池已关闭")
+
+
+@contextmanager
+def get_logs_connection() -> Generator[Any, None, None]:
+    """获取追踪库连接的上下文管理器"""
+    if _logs_connection_pool is None:
+        raise RuntimeError("追踪库连接池未初始化，请检查 LOGS_DATABASE_URL 配置")
+
+    conn = _logs_connection_pool.getconn()
+    try:
+        # 检查连接有效性
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        _logs_connection_pool.putconn(conn, close=True)
+        raise RuntimeError("追踪库连接失效")
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    class LogsCursorWrapper:
+        def __init__(self, cursor, conn):
+            self._cursor = cursor
+            self._conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self._cursor, name)
+
+        def commit(self):
+            self._conn.commit()
+
+        def rollback(self):
+            self._conn.rollback()
+
+        def close(self):
+            pass
+
+    wrapper = LogsCursorWrapper(cursor, conn)
+
+    try:
+        yield wrapper
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.rollback()
+        except Exception:
+            _logs_connection_pool.putconn(conn, close=True)
+            return
+        _logs_connection_pool.putconn(conn)
 
 
 def health_check_pool() -> dict:
@@ -353,6 +477,40 @@ def _seed_reply_styles():
 def init_database():
     """初始化数据库表（PostgreSQL）"""
     _init_postgresql()
+
+
+def init_logs_tables():
+    """初始化追踪库表（obs_traces, obs_spans, obs_scores）"""
+    if not LOGS_DATABASE_URL or _logs_connection_pool is None:
+        return
+
+    project_root = Path(__file__).parent.parent.parent
+    sql_file = project_root / "deploy" / "init-postgres-logs.sql"
+
+    if not sql_file.exists():
+        logger.warning(f"追踪库初始化脚本不存在: {sql_file}")
+        return
+
+    try:
+        import psycopg2
+        # 用 autocommit 连接执行 DDL，避免单条失败导致整个事务中止
+        config = _get_logs_db_config()
+        ddl_conn = psycopg2.connect(
+            host=config["host"], port=config["port"],
+            database=config["database"], user=config["user"],
+            password=config["password"],
+            connect_timeout=5,
+        )
+        ddl_conn.autocommit = True
+        try:
+            sql_content = sql_file.read_text(encoding='utf-8')
+            ddl_cur = ddl_conn.cursor()
+            ddl_cur.execute(sql_content)
+            logger.info("追踪库表初始化完成")
+        finally:
+            ddl_conn.close()
+    except Exception as e:
+        logger.warning(f"追踪库表初始化失败（不影响业务）: {e}")
 
 
 def _apply_db_updates(conn):
