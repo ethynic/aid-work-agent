@@ -20,8 +20,8 @@ class StyleManager:
         self._system_styles: dict = {}    # style_id -> content（系统内置）
         self._disk_styles: dict = {}      # style_id -> content（磁盘 fallback）
         self._last_load_time: float = 0
+        self._db_loaded: bool = False
         self._load_disk_files()
-        self._load_from_db()
 
     def _load_disk_files(self):
         """加载磁盘风格文件（fallback）"""
@@ -42,16 +42,23 @@ class StyleManager:
                 self._styles[key] = s["content"]
                 if s["tenant_id"] == SYSTEM_TENANT:
                     self._system_styles[s["style_id"]] = s["content"]
+            self._db_loaded = True
             logger.info(f"Loaded {len(styles)} reply styles from database")
         except Exception as e:
-            logger.warning(f"Failed to load reply styles from database, using disk fallback: {e}")
-            # 数据库不可用时，将磁盘文件作为 fallback
-            for style_id, content in self._disk_styles.items():
-                self._system_styles[style_id] = content
+            if not self._db_loaded:
+                logger.warning(f"Failed to load reply styles from database, using disk fallback: {e}")
+                # 数据库不可用时，将磁盘文件作为 fallback
+                for style_id, content in self._disk_styles.items():
+                    self._system_styles[style_id] = content
+            else:
+                logger.warning(f"Failed to refresh reply styles from database: {e}")
         self._last_load_time = time.time()
 
     def _maybe_refresh_cache(self):
         """检查缓存 TTL，过期则重新加载"""
+        if not self._db_loaded:
+            self._load_from_db()
+            return
         if time.time() - self._last_load_time > self.CACHE_TTL:
             self._styles.clear()
             self._system_styles.clear()
