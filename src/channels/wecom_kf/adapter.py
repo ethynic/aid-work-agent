@@ -35,7 +35,7 @@ from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
 # 人工转接关键词默认值（租户配置未设置时使用）
-_DEFAULT_HUMAN_KEYWORDS = ["人工服务", "转人工", "人工客服", "找真人"]
+_DEFAULT_HUMAN_KEYWORDS = ["人工", "人工服务", "转人工", "人工客服", "找真人"]
 
 # 退出人工关键词默认值（租户配置未设置时使用）
 _DEFAULT_EXIT_HUMAN_KEYWORDS = ["退出人工", "返回智能助手", "结束人工", "退出人工服务"]
