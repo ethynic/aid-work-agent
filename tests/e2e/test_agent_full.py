@@ -33,12 +33,14 @@ class TestAgentFull:
         session_id = f"test_session_{os.getpid()}"
 
         responses = []
-        async for chunk in agent.process_message(
+        async for event in agent.process_message(
             user_input="你好，请回复'测试成功'",
             session_id=session_id,
         ):
-            if chunk:
-                responses.append(chunk)
+            if event.get("type") == "response":
+                data = event.get("data", "")
+                if data:
+                    responses.append(data)
 
         assert len(responses) > 0
         full_response = "".join(responses)

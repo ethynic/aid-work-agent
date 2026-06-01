@@ -160,17 +160,24 @@ async def process_message_async(
                 except Exception as e:
                     logger.error(f"Failed to attach file {file_path}: {e}")
 
-    # 处理消息（异步生成器），传递进度回调
+    # 处理消息（异步生成器）
     response_chunks = []
 
     try:
-        async for chunk in master_agent.process_message(
+        async for event in master_agent.process_message(
             user_input=user_message,
             session_id=session_id,
             attachments=attachments if attachments else None,
-            progress_callback=lambda msg: progress_callback(session_id, msg)
         ):
-            response_chunks.append(chunk)
+            event_type = event.get("type")
+            if event_type == "response":
+                response_chunks.append(event.get("data", ""))
+            elif event_type == "tool_start":
+                add_progress_message(session_id, f"🔧 执行工具: {event.get('toolName')}")
+            elif event_type == "tool_result":
+                add_progress_message(session_id, f"📤 工具完成: {event.get('toolName')}")
+            elif event_type == "progress":
+                add_progress_message(session_id, event.get("data", ""))
 
         full_response = "".join(response_chunks)
 

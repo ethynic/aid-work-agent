@@ -257,6 +257,9 @@ export class SSEManager {
             // 实例繁忙，前端显示排队选项
             callbacks.onBusy?.(event.instance_id, event.message, event.is_same_user)
             break
+          case 'cancelled':
+            // 保留扩展能力，暂不触发 UI 回调
+            break
         }
       } catch {
         // 非JSON数据，当作响应处理

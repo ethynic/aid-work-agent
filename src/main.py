@@ -722,20 +722,11 @@ async def chat(request: Request):
         if instance_id:
             agent._instance_id = instance_id
 
-        # Process message — run in executor to avoid blocking the event loop
-        # under high concurrency (LLM calls can take 2-30s).
-        # This mirrors the SSE endpoint's pattern of offloading agent work to
-        # a separate thread with its own event loop.
-        loop = asyncio.get_running_loop()
-        response_text = await loop.run_in_executor(
-            None,
-            lambda: asyncio.run(
-                agent.process_message_sync(
-                    user_input=user_input,
-                    session_id=session_id,
-                    user=agent_user,
-                )
-            ),
+        # Process message — process_message_sync is now pure async, no thread needed
+        response_text = await agent.process_message_sync(
+            user_input=user_input,
+            session_id=session_id,
+            user=agent_user,
         )
 
         return JSONResponse({
@@ -1258,12 +1249,37 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         agent._instance_id = _instance_id
 
     async def event_generator():
-        """SSE事件生成器"""
+        """SSE事件生成器 — 直接 async for 迭代，无需线程"""
         sse_start_time = datetime.now()
         logger.info(f"[SSE] event_generator started, session_id={session_id}")
 
-        # 清除可能残留的取消标记（上次请求被取消后新请求到来时，旧线程的 finally 可能尚未执行）
         sse_manager.clear_cancelled(session_id)
+
+        # 准备 record_service 和 agent_user
+        current_user_for_record = auth.get_current_user(http_request)
+        record_user_id = current_user_for_record["user_id"] if current_user_for_record else (request.user_id or "anonymous")
+
+        from src.models.user import User
+        agent_user = None
+        if current_user_for_record:
+            agent_user = User(
+                user_id=current_user_for_record["user_id"],
+                name=current_user_for_record.get("username", current_user_for_record.get("phone", "unknown")),
+                phone=current_user_for_record.get("phone"),
+            )
+
+        record_service = SessionRecordManager.start_record(
+            session_id=session_id,
+            user_id=record_user_id,
+            user_message=full_message,
+            tenant_id=chat_tenant_id
+        )
+        record_service.set_model(agent.llm.get_model_name())
+        record_service.set_provider(agent.llm.get_provider_name())
+
+        response_parts = []
+        progress_events = []
+        error_occurred = None
 
         try:
             # 发送初始连接成功消息
@@ -1274,249 +1290,76 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             except Exception as e:
                 logger.error(f"[SSE] Failed to send initial message: {e}", exc_info=True)
                 return
-            
-            # 使用线程方式运行agent，避免阻塞事件循环
-            import threading
-            from concurrent.futures import ThreadPoolExecutor
-            
-            results = {
-                'chunks': [],
-                'progress': [],
-                'error': None,
-                'full_response': ""
-            }
-            completed = threading.Event()
-            logger.info(f"[SSE] ThreadPoolExecutor initialized, session_id={session_id}")
-            
-            def run_agent():
-                """在线程中运行agent"""
-                thread_start_time = datetime.now()
-                logger.info(f"[SSE-Thread] run_agent started, session_id={session_id}")
 
-                try:
-                    # 提前检查是否已被取消
-                    if sse_manager.is_cancelled(session_id):
-                        logger.info(f"[SSE-Thread] Session already cancelled before start, exiting: session_id={session_id}")
-                        results['error'] = "Cancelled by user"
-                        completed.set()
+            # 直接在 FastAPI event loop 中迭代 agent
+            try:
+                async for event in agent.process_message(
+                    user_input=full_message,
+                    session_id=session_id,
+                    user=agent_user,
+                    attachments=attachments,
+                    cancel_check=lambda: sse_manager.is_cancelled(session_id),
+                ):
+                    # 每个 event 直接序列化为 SSE 帧
+                    try:
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                        logger.warning(f"[SSE] Client disconnected during event yield, session_id={session_id}, error: {e}")
+                        sse_manager.cancel_session(session_id)
                         return
 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    logger.info(f"[SSE-Thread] Event loop created, session_id={session_id}")
-
-                    # 进度回调：同步函数，支持多种事件类型
-                    # event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
-                    def sync_progress_callback(event):
-                        # 检查是否已被取消
-                        if sse_manager.is_cancelled(session_id):
-                            logger.info(f"[SSE-Thread] Generation cancelled by user during progress: session_id={session_id}")
-                            raise asyncio.CancelledError("Cancelled by user")
-                        results['progress'].append(event)
-                        # 同时将事件传递给会话记录服务（同步版本）
+                    # 收集 response 和 progress 数据
+                    event_type = event.get("type")
+                    if event_type == "response":
+                        response_parts.append(event.get("data", ""))
+                    elif event_type == "tool_result":
                         record_service.handle_progress_event(event)
+                        progress_events.append(event)
+                    elif event_type in ("tool_start", "progress", "thinking", "clarification"):
+                        record_service.handle_progress_event(event)
+                        progress_events.append(event)
 
-                    # 从请求头解析用户身份（优先使用真实用户）
-                    # 如果请求头中没有有效的认证信息，才使用请求体中的user_id
-                    current_user = auth.get_current_user(http_request)
-                    if current_user:
-                        user_id = current_user["user_id"]
-                        logger.info(f"后端日志：从请求头解析用户身份 user_id={user_id}")
-                    else:
-                        user_id = request.user_id or "anonymous"
-                        logger.info(f"后端日志：使用匿名用户或请求体user_id user_id={user_id}")
-
-                    # 构建 User 对象传入 agent
-                    from src.models.user import User
-                    agent_user = None
-                    if current_user:
-                        agent_user = User(
-                            user_id=current_user["user_id"],
-                            name=current_user.get("username", current_user.get("phone", "unknown")),
-                            phone=current_user.get("phone"),
-                        )
-                    record_service = SessionRecordManager.start_record(
-                        session_id=session_id,
-                        user_id=user_id,
-                        user_message=full_message,
-                        tenant_id=chat_tenant_id
-                    )
-                    record_service.set_model(agent.llm.get_model_name())
-                    record_service.set_provider(agent.llm.get_provider_name())
-
-                    # 包装成async回调
-                    # 支持直接接收 dict 事件（子智能体的 tool_start/tool_result 等完整事件）
-                    # 或字符串消息（主智能体的 progress 消息）
-                    async def async_progress_callback(message):
-                        # 检查是否已被取消
-                        if sse_manager.is_cancelled(session_id):
-                            logger.info(f"[SSE-Thread] Generation cancelled by user during async progress: session_id={session_id}")
-                            raise asyncio.CancelledError("Cancelled by user")
-                        if isinstance(message, dict):
-                            # 已经是完整的事件格式，直接传递
-                            sync_progress_callback(message)
-                        else:
-                            # 字符串消息，包装为 progress 事件
-                            sync_progress_callback({"type": "progress", "data": message})
-
-                    # 运行agent
-                    async def consume_generator():
-                        """创建协程来迭代async generator"""
-                        try:
-                            async for chunk in agent.process_message(
-                                user_input=full_message,
-                                session_id=session_id,
-                                user=agent_user,
-                                attachments=attachments,
-                                progress_callback=async_progress_callback,
-                                cancel_check=lambda: sse_manager.is_cancelled(session_id)
-                            ):
-                                # 每接收一个chunk就检查一次是否被取消
-                                if sse_manager.is_cancelled(session_id):
-                                    logger.info(f"[SSE-Thread] Generation cancelled by user during chunk generation: session_id={session_id}")
-                                    raise asyncio.CancelledError("Cancelled by user")
-                                results['chunks'].append(chunk)
-                        except asyncio.CancelledError:
-                            logger.info(f"[SSE-Thread] Consumption cancelled: session_id={session_id}")
-                            raise
-
-                    loop.run_until_complete(consume_generator())
-                    loop.close()
-
-                    # 将结果放入 results，不直接保存到 DB
-                    # 消息保存由 SSE 主循环在确认客户端收到响应后执行
-                    full_response = "".join(results['chunks'])
-                    results['full_response'] = full_response
-                    if not sse_manager.is_cancelled(session_id) and full_response:
-                        record_service.complete(full_response)
-                        if results.get('error'):
-                            record_service.mark_error(results['error'])
-                        SessionRecordManager.end_record()
-
-                        # 准备待保存的消息数据（不立即保存，由 SSE 主循环负责）
-                        results['pending_save'] = {
-                            'full_message': full_message,
-                            'full_response': full_response,
-                            'request_files': request.files,
-                            'progress_events': results.get('progress', []),
-                        }
-
-                except asyncio.CancelledError:
-                    logger.info(f"[SSE-Thread] Agent generation was cancelled by user: session_id={session_id}")
-                    results['error'] = "Cancelled by user"
-                    if SessionRecordManager.get_current_record():
-                        SessionRecordManager.get_current_record().mark_error("Cancelled by user")
-                        SessionRecordManager.end_record()
-                except Exception as e:
-                    results['error'] = str(e)
-                    logger.error(f"[SSE-Thread] Agent thread error, session_id={session_id}, error: {type(e).__name__}: {e}", exc_info=True)
-                    # 记录错误
-                    if SessionRecordManager.get_current_record():
-                        SessionRecordManager.get_current_record().mark_error(str(e))
-                        SessionRecordManager.end_record()
-                finally:
-                    # 清除取消标记
-                    sse_manager.clear_cancelled(session_id)
-                    completed.set()
-                    thread_duration = (datetime.now() - thread_start_time).total_seconds()
-                    logger.info(f"[SSE-Thread] run_agent finished, session_id={session_id}, duration={thread_duration:.2f}s, chunks={len(results['chunks'])}, progress={len(results['progress'])}")
-            
-            # 启动线程运行agent
-            logger.info(f"[SSE] Starting ThreadPoolExecutor, session_id={session_id}")
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_agent)
-                logger.info(f"[SSE] Agent thread submitted, session_id={session_id}")
-                
-                # 主循环：定期检查并yield结果
-                last_progress_count = 0
-                iteration_count = 0
-
-                while not completed.is_set() or len(results['chunks']) > 0 or len(results['progress']) > last_progress_count:
-                    iteration_count += 1
-                    if iteration_count == 1 or iteration_count % 10 == 0:
-                        logger.info(f"[SSE-MAIN] Loop iteration {iteration_count}, completed={completed.is_set()}, chunks={len(results['chunks'])}, progress={len(results['progress'])}, last_progress={last_progress_count}")
-                    
-                    # Yield 新的进度消息
-                    while len(results['progress']) > last_progress_count:
-                        try:
-                            progress_event = results['progress'][last_progress_count]
-                            # progress_event 格式: {"type": "progress"|"tool_start"|"tool_result"|"thinking", "data": str, ...}
-                            event = {
-                                "type": progress_event.get("type", "progress"),
-                                "timestamp": int(datetime.now().timestamp() * 1000)
-                            }
-                            # 根据事件类型添加相应字段
-                            if event["type"] == "tool_start":
-                                event["toolName"] = progress_event.get("toolName", "")
-                                event["toolArgs"] = progress_event.get("toolArgs", {})
-                            elif event["type"] == "tool_result":
-                                event["toolName"] = progress_event.get("toolName", "")
-                                event["result"] = progress_event.get("result", {})
-                                event["success"] = progress_event.get("success", True)
-                            elif event["type"] == "clarification":
-                                event["subagentName"] = progress_event.get("subagent_name", "")
-                                event["question"] = progress_event.get("question", "")
-                            else:
-                                event["data"] = progress_event.get("data", progress_event.get("message", ""))
-
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                            last_progress_count += 1
-                            
-                        except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                            # 客户端已断开，标记取消并退出
-                            logger.warning(f"[SSE] Client disconnected during progress yield, session_id={session_id}, error: {e}")
-                            sse_manager.cancel_session(session_id)
-                            completed.set()
-                            break
-                        except Exception as e:
-                            logger.error(f"[SSE] Error yielding progress event, session_id={session_id}, error: {e}", exc_info=True)
-                            last_progress_count += 1
-                            continue
-                    
-                    # Yield 新的响应chunk
-                    while len(results['chunks']) > 0:
-                        try:
-                            chunk = results['chunks'].pop(0)
-                            event = {
-                                "type": "response",
-                                "data": chunk,
-                                "timestamp": int(datetime.now().timestamp() * 1000)
-                            }
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                            
-                        except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                            # 客户端已断开，标记取消并退出
-                            logger.warning(f"[SSE] Client disconnected during chunk yield, session_id={session_id}, error: {e}")
-                            sse_manager.cancel_session(session_id)
-                            completed.set()
-                            break
-                        except Exception as e:
-                            logger.error(f"[SSE] Error yielding chunk, session_id={session_id}, error: {e}", exc_info=True)
-                            continue
-
-                    await asyncio.sleep(0.05)  # 50ms轮询间隔，不阻塞事件循环
-                
-                # 确保线程完成
+            except asyncio.CancelledError:
+                logger.info(f"[SSE] Agent cancelled by user, session_id={session_id}")
+                error_occurred = "Cancelled by user"
                 try:
-                    future.result()
-                    logger.info(f"[SSE] Agent thread completed successfully, session_id={session_id}")
-                except Exception as e:
-                    logger.error(f"[SSE] Agent thread raised exception, session_id={session_id}, error: {e}", exc_info=True)
-            
-            # 检查错误
-            if results['error']:
-                logger.error(f"[SSE] Agent returned error, session_id={session_id}, error: {results['error']}")
+                    yield f"data: {json.dumps({'type': 'cancelled', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                if SessionRecordManager.get_current_record():
+                    SessionRecordManager.get_current_record().mark_error("Cancelled by user")
+                    SessionRecordManager.end_record()
+            except Exception as e:
+                logger.error(f"[SSE] Agent error, session_id={session_id}, error: {type(e).__name__}: {e}", exc_info=True)
+                error_occurred = str(e)
                 try:
-                    yield f"data: {json.dumps({'type': 'error', 'data': results['error'], 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
-                except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                    logger.warning(f"[SSE] Client disconnected before error message sent, session_id={session_id}, error: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                if SessionRecordManager.get_current_record():
+                    SessionRecordManager.get_current_record().mark_error(str(e))
+                    SessionRecordManager.end_record()
 
-            # 保存完整响应到内存历史（不影响 DB）
-            full_response = results.get('full_response', "".join(results['chunks']))
+            # 完成记录
+            full_response = "".join(response_parts)
+            if not error_occurred and full_response:
+                record_service.complete(full_response)
+                SessionRecordManager.end_record()
+
+            # 发送完成消息
+            try:
+                yield f"data: {json.dumps({'type': 'complete', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
+                sse_duration = (datetime.now() - sse_start_time).total_seconds()
+                logger.info(f"[SSE] Stream completed, session_id={session_id}, duration={sse_duration:.2f}s")
+            except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                logger.warning(f"[SSE] Client disconnected before complete, session_id={session_id}, error: {e}")
+                return
+
+            # 保存完整响应到内存历史
             sse_manager.add_to_history(session_id, "assistant", full_response)
 
             # 并发控制：刷新实例锁（3分钟思考窗口）
-            if instance_id and settings.saas.enabled and not results.get('error'):
+            if instance_id and settings.saas.enabled and not error_occurred:
                 from src.saas.services.instance_service import InstanceService
                 try:
                     InstanceService.refresh_lock(instance_id, session_id, extend_minutes=3)
@@ -1524,62 +1367,48 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 except Exception as e:
                     logger.warning(f"[Concurrency] Failed to refresh lock: {e}")
 
-            # 发送完成消息
-            try:
-                yield f"data: {json.dumps({'type': 'complete', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
-                sse_duration = (datetime.now() - sse_start_time).total_seconds()
-                logger.info(f"[SSE] Stream completed successfully, session_id={session_id}, duration={sse_duration:.2f}s, chunks={len(results['chunks'])}, progress={len(results['progress'])}")
-            except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                # 客户端已断开，complete 没发出。generator 将被 Starlette 丢弃，后面的保存代码不会执行。
-                logger.warning(f"[SSE] Client disconnected before complete message sent, session_id={session_id}, error: {e}")
-                return  # 提前退出 generator，不保存消息
-
-            # ✅ complete 事件成功发送给客户端后，才保存消息到 DB
-            # 如果客户端中途断开（点停止），上面的 yield 会抛异常导致 return，这段不会执行
-            pending = results.get('pending_save')
-            if pending and not results.get('error'):
+            # 保存消息到 DB
+            if full_response and not error_occurred:
                 try:
-                    # 保存用户消息
                     user_metadata = {"progressMessages": []}
-                    if pending['request_files']:
-                        user_metadata["attachments"] = pending['request_files']
+                    if request.files:
+                        user_metadata["attachments"] = request.files
                     MessageDB.create(
                         session_id=session_id,
                         role="user",
-                        content=pending['full_message'],
+                        content=full_message,
                         metadata=user_metadata
                     )
-                    # 保存AI回复
-                    if pending['full_response']:
-                        downloadable_files = []
-                        download_tool_names = {"register_download_file", "file_write"}
-                        for event in pending.get('progress_events', []):
-                            if (event.get("type") == "tool_result"
-                                and event.get("toolName") in download_tool_names
-                                and event.get("success") is True):
-                                result = event.get("result", {})
-                                if result.get("file_id"):
-                                    downloadable_files.append({
-                                        "file_id": result["file_id"],
-                                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                                        "file_size": result.get("file_size", 0),
-                                        "download_url": result.get("download_url", ""),
-                                        "mime_type": result.get("mime_type", ""),
-                                    })
+                    # 提取可下载文件
+                    downloadable_files = []
+                    download_tool_names = {"register_download_file", "file_write"}
+                    for evt in progress_events:
+                        if (evt.get("type") == "tool_result"
+                            and evt.get("toolName") in download_tool_names
+                            and evt.get("success") is True):
+                            result = evt.get("result", {})
+                            if result.get("file_id"):
+                                downloadable_files.append({
+                                    "file_id": result["file_id"],
+                                    "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                                    "file_size": result.get("file_size", 0),
+                                    "download_url": result.get("download_url", ""),
+                                    "mime_type": result.get("mime_type", ""),
+                                })
 
-                        assistant_metadata = {"progressMessages": pending.get('progress_events', [])}
-                        if downloadable_files:
-                            assistant_metadata["downloadableFiles"] = downloadable_files
-                        MessageDB.create(
-                            session_id=session_id,
-                            role="assistant",
-                            content=pending['full_response'],
-                            metadata=assistant_metadata
-                        )
+                    assistant_metadata = {"progressMessages": progress_events}
+                    if downloadable_files:
+                        assistant_metadata["downloadableFiles"] = downloadable_files
+                    MessageDB.create(
+                        session_id=session_id,
+                        role="assistant",
+                        content=full_response,
+                        metadata=assistant_metadata
+                    )
                     logger.info(f"[SSE] Messages saved to DB, session_id={session_id}")
                 except Exception as e:
                     logger.error(f"[SSE] Failed to save messages: {e}", exc_info=True)
-            
+
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
@@ -1592,7 +1421,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         finally:
             sse_manager.remove_sse_client(session_id, client_queue)
             logger.info(f"[SSE] SSE cleanup completed, session_id={session_id}")
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -1725,8 +1554,13 @@ async def cli_chat():
             
             # Process message
             print("\nAssistant: ", end="")
-            async for chunk in master_agent.process_message(user_input, session_id):
-                print(chunk, end="", flush=True)
+            async for event in master_agent.process_message(user_input, session_id):
+                if event.get("type") == "response":
+                    print(event.get("data", ""), end="", flush=True)
+                elif event.get("type") == "tool_start":
+                    print(f"\n  [tool] {event.get('toolName')}")
+                elif event.get("type") == "progress":
+                    print(f"\n  [progress] {event.get('data', '')}")
             print()
         
         except KeyboardInterrupt:

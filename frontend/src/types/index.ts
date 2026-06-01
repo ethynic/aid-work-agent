@@ -58,6 +58,7 @@ export type MessageStreamEvent =
   | { type: 'thinking'; data: string; timestamp: number }
   | { type: 'clarification'; subagentName: string; question: string; timestamp: number }
   | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }
+  | { type: 'cancelled'; timestamp: number }
 
 // "正在输入"提示状态
 export type InputHintState = 'idle' | 'thinking' | 'working' | 'responding'

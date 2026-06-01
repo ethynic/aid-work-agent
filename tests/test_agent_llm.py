@@ -62,9 +62,11 @@ async def interactive_mode():
             print("\nAssistant: ", end="", flush=True)
             
             response_parts = []
-            async for chunk in master_agent.process_message(user_input, session_id):
-                print(chunk, end="", flush=True)
-                response_parts.append(chunk)
+            async for event in master_agent.process_message(user_input, session_id):
+                if event.get("type") == "response":
+                    data = event.get("data", "")
+                    print(data, end="", flush=True)
+                    response_parts.append(data)
             
             print()  # New line after response
             
