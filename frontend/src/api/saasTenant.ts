@@ -221,6 +221,16 @@ export async function createInstance(data: {
   return res.json()
 }
 
+export async function updateInstance(instanceId: string, data: Record<string, any>): Promise<{ success: boolean; instance?: any }> {
+  const res = await fetch(`${API_BASE}/instances/${instanceId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('更新实例失败')
+  return res.json()
+}
+
 export async function startInstance(instanceId: string): Promise<{ success: boolean; message?: string }> {
   const res = await fetch(`${API_BASE}/instances/${instanceId}/start`, {
     method: 'POST',
@@ -542,7 +552,7 @@ function getCurrentTenantId(): string | null {
   return match ? match[1] : null
 }
 
-function getSaasAuthHeader(): Record<string, string> {
+export function getSaasAuthHeader(): Record<string, string> {
   const headers: Record<string, string> = {}
 
   // 根据路由获取对应的 token

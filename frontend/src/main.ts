@@ -151,6 +151,7 @@ const router = createRouter({
         { path: 'subagents', name: 'portal-subagents', component: () => import('./components/DigitalEmployeeManager.vue') },
         { path: 'token-usage', name: 'portal-token-usage', component: () => import('./components/saas/PlatformTokenUsage.vue') },
         { path: 'error-logs', name: 'portal-error-logs', component: () => import('./components/saas/ErrorLogs.vue') },
+        { path: 'reply-styles', name: 'portal-reply-styles', component: () => import('./components/saas/SystemReplyStyleManager.vue') },
       ]
     },
     // 租户入口 /t/:tenant_id（所有用户）
@@ -169,6 +170,7 @@ const router = createRouter({
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
         { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },
         { path: 'token-usage', name: 'tenant-token-usage', component: () => import('./components/saas/TenantTokenUsage.vue') },
+        { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('./components/saas/ReplyStyleManager.vue') },
         // 外贸获客智能体业务数据页面
         {
           path: 'trade-specialist',

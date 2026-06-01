@@ -646,6 +646,7 @@ const adminSubMenuItems = computed(() => {
     { path: `${base}/knowledge`, label: '企业知识库', icon: '📚' },
     { path: `${base}/settings`, label: '企业设置', icon: '⚙️' },
     { path: `${base}/token-usage`, label: 'Token用量', icon: '📊' },
+    { path: `${base}/reply-styles`, label: '回复风格', icon: '💬' },
   ]
 })
 

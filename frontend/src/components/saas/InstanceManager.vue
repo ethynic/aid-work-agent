@@ -41,6 +41,10 @@
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
                 <button
+                  @click="openEdit(inst)"
+                  class="text-xs px-2 py-1 bg-primary-100 text-primary-700 rounded hover:bg-primary-200 transition-colors"
+                >编辑</button>
+                <button
                   v-if="inst.status !== 'running'"
                   @click="handleStart(inst.instance_id)"
                   class="text-xs px-2 py-1 bg-success-100 text-success-700 rounded hover:bg-success-200 transition-colors"
@@ -115,13 +119,45 @@
         </div>
       </div>
     </div>
+
+    <!-- 编辑弹窗 -->
+    <div v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showEdit = false"></div>
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
+        <h3 class="text-lg font-bold text-default mb-4">编辑实例</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm text-default mb-1">显示名称</label>
+            <input v-model="editForm.display_name" type="text"
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
+          </div>
+          <div>
+            <label class="block text-sm text-default mb-1">回复风格</label>
+            <select v-model="editForm.reply_style_id"
+              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400">
+              <option value="">默认（不指定）</option>
+              <option v-for="s in replyStyles" :key="s.style_id" :value="s.style_id">
+                {{ s.name }}{{ s.is_system ? '（系统）' : '' }}
+              </option>
+            </select>
+          </div>
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button @click="showEdit = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-surface-hover transition-colors">取消</button>
+          <button @click="handleSaveEdit" :disabled="savingEdit" class="flex-1 py-2 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg transition-colors">
+            {{ savingEdit ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
-import { listInstances, createInstance, startInstance, stopInstance, deleteInstance } from '@/api/saasTenant'
+import { listInstances, createInstance, startInstance, stopInstance, deleteInstance, updateInstance } from '@/api/saasTenant'
+import { listStyles } from '@/api/replyStyle'
 
 const toast = useToast()
 
@@ -130,6 +166,12 @@ const instances = ref<any[]>([])
 const showCreate = ref(false)
 const creating = ref(false)
 const createError = ref('')
+
+// 编辑相关
+const showEdit = ref(false)
+const savingEdit = ref(false)
+const editForm = ref({ instance_id: '', display_name: '', reply_style_id: '' })
+const replyStyles = ref<any[]>([])
 
 const form = ref({
   display_name: '',
@@ -147,6 +189,47 @@ async function loadInstances() {
     console.error('加载实例列表失败:', e)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadReplyStyles() {
+  try {
+    const res = await listStyles()
+    replyStyles.value = res.styles || []
+  } catch (e) {
+    console.error('加载风格列表失败:', e)
+  }
+}
+
+async function openEdit(inst: any) {
+  editForm.value = {
+    instance_id: inst.instance_id,
+    display_name: inst.display_name || '',
+    reply_style_id: inst.reply_style_id || '',
+  }
+  await loadReplyStyles()
+  showEdit.value = true
+}
+
+async function handleSaveEdit() {
+  savingEdit.value = true
+  try {
+    const data: Record<string, any> = {
+      display_name: editForm.value.display_name,
+    }
+    if (editForm.value.reply_style_id) {
+      data.reply_style_id = editForm.value.reply_style_id
+    } else {
+      data.reply_style_id = null
+    }
+    await updateInstance(editForm.value.instance_id, data)
+    toast.success('保存成功')
+    showEdit.value = false
+    await loadInstances()
+  } catch (e: any) {
+    toast.error(e.message || '保存失败')
+  } finally {
+    savingEdit.value = false
   }
 }
 

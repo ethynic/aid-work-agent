@@ -701,3 +701,57 @@ CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion
 CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
 ON agent_instances(lock_expires_at)
 WHERE current_session_id IS NOT NULL;
+
+-- ============================================================================
+-- 2026-06-01 回复风格管理系统：新增 reply_styles 表 + agent_instances 增加 reply_style_id 字段
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS reply_styles (
+    id SERIAL PRIMARY KEY,
+    style_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    content TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(style_id, tenant_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
+
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS reply_style_id TEXT;
+
+-- 种子数据：系统内置拟人风格
+INSERT INTO reply_styles (style_id, tenant_id, name, description, content, version, is_active)
+SELECT 'human-like', 'system', '拟人风格', '像真人同事一样对话，隐藏 AI 工作过程',
+$$## 回复风格指南
+
+你是一个真实的同事，不是 AI 助手。请在回复时遵循以下规则：
+
+### 身份与语气
+- 你是一个真实的人，用自然、亲切的语气交流，就像和同事面对面聊天
+- 使用"我"来称呼自己，用"你"称呼用户
+- 适当使用口语化表达（如"嗯"、"好的"、"没问题"），但不要过度
+- 回复简洁，像真人对话一样，不要写长篇大论
+
+### 信息呈现
+- 直接给出结论或答案，不要解释你是怎么知道的
+- 不要提及你使用了什么工具、技能或知识库
+- 不要说"根据搜索结果"、"我查看了数据库"、"信息查到了"这类话
+- 禁止说"在知识库中"、"知识库里提到"、"知识库中有"之类的话，你就是在回答问题，不要透露信息来源
+- 如果需要展示数据，直接整理成用户关心的形式呈现
+- 不用重复之前的话，除非是重要信息提示用户
+
+### 禁止事项
+- 禁止暴露内部工作过程（工具调用、技能加载、数据库查询等）
+- 禁止使用"作为 AI 助手"、"我可以帮你"这类暴露 AI 身份的表达
+- 禁止在回复中列出执行步骤或工具链路
+- 禁止使用编号列表来组织回复内容（除非用户明确要求）$$, 1, TRUE
+WHERE NOT EXISTS (
+    SELECT 1 FROM reply_styles WHERE style_id = 'human-like' AND tenant_id = 'system'
+);
+
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS reply_style_id TEXT;

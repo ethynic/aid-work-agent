@@ -32,7 +32,7 @@ from src.tools.executor import ToolExecutor
 from src.memory.short_term import ShortTermMemory
 from src.memory.manager import MemoryManager
 from src.prompts import PromptManager
-from src.prompts.style_manager import StyleManager
+from src.prompts.style_manager import StyleManager, get_style_manager
 from src.models.message import UnifiedMessage
 from src.models.user import User
 from src.models.plan import TaskStatus
@@ -127,7 +127,7 @@ class Agent:
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
         self.prompt_manager = PromptManager()
-        self.style_manager = StyleManager()
+        self.style_manager = get_style_manager()
         self.memory = MemoryManager(
             max_short_term_messages=settings.memory.short_term.max_messages,
             short_term_ttl=settings.memory.short_term.ttl,
@@ -169,6 +169,7 @@ class Agent:
 
         # 租户 skills 按需加载状态
         self._init_tenant_id = tenant_id  # 初始化时传入的 tenant_id
+        self._instance_id = None           # 当前关联的数字员工实例ID（运行时注入）
         self._loaded_tenant_id = None
         self._skills_loaded_at = 0.0
 
@@ -654,7 +655,8 @@ class Agent:
         reply_style_section = ""
         style_id = self._resolve_reply_style(user)
         if style_id:
-            style_content = self.style_manager.get_style(style_id)
+            tenant_id_for_style = self._get_effective_tenant_id()
+            style_content = self.style_manager.get_style(style_id, tenant_id_for_style)
             if style_content:
                 reply_style_section = f"\n\n---\n\n## 回复风格\n\n{style_content}"
             else:
@@ -775,7 +777,8 @@ class Agent:
     def _resolve_reply_style(self, user: Optional[User] = None) -> Optional[str]:
         """
         解析当前应使用的回复风格（优先级从高到低）：
-        1. 用户长期记忆中的 reply_style（用户主动设定，最高优先）
+        0. 用户长期记忆中的 reply_style（用户主动设定，最高优先）
+        1. 数字员工实例级别（agent_instances.reply_style_id）
         2. 子智能体/独立模式且配置了 reply_style
         3. 全局默认（config.yaml 中 agent.reply_style）
         """
@@ -794,12 +797,22 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Failed to read user reply_style from memory: {e}")
 
-        # 优先级 1：子智能体/独立模式且配置了 reply_style
+        # 优先级 1：数字员工实例级别
+        if self._instance_id:
+            try:
+                from src.saas.db.agent_instance_db import AgentInstanceDB
+                inst = AgentInstanceDB.get_by_id(self._instance_id)
+                if inst and inst.get("reply_style_id"):
+                    return inst["reply_style_id"]
+            except Exception as e:
+                logger.debug(f"Failed to resolve instance reply_style: {e}")
+
+        # 优先级 2：子智能体/独立模式且配置了 reply_style
         if self.mode != AgentMode.MASTER and self.subagent_config:
             if self.subagent_config.reply_style:
                 return self.subagent_config.reply_style
 
-        # 优先级 2：全局默认
+        # 优先级 3：全局默认
         agent_cfg = getattr(settings, 'agent', None)
         if agent_cfg:
             return getattr(agent_cfg, 'reply_style', None)
@@ -865,7 +878,8 @@ class Agent:
             if style_match:
                 raw_style = style_match.group(1).strip()
                 # 模糊匹配风格 ID
-                available = self.style_manager.list_styles()
+                tenant_id_for_style = self._get_effective_tenant_id()
+                available = self.style_manager.list_styles(tenant_id_for_style)
                 matched_id = self._fuzzy_match_style(raw_style, available)
                 if matched_id:
                     ltm.set_reply_style(tenant_id=tenant_id, user_id=user.user_id, style_id=matched_id)

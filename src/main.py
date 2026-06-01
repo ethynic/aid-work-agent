@@ -718,6 +718,10 @@ async def chat(request: Request):
         if _tenant_id and not agent._init_tenant_id:
             agent._init_tenant_id = _tenant_id
 
+        # 注入 instance_id（供回复风格实例级别优先级使用）
+        if instance_id:
+            agent._instance_id = instance_id
+
         # Process message — run in executor to avoid blocking the event loop
         # under high concurrency (LLM calls can take 2-30s).
         # This mirrors the SSE endpoint's pattern of offloading agent work to
@@ -1249,6 +1253,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     if _tenant_id and not agent._init_tenant_id:
         agent._init_tenant_id = _tenant_id
 
+    # 注入 instance_id（供回复风格实例级别优先级使用）
+    if _instance_id:
+        agent._instance_id = _instance_id
+
     async def event_generator():
         """SSE事件生成器"""
         sse_start_time = datetime.now()
@@ -1674,7 +1682,7 @@ app.include_router(memory_api.router)
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes
-from src.saas.api import tenant_users, usage_reports, permissions
+from src.saas.api import tenant_users, usage_reports, permissions, reply_styles
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
 app.include_router(subscriptions.router)
@@ -1686,6 +1694,7 @@ app.include_router(tenant_users.router)
 app.include_router(usage_reports.router)
 app.include_router(usage_reports.public_router)
 app.include_router(permissions.router)
+app.include_router(reply_styles.router)
 
 
 

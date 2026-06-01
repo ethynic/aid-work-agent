@@ -93,7 +93,7 @@ class AgentInstanceDB:
         allowed_fields = {
             "display_name", "instance_name", "avatar", "description",
             "personality_traits", "status", "config", "bound_channel_type",
-            "allowed_skills"
+            "allowed_skills", "reply_style_id"
         }
         updates = {}
         for k, v in kwargs.items():

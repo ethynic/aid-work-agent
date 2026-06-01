@@ -340,6 +340,16 @@ def get_db_connection() -> Generator[Any, None, None]:
             return_pooled_connection(conn)
 
 
+def _seed_reply_styles():
+    """将磁盘风格文件作为系统内置种子数据写入 reply_styles 表"""
+    try:
+        from src.prompts.style_manager import get_style_manager
+        sm = get_style_manager()
+        sm.seed_system_styles()
+    except Exception as e:
+        logger.warning(f"Failed to seed reply styles: {e}")
+
+
 def init_database():
     """初始化数据库表（PostgreSQL）"""
     _init_postgresql()
@@ -1036,6 +1046,9 @@ def _init_postgresql():
         # 执行增量数据库更新（db_update.sql）
         _apply_db_updates(conn)
         conn.commit()
+
+    # 种子数据：将磁盘风格文件写入 reply_styles 表
+    _seed_reply_styles()
 
 
 if __name__ == "__main__":

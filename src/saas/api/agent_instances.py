@@ -47,6 +47,7 @@ class InstanceUpdateRequest(BaseModel):
     config: Optional[dict] = Field(None, description="自定义配置")
     bound_channel_type: Optional[str] = Field(None, description="绑定渠道")
     allowed_skills: Optional[List[str]] = Field(None, description="允许的 Skill 列表")
+    reply_style_id: Optional[str] = Field(None, description="回复风格ID")
 
 
 # ============== API 端点 ==============

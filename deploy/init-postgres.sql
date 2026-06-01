@@ -432,6 +432,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
+    reply_style_id TEXT,                          -- 回复风格ID
     total_chats INTEGER DEFAULT 0,               -- 累计对话次数
     total_messages INTEGER DEFAULT 0,            -- 累计消息数
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -443,6 +444,23 @@ CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(te
 CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
 ON agent_instances(lock_expires_at)
 WHERE current_session_id IS NOT NULL;
+
+-- 回复风格表
+CREATE TABLE IF NOT EXISTS reply_styles (
+    id SERIAL PRIMARY KEY,
+    style_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    content TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(style_id, tenant_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
 
 -- 实例等待队列表
 CREATE TABLE IF NOT EXISTS agent_instance_queue (
@@ -838,6 +856,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
+    reply_style_id TEXT,                          -- 回复风格ID
     total_chats INTEGER DEFAULT 0,               -- 累计对话次数
     total_messages INTEGER DEFAULT 0,            -- 累计消息数
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -849,6 +868,23 @@ CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(te
 CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
 ON agent_instances(lock_expires_at)
 WHERE current_session_id IS NOT NULL;
+
+-- 回复风格表
+CREATE TABLE IF NOT EXISTS reply_styles (
+    id SERIAL PRIMARY KEY,
+    style_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    content TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(style_id, tenant_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
 
 -- 实例等待队列表
 CREATE TABLE IF NOT EXISTS agent_instance_queue (
