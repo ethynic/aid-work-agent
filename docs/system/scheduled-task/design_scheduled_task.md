@@ -528,7 +528,6 @@ if tool_name == "create_scheduled_task":
         args=tool_args,
         user=user,
         session_id=session_id,
-        progress_callback=progress_callback,
     )
     # 返回结果，包含是否创建成功、任务ID、下次执行时间等
 
@@ -543,26 +542,26 @@ if tool_name == "manage_scheduled_task":
 #### `_handle_create_scheduled_task` 方法核心流程
 
 ```python
-async def _handle_create_scheduled_task(self, args, user, session_id, progress_callback):
+async def _handle_create_scheduled_task(self, args, user, session_id):
     # 1. 参数解析
     name = args["name"]
     task_prompt = args["task_prompt"]
     schedule_type = args["schedule_type"]
     time_config = args.get("time_config", {})
-    
+
     # 2. 生成 cron 表达式
     cron_expression = self._generate_cron_expression(schedule_type, time_config)
-    
+
     # 3. 先试执行（dry run）
-    await progress_callback({"type": "progress", "data": "正在验证任务是否可以执行..."})
-    
+    yield make_event("progress", data="正在验证任务是否可以执行...")
+
     executor = ScheduledTaskExecutor()
     dry_run_result = await executor.dry_run(
         user_id=user.user_id,
         task_prompt=task_prompt,
         user_input=args.get("description", ""),
     )
-    
+
     if not dry_run_result["success"]:
         return {
             "success": False,
@@ -570,9 +569,9 @@ async def _handle_create_scheduled_task(self, args, user, session_id, progress_c
             "debug": dry_run_result.get("error", "未知错误"),
             "message": "抱歉，我目前无法完成此类定时任务。"
         }
-    
+
     # 4. 验证成功，创建定时任务
-    await progress_callback({"type": "progress", "data": "任务验证通过，正在创建定时任务..."})
+    yield make_event("progress", data="任务验证通过，正在创建定时任务...")
     
     task = ScheduledTaskDB.create(
         user_id=user.user_id,

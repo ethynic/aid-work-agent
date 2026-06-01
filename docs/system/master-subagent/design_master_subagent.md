@@ -96,15 +96,15 @@
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `process_message()` | `async (user_input, session_id, user?, attachments?, progress_callback?) -> AsyncGenerator[str, None]` | 主入口：处理用户消息，yield 响应片段。最多 20 轮 LLM 迭代。通过 progress_callback 实时推送进度事件 |
-| `process_message_sync()` | `async (user_input, session_id, user?, attachments?) -> str` | `process_message` 的同步封装，收集所有 chunk 返回完整字符串。**注意：不传递 progress_callback** |
-| `execute_as_subagent()` | `async (task_description, parent_session_id, task_record?, progress_callback?) -> Dict` | 子智能体执行入口。构建独立消息列表（仅有 system_prompt + task_description），独立 LLM 循环。若 `is_master=True` 则抛 RuntimeError |
+| `process_message()` | `async (user_input, session_id, user?, attachments?, cancel_check?) -> AsyncGenerator[dict, None]` | 主入口：处理用户消息，yield 结构化 `AgentEvent` dict。最多 20 轮 LLM 迭代。所有中间状态（progress、tool_start、tool_result、thinking、clarification）和响应文本都通过 yield 输出 |
+| `process_message_sync()` | `async (user_input, session_id, user?, attachments?, record_service?, progress_callback?) -> str` | `process_message` 的同步封装，收集所有 `type=response` 事件的 `data` 返回完整字符串。可选 `progress_callback` 接收每个事件用于渠道文件捕获 |
+| `execute_as_subagent()` | `async (task_description, parent_session_id, task_record?, progress_callback?) -> Dict` | 子智能体执行入口。内部迭代 `process_message()` 收集事件，返回包含 `result`、`events` 的 dict。若 `is_master=True` 则抛 RuntimeError |
 | `_build_base_system_prompt()` | `(include_delegation=True, subagent_constraint="", user=None) -> str` | 构建系统提示词。约 400 行，包含工作流、工具列表、技能规则、委派指南、引导原则等。`not is_master` 时强制 `include_delegation=False` |
 | `_build_system_prompt()` | `(user=None) -> str` | 包装方法：master 传 `include_delegation=True`，subagent 传 `include_delegation=False` + `subagent_constraint` |
 | `_get_tools()` | `() -> List[Dict]` | 获取工具列表（含 skill 工具 + 委派工具（仅 master 且有子智能体时）） |
 | `_register_builtin_tools()` | `() -> None` | 注册 28 个内置工具 + 2 个定时任务工具。master 和 subagent 都调用。subagent 额外调用 `_filter_tools_by_config()` |
 | `_filter_tools_by_config()` | `() -> None` | 根据 `subagent_config.tools` 过滤 tool_registry。`inherit: true` 保留全部，否则只保留 `allowed` 列表 |
-| `_handle_delegate_to_subagent()` | `(subagent_name, task_description, context_needed?, session_id, progress_callback?) -> Dict` | 委派的核心实现：校验子智能体 → 包装进度回调 → 调用 executor.delegate → 等待结果（超时 7200s）→ 处理澄清状态 |
+| `_handle_delegate_to_subagent()` | `(subagent_name, task_description, context_needed?, session_id) -> Dict` | 委派的核心实现：校验子智能体 → 调用 executor.delegate → 等待结果（超时 7200s）→ 处理澄清状态。委派前后 yield `subagent_start`/`subagent_end` 事件 |
 | `_handle_use_skill()` | `(skill_name) -> str` | 加载技能内容，创建 SkillSession 追踪，返回增强的技能指南 |
 | `_handle_skill_execute()` | `(skill_name, command, files?, session_id?, workdir?) -> Dict` | 执行技能脚本命令，处理参数替换、文件解码 |
 | `_build_messages()` | `(session_id) -> List[Dict]` | 从 ShortTermMemory 构建消息历史列表 |

@@ -163,9 +163,9 @@ GET /api/tools
 前端通过 SSE 与后端的 `/api/chat/stream` 接口通信。后端会：
 
 1. 接收前端消息
-2. 调用 `master_agent.process_message()`
-3. 通过 `progress_callback` 实时推送进度
-4. 将 Agent 响应的每个 chunk 都通过 SSE 推送给前端
+2. 调用 `master_agent.process_message()`（返回 `AsyncGenerator[dict]`）
+3. 通过 `async for` 迭代 agent yield 的结构化事件（`response`、`progress`、`tool_start`、`tool_result` 等）
+4. 每个事件直接序列化为 SSE 帧推送给前端
 
 ## 构建生产版本
 

@@ -242,26 +242,26 @@ function handleEnter(e: KeyboardEvent) {
 **根因**：
 ```
 T1: 用户点停止 → abortStreaming() → POST /cancel → Redis 设置取消标记
-T2: 用户发新消息 → POST /chat/stream → 新 Agent 线程启动
-T3: 新线程检查 is_cancelled() → True（旧标记还在）→ 立即退出 "Cancelled by user"
-T4: 旧线程 finally → clear_cancelled()（太晚了，新请求已死）
+T2: 用户发新消息 → POST /chat/stream → 新 Agent async 上下文启动
+T3: 新请求检查 is_cancelled() → True（旧标记还在）→ 立即退出 "Cancelled by user"
+T4: 旧请求 finally → clear_cancelled()（太晚了，新请求已死）
 ```
 
-**修复**：在 `event_generator()` 开始时主动清除残留的取消标记（`src/main.py:1119`），确保新请求不受旧取消标记影响。
+**修复**：在 `event_generator()` 开始时主动清除残留的取消标记，确保新请求不受旧取消标记影响。
 
-旧线程的 `finally` 中 `clear_cancelled()` 保留不变，双重清除无害。
+旧请求的 `finally` 中 `clear_cancelled()` 保留不变，双重清除无害。
 
 ### 5.2 Bug 修复：取消后后端仍保存消息
 
 **问题**：用户点停止后刷新页面，发现被取消的对话仍然有完整回复。
 
-**根因**：消息保存逻辑在 Agent 线程中执行。Agent 跑完后立即保存消息到 DB，此时 `POST /cancel` 可能还没到达后端。即使 SSE 连接已断开，Agent 线程仍继续执行保存。
+**根因**：消息保存逻辑在 agent 执行完成后执行。Agent 跑完后立即保存消息到 DB，此时 `POST /cancel` 可能还没到达后端。即使 SSE 连接已断开，保存逻辑仍继续执行。
 
-**修复**：将消息保存从 Agent 线程移到 SSE generator 中 `yield complete` 之后。核心原理：
+**修复**：将消息保留存放在 `event_generator()` 的 `async for` 迭代完成后的逻辑中。核心原理：
 - `yield complete` 成功 → 客户端在线 → 继续执行保存
 - `yield complete` 抛 `BrokenPipeError` → 客户端已断开 → `return` 退出 generator → 不保存
 
-Agent 线程只把数据放入 `results['pending_save']`，不做 DB 写入。SSE generator 在确认客户端收到 complete 事件后才执行 DB 保存。
+`event_generator()` 在确认客户端收到 complete 事件后才执行 DB 保存。
 
 ### 5.3 Bug 修复：取消显示为"任务完成"
 

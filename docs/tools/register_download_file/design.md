@@ -28,7 +28,7 @@ SSE → 前端收到 tool_result 事件
 | # | 问题 | 严重程度 | 说明 |
 |---|------|----------|------|
 | **P1** | 下载链接不展示 | 高 | 前端收到 tool_result 后只显示"执行完成"文本，下载信息被埋在 progressMessages 的 result 字段中，用户看不到 |
-| **P2** | tenant_id/user_id 获取不可靠 | 高 | `_get_tenant_upload_dir()` 依赖 ContextVar，但 Agent 在 `ThreadPoolExecutor` 线程中运行，ContextVar **不跨线程传播**，导致 tenant_id 和 user_id 均为 None，文件存到 `storage/uploads/conversation/` |
+| **P2** | tenant_id/user_id 获取不可靠 | ~~高~~ 已解决 | ~~`_get_tenant_upload_dir()` 依赖 ContextVar，但 Agent 在 `ThreadPoolExecutor` 线程中运行，ContextVar **不跨线程传播**~~ AsyncGenerator 迁移后 Agent 在 FastAPI event loop 中直接运行，ContextVar 正常传播 |
 | **P3** | 工具无法获取当前用户信息 | 高 | `RegisterDownloadFileTool.execute()` 没有接收 user/tenant 参数的通道，`BaseTool` 接口无上下文注入机制 |
 | **P4** | 重启后文件丢失注册 | 中 | `uploaded_files` 是内存字典，重启后丢失。虽然有磁盘扫描恢复（`_get_file_info`），但不可靠且不存储 display_name |
 | **P5** | 同一文件被多次注册 | 低 | LLM 可能对同一文件调用多次 register_download_file，每次都复制一份新文件 |
@@ -164,13 +164,13 @@ if user:
 
 **调用处修改** (`src/main.py`):
 ```python
-async for chunk in agent.process_message(
+async for event in agent.process_message(
     user_input=full_message,
     session_id=session_id,
     user=agent_user,
     tenant_id=chat_tenant_id,   # 新增
     attachments=attachments,
-    progress_callback=async_progress_callback
+    cancel_check=lambda: sse_manager.is_cancelled(session_id),
 ):
 ```
 
@@ -189,12 +189,12 @@ async for chunk in agent.process_message(
 
 **修改文件**: `src/main.py`
 
-在 SSE 流结束后、保存 assistant 消息前，从 `results['progress']` 中提取 `register_download_file` 的结果：
+在 SSE 流结束后、保存 assistant 消息前，从 `async for` 迭代中收集的 `tool_result` 事件中提取 `register_download_file` 的结果：
 
 ```python
-# 从 progress 事件中提取下载文件信息
+# 从 tool_result 事件中提取下载文件信息
 downloadable_files = []
-for event in results.get('progress', []):
+for event in collected_events:
     if (event.get("type") == "tool_result"
         and event.get("toolName") == "register_download_file"
         and event.get("success") is True):

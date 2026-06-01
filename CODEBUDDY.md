@@ -133,7 +133,7 @@ SubAgents (subagents/)  /  Skills (src/skills/)
    - 若 LLM 返回工具调用，逐个执行（`create_plan`、`use_skill`、`skill_execute`、`delegate_to_subagent` 有专用处理逻辑，其余走 `ToolExecutor`）
    - 工具结果追加到消息列表，进入下一轮
    - 无工具调用时 yield 最终回复并退出循环
-4. 通过 `progress_callback` 实时推送工具执行进度事件（`tool_start`、`tool_result`、`progress`、`thinking` 等），SSE 接口将其流式发送给前端
+4. 通过 `yield make_event(...)` 实时 yield 结构化事件（`tool_start`、`tool_result`、`progress`、`thinking` 等），SSE 端点通过 `async for` 迭代直接序列化为 SSE 帧推送给前端
 
 **系统提示词**：`_build_base_system_prompt()` 动态生成，根据 `is_master` 决定是否包含委派规则、可用子智能体列表。系统提示词对 LLM 行为有决定性影响，修改需谨慎。
 

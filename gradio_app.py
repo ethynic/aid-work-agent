@@ -119,15 +119,6 @@ def format_chat_history(session_id: str) -> List[Dict[str, str]]:
     return []
 
 
-async def progress_callback(session_id: str, message: str):
-    """
-    进度回调函数 - 由 agent 调用，接收实时进度消息
-    """
-    add_progress_message(session_id, message)
-    # 让出控制权，允许其他协程执行
-    await asyncio.sleep(0)
-
-
 async def process_message_async(
     user_message: str,
     session_id: str,

@@ -23,7 +23,7 @@
 | G3 | Provider 未解析缓存命中 token | 无法区分付费 token 和缓存命中的 token |
 | G4 | `chat_records` 表缺少 `model`、`provider`、`agent_iterations` 等审计字段 | 无法按模型/提供商分析成本 |
 | G5 | Agent loop 中工具调用的结果只存在 loguru 日志中，无结构化存储 | 审计时无法追溯工具返回内容 |
-| G6 | `SessionRecordService` 通过 `threading.local()` 管理，在 ThreadPoolExecutor 线程中可能丢失 | 数据不一致 |
+| G6 | ~~`SessionRecordService` 通过 `threading.local()` 管理，在 ThreadPoolExecutor 线程中可能丢失~~ | **已解决**：AsyncGenerator 迁移后 Agent 在 FastAPI event loop 中直接运行，`record_service` 通过参数传递，不再依赖 `threading.local()` |
 | G7 | `execution_details` 字段（JSON）中的工具执行结果被截断到 500 字符 | 审计价值有限 |
 
 ---
@@ -65,7 +65,7 @@
 ```
 ┌───────────────────── Agent 主流程（零 I/O）──────────────────────┐
 │                                                                    │
-│  main.py: run_agent()                                              │
+│  main.py: event_generator() async for 迭代                        │
 │    ├─ record = SessionRecordManager.start_record(...)              │
 │    │                                                               │
 │    ├─ agent.process_message()                                      │
@@ -90,7 +90,7 @@
 
 **关键设计决策**：
 
-1. **`save()` 在 agent 返回之后调用**：`main.py` 中 `end_record()` 在 `consume_generator()` 完成后执行（line 1085），此时 agent 的响应已经全部 yield 给前端。即使 `save()` 抛异常，响应已经送达。
+1. **`save()` 在 agent 返回之后调用**：`main.py` 中 `end_record()` 在 `async for` 迭代完成后的 `finally` 块中执行，此时 agent 的响应已经全部 yield 给前端。即使 `save()` 抛异常，响应已经送达。
 
 2. **agent loop 内部零 I/O**：`add_llm_usage()`、`increment_iterations()`、`handle_progress_event()` 都是纯内存操作（dict append、int +=），不涉及 DB 或文件写入。
 
@@ -115,7 +115,7 @@ def save(self, timeout_seconds: int = 5) -> Optional[Dict[str, Any]]:
         return None
 ```
 
-更稳妥的方案是在 `end_record()` 中用 `threading.Timer` 或在 ThreadPoolExecutor 中设超时，但考虑到 `save()` 已经有 `try/except` 保护，且 DB INSERT 通常极快，当前方案已足够。如果未来 DB 写入成为瓶颈，再引入异步队列。
+更稳妥的方案是在 `end_record()` 中用 `asyncio.wait_for()` 设超时，但考虑到 `save()` 已经有 `try/except` 保护，且 DB INSERT 通常极快，当前方案已足够。如果未来 DB 写入成为瓶颈，再引入异步队列。
 
 ### 3.2 数据库表改造
 
@@ -833,20 +833,18 @@ except Exception:
     logger.debug(f"Failed to record token usage", exc_info=True)
 ```
 
-**threading.local() 线程安全性验证结论**:
+**threading.local() 线程安全性验证结论（AsyncGenerator 迁移后更新）**:
 
-已验证通过。`threading.local()` 在当前架构下**安全**，无需改为参数传递。原因：
+AsyncGenerator 迁移后，`record_service` 通过参数传递给 `event_generator()`，不再依赖 `threading.local()` 的线程上下文隔离。Agent 直接在 FastAPI 的 async event loop 中运行。
 
-1. **`start_record()` 在 ThreadPoolExecutor 线程内调用**（`main.py:1036`，位于 `run_agent()` 函数内）
-2. **`end_record()` 在同一线程内调用**（`main.py:1085`，位于 `run_agent()` 函数内）
-3. **`handle_progress_event()` 在同一线程内调用**（`main.py:1016`，位于 `run_agent()` 内的 `sync_progress_callback`）
-4. **Agent loop 的 `process_message()` 也在同一线程内执行**（`main.py:1059`，位于 `run_agent()` 内的 `consume_generator()`）
+1. **`start_record()` 在 `event_generator()` 开头调用**（agent 调用前）
+2. **`end_record()` 在 `event_generator()` 的 `finally` 块中调用**
+3. **`handle_progress_event()` 在 `async for` 循环内按事件类型调用**
+4. **Agent loop 的 `process_message()` 通过 `async for` 迭代**，所有操作在同一 async 上下文中
 
-调用链：`executor.submit(run_agent)` → `run_agent()` → `start_record()` / `process_message()` / `end_record()` 全在同一个 worker thread。
+调用链：`event_generator()` → `start_record()` → `async for event in agent.process_message()` → `handle_progress_event()` → `end_record()` 全在同一个 async 上下文中。
 
-因此 agent loop 内的 `SessionRecordManager.get_current_record()` 能正确获取到 `start_record()` 设置的实例。`_local` 是类级别的 `threading.local()`，同一线程内读写是同一个命名空间，不存在跨线程问题。
-
-**唯一注意点**：子智能体（Task 8）在独立线程中执行，`threading.local()` 会隔离到子线程自己的命名空间。但子智能体**不应共享主 Agent 的 record**（独立统计），所以隔离反而是正确行为。
+**唯一注意点**：子智能体（Task 8）通过 `SubagentExecutor` 执行，使用 `asyncio.Semaphore` 并发控制。子智能体**不应共享主 Agent 的 record**（独立统计），所以隔离是正确行为。
 
 ---
 

@@ -179,11 +179,10 @@ async def execute(self, task, url, ...):
 
     # 通知前端可以连接 WebSocket
     if self.progress_callback:
-        await self.progress_callback({
-            "type": "browser_view_ready",
-            "session_id": self.session_id,
-            "ws_url": f"/ws/browser-view/{self.session_id}"
-        })
+        await self.progress_callback(make_event("browser_view_ready",
+            session_id=self.session_id,
+            ws_url=f"/ws/browser-view/{self.session_id}"
+        ))
 
     try:
         # ... 现有的编排循环 ...
@@ -221,15 +220,14 @@ async def browser_view_websocket(websocket: WebSocket, session_id: str):
 
 **文件**: `src/main.py` 的 `event_generator()` 中
 
-在现有的 progress 事件处理中增加 `browser_view_ready` 事件类型的透传：
+在 `async for` 事件迭代中，`browser_view_ready` 事件会自动被序列化为 SSE 帧推送给前端：
 
 ```python
-# 现有代码已支持 dict 类型事件的直接透传
-# browser_view_ready 事件从 orchestrator → agent callback → sync_progress_callback → results['progress']
-# event_generator 会自动将其格式化为 SSE 事件并推送
+# browser_view_ready 事件从 orchestrator → agent yield → event_generator async for 迭代
+# 每个事件自动序列化为 SSE data: 帧并推送，无需额外处理
 ```
 
-无需额外修改，因为现有事件管道已支持任意 dict 类型事件的透传。
+无需额外修改，因为 AsyncGenerator 事件流已支持任意 dict 类型事件的透传。
 
 ### 3.2 前端改动
 
