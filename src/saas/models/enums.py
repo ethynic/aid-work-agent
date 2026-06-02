@@ -179,6 +179,30 @@ class UserRole(str, Enum):
         return mapping.get(self, "未知")
 
 
+# ============== 用户来源 ==============
+
+class UserSource(str, Enum):
+    """
+    用户来源枚举
+
+    数据库存储：TEXT
+    - NULL / 空字符串 = 内部用户（管理员创建）
+    - wecom_kf = 企业微信客服
+    """
+    WECOM_KF = "wecom_kf"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.WECOM_KF.value]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.WECOM_KF: "企业微信客服",
+        }
+        return mapping.get(self, "未知")
+
+
 # ============== 套餐计划 ==============
 
 class PlanType(str, Enum):

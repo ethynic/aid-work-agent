@@ -406,9 +406,9 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
             user_id = str(uuid.uuid4())
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
-                INSERT INTO users (user_id, username, phone, role, tenant_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (user_id, identifier, identifier, "platform_admin", None, now, now))
+                INSERT INTO users (user_id, username, phone, role, tenant_id, source, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, identifier, identifier, "platform_admin", None, None, now, now))
             conn.commit()
             cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
             user = dict(cursor.fetchone())

@@ -6,6 +6,7 @@ from .enums import (
     PaymentStatus,
     AgentInstanceStatus,
     UserRole,
+    UserSource,
     PlanType,
 )
 from .tenant import TenantCreate, TenantUpdate, TenantResponse
@@ -21,6 +22,7 @@ __all__ = [
     "PaymentStatus",
     "AgentInstanceStatus",
     "UserRole",
+    "UserSource",
     "PlanType",
     # 模型
     "TenantCreate", "TenantUpdate", "TenantResponse",

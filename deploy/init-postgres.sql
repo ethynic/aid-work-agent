@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT DEFAULT 'user',
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source TEXT
 );
 
 -- 租户内手机号唯一约束（不同租户允许相同手机号）
@@ -565,7 +566,8 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT DEFAULT 'user',
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source TEXT
 );
 
 -- 租户内手机号唯一约束（不同租户允许相同手机号）

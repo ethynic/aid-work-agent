@@ -17,6 +17,7 @@ async def ensure_user_registered(
     channel_user_id: str,
     tenant_id: Optional[str] = None,
     user_info: Optional[Dict[str, Any]] = None,
+    source: Optional[str] = None,
 ) -> Optional[str]:
     """
     确保 IM 用户已注册。
@@ -55,6 +56,7 @@ async def ensure_user_registered(
     user = UserDB.create(
         username=username,
         tenant_id=tenant_id,
+        source=source,
     )
     if not user:
         logger.error(f"Failed to auto-create user for {channel_type}:{channel_user_id}")

@@ -463,9 +463,9 @@ async def login(request: Request, body: LoginRequest):
             user_id = str(uuid.uuid4())
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
-                INSERT INTO users (user_id, username, phone, role, tenant_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (user_id, identifier, identifier, "platform_admin", None, now, now))
+                INSERT INTO users (user_id, username, phone, role, tenant_id, source, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, identifier, identifier, "platform_admin", None, None, now, now))
             conn.commit()
 
             # 查询刚创建的用户

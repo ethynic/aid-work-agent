@@ -755,3 +755,6 @@ WHERE NOT EXISTS (
 );
 
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS reply_style_id TEXT;
+
+-- 2026-06-02，users 表增加 source 字段，区分用户来源（NULL=内部用户，wecom_kf=企业微信客服）
+ALTER TABLE users ADD COLUMN IF NOT EXISTS source TEXT;

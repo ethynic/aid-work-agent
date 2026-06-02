@@ -110,6 +110,23 @@ export enum QueueStatus {
   ABANDONED = 'abandoned',
 }
 
+/** 用户来源 */
+export enum UserSource {
+  WECOM_KF = 'wecom_kf',
+}
+
+export const UserSourceMap = {
+  [UserSource.WECOM_KF]: { label: '企业微信客服', color: 'blue' },
+} as const;
+
+/**
+ * 获取用户来源显示信息（NULL 显示为"内部用户"）
+ */
+export function getUserSourceInfo(source: string | null | undefined): { label: string; color: string } {
+  if (!source) return { label: '内部用户', color: 'gray' };
+  return (UserSourceMap as Record<string, { label: string; color: string }>)[source] ?? { label: source, color: 'gray' };
+}
+
 /** 排队状态工具函数 */
 export const QueueStatusMap = {
   [QueueStatus.WAITING]: { label: '排队中', color: 'blue' },

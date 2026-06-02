@@ -58,7 +58,8 @@ class UserDB:
     @staticmethod
     def create(phone: str = None, password: str = None,
               wx_openid: str = None, username: str = None,
-              role: str = "user", tenant_id: str = None) -> Optional[Dict[str, Any]]:
+              role: str = "user", tenant_id: str = None,
+              source: str = None) -> Optional[Dict[str, Any]]:
         """创建新用户
 
         Args:
@@ -76,11 +77,11 @@ class UserDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO users (user_id, phone, password_hash, wx_openid, username, role, tenant_id)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    INSERT INTO users (user_id, phone, password_hash, wx_openid, username, role, tenant_id, source)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (user_id, phone, hash_password(password) if password else None,
                       wx_openid, username or (f"用户{phone[-4:]}" if phone else f"用户{user_id[-4:]}"),
-                      role, tenant_id))
+                      role, tenant_id, source))
                 conn.commit()
 
                 logger.info(f"User created: {user_id} with role {role}")
@@ -190,7 +191,7 @@ class UserDB:
             user_id: 用户ID
             **kwargs: 可更新字段，支持 username, avatar_url, role, tenant_id
         """
-        allowed_fields = ["username", "avatar_url", "role", "tenant_id"]
+        allowed_fields = ["username", "avatar_url", "role", "tenant_id", "source"]
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
         if not updates:

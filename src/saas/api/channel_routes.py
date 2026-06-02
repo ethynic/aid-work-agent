@@ -954,7 +954,7 @@ async def _process_tenant_wecom_kf_messages(
                 # 自动注册用户
                 user_id = None
                 try:
-                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info)
+                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info, source="wecom_kf")
                 except Exception as e:
                     logger.warning(f"[WeCom KF] 自动注册失败: {e}")
 
