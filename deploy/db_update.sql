@@ -1,6 +1,9 @@
 -- 数据库加表、加字段等SQL语句，记录在本文件，以便升级部署
 -- 所有SQL语句必须幂等安全（可重复执行），使用 IF NOT EXISTS、DROP TABLE IF EXISTS 等保护措施
 
+-- 2026-6-2，users 表增加 nickname 字段，存储微信昵称等渠道用户昵称
+ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT;
+
 -- 2026-4-21，添加租户初始管理员信息
 ALTER TABLE tenants add column IF NOT EXISTS initial_admin_name TEXT default '',add column IF NOT EXISTS initial_admin_phone TEXT default '';
 

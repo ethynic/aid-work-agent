@@ -59,7 +59,7 @@ class UserDB:
     def create(phone: str = None, password: str = None,
               wx_openid: str = None, username: str = None,
               role: str = "user", tenant_id: str = None,
-              source: str = None) -> Optional[Dict[str, Any]]:
+              source: str = None, nickname: str = None) -> Optional[Dict[str, Any]]:
         """创建新用户
 
         Args:
@@ -69,6 +69,7 @@ class UserDB:
             username: 用户名
             role: 角色，platform_admin/tenant_admin/user
             tenant_id: 租户ID，平台管理员为空
+            nickname: 昵称（微信昵称等渠道用户昵称）
         """
         user_id = generate_user_id()
         placeholder = "%s"
@@ -77,11 +78,11 @@ class UserDB:
             cursor = conn.cursor()
             try:
                 cursor.execute(f"""
-                    INSERT INTO users (user_id, phone, password_hash, wx_openid, username, role, tenant_id, source)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    INSERT INTO users (user_id, phone, password_hash, wx_openid, username, role, tenant_id, source, nickname)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                 """, (user_id, phone, hash_password(password) if password else None,
                       wx_openid, username or (f"用户{phone[-4:]}" if phone else f"用户{user_id[-4:]}"),
-                      role, tenant_id, source))
+                      role, tenant_id, source, nickname))
                 conn.commit()
 
                 logger.info(f"User created: {user_id} with role {role}")
@@ -191,7 +192,7 @@ class UserDB:
             user_id: 用户ID
             **kwargs: 可更新字段，支持 username, avatar_url, role, tenant_id
         """
-        allowed_fields = ["username", "avatar_url", "role", "tenant_id", "source"]
+        allowed_fields = ["username", "avatar_url", "role", "tenant_id", "source", "nickname", "wx_unionid"]
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
         if not updates:

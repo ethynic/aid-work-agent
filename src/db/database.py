@@ -815,6 +815,7 @@ def _init_postgresql():
                 wx_openid TEXT,
                 wx_unionid TEXT,
                 avatar_url TEXT,
+                nickname TEXT,
                 tenant_id TEXT,
                 role TEXT DEFAULT 'user',
                 status TEXT DEFAULT 'active',

@@ -855,7 +855,7 @@ async def _process_tenant_wecom_kf_messages(
                 # 自动注册用户并获取 user_id
                 try:
                     from src.saas.services.auto_register import ensure_user_registered
-                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id)
+                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info, source="wecom_kf")
                     user_info["user_id"] = user_id
                 except Exception as e:
                     logger.warning(f"[WeCom KF] 自动注册失败: {e}")

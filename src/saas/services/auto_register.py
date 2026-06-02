@@ -11,6 +11,14 @@ from loguru import logger
 from src.db.database import get_db_connection
 from src.db.models import UserDB
 
+# channel_type → 中文名称映射
+CHANNEL_TYPE_NAME = {
+    "wecom_kf": "企业微信客服",
+    "wecom": "企业微信",
+    "dingtalk": "钉钉",
+    "feishu": "飞书",
+}
+
 
 async def ensure_user_registered(
     channel_type: str,
@@ -49,12 +57,21 @@ async def ensure_user_registered(
         if user_info:
             _update_user_info_from_channel(existing_user_id, user_info)
 
+        # 补写 source（如果当前为空且有传入）
+        if source:
+            user = UserDB.get_by_id(existing_user_id)
+            if user and not user.get("source"):
+                UserDB.update_info(existing_user_id, source=source)
+                logger.info(f"补写用户 {existing_user_id} source={source}")
+
         return existing_user_id
 
     # 2. 用户不存在，创建用户（设置 tenant_id）
-    username = _build_username(channel_type, channel_user_id, user_info)
+    username = _build_username(channel_type, channel_user_id)
+    nickname = _extract_nickname(user_info)
     user = UserDB.create(
         username=username,
+        nickname=nickname,
         tenant_id=tenant_id,
         source=source,
     )
@@ -67,21 +84,19 @@ async def ensure_user_registered(
     # 3. 记录渠道关联信息
     _save_channel_user_mapping(channel_type, channel_user_id, user_id)
 
-    # 4. 保存头像（user_info 有真实昵称和头像时）
+    # 4. 保存头像（user_info 有头像时）
     if user_info and user_info.get("avatar"):
         UserDB.update_info(user_id, avatar_url=user_info["avatar"])
-    if user_info and user_info.get("name") and user_info["name"] != username:
-        UserDB.update_info(user_id, username=user_info["name"])
 
     if tenant_id:
         logger.info(
             f"IM user auto-registered: {channel_type}:{channel_user_id} "
-            f"→ user={user_id}, tenant={tenant_id}"
+            f"→ user={user_id}, tenant={tenant_id}, source={source}, nickname={nickname}"
         )
     else:
         logger.info(
             f"IM user auto-registered: {channel_type}:{channel_user_id} "
-            f"→ user={user_id}"
+            f"→ user={user_id}, source={source}, nickname={nickname}"
         )
 
     return user_id
@@ -89,14 +104,14 @@ async def ensure_user_registered(
 
 def _find_user_by_channel_id(channel_type: str, channel_user_id: str) -> Optional[str]:
     """通过渠道用户 ID 查找系统用户"""
+    channel_name = CHANNEL_TYPE_NAME.get(channel_type, channel_type)
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # 查找是否已有此渠道用户的映射
         cursor.execute("""
             SELECT user_id FROM users
             WHERE username LIKE %s
             LIMIT 1
-        """, (f"{channel_type}用户{channel_user_id[-4:]}",))
+        """, (f"{channel_name}用户{channel_user_id[-4:]}",))
         row = cursor.fetchone()
         if row:
             return row["user_id"]
@@ -105,23 +120,27 @@ def _find_user_by_channel_id(channel_type: str, channel_user_id: str) -> Optiona
 
 def _save_channel_user_mapping(channel_type: str, channel_user_id: str, user_id: str):
     """保存渠道用户映射到 users 表的元信息"""
-    # 当前简单实现：更新 username 包含渠道信息
-    # 未来可扩展为独立的 channel_user_mappings 表
+    channel_name = CHANNEL_TYPE_NAME.get(channel_type, channel_type)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE users SET username = %s
             WHERE user_id = %s
-        """, (f"{channel_type}用户{channel_user_id[-4:]}", user_id))
+        """, (f"{channel_name}用户{channel_user_id[-4:]}", user_id))
         conn.commit()
 
 
-def _build_username(channel_type: str, channel_user_id: str,
-                    user_info: Optional[Dict[str, Any]] = None) -> str:
-    """构建用户名，优先使用 user_info 中的昵称"""
+def _build_username(channel_type: str, channel_user_id: str) -> str:
+    """构建用户名，使用中文渠道名称"""
+    channel_name = CHANNEL_TYPE_NAME.get(channel_type, channel_type)
+    return f"{channel_name}用户{channel_user_id[-4:]}"
+
+
+def _extract_nickname(user_info: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """从 user_info 中提取昵称"""
     if user_info and user_info.get("name"):
         return user_info["name"]
-    return f"{channel_type}用户{channel_user_id[-4:]}"
+    return None
 
 
 def _update_user_info_from_channel(existing_user_id: str,
@@ -132,11 +151,9 @@ def _update_user_info_from_channel(existing_user_id: str,
         return
 
     updates = {}
-    # 只在用户名为默认格式时才更新为真实昵称
-    if user_info.get("name") and (
-        not user.get("username") or "用户" in (user.get("username") or "")
-    ):
-        updates["username"] = user_info["name"]
+    # 更新 nickname（微信昵称等）
+    if user_info.get("name") and not user.get("nickname"):
+        updates["nickname"] = user_info["name"]
     if user_info.get("avatar") and not user.get("avatar_url"):
         updates["avatar_url"] = user_info["avatar"]
 
