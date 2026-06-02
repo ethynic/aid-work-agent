@@ -78,7 +78,8 @@ class HybridRetriever:
         self,
         query: str,
         top_k: int = 10,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        tenant_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         混合检索（加权 RRF 融合 + 向量相似度阈值 + 相关度截断）
@@ -87,13 +88,14 @@ class HybridRetriever:
             query: 用户查询
             top_k: 返回结果数量
             user_id: 用户 ID（权限控制，暂未实现）
+            tenant_id: 租户ID，提供时只搜索该租户的文档
 
         Returns:
             检索结果列表
         """
         # 1. 向量检索（语义相似度，权重更高）
         query_embedding = await self.embedding_client.embed(query)
-        raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3)
+        raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3, tenant_id=tenant_id)
 
         # 后端日志：输出原始向量检索结果（调优用）
         logger.info(
@@ -132,7 +134,7 @@ class HybridRetriever:
 
         # 3. FTS5 全文检索（关键词精确匹配）
         fts_query = self._preprocess_fts_query(query)
-        fts_results = self._fts_search(fts_query, top_k=top_k * 3)
+        fts_results = self._fts_search(fts_query, top_k=top_k * 3, tenant_id=tenant_id)
 
         # 后端日志：步骤3-FTS5全文检索详情
         logger.info(
@@ -246,11 +248,11 @@ class HybridRetriever:
         # 用 OR 连接关键词（FTS5 语法：匹配任一关键词即可）
         return " OR ".join(keywords)
 
-    def _fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
+    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None) -> List[Tuple[int, float]]:
         """全文检索（PostgreSQL tsvector）"""
-        return self._postgres_fts_search(query, top_k)
+        return self._postgres_fts_search(query, top_k, tenant_id=tenant_id)
 
-    def _postgres_fts_search(self, query: str, top_k: int) -> List[Tuple[int, float]]:
+    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
         conn = self._get_connection()
         try:
@@ -259,14 +261,28 @@ class HybridRetriever:
             # 预处理查询：将空格替换为 |（OR 语义）以支持多关键词
             processed_query = self._preprocess_fts_query(query)
 
-            # PostgreSQL 全文搜索：使用 to_tsquery 和 ts_rank
-            cursor.execute("""
-                SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
-                FROM chunks c
-                WHERE c.text_vec @@ plainto_tsquery(%s)
-                ORDER BY score DESC
-                LIMIT %s
-            """, (processed_query, processed_query, top_k))
+            if tenant_id:
+                # 多租户模式：JOIN documents 过滤 tenant_id
+                cursor.execute("""
+                    SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
+                    FROM chunks c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE c.text_vec @@ plainto_tsquery(%s)
+                      AND d.tenant_id = %s
+                    ORDER BY score DESC
+                    LIMIT %s
+                """, (processed_query, processed_query, tenant_id, top_k))
+            else:
+                # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
+                cursor.execute("""
+                    SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
+                    FROM chunks c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE c.text_vec @@ plainto_tsquery(%s)
+                      AND (d.tenant_id = 'demo' OR d.tenant_id IS NULL)
+                    ORDER BY score DESC
+                    LIMIT %s
+                """, (processed_query, processed_query, top_k))
 
             results = cursor.fetchall()
             # row 是 dict: {"id": ..., "score": ...}，对应 SELECT c.id, ... as score

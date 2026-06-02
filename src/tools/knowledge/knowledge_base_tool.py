@@ -3,7 +3,6 @@
 """
 
 from typing import Dict, Any, List, Optional
-import logging
 
 from pydantic import BaseModel, Field
 
@@ -12,8 +11,7 @@ from src.knowledge.vector_db.vector_db import get_vector_db
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.retriever.hybrid_retriever import HybridRetriever
 from src.db.database import get_db_connection
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class KnowledgeBaseSearchInput(BaseModel):
@@ -41,6 +39,11 @@ class KnowledgeBaseTool(BaseTool):
 
     def __init__(self):
         self._retriever = None  # 惰性初始化，首次使用时创建
+        self._tenant_id = None
+
+    def set_tenant_id(self, tenant_id: str):
+        """由 Agent 注入 tenant_id（子智能体线程中 ContextVar 不可用）"""
+        self._tenant_id = tenant_id
 
     @property
     def retriever(self):
@@ -87,8 +90,19 @@ class KnowledgeBaseTool(BaseTool):
                 "count": 0
             }
 
+        # 解析 tenant_id：优先 Agent 注入，回退 ContextVar
+        tenant_id = self._tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                pass
+
+        logger.info(f"后端日志：知识库检索 tenant_id={tenant_id}, query={query}")
+
         try:
-            results = await self.retriever.retrieve(query=query, top_k=top_k)
+            results = await self.retriever.retrieve(query=query, top_k=top_k, tenant_id=tenant_id)
 
             # 提取文档标题
             if results:
@@ -100,9 +114,15 @@ class KnowledgeBaseTool(BaseTool):
                 conn = conn_cm.__enter__()
                 try:
                     cursor = conn.cursor()
-                    cursor.execute(f"""
-                        SELECT id, title FROM documents WHERE id IN ({placeholders})
-                    """, list(doc_ids))
+                    if tenant_id:
+                        cursor.execute(f"""
+                            SELECT id, title FROM documents WHERE id IN ({placeholders}) AND tenant_id = %s
+                        """, list(doc_ids) + [tenant_id])
+                    else:
+                        cursor.execute(f"""
+                            SELECT id, title FROM documents WHERE id IN ({placeholders})
+                              AND (tenant_id = 'demo' OR tenant_id IS NULL)
+                        """, list(doc_ids))
 
                     doc_titles = {row["id"]: row["title"] for row in cursor.fetchall()}
                 finally:

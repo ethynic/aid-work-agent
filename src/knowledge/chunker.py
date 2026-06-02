@@ -146,11 +146,10 @@ class TextChunker:
                         })
                         chunk_index += 1
 
-                    # 保留重叠部分（上一个句子的尾部）
+                    # 保留重叠部分（上一个块尾部，按字符数截断）
                     overlap_text = ""
                     if current_chunk and self.overlap > 0:
-                        # 取最后一个完整句子作为 overlap
-                        overlap_text = self._get_tail_sentences(current_chunk, 1)
+                        overlap_text = self._get_tail_text(current_chunk, self.overlap)
                     current_chunk = overlap_text + sent if overlap_text else sent
                     current_chars = len(current_chunk)
                 else:
@@ -249,3 +248,26 @@ class TextChunker:
         if len(sentences) <= n:
             return text
         return "".join(sentences[-n:])
+
+    def _get_tail_text(self, text: str, max_chars: int) -> str:
+        """
+        获取文本末尾内容，按字符数限制，优先在句子边界截断
+
+        Args:
+            text: 文本
+            max_chars: 最大字符数
+
+        Returns:
+            末尾不超过 max_chars 的文本
+        """
+        if len(text) <= max_chars:
+            return text
+
+        tail = text[-max_chars:]
+        # 在句子边界处截断，避免截断到句子中间
+        for sep in ('。', '！', '？', '；', '\n', ' '):
+            idx = tail.find(sep)
+            if 0 < idx < len(tail) - 1:
+                tail = tail[idx + 1:]
+                break
+        return tail

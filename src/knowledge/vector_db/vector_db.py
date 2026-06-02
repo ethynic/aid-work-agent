@@ -25,10 +25,14 @@ class VectorDatabase:
     async def search(
         self,
         query_embedding: List[float],
-        top_k: int = 10
+        top_k: int = 10,
+        tenant_id: Optional[str] = None
     ) -> List[Tuple[int, float]]:
         """
         向量相似度搜索
+
+        Args:
+            tenant_id: 租户ID，提供时只搜索该租户的文档
 
         Returns:
             List[(chunk_id, similarity)]
@@ -144,7 +148,8 @@ class VectorDBPostgreSQL(VectorDatabase):
     async def search(
         self,
         query_embedding: List[float],
-        top_k: int = 10
+        top_k: int = 10,
+        tenant_id: Optional[str] = None
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
         conn = self._get_connection()
@@ -154,14 +159,28 @@ class VectorDBPostgreSQL(VectorDatabase):
             # 将查询向量转换为 vector 类型字符串
             vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-            # pgvector 使用余弦距离 (<=>)，距离越小越相似
-            # 为了返回相似度（0-1），使用 1 - distance
-            cursor.execute("""
-                SELECT chunk_id, embedding <=> %s::vector as distance
-                FROM chunks_vec
-                ORDER BY distance
-                LIMIT %s
-            """, (vector_str, top_k))
+            if tenant_id:
+                # 指定租户：只查该租户的文档
+                cursor.execute("""
+                    SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
+                    FROM chunks_vec cv
+                    JOIN chunks c ON cv.chunk_id = c.id
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE d.tenant_id = %s
+                    ORDER BY distance
+                    LIMIT %s
+                """, (vector_str, tenant_id, top_k))
+            else:
+                # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
+                cursor.execute("""
+                    SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
+                    FROM chunks_vec cv
+                    JOIN chunks c ON cv.chunk_id = c.id
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE d.tenant_id = 'demo' OR d.tenant_id IS NULL
+                    ORDER BY distance
+                    LIMIT %s
+                """, (vector_str, top_k))
 
             results = cursor.fetchall()
 

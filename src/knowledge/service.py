@@ -454,7 +454,7 @@ class KnowledgeBaseService:
                 )
 
                 # 执行混合检索
-                results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id)
+                results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id)
 
                 # 提取文档标题
                 if results:
