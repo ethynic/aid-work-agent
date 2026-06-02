@@ -53,7 +53,7 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 19 | 浏览器自动化工具 | ✅ 已完成开发 | 网页自动化操作、数据采集、Markdown 转换 | [设计](tools/browser/browser_automation_design.md) | — |
-| 19.1 | 知识库检索租户隔离 | 🔧 部分完成 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露。代码已完成，待验证。2026-06-02 | [设计](tools/knowledge-base-search-tenant-isolation-design.md) | [计划](tools/knowledge-base-search-tenant-isolation-dev-plan.md) |
+| 19.1 | 知识库检索租户隔离 | ✅ 已完成开发 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露 + 分块 overlap 修复。2026-06-02 | [设计](tools/knowledge-base-search-tenant-isolation-design.md) | [计划](tools/knowledge-base-search-tenant-isolation-dev-plan.md) |
 | 20 | 浏览器操作可视化 | 📋 待开发 | Playwright Screencast API 实时推送浏览器操作画面到前端，支持操作标注。2026-05-21 | [设计](tools/browser/browser_visualization_design.md) | — |
 | 21 | PPT 生成工具 | ✅ 已完成开发 | AI 驱动的 PPT 内容生成与模板渲染 | [设计](tools/ppt/ppt_tool_design.md) | — |
 | 21 | Word 工具 | ✅ 已完成开发 | Word 文档读取与生成 | [设计](tools/word/word_tool_design.md) | — |
