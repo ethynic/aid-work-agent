@@ -70,18 +70,6 @@ class HttpApiTool(BaseTool):
     usage_guide = """\
 ## http_api 工具使用指南
 
-这是一个通用 HTTP 客户端工具，可以调用任何 HTTP API。
-
-### 参数说明
-- **method**: HTTP 方法（GET/POST/PUT/DELETE/PATCH），默认 GET
-- **url**: 完整的请求 URL
-- **headers**: 自定义请求头字典（可选）
-- **query_params**: URL 查询参数字典（可选）
-- **body**: JSON 请求体，可以是对象或数组（可选，POST/PUT 用）
-- **form_data**: 表单数据字典（可选，与 body 和 files 互斥）
-- **files**: 文件上传字典，{'字段名': '文件路径'}（可选，与 body 互斥）
-- **timeout**: 超时秒数，默认 30（可选）
-
 ### 文件上传
 使用 files 参数上传文件，自动以 multipart/form-data 编码发送：
 ```
@@ -92,11 +80,11 @@ files: {"file": "/path/to/document.pdf"}
 ### 凭据替换
 URL 和 headers 中可以使用 `${ENV_VAR}` 占位符，运行时自动替换为实际值。
 
-### 常见认证模式示例
-1. Bearer Token: headers 中设置 `{"Authorization": "Bearer ${API_TOKEN}"}`
-2. API Key Header: headers 中设置 `{"X-API-Key": "${API_KEY}"}`
-3. Basic Auth: headers 中设置 `{"Authorization": "Basic ${BASIC_AUTH}"}`
-4. URL 参数: url 中使用 `https://api.example.com?key=${API_KEY}`
+### 常见认证模式
+1. Bearer Token: `{"Authorization": "Bearer ${API_TOKEN}"}`
+2. API Key Header: `{"X-API-Key": "${API_KEY}"}`
+3. Basic Auth: `{"Authorization": "Basic ${BASIC_AUTH}"}`
+4. URL 参数: `https://api.example.com?key=${API_KEY}`
 """
     display_name = "HTTP API 调用"
     category = "network"
