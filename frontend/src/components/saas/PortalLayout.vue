@@ -20,6 +20,16 @@
           <span class="text-base">{{ item.icon }}</span>
           <span>{{ item.label }}</span>
         </router-link>
+        <!-- 清空缓存 -->
+        <button
+          @click="handleClearCache"
+          class="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-danger-400 transition-colors"
+        >
+          <svg class="w-5 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+          <span>清空缓存</span>
+        </button>
       </nav>
 
       <!-- 底部操作 -->
@@ -93,7 +103,7 @@ import { TenantStatus } from '@/api/enums'
 
 const router = useRouter()
 const route = useRoute()
-const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
+const { admin, tenant, isLoggedIn, init, logout, getAuthHeader } = useTenantAuth()
 const toast = useToast()
 const { isMobile } = useMobile()
 
@@ -219,6 +229,24 @@ async function handleLogout() {
     router.push(`/t/${tenantId.value}/login`)
   } else {
     router.push('/portal/login')
+  }
+}
+
+async function handleClearCache() {
+  try {
+    const response = await fetch('/api/clear_cache', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { ...getAuthHeader() },
+    })
+    const data = await response.json()
+    if (data.success) {
+      toast.success(`已清空缓存，删除了 ${data.deleted} 个 key`)
+    } else {
+      toast.error(data.message || '清空缓存失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '清空缓存失败')
   }
 }
 

@@ -644,7 +644,7 @@ async def health_check_db():
     }
 
 
-@app.get("/internal/clear_cache")
+@app.get("/api/clear_cache")
 async def clear_channel_session_cache(request: Request):
     """清空渠道会话缓存（需要平台管理员登录）
 
