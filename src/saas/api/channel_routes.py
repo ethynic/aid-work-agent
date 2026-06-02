@@ -841,13 +841,29 @@ async def _process_tenant_wecom_kf_messages(
                     f"text_len={len(unified_msg.text or '')}, msgtype={msg.get('msgtype')}"
                 )
 
+                # 获取客户信息（昵称、头像）
+                user_info = await adapter.get_user_info(unified_msg.user_id)
+                logger.info(
+                    f"[WeCom KF] 客户信息: user={unified_msg.user_id}, "
+                    f"name={user_info.get('name')}, has_avatar={bool(user_info.get('avatar'))}"
+                )
+
+                # 构建会话元数据（存储头像等扩展信息）
+                session_metadata = {}
+                if user_info.get("avatar"):
+                    session_metadata["avatar"] = user_info["avatar"]
+                if user_info.get("gender"):
+                    session_metadata["gender"] = user_info["gender"]
+
                 # 获取或创建会话
                 session = channel_session_manager.get_or_create_session(
                     channel_type="wecom_kf",
                     channel_user_id=unified_msg.user_id,
                     tenant_id=tenant_id,
+                    user_info=user_info,
                     subagent_id=subagent_type or "",
                     channel_chat_id=open_kfid,
+                    metadata=session_metadata if session_metadata else None,
                 )
                 session_id = session["session_id"]
 
@@ -938,7 +954,7 @@ async def _process_tenant_wecom_kf_messages(
                 # 自动注册用户
                 user_id = None
                 try:
-                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id)
+                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info)
                 except Exception as e:
                     logger.warning(f"[WeCom KF] 自动注册失败: {e}")
 
