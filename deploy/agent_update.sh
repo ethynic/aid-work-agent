@@ -15,7 +15,7 @@ echo "=========================================="
 git config --global --add safe.directory /var/www/agent 2>/dev/null || true
 
 # 1. 拉取代码
-echo "[1/3] 拉取最新代码..."
+echo "[1/4] 拉取最新代码..."
 cd "/var/www/agent"
 #git pull origin master
 git fetch --all
@@ -26,15 +26,24 @@ sudo chmod -R 777 log
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 2. 更新前端
-echo "[2/3] 更新前端..."
+echo "[2/4] 更新前端..."
 # 使用 Docker 中的 node:18-alpine 构建
 sudo rm -rf frontend/dist/*
 
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm install
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm run build
 
-# 3. 重启后端容器（代码已通过 volume 挂载，无需重建）
-echo "[3/3] 重启后端服务..."
+# 3. 释放数据库连接（容器重启前清理残留连接，避免占满 max_connections）
+echo "[3/4] 释放数据库连接..."
+for DB_NAME in aid_work_agent aid_work_logs; do
+    sudo docker run --rm postgres:16-alpine psql \
+        "postgresql://aid_user:Aid_2026@172.17.80.10:5433/${DB_NAME}" \
+        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name IN ('aid-work-agent', 'aid-work-agent-logs') AND pid <> pg_backend_pid();" \
+        2>/dev/null && echo "  已清理 ${DB_NAME} 应用连接" || echo "  跳过 ${DB_NAME}（不可达或无连接）"
+done
+
+# 4. 重启后端容器（代码已通过 volume 挂载，无需重建）
+echo "[4/4] 重启后端服务..."
 sudo docker compose -f docker-compose.prod.yml down
 sudo docker compose -f docker-compose.prod.yml up -d
 
