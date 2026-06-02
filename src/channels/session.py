@@ -544,7 +544,7 @@ class ChannelSessionManager:
 
     def delete_session(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
         """
-        删除会话
+        删除会话。目前该方法暂时没用，启用时需要注意“接待外部客户”页面需要展示 channel_sessions 和 channel_messages 的内容，所以原则上不应删除，而只能禁用（增加状态字段控制）
 
         Args:
             session_id: 会话ID

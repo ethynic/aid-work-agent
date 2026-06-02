@@ -128,11 +128,13 @@ async def _process_tenant_channel_message(
         logger.warning(f"Auto-register failed for {channel_type}:{message.user_id}: {e}")
         user_id = None
 
-    # 4. 获取或创建会话（带租户隔离）
+    # 4. 构建用户信息并获取或创建会话（带租户隔离）
+    user_info = {"user_id": user_id, "name": getattr(message, 'username', None) or getattr(message, 'user_name', None)}
     session = channel_session_manager.get_or_create_session(
         channel_type=channel_type,
         channel_user_id=message.user_id,
         tenant_id=tenant_id,
+        user_info=user_info,
         subagent_id=subagent_type or "",
     )
     session_id = session["session_id"]
@@ -269,11 +271,13 @@ async def _process_tenant_wecom_background(
         except Exception as e:
             logger.warning(f"[Tenant WeCom] 自动注册失败: {e}")
 
-        # 创建/获取会话（带租户隔离）
+        # 构建用户信息并创建/获取会话（带租户隔离）
+        user_info = {"user_id": user_id, "name": getattr(message, 'username', None) or getattr(message, 'user_name', None)}
         session = channel_session_manager.get_or_create_session(
             channel_type="wecom",
             channel_user_id=message.user_id,
             tenant_id=tenant_id,
+            user_info=user_info,
             subagent_id=subagent_type or "",
         )
         session_id = session["session_id"]
@@ -847,6 +851,14 @@ async def _process_tenant_wecom_kf_messages(
                     f"[WeCom KF] 客户信息: user={unified_msg.user_id}, "
                     f"name={user_info.get('name')}, has_avatar={bool(user_info.get('avatar'))}"
                 )
+
+                # 自动注册用户并获取 user_id
+                try:
+                    from src.saas.services.auto_register import ensure_user_registered
+                    user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id)
+                    user_info["user_id"] = user_id
+                except Exception as e:
+                    logger.warning(f"[WeCom KF] 自动注册失败: {e}")
 
                 # 构建会话元数据（存储头像等扩展信息）
                 session_metadata = {}

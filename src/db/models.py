@@ -307,6 +307,161 @@ class UserDB:
                 """)
             return [dict(row) for row in cursor.fetchall()]
 
+    @staticmethod
+    def list_external_users(
+        tenant_id: str,
+        username: str = None,
+        source: str = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """获取租户的外部用户列表（source 不为空的用户）
+
+        Args:
+            tenant_id: 租户ID
+            username: 用户名搜索（可选）
+            source: 用户来源筛选（可选）
+            page: 页码，从1开始
+            page_size: 每页数量
+
+        Returns:
+            {"users": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 构建查询条件
+            conditions = ["tenant_id = %s", "source IS NOT NULL"]
+            params = [tenant_id]
+
+            if username:
+                conditions.append("username LIKE %s")
+                params.append(f"%{username}%")
+
+            if source:
+                conditions.append("source = %s")
+                params.append(source)
+
+            where_clause = " AND ".join(conditions)
+
+            # 统计总数
+            cursor.execute(f"SELECT COUNT(*) as cnt FROM users WHERE {where_clause}", params)
+            total = cursor.fetchone()["cnt"]
+
+            # 查询列表
+            cursor.execute(f"""
+                SELECT user_id, username, avatar_url, source, tenant_id, created_at
+                FROM users
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """, params + [page_size, offset])
+
+            users = [dict(row) for row in cursor.fetchall()]
+        return {"users": users, "total": total, "page": page, "page_size": page_size}
+
+    @staticmethod
+    def get_user_sessions(
+        user_id: str,
+        instance_id: str = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """获取用户的会话列表（分页）
+
+        Args:
+            user_id: 用户ID
+            instance_id: 数字员工实例ID筛选（可选）
+            page: 页码，从1开始
+            page_size: 每页数量
+
+        Returns:
+            {"sessions": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 构建查询条件
+            conditions = ["user_id = %s"]
+            params = [user_id]
+
+            if instance_id:
+                conditions.append("instance_id = %s")
+                params.append(instance_id)
+
+            where_clause = " AND ".join(conditions)
+
+            # 统计总数
+            cursor.execute(f"SELECT COUNT(*) as cnt FROM chat_sessions WHERE {where_clause}", params)
+            total = cursor.fetchone()["cnt"]
+
+            # 查询列表
+            cursor.execute(f"""
+                SELECT session_id, user_id, tenant_id, subagent_id, instance_id, title, created_at, updated_at
+                FROM chat_sessions
+                WHERE {where_clause}
+                ORDER BY updated_at DESC
+                LIMIT %s OFFSET %s
+            """, params + [page_size, offset])
+
+            sessions = [dict(row) for row in cursor.fetchall()]
+        return {"sessions": sessions, "total": total, "page": page, "page_size": page_size}
+
+    @staticmethod
+    def get_session_messages(
+        session_id: str,
+        content_search: str = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict:
+        """获取会话的消息列表（支持内容搜索）
+
+        Args:
+            session_id: 会话ID
+            content_search: 聊天内容搜索（可选）
+            page: 页码，从1开始
+            page_size: 每页数量
+
+        Returns:
+            {"messages": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 构建查询条件
+            conditions = ["session_id = %s"]
+            params = [session_id]
+
+            if content_search:
+                conditions.append("content LIKE %s")
+                params.append(f"%{content_search}%")
+
+            where_clause = " AND ".join(conditions)
+
+            # 统计总数
+            cursor.execute(f"SELECT COUNT(*) as cnt FROM chat_messages WHERE {where_clause}", params)
+            total = cursor.fetchone()["cnt"]
+
+            # 查询列表
+            cursor.execute(f"""
+                SELECT message_id, session_id, role, content, metadata, created_at
+                FROM chat_messages
+                WHERE {where_clause}
+                ORDER BY created_at ASC
+                LIMIT %s OFFSET %s
+            """, params + [page_size, offset])
+
+            messages = []
+            for row in cursor.fetchall():
+                msg = dict(row)
+                if msg.get("metadata"):
+                    msg["metadata"] = json.loads(msg["metadata"])
+                messages.append(msg)
+        return {"messages": messages, "total": total, "page": page, "page_size": page_size}
+
 
 # ============== 会话数据库访问 ==============
 

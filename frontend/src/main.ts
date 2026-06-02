@@ -174,6 +174,7 @@ const router = createRouter({
         { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },
         { path: 'token-usage', name: 'tenant-token-usage', component: () => import('./components/saas/TenantTokenUsage.vue') },
         { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('./components/saas/ReplyStyleManager.vue') },
+        { path: 'external-customers', name: 'tenant-external-customers', component: () => import('./components/saas/ExternalCustomerService.vue') },
         // 外贸获客智能体业务数据页面
         {
           path: 'trade-specialist',
