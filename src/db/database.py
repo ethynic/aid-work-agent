@@ -491,26 +491,21 @@ def init_logs_tables():
         logger.warning(f"追踪库初始化脚本不存在: {sql_file}")
         return
 
+    conn = None
     try:
-        import psycopg2
-        # 用 autocommit 连接执行 DDL，避免单条失败导致整个事务中止
-        config = _get_logs_db_config()
-        ddl_conn = psycopg2.connect(
-            host=config["host"], port=config["port"],
-            database=config["database"], user=config["user"],
-            password=config["password"],
-            connect_timeout=5,
-        )
-        ddl_conn.autocommit = True
-        try:
-            sql_content = sql_file.read_text(encoding='utf-8')
-            ddl_cur = ddl_conn.cursor()
-            ddl_cur.execute(sql_content)
-            logger.info("追踪库表初始化完成")
-        finally:
-            ddl_conn.close()
+        conn = _logs_connection_pool.getconn()
+        conn.autocommit = True
+        sql_content = sql_file.read_text(encoding='utf-8')
+        cur = conn.cursor()
+        cur.execute(sql_content)
+        cur.close()
+        logger.info("追踪库表初始化完成")
     except Exception as e:
         logger.warning(f"追踪库表初始化失败（不影响业务）: {e}")
+    finally:
+        if conn:
+            conn.autocommit = False
+            _logs_connection_pool.putconn(conn, close=False)
 
 
 def _apply_db_updates(conn):

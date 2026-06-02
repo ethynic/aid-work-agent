@@ -220,47 +220,75 @@ setup_logging(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
+    import os as _os
+    _pid = _os.getpid()
+    logger.info(f"[pid={_pid}] lifespan startup begin")
+
     # On startup
     logger.info(f"Starting {settings.app.name} v{settings.app.version}")
     logger.info(f"LLM Provider: {settings.llm.provider}, Model: {settings.llm.qwen.model}, Base URL: {settings.llm.qwen.base_url}")
     logger.info(f"Registered tools: {master_agent.tool_registry.list_tools()}")
 
     # Initialize PostgreSQL connection pool first (required by init_database)
-    init_postgres_pool()
+    try:
+        logger.info(f"[pid={_pid}] step1: init_postgres_pool ...")
+        init_postgres_pool()
+        logger.info(f"[pid={_pid}] step1: init_postgres_pool done")
+    except Exception as e:
+        logger.error(f"[pid={_pid}] step1 FAILED (critical): {e}", exc_info=True)
+        raise
 
     # Initialize database (may use PostgreSQL)
-    init_database()
-    logger.info("Database initialized")
+    try:
+        logger.info(f"[pid={_pid}] step2: init_database ...")
+        init_database()
+        logger.info(f"[pid={_pid}] step2: init_database done")
+    except Exception as e:
+        logger.error(f"[pid={_pid}] step2 FAILED (critical): {e}", exc_info=True)
+        raise
 
     # Initialize logs database pool (observability, optional)
     try:
+        logger.info(f"[pid={_pid}] step3: init_logs_pool ...")
         from src.db.database import init_logs_pool, init_logs_tables
         logs_ok = init_logs_pool()
+        logger.info(f"[pid={_pid}] step3: init_logs_pool done, ok={logs_ok}")
         if logs_ok:
+            logger.info(f"[pid={_pid}] step3b: init_logs_tables ...")
             init_logs_tables()
-            logger.info("Logs database pool initialized")
+            logger.info(f"[pid={_pid}] step3b: init_logs_tables done")
+        logger.info("Logs database pool initialized")
     except Exception as e:
         logger.warning(f"Logs database pool init failed (non-critical): {e}")
 
     # Initialize channel session manager (triggers lazy table creation)
-    from src.channels.session import channel_session_manager
-    channel_session_manager._ensure_tables()
-    logger.info("Channel session manager initialized")
+    try:
+        logger.info(f"[pid={_pid}] step4: channel_session_manager ...")
+        from src.channels.session import channel_session_manager
+        channel_session_manager._ensure_tables()
+        logger.info(f"[pid={_pid}] step4: channel_session_manager done")
+        logger.info("Channel session manager initialized")
+    except Exception as e:
+        logger.error(f"[pid={_pid}] step4 FAILED (critical): {e}", exc_info=True)
+        raise
 
     # Initialize scheduled task scheduler
     try:
+        logger.info(f"[pid={_pid}] step5: scheduled_task_manager ...")
         from src.scheduler.manager import scheduled_task_manager
         scheduled_task_manager.start()
+        logger.info(f"[pid={_pid}] step5: scheduled_task_manager done")
         logger.info("Scheduled task scheduler started")
     except Exception as e:
         logger.error(f"Failed to start scheduled task scheduler: {e}", exc_info=True)
-    
 
     # Initialize SaaS instance manager
     if settings.saas.enabled:
         try:
+            logger.info(f"[pid={_pid}] step6: SaaS instance manager ...")
             from src.saas.services.instance_manager import instance_manager
             restored = instance_manager.restore_running_instances()
+            logger.info(f"[pid={_pid}] step6: SaaS instance manager done, restored={restored}")
             logger.info(f"SaaS instance manager initialized, restored {restored} instances")
         except Exception as e:
             logger.error(f"Failed to initialize SaaS instance manager: {e}", exc_info=True)
