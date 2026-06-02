@@ -423,6 +423,18 @@
           <span>修改密码</span>
         </button>
 
+        <!-- 清空缓存（仅平台管理员可见） -->
+        <button
+          v-if="isPlatformAdmin"
+          @click="handleClearCache"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-danger-50 hover:text-danger-600 transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+          <span>清空缓存</span>
+        </button>
+
         <!-- 退出登录 -->
         <button
           @click="handleLogout"
@@ -485,6 +497,7 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
+import { useToast } from 'vue-toastification'
 
 import type { SubagentListItem, BusinessPage } from '@/api/subagent'
 
@@ -516,6 +529,7 @@ const route = useRoute()
 const { user: demoUser, isLoggedIn: demoIsLoggedIn, logout: demoLogout } = useDemoAuth()
 const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
 const { currentTheme, setTheme, getAvailableThemes } = useTheme()
+const toast = useToast()
 
 const showUserMenu = ref(false)
 const showThemeSubmenu = ref(false)
@@ -624,6 +638,11 @@ const tenantId = computed(() => {
 // 是否为租户管理员
 const isTenantAdmin = computed(() => {
   return tenantAdmin.value?.role === 'tenant_admin' || tenantAdmin.value?.role === 'platform_admin'
+})
+
+// 是否为平台管理员
+const isPlatformAdmin = computed(() => {
+  return tenantAdmin.value?.role === 'platform_admin'
 })
 
 // 侧边栏标题
@@ -1015,6 +1034,25 @@ function handleModifyPassword() {
   // 手机端点击后自动收起左侧菜单
   if (props.isMobile) {
     emit('collapse')
+  }
+}
+
+// 清空渠道会话缓存（仅平台管理员）
+async function handleClearCache() {
+  showUserMenu.value = false
+  try {
+    const response = await fetch('/internal/clear_cache', {
+      method: 'GET',
+      credentials: 'include',
+    })
+    const data = await response.json()
+    if (data.success) {
+      toast.success(`已清空缓存，删除了 ${data.deleted} 个 key`)
+    } else {
+      toast.error(data.message || '清空缓存失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '清空缓存失败')
   }
 }
 

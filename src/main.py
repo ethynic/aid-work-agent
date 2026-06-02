@@ -644,6 +644,33 @@ async def health_check_db():
     }
 
 
+@app.get("/internal/clear_cache")
+async def clear_channel_session_cache(request: Request):
+    """清空渠道会话缓存（需要平台管理员登录）
+
+    用于解决缓存与数据库不一致问题
+    """
+    from src.saas.api.tenant_auth import require_admin
+    from src.core.cache_utils import CacheKeys
+    from src.core.redis_client import redis_client
+
+    # 验证平台管理员登录
+    admin = require_admin(request)
+    if admin.get("role") != "platform_admin":
+        return {"success": False, "message": "仅限平台管理员访问"}
+
+    key_prefix = redis_client.make_key(CacheKeys.CHANNEL_SESSION, "")
+    pattern = f"{key_prefix}*"
+    keys_found = redis_client.keys(pattern)
+    deleted_count = 0
+    for k in keys_found:
+        if redis_client.delete(k):
+            deleted_count += 1
+
+    logger.info(f"后端日志：清空渠道会话缓存，已删除 {deleted_count} 个 key")
+    return {"success": True, "deleted": deleted_count, "keys_found": len(keys_found)}
+
+
 @app.get("/")
 async def root():
     """Root endpoint - 演示模式开启时返回JSON，关闭时返回租户入口页面"""

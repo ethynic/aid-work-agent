@@ -172,30 +172,3 @@ async def get_session_messages(
     )
     return {"success": True, **result}
 
-
-@router.get("/instances")
-async def list_tenant_instances(request: Request):
-    """获取租户下的数字员工实例列表（用于筛选下拉框）"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-    tenant_id = admin.get("tenant_id")
-
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="缺少租户信息")
-
-    from src.saas.db.agent_instance_db import AgentInstanceDB
-
-    with AgentInstanceDB.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT instance_id, name, subagent_type, status
-            FROM agent_instances
-            WHERE tenant_id = %s AND status = 'active'
-            ORDER BY created_at DESC
-        """, (tenant_id,))
-        rows = cursor.fetchall()
-
-    instances = [dict(row) for row in rows]
-    return {"success": True, "instances": instances}
