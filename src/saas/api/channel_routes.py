@@ -1147,7 +1147,7 @@ async def _handle_kf_enter_session(callback_root, adapter) -> None:
 
 
 async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> None:
-    """会话状态变更 → 更新本地元信息"""
+    """会话状态变更 → 更新本地元信息，结束对话时通知客户并清理上下文"""
     try:
         open_kfid = callback_root.findtext("OpenKfId", "")
         external_userid = callback_root.findtext("ExternalUserId", "")
@@ -1169,8 +1169,90 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
             f"[WeCom KF] 会话状态变更: open_kfid={open_kfid}, "
             f"user={external_userid}, state={service_state}, updated_sessions={updated_count}"
         )
+
+        # 员工结束对话（service_state=4）时，通知客户并清除对话上下文
+        if service_state == 4 and updated_count > 0:
+            await _on_kf_session_ended(tenant_id, open_kfid, external_userid)
+
     except Exception as e:
         logger.error(f"[WeCom KF] session_status_change 处理异常: {e}")
+
+
+async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: str) -> None:
+    """员工结束微信客服对话后的清理：通知客户 + 清除短期记忆"""
+    try:
+        from src.saas.services.channel_factory import ChannelFactory
+
+        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf")
+        if adapter is None:
+            logger.warning(
+                f"[WeCom KF] 结束对话通知：无法创建 adapter: tenant_id={tenant_id}"
+            )
+            return
+
+        adapter.current_open_kfid = open_kfid
+        await adapter.send_text(
+            "人工服务已结束，如需继续咨询请重新发送消息。",
+            external_userid,
+        )
+        logger.info(
+            f"[WeCom KF] 已向客户发送结束对话通知: "
+            f"open_kfid={open_kfid}, user={external_userid}"
+        )
+        await adapter.close()
+    except Exception as e:
+        logger.error(f"[WeCom KF] 结束对话通知客户失败: {e}")
+
+    # 清除该渠道会话在 chat_messages 表中的历史记录，
+    # 避免下次客户发消息时 Agent 基于之前的转人工上下文再次触发转人工
+    try:
+        from src.db.database import get_db_connection
+
+        # 找到该渠道用户的所有 session_id
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT session_id FROM channel_sessions
+                WHERE tenant_id = %s AND channel_type = 'wecom_kf'
+                  AND channel_user_id = %s
+            """, (tenant_id, external_userid))
+            session_rows = cursor.fetchall()
+
+        for row in session_rows:
+            sid = row["session_id"]
+            # 清除 chat_messages 中的对话历史
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    DELETE FROM chat_messages
+                    WHERE session_id = %s
+                """, (sid,))
+                deleted = cursor.rowcount
+                conn.commit()
+                if deleted > 0:
+                    logger.info(
+                        f"[WeCom KF] 已清除会话历史: session_id={sid}, "
+                        f"deleted_messages={deleted}"
+                    )
+
+            # 清除 channel_messages 中的对话历史
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    DELETE FROM channel_messages
+                    WHERE session_id = %s
+                """, (sid,))
+                conn.commit()
+
+            # 清除进程内短期记忆（当前 worker）
+            try:
+                from src.core.agent_router import agent_router
+                agent_router.master_agent.memory.clear(sid)
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.error(f"[WeCom KF] 清除会话历史失败: {e}")
 
 
 async def _transfer_kf_to_human(

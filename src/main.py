@@ -328,6 +328,30 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_instance_lock_cleanup_loop())
 
         # Start wecom_kf human service timeout check — 每 60 秒检查
+        async def _clear_session_chat_history(session_id: str) -> None:
+            """清除会话的对话历史，避免下次客户发消息时 Agent 基于旧上下文触发转人工"""
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM chat_messages WHERE session_id = %s", (session_id,))
+                    deleted = cursor.rowcount
+                    conn.commit()
+                    if deleted > 0:
+                        logger.info(
+                            f"[WeCom KF] 清除会话历史: session_id={session_id}, "
+                            f"deleted_messages={deleted}"
+                        )
+                    cursor.execute("DELETE FROM channel_messages WHERE session_id = %s", (session_id,))
+                    conn.commit()
+
+                # 清除进程内短期记忆
+                try:
+                    master_agent.memory.clear(session_id)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"[WeCom KF] 清除会话历史失败: session_id={session_id}, error={e}")
+
         async def _wecom_kf_timeout_check_loop():
             """后台定时检查微信客服人工会话超时，自动退出人工服务"""
             import json
@@ -396,7 +420,7 @@ async def lifespan(app: FastAPI):
                                 f"elapsed={elapsed_minutes:.1f}min, threshold={timeout_minutes}min"
                             )
 
-                            # 创建 adapter 并退出人工服务
+                            # 创建 adapter
                             from src.saas.services.channel_factory import ChannelFactory
                             adapter, _, _ = ChannelFactory.create_from_tenant_config(
                                 tenant_id, "wecom_kf"
@@ -408,6 +432,45 @@ async def lifespan(app: FastAPI):
                                 )
                                 continue
 
+                            # 先查询微信侧实际状态，防止员工已结束对话但本地状态未更新
+                            remote_state = await adapter.api_client.get_service_state(
+                                open_kfid, external_userid
+                            )
+                            remote_service_state = remote_state.get("service_state")
+                            logger.info(
+                                f"[WeCom KF] 超时检查远程状态: session_id={session_id}, "
+                                f"local_state=3, remote_state={remote_service_state}"
+                            )
+
+                            if remote_service_state == 4:
+                                # 微信侧已结束，只需同步本地状态，不发送超时消息
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": 4},
+                                )
+                                logger.info(
+                                    f"[WeCom KF] 远程已结束，跳过超时处理: "
+                                    f"session_id={session_id}"
+                                )
+                                # 清除对话历史，避免下次转人工
+                                await _clear_session_chat_history(session_id)
+                                await adapter.close()
+                                continue
+
+                            if remote_service_state != 3:
+                                # 远程状态不是人工接待，同步本地状态并跳过
+                                channel_session_manager.update_session(
+                                    session_id=session_id,
+                                    metadata={"service_state": remote_service_state},
+                                )
+                                logger.info(
+                                    f"[WeCom KF] 远程状态已变更({remote_service_state})，跳过超时处理: "
+                                    f"session_id={session_id}"
+                                )
+                                await adapter.close()
+                                continue
+
+                            # 远程仍是人工状态，执行超时退出
                             adapter.current_open_kfid = open_kfid
                             result = await adapter.transfer_to_agent(open_kfid, external_userid)
                             if result:
@@ -424,6 +487,8 @@ async def lifespan(app: FastAPI):
                                     f"[WeCom KF] 超时退出人工服务成功: "
                                     f"session_id={session_id}"
                                 )
+                                # 清除对话历史，避免下次客户发消息时 Agent 基于之前的转人工上下文再次触发转人工
+                                await _clear_session_chat_history(session_id)
                             else:
                                 # 微信API调用失败（如95016不允许状态转换），保留 service_state=3
                                 # 并标记失败时间戳，避免死循环反复重试
