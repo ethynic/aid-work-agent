@@ -39,5 +39,12 @@
 
 **不得遗漏登记**，确保 `docs/ideas.md` 始终是项目所有文档的完整索引。
 
+### 开发状态更新规范
+
+- **开发完成时**：将条目从 `docs/ideas.md` 移动到 `docs/ideas_finished.md`，状态标记为 ✅ 已完成开发
+- **部分完成时**：在 `docs/ideas.md` 中更新状态为 🔧 部分完成，并在说明中补充完成进度
+- **开始开发时**：在 `docs/ideas.md` 中更新状态为 🔧 部分完成
+- **新增开发内容时**：在 `docs/ideas.md` 对应分区添加新条目
+
 ## OpenSpec规范
 本项目开始逐步采用 OpenSpec 进行规格驱动开发。详细指令见 `openspec/AGENTS.md`。
