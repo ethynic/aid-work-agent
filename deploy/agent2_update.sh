@@ -44,14 +44,11 @@ fi
 
 # 3. 释放数据库连接（容器重启前清理残留连接，避免占满 max_connections）
 echo "[3/5] 释放数据库连接..."
-for DB_NAME in aid_work_agent2 aid_work_logs2; do
-    sudo docker run --rm postgres:16-alpine psql \
-        "postgresql://aid_user:Aid_2026@172.17.80.10:5433/${DB_NAME}" \
-        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name IN ('aid-work-agent', 'aid-work-agent-logs') AND pid <> pg_backend_pid();" \
-        2>/dev/null && echo "  已清理 ${DB_NAME} 应用连接" || echo "  跳过 ${DB_NAME}（不可达或无连接）"
-done
+sudo docker compose -f docker-compose.test.yml exec -T aid-agent-api \
+    python /app/deploy/kill_connections.py 2>&1 || \
+    echo "  跳过（容器未运行或数据库不可达）"
 
-# 4. 重启后端容器（代码已通过 volume 挂载，无需重建）
+# 4. 重启后端容器
 echo "[4/5] 重启后端服务..."
 sudo docker compose -f docker-compose.test.yml down
 sudo docker compose -f docker-compose.test.yml up -d
