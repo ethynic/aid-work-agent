@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
-from src.db.models import UserDB, SessionDB, MessageDB
+from src.db.models import UserDB
 from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/external-customers", tags=["外部接待客户"])
@@ -156,15 +156,17 @@ async def get_session_messages(
     if not tenant_id:
         raise HTTPException(status_code=400, detail="缺少租户信息")
 
-    # 验证会话属于该租户
-    session = SessionDB.get_by_id(session_id)
+    from src.channels.session import channel_session_manager
+
+    # 验证渠道会话属于该租户
+    session = channel_session_manager.get_session_by_id(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     if session.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
-    result = UserDB.get_session_messages(
+    result = channel_session_manager.get_messages_paginated(
         session_id=session_id,
         content_search=content_search,
         page=page,

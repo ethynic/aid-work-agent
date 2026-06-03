@@ -70,7 +70,6 @@ export async function getUserSessions(params: {
   message?: string
 }> {
   const searchParams = new URLSearchParams()
-  searchParams.set('user_id', params.user_id)
   if (params.instance_id) searchParams.set('instance_id', params.instance_id)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())
@@ -97,7 +96,6 @@ export async function getSessionMessages(params: {
   message?: string
 }> {
   const searchParams = new URLSearchParams()
-  searchParams.set('session_id', params.session_id)
   if (params.content_search) searchParams.set('content_search', params.content_search)
   if (params.page) searchParams.set('page', params.page.toString())
   if (params.page_size) searchParams.set('page_size', params.page_size.toString())

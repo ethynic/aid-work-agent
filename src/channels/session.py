@@ -542,6 +542,81 @@ class ChannelSessionManager:
 
             return updated_count
 
+    def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        按 session_id 直接查询渠道会话
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            会话信息字典，不存在返回 None
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM channel_sessions WHERE session_id = %s
+            """, (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["context_data"] = self._parse_json_field(result.get("context_data"), {})
+            result["metadata"] = self._parse_json_field(result.get("metadata"))
+            return result
+
+    def get_messages_paginated(
+        self,
+        session_id: str,
+        content_search: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict:
+        """
+        分页获取渠道会话消息（支持内容搜索）
+
+        Args:
+            session_id: 会话ID
+            content_search: 聊天内容搜索（可选）
+            page: 页码
+            page_size: 每页数量
+
+        Returns:
+            {"messages": [...], "total": int, "page": int, "page_size": int}
+        """
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            conditions = ["session_id = %s"]
+            params = [session_id]
+
+            if content_search:
+                conditions.append("content LIKE %s")
+                params.append(f"%{content_search}%")
+
+            where_clause = " AND ".join(conditions)
+
+            cursor.execute(f"SELECT COUNT(*) as cnt FROM channel_messages WHERE {where_clause}", params)
+            total = cursor.fetchone()["cnt"]
+
+            cursor.execute(f"""
+                SELECT message_id, session_id, role, content, message_type, attachments, metadata, created_at
+                FROM channel_messages
+                WHERE {where_clause}
+                ORDER BY created_at ASC
+                LIMIT %s OFFSET %s
+            """, params + [page_size, offset])
+
+            messages = []
+            for row in cursor.fetchall():
+                msg = dict(row)
+                msg["attachments"] = self._parse_json_field(msg.get("attachments"), [])
+                msg["metadata"] = self._parse_json_field(msg.get("metadata"))
+                messages.append(msg)
+
+        return {"messages": messages, "total": total, "page": page, "page_size": page_size}
+
     def delete_session(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
         """
         删除会话。目前该方法暂时没用，启用时需要注意“接待外部客户”页面需要展示 channel_sessions 和 channel_messages 的内容，所以原则上不应删除，而只能禁用（增加状态字段控制）
