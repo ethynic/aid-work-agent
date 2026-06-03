@@ -18,11 +18,9 @@ git config --global --add safe.directory /var/www/agent2 2>/dev/null || true
 echo "[1/5] 拉取最新代码..."
 cd "/var/www/agent2"
 OLD_HEAD=$(git rev-parse HEAD)
-#git pull origin master
 git fetch --all
 git reset --hard origin/master
 NEW_HEAD=$(git rev-parse HEAD)
-# 设置需要写入权限的目录
 sudo chmod -R 777 .
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
@@ -42,17 +40,24 @@ else
     echo "[2/5] 前端代码无变更，跳过编译。"
 fi
 
-# 3. 释放数据库连接（容器重启前清理残留连接，避免占满 max_connections）
-echo "[3/5] 释放数据库连接..."
-sudo docker compose -f docker-compose.test.yml exec -T aid-agent-api \
-    python /app/deploy/kill_connections.py 2>&1 || \
-    echo "  跳过（容器未运行或数据库不可达）"
-
-# 4. 重启后端容器
-echo "[4/5] 重启后端服务..."
+# 3. 停止旧容器（释放数据库连接）
+echo "[3/5] 停止旧容器..."
 sudo docker compose -f docker-compose.test.yml down
+
+# 4. 清理数据库残留连接（此时旧容器已停，有空位建立新连接）
+echo "[4/5] 清理数据库残留连接..."
+sleep 3
+sudo docker run --rm \
+    --env-file /var/www/agent2/.env \
+    -v /var/www/agent2:/app \
+    --entrypoint python \
+    aid-agent-api:latest \
+    /app/deploy/kill_connections.py 2>&1 || echo "  跳过（数据库不可达）"
+
+# 5. 启动新容器
+echo "[5/5] 启动后端服务..."
 sudo docker compose -f docker-compose.test.yml up -d
 
 echo ""
-echo "[5/5] 更新完成！"
+echo "更新完成！"
 echo "=========================================="
