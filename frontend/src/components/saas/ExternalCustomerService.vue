@@ -71,7 +71,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</div>
                   <div class="flex items-center gap-2 mt-1">
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted">{{ user.source || '未知来源' }}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted">{{ getUserSourceInfo(user.source).label }}</span>
                     <span class="text-xs text-muted">{{ formatDate(user.created_at) }}</span>
                   </div>
                 </div>
@@ -173,6 +173,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { getUserSourceInfo } from '@/api/enums'
 import { useToast } from 'vue-toastification'
 
 const toast = useToast()
@@ -334,11 +335,16 @@ async function loadSessionMessages() {
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return ''
   const date = new Date(dateStr)
-  return date.toLocaleDateString('zh-CN', {
+  const datePart = date.toLocaleDateString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   })
+  const timePart = date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return `${datePart} ${timePart}`
 }
 
 function formatTime(timeStr: string | null): string {

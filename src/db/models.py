@@ -338,7 +338,8 @@ class UserDB:
             params = [tenant_id]
 
             if username:
-                conditions.append("username LIKE %s")
+                conditions.append("(username LIKE %s OR nickname LIKE %s)")
+                params.append(f"%{username}%")
                 params.append(f"%{username}%")
 
             if source:
