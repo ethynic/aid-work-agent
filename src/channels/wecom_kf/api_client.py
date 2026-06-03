@@ -105,6 +105,15 @@ class WeComKfApiClient:
                 else:
                     response = await client.post(url, params=params, json=json_body or {})
 
+                if response.status_code != 200:
+                    logger.warning(f"请求 {path} HTTP {response.status_code}: {response.text[:200]}")
+                    return {"errcode": -1, "errmsg": f"HTTP {response.status_code}"}
+
+                raw_text = response.text.strip()
+                if not raw_text:
+                    logger.warning(f"请求 {path} 返回空响应体")
+                    return {"errcode": -1, "errmsg": "empty response body"}
+
                 data = response.json()
                 errcode = data.get("errcode", 0)
 

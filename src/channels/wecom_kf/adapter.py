@@ -459,6 +459,7 @@ class WeComKfAdapter(ChannelAdapter):
             "name": result.get("nickname", ""),
             "avatar": result.get("avatar", ""),
             "gender": result.get("gender", 0),
+            "wx_unionid": result.get("unionid", ""),
         }
 
     # ==================== 签名验证 ====================

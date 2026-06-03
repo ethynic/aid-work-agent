@@ -69,9 +69,13 @@ async def ensure_user_registered(
     # 2. 用户不存在，创建用户（设置 tenant_id）
     username = _build_username(channel_type, channel_user_id)
     nickname = _extract_nickname(user_info)
+    wx_openid = _extract_wx_openid(user_info)
+    wx_unionid = _extract_wx_unionid(user_info)
     user = UserDB.create(
         username=username,
         nickname=nickname,
+        wx_openid=wx_openid,
+        wx_unionid=wx_unionid,
         tenant_id=tenant_id,
         source=source,
     )
@@ -84,9 +88,15 @@ async def ensure_user_registered(
     # 3. 记录渠道关联信息
     _save_channel_user_mapping(channel_type, channel_user_id, user_id)
 
-    # 4. 保存头像（user_info 有头像时）
-    if user_info and user_info.get("avatar"):
-        UserDB.update_info(user_id, avatar_url=user_info["avatar"])
+    # 4. 保存头像和微信信息（user_info 有值时）
+    if user_info:
+        extra_updates = {}
+        if user_info.get("avatar"):
+            extra_updates["avatar_url"] = user_info["avatar"]
+        if user_info.get("wx_unionid") and not wx_unionid:
+            extra_updates["wx_unionid"] = user_info["wx_unionid"]
+        if extra_updates:
+            UserDB.update_info(user_id, **extra_updates)
 
     if tenant_id:
         logger.info(
@@ -143,9 +153,23 @@ def _extract_nickname(user_info: Optional[Dict[str, Any]] = None) -> Optional[st
     return None
 
 
+def _extract_wx_openid(user_info: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """从 user_info 中提取微信 openid"""
+    if user_info and user_info.get("wx_openid"):
+        return user_info["wx_openid"]
+    return None
+
+
+def _extract_wx_unionid(user_info: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """从 user_info 中提取微信 unionid"""
+    if user_info and user_info.get("wx_unionid"):
+        return user_info["wx_unionid"]
+    return None
+
+
 def _update_user_info_from_channel(existing_user_id: str,
                                    user_info: Dict[str, Any]):
-    """用渠道用户信息更新已有用户的昵称和头像"""
+    """用渠道用户信息更新已有用户的昵称、头像、微信信息"""
     user = UserDB.get_by_id(existing_user_id)
     if not user:
         return
@@ -156,6 +180,10 @@ def _update_user_info_from_channel(existing_user_id: str,
         updates["nickname"] = user_info["name"]
     if user_info.get("avatar") and not user.get("avatar_url"):
         updates["avatar_url"] = user_info["avatar"]
+    if user_info.get("wx_openid") and not user.get("wx_openid"):
+        updates["wx_openid"] = user_info["wx_openid"]
+    if user_info.get("wx_unionid") and not user.get("wx_unionid"):
+        updates["wx_unionid"] = user_info["wx_unionid"]
 
     if updates:
         UserDB.update_info(existing_user_id, **updates)
