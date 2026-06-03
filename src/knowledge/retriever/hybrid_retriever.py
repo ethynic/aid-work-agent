@@ -79,7 +79,8 @@ class HybridRetriever:
         query: str,
         top_k: int = 10,
         user_id: Optional[int] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         混合检索（加权 RRF 融合 + 向量相似度阈值 + 相关度截断）
@@ -89,13 +90,14 @@ class HybridRetriever:
             top_k: 返回结果数量
             user_id: 用户 ID（权限控制，暂未实现）
             tenant_id: 租户ID，提供时只搜索该租户的文档
+            source_type: 文档来源类型，提供时只搜索该类型的文档
 
         Returns:
             检索结果列表
         """
         # 1. 向量检索（语义相似度，权重更高）
         query_embedding = await self.embedding_client.embed(query)
-        raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3, tenant_id=tenant_id)
+        raw_vector_results = await self.vector_db.search(query_embedding, top_k=top_k * 3, tenant_id=tenant_id, source_type=source_type)
 
         # 后端日志：输出原始向量检索结果（调优用）
         logger.info(
@@ -134,7 +136,7 @@ class HybridRetriever:
 
         # 3. FTS5 全文检索（关键词精确匹配）
         fts_query = self._preprocess_fts_query(query)
-        fts_results = self._fts_search(fts_query, top_k=top_k * 3, tenant_id=tenant_id)
+        fts_results = self._fts_search(fts_query, top_k=top_k * 3, tenant_id=tenant_id, source_type=source_type)
 
         # 后端日志：步骤3-FTS5全文检索详情
         logger.info(
@@ -248,11 +250,11 @@ class HybridRetriever:
         # 用 OR 连接关键词（FTS5 语法：匹配任一关键词即可）
         return " OR ".join(keywords)
 
-    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None) -> List[Tuple[int, float]]:
+    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None) -> List[Tuple[int, float]]:
         """全文检索（PostgreSQL tsvector）"""
-        return self._postgres_fts_search(query, top_k, tenant_id=tenant_id)
+        return self._postgres_fts_search(query, top_k, tenant_id=tenant_id, source_type=source_type)
 
-    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None) -> List[Tuple[int, float]]:
+    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
         conn = self._get_connection()
         try:
@@ -263,26 +265,36 @@ class HybridRetriever:
 
             if tenant_id:
                 # 多租户模式：JOIN documents 过滤 tenant_id
-                cursor.execute("""
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
+                params = [processed_query, processed_query, tenant_id]
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
                     SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
-                      AND d.tenant_id = %s
+                      AND d.tenant_id = %s{source_type_condition}
                     ORDER BY score DESC
                     LIMIT %s
-                """, (processed_query, processed_query, tenant_id, top_k))
+                """, params)
             else:
                 # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
-                cursor.execute("""
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
+                params = [processed_query, processed_query]
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
                     SELECT c.id, ts_rank(c.text_vec, plainto_tsquery(%s)) as score
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
-                      AND (d.tenant_id = 'demo' OR d.tenant_id IS NULL)
+                      AND (d.tenant_id = 'demo' OR d.tenant_id IS NULL){source_type_condition}
                     ORDER BY score DESC
                     LIMIT %s
-                """, (processed_query, processed_query, top_k))
+                """, params)
 
             results = cursor.fetchall()
             # row 是 dict: {"id": ..., "score": ...}，对应 SELECT c.id, ... as score

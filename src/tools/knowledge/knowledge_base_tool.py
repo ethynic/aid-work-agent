@@ -18,6 +18,7 @@ class KnowledgeBaseSearchInput(BaseModel):
     """搜索知识库参数"""
     query: str = Field(..., description="用户问题或查询关键词")
     top_k: Optional[int] = Field(10, description="返回的相关段落数量，默认 10")
+    source_type: Optional[str] = Field(None, description="文档来源类型过滤，不传则搜索全部知识库，传值则只搜索指定类型的文档")
 
 
 class KnowledgeBaseTool(BaseTool):
@@ -81,6 +82,7 @@ class KnowledgeBaseTool(BaseTool):
         """
         query = kwargs.get("query")
         top_k = kwargs.get("top_k", 10)
+        source_type = kwargs.get("source_type")
 
         if not query:
             return {
@@ -99,10 +101,10 @@ class KnowledgeBaseTool(BaseTool):
             except Exception:
                 pass
 
-        logger.info(f"后端日志：知识库检索 tenant_id={tenant_id}, query={query}")
+        logger.info(f"后端日志：知识库检索 tenant_id={tenant_id}, query={query}, source_type={source_type}")
 
         try:
-            results = await self.retriever.retrieve(query=query, top_k=top_k, tenant_id=tenant_id)
+            results = await self.retriever.retrieve(query=query, top_k=top_k, tenant_id=tenant_id, source_type=source_type)
 
             # 提取文档标题
             if results:
@@ -114,15 +116,22 @@ class KnowledgeBaseTool(BaseTool):
                 conn = conn_cm.__enter__()
                 try:
                     cursor = conn.cursor()
+                    source_type_condition = " AND source_type = %s" if source_type else ""
                     if tenant_id:
+                        params = list(doc_ids) + [tenant_id]
+                        if source_type:
+                            params.append(source_type)
                         cursor.execute(f"""
-                            SELECT id, title FROM documents WHERE id IN ({placeholders}) AND tenant_id = %s
-                        """, list(doc_ids) + [tenant_id])
+                            SELECT id, title FROM documents WHERE id IN ({placeholders}) AND tenant_id = %s{source_type_condition}
+                        """, params)
                     else:
+                        params = list(doc_ids)
+                        if source_type:
+                            params.append(source_type)
                         cursor.execute(f"""
                             SELECT id, title FROM documents WHERE id IN ({placeholders})
-                              AND (tenant_id = 'demo' OR tenant_id IS NULL)
-                        """, list(doc_ids))
+                              AND (tenant_id = 'demo' OR tenant_id IS NULL){source_type_condition}
+                        """, params)
 
                     doc_titles = {row["id"]: row["title"] for row in cursor.fetchall()}
                 finally:
