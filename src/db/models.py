@@ -353,7 +353,7 @@ class UserDB:
 
             # 查询列表
             cursor.execute(f"""
-                SELECT user_id, username, avatar_url, source, tenant_id, created_at
+                SELECT user_id, username, nickname, avatar_url, source, tenant_id, created_at
                 FROM users
                 WHERE {where_clause}
                 ORDER BY created_at DESC

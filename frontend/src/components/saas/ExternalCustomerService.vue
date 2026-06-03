@@ -64,12 +64,12 @@
             >
               <div class="flex items-center gap-3">
                 <img
-                  :src="user.avatar || defaultAvatar"
+                  :src="user.avatar_url || defaultAvatar"
                   class="w-12 h-12 rounded-full object-cover bg-gray-100 ring-2 ring-gray-200"
                   alt="头像"
                 />
                 <div class="flex-1 min-w-0">
-                  <div class="font-medium text-default truncate">{{ user.username || '未知用户' }}</div>
+                  <div class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</div>
                   <div class="flex items-center gap-2 mt-1">
                     <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted">{{ user.source || '未知来源' }}</span>
                     <span class="text-xs text-muted">{{ formatDate(user.created_at) }}</span>
@@ -97,12 +97,12 @@
         <div v-if="selectedUser" class="p-4 border-b border-default bg-surface">
           <div class="flex items-center gap-3">
             <img
-              :src="selectedUser.avatar || defaultAvatar"
+              :src="selectedUser.avatar_url || defaultAvatar"
               class="w-10 h-10 rounded-full object-cover bg-gray-100"
               alt="头像"
             />
             <div>
-              <div class="font-medium text-default">{{ selectedUser.username || '未知用户' }}</div>
+              <div class="font-medium text-default">{{ selectedUser.nickname || selectedUser.username || '未知用户' }}</div>
               <div class="text-xs text-muted">创建于 {{ formatDate(selectedUser.created_at) }}</div>
             </div>
           </div>
