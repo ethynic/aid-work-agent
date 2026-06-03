@@ -15,7 +15,7 @@ echo "=========================================="
 git config --global --add safe.directory /var/www/agent 2>/dev/null || true
 
 # 1. 拉取代码
-echo "[1/5] 拉取最新代码..."
+echo "[1] 拉取最新代码..."
 cd "/var/www/agent"
 git fetch --all
 git reset --hard origin/master
@@ -24,27 +24,17 @@ sudo chmod -R 777 log
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 2. 更新前端
-echo "[2/5] 更新前端..."
+echo "[2] 更新前端..."
 sudo rm -rf frontend/dist/*
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm install
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm run build
 
 # 3. 停止旧容器（释放数据库连接）
-echo "[3/5] 停止旧容器..."
+echo "[3] 停止旧容器..."
 sudo docker compose -f docker-compose.prod.yml down
 
-# 4. 清理数据库残留连接（此时旧容器已停，有空位建立新连接）
-echo "[4/5] 清理数据库残留连接..."
-sleep 3
-sudo docker run --rm \
-    --env-file /var/www/agent/.env \
-    -v /var/www/agent:/app \
-    --entrypoint python \
-    aid-agent-api:latest \
-    /app/deploy/kill_connections.py 2>&1 || echo "  跳过（数据库不可达）"
-
-# 5. 启动新容器
-echo "[5/5] 启动后端服务..."
+# 4. 启动新容器
+echo "[4] 启动后端服务..."
 sudo docker compose -f docker-compose.prod.yml up -d
 
 echo ""
