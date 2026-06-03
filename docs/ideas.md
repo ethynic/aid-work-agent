@@ -20,7 +20,7 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。Phase 1 完成，Phase 2-4 未开始。2026-05-29 | [设计](infrastructure/observability-design.md) | [计划](infrastructure/observability-dev-plan.md) |
-| 2 | Prompt 全生命周期管理 | 📋 待开发 | 版本控制、A/B 测试、效果评估。第一优先级：Prompt 内容优化 + extra_md 迁移 + 前端编辑器。草案阶段，预估 4 周。2026-06-02 | [设计](infrastructure/prompt-lifecycle-design.md) | [计划](infrastructure/prompt-lifecycle-dev-plan.md) |
+| 2 | Prompt 全生命周期管理 | 🔧 部分完成 | Phase 0+1+2 代码完成（版本管理 DB + 服务层 + API + 智能体管理页面 + 整体降级策略）。Phase 3 待开发。2026-06-03 | [设计](infrastructure/prompt-lifecycle-design.md) | [计划](infrastructure/prompt-lifecycle-dev-plan.md) |
 
 ## 系统功能
 
@@ -32,7 +32,7 @@
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 9 | 数据分析智能体 | 📋 待开发 | 4 模块架构：Excel 智能解析 + 数据连接器 + Metadata 知识库 + 预定义工具集（LLM 传参模式）。2026-06-02 重新设计 | [设计](system/digital-employee/data-analysis-subagent-design.md) | — |
+| 9 | 数据分析智能体 | 📋 待开发 | 统一智能分析工具（SmartDataAnalysisTool）：内置 LLM 编排 + pandas/numpy 执行引擎 + DAG 并行。2026-06-03 重新设计 | [设计](system/digital-employee/data-analysis-subagent-design.md)、[工具设计](system/digital-employee/smart-data-analysis-tool-design.md) | — |
 | 17 | CRM 智能体 | 📋 待开发 | 客户关系管理，客户数据整合与智能跟进建议 | [设计](subagent/crm/crm_subagent_design.md) | — |
 
 ## 工具

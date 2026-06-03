@@ -79,8 +79,11 @@ class DelegateToSubagentTool(BaseTool):
                 "error": "No task description provided"
             }
 
-        # Check if subagent exists
+        # Check if subagent exists（registry → DB 按需加载）
         config = self.subagent_registry.get(subagent_name)
+        if not config:
+            from src.subagents.factory import AgentFactory
+            config = AgentFactory._load_single_from_db(self.subagent_registry, subagent_name)
         if not config:
             return {
                 "success": False,

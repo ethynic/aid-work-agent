@@ -247,6 +247,15 @@ async def lifespan(app: FastAPI):
         logger.error(f"[pid={_pid}] step2 FAILED (critical): {e}", exc_info=True)
         raise
 
+    # Load subagent definitions from DB (Phase 2: 整体降级策略)
+    try:
+        from src.core.agent import master_agent as _master
+        loaded = _master.subagent_registry.load_from_db()
+        if loaded > 0:
+            logger.info(f"Loaded {loaded} subagent definitions from database")
+    except Exception as e:
+        logger.warning(f"Failed to load subagent definitions from DB (non-critical): {e}")
+
     # Initialize logs database pool (observability, optional)
     try:
         logger.info(f"[pid={_pid}] step3: init_logs_pool ...")
@@ -1657,6 +1666,15 @@ from src.api import chat_instances
 app.include_router(chat_instances.router)
 app.include_router(admin_subagent.router)
 app.include_router(subagent_extra.router)
+
+# Prompt 版本管理 API
+from src.api import prompt_management
+app.include_router(prompt_management.admin_router)
+app.include_router(prompt_management.tenant_router)
+
+# 子智能体定义管理 API
+from src.api import agent_definitions
+app.include_router(agent_definitions.router)
 app.include_router(travel_quote.router)
 app.include_router(subagent.router)
 

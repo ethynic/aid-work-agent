@@ -3,8 +3,8 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.2
 > 关联调研：[Prompt 版本管理与生命周期管理 — 业界调研](../research/prompt-version-management-research.md)
 > 设计日期：2026-05-28
-> 更新日期：2026-06-02（重新定位为子智能体 Prompt 管理，融入子智能体定义管理）
-> 状态：草案
+> 更新日期：2026-06-02（Phase 2 重做：新增独立智能体管理页面，子智能体定义存数据库）
+> 状态：Phase 2 代码完成，待验证
 
 ---
 
@@ -210,7 +210,44 @@
 └──────────────────┘
 ```
 
-### 3.2 表结构
+### 3.2 子智能体定义表（Phase 2 新增）
+
+子智能体的元数据定义（name、tools、skills 等）独立存储，与 system_prompt（由 prompt_versions 管理）解耦。
+
+```sql
+CREATE TABLE IF NOT EXISTS subagent_definitions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id        TEXT NOT NULL,       -- 唯一标识（如 my-agent）
+    name            TEXT NOT NULL,       -- 显示名称
+    description     TEXT,
+    version         TEXT DEFAULT '1.0.0',
+    author          TEXT,
+    capabilities    JSONB DEFAULT '[]',  -- 能力标签
+    triggers        JSONB DEFAULT '{}',  -- 触发条件
+    tools           JSONB DEFAULT '{}',  -- 工具配置 {inherit, additional}
+    skills          JSONB DEFAULT '{}',  -- 技能配置 {allowed}
+    context         JSONB DEFAULT '{}',  -- 上下文约束
+    delegatable_to  JSONB DEFAULT '[]',
+    allow_delegation BOOLEAN DEFAULT TRUE,
+    llm_provider    TEXT,
+    reply_style     TEXT,
+    business_pages  JSONB,
+    status          TEXT DEFAULT 'active',  -- active / disabled
+    created_by      TEXT,
+    updated_by      TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent
+    ON subagent_definitions (agent_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_def_status
+    ON subagent_definitions (status);
+```
+
+**与 prompt_registry 的关联**：通过 `scope='subagent'`、`scope_id=<agent_id>` 松散关联（无外键）。system_prompt 的版本管理完全由 prompt_versions 负责。
+
+### 3.3 表结构
 
 #### prompt_registry — Prompt 注册表
 
@@ -452,29 +489,73 @@ CREATE TABLE IF NOT EXISTS prompt_drafts (
 
 ### 6.2 新增 Prompt Resolver 层
 
-在模板渲染之前，新增一个 Prompt Resolver 层，负责从数据库解析当前应使用的 Prompt 版本：
+在模板渲染之前，新增一个 Prompt Resolver 层，负责从数据库解析当前应使用的 Prompt 版本。
+
+#### 6.2.1 通用 Prompt 解析（`PromptResolver.resolve()`）
+
+用于 skill、system_template、tenant_extra 等非子智能体场景：
 
 ```
-用户请求 → Agent._build_system_prompt(user)
-  → PromptResolver.resolve(scope, scope_id, tenant_id)
-    → 查找 prompt_registry 记录
-    → 查找 prompt_labels 中 "production" 标签指向的版本
-    → 返回 prompt_version.content
-  → render_template(content, variables)   ← 统一使用 f-string 渲染
-  → 返回 system_prompt
+PromptResolver.resolve(scope, scope_id, tenant_id)
+  → 查找 prompt_registry 记录
+  → 查找 prompt_labels 中 "production" 标签指向的版本
+  → 返回 prompt_version.content 或 None
 ```
+
+#### 6.2.2 子智能体整体解析（`resolve_subagent(agent_id)`）
+
+子智能体的定义和 system_prompt 作为**整体**解析，遵循整体降级策略：
+
+```
+resolve_subagent(agent_id):
+  1. 查 subagent_definitions（agent_id = agent_id, status = active）
+  2. 如不存在 → 返回 None（整体降级到文件系统）
+  3. 如存在 → 调用 prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
+  4. 如 prompt 也无 → 返回 None（整体降级到文件系统）
+  5. 都有 → 返回 (definition_row, prompt_content)
+```
+
+**核心原则**：定义和 system_prompt 必须同时存在于数据库才算 DB 命中，缺一则整体降级到文件系统。
 
 ### 6.3 降级策略
+
+#### 子智能体的整体降级
+
+```
+Agent._build_system_prompt(user):
+  if config.from_db == True:
+    # 来自 DB → system_prompt 已在 load_from_db() 时解析并写入 config
+    subagent_constraint = config.system_prompt
+  else:
+    # 来自文件系统 → 使用 SUBAGENT.md 中的 system_prompt，不查 DB
+    subagent_constraint = config.system_prompt
+```
+
+**关键**：`_build_system_prompt()` 不再独立调用 `prompt_resolver.resolve()`。DB 来源的 Config 在 `load_from_db()` 阶段已解析好 system_prompt；文件系统来源的 Config 直接使用 SUBAGENT.md 中的内容。
+
+#### SubagentRegistry 的整体加载策略
+
+```
+SubagentRegistry.load_from_db():
+  definitions = SubagentDefinitionDB.list_active()
+  for row in definitions:
+    prompt_content = prompt_resolver.resolve(scope="subagent", scope_id=row["agent_id"])
+    if not prompt_content:
+      logger.warning(f"跳过 {row['agent_id']}：有定义但无 system_prompt，由文件系统兜底")
+      continue  # ← 缺一则整体跳过
+    config = SubagentConfig(..., system_prompt=prompt_content, from_db=True)
+    self._configs[config.name] = config
+```
+
+#### 非 DB 场景的降级链（通用 Prompt）
 
 ```
 PromptResolver.resolve()
   ├── 查找 prompt_labels("production") → 找到 → 使用该版本
   ├── 查找 prompt_labels("latest")     → 找到 → 使用该版本
   ├── prompt_registry 存在但无标签      → 使用 latest_version
-  └── prompt_registry 不存在            → 降级到文件系统加载（当前逻辑）
+  └── prompt_registry 不存在            → 返回 None（调用方自行降级）
 ```
-
-**关键**：当数据库中不存在对应记录时，完全退回到现有的文件系统加载逻辑，确保改造过程零风险。
 
 ### 6.4 缓存设计
 
@@ -560,17 +641,30 @@ class PromptCache:
 
 ## 八、与现有系统的集成方案
 
-### 8.1 子智能体管理改造（第一优先级）
+### 8.1 子智能体管理（第一优先级）
 
-#### 8.1.1 改造思路
+#### 8.1.1 设计思路
 
-现有的 `DigitalEmployeeManager.vue` 已提供子智能体列表、创建、编辑、删除的完整 CRUD。改造策略是在此基础上**增强**，而不是替代：
+**新增独立的"智能体管理"页面**，与旧的 `/portal/subagents`（DigitalEmployeeManager）完全解耦。旧的数字员工页面保持不动。
 
-1. **子智能体列表页增强**：每个子智能体卡片展示当前 System Prompt 版本号、最后修改时间
+**核心变化**：子智能体定义（name、tools、skills 等）从文件系统迁移到数据库（`subagent_definitions` 表），system_prompt 的版本管理复用已有的 `prompt_versions` 系统。
+
+**新页面** `/portal/agent-definitions`（AgentDefinitionManager.vue）：
+
+1. **列表页**：展示数据库中的子智能体定义，每个卡片展示当前 System Prompt 版本号、状态
 2. **编辑页面两区分离**：
-   - **定义区**（上半部分）：name、description、capabilities、tools、skills 等结构化配置。工具/技能绑定支持 LLM 智能推荐按钮
-   - **Prompt 区**（下半部分）：System Prompt 的 Markdown 编辑器 + 版本历史面板 + 版本对比
-3. **租户定制入口**：子智能体卡片增加"租户定制"标签页/按钮，进入租户 Prompt 编辑器
+   - **定义区**（左半部分）：name、description、capabilities、tools、skills 等结构化配置。工具/技能绑定支持 LLM 智能推荐按钮
+   - **Prompt 区**（右半部分）：System Prompt 的 Markdown 编辑器 + 版本历史面板 + 版本对比
+3. **运行时集成**：`SubagentRegistry` 新增 `load_from_db()` 方法，从数据库加载子智能体定义
+
+**与旧系统的关系**：
+
+| 维度 | 旧（/portal/subagents） | 新（/portal/agent-definitions） |
+|------|------------------------|-------------------------------|
+| 数据源 | 文件系统（SUBAGENT.md） | PostgreSQL（subagent_definitions） |
+| 内置子智能体 | 从 subagents/ 目录加载 | 不管理，仍从文件系统加载 |
+| 定制子智能体 | storage/subagents2/ 目录 | DB + prompt_versions |
+| Prompt 版本 | 无 | 完整版本管理（提交/对比/回滚） |
 
 #### 8.1.2 LLM 智能推荐工具/技能
 
@@ -600,48 +694,74 @@ LLM 返回推荐的 tools 和 skills 配置
 **后端 API**：
 
 ```
-POST /api/admin/subagents/suggest-config
+POST /api/admin/agent-definitions/meta/suggest-config
 Body: { "name": "售后服务助手", "description": "...", "capabilities": [...] }
 Response: { "tools": {"inherit": true, "additional": ["http_api"]}, "skills": {"allowed": ["after-sales-core"]} }
 ```
 
 **现有基础**：`POST /api/admin/subagents/{agent_id}/ai-enhance` 已实现类似的 LLM 增强功能，可以复用其模式。
 
-#### 8.1.3 子智能体 System Prompt 版本管理集成
+#### 8.1.3 子智能体运行时集成
 
-**改动点**：`src/core/agent.py` 的 `_build_system_prompt()`
+**改动点**：
+1. `src/models/subagent.py` — `SubagentConfig` 新增 `from_db: bool = False` 字段
+2. `src/subagents/registry.py` — 新增 `load_from_db()` 方法（整体降级策略）
+3. `src/core/agent.py` — `_build_system_prompt()` 改为根据 `from_db` 标记决定行为
 
-**改造策略**：不改 SUBAGENT.md 的加载逻辑，而是在运行时优先从数据库解析 System Prompt。
+**策略**：整体降级——定义 + system_prompt 必须同时存在于 DB，缺一则整体降级到文件系统。
+
+```python
+# registry.py 新增方法
+def load_from_db(self):
+    from src.db.subagent_definition_db import SubagentDefinitionDB
+    from src.prompts.prompt_resolver import prompt_resolver
+
+    definitions = SubagentDefinitionDB.list_active()
+    for row in definitions:
+        # 整体判断：定义 + system_prompt 必须同时存在
+        prompt_content = prompt_resolver.resolve(
+            scope="subagent", scope_id=row["agent_id"],
+        )
+        if not prompt_content:
+            logger.warning(
+                f"子智能体 {row['agent_id']} 有定义但无 system_prompt，"
+                "跳过 DB 加载，由文件系统兜底"
+            )
+            continue  # 缺 prompt → 整体跳过，让文件系统兜底
+
+        config = SubagentConfig(
+            name=row["name"], dir_name=row["agent_id"],
+            description=row.get("description", ""),
+            capabilities=row.get("capabilities", []),
+            tools=row.get("tools", {}),
+            skills=row.get("skills", {}),
+            context=row.get("context", {}),
+            system_prompt=prompt_content,  # 已从 DB 解析
+            from_db=True,  # 标记来自数据库
+            # ...其他字段从 DB row 映射
+        )
+        if config.name not in self._builtin_names:
+            self._configs[config.name] = config
+    self._build_indices()
+```
+
+**`_build_system_prompt()` 改造**（Phase 2 实现，需调整 Phase 1 的逻辑）：
+
+Phase 1 已实现的 `_build_system_prompt()` 中有独立的 `prompt_resolver.resolve()` 调用。Phase 2 需将其改为根据 `from_db` 标记决定行为：
 
 ```python
 # agent.py _build_system_prompt() 改造
-async def _build_system_prompt(self, user=None):
-    # ... 构建 variables ...
-
-    # SUBAGENT/STANDALONE 模式：优先从数据库获取 system prompt
-    if self.subagent_config:
-        resolved = await prompt_resolver.resolve(
-            scope="subagent",
-            scope_id=self.subagent_config.dir_name,
-            tenant_id=None  # system prompt 是全局的，不按租户区分
-        )
-        if resolved:
-            subagent_constraint = resolved.content
-        else:
-            # 降级：使用文件系统中的 SUBAGENT.md body
-            subagent_constraint = self.subagent_config.system_prompt
-
-        # 加载租户定制 extra.md
-        extra_content = await self._load_extra_md()
-        if extra_content:
-            subagent_constraint += "\n\n## 租户定制需求\n\n" + extra_content
-
-        return self._build_base_system_prompt(
-            include_delegation=False,
-            subagent_constraint=subagent_constraint,
-            user=user
-        )
+subagent_constraint = ""
+if self.subagent_config:
+    if self.subagent_config.from_db:
+        # 来自 DB → system_prompt 已在 load_from_db() 时解析好
+        subagent_constraint = self.subagent_config.system_prompt
+    else:
+        # 来自文件系统 → 直接用 SUBAGENT.md 中的内容，不查 DB
+        subagent_constraint = self.subagent_config.system_prompt
 ```
+
+**核心变化**：不再在 `_build_system_prompt()` 中独立调用 `prompt_resolver.resolve()`。DB 解析工作在 `load_from_db()` 阶段完成，运行时只根据 `from_db` 标记读取已解析的内容。
 
 ### 8.2 租户定制 extra.md 集成
 
@@ -700,11 +820,11 @@ async def _load_extra_md(self, dir_name=None, tenant_id=None):
 
 ### 8.3 前端改造
 
-#### 8.3.1 平台管理后台：子智能体管理增强
+#### 8.3.1 平台管理后台：独立智能体管理页面
 
-**现有基础**：`DigitalEmployeeManager.vue` 已有子智能体列表、创建、编辑、删除功能。
+**新建页面**：`AgentDefinitionManager.vue`，路由 `/portal/agent-definitions`
 
-**改造为两区分离的编辑页面**：
+**完全独立于旧的 DigitalEmployeeManager.vue**（`/portal/subagents`），不从旧页面改造。
 
 ```
 ┌────────────────────────────────────────────────────────────────┐

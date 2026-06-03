@@ -87,6 +87,9 @@ class SubagentConfig(BaseModel):
     # 业务数据页面配置
     business_pages: Optional[List[Dict[str, Any]]] = Field(default=None, description="业务数据页面列表")
 
+    # 来源标记
+    from_db: bool = Field(default=False, description="是否来自数据库加载")
+
     class Config:
         use_enum_values = True
     

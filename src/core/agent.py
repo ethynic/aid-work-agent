@@ -700,9 +700,11 @@ class Agent:
         if self.mode == AgentMode.MASTER:
             return self._build_base_system_prompt(include_delegation=True, user=user)
         else:
-            # SUBAGENT 和 STANDALONE：使用配置中的系统提示词
+            # SUBAGENT 和 STANDALONE：整体降级策略
+            # from_db=True → system_prompt 已在 load_from_db() 时解析好
+            # from_db=False → 直接用文件系统的 system_prompt
             subagent_constraint = ""
-            if self.subagent_config and self.subagent_config.system_prompt:
+            if self.subagent_config:
                 subagent_constraint = self.subagent_config.system_prompt
 
             # 加载租户定制 extra.md
@@ -1199,8 +1201,11 @@ class Agent:
                 "error": "No task description provided"
             }
         
-        # Check if subagent exists
+        # Check if subagent exists（registry → DB 按需加载）
         config = self.subagent_registry.get(subagent_name)
+        if not config:
+            from src.subagents.factory import AgentFactory
+            config = AgentFactory._load_single_from_db(self.subagent_registry, subagent_name)
         if not config:
             return {
                 "success": False,

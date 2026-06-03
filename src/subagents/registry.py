@@ -480,7 +480,7 @@ class SubagentRegistry:
     def reload(self) -> int:
         """
         重新加载所有Subagent配置
-        
+
         Returns:
             加载的配置数量
         """
@@ -490,6 +490,70 @@ class SubagentRegistry:
             self._build_indices()
             logger.info(f"SubagentRegistry reloaded {len(self._configs)} subagents")
         return len(self._configs)
+
+    def load_from_db(self) -> int:
+        """
+        从数据库加载子智能体定义（DB 优先，文件系统兜底）。
+
+        加载策略：DB 优先于文件系统。
+        - DB 中有定义 + system_prompt → 使用 DB 版本，覆盖文件系统版本
+        - DB 中无定义或无 system_prompt → 保留文件系统版本
+
+        Returns:
+            加载的配置数量
+        """
+        from src.db.subagent_definition_db import SubagentDefinitionDB
+        from src.prompts.prompt_resolver import prompt_resolver
+
+        definitions = SubagentDefinitionDB.list_active()
+        loaded = 0
+        for row in definitions:
+            agent_id = row["agent_id"]
+
+            # 整体判断：定义 + system_prompt 必须同时存在
+            prompt_content = prompt_resolver.resolve(
+                scope="subagent", scope_id=agent_id
+            )
+            if not prompt_content:
+                logger.warning(
+                    f"跳过 DB 加载 {agent_id}：有定义但无 system_prompt，"
+                    "由文件系统兜底"
+                )
+                continue
+
+            config = SubagentConfig(
+                name=row["name"],
+                dir_name=agent_id,
+                description=row.get("description", ""),
+                version=row.get("version", "1.0.0"),
+                author=row.get("author"),
+                capabilities=row.get("capabilities", []),
+                triggers=row.get("triggers", {}),
+                tools=row.get("tools", {}),
+                skills=row.get("skills", {}),
+                context=row.get("context", {}),
+                system_prompt=prompt_content,
+                delegatable_to=row.get("delegatable_to", []),
+                allow_delegation=row.get("allow_delegation", True),
+                llm_provider=row.get("llm_provider"),
+                reply_style=row.get("reply_style"),
+                business_pages=row.get("business_pages"),
+                from_db=True,
+            )
+
+            existing = self.get(agent_id)
+            if existing:
+                logger.info(f"DB 定义覆盖文件系统版本: {config.name} (agent_id={agent_id})")
+
+            self._configs[config.name] = config
+            loaded += 1
+            logger.info(f"从 DB 加载子智能体: {config.name} (agent_id={agent_id})")
+
+        if loaded > 0:
+            self._build_indices()
+
+        logger.info(f"SubagentRegistry.load_from_db() 加载了 {loaded} 个子智能体")
+        return loaded
     
     def __len__(self) -> int:
         return len(self._configs)

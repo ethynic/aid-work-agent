@@ -149,6 +149,7 @@ const router = createRouter({
         { path: '', name: 'portal-dashboard', component: () => import('./components/saas/TenantDashboard.vue') },
         { path: 'tenants', name: 'portal-tenants', component: () => import('./components/saas/TenantMgmt.vue') },
         { path: 'subagents', name: 'portal-subagents', component: () => import('./components/DigitalEmployeeManager.vue') },
+        { path: 'agent-definitions', name: 'portal-agent-definitions', component: () => import('./components/AgentDefinitionManager.vue') },
         { path: 'token-usage', name: 'portal-token-usage', component: () => import('./components/saas/PlatformTokenUsage.vue') },
         { path: 'error-logs', name: 'portal-error-logs', component: () => import('./components/saas/ErrorLogs.vue') },
         { path: 'reply-styles', name: 'portal-reply-styles', component: () => import('./components/saas/SystemReplyStyleManager.vue') },

@@ -541,6 +541,72 @@ CREATE TABLE IF NOT EXISTS subagent_env_vars (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_env_unique ON subagent_env_vars(tenant_id, subagent_name, var_name);
 CREATE INDEX IF NOT EXISTS idx_subagent_env_tenant ON subagent_env_vars(tenant_id, subagent_name);
 
+-- ============== Prompt 版本管理表 ==============
+
+-- prompt_registry — Prompt 注册表
+CREATE TABLE IF NOT EXISTS prompt_registry (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     TEXT,
+    scope         TEXT NOT NULL,
+    scope_id      TEXT NOT NULL,
+    prompt_type   TEXT DEFAULT 'normal',
+    display_name  TEXT,
+    description   TEXT,
+    latest_version INTEGER DEFAULT 0,
+    created_by    TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_registry_tenant_scope
+    ON prompt_registry (COALESCE(tenant_id, ''), scope, scope_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_registry_scope
+    ON prompt_registry (scope, scope_id);
+
+-- prompt_versions — Prompt 版本（不可变）
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id      UUID NOT NULL,
+    version        INTEGER NOT NULL,
+    content        TEXT NOT NULL,
+    variables      JSONB,
+    model_config   JSONB,
+    commit_message TEXT,
+    content_hash   TEXT,
+    parent_version INTEGER,
+    created_by     TEXT,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_prompt_ver
+    ON prompt_versions (prompt_id, version);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_prompt
+    ON prompt_versions (prompt_id, created_at DESC);
+
+-- prompt_labels — 标签（命名指针）
+CREATE TABLE IF NOT EXISTS prompt_labels (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id     UUID NOT NULL,
+    version_id    UUID NOT NULL,
+    label         TEXT NOT NULL,
+    created_by    TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_labels_prompt_label
+    ON prompt_labels (prompt_id, label);
+
+-- prompt_drafts — 草稿（每 Prompt 最多一条）
+CREATE TABLE IF NOT EXISTS prompt_drafts (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id     UUID NOT NULL UNIQUE,
+    content       TEXT NOT NULL,
+    variables     JSONB,
+    base_version  INTEGER,
+    updated_by    TEXT,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- 输出初始化完成信息
 DO $$
@@ -1069,6 +1135,97 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_travel_seasons_tenant ON bs_travel_quote_seasons(tenant_id, is_active);
+
+-- ============== Prompt 版本管理表（测试库） ==============
+
+CREATE TABLE IF NOT EXISTS prompt_registry (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     TEXT,
+    scope         TEXT NOT NULL,
+    scope_id      TEXT NOT NULL,
+    prompt_type   TEXT DEFAULT 'normal',
+    display_name  TEXT,
+    description   TEXT,
+    latest_version INTEGER DEFAULT 0,
+    created_by    TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_registry_tenant_scope
+    ON prompt_registry (COALESCE(tenant_id, ''), scope, scope_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_registry_scope
+    ON prompt_registry (scope, scope_id);
+
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id      UUID NOT NULL,
+    version        INTEGER NOT NULL,
+    content        TEXT NOT NULL,
+    variables      JSONB,
+    model_config   JSONB,
+    commit_message TEXT,
+    content_hash   TEXT,
+    parent_version INTEGER,
+    created_by     TEXT,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_prompt_ver
+    ON prompt_versions (prompt_id, version);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_prompt
+    ON prompt_versions (prompt_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS prompt_labels (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id     UUID NOT NULL,
+    version_id    UUID NOT NULL,
+    label         TEXT NOT NULL,
+    created_by    TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_labels_prompt_label
+    ON prompt_labels (prompt_id, label);
+
+CREATE TABLE IF NOT EXISTS prompt_drafts (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id     UUID NOT NULL UNIQUE,
+    content       TEXT NOT NULL,
+    variables     JSONB,
+    base_version  INTEGER,
+    updated_by    TEXT,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- subagent_definitions — 子智能体元数据定义（Phase 2）
+CREATE TABLE IF NOT EXISTS subagent_definitions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id        TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    version         TEXT DEFAULT '1.0.0',
+    author          TEXT,
+    capabilities    JSONB DEFAULT '[]',
+    triggers        JSONB DEFAULT '{}',
+    tools           JSONB DEFAULT '{}',
+    skills          JSONB DEFAULT '{}',
+    context         JSONB DEFAULT '{}',
+    delegatable_to  JSONB DEFAULT '[]',
+    allow_delegation BOOLEAN DEFAULT TRUE,
+    llm_provider    TEXT,
+    reply_style     TEXT,
+    business_pages  JSONB,
+    status          TEXT DEFAULT 'active',
+    created_by      TEXT,
+    updated_by      TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id
+    ON subagent_definitions (agent_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_def_status
+    ON subagent_definitions (status);
 
 
 -- 测试库初始化完成

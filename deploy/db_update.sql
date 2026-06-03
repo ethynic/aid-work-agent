@@ -761,3 +761,100 @@ ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS reply_style_id TEXT;
 
 -- 2026-06-02，users 表增加 source 字段，区分用户来源（NULL=内部用户，wecom_kf=企业微信客服）
 ALTER TABLE users ADD COLUMN IF NOT EXISTS source TEXT;
+
+-- 2026-06-02，Prompt Version Management System - Phase 1
+
+-- 1. prompt_registry — Prompt 注册表
+CREATE TABLE IF NOT EXISTS prompt_registry (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     TEXT,
+    scope         TEXT NOT NULL,
+    scope_id      TEXT NOT NULL,
+    prompt_type   TEXT DEFAULT 'normal',
+    display_name  TEXT,
+    description   TEXT,
+    latest_version INTEGER DEFAULT 0,
+    created_by    TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_registry_tenant_scope
+    ON prompt_registry (COALESCE(tenant_id, ''), scope, scope_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_registry_scope
+    ON prompt_registry (scope, scope_id);
+
+-- 2. prompt_versions — Prompt 版本（不可变）
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id      UUID NOT NULL,
+    version        INTEGER NOT NULL,
+    content        TEXT NOT NULL,
+    variables      JSONB,
+    model_config   JSONB,
+    commit_message TEXT,
+    content_hash   TEXT,
+    parent_version INTEGER,
+    created_by     TEXT,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_prompt_ver
+    ON prompt_versions (prompt_id, version);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_prompt
+    ON prompt_versions (prompt_id, created_at DESC);
+
+-- 3. prompt_labels — 标签（命名指针）
+CREATE TABLE IF NOT EXISTS prompt_labels (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id     UUID NOT NULL,
+    version_id    UUID NOT NULL,
+    label         TEXT NOT NULL,
+    created_by    TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_labels_prompt_label
+    ON prompt_labels (prompt_id, label);
+
+-- 4. prompt_drafts — 草稿（每 Prompt 最多一条）
+CREATE TABLE IF NOT EXISTS prompt_drafts (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prompt_id     UUID NOT NULL UNIQUE,
+    content       TEXT NOT NULL,
+    variables     JSONB,
+    base_version  INTEGER,
+    updated_by    TEXT,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2026-06-03，Phase 2 — 子智能体定义表（system_prompt 由 prompt_versions 管理）
+
+-- 5. subagent_definitions — 子智能体元数据定义
+CREATE TABLE IF NOT EXISTS subagent_definitions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id        TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    version         TEXT DEFAULT '1.0.0',
+    author          TEXT,
+    capabilities    JSONB DEFAULT '[]',
+    triggers        JSONB DEFAULT '{}',
+    tools           JSONB DEFAULT '{}',
+    skills          JSONB DEFAULT '{}',
+    context         JSONB DEFAULT '{}',
+    delegatable_to  JSONB DEFAULT '[]',
+    allow_delegation BOOLEAN DEFAULT TRUE,
+    llm_provider    TEXT,
+    reply_style     TEXT,
+    business_pages  JSONB,
+    status          TEXT DEFAULT 'active',
+    created_by      TEXT,
+    updated_by      TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id
+    ON subagent_definitions (agent_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_def_status
+    ON subagent_definitions (status);

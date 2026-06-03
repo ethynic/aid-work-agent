@@ -171,13 +171,10 @@ class AgentFactory:
         """
         创建子智能体独立模式（入口级绑定，直接作为主智能体处理请求）
 
-        与 create_standalone_agent() 的区别：
-        - 使用 subagent_config（注入专业 system_prompt）
-        - 使用 AgentMode.STANDALONE（影响提示词和工具）
-        - 工具按 subagent_config.tools 过滤
+        查找顺序：registry 缓存 → DB 按需加载 → 返回 None
 
         Args:
-            name: 子智能体名称
+            name: 子智能体名称（name 或 dir_name/agent_id）
             session_id: 会话ID
             tenant_id: 租户ID（用于加载租户定制 extra.md）
 
@@ -186,7 +183,16 @@ class AgentFactory:
         """
         from src.core.agent import Agent, AgentMode, master_agent
 
-        config = master_agent.subagent_registry.get(name) if master_agent.subagent_registry else None
+        registry = master_agent.subagent_registry if master_agent.subagent_registry else None
+        if not registry:
+            return None
+
+        config = registry.get(name)
+
+        # registry 中没有，尝试从 DB 按需加载
+        if not config:
+            config = AgentFactory._load_single_from_db(registry, name)
+
         if not config:
             return None
 
@@ -197,6 +203,49 @@ class AgentFactory:
             session_id=session_id,
             tenant_id=tenant_id,
         )
+
+    @staticmethod
+    def _load_single_from_db(registry, agent_id: str) -> Optional[SubagentConfig]:
+        """从数据库按需加载单个子智能体定义并注册到 registry"""
+        from src.db.subagent_definition_db import SubagentDefinitionDB
+        from src.prompts.prompt_resolver import prompt_resolver
+
+        row = SubagentDefinitionDB.get_by_agent_id(agent_id)
+        if not row:
+            logger.debug(f"DB 中无子智能体定义: {agent_id}")
+            return None
+
+        prompt_content = prompt_resolver.resolve(
+            scope="subagent", scope_id=agent_id
+        )
+        if not prompt_content:
+            logger.warning(f"DB 中有子智能体定义 {agent_id} 但无 system_prompt")
+            return None
+
+        config = SubagentConfig(
+            name=row["name"],
+            dir_name=agent_id,
+            description=row.get("description", ""),
+            version=row.get("version", "1.0.0"),
+            author=row.get("author"),
+            capabilities=row.get("capabilities", []),
+            triggers=row.get("triggers", {}),
+            tools=row.get("tools", {}),
+            skills=row.get("skills", {}),
+            context=row.get("context", {}),
+            system_prompt=prompt_content,
+            delegatable_to=row.get("delegatable_to", []),
+            allow_delegation=row.get("allow_delegation", True),
+            llm_provider=row.get("llm_provider"),
+            reply_style=row.get("reply_style"),
+            business_pages=row.get("business_pages"),
+            from_db=True,
+        )
+
+        registry._configs[config.name] = config
+        registry._build_indices()
+        logger.info(f"按需从 DB 加载子智能体: {config.name} (agent_id={agent_id})")
+        return config
 
     def list_available_agents(self) -> list:
         """
