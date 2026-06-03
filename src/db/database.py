@@ -246,19 +246,26 @@ def close_logs_pool():
 
 @contextmanager
 def get_logs_connection() -> Generator[Any, None, None]:
-    """获取追踪库连接的上下文管理器"""
+    """获取追踪库连接的上下文管理器（带重试）"""
     if _logs_connection_pool is None:
         raise RuntimeError("追踪库连接池未初始化，请检查 LOGS_DATABASE_URL 配置")
 
-    conn = _logs_connection_pool.getconn()
-    try:
-        # 检查连接有效性
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.close()
-    except (psycopg2.OperationalError, psycopg2.InterfaceError):
-        _logs_connection_pool.putconn(conn, close=True)
-        raise RuntimeError("追踪库连接失效")
+    max_retries = 2
+    last_error = None
+    for attempt in range(max_retries):
+        conn = _logs_connection_pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            break  # 连接有效，跳出重试
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            _logs_connection_pool.putconn(conn, close=True)
+            conn = None
+            last_error = e
+            logger.debug(f"追踪库连接失效（尝试 {attempt + 1}/{max_retries}）: {e}")
+    else:
+        raise RuntimeError(f"追踪库连接失效（重试 {max_retries} 次后仍失败）: {last_error}")
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
