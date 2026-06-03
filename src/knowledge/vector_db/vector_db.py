@@ -26,13 +26,15 @@ class VectorDatabase:
         self,
         query_embedding: List[float],
         top_k: int = 10,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None
     ) -> List[Tuple[int, float]]:
         """
         向量相似度搜索
 
         Args:
             tenant_id: 租户ID，提供时只搜索该租户的文档
+            source_type: 文档来源类型，提供时只搜索该类型的文档
 
         Returns:
             List[(chunk_id, similarity)]
@@ -149,7 +151,8 @@ class VectorDBPostgreSQL(VectorDatabase):
         self,
         query_embedding: List[float],
         top_k: int = 10,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
         conn = self._get_connection()
@@ -159,28 +162,38 @@ class VectorDBPostgreSQL(VectorDatabase):
             # 将查询向量转换为 vector 类型字符串
             vector_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
+            source_type_condition = " AND d.source_type = %s" if source_type else ""
+
             if tenant_id:
                 # 指定租户：只查该租户的文档
-                cursor.execute("""
+                params = [vector_str, tenant_id]
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
                     SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE d.tenant_id = %s
+                    WHERE d.tenant_id = %s{source_type_condition}
                     ORDER BY distance
                     LIMIT %s
-                """, (vector_str, tenant_id, top_k))
+                """, params)
             else:
                 # 未指定租户：只查 demo 或无租户的数据，绝不泄露其他租户数据
-                cursor.execute("""
+                params = [vector_str]
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
                     SELECT cv.chunk_id, cv.embedding <=> %s::vector as distance
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE d.tenant_id = 'demo' OR d.tenant_id IS NULL
+                    WHERE d.tenant_id = 'demo' OR d.tenant_id IS NULL{source_type_condition}
                     ORDER BY distance
                     LIMIT %s
-                """, (vector_str, top_k))
+                """, params)
 
             results = cursor.fetchall()
 

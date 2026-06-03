@@ -412,7 +412,8 @@ class KnowledgeBaseService:
         query: str,
         user_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
-        top_k: int = 10
+        top_k: int = 10,
+        source_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
@@ -422,6 +423,7 @@ class KnowledgeBaseService:
             user_id: 用户 ID（权限控制，暂未实现）
             tenant_id: 租户 ID
             top_k: 返回结果数量
+            source_type: 文档来源类型，提供时只搜索该类型的文档
 
         Returns:
             搜索结果
@@ -454,7 +456,7 @@ class KnowledgeBaseService:
                 )
 
                 # 执行混合检索
-                results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id)
+                results = await retriever.retrieve(query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id, source_type=source_type)
 
                 # 提取文档标题
                 if results:
