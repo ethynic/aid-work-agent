@@ -1,0 +1,217 @@
+/* ============================================
+   页面公共样式 - page-common.css
+
+   本文件提供列表页、详情页的通用布局和工具类，
+   所有业务页面应引用此文件以保持样式统一。
+
+   使用方式：在 style.css 中 @import 或在组件中引用。
+   ============================================ */
+
+/* ============================================
+   列表页布局
+   ============================================ */
+
+/* 列表页顶层容器：占满高度，flex column 布局 */
+.page-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 列表页内容区（表格 + 分页），flex-1 填充剩余空间 */
+.page-content {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 搜索区 + 操作按钮区 */
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+.page-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.page-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* ============================================
+   表格滚动容器
+   ============================================ */
+
+/* 表格外层包裹：水平滚动 + 自定义滚动条 */
+.table-scroll-wrapper {
+  overflow-x: auto;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar {
+  height: 6px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-track {
+  background: var(--color-gray-100);
+  border-radius: 3px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: var(--color-primary-600);
+  border-radius: 3px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary-700);
+}
+
+/* ============================================
+   表单字段样式
+   ============================================ */
+
+/* 表单字段标签 */
+.form-label {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+  display: block;
+}
+
+/* 必填标记 */
+.form-required {
+  color: var(--color-danger-500);
+}
+
+/* 表单字段组（label + input 的包裹容器） */
+.form-field {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 多列表单网格 */
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.form-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+
+/* 表单字段垂直间距（space-y-4 等效） */
+.form-section > * + * {
+  margin-top: 1rem;
+}
+
+/* ============================================
+   弹框内表单布局
+   ============================================ */
+
+/* 弹框内表单区域 */
+.modal-form > * + * {
+  margin-top: 1rem;
+}
+
+/* 弹框内表单行（两列布局） */
+.modal-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+/* 弹框内全宽字段 */
+.modal-form-full {
+  grid-column: 1 / -1;
+}
+
+/* ============================================
+   通用工具类
+   ============================================ */
+
+/* 文字截断 + 省略号 */
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 弹性间距 */
+.flex-spacer {
+  flex: 1 1 0%;
+}
+
+/* 表格列宽快捷类 */
+.col-id {
+  width: 60px;
+}
+
+.col-actions-sm {
+  width: 100px;
+}
+
+.col-actions-md {
+  width: 140px;
+}
+
+.col-actions-lg {
+  width: 160px;
+}
+
+/* ============================================
+   空状态
+   ============================================ */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-top: 3rem;
+  padding-bottom: 3rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.empty-state-icon {
+  color: var(--color-gray-300);
+  margin-bottom: 0.75rem;
+}
+
+/* ============================================
+   复选框列
+   ============================================ */
+
+.table-checkbox {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 0.25rem;
+  border-color: var(--color-primary-200);
+  accent-color: var(--color-primary-600);
+}
+
+.table-checkbox:focus {
+  outline: 2px solid var(--color-primary-500);
+  outline-offset: 2px;
+}

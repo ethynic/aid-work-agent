@@ -8,35 +8,6 @@
       @toggle-sidebar="handleToggleSidebar"
       @logout="handleLogout"
     >
-      <template #menu-items="{ closeMenu }">
-        <button
-          @click="goToChat(); closeMenu()"
-          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          返回对话
-        </button>
-        <button
-          @click="openCustomerInfo(); closeMenu()"
-          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-          </svg>
-          我的客户
-        </button>
-        <button
-          @click="openScheduledTasks(); closeMenu()"
-          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          我的定时任务
-        </button>
-      </template>
     </AppHeader>
 
     <!-- Main Content -->
@@ -86,14 +57,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
 import { getTenantInfo, updateTenantInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
 const router = useRouter()
-const toast = useToast()
 const tenantId = computed(() => route.params.tenant_id as string)
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
 
@@ -137,23 +106,6 @@ function handleToggleSidebar() {
 async function handleLogout() {
   await tenantLogout()
   router.push(`/t/${tenantId.value}/login`)
-}
-
-function goToChat() {
-  router.push(`/t/${tenantId.value}/chat`)
-}
-
-function openCustomerInfo() {
-  const userId = effectiveUser.value?.user_id
-  if (userId) {
-    window.open(`/customer-info?user_id=${userId}`, '_blank')
-  } else {
-    toast.warning('请先登录')
-  }
-}
-
-function openScheduledTasks() {
-  window.open('/scheduled-tasks', '_blank')
 }
 
 const loading = ref(true)

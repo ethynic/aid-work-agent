@@ -90,34 +90,6 @@
 
     <!-- Right Side - Actions -->
     <div v-if="isLoggedIn" class="flex items-center gap-3 flex-shrink-0">
-      <div class="hidden md:flex items-center gap-3">
-        <!-- More Menu -->
-        <div class="relative">
-          <button
-            @click="showMenuDropdown = !showMenuDropdown"
-            class="px-2 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            更多
-          </button>
-
-          <!-- Dropdown Menu -->
-          <div
-            v-if="showMenuDropdown"
-            class="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50"
-          >
-            <slot name="menu-items" :close-menu="closeMenu">
-              <slot name="extra-menu-items" :close-menu="closeMenu" />
-            </slot>
-          </div>
-        </div>
-
-        <!-- Click outside to close menu -->
-        <div
-          v-if="showMenuDropdown"
-          class="fixed inset-0 z-40"
-          @click="showMenuDropdown = false"
-        ></div>
-      </div>
     </div>
   </header>
 </template>
@@ -126,7 +98,7 @@
 import { ref, computed } from 'vue'
 import type { AgentItem } from '@/api/saasPermissions'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   title?: string
   isLoggedIn?: boolean
   user?: { username: string; user_id?: string | number } | null
@@ -136,7 +108,9 @@ const props = defineProps<{
   currentSubagentId?: string | null
   /** 是否显示右上角演示模式退出按钮，默认 true */
   showDemoLogout?: boolean
-}>()
+}>(), {
+  showDemoLogout: true,
+})
 
 const emit = defineEmits<{
   'toggle-sidebar': []
@@ -144,7 +118,6 @@ const emit = defineEmits<{
   'change-subagent': [agentId: string]
 }>()
 
-const showMenuDropdown = ref(false)
 const showSubagentDropdown = ref(false)
 
 
@@ -208,9 +181,5 @@ function selectSubagent(agentId: string) {
     emit('change-subagent', agentId)
   }
   showSubagentDropdown.value = false
-}
-
-function closeMenu() {
-  showMenuDropdown.value = false
 }
 </script>

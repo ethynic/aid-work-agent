@@ -28,49 +28,6 @@
             @logout="handleLogout"
             @change-subagent="handleSubagentChange"
           >
-            <template #menu-items="{ closeMenu }">
-
-              <!-- 结束会话（仅当有实例ID时显示） -->
-              <button
-                v-if="instanceId"
-                @click="handleEndSession(); closeMenu()"
-                class="w-full px-3 py-2 text-left text-sm text-danger-600 hover:bg-danger-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                结束会话释放实例
-              </button>
-
-              <button
-                @click="showCredentialManager = true; closeMenu()"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                </svg>
-                凭据管理
-              </button>
-              <button
-                @click="openScheduledTasks"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                我的定时任务
-              </button>
-              <button
-                @click="showSettingsDialog = true; closeMenu()"
-                class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                设置
-              </button>
-            </template>
           </AppHeader>
 
           <!-- Messages Area -->
@@ -119,26 +76,12 @@
       @success="handleLoginSuccess"
     />
 
-    <!-- Credential Manager -->
-    <CredentialManager
-      v-if="showCredentialManager"
-      @close="showCredentialManager = false"
-    />
-
-    <!-- Settings Dialog -->
-    <SettingsDialog
-      :visible="showSettingsDialog"
-      @close="showSettingsDialog = false"
-    />
-
-
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { defineAsyncComponent } from 'vue'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import LoginModal from './LoginModal.vue'
@@ -146,9 +89,6 @@ import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 
-// ✅ 优化：对话框组件异步加载，用户点击时才加载
-const CredentialManager = defineAsyncComponent(() => import('./CredentialManager.vue'))
-const SettingsDialog = defineAsyncComponent(() => import('./SettingsDialog.vue'))
 import { useAgent } from '@/composables/useAgent'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -181,7 +121,6 @@ const {
   clearAttachments,
   abortStreaming,
   sessionId: agentSessionId,
-  endSession,
   inputHintState
 } = useAgent()
 
@@ -351,8 +290,7 @@ const isSidebarCollapsed = computed({
   }
 })
 const showLoginModal = ref(false)
-const showCredentialManager = ref(false)
-const showSettingsDialog = ref(false)
+
 
 // 标志位：避免 selectSession + 手动 switchSession 与 watcher 重复执行
 const skipNextSwitch = ref(false)
@@ -373,22 +311,6 @@ const pageTitle = computed(() => {
 
 // 排队轮到了，自动发送消息
 
-
-// 结束会话，释放实例锁
-async function handleEndSession() {
-  if (!instanceId.value) return
-
-  const success = await endSession(instanceId.value)
-  if (success) {
-    toast.success('会话已结束，实例已释放')
-  } else {
-    toast.error('结束会话失败')
-  }
-}
-// 跳转到定时任务页面
-function openScheduledTasks() {
-  window.open('/scheduled-tasks', '_blank')
-}
 
 // 检查并处理主智能体不可用的情况（ChatContainer 特有逻辑）
 async function checkAndRedirectIfMainAgentUnavailable() {

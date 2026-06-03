@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any
 from loguru import logger
 
 from src.db.database import get_db_connection
-from src.db.remote_credential import encryption_manager
+from src.db.encryption import encryption_manager
 
 
 class EmailCredentialDB:

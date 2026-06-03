@@ -1,6 +1,9 @@
 /* highlight.js 代码高亮样式 - 使用浅色主题匹配整体浅色风格 */
 @import 'highlight.js/styles/github.css';
 
+/* 页面公共样式（列表页、表单、弹框等） */
+@import './styles/page-common.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

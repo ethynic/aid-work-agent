@@ -11,7 +11,6 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
-from src.db.remote_credential import RemoteCredentialDB
 from src.config.settings import settings
 
 
@@ -21,6 +20,11 @@ class UploadToRemoteInput(BaseModel):
     remote_path: str = Field(..., description="远程服务器路径")
     connection_type: str = Field(..., description="连接类型: smb 或 ftp")
     filename: Optional[str] = Field(None, description="上传后的文件名（可选，默认使用原文件名）")
+    server_host: str = Field(..., description="服务器地址")
+    server_port: int = Field(..., description="服务器端口")
+    username: str = Field(..., description="连接用户名")
+    password: str = Field(..., description="连接密码")
+    domain: Optional[str] = Field(None, description="SMB 域（可选）")
 
 
 class SMBUploader:
@@ -275,11 +279,15 @@ class UploadToRemoteTool(BaseTool):
         Returns:
             上传结果
         """
-        # 参数验证
         file_path = kwargs.get('file_path')
         remote_path = kwargs.get('remote_path')
         connection_type = kwargs.get('connection_type')
         filename = kwargs.get('filename')
+        server_host = kwargs.get('server_host')
+        server_port = kwargs.get('server_port')
+        username = kwargs.get('username')
+        password = kwargs.get('password')
+        domain = kwargs.get('domain')
 
         if not file_path or not remote_path or not connection_type:
             return {
@@ -295,6 +303,13 @@ class UploadToRemoteTool(BaseTool):
                 "debug": f"连接类型: {connection_type}"
             }
 
+        if not server_host or not server_port or not username or not password:
+            return {
+                "success": False,
+                "error": "缺少连接参数: server_host, server_port, username, password",
+                "debug": f"提供的参数: {kwargs}"
+            }
+
         # 解析文件路径
         abs_file_path, original_filename = self._resolve_file_path(file_path)
 
@@ -306,62 +321,26 @@ class UploadToRemoteTool(BaseTool):
                 "debug": f"文件路径: {abs_file_path}"
             }
 
-        # 使用指定的文件名或原文件名
         final_filename = filename or original_filename
 
-        # 查找凭据
-        if user_id:
-            credential = RemoteCredentialDB.find_by_path(user_id, remote_path)
-
-            if not credential:
-                # 凭据未配置，返回配置链接
-                credential_link = f"http://localhost:3000/credentials/add?path={remote_path}&type={connection_type}"
-                return {
-                    "success": False,
-                    "error": f"路径 {remote_path} 的凭据未配置",
-                    "debug": f"用户 {user_id} 未配置路径 {remote_path} 的凭据",
-                    "credential_required": True,
-                    "credential_link": credential_link,
-                    "message": f"请点击下方链接配置 {connection_type.upper()} 凭据:\n{credential_link}"
-                }
-
-            # 获取完整凭据（包含解密密码）
-            full_credential = RemoteCredentialDB.get_by_id(credential['credential_id'], user_id)
-            if not full_credential:
-                return {
-                    "success": False,
-                    "error": "凭据获取失败",
-                    "debug": "无法获取凭据详情"
-                }
-
-            # 上传文件
-            if connection_type == 'smb':
-                return SMBUploader.upload(
-                    server_host=full_credential['server_host'],
-                    server_port=full_credential['server_port'],
-                    username=full_credential['username'],
-                    password=full_credential['password'],
-                    remote_path=full_credential['remote_path'],
-                    local_file_path=abs_file_path,
-                    filename=final_filename,
-                    domain=full_credential.get('domain')
-                )
-            else:  # ftp
-                return FTPUploader.upload(
-                    server_host=full_credential['server_host'],
-                    server_port=full_credential['server_port'],
-                    username=full_credential['username'],
-                    password=full_credential['password'],
-                    remote_path=full_credential['remote_path'],
-                    local_file_path=abs_file_path,
-                    filename=final_filename
-                )
+        if connection_type == 'smb':
+            return SMBUploader.upload(
+                server_host=server_host,
+                server_port=server_port,
+                username=username,
+                password=password,
+                remote_path=remote_path,
+                local_file_path=abs_file_path,
+                filename=final_filename,
+                domain=domain
+            )
         else:
-            # 未提供 user_id，返回错误（需要用户凭据）
-            return {
-                "success": False,
-                "error": "需要用户凭据才能上传文件",
-                "debug": "未提供 user_id，无法查找凭据",
-                "credential_required": True,
-                "message": "请提供用户身份信息以查找凭据"
-            }
+            return FTPUploader.upload(
+                server_host=server_host,
+                server_port=server_port,
+                username=username,
+                password=password,
+                remote_path=remote_path,
+                local_file_path=abs_file_path,
+                filename=final_filename
+            )

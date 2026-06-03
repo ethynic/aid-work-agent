@@ -7,17 +7,6 @@
       @toggle-sidebar="handleToggleSidebar"
       @logout="handleLogout"
     >
-      <template #menu-items="{ closeMenu }">
-        <button
-          @click="goToChat(); closeMenu()"
-          class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          返回对话
-        </button>
-      </template>
     </AppHeader>
 
     <div class="flex-1 overflow-y-auto p-6">
@@ -159,11 +148,6 @@ async function handleLogout() {
   await tenantLogout()
   router.push(`/t/${route.params.tenant_id}/login`)
 }
-
-function goToChat() {
-  router.push(`/t/${route.params.tenant_id}/chat`)
-}
-
 const loading = ref(true)
 const selectedMonth = ref(getDefaultMonth())
 const summary = ref<any>(null)

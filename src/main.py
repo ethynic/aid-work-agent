@@ -28,7 +28,7 @@ from src.core.agent_router import agent_router
 from src.core.redis_client import redis_client
 from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
-from src.api import auth, session as session_api, credentials, customer, scheduled_task, email_settings
+from src.api import auth, session as session_api, customer, scheduled_task, email_settings
 from src.api import monitor as monitor_api
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
 from src.api import customer_followup, complaint_handling
@@ -1654,7 +1654,6 @@ async def cancel_chat_generation(session_id: str):
 app.include_router(auth.router)
 app.include_router(session_api.router)
 app.include_router(channels_api.router)
-app.include_router(credentials.router)
 app.include_router(customer.router)
 app.include_router(customer_followup.router)
 app.include_router(complaint_handling.router)

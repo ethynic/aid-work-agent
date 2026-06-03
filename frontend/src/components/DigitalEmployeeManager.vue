@@ -28,17 +28,6 @@
           :is-logged-in="effectiveIsLoggedIn"
           :user="demoUser"
         >
-          <template #menu-items="{ closeMenu }">
-            <button
-              @click="createNew(); closeMenu()"
-              class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-              新建定制
-            </button>
-          </template>
         </AppHeader>
 
         <!-- Content Area -->
@@ -494,22 +483,6 @@ async function selectAgent(item: SubagentListItem) {
   }
 }
 
-function createNew() {
-  selectedAgent.value = null
-  detail.value = null
-  isNewMode.value = true
-  isEditMode.value = true
-  editForm.value = {
-    agent_id: '',
-    name: '',
-    description: '',
-    capabilities: [],
-    tools: { inherit: true, list: [] },
-    skills: { allowed: [] },
-    system_prompt: '',
-  }
-  promptMode.value = 'edit'
-}
 
 function enterEdit() {
   if (!detail.value) return
