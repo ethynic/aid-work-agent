@@ -449,17 +449,20 @@ class WeComKfAdapter(ChannelAdapter):
         if not self.current_open_kfid:
             return {}
         result = await self.api_client.get_customer_info(
-            open_kfid=self.current_open_kfid,
             external_userid=user_id,
         )
         if result.get("errcode", 0) != 0:
             return {}
+        customers = result.get("customer_list") or []
+        if not customers:
+            return {}
+        customer = customers[0]
         return {
-            "user_id": result.get("external_userid", ""),
-            "name": result.get("nickname", ""),
-            "avatar": result.get("avatar", ""),
-            "gender": result.get("gender", 0),
-            "wx_unionid": result.get("unionid", ""),
+            "user_id": customer.get("external_userid", ""),
+            "name": customer.get("nickname", ""),
+            "avatar": customer.get("avatar", ""),
+            "gender": customer.get("gender", 0),
+            "wx_unionid": customer.get("unionid", ""),
         }
 
     # ==================== 签名验证 ====================

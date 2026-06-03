@@ -243,22 +243,23 @@ class WeComKfApiClient:
 
     # ==================== 客户信息 ====================
 
-    async def get_customer_info(self, open_kfid: str, external_userid: str) -> Dict[str, Any]:
+    async def get_customer_info(self, external_userid: str, need_enter_session_context: int = 0) -> Dict[str, Any]:
         """
-        获取客户信息。
+        获取客户信息（批量接口，每次查一个）。
+
+        Args:
+            external_userid: 客户 external_userid
+            need_enter_session_context: 是否需要返回进入会话上下文，0/1
 
         Returns:
             {
                 "errcode": 0,
-                "external_userid": "wmXXX",
-                "nickname": "昵称",
-                "avatar": "头像URL",
-                "gender": 1,
-                ...
+                "customer_list": [{"external_userid": "wmXXX", "nickname": "昵称", "avatar": "...", "gender": 1, "unionid": "..."}],
+                "invalid_external_userid": []
             }
         """
-        body = {"open_kfid": open_kfid, "external_userid": external_userid}
-        return await self._request("POST", "/cgi-bin/kf/customer/get", json_body=body)
+        body = {"external_userid_list": [external_userid], "need_enter_session_context": need_enter_session_context}
+        return await self._request("POST", "/cgi-bin/kf/customer/batchget", json_body=body)
 
     # ==================== 临时素材 ====================
 
