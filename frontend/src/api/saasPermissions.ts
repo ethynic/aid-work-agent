@@ -255,3 +255,77 @@ export async function setSubagentEnvVars(
   if (!res.ok) throw new Error('设置环境变量失败')
   return res.json()
 }
+
+// ==================== 租户配置文件管理 ====================
+
+const CONFIG_FILE_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/tenant/config-file`
+
+export interface ConfigFileStatus {
+  success: boolean
+  configured: boolean
+  filename?: string
+  size?: number
+  updated_at?: number
+}
+
+export async function getConfigFileStatus(tenantId: string, subagentName: string): Promise<ConfigFileStatus> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}/status`, { headers })
+  if (!res.ok) throw new Error('获取配置文件状态失败')
+  return res.json()
+}
+
+export async function uploadConfigFile(tenantId: string, subagentName: string, file: File): Promise<{ success: boolean; message?: string }> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || '上传配置文件失败')
+  }
+  return res.json()
+}
+
+export async function downloadConfigFile(tenantId: string, subagentName: string): Promise<void> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}`, { headers })
+  if (!res.ok) throw new Error('下载配置文件失败')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${subagentName}-api.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function deleteConfigFile(tenantId: string, subagentName: string): Promise<{ success: boolean; message?: string }> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}`, {
+    method: 'DELETE',
+    headers,
+  })
+  if (!res.ok) throw new Error('删除配置文件失败')
+  return res.json()
+}

@@ -1685,6 +1685,9 @@ app.include_router(word_api.router)
 from src.api import subagent_env_var
 app.include_router(subagent_env_var.router)
 
+from src.api import tenant_config_file
+app.include_router(tenant_config_file.router)
+
 # 平台管理报表 API
 from src.api import admin_reports
 app.include_router(admin_reports.router)

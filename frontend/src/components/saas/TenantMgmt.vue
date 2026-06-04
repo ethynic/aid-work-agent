@@ -98,7 +98,7 @@
     <!-- 新增/编辑弹窗 -->
     <div v-if="showFormDialog" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showFormDialog = false"></div>
-      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 p-6">
         <h3 class="text-lg font-bold text-default mb-4">{{ isEdit ? '编辑租户' : '新增租户' }}</h3>
         <!-- 标签页 -->
         <div class="flex border-b border-default mb-4">
@@ -219,6 +219,12 @@
                 class="ml-2 text-xs px-2 py-1 rounded border border-default text-muted hover:text-primary-600 hover:border-primary-400 transition-colors"
                 title="环境变量设置"
               >环境变量</button>
+              <button
+                v-if="selectedAgentIds.includes(agent.agent_id) && configSupportedAgents.includes(agent.agent_id)"
+                @click="openConfigFileDialog(agent)"
+                class="ml-1 text-xs px-2 py-1 rounded border border-default text-muted hover:text-info-600 hover:border-info-400 transition-colors"
+                title="API 配置文件"
+              >API 配置</button>
             </div>
           </div>
           <!-- 实例检查和创建按钮 -->
@@ -314,6 +320,55 @@
       </div>
     </div>
 
+    <!-- API 配置文件弹窗 -->
+    <div v-if="showConfigFileDialog" class="fixed inset-0 z-[60] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showConfigFileDialog = false"></div>
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold text-default">API 配置文件</h3>
+          <span class="text-xs text-muted">{{ configFileAgentName }} · {{ currentTenant?.company_name }}</span>
+        </div>
+
+        <div class="text-xs text-muted mb-3">
+          上传外部系统 API 配置文件（Markdown 格式）。该文件将供 {{ configFileAgentName }} 运行时读取，了解如何调用外部系统接口。
+        </div>
+
+        <!-- 已配置状态 -->
+        <div v-if="configFileStatus?.configured" class="mb-4 p-3 bg-success-50 border border-success-200 rounded-lg">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm text-success-700 font-medium">已配置</div>
+              <div class="text-xs text-muted mt-0.5">
+                {{ configFileStatus.filename }} · {{ (configFileStatus.size / 1024).toFixed(1) }} KB
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="handleDownloadConfigFile" class="text-xs px-3 py-1.5 bg-white border border-default rounded hover:border-primary-400 transition-colors">下载</button>
+              <button @click="handleDeleteConfigFile" class="text-xs px-3 py-1.5 bg-white border border-danger-300 text-danger-600 rounded hover:bg-danger-50 transition-colors">删除</button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="mb-4 p-3 bg-canvas border border-default rounded-lg">
+          <div class="text-sm text-muted">未配置，请上传 API 配置文件</div>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="border-2 border-dashed border-default rounded-lg p-4 text-center hover:border-primary-400 transition-colors cursor-pointer relative"
+          @click="triggerConfigFileInput" @dragover.prevent @drop.prevent="handleConfigFileDrop">
+          <input ref="configFileInputRef" type="file" accept=".md" class="hidden" @change="handleConfigFileSelect" />
+          <div class="text-sm text-muted">点击或拖拽上传 .md 文件</div>
+          <div class="text-xs text-muted mt-1">{{ configFileAgentName ? `${configFileAgentName}.md` : '配置文件' }}</div>
+        </div>
+
+        <div v-if="configFileUploading" class="mt-2 text-xs text-muted">上传中...</div>
+        <div v-if="configFileError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ configFileError }}</div>
+
+        <div class="flex gap-3 mt-6">
+          <button @click="showConfigFileDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 详情弹窗 -->
     <div v-if="showDetailDialog" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showDetailDialog = false"></div>
@@ -396,7 +451,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
-import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, getSubagentEnvVars, setSubagentEnvVars, type AgentItem, type EnvVarItem } from '@/api/saasPermissions'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem } from '@/api/saasPermissions'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -428,6 +483,16 @@ const envVarList = ref<Array<{ name: string; value: string; description: string 
 const loadingEnvVars = ref(false)
 const savingEnvVars = ref(false)
 const envVarError = ref('')
+
+// API 配置文件弹窗
+const configSupportedAgents = ['after-sales', 'order-processing']
+const showConfigFileDialog = ref(false)
+const configFileAgentId = ref('')
+const configFileAgentName = ref('')
+const configFileStatus = ref<{ configured: boolean; filename?: string; size?: number } | null>(null)
+const configFileUploading = ref(false)
+const configFileError = ref('')
+const configFileInputRef = ref<HTMLInputElement | null>(null)
 
 const defaultFormData: TenantFormData = {
   company_name: '',
@@ -629,6 +694,84 @@ async function handleSaveEnvVars() {
     envVarError.value = e.message || '保存失败'
   } finally {
     savingEnvVars.value = false
+  }
+}
+
+// API 配置文件
+async function openConfigFileDialog(agent: AgentItem) {
+  if (!currentTenant.value) return
+  configFileAgentId.value = agent.agent_id
+  configFileAgentName.value = agent.name
+  configFileError.value = ''
+  configFileStatus.value = null
+  showConfigFileDialog.value = true
+  try {
+    const status = await getConfigFileStatus(currentTenant.value.tenant_id, agent.agent_id)
+    configFileStatus.value = status as any
+  } catch (e) {
+    console.error('获取配置文件状态失败:', e)
+  }
+}
+
+function triggerConfigFileInput() {
+  configFileInputRef.value?.click()
+}
+
+function handleConfigFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) doUploadConfigFile(file)
+  input.value = ''
+}
+
+function handleConfigFileDrop(event: DragEvent) {
+  const file = event.dataTransfer?.files?.[0]
+  if (file) doUploadConfigFile(file)
+}
+
+async function doUploadConfigFile(file: File) {
+  if (!currentTenant.value) return
+  if (!file.name.endsWith('.md')) {
+    configFileError.value = '仅支持 .md 文件'
+    return
+  }
+  configFileUploading.value = true
+  configFileError.value = ''
+  try {
+    const res = await uploadConfigFile(currentTenant.value.tenant_id, configFileAgentId.value, file)
+    if (res.success) {
+      toast.success('配置文件上传成功')
+      // 刷新状态
+      const status = await getConfigFileStatus(currentTenant.value.tenant_id, configFileAgentId.value)
+      configFileStatus.value = status as any
+    }
+  } catch (e: any) {
+    configFileError.value = e.message || '上传失败'
+  } finally {
+    configFileUploading.value = false
+  }
+}
+
+async function handleDownloadConfigFile() {
+  if (!currentTenant.value) return
+  try {
+    await downloadConfigFile(currentTenant.value.tenant_id, configFileAgentId.value)
+  } catch (e: any) {
+    toast.error(e.message || '下载失败')
+  }
+}
+
+async function handleDeleteConfigFile() {
+  if (!currentTenant.value) return
+  if (!confirm('确定删除配置文件？')) return
+  try {
+    const res = await deleteConfigFile(currentTenant.value.tenant_id, configFileAgentId.value)
+    if (res.success) {
+      toast.success('配置文件已删除')
+      configFileStatus.value = null
+    }
+  } catch (e: any) {
+    toast.error(e.message || '删除失败')
   }
 }
 
