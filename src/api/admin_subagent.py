@@ -33,7 +33,6 @@ class CreateSubagentRequest(BaseModel):
     agent_id: str = Field(..., description="目录名，如 my-custom-agent")
     name: str = Field(..., description="显示名称")
     description: str = ""
-    capabilities: List[str] = Field(default_factory=list)
     triggers: Dict[str, Any] = Field(default_factory=dict)
     tools: Dict[str, Any] = Field(default_factory=lambda: {"inherit": True})
     skills: Dict[str, Any] = Field(default_factory=dict)
@@ -223,7 +222,6 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "description": config.description,
             "version": config.version,
             "author": config.author,
-            "capabilities": config.capabilities,
             "triggers": config.triggers,
             "tools": config.tools,
             "skills": config.skills,
@@ -296,7 +294,6 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
         config = SubagentConfig(
             name=body.name,
             description=body.description,
-            capabilities=body.capabilities,
             triggers=body.triggers,
             tools=body.tools,
             skills=body.skills,
@@ -348,7 +345,6 @@ async def update_subagent(request: Request, agent_id: str, body: CreateSubagentR
         config = SubagentConfig(
             name=body.name,
             description=body.description,
-            capabilities=body.capabilities,
             triggers=body.triggers,
             tools=body.tools,
             skills=body.skills,
@@ -482,8 +478,7 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
 
 ## 优化方向
 1. **description**：用中文使描述更精准、更专业，突出核心价值和适用场景
-2. **capabilities**：补充遗漏的能力标签，使用英文小写下划线命名
-3. **triggers.file_patterns**：根据智能体用途补充合理的文件触发模式
+2. **triggers.file_patterns**：根据智能体用途补充合理的文件触发模式
 4. **skills.allowed**：根据能力需要补充或调整技能配置
 5. **system_prompt（Markdown body）**：
    - 使用中文优化角色定义和职责描述

@@ -25,7 +25,6 @@ export interface AgentDefinition {
   description: string | null
   version: string
   author: string | null
-  capabilities: string[]
   triggers: Record<string, any>
   tools: Record<string, any>
   skills: Record<string, any>
@@ -105,7 +104,6 @@ export async function createDefinition(data: {
   name: string
   system_prompt: string
   description?: string
-  capabilities?: string[]
   tools?: Record<string, any>
   skills?: Record<string, any>
   context?: Record<string, any>

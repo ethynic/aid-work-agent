@@ -48,7 +48,6 @@ async def list_subagents(request: Request):
                         "agent_id": "main",
                         "name": "CEO智能体",
                         "description": "系统主智能体，具备通用能力和工具",
-                        "capabilities": [],
                         "type": "builtin",
                         "business_pages": []
                     })
@@ -59,7 +58,6 @@ async def list_subagents(request: Request):
                 "agent_id": "main",
                 "name": "CEO智能体",
                 "description": "系统主智能体，具备通用能力和工具",
-                "capabilities": [],
                 "type": "builtin",
                 "business_pages": []
             })
@@ -91,7 +89,6 @@ async def get_subagent_detail(request: Request, agent_id: str):
                 "description": "系统主智能体，具备通用能力和工具",
                 "version": "1.0.0",
                 "author": "system",
-                "capabilities": [],
                 "triggers": {},
                 "tools": {},
                 "skills": {},
@@ -112,7 +109,6 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "description": config.description,
             "version": config.version,
             "author": config.author,
-            "capabilities": config.capabilities,
             "triggers": config.triggers,
             "tools": config.tools,
             "skills": config.skills,

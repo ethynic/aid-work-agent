@@ -228,7 +228,6 @@ class AgentFactory:
             description=row.get("description", ""),
             version=row.get("version", "1.0.0"),
             author=row.get("author"),
-            capabilities=row.get("capabilities", []),
             triggers=row.get("triggers", {}),
             tools=row.get("tools", {}),
             skills=row.get("skills", {}),
@@ -273,7 +272,6 @@ class AgentFactory:
         return {
             "name": config.name,
             "description": config.description,
-            "capabilities": config.capabilities,
             "delegatable_to": config.delegatable_to,
             "allow_delegation": config.allow_delegation,
         }

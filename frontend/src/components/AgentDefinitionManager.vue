@@ -107,22 +107,6 @@
                       class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400"></textarea>
                   </div>
                   <div>
-                    <label class="text-xs text-gray-500 mb-1 block">能力标签</label>
-                    <div class="flex flex-wrap gap-1 mb-1">
-                      <span v-for="(cap, i) in form.capabilities" :key="i"
-                        class="px-2 py-0.5 text-xs bg-info-50 text-info-700 rounded-full flex items-center gap-1">
-                        {{ cap }}
-                        <button @click="form.capabilities.splice(i, 1)" class="text-info-400 hover:text-info-600">&times;</button>
-                      </span>
-                    </div>
-                    <div class="flex gap-1">
-                      <input v-model="newCapability" type="text" placeholder="添加能力标签"
-                        class="flex-1 px-2 py-1 text-xs border border-gray-200 rounded-lg"
-                        @keyup.enter="addCapability" />
-                      <button @click="addCapability" class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg">+</button>
-                    </div>
-                  </div>
-                  <div>
                     <label class="text-xs text-gray-500 mb-1 block">工具配置</label>
                     <div class="bg-gray-50 rounded-lg p-2">
                       <label class="flex items-center gap-2 text-xs text-gray-600 mb-2">
@@ -358,7 +342,6 @@ let toastId = 0
 const form = ref<Record<string, any>>({})
 const toolsInherit = ref(true)
 const additionalTools = ref<string[]>([])
-const newCapability = ref('')
 const newTool = ref('')
 const newSkill = ref('')
 const saving = ref(false)
@@ -429,7 +412,6 @@ function populateForm(data: AgentDefinition) {
     agent_id: data.agent_id,
     name: data.name,
     description: data.description || '',
-    capabilities: [...(data.capabilities || [])],
     skills: { ...data.skills },
     status: data.status || 'active',
   }
@@ -524,7 +506,6 @@ async function saveDefinition() {
     const data: Record<string, any> = {
       name: form.value.name,
       description: form.value.description || null,
-      capabilities: form.value.capabilities,
       tools: { inherit: toolsInherit.value, additional: additionalTools.value },
       skills: form.value.skills,
       status: form.value.status,
@@ -565,14 +546,6 @@ async function doDelete() {
 }
 
 // ============== Capability / Tool / Skill helpers ==============
-function addCapability() {
-  const v = newCapability.value.trim()
-  if (v && !form.value.capabilities.includes(v)) {
-    form.value.capabilities.push(v)
-    newCapability.value = ''
-  }
-}
-
 function addTool() {
   const v = newTool.value.trim()
   if (v && !additionalTools.value.includes(v)) {

@@ -2,8 +2,6 @@ name: test-agent
 description: 测试子智能体
 version: 1.0.0
 author: tester
-capabilities:
-  - 测试能力
 triggers:
   file_patterns:
     - "*.test"

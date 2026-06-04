@@ -91,19 +91,6 @@ class TestSubagentLoading:
         frontmatter, _ = _parse_frontmatter_and_body(SUBAGENT_MD_PATH)
         assert frontmatter["name"] == "竞品研究专家"
 
-    def test_subagent_capabilities(self):
-        """capabilities 包含预期的 4 项能力"""
-        frontmatter, _ = _parse_frontmatter_and_body(SUBAGENT_MD_PATH)
-        expected = [
-            "deep_web_research",
-            "competitor_analysis",
-            "report_generation",
-            "html_report",
-        ]
-        capabilities = frontmatter.get("capabilities", [])
-        for cap in expected:
-            assert cap in capabilities, f"Missing capability: {cap}"
-
     def test_subagent_tools_inherit(self):
         """tools.inherit 为 True"""
         frontmatter, _ = _parse_frontmatter_and_body(SUBAGENT_MD_PATH)
@@ -157,7 +144,6 @@ class TestSubagentLoading:
         assert config.version == "1.0.0"
         assert config.tools.get("inherit") is True
         assert "baidu-search" in config.get_allowed_skills()
-        assert len(config.capabilities) == 4
         assert config.system_prompt  # body should be used as system_prompt
         assert "file_write" in config.system_prompt
 

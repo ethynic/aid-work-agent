@@ -45,7 +45,6 @@ export interface AgentItem {
   agent_id: string
   name: string
   description: string
-  capabilities: string[]
   type: 'builtin' | 'custom'
   business_pages?: any[]
   // 实例相关字段（租户模式下返回实例时包含）

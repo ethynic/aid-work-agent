@@ -838,7 +838,6 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     description     TEXT,
     version         TEXT DEFAULT '1.0.0',
     author          TEXT,
-    capabilities    JSONB DEFAULT '[]',
     triggers        JSONB DEFAULT '{}',
     tools           JSONB DEFAULT '{}',
     skills          JSONB DEFAULT '{}',
@@ -858,6 +857,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id
     ON subagent_definitions (agent_id);
 CREATE INDEX IF NOT EXISTS idx_subagent_def_status
     ON subagent_definitions (status);
+-- 2026-6-4, Phase 3.1 -- 移除 capabilities 字段（不再使用能力标签匹配）
+ALTER TABLE subagent_definitions DROP COLUMN IF EXISTS capabilities;
 
 -- 2026-6-3，数据连接器表，用于数据分析智能体的数据库连接管理
 CREATE TABLE IF NOT EXISTS data_connectors (

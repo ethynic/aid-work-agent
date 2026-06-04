@@ -165,7 +165,7 @@ export async function setLabel(promptId: string, label: string, version: number)
 }
 
 export async function suggestConfig(data: {
-  name: string; description: string; capabilities?: string[]
+  name: string; description: string
 }): Promise<{ success: boolean; data: SuggestConfigResult }> {
   const base = `${import.meta.env.VITE_API_BASE_URL || '/api'}/admin/subagents`
   const response = await fetch(`${base}/suggest-config`, {

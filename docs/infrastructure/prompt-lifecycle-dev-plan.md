@@ -4,7 +4,7 @@
 > 对应调研报告：[prompt-version-management-research.md](../research/prompt-version-management-research.md)
 > 创建日期：2026-06-02
 > 更新日期：2026-06-03（Phase 3 重做：知识库关联配置优先，extra_md 迁移后移至 Phase 4；移除 capabilities 字段）
-> 状态：Phase 2 代码完成，待验证
+> 状态：Phase 2 代码完成，待验证；Phase 3.1 已完成
 
 ---
 
@@ -608,20 +608,23 @@ class SetLabelRequest(BaseModel):
 
 ### 阶段 3.1：移除 capabilities 字段
 
-- [ ] **3.1.1 移除 subagent_definitions 表的 capabilities 列**
+- [x] **3.1.1 移除 subagent_definitions 表的 capabilities 列**
   - `deploy/db_update.sql` 添加 `ALTER TABLE subagent_definitions DROP COLUMN IF EXISTS capabilities;`
   - `deploy/init-postgres.sql` 建表语句移除 `capabilities` 字段
-  - [ ] 未开始
+  - ✅ 已完成
 
-- [ ] **3.1.2 移除代码中的 capabilities 引用**
+- [x] **3.1.2 移除代码中的 capabilities 引用**
   - `src/db/subagent_definition_db.py` — 移除 capabilities 的读写
   - `src/models/subagent.py` — SubagentConfig 移除 capabilities 字段
   - `src/subagents/loader.py` — YAML 解析移除 capabilities
   - `src/subagents/registry.py` — 移除 `_capability_index` 和 `match_by_capability()`
   - `src/core/agent.py` — 移除 `subagent_descriptions` 中的 capabilities 展示
   - `src/subagents/executor.py` — 移除 capabilities 日志
-  - 前端 `AgentDefinitionManager.vue` — 移除 capabilities 编辑区
-  - [ ] 未开始
+  - `src/api/agent_definitions.py`、`src/services/subagent_definition_service.py`、`src/api/admin_subagent.py`、`src/api/subagent.py`、`src/subagents/factory.py`、`src/saas/api/permissions.py` — 移除 capabilities 传递
+  - 前端 `AgentDefinitionManager.vue`、`DigitalEmployeeManager.vue` — 移除 capabilities 编辑区
+  - 前端 `agentDefinitions.ts`、`subagent.ts`、`adminSubagent.ts`、`saasPermissions.ts`、`prompts.ts` — 移除 capabilities 类型定义
+  - 测试 `test_competitor_research.py`、`test_phase2_e2e.py`、`test_subagent.py`、`test-agent.yaml` — 移除 capabilities 引用
+  - ✅ 已完成（单元测试 20/20 PASS，前端无新增 TS 错误）
 
 ### 阶段 3.2：知识库关联配置
 

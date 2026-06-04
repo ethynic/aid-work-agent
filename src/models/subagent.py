@@ -33,10 +33,7 @@ class SubagentConfig(BaseModel):
     description: str = Field(default="", description="智能体描述")
     version: str = Field(default="1.0.0", description="版本号")
     author: str = Field(default="unknown", description="作者")
-    
-    # 能力标签（用于自动匹配）
-    capabilities: List[str] = Field(default_factory=list, description="能力标签列表")
-    
+
     # 触发条件
     triggers: Dict[str, Any] = Field(default_factory=dict, description="触发条件配置")
     # triggers 结构:
