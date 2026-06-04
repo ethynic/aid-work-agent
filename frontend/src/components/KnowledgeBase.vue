@@ -1,8 +1,6 @@
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
-    <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
-      <!-- Session Sidebar - 仅在非PortalLayout子路由时渲染 -->
       <MenuSidebar
         v-if="!isNestedRoute"
         :is-collapsed="isSidebarCollapsed"
@@ -11,58 +9,35 @@
         @collapse="isSidebarCollapsed = true"
       />
 
-      <!-- Right Content Area -->
       <div class="flex-1 flex flex-col min-w-0">
-        <!-- Header Bar -->
         <AppHeader
           title="企业知识库"
           :is-logged-in="effectiveIsLoggedIn"
           :user="effectiveUser"
           @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
           @logout="handleLogout"
-        >
-        </AppHeader>
+        />
 
-        <!-- Main Content Area -->
         <div class="flex-1 overflow-hidden p-6">
-          <div class="max-w-6xl mx-auto h-full flex flex-col">
-            <!-- Toolbar -->
-            <div class="flex items-center justify-between mb-4">
-              <!-- Search -->
-              <div class="relative flex-1 max-w-md">
-                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                <input
-                  v-model="searchQuery"
-                  @input="handleSearchInput"
-                  type="text"
-                  placeholder="搜索文档..."
-                  class="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-800 placeholder-gray-400 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition-all"
-                />
+          <div class="max-w-6xl mx-auto h-full flex flex-col page-container">
+            <div class="page-toolbar">
+              <div class="page-toolbar-left">
+                <BaseInput v-model="searchQuery" placeholder="搜索文档..." size="sm" class="w-80" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
               </div>
-
-              <!-- Upload Button -->
-              <button
-                @click="showUploadModal = true"
-                class="ml-4 flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
-              >
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                上传文档
-              </button>
+              <div class="page-toolbar-right">
+                <BaseButton @click="showUploadModal = true">上传文档</BaseButton>
+              </div>
             </div>
 
-            <!-- Document List -->
-            <div class="flex-1 overflow-hidden bg-white rounded-xl border border-gray-200">
+            <div class="flex-1 overflow-hidden bg-white rounded-xl border border-default">
               <!-- Loading -->
               <div v-if="isLoading" class="flex items-center justify-center h-full">
                 <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <span class="ml-3 text-gray-500">加载中...</span>
+                <span class="ml-3 text-muted">加载中...</span>
               </div>
 
               <!-- Searching -->
@@ -71,7 +46,7 @@
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <span class="ml-3 text-gray-500">搜索中...</span>
+                <span class="ml-3 text-muted">搜索中...</span>
               </div>
 
               <!-- Search Error -->
@@ -80,7 +55,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
                 <p class="text-danger-500 mb-2">搜索失败</p>
-                <p class="text-sm text-gray-400">{{ searchError }}</p>
+                <p class="text-sm text-muted">{{ searchError }}</p>
               </div>
 
               <!-- Search Results Empty -->
@@ -88,27 +63,23 @@
                 <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <p class="text-gray-500 mb-2">未找到匹配的文档</p>
-                <p class="text-sm text-gray-400">尝试其他关键词</p>
+                <p class="text-muted mb-2">未找到匹配的文档</p>
+                <p class="text-sm text-muted">尝试其他关键词</p>
               </div>
 
               <!-- Document List Empty -->
-              <div v-else-if="filteredDocuments.length === 0 && !isSearchMode && !isLoading" class="flex flex-col items-center justify-center h-full">
+              <div v-else-if="documents.length === 0 && !isSearchMode && !isLoading" class="flex flex-col items-center justify-center h-full">
                 <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p class="text-gray-500 mb-2">暂无已上传的文档</p>
-                <p class="text-sm text-gray-400">点击上方按钮上传文档</p>
+                <p class="text-muted mb-2">暂无已上传的文档</p>
+                <p class="text-sm text-muted">点击上方按钮上传文档</p>
               </div>
 
               <!-- Search Results -->
               <div v-else-if="isSearchMode && groupedSearchResults.length > 0" class="h-full overflow-auto p-4">
                 <div class="space-y-4">
-                  <div
-                    v-for="group in groupedSearchResults"
-                    :key="group.chunks[0].doc_id"
-                    class="bg-gray-50 rounded-lg p-4"
-                  >
+                  <div v-for="group in groupedSearchResults" :key="group.chunks[0].doc_id" class="bg-canvas rounded-lg p-4">
                     <div class="flex items-center gap-3 mb-3">
                       <div :class="getFileIconClass('.' + group.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center">
                         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -116,26 +87,16 @@
                         </svg>
                       </div>
                       <div class="flex-1 min-w-0">
-                        <h3
-                          @click="openDocument(group.chunks[0].doc_id)"
-                          class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate"
-                          :title="'点击打开原文: ' + group.title"
-                        >{{ group.title }}</h3>
-                        <p class="text-xs text-gray-500">{{ group.chunks.length }} 个相关片段</p>
+                        <h3 @click="openDocument(group.chunks[0].doc_id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate" :title="'点击打开原文: ' + group.title">{{ group.title }}</h3>
+                        <p class="text-xs text-muted">{{ group.chunks.length }} 个相关片段</p>
                       </div>
                     </div>
                     <div class="space-y-2">
-                      <div
-                        v-for="(chunk, _idx) in group.chunks.slice(0, 3)"
-                        :key="chunk.chunk_id"
-                        class="bg-white rounded p-3 text-sm text-gray-600 border border-gray-100"
-                      >
+                      <div v-for="(chunk, _idx) in group.chunks.slice(0, 3)" :key="chunk.chunk_id" class="bg-white rounded p-3 text-sm text-default border border-default">
                         <p class="line-clamp-3">{{ chunk.text }}</p>
                         <p class="text-xs text-primary-500 mt-1">相关度: {{ (chunk.score * 100).toFixed(1) }}%</p>
                       </div>
-                      <p v-if="group.chunks.length > 3" class="text-xs text-gray-400 text-center">
-                        还有 {{ group.chunks.length - 3 }} 个相关片段...
-                      </p>
+                      <p v-if="group.chunks.length > 3" class="text-xs text-muted text-center">还有 {{ group.chunks.length - 3 }} 个相关片段...</p>
                     </div>
                   </div>
                 </div>
@@ -143,130 +104,41 @@
 
               <!-- Table -->
               <div v-else class="h-full flex flex-col">
-                <div class="flex-1 overflow-auto">
-                <table class="w-full">
-                  <thead class="sticky top-0 bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">序号</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">文档名称</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-96">摘要</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">大小</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分块数</th>
-                      <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">上传时间</th>
-                      <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody class="divide-y divide-gray-100">
-                    <tr
-                      v-for="(doc, index) in filteredDocuments"
-                      :key="doc.id"
-                      class="hover:bg-gray-50 transition-colors"
-                    >
-                      <td class="px-6 py-4 text-sm text-gray-500">{{ (currentPage - 1) * pageSize + index + 1 }}</td>
-                      <td class="px-6 py-4">
-                        <div class="flex items-center gap-3">
-                          <!-- File Icon -->
-                          <div :class="getFileIconClass(doc.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
-                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                          </div>
-                          <div class="flex-1 min-w-0">
-                            <span
-                              @click="openDocument(doc.id)"
-                              class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block"
-                              :title="'点击打开原文: ' + doc.title"
-                            >{{ doc.title }}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td class="px-6 py-4">
-                        <p
-                          v-if="doc.summary"
-                          class="text-sm text-gray-600 line-clamp-2"
-                          :title="doc.summary"
-                        >{{ doc.summary }}</p>
-                        <p v-else class="text-sm text-gray-400">-</p>
-                      </td>
-                      <td class="px-6 py-4">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 uppercase">
-                          {{ doc.file_type.replace('.', '') }}
-                        </span>
-                      </td>
-                      <td class="px-6 py-4 text-sm text-gray-600">{{ formatFileSize(doc.file_size) }}</td>
-                      <td class="px-6 py-4 text-sm text-gray-600">{{ doc.total_chunks }}</td>
-                      <td class="px-6 py-4 text-sm text-gray-600">{{ formatTime(doc.created_at) }}</td>
-                      <td class="px-6 py-4 text-right">
-                        <button
-                          @click="handleDelete(doc)"
-                          class="p-2 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded-lg transition-colors"
-                          title="删除"
-                        >
-                          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                <div class="flex-1 overflow-auto table-scroll-wrapper">
+                  <BaseTable :columns="columns" :data="documents" row-key="id">
+                    <template #index="{ index }">{{ seqNumber(index) }}</template>
+                    <template #title="{ row }">
+                      <div class="flex items-center gap-3">
+                        <div :class="getFileIconClass(row.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
+                          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                           </svg>
-                        </button>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                        </div>
+                        <span @click="openDocument(row.id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block" :title="'点击打开原文: ' + row.title">{{ row.title }}</span>
+                      </div>
+                    </template>
+                    <template #summary="{ row }">
+                      <p v-if="row.summary" class="text-sm text-default line-clamp-2" :title="row.summary">{{ row.summary }}</p>
+                      <p v-else class="text-sm text-muted">-</p>
+                    </template>
+                    <template #file_type="{ row }">
+                      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-default uppercase">{{ row.file_type.replace('.', '') }}</span>
+                    </template>
+                    <template #file_size="{ row }">{{ formatFileSize(row.file_size) }}</template>
+                    <template #total_chunks="{ row }">{{ row.total_chunks }}</template>
+                    <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
+                    <template #actions="{ row }">
+                      <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
+                    </template>
+                  </BaseTable>
                 </div>
 
-                <!-- Pagination -->
-                <div v-if="totalDocuments > pageSize" class="flex-shrink-0 flex items-center justify-between px-6 py-3 border-t border-gray-200 bg-gray-50">
-                  <span class="text-sm text-gray-500">
-                    共 {{ totalDocuments }} 篇文档，第 {{ currentPage }}/{{ totalPages }} 页
-                  </span>
-                  <div class="flex items-center gap-1">
-                    <button
-                      @click="goToPage(1)"
-                      :disabled="currentPage === 1"
-                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
-                    >
-                      首页
-                    </button>
-                    <button
-                      @click="goToPage(currentPage - 1)"
-                      :disabled="currentPage === 1"
-                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-                      </svg>
-                    </button>
-                    <template v-for="page in totalPages" :key="page">
-                      <button
-                        v-if="shouldShowPage(page)"
-                        @click="goToPage(page)"
-                        :class="[
-                          'min-w-[32px] px-2 py-1.5 text-sm rounded transition-colors',
-                          page === currentPage
-                            ? 'bg-primary-600 text-white'
-                            : 'text-gray-600 hover:bg-gray-200'
-                        ]"
-                      >
-                        {{ page }}
-                      </button>
-                    </template>
-                    <button
-                      @click="goToPage(currentPage + 1)"
-                      :disabled="currentPage === totalPages"
-                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                      </svg>
-                    </button>
-                    <button
-                      @click="goToPage(totalPages)"
-                      :disabled="currentPage === totalPages"
-                      class="px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
-                    >
-                      末页
-                    </button>
-                  </div>
-                </div>
+                <BasePagination
+                  v-if="totalDocuments > pageSize"
+                  :total="totalDocuments"
+                  v-model:current-page="currentPage"
+                  :page-size="pageSize"
+                />
               </div>
             </div>
           </div>
@@ -275,18 +147,11 @@
     </main>
 
     <!-- Upload Modal -->
-    <div
-      v-if="showUploadModal"
-      class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-      @click.self="showUploadModal = false"
-    >
+    <div v-if="showUploadModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" @click.self="showUploadModal = false">
       <div class="bg-white rounded-2xl w-full max-w-lg mx-4 shadow-2xl">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <h2 class="text-sm font-semibold text-gray-800">上传文档</h2>
-          <button
-            @click="showUploadModal = false"
-            class="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-          >
+        <div class="flex items-center justify-between px-6 py-4 border-b border-default">
+          <h2 class="text-sm font-semibold text-default">上传文档</h2>
+          <button @click="showUploadModal = false" class="p-2 text-muted hover:text-default hover:bg-surface-hover rounded-lg transition-colors">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -294,38 +159,25 @@
         </div>
 
         <div class="p-6">
-          <!-- Drop Zone -->
-          <div
-            @dragover.prevent="isDragging = true"
-            @dragleave.prevent="isDragging = false"
-            @drop.prevent="handleDrop"
-            :class="[
-              'border-2 border-dashed rounded-xl p-8 text-center transition-all',
-              isDragging ? 'border-primary-500 bg-primary-50' : 'border-gray-300 hover:border-gray-400'
-            ]"
-          >
-            <input
-              ref="fileInputRef"
-              type="file"
-              multiple
+          <div @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop"
+            :class="['border-2 border-dashed rounded-xl p-8 text-center transition-all', isDragging ? 'border-primary-500 bg-primary-50' : 'border-default hover:border-hover']">
+            <input ref="fileInputRef" type="file" multiple
               accept=".docx,.xlsx,.pptx,.pdf,.txt,.md,.json,.yaml,.yml,.log,.csv,.xml,.ini,.properties,.conf,.config"
-              @change="handleFileSelect"
-              class="hidden"
-            />
+              @change="handleFileSelect" class="hidden" />
 
-            <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg v-if="selectedFiles.length === 0" class="w-12 h-12 mx-auto text-muted mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
 
             <div v-if="selectedFiles.length === 0" class="space-y-2">
-              <p class="text-gray-600 font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
-              <p class="text-sm text-gray-400">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
-              <p class="text-xs text-gray-400">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
+              <p class="text-default font-medium">拖拽文件到此处，或<span @click="fileInputRef?.click()" class="text-primary-600 hover:text-primary-500 cursor-pointer">点击选择</span></p>
+              <p class="text-sm text-muted">支持多文件上传，单文件不超过 {{ MAX_FILE_SIZE_MB }}MB</p>
+              <p class="text-xs text-muted">支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config 等</p>
             </div>
 
             <div v-else class="space-y-3">
               <div class="space-y-2 max-h-48 overflow-y-auto">
-                <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 rounded-lg">
+                <div v-for="(file, index) in selectedFiles" :key="index" class="flex items-center justify-between gap-3 px-3 py-2 bg-canvas rounded-lg">
                   <div class="flex items-center gap-3 min-w-0 flex-1">
                     <div :class="getFileIconClassByExt(file.name)" class="w-8 h-8 rounded flex items-center justify-center flex-shrink-0">
                       <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -333,14 +185,11 @@
                       </svg>
                     </div>
                     <div class="text-left min-w-0 flex-1">
-                      <p class="text-gray-800 font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
-                      <p class="text-xs text-gray-400">{{ formatFileSize(file.size) }}</p>
+                      <p class="text-default font-medium text-sm truncate" :title="file.name">{{ file.name }}</p>
+                      <p class="text-xs text-muted">{{ formatFileSize(file.size) }}</p>
                     </div>
                   </div>
-                  <button
-                    @click.stop="removeFile(index)"
-                    class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded flex-shrink-0"
-                  >
+                  <button @click.stop="removeFile(index)" class="p-1 text-muted hover:text-default hover:bg-surface-hover rounded flex-shrink-0">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
@@ -348,18 +197,12 @@
                 </div>
               </div>
               <div class="flex items-center justify-between">
-                <p class="text-sm text-gray-500">已选择 {{ selectedFiles.length }} 个文件</p>
-                <button
-                  @click.stop="clearFiles"
-                  class="text-sm text-gray-500 hover:text-gray-700"
-                >
-                  清空全部
-                </button>
+                <p class="text-sm text-muted">已选择 {{ selectedFiles.length }} 个文件</p>
+                <button @click.stop="clearFiles" class="text-sm text-muted hover:text-default">清空全部</button>
               </div>
             </div>
           </div>
 
-          <!-- Error Messages -->
           <div v-if="uploadError" class="mt-3 p-3 bg-danger-50 rounded-lg">
             <p class="text-sm text-danger-500">{{ uploadError }}</p>
           </div>
@@ -374,64 +217,34 @@
           </div>
         </div>
 
-        <div class="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
-          <button
-            @click="handleCancelUpload"
-            class="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded-lg transition-colors"
-          >
-            取消
-          </button>
-          <button
-            @click="handleUpload"
-            :disabled="selectedFiles.length === 0 || isUploading"
-            class="px-4 py-2 bg-primary-600 hover:bg-primary-500 disabled:bg-primary-400 text-white rounded-lg transition-colors flex items-center gap-2"
-          >
-            <svg v-if="isUploading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
+        <div class="flex justify-end gap-3 px-6 py-4 border-t border-default bg-canvas rounded-b-2xl">
+          <BaseButton intent="secondary" @click="handleCancelUpload">取消</BaseButton>
+          <BaseButton :disabled="selectedFiles.length === 0 || isUploading" @click="handleUpload">
             {{ uploadButtonText }}
-          </button>
+          </BaseButton>
         </div>
       </div>
     </div>
 
     <!-- Delete Confirmation Modal -->
-    <div
-      v-if="documentToDelete"
-      class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-      @click.self="documentToDelete = null"
-    >
-      <div class="bg-white rounded-2xl w-full max-w-md mx-4 shadow-2xl p-6">
-        <div class="flex items-center gap-4 mb-4">
+    <BaseModal v-model="showDeleteConfirm" title="删除文档" size="md">
+      <template v-if="documentToDelete">
+        <div class="flex items-center gap-4">
           <div class="w-12 h-12 rounded-full bg-danger-100 flex items-center justify-center">
             <svg class="w-6 h-6 text-danger-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
           <div>
-            <h3 class="text-sm font-semibold text-gray-800">删除文档</h3>
-            <p class="text-sm text-gray-500">确定要删除"{{ documentToDelete.title }}"吗？此操作不可恢复。</p>
+            <p class="text-sm text-default">确定要删除"{{ documentToDelete.title }}"吗？此操作不可恢复。</p>
           </div>
         </div>
-        <div class="flex justify-end gap-3">
-          <button
-            @click="documentToDelete = null"
-            class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            取消
-          </button>
-          <button
-            @click="confirmDelete"
-            :disabled="isDeleting"
-            class="px-4 py-2 bg-danger-600 hover:bg-danger-500 disabled:bg-danger-400 text-white rounded-lg transition-colors"
-          >
-            {{ isDeleting ? '删除中...' : '删除' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
+      </template>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showDeleteConfirm = false">取消</BaseButton>
+        <BaseButton intent="danger" :disabled="isDeleting" @click="confirmDelete">{{ isDeleting ? '删除中...' : '删除' }}</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -441,6 +254,12 @@ import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
+import { usePageContext } from '@/composables/usePageContext'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem, type BatchUploadError } from '@/api/knowledge'
@@ -454,12 +273,10 @@ const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout }
 
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
 
-// 统一的登录状态检查
 const effectiveIsLoggedIn = computed(() => {
   return isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value
 })
 
-// 统一的用户信息
 const effectiveUser = computed(() => {
   if (isTenantMode.value) {
     return tenantAdmin.value ? {
@@ -471,6 +288,17 @@ const effectiveUser = computed(() => {
   return demoUser.value
 })
 const toast = useToast()
+
+const columns = [
+  { key: 'index', label: '序号', width: '60px' },
+  { key: 'title', label: '文档名称', width: '260px' },
+  { key: 'summary', label: '摘要', width: '380px' },
+  { key: 'file_type', label: '类型' },
+  { key: 'file_size', label: '大小' },
+  { key: 'total_chunks', label: '分块数' },
+  { key: 'created_at', label: '上传时间' },
+  { key: 'actions', label: '操作', width: '80px' },
+]
 
 const documents = ref<DocumentResponse[]>([])
 const isLoading = ref(false)
@@ -485,75 +313,51 @@ const isUploading = ref(false)
 const uploadError = ref('')
 const uploadErrors = ref<BatchUploadError[]>([])
 const documentToDelete = ref<DocumentResponse | null>(null)
+const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
 
-// 串行上传进度追踪
 const uploadProgress = ref({
   total: 0,
   current: 0,
   currentFileName: ''
 })
 
-// 文件大小限制（从环境变量读取，默认 50MB）
 const MAX_FILE_SIZE = (import.meta.env.VITE_MAX_KNOWLEDGE_FILE_SIZE || 50) * 1024 * 1024
 const MAX_FILE_SIZE_MB = Math.round(MAX_FILE_SIZE / 1024 / 1024)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
-// Pagination state
-const currentPage = ref(1)
-const pageSize = ref(10)
-const totalDocuments = ref(0)
-
-// Layout state
 const isSidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
-
-// 判断是否为嵌套路由（作为PortalLayout的子路由）
-// 如果路由路径以 /t/ 开头，说明被PortalLayout包裹，不需要自己渲染MenuSidebar
 const isNestedRoute = computed(() => route.path.startsWith('/t/'))
-
-// 可用的数字员工列表
 const availableSubagents = ref<SubagentListItem[]>([])
 
-// 当前选中的子智能体ID（从路由获取）
 const currentSubagentId = computed(() => {
   const segments = route.path.split('/').filter(p => p)
-  // 租户模式：segments = ['t', 'tenantId', ...]
   if (segments[0] === 't' && segments.length >= 3) {
     if (segments[2] === 'chat' && segments.length >= 4) {
-      // 格式: /t/:tenantId/chat/:subagentId
       return segments[3]
     }
-    // 格式: /t/:tenantId/:subagentId/* （业务数据页面）
     return segments[2]
   }
-  // 非租户模式：匹配 /chat/:subagentId 或 /:subagentId/*
   if (segments.length >= 1) {
     if (segments[0] === 'chat' && segments.length >= 2) {
-      // 格式: /chat/:subagentId
       return segments[1]
     }
-    // 格式: /:subagentId/* （业务数据页面）
     return segments[0]
   }
   return undefined
 })
 
-// 加载数字员工列表
 async function loadAvailableSubagents() {
   try {
-    // 租户模式下使用 allowed-agents 接口，非租户模式使用 listSubagents
     let res
     if (isTenantMode.value) {
       res = await getMyAllowedAgents()
     } else {
-      // 非租户模式仍使用 listSubagents
       const { listSubagents } = await import('@/api/subagent')
       res = await listSubagents()
     }
-
     if (res.success && res.data) {
-      // 后端已返回完整格式，直接使用
       availableSubagents.value = res.data as SubagentListItem[]
     }
   } catch (e) {
@@ -561,10 +365,12 @@ async function loadAvailableSubagents() {
   }
 }
 
-// 分页总页数
-const totalPages = computed(() => Math.ceil(totalDocuments.value / pageSize.value) || 1)
+const totalDocuments = ref(0)
+const { currentPage, pageSize, seqNumber } =
+  usePageContext(async () => {
+    await loadDocuments()
+  })
 
-// 上传按钮文本
 const uploadButtonText = computed(() => {
   if (isUploading.value) {
     const progress = uploadProgress.value
@@ -576,32 +382,18 @@ const uploadButtonText = computed(() => {
   return `上传 (${selectedFiles.value.length})`
 })
 
-// Filtered documents based on search
-const filteredDocuments = computed(() => {
-  if (!searchQuery.value.trim()) {
-    return documents.value
-  }
-  // 搜索模式下返回空（显示搜索结果）
-  return []
-})
-
-// 判断是否处于搜索模式
 const isSearchMode = computed(() => searchQuery.value.trim().length > 0)
 
-// 防抖定时器
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-// 执行搜索
 async function performSearch(query: string) {
   if (!query.trim()) {
     searchResults.value = []
     searchError.value = ''
     return
   }
-
   isSearching.value = true
   searchError.value = ''
-
   try {
     const result = await searchDocuments(query)
     if (result.success) {
@@ -619,7 +411,6 @@ async function performSearch(query: string) {
   }
 }
 
-// 监听搜索输入（防抖）
 function handleSearchInput() {
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer)
@@ -633,7 +424,16 @@ function handleSearchInput() {
   }, 300)
 }
 
-// 按文档分组搜索结果，按相关度从高到低排列
+function clearSearch() {
+  searchQuery.value = ''
+  searchResults.value = []
+  searchError.value = ''
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+}
+
 const groupedSearchResults = computed(() => {
   const groups: Record<number, { title: string; file_type: string; chunks: SearchResultItem[]; maxScore: number }> = {}
   for (const result of searchResults.value) {
@@ -646,12 +446,10 @@ const groupedSearchResults = computed(() => {
       }
     }
     groups[result.doc_id].chunks.push(result)
-    // 跟踪该文档的最高分
     if (result.score > groups[result.doc_id].maxScore) {
       groups[result.doc_id].maxScore = result.score
     }
   }
-  // 按文档最高分从高到低排序，同文档内 chunks 也按分数降序排列
   return Object.values(groups)
     .map(group => ({
       ...group,
@@ -660,7 +458,6 @@ const groupedSearchResults = computed(() => {
     .sort((a, b) => b.maxScore - a.maxScore)
 })
 
-// Load documents
 async function loadDocuments() {
   isLoading.value = true
   try {
@@ -674,25 +471,8 @@ async function loadDocuments() {
   }
 }
 
-// 翻页
-function goToPage(page: number) {
-  if (page < 1 || page > totalPages.value) return
-  currentPage.value = page
-  loadDocuments()
-}
-
-// 判断页码是否显示（总页数 <= 7 全部显示，否则只显示首尾和当前页附近的）
-function shouldShowPage(page: number): boolean {
-  if (totalPages.value <= 7) return true
-  if (page === 1 || page === totalPages.value) return true
-  if (Math.abs(page - currentPage.value) <= 1) return true
-  return false
-}
-
-// 允许的文件扩展名
 const ALLOWED_EXTENSIONS = ['.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.md', '.json', '.yaml', '.yml', '.log', '.csv', '.xml', '.ini', '.properties', '.conf', '.config']
 
-// 验证单个文件
 function validateFile(file: File): { valid: boolean; error?: string } {
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
   if (!ALLOWED_EXTENSIONS.includes(ext)) {
@@ -704,18 +484,15 @@ function validateFile(file: File): { valid: boolean; error?: string } {
   return { valid: true }
 }
 
-// 处理文件选择
 function handleFileSelect(event: Event) {
   const input = event.target as HTMLInputElement
   if (input.files && input.files.length > 0) {
     const newFiles: File[] = []
     const errors: string[] = []
-
     for (let i = 0; i < input.files.length; i++) {
       const file = input.files[i]
       const validation = validateFile(file)
       if (validation.valid) {
-        // 避免重复添加
         if (!selectedFiles.value.some(f => f.name === file.name && f.size === file.size)) {
           newFiles.push(file)
         }
@@ -723,26 +500,22 @@ function handleFileSelect(event: Event) {
         errors.push(`${file.name}: ${validation.error}`)
       }
     }
-
     if (newFiles.length > 0) {
       selectedFiles.value = [...selectedFiles.value, ...newFiles]
       uploadError.value = ''
       uploadErrors.value = []
     }
-
     if (errors.length > 0) {
       uploadError.value = errors.join('；')
     }
   }
 }
 
-// 处理拖拽
 function handleDrop(event: DragEvent) {
   isDragging.value = false
   if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
     const newFiles: File[] = []
     const errors: string[] = []
-
     for (let i = 0; i < event.dataTransfer.files.length; i++) {
       const file = event.dataTransfer.files[i]
       const validation = validateFile(file)
@@ -754,50 +527,41 @@ function handleDrop(event: DragEvent) {
         errors.push(`${file.name}: ${validation.error}`)
       }
     }
-
     if (newFiles.length > 0) {
       selectedFiles.value = [...selectedFiles.value, ...newFiles]
       uploadError.value = ''
       uploadErrors.value = []
     }
-
     if (errors.length > 0) {
       uploadError.value = errors.join('；')
     }
   }
 }
 
-// 移除单个文件
 function removeFile(index: number) {
   selectedFiles.value.splice(index, 1)
 }
 
-// 清空所有文件
 function clearFiles() {
   selectedFiles.value = []
   uploadError.value = ''
   uploadErrors.value = []
 }
 
-// 取消上传
 function handleCancelUpload() {
   clearFiles()
   showUploadModal.value = false
 }
 
-// 处理批量上传（串行模式，1个1个传，配合服务器带宽限制）
 async function handleUpload() {
   if (selectedFiles.value.length === 0) return
-
   isUploading.value = true
   uploadError.value = ''
   uploadErrors.value = []
 
-  // 保存要上传的文件列表，然后清空 selectedFiles，防止用户重复添加
   const filesToUpload = [...selectedFiles.value]
   const totalFiles = filesToUpload.length
 
-  // 初始化进度
   uploadProgress.value = {
     total: totalFiles,
     current: 0,
@@ -808,47 +572,27 @@ async function handleUpload() {
   const errorResults: BatchUploadError[] = []
 
   try {
-    // 串行上传，1个1个传
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i]
       uploadProgress.value.current = i + 1
       uploadProgress.value.currentFileName = file.name
 
       try {
-        // 调用单文件上传接口
         const result = await uploadDocument(file)
         successResults.push(result)
-
-        // 每上传成功一个，就刷新一次列表，让用户马上能看到
         await loadDocuments()
       } catch (error: any) {
         const errorMsg = error.response?.data?.error || error.message || '上传失败'
-        errorResults.push({
-          filename: file.name,
-          error: errorMsg
-        })
+        errorResults.push({ filename: file.name, error: errorMsg })
       }
     }
 
     showUploadModal.value = false
-
-    // 清除搜索状态，回到文档列表视图
-    searchQuery.value = ''
-    searchResults.value = []
-    searchError.value = ''
-    if (searchDebounceTimer) {
-      clearTimeout(searchDebounceTimer)
-      searchDebounceTimer = null
-    }
-
-    // 清空选择
+    clearSearch()
     selectedFiles.value = []
-
-    // 翻回第一页，刷新列表
     currentPage.value = 1
     await loadDocuments()
 
-    // 显示结果
     if (successResults.length > 0) {
       if (successResults.length === totalFiles) {
         toast.success('全部 ' + successResults.length + ' 个文件上传成功')
@@ -866,28 +610,22 @@ async function handleUpload() {
     toast.error(errorMsg)
   } finally {
     isUploading.value = false
-    // 重置进度
-    uploadProgress.value = {
-      total: 0,
-      current: 0,
-      currentFileName: ''
-    }
+    uploadProgress.value = { total: 0, current: 0, currentFileName: '' }
   }
 }
 
-// Handle delete
-function handleDelete(doc: DocumentResponse) {
+function handleDelete(doc: any) {
   documentToDelete.value = doc
+  showDeleteConfirm.value = true
 }
 
 async function confirmDelete() {
   if (!documentToDelete.value) return
-
   isDeleting.value = true
   try {
     await deleteDocument(documentToDelete.value.id)
+    showDeleteConfirm.value = false
     documentToDelete.value = null
-    // 如果当前页已无数据且不是第一页，则回到上一页
     if (documents.value.length === 1 && currentPage.value > 1) {
       currentPage.value--
     }
@@ -900,7 +638,6 @@ async function confirmDelete() {
   }
 }
 
-// Format file size
 function formatFileSize(bytes: number | null): string {
   if (bytes === null || bytes === 0) return '-'
   if (bytes < 1024) return bytes + ' B'
@@ -908,10 +645,8 @@ function formatFileSize(bytes: number | null): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-// Format time
 function formatTime(isoString: string): string {
   if (!isoString) return '-'
-  // 直接解析 ISO 字符串，JavaScript 会正确处理本地时间（不带 Z 的格式）
   const date = new Date(isoString)
   const year = date.getFullYear()
   const month = date.getMonth() + 1
@@ -921,7 +656,6 @@ function formatTime(isoString: string): string {
   return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes
 }
 
-// Get file icon class based on type
 function getFileIconClass(fileType: string): string {
   const ext = fileType.toLowerCase()
   if (ext === 'pdf' || ext === '.pdf') return 'bg-danger-500'
@@ -931,20 +665,15 @@ function getFileIconClass(fileType: string): string {
   return 'bg-gray-500'
 }
 
-// 根据文件名获取图标类（用于多文件上传显示）
 function getFileIconClassByExt(filename: string): string {
   const ext = '.' + filename.split('.').pop()?.toLowerCase()
   return getFileIconClass(ext)
 }
 
-// 打开原始文档（新窗口）
 function openDocument(docId: number) {
   const url = getDocumentDownloadUrl(docId)
   window.open(url, '_blank')
 }
-
-// Navigation functions
-// (removed - menu moved to MenuSidebar)
 
 async function handleLogout() {
   if (isTenantMode.value) {

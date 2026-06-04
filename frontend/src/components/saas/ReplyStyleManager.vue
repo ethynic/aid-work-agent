@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div class="page-container bg-canvas">
     <AppHeader
       title="回复风格"
       :is-logged-in="effectiveIsLoggedIn"
@@ -8,26 +8,30 @@
       @logout="handleLogout"
     />
 
-    <div class="flex-1 overflow-y-auto p-6">
+    <div class="page-content p-6">
       <!-- 操作栏 -->
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-2">
+      <div class="page-toolbar">
+        <div class="page-toolbar-left">
           <BaseInput
             v-model="searchQuery"
             placeholder="搜索风格名称..."
             size="sm"
-            class="w-64"
-            @input="filterStyles"
+            class="w-80"
+            @keyup.enter="searchQuery = searchQuery"
           />
+          <BaseButton size="sm" @click="searchQuery = searchQuery">搜索</BaseButton>
         </div>
-        <BaseButton size="sm" @click="openCreate">新增风格</BaseButton>
+        <div class="page-toolbar-right">
+          <BaseButton @click="openCreate">新增风格</BaseButton>
+        </div>
       </div>
 
       <!-- 风格列表 -->
-      <BaseTable :columns="columns" :data="filteredStyles" row-key="style_id">
-        <template #col-index="{ index }">
-          {{ index + 1 }}
-        </template>
+      <div class="table-scroll-wrapper">
+        <BaseTable :columns="columns" :data="filteredStyles" row-key="style_id">
+          <template #col-index="{ index }">
+            {{ index + 1 }}
+          </template>
         <template #col-name="{ row }">
           <div>
             <span class="text-default font-medium">{{ row.name }}</span>
@@ -52,6 +56,7 @@
           <div class="text-center py-8 text-muted">暂无回复风格</div>
         </template>
       </BaseTable>
+      </div>
     </div>
 
     <!-- 新增/编辑弹窗 -->
@@ -59,28 +64,25 @@
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">风格标识 <span class="text-danger-500">*</span></label>
-          <input
+          <BaseInput
             v-model="editorForm.style_id"
             :disabled="editorMode !== 'create'"
-            :class="inputClass"
             placeholder="如 professional（创建后不可修改）"
           />
         </div>
         <div>
           <label class="text-sm text-muted mb-1 block">风格名称 <span class="text-danger-500">*</span></label>
-          <input
+          <BaseInput
             v-model="editorForm.name"
             :disabled="editorMode === 'view'"
-            :class="inputClass"
             placeholder="如 专业助手"
           />
         </div>
         <div>
           <label class="text-sm text-muted mb-1 block">风格描述</label>
-          <input
+          <BaseInput
             v-model="editorForm.description"
             :disabled="editorMode === 'view'"
-            :class="inputClass"
             placeholder="简短描述风格特点"
           />
         </div>
@@ -175,8 +177,6 @@ const filteredStyles = computed(() => {
   )
 })
 
-function filterStyles() {}
-
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'name', label: '名称' },
@@ -184,8 +184,6 @@ const columns = [
   { key: 'version', label: '版本', width: '80px' },
   { key: 'actions', label: '操作', width: '220px' },
 ]
-
-const inputClass = 'w-full px-3 py-2 bg-surface-hover border border-default rounded-lg text-default focus:outline-none focus:border-primary-400'
 
 // 编辑器
 const showEditor = ref(false)

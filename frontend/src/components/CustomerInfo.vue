@@ -1,175 +1,137 @@
 <template>
-  <div class="customer-info-container">
-    <!-- 头部 -->
-    <div class="header">
-      <button v-if="false" class="back-btn" @click="goBack">
-        <span>←</span> 返回
-      </button>
-      <h1>📋 外贸客户信息</h1>
-      <div class="header-actions">
-        <button class="refresh-btn" @click="loadData" :disabled="loading">
+  <div class="page-container">
+    <div class="page-toolbar">
+      <div class="page-toolbar-left">
+        <h2 class="m-0 text-lg">外贸客户信息</h2>
+      </div>
+      <div class="page-toolbar-right">
+        <BaseButton size="sm" :disabled="loading" @click="loadData">
           {{ loading ? '加载中...' : '刷新' }}
-        </button>
+        </BaseButton>
       </div>
     </div>
 
     <!-- 统计卡片 -->
-    <div v-if="stats" class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.total_customers }}</div>
-        <div class="stat-label">匹配客户总数</div>
+    <div v-if="stats" class="grid grid-cols-4 gap-4 mb-4">
+      <div class="rounded-xl border border-default bg-surface p-4 text-center">
+        <div class="text-2xl font-bold text-default tabular-nums">{{ stats.total_customers }}</div>
+        <div class="text-sm text-muted mt-1">匹配客户总数</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.success_emails }}</div>
-        <div class="stat-label">成功发送邮件</div>
+      <div class="rounded-xl border border-default bg-surface p-4 text-center">
+        <div class="text-2xl font-bold text-success-600 tabular-nums">{{ stats.success_emails }}</div>
+        <div class="text-sm text-muted mt-1">成功发送邮件</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.failed_emails }}</div>
-        <div class="stat-label">发送失败</div>
+      <div class="rounded-xl border border-default bg-surface p-4 text-center">
+        <div class="text-2xl font-bold text-danger-600 tabular-nums">{{ stats.failed_emails }}</div>
+        <div class="text-sm text-muted mt-1">发送失败</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.recent_customers }}</div>
-        <div class="stat-label">本周新增客户</div>
+      <div class="rounded-xl border border-default bg-surface p-4 text-center">
+        <div class="text-2xl font-bold text-info-600 tabular-nums">{{ stats.recent_customers }}</div>
+        <div class="text-sm text-muted mt-1">本周新增客户</div>
       </div>
-    </div>
-
-    <!-- 加载状态 -->
-    <div v-if="loading" class="loading">
-      <div class="spinner"></div>
-      <p>加载客户信息中...</p>
     </div>
 
     <!-- 错误提示 -->
-    <div v-else-if="error" class="error-message">
-      <p>❌ {{ error }}</p>
-      <p v-if="debug" class="debug-info">{{ debug }}</p>
+    <div v-if="error" class="mb-4 p-4 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">
+      <p class="m-0">加载客户信息失败</p>
+      <p v-if="debug" class="mt-2 text-xs text-danger-700">{{ debug }}</p>
     </div>
 
-    <!-- 客户列表 - 表格形式 -->
-    <div v-else-if="customers.length > 0" class="customer-table-section">
-      <div class="table-header">
-        <h2>📋 匹配客户列表 ({{ customers.length }})</h2>
+    <!-- 客户列表 -->
+    <template v-if="!loading && !error && customers.length > 0">
+      <div class="table-scroll-wrapper">
+        <BaseTable :columns="columns" :data="pagedCustomers" row-key="customer_id">
+          <template #index="{ index }">{{ seqNumber(index) }}</template>
+          <template #company_name="{ row }">
+            <span class="font-medium text-default">{{ row.company_name || '-' }}</span>
+          </template>
+          <template #contact_name="{ row }">{{ row.contact_name || '-' }}</template>
+          <template #email="{ row }">
+            <span class="text-primary-600">{{ row.email || '-' }}</span>
+          </template>
+          <template #country="{ row }">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-info-100 text-info-700">{{ row.country || '-' }}</span>
+          </template>
+          <template #language="{ row }">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700">{{ row.language || '-' }}</span>
+          </template>
+          <template #match_date="{ row }">{{ formatDate(row.match_date) }}</template>
+          <template #industry="{ row }">{{ row.industry || '-' }}</template>
+          <template #import_category="{ row }">{{ row.import_category || '-' }}</template>
+          <template #company_size="{ row }">{{ row.company_size || '-' }}</template>
+          <template #match_reason="{ row }">
+            <span class="block max-w-[200px] truncate" :title="row.match_reason">{{ row.match_reason || '-' }}</span>
+          </template>
+          <template #email_status="{ row }">
+            <span v-if="getCustomerEmailCount(row.customer_id) > 0" class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-success-100 text-success-700">
+              已发 {{ getCustomerEmailCount(row.customer_id) }} 封
+            </span>
+            <span v-else class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-muted">未发邮件</span>
+          </template>
+          <template #actions="{ row }">
+            <BaseButton intent="ghost" size="sm" @click="toggleCustomerDetail(row.customer_id)">
+              {{ expandedCustomerId === row.customer_id ? '收起' : '详情' }}
+            </BaseButton>
+          </template>
+          <template #empty>暂无客户信息</template>
+        </BaseTable>
       </div>
 
-      <div class="table-wrapper">
-        <table class="customer-table">
-          <thead>
-            <tr>
-              <th>公司名称</th>
-              <th>联系人</th>
-              <th>邮箱</th>
-              <th>国家</th>
-              <th>语言</th>
-              <th>匹配日期</th>
-              <th>行业</th>
-              <th>进口品类</th>
-              <th>公司规模</th>
-              <th>匹配原因</th>
-              <th>邮件状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="customer in customers" :key="customer.customer_id">
-              <td class="company-name">{{ customer.company_name || '-' }}</td>
-              <td>{{ customer.contact_name || '-' }}</td>
-              <td class="email-cell">{{ customer.email || '-' }}</td>
-              <td>
-                <span class="country-badge">{{ customer.country || '-' }}</span>
-              </td>
-              <td>
-                <span class="language-badge">{{ customer.language || '-' }}</span>
-              </td>
-              <td>{{ formatDate(customer.match_date) }}</td>
-              <td>{{ customer.industry || '-' }}</td>
-              <td>{{ customer.import_category || '-' }}</td>
-              <td>{{ customer.company_size || '-' }}</td>
-              <td class="match-reason-cell" :title="customer.match_reason">
-                {{ customer.match_reason || '-' }}
-              </td>
-              <td>
-                <span v-if="getCustomerEmailCount(customer.customer_id) > 0" class="email-badge success">
-                  ✉️ 已发 {{ getCustomerEmailCount(customer.customer_id) }} 封
-                </span>
-                <span v-else class="email-badge no-email">
-                  ✉️ 未发邮件
-                </span>
-              </td>
-              <td>
-                <button class="detail-btn" @click="toggleCustomerDetail(customer.customer_id)">
-                  {{ expandedCustomerId === customer.customer_id ? '收起' : '详情' }}
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <BasePagination
+        v-if="total > 0"
+        :total="total"
+        v-model:current-page="currentPage"
+        :page-size="pageSize"
+      />
+    </template>
 
-    </div>
-
-    <!-- 邮件详情弹窗 -->
-    <div v-if="expandedCustomerId" class="modal-overlay" @click.self="expandedCustomerId = null">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>邮件详情 - {{ getExpandedCustomerName() }}</h3>
-          <button class="close-btn" @click="expandedCustomerId = null">×</button>
-        </div>
-
-        <!-- 邮件列表 -->
-        <div v-if="getCustomerEmails(expandedCustomerId).length > 0" class="modal-body">
-          <table class="email-table">
-            <thead>
-              <tr>
-                <th>邮件主题</th>
-                <th>语言</th>
-                <th>发送时间</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="email in getCustomerEmails(expandedCustomerId)" :key="email.email_id">
-                <td>{{ email.email_subject || '-' }}</td>
-                <td>{{ email.email_language || '-' }}</td>
-                <td>{{ formatDate(email.send_time) }}</td>
-                <td>
-                  <span :class="['status-badge', email.send_status]">
-                    {{ email.send_status === 'success' ? '✅ 成功' : email.send_status === 'failed' ? '❌ 失败' : '⏳ 进行中' }}
-                  </span>
-                </td>
-                <td>
-                  <button class="text-btn" @click="toggleEmailDetail(email.email_id)">
-                    {{ expandedEmailId === email.email_id ? '收起' : '查看内容' }}
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <!-- 展开的邮件内容 -->
-          <div v-if="expandedEmailId" class="email-body-section">
-            <h4>邮件内容</h4>
-            <pre class="email-body-content">{{ getExpandedEmailBody() }}</pre>
-          </div>
-        </div>
-
-        <div v-else class="no-emails">
-          <p>暂无邮件发送记录</p>
-        </div>
-      </div>
+    <!-- 加载状态 -->
+    <div v-else-if="loading" class="text-center py-12 text-muted">
+      <svg class="w-8 h-8 animate-spin mx-auto mb-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+      加载客户信息中...
     </div>
 
     <!-- 空状态 -->
-    <div v-else class="empty-state">
-      <p>📭 暂无客户信息</p>
-      <p class="hint">请先在外贸智能体中匹配客户</p>
+    <div v-else-if="!error && customers.length === 0" class="text-center py-12 text-muted">
+      <p class="text-lg mb-2">暂无客户信息</p>
+      <p class="text-sm">请先在外贸智能体中匹配客户</p>
     </div>
+
+    <!-- 邮件详情弹窗 -->
+    <BaseModal v-model="showEmailModal" :title="'邮件详情 - ' + getExpandedCustomerName()" size="lg">
+      <div v-if="getCustomerEmails(expandedCustomerId || '').length > 0">
+        <BaseTable :columns="emailColumns" :data="getCustomerEmails(expandedCustomerId || '')" row-key="email_id">
+          <template #email_subject="{ row }">{{ row.email_subject || '-' }}</template>
+          <template #email_language="{ row }">{{ row.email_language || '-' }}</template>
+          <template #send_time="{ row }">{{ formatDateTime(row.send_time) }}</template>
+          <template #send_status="{ row }">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="emailStatusClass(row.send_status)">
+              {{ row.send_status === 'success' ? '成功' : row.send_status === 'failed' ? '失败' : '进行中' }}
+            </span>
+          </template>
+          <template #actions="{ row }">
+            <BaseButton intent="ghost" size="sm" @click="toggleEmailDetail(row.email_id)">
+              {{ expandedEmailId === row.email_id ? '收起' : '查看内容' }}
+            </BaseButton>
+          </template>
+        </BaseTable>
+
+        <div v-if="expandedEmailId" class="mt-4 p-4 bg-canvas rounded-lg border border-default">
+          <h4 class="text-sm font-medium text-muted mb-2">邮件内容</h4>
+          <pre class="text-sm text-default whitespace-pre-wrap break-words m-0 font-inherit max-h-[300px] overflow-y-auto">{{ getExpandedEmailBody() }}</pre>
+        </div>
+      </div>
+      <div v-else class="text-center py-8 text-muted text-sm">暂无邮件发送记录</div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showEmailModal = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   listCustomers,
   getCustomer,
@@ -177,9 +139,13 @@ import {
   type Customer,
   type CustomerEmail,
   type CustomerStats
-} from '../api/customer'
+} from '@/api/customer'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
+import { usePageContext } from '@/composables/usePageContext'
 
-const router = useRouter()
 const route = useRoute()
 
 const loading = ref(false)
@@ -190,14 +156,54 @@ const customerEmails = ref<Map<string, CustomerEmail[]>>(new Map())
 const stats = ref<CustomerStats | null>(null)
 const expandedCustomerId = ref<string | null>(null)
 const expandedEmailId = ref<string | null>(null)
+const showEmailModal = ref(false)
+const total = ref(0)
 
-// 获取 URL 参数
 const userId = computed(() => route.query.user_id as string)
-const sessionId = computed(() => route.query.session_id as string)
 
-// 加载数据
+const columns = [
+  { key: 'index', label: '序号', width: '60px' },
+  { key: 'company_name', label: '公司名称' },
+  { key: 'contact_name', label: '联系人' },
+  { key: 'email', label: '邮箱' },
+  { key: 'country', label: '国家' },
+  { key: 'language', label: '语言' },
+  { key: 'match_date', label: '匹配日期' },
+  { key: 'industry', label: '行业' },
+  { key: 'import_category', label: '进口品类' },
+  { key: 'company_size', label: '公司规模' },
+  { key: 'match_reason', label: '匹配原因' },
+  { key: 'email_status', label: '邮件状态' },
+  { key: 'actions', label: '操作', width: '80px' },
+]
+
+const emailColumns = [
+  { key: 'email_subject', label: '邮件主题' },
+  { key: 'email_language', label: '语言' },
+  { key: 'send_time', label: '发送时间' },
+  { key: 'send_status', label: '状态' },
+  { key: 'actions', label: '操作', width: '100px' },
+]
+
+const { currentPage, pageSize, seqNumber } =
+  usePageContext(async () => { await loadData() })
+
+const pagedCustomers = computed(() => {
+  total.value = customers.value.length
+  const start = (currentPage.value - 1) * pageSize.value
+  return customers.value.slice(start, start + pageSize.value)
+})
+
+function emailStatusClass(status: string) {
+  const map: Record<string, string> = {
+    success: 'bg-success-100 text-success-700',
+    failed: 'bg-danger-100 text-danger-700',
+    pending: 'bg-warning-100 text-warning-700',
+  }
+  return map[status] || 'bg-gray-100 text-muted'
+}
+
 async function loadData() {
-  console.log('前端日志：loadData开始', { userId: userId.value, sessionId: sessionId.value })
   if (!userId.value) {
     error.value = '缺少用户ID参数，请从外贸智能体页面跳转'
     return
@@ -208,19 +214,14 @@ async function loadData() {
   debug.value = ''
 
   try {
-    // 并行加载客户列表和统计
-    // 注意：不传 sessionId 以获取用户的所有客户（包括所有 session）
-    console.log('前端日志：开始请求API', { userId: userId.value })
     const [customerRes, statsRes] = await Promise.all([
       listCustomers(userId.value),
       getStats(userId.value)
     ])
-    console.log('前端日志：API响应', { customerRes, statsRes })
 
     if (customerRes.success && customerRes.data) {
       customers.value = customerRes.data.customers
 
-      // 为每个客户加载邮件
       const emailPromises = customerRes.data.customers.map(async (customer) => {
         const detailRes = await getCustomer(customer.customer_id)
         if (detailRes.success && detailRes.data) {
@@ -244,490 +245,56 @@ async function loadData() {
   }
 }
 
-// 返回上一页
-function goBack() {
-  router.back()
-}
-
-// 获取客户的邮件数量
 function getCustomerEmailCount(customerId: string): number {
   return customerEmails.value.get(customerId)?.length || 0
 }
 
-// 获取客户的邮件列表
 function getCustomerEmails(customerId: string): CustomerEmail[] {
   return customerEmails.value.get(customerId) || []
 }
 
-// 展开/收起客户详情
 function toggleCustomerDetail(customerId: string) {
-  expandedCustomerId.value = expandedCustomerId.value === customerId ? null : customerId
-  // 收起时也要收起邮件详情
-  if (expandedCustomerId.value === null) {
+  if (expandedCustomerId.value === customerId) {
+    expandedCustomerId.value = null
     expandedEmailId.value = null
+    showEmailModal.value = false
+  } else {
+    expandedCustomerId.value = customerId
+    expandedEmailId.value = null
+    showEmailModal.value = true
   }
 }
 
-// 展开/收起邮件详情
 function toggleEmailDetail(emailId: string) {
   expandedEmailId.value = expandedEmailId.value === emailId ? null : emailId
 }
 
-// 获取展开客户的名称
 function getExpandedCustomerName(): string {
   const customer = customers.value.find(c => c.customer_id === expandedCustomerId.value)
   return customer?.company_name || '-'
 }
 
-// 获取展开邮件的内容
 function getExpandedEmailBody(): string {
   const emails = getCustomerEmails(expandedCustomerId.value || '')
   const email = emails.find(e => e.email_id === expandedEmailId.value)
   return email?.email_body || '-'
 }
 
-// 格式化日期
 function formatDate(dateStr: string): string {
   if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return dateStr
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  })
+  try {
+    const d = new Date(dateStr)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  } catch { return dateStr }
 }
 
-// 页面加载时获取数据
-onMounted(() => {
-  loadData()
-})
+function formatDateTime(dateStr: string): string {
+  if (!dateStr) return '-'
+  try {
+    const d = new Date(dateStr)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  } catch { return dateStr }
+}
+
+onMounted(() => { loadData() })
 </script>
-
-<style scoped>
-.customer-info-container {
-  max-width: 1800px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-.header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.header h1 {
-  flex: 1;
-  font-size: 24px;
-  margin: 0;
-}
-
-.back-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 16px;
-  background: #f3f4f6;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.back-btn:hover {
-  background: #e5e7eb;
-}
-
-.refresh-btn {
-  padding: 8px 16px;
-  background: #3b82f6;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.refresh-btn:hover:not(:disabled) {
-  background: #2563eb;
-}
-
-.refresh-btn:disabled {
-  background: #9ca3af;
-  cursor: not-allowed;
-}
-
-/* 统计卡片 */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 20px;
-  border-radius: 12px;
-  text-align: center;
-}
-
-.stat-value {
-  font-size: 32px;
-  font-weight: bold;
-}
-
-.stat-label {
-  font-size: 14px;
-  opacity: 0.9;
-  margin-top: 4px;
-}
-
-/* 加载状态 */
-.loading {
-  text-align: center;
-  padding: 60px 20px;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 4px solid #e5e7eb;
-  border-top-color: #3b82f6;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 16px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* 错误提示 */
-.error-message {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 24px;
-}
-
-.debug-info {
-  font-size: 12px;
-  color: #991b1b;
-  margin-top: 8px;
-}
-
-/* 表格区域 */
-.customer-table-section {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-}
-
-.table-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.table-header h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.table-wrapper {
-  overflow-x: auto;
-}
-
-/* 客户表格 */
-.customer-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.customer-table th {
-  background: #f9fafb;
-  padding: 12px 16px;
-  text-align: left;
-  font-weight: 600;
-  color: #374151;
-  border-bottom: 2px solid #e5e7eb;
-  white-space: nowrap;
-}
-
-.customer-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-  color: #6b7280;
-}
-
-.customer-table tbody tr:hover {
-  background: #f9fafb;
-}
-
-.customer-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.company-name {
-  font-weight: 600;
-  color: #111827 !important;
-}
-
-.email-cell {
-  color: #3b82f6 !important;
-}
-
-.match-reason-cell {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 表格徽章 */
-.country-badge,
-.language-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.country-badge {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.language-badge {
-  background: #f3e8ff;
-  color: #7c3aed;
-}
-
-.email-badge {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.email-badge.success {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.email-badge.no-email {
-  background: #f3f4f6;
-  color: #9ca3af;
-}
-
-/* 操作列 */
-.customer-table th:last-child,
-.customer-table td:last-child {
-  width: 80px;
-  text-align: center;
-}
-
-/* 操作按钮 */
-.detail-btn {
-  padding: 6px 16px;
-  background: #3b82f6;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.detail-btn:hover {
-  background: #2563eb;
-}
-
-/* 模态框 */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-content {
-  background: white;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 900px;
-  max-height: 80vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f9fafb;
-}
-
-.modal-header h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.close-btn {
-  width: 32px;
-  height: 32px;
-  background: #e5e7eb;
-  border: none;
-  border-radius: 4px;
-  font-size: 20px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.close-btn:hover {
-  background: #d1d5db;
-}
-
-.modal-body {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-/* 邮件表格 */
-.email-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.email-table th {
-  background: #f3f4f6;
-  padding: 12px 16px;
-  text-align: left;
-  font-weight: 600;
-  color: #374151;
-  border-bottom: 2px solid #e5e7eb;
-}
-
-.email-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-  color: #6b7280;
-}
-
-.email-table tbody tr:hover {
-  background: #f9fafb;
-}
-
-.status-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 12px;
-}
-
-.status-badge.success {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.status-badge.failed {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.status-badge.pending {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.text-btn {
-  background: none;
-  border: none;
-  color: #3b82f6;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.text-btn:hover {
-  text-decoration: underline;
-}
-
-/* 邮件内容 */
-.email-body-section {
-  margin-top: 16px;
-  padding: 16px;
-  background: white;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.email-body-section h4 {
-  margin: 0 0 12px 0;
-  font-size: 14px;
-}
-
-.email-body-content {
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
-  font-size: 13px;
-  font-family: inherit;
-  color: #374151;
-  background: #f9fafb;
-  padding: 12px;
-  border-radius: 6px;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-/* 无邮件 */
-.no-emails {
-  text-align: center;
-  padding: 40px;
-  color: #9ca3af;
-}
-
-.no-emails p {
-  margin: 0;
-}
-
-/* 空状态 */
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: #6b7280;
-}
-
-.empty-state p {
-  margin: 0;
-}
-
-.hint {
-  font-size: 14px;
-  margin-top: 8px;
-  color: #9ca3af;
-}
-</style>

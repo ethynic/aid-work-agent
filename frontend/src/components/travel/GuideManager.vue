@@ -1,17 +1,19 @@
 <template>
-  <div class="p-5 max-w-[1400px] mx-auto">
-    <div class="flex justify-between items-center mb-5">
-      <h2 class="m-0 text-lg">导游费用管理</h2>
-      <div class="flex gap-2.5 items-center">
-        <BaseInput v-model="filterRegion" placeholder="筛选区域" size="sm" @keyup.enter="loadData" />
-        <BaseSelect v-model="filterType" size="sm" @change="loadData">
+  <div class="page-container p-5 max-w-[1400px] mx-auto">
+    <div class="page-toolbar">
+      <div class="page-toolbar-left">
+        <BaseInput v-model="searchKeyword" placeholder="筛选区域" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
+        <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
+        <BaseSelect v-model="filterType" size="sm" class="ml-2" @change="handleSearch(searchKeyword)">
           <option value="">全部类型</option>
           <option value="local">地接导游</option>
           <option value="national">全陪导游</option>
           <option value="research">研学导师</option>
           <option value="driver_guide">司兼导</option>
         </BaseSelect>
-        <BaseButton @click="openCreate">+ 新增导游</BaseButton>
+      </div>
+      <div class="page-toolbar-right">
+        <BaseButton @click="openCreate">新增导游</BaseButton>
         <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
@@ -20,8 +22,9 @@
       </div>
     </div>
 
-    <BaseTable :columns="columns" :data="items" row-key="id">
-      <template #index="{ index }">{{ index + 1 }}</template>
+    <div class="table-scroll-wrapper">
+    <BaseTable :columns="columns" :data="pagedItems" row-key="id">
+      <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #region_name="{ row }">{{ row.region_name || '通用' }}</template>
       <template #guide_type="{ row }">{{ row.guide_type_label || row.guide_type }}</template>
       <template #guide_level="{ row }">{{ row.guide_level_label || row.guide_level }}</template>
@@ -38,6 +41,14 @@
       </template>
       <template v-if="loading" #empty>加载中...</template>
     </BaseTable>
+    </div>
+
+    <BasePagination
+      v-if="total > 0"
+      :total="total"
+      v-model:current-page="currentPage"
+      :page-size="pageSize"
+    />
 
     <BaseModal v-model="showModal" :title="editingItem ? '编辑导游' : '新增导游'" size="lg">
       <div class="grid grid-cols-2 gap-4">
@@ -139,14 +150,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { guides } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
+import { usePageContext } from '@/composables/usePageContext'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
@@ -162,14 +175,24 @@ const columns = [
   { key: 'actions', label: '操作', width: '140px' },
 ]
 
-const items = ref<any[]>([])
+const allItems = ref<any[]>([])
 const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
-const filterRegion = ref('')
 const filterType = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useImport(loadData)
+
+const total = ref(0)
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
+  usePageContext(async () => {
+    await loadData()
+  })
+
+const pagedItems = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return allItems.value.slice(start, start + pageSize.value)
+})
 
 const form = ref({
   guide_type: 'local', guide_type_label: '', guide_level: 'standard', guide_level_label: '',
@@ -182,9 +205,10 @@ async function loadData() {
   loading.value = true
   try {
     const params: any = {}
-    if (filterRegion.value) params.region_name = filterRegion.value
+    if (searchKeyword.value) params.region_name = searchKeyword.value
     if (filterType.value) params.guide_type = filterType.value
-    items.value = await guides.list(params)
+    allItems.value = await guides.list(params)
+    total.value = allItems.value.length
   } catch (e) { console.error('加载导游数据失败', e) }
   finally { loading.value = false }
 }

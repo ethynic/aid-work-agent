@@ -1,8 +1,10 @@
 <template>
-  <div class="p-5 max-w-[1400px] mx-auto">
-    <div class="flex justify-between items-center mb-5">
-      <h2 class="m-0 text-lg">酒店知识库</h2>
-      <div class="flex gap-2.5 items-center">
+  <div class="page-container p-5 max-w-[1400px] mx-auto">
+    <div class="page-toolbar">
+      <div class="page-toolbar-left">
+        <h2 class="m-0 text-lg">酒店知识库</h2>
+      </div>
+      <div class="page-toolbar-right">
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none"
                @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
         <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
@@ -14,10 +16,10 @@
 
     <!-- 搜索栏 -->
     <div class="flex gap-2.5 mb-3 items-center">
-      <BaseInput v-model="searchQuery" placeholder="输入关键词搜索酒店，如：贵阳 4钻酒店" class="max-w-[500px]" @keyup.enter="doSearch" />
-      <BaseButton :disabled="searching" @click="doSearch">{{ searching ? '搜索中...' : '搜索' }}</BaseButton>
-      <BaseButton v-if="searched" intent="secondary" @click="clearSearch">显示全部</BaseButton>
-      <BaseButton v-if="selectedIds.size > 0" intent="danger" @click="handleBatchDelete">
+      <BaseInput v-model="searchQuery" placeholder="输入关键词搜索酒店，如：贵阳 4钻酒店" class="max-w-[500px]" size="sm" @keyup.enter="doSearch" />
+      <BaseButton size="sm" :disabled="searching" @click="doSearch">{{ searching ? '搜索中...' : '搜索' }}</BaseButton>
+      <BaseButton size="sm" v-if="searched" intent="secondary" @click="clearSearch">显示全部</BaseButton>
+      <BaseButton size="sm" v-if="selectedIds.size > 0" intent="danger" @click="handleBatchDelete">
         批量删除 ({{ selectedIds.size }})
       </BaseButton>
     </div>
@@ -33,6 +35,7 @@
     </div>
 
     <!-- 表格 -->
+    <div class="table-scroll-wrapper">
     <BaseTable :columns="columns" :data="currentList" row-key="doc_id">
       <template #checkbox="{ row }">
         <input type="checkbox" :value="row.doc_id" v-model="selectedArr" />
@@ -56,6 +59,7 @@
       </template>
       <template v-if="loading" #empty>加载中...</template>
     </BaseTable>
+    </div>
 
     <!-- 分页 -->
     <BasePagination

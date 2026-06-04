@@ -1,5 +1,5 @@
 <template>
-  <div class="p-5 max-w-[1400px] mx-auto">
+  <div class="page-container p-5 max-w-[1400px] mx-auto">
     <div class="flex justify-between items-center mb-5">
       <h2 class="m-0 text-lg">费用与淡旺季管理</h2>
     </div>
@@ -20,17 +20,18 @@
 
     <!-- 其他费用 Tab -->
     <div v-if="activeTab === 'fees'">
-      <div class="flex justify-between items-center mb-5">
-        <div></div>
-        <div class="flex gap-2.5 items-center">
-          <BaseSelect v-model="filterCategory" size="sm" @change="loadFees">
+      <div class="page-toolbar">
+        <div class="page-toolbar-left">
+          <BaseSelect v-model="filterCategory" size="sm" class="w-40" @change="handleFeeSearch(filterCategory)">
             <option value="">全部分类</option>
             <option value="insurance">保险</option>
             <option value="service">服务费</option>
             <option value="transport">交通</option>
             <option value="other">其他</option>
           </BaseSelect>
-          <BaseButton @click="openFeeCreate">+ 新增费用</BaseButton>
+        </div>
+        <div class="page-toolbar-right">
+          <BaseButton @click="openFeeCreate">新增费用</BaseButton>
           <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
           <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
             {{ importing ? '导入中...' : '导入 Excel' }}
@@ -39,8 +40,9 @@
         </div>
       </div>
 
-      <BaseTable :columns="feeColumns" :data="feeItems" row-key="id">
-        <template #index="{ index }">{{ index + 1 }}</template>
+      <div class="table-scroll-wrapper">
+      <BaseTable :columns="feeColumns" :data="pagedFeeItems" row-key="id">
+        <template #index="{ index }">{{ feeSeqNumber(index) }}</template>
         <template #billing_method="{ row }">{{ billingLabel(row.billing_method) }}</template>
         <template #is_mandatory="{ row }">{{ row.is_mandatory ? '是' : '否' }}</template>
         <template #remark="{ row }">{{ row.remark || '-' }}</template>
@@ -52,6 +54,14 @@
         </template>
         <template v-if="feeLoading" #empty>加载中...</template>
       </BaseTable>
+      </div>
+
+      <BasePagination
+        v-if="feeTotal > 0"
+        :total="feeTotal"
+        v-model:current-page="feeCurrentPage"
+        :page-size="feePageSize"
+      />
 
       <!-- 费用弹窗 -->
       <BaseModal v-model="showFeeModal" :title="editingFee ? '编辑费用' : '新增费用'" size="lg">
@@ -111,13 +121,16 @@
 
     <!-- 淡旺季配置 Tab -->
     <div v-if="activeTab === 'seasons'">
-      <div class="flex justify-between items-center mb-5">
-        <div></div>
-        <BaseButton @click="openSeasonCreate">+ 新增季节</BaseButton>
+      <div class="page-toolbar">
+        <div class="page-toolbar-left"></div>
+        <div class="page-toolbar-right">
+          <BaseButton @click="openSeasonCreate">新增季节</BaseButton>
+        </div>
       </div>
 
-      <BaseTable :columns="seasonColumns" :data="seasonItems" row-key="id">
-        <template #index="{ index }">{{ index + 1 }}</template>
+      <div class="table-scroll-wrapper">
+      <BaseTable :columns="seasonColumns" :data="pagedSeasonItems" row-key="id">
+        <template #index="{ index }">{{ seasonSeqNumber(index) }}</template>
         <template #remark="{ row }">{{ row.remark || '-' }}</template>
         <template #actions="{ row }">
           <div class="flex gap-2">
@@ -127,6 +140,14 @@
         </template>
         <template v-if="seasonLoading" #empty>加载中...</template>
       </BaseTable>
+      </div>
+
+      <BasePagination
+        v-if="seasonTotal > 0"
+        :total="seasonTotal"
+        v-model:current-page="seasonCurrentPage"
+        :page-size="seasonPageSize"
+      />
 
       <!-- 季节弹窗 -->
       <BaseModal v-model="showSeasonModal" :title="editingSeason ? '编辑季节' : '新增季节'" size="lg">
@@ -182,14 +203,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { fees, seasons } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
+import { usePageContext } from '@/composables/usePageContext'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 
 const activeTab = ref('fees')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -225,6 +248,17 @@ const showFeeModal = ref(false)
 const editingFee = ref<any>(null)
 const filterCategory = ref('')
 
+const feeTotal = ref(0)
+const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNumber, handleSearch: handleFeeSearch } =
+  usePageContext(async () => {
+    await loadFees()
+  })
+
+const pagedFeeItems = computed(() => {
+  const start = (feeCurrentPage.value - 1) * feePageSize.value
+  return feeItems.value.slice(start, start + feePageSize.value)
+})
+
 const feeForm = ref({
   fee_name: '', fee_category: 'insurance', billing_method: 'per_person',
   unit_price: 0, is_mandatory: false, sort_order: 0, remark: ''
@@ -241,6 +275,7 @@ async function loadFees() {
     const params: any = {}
     if (filterCategory.value) params.fee_category = filterCategory.value
     feeItems.value = await fees.list(params)
+    feeTotal.value = feeItems.value.length
   } catch (e) { console.error('加载费用失败', e) }
   finally { feeLoading.value = false }
 }
@@ -277,6 +312,17 @@ const seasonLoading = ref(false)
 const showSeasonModal = ref(false)
 const editingSeason = ref<any>(null)
 
+const seasonTotal = ref(0)
+const { currentPage: seasonCurrentPage, pageSize: seasonPageSize, seqNumber: seasonSeqNumber } =
+  usePageContext(async () => {
+    await loadSeasons()
+  })
+
+const pagedSeasonItems = computed(() => {
+  const start = (seasonCurrentPage.value - 1) * seasonPageSize.value
+  return seasonItems.value.slice(start, start + seasonPageSize.value)
+})
+
 const seasonForm = ref({
   season_type: '', season_type_label: '', start_date: '', end_date: '',
   price_multiplier: 1, remark: ''
@@ -284,7 +330,10 @@ const seasonForm = ref({
 
 async function loadSeasons() {
   seasonLoading.value = true
-  try { seasonItems.value = await seasons.list() }
+  try {
+    seasonItems.value = await seasons.list()
+    seasonTotal.value = seasonItems.value.length
+  }
   catch (e) { console.error('加载淡旺季失败', e) }
   finally { seasonLoading.value = false }
 }

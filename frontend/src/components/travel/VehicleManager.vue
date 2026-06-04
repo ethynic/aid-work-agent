@@ -1,10 +1,12 @@
 <template>
-  <div class="p-5 max-w-[1400px] mx-auto">
-    <div class="flex justify-between items-center mb-5">
-      <h2 class="m-0 text-lg">车辆价格管理</h2>
-      <div class="flex gap-2.5 items-center">
-        <BaseInput v-model="filterRegion" placeholder="筛选区域" size="sm" @keyup.enter="loadData" />
-        <BaseButton @click="openCreate">+ 新增车辆</BaseButton>
+  <div class="page-container p-5 max-w-[1400px] mx-auto">
+    <div class="page-toolbar">
+      <div class="page-toolbar-left">
+        <BaseInput v-model="searchKeyword" placeholder="筛选区域" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
+        <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
+      </div>
+      <div class="page-toolbar-right">
+        <BaseButton @click="openCreate">新增车辆</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
         </BaseButton>
@@ -12,8 +14,9 @@
       </div>
     </div>
 
-    <BaseTable :columns="columns" :data="items" row-key="id">
-      <template #index="{ index }">{{ index + 1 }}</template>
+    <div class="table-scroll-wrapper">
+    <BaseTable :columns="columns" :data="pagedItems" row-key="id">
+      <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #vehicle_type="{ row }">{{ row.vehicle_type }}</template>
       <template #vehicle_type_label="{ row }">{{ row.vehicle_type_label || '-' }}</template>
       <template #region_name="{ row }">{{ row.region_name || '通用' }}</template>
@@ -30,6 +33,14 @@
       </template>
       <template v-if="loading" #empty>加载中...</template>
     </BaseTable>
+    </div>
+
+    <BasePagination
+      v-if="total > 0"
+      :total="total"
+      v-model:current-page="currentPage"
+      :page-size="pageSize"
+    />
 
     <BaseModal v-model="showModal" :title="editingItem ? '编辑车辆' : '新增车辆'" size="lg">
       <div class="grid grid-cols-2 gap-4">
@@ -105,14 +116,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { vehicles } from '@/api/travelQuote'
 import { useVehicleImport } from '@/composables/useImport'
+import { usePageContext } from '@/composables/usePageContext'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'vehicle_type', label: '车型' },
@@ -126,13 +139,23 @@ const columns = [
   { key: 'actions', label: '操作', width: '140px' },
 ]
 
-const items = ref<any[]>([])
+const allItems = ref<any[]>([])
 const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
-const filterRegion = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useVehicleImport(loadData)
+
+const total = ref(0)
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
+  usePageContext(async () => {
+    await loadData()
+  })
+
+const pagedItems = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return allItems.value.slice(start, start + pageSize.value)
+})
 
 const defaultForm = {
   vehicle_type: 'business', vehicle_type_label: '', region_name: '',
@@ -147,8 +170,9 @@ async function loadData() {
   loading.value = true
   try {
     const params: any = {}
-    if (filterRegion.value) params.region_name = filterRegion.value
-    items.value = await vehicles.list(params)
+    if (searchKeyword.value) params.region_name = searchKeyword.value
+    allItems.value = await vehicles.list(params)
+    total.value = allItems.value.length
   } catch (e) {
     console.error('加载车辆数据失败', e)
   } finally {

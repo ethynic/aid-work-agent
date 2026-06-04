@@ -1,10 +1,10 @@
 <template>
-  <div class="p-5 max-w-[1400px] mx-auto">
-    <div class="flex justify-between items-center mb-5">
-      <h2 class="m-0 text-lg">餐标价格管理</h2>
-      <div class="flex gap-2.5 items-center">
-        <BaseInput v-model="filterRegion" placeholder="筛选区域" size="sm" @keyup.enter="loadData" />
-        <BaseSelect v-model="filterTier" size="sm" @change="loadData">
+  <div class="page-container p-5 max-w-[1400px] mx-auto">
+    <div class="page-toolbar">
+      <div class="page-toolbar-left">
+        <BaseInput v-model="searchKeyword" placeholder="筛选区域" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
+        <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
+        <BaseSelect v-model="filterTier" size="sm" class="ml-2" @change="handleSearch(searchKeyword)">
           <option value="">全部档次</option>
           <option value="economy">经济餐</option>
           <option value="standard">标准餐</option>
@@ -12,7 +12,9 @@
           <option value="premium">高餐标</option>
           <option value="luxury">豪华餐标</option>
         </BaseSelect>
-        <BaseButton @click="openCreate">+ 新增餐标</BaseButton>
+      </div>
+      <div class="page-toolbar-right">
+        <BaseButton @click="openCreate">新增餐标</BaseButton>
         <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
@@ -21,8 +23,9 @@
       </div>
     </div>
 
-    <BaseTable :columns="columns" :data="items" row-key="id">
-      <template #index="{ index }">{{ index + 1 }}</template>
+    <div class="table-scroll-wrapper">
+    <BaseTable :columns="columns" :data="pagedItems" row-key="id">
+      <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #region_name="{ row }">{{ row.region_name || '通用' }}</template>
       <template #meal_tier="{ row }">{{ row.meal_tier_label || row.meal_tier }}</template>
       <template #meal_type="{ row }">{{ row.meal_type_label || row.meal_type }}</template>
@@ -36,6 +39,14 @@
       </template>
       <template v-if="loading" #empty>加载中...</template>
     </BaseTable>
+    </div>
+
+    <BasePagination
+      v-if="total > 0"
+      :total="total"
+      v-model:current-page="currentPage"
+      :page-size="pageSize"
+    />
 
     <BaseModal v-model="showModal" :title="editingItem ? '编辑餐标' : '新增餐标'" size="lg">
       <div class="grid grid-cols-2 gap-4">
@@ -125,14 +136,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { meals } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
+import { usePageContext } from '@/composables/usePageContext'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
@@ -147,14 +160,24 @@ const columns = [
   { key: 'actions', label: '操作', width: '140px' },
 ]
 
-const items = ref<any[]>([])
+const allItems = ref<any[]>([])
 const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
-const filterRegion = ref('')
 const filterTier = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useImport(loadData)
+
+const total = ref(0)
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
+  usePageContext(async () => {
+    await loadData()
+  })
+
+const pagedItems = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return allItems.value.slice(start, start + pageSize.value)
+})
 
 const form = ref({
   meal_tier: 'standard', meal_tier_label: '', meal_type: 'lunch', meal_type_label: '',
@@ -166,9 +189,10 @@ async function loadData() {
   loading.value = true
   try {
     const params: any = {}
-    if (filterRegion.value) params.region_name = filterRegion.value
+    if (searchKeyword.value) params.region_name = searchKeyword.value
     if (filterTier.value) params.meal_tier = filterTier.value
-    items.value = await meals.list(params)
+    allItems.value = await meals.list(params)
+    total.value = allItems.value.length
   } catch (e) { console.error('加载餐标数据失败', e) }
   finally { loading.value = false }
 }
