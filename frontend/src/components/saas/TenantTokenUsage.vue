@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container bg-canvas">
+  <div class="h-full flex flex-col bg-canvas">
     <AppHeader
       title="站点Token用量"
       :is-logged-in="effectiveIsLoggedIn"
@@ -9,7 +9,7 @@
     >
     </AppHeader>
 
-    <div class="page-content p-6">
+    <div class="flex-1 min-h-0 overflow-y-auto p-6">
       <!-- 顶部工具栏 -->
       <div class="page-toolbar">
         <div class="page-toolbar-left">
@@ -99,6 +99,9 @@ import { ref, computed, onMounted, inject, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 import { getTenantTokenDetails } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { formatTokensToMillionsThreeDecimals, formatMessagePreview } from '@/utils/formatTokens'

@@ -17,9 +17,9 @@
             placeholder="搜索风格名称..."
             size="sm"
             class="w-80"
-            @keyup.enter="searchQuery = searchQuery"
+            @keyup.enter="handleClientSearch"
           />
-          <BaseButton size="sm" @click="searchQuery = searchQuery">搜索</BaseButton>
+          <BaseButton size="sm" @click="handleClientSearch">搜索</BaseButton>
         </div>
         <div class="page-toolbar-right">
           <BaseButton @click="openCreate">新增风格</BaseButton>
@@ -28,7 +28,10 @@
 
       <!-- 风格列表 -->
       <div class="table-scroll-wrapper">
-        <BaseTable :columns="columns" :data="filteredStyles" row-key="style_id">
+        <BaseTable :columns="columns" :data="pagedStyles" row-key="style_id">
+        <template #col-index="{ index }">
+          <span class="text-muted text-xs">{{ seqNumber(index) }}</span>
+        </template>
         <template #col-name="{ row }">
           <div>
             <span class="text-default font-medium cursor-pointer hover:text-primary-600" @click="row.is_system ? openView(row) : openEdit(row)">{{ row.name }}</span>
@@ -41,12 +44,26 @@
         <template #col-version="{ row }">
           <span class="text-muted text-sm">v{{ row.version }}</span>
           <BaseButton intent="ghost" size="sm" class="ml-1 text-xs" @click.stop="openVersions(row)">版本</BaseButton>
-          <BaseButton v-if="!row.is_system" intent="danger-ghost" size="sm" class="ml-1 text-xs" @click.stop="handleDelete(row)">删除</BaseButton>
+        </template>
+        <template #col-actions="{ row }">
+          <div class="flex items-center justify-center gap-1 whitespace-nowrap">
+            <BaseButton intent="ghost" size="sm" class="text-xs" @click="openEdit(row)">编辑</BaseButton>
+            <BaseButton v-if="!row.is_system" intent="danger-ghost" size="sm" class="text-xs" @click.stop="handleDelete(row)">删除</BaseButton>
+          </div>
         </template>
         <template #empty>
           <div class="text-center py-8 text-muted">暂无回复风格</div>
         </template>
       </BaseTable>
+      </div>
+
+      <!-- 分页 -->
+      <div v-if="total > 0" class="mt-4 flex justify-center">
+        <BasePagination
+          :total="total"
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+        />
       </div>
     </div>
 
@@ -131,11 +148,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, inject } from 'vue'
 import { useToast } from 'vue-toastification'
+import { usePageContext } from '@/composables/usePageContext'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 import AppHeader from '@/components/AppHeader.vue'
 import {
   listStyles, getStyle, createStyle, updateStyle, deleteStyle,
@@ -157,8 +176,11 @@ function handleLogout() {}
 
 // 数据
 const styles = ref<any[]>([])
-const loading = ref(false)
 const searchQuery = ref('')
+
+const { currentPage, pageSize, seqNumber } = usePageContext(async () => {
+  // 客户端分页，无需额外加载
+})
 
 const filteredStyles = computed(() => {
   if (!searchQuery.value) return styles.value
@@ -168,10 +190,24 @@ const filteredStyles = computed(() => {
   )
 })
 
+const total = computed(() => filteredStyles.value.length)
+
+const pagedStyles = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredStyles.value.slice(start, end)
+})
+
+function handleClientSearch() {
+  currentPage.value = 1
+}
+
 const columns = [
+  { key: 'index', label: '序号', width: '60px' },
   { key: 'name', label: '名称' },
   { key: 'description', label: '描述' },
   { key: 'version', label: '版本', width: '80px' },
+  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
 ]
 
 // 编辑器
@@ -189,14 +225,11 @@ const versionsStyleName = ref('')
 const versionsIsSystem = ref(false)
 
 async function loadStyles() {
-  loading.value = true
   try {
     const res = await listStyles()
     styles.value = res.styles || []
   } catch (e: any) {
     toast.error(e.message || '加载风格列表失败')
-  } finally {
-    loading.value = false
   }
 }
 
