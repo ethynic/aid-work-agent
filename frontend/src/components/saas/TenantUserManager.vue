@@ -52,8 +52,8 @@
               </template>
               <template #actions="{ row }">
                 <div class="flex gap-2">
-                  <BaseButton intent="ghost" size="sm" @click="openPermissionDialog(row)">授权</BaseButton>
-                  <BaseButton intent="danger" size="sm" @click="handleRemove(row.user_id)">删除</BaseButton>
+                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openPermissionDialog(row)">授权</BaseButton>
+                  <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleRemove(row.user_id)">删除</BaseButton>
                 </div>
               </template>
             </BaseTable>
@@ -229,7 +229,7 @@ const columns = [
   { key: 'department', label: '部门' },
   { key: 'role', label: '角色' },
   { key: 'agent_auth', label: '数字员工授权' },
-  { key: 'actions', label: '操作', width: '140px' },
+  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
 ]
 
 const loading = ref(true)

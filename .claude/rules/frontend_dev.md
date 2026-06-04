@@ -38,7 +38,8 @@
 
 1. **新页面必须使用 Base* 组件**，不允许自行定义 `.btn-primary`、`.data-table` 等 CSS 类
 2. **颜色必须使用语义 token**（`primary-*`、`danger-*`、`bg-surface` 等）
-3. 详细的页面模式规范见 [page_patterns.md](./page_patterns.md)
+3. **页面模式规范要点速查** [page_patterns.md](./page_patterns.md)
+4. **新增列表页、详情页时**，必须按 [page-convention.md](../../docs/system/page-convention.md) 规范执行
 
 ## 颜色使用规范
 

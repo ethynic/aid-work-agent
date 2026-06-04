@@ -9,7 +9,7 @@ import { computed } from 'vue'
 import { button } from '@/variants/button'
 
 const props = withDefaults(defineProps<{
-  intent?: 'primary' | 'secondary' | 'danger' | 'ghost'
+  intent?: 'primary' | 'secondary' | 'danger' | 'danger-ghost' | 'ghost'
   size?: 'sm' | 'md' | 'lg'
   fullWidth?: boolean
   disabled?: boolean

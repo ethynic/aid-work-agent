@@ -7,7 +7,10 @@
             v-for="col in columns"
             :key="col.key"
             :class="slots.th()"
-            :style="col.width ? { width: col.width } : undefined"
+            :style="[
+              col.width ? { width: col.width } : undefined,
+              col.thAlign ? { textAlign: col.thAlign } : undefined
+            ]"
           >
             {{ col.label }}
           </th>
@@ -47,6 +50,7 @@ export interface TableColumn {
   key: string
   label: string
   width?: string
+  thAlign?: 'left' | 'center' | 'right'
 }
 
 defineProps<{
