@@ -53,12 +53,28 @@ def get_db_connection():
 
 
 def _get_current_tenant_id() -> Optional[str]:
-    """获取当前租户 ID"""
+    """获取当前租户 ID（优先级：stdin > 环境变量 > ContextVar）"""
+    # 1. 从 stdin 读取（skill_execute 通过 stdin 注入 JSON）
+    try:
+        raw = sys.stdin.read().strip()
+        if raw:
+            data = json.loads(raw)
+            if isinstance(data, dict) and data.get("tenant_id"):
+                return data["tenant_id"]
+    except (json.JSONDecodeError, EOFError, ValueError):
+        pass
+
+    # 2. 从环境变量获取
+    tenant_id = os.environ.get("CURRENT_TENANT_ID")
+    if tenant_id:
+        return tenant_id
+
+    # 3. 从 ContextVar 获取（子进程中通常不可用）
     try:
         from src.saas.context import get_current_tenant_id
         return get_current_tenant_id()
     except Exception:
-        return os.environ.get("CURRENT_TENANT_ID")
+        return None
 
 
 def init_tables():

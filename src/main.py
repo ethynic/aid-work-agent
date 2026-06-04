@@ -31,7 +31,7 @@ from src.db.database import init_database, init_postgres_pool, close_postgres_po
 from src.api import auth, session as session_api, customer, scheduled_task, email_settings
 from src.api import monitor as monitor_api
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
-from src.api import customer_followup, complaint_handling
+from src.api import customer_followup, complaint_handling, after_sales
 from src.knowledge.api import router as knowledge_router
 from src.db.models import SessionDB, MessageDB
 from src.channels import callback as channels_api
@@ -1657,6 +1657,7 @@ app.include_router(channels_api.router)
 app.include_router(customer.router)
 app.include_router(customer_followup.router)
 app.include_router(complaint_handling.router)
+app.include_router(after_sales.router)
 app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)

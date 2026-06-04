@@ -136,6 +136,24 @@ const router = createRouter({
         },
       ]
     },
+    // 售后服务智能体业务数据页面
+    {
+      path: '/after-sales',
+      name: 'after-sales',
+      component: () => import('./components/BaseBusinessLayout.vue'),
+      children: [
+        {
+          path: 'tickets',
+          name: 'after-sales-tickets',
+          component: () => import('./components/after-sales/TicketList.vue')
+        },
+        {
+          path: 'returns',
+          name: 'after-sales-returns',
+          component: () => import('./components/after-sales/ReturnList.vue')
+        },
+      ]
+    },
     // SaaS 租户管理 Portal（仅平台管理员）
     {
       path: '/portal/login',
@@ -247,6 +265,24 @@ const router = createRouter({
               path: 'stats',
               name: 'tenant-complaint-stats',
               component: () => import('./components/complaint/ComplaintStats.vue')
+            },
+          ]
+        },
+        // 售后服务智能体业务数据页面
+        {
+          path: 'after-sales',
+          name: 'tenant-after-sales',
+          component: () => import('./components/BaseBusinessLayout.vue'),
+          children: [
+            {
+              path: 'tickets',
+              name: 'tenant-after-sales-tickets',
+              component: () => import('./components/after-sales/TicketList.vue')
+            },
+            {
+              path: 'returns',
+              name: 'tenant-after-sales-returns',
+              component: () => import('./components/after-sales/ReturnList.vue')
             },
           ]
         },
