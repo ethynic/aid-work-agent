@@ -357,14 +357,14 @@ Follow the instructions in the skill above to complete the user's task."""
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.PIPE if stdin_content else None,
+                stdin=asyncio.subprocess.PIPE,  # 始终创建 PIPE，避免子进程 stdin 阻塞
                 cwd=str(workdir),
                 env=env,  # 显式传递环境变量
             )
 
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(input=stdin_content),
+                    process.communicate(input=stdin_content or b""),
                     timeout=timeout
                 )
                 duration = time.time() - start_time

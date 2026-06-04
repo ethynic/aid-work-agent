@@ -145,77 +145,71 @@ class SkillExecuteTool(BaseTool):
         # 处理纯文本 content 参数：通过 stdin 直接传给子进程，不写中间文件
         stdin_content = None
         content_text = kwargs.get("content")
+
+        # 解析 tenant_id（无论是否有 content 都需要）
+        import json as _json
+        resolved_tenant_id = None
+
+        # 优先从 ContextVar 获取（Agent 进程内直接可用）
+        try:
+            from src.saas.context import get_current_tenant_id
+            resolved_tenant_id = get_current_tenant_id()
+        except Exception:
+            pass
+
+        if not resolved_tenant_id and real_session_id:
+            # 方式1：从 chat_sessions 表查询（Web端会话）
+            from src.db.models import SessionDB
+            session_info = SessionDB.get_by_id(real_session_id)
+            if session_info:
+                resolved_tenant_id = session_info.get("tenant_id")
+
+            # 方式2：从 channel_sessions 表查询（企业微信/钉钉/飞书等渠道会话）
+            if not resolved_tenant_id:
+                try:
+                    from src.db.database import get_db_connection
+                    with get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT tenant_id FROM channel_sessions WHERE session_id = %s",
+                            (real_session_id,)
+                        )
+                        row = cursor.fetchone()
+                        if row and row.get("tenant_id"):
+                            resolved_tenant_id = row["tenant_id"]
+                except Exception:
+                    pass
+
+            # 方式3：从 session_id 格式解析 tenant_id（fallback）
+            if not resolved_tenant_id:
+                known_channels = ["wecom_kf", "wecom", "dingtalk", "feishu", "web"]
+                for ch in known_channels:
+                    marker = f"_{ch}_"
+                    if marker in real_session_id:
+                        idx = real_session_id.index(marker)
+                        resolved_tenant_id = real_session_id[:idx]
+                        break
+
         if content_text:
             # 支持字符串或列表类型，列表时转为 JSON 字符串
             if isinstance(content_text, list):
-                import json
-                content_text = json.dumps(content_text, ensure_ascii=False)
+                content_text = _json.dumps(content_text, ensure_ascii=False)
 
-            # 自动注入 tenant_id：从 session 获取真实 tenant_id 注入到 content JSON 中
-            import json as _json
+            # 自动注入 tenant_id 到 content JSON 中
             try:
                 content_obj = _json.loads(content_text)
                 if isinstance(content_obj, dict):
-                    real_tenant_id = None
-                    session_source = None
-
-                    # 方式1：从 chat_sessions 表查询（Web端会话）
-                    if real_session_id:
-                        from src.db.models import SessionDB
-                        session_info = SessionDB.get_by_id(real_session_id)
-                        if session_info:
-                            real_tenant_id = session_info.get("tenant_id")
-                            if real_tenant_id:
-                                session_source = "chat_sessions"
-
-                    # 方式2：从 channel_sessions 表查询（企业微信/钉钉/飞书等渠道会话）
-                    if not real_tenant_id and real_session_id:
-                        try:
-                            from src.channels.session import channel_session_manager
-                            from src.db.database import get_db_connection
-                            with get_db_connection() as conn:
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                    "SELECT tenant_id FROM channel_sessions WHERE session_id = %s",
-                                    (real_session_id,)
-                                )
-                                row = cursor.fetchone()
-                                if row and row.get("tenant_id"):
-                                    real_tenant_id = row["tenant_id"]
-                                    session_source = "channel_sessions"
-                        except Exception:
-                            pass
-
-                    # 方式3：从 session_id 格式解析 tenant_id（fallback）
-                    # session_id 格式: {tenant_id}_{channel_type}_{channel_user_id}_{subagent_id}
-                    if not real_tenant_id and real_session_id:
-                        known_channels = ["wecom_kf", "wecom", "dingtalk", "feishu", "web"]
-                        for ch in known_channels:
-                            marker = f"_{ch}_"
-                            if marker in real_session_id:
-                                idx = real_session_id.index(marker)
-                                real_tenant_id = real_session_id[:idx]
-                                session_source = "session_id_parsed"
-                                break
-
-                    if real_tenant_id:
-                        old_val = content_obj.get("tenant_id", "")
-                        if old_val != real_tenant_id:
-                            logger.info(
-                                f"[skill_execute] 注入 tenant_id: '{old_val}' -> '{real_tenant_id}' "
-                                f"(来源: {session_source}, session_id={real_session_id})"
-                            )
-                            content_obj["tenant_id"] = real_tenant_id
-                            content_text = _json.dumps(content_obj, ensure_ascii=False)
-                    else:
-                        logger.warning(
-                            f"[skill_execute] 未能获取 tenant_id，content 中 tenant_id 将为空 "
-                            f"(session_id={real_session_id}, content_tenant_id={content_obj.get('tenant_id', '')})"
-                        )
+                    if resolved_tenant_id:
+                        content_obj["tenant_id"] = resolved_tenant_id
+                    content_text = _json.dumps(content_obj, ensure_ascii=False)
             except (_json.JSONDecodeError, TypeError):
                 pass  # 非 JSON 内容，跳过
 
             stdin_content = str(content_text).encode("utf-8", errors="surrogatepass")
+        else:
+            # 无 content 时，构造只含 tenant_id 的 JSON 通过 stdin 传给子进程
+            if resolved_tenant_id:
+                stdin_content = _json.dumps({"tenant_id": resolved_tenant_id}).encode("utf-8")
 
         try:
             # 后端日志：诊断实际提交给执行器的命令

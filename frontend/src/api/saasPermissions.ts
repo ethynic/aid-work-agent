@@ -203,3 +203,55 @@ export async function syncTenantInstances(tenantId: string): Promise<{
   if (!res.ok) throw new Error('同步租户实例失败')
   return res.json()
 }
+
+// ==================== 子智能体环境变量 ====================
+
+const ENV_VAR_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/tenant/subagent-env-vars`
+
+function getEnvVarAuthHeader(tenantId: string): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  headers['X-Tenant-Id'] = tenantId
+  return headers
+}
+
+export interface EnvVarItem {
+  tenant_id: string
+  subagent_name: string
+  var_name: string
+  var_value: string
+  description: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function getSubagentEnvVars(tenantId: string, subagentName: string): Promise<{
+  success: boolean
+  data?: EnvVarItem[]
+}> {
+  const res = await fetch(`${ENV_VAR_BASE}/${encodeURIComponent(subagentName)}`, {
+    headers: getEnvVarAuthHeader(tenantId),
+  })
+  if (!res.ok) throw new Error('获取环境变量失败')
+  return res.json()
+}
+
+export async function setSubagentEnvVars(
+  tenantId: string,
+  subagentName: string,
+  vars: Array<{ name: string; value: string; description?: string }>,
+): Promise<{ success: boolean; message?: string }> {
+  const headers = getEnvVarAuthHeader(tenantId)
+  headers['Content-Type'] = 'application/json'
+  const res = await fetch(`${ENV_VAR_BASE}/${encodeURIComponent(subagentName)}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ vars }),
+  })
+  if (!res.ok) throw new Error('设置环境变量失败')
+  return res.json()
+}

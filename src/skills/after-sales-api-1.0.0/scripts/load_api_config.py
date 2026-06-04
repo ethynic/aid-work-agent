@@ -13,9 +13,15 @@ import json
 import sys
 import os
 
+
 def get_tenant_id():
     """获取当前租户 ID"""
-    # 1. 从 stdin 输入获取
+    # 1. 从环境变量获取
+    tenant_id = os.environ.get("CURRENT_TENANT_ID")
+    if tenant_id:
+        return tenant_id
+
+    # 2. 从 stdin 获取（skill_execute 可能通过 content 参数传入）
     try:
         raw = sys.stdin.read().strip()
         if raw:
@@ -25,12 +31,7 @@ def get_tenant_id():
     except (json.JSONDecodeError, EOFError):
         pass
 
-    # 2. 从环境变量获取
-    tenant_id = os.environ.get("CURRENT_TENANT_ID")
-    if tenant_id:
-        return tenant_id
-
-    # 3. 从 ContextVar 获取（需要导入 Python 模块）
+    # 3. 从 ContextVar 获取
     try:
         from src.saas.context import get_current_tenant_id
         tid = get_current_tenant_id()
@@ -46,26 +47,51 @@ def load_api_config():
     """加载租户的 API 配置文件"""
     tenant_id = get_tenant_id()
 
+    # 调试：收集诊断信息
+    env_tid = os.environ.get("CURRENT_TENANT_ID", "")
+    stdin_raw = ""
+    try:
+        stdin_raw = getattr(load_api_config, '_stdin_raw', '')
+    except Exception:
+        pass
+
     if not tenant_id:
         print(json.dumps({
             "success": False,
             "error": "无法获取当前租户 ID",
+            "debug": {
+                "env_CURRENT_TENANT_ID": env_tid or "(empty)",
+                "cwd": os.getcwd(),
+                "script_path": os.path.abspath(__file__),
+            },
             "content": ""
         }, ensure_ascii=False))
         return
 
-    config_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)
-        )))),
-        "storage", "tenants", tenant_id, "after-sales-api.md"
-    )
+    # 计算配置文件路径
+    # 脚本位于 src/skills/after-sales-api-1.0.0/scripts/，往上 4 级到项目根目录
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(script_dir))))
+    config_path = os.path.join(project_root, "storage", "tenants", tenant_id, "after-sales-api.md")
 
     if not os.path.exists(config_path):
+        # 列出 storage/tenants/ 下有哪些目录
+        tenants_dir = os.path.join(project_root, "storage", "tenants")
+        existing_tenants = []
+        if os.path.isdir(tenants_dir):
+            existing_tenants = os.listdir(tenants_dir)
+
         print(json.dumps({
             "success": True,
             "content": "未配置外部系统 API。请使用 after_sales_action 工具进行内部工单操作。",
-            "configured": False
+            "configured": False,
+            "debug": {
+                "tenant_id": tenant_id,
+                "expected_path": config_path,
+                "path_exists": os.path.exists(config_path),
+                "project_root": project_root,
+                "existing_tenants": existing_tenants,
+            }
         }, ensure_ascii=False))
         return
 

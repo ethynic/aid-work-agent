@@ -213,6 +213,12 @@
                 :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
                 {{ agent.type === 'builtin' ? '内置' : '定制' }}
               </span>
+              <button
+                v-if="selectedAgentIds.includes(agent.agent_id)"
+                @click="openEnvVarDialog(agent)"
+                class="ml-2 text-xs px-2 py-1 rounded border border-default text-muted hover:text-primary-600 hover:border-primary-400 transition-colors"
+                title="环境变量设置"
+              >环境变量</button>
             </div>
           </div>
           <!-- 实例检查和创建按钮 -->
@@ -251,6 +257,58 @@
           <button @click="showFormDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">取消</button>
           <button @click="handleSubmit" :disabled="submitting" class="flex-1 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg transition-colors">
             {{ submitting ? '处理中...' : '确认' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 环境变量弹窗 -->
+    <div v-if="showEnvVarDialog" class="fixed inset-0 z-[60] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showEnvVarDialog = false"></div>
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-xl mx-4 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold text-default">环境变量设置</h3>
+          <span class="text-xs text-muted">{{ envVarAgentName }} · {{ currentTenant?.company_name }}</span>
+        </div>
+
+        <div class="text-xs text-muted mb-3">
+          这些变量将在 {{ envVarAgentName }} 运行时注入为环境变量，供 http_api 工具中的 ${VAR_NAME} 引用。
+        </div>
+
+        <div v-if="loadingEnvVars" class="text-center py-6 text-muted text-sm">加载中...</div>
+        <div v-else class="space-y-2 max-h-[400px] overflow-y-auto">
+          <div v-for="(item, idx) in envVarList" :key="idx" class="flex items-start gap-2">
+            <input
+              v-model="item.name"
+              placeholder="变量名"
+              class="flex-1 px-2 py-1.5 text-sm border border-default rounded focus:outline-none focus:border-primary-400 font-mono"
+            />
+            <input
+              v-model="item.value"
+              placeholder="变量值"
+              class="flex-[2] px-2 py-1.5 text-sm border border-default rounded focus:outline-none focus:border-primary-400"
+            />
+            <input
+              v-model="item.description"
+              placeholder="说明"
+              class="flex-1 px-2 py-1.5 text-sm border border-default rounded focus:outline-none focus:border-primary-400"
+            />
+            <button @click="envVarList.splice(idx, 1)" class="text-muted hover:text-danger-500 transition-colors px-1">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <button
+            @click="envVarList.push({ name: '', value: '', description: '' })"
+            class="w-full py-1.5 text-sm text-primary-600 hover:text-primary-700 border border-dashed border-default rounded hover:border-primary-400 transition-colors"
+          >+ 添加变量</button>
+        </div>
+
+        <div v-if="envVarError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ envVarError }}</div>
+
+        <div class="flex gap-3 mt-6">
+          <button @click="showEnvVarDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">取消</button>
+          <button @click="handleSaveEnvVars" :disabled="savingEnvVars" class="flex-1 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg transition-colors">
+            {{ savingEnvVars ? '保存中...' : '保存' }}
           </button>
         </div>
       </div>
@@ -338,7 +396,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
-import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, type AgentItem } from '@/api/saasPermissions'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, getSubagentEnvVars, setSubagentEnvVars, type AgentItem, type EnvVarItem } from '@/api/saasPermissions'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -361,6 +419,15 @@ const selectedAgentQuotas = ref<Record<string, number>>({})
 const loadingAgents = ref(false)
 const syncingInstances = ref<string | null>(null)
 const checkingInstances = ref(false)
+
+// 环境变量弹窗
+const showEnvVarDialog = ref(false)
+const envVarAgentId = ref('')
+const envVarAgentName = ref('')
+const envVarList = ref<Array<{ name: string; value: string; description: string }>>([])
+const loadingEnvVars = ref(false)
+const savingEnvVars = ref(false)
+const envVarError = ref('')
 
 const defaultFormData: TenantFormData = {
   company_name: '',
@@ -504,6 +571,65 @@ function toggleAgentSelection(agentId: string) {
 function updateAgentQuota(agentId: string, value: number) {
   if (value < 1) value = 1
   selectedAgentQuotas.value[agentId] = value
+}
+
+async function openEnvVarDialog(agent: AgentItem) {
+  if (!currentTenant.value) return
+  envVarAgentId.value = agent.agent_id
+  envVarAgentName.value = agent.name
+  envVarError.value = ''
+  envVarList.value = []
+  showEnvVarDialog.value = true
+  loadingEnvVars.value = true
+  try {
+    const res = await getSubagentEnvVars(currentTenant.value.tenant_id, agent.agent_id)
+    if (res.success && res.data) {
+      envVarList.value = res.data.map((v: EnvVarItem) => ({
+        name: v.var_name,
+        value: v.var_value || '',
+        description: v.description || '',
+      }))
+    }
+    if (envVarList.value.length === 0) {
+      envVarList.value = [{ name: '', value: '', description: '' }]
+    }
+  } catch (e) {
+    console.error('加载环境变量失败:', e)
+    envVarList.value = [{ name: '', value: '', description: '' }]
+  } finally {
+    loadingEnvVars.value = false
+  }
+}
+
+async function handleSaveEnvVars() {
+  if (!currentTenant.value) return
+  // 过滤掉空行
+  const vars = envVarList.value.filter(v => v.name.trim())
+  // 检查重名
+  const names = vars.map(v => v.name.trim())
+  if (new Set(names).size !== names.length) {
+    envVarError.value = '变量名不能重复'
+    return
+  }
+  savingEnvVars.value = true
+  envVarError.value = ''
+  try {
+    const res = await setSubagentEnvVars(
+      currentTenant.value.tenant_id,
+      envVarAgentId.value,
+      vars.map(v => ({ name: v.name.trim(), value: v.value, description: v.description || undefined })),
+    )
+    if (res.success) {
+      toast.success('环境变量保存成功')
+      showEnvVarDialog.value = false
+    } else {
+      envVarError.value = res.message || '保存失败'
+    }
+  } catch (e: any) {
+    envVarError.value = e.message || '保存失败'
+  } finally {
+    savingEnvVars.value = false
+  }
 }
 
 function validateTenantCodeFormat() {
