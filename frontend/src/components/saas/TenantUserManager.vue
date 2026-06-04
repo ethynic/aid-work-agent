@@ -158,7 +158,6 @@
         <BaseButton :disabled="savingPermissions" @click="saveUserPermissions">{{ savingPermissions ? '保存中...' : '确认保存' }}</BaseButton>
       </template>
     </BaseModal>
-  </div>
 </template>
 
 <script setup lang="ts">

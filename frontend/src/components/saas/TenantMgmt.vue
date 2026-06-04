@@ -339,7 +339,7 @@
             <div>
               <div class="text-sm text-success-700 font-medium">已配置</div>
               <div class="text-xs text-muted mt-0.5">
-                {{ configFileStatus.filename }} · {{ (configFileStatus.size / 1024).toFixed(1) }} KB
+                {{ configFileStatus.filename }} · {{ ((configFileStatus.size ?? 0) / 1024).toFixed(1) }} KB
               </div>
             </div>
             <div class="flex gap-2">

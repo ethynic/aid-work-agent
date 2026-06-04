@@ -177,7 +177,7 @@
                       </template>
                       <template #file_size="{ row }">{{ formatFileSize(row.file_size) }}</template>
                       <template #total_chunks="{ row }">
-                        <span @click="openChunkDetail(row)" class="text-primary-600 hover:text-primary-700 hover:underline cursor-pointer">{{ row.total_chunks }}</span>
+                        <span @click="openChunkDetail(row as DocumentResponse)" class="text-primary-600 hover:text-primary-700 hover:underline cursor-pointer">{{ row.total_chunks }}</span>
                       </template>
                       <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
                       <template #actions="{ row }">
