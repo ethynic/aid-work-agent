@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div class="page-container bg-canvas">
     <AppHeader
       title="用户管理"
       :is-logged-in="effectiveIsLoggedIn"
@@ -8,9 +8,8 @@
       @logout="handleLogout"
     />
 
-    <div class="flex-1 overflow-y-auto p-6">
-      <div class="page-container">
-        <div class="page-toolbar">
+    <div class="page-content p-6">
+      <div class="page-toolbar">
           <div class="page-toolbar-left">
             <BaseInput v-model="searchKeyword" placeholder="搜索用户名/手机号" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
             <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
@@ -62,7 +61,7 @@
           <BasePagination
             v-if="total > 0"
             :total="total"
-            v-model:current-page="currentPage"
+            v-model:currentPage="currentPage"
             :page-size="pageSize"
           />
         </template>
@@ -229,7 +228,7 @@ const columns = [
   { key: 'department', label: '部门' },
   { key: 'role', label: '角色' },
   { key: 'agent_auth', label: '数字员工授权' },
-  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
+  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' as const },
 ]
 
 const loading = ref(true)

@@ -181,7 +181,7 @@
                       </template>
                       <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
                       <template #actions="{ row }">
-                        <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
+                        <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(row)">删除</BaseButton>
                       </template>
                     </BaseTable>
                   </div>

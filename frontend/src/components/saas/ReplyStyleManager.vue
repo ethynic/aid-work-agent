@@ -29,12 +29,9 @@
       <!-- 风格列表 -->
       <div class="table-scroll-wrapper">
         <BaseTable :columns="columns" :data="filteredStyles" row-key="style_id">
-          <template #col-index="{ index }">
-            {{ index + 1 }}
-          </template>
         <template #col-name="{ row }">
           <div>
-            <span class="text-default font-medium">{{ row.name }}</span>
+            <span class="text-default font-medium cursor-pointer hover:text-primary-600" @click="row.is_system ? openView(row) : openEdit(row)">{{ row.name }}</span>
             <BaseBadge v-if="row.is_system" intent="info" class="ml-2">系统</BaseBadge>
           </div>
         </template>
@@ -43,14 +40,8 @@
         </template>
         <template #col-version="{ row }">
           <span class="text-muted text-sm">v{{ row.version }}</span>
-        </template>
-        <template #col-actions="{ row }">
-          <div class="flex items-center gap-2">
-            <BaseButton v-if="row.is_system" intent="ghost" size="sm" @click="openView(row)">查看</BaseButton>
-            <BaseButton v-else intent="ghost" size="sm" @click="openEdit(row)">编辑</BaseButton>
-            <BaseButton intent="ghost" size="sm" @click="openVersions(row)">版本</BaseButton>
-            <BaseButton v-if="!row.is_system" intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
-          </div>
+          <BaseButton intent="ghost" size="sm" class="ml-1 text-xs" @click.stop="openVersions(row)">版本</BaseButton>
+          <BaseButton v-if="!row.is_system" intent="danger-ghost" size="sm" class="ml-1 text-xs" @click.stop="handleDelete(row)">删除</BaseButton>
         </template>
         <template #empty>
           <div class="text-center py-8 text-muted">暂无回复风格</div>
@@ -178,11 +169,9 @@ const filteredStyles = computed(() => {
 })
 
 const columns = [
-  { key: 'index', label: '序号', width: '60px' },
   { key: 'name', label: '名称' },
   { key: 'description', label: '描述' },
   { key: 'version', label: '版本', width: '80px' },
-  { key: 'actions', label: '操作', width: '220px' },
 ]
 
 // 编辑器

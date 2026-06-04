@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div class="page-container bg-canvas">
     <!-- Header Bar -->
     <AppHeader
       title="渠道配置"
@@ -11,57 +11,53 @@
     </AppHeader>
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-y-auto p-6">
-      <div class="flex items-center justify-between mb-6">
+    <div class="page-content p-6">
+      <div class="page-toolbar">
         <div></div>
-        <button
-          @click="openAddChannel"
-          class="px-4 py-2 bg-primary-500 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition-colors"
-        >
-          + 添加渠道
-        </button>
+        <div class="page-toolbar-right">
+          <BaseButton @click="openAddChannel">添加渠道</BaseButton>
+        </div>
       </div>
 
     <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <!-- 渠道列表 -->
     <div v-else-if="channels.length > 0" class="space-y-4">
-      <div v-for="ch in channels" :key="ch.config_id" class="bg-white rounded-xl shadow-sm border border-default p-5">
+      <div v-for="ch in channels" :key="ch.config_id" class="bg-surface rounded-lg border border-default p-5">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
             <span class="text-sm text-default font-mono">{{ ch.id }}</span>
             <span class="text-sm text-default">{{ channelTypeLabel(ch.channel_type) }}</span>
-            <span
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
-              :class="ch.verified ? 'bg-success-100 text-success-700' : 'bg-yellow-100 text-yellow-700'"
-            >
+            <BaseBadge :intent="ch.verified ? 'success' : 'warning'">
               {{ ch.verified ? '已验证' : '未验证' }}
-            </span>
-            <span v-if="ch.subagent_type" class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
+            </BaseBadge>
+            <BaseBadge v-if="ch.subagent_type" intent="info">
               🤖 {{ subagentTypeLabel(ch.subagent_type) }}
-            </span>
+            </BaseBadge>
           </div>
           <div class="flex items-center gap-2">
-            <button @click="showGuide(ch)" class="text-sm px-3 py-1.5 bg-surface-hover text-default rounded-lg hover:bg-gray-200 transition-colors">配置指南</button>
-            <button @click="handleVerify(ch.config_id)" class="text-sm px-3 py-1.5 bg-success-100 text-success-700 rounded-lg hover:bg-success-200 transition-colors">验证连接</button>
-            <button @click="editChannel(ch)" class="text-sm px-3 py-1.5 bg-info-100 text-info-700 rounded-lg hover:bg-info-200 transition-colors">编辑</button>
-            <button @click="handleDelete(ch.config_id)" class="text-sm px-3 py-1.5 bg-danger-100 text-danger-700 rounded-lg hover:bg-danger-200 transition-colors">删除</button>
+            <BaseButton intent="ghost" size="sm" @click="showGuide(ch)">配置指南</BaseButton>
+            <BaseButton intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
+            <BaseButton intent="ghost" size="sm" @click="editChannel(ch)">编辑</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
           </div>
         </div>
         <!-- 回调地址展示 -->
         <div v-if="tenant" class="bg-canvas rounded-lg p-3 text-sm">
           <span class="text-muted">回调地址：</span>
           <code class="text-primary-600 select-all font-mono">{{ getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
-          <button @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)" class="ml-2 text-sm text-muted hover:text-primary-600 transition-colors">{{ copied[ch.config_id] ? '已复制' : '复制' }}</button>
+          <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
+            {{ copied[ch.config_id] ? '已复制' : '复制' }}
+          </BaseButton>
         </div>
       </div>
     </div>
 
-    <div v-else class="text-center py-16 bg-white rounded-xl shadow-sm border border-default">
+    <div v-else class="text-center py-16 bg-surface rounded-lg border border-default">
       <div class="text-4xl mb-4">🔗</div>
       <p class="text-lg font-medium text-default mb-2">尚未配置任何渠道</p>
       <p class="text-sm text-muted mb-6">配置企业微信、钉钉或飞书后，员工即可在 IM 中与智能体对话</p>
-      <button @click="openAddChannel" class="px-6 py-2.5 bg-primary-500 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition-colors">添加第一个渠道</button>
+      <BaseButton @click="openAddChannel">添加第一个渠道</BaseButton>
     </div>
     </div>
 
@@ -74,11 +70,11 @@
       :content-class="{ 'modal-fullscreen': isFullscreen }"
     >
       <template #header-extra>
-        <button class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
+        <BaseButton intent="ghost" size="sm" class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
           </svg>
-        </button>
+        </BaseButton>
       </template>
 
       <div>
@@ -95,7 +91,7 @@
           <button
             v-for="ct in channelTypes" :key="ct.value"
             @click="form.channel_type = ct.value"
-            class="flex flex-col items-center gap-1.5 py-3 px-2 rounded-lg border-2 transition-all"
+            class="flex flex-col items-center gap-1.5 py-3 px-2 rounded-lg border-2 transition-all cursor-pointer"
             :class="form.channel_type === ct.value ? 'border-primary-400 bg-primary-50' : 'border-default hover:border-hover'"
           >
             <span class="text-lg">{{ ct.icon }}</span>
@@ -104,9 +100,9 @@
         </div>
 
         <!-- 配置指引摘要 -->
-        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-sm text-amber-800">
+        <div class="bg-warning-50 border border-warning-200 rounded-lg p-3 mb-3 text-sm text-warning-800">
           <p class="font-medium mb-1.5">{{ currentGuide.title }}</p>
-          <ol class="list-decimal list-inside space-y-0.5 text-amber-700">
+          <ol class="list-decimal list-inside space-y-0.5 text-warning-700">
             <li v-for="(step, i) in currentGuide.steps" :key="i">{{ step }}</li>
           </ol>
           <a v-if="currentGuide.docUrl" :href="currentGuide.docUrl" target="_blank"
@@ -119,11 +115,9 @@
         <div class="grid grid-cols-4 gap-3">
           <div v-for="field in channelFields" :key="field.key">
             <label class="text-sm text-muted mb-1 block">{{ field.label }}</label>
-            <input
+            <BaseInput
               v-model="form.config[field.key]"
-              type="text"
               :placeholder="field.placeholder"
-              class="w-full px-3 py-2.5 bg-canvas border border-hover rounded-lg text-default text-sm focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
             />
             <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
           </div>
@@ -131,13 +125,10 @@
           <!-- 关联数字员工 -->
           <div>
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
-            <select
-              v-model="form.subagent_type"
-              class="w-full px-3 py-2.5 bg-canvas border border-hover rounded-lg text-default text-sm focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
-            >
+            <BaseSelect v-model="form.subagent_type">
               <option value="">不绑定（默认）</option>
               <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
-            </select>
+            </BaseSelect>
             <p class="mt-1 text-xs text-muted">选择该渠道消息由哪个数字员工处理</p>
           </div>
         </div>
@@ -146,7 +137,7 @@
         <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
           <div class="flex items-center justify-between mb-3">
             <label class="text-sm font-medium text-default">客服账号配置</label>
-            <button @click="addKfAccount" class="text-xs text-primary-600 hover:text-primary-700 font-medium">+ 添加客服账号</button>
+            <BaseButton intent="ghost" size="sm" @click="addKfAccount">+ 添加客服账号</BaseButton>
           </div>
           <div v-if="kfAccounts.length === 0" class="text-xs text-muted bg-canvas rounded-lg p-4 text-center">
             尚未配置客服账号，请先添加
@@ -154,36 +145,36 @@
           <div v-for="(kf, idx) in kfAccounts" :key="idx" class="bg-canvas border border-default rounded-lg p-3 mb-3">
             <div class="flex items-center justify-between mb-3">
               <span class="text-sm font-medium text-default">客服账号 #{{ idx + 1 }}</span>
-              <button @click="removeKfAccount(idx)" class="text-xs text-danger-400 hover:text-danger-600">删除</button>
+              <BaseButton intent="danger-ghost" size="sm" @click="removeKfAccount(idx)">删除</BaseButton>
             </div>
             <div class="grid grid-cols-4 gap-3">
               <div>
                 <label class="block text-xs text-muted mb-1">客服账号名称</label>
-                <input v-model="kf.name" type="text" placeholder="售前咨询" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <BaseInput v-model="kf.name" placeholder="售前咨询" />
               </div>
               <div>
                 <label class="block text-xs text-muted mb-1">open_kfid</label>
-                <input v-model="kf.open_kfid" type="text" placeholder="首次接收消息时自动填入" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <BaseInput v-model="kf.open_kfid" placeholder="首次接收消息时自动填入" />
               </div>
               <div>
                 <label class="block text-xs text-muted mb-1">绑定子智能体</label>
-                <select v-model="kf.subagent_type" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400">
+                <BaseSelect v-model="kf.subagent_type">
                   <option value="">不绑定（使用渠道默认）</option>
                   <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
-                </select>
+                </BaseSelect>
               </div>
               <div>
                 <label class="block text-xs text-muted mb-1">欢迎语</label>
-                <input v-model="kf.welcome_message" type="text" placeholder="您好，请问有什么可以帮您？" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <BaseInput v-model="kf.welcome_message" placeholder="您好，请问有什么可以帮您？" />
               </div>
               <div class="col-span-2">
                 <label class="block text-xs text-muted mb-1">人工接待人员（企微 userid）</label>
-                <input v-model="kf.servicer_userid_list" type="text" placeholder="zhangsan, lisi" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <BaseInput v-model="kf.servicer_userid_list" placeholder="zhangsan, lisi" />
                 <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
               </div>
               <div class="col-span-2">
                 <label class="block text-xs text-muted mb-1">转人工关键词</label>
-                <input v-model="kf.human_transfer_keywords" type="text" placeholder="人工服务, 转人工, 人工客服" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <BaseInput v-model="kf.human_transfer_keywords" placeholder="人工服务, 转人工, 人工客服" />
                 <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，不设置则使用默认值</p>
               </div>
             </div>
@@ -195,8 +186,8 @@
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
           <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
           <div class="flex items-center gap-2">
-            <code class="flex-1 bg-white px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
-            <button @click="copyUrl(getCallbackUrl(form.channel_type), 'form')" class="px-3 py-2 bg-primary-100 text-primary-700 rounded text-xs hover:bg-primary-200 transition-colors whitespace-nowrap">{{ copied['form'] ? '已复制' : '复制' }}</button>
+            <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
+            <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(form.channel_type), 'form')">{{ copied['form'] ? '已复制' : '复制' }}</BaseButton>
           </div>
         </div>
 
@@ -205,71 +196,56 @@
     </BaseModal>
 
     <!-- ==================== 配置指南弹窗 ==================== -->
-    <div v-if="showGuideModal" class="fixed inset-0 z-50 flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/50" @click="showGuideModal = false"></div>
-      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-y-auto">
-        <div class="p-6">
-          <div class="flex items-center justify-between mb-5">
-            <h3 class="text-lg font-bold text-default">{{ channelTypeLabel(guideChannel) }} 接入指南</h3>
-            <button @click="showGuideModal = false" class="text-muted hover:text-default text-xl">&times;</button>
-          </div>
-
-          <!-- 步骤指引 -->
-          <div class="space-y-4">
-            <div v-for="(step, i) in fullGuide.steps" :key="i" class="flex gap-4">
-              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-bold">{{ i + 1 }}</div>
-              <div class="flex-1 pt-1">
-                <p class="font-medium text-default">{{ step.title }}</p>
-                <p class="text-sm text-muted mt-0.5">{{ step.desc }}</p>
-                <p v-if="step.location" class="text-xs text-primary-600 mt-1">位置：{{ step.location }}</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- 回调地址 -->
-          <div class="mt-6 bg-canvas border border-default rounded-xl p-5">
-            <p class="font-medium text-default mb-2">回调地址</p>
-            <p class="text-sm text-muted mb-3">在 {{ channelTypeLabel(guideChannel) }} 后台配置接收消息时，URL 填入：</p>
-            <div class="flex items-center gap-2">
-              <code class="flex-1 bg-white px-4 py-3 rounded-lg text-primary-700 font-mono text-sm select-all break-all border border-default">{{ getCallbackUrl(guideChannel) }}</code>
-              <button @click="copyUrl(getCallbackUrl(guideChannel), 'guide')" class="px-4 py-3 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-700 transition-colors whitespace-nowrap">{{ copied['guide'] ? '已复制' : '复制' }}</button>
-            </div>
-          </div>
-
-          <!-- 凭证说明表 -->
-          <div class="mt-6">
-            <p class="font-medium text-default mb-3">凭证字段说明</p>
-            <table class="w-full text-sm">
-              <thead>
-                <tr class="border-b border-default">
-                  <th class="text-left py-2 text-muted font-medium">字段</th>
-                  <th class="text-left py-2 text-muted font-medium">说明</th>
-                  <th class="text-left py-2 text-muted font-medium">获取位置</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="f in channelFieldMap[guideChannel] || []" :key="f.key" class="border-b border-default">
-                  <td class="py-2 text-default font-mono text-xs">{{ f.key }}</td>
-                  <td class="py-2 text-default">{{ f.label }}</td>
-                  <td class="py-2 text-muted text-xs">{{ f.location || '-' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- 常见问题 -->
-          <div v-if="fullGuide.faq" class="mt-6">
-            <p class="font-medium text-default mb-3">常见问题</p>
-            <div class="space-y-3">
-              <div v-for="(item, i) in fullGuide.faq" :key="i">
-                <p class="text-sm font-medium text-default">Q: {{ item.q }}</p>
-                <p class="text-sm text-muted">A: {{ item.a }}</p>
-              </div>
-            </div>
+    <BaseModal v-model="showGuideModal" :title="`${channelTypeLabel(guideChannel)} 接入指南`" size="xl">
+      <!-- 步骤指引 -->
+      <div class="space-y-4">
+        <div v-for="(step, i) in fullGuide.steps" :key="i" class="flex gap-4">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-bold">{{ i + 1 }}</div>
+          <div class="flex-1 pt-1">
+            <p class="font-medium text-default">{{ step.title }}</p>
+            <p class="text-sm text-muted mt-0.5">{{ step.desc }}</p>
+            <p v-if="step.location" class="text-xs text-primary-600 mt-1">位置：{{ step.location }}</p>
           </div>
         </div>
       </div>
-    </div>
+
+      <!-- 回调地址 -->
+      <div class="mt-6 bg-canvas border border-default rounded-lg p-4">
+        <p class="font-medium text-default mb-2">回调地址</p>
+        <p class="text-sm text-muted mb-3">在 {{ channelTypeLabel(guideChannel) }} 后台配置接收消息时，URL 填入：</p>
+        <div class="flex items-center gap-2">
+          <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all border border-default">{{ getCallbackUrl(guideChannel) }}</code>
+          <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(guideChannel), 'guide')">{{ copied['guide'] ? '已复制' : '复制' }}</BaseButton>
+        </div>
+      </div>
+
+      <!-- 凭证说明表 -->
+      <div class="mt-6">
+        <p class="font-medium text-default mb-3">凭证字段说明</p>
+        <div class="table-scroll-wrapper">
+          <BaseTable :columns="guideFieldColumns" :data="channelFieldMap[guideChannel] || []" row-key="key">
+            <template #key="{ row }"><span class="font-mono text-xs">{{ row.key }}</span></template>
+            <template #label="{ row }">{{ row.label }}</template>
+            <template #location="{ row }"><span class="text-muted text-xs">{{ row.location || '-' }}</span></template>
+          </BaseTable>
+        </div>
+      </div>
+
+      <!-- 常见问题 -->
+      <div v-if="fullGuide.faq" class="mt-6">
+        <p class="font-medium text-default mb-3">常见问题</p>
+        <div class="space-y-3">
+          <div v-for="(item, i) in fullGuide.faq" :key="i">
+            <p class="text-sm font-medium text-default">Q: {{ item.q }}</p>
+            <p class="text-sm text-muted">A: {{ item.a }}</p>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <BaseButton intent="secondary" @click="showGuideModal = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -280,6 +256,7 @@ import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
 import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -547,6 +524,12 @@ const fullGuideMap: Record<string, { steps: { title: string; desc: string; locat
 }
 
 const fullGuide = computed(() => fullGuideMap[guideChannel.value] || { steps: [] })
+
+const guideFieldColumns = [
+  { key: 'key', label: '字段', width: '160px' },
+  { key: 'label', label: '说明' },
+  { key: 'location', label: '获取位置', width: '200px' },
+]
 
 // ==================== 回调地址 ====================
 
