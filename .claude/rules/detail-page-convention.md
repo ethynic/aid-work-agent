@@ -17,21 +17,19 @@
 使用 `BaseModal` 组件：
 
 ```vue
-<BaseModal v-model="showModal" :title="editingItem ? 'XX - 编辑' : 'XX - 新增'" size="lg">
+<BaseModal
+  v-model="showModal"
+  :title="editingItem ? 'XX - 编辑' : 'XX - 新增'"
+  size="lg"
+  :content-class="{ 'modal-fullscreen': isFullscreen }"
+>
   <!-- 弹框右上角按钮 -->
   <template #header-extra>
-    <div class="modal-header-actions">
-      <button class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-        </svg>
-      </button>
-      <button class="modal-close-btn" title="关闭" @click="handleClose">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 6 6 18M6 6l12 12"/>
-        </svg>
-      </button>
-    </div>
+    <button class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+      </svg>
+    </button>
   </template>
   <!-- 表单内容 -->
   <template #footer>
@@ -42,8 +40,9 @@
 ```
 
 **弹框右上角按钮**：
-- **全屏按钮**：使用 `modal-fullscreen-btn` 类，点击后弹框切换为全屏（添加 `modal-fullscreen` 类）
-- **关闭按钮**：使用 `modal-close-btn` 类，功能等同于关闭操作，需触发脏检测（如有修改则弹出确认）
+- **全屏按钮**：使用 `modal-fullscreen-btn` 类，点击后切换 `isFullscreen` 状态，通过 `content-class` prop 将 `modal-fullscreen` 类应用到内容容器上
+- **关闭按钮**：**不要在 `#header-extra` 中定义**，`BaseModal` 已自带右上角 X 关闭按钮
+- **全屏功能**：`BaseModal` 根节点使用 `<Teleport to="body">`，直接给组件绑定 `:class` 会作用在遮罩层而非内容区，必须使用 `content-class` prop 让 `modal-fullscreen` 应用到内容容器 `<div>` 上
 
 ### 关闭弹框脏检测
 
@@ -59,14 +58,14 @@ const {
   confirmSave, confirmDiscard, confirmCancel
 } = useModalCloseGuard(form, () => ({ ...form.value }), async () => { await save() })
 
-// 在 BaseModal 上绑定：
-// <BaseModal v-model="showModal" :closeOnOverlay="false" @overlay-click="handleOverlayClick">
-//   关闭按钮 @click="handleCloseClick"
-//   确认弹框三个按钮：confirmSave / confirmDiscard / confirmCancel
+// 在 BaseModal 上绑定（如需脏检测关闭）：
+// <BaseModal v-model="showModal" :closeOnOverlay="false" @update:modelValue="handleOverlayClick">
+// 关闭按钮 @click="handleCloseClick"
+// 确认弹框三个按钮：confirmSave / confirmDiscard / confirmCancel
 ```
 
 逻辑说明：
-1. 点击遮罩层或关闭按钮时，判断是否有未保存的修改
+1. 点击遮罩层时，判断是否有未保存的修改（需设置 `:close-on-overlay="false"`）
 2. 无修改：直接关闭
 3. 有修改：弹出确认对话框（保存 / 不保存 / 取消）
 4. 关闭弹框后，列表页自动刷新
@@ -81,8 +80,8 @@ BaseModal 支持以下尺寸（通过 `size` prop）：
 |------|------|---------|---------|
 | `sm` | `max-w-sm`（384px） | 简单确认对话框 | 一般一行 1 个字段 |
 | `md`（默认） | `max-w-lg`（512px） | 少于 6 个字段的表单 | 一般一行 1 个字段 |
-| `lg` | `max-w-2xl`（672px） | 6~12 个字段的表单 | 一般一行 2 个字段，如果是大文本字段可以一行 1 个 |
-| `xl` | `max-w-4xl`（896px） | 内容较多的详情页 | 一般一行 3-4 个字段，如果是大文本字段可以一行 1 个 |
+| `lg` | `max-w-4xl` (896px) | 6~12 个字段的表单 | 一般一行 2 个字段，如果是大文本字段可以一行 1 个 |
+| `xl` | `w-[90vw] h-[90vh]` | 内容较多的详情页 | 一般一行 4 个字段，如果是大文本字段可以一行 1 个 |
 
 弹框内容区默认 `max-h-[70vh]` 并带纵向滚动条（`scrollable=true`）。
 
@@ -94,7 +93,7 @@ BaseModal 支持以下尺寸（通过 `size` prop）：
 
 ## 3. 详情页头部
 
-详情页头部分为两行布局：
+详情页的标题已经显示在弹框的 `title` prop 中，无需额外显示。
 
 ### 3.1 第一行：操作按钮区
 
@@ -108,17 +107,13 @@ BaseModal 支持以下尺寸（通过 `size` prop）：
 | 刷新 | `ghost` | 重新加载数据 |
 
 **布局规范**：
-- 使用 `flex justify-between items-center` 布局
-- 左侧可放置页面标题（如"XX 详情"）
-- 右侧放置操作按钮，使用 `flex gap-2` 间距
+- 使用 `flex items-center` 布局
+- 操作按钮居左显示，使用 `flex gap-2` 间距
 - 按钮尺寸使用 `md`（默认）
 
 ```vue
-<div class="flex justify-between items-center mb-4">
-  <!-- 左侧：页面标题 -->
-  <h2 class="text-lg font-semibold text-default">XX 详情</h2>
-
-  <!-- 右侧：操作按钮 -->
+<div class="flex items-center mb-4">
+  <!-- 操作按钮 -->
   <div class="flex gap-2">
     <BaseButton @click="handleSave">保存</BaseButton>
     <BaseButton intent="secondary" @click="handleSaveAndClose">保存并关闭</BaseButton>

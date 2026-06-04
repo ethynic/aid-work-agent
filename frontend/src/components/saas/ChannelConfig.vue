@@ -66,135 +66,143 @@
     </div>
 
     <!-- ==================== 添加/编辑弹窗 ==================== -->
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/50" @click="showForm = false"></div>
-      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto">
-        <div class="p-6">
-          <h3 class="text-lg font-bold text-default mb-1">{{ editingId ? '编辑渠道' : '添加渠道' }}</h3>
-          <p v-if="!editingId" class="text-sm text-muted mb-5">选择 IM 平台，然后填写应用凭证</p>
+    <BaseModal
+      v-model="showForm"
+      :title="editingId ? '渠道配置 - 编辑' : '渠道配置 - 新增'"
+      size="xl"
+      :close-on-overlay="false"
+      :content-class="{ 'modal-fullscreen': isFullscreen }"
+    >
+      <template #header-extra>
+        <button class="modal-fullscreen-btn" title="全屏" @click="toggleFullscreen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+          </svg>
+        </button>
+      </template>
 
-          <!-- 渠道类型选择 -->
-          <div v-if="!editingId" class="grid grid-cols-3 gap-3 mb-6">
-            <button
-              v-for="ct in channelTypes" :key="ct.value"
-              @click="form.channel_type = ct.value"
-              class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all"
-              :class="form.channel_type === ct.value ? 'border-primary-400 bg-primary-50' : 'border-default hover:border-hover'"
+      <div>
+        <!-- 操作按钮区（第一行） -->
+        <div class="flex items-center gap-2 mb-3">
+          <BaseButton @click="handleSubmit">保存</BaseButton>
+          <BaseButton intent="secondary" @click="handleSaveAndClose">保存并关闭</BaseButton>
+        </div>
+
+        <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
+
+        <!-- 渠道类型选择 -->
+        <div v-if="!editingId" class="grid grid-cols-4 gap-2 mb-3">
+          <button
+            v-for="ct in channelTypes" :key="ct.value"
+            @click="form.channel_type = ct.value"
+            class="flex flex-col items-center gap-1.5 py-3 px-2 rounded-lg border-2 transition-all"
+            :class="form.channel_type === ct.value ? 'border-primary-400 bg-primary-50' : 'border-default hover:border-hover'"
+          >
+            <span class="text-lg">{{ ct.icon }}</span>
+            <span class="text-xs font-medium" :class="form.channel_type === ct.value ? 'text-primary-700' : 'text-default'">{{ ct.label }}</span>
+          </button>
+        </div>
+
+        <!-- 配置指引摘要 -->
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-sm text-amber-800">
+          <p class="font-medium mb-1.5">{{ currentGuide.title }}</p>
+          <ol class="list-decimal list-inside space-y-0.5 text-amber-700">
+            <li v-for="(step, i) in currentGuide.steps" :key="i">{{ step }}</li>
+          </ol>
+          <a v-if="currentGuide.docUrl" :href="currentGuide.docUrl" target="_blank"
+            class="inline-block mt-1.5 text-primary-600 hover:underline text-xs">
+            前往 {{ channelTypeLabel(form.channel_type) }} 管理后台 &rarr;
+          </a>
+        </div>
+
+        <!-- 表单字段（一行4个） -->
+        <div class="grid grid-cols-4 gap-3">
+          <div v-for="field in channelFields" :key="field.key">
+            <label class="text-sm text-muted mb-1 block">{{ field.label }}</label>
+            <input
+              v-model="form.config[field.key]"
+              type="text"
+              :placeholder="field.placeholder"
+              class="w-full px-3 py-2.5 bg-canvas border border-hover rounded-lg text-default text-sm focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
+            />
+            <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
+          </div>
+
+          <!-- 关联数字员工 -->
+          <div>
+            <label class="text-sm text-muted mb-1 block">关联数字员工</label>
+            <select
+              v-model="form.subagent_type"
+              class="w-full px-3 py-2.5 bg-canvas border border-hover rounded-lg text-default text-sm focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
             >
-              <span class="text-2xl">{{ ct.icon }}</span>
-              <span class="text-sm font-medium" :class="form.channel_type === ct.value ? 'text-primary-700' : 'text-default'">{{ ct.label }}</span>
-            </button>
-          </div>
-
-          <!-- 配置指引摘要 -->
-          <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-5 text-sm text-amber-800">
-            <p class="font-medium mb-2">{{ currentGuide.title }}</p>
-            <ol class="list-decimal list-inside space-y-1 text-amber-700">
-              <li v-for="(step, i) in currentGuide.steps" :key="i">{{ step }}</li>
-            </ol>
-            <a v-if="currentGuide.docUrl" :href="currentGuide.docUrl" target="_blank"
-              class="inline-block mt-2 text-primary-600 hover:underline text-xs">
-              前往 {{ channelTypeLabel(form.channel_type) }} 管理后台 &rarr;
-            </a>
-          </div>
-
-          <!-- 表单字段 -->
-          <div class="space-y-4">
-            <div v-for="field in channelFields" :key="field.key">
-              <label class="block text-sm font-medium text-default mb-1">{{ field.label }}</label>
-              <input
-                v-model="form.config[field.key]"
-                type="text"
-                :placeholder="field.placeholder"
-                class="w-full px-3 py-2.5 bg-canvas border border-hover rounded-lg text-default text-sm focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
-              />
-              <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
-            </div>
-
-            <!-- 关联数字员工 -->
-            <div>
-              <label class="block text-sm font-medium text-default mb-1">关联数字员工</label>
-              <select
-                v-model="form.subagent_type"
-                class="w-full px-3 py-2.5 bg-canvas border border-hover rounded-lg text-default text-sm focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200"
-              >
-                <option value="">不绑定（默认）</option>
-                <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
-              </select>
-              <p class="mt-1 text-xs text-muted">选择该渠道消息由哪个数字员工处理，不选则使用通用智能体</p>
-            </div>
-
-            <!-- 微信客服特有：客服账号配置 -->
-            <div v-if="form.channel_type === 'wecom_kf'" class="pt-4 border-t border-default">
-              <div class="flex items-center justify-between mb-3">
-                <label class="text-sm font-medium text-default">客服账号配置</label>
-                <button @click="addKfAccount" class="text-xs text-primary-600 hover:text-primary-700 font-medium">+ 添加客服账号</button>
-              </div>
-              <div v-if="kfAccounts.length === 0" class="text-xs text-muted bg-canvas rounded-lg p-4 text-center">
-                尚未配置客服账号，请先添加
-              </div>
-              <div v-for="(kf, idx) in kfAccounts" :key="idx" class="bg-canvas border border-default rounded-lg p-4 mb-3">
-                <div class="flex items-center justify-between mb-3">
-                  <span class="text-sm font-medium text-default">客服账号 #{{ idx + 1 }}</span>
-                  <button @click="removeKfAccount(idx)" class="text-xs text-danger-400 hover:text-danger-600">删除</button>
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="block text-xs font-medium text-default mb-1">客服账号名称</label>
-                    <input v-model="kf.name" type="text" placeholder="售前咨询" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
-                  </div>
-                  <div>
-                    <label class="block text-xs font-medium text-default mb-1">open_kfid</label>
-                    <input v-model="kf.open_kfid" type="text" placeholder="首次接收消息时自动填入" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
-                    <p class="mt-0.5 text-xs text-muted">首次接收消息时自动填入，无需手动填写</p>
-                  </div>
-                  <div class="col-span-2">
-                    <label class="block text-xs font-medium text-default mb-1">绑定子智能体</label>
-                    <select v-model="kf.subagent_type" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400">
-                      <option value="">不绑定（使用渠道默认）</option>
-                      <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
-                    </select>
-                  </div>
-                  <div class="col-span-2">
-                    <label class="block text-xs font-medium text-default mb-1">欢迎语</label>
-                    <input v-model="kf.welcome_message" type="text" placeholder="您好，请问有什么可以帮您？" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
-                  </div>
-                  <div class="col-span-2">
-                    <label class="block text-xs font-medium text-default mb-1">人工接待人员（企微 userid）</label>
-                    <input v-model="kf.servicer_userid_list" type="text" placeholder="zhangsan, lisi" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
-                    <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
-                  </div>
-                  <div class="col-span-2">
-                    <label class="block text-xs font-medium text-default mb-1">转人工关键词</label>
-                    <input v-model="kf.human_transfer_keywords" type="text" placeholder="人工服务, 转人工, 人工客服" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
-                    <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，不设置则使用默认值</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 回调地址提示 -->
-          <div v-if="tenant" class="mt-5 bg-primary-50 border border-primary-200 rounded-lg p-4">
-            <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
-            <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
-            <div class="flex items-center gap-2">
-              <code class="flex-1 bg-white px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
-              <button @click="copyUrl(getCallbackUrl(form.channel_type), 'form')" class="px-3 py-2 bg-primary-100 text-primary-700 rounded text-xs hover:bg-primary-200 transition-colors whitespace-nowrap">{{ copied['form'] ? '已复制' : '复制' }}</button>
-            </div>
-          </div>
-
-          <div v-if="formError" class="mt-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">{{ formError }}</div>
-
-          <div class="flex gap-3 mt-6">
-            <button @click="showForm = false" class="flex-1 py-2.5 border border-hover rounded-lg text-default hover:bg-surface-hover transition-colors text-sm">取消</button>
-            <button @click="handleSubmit" :disabled="submitting" class="flex-1 py-2.5 bg-primary-500 hover:bg-primary-700 disabled:bg-gray-300 text-white rounded-lg transition-colors text-sm font-medium">
-              {{ submitting ? '保存中...' : '保存' }}
-            </button>
+              <option value="">不绑定（默认）</option>
+              <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+            </select>
+            <p class="mt-1 text-xs text-muted">选择该渠道消息由哪个数字员工处理</p>
           </div>
         </div>
+
+        <!-- 微信客服特有：客服账号配置 -->
+        <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
+          <div class="flex items-center justify-between mb-3">
+            <label class="text-sm font-medium text-default">客服账号配置</label>
+            <button @click="addKfAccount" class="text-xs text-primary-600 hover:text-primary-700 font-medium">+ 添加客服账号</button>
+          </div>
+          <div v-if="kfAccounts.length === 0" class="text-xs text-muted bg-canvas rounded-lg p-4 text-center">
+            尚未配置客服账号，请先添加
+          </div>
+          <div v-for="(kf, idx) in kfAccounts" :key="idx" class="bg-canvas border border-default rounded-lg p-3 mb-3">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-sm font-medium text-default">客服账号 #{{ idx + 1 }}</span>
+              <button @click="removeKfAccount(idx)" class="text-xs text-danger-400 hover:text-danger-600">删除</button>
+            </div>
+            <div class="grid grid-cols-4 gap-3">
+              <div>
+                <label class="block text-xs text-muted mb-1">客服账号名称</label>
+                <input v-model="kf.name" type="text" placeholder="售前咨询" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+              </div>
+              <div>
+                <label class="block text-xs text-muted mb-1">open_kfid</label>
+                <input v-model="kf.open_kfid" type="text" placeholder="首次接收消息时自动填入" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+              </div>
+              <div>
+                <label class="block text-xs text-muted mb-1">绑定子智能体</label>
+                <select v-model="kf.subagent_type" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400">
+                  <option value="">不绑定（使用渠道默认）</option>
+                  <option v-for="sa in availableSubagents" :key="sa" :value="sa">{{ subagentTypeLabel(sa) }} ({{ sa }})</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs text-muted mb-1">欢迎语</label>
+                <input v-model="kf.welcome_message" type="text" placeholder="您好，请问有什么可以帮您？" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+              </div>
+              <div class="col-span-2">
+                <label class="block text-xs text-muted mb-1">人工接待人员（企微 userid）</label>
+                <input v-model="kf.servicer_userid_list" type="text" placeholder="zhangsan, lisi" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
+              </div>
+              <div class="col-span-2">
+                <label class="block text-xs text-muted mb-1">转人工关键词</label>
+                <input v-model="kf.human_transfer_keywords" type="text" placeholder="人工服务, 转人工, 人工客服" class="w-full px-2.5 py-2 bg-white border border-hover rounded text-sm focus:outline-none focus:border-primary-400" />
+                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，不设置则使用默认值</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 回调地址提示 -->
+        <div v-if="tenant" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
+          <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
+          <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
+          <div class="flex items-center gap-2">
+            <code class="flex-1 bg-white px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
+            <button @click="copyUrl(getCallbackUrl(form.channel_type), 'form')" class="px-3 py-2 bg-primary-100 text-primary-700 rounded text-xs hover:bg-primary-200 transition-colors whitespace-nowrap">{{ copied['form'] ? '已复制' : '复制' }}</button>
+          </div>
+        </div>
+
+        <div v-if="formError" class="mt-3 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">{{ formError }}</div>
       </div>
-    </div>
+    </BaseModal>
 
     <!-- ==================== 配置指南弹窗 ==================== -->
     <div v-if="showGuideModal" class="fixed inset-0 z-50 flex items-center justify-center">
@@ -270,6 +278,8 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
 import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -362,6 +372,19 @@ const form = ref<{ channel_type: string; config: Record<string, string>; subagen
   config: {},
   subagent_type: ''
 })
+
+const isFullscreen = ref(false)
+const formInitialSnapshot = ref<Record<string, any>>({})
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+}
+
+function closeModal() {
+  showForm.value = false
+  isFullscreen.value = false
+  formInitialSnapshot.value = {}
+}
 
 // ==================== 渠道类型定义 ====================
 
@@ -564,6 +587,8 @@ function openAddChannel() {
   form.value = { channel_type: 'wecom', config: {}, subagent_type: '' }
   kfAccounts.value = []
   formError.value = ''
+  formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
+  isFullscreen.value = false
   showForm.value = true
 }
 
@@ -584,6 +609,8 @@ function editChannel(ch: any) {
   } else {
     kfAccounts.value = []
   }
+  formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
+  isFullscreen.value = false
   showForm.value = true
 }
 
@@ -644,13 +671,17 @@ async function handleSubmit() {
     } else {
       await createChannel({ channel_type: form.value.channel_type, config: payload.config, subagent_type: payload.subagent_type } as any)
     }
-    showForm.value = false
+    closeModal()
     await loadChannels()
   } catch (e: any) {
     formError.value = e.message || '保存失败'
   } finally {
     submitting.value = false
   }
+}
+
+async function handleSaveAndClose() {
+  await handleSubmit()
 }
 
 async function handleVerify(configId: string) {
