@@ -177,7 +177,7 @@ async function loadData(page: number = 1) {
     if (response.success) {
       summary.value = response.summary
       data.value = response.data
-      total.value = response.pagination?.total || 0
+      total.value = response.pagination?.total_count || 0
     } else {
       toast.error(response.message || '加载数据失败')
       summary.value = null

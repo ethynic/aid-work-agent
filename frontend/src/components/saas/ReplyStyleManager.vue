@@ -29,23 +29,23 @@
       <!-- 风格列表 -->
       <div class="table-scroll-wrapper">
         <BaseTable :columns="columns" :data="pagedStyles" row-key="style_id">
-        <template #col-index="{ index }">
+        <template #index="{ index }">
           <span class="text-muted text-xs">{{ seqNumber(index) }}</span>
         </template>
-        <template #col-name="{ row }">
+        <template #name="{ row }">
           <div>
             <span class="text-default font-medium cursor-pointer hover:text-primary-600" @click="row.is_system ? openView(row) : openEdit(row)">{{ row.name }}</span>
             <BaseBadge v-if="row.is_system" intent="info" class="ml-2">系统</BaseBadge>
           </div>
         </template>
-        <template #col-description="{ row }">
+        <template #description="{ row }">
           <span class="text-muted text-sm">{{ row.description || '-' }}</span>
         </template>
-        <template #col-version="{ row }">
-          <span class="text-muted text-sm">v{{ row.version }}</span>
-          <BaseButton intent="ghost" size="sm" class="ml-1 text-xs" @click.stop="openVersions(row)">版本</BaseButton>
+        <template #version="{ row }">
+          <span class="text-muted text-sm">v{{ row.version }}　</span>
+          <button type="button" class="ml-1 text-xs text-primary-600 hover:text-primary-700 cursor-pointer" @click.stop="openVersions(row)">历史版本▼</button>
         </template>
-        <template #col-actions="{ row }">
+        <template #actions="{ row }">
           <div class="flex items-center justify-center gap-1 whitespace-nowrap">
             <BaseButton intent="ghost" size="sm" class="text-xs" @click="openEdit(row)">编辑</BaseButton>
             <BaseButton v-if="!row.is_system" intent="danger-ghost" size="sm" class="text-xs" @click.stop="handleDelete(row)">删除</BaseButton>
@@ -202,12 +202,12 @@ function handleClientSearch() {
   currentPage.value = 1
 }
 
-const columns = [
+const columns: { key: string; label: string; width?: string; thAlign?: 'left' | 'center' | 'right' }[] = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'name', label: '名称' },
   { key: 'description', label: '描述' },
-  { key: 'version', label: '版本', width: '80px' },
-  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
+  { key: 'version', label: '版本', width: '160px' },
+  { key: 'actions', label: '操作', width: '140px', thAlign: 'center' },
 ]
 
 // 编辑器

@@ -8,6 +8,27 @@
    ============================================ */
 
 /* ============================================
+   全局滚动条统一样式
+   ============================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-canvas);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-primary-600);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary-700);
+}
+
+/* ============================================
    列表页布局
    ============================================ */
 
