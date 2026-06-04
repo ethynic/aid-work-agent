@@ -881,3 +881,27 @@ CREATE TABLE IF NOT EXISTS data_connectors (
 );
 
 CREATE INDEX IF NOT EXISTS idx_data_connectors_tenant ON data_connectors(tenant_id);
+
+-- 2026-6-4，知识库分类表（Phase 0：分类管理）
+CREATE TABLE IF NOT EXISTS knowledge_categories (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    display_name TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, source_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_categories_tenant ON knowledge_categories(tenant_id);
+
+-- 为已有租户自动注册已有 source_type 分类（幂等）
+INSERT INTO knowledge_categories (tenant_id, source_type, display_name)
+SELECT DISTINCT d.tenant_id, d.source_type, d.source_type
+FROM documents d
+WHERE d.tenant_id IS NOT NULL
+  AND d.source_type IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM knowledge_categories kc
+    WHERE kc.tenant_id = d.tenant_id AND kc.source_type = d.source_type
+  );

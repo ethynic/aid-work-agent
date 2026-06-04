@@ -5,7 +5,9 @@
 
 import io
 import json
+import os
 import re
+import shutil
 import tempfile
 from typing import Optional, Dict, Any, List
 
@@ -13,6 +15,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
+
+from src.api.auth import get_current_user
 
 from src.db.database import get_db_connection
 
@@ -33,6 +37,26 @@ def _get_tenant_id(request: Request) -> str:
     if not tenant_id:
         raise HTTPException(status_code=400, detail="无法确定租户ID")
     return tenant_id
+
+
+def _save_upload_to_storage(content: bytes, filename: str, tenant_id: str) -> str:
+    """保存上传文件到 storage 目录，返回相对路径（storage/...）"""
+    from pathlib import Path
+    from src.config.settings import settings
+    import uuid
+
+    upload_dir = Path(settings.storage.uploads_dir) / tenant_id / "knowledge"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(filename).suffix.lower()
+    file_id = f"kb_{uuid.uuid4().hex[:12]}"
+    file_path = upload_dir / f"{file_id}{ext}"
+
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # 返回相对路径
+    return str(file_path).replace("\\", "/")
 
 
 class ApiResponse(BaseModel):
@@ -797,11 +821,19 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
     """上传酒店报价 Excel，逐 Sheet 解析后导入到向量知识库"""
     tenant_id = _get_tenant_id(request)
 
+    user_id = None
+    current_user = get_current_user(request)
+    if current_user:
+        user_id = current_user.get("user_id")
+
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
 
-    # 1. 保存到临时文件
+    # 1. 保存到持久目录（供 documents.file_path 引用）
     content = await file.read()
+    file_rel_path = _save_upload_to_storage(content, file.filename or "unknown.xlsx", tenant_id)
+
+    # 同时写临时文件供 openpyxl 读取
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
@@ -893,7 +925,8 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
                         info_text=info_text,
                         price_table_text=price_table_text,
                         metadata=metadata,
-                        source_file=source_filename,
+                        source_file=file_rel_path,
+                        user_id=user_id,
                     )
                     imported += 1
 
@@ -955,11 +988,19 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
     """上传景点报价 Excel，解析后导入到向量知识库"""
     tenant_id = _get_tenant_id(request)
 
+    user_id = None
+    current_user = get_current_user(request)
+    if current_user:
+        user_id = current_user.get("user_id")
+
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
 
-    # 1. 保存到临时文件
+    # 1. 保存到持久目录（供 documents.file_path 引用）
     content = await file.read()
+    file_rel_path = _save_upload_to_storage(content, file.filename or "unknown.xlsx", tenant_id)
+
+    # 同时写临时文件供 openpyxl 读取
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
@@ -1053,7 +1094,8 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
                         ticket_table_text=ticket_table_text,
                         project_table_text=project_table_text,
                         metadata=metadata,
-                        source_file=source_filename,
+                        source_file=file_rel_path,
+                        user_id=user_id,
                     )
                     imported += 1
 
@@ -1329,6 +1371,11 @@ async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
     """导入酒店到向量知识库"""
     tenant_id = _get_tenant_id(request)
 
+    user_id = None
+    current_user = get_current_user(request)
+    if current_user:
+        user_id = current_user.get("user_id")
+
     import sys
     from pathlib import Path
     skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
@@ -1345,6 +1392,7 @@ async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
             info_text=body.info_text,
             price_table_text=body.price_table_text,
             metadata=body.metadata,
+            user_id=user_id,
         )
         return {"success": True, "data": {"doc_id": doc_id}}
     except Exception as e:
@@ -1356,6 +1404,11 @@ async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
 async def import_attractions_kb(request: Request, body: ImportAttractionKBRequest):
     """导入景点到向量知识库"""
     tenant_id = _get_tenant_id(request)
+
+    user_id = None
+    current_user = get_current_user(request)
+    if current_user:
+        user_id = current_user.get("user_id")
 
     import sys
     from pathlib import Path

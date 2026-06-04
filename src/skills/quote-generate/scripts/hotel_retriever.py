@@ -214,7 +214,8 @@ class HotelRetriever:
     def import_hotel(self, tenant_id: str, hotel_name: str, region: str,
                      info_text: str, price_table_text: str,
                      metadata: Optional[Dict] = None,
-                     source_file: str = "") -> int:
+                     source_file: str = "",
+                     user_id: Optional[str] = None) -> int:
         """
         导入一个酒店到知识库。
 
@@ -225,6 +226,8 @@ class HotelRetriever:
             info_text: 酒店信息摘要（chunk 0，会向量化）
             price_table_text: 价格明细表（chunk 1，不向量化）
             metadata: 额外元信息
+            source_file: 来源文件名（仅记入 metadata）
+            user_id: 上传用户 ID
 
         Returns:
             doc_id
@@ -237,11 +240,11 @@ class HotelRetriever:
         with self._get_conn() as conn:
             # 1. 创建 document
             conn.execute("""
-                INSERT INTO documents (tenant_id, title, source_type, file_type, file_path,
-                                       total_chunks, embedding_model, metadata)
-                VALUES (%s, %s, %s, 'text', %s, 2, 'text-embedding-v3', %s)
+                INSERT INTO documents (user_id, tenant_id, title, source_type, file_type, file_path,
+                                       total_chunks, embedding_model, metadata, summary)
+                VALUES (%s, %s, %s, %s, 'xlsx', %s, 2, 'text-embedding-v3', %s, %s)
                 RETURNING id
-            """, (tenant_id, f"酒店：{hotel_name}", self.SOURCE_TYPE, source_file, meta_json))
+            """, (user_id, tenant_id, f"酒店：{hotel_name}", self.SOURCE_TYPE, source_file, meta_json, info_text))
             doc_id = conn.fetchone()["id"]
 
             # 2. 插入 chunk 0（酒店信息摘要）
