@@ -3,7 +3,7 @@
 > 对应设计文档：[prompt-lifecycle-design.md](./prompt-lifecycle-design.md)
 > 对应调研报告：[prompt-version-management-research.md](../research/prompt-version-management-research.md)
 > 创建日期：2026-06-02
-> 更新日期：2026-06-02（Phase 2 重做：新增独立智能体管理页面）
+> 更新日期：2026-06-03（Phase 3 重做：知识库关联配置优先，extra_md 迁移后移至 Phase 4；移除 capabilities 字段）
 > 状态：Phase 2 代码完成，待验证
 
 ---
@@ -14,14 +14,14 @@
 
 > **子智能体 = 定义部分（YAML 配置） + System Prompt（可版本化）**
 
-- **定义部分**：name、description、capabilities、tools、skills 等配置，通过子智能体管理界面修改，支持 LLM 智能推荐工具/技能
+- **定义部分**：name、description、tools、skills、knowledge_sources 等配置，通过子智能体管理界面修改，支持 LLM 智能推荐工具/技能
 - **System Prompt 部分**：Markdown body，纳入版本管理，支持编辑 → 提交版本 → 对比 → 回滚
 - **租户定制 Prompt（extra_md）**：独立的第三层，同样纳入版本管理
 
 **不在本计划范围内**：
 - §九 A/B 测试（二期）
 - §十 效果评估 Pipeline（二期）
-- 系统模板版本化（三期）
+- 系统模板版本化（远期）
 - 技能 Prompt 版本化（二期）
 
 ---
@@ -467,20 +467,22 @@ class SetLabelRequest(BaseModel):
 | 3 | `src/services/subagent_definition_service.py` | **新建** | 服务层（编排 DB 定义 + Prompt 版本） ✅ |
 | 4 | `src/api/agent_definitions.py` | **新建** | `/api/admin/agent-definitions` 路由 ✅ |
 | 5 | `src/models/subagent.py` | 修改 | `SubagentConfig` 新增 `from_db` 字段 ✅ |
-| 6 | `src/subagents/registry.py` | 修改 | 新增 `load_from_db()` 方法（整体降级） ✅ |
-| 7 | `src/core/agent.py` | 修改 | `_build_system_prompt()` 移除独立 prompt_resolver 调用 ✅ |
-| 8 | `src/main.py` | 修改 | 注册新 router + 启动时调用 `load_from_db()` ✅ |
-| 9 | `frontend/src/api/agentDefinitions.ts` | **新建** | 前端 API 客户端 ✅ |
-| 10 | `frontend/src/components/AgentDefinitionManager.vue` | **新建** | 智能体管理页面（列表 + 两区编辑） ✅ |
-| 11 | `frontend/src/main.ts` | 修改 | 添加路由 ✅ |
-| 12 | `frontend/src/components/saas/PortalLayout.vue` | 修改 | 添加"智能体管理"菜单项 ✅ |
+| 6 | `src/subagents/registry.py` | 修改 | 新增 `load_from_db()` 方法（DB 优先覆盖） ✅ |
+| 7 | `src/core/agent.py` | 修改 | `_build_system_prompt()` 移除独立 prompt_resolver 调用 + 委派路径 DB 兜底 ✅ |
+| 8 | `src/subagents/factory.py` | 修改 | 新增 `_load_single_from_db()` 按需加载 + `create_standalone_subagent` DB 兜底 ✅ |
+| 9 | `src/tools/agent/delegate_tool.py` | 修改 | 委派查找路径 DB 兜底 ✅ |
+| 10 | `src/main.py` | 修改 | 注册新 router + 启动时调用 `load_from_db()` ✅ |
+| 11 | `frontend/src/api/agentDefinitions.ts` | **新建** | 前端 API 客户端 ✅ |
+| 12 | `frontend/src/components/AgentDefinitionManager.vue` | **新建** | 智能体管理页面（列表 + 两区编辑） ✅ |
+| 13 | `frontend/src/main.ts` | 修改 | 添加路由 ✅ |
+| 14 | `frontend/src/components/saas/PortalLayout.vue` | 修改 | 添加"智能体管理"菜单项 ✅ |
 
 ### 阶段 2A：数据库表 + DB 访问层
 
 > 前置依赖：Phase 1（prompt 版本管理表已就绪）
 
 - [x] **2A.1 在 deploy/db_update.sql 和 init-postgres.sql 追加 `subagent_definitions` 表**
-  - 字段：agent_id, name, description, capabilities(JSONB), tools(JSONB), skills(JSONB), context(JSONB), triggers(JSONB), status 等
+  - 字段：agent_id, name, description, tools(JSONB), skills(JSONB), context(JSONB), triggers(JSONB), status 等
   - system_prompt 不在此表中，由 prompt_versions 管理
   - ✅ 已完成
 
@@ -528,22 +530,21 @@ class SetLabelRequest(BaseModel):
   - `PortalLayout.vue` 添加"智能体管理"菜单项
   - ✅ 已完成
 
-### 阶段 2D：运行时集成（整体降级策略）
+### 阶段 2D：运行时集成（DB 优先，文件系统兜底）
 
 > 前置依赖：2A
-> 核心原则：子智能体的定义和 system_prompt 作为整体判断，两者都在 DB 中才算命中，缺一则整体降级到文件系统。
+> 核心原则：DB 优先于文件系统。DB 中有定义 + system_prompt 的子智能体覆盖文件系统版本，DB 中没有的保留文件系统版本。
 
 - [x] **2D.1 `SubagentConfig` 新增 `from_db` 标记**
   - 在 `src/models/subagent.py` 的 `SubagentConfig` 中添加 `from_db: bool = False`
   - `True` 表示来自数据库加载，`False` 表示来自文件系统
   - ✅ 已完成
 
-- [x] **2D.2 `SubagentRegistry.load_from_db()` — 整体降级**
+- [x] **2D.2 `SubagentRegistry.load_from_db()` — DB 优先覆盖**
   - 从 subagent_definitions 查询 active 记录
-  - **整体判断**：对每条定义，通过 `prompt_resolver.resolve()` 检查是否有 system_prompt
-  - **缺一则跳过**：有定义但无 prompt → `continue`，让文件系统兜底
-  - 两者都有 → 创建 `SubagentConfig(from_db=True, system_prompt=prompt_content)` 注册到内存
-  - 不覆盖 builtin（文件系统加载的子智能体）
+  - 对每条定义，通过 `prompt_resolver.resolve()` 检查是否有 system_prompt
+  - **缺 prompt 则跳过**：有定义但无 prompt → `continue`，保留文件系统版本
+  - 两者都有 → 创建 `SubagentConfig(from_db=True, system_prompt=prompt_content)` **覆盖**文件系统版本
   - ✅ 已完成
 
 - [x] **2D.3 调整 `_build_system_prompt()` 的降级逻辑**
@@ -558,6 +559,13 @@ class SetLabelRequest(BaseModel):
   - 在 main.py 初始化阶段，master_agent 创建后调用
   - ✅ 已完成
 
+- [x] **2D.5 运行时按需加载（`AgentFactory._load_single_from_db()`）**
+  - 新增 `AgentFactory._load_single_from_db(registry, agent_id)` 方法
+  - 当 registry 中找不到子智能体时，从 DB 按需加载单个并注册到 registry
+  - 三个入口已接入：`create_standalone_subagent`、`_delegate_to_subagent`、`DelegateTool.execute`
+  - 确保 DB-only 智能体（文件系统中无 SUBAGENT.md）也能正常加载
+  - ✅ 已完成
+
 ### 阶段 2E：验证
 
 - [ ] **2E.1 后端验证**
@@ -565,7 +573,7 @@ class SetLabelRequest(BaseModel):
   - 编辑 system_prompt → V2 + production 更新
   - 运行时 load_from_db() 加载正确
   - `_build_system_prompt()` 根据 `from_db` 标记正确选择来源
-  - **整体降级验证**：DB 有定义无 prompt → 降级到文件系统；DB 两者都有 → 不走文件系统
+  - **DB 优先验证**：DB 有定义+prompt → 覆盖文件系统版本；DB 有定义无 prompt → 保留文件系统版本；DB-only 智能体（文件系统中不存在）→ 按需加载正常工作
   - [ ] 待验证
 
 - [ ] **2E.2 前端验证**
@@ -583,56 +591,148 @@ class SetLabelRequest(BaseModel):
 - [ ] 子智能体定义存数据库（subagent_definitions），不再依赖文件系统
 - [ ] 新页面 `/portal/agent-definitions` 独立运作，旧页面 `/portal/subagents` 不受影响
 - [ ] Prompt 版本管理完整（提交/对比/回滚/草稿）
-- [ ] 运行时 SubagentRegistry 从数据库加载定制子智能体（整体降级策略）
+- [ ] 运行时 SubagentRegistry 从数据库加载子智能体（DB 优先覆盖文件系统版本）
+- [ ] DB-only 智能体（文件系统中无 SUBAGENT.md）通过按需加载正常工作
 - [ ] `_build_system_prompt()` 根据 `from_db` 标记选择来源，不再独立调用 prompt_resolver
 - [ ] LLM 智能推荐工具/技能功能正常
 - [ ] 前端构建无错误
 
 ---
 
-## Phase 3：extra_md 迁移 + 租户前台编辑器
+## Phase 3：知识库关联配置 + 工具技能元数据 API
+
+> 设计文档参考：§八.1.3（知识库关联配置）、§八.1.4（工具/技能元数据 API）
+> 目标：子智能体支持配置知识库 source_type 过滤；前端展示可用工具/技能清单供选择
+> 预计工期：1 周
+> 前置依赖：Phase 2
+
+### 阶段 3.1：移除 capabilities 字段
+
+- [ ] **3.1.1 移除 subagent_definitions 表的 capabilities 列**
+  - `deploy/db_update.sql` 添加 `ALTER TABLE subagent_definitions DROP COLUMN IF EXISTS capabilities;`
+  - `deploy/init-postgres.sql` 建表语句移除 `capabilities` 字段
+  - [ ] 未开始
+
+- [ ] **3.1.2 移除代码中的 capabilities 引用**
+  - `src/db/subagent_definition_db.py` — 移除 capabilities 的读写
+  - `src/models/subagent.py` — SubagentConfig 移除 capabilities 字段
+  - `src/subagents/loader.py` — YAML 解析移除 capabilities
+  - `src/subagents/registry.py` — 移除 `_capability_index` 和 `match_by_capability()`
+  - `src/core/agent.py` — 移除 `subagent_descriptions` 中的 capabilities 展示
+  - `src/subagents/executor.py` — 移除 capabilities 日志
+  - 前端 `AgentDefinitionManager.vue` — 移除 capabilities 编辑区
+  - [ ] 未开始
+
+### 阶段 3.2：知识库关联配置
+
+- [ ] **3.2.1 subagent_definitions 表添加 knowledge_sources 字段**
+  - `ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS knowledge_sources JSONB DEFAULT '[]';`
+  - `deploy/init-postgres.sql` 同步更新
+  - [ ] 未开始
+
+- [ ] **3.2.2 SubagentConfig 添加 knowledge_sources 字段**
+  - `src/models/subagent.py` — `knowledge_sources: List[Dict[str, str]] = field(default_factory=list)`
+  - [ ] 未开始
+
+- [ ] **3.2.3 DB 层和服务层支持 knowledge_sources 读写**
+  - `src/db/subagent_definition_db.py` — create/update 读写 knowledge_sources
+  - `src/services/subagent_definition_service.py` — 透传
+  - [ ] 未开始
+
+- [ ] **3.2.4 运行时注入知识库约束到 system prompt**
+  - `_build_system_prompt()` 中，如果 `subagent_config.knowledge_sources` 非空，在 `{subagent_constraint_section}` 末尾追加知识库使用约束提示
+  - 格式：列出允许的 source_type 和描述，指导 LLM 调用 `knowledge_base_search` 时传入正确的 source_type
+  - [ ] 未开始
+
+- [ ] **3.2.5 前端添加知识库关联配置区**
+  - 在 AgentDefinitionManager.vue 的定义区增加"知识库关联"配置
+  - 复选框列表，展示系统可用的 source_type 及说明
+  - [ ] 未开始
+
+### 阶段 3.3：工具/技能元数据 API
+
+- [ ] **3.3.1 新增元数据 API**
+  - `GET /api/admin/agent-definitions/meta/tools` — 返回所有工具的 id/name/description
+  - `GET /api/admin/agent-definitions/meta/skills` — 返回所有技能的 id/name/description
+  - `GET /api/admin/agent-definitions/meta/source-types` — 返回所有可用的 source_type 及说明
+  - 数据来源：`ToolRegistry`、`SkillRegistry`、`documents` 表
+  - [ ] 未开始
+
+- [ ] **3.3.2 前端改造工具/技能选择器**
+  - 从手动输入 ID 改为下拉选择列表
+  - 每个选项展示 name + description
+  - 工具和技能列表通过元数据 API 获取
+  - [ ] 未开始
+
+### 阶段 3.4：验证
+
+- [ ] **3.4.1 后端验证**
+  - capabilities 字段完全移除，无残留引用
+  - knowledge_sources 读写正常
+  - 元数据 API 返回正确的工具/技能/source_type 列表
+  - 知识库约束注入到 system prompt 后 LLM 能正确使用 source_type 参数
+  - [ ] 未开始
+
+- [ ] **3.4.2 前端验证**
+  - 知识库关联配置正确展示和保存
+  - 工具/技能选择器展示名称和说明
+  - 前端构建无错误
+  - [ ] 未开始
+
+### Phase 3 完成标准
+
+- [ ] capabilities 字段已从数据库和代码中完全移除
+- [ ] knowledge_sources 配置功能正常，可指定允许的知识库 source_type
+- [ ] 运行时 knowledge_base_search 根据 knowledge_sources 配置限制检索范围
+- [ ] 工具/技能元数据 API 正常工作
+- [ ] 前端选择器展示工具/技能的名称和说明
+- [ ] 前端构建无错误
+
+---
+
+## Phase 4：extra_md 迁移 + 租户前台编辑器
 
 > 设计文档参考：§八.2（租户定制 extra.md 集成）、§八.3.2（租户前台编辑入口）
 > 目标：将 extra_md 从文件系统迁移到数据库 + 租户前台编辑器
 > 预计工期：1.5 周
 > 前置依赖：Phase 1
 
-### 阶段 3.1：extra_md 迁移
+### 阶段 4.1：extra_md 迁移
 
-- [ ] **3.1.1 编写文件系统 → 数据库迁移脚本**
+- [ ] **4.1.1 编写文件系统 → 数据库迁移脚本**
   - 扫描 `storage/subagents/` 下所有 `extra_<tenant_id>.md` 文件
   - 为每个文件创建 prompt_registry + prompt_versions + prompt_labels 记录
   - 支持 `--dry-run`，幂等安全
   - [ ] 未开始
 
-- [ ] **3.1.2 改造 `_load_extra_md()` 为数据库优先**
+- [ ] **4.1.2 改造 `_load_extra_md()` 为数据库优先**
   - 先查 PromptResolver，miss 时降级到文件系统
   - [ ] 未开始
 
-- [ ] **3.1.3 改造 extra_md API 为数据库驱动**
+- [ ] **4.1.3 改造 extra_md API 为数据库驱动**
   - `src/api/subagent_extra.py` 改为调用 PromptRegistryService
   - 保持 API 签名不变
   - [ ] 未开始
 
-- [ ] **3.1.4 验证迁移和降级**
+- [ ] **4.1.4 验证迁移和降级**
   - 数据迁移正确 + 降级路径正常 + API 兼容
   - [ ] 未开始
 
-### 阶段 3.2：租户前台编辑器
+### 阶段 4.2：租户前台编辑器
 
-- [ ] **3.2.1 DigitalEmployeeManager 租户卡片添加"定制提示词"按钮**
+- [ ] **4.2.1 DigitalEmployeeManager 租户卡片添加"定制提示词"按钮**
   - 点击跳转到 `/t/{tenant_id}/agent/{subagent_name}/prompt`
   - [ ] 未开始
 
-- [ ] **3.2.2 新建 TenantPromptEditor.vue**
+- [ ] **4.2.2 新建 TenantPromptEditor.vue**
   - Markdown 编辑器 + 版本历史面板（复用 PromptVersionHistory.vue）
   - 草稿自动保存 + 提交版本（tenant_extra 直接标记 production）
   - [ ] 未开始
 
-- [ ] **3.2.3 路由注册和前端构建验证**
+- [ ] **4.2.3 路由注册和前端构建验证**
   - [ ] 未开始
 
-### Phase 3 完成标准
+### Phase 4 完成标准
 
 - [ ] extra_md 已迁移到数据库，降级路径正常
 - [ ] 租户管理员可在线编辑定制 Prompt
@@ -648,9 +748,10 @@ class SetLabelRequest(BaseModel):
 | Phase 0 | Prompt 内容优化（P0~P3） | 2 天 | ✅ 已完成 |
 | Phase 1 | 版本管理数据库 + 基础服务层 | 1 周 | ✅ 代码完成（e2e 测试通过） |
 | Phase 2 | 独立智能体管理页面（重做） | 1.5 周 | 🔧 代码完成，待验证 |
-| Phase 3 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
+| Phase 3 | 知识库关联配置 + 工具技能元数据 | 1 周 | ⬜ 未开始 |
+| Phase 4 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
 
-**总工期：约 4 周**
+**总工期：约 5 周**
 
 ### 关键里程碑
 
@@ -659,7 +760,8 @@ class SetLabelRequest(BaseModel):
 | M0: Prompt 优化完成 | 透明化矛盾修复 + usage_guide 精简 | Phase 0 ✅ |
 | M1: 版本管理可用 | 数据库表 + 服务层 + API 可工作 | Phase 1 |
 | M2: 智能体管理独立页面 | DB 定义 + 两区编辑 + LLM 智能推荐 + 版本管理 | Phase 2 |
-| M3: 租户编辑器可用 | extra_md 迁移 + 租户前台编辑器 | Phase 3 |
+| M3: 知识库关联 + 工具展示 | knowledge_sources 配置 + 工具/技能元数据 API | Phase 3 |
+| M4: 租户编辑器可用 | extra_md 迁移 + 租户前台编辑器 | Phase 4 |
 
 ### 依赖关系
 
@@ -667,7 +769,8 @@ class SetLabelRequest(BaseModel):
 Phase 0 ─── ✅ 已完成
 Phase 1 ─── 无前置，可立即开始
 Phase 2 ─── 依赖 Phase 1（需要版本管理服务层）
-Phase 3 ─── 依赖 Phase 1（需要版本管理服务层），可与 Phase 2 并行
+Phase 3 ─── 依赖 Phase 2（需要智能体管理页面和 subagent_definitions 表）
+Phase 4 ─── 依赖 Phase 1（需要版本管理服务层），可与 Phase 3 并行
 ```
 
 ### 风险项

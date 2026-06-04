@@ -63,6 +63,11 @@ const router = createRouter({
       name: 'all-sessions',
       component: () => import('./components/AllSessions.vue')
     },
+    {
+      path: '/data-sources',
+      name: 'data-sources',
+      component: () => import('./pages/DataSourceManager.vue')
+    },
     // 外贸获客智能体业务数据页面
     {
       path: '/trade-specialist',
@@ -176,6 +181,7 @@ const router = createRouter({
         { path: 'token-usage', name: 'tenant-token-usage', component: () => import('./components/saas/TenantTokenUsage.vue') },
         { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('./components/saas/ReplyStyleManager.vue') },
         { path: 'external-customers', name: 'tenant-external-customers', component: () => import('./components/saas/ExternalCustomerService.vue') },
+        { path: 'data-sources', name: 'tenant-data-sources', component: () => import('./pages/DataSourceManager.vue') },
         // 外贸获客智能体业务数据页面
         {
           path: 'trade-specialist',

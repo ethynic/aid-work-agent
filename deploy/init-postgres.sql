@@ -362,6 +362,28 @@ CREATE TABLE IF NOT EXISTS user_email_settings (
 
 CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(user_id);
 
+-- 数据连接器表（数据分析智能体）
+CREATE TABLE IF NOT EXISTS data_connectors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    db_type TEXT NOT NULL,
+    host TEXT,
+    port INTEGER,
+    database_name TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password_encrypted TEXT NOT NULL,
+    options JSONB,
+    is_active BOOLEAN DEFAULT TRUE,
+    imported_tables JSONB DEFAULT '[]',
+    last_sync_at TIMESTAMP,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_connectors_tenant ON data_connectors(tenant_id);
+
 -- ============== SaaS 多租户表 ==============
 
 -- 租户表
@@ -855,6 +877,28 @@ CREATE TABLE IF NOT EXISTS user_email_settings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(user_id);
+
+-- 数据连接器表（数据分析智能体）
+CREATE TABLE IF NOT EXISTS data_connectors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    db_type TEXT NOT NULL,
+    host TEXT,
+    port INTEGER,
+    database_name TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password_encrypted TEXT NOT NULL,
+    options JSONB,
+    is_active BOOLEAN DEFAULT TRUE,
+    imported_tables JSONB DEFAULT '[]',
+    last_sync_at TIMESTAMP,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_connectors_tenant ON data_connectors(tenant_id);
 
 -- 租户表
 CREATE TABLE IF NOT EXISTS tenants (

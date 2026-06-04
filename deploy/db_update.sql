@@ -858,3 +858,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id
     ON subagent_definitions (agent_id);
 CREATE INDEX IF NOT EXISTS idx_subagent_def_status
     ON subagent_definitions (status);
+
+-- 2026-6-3，数据连接器表，用于数据分析智能体的数据库连接管理
+CREATE TABLE IF NOT EXISTS data_connectors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT,
+    name TEXT NOT NULL,
+    db_type TEXT NOT NULL,
+    host TEXT,
+    port INTEGER,
+    database_name TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password_encrypted TEXT NOT NULL,
+    options JSONB,
+    is_active BOOLEAN DEFAULT TRUE,
+    imported_tables JSONB DEFAULT '[]',
+    last_sync_at TIMESTAMP,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_connectors_tenant ON data_connectors(tenant_id);

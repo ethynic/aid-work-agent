@@ -3,7 +3,7 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.2
 > 关联调研：[Prompt 版本管理与生命周期管理 — 业界调研](../research/prompt-version-management-research.md)
 > 设计日期：2026-05-28
-> 更新日期：2026-06-02（Phase 2 重做：新增独立智能体管理页面，子智能体定义存数据库）
+> 更新日期：2026-06-03（Phase 3 规划重做：知识库关联配置优先，extra_md 迁移后移至 Phase 4；移除 capabilities 字段）
 > 状态：Phase 2 代码完成，待验证
 
 ---
@@ -33,9 +33,10 @@
 │                                                  │
 │  ┌─────────────────────────────────────────┐    │
 │  │  Part 1: 定义部分（YAML frontmatter）    │    │
-│  │  · name / description / capabilities    │    │
+│  │  · name / description                   │    │
 │  │  · tools（工具绑定）                     │    │
 │  │  · skills（技能绑定）                    │    │
+│  │  · knowledge_sources（知识库关联）       │    │
 │  │  · triggers（触发条件）                  │    │
 │  │  · context / llm_provider / reply_style │    │
 │  │  → 这部分决定"用什么"，不能随意修改     │    │
@@ -63,9 +64,10 @@
 1. **子智能体统一管理**：平台管理员在一个界面中管理子智能体的完整生命周期（创建、配置、编辑 Prompt、禁用）
 2. **System Prompt 版本化**：子智能体的 System Prompt 每次变更生成不可变版本，支持对比和一键回滚
 3. **LLM 智能推荐工具/技能**：创建或编辑子智能体时，LLM 根据子智能体用途自动推荐应绑定的工具和技能
-4. **租户定制 Prompt 管理**：租户管理员可在线编辑定制内容，同样纳入版本管理
-5. **参数化模板**：继续使用 `str.format_map`（f-string）变量替换，不引入额外模板引擎
-6. **渐进式改造**：不破坏现有架构，分阶段引入，每阶段可独立上线
+4. **知识库关联配置**：子智能体可配置允许检索的知识库 source_type，未配置则检索整个租户知识库
+5. **租户定制 Prompt 管理**：租户管理员可在线编辑定制内容，同样纳入版本管理
+6. **参数化模板**：继续使用 `str.format_map`（f-string）变量替换，不引入额外模板引擎
+7. **渐进式改造**：不破坏现有架构，分阶段引入，每阶段可独立上线
 
 ### 1.4 设计原则
 
@@ -103,7 +105,7 @@
 
 | 层次 | 内容 | 修改方式 | 版本管理 |
 |------|------|---------|---------|
-| **定义层** | name、description、capabilities、tools、skills、triggers、context | 子智能体管理界面直接修改（支持 LLM 推荐工具/技能） | 不需要（结构化配置） |
+| **定义层** | name、description、tools、skills、knowledge_sources、triggers、context | 子智能体管理界面直接修改（支持 LLM 推荐工具/技能） | 不需要（结构化配置） |
 | **Prompt 层** | System Prompt（Markdown body） | Prompt 编辑器修改 → 提交版本 | 需要（支持 diff、回滚） |
 
 **权限规则**：
@@ -219,13 +221,13 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id        TEXT NOT NULL,       -- 唯一标识（如 my-agent）
     name            TEXT NOT NULL,       -- 显示名称
-    description     TEXT,
+    description     TEXT,                -- 用途描述（50~500 字，LLM 推荐依赖此字段）
     version         TEXT DEFAULT '1.0.0',
     author          TEXT,
-    capabilities    JSONB DEFAULT '[]',  -- 能力标签
     triggers        JSONB DEFAULT '{}',  -- 触发条件
     tools           JSONB DEFAULT '{}',  -- 工具配置 {inherit, additional}
     skills          JSONB DEFAULT '{}',  -- 技能配置 {allowed}
+    knowledge_sources JSONB DEFAULT '[]', -- 知识库关联 [{"source_type": "file", "description": "上传的文档"}]
     context         JSONB DEFAULT '{}',  -- 上下文约束
     delegatable_to  JSONB DEFAULT '[]',
     allow_delegation BOOLEAN DEFAULT TRUE,
@@ -502,24 +504,27 @@ PromptResolver.resolve(scope, scope_id, tenant_id)
   → 返回 prompt_version.content 或 None
 ```
 
-#### 6.2.2 子智能体整体解析（`resolve_subagent(agent_id)`）
+#### 6.2.2 子智能体解析（DB 优先，文件系统兜底）
 
-子智能体的定义和 system_prompt 作为**整体**解析，遵循整体降级策略：
+子智能体的定义和 system_prompt 解析遵循 **DB 优先**策略：
 
 ```
-resolve_subagent(agent_id):
-  1. 查 subagent_definitions（agent_id = agent_id, status = active）
-  2. 如不存在 → 返回 None（整体降级到文件系统）
-  3. 如存在 → 调用 prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
-  4. 如 prompt 也无 → 返回 None（整体降级到文件系统）
-  5. 都有 → 返回 (definition_row, prompt_content)
+子智能体查找顺序:
+  1. registry 缓存（启动时从文件系统全量加载 + DB 全量覆盖）
+  2. DB 按需加载（AgentFactory._load_single_from_db）
+     - 查 subagent_definitions（agent_id = agent_id, status = active）
+     - 如不存在 → 返回 None
+     - 如存在 → 调用 prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
+     - 如 prompt 也无 → 返回 None
+     - 都有 → 注册到 registry 并返回
+  3. 都没有 → 返回 None（加载失败）
 ```
 
-**核心原则**：定义和 system_prompt 必须同时存在于数据库才算 DB 命中，缺一则整体降级到文件系统。
+**核心原则**：DB 优先于文件系统。DB 中有定义 + system_prompt 的子智能体覆盖文件系统版本；DB 中没有的保留文件系统版本；两者都没有则加载失败。
 
 ### 6.3 降级策略
 
-#### 子智能体的整体降级
+#### 子智能体的加载策略（DB 优先）
 
 ```
 Agent._build_system_prompt(user):
@@ -533,7 +538,9 @@ Agent._build_system_prompt(user):
 
 **关键**：`_build_system_prompt()` 不再独立调用 `prompt_resolver.resolve()`。DB 来源的 Config 在 `load_from_db()` 阶段已解析好 system_prompt；文件系统来源的 Config 直接使用 SUBAGENT.md 中的内容。
 
-#### SubagentRegistry 的整体加载策略
+#### SubagentRegistry 的加载策略（DB 优先，文件系统兜底）
+
+**启动时全量加载**：
 
 ```
 SubagentRegistry.load_from_db():
@@ -542,10 +549,25 @@ SubagentRegistry.load_from_db():
     prompt_content = prompt_resolver.resolve(scope="subagent", scope_id=row["agent_id"])
     if not prompt_content:
       logger.warning(f"跳过 {row['agent_id']}：有定义但无 system_prompt，由文件系统兜底")
-      continue  # ← 缺一则整体跳过
+      continue  # ← 缺 prompt 则跳过，保留文件系统版本
     config = SubagentConfig(..., system_prompt=prompt_content, from_db=True)
-    self._configs[config.name] = config
+    self._configs[config.name] = config  # DB 版本覆盖文件系统版本
 ```
+
+**运行时按需加载**：
+
+```
+AgentFactory._load_single_from_db(registry, agent_id):
+  row = SubagentDefinitionDB.get_by_agent_id(agent_id)
+  if not row → return None
+  prompt_content = prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
+  if not prompt_content → return None
+  config = SubagentConfig(..., from_db=True)
+  registry._configs[config.name] = config  # 注册到内存，后续请求直接命中缓存
+  return config
+```
+
+调用方（`create_standalone_subagent`、`_delegate_to_subagent`、`DelegateTool.execute`）查找顺序：registry 缓存 → DB 按需加载 → 返回 None。
 
 #### 非 DB 场景的降级链（通用 Prompt）
 
@@ -653,17 +675,18 @@ class PromptCache:
 
 1. **列表页**：展示数据库中的子智能体定义，每个卡片展示当前 System Prompt 版本号、状态
 2. **编辑页面两区分离**：
-   - **定义区**（左半部分）：name、description、capabilities、tools、skills 等结构化配置。工具/技能绑定支持 LLM 智能推荐按钮
+   - **定义区**（左半部分）：name、description、tools、skills、knowledge_sources 等结构化配置。工具/技能绑定支持 LLM 智能推荐按钮
    - **Prompt 区**（右半部分）：System Prompt 的 Markdown 编辑器 + 版本历史面板 + 版本对比
-3. **运行时集成**：`SubagentRegistry` 新增 `load_from_db()` 方法，从数据库加载子智能体定义
+3. **运行时集成**：`SubagentRegistry` 新增 `load_from_db()` 方法（DB 优先覆盖文件系统版本），`AgentFactory` 新增 `_load_single_from_db()` 按需加载
 
 **与旧系统的关系**：
 
 | 维度 | 旧（/portal/subagents） | 新（/portal/agent-definitions） |
 |------|------------------------|-------------------------------|
 | 数据源 | 文件系统（SUBAGENT.md） | PostgreSQL（subagent_definitions） |
-| 内置子智能体 | 从 subagents/ 目录加载 | 不管理，仍从文件系统加载 |
+| 加载优先级 | 文件系统唯一来源 | **DB 优先**，DB 有定义+prompt 则覆盖文件系统版本 |
 | 定制子智能体 | storage/subagents2/ 目录 | DB + prompt_versions |
+| DB-only 智能体 | 不支持 | 按需加载支持（文件系统中无需存在） |
 | Prompt 版本 | 无 | 完整版本管理（提交/对比/回滚） |
 
 #### 8.1.2 LLM 智能推荐工具/技能
@@ -680,9 +703,9 @@ class PromptCache:
     │
     ▼
 后端调用 LLM，输入：
-  - 子智能体的 name、description、capabilities
-  - 系统当前可用的工具列表（名称 + 描述）
-  - 系统当前可用的技能列表（名称 + 描述）
+  - 子智能体的 name、description
+  - 系统当前可用的工具列表（ID + 名称 + 描述）
+  - 系统当前可用的技能列表（ID + 名称 + 描述）
     │
     ▼
 LLM 返回推荐的 tools 和 skills 配置
@@ -691,34 +714,145 @@ LLM 返回推荐的 tools 和 skills 配置
 前端展示推荐结果，管理员确认或调整后保存
 ```
 
+**description 字数约束**：description 字段要求 50~500 字。低于 50 字时 LLM 推荐效果差（信息不足无法判断用途），前端在字数不足时禁用"智能推荐"按钮并提示"描述不足 50 字，无法推荐"。
+
 **后端 API**：
 
 ```
 POST /api/admin/agent-definitions/meta/suggest-config
-Body: { "name": "售后服务助手", "description": "...", "capabilities": [...] }
+Body: { "name": "售后服务助手", "description": "..." }
+  → 后端校验 description 长度，< 50 字返回 400 错误
 Response: { "tools": {"inherit": true, "additional": ["http_api"]}, "skills": {"allowed": ["after-sales-core"]} }
 ```
 
 **现有基础**：`POST /api/admin/subagents/{agent_id}/ai-enhance` 已实现类似的 LLM 增强功能，可以复用其模式。
 
-#### 8.1.3 子智能体运行时集成
+#### 8.1.3 知识库关联配置（Phase 3）
+
+**问题**：当前 `knowledge_base_search` 工具搜索整个租户下的所有知识库文档。不同子智能体关注的知识范围不同（如旅游顾问关注景点和酒店，售后助手关注产品文档），LLM 调用检索工具时可能检索到不相关的内容。
+
+**方案**：在子智能体定义中增加 `knowledge_sources` 配置，指定允许检索的 `source_type` 列表。运行时调用 `knowledge_base_search` 时，注入该配置限制 LLM 只能检索指定的 source_type。
+
+**数据模型**：
+
+```json
+// subagent_definitions.knowledge_sources 字段
+[
+    {"source_type": "file", "description": "上传的文档资料"},
+    {"source_type": "attraction_resource", "description": "景点资源数据"}
+]
+// 空列表 [] 表示不限制，检索整个租户知识库
+```
+
+**已知 source_type 值**（来源：`documents` 表）：
+
+| source_type | 说明 |
+|-------------|------|
+| `file` | 通过知识库 API 上传的文档 |
+| `attraction_resource` | 景点资源数据 |
+| `hotel_resource` | 酒店住宿数据 |
+
+**运行时行为**：
+
+```
+子智能体调用 knowledge_base_search 工具时:
+  if config.knowledge_sources 非空:
+    → 在系统 prompt 中注入知识库约束，指导 LLM 使用指定的 source_type 参数
+    → knowledge_base_search(source_type="attraction_resource")
+  else:
+    → 不注入约束，LLM 按需决定是否传 source_type
+    → knowledge_base_search()  // 不传 source_type，检索全部
+```
+
+**实现方式**：通过 `{subagent_constraint_section}` 注入知识库约束提示。例如：
+
+```
+## 知识库使用约束
+你只能检索以下类型的知识库内容：
+- file: 上传的文档资料
+- attraction_resource: 景点资源数据
+调用 knowledge_base_search 时，必须指定 source_type 参数为以上类型之一。
+```
+
+**SubagentConfig 改动**：
+
+```python
+# src/models/subagent.py
+@dataclass
+class SubagentConfig:
+    ...
+    knowledge_sources: List[Dict[str, str]] = field(default_factory=list)
+    # [{"source_type": "file", "description": "上传的文档资料"}]
+```
+
+#### 8.1.4 工具/技能元数据 API（Phase 3）
+
+**问题**：管理员在配置子智能体的工具和技能时，不知道系统有哪些可用的工具/技能，也不了解各工具/技能的作用。当前前端只展示 ID 列表，没有名称和说明。
+
+**方案**：新增元数据查询 API，返回系统中所有工具和技能的 `id`、`display_name`、`description`，前端以可选择的列表形式展示。
+
+**后端 API**：
+
+```
+GET /api/admin/agent-definitions/meta/tools
+Response: {
+    "tools": [
+        {"id": "web_search", "name": "网络搜索", "description": "在网络上搜索实时信息"},
+        {"id": "knowledge_base_search", "name": "知识库搜索", "description": "搜索租户知识库中的相关内容"},
+        {"id": "email_send", "name": "发送邮件", "description": "发送电子邮件"},
+        ...
+    ]
+}
+
+GET /api/admin/agent-definitions/meta/skills
+Response: {
+    "skills": [
+        {"id": "trade-customer-1.0.0", "name": "外贸客户管理", "description": "管理外贸客户信息和跟进记录"},
+        {"id": "quote-generate-1.0.0", "name": "行程报价生成", "description": "生成旅游行程和报价方案"},
+        ...
+    ]
+}
+
+GET /api/admin/agent-definitions/meta/source-types
+Response: {
+    "source_types": [
+        {"source_type": "file", "description": "上传的文档资料"},
+        {"source_type": "attraction_resource", "description": "景点资源数据"},
+        {"source_type": "hotel_resource", "description": "酒店住宿数据"}
+    ]
+}
+```
+
+**数据来源**：
+- **工具**：`ToolRegistry` 已有每个工具的 `name`、`display_name`、`description`，直接聚合返回
+- **技能**：`SkillRegistry` 已有每个技能的 `name`、`description`，直接聚合返回
+- **source_type**：从 `documents` 表 `SELECT DISTINCT source_type` 查询，加上预定义的说明
+
+**前端展示**：工具和技能选择器从"手动输入 ID"改为"下拉选择 + 描述说明"，用户可以看到每个选项的名称和用途。
+
+#### 8.1.5 子智能体运行时集成
 
 **改动点**：
 1. `src/models/subagent.py` — `SubagentConfig` 新增 `from_db: bool = False` 字段
-2. `src/subagents/registry.py` — 新增 `load_from_db()` 方法（整体降级策略）
+2. `src/subagents/registry.py` — 新增 `load_from_db()` 方法（DB 优先，覆盖文件系统版本）
 3. `src/core/agent.py` — `_build_system_prompt()` 改为根据 `from_db` 标记决定行为
+4. `src/subagents/factory.py` — 新增 `_load_single_from_db()` 按需加载单个子智能体
 
-**策略**：整体降级——定义 + system_prompt 必须同时存在于 DB，缺一则整体降级到文件系统。
+**策略**：DB 优先——DB 中有定义 + system_prompt 的子智能体直接覆盖文件系统版本。DB 中无定义或无 system_prompt 的，保留文件系统版本。
+
+**加载流程**（启动时）：
+1. `SubagentRegistry()` 构造时从 `subagents/` 目录全量加载文件系统子智能体
+2. `load_from_db()` 从数据库全量加载，覆盖同名的文件系统版本
+3. 文件系统中有但 DB 中没有的子智能体保持不变
+
+**按需加载**（运行时）：
+当 registry 中找不到子智能体时（如 DB-only 智能体未被启动时全量加载到），`AgentFactory._load_single_from_db()` 从 DB 单独加载并注册到 registry。调用方覆盖 `create_standalone_subagent`、`_delegate_to_subagent`、`DelegateTool.execute` 三个入口。
 
 ```python
-# registry.py 新增方法
+# registry.py — 启动时全量加载
 def load_from_db(self):
-    from src.db.subagent_definition_db import SubagentDefinitionDB
-    from src.prompts.prompt_resolver import prompt_resolver
-
     definitions = SubagentDefinitionDB.list_active()
     for row in definitions:
-        # 整体判断：定义 + system_prompt 必须同时存在
         prompt_content = prompt_resolver.resolve(
             scope="subagent", scope_id=row["agent_id"],
         )
@@ -727,22 +861,34 @@ def load_from_db(self):
                 f"子智能体 {row['agent_id']} 有定义但无 system_prompt，"
                 "跳过 DB 加载，由文件系统兜底"
             )
-            continue  # 缺 prompt → 整体跳过，让文件系统兜底
+            continue
 
         config = SubagentConfig(
             name=row["name"], dir_name=row["agent_id"],
             description=row.get("description", ""),
-            capabilities=row.get("capabilities", []),
             tools=row.get("tools", {}),
             skills=row.get("skills", {}),
+            knowledge_sources=row.get("knowledge_sources", []),
             context=row.get("context", {}),
             system_prompt=prompt_content,  # 已从 DB 解析
             from_db=True,  # 标记来自数据库
             # ...其他字段从 DB row 映射
         )
-        if config.name not in self._builtin_names:
-            self._configs[config.name] = config
-    self._build_indices()
+        self._configs[config.name] = config  # DB 版本覆盖文件系统版本
+
+# factory.py — 运行时按需加载
+@staticmethod
+def _load_single_from_db(registry, agent_id):
+    row = SubagentDefinitionDB.get_by_agent_id(agent_id)
+    if not row:
+        return None
+    prompt_content = prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
+    if not prompt_content:
+        return None
+    config = SubagentConfig(..., from_db=True)
+    registry._configs[config.name] = config
+    registry._build_indices()
+    return config
 ```
 
 **`_build_system_prompt()` 改造**（Phase 2 实现，需调整 Phase 1 的逻辑）：
@@ -834,13 +980,17 @@ async def _load_extra_md(self, dir_name=None, tenant_id=None):
 │  ┌─ 定义区（YAML 配置）───────────────────────────────────┐  │
 │  │  名称：[售后服务助手          ]                         │  │
 │  │  描述：[处理售后...           ]                         │  │
-│  │  能力标签：[order_query] [return_process] [+添加]      │  │
 │  │                                                        │  │
 │  │  工具配置：                    [🤖 智能推荐]            │  │
 │  │  ☑ 继承默认工具  额外工具：[http_api ▼] [+添加]        │  │
 │  │                                                        │  │
 │  │  技能配置：                    [🤖 智能推荐]            │  │
 │  │  已选技能：[after-sales-core] [+添加]                   │  │
+│  │                                                        │  │
+│  │  知识库关联：                                           │  │
+│  │  ☑ file — 上传的文档资料                               │  │
+│  │  ☐ attraction_resource — 景点资源数据                  │  │
+│  │  [查看可用 source_type]                                │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                                │
 │  ┌─ Prompt 区（System Prompt）───────────────────────────┐  │
@@ -1095,7 +1245,11 @@ CREATE TABLE IF NOT EXISTS prompt_eval_results (
 
 > 目标：改造子智能体编辑页面为两区分离，增加 LLM 智能推荐工具/技能功能
 
-### 阶段三：extra_md 迁移 + 前端编辑器（2-3 周）
+### 阶段三：知识库关联配置 + 工具技能列表展示（1 周）
+
+> 目标：子智能体支持配置知识库 source_type 过滤，前端展示可用工具/技能清单供选择
+
+### 阶段四：extra_md 迁移 + 租户前台编辑器（2-3 周）
 
 > 目标：租户定制 Prompt 从文件系统迁移到数据库 + 租户前台编辑器
 

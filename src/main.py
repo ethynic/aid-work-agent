@@ -1694,6 +1694,10 @@ from src.api import admin_error_logs
 app.include_router(admin_error_logs.router)
 app.include_router(monitor_api.router)
 
+# 数据分析 API
+from src.api import data_analysis
+app.include_router(data_analysis.router)
+
 # 长期记忆 API
 from src.api import memory as memory_api
 app.include_router(memory_api.router)
