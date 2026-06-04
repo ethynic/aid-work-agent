@@ -68,7 +68,7 @@
     <!-- ==================== 添加/编辑弹窗 ==================== -->
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/50" @click="showForm = false"></div>
-      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto">
         <div class="p-6">
           <h3 class="text-lg font-bold text-default mb-1">{{ editingId ? '编辑渠道' : '添加渠道' }}</h3>
           <p v-if="!editingId" class="text-sm text-muted mb-5">选择 IM 平台，然后填写应用凭证</p>

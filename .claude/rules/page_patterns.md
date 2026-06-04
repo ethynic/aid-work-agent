@@ -55,7 +55,8 @@
 | 正文/表格单元格 | `14px` | `400` | `1.5` | `text-sm` |
 | 辅助文字/标签 | `12px` | `400` | `1.4` | `text-xs` |
 | 输入框/选择器文字 | `14px` | `400` | — | `text-sm`（BaseInput 内置） |
-| 按钮文字 | `14px` | `500` | — | `font-medium`（BaseButton 内置） |
+| 普通按钮文字 | `14px` | `500` | — | `font-medium`（BaseButton 内置） |
+| 表格内按钮文字 | `12px` | `500` | — | `font-medium`（BaseButton 内置） |
 
 ### 1.3 按钮规范
 
@@ -138,6 +139,16 @@ focus:ring-primary-500
 | 信息文字 | 左侧显示 "显示 X-Y 条，共 Z 条" |
 
 > **待增强**：当前 BasePagination 不支持每页行数选择器（10/20/50/100）。如需此功能，需扩展 BasePagination 组件。
+
+### 1.9 手机端支持
+
+| 页面类型 | 是否需要手机端支持 |
+|---------|------------------|
+| 管理后台页面（平台管理员使用） | 不需要 |
+| 租户前台"管理菜单"下的功能页面（租户管理员使用） | 不需要 |
+| 租户前台普通用户使用的功能（对话界面、各智能体业务数据页面） | 需要 |
+
+手机端适配参考响应式断点：`max-width: 768px`（平板及手机），`max-width: 480px`（手机）。
 
 ---
 
@@ -383,3 +394,55 @@ focus:ring-primary-500
 | CSS 方案 | 统一使用 Tailwind + 语义 token，使用 Base* 组件 |
 | 卡片列表 vs 表格 | 数据列表优先用 BaseTable；卡片仅用于特殊场景 |
 | 行内编辑 vs 弹窗编辑 | 简单 CRUD 用 BaseModal；复杂多步骤编辑可用行内面板 |
+
+---
+
+## 附录 A：组件快速参考
+
+### 现有 Base 组件
+
+| 组件 | 文件 | 用途 |
+|------|------|------|
+| `BaseButton` | `components/ui/BaseButton.vue` | 按钮，intent: primary/secondary/danger/ghost，size: sm/md/lg |
+| `BaseInput` | `components/ui/BaseInput.vue` | 输入框，state: default/error/success，size: sm/md/lg |
+| `BaseSelect` | `components/ui/BaseSelect.vue` | 下拉选择，state: default/error，size: sm/md/lg |
+| `BaseTable` | `components/ui/BaseTable.vue` | 表格，columns + data + 具名插槽 |
+| `BasePagination` | `components/ui/BasePagination.vue` | 分页，total + currentPage + pageSize |
+| `BaseModal` | `components/ui/BaseModal.vue` | 模态框，size: sm/md/lg/xl，scrollable |
+| `BaseCard` | `components/ui/BaseCard.vue` | 卡片容器 |
+| `BaseBadge` | `components/ui/BaseBadge.vue` | 徽章/标签 |
+
+### 待扩展/待创建的组件
+
+| 组件 | 说明 |
+|------|------|
+| `BaseCheckbox` | 统一样式的复选框组件 |
+| `BaseTextarea` | 统一样式的文本域组件 |
+| `BasePagination` 增强 | 添加每页行数选择器（10/20/50/100） |
+| `BaseModal` 增强 | 添加脏检测关闭逻辑、全屏按钮 |
+
+### 布局组件
+
+| 组件 | 文件 | 用途 |
+|------|------|------|
+| `AppHeader` | `components/AppHeader.vue` | 顶部标题栏（汉堡按钮 + 标题 + 更多菜单） |
+| `MenuSidebar` | `components/MenuSidebar.vue` | 左侧菜单栏（可收缩） |
+| `PortalLayout` | Portal 相关 | 租户前台布局（MenuSidebar + router-view） |
+| `BaseBusinessLayout` | `components/BaseBusinessLayout.vue` | 业务数据管理页布局（顶部导航 + router-view） |
+
+---
+
+## 附录 B：Tailwind 主题配置
+
+项目的 `tailwind.config.js` 已将 CSS 变量映射为 Tailwind 颜色类，开发时直接使用语义类名：
+
+```js
+// 已配置，可直接使用以下类名：
+bg-primary-600       // → var(--color-primary-600)
+text-gray-800         // → var(--color-gray-800)
+border-default        // → var(--border-default)
+bg-surface            // → var(--bg-surface)
+text-muted            // → var(--text-muted)
+```
+
+> **核心原则**：优先使用 Tailwind 语义类名（`bg-primary-600`），而非直接写 `var(--color-primary-600)`。后者仅在 Tailwind 无法覆盖的场景（如内联 style 动态值）中使用。

@@ -53,7 +53,6 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 33 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
-| 34 | 前端页面规范 | 📋 待开发 | 列表页、详情页、表单弹框统一样式规范，对齐 Base 组件体系 | [规范](system/page-convention.md) | — |
 
 ---
 
