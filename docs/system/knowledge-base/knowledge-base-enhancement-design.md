@@ -3,8 +3,9 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析报告](../../research/enterprise-agent-infrastructure-gap-analysis.md) §2.3
 > 前序设计：[企业知识库功能设计文档](./enterprise_knowledge_base.md)
 > 技术调研：[企业知识库 RAG 系统前沿技术调研](../../research/enterprise-knowledge-base-rag-research.md)
+> 文档索引：[ideas.md §系统功能 #5](../../ideas.md)
 > 创建日期：2026-05-28
-> 状态：设计中
+> 状态：设计中（Phase 0 开发中）
 
 ---
 
@@ -824,6 +825,18 @@ class RetrievalPipeline:
 ```sql
 -- deploy/init-postgres.sql 新增
 
+-- 知识库分类表（Phase 0）
+CREATE TABLE IF NOT EXISTS knowledge_categories (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(tenant_id, source_type)
+);
+CREATE INDEX idx_knowledge_categories_tenant ON knowledge_categories(tenant_id);
+
 -- 知识库表
 CREATE TABLE IF NOT EXISTS knowledge_bases (
     id SERIAL PRIMARY KEY,
@@ -895,6 +908,8 @@ CREATE TABLE IF NOT EXISTS evaluation_results (
 );
 ```
 
+> **注意**：`documents` 表无需变更。分类元数据由独立的 `knowledge_categories` 表管理，通过 `source_type` 字段关联。
+
 ### 4.2 现有表变更
 
 ```sql
@@ -915,7 +930,353 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS valid_until TIMESTAMP;
 
 ## 五、前端变更
 
-### 5.1 知识库管理页面
+### 5.0 知识库分类管理页面（Phase 0 — 最高优先级）
+
+#### 5.0.1 需求概述
+
+当前 `KnowledgeBase.vue` 页面（路由 `/t/:tenant_id/knowledge`）平铺显示所有文档，未按 `source_type` 分类。用户需要：
+
+1. 新建一张独立的分类表（`knowledge_categories`），存储每个租户自定义的 `source_type` 代号 + 中文名称
+2. 知识库页面左侧按分类表中的名称显示分类导航，右侧显示对应文档
+3. 租户可自行创建新分类（输入英文代号 + 中文名称）、重命名已有分类
+4. 上传文档时自动关联当前选中的分类（`source_type`）
+
+**核心设计决策**：用独立表管理分类元数据，不修改 `documents` 表结构。分类表与 `documents` 通过 `source_type` 字段关联。
+
+#### 5.0.2 数据模型：新增 `knowledge_categories` 表
+
+```sql
+-- deploy/init-postgres.sql 新增
+
+CREATE TABLE IF NOT EXISTS knowledge_categories (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,               -- 租户 ID
+    source_type TEXT NOT NULL,             -- 英文代号，如 "file"、"hotel_resource"
+    display_name TEXT NOT NULL,            -- 中文显示名称，如 "上传文件"、"酒店资源"
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(tenant_id, source_type)         -- 同一租户下 source_type 唯一
+);
+
+CREATE INDEX idx_knowledge_categories_tenant ON knowledge_categories(tenant_id);
+```
+
+**预置分类数据**（系统初始化时按需插入，新租户创建时自动初始化）：
+
+```sql
+-- 新租户创建时或系统首次启动时，插入默认分类
+INSERT INTO knowledge_categories (tenant_id, source_type, display_name) VALUES
+    ('{tenant_id}', 'file', '上传文件'),
+    ('{tenant_id}', 'attraction_resource', '景点资源'),
+    ('{tenant_id}', 'hotel_resource', '酒店资源'),
+    ('{tenant_id}', 'data-analysis-metadata', '数据分析-表结构'),
+    ('{tenant_id}', 'data-analysis-relations', '数据分析-表关系')
+ON CONFLICT (tenant_id, source_type) DO NOTHING;
+```
+
+**`deploy/db_update.sql` 迁移**：
+
+```sql
+-- 2026-06-04，新建知识库分类表
+CREATE TABLE IF NOT EXISTS knowledge_categories (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(tenant_id, source_type)
+);
+
+CREATE INDEX idx_knowledge_categories_tenant ON knowledge_categories(tenant_id);
+
+-- 2026-06-04，为已有租户从 documents 表中提取已有的 source_type，初始化分类记录
+-- 对每个 tenant_id + source_type 组合，生成一条分类记录
+INSERT INTO knowledge_categories (tenant_id, source_type, display_name)
+SELECT DISTINCT d.tenant_id, d.source_type,
+    CASE d.source_type
+        WHEN 'file' THEN '上传文件'
+        WHEN 'attraction_resource' THEN '景点资源'
+        WHEN 'hotel_resource' THEN '酒店资源'
+        WHEN 'data-analysis-metadata' THEN '数据分析-表结构'
+        WHEN 'data-analysis-relations' THEN '数据分析-表关系'
+        ELSE d.source_type
+    END
+FROM documents d
+WHERE d.tenant_id IS NOT NULL
+  AND d.source_type IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM knowledge_categories kc
+      WHERE kc.tenant_id = d.tenant_id AND kc.source_type = d.source_type
+  );
+```
+
+#### 5.0.3 后端 API 变更
+
+**新增 API 端点**（`src/knowledge/api.py`）：
+
+```python
+# --- 分类 CRUD ---
+
+@router.get("/categories")
+async def list_categories(http_request: Request = None):
+    """
+    获取当前租户的知识库分类列表
+
+    返回:
+    [
+        {
+            "id": 1,
+            "source_type": "file",
+            "display_name": "上传文件",
+            "document_count": 25
+        }
+    ]
+    document_count 通过 LEFT JOIN documents 统计
+    """
+    tenant_id = get_current_tenant_id()
+    # SELECT kc.id, kc.source_type, kc.display_name,
+    #        COUNT(d.id) AS document_count
+    # FROM knowledge_categories kc
+    # LEFT JOIN documents d ON d.source_type = kc.source_type AND d.tenant_id = kc.tenant_id
+    # WHERE kc.tenant_id = %s
+    # GROUP BY kc.id, kc.source_type, kc.display_name
+    # ORDER BY kc.id
+
+
+@router.post("/categories")
+async def create_category(request: CreateCategoryRequest, http_request: Request = None):
+    """
+    添加新的知识库分类
+
+    请求体:
+    {
+        "source_type": "custom_kb",
+        "display_name": "自定义知识库"
+    }
+
+    验证：
+    - source_type: 只允许小写字母、数字、下划线、连字符，不为空
+    - display_name: 不为空
+    - 同一租户下 source_type 不能重复
+    """
+    tenant_id = get_current_tenant_id()
+    # INSERT INTO knowledge_categories (tenant_id, source_type, display_name)
+    # VALUES (%s, %s, %s)
+    # ON CONFLICT DO NOTHING → 检查返回值，重复则 409
+
+
+@router.put("/categories/{category_id}")
+async def update_category(category_id: int, request: UpdateCategoryRequest, http_request: Request = None):
+    """
+    更新分类（重命名显示名称）
+
+    请求体:
+    {
+        "display_name": "新名称"
+    }
+
+    只更新 display_name，source_type 不可修改（因为已关联 documents）
+    """
+    tenant_id = get_current_tenant_id()
+    # UPDATE knowledge_categories SET display_name = %s, updated_at = NOW()
+    # WHERE id = %s AND tenant_id = %s
+
+
+@router.delete("/categories/{category_id}")
+async def delete_category(category_id: int, http_request: Request = None):
+    """
+    删除分类（仅删除分类记录，不删除关联的文档）
+
+    前端需确认：删除后该 source_type 的文档仍存在，但不再显示在分类导航中。
+    可选：返回该分类下文档数，前端提示用户。
+    """
+    tenant_id = get_current_tenant_id()
+    # DELETE FROM knowledge_categories WHERE id = %s AND tenant_id = %s
+    # 返回被删除的 source_type，前端可判断是否需要处理关联文档
+
+
+# --- 现有端点扩展 ---
+
+@router.get("/documents")  # 扩展现有端点
+async def list_documents(
+    limit: int = 100,
+    offset: int = 0,
+    source_type: Optional[str] = None,  # 新增：按分类过滤
+    http_request: Request = None
+):
+    """获取知识库文档列表，支持按 source_type 过滤"""
+    tenant_id = get_current_tenant_id()
+    # 现有逻辑 + WHERE source_type = %s（如果指定）
+```
+
+**Pydantic 模型**：
+
+```python
+class CreateCategoryRequest(BaseModel):
+    source_type: str = Field(..., description="英文代号，唯一标识，只允许 a-z 0-9 _ -")
+    display_name: str = Field(..., description="中文显示名称")
+
+class UpdateCategoryRequest(BaseModel):
+    display_name: str = Field(..., description="新的显示名称")
+
+class CategoryResponse(BaseModel):
+    id: int
+    source_type: str
+    display_name: str
+    document_count: int = 0
+```
+
+#### 5.0.4 前端页面设计
+
+**页面布局**：左侧分类导航 + 右侧文档列表（双栏布局）
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  [AppHeader: 企业知识库]                                          │
+├────────────────┬─────────────────────────────────────────────────┤
+│  知识库分类     │  [搜索文档...]  [上传文档]                         │
+│                │                                                 │
+│  📄 全部 (45)   │  ┌────┬──────────┬────┬────┬────┬────────┬────┐ │
+│  ──────────── │  │序号│ 文档名称  │ 摘要│类型│大小│ 分块数  │操作│ │
+│  📁 上传文件(25)│  ├────┼──────────┼────┼────┼────┼────────┼────┤ │
+│  🏨 酒店资源(15)│  │ 1  │ ...      │    │TEXT│ -  │  2     │删除│ │
+│  🎯 景点资源(3) │  │ 2  │ ...      │    │TEXT│ -  │  2     │删除│ │
+│  📊 数据分析(2) │  │ ...│          │    │    │    │        │    │ │
+│                │  └────┴──────────┴────┴────┴────┴────────┴────┘ │
+│  ──────────── │                                                 │
+│  [+ 添加分类]  │  [分页]                                          │
+│                │                                                 │
+└────────────────┴─────────────────────────────────────────────────┘
+```
+
+**左侧分类导航**：
+
+| 元素 | 说明 |
+|------|------|
+| "全部" 项 | 显示所有文档（不过滤 `source_type`），后面显示文档总数 |
+| 分类列表 | 从 `/api/knowledge/categories` 获取，每项显示 `display_name`，后跟文档数 |
+| "添加分类" 按钮 | 弹窗输入英文代号 + 中文名称 |
+| 分类项右侧编辑图标 | 弹窗重命名 `display_name` |
+| 分类项右侧删除图标 | 删除分类（仅删分类记录，不删文档），需确认 |
+
+**添加分类弹窗**：
+
+```
+┌──────────────────────────┐
+│  添加知识库分类            │
+│                          │
+│  英文代号 *               │
+│  ┌──────────────────────┐│
+│  │ custom_knowledge     ││
+│  └──────────────────────┘│
+│  只允许小写字母、数字、    │
+│  下划线和连字符            │
+│                          │
+│  分类名称 *               │
+│  ┌──────────────────────┐│
+│  │ 自定义知识库          ││
+│  └──────────────────────┘│
+│                          │
+│  [取消]        [确定]     │
+└──────────────────────────┘
+```
+
+**重命名弹窗**：
+
+```
+┌──────────────────────────┐
+│  重命名分类               │
+│                          │
+│  英文代号（不可编辑）      │
+│  hotel_resource          │
+│                          │
+│  分类名称 *               │
+│  ┌──────────────────────┐│
+│  │ 酒店资源库            ││
+│  └──────────────────────┘│
+│                          │
+│  [取消]        [保存]     │
+└──────────────────────────┘
+```
+
+#### 5.0.5 前端 API 变更
+
+`frontend/src/api/knowledge.ts` 新增：
+
+```typescript
+// 分类相关接口
+export interface CategoryResponse {
+  id: number
+  source_type: string
+  display_name: string
+  document_count: number
+}
+
+export interface CreateCategoryRequest {
+  source_type: string
+  display_name: string
+}
+
+export interface UpdateCategoryRequest {
+  display_name: string
+}
+
+// 获取分类列表
+export const listCategories = () =>
+  api.get<CategoryResponse[]>('/knowledge/categories')
+
+// 添加新分类
+export const createCategory = (data: CreateCategoryRequest) =>
+  api.post('/knowledge/categories', data)
+
+// 重命名分类
+export const updateCategory = (categoryId: number, data: UpdateCategoryRequest) =>
+  api.put(`/knowledge/categories/${categoryId}`, data)
+
+// 删除分类
+export const deleteCategory = (categoryId: number) =>
+  api.delete(`/knowledge/categories/${categoryId}`)
+
+// listDocuments 扩展：新增 source_type 参数
+export const listDocuments = (limit: number, offset: number, sourceType?: string) =>
+  api.get('/knowledge/documents', { params: { limit, offset, source_type: sourceType } })
+```
+
+#### 5.0.6 交互细节
+
+1. **分类切换**：点击左侧分类项 → 右侧文档列表按 `source_type` 过滤；点击"全部" → 显示所有文档
+2. **添加分类验证**：
+   - 英文代号：前端正则 `^[a-z][a-z0-9_-]*$` 校验格式
+   - 重名校验：后端通过 `UNIQUE(tenant_id, source_type)` 约束校验，返回 409 时前端提示"该代号已存在"
+   - 分类名称不能为空
+3. **重命名**：点击分类旁的编辑图标 → 弹窗修改 `display_name` → 保存后更新 `knowledge_categories` 表
+4. **删除分类**：删除前弹窗提示"删除分类不会删除已上传的文档"，确认后仅删除 `knowledge_categories` 记录
+5. **空分类处理**：新创建的分类 `document_count: 0`，仍显示在左侧导航
+6. **上传文档关联分类**：选中某个分类时上传，文档的 `source_type` 设为该分类的 `source_type`；选中"全部"时默认 `source_type = "file"`
+7. **非分类表中的 source_type**：如果 `documents` 表中存在 `knowledge_categories` 表里没有的 `source_type`（比如其他模块自动写入的），左侧导航不显示该分类，但这些文档会在"全部"中显示
+
+#### 5.0.7 后端 service 变更
+
+`src/knowledge/service.py` 需修改/新增：
+
+| 方法 | 变更 |
+|------|------|
+| `list_documents()` | 新增 `source_type` 可选参数，在 WHERE 条件中追加过滤 |
+| `upload_document()` | 新增 `source_type` 参数，覆盖默认的 `"file"` |
+| `list_categories(tenant_id)` | **新增**：从 `knowledge_categories` 表查询，LEFT JOIN 统计文档数 |
+| `create_category(tenant_id, source_type, display_name)` | **新增**：插入 `knowledge_categories`，唯一性由 DB 约束保证 |
+| `update_category(category_id, tenant_id, display_name)` | **新增**：更新 `display_name` |
+| `delete_category(category_id, tenant_id)` | **新增**：删除分类记录 |
+
+#### 5.0.8 向后兼容
+
+- `documents` 表结构不变，无需新增字段
+- `/api/knowledge/documents` 的 `source_type` 参数为可选，不传则返回全部
+- 已有 `source_type`（如 `file`、`hotel_resource`）通过迁移脚本自动注册到 `knowledge_categories`
+- 其他模块（如 `data_analysis.py`）向 `documents` 写入数据时不受影响，其 `source_type` 如需显示在分类导航，可后续手动添加
+
+### 5.1 知识库管理页面（原计划，Phase 1）
 
 新增知识库管理界面（可复用现有 BaseCard/BaseTable 组件）：
 
@@ -979,6 +1340,18 @@ knowledge:
 
 ## 七、实施计划
 
+### Phase 0：知识库分类管理（最高优先级，1 周）
+
+| 天数 | 任务 | 交付物 |
+|------|------|--------|
+| D1 | 数据库变更（新建 `knowledge_categories` 表 + 已有数据迁移） | `init-postgres.sql` + `db_update.sql` |
+| D1 | 后端 API（分类 CRUD + 文档列表 `source_type` 过滤） | `src/knowledge/api.py` + `service.py` |
+| D2 | 前端 API 层（`knowledge.ts` 新增分类接口） | `frontend/src/api/knowledge.ts` |
+| D2-3 | 前端页面改造（左侧分类导航 + 右侧文档列表双栏布局） | `KnowledgeBase.vue` |
+| D3 | 添加分类弹窗 + 重命名弹窗 + 删除确认 + 验证逻辑 | 弹窗组件 |
+| D4 | 上传文档时关联当前分类（`source_type` 传参） | 上传逻辑改造 |
+| D4 | 联调测试 | 全流程验证 |
+
 ### 第一阶段：核心检索增强（4-5 周）
 
 | 周次 | 任务 | 交付物 |
@@ -1009,6 +1382,9 @@ knowledge:
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|---------|
+| 已有 source_type 未注册到分类表 | 其他模块写入的文档不在分类导航中 | 迁移脚本自动提取已有 source_type；未注册的文档仍在"全部"中可见 |
+| 删除分类后文档孤立 | 文档的 source_type 无对应分类 | 删除分类不删文档；文档仍在"全部"中显示；可重新创建同名分类恢复 |
+| 分类与 source_type 不一致 | 用户可能期望改 source_type | source_type 不可修改（已关联文档），仅允许重命名 display_name |
 | LLM Rerank 增加延迟 | 检索 p95 从 200ms 增至 500-700ms | Selective Rerank：高置信结果跳过 rerank；超时降级 |
 | Query Rewriting 失败 | 改写错误导致检索不到结果 | fallback 到原始查询；记录改写日志便于调试 |
 | 权限过滤性能 | 大量文档 ID 的 IN 查询可能慢 | 限制单次过滤 max 5000 doc；使用 PostgreSQL ANY 数组 |
@@ -1024,6 +1400,7 @@ knowledge:
 
 | 差距分析需求 | 本文档章节 | 实施阶段 |
 |-------------|-----------|---------|
+| **知识库分类管理**（新增需求） | **§5.0** | **Phase 0（最高优先级）** |
 | Rerank 重排序 | §3.1 | 第一阶段 W1 |
 | 文档级权限控制 | §3.2 | 第一阶段 W2 |
 | 知识库健康度检测 | §3.8 | 第二阶段 |

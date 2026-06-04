@@ -69,8 +69,12 @@ export interface DocumentListResponse {
 /**
  * 获取知识库文档列表（分页）
  */
-export async function listDocuments(limit = 100, offset = 0): Promise<DocumentListResponse> {
-  const response = await fetch(`${API_BASE}/documents?limit=${limit}&offset=${offset}`, {
+export async function listDocuments(limit = 100, offset = 0, sourceType?: string): Promise<DocumentListResponse> {
+  let url = `${API_BASE}/documents?limit=${limit}&offset=${offset}`
+  if (sourceType) {
+    url += `&source_type=${encodeURIComponent(sourceType)}`
+  }
+  const response = await fetch(url, {
     headers: { ...getAuthHeader() }
   })
   if (!response.ok) {
@@ -93,9 +97,12 @@ export async function deleteDocument(docId: number): Promise<ApiResponse> {
 /**
  * 上传知识库文档（单文件）
  */
-export async function uploadDocument(file: File): Promise<UploadResponse> {
+export async function uploadDocument(file: File, sourceType?: string): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
+  if (sourceType) {
+    formData.append('source_type', sourceType)
+  }
 
   const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
@@ -121,11 +128,14 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
 /**
  * 批量上传知识库文档（多文件）
  */
-export async function uploadDocumentsBatch(files: File[]): Promise<BatchUploadResponse> {
+export async function uploadDocumentsBatch(files: File[], sourceType?: string): Promise<BatchUploadResponse> {
   const formData = new FormData()
   files.forEach(file => {
     formData.append('files', file)
   })
+  if (sourceType) {
+    formData.append('source_type', sourceType)
+  }
 
   const response = await fetch(`${API_BASE}/upload/batch`, {
     method: 'POST',
@@ -139,9 +149,29 @@ export async function uploadDocumentsBatch(files: File[]): Promise<BatchUploadRe
 }
 
 /**
- * 获取文档分块（用于调试）
+ * 分块详情
  */
-export async function getDocumentChunks(docId: number): Promise<any> {
+export interface ChunkResponse {
+  chunk_id: number
+  index: number
+  text: string
+  tokens: number
+  metadata: Record<string, any>
+  has_vector: boolean
+  vector_text: string | null
+}
+
+export interface ChunkListResponse {
+  success: boolean
+  doc_id: number
+  chunks: ChunkResponse[]
+  count: number
+}
+
+/**
+ * 获取文档分块（含向量数据）
+ */
+export async function getDocumentChunks(docId: number): Promise<ChunkListResponse> {
   const response = await fetch(`${API_BASE}/documents/${docId}/chunks`, {
     headers: { ...getAuthHeader() }
   })
@@ -171,5 +201,81 @@ export async function searchDocuments(query: string, top_k = 10): Promise<Search
     const error = await response.json()
     throw new Error(error.error || '搜索失败')
   }
+  return response.json()
+}
+
+// ========== 分类管理 ==========
+
+export interface CategoryResponse {
+  id: number
+  source_type: string
+  display_name: string | null
+  document_count: number
+  created_at: string | null
+}
+
+export interface CategoryListResponse {
+  items: CategoryResponse[]
+}
+
+/**
+ * 获取知识库分类列表
+ */
+export async function listCategories(): Promise<CategoryListResponse> {
+  const response = await fetch(`${API_BASE}/categories`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!response.ok) {
+    throw new Error(`获取分类列表失败: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
+ * 创建知识库分类
+ */
+export async function createCategory(sourceType: string, displayName?: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/categories`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ source_type: sourceType, display_name: displayName || sourceType })
+  })
+  const result = await response.json()
+  if (!response.ok) {
+    throw new Error(result.error || '创建分类失败')
+  }
+  return result
+}
+
+/**
+ * 更新分类名称
+ */
+export async function updateCategory(categoryId: number, displayName: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/categories/${categoryId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ display_name: displayName })
+  })
+  const result = await response.json()
+  if (!response.ok) {
+    throw new Error(result.error || '更新分类失败')
+  }
+  return result
+}
+
+/**
+ * 删除分类（不删除文档）
+ */
+export async function deleteCategory(categoryId: number): Promise<ApiResponse> {
+  const response = await fetch(`${API_BASE}/categories/${categoryId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeader() }
+  })
   return response.json()
 }

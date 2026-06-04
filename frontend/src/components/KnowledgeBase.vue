@@ -19,126 +19,181 @@
         />
 
         <div class="flex-1 overflow-hidden p-6">
-          <div class="max-w-6xl mx-auto h-full flex flex-col page-container">
-            <div class="page-toolbar">
-              <div class="page-toolbar-left">
-                <BaseInput v-model="searchQuery" placeholder="搜索文档..." size="sm" class="w-80" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
-                <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
+          <div class="max-w-7xl mx-auto h-full flex gap-4">
+            <!-- 左侧分类导航 -->
+            <div class="w-52 flex-shrink-0 flex flex-col bg-white rounded-xl border border-default">
+              <div class="px-3 py-3 border-b border-default">
+                <span class="text-sm font-medium text-default">文档分类</span>
               </div>
-              <div class="page-toolbar-right">
-                <BaseButton @click="showUploadModal = true">上传文档</BaseButton>
+              <div class="flex-1 overflow-y-auto p-2">
+                <!-- 全部 -->
+                <button
+                  @click="selectCategory(null)"
+                  :class="[
+                    'w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group',
+                    !selectedSourceType ? 'bg-primary-50 text-primary-700 font-medium' : 'text-default hover:bg-surface-hover'
+                  ]"
+                >
+                  <span>全部</span>
+                  <span class="text-xs text-muted">{{ totalDocuments }}</span>
+                </button>
+
+                <!-- 分类列表 -->
+                <button
+                  v-for="cat in categories"
+                  :key="cat.id"
+                  @click="selectCategory(cat.source_type)"
+                  :class="[
+                    'w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group mt-0.5',
+                    selectedSourceType === cat.source_type ? 'bg-primary-50 text-primary-700 font-medium' : 'text-default hover:bg-surface-hover'
+                  ]"
+                >
+                  <span class="truncate" :title="cat.display_name || cat.source_type">{{ cat.display_name || cat.source_type }}</span>
+                  <span class="flex items-center gap-1">
+                    <span class="text-xs text-muted">{{ cat.document_count }}</span>
+                    <span class="hidden group-hover:flex items-center gap-0.5">
+                      <button @click.stop="openRenameCategory(cat)" class="p-0.5 rounded hover:bg-primary-100 text-muted hover:text-primary-600">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                      </button>
+                      <button @click.stop="handleDeleteCategory(cat)" class="p-0.5 rounded hover:bg-danger-100 text-muted hover:text-danger-600">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      </button>
+                    </span>
+                  </span>
+                </button>
+              </div>
+              <div class="p-2 border-t border-default">
+                <button @click="openAddCategory" class="w-full px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors text-center">
+                  + 添加分类
+                </button>
               </div>
             </div>
 
-            <div class="flex-1 overflow-hidden bg-white rounded-xl border border-default">
-              <!-- Loading -->
-              <div v-if="isLoading" class="flex items-center justify-center h-full">
-                <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span class="ml-3 text-muted">加载中...</span>
-              </div>
-
-              <!-- Searching -->
-              <div v-else-if="isSearching" class="flex flex-col items-center justify-center h-full">
-                <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span class="ml-3 text-muted">搜索中...</span>
-              </div>
-
-              <!-- Search Error -->
-              <div v-else-if="searchError && isSearchMode" class="flex flex-col items-center justify-center h-full">
-                <svg class="w-16 h-16 text-danger-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <p class="text-danger-500 mb-2">搜索失败</p>
-                <p class="text-sm text-muted">{{ searchError }}</p>
-              </div>
-
-              <!-- Search Results Empty -->
-              <div v-else-if="isSearchMode && groupedSearchResults.length === 0 && !isLoading" class="flex flex-col items-center justify-center h-full">
-                <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <p class="text-muted mb-2">未找到匹配的文档</p>
-                <p class="text-sm text-muted">尝试其他关键词</p>
-              </div>
-
-              <!-- Document List Empty -->
-              <div v-else-if="documents.length === 0 && !isSearchMode && !isLoading" class="flex flex-col items-center justify-center h-full">
-                <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <p class="text-muted mb-2">暂无已上传的文档</p>
-                <p class="text-sm text-muted">点击上方按钮上传文档</p>
-              </div>
-
-              <!-- Search Results -->
-              <div v-else-if="isSearchMode && groupedSearchResults.length > 0" class="h-full overflow-auto p-4">
-                <div class="space-y-4">
-                  <div v-for="group in groupedSearchResults" :key="group.chunks[0].doc_id" class="bg-canvas rounded-lg p-4">
-                    <div class="flex items-center gap-3 mb-3">
-                      <div :class="getFileIconClass('.' + group.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center">
-                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                      </div>
-                      <div class="flex-1 min-w-0">
-                        <h3 @click="openDocument(group.chunks[0].doc_id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate" :title="'点击打开原文: ' + group.title">{{ group.title }}</h3>
-                        <p class="text-xs text-muted">{{ group.chunks.length }} 个相关片段</p>
-                      </div>
-                    </div>
-                    <div class="space-y-2">
-                      <div v-for="(chunk, _idx) in group.chunks.slice(0, 3)" :key="chunk.chunk_id" class="bg-white rounded p-3 text-sm text-default border border-default">
-                        <p class="line-clamp-3">{{ chunk.text }}</p>
-                        <p class="text-xs text-primary-500 mt-1">相关度: {{ (chunk.score * 100).toFixed(1) }}%</p>
-                      </div>
-                      <p v-if="group.chunks.length > 3" class="text-xs text-muted text-center">还有 {{ group.chunks.length - 3 }} 个相关片段...</p>
-                    </div>
-                  </div>
+            <!-- 右侧文档列表 -->
+            <div class="flex-1 flex flex-col min-w-0">
+              <div class="page-toolbar mb-3">
+                <div class="page-toolbar-left">
+                  <BaseInput v-model="searchQuery" placeholder="搜索文档..." size="sm" class="w-80" @keyup.enter="handleSearchInput" @input="handleSearchInput" />
+                  <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
+                </div>
+                <div class="page-toolbar-right">
+                  <BaseButton @click="showUploadModal = true">上传文档</BaseButton>
                 </div>
               </div>
 
-              <!-- Table -->
-              <div v-else class="h-full flex flex-col">
-                <div class="flex-1 overflow-auto table-scroll-wrapper">
-                  <BaseTable :columns="columns" :data="documents" row-key="id">
-                    <template #index="{ index }">{{ seqNumber(index) }}</template>
-                    <template #title="{ row }">
-                      <div class="flex items-center gap-3">
-                        <div :class="getFileIconClass(row.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
+              <div class="flex-1 overflow-hidden bg-white rounded-xl border border-default">
+                <!-- Loading -->
+                <div v-if="isLoading" class="flex items-center justify-center h-full">
+                  <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span class="ml-3 text-muted">加载中...</span>
+                </div>
+
+                <!-- Searching -->
+                <div v-else-if="isSearching" class="flex flex-col items-center justify-center h-full">
+                  <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span class="ml-3 text-muted">搜索中...</span>
+                </div>
+
+                <!-- Search Error -->
+                <div v-else-if="searchError && isSearchMode" class="flex flex-col items-center justify-center h-full">
+                  <svg class="w-16 h-16 text-danger-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <p class="text-danger-500 mb-2">搜索失败</p>
+                  <p class="text-sm text-muted">{{ searchError }}</p>
+                </div>
+
+                <!-- Search Results Empty -->
+                <div v-else-if="isSearchMode && groupedSearchResults.length === 0 && !isLoading" class="flex flex-col items-center justify-center h-full">
+                  <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p class="text-muted mb-2">未找到匹配的文档</p>
+                  <p class="text-sm text-muted">尝试其他关键词</p>
+                </div>
+
+                <!-- Document List Empty -->
+                <div v-else-if="documents.length === 0 && !isSearchMode && !isLoading" class="flex flex-col items-center justify-center h-full">
+                  <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p class="text-muted mb-2">暂无已上传的文档</p>
+                  <p class="text-sm text-muted">点击上方按钮上传文档</p>
+                </div>
+
+                <!-- Search Results -->
+                <div v-else-if="isSearchMode && groupedSearchResults.length > 0" class="h-full overflow-auto p-4">
+                  <div class="space-y-4">
+                    <div v-for="group in groupedSearchResults" :key="group.chunks[0].doc_id" class="bg-canvas rounded-lg p-4">
+                      <div class="flex items-center gap-3 mb-3">
+                        <div :class="getFileIconClass('.' + group.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center">
                           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                           </svg>
                         </div>
-                        <span @click="openDocument(row.id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block" :title="'点击打开原文: ' + row.title">{{ row.title }}</span>
+                        <div class="flex-1 min-w-0">
+                          <h3 @click="openDocument(group.chunks[0].doc_id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer truncate" :title="'点击打开原文: ' + group.title">{{ group.title }}</h3>
+                          <p class="text-xs text-muted">{{ group.chunks.length }} 个相关片段</p>
+                        </div>
                       </div>
-                    </template>
-                    <template #summary="{ row }">
-                      <p v-if="row.summary" class="text-sm text-default line-clamp-2" :title="row.summary">{{ row.summary }}</p>
-                      <p v-else class="text-sm text-muted">-</p>
-                    </template>
-                    <template #file_type="{ row }">
-                      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-default uppercase">{{ row.file_type.replace('.', '') }}</span>
-                    </template>
-                    <template #file_size="{ row }">{{ formatFileSize(row.file_size) }}</template>
-                    <template #total_chunks="{ row }">{{ row.total_chunks }}</template>
-                    <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
-                    <template #actions="{ row }">
-                      <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
-                    </template>
-                  </BaseTable>
+                      <div class="space-y-2">
+                        <div v-for="(chunk, _idx) in group.chunks.slice(0, 3)" :key="chunk.chunk_id" class="bg-white rounded p-3 text-sm text-default border border-default">
+                          <p class="line-clamp-3">{{ chunk.text }}</p>
+                          <p class="text-xs text-primary-500 mt-1">相关度: {{ (chunk.score * 100).toFixed(1) }}%</p>
+                        </div>
+                        <p v-if="group.chunks.length > 3" class="text-xs text-muted text-center">还有 {{ group.chunks.length - 3 }} 个相关片段...</p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
-                <BasePagination
-                  v-if="totalDocuments > pageSize"
-                  :total="totalDocuments"
-                  v-model:current-page="currentPage"
-                  :page-size="pageSize"
-                />
+                <!-- Table -->
+                <div v-else class="h-full flex flex-col">
+                  <div class="flex-1 overflow-auto table-scroll-wrapper">
+                    <BaseTable :columns="columns" :data="documents" row-key="id">
+                      <template #index="{ index }">{{ seqNumber(index) }}</template>
+                      <template #title="{ row }">
+                        <div class="flex items-center gap-3">
+                          <div :class="getFileIconClass(row.file_type)" class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                          </div>
+                          <span @click="openDocument(row.id)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block" :title="'点击打开原文: ' + row.title">{{ row.title }}</span>
+                        </div>
+                      </template>
+                      <template #summary="{ row }">
+                        <p v-if="row.summary" class="text-sm text-default line-clamp-2" :title="row.summary">{{ row.summary }}</p>
+                        <p v-else class="text-sm text-muted">-</p>
+                      </template>
+                      <template #file_type="{ row }">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-default uppercase">{{ row.file_type.replace('.', '') }}</span>
+                      </template>
+                      <template #file_size="{ row }">{{ formatFileSize(row.file_size) }}</template>
+                      <template #total_chunks="{ row }">
+                        <span @click="openChunkDetail(row)" class="text-primary-600 hover:text-primary-700 hover:underline cursor-pointer">{{ row.total_chunks }}</span>
+                      </template>
+                      <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
+                      <template #actions="{ row }">
+                        <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
+                      </template>
+                    </BaseTable>
+                  </div>
+
+                  <BasePagination
+                    v-if="totalDocuments > pageSize"
+                    :total="totalDocuments"
+                    :current-page="currentPage"
+                    :page-size="pageSize"
+                    @update:current-page="handlePageChange"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -226,7 +281,7 @@
       </div>
     </div>
 
-    <!-- Delete Confirmation Modal -->
+    <!-- Delete Document Confirmation Modal -->
     <BaseModal v-model="showDeleteConfirm" title="删除文档" size="md">
       <template v-if="documentToDelete">
         <div class="flex items-center gap-4">
@@ -245,6 +300,87 @@
         <BaseButton intent="danger" :disabled="isDeleting" @click="confirmDelete">{{ isDeleting ? '删除中...' : '删除' }}</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- Add Category Modal -->
+    <BaseModal v-model="showAddCategoryModal" title="添加分类" size="md">
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">英文代号 <span class="text-danger-500">*</span></label>
+          <BaseInput v-model="newCategorySourceType" placeholder="如: contract, policy" />
+          <p v-if="newCategoryError" class="text-xs text-danger-500 mt-1">{{ newCategoryError }}</p>
+          <p v-else class="text-xs text-muted mt-1">仅允许小写字母开头，后续为小写字母、数字、下划线或连字符</p>
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">分类名称</label>
+          <BaseInput v-model="newCategoryDisplayName" placeholder="如: 合同文档, 政策文件" />
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showAddCategoryModal = false">取消</BaseButton>
+        <BaseButton :disabled="isCreatingCategory" @click="handleCreateCategory">{{ isCreatingCategory ? '创建中...' : '创建' }}</BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- Rename Category Modal -->
+    <BaseModal v-model="showRenameCategoryModal" title="重命名分类" size="md">
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">英文代号</label>
+          <BaseInput :model-value="renameCategorySourceType" disabled />
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">分类名称 <span class="text-danger-500">*</span></label>
+          <BaseInput v-model="renameCategoryDisplayName" />
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showRenameCategoryModal = false">取消</BaseButton>
+        <BaseButton :disabled="isRenamingCategory" @click="handleRenameCategory">{{ isRenamingCategory ? '保存中...' : '保存' }}</BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- Chunk Detail Modal -->
+    <BaseModal v-model="showChunkModal" title="分块详情" size="xl">
+      <div class="mb-2 text-sm text-muted">{{ chunkDocTitle }}</div>
+      <div v-if="isLoadingChunks" class="flex items-center justify-center py-12">
+        <svg class="w-6 h-6 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="ml-2 text-muted">加载中...</span>
+      </div>
+      <div v-else-if="chunkList.length === 0" class="text-center text-muted py-12">暂无分块数据</div>
+      <div v-else class="space-y-3 max-h-[60vh] overflow-y-auto">
+        <div v-for="chunk in chunkList" :key="chunk.chunk_id" class="border border-default rounded-lg p-4">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-3">
+              <BaseBadge intent="info">Chunk {{ chunk.index }}</BaseBadge>
+              <span class="text-xs text-muted">ID: {{ chunk.chunk_id }}</span>
+              <span class="text-xs text-muted">{{ chunk.tokens }} chars</span>
+            </div>
+            <BaseBadge v-if="chunk.has_vector" intent="success">有向量</BaseBadge>
+            <BaseBadge v-else intent="neutral">无向量</BaseBadge>
+          </div>
+          <div class="bg-canvas rounded p-3 text-sm text-default whitespace-pre-wrap break-all cursor-pointer hover:bg-primary-50 transition-colors"
+               @click="copyToClipboard(chunk.text, '分块内容')" title="点击复制内容">
+            {{ chunk.text }}
+          </div>
+          <div v-if="chunk.has_vector && chunk.vector_text" class="mt-2">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs text-muted font-medium">向量</span>
+              <button class="text-xs text-primary-600 hover:text-primary-700" @click="copyToClipboard(chunk.vector_text!, '向量数据')">复制完整向量</button>
+            </div>
+            <div class="bg-canvas rounded p-2 text-xs text-muted font-mono break-all cursor-pointer hover:bg-primary-50 transition-colors"
+                 @click="copyToClipboard(chunk.vector_text!, '向量数据')" title="点击复制向量">
+              {{ truncateVector(chunk.vector_text) }}
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showChunkModal = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -259,10 +395,17 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import BaseBadge from '@/components/ui/BaseBadge.vue'
 import { usePageContext } from '@/composables/usePageContext'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
-import { listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl, type DocumentResponse, type SearchResultItem, type BatchUploadError } from '@/api/knowledge'
+import {
+  listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl,
+  type DocumentResponse, type SearchResultItem, type BatchUploadError,
+  listCategories, createCategory, updateCategory, deleteCategory,
+  type CategoryResponse,
+  getDocumentChunks, type ChunkResponse
+} from '@/api/knowledge'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -300,9 +443,34 @@ const columns = [
   { key: 'actions', label: '操作', width: '80px' },
 ]
 
+// ========== 分类状态 ==========
+const categories = ref<CategoryResponse[]>([])
+const selectedSourceType = ref<string | null>(null)
+
+// 添加分类
+const showAddCategoryModal = ref(false)
+const newCategorySourceType = ref('')
+const newCategoryDisplayName = ref('')
+const newCategoryError = ref('')
+const isCreatingCategory = ref(false)
+
+// 重命名分类
+const showRenameCategoryModal = ref(false)
+const renameCategoryId = ref<number | null>(null)
+const renameCategorySourceType = ref('')
+const renameCategoryDisplayName = ref('')
+const isRenamingCategory = ref(false)
+
+// ========== 文档状态 ==========
 const documents = ref<DocumentResponse[]>([])
 const isLoading = ref(false)
 const searchQuery = ref('')
+
+// 分块详情弹窗
+const showChunkModal = ref(false)
+const chunkDocTitle = ref('')
+const chunkList = ref<ChunkResponse[]>([])
+const isLoadingChunks = ref(false)
 const searchResults = ref<SearchResultItem[]>([])
 const isSearching = ref(false)
 const searchError = ref('')
@@ -366,7 +534,7 @@ async function loadAvailableSubagents() {
 }
 
 const totalDocuments = ref(0)
-const { currentPage, pageSize, seqNumber } =
+const { currentPage, pageSize, seqNumber, handlePageChange } =
   usePageContext(async () => {
     await loadDocuments()
   })
@@ -458,10 +626,97 @@ const groupedSearchResults = computed(() => {
     .sort((a, b) => b.maxScore - a.maxScore)
 })
 
+// ========== 分类操作 ==========
+
+async function loadCategories() {
+  try {
+    const result = await listCategories()
+    categories.value = result.items || []
+  } catch (e) {
+    console.error('加载分类列表失败:', e)
+  }
+}
+
+function selectCategory(sourceType: string | null) {
+  selectedSourceType.value = sourceType
+  currentPage.value = 1
+  clearSearch()
+  loadDocuments()
+}
+
+function openAddCategory() {
+  newCategorySourceType.value = ''
+  newCategoryDisplayName.value = ''
+  newCategoryError.value = ''
+  showAddCategoryModal.value = true
+}
+
+async function handleCreateCategory() {
+  const st = newCategorySourceType.value.trim()
+  if (!/^[a-z][a-z0-9_-]*$/.test(st)) {
+    newCategoryError.value = '格式错误：仅允许小写字母开头，后续为小写字母、数字、下划线或连字符'
+    return
+  }
+  isCreatingCategory.value = true
+  try {
+    await createCategory(st, newCategoryDisplayName.value.trim() || st)
+    showAddCategoryModal.value = false
+    await loadCategories()
+    toast.success('分类创建成功')
+  } catch (e: any) {
+    toast.error(e.message || '创建分类失败')
+  } finally {
+    isCreatingCategory.value = false
+  }
+}
+
+function openRenameCategory(cat: CategoryResponse) {
+  renameCategoryId.value = cat.id
+  renameCategorySourceType.value = cat.source_type
+  renameCategoryDisplayName.value = cat.display_name || cat.source_type
+  showRenameCategoryModal.value = true
+}
+
+async function handleRenameCategory() {
+  if (!renameCategoryId.value) return
+  const name = renameCategoryDisplayName.value.trim()
+  if (!name) {
+    toast.error('分类名称不能为空')
+    return
+  }
+  isRenamingCategory.value = true
+  try {
+    await updateCategory(renameCategoryId.value, name)
+    showRenameCategoryModal.value = false
+    await loadCategories()
+    toast.success('分类重命名成功')
+  } catch (e: any) {
+    toast.error(e.message || '重命名失败')
+  } finally {
+    isRenamingCategory.value = false
+  }
+}
+
+async function handleDeleteCategory(cat: CategoryResponse) {
+  if (!confirm(`删除分类"${cat.display_name || cat.source_type}"不会删除已上传的文档，确定删除？`)) return
+  try {
+    await deleteCategory(cat.id)
+    if (selectedSourceType.value === cat.source_type) {
+      selectedSourceType.value = null
+    }
+    await loadCategories()
+    toast.success('分类已删除')
+  } catch (e: any) {
+    toast.error(e.message || '删除分类失败')
+  }
+}
+
+// ========== 文档操作 ==========
+
 async function loadDocuments() {
   isLoading.value = true
   try {
-    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value)
+    const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value, selectedSourceType.value || undefined)
     documents.value = result.items
     totalDocuments.value = result.total
   } catch (error: any) {
@@ -561,6 +816,7 @@ async function handleUpload() {
 
   const filesToUpload = [...selectedFiles.value]
   const totalFiles = filesToUpload.length
+  const currentSourceType = selectedSourceType.value || undefined
 
   uploadProgress.value = {
     total: totalFiles,
@@ -578,7 +834,7 @@ async function handleUpload() {
       uploadProgress.value.currentFileName = file.name
 
       try {
-        const result = await uploadDocument(file)
+        const result = await uploadDocument(file, currentSourceType)
         successResults.push(result)
         await loadDocuments()
       } catch (error: any) {
@@ -592,6 +848,7 @@ async function handleUpload() {
     selectedFiles.value = []
     currentPage.value = 1
     await loadDocuments()
+    await loadCategories()
 
     if (successResults.length > 0) {
       if (successResults.length === totalFiles) {
@@ -630,6 +887,7 @@ async function confirmDelete() {
       currentPage.value--
     }
     await loadDocuments()
+    await loadCategories()
   } catch (error: any) {
     console.error('前端日志：删除文档失败', error)
     toast.error(error.response?.data?.error || '删除失败')
@@ -675,6 +933,38 @@ function openDocument(docId: number) {
   window.open(url, '_blank')
 }
 
+async function openChunkDetail(row: DocumentResponse) {
+  chunkDocTitle.value = row.title
+  chunkList.value = []
+  showChunkModal.value = true
+  isLoadingChunks.value = true
+  try {
+    const result = await getDocumentChunks(row.id)
+    chunkList.value = result.chunks || []
+  } catch (e) {
+    console.error('获取分块详情失败:', e)
+    toast.error('获取分块详情失败')
+  } finally {
+    isLoadingChunks.value = false
+  }
+}
+
+async function copyToClipboard(text: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success(`${label}已复制`)
+  } catch {
+    toast.error('复制失败')
+  }
+}
+
+function truncateVector(vecText: string | null): string {
+  if (!vecText) return ''
+  const nums = vecText.replace(/^\[|\]$/g, '').split(',')
+  if (nums.length <= 20) return vecText
+  return '[' + nums.slice(0, 20).join(',') + ', ...] (' + nums.length + ' 维)'
+}
+
 async function handleLogout() {
   if (isTenantMode.value) {
     await tenantLogout()
@@ -686,6 +976,7 @@ async function handleLogout() {
 
 onMounted(() => {
   loadAvailableSubagents()
+  loadCategories()
   loadDocuments()
 })
 </script>

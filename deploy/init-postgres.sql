@@ -283,6 +283,19 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(u
 
 -- ============== 知识库表 ==============
 
+-- 知识库分类表
+CREATE TABLE IF NOT EXISTS knowledge_categories (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    display_name TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, source_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_categories_tenant ON knowledge_categories(tenant_id);
+
 -- 文档表
 CREATE TABLE IF NOT EXISTS documents (
     id SERIAL PRIMARY KEY,

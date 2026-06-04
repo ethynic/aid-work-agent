@@ -214,7 +214,8 @@ class AttractionRetriever:
                           info_text: str, ticket_table_text: str,
                           project_table_text: str = "",
                           metadata: Optional[Dict] = None,
-                          source_file: str = "") -> int:
+                          source_file: str = "",
+                          user_id: Optional[str] = None) -> int:
         """
         导入一个景点到知识库。
 
@@ -226,7 +227,8 @@ class AttractionRetriever:
             ticket_table_text: 门票价格表（chunk 1，不向量化）
             project_table_text: 项目/服务价格表（chunk 2，不向量化）
             metadata: 额外元信息
-            source_file: 来源文件名
+            source_file: 来源文件名（仅记入 metadata）
+            user_id: 上传用户 ID
 
         Returns:
             doc_id
@@ -239,11 +241,11 @@ class AttractionRetriever:
         with self._get_conn() as conn:
             # 1. 创建 document
             conn.execute("""
-                INSERT INTO documents (tenant_id, title, source_type, file_type, file_path,
-                                       total_chunks, embedding_model, metadata)
-                VALUES (%s, %s, %s, 'text', %s, 3, 'text-embedding-v3', %s)
+                INSERT INTO documents (user_id, tenant_id, title, source_type, file_type, file_path,
+                                       total_chunks, embedding_model, metadata, summary)
+                VALUES (%s, %s, %s, %s, 'xlsx', %s, 3, 'text-embedding-v3', %s, %s)
                 RETURNING id
-            """, (tenant_id, f"景点：{attraction_name}", self.SOURCE_TYPE, source_file, meta_json))
+            """, (user_id, tenant_id, f"景点：{attraction_name}", self.SOURCE_TYPE, source_file, meta_json, info_text))
             doc_id = conn.fetchone()["id"]
 
             # 2. 插入 chunk 0（景点信息摘要）

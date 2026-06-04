@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from loguru import logger
@@ -81,9 +81,70 @@ class SearchResponse(BaseModel):
     debug: Optional[str] = None
 
 
+class CategoryResponse(BaseModel):
+    id: int
+    source_type: str
+    display_name: Optional[str] = None
+    document_count: int = 0
+    created_at: Optional[str] = None
+
+
+class CreateCategoryRequest(BaseModel):
+    source_type: str
+    display_name: Optional[str] = None
+
+
+class UpdateCategoryRequest(BaseModel):
+    display_name: str
+
+
+@router.get("/categories")
+async def list_categories(http_request: Request = None):
+    """获取知识库分类列表"""
+    tenant_id = get_current_tenant_id()
+    categories = knowledge_service.list_categories(tenant_id)
+    return {"items": [CategoryResponse(**c) for c in categories]}
+
+
+@router.post("/categories")
+async def create_category(request: CreateCategoryRequest, http_request: Request = None):
+    """创建知识库分类"""
+    tenant_id = get_current_tenant_id()
+    result = knowledge_service.create_category(
+        tenant_id=tenant_id,
+        source_type=request.source_type,
+        display_name=request.display_name
+    )
+    if not result.get("success"):
+        status_code = result.get("status", 400)
+        return JSONResponse(status_code=status_code, content={"success": False, "error": result.get("error", "创建失败")})
+    return result
+
+
+@router.put("/categories/{category_id}")
+async def update_category(category_id: int, request: UpdateCategoryRequest, http_request: Request = None):
+    """更新分类名称"""
+    tenant_id = get_current_tenant_id()
+    result = knowledge_service.update_category(category_id, tenant_id, request.display_name)
+    if not result.get("success"):
+        return JSONResponse(status_code=404, content={"success": False, "error": result.get("error", "更新失败")})
+    return {"success": True}
+
+
+@router.delete("/categories/{category_id}")
+async def delete_category(category_id: int, http_request: Request = None):
+    """删除分类（不删除文档）"""
+    tenant_id = get_current_tenant_id()
+    result = knowledge_service.delete_category(category_id, tenant_id)
+    if not result.get("success"):
+        return JSONResponse(status_code=404, content={"success": False, "error": result.get("error", "删除失败")})
+    return {"success": True}
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
+    source_type: Optional[str] = Form(None),
     http_request: Request = None
 ):
     """
@@ -135,7 +196,8 @@ async def upload_document(
             file_path=str(file_path),
             file_filename=file.filename or "unknown",
             user_id=user_id,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            source_type=source_type
         )
 
         if not result.get("success"):
@@ -177,6 +239,7 @@ async def upload_document(
 @router.post("/upload/batch", response_model=BatchUploadResponse)
 async def upload_documents_batch(
     files: list[UploadFile] = File(...),
+    source_type: Optional[str] = Form(None),
     http_request: Request = None
 ):
     """
@@ -237,7 +300,8 @@ async def upload_documents_batch(
                 file_path=str(file_path),
                 file_filename=filename,
                 user_id=user_id,
-                tenant_id=tenant_id
+                tenant_id=tenant_id,
+                source_type=source_type
             )
 
             if not result.get("success"):
@@ -278,12 +342,14 @@ async def upload_documents_batch(
 async def list_documents(
     limit: int = 100,
     offset: int = 0,
+    source_type: Optional[str] = None,
     http_request: Request = None
 ):
     """
     获取知识库文档列表
 
     - 支持分页查询
+    - 支持按 source_type 过滤
     - 返回 {items, total} 格式
     - 仅做租户隔离，同一租户内所有用户共享可见
     """
@@ -292,9 +358,10 @@ async def list_documents(
     documents = knowledge_service.list_documents(
         tenant_id=tenant_id,
         limit=limit,
-        offset=offset
+        offset=offset,
+        source_type=source_type
     )
-    total = knowledge_service.count_documents(tenant_id=tenant_id)
+    total = knowledge_service.count_documents(tenant_id=tenant_id, source_type=source_type)
 
     return {
         "items": [DocumentResponse(**doc) for doc in documents],
@@ -409,8 +476,12 @@ async def download_document(doc_id: int):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="文件不存在，可能已被删除")
 
+    # 从实际文件路径提取扩展名，拼到下载文件名上
+    ext = Path(file_path).suffix  # 如 ".xlsx"
+    download_name = title if title.endswith(ext) else title + ext
+
     return FileResponse(
         path=file_path,
-        filename=title,
+        filename=download_name,
         media_type='application/octet-stream'
     )

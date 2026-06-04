@@ -121,12 +121,110 @@ class KnowledgeBaseService:
         """获取数据库连接（使用统一的数据库连接管理）"""
         return get_db_connection()
 
+    # ========== 分类管理 ==========
+
+    def list_categories(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """获取分类列表，含文档数统计"""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT kc.id, kc.source_type, kc.display_name, kc.created_at,
+                           COALESCE(doc_cnt.document_count, 0) AS document_count
+                    FROM knowledge_categories kc
+                    LEFT JOIN (
+                        SELECT tenant_id, source_type, COUNT(*) AS document_count
+                        FROM documents
+                        WHERE tenant_id = %s
+                        GROUP BY tenant_id, source_type
+                    ) doc_cnt ON kc.tenant_id = doc_cnt.tenant_id AND kc.source_type = doc_cnt.source_type
+                    WHERE kc.tenant_id = %s
+                    ORDER BY kc.created_at ASC
+                """, (tenant_id, tenant_id))
+                rows = cursor.fetchall()
+                result = []
+                for row in rows:
+                    d = dict(row)
+                    if d.get("created_at"):
+                        d["created_at"] = d["created_at"].isoformat()
+                    result.append(d)
+                return result
+        except Exception as e:
+            logger.error(f"获取分类列表失败: {e}", exc_info=True)
+            return []
+
+    def create_category(self, tenant_id: str, source_type: str, display_name: str) -> Dict[str, Any]:
+        """创建分类"""
+        import re
+        if not re.match(r'^[a-z][a-z0-9_-]*$', source_type):
+            return {"success": False, "error": "source_type 格式错误，仅允许小写字母开头，后续为小写字母、数字、下划线或连字符"}
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO knowledge_categories (tenant_id, source_type, display_name)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, created_at
+                """, (tenant_id, source_type, display_name or source_type))
+                row = cursor.fetchone()
+                conn.commit()
+                d = dict(row)
+                if d.get("created_at"):
+                    d["created_at"] = d["created_at"].isoformat()
+                return {
+                    "success": True,
+                    "id": d["id"],
+                    "source_type": source_type,
+                    "display_name": display_name or source_type,
+                    "created_at": d.get("created_at", "")
+                }
+        except Exception as e:
+            err = str(e)
+            if "unique" in err.lower() or "duplicate" in err.lower():
+                return {"success": False, "error": "该代号已存在", "status": 409}
+            logger.error(f"创建分类失败: {e}", exc_info=True)
+            return {"success": False, "error": "创建分类失败"}
+
+    def update_category(self, category_id: int, tenant_id: str, display_name: str) -> Dict[str, Any]:
+        """更新分类名称"""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE knowledge_categories SET display_name = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND tenant_id = %s
+                """, (display_name, category_id, tenant_id))
+                if cursor.rowcount == 0:
+                    return {"success": False, "error": "分类不存在"}
+                conn.commit()
+                return {"success": True}
+        except Exception as e:
+            logger.error(f"更新分类失败: {e}", exc_info=True)
+            return {"success": False, "error": "更新分类失败"}
+
+    def delete_category(self, category_id: int, tenant_id: str) -> Dict[str, Any]:
+        """删除分类（仅删记录，不删文档）"""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    DELETE FROM knowledge_categories WHERE id = %s AND tenant_id = %s
+                """, (category_id, tenant_id))
+                if cursor.rowcount == 0:
+                    return {"success": False, "error": "分类不存在"}
+                conn.commit()
+                return {"success": True}
+        except Exception as e:
+            logger.error(f"删除分类失败: {e}", exc_info=True)
+            return {"success": False, "error": "删除分类失败"}
+
     async def upload_document(
         self,
         file_path: str,
         file_filename: str,
         user_id: Optional[int] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         上传并处理文档
@@ -136,6 +234,7 @@ class KnowledgeBaseService:
             file_filename: 原始文件名
             user_id: 用户 ID
             tenant_id: 租户 ID
+            source_type: 文档来源类型，默认 "file"
 
         Returns:
             处理结果
@@ -187,7 +286,7 @@ class KnowledgeBaseService:
                     user_id,
                     tenant_id,
                     file_filename,
-                    "file",
+                    source_type or "file",
                     ext,
                     file_path,
                     os.path.getsize(file_path) if os.path.exists(file_path) else 0,
@@ -294,7 +393,7 @@ class KnowledgeBaseService:
             logger.error(f"后端日志：文档删除失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None) -> int:
+    def count_documents(self, user_id: Optional[int] = None, tenant_id: Optional[str] = None, source_type: Optional[str] = None) -> int:
         """获取文档总数"""
         try:
             with self._get_db_connection() as conn:
@@ -309,6 +408,9 @@ class KnowledgeBaseService:
                 if user_id:
                     conditions.append("user_id = %s")
                     params.append(user_id)
+                if source_type is not None:
+                    conditions.append("source_type = %s")
+                    params.append(source_type)
 
                 where_clause = " AND ".join(conditions)
                 if where_clause:
@@ -328,7 +430,8 @@ class KnowledgeBaseService:
         user_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        source_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """获取文档列表"""
         try:
@@ -345,6 +448,9 @@ class KnowledgeBaseService:
                 if user_id:
                     conditions.append(f"user_id = {placeholder}")
                     params.append(user_id)
+                if source_type is not None:
+                    conditions.append(f"source_type = {placeholder}")
+                    params.append(source_type)
 
                 where_clause = ""
                 if conditions:
@@ -375,22 +481,23 @@ class KnowledgeBaseService:
             return []
 
     def get_document_chunks(self, doc_id: int) -> List[Dict[str, Any]]:
-        """获取文档的所有分块"""
+        """获取文档的所有分块（含向量数据）"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
 
                 cursor.execute("""
-                    SELECT id, chunk_index, text, tokens, metadata
-                    FROM chunks
-                    WHERE doc_id = %s
-                    ORDER BY chunk_index
+                    SELECT c.id, c.chunk_index, c.text, c.tokens, c.metadata,
+                           cv.embedding IS NOT NULL AS has_vector,
+                           CASE WHEN cv.embedding IS NOT NULL
+                                THEN cv.embedding::text ELSE NULL END AS vector_text
+                    FROM chunks c
+                    LEFT JOIN chunks_vec cv ON c.id = cv.chunk_id
+                    WHERE c.doc_id = %s
+                    ORDER BY c.chunk_index
                 """, (doc_id,))
 
                 rows = cursor.fetchall()
-
-                # 转换为 dict 以便访问列名
-                rows = [dict(row) for row in rows]
 
                 return [
                     {
@@ -398,7 +505,9 @@ class KnowledgeBaseService:
                         "index": row["chunk_index"],
                         "text": row["text"],
                         "tokens": row["tokens"],
-                        "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
+                        "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                        "has_vector": bool(row["has_vector"]),
+                        "vector_text": row["vector_text"]
                     }
                     for row in rows
                 ]
