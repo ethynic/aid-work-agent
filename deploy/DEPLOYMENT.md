@@ -597,24 +597,117 @@ API_KEYS=key1,key2,key3
 
 ---
 
-## 📞 联系支持
+## Docker 镜像仓库
 
-如遇问题，请查看：
-1. 项目文档：`/var/www/agent/docs/`
-2. 应用日志：`/var/www/agent/log/`
-3. 容器日志：`docker logs aid-agent-api`
-4. 技术支持：联系项目负责人
+自行部署镜像仓库在 124.222.3.254:5005 端口
 
----
+```
+docker pull registry:2
+docker run -d -p 5005:5000 --restart=always --name registry -v /data/docker/registry:/var/lib/registry registry:2
+```
 
-**部署清单**：
-- [ ] 服务器环境准备完成（Docker、docker compose、Nginx）
-- [ ] 项目代码拉取完成
-- [ ] 环境变量配置完成（`.env`）
-- [ ] SMB 共享目录挂载完成（`/mnt/smb/AIUpload`，EAS 合同核对功能）
-- [ ] 前端构建完成
-- [ ] Docker 容器运行正常（确认 9 个 gunicorn worker 启动）
-- [ ] Nginx 配置生效
-- [ ] SSL 证书配置完成
-- [ ] 健康检查通过（`curl http://localhost:8000/health`）
-- [ ] 备份脚本配置完成
+### 本地编译镜像并推送
+
+在**本地开发机**上完成镜像构建并推送到镜像仓库：
+
+```bash
+# 1. 进入项目目录
+cd /path/to/aid-work-agent
+
+# 2. 构建镜像（使用生产 Dockerfile）
+docker build -t 124.222.3.254:5005/aid-agent-api:latest .
+
+# 3. 添加版本标签
+docker tag aid-agent-api:latest 124.222.3.254:5005/aid-agent-api:latest
+
+# 4. 推送镜像到仓库（如果 registry 不支持 HTTPS，需先配置 insecure-registries）
+docker push 124.222.3.254:5005/aid-agent-api:latest
+```
+
+**注意**：若镜像仓库未配置 HTTPS，Docker 默认拒绝推送。请在 `/etc/docker/daemon.json` 中添加：
+```json
+{
+  "insecure-registries": ["124.222.3.254:5005"]
+}
+```
+
+然后执行 `sudo systemctl restart docker` 使配置生效。
+
+### 服务器上拉取镜像并部署
+
+在**生产服务器**上拉取已推送的镜像并启动服务：
+
+```bash
+# 1. SSH 登录到生产服务器
+ssh user@your-server-ip
+
+# 2. 进入项目目录
+cd /var/www/agent
+
+# 3. 拉取最新镜像（如果 registry 不支持 HTTPS，同样需要配置 insecure-registries）
+docker pull 124.222.3.254:5005/aid-agent-api:latest
+
+# 4. 停止旧容器
+docker compose -f docker-compose.prod.yml down
+
+# 5. 启动新容器（使用已拉取的镜像，无需 --build）
+docker compose -f docker-compose.prod.yml up -d
+
+# 6. 查看容器状态
+docker compose -f docker-compose.prod.yml ps
+
+# 7. 查看启动日志
+docker compose -f docker-compose.prod.yml logs -f aid-agent-api
+```
+
+> **提示**：需要在 `docker-compose.prod.yml` 中将 `build` 替换为 `image`，或同时保留两者（Docker Compose 会优先使用本地镜像），以确保使用拉取的镜像而非本地构建：
+> ```yaml
+> services:
+>   aid-agent-api:
+>     image: 124.222.3.254:5005/aid-agent-api:latest
+>     # build: .   ← 可注释掉，避免每次重建
+>     ...
+> ```
+
+### 一键更新脚本（服务器端）
+
+将以下脚本保存为 `deploy/update-from-registry.sh`，便于快速更新：
+
+```bash
+#!/bin/bash
+# 从镜像仓库拉取最新镜像并重启服务
+
+set -e
+
+REGISTRY="124.222.3.254:5005"
+IMAGE="${REGISTRY}/aid-agent-api:latest"
+PROJECT_DIR="/var/www/agent"
+
+echo "=== 拉取最新镜像 ==="
+docker pull ${IMAGE}
+
+echo "=== 停止旧容器 ==="
+cd ${PROJECT_DIR}
+docker compose -f docker-compose.prod.yml down
+
+echo "=== 启动新容器 ==="
+docker compose -f docker-compose.prod.yml up -d
+
+echo "=== 清理旧镜像（可选） ==="
+docker image prune -f
+
+echo "=== 检查服务状态 ==="
+sleep 5
+docker compose -f docker-compose.prod.yml ps
+curl -s http://localhost:8000/health || echo "健康检查失败，请检查日志"
+
+echo "=== 更新完成 ==="
+```
+
+使用方法：
+```bash
+cd /var/www/agent
+chmod +x deploy/update-from-registry.sh
+./deploy/update-from-registry.sh
+```
+
