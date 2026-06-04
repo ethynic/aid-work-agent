@@ -98,7 +98,6 @@ def main():
         description=frontmatter.get("description", ""),
         version=frontmatter.get("version", "1.0.0"),
         author=frontmatter.get("author"),
-        capabilities=frontmatter.get("capabilities", []),
         triggers=frontmatter.get("triggers", {}),
         tools=frontmatter.get("tools", {}),
         skills=frontmatter.get("skills", {}),
@@ -123,7 +122,6 @@ def main():
     defn = test_step("2.1 查询定义详情", lambda: SubagentDefinitionService.get_definition(AGENT_ID))
     if defn:
         print(f"  name = {defn['name']}")
-        print(f"  capabilities = {defn.get('capabilities')}")
         print(f"  tools = {defn.get('tools')}")
         print(f"  skills = {defn.get('skills')}")
         print(f"  llm_provider = {defn.get('llm_provider')}")
@@ -162,7 +160,6 @@ def main():
         print(f"  config.from_db = {config.from_db}")
         print(f"  config.dir_name = {config.dir_name}")
         print(f"  config.system_prompt length = {len(config.system_prompt)}")
-        print(f"  config.capabilities = {config.capabilities}")
         print(f"  config.tools = {config.tools}")
         print(f"  config.skills = {config.skills}")
         print(f"  config.llm_provider = {config.llm_provider}")

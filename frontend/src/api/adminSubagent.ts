@@ -30,7 +30,6 @@ export interface SubagentListItem {
   agent_id: string
   name: string
   description: string
-  capabilities: string[]
   type: 'builtin' | 'custom'
   business_pages?: BusinessPage[]
 }
@@ -41,7 +40,6 @@ export interface SubagentDetail {
   description: string
   version: string
   author: string
-  capabilities: string[]
   triggers: Record<string, any>
   tools: Record<string, any>
   skills: Record<string, any>
@@ -55,7 +53,6 @@ export interface CreateSubagentRequest {
   agent_id: string
   name: string
   description?: string
-  capabilities?: string[]
   triggers?: Record<string, any>
   tools?: Record<string, any>
   skills?: Record<string, any>

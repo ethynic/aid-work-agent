@@ -32,7 +32,6 @@ class SubagentDefinitionDB:
         description: Optional[str] = None,
         version: str = "1.0.0",
         author: Optional[str] = None,
-        capabilities: Optional[list] = None,
         triggers: Optional[dict] = None,
         tools: Optional[dict] = None,
         skills: Optional[dict] = None,
@@ -51,20 +50,20 @@ class SubagentDefinitionDB:
                 cursor.execute("""
                     INSERT INTO subagent_definitions (
                         id, agent_id, name, description, version, author,
-                        capabilities, triggers, tools, skills, context,
+                        triggers, tools, skills, context,
                         delegatable_to, allow_delegation,
                         llm_provider, reply_style, business_pages,
                         created_by, updated_by
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s,
                         %s, %s,
                         %s, %s, %s,
                         %s, %s
                     )
                 """, (
                     row_id, agent_id, name, description, version, author,
-                    _json(capabilities or []), _json(triggers or {}),
+                    _json(triggers or {}),
                     _json(tools or {}), _json(skills or {}),
                     _json(context or {}),
                     _json(delegatable_to or []), allow_delegation,
@@ -141,13 +140,13 @@ class SubagentDefinitionDB:
     def update(agent_id: str, **kwargs) -> Optional[Dict[str, Any]]:
         allowed = {
             "name", "description", "version", "author",
-            "capabilities", "triggers", "tools", "skills", "context",
+            "triggers", "tools", "skills", "context",
             "delegatable_to", "allow_delegation",
             "llm_provider", "reply_style", "business_pages",
             "status", "updated_by",
         }
         jsonb_fields = {
-            "capabilities", "triggers", "tools", "skills", "context",
+            "triggers", "tools", "skills", "context",
             "delegatable_to", "business_pages",
         }
         updates = {}

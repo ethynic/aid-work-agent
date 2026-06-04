@@ -32,10 +32,7 @@ class SubagentRegistry:
         
         # 获取配置
         config = registry.get("code-reviewer")
-        
-        # 匹配Subagent
-        name = registry.match_by_capability("审查代码的安全性")
-        
+
         # 获取描述
         descriptions = registry.get_descriptions()
     """
@@ -51,9 +48,7 @@ class SubagentRegistry:
         self._configs: Dict[str, SubagentConfig] = {}
         self._loader: Optional[SubagentLoader] = None
         self._custom_loader: Optional[SubagentLoader] = None
-        
-        # 能力索引
-        self._capability_index: Dict[str, Set[str]] = {}
+
         # 文件模式索引
         self._file_pattern_index: Dict[str, str] = {}
         
@@ -113,7 +108,6 @@ class SubagentRegistry:
                 "agent_id": config.dir_name or name,
                 "name": config.name,
                 "description": config.description,
-                "capabilities": config.capabilities,
                 "type": "builtin" if name in self._builtin_names else "custom",
             }
             if config.business_pages:
@@ -201,17 +195,9 @@ class SubagentRegistry:
     
     def _build_indices(self):
         """构建加速查找的索引"""
-        self._capability_index.clear()
         self._file_pattern_index.clear()
 
         for name, config in self._configs.items():
-            # 能力索引
-            for capability in config.capabilities:
-                cap_lower = capability.lower()
-                if cap_lower not in self._capability_index:
-                    self._capability_index[cap_lower] = set()
-                self._capability_index[cap_lower].add(name)
-
             # 文件模式索引
             patterns = config.triggers.get("file_patterns", [])
             for pattern in patterns:
@@ -234,12 +220,6 @@ class SubagentRegistry:
         self._configs[config.name] = config
 
         # 更新索引
-        for capability in config.capabilities:
-            cap_lower = capability.lower()
-            if cap_lower not in self._capability_index:
-                self._capability_index[cap_lower] = set()
-            self._capability_index[cap_lower].add(config.name)
-
         patterns = config.triggers.get("file_patterns", [])
         for pattern in patterns:
             self._file_pattern_index[pattern.lower()] = config.name
@@ -264,13 +244,6 @@ class SubagentRegistry:
         config = self._configs.pop(name)
 
         # 更新索引
-        for capability in config.capabilities:
-            cap_lower = capability.lower()
-            if cap_lower in self._capability_index:
-                self._capability_index[cap_lower].discard(name)
-                if not self._capability_index[cap_lower]:
-                    del self._capability_index[cap_lower]
-
         patterns = config.triggers.get("file_patterns", [])
         for pattern in patterns:
             self._file_pattern_index.pop(pattern.lower(), None)
@@ -338,30 +311,6 @@ class SubagentRegistry:
         """
         return list(self._configs.keys())
     
-    def match_by_capability(self, description: str) -> Optional[str]:
-        """
-        根据任务描述匹配Subagent
-        
-        Args:
-            description: 任务描述
-            
-        Returns:
-            匹配的Subagent名称，如果没有匹配返回None
-        """
-        desc_lower = description.lower()
-        
-        # 检查能力索引
-        matched: Set[str] = set()
-        for capability, names in self._capability_index.items():
-            if capability in desc_lower:
-                matched.update(names)
-
-        if matched:
-            # 返回第一个匹配的
-            return list(matched)[0]
-        
-        return None
-    
     def match_by_file(self, filename: str) -> Optional[str]:
         """
         根据文件名匹配Subagent
@@ -407,8 +356,7 @@ class SubagentRegistry:
 
         lines = []
         for name, config in filtered_configs:
-            capabilities = ", ".join(config.capabilities) if config.capabilities else "general"
-            lines.append(f"- {name}: {config.description} (capabilities: {capabilities})")
+            lines.append(f"- {name}: {config.description}")
 
         return "\n".join(lines) if lines else "(no subagents available)"
     
@@ -527,7 +475,6 @@ class SubagentRegistry:
                 description=row.get("description", ""),
                 version=row.get("version", "1.0.0"),
                 author=row.get("author"),
-                capabilities=row.get("capabilities", []),
                 triggers=row.get("triggers", {}),
                 tools=row.get("tools", {}),
                 skills=row.get("skills", {}),

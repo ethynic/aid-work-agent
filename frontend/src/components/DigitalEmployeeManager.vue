@@ -101,13 +101,6 @@
               <p class="text-sm text-gray-800 whitespace-pre-wrap">{{ detail?.description || '无' }}</p>
             </div>
             <div>
-              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">能力标签</label>
-              <div class="flex flex-wrap gap-1">
-                <span v-for="cap in detail?.capabilities" :key="cap" class="px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded">{{ cap }}</span>
-                <span v-if="!detail?.capabilities?.length" class="text-sm text-gray-400">（空）</span>
-              </div>
-            </div>
-            <div>
               <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">工具配置</label>
               <div v-if="detail?.tools?.inherit" class="text-sm text-gray-800">继承全部工具</div>
               <div v-else-if="detail?.tools?.list?.length" class="flex flex-wrap gap-1">
@@ -154,23 +147,6 @@
               <textarea v-model="editForm.description" rows="2" placeholder="简要描述此数字员工的用途"
                 class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"></textarea>
             </div>
-            <!-- Capabilities -->
-            <div class="flex-shrink-0">
-              <label class="block text-sm font-medium text-gray-500 mb-1">能力标签</label>
-              <div class="flex flex-wrap gap-1 mb-1">
-                <span v-for="(cap, idx) in editForm.capabilities" :key="idx"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-info-50 text-info-700 rounded">
-                  {{ cap }}
-                  <button @click="editForm.capabilities.splice(idx, 1)" class="hover:text-danger-500">&times;</button>
-                </span>
-              </div>
-              <div class="flex gap-2">
-                <input v-model="newCapability" @keydown.enter.prevent="addCapability" type="text" placeholder="输入后回车添加"
-                  class="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
-                <button @click="addCapability" class="px-3 py-1.5 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">添加</button>
-              </div>
-            </div>
-
             <!-- Tools Configuration -->
             <div class="flex-shrink-0">
               <label class="block text-sm font-medium text-gray-500 mb-1">工具配置</label>
@@ -354,12 +330,10 @@ const editForm = ref({
   agent_id: '',
   name: '',
   description: '',
-  capabilities: [] as string[],
   tools: { inherit: true, list: [] as string[] },
   skills: { allowed: [] as string[] },
   system_prompt: '',
 })
-const newCapability = ref('')
 
 // Available skills
 const availableSkills = ref<string[]>([])
@@ -493,7 +467,6 @@ function enterEdit() {
     agent_id: detail.value.agent_id,
     name: detail.value.name,
     description: detail.value.description,
-    capabilities: [...(detail.value.capabilities || [])],
     tools: {
       inherit: detailTools.inherit ?? true,
       list: detailTools.list || [],
@@ -512,14 +485,6 @@ function cancelEdit() {
   } else {
     isEditMode.value = false
   }
-}
-
-function addCapability() {
-  const val = newCapability.value.trim().toLowerCase().replace(/\s+/g, '_')
-  if (val && !editForm.value.capabilities.includes(val)) {
-    editForm.value.capabilities.push(val)
-  }
-  newCapability.value = ''
 }
 
 function toggleSkill(event: Event, skill: string) {
@@ -636,7 +601,6 @@ async function aiEnhance() {
     `description: ${editForm.value.description}`,
     `version: 1.0.0`,
     `author: admin`,
-    editForm.value.capabilities.length ? `capabilities:\n${editForm.value.capabilities.map(c => `  - ${c}`).join('\n')}` : '',
     `tools:\n  inherit: ${editForm.value.tools.inherit}`,
     editForm.value.skills.allowed.length ? `skills:\n  allowed:\n${editForm.value.skills.allowed.map(s => `    - ${s}`).join('\n')}` : 'skills: {}',
     '---',
@@ -670,11 +634,6 @@ function acceptAiEnhance() {
     const nameMatch = yamlPart.match(/name:\s*(.+)/)
     if (nameMatch?.[1]?.trim()) {
       editForm.value.name = nameMatch[1].trim()
-    }
-    // Extract capabilities
-    const capMatch = yamlPart.match(/capabilities:\s*\n((?:  - .+\n?)+)/)
-    if (capMatch?.[1]) {
-      editForm.value.capabilities = capMatch[1].split('\n').filter(l => l.trim().startsWith('- ')).map(l => l.replace(/^\s*- /, '').trim())
     }
     // The body after the second --- is the system_prompt
     editForm.value.system_prompt = parts.slice(2).join('---').trim()

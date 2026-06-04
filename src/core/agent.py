@@ -590,8 +590,7 @@ class Agent:
                 # 生成描述
                 lines = []
                 for name, config in filtered_configs:
-                    capabilities = ", ".join(config.capabilities) if config.capabilities else "general"
-                    lines.append(f"- {name}: {config.description} (capabilities: {capabilities})")
+                    lines.append(f"- {name}: {config.description}")
                 subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
             else:
                 # 演示模式或非SaaS模式，使用全部子智能体（排除CEO智能体）
@@ -604,8 +603,7 @@ class Agent:
                 # 生成描述
                 lines = []
                 for name, config in all_configs:
-                    capabilities = ", ".join(config.capabilities) if config.capabilities else "general"
-                    lines.append(f"- {name}: {config.description} (capabilities: {capabilities})")
+                    lines.append(f"- {name}: {config.description}")
                 subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
         
         # 委派工具说明（仅主智能体使用）

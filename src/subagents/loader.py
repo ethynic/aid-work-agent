@@ -21,9 +21,6 @@ SUBAGENT.md格式:
     name: code-reviewer
     description: 代码审查专家
     version: 1.0.0
-    capabilities:
-      - code_review
-      - security_audit
     triggers:
       file_patterns:
         - "*.py"
@@ -158,7 +155,6 @@ class SubagentLoader:
             description=frontmatter.get("description", ""),
             version=frontmatter.get("version", "1.0.0"),
             author=frontmatter.get("author", "unknown"),
-            capabilities=frontmatter.get("capabilities", []),
             triggers=frontmatter.get("triggers", {}),
             tools=frontmatter.get("tools", {}),
             skills=frontmatter.get("skills", {}),
@@ -252,8 +248,6 @@ class SubagentLoader:
             "author": config.author or "admin",
         }
 
-        if config.capabilities:
-            frontmatter["capabilities"] = config.capabilities
         if config.triggers:
             frontmatter["triggers"] = config.triggers
         if config.tools:

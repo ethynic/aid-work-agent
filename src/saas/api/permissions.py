@@ -267,7 +267,6 @@ def get_my_allowed_agents(request: Request):
                     "name": item["name"],
                     "description": item.get("description", ""),
                     "type": item.get("type", "custom"),
-                    "capabilities": item.get("capabilities", []),
                     "business_pages": item.get("business_pages", []),
                     # 不包含 instance_id, instance_name, display_name 等实例字段
                 })
@@ -279,7 +278,6 @@ def get_my_allowed_agents(request: Request):
                 "name": "CEO智能体",
                 "description": "系统主智能体，具备通用能力和工具",
                 "type": "builtin",
-                "capabilities": [],
                 "business_pages": []
             })
 
@@ -311,7 +309,6 @@ def get_my_allowed_agents(request: Request):
                 "name": "CEO智能体",
                 "description": "系统主智能体，具备通用能力和工具",
                 "type": "builtin",
-                "capabilities": [],
                 "business_pages": []
             })
 

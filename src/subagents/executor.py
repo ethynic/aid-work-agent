@@ -213,8 +213,7 @@ class SubagentExecutor:
             )
         
         logger.info(f"[SUBAGENT] Config found: {config.name}")
-        logger.info(f"[SUBAGENT] Config capabilities: {config.capabilities}")
-        
+
         # 生成执行ID
         execution_id = self._create_execution_id()
         logger.info(f"[SUBAGENT] Generated execution_id: {execution_id}")

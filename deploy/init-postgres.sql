@@ -1250,7 +1250,6 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     description     TEXT,
     version         TEXT DEFAULT '1.0.0',
     author          TEXT,
-    capabilities    JSONB DEFAULT '[]',
     triggers        JSONB DEFAULT '{}',
     tools           JSONB DEFAULT '{}',
     skills          JSONB DEFAULT '{}',

@@ -30,7 +30,6 @@ def test_loader():
     print(f"加载的Subagent数量: {len(loader.configs)}")
     for name, config in loader.configs.items():
         print(f"  - {name}: {config.description}")
-        print(f"    能力: {config.capabilities}")
         print(f"    可委派给: {config.delegatable_to}")
 
 

@@ -29,7 +29,6 @@ export interface SubagentListItem {
   agent_id: string
   name: string
   description: string
-  capabilities: string[]
   type: 'builtin' | 'custom'
   business_pages?: BusinessPage[]
   // 实例相关字段（租户模式下返回实例时包含）
@@ -48,7 +47,6 @@ export interface SubagentDetail {
   description: string
   version: string
   author: string
-  capabilities: string[]
   triggers: Record<string, any>
   tools: Record<string, any>
   skills: Record<string, any>

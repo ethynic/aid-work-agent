@@ -30,7 +30,6 @@ class CreateDefinitionRequest(BaseModel):
     system_prompt: str = Field(..., min_length=1, description="System Prompt 内容")
     version: str = "1.0.0"
     author: Optional[str] = None
-    capabilities: Optional[List[str]] = None
     triggers: Optional[Dict[str, Any]] = None
     tools: Optional[Dict[str, Any]] = None
     skills: Optional[Dict[str, Any]] = None
@@ -48,7 +47,6 @@ class UpdateDefinitionRequest(BaseModel):
     description: Optional[str] = None
     version: Optional[str] = None
     author: Optional[str] = None
-    capabilities: Optional[List[str]] = None
     triggers: Optional[Dict[str, Any]] = None
     tools: Optional[Dict[str, Any]] = None
     skills: Optional[Dict[str, Any]] = None
@@ -158,7 +156,6 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             description=body.description,
             version=body.version,
             author=body.author,
-            capabilities=body.capabilities,
             triggers=body.triggers,
             tools=body.tools,
             skills=body.skills,
