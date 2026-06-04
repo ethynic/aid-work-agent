@@ -74,6 +74,8 @@ APScheduler>=3.10.0  # Background task scheduling
 
 # Database
 psycopg2-binary>=2.9.0  # PostgreSQL database driver
+SQLAlchemy>=2.0.0  # Database connector for external data sources (MySQL, PostgreSQL, etc.)
+PyMySQL>=1.1.0  # MySQL driver for SQLAlchemy
 
 # Redis
 redis>=5.0.0  # Redis client for shared cross-worker state
