@@ -1,5 +1,6 @@
 <template>
   <div class="page-container p-5">
+    <div class="page-content flex-1 flex flex-col min-h-0">
     <div class="page-toolbar">
       <div class="page-toolbar-left">
         <h2 class="m-0 text-lg">景点知识库</h2>
@@ -35,7 +36,7 @@
     </div>
 
     <!-- 表格 -->
-    <div class="table-scroll-wrapper">
+    <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="currentList" row-key="doc_id">
       <template #checkbox="{ row }">
         <input type="checkbox" :value="row.doc_id" v-model="selectedArr" />
@@ -142,6 +143,7 @@
         <BaseButton @click="showImportResult = false">确定</BaseButton>
       </template>
     </BaseModal>
+    </div>
   </div>
 </template>
 

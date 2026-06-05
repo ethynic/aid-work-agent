@@ -191,11 +191,6 @@ function handleMonthChange() {
   loadData(1)
 }
 
-function handlePageSizeChange() {
-  currentPage.value = 1
-  loadData(1)
-}
-
 watch(currentPage, (newPage) => loadData(newPage))
 
 onMounted(() => loadData(1))

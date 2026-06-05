@@ -1,5 +1,6 @@
 <template>
   <div class="page-container p-5">
+    <div class="page-content flex-1 flex flex-col min-h-0">
     <div class="page-toolbar">
       <div class="page-toolbar-left">
         <BaseInput v-model="searchKeyword" placeholder="筛选区域" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
@@ -22,7 +23,7 @@
       </div>
     </div>
 
-    <div class="table-scroll-wrapper">
+    <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="pagedItems" row-key="id">
       <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #region_name="{ row }">{{ row.region_name || '通用' }}</template>
@@ -148,6 +149,7 @@
         <BaseButton @click="showImportResult = false">确定</BaseButton>
       </template>
     </BaseModal>
+    </div>
   </div>
 </template>
 

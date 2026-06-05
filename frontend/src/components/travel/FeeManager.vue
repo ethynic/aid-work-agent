@@ -1,5 +1,6 @@
 <template>
   <div class="page-container p-5">
+    <div class="page-content flex-1 flex flex-col min-h-0">
     <div class="flex justify-between items-center mb-5">
       <h2 class="m-0 text-lg">费用与淡旺季管理</h2>
     </div>
@@ -40,7 +41,7 @@
         </div>
       </div>
 
-      <div class="table-scroll-wrapper">
+      <div class="table-scroll-wrapper flex-1">
       <BaseTable :columns="feeColumns" :data="pagedFeeItems" row-key="id">
         <template #index="{ index }">{{ feeSeqNumber(index) }}</template>
         <template #billing_method="{ row }">{{ billingLabel(row.billing_method) }}</template>
@@ -130,7 +131,7 @@
         </div>
       </div>
 
-      <div class="table-scroll-wrapper">
+      <div class="table-scroll-wrapper flex-1">
       <BaseTable :columns="seasonColumns" :data="pagedSeasonItems" row-key="id">
         <template #index="{ index }">{{ seasonSeqNumber(index) }}</template>
         <template #remark="{ row }">{{ row.remark || '-' }}</template>
@@ -203,6 +204,7 @@
         <BaseButton @click="showImportResult = false">确定</BaseButton>
       </template>
     </BaseModal>
+    </div>
   </div>
 </template>
 
