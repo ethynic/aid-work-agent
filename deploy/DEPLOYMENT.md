@@ -740,4 +740,29 @@ docker exec -it aid-postgres psql -U aid_user -d aid_work_logs -c "CREATE EXTENS
 docker exec -it aid-postgres psql -U aid_user -d aid_work_logs -c "SELECT extname, extversion FROM pg_extension;"
 应该看到 timescaledb 和 vector（如果日志库也装了）都已就绪。之后部署应用时，init_logs_tables() 会自动建表并配置 Hypertable 分区策略。
 
+数据恢复步骤
+
+1. 确认目标数据库存在
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "\l"
+
+如果缺了哪个，先创建
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "CREATE DATABASE aid_work_agent2 OWNER aid_user;"
+
+# 1. 断开所有连接
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='aid_work_agent' AND pid <> pg_backend_pid();"
+
+# 2. 删除并重建空库
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "DROP DATABASE aid_work_agent;"
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "CREATE DATABASE aid_work_agent OWNER aid_user;"
+
+# 3. 恢复备份
+gunzip -c /backups/202606/aid_work_agent_20260605_120310.sql.gz | docker exec -i aid-postgres psql -U aid_user -d aid_work_agent
+
+# === aid_work_agent2 ===
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='aid_work_agent2' AND pid <> pg_backend_pid();"
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "DROP DATABASE aid_work_agent2;"
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "CREATE DATABASE aid_work_agent2 OWNER aid_user;"
+gunzip -c /backups/202606/aid_work_agent2_20260605_120310.sql.gz | docker exec -i aid-postgres psql -U aid_user -d aid_work_agent2
+
 ```
+

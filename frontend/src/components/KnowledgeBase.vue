@@ -19,7 +19,7 @@
         />
 
         <div class="flex-1 overflow-hidden p-6">
-          <div class="max-w-7xl mx-auto h-full flex gap-4">
+          <div class="h-full flex gap-4">
             <!-- 左侧分类导航 -->
             <div class="w-52 flex-shrink-0 flex flex-col bg-white rounded-xl border border-default">
               <div class="px-3 py-3 border-b border-default">
@@ -181,7 +181,9 @@
                       </template>
                       <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
                       <template #actions="{ row }">
-                        <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(row)">删除</BaseButton>
+                        <div class="flex justify-center">
+                          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
+                        </div>
                       </template>
                     </BaseTable>
                   </div>
@@ -439,8 +441,8 @@ const columns = [
   { key: 'file_type', label: '类型' },
   { key: 'file_size', label: '大小' },
   { key: 'total_chunks', label: '分块数' },
-  { key: 'created_at', label: '上传时间' },
-  { key: 'actions', label: '操作', width: '80px' },
+  { key: 'created_at', label: '上传时间', width: '160px' },
+  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
 ]
 
 // ========== 分类状态 ==========
