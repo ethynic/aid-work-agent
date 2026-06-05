@@ -28,6 +28,7 @@
           </BaseSelect>
         </div>
         <div class="page-toolbar-right">
+          <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
           <BaseButton @click="openFeeCreate">新增费用</BaseButton>
           <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
           <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
@@ -39,6 +40,22 @@
 
       <div class="table-scroll-wrapper flex-1">
       <BaseTable :columns="feeColumns" :data="pagedFeeItems" row-key="id">
+        <!-- 表头全选框 -->
+        <template #checkbox_header>
+          <input
+            type="checkbox"
+            :checked="isAllSelected(pagedFeeItems)"
+            @change="(e: Event) => toggleAll(pagedFeeItems, (e.target as HTMLInputElement).checked)"
+          />
+        </template>
+        <!-- 行选择框 -->
+        <template #checkbox="{ row }">
+          <input
+            type="checkbox"
+            :checked="isSelected(row)"
+            @change="() => toggleRow(row)"
+          />
+        </template>
         <template #index="{ index }">{{ feeSeqNumber(index) }}</template>
         <template #billing_method="{ row }">{{ billingLabel(row.billing_method) }}</template>
         <template #is_mandatory="{ row }">{{ row.is_mandatory ? '是' : '否' }}</template>
@@ -209,6 +226,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { fees, seasons } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
+import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -222,6 +240,7 @@ const { importing, showImportResult, importResult, handleImport, handleDownloadT
 
 // --- 费用 ---
 const feeColumns = [
+  { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
   { key: 'fee_name', label: '费用名称' },
   { key: 'fee_category', label: '分类' },
@@ -256,6 +275,11 @@ const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNum
     await loadFees()
   })
 
+// 批量选择（费用Tab）
+const { selectedArr, isAllSelected, toggleAll, toggleRow, clearSelection, isSelected } = useTableSelection<any>({
+  getRowId: (row) => row.id
+})
+
 const pagedFeeItems = computed(() => {
   const start = (feeCurrentPage.value - 1) * feePageSize.value
   return feeItems.value.slice(start, start + feePageSize.value)
@@ -278,6 +302,8 @@ async function loadFees() {
     if (filterCategory.value) params.fee_category = filterCategory.value
     feeItems.value = await fees.list(params)
     feeTotal.value = feeItems.value.length
+    // 搜索/刷新时清空选择
+    clearSelection()
   } catch (e) { console.error('加载费用失败', e) }
   finally { feeLoading.value = false }
 }
@@ -306,6 +332,19 @@ async function handleFeeDelete(item: any) {
   if (!confirm(`确定删除费用「${item.fee_name}」？`)) return
   try { await fees.delete(item.id); await loadFees() }
   catch (e) { console.error('删除失败', e); alert('删除失败') }
+}
+
+async function handleBatchDelete() {
+  if (selectedArr.value.length === 0) return
+  if (!confirm(`确定删除选中的 ${selectedArr.value.length} 个费用？`)) return
+  try {
+    for (const id of selectedArr.value) {
+      await fees.delete(id)
+    }
+    clearSelection()
+    await loadFees()
+    alert('批量删除成功')
+  } catch (e) { console.error('批量删除失败', e); alert('批量删除失败') }
 }
 
 // --- 淡旺季 ---

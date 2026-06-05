@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container bg-canvas">
+  <div class="page-container bg-canvas" v-bind="$attrs">
     <AppHeader
       title="用户管理"
       :is-logged-in="effectiveIsLoggedIn"
@@ -11,10 +11,11 @@
     <div class="page-content p-6">
       <div class="page-toolbar">
           <div class="page-toolbar-left">
-            <BaseInput v-model="searchKeyword" placeholder="搜索用户名/手机号" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
-            <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
+            <BaseInput v-model="searchKeyword" placeholder="搜索用户名/手机号" size="sm" class="w-80" @keyup.enter="handleSearchWrapper(searchKeyword)" />
+            <BaseButton size="sm" @click="handleSearchWrapper(searchKeyword)">搜索</BaseButton>
           </div>
           <div class="page-toolbar-right">
+            <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
             <BaseButton intent="secondary" @click="showImport = true">CSV 导入</BaseButton>
             <BaseButton @click="openAddUser">添加用户</BaseButton>
           </div>
@@ -25,6 +26,22 @@
         <template v-else-if="filteredUsers.length > 0">
           <div class="table-scroll-wrapper">
             <BaseTable :columns="columns" :data="pagedUsers" row-key="mapping_id">
+              <!-- 表头全选框 -->
+              <template #checkbox_header>
+                <input
+                  type="checkbox"
+                  :checked="isAllSelected(pagedUsers)"
+                  @change="(e: Event) => toggleAll(pagedUsers, (e.target as HTMLInputElement).checked)"
+                />
+              </template>
+              <!-- 行选择框 -->
+              <template #checkbox="{ row }">
+                <input
+                  type="checkbox"
+                  :checked="isSelected(row)"
+                  @change="() => toggleRow(row)"
+                />
+              </template>
               <template #index="{ index }">{{ seqNumber(index) }}</template>
               <template #username="{ row }">{{ row.username || '-' }}</template>
               <template #phone="{ row }">{{ row.phone || '-' }}</template>
@@ -162,6 +179,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, inject } from 'vue'
+
+// 禁用属性继承，因为组件通过 RouterView 异步加载时会触发多根渲染警告
+defineOptions({
+  inheritAttrs: false,
+})
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
@@ -172,6 +194,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { useTableSelection } from '@/composables/useTableSelection'
 import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser } from '@/api/saasTenant'
 import { getTenantAvailableUserAgents, getUserAgentPermissions, setUserAgentPermissions, type AgentItem } from '@/api/saasPermissions'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -221,6 +244,7 @@ async function handleLogout() {
 }
 
 const columns = [
+  { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
   { key: 'username', label: '用户名' },
   { key: 'phone', label: '手机号' },
@@ -257,6 +281,11 @@ const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
   usePageContext(async () => {
     await loadUsers()
   })
+
+// 批量选择
+const { selectedArr, isAllSelected, toggleAll, toggleRow, clearSelection, isSelected } = useTableSelection<any>({
+  getRowId: (row) => row.user_id
+})
 
 const filteredUsers = computed(() => {
   if (!searchKeyword.value) return users.value
@@ -350,6 +379,12 @@ async function loadUsers() {
   }
 }
 
+// 搜索时清空选择
+async function handleSearchWrapper(keyword: string) {
+  clearSelection()
+  await handleSearch(keyword)
+}
+
 async function handleAddUser() {
   if (!addForm.value.phone) {
     addError.value = '请填写手机号'
@@ -400,6 +435,21 @@ async function handleRemove(userId: string) {
     await loadUsers()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  }
+}
+
+async function handleBatchDelete() {
+  if (selectedArr.value.length === 0) return
+  if (!confirm(`确定要删除选中的 ${selectedArr.value.length} 个用户吗？`)) return
+  try {
+    for (const userId of selectedArr.value) {
+      await removeTenantUser(userId)
+    }
+    clearSelection()
+    await loadUsers()
+    toast.success('批量删除成功')
+  } catch (e: any) {
+    toast.error(e.message || '批量删除失败')
   }
 }
 

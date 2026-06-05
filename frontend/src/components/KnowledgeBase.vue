@@ -77,6 +77,7 @@
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
+                  <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton @click="showUploadModal = true">上传文档</BaseButton>
                 </div>
               </div>
@@ -157,6 +158,22 @@
                 <div v-else class="h-full flex flex-col">
                   <div class="flex-1 overflow-auto table-scroll-wrapper">
                     <BaseTable :columns="columns" :data="documents" row-key="id">
+                      <!-- 表头全选框 -->
+                      <template #checkbox_header>
+                        <input
+                          type="checkbox"
+                          :checked="isAllSelected(documents)"
+                          @change="(e: Event) => toggleAll(documents, (e.target as HTMLInputElement).checked)"
+                        />
+                      </template>
+                      <!-- 行选择框 -->
+                      <template #checkbox="{ row }">
+                        <input
+                          type="checkbox"
+                          :checked="isSelected(row)"
+                          @change="() => toggleRow(row)"
+                        />
+                      </template>
                       <template #index="{ index }">{{ seqNumber(index) }}</template>
                       <template #title="{ row }">
                         <div class="flex items-center gap-3">
@@ -400,6 +417,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { useTableSelection } from '@/composables/useTableSelection'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
@@ -436,6 +454,7 @@ const effectiveUser = computed(() => {
 const toast = useToast()
 
 const columns = [
+  { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
   { key: 'title', label: '文档名称', width: '260px' },
   { key: 'summary', label: '摘要', width: '380px' },
@@ -542,6 +561,11 @@ const { currentPage, pageSize, seqNumber, handlePageChange, handlePageSizeChange
     await loadDocuments()
   })
 
+// 批量选择
+const { selectedArr, isAllSelected, toggleAll, toggleRow, clearSelection, isSelected } = useTableSelection<any>({
+  getRowId: (row) => row.id
+})
+
 const uploadButtonText = computed(() => {
   if (isUploading.value) {
     const progress = uploadProgress.value
@@ -603,6 +627,7 @@ function clearSearch() {
     clearTimeout(searchDebounceTimer)
     searchDebounceTimer = null
   }
+  clearSelection()
 }
 
 const groupedSearchResults = computed(() => {
@@ -644,6 +669,7 @@ function selectCategory(sourceType: string | null) {
   selectedSourceType.value = sourceType
   currentPage.value = 1
   clearSearch()
+  clearSelection()
   loadDocuments()
 }
 
@@ -894,6 +920,26 @@ async function confirmDelete() {
   } catch (error: any) {
     console.error('前端日志：删除文档失败', error)
     toast.error(error.response?.data?.error || '删除失败')
+  } finally {
+    isDeleting.value = false
+  }
+}
+
+async function handleBatchDelete() {
+  if (selectedArr.value.length === 0) return
+  if (!confirm(`确定要删除选中的 ${selectedArr.value.length} 个文档吗？此操作不可恢复。`)) return
+  isDeleting.value = true
+  try {
+    for (const docId of selectedArr.value) {
+      await deleteDocument(docId)
+    }
+    clearSelection()
+    await loadDocuments()
+    await loadCategories()
+    toast.success('批量删除成功')
+  } catch (error: any) {
+    console.error('前端日志：批量删除文档失败', error)
+    toast.error(error.response?.data?.error || '批量删除失败')
   } finally {
     isDeleting.value = false
   }

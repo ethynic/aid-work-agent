@@ -15,6 +15,7 @@
         </BaseSelect>
       </div>
       <div class="page-toolbar-right">
+        <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
         <BaseButton @click="openCreate">新增餐标</BaseButton>
         <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
@@ -26,6 +27,22 @@
 
     <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="pagedItems" row-key="id">
+      <!-- 表头全选框 -->
+      <template #checkbox_header>
+        <input
+          type="checkbox"
+          :checked="isAllSelected(pagedItems)"
+          @change="(e: Event) => toggleAll(pagedItems, (e.target as HTMLInputElement).checked)"
+        />
+      </template>
+      <!-- 行选择框 -->
+      <template #checkbox="{ row }">
+        <input
+          type="checkbox"
+          :checked="isSelected(row)"
+          @change="() => toggleRow(row)"
+        />
+      </template>
       <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #region_name="{ row }">{{ row.region_name || '通用' }}</template>
       <template #meal_tier="{ row }">{{ row.meal_tier_label || row.meal_tier }}</template>
@@ -144,6 +161,7 @@ import { ref, computed, onMounted } from 'vue'
 import { meals } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
+import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -152,6 +170,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 
 const columns = [
+  { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
   { key: 'region_name', label: '区域' },
   { key: 'meal_tier', label: '餐标档次' },
@@ -178,6 +197,11 @@ const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePag
     await loadData()
   })
 
+// 批量选择
+const { selectedArr, isAllSelected, toggleAll, toggleRow, clearSelection, isSelected } = useTableSelection<any>({
+  getRowId: (row) => row.id
+})
+
 const pagedItems = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return allItems.value.slice(start, start + pageSize.value)
@@ -197,6 +221,8 @@ async function loadData() {
     if (filterTier.value) params.meal_tier = filterTier.value
     allItems.value = await meals.list(params)
     total.value = allItems.value.length
+    // 搜索/刷新时清空选择
+    clearSelection()
   } catch (e) { console.error('加载餐标数据失败', e) }
   finally { loading.value = false }
 }
@@ -225,6 +251,19 @@ async function handleDelete(item: any) {
   if (!confirm('确定删除该餐标？')) return
   try { await meals.delete(item.id); await loadData() }
   catch (e) { console.error('删除失败', e); alert('删除失败') }
+}
+
+async function handleBatchDelete() {
+  if (selectedArr.value.length === 0) return
+  if (!confirm(`确定删除选中的 ${selectedArr.value.length} 个餐标？`)) return
+  try {
+    for (const id of selectedArr.value) {
+      await meals.delete(id)
+    }
+    clearSelection()
+    await loadData()
+    alert('批量删除成功')
+  } catch (e) { console.error('批量删除失败', e); alert('批量删除失败') }
 }
 
 onMounted(() => { loadData() })

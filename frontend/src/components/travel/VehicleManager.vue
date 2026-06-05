@@ -6,6 +6,7 @@
         <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
       </div>
       <div class="page-toolbar-right">
+        <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
         <BaseButton @click="openCreate">新增车辆</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
@@ -16,6 +17,22 @@
 
     <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="pagedItems" row-key="id">
+      <!-- 表头全选框 -->
+      <template #checkbox_header>
+        <input
+          type="checkbox"
+          :checked="isAllSelected(pagedItems)"
+          @change="(e: Event) => toggleAll(pagedItems, (e.target as HTMLInputElement).checked)"
+        />
+      </template>
+      <!-- 行选择框 -->
+      <template #checkbox="{ row }">
+        <input
+          type="checkbox"
+          :checked="isSelected(row)"
+          @change="() => toggleRow(row)"
+        />
+      </template>
       <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #vehicle_type="{ row }">{{ row.vehicle_type }}</template>
       <template #vehicle_type_label="{ row }">{{ row.vehicle_type_label || '-' }}</template>
@@ -122,6 +139,7 @@ import { ref, computed, onMounted } from 'vue'
 import { vehicles } from '@/api/travelQuote'
 import { useVehicleImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
+import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -129,6 +147,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 const columns = [
+  { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
   { key: 'vehicle_type', label: '车型' },
   { key: 'vehicle_type_label', label: '显示名' },
@@ -154,6 +173,11 @@ const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePag
     await loadData()
   })
 
+// 批量选择
+const { selectedArr, isAllSelected, toggleAll, toggleRow, clearSelection, isSelected } = useTableSelection<any>({
+  getRowId: (row) => row.id
+})
+
 const pagedItems = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return allItems.value.slice(start, start + pageSize.value)
@@ -175,6 +199,8 @@ async function loadData() {
     if (searchKeyword.value) params.region_name = searchKeyword.value
     allItems.value = await vehicles.list(params)
     total.value = allItems.value.length
+    // 搜索/刷新时清空选择
+    clearSelection()
   } catch (e) {
     console.error('加载车辆数据失败', e)
   } finally {
@@ -223,6 +249,22 @@ async function handleDelete(item: any) {
   } catch (e) {
     console.error('删除失败', e)
     alert('删除失败')
+  }
+}
+
+async function handleBatchDelete() {
+  if (selectedArr.value.length === 0) return
+  if (!confirm(`确定删除选中的 ${selectedArr.value.length} 个车辆？`)) return
+  try {
+    for (const id of selectedArr.value) {
+      await vehicles.delete(id)
+    }
+    clearSelection()
+    await loadData()
+    alert('批量删除成功')
+  } catch (e) {
+    console.error('批量删除失败', e)
+    alert('批量删除失败')
   }
 }
 
