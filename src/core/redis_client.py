@@ -201,6 +201,7 @@ class RedisClient:
                 socket_connect_timeout=5,
                 socket_timeout=5,
                 health_check_interval=30,
+                protocol=2,  # 强制 RESP2 协议，兼容 Redis 5.x，避免 HELLO 命令
             )
             # 测试连接
             self._client.ping()
