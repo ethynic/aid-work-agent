@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container p-5 max-w-[1400px] mx-auto">
+  <div class="page-container p-5">
     <div class="flex justify-between items-center mb-5">
       <h2 class="m-0 text-lg">费用与淡旺季管理</h2>
     </div>
@@ -48,8 +48,8 @@
         <template #remark="{ row }">{{ row.remark || '-' }}</template>
         <template #actions="{ row }">
           <div class="flex gap-2">
-            <BaseButton intent="ghost" size="sm" @click="openFeeEdit(row)">编辑</BaseButton>
-            <BaseButton intent="danger" size="sm" @click="handleFeeDelete(row)">删除</BaseButton>
+            <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openFeeEdit(row)">编辑</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleFeeDelete(row)">删除</BaseButton>
           </div>
         </template>
         <template v-if="feeLoading" #empty>加载中...</template>
@@ -61,6 +61,8 @@
         :total="feeTotal"
         v-model:current-page="feeCurrentPage"
         :page-size="feePageSize"
+        :show-size-changer="true"
+        @update:page-size="feeHandlePageSizeChange"
       />
 
       <!-- 费用弹窗 -->
@@ -134,8 +136,8 @@
         <template #remark="{ row }">{{ row.remark || '-' }}</template>
         <template #actions="{ row }">
           <div class="flex gap-2">
-            <BaseButton intent="ghost" size="sm" @click="openSeasonEdit(row)">编辑</BaseButton>
-            <BaseButton intent="danger" size="sm" @click="handleSeasonDelete(row)">删除</BaseButton>
+            <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openSeasonEdit(row)">编辑</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleSeasonDelete(row)">删除</BaseButton>
           </div>
         </template>
         <template v-if="seasonLoading" #empty>加载中...</template>
@@ -147,6 +149,8 @@
         :total="seasonTotal"
         v-model:current-page="seasonCurrentPage"
         :page-size="seasonPageSize"
+        :show-size-changer="true"
+        @update:page-size="seasonHandlePageSizeChange"
       />
 
       <!-- 季节弹窗 -->
@@ -249,7 +253,7 @@ const editingFee = ref<any>(null)
 const filterCategory = ref('')
 
 const feeTotal = ref(0)
-const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNumber, handleSearch: handleFeeSearch } =
+const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNumber, handleSearch: handleFeeSearch, handlePageSizeChange: feeHandlePageSizeChange } =
   usePageContext(async () => {
     await loadFees()
   })
@@ -313,7 +317,7 @@ const showSeasonModal = ref(false)
 const editingSeason = ref<any>(null)
 
 const seasonTotal = ref(0)
-const { currentPage: seasonCurrentPage, pageSize: seasonPageSize, seqNumber: seasonSeqNumber } =
+const { currentPage: seasonCurrentPage, pageSize: seasonPageSize, seqNumber: seasonSeqNumber, handlePageSizeChange: seasonHandlePageSizeChange } =
   usePageContext(async () => {
     await loadSeasons()
   })

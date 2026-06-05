@@ -34,7 +34,7 @@ context:
   max_output_tokens: 4000
 business_pages:
   - id: tickets
-    title: 我的工单
+    title: 售后工单
     icon: ticket
     route: /after-sales/tickets
   - id: returns

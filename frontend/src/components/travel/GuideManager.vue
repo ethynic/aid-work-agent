@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container p-5 max-w-[1400px] mx-auto">
+  <div class="page-container p-5">
     <div class="page-toolbar">
       <div class="page-toolbar-left">
         <BaseInput v-model="searchKeyword" placeholder="筛选区域" size="sm" class="w-80" @keyup.enter="handleSearch(searchKeyword)" />
@@ -35,8 +35,8 @@
       <template #peak_season_multiplier="{ row }">{{ row.peak_season_multiplier || '-' }}</template>
       <template #actions="{ row }">
         <div class="flex gap-2">
-          <BaseButton intent="ghost" size="sm" @click="openEdit(row)">编辑</BaseButton>
-          <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
+          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEdit(row)">编辑</BaseButton>
+          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
         </div>
       </template>
       <template v-if="loading" #empty>加载中...</template>
@@ -48,6 +48,8 @@
       :total="total"
       v-model:current-page="currentPage"
       :page-size="pageSize"
+      :show-size-changer="true"
+      @update:page-size="handlePageSizeChange"
     />
 
     <BaseModal v-model="showModal" :title="editingItem ? '编辑导游' : '新增导游'" size="lg">
@@ -184,7 +186,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useImport(loadData)
 
 const total = ref(0)
-const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePageSizeChange } =
   usePageContext(async () => {
     await loadData()
   })

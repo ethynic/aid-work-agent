@@ -194,6 +194,7 @@
                     :current-page="currentPage"
                     :page-size="pageSize"
                     @update:current-page="handlePageChange"
+                    @update:page-size="handlePageSizeChange"
                   />
                 </div>
               </div>
@@ -536,7 +537,7 @@ async function loadAvailableSubagents() {
 }
 
 const totalDocuments = ref(0)
-const { currentPage, pageSize, seqNumber, handlePageChange } =
+const { currentPage, pageSize, seqNumber, handlePageChange, handlePageSizeChange } =
   usePageContext(async () => {
     await loadDocuments()
   })

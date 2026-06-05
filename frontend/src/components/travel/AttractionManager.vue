@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container p-5 max-w-[1400px] mx-auto">
+  <div class="page-container p-5">
     <div class="page-toolbar">
       <div class="page-toolbar-left">
         <h2 class="m-0 text-lg">景点知识库</h2>
@@ -40,7 +40,7 @@
       <template #checkbox="{ row }">
         <input type="checkbox" :value="row.doc_id" v-model="selectedArr" />
       </template>
-      <template #index="{ index }">{{ (currentPage - 1) * PAGE_SIZE + index + 1 }}</template>
+      <template #index="{ index }">{{ (currentPage - 1) * pageSize + index + 1 }}</template>
       <template #title="{ row }"><span class="font-medium">{{ row.title }}</span></template>
       <template #region="{ row }">{{ row.metadata?.region || '-' }}</template>
       <template #category_cn="{ row }">{{ row.metadata?.category_cn || '-' }}</template>
@@ -52,9 +52,9 @@
       </template>
       <template #actions="{ row }">
         <div class="flex gap-2">
-          <BaseButton intent="ghost" size="sm" @click="showDetail(row.doc_id)">详情</BaseButton>
-          <BaseButton intent="ghost" size="sm" @click="openEdit(row)">编辑</BaseButton>
-          <BaseButton intent="danger" size="sm" @click="handleDelete(row)">删除</BaseButton>
+          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="showDetail(row.doc_id)">详情</BaseButton>
+          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEdit(row)">编辑</BaseButton>
+          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
         </div>
       </template>
       <template v-if="loading" #empty>加载中...</template>
@@ -66,8 +66,10 @@
       v-if="!searched && totalPages > 1"
       :total="total"
       v-model:current-page="currentPage"
-      :page-size="PAGE_SIZE"
+      :page-size="pageSize"
+      :show-size-changer="true"
       @update:current-page="goPage"
+      @update:page-size="handlePageSizeChange"
     />
 
     <!-- 编辑弹窗 -->
@@ -156,7 +158,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 
-const PAGE_SIZE = 50
+const pageSize = ref(20)
 
 const columns = [
   { key: 'checkbox', label: '', width: '40px' },
@@ -196,7 +198,7 @@ const form = ref({ title: '', region: '', category_cn: '', info: '', ticket_tabl
 const detailVisible = ref(false)
 const detailData = ref<any>({})
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const currentList = computed(() => searched.value ? searchResults.value : items.value)
 
 // 选择逻辑
@@ -208,8 +210,8 @@ const selectedArr = computed({
 async function loadAll() {
   loading.value = true
   try {
-    const offset = (currentPage.value - 1) * PAGE_SIZE
-    const result = await listAttractionsKB({ limit: PAGE_SIZE, offset })
+    const offset = (currentPage.value - 1) * pageSize.value
+    const result = await listAttractionsKB({ limit: pageSize.value, offset })
     items.value = result.items || []
     total.value = result.total || 0
   } catch (e) {
@@ -221,6 +223,13 @@ async function loadAll() {
 
 function goPage(page: number) {
   currentPage.value = page
+  selectedIds.value.clear()
+  loadAll()
+}
+
+function handlePageSizeChange(size: number) {
+  pageSize.value = size
+  currentPage.value = 1
   selectedIds.value.clear()
   loadAll()
 }

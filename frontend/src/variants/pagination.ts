@@ -2,11 +2,11 @@ import { tv, type VariantProps } from 'tailwind-variants'
 
 export const pagination = tv({
   slots: {
-    wrapper: 'flex items-center justify-between px-4 py-3 border-t border-default',
-    info: 'text-sm text-muted',
+    wrapper: 'flex items-center justify-center gap-4 px-4 py-3 border-t border-default',
+    info: 'text-xs text-muted',
     buttons: 'flex items-center gap-1',
-    button: 'inline-flex items-center justify-center h-8 w-8 rounded-lg text-sm transition-colors',
-    pageButton: 'inline-flex items-center justify-center h-8 min-w-[2rem] px-2 rounded-lg text-sm transition-colors',
+    button: 'inline-flex items-center justify-center h-8 w-8 rounded-lg text-xs transition-colors',
+    pageButton: 'inline-flex items-center justify-center h-8 min-w-[2rem] px-2 rounded-lg text-xs transition-colors',
   },
   variants: {
     active: {

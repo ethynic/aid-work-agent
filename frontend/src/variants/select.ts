@@ -8,7 +8,7 @@ export const select = tv({
       error: 'border-danger-500 focus:ring-danger-500/20 focus:border-danger-500',
     },
     size: {
-      sm: 'h-8 text-xs',
+      sm: 'h-8 text-xs py-1',
       md: 'h-10 text-sm',
       lg: 'h-12 text-base',
     },

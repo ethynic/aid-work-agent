@@ -1154,7 +1154,7 @@ CREATE TABLE IF NOT EXISTS bs_after_sales_returns (
 ```
 business_pages:
   - id: tickets
-    title: 我的工单
+    title: 售后工单
     route: /after-sales/tickets
   - id: returns
     title: 退换货记录
