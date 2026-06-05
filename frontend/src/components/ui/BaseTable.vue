@@ -31,6 +31,7 @@
             v-for="col in columns"
             :key="col.key"
             :class="slots.td()"
+            :title="getCellTitle(row, col)"
           >
             <slot :name="col.key" :row="row" :index="index">
               {{ row[col.key] }}
@@ -51,6 +52,8 @@ export interface TableColumn {
   label: string
   width?: string
   thAlign?: 'left' | 'center' | 'right'
+  /** 自定义悬停提示内容，不填则取 row[col.key] */
+  tooltip?: string | ((row: Record<string, any>) => string | undefined)
 }
 
 defineProps<{
@@ -60,4 +63,17 @@ defineProps<{
 }>()
 
 const slots = computed(() => table())
+
+// 获取单元格 title（悬停显示完整内容）
+function getCellTitle(row: Record<string, any>, col: TableColumn): string | undefined {
+  if (col.tooltip) {
+    if (typeof col.tooltip === 'function') {
+      return col.tooltip(row)
+    }
+    return col.tooltip
+  }
+  const value = row[col.key]
+  if (value == null) return undefined
+  return String(value)
+}
 </script>

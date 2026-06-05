@@ -102,7 +102,16 @@
 - 列头：`text-xs font-medium text-muted uppercase tracking-wider`（BaseTable 内置）。
 - 单元格：`text-sm text-default`（BaseTable 内置）。
 - 文字超出时显示省略号（`truncate` 类）。
-- 所有字段，鼠标悬停，都要显示完整文字内容。
+- 所有字段，鼠标悬停，都要显示完整文字内容（`BaseTable` 自动为所有单元格设置 `title` 属性实现）。
+
+  **自定义 slot 列的 tooltip**：若单元格使用了自定义 slot（如 `#region="{ row }"`），且实际数据路径与 `row[col.key]` 不同（如数据实际在 `row.metadata.region`），需要在 `columns` 定义中通过 `tooltip` 字段指定数据路径：
+
+  ```ts
+  // 正确：tooltip 函数指向实际数据路径
+  { key: 'region', label: '区域', tooltip: (row: any) => row.metadata?.region || '-' }
+  ```
+
+  `tooltip` 支持字符串（静态内容）或函数（动态计算）。
 
 ---
 
