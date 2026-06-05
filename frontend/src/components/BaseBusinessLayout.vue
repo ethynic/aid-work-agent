@@ -1,8 +1,8 @@
 <template>
-  <div class="min-h-screen bg-gray-50">
+  <div class="h-full bg-gray-50 flex flex-col">
     <!-- Header -->
-    <header class="bg-white border-b border-gray-200 shadow-sm">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <header class="bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
+      <div class="w-full px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between items-center py-4">
           <div>
             <h1 class="text-lg font-semibold text-gray-900">
@@ -25,8 +25,8 @@
     </header>
 
     <!-- Content -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <router-view />
+    <main class="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6 overflow-hidden">
+      <router-view class="h-full" />
     </main>
   </div>
 </template>

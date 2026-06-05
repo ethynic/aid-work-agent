@@ -77,6 +77,8 @@
 /* 表格外层包裹：水平滚动 + 自定义滚动条 */
 .table-scroll-wrapper {
   overflow-x: auto;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .table-scroll-wrapper::-webkit-scrollbar {

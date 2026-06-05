@@ -219,12 +219,12 @@ const router = createRouter({
           name: 'tenant-travel-consultant',
           component: () => import('./components/BaseBusinessLayout.vue'),
           children: [
-            { path: 'vehicles', name: 'tenant-travel-consultant-vehicles', component: () => import('./components/travel/VehicleManager.vue') },
-            { path: 'attractions', name: 'tenant-travel-consultant-attractions', component: () => import('./components/travel/AttractionManager.vue') },
-            { path: 'hotels', name: 'tenant-travel-consultant-hotels', component: () => import('./components/travel/HotelManager.vue') },
-            { path: 'meals', name: 'tenant-travel-consultant-meals', component: () => import('./components/travel/MealManager.vue') },
-            { path: 'guides', name: 'tenant-travel-consultant-guides', component: () => import('./components/travel/GuideManager.vue') },
-            { path: 'fees', name: 'tenant-travel-consultant-fees', component: () => import('./components/travel/FeeManager.vue') },
+            { path: 'vehicles', name: '车辆价格', component: () => import('./components/travel/VehicleManager.vue') },
+            { path: 'attractions', name: '景点门票', component: () => import('./components/travel/AttractionManager.vue') },
+            { path: 'hotels', name: '酒店房型', component: () => import('./components/travel/HotelManager.vue') },
+            { path: 'meals', name: '餐标价格', component: () => import('./components/travel/MealManager.vue') },
+            { path: 'guides', name: '导游费用', component: () => import('./components/travel/GuideManager.vue') },
+            { path: 'fees', name: '其他费用', component: () => import('./components/travel/FeeManager.vue') },
           ]
         },
         // 客户跟进智能体业务数据页面

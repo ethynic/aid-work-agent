@@ -142,6 +142,52 @@ class TenantStatus(IntEnum):
 
 **如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/src/api/enums.ts`（前端）。
 
+## 业务数据表（bs_）CRUD 规范
+
+所有业务数据表（`bs_` 开头）的增删改查接口必须遵循以下规范：
+
+### 创建数据
+
+在能确定创建用户时，必须附带 `user_id` 字段的值：
+
+```python
+# ✅ 正确：附带 user_id
+cursor.execute(
+    "INSERT INTO bs_example (tenant_id, user_id, name, created_at) VALUES (%s, %s, %s, NOW())",
+    (tenant_id, user_id, name)
+)
+
+# ❌ 错误：遗漏 user_id
+cursor.execute(
+    "INSERT INTO bs_example (tenant_id, name) VALUES (%s, %s)",
+    (tenant_id, name)
+)
+```
+
+`created_at` 字段有数据库默认值 `DEFAULT CURRENT_TIMESTAMP`，后端代码可以不显式指定，数据库会自动填充。
+
+### 列表查询
+
+列表页接口默认按 `created_at DESC` 排序，确保用户一眼看到最新数据：
+
+```python
+# ✅ 正确：按创建时间倒序
+cursor.execute(
+    "SELECT * FROM bs_example WHERE tenant_id = %s ORDER BY created_at DESC",
+    (tenant_id,)
+)
+
+# ❌ 错误：无排序或默认升序
+cursor.execute(
+    "SELECT * FROM bs_example WHERE tenant_id = %s",
+    (tenant_id,)
+)
+```
+
+### 表结构要求
+
+详见 [database_dev.md](./database_dev.md)「业务数据表必需字段」章节。
+
 ## SaaS 租户隔离规范
 
 ### 核心规则

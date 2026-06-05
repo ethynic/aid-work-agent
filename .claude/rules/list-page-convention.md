@@ -28,6 +28,8 @@
 - **宽度**：尽量利用屏幕宽度。如果业务数据列很多，允许出现横向滚动条。
 - **高度**：内容区使用 `flex-1 overflow-y-auto`，利用 flex 布局自动填充剩余空间。
 
+> **经验总结**：确保分页器固定在页面底部，需要整条布局链正确设置 flex 样式。详见本文档「6. 分页器固定底部的布局链要求」。
+
 ### 公共 CSS 类
 
 列表页布局、搜索区、表格滚动条、表单字段、弹框表单等通用样式已提取到 `frontend/src/styles/page-common.css`（已在 `style.css` 中全局引入）：
@@ -100,17 +102,36 @@
 - 列头：`text-xs font-medium text-muted uppercase tracking-wider`（BaseTable 内置）。
 - 单元格：`text-sm text-default`（BaseTable 内置）。
 - 文字超出时显示省略号（`truncate` 类）。
+- 所有字段，鼠标悬停，都要显示完整文字内容。
 
 ---
 
 ## 5. 分页器
 
 - 位于列表页底部，使用 `BasePagination` 组件。
-- 分页器与表格之间保留适当间距。
+- 分页器应固定居于页面底部，水平居中。
+  - **实现方式**：配合 `.page-content` 的 `flex-1 flex flex-col min-h-0` 布局，分页器会自动被推到 flex 容器的底部。
+  - **示意**：外层容器使用 `page-container`（`h-full flex flex-col`），内容区使用 `page-content`（`flex-1 flex flex-col min-h-0`），此时分页器在内容区底部自然固定。
 
 ---
 
-## 5. 公共 Composable：`usePageContext`
+## 6. 分页器固定底部的布局链要求
+
+分页器固定在页面底部，需要**整条布局链**（从外层布局到页面容器）全部正确设置 flex 样式。以下是各层级的具体要求：
+**关键点**：`min-h-0` 是 flex 子元素能收缩的必要条件，缺少它会导致子元素无法被压缩，分页器无法被推到容器底部。
+
+### 常见问题排查
+
+| 现象 | 常见原因 | 解决方案 |
+|------|----------|----------|
+| 分页器不在底部，而是跟随表格内容滚动 | `.table-scroll-wrapper` 缺少 `overflow-y: auto` | 添加 `overflow-y: auto` |
+| 分页器被推到屏幕外 | 父容器使用了 `min-h-screen` 而非 `h-full` | 改为 `h-full` |
+| 内容区不能收缩，表格占满屏幕 | 页面根容器使用了 `min-h-screen` | 改为 `h-full`，并确保父级有固定高度 |
+| 表格区域不滚动，分页器被挤出视口 | `.table-scroll-wrapper` 缺少 `min-height: 0` | 添加 `min-height: 0` |
+
+---
+
+## 7. 公共 Composable：`usePageContext`
 
 列表页的分页序号计算、搜索、刷新等通用逻辑已封装为 `usePageContext` composable（`frontend/src/composables/usePageContext.ts`）：
 

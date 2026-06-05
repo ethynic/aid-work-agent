@@ -14,7 +14,7 @@
       </div>
     </div>
 
-    <div class="table-scroll-wrapper">
+    <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="pagedItems" row-key="id">
       <template #index="{ index }">{{ seqNumber(index) }}</template>
       <template #vehicle_type="{ row }">{{ row.vehicle_type }}</template>

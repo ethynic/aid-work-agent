@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS bs_trade_specialist_matched_customers (
 - [ ] 表名以 `bs_` 开头
 - [ ] 表名包含子智能体名称（连字符 `-` 已替换为下划线 `_`）
 - [ ] 表中包含 `tenant_id` 字段（用于租户隔离）
+- [ ] 表中包含 `user_id` 字段（创建用户，无法确定创建用户时可为 NULL）
+- [ ] 表中包含 `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` 字段（创建时间，带数据库默认值）
 - [ ] 在 skill 加载时调用 `init_tables()` 初始化表
 - [ ] 更新本文档，保持规范一致性
 
@@ -109,6 +111,30 @@ def init_tables():
 -- 2026-4-25，chat_sessions 增加 subagent_id 字段，记录会话关联的数字员工ID
 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
 ```
+
+## 业务数据表必需字段
+
+所有业务数据表（`bs_` 开头）必须包含以下字段：
+
+| 字段 | 类型 | 要求 | 说明 |
+|------|------|------|------|
+| `user_id` | TEXT | 必填（无法确定创建用户时可为 NULL） | 创建用户 ID，后端创建数据时应尽量附带此字段 |
+| `created_at` | TIMESTAMP | 必填，带数据库默认值 `DEFAULT CURRENT_TIMESTAMP` | 创建时间，后端代码无需手动指定 |
+| `tenant_id` | TEXT | 必填（非 SAAS 模式可为 NULL） | 租户隔离，见上文租户隔离要求 |
+
+```sql
+CREATE TABLE IF NOT EXISTS bs_example (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    ...
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**后端接口规范**（详见 [backend_dev.md](./backend_dev.md)）：
+- 创建数据时，在能确定创建用户时都应附带 `user_id` 的值
+- 列表页接口默认按 `created_at DESC` 排序，确保最新数据在前
 
 ## 数据库设计禁忌
 

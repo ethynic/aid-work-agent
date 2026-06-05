@@ -72,22 +72,13 @@
         </div>
 
         <!-- 分页控件 -->
-        <div v-if="total > 0" class="flex items-center justify-between">
+        <div v-if="total > 0" class="flex items-center justify-center">
           <BasePagination
             :total="total"
             v-model:currentPage="currentPage"
-            :pageSize="pageSize"
+            v-model:pageSize="pageSize"
+            :size-options="[10, 20, 50, 100]"
           />
-          <div class="flex items-center gap-2">
-            <label class="text-sm text-muted">每页行数:</label>
-            <select v-model="pageSize" @change="handlePageSizeChange"
-              class="px-2 py-1.5 border border-default rounded-lg text-sm bg-surface focus:outline-none focus:border-primary-400">
-              <option :value="10">10</option>
-              <option :value="20">20</option>
-              <option :value="50">50</option>
-              <option :value="100">100</option>
-            </select>
-          </div>
         </div>
       </template>
     </div>

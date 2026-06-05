@@ -56,13 +56,13 @@
     />
 
     <!-- 主内容区 -->
-    <main class="flex-1 overflow-y-auto">
+    <main class="flex-1 flex flex-col overflow-hidden">
       <!-- 平台管理员访问停用租户时的状态提示 -->
       <div
         v-if="showTenantStatusWarning"
         :class="[
           tenantStatusColorClass === 'red' ? 'bg-danger-50 border-danger-200' : 'bg-amber-50 border-amber-200',
-          'border-b px-6 py-3'
+          'border-b px-6 py-3 flex-shrink-0'
         ]"
       >
         <div class="flex items-center gap-2" :class="tenantStatusColorClass === 'red' ? 'text-danger-700' : 'text-amber-800'">
@@ -86,7 +86,7 @@
           </div>
         </div>
       </div>
-      <router-view />
+      <router-view class="flex-1 min-h-0" />
     </main>
   </div>
 </template>
