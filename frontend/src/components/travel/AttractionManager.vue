@@ -6,8 +6,8 @@
         <BaseInput v-model="searchQuery" placeholder="输入关键词搜索景点，如：黄果树 5A景区" class="max-w-[500px]" size="sm" @keyup.enter="doSearch" />
         <BaseButton size="sm" :disabled="searching" @click="doSearch">{{ searching ? '搜索中...' : '搜索' }}</BaseButton>
         <BaseButton size="sm" v-if="searched" intent="secondary" @click="clearSearch">显示全部</BaseButton>
-        <BaseButton size="sm" v-if="selectedIds.size > 0" intent="danger" @click="handleBatchDelete">
-          批量删除 ({{ selectedIds.size }})
+        <BaseButton size="sm" :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">
+          批量删除 ({{ selectedArr.length }})
         </BaseButton>
       </div>
       <div class="flex gap-2 items-center">
@@ -33,6 +33,9 @@
     <!-- 表格 -->
     <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="currentList" row-key="doc_id">
+      <template #checkbox_header="{ index }">
+        <input type="checkbox" :checked="isAllSelected(currentList)" @change="(e: Event) => toggleAll(currentList, (e.target as HTMLInputElement).checked)" />
+      </template>
       <template #checkbox="{ row }">
         <input type="checkbox" :value="row.doc_id" v-model="selectedArr" />
       </template>
@@ -48,7 +51,6 @@
       </template>
       <template #actions="{ row }">
         <div class="flex gap-2">
-          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="showDetail(row.doc_id)">详情</BaseButton>
           <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEdit(row)">编辑</BaseButton>
           <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
         </div>
@@ -149,11 +151,17 @@ import {
   deleteAttractionKB, batchDeleteAttractionsKB, updateAttractionKB
 } from '@/api/travelQuote'
 import { useAttractionKBImport } from '@/composables/useImport'
+import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+
+// 批量选择逻辑
+const { selectedArr, isAllSelected, toggleAll, clearSelection } = useTableSelection<any>({
+  getRowId: (row) => row.doc_id
+})
 
 const pageSize = ref(20)
 
@@ -165,7 +173,7 @@ const columns = [
   { key: 'category_cn', label: '类型', tooltip: (row: any) => row.metadata?.category_cn || '-' },
   { key: 'source_file', label: '来源文件' },
   { key: 'info', label: '摘要' },
-  { key: 'actions', label: '操作', width: '180px' },
+  { key: 'actions', label: '操作', width: '140px' },
 ]
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -183,9 +191,6 @@ const searched = ref(false)
 const searching = ref(false)
 const searchQuery = ref('')
 
-// 选择
-const selectedIds = ref<Set<number>>(new Set())
-
 // 编辑弹窗
 const showModal = ref(false)
 const editingItem = ref<any>(null)
@@ -197,12 +202,6 @@ const detailData = ref<any>({})
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const currentList = computed(() => searched.value ? searchResults.value : items.value)
-
-// 选择逻辑
-const selectedArr = computed({
-  get: () => [...selectedIds.value],
-  set: (vals: number[]) => { selectedIds.value = new Set(vals) }
-})
 
 async function loadAll() {
   loading.value = true
@@ -220,14 +219,14 @@ async function loadAll() {
 
 function goPage(page: number) {
   currentPage.value = page
-  selectedIds.value.clear()
+  clearSelection()
   loadAll()
 }
 
 function handlePageSizeChange(size: number) {
   pageSize.value = size
   currentPage.value = 1
-  selectedIds.value.clear()
+  clearSelection()
   loadAll()
 }
 
@@ -237,7 +236,7 @@ async function doSearch() {
   try {
     searchResults.value = await searchAttractionsKB({ q: searchQuery.value })
     searched.value = true
-    selectedIds.value.clear()
+    clearSelection()
   } catch (e) {
     console.error('搜索景点失败', e)
     searchResults.value = []
@@ -251,7 +250,7 @@ function clearSearch() {
   searchQuery.value = ''
   searched.value = false
   searchResults.value = []
-  selectedIds.value.clear()
+  clearSelection()
 }
 
 async function showDetail(docId: number) {
@@ -315,7 +314,7 @@ async function handleDelete(item: any) {
   if (!confirm(`确定删除景点「${item.title}」？`)) return
   try {
     await deleteAttractionKB(item.doc_id)
-    selectedIds.value.delete(item.doc_id)
+    selectedArr.value = selectedArr.value.filter((id: any) => id !== item.doc_id)
     if (searched.value) {
       searchResults.value = searchResults.value.filter((r: any) => r.doc_id !== item.doc_id)
     } else {
@@ -328,11 +327,11 @@ async function handleDelete(item: any) {
 }
 
 async function handleBatchDelete() {
-  const count = selectedIds.value.size
+  const count = selectedArr.value.length
   if (!confirm(`确定删除选中的 ${count} 个景点？`)) return
   try {
-    await batchDeleteAttractionsKB([...selectedIds.value])
-    selectedIds.value.clear()
+    await batchDeleteAttractionsKB([...selectedArr.value])
+    clearSelection()
     if (searched.value) {
       await doSearch()
     } else {

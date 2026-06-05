@@ -12,7 +12,9 @@
               col.thAlign ? { textAlign: col.thAlign } : undefined
             ]"
           >
-            {{ col.label }}
+            <slot :name="col.key + '_header'" :row="null" :index="-1">
+              {{ col.label }}
+            </slot>
           </th>
         </tr>
       </thead>

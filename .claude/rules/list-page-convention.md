@@ -160,3 +160,61 @@ const { currentPage, pageSize, seqNumber, handleSearch, refresh } =
 // 搜索：@keyup.enter="handleSearch(keyword)"
 // 分页切换：handlePageChange(page) / handlePageSizeChange(size)
 ```
+
+---
+
+## 8. 公共 Composable：`useTableSelection`
+
+表格批量选择逻辑已封装为 `useTableSelection` composable（`frontend/src/composables/useTableSelection.ts`）：
+
+### 基本用法
+
+```ts
+import { useTableSelection } from '@/composables/useTableSelection'
+
+// 初始化选择逻辑，传入获取行 ID 的函数
+const { selectedArr, isAllSelected, toggleAll, clearSelection } = useTableSelection<any>({
+  getRowId: (row) => row.doc_id
+})
+```
+
+### 模板中使用
+
+```vue
+<!-- 批量删除按钮 -->
+<BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">
+  批量删除 ({{ selectedArr.length }})
+</BaseButton>
+
+<!-- 表格 -->
+<BaseTable :columns="columns" :data="currentList" row-key="doc_id">
+  <!-- 表头全选框 -->
+  <template #checkbox_header>
+    <input
+      type="checkbox"
+      :checked="isAllSelected(currentList)"
+      @change="(e) => toggleAll(currentList, ($event.target as HTMLInputElement).checked)"
+    />
+  </template>
+  <!-- 行选择框 -->
+  <template #checkbox="{ row }">
+    <input type="checkbox" :value="row.doc_id" v-model="selectedArr" />
+  </template>
+</BaseTable>
+```
+
+### 辅助方法
+
+| 方法 | 说明 |
+|------|------|
+| `selectedArr` | 选中的 ID 数组（可用于 v-model） |
+| `isAllSelected(rows)` | 判断是否全选，传入当前列表 |
+| `toggleAll(rows, checked)` | 全选/取消全选 |
+| `clearSelection()` | 清空选择（翻页、搜索时调用） |
+| `isSelected(row)` | 判断某行是否选中 |
+
+### 注意事项
+
+- 翻页、搜索、切换页大小时需调用 `clearSelection()` 清空选择
+- 删除单行后需同步更新：`selectedArr.value = selectedArr.value.filter(id => id !== item.doc_id)`
+- 批量删除后需调用 `clearSelection()`
