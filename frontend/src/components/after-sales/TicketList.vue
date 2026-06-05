@@ -97,70 +97,62 @@
       :page-size="pageSize"
     />
 
-    <!-- Detail Side Panel -->
-    <Teleport to="body">
-      <div v-if="detail" class="fixed inset-0 z-50 flex justify-end">
-        <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" @click="detail = null" />
-        <div class="relative w-full max-w-lg bg-surface border-l border-default shadow-xl overflow-y-auto">
-          <div class="sticky top-0 z-10 bg-surface border-b border-default px-6 py-4 flex items-center justify-between">
-            <h2 class="text-lg font-semibold">工单详情</h2>
-            <button @click="detail = null" class="p-1.5 rounded-md text-muted hover:text-default hover:bg-surface-hover transition-colors">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-            </button>
+    <!-- Detail Modal -->
+    <BaseModal v-model="showDetail" title="工单详情" size="lg">
+      <template v-if="detail">
+        <!-- Basic Info -->
+        <div>
+          <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">基本信息</h3>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div><span class="text-muted">工单ID：</span><span class="font-mono text-xs text-default">{{ detail.ticket_id }}</span></div>
+            <div><span class="text-muted">分类：</span><span class="text-default">{{ categoryLabels[detail.category as keyof typeof categoryLabels] || detail.category }}</span></div>
+            <div><span class="text-muted">状态：</span>
+              <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="statusBadgeClass(detail.status)">{{ statusLabels[detail.status as keyof typeof statusLabels] || detail.status }}</span>
+            </div>
+            <div><span class="text-muted">优先级：</span>
+              <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="priorityBadgeClass(detail.priority)">{{ priorityLabels[detail.priority as keyof typeof priorityLabels] || detail.priority }}</span>
+            </div>
+            <div v-if="detail.order_id"><span class="text-muted">订单ID：</span><span class="text-default">{{ detail.order_id }}</span></div>
+            <div><span class="text-muted">创建时间：</span><span class="text-default tabular-nums">{{ formatDate(detail.created_at) }}</span></div>
+            <div v-if="detail.updated_at"><span class="text-muted">更新时间：</span><span class="text-default tabular-nums">{{ formatDate(detail.updated_at) }}</span></div>
           </div>
-          <div class="p-6 space-y-6">
-            <!-- Basic Info -->
-            <div>
-              <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">基本信息</h3>
-              <div class="grid grid-cols-2 gap-3 text-sm">
-                <div><span class="text-muted">工单ID：</span><span class="font-mono text-xs text-default">{{ detail.ticket_id }}</span></div>
-                <div><span class="text-muted">分类：</span><span class="text-default">{{ categoryLabels[detail.category as keyof typeof categoryLabels] || detail.category }}</span></div>
-                <div><span class="text-muted">状态：</span>
-                  <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="statusBadgeClass(detail.status)">{{ statusLabels[detail.status as keyof typeof statusLabels] || detail.status }}</span>
-                </div>
-                <div><span class="text-muted">优先级：</span>
-                  <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="priorityBadgeClass(detail.priority)">{{ priorityLabels[detail.priority as keyof typeof priorityLabels] || detail.priority }}</span>
-                </div>
-                <div v-if="detail.order_id"><span class="text-muted">订单ID：</span><span class="text-default">{{ detail.order_id }}</span></div>
-                <div><span class="text-muted">创建时间：</span><span class="text-default tabular-nums">{{ formatDate(detail.created_at) }}</span></div>
-                <div v-if="detail.updated_at"><span class="text-muted">更新时间：</span><span class="text-default tabular-nums">{{ formatDate(detail.updated_at) }}</span></div>
+        </div>
+
+        <!-- Description -->
+        <div class="mt-4">
+          <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">问题描述</h3>
+          <p class="text-sm text-muted bg-canvas rounded-lg p-3 border border-default">{{ detail.description }}</p>
+        </div>
+
+        <!-- Resolution -->
+        <div v-if="detail.resolution" class="mt-4">
+          <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">处理结果</h3>
+          <p class="text-sm text-muted bg-success-50 rounded-lg p-3 border border-success-200">{{ detail.resolution }}</p>
+        </div>
+
+        <!-- Messages -->
+        <div class="mt-4">
+          <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">消息记录 ({{ detail.messages?.length || 0 }})</h3>
+          <div v-if="!detail.messages?.length" class="text-sm text-muted py-2">暂无消息记录</div>
+          <div v-else class="space-y-3">
+            <div
+              v-for="msg in detail.messages"
+              :key="msg.id"
+              class="p-3 rounded-lg border border-default bg-canvas"
+            >
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-medium" :class="senderTypeClass(msg.sender_type)">{{ senderTypeLabels[msg.sender_type] || msg.sender_type }}</span>
+                <span class="text-xs text-muted tabular-nums">{{ formatDate(msg.created_at) }}</span>
               </div>
-            </div>
-
-            <!-- Description -->
-            <div>
-              <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">问题描述</h3>
-              <p class="text-sm text-muted bg-canvas rounded-lg p-3 border border-default">{{ detail.description }}</p>
-            </div>
-
-            <!-- Resolution -->
-            <div v-if="detail.resolution">
-              <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">处理结果</h3>
-              <p class="text-sm text-muted bg-success-50 rounded-lg p-3 border border-success-200">{{ detail.resolution }}</p>
-            </div>
-
-            <!-- Messages -->
-            <div>
-              <h3 class="text-sm font-medium text-muted mb-3 uppercase tracking-wider">消息记录 ({{ detail.messages?.length || 0 }})</h3>
-              <div v-if="!detail.messages?.length" class="text-sm text-muted py-2">暂无消息记录</div>
-              <div v-else class="space-y-3">
-                <div
-                  v-for="msg in detail.messages"
-                  :key="msg.id"
-                  class="p-3 rounded-lg border border-default bg-canvas"
-                >
-                  <div class="flex items-center justify-between mb-1">
-                    <span class="text-xs font-medium" :class="senderTypeClass(msg.sender_type)">{{ senderTypeLabels[msg.sender_type] || msg.sender_type }}</span>
-                    <span class="text-xs text-muted tabular-nums">{{ formatDate(msg.created_at) }}</span>
-                  </div>
-                  <p class="text-sm text-muted">{{ msg.content }}</p>
-                </div>
-              </div>
+              <p class="text-sm text-muted">{{ msg.content }}</p>
             </div>
           </div>
         </div>
-      </div>
-    </Teleport>
+      </template>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showDetail = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -172,6 +164,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
 import { usePageContext } from '@/composables/usePageContext'
 
 const statusLabels: Record<string, string> = {
@@ -204,6 +197,7 @@ const columns = [
 const tickets = ref<Ticket[]>([])
 const total = ref(0)
 const detail = ref<Ticket | null>(null)
+const showDetail = ref(false)
 const filters = ref({ status: '', category: '', priority: '', keyword: '' })
 
 const { currentPage, pageSize, loading, seqNumber, handleSearch } =
@@ -278,6 +272,7 @@ function resetFilters() {
 async function openDetail(row: any) {
   try {
     detail.value = await afterSalesAPI.getTicket(row.ticket_id)
+    showDetail.value = true
   } catch (e: any) {
     alert(e.message || '加载详情失败')
   }
