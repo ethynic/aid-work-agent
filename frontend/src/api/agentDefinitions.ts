@@ -34,6 +34,7 @@ export interface AgentDefinition {
   llm_provider: string | null
   reply_style: string | null
   business_pages: any[] | null
+  knowledge_sources: { source_type: string; display_name: string }[]
   status: string
   created_by: string | null
   updated_by: string | null

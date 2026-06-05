@@ -35,6 +35,7 @@ class SubagentDefinitionService:
         llm_provider: Optional[str] = None,
         reply_style: Optional[str] = None,
         business_pages: Optional[list] = None,
+        knowledge_sources: Optional[list] = None,
         created_by: Optional[str] = None,
         commit_message: str = "初始版本",
     ) -> Optional[Dict[str, Any]]:
@@ -58,6 +59,7 @@ class SubagentDefinitionService:
             llm_provider=llm_provider,
             reply_style=reply_style,
             business_pages=business_pages,
+            knowledge_sources=knowledge_sources or [],
             created_by=created_by,
         )
         if not definition:

@@ -3,8 +3,8 @@
 > 对应设计文档：[prompt-lifecycle-design.md](./prompt-lifecycle-design.md)
 > 对应调研报告：[prompt-version-management-research.md](../research/prompt-version-management-research.md)
 > 创建日期：2026-06-02
-> 更新日期：2026-06-03（Phase 3 重做：知识库关联配置优先，extra_md 迁移后移至 Phase 4；移除 capabilities 字段）
-> 状态：Phase 2 代码完成，待验证；Phase 3.1 已完成
+> 更新日期：2026-06-05（Phase 3.2 知识库关联设计更新：数据源改为 knowledge_categories 表）
+> 状态：Phase 2 代码完成，待验证；Phase 3.1~3.2 已完成；Phase 3.3~3.6 未开始
 
 ---
 
@@ -599,11 +599,11 @@ class SetLabelRequest(BaseModel):
 
 ---
 
-## Phase 3：知识库关联配置 + 工具技能元数据 API
+## Phase 3：知识库关联配置 + 工具技能元数据 API + 回复风格 + business_pages
 
-> 设计文档参考：§八.1.3（知识库关联配置）、§八.1.4（工具/技能元数据 API）
-> 目标：子智能体支持配置知识库 source_type 过滤；前端展示可用工具/技能清单供选择
-> 预计工期：1 周
+> 设计文档参考：§八.1.3（知识库关联配置）、§八.1.4（工具/技能元数据 API）、§八.1.6（回复风格配置）、§八.1.7（business_pages 配置）
+> 目标：完善智能体定义配置——知识库关联、回复风格、业务页面配置；前端展示可用工具/技能清单供选择
+> 预计工期：1.5 周
 > 前置依赖：Phase 2
 
 ### 阶段 3.1：移除 capabilities 字段
@@ -628,37 +628,57 @@ class SetLabelRequest(BaseModel):
 
 ### 阶段 3.2：知识库关联配置
 
-- [ ] **3.2.1 subagent_definitions 表添加 knowledge_sources 字段**
-  - `ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS knowledge_sources JSONB DEFAULT '[]';`
-  - `deploy/init-postgres.sql` 同步更新
-  - [ ] 未开始
+> **架构决策**：知识库关联是**租户级别**的配置（per-tenant per-agent），而非平台级定义。
+> 原因：每个租户的知识库分类不同（名称、数量），Portal 管理页面无法知道租户有哪些知识库。
+>
+> **存储方案**：
+> - `subagent_definitions.knowledge_sources` — 保留字段，但不在 Portal 前端配置（预留未来用途）
+> - `subagent_knowledge_sources` — 新建租户级表（tenant_id + subagent_name + sources JSONB）
+>
+> **配置入口**：TenantMgmt.vue 的 agents tab，跟"环境变量"和"API 配置"按钮同级。
+> **数据源**：`knowledge_categories` 表（每个租户独立维护的知识库分类）。
+> **运行时注入**：`_build_system_prompt()` → `_load_knowledge_sources()` → 读取 `subagent_knowledge_sources` 表。
 
-- [ ] **3.2.2 SubagentConfig 添加 knowledge_sources 字段**
+- [x] **3.2.1 数据库：subagent_definitions 添加 knowledge_sources + 新建 subagent_knowledge_sources 表**
+  - `deploy/db_update.sql`：ALTER TABLE + CREATE TABLE
+  - `deploy/init-postgres.sql`：同步更新
+  - ✅ 已完成
+
+- [x] **3.2.2 SubagentConfig 添加 knowledge_sources 字段**
   - `src/models/subagent.py` — `knowledge_sources: List[Dict[str, str]] = field(default_factory=list)`
-  - [ ] 未开始
+  - ✅ 已完成
 
-- [ ] **3.2.3 DB 层和服务层支持 knowledge_sources 读写**
-  - `src/db/subagent_definition_db.py` — create/update 读写 knowledge_sources
+- [x] **3.2.3 DB 层 + 服务层 + API 层**
+  - `src/db/subagent_knowledge_source_db.py` — **新建**，租户级知识库关联 CRUD
+  - `src/db/subagent_definition_db.py` — knowledge_sources 读写
   - `src/services/subagent_definition_service.py` — 透传
-  - [ ] 未开始
+  - `src/api/subagent_knowledge_source.py` — **新建**，`/api/saas/tenant/subagent-knowledge/:name`
+  - `src/main.py` — 注册新 router
+  - ✅ 已完成
 
-- [ ] **3.2.4 运行时注入知识库约束到 system prompt**
-  - `_build_system_prompt()` 中，如果 `subagent_config.knowledge_sources` 非空，在 `{subagent_constraint_section}` 末尾追加知识库使用约束提示
-  - 格式：列出允许的 source_type 和描述，指导 LLM 调用 `knowledge_base_search` 时传入正确的 source_type
-  - [ ] 未开始
+- [x] **3.2.4 运行时注入知识库约束到 system prompt**
+  - `src/core/agent.py` — `_load_knowledge_sources()` 从 `subagent_knowledge_sources` 表按 tenant_id + subagent_name 读取
+  - `_build_system_prompt()` 调用 `_load_knowledge_sources()` 注入知识库约束
+  - ✅ 已完成
 
-- [ ] **3.2.5 前端添加知识库关联配置区**
-  - 在 AgentDefinitionManager.vue 的定义区增加"知识库关联"配置
-  - 复选框列表，展示系统可用的 source_type 及说明
-  - [ ] 未开始
+- [x] **3.2.5 前端：TenantMgmt.vue 添加知识库关联配置**
+  - `frontend/src/api/saasPermissions.ts` — 新增 `getSubagentKnowledgeSources`、`setSubagentKnowledgeSources`、`listTenantKnowledgeCategories`
+  - `TenantMgmt.vue` agents tab — 每个 agent 旁新增"知识库"按钮
+  - 弹窗：复选框列表，数据来自租户的 knowledge_categories，保存到 subagent_knowledge_sources
+  - Portal 页面（AgentDefinitionManager.vue）不配置知识库关联
+  - ✅ 已完成
+
+- [x] **3.2.6 前端构建验证**
+  - `npm run build` 通过
+  - ✅ 已完成
 
 ### 阶段 3.3：工具/技能元数据 API
 
 - [ ] **3.3.1 新增元数据 API**
   - `GET /api/admin/agent-definitions/meta/tools` — 返回所有工具的 id/name/description
   - `GET /api/admin/agent-definitions/meta/skills` — 返回所有技能的 id/name/description
-  - `GET /api/admin/agent-definitions/meta/source-types` — 返回所有可用的 source_type 及说明
-  - 数据来源：`ToolRegistry`、`SkillRegistry`、`documents` 表
+  - ~~`GET /api/admin/agent-definitions/meta/source-types`~~ — 不再需要，前端直接调用 `GET /knowledge/categories` 获取租户知识库分类
+  - 数据来源：`ToolRegistry`、`SkillRegistry`
   - [ ] 未开始
 
 - [ ] **3.3.2 前端改造工具/技能选择器**
@@ -667,18 +687,59 @@ class SetLabelRequest(BaseModel):
   - 工具和技能列表通过元数据 API 获取
   - [ ] 未开始
 
-### 阶段 3.4：验证
+### 阶段 3.4：回复风格选择器
 
-- [ ] **3.4.1 后端验证**
+> 后端已就绪：`subagent_definitions.reply_style` 字段已存在，`_resolve_reply_style()` 已读取 `subagent_config.reply_style`
+> 只需前端工作
+
+- [ ] **3.4.1 前端添加回复风格选择器**
+  - 在 AgentDefinitionManager.vue 定义区增加"回复风格"下拉选择器
+  - 数据源：调用 `GET /api/saas/reply-styles` 获取系统级 + 租户级风格列表
+  - 选项展示：`{style.name} — {style.description}`（如"拟人风格 — 以真人同事口吻回复"）
+  - 选中值保存到 `reply_style` 字段（style_id 字符串）
+  - 允许选择"默认"（空值），表示使用全局配置的回复风格
+  - [ ] 未开始
+
+- [ ] **3.4.2 前端 API 客户端添加风格列表方法**
+  - `agentDefinitions.ts` 或新建 `replyStyles.ts`：`listReplyStyles()` 方法
+  - 复用 `getAuthHeaders()` 认证
+  - [ ] 未开始
+
+### 阶段 3.5：business_pages 配置管理
+
+> 后端已就绪：`subagent_definitions.business_pages` JSONB 字段已存在，API 已支持读写
+> 只需前端工作
+
+- [ ] **3.5.1 前端添加 business_pages 配置区**
+  - 在 AgentDefinitionManager.vue 定义区增加"业务页面配置"区域
+  - 展示当前配置的页面列表（id、title、icon、route）
+  - 支持增删改页面条目
+  - 每个条目 4 个字段：`id`（英文标识）、`title`（菜单显示名）、`icon`（emoji 图标）、`route`（路由路径）
+  - [ ] 未开始
+
+- [ ] **3.5.2 业务页面配置交互设计**
+  - 列表形式展示已配置的页面，每行：`{icon} {title} → {route}`
+  - 每行有"编辑"和"删除"按钮
+  - 顶部有"添加页面"按钮，弹出 BaseModal 表单
+  - route 字段自动补全前缀提示：以 `/` 开头的相对路径
+  - [ ] 未开始
+
+### 阶段 3.6：验证
+
+- [ ] **3.6.1 后端验证**
   - capabilities 字段完全移除，无残留引用
   - knowledge_sources 读写正常
   - 元数据 API 返回正确的工具/技能/source_type 列表
   - 知识库约束注入到 system prompt 后 LLM 能正确使用 source_type 参数
+  - 回复风格选择后保存到 `subagent_definitions.reply_style`，运行时 `_resolve_reply_style()` 正确读取
+  - business_pages 保存到 `subagent_definitions.business_pages`，MenuSidebar 正确渲染
   - [ ] 未开始
 
-- [ ] **3.4.2 前端验证**
+- [ ] **3.6.2 前端验证**
   - 知识库关联配置正确展示和保存
   - 工具/技能选择器展示名称和说明
+  - 回复风格选择器正确展示风格列表，选择后保存生效
+  - business_pages 配置区正确展示和编辑页面列表
   - 前端构建无错误
   - [ ] 未开始
 
@@ -689,6 +750,8 @@ class SetLabelRequest(BaseModel):
 - [ ] 运行时 knowledge_base_search 根据 knowledge_sources 配置限制检索范围
 - [ ] 工具/技能元数据 API 正常工作
 - [ ] 前端选择器展示工具/技能的名称和说明
+- [ ] 回复风格可在智能体定义中选择，运行时正确生效
+- [ ] business_pages 可在智能体定义中配置，前端正确展示和管理
 - [ ] 前端构建无错误
 
 ---
@@ -751,10 +814,10 @@ class SetLabelRequest(BaseModel):
 | Phase 0 | Prompt 内容优化（P0~P3） | 2 天 | ✅ 已完成 |
 | Phase 1 | 版本管理数据库 + 基础服务层 | 1 周 | ✅ 代码完成（e2e 测试通过） |
 | Phase 2 | 独立智能体管理页面（重做） | 1.5 周 | 🔧 代码完成，待验证 |
-| Phase 3 | 知识库关联配置 + 工具技能元数据 | 1 周 | ⬜ 未开始 |
+| Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages | 1.5 周 | 🔧 3.1~3.2 已完成，3.3~3.6 未开始 |
 | Phase 4 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
 
-**总工期：约 5 周**
+**总工期：约 5.5 周**
 
 ### 关键里程碑
 
@@ -763,7 +826,7 @@ class SetLabelRequest(BaseModel):
 | M0: Prompt 优化完成 | 透明化矛盾修复 + usage_guide 精简 | Phase 0 ✅ |
 | M1: 版本管理可用 | 数据库表 + 服务层 + API 可工作 | Phase 1 |
 | M2: 智能体管理独立页面 | DB 定义 + 两区编辑 + LLM 智能推荐 + 版本管理 | Phase 2 |
-| M3: 知识库关联 + 工具展示 | knowledge_sources 配置 + 工具/技能元数据 API | Phase 3 |
+| M3: 知识库关联 + 工具展示 + 定义完善 | knowledge_sources + 回复风格 + business_pages + 工具/技能元数据 API | Phase 3 |
 | M4: 租户编辑器可用 | extra_md 迁移 + 租户前台编辑器 | Phase 4 |
 
 ### 依赖关系

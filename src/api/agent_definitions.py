@@ -39,6 +39,7 @@ class CreateDefinitionRequest(BaseModel):
     llm_provider: Optional[str] = None
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
+    knowledge_sources: Optional[List[Dict[str, str]]] = None
     commit_message: str = "初始版本"
 
 
@@ -56,6 +57,7 @@ class UpdateDefinitionRequest(BaseModel):
     llm_provider: Optional[str] = None
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
+    knowledge_sources: Optional[List[Dict[str, str]]] = None
     status: Optional[str] = None
 
 
@@ -165,6 +167,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             llm_provider=body.llm_provider,
             reply_style=body.reply_style,
             business_pages=body.business_pages,
+            knowledge_sources=body.knowledge_sources,
             created_by=admin.get("user_id"),
             commit_message=body.commit_message,
         )

@@ -705,6 +705,18 @@ class Agent:
             if self.subagent_config:
                 subagent_constraint = self.subagent_config.system_prompt
 
+                # 注入租户级知识库约束
+                ks = self._load_knowledge_sources()
+                if ks:
+                    lines = ["", "## 可用知识库", ""]
+                    lines.append("你可以通过 knowledge_base_search 工具检索以下知识库：")
+                    for src in ks:
+                        st = src.get('source_type', '')
+                        dn = src.get('display_name', st)
+                        lines.append(f"- {st}（{dn}）")
+                    lines.append("调用时必须传入正确的 source_type 参数。")
+                    subagent_constraint += "\n".join(lines)
+
             # 加载租户定制 extra.md
             extra_content = self._load_extra_md()
             if extra_content:
@@ -747,6 +759,36 @@ class Agent:
             logger.warning(f"Failed to load extra.md from {extra_path}: {e}")
 
         return None
+
+    def _load_knowledge_sources(self) -> list:
+        """加载租户级子智能体知识库关联"""
+        if not self.subagent_config:
+            return []
+
+        tenant_id = self._init_tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                pass
+
+        if not tenant_id:
+            return []
+
+        subagent_name = self.subagent_config.dir_name
+        if not subagent_name:
+            return []
+
+        try:
+            from src.db.subagent_knowledge_source_db import SubagentKnowledgeSourceDB
+            sources = SubagentKnowledgeSourceDB.get(tenant_id, subagent_name)
+            if sources:
+                logger.debug(f"Loaded {len(sources)} knowledge sources for tenant {tenant_id}, subagent {subagent_name}")
+            return sources
+        except Exception as e:
+            logger.warning(f"Failed to load knowledge sources: {e}")
+            return []
 
     def _load_long_term_memory(self, user: Optional[User] = None) -> str:
         """

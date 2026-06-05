@@ -84,6 +84,9 @@ class SubagentConfig(BaseModel):
     # 业务数据页面配置
     business_pages: Optional[List[Dict[str, Any]]] = Field(default=None, description="业务数据页面列表")
 
+    # 知识库关联配置
+    knowledge_sources: List[Dict[str, str]] = Field(default_factory=list, description="关联的知识库列表，每项含 source_type 和 display_name")
+
     # 来源标记
     from_db: bool = Field(default=False, description="是否来自数据库加载")
 

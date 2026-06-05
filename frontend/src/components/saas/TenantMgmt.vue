@@ -220,6 +220,12 @@
                 title="环境变量设置"
               >环境变量</button>
               <button
+                v-if="selectedAgentIds.includes(agent.agent_id)"
+                @click="openKnowledgeDialog(agent)"
+                class="ml-1 text-xs px-2 py-1 rounded border border-default text-muted hover:text-success-600 hover:border-success-400 transition-colors"
+                title="知识库关联"
+              >知识库</button>
+              <button
                 v-if="selectedAgentIds.includes(agent.agent_id) && configSupportedAgents.includes(agent.agent_id)"
                 @click="openConfigFileDialog(agent)"
                 class="ml-1 text-xs px-2 py-1 rounded border border-default text-muted hover:text-info-600 hover:border-info-400 transition-colors"
@@ -315,6 +321,48 @@
           <button @click="showEnvVarDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">取消</button>
           <button @click="handleSaveEnvVars" :disabled="savingEnvVars" class="flex-1 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg transition-colors">
             {{ savingEnvVars ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 知识库关联弹窗 -->
+    <div v-if="showKnowledgeDialog" class="fixed inset-0 z-[60] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/50" @click="showKnowledgeDialog = false"></div>
+      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold text-default">知识库关联</h3>
+          <span class="text-xs text-muted">{{ knowledgeAgentName }} · {{ currentTenant?.company_name }}</span>
+        </div>
+
+        <div class="text-xs text-muted mb-3">
+          选择 {{ knowledgeAgentName }} 可以检索的知识库，关联后运行时会自动注入检索指引。
+        </div>
+
+        <div v-if="loadingKnowledge" class="text-center py-6 text-muted text-sm">加载中...</div>
+        <div v-else-if="knowledgeCategories.length === 0" class="text-center py-6 text-muted text-sm">
+          该租户暂无知识库分类，请先在知识库管理中创建分类并上传文档。
+        </div>
+        <div v-else class="space-y-2 max-h-[400px] overflow-y-auto">
+          <label v-for="cat in knowledgeCategories" :key="cat.source_type"
+            class="flex items-start gap-2.5 p-2 rounded-lg hover:bg-canvas cursor-pointer transition-colors">
+            <input type="checkbox"
+              :value="cat.source_type"
+              v-model="knowledgeSelectedTypes"
+              class="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-medium text-default">{{ cat.display_name || cat.source_type }}</div>
+              <div class="text-xs text-muted">{{ cat.source_type }} · {{ cat.document_count }} 篇文档</div>
+            </div>
+          </label>
+        </div>
+
+        <div v-if="knowledgeError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ knowledgeError }}</div>
+
+        <div class="flex gap-3 mt-6">
+          <button @click="showKnowledgeDialog = false" class="flex-1 py-2 border border-hover rounded-lg text-default hover:bg-canvas transition-colors">取消</button>
+          <button @click="handleSaveKnowledge" :disabled="savingKnowledge" class="flex-1 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg transition-colors">
+            {{ savingKnowledge ? '保存中...' : '保存' }}
           </button>
         </div>
       </div>
@@ -451,7 +499,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
-import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem } from '@/api/saasPermissions'
+import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, syncTenantInstances, checkTenantInstances, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories } from '@/api/saasPermissions'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -483,6 +531,16 @@ const envVarList = ref<Array<{ name: string; value: string; description: string 
 const loadingEnvVars = ref(false)
 const savingEnvVars = ref(false)
 const envVarError = ref('')
+
+// 知识库关联弹窗
+const showKnowledgeDialog = ref(false)
+const knowledgeAgentId = ref('')
+const knowledgeAgentName = ref('')
+const knowledgeCategories = ref<{ source_type: string; display_name: string | null; document_count: number }[]>([])
+const knowledgeSelectedTypes = ref<string[]>([])
+const loadingKnowledge = ref(false)
+const savingKnowledge = ref(false)
+const knowledgeError = ref('')
 
 // API 配置文件弹窗
 const configSupportedAgents = ['after-sales', 'order-processing']
@@ -694,6 +752,58 @@ async function handleSaveEnvVars() {
     envVarError.value = e.message || '保存失败'
   } finally {
     savingEnvVars.value = false
+  }
+}
+
+// 知识库关联
+async function openKnowledgeDialog(agent: AgentItem) {
+  if (!currentTenant.value) return
+  knowledgeAgentId.value = agent.agent_id
+  knowledgeAgentName.value = agent.name
+  knowledgeError.value = ''
+  knowledgeSelectedTypes.value = []
+  showKnowledgeDialog.value = true
+  loadingKnowledge.value = true
+  try {
+    const [catRes, srcRes] = await Promise.all([
+      listTenantKnowledgeCategories(currentTenant.value.tenant_id),
+      getSubagentKnowledgeSources(currentTenant.value.tenant_id, agent.agent_id),
+    ])
+    knowledgeCategories.value = catRes.items || []
+    if (srcRes.success && srcRes.data) {
+      knowledgeSelectedTypes.value = srcRes.data.map((s: KnowledgeSourceItem) => s.source_type)
+    }
+  } catch (e) {
+    console.error('加载知识库关联失败:', e)
+  } finally {
+    loadingKnowledge.value = false
+  }
+}
+
+async function handleSaveKnowledge() {
+  if (!currentTenant.value) return
+  savingKnowledge.value = true
+  knowledgeError.value = ''
+  try {
+    const sources: KnowledgeSourceItem[] = knowledgeSelectedTypes.value.map(st => {
+      const cat = knowledgeCategories.value.find(c => c.source_type === st)
+      return { source_type: st, display_name: cat?.display_name || st }
+    })
+    const res = await setSubagentKnowledgeSources(
+      currentTenant.value.tenant_id,
+      knowledgeAgentId.value,
+      sources,
+    )
+    if (res.success) {
+      toast.success('知识库关联保存成功')
+      showKnowledgeDialog.value = false
+    } else {
+      knowledgeError.value = res.error || '保存失败'
+    }
+  } catch (e: any) {
+    knowledgeError.value = e.message || '保存失败'
+  } finally {
+    savingKnowledge.value = false
   }
 }
 

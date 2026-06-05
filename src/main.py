@@ -1686,6 +1686,10 @@ app.include_router(word_api.router)
 from src.api import subagent_env_var
 app.include_router(subagent_env_var.router)
 
+# 子智能体知识库关联 API
+from src.api import subagent_knowledge_source
+app.include_router(subagent_knowledge_source.router)
+
 from src.api import tenant_config_file
 app.include_router(tenant_config_file.router)
 

@@ -3,7 +3,7 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.2
 > 关联调研：[Prompt 版本管理与生命周期管理 — 业界调研](../research/prompt-version-management-research.md)
 > 设计日期：2026-05-28
-> 更新日期：2026-06-03（Phase 3 规划重做：知识库关联配置优先，extra_md 迁移后移至 Phase 4；移除 capabilities 字段）
+> 更新日期：2026-06-04（Phase 3 新增回复风格选择器 + business_pages 配置；§八.1.6、§八.1.7）
 > 状态：Phase 2 代码完成，待验证
 
 ---
@@ -227,7 +227,7 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     triggers        JSONB DEFAULT '{}',  -- 触发条件
     tools           JSONB DEFAULT '{}',  -- 工具配置 {inherit, additional}
     skills          JSONB DEFAULT '{}',  -- 技能配置 {allowed}
-    knowledge_sources JSONB DEFAULT '[]', -- 知识库关联 [{"source_type": "file", "description": "上传的文档"}]
+    knowledge_sources JSONB DEFAULT '[]', -- 预留字段，运行时知识库关联由 subagent_knowledge_sources 表管理
     context         JSONB DEFAULT '{}',  -- 上下文约束
     delegatable_to  JSONB DEFAULT '[]',
     allow_delegation BOOLEAN DEFAULT TRUE,
@@ -727,63 +727,55 @@ Response: { "tools": {"inherit": true, "additional": ["http_api"]}, "skills": {"
 
 **现有基础**：`POST /api/admin/subagents/{agent_id}/ai-enhance` 已实现类似的 LLM 增强功能，可以复用其模式。
 
-#### 8.1.3 知识库关联配置（Phase 3）
+#### 8.1.3 知识库关联配置（Phase 3） ✅ 已实现
 
 **问题**：当前 `knowledge_base_search` 工具搜索整个租户下的所有知识库文档。不同子智能体关注的知识范围不同（如旅游顾问关注景点和酒店，售后助手关注产品文档），LLM 调用检索工具时可能检索到不相关的内容。
 
-**方案**：在子智能体定义中增加 `knowledge_sources` 配置，指定允许检索的 `source_type` 列表。运行时调用 `knowledge_base_search` 时，注入该配置限制 LLM 只能检索指定的 source_type。
+**架构决策**：知识库关联是**租户级别**的配置（per-tenant per-agent），而非平台级定义。原因：每个租户的知识库分类不同（名称、数量），Portal 管理页面无租户上下文，无法获知租户有哪些知识库。因此配置入口放在 `TenantMgmt.vue` 的 agents tab，与"环境变量"和"API 配置"按钮同级。
 
 **数据模型**：
 
-```json
-// subagent_definitions.knowledge_sources 字段
-[
-    {"source_type": "file", "description": "上传的文档资料"},
-    {"source_type": "attraction_resource", "description": "景点资源数据"}
-]
-// 空列表 [] 表示不限制，检索整个租户知识库
+```sql
+-- 租户级知识库关联表（Phase 3.2 新增）
+CREATE TABLE subagent_knowledge_sources (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    sources JSONB NOT NULL DEFAULT '[]',
+    -- sources 格式: [{"source_type": "attraction_resource", "display_name": "景点资源数据"}]
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, subagent_name)
+);
 ```
 
-**已知 source_type 值**（来源：`documents` 表）：
-
-| source_type | 说明 |
-|-------------|------|
-| `file` | 通过知识库 API 上传的文档 |
-| `attraction_resource` | 景点资源数据 |
-| `hotel_resource` | 酒店住宿数据 |
+**数据源**：租户的知识库分类由 `knowledge_categories` 表维护（每条记录含 `source_type` + `display_name` + `document_count`）。前端通过 `GET /knowledge/categories`（带 `X-Tenant-Id`）获取可选列表。
 
 **运行时行为**：
 
 ```
-子智能体调用 knowledge_base_search 工具时:
-  if config.knowledge_sources 非空:
-    → 在系统 prompt 中注入知识库约束，指导 LLM 使用指定的 source_type 参数
-    → knowledge_base_search(source_type="attraction_resource")
-  else:
-    → 不注入约束，LLM 按需决定是否传 source_type
-    → knowledge_base_search()  // 不传 source_type，检索全部
+_build_system_prompt() → _load_knowledge_sources(tenant_id, subagent_name)
+  → 查询 subagent_knowledge_sources 表
+  → 如果非空:
+    在 system prompt 末尾追加:
+      ## 可用知识库
+      你可以通过 knowledge_base_search 工具检索以下知识库：
+      - attraction_resource（景点资源数据）
+      - hotel_resource（酒店住宿数据）
+      调用时必须传入正确的 source_type 参数。
+  → 如果为空（未配置）:
+    不注入约束，LLM 按需决定是否传 source_type
 ```
 
-**实现方式**：通过 `{subagent_constraint_section}` 注入知识库约束提示。例如：
+**后端 API**：
 
 ```
-## 知识库使用约束
-你只能检索以下类型的知识库内容：
-- file: 上传的文档资料
-- attraction_resource: 景点资源数据
-调用 knowledge_base_search 时，必须指定 source_type 参数为以上类型之一。
+GET  /api/saas/tenant/subagent-knowledge/:subagent_name  → 获取关联
+PUT  /api/saas/tenant/subagent-knowledge/:subagent_name  → 设置关联（全量覆盖）
+DELETE /api/saas/tenant/subagent-knowledge/:subagent_name → 删除关联
 ```
 
-**SubagentConfig 改动**：
-
-```python
-# src/models/subagent.py
-@dataclass
-class SubagentConfig:
-    ...
-    knowledge_sources: List[Dict[str, str]] = field(default_factory=list)
-    # [{"source_type": "file", "description": "上传的文档资料"}]
-```
+**前端配置入口**：`TenantMgmt.vue` agents tab，每个已授权 agent 旁的"知识库"按钮 → 弹窗复选框列表。
 
 #### 8.1.4 工具/技能元数据 API（Phase 3）
 
@@ -909,6 +901,86 @@ if self.subagent_config:
 
 **核心变化**：不再在 `_build_system_prompt()` 中独立调用 `prompt_resolver.resolve()`。DB 解析工作在 `load_from_db()` 阶段完成，运行时只根据 `from_db` 标记读取已解析的内容。
 
+#### 8.1.6 回复风格配置（Phase 3）
+
+**现状**：
+
+- **数据库**：`subagent_definitions` 表已有 `reply_style TEXT` 字段
+- **模型**：`SubagentConfig` 已有 `reply_style: Optional[str]` 字段
+- **运行时**：`agent.py _resolve_reply_style()` 已读取 `subagent_config.reply_style`（优先级 2）
+- **风格数据**：`reply_styles` 表存储系统级和租户级风格，`StyleManager` 管理缓存和降级
+- **API**：`GET /api/saas/reply-styles` 已返回风格列表
+
+**缺失**：`AgentDefinitionManager.vue` 定义区无回复风格选择器，管理员无法在智能体定义中配置回复风格。
+
+**方案**：在定义区增加回复风格下拉选择器，调用现有 API 获取可选风格列表。
+
+```
+定义区 — 回复风格配置区：
+┌─────────────────────────────────────────┐
+│  回复风格：[▼ 拟人风格 — 以真人同事口吻回复 ] │
+│                                         │
+│  选项来源：GET /api/saas/reply-styles    │
+│  · 系统级风格（tenant_id=system）        │
+│  · 租户自定义风格（当前租户）             │
+│  · "默认"选项（空值，使用全局配置）       │
+└─────────────────────────────────────────┘
+```
+
+**后端无改动**，`reply_style` 字段的读写已在 Phase 2 实现。只需前端增加：
+1. 调用 `GET /api/saas/reply-styles` 获取风格列表
+2. 下拉选择器展示风格名称和描述
+3. 选中值保存到智能体定义的 `reply_style` 字段
+
+#### 8.1.7 业务页面配置（business_pages）（Phase 3）
+
+**现状**：
+
+- **数据库**：`subagent_definitions` 表已有 `business_pages JSONB` 字段
+- **模型**：`SubagentConfig` 已有 `business_pages: Optional[List[Dict[str, Any]]]` 字段
+- **YAML 来源**：`SUBAGENT.md` frontmatter 中定义 `business_pages` 数组
+- **API**：`CreateDefinitionRequest` / `UpdateDefinitionRequest` 已支持 `business_pages` 读写
+- **运行时**：`MenuSidebar.vue` 已根据 `business_pages` 渲染侧边栏菜单
+- **注册表**：`get_all_subagents_with_type()` 已包含 `business_pages`
+
+**缺失**：`AgentDefinitionManager.vue` 定义区无 business_pages 编辑区，管理员无法配置智能体的业务页面。
+
+**方案**：在定义区增加业务页面列表编辑功能，支持增删改页面条目。
+
+**数据结构**：
+
+```json
+// subagent_definitions.business_pages 字段
+[
+    {"id": "vehicles", "title": "车辆价格", "icon": "🚐", "route": "/travel-consultant/vehicles"},
+    {"id": "attractions", "title": "景点门票", "icon": "🏔️️", "route": "/travel-consultant/attractions"}
+]
+```
+
+**前端交互**：
+
+```
+定义区 — 业务页面配置区：
+┌──────────────────────────────────────────────────┐
+│  业务页面：                              [+ 添加] │
+│                                                  │
+│  🚐 车辆价格 → /travel-consultant/vehicles  [编辑][删除] │
+│  🏔️ 景点门票 → /travel-consultant/attractions [编辑][删除] │
+│  🏨 酒店住宿 → /travel-consultant/hotels    [编辑][删除] │
+│                                                  │
+│  添加/编辑弹窗（BaseModal）：                     │
+│  ┌─────────────────────────────────────┐         │
+│  │  页面ID：[vehicles          ] *     │         │
+│  │  页面名称：[车辆价格        ] *     │         │
+│  │  图标：[🚐                ]         │         │
+│  │  路由：[/travel-consultant/vehicles] *│        │
+│  │                    [取消]  [保存]   │         │
+│  └─────────────────────────────────────┘         │
+└──────────────────────────────────────────────────┘
+```
+
+**后端无改动**，`business_pages` 字段的读写已在 Phase 2 实现。只需前端增加编辑区。
+
 ### 8.2 租户定制 extra.md 集成
 
 > 改造目标不变：将 extra_md 从文件系统迁移到数据库，纳入版本管理，并在租户前台提供编辑界面。
@@ -991,6 +1063,12 @@ async def _load_extra_md(self, dir_name=None, tenant_id=None):
 │  │  ☑ file — 上传的文档资料                               │  │
 │  │  ☐ attraction_resource — 景点资源数据                  │  │
 │  │  [查看可用 source_type]                                │  │
+│  │                                                        │  │
+│  │  回复风格：[▼ 拟人风格 — 以真人同事口吻回复 ]            │  │
+│  │                                                        │  │
+│  │  业务页面：                                  [+ 添加]   │  │
+│  │  🚐 车辆价格 → /travel-consultant/vehicles  [编辑][删除] │  │
+│  │  🏔️ 景点门票 → /travel-consultant/attractions [编辑][删除] │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                                │
 │  ┌─ Prompt 区（System Prompt）───────────────────────────┐  │
@@ -1245,9 +1323,11 @@ CREATE TABLE IF NOT EXISTS prompt_eval_results (
 
 > 目标：改造子智能体编辑页面为两区分离，增加 LLM 智能推荐工具/技能功能
 
-### 阶段三：知识库关联配置 + 工具技能列表展示（1 周）
+### 阶段三：知识库关联配置 + 工具技能列表展示 + 回复风格 + business_pages（1.5 周）
 
-> 目标：子智能体支持配置知识库 source_type 过滤，前端展示可用工具/技能清单供选择
+> 目标：完善智能体定义配置——知识库关联（租户级）、回复风格、业务页面配置；前端展示可用工具/技能清单供选择
+> 
+> **已完成**：3.1 移除 capabilities、3.2 知识库关联配置（租户级表 + TenantMgmt 配置入口 + 运行时注入）
 
 ### 阶段四：extra_md 迁移 + 租户前台编辑器（2-3 周）
 

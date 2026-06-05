@@ -576,6 +576,17 @@ CREATE TABLE IF NOT EXISTS subagent_env_vars (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_env_unique ON subagent_env_vars(tenant_id, subagent_name, var_name);
 CREATE INDEX IF NOT EXISTS idx_subagent_env_tenant ON subagent_env_vars(tenant_id, subagent_name);
 
+-- 租户级子智能体知识库关联表（Phase 3.2）
+CREATE TABLE IF NOT EXISTS subagent_knowledge_sources (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    sources JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, subagent_name)
+);
+
 -- ============== Prompt 版本管理表 ==============
 
 -- prompt_registry — Prompt 注册表
@@ -1272,6 +1283,7 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     llm_provider    TEXT,
     reply_style     TEXT,
     business_pages  JSONB,
+    knowledge_sources JSONB DEFAULT '[]',
     status          TEXT DEFAULT 'active',
     created_by      TEXT,
     updated_by      TEXT,

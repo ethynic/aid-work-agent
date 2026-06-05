@@ -41,6 +41,7 @@ class SubagentDefinitionDB:
         llm_provider: Optional[str] = None,
         reply_style: Optional[str] = None,
         business_pages: Optional[list] = None,
+        knowledge_sources: Optional[list] = None,
         created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         row_id = str(uuid.uuid4())
@@ -52,13 +53,13 @@ class SubagentDefinitionDB:
                         id, agent_id, name, description, version, author,
                         triggers, tools, skills, context,
                         delegatable_to, allow_delegation,
-                        llm_provider, reply_style, business_pages,
+                        llm_provider, reply_style, business_pages, knowledge_sources,
                         created_by, updated_by
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s,
                         %s, %s,
-                        %s, %s, %s,
+                        %s, %s, %s, %s,
                         %s, %s
                     )
                 """, (
@@ -68,6 +69,7 @@ class SubagentDefinitionDB:
                     _json(context or {}),
                     _json(delegatable_to or []), allow_delegation,
                     llm_provider, reply_style, _json(business_pages),
+                    _json(knowledge_sources or []),
                     created_by, created_by,
                 ))
                 conn.commit()
@@ -143,11 +145,12 @@ class SubagentDefinitionDB:
             "triggers", "tools", "skills", "context",
             "delegatable_to", "allow_delegation",
             "llm_provider", "reply_style", "business_pages",
+            "knowledge_sources",
             "status", "updated_by",
         }
         jsonb_fields = {
             "triggers", "tools", "skills", "context",
-            "delegatable_to", "business_pages",
+            "delegatable_to", "business_pages", "knowledge_sources",
         }
         updates = {}
         for k, v in kwargs.items():

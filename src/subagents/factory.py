@@ -238,6 +238,7 @@ class AgentFactory:
             llm_provider=row.get("llm_provider"),
             reply_style=row.get("reply_style"),
             business_pages=row.get("business_pages"),
+            knowledge_sources=row.get("knowledge_sources") or [],
             from_db=True,
         )
 

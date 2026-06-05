@@ -328,3 +328,52 @@ export async function deleteConfigFile(tenantId: string, subagentName: string): 
   if (!res.ok) throw new Error('删除配置文件失败')
   return res.json()
 }
+
+// ==================== 租户级子智能体知识库关联 ====================
+
+const KNOWLEDGE_BASE_URL = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/tenant/subagent-knowledge`
+
+export interface KnowledgeSourceItem {
+  source_type: string
+  display_name: string
+}
+
+export async function getSubagentKnowledgeSources(tenantId: string, subagentName: string): Promise<{ success: boolean; data: KnowledgeSourceItem[] }> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${KNOWLEDGE_BASE_URL}/${encodeURIComponent(subagentName)}`, { headers })
+  if (!res.ok) throw new Error('获取知识库关联失败')
+  return res.json()
+}
+
+export async function setSubagentKnowledgeSources(
+  tenantId: string, subagentName: string, sources: KnowledgeSourceItem[]
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const res = await fetch(`${KNOWLEDGE_BASE_URL}/${encodeURIComponent(subagentName)}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ sources }),
+  })
+  if (!res.ok) throw new Error('设置知识库关联失败')
+  return res.json()
+}
+
+export async function listTenantKnowledgeCategories(tenantId: string): Promise<{ items: { id: number; source_type: string; display_name: string | null; document_count: number }[] }> {
+  const headers: Record<string, string> = {}
+  const tokenKey = getTokenKey()
+  const token = localStorage.getItem(tokenKey)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  headers['X-Tenant-Id'] = tenantId
+  const KB_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/knowledge`
+  const res = await fetch(`${KB_BASE}/categories`, { headers })
+  if (!res.ok) throw new Error('获取知识库分类失败')
+  return res.json()
+}

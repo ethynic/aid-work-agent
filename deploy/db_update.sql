@@ -859,6 +859,19 @@ CREATE INDEX IF NOT EXISTS idx_subagent_def_status
     ON subagent_definitions (status);
 -- 2026-6-4, Phase 3.1 -- 移除 capabilities 字段（不再使用能力标签匹配）
 ALTER TABLE subagent_definitions DROP COLUMN IF EXISTS capabilities;
+-- 2026-6-5, Phase 3.2 -- 知识库关联配置（source_type + display_name）
+ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS knowledge_sources JSONB DEFAULT '[]';
+
+-- 2026-6-5, Phase 3.2 -- 租户级子智能体知识库关联表（per-tenant per-agent）
+CREATE TABLE IF NOT EXISTS subagent_knowledge_sources (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subagent_name TEXT NOT NULL,
+    sources JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, subagent_name)
+);
 
 -- 2026-6-3，数据连接器表，用于数据分析智能体的数据库连接管理
 CREATE TABLE IF NOT EXISTS data_connectors (
