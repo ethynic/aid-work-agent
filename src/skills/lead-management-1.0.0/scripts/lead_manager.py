@@ -232,6 +232,7 @@ def cmd_init_tables(args):
                     id SERIAL PRIMARY KEY,
                     rule_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     name TEXT NOT NULL,
                     rule_type TEXT NOT NULL,
                     priority INTEGER DEFAULT 0,
@@ -250,10 +251,11 @@ def cmd_init_tables(args):
                     id SERIAL PRIMARY KEY,
                     funnel_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     lead_id TEXT NOT NULL,
                     from_stage TEXT,
                     to_stage TEXT NOT NULL,
-                    changed_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMP DEFAULT NOW(),
                     changed_by TEXT,
                     days_in_previous_stage INTEGER,
                     note TEXT
@@ -280,7 +282,7 @@ def cmd_init_tables(args):
                 "CREATE INDEX IF NOT EXISTS idx_cf_funnel_tenant ON bs_customer_followup_conversion_funnel(tenant_id)",
                 "CREATE INDEX IF NOT EXISTS idx_cf_funnel_lead ON bs_customer_followup_conversion_funnel(lead_id)",
                 "CREATE INDEX IF NOT EXISTS idx_cf_funnel_stage ON bs_customer_followup_conversion_funnel(tenant_id, to_stage)",
-                "CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, changed_at)",
+                "CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, created_at)",
             ]
             for idx_sql in indexes:
                 cursor.execute(idx_sql)
@@ -592,9 +594,9 @@ def cmd_update_stage(args):
             funnel_id = generate_id("funnel")
             cursor.execute("""
                 INSERT INTO bs_customer_followup_conversion_funnel
-                    (funnel_id, tenant_id, lead_id, from_stage, to_stage, changed_at, changed_by, days_in_previous_stage, note)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (funnel_id, tenant_id, args.lead_id, from_stage, args.stage, now, None, days_in_previous, note))
+                    (funnel_id, tenant_id, user_id, lead_id, from_stage, to_stage, created_at, changed_by, days_in_previous_stage, note)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (funnel_id, tenant_id, None, args.lead_id, from_stage, args.stage, now, None, days_in_previous, note))
 
             conn.commit()
 
@@ -1194,11 +1196,11 @@ def cmd_add_assign_rule(args):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO bs_customer_followup_assign_rules
-                    (rule_id, tenant_id, name, rule_type, priority,
+                    (rule_id, tenant_id, user_id, name, rule_type, priority,
                      is_active, conditions, target_rep_ids, auto_assign)
-                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s)
             """, (
-                rule_id, tenant_id, args.name, rule_type,
+                rule_id, tenant_id, None, args.name, rule_type,
                 int(getattr(args, 'priority', 0) or 0),
                 json.dumps(conditions), target_rep_ids,
                 getattr(args, 'auto_assign', 'true').lower() != 'false',
@@ -1232,7 +1234,7 @@ def cmd_list_assign_rules(args):
                        conditions, target_rep_ids, auto_assign, created_at
                 FROM bs_customer_followup_assign_rules
                 WHERE {where}
-                ORDER BY priority DESC, created_at
+                ORDER BY created_at DESC
             """, params)
 
             columns = [desc[0] for desc in cursor.description]

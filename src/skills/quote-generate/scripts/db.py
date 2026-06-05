@@ -25,6 +25,7 @@ TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
             id SERIAL PRIMARY KEY,
             tenant_id TEXT,
+            user_id TEXT,
             region_name TEXT,
             vehicle_type TEXT NOT NULL,
             vehicle_type_label TEXT,
@@ -44,6 +45,7 @@ TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
             id SERIAL PRIMARY KEY,
             tenant_id TEXT,
+            user_id TEXT,
             region_name TEXT,
             meal_tier TEXT NOT NULL,
             meal_tier_label TEXT NOT NULL,
@@ -63,6 +65,7 @@ TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS bs_travel_quote_guides (
             id SERIAL PRIMARY KEY,
             tenant_id TEXT,
+            user_id TEXT,
             region_name TEXT,
             guide_type TEXT NOT NULL,
             guide_type_label TEXT NOT NULL,
@@ -82,6 +85,7 @@ TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS bs_travel_quote_fees (
             id SERIAL PRIMARY KEY,
             tenant_id TEXT,
+            user_id TEXT,
             fee_name TEXT NOT NULL,
             fee_category TEXT NOT NULL,
             billing_method TEXT NOT NULL,
@@ -96,6 +100,7 @@ TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
             id SERIAL PRIMARY KEY,
             tenant_id TEXT,
+            user_id TEXT,
             season_type TEXT NOT NULL,
             season_type_label TEXT NOT NULL,
             start_date DATE NOT NULL,
@@ -133,7 +138,7 @@ def query_by_region(table: str, tenant_id: str, region_names: List[str],
             conn.execute(
                 f"SELECT * FROM {table} WHERE tenant_id=%s AND is_active=true "
                 f"{season_filter} AND (region_name IN ({placeholders}) OR region_name IS NULL) "
-                f"{extra_where} ORDER BY region_name IS NULL, id",
+                f"{extra_where} ORDER BY created_at DESC",
                 tuple(params)
             )
             rows = conn.fetchall()
@@ -149,7 +154,7 @@ def query_by_region(table: str, tenant_id: str, region_names: List[str],
 
         conn.execute(
             f"SELECT * FROM {table} WHERE tenant_id=%s AND is_active=true "
-            f"{season_filter} AND region_name IS NULL {extra_where} ORDER BY id",
+            f"{season_filter} AND region_name IS NULL {extra_where} ORDER BY created_at DESC",
             tuple(params)
         )
         return conn.fetchall()

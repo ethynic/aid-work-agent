@@ -194,6 +194,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_records_source_type ON chat_records(source_t
 CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     region_name TEXT,
     vehicle_type TEXT NOT NULL,
     vehicle_type_label TEXT,
@@ -226,6 +227,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_vehicles_tenant ON bs_travel_quote_vehicle
 CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     region_name TEXT,
     meal_tier TEXT NOT NULL,
     meal_tier_label TEXT NOT NULL,
@@ -247,6 +249,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_meals_tenant ON bs_travel_quote_meals(tena
 CREATE TABLE IF NOT EXISTS bs_travel_quote_guides (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     region_name TEXT,
     guide_type TEXT NOT NULL,
     guide_type_label TEXT NOT NULL,
@@ -268,6 +271,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_guides_tenant ON bs_travel_quote_guides(te
 CREATE TABLE IF NOT EXISTS bs_travel_quote_fees (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     fee_name TEXT NOT NULL,
     fee_category TEXT NOT NULL,
     billing_method TEXT NOT NULL,
@@ -284,6 +288,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_fees_tenant ON bs_travel_quote_fees(tenant
 CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     season_type TEXT NOT NULL,
     season_type_label TEXT NOT NULL,
     start_date DATE NOT NULL,
@@ -432,6 +437,7 @@ CREATE INDEX IF NOT EXISTS idx_ast_user ON bs_after_sales_tickets(user_id, statu
 CREATE TABLE IF NOT EXISTS bs_after_sales_ticket_messages (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     ticket_id TEXT NOT NULL,
     sender_type TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -505,6 +511,7 @@ CREATE INDEX IF NOT EXISTS idx_complaints_created ON bs_complaint_handling_compl
 CREATE TABLE IF NOT EXISTS bs_complaint_handling_interactions (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     complaint_id TEXT NOT NULL,
     interaction_type TEXT NOT NULL DEFAULT 'message',
     sender_type TEXT NOT NULL,
@@ -521,6 +528,7 @@ CREATE INDEX IF NOT EXISTS idx_interactions_tenant ON bs_complaint_handling_inte
 CREATE TABLE IF NOT EXISTS bs_complaint_handling_case_solutions (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     complaint_id TEXT UNIQUE NOT NULL,
     category TEXT NOT NULL,
     sub_category TEXT,
@@ -545,6 +553,7 @@ CREATE INDEX IF NOT EXISTS idx_case_solutions_effective ON bs_complaint_handling
 CREATE TABLE IF NOT EXISTS bs_complaint_handling_followups (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     complaint_id TEXT NOT NULL,
     action TEXT NOT NULL,
     assigned_to TEXT,
@@ -663,6 +672,7 @@ CREATE TABLE IF NOT EXISTS bs_customer_followup_assign_rules (
     id SERIAL PRIMARY KEY,
     rule_id TEXT UNIQUE NOT NULL,
     tenant_id TEXT,
+    user_id TEXT,
     name TEXT NOT NULL,
     rule_type TEXT NOT NULL,
     priority INTEGER DEFAULT 0,
@@ -681,10 +691,11 @@ CREATE TABLE IF NOT EXISTS bs_customer_followup_conversion_funnel (
     id SERIAL PRIMARY KEY,
     funnel_id TEXT UNIQUE NOT NULL,
     tenant_id TEXT,
+    user_id TEXT,
     lead_id TEXT NOT NULL,
     from_stage TEXT,
     to_stage TEXT NOT NULL,
-    changed_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
     changed_by TEXT,
     days_in_previous_stage INTEGER,
     note TEXT
@@ -693,7 +704,7 @@ CREATE TABLE IF NOT EXISTS bs_customer_followup_conversion_funnel (
 CREATE INDEX IF NOT EXISTS idx_cf_funnel_tenant ON bs_customer_followup_conversion_funnel(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cf_funnel_lead ON bs_customer_followup_conversion_funnel(lead_id);
 CREATE INDEX IF NOT EXISTS idx_cf_funnel_stage ON bs_customer_followup_conversion_funnel(tenant_id, to_stage);
-CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, changed_at);
+CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, created_at);
 
 -- ============================================================================
 -- 2026-05-25 性能优化：加速过期锁清理查询 + PostgreSQL 容器参数优化
@@ -918,3 +929,88 @@ WHERE d.tenant_id IS NOT NULL
     SELECT 1 FROM knowledge_categories kc
     WHERE kc.tenant_id = d.tenant_id AND kc.source_type = d.source_type
   );
+
+-- ============================================================================
+-- 2026-06-05，业务数据表统一增加 user_id 字段 + 规范化 created_at 字段
+-- ============================================================================
+
+-- 1. bs_customer_followup_assign_rules 增加 user_id 字段
+ALTER TABLE bs_customer_followup_assign_rules ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 2. bs_customer_followup_conversion_funnel 增加 user_id 字段，changed_at 重命名为 created_at
+ALTER TABLE bs_customer_followup_conversion_funnel ADD COLUMN IF NOT EXISTS user_id TEXT;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'bs_customer_followup_conversion_funnel' AND column_name = 'changed_at'
+    ) THEN
+        ALTER TABLE bs_customer_followup_conversion_funnel RENAME COLUMN changed_at TO created_at;
+    END IF;
+END $$;
+-- 重建依赖 changed_at 的索引
+DROP INDEX IF EXISTS idx_cf_funnel_date;
+CREATE INDEX IF NOT EXISTS idx_cf_funnel_date ON bs_customer_followup_conversion_funnel(tenant_id, created_at);
+
+-- 3. bs_order_processing_order_items 增加 user_id 字段
+ALTER TABLE bs_order_processing_order_items ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 4. bs_order_processing_status_history 增加 user_id 字段
+ALTER TABLE bs_order_processing_status_history ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 5. bs_order_processing_approvals 增加 user_id 字段
+ALTER TABLE bs_order_processing_approvals ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 6. bs_order_processing_webhook_events 增加 user_id 字段，received_at 重命名为 created_at
+ALTER TABLE bs_order_processing_webhook_events ADD COLUMN IF NOT EXISTS user_id TEXT;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'bs_order_processing_webhook_events' AND column_name = 'received_at'
+    ) THEN
+        ALTER TABLE bs_order_processing_webhook_events RENAME COLUMN received_at TO created_at;
+    END IF;
+END $$;
+-- 重建依赖 received_at 的索引
+DROP INDEX IF EXISTS idx_webhook_processed_received;
+CREATE INDEX IF NOT EXISTS idx_webhook_processed_received ON bs_order_processing_webhook_events(processed, created_at);
+
+-- 7. bs_order_processing_products 增加 user_id 字段
+ALTER TABLE bs_order_processing_products ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 8. bs_order_processing_inventory 增加 user_id 字段
+ALTER TABLE bs_order_processing_inventory ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 9. bs_order_processing_inventory_reservations 增加 user_id 字段
+ALTER TABLE bs_order_processing_inventory_reservations ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 10. bs_order_processing_shipments 增加 user_id 字段
+ALTER TABLE bs_order_processing_shipments ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 11. bs_travel_quote_vehicles 增加 user_id 字段
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 12. bs_travel_quote_meals 增加 user_id 字段
+ALTER TABLE bs_travel_quote_meals ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 13. bs_travel_quote_guides 增加 user_id 字段
+ALTER TABLE bs_travel_quote_guides ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 14. bs_travel_quote_fees 增加 user_id 字段
+ALTER TABLE bs_travel_quote_fees ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 15. bs_travel_quote_seasons 增加 user_id 字段
+ALTER TABLE bs_travel_quote_seasons ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 16. bs_complaint_handling_interactions 增加 user_id 字段
+ALTER TABLE bs_complaint_handling_interactions ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 17. bs_complaint_handling_case_solutions 增加 user_id 字段
+ALTER TABLE bs_complaint_handling_case_solutions ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 18. bs_complaint_handling_followups 增加 user_id 字段
+ALTER TABLE bs_complaint_handling_followups ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 19. bs_after_sales_ticket_messages 增加 user_id 字段
+ALTER TABLE bs_after_sales_ticket_messages ADD COLUMN IF NOT EXISTS user_id TEXT;

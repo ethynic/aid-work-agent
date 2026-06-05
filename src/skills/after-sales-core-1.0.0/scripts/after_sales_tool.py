@@ -105,6 +105,7 @@ def init_tables():
             CREATE TABLE IF NOT EXISTS bs_after_sales_ticket_messages (
                 id SERIAL PRIMARY KEY,
                 tenant_id TEXT,
+                user_id TEXT,
                 ticket_id TEXT NOT NULL,
                 sender_type TEXT NOT NULL,
                 content TEXT NOT NULL,

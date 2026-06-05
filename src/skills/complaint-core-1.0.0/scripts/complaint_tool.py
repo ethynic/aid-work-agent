@@ -118,6 +118,7 @@ def init_tables():
                 CREATE TABLE IF NOT EXISTS bs_complaint_handling_interactions (
                     id SERIAL PRIMARY KEY,
                     tenant_id TEXT,
+                    user_id TEXT,
                     complaint_id TEXT NOT NULL,
                     interaction_type TEXT NOT NULL DEFAULT 'message',
                     sender_type TEXT NOT NULL,
@@ -136,6 +137,7 @@ def init_tables():
                 CREATE TABLE IF NOT EXISTS bs_complaint_handling_case_solutions (
                     id SERIAL PRIMARY KEY,
                     tenant_id TEXT,
+                    user_id TEXT,
                     complaint_id TEXT UNIQUE NOT NULL,
                     category TEXT NOT NULL,
                     sub_category TEXT,
@@ -162,6 +164,7 @@ def init_tables():
                 CREATE TABLE IF NOT EXISTS bs_complaint_handling_followups (
                     id SERIAL PRIMARY KEY,
                     tenant_id TEXT,
+                    user_id TEXT,
                     complaint_id TEXT NOT NULL,
                     action TEXT NOT NULL,
                     assigned_to TEXT,
@@ -321,10 +324,10 @@ def create_complaint(args):
             # 自动记录创建交互
             cursor.execute("""
                 INSERT INTO bs_complaint_handling_interactions
-                (tenant_id, complaint_id, interaction_type, sender_type, content, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (tenant_id, user_id, complaint_id, interaction_type, sender_type, content, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (
-                tenant_id, complaint_id,
+                tenant_id, args.user_id, complaint_id,
                 "status_change", "system",
                 f"投诉已创建，分类：{args.category}，紧急程度：{getattr(args, 'urgency', 'normal')}",
                 now,
@@ -393,9 +396,9 @@ def update_complaint(args):
             tenant_id = _get_current_tenant_id()
             cursor.execute("""
                 INSERT INTO bs_complaint_handling_interactions
-                (tenant_id, complaint_id, interaction_type, sender_type, content, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (tenant_id, args.complaint_id, "status_change", "agent", content, now))
+                (tenant_id, user_id, complaint_id, interaction_type, sender_type, content, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (tenant_id, None, args.complaint_id, "status_change", "agent", content, now))
 
             # 如果投诉已解决，自动记录到案例解决方案库
             if args.status == "resolved" and getattr(args, "resolution", None):
@@ -430,14 +433,14 @@ def _save_case_solution(cursor, conn, complaint_id, tenant_id):
 
         cursor.execute("""
             INSERT INTO bs_complaint_handling_case_solutions
-            (tenant_id, complaint_id, category, sub_category, problem_summary, solution, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (tenant_id, user_id, complaint_id, category, sub_category, problem_summary, solution, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (complaint_id) DO UPDATE SET
                 problem_summary = EXCLUDED.problem_summary,
                 solution = EXCLUDED.solution,
                 updated_at = EXCLUDED.updated_at
         """, (
-            tenant_id, complaint_id, category, sub_category,
+            tenant_id, None, complaint_id, category, sub_category,
             description[:500], resolution,
             datetime.now(), datetime.now(),
         ))
@@ -544,10 +547,10 @@ def escalate_complaint(args):
             # 记录升级交互
             cursor.execute("""
                 INSERT INTO bs_complaint_handling_interactions
-                (tenant_id, complaint_id, interaction_type, sender_type, content, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (tenant_id, user_id, complaint_id, interaction_type, sender_type, content, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (
-                tenant_id, args.complaint_id,
+                tenant_id, None, args.complaint_id,
                 "escalation", "system",
                 f"投诉已升级至 {escalate_to}，原因: {args.reason}",
                 now,
@@ -755,11 +758,11 @@ def create_followup(args):
 
             cursor.execute("""
                 INSERT INTO bs_complaint_handling_followups
-                (tenant_id, complaint_id, action, assigned_to, due_date, status, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (tenant_id, user_id, complaint_id, action, assigned_to, due_date, status, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                tenant_id, args.complaint_id, args.action,
+                tenant_id, None, args.complaint_id, args.action,
                 getattr(args, "assigned_to", None),
                 due_date, "pending", now,
             ))
@@ -775,9 +778,9 @@ def create_followup(args):
 
             cursor.execute("""
                 INSERT INTO bs_complaint_handling_interactions
-                (tenant_id, complaint_id, interaction_type, sender_type, content, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (tenant_id, args.complaint_id, "note", "agent", content, now))
+                (tenant_id, user_id, complaint_id, interaction_type, sender_type, content, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (tenant_id, None, args.complaint_id, "note", "agent", content, now))
 
             conn.commit()
 
@@ -886,11 +889,11 @@ def add_interaction(args):
             interaction_type = getattr(args, "interaction_type", "message")
             cursor.execute("""
                 INSERT INTO bs_complaint_handling_interactions
-                (tenant_id, complaint_id, interaction_type, sender_type, sender_name, content, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (tenant_id, user_id, complaint_id, interaction_type, sender_type, sender_name, content, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                tenant_id, args.complaint_id, interaction_type,
+                tenant_id, None, args.complaint_id, interaction_type,
                 args.sender_type, None, args.content, now,
             ))
 

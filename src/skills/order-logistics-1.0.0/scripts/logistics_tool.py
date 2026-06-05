@@ -98,6 +98,7 @@ def init_tables():
                     id SERIAL PRIMARY KEY,
                     shipment_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     order_id TEXT NOT NULL,
                     carrier TEXT,
                     tracking_number TEXT,
@@ -154,8 +155,8 @@ def create_shipment(args):
                 INSERT INTO bs_order_processing_shipments
                 (shipment_id, tenant_id, order_id, carrier, tracking_number,
                  shipping_method, weight, shipping_address, status,
-                 shipped_at, estimated_delivery, notes, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 shipped_at, estimated_delivery, notes, user_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 shipment_id, tenant_id, args.order_id,
@@ -168,6 +169,7 @@ def create_shipment(args):
                 now,
                 getattr(args, "estimated_delivery", None),
                 getattr(args, "notes", None),
+                None,
                 now, now,
             ))
 
@@ -185,9 +187,9 @@ def create_shipment(args):
                     # 写入状态历史
                     cursor.execute("""
                         INSERT INTO bs_order_processing_status_history
-                        (tenant_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (tenant_id, args.order_id, "processing", "shipped", None, "创建发货记录，订单自动发货", now))
+                        (tenant_id, order_id, from_status, to_status, changed_by, change_reason, user_id, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (tenant_id, args.order_id, "processing", "shipped", None, "创建发货记录，订单自动发货", None, now))
 
             conn.commit()
 
@@ -544,9 +546,9 @@ def confirm_delivery(args):
             if order_updated:
                 cursor.execute("""
                     INSERT INTO bs_order_processing_status_history
-                    (tenant_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (tenant_id, order_id, "shipped", "delivered", None, "确认签收，订单自动完成发货", now))
+                    (tenant_id, order_id, from_status, to_status, changed_by, change_reason, user_id, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (tenant_id, order_id, "shipped", "delivered", None, "确认签收，订单自动完成发货", None, now))
 
             conn.commit()
 

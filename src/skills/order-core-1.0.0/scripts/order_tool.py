@@ -146,6 +146,7 @@ def init_tables():
                 CREATE TABLE IF NOT EXISTS bs_order_processing_order_items (
                     id SERIAL PRIMARY KEY,
                     tenant_id TEXT,
+                    user_id TEXT,
                     order_id TEXT NOT NULL,
                     item_id TEXT UNIQUE NOT NULL,
                     product_sku TEXT,
@@ -167,6 +168,7 @@ def init_tables():
                 CREATE TABLE IF NOT EXISTS bs_order_processing_status_history (
                     id SERIAL PRIMARY KEY,
                     tenant_id TEXT,
+                    user_id TEXT,
                     order_id TEXT NOT NULL,
                     from_status TEXT,
                     to_status TEXT NOT NULL,
@@ -185,6 +187,7 @@ def init_tables():
                     id SERIAL PRIMARY KEY,
                     approval_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     order_id TEXT NOT NULL,
                     approval_type TEXT NOT NULL DEFAULT 'order_approval',
                     status TEXT NOT NULL DEFAULT 'pending',
@@ -209,19 +212,20 @@ def init_tables():
                     id SERIAL PRIMARY KEY,
                     event_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     event_type TEXT NOT NULL,
                     source TEXT NOT NULL,
                     payload JSON NOT NULL,
                     processed BOOLEAN DEFAULT false,
                     processing_result TEXT,
                     error_message TEXT,
-                    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     processed_at TIMESTAMP
                 )
             """)
 
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhook_tenant_type ON bs_order_processing_webhook_events (tenant_id, event_type)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhook_processed_received ON bs_order_processing_webhook_events (processed, received_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhook_processed_received ON bs_order_processing_webhook_events (processed, created_at)")
 
             conn.commit()
             logger.info("[order_tool] 订单处理表初始化完成")
@@ -290,12 +294,12 @@ def create_order(args):
                 item_id = _generate_id("itm")
                 cursor.execute("""
                     INSERT INTO bs_order_processing_order_items
-                    (tenant_id, order_id, item_id, product_sku, product_name,
+                    (tenant_id, user_id, order_id, item_id, product_sku, product_name,
                      quantity, unit_price, discount_rate, subtotal,
                      product_snapshot, notes, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    tenant_id, order_id, item_id,
+                    tenant_id, args.user_id, order_id, item_id,
                     item.get("product_sku"),
                     item.get("product_name", ""),
                     int(item.get("quantity", 1)),
@@ -310,9 +314,9 @@ def create_order(args):
             # 插入初始状态历史
             cursor.execute("""
                 INSERT INTO bs_order_processing_status_history
-                (tenant_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (tenant_id, order_id, None, "draft", args.user_id, "订单创建", now))
+                (tenant_id, user_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tenant_id, args.user_id, order_id, None, "draft", args.user_id, "订单创建", now))
 
             # 预留库存（尝试为每个商品的 SKU 预留库存）
             reservation_results = []
@@ -437,7 +441,7 @@ def get_order(args):
                        discount_rate, subtotal, notes, created_at
                 FROM bs_order_processing_order_items
                 WHERE order_id = %s
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
             """, (args.order_id,))
 
             item_rows = cursor.fetchall()
@@ -719,9 +723,9 @@ def cancel_order(args):
             # 写入状态历史
             cursor.execute("""
                 INSERT INTO bs_order_processing_status_history
-                (tenant_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (tenant_id, args.order_id, current_status, "cancelled", None, reason or "订单取消", now))
+                (tenant_id, user_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tenant_id, None, args.order_id, current_status, "cancelled", None, reason or "订单取消", now))
 
             # 释放该订单的所有活跃库存预留
             cursor.execute("""
@@ -805,9 +809,9 @@ def change_status(args):
             # 写入状态历史
             cursor.execute("""
                 INSERT INTO bs_order_processing_status_history
-                (tenant_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (tenant_id, args.order_id, current_status, target_status, None, reason, now))
+                (tenant_id, user_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tenant_id, None, args.order_id, current_status, target_status, None, reason, now))
 
             conn.commit()
 
@@ -851,13 +855,13 @@ def create_approval(args):
             # 插入审批记录
             cursor.execute("""
                 INSERT INTO bs_order_processing_approvals
-                (approval_id, tenant_id, order_id, approval_type, status,
+                (approval_id, tenant_id, user_id, order_id, approval_type, status,
                  requested_by, assigned_to, amount_threshold, note,
                  created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                approval_id, tenant_id, args.order_id,
+                approval_id, tenant_id, args.requested_by, args.order_id,
                 getattr(args, "approval_type", "order_approval"),
                 "pending",
                 args.requested_by,
@@ -884,9 +888,9 @@ def create_approval(args):
 
                 cursor.execute("""
                     INSERT INTO bs_order_processing_status_history
-                    (tenant_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (tenant_id, args.order_id, current_status, "pending_approval", args.requested_by, "提交审批", now))
+                    (tenant_id, user_id, order_id, from_status, to_status, changed_by, change_reason, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (tenant_id, args.requested_by, args.order_id, current_status, "pending_approval", args.requested_by, "提交审批", now))
 
             conn.commit()
 

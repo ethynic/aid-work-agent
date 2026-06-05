@@ -1110,6 +1110,7 @@ CREATE INDEX IF NOT EXISTS idx_subagent_env_tenant ON subagent_env_vars(tenant_i
 CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     region_name TEXT,
     vehicle_type TEXT NOT NULL,
     vehicle_type_label TEXT,
@@ -1135,6 +1136,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_vehicles_tenant ON bs_travel_quote_vehicle
 CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     region_name TEXT,
     meal_tier TEXT NOT NULL,
     meal_tier_label TEXT NOT NULL,
@@ -1156,6 +1158,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_meals_tenant ON bs_travel_quote_meals(tena
 CREATE TABLE IF NOT EXISTS bs_travel_quote_guides (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     region_name TEXT,
     guide_type TEXT NOT NULL,
     guide_type_label TEXT NOT NULL,
@@ -1177,6 +1180,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_guides_tenant ON bs_travel_quote_guides(te
 CREATE TABLE IF NOT EXISTS bs_travel_quote_fees (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     fee_name TEXT NOT NULL,
     fee_category TEXT NOT NULL,
     billing_method TEXT NOT NULL,
@@ -1193,6 +1197,7 @@ CREATE INDEX IF NOT EXISTS idx_travel_fees_tenant ON bs_travel_quote_fees(tenant
 CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT,
+    user_id TEXT,
     season_type TEXT NOT NULL,
     season_type_label TEXT NOT NULL,
     start_date DATE NOT NULL,

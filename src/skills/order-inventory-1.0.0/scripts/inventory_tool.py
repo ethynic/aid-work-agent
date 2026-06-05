@@ -89,6 +89,7 @@ def init_tables():
                     id SERIAL PRIMARY KEY,
                     product_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     product_sku TEXT NOT NULL,
                     product_name TEXT NOT NULL,
                     category TEXT,
@@ -121,6 +122,7 @@ def init_tables():
                 CREATE TABLE IF NOT EXISTS bs_order_processing_inventory (
                     id SERIAL PRIMARY KEY,
                     tenant_id TEXT,
+                    user_id TEXT,
                     product_sku TEXT NOT NULL,
                     product_name TEXT,
                     quantity_total INTEGER NOT NULL DEFAULT 0,
@@ -143,6 +145,7 @@ def init_tables():
                     id SERIAL PRIMARY KEY,
                     reservation_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT,
+                    user_id TEXT,
                     order_id TEXT NOT NULL,
                     product_sku TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
@@ -180,13 +183,13 @@ def create_product(args):
             # 插入商品记录
             cursor.execute("""
                 INSERT INTO bs_order_processing_products
-                (product_id, tenant_id, product_sku, product_name, category, brand, model,
+                (product_id, tenant_id, user_id, product_sku, product_name, category, brand, model,
                  specifications, unit, cost_price, selling_price, description, images, tags,
                  status, weight, barcode, external_product_id, supplier, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                product_id, tenant_id, args.product_sku, args.product_name,
+                product_id, tenant_id, None, args.product_sku, args.product_name,
                 getattr(args, "category", None),
                 getattr(args, "brand", None),
                 getattr(args, "model", None),
@@ -208,11 +211,11 @@ def create_product(args):
             # 自动创建库存记录（初始数量为 0）
             cursor.execute("""
                 INSERT INTO bs_order_processing_inventory
-                (tenant_id, product_sku, product_name, quantity_total, quantity_reserved,
+                (tenant_id, user_id, product_sku, product_name, quantity_total, quantity_reserved,
                  quantity_available, low_stock_threshold, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                tenant_id, args.product_sku, args.product_name,
+                tenant_id, None, args.product_sku, args.product_name,
                 0, 0, 0, 10, now, now,
             ))
 
@@ -570,11 +573,11 @@ def reserve_stock(args):
             # 插入预留记录
             cursor.execute("""
                 INSERT INTO bs_order_processing_inventory_reservations
-                (reservation_id, tenant_id, order_id, product_sku, quantity,
+                (reservation_id, tenant_id, user_id, order_id, product_sku, quantity,
                  status, expires_at, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                reservation_id, tenant_id, args.order_id, args.sku,
+                reservation_id, tenant_id, None, args.order_id, args.sku,
                 quantity, "active", expires_at, now, now,
             ))
 
@@ -824,8 +827,8 @@ def sync_from_external(args):
                     cursor.execute("""
                         INSERT INTO bs_order_processing_inventory
                         (tenant_id, product_sku, product_name, quantity_total,
-                         quantity_reserved, quantity_available, last_synced_at, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, 0, %s, %s, %s, %s)
+                         quantity_reserved, quantity_available, last_synced_at, user_id, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, 0, %s, %s, %s, %s, %s)
                         ON CONFLICT (tenant_id, product_sku)
                         DO UPDATE SET
                             quantity_total = EXCLUDED.quantity_total,
@@ -835,7 +838,7 @@ def sync_from_external(args):
                             updated_at = EXCLUDED.updated_at
                     """, (
                         tenant_id, sku, name, qty,
-                        qty, now, now, now,
+                        qty, now, None, now, now,
                     ))
                     synced_count += 1
                 except Exception as item_err:
