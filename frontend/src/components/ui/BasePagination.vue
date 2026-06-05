@@ -25,7 +25,7 @@
         <button
           v-for="page in visiblePages"
           :key="page"
-          :class="[slots.pageButton(), page === currentPage ? 'bg-primary-600 !text-white font-medium' : 'text-default hover:bg-gray-100']"
+          :class="[slots.pageButton(), page === currentPage ? 'bg-primary-600 !text-white font-medium hover:!bg-primary-600' : 'text-default']"
           @click="emit('update:currentPage', page)"
         >
           {{ page }}

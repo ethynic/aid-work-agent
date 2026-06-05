@@ -50,10 +50,12 @@ export function useSession() {
    * @param page 页码
    * @param forceRefresh 是否强制刷新，默认 false
    */
-  async function loadSessions(page: number = 1, forceRefresh = false) {
+  async function loadSessions(page?: number, forceRefresh = false) {
+    // 如果 page 未指定，使用当前已保存的页码（避免 route 变化时覆盖用户选择的页码）
+    const targetPage = page !== undefined ? page : currentPage.value
+
     // 如果已经发生认证错误，不再尝试请求
     if (hasAuthError.value) {
-      console.warn('Skipping loadSessions due to previous auth error')
       return
     }
 
@@ -61,8 +63,8 @@ export function useSession() {
       return
     }
 
-    // 已有数据且不强制刷新，直接返回
-    if (isLoaded.value && !forceRefresh && !isLoading.value) {
+    // 已有数据且不强制刷新，且请求的页码和每页条数都没变，直接返回
+    if (isLoaded.value && !forceRefresh && !isLoading.value && targetPage === currentPage.value) {
       return
     }
 
@@ -73,18 +75,8 @@ export function useSession() {
 
     isLoading.value = true
     try {
-      const result = await listSessions(page, pageSize.value)
-      let loadedSessions = result.sessions || []
-
-      // 过滤掉创建超过5分钟仍然是默认标题的空会话
-      const now = new Date().getTime()
-      loadedSessions = loadedSessions.filter(s => {
-        const createdTime = new Date(s.created_at).getTime()
-        const isEmptyTitle = s.title === '新会话' || !s.title
-        const isOldEmpty = isEmptyTitle && (now - createdTime) > 5 * 60000 // 超过5分钟
-
-        return !isOldEmpty
-      })
+      const result = await listSessions(targetPage, pageSize.value)
+      const loadedSessions = result.sessions || []
 
       sessions.value = loadedSessions
       totalSessions.value = result.total

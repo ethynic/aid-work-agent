@@ -47,22 +47,20 @@
             <!-- Session List -->
             <div v-else class="space-y-1.5">
               <div
-                v-for="session in sessions"
+                v-for="(session, index) in sessions"
                 :key="session.session_id"
                 :class="[
-                  'group relative p-2.5 bg-white rounded-lg border transition-colors cursor-pointer',
+                  'group relative p-2.5 rounded-lg border border-gray-200 bg-white transition-colors cursor-pointer',
                   currentSessionId === session.session_id
-                    ? 'border-primary-300 bg-primary-50'
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    ? 'ring-2 ring-primary-300 bg-primary-50 border-primary-300'
+                    : 'hover:bg-gray-50'
                 ]"
                 @click="handleSelectSession(session.session_id)"
               >
                 <div class="flex items-center gap-3">
-                  <div class="flex-shrink-0 mt-0">
-                    <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  </div>
+                  <span class="text-xs text-gray-400 w-5 text-right flex-shrink-0">
+                    {{ (currentPage - 1) * pageSize + index + 1 }}
+                  </span>
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center justify-between">
                       <div class="flex items-center gap-2 truncate">
@@ -73,50 +71,30 @@
                           · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
                         </span>
                       </div>
-                      <!-- Desktop: hover show -->
-                      <div class="hidden md:group-hover:flex items-center gap-1 ml-3">
+                      <div class="flex items-center gap-1 ml-3">
                         <span class="text-xs text-gray-400">
                           {{ formatTime(session.updated_at) }}
                         </span>
-                        <button
-                          @click.stop="handleRenameSession(session)"
-                          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                          title="重命名"
-                        >
-                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                        <button
-                          @click.stop="handleDeleteSession(session.session_id)"
-                          class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
-                          title="删除"
-                        >
-                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
-                      </div>
-                      <!-- Mobile: always show -->
-                      <div class="flex md:hidden items-center gap-1 ml-3">
-                        <button
-                          @click.stop="handleRenameSession(session)"
-                          class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                          title="重命名"
-                        >
-                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                        <button
-                          @click.stop="handleDeleteSession(session.session_id)"
-                          class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
-                          title="删除"
-                        >
-                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
+                        <div class="flex items-center gap-1">
+                          <button
+                            @click.stop="handleRenameSession(session)"
+                            class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                            title="重命名"
+                          >
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          <button
+                            @click.stop="handleDeleteSession(session.session_id)"
+                            class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
+                            title="删除"
+                          >
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -125,43 +103,14 @@
             </div>
 
             <!-- Pagination -->
-            <div v-if="totalPages > 1" class="mt-6 flex items-center justify-center">
-              <div class="flex items-center gap-2">
-                <button
-                  :disabled="currentPage <= 1"
-                  @click="goToPage(currentPage - 1)"
-                  class="px-2 py-1 text-xs md:px-3 md:py-1.5 md:text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  上一页
-                </button>
-                <template v-for="(page, idx) in visiblePages" :key="idx">
-                  <span v-if="page === -1" class="px-2 text-gray-400">...</span>
-                  <button
-                    v-else
-                    @click="goToPage(page)"
-                    :class="[
-                      'px-3 py-1.5 text-sm border rounded-lg transition-colors',
-                      page === currentPage
-                        ? 'bg-primary-600 text-white border-primary-600'
-                        : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-200'
-                    ]"
-                  >
-                    {{ page }}
-                  </button>
-                </template>
-                <button
-                  :disabled="currentPage >= totalPages"
-                  @click="goToPage(currentPage + 1)"
-                  class="px-2 py-1 text-xs md:px-3 md:py-1.5 md:text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  下一页
-                </button>
-              </div>
-            </div>
-
-            <div v-if="totalPages > 1" class="mt-2 text-center text-sm text-gray-500">
-              共 {{ totalSessions }} 条会话，第 {{ currentPage }} / {{ totalPages }} 页
-            </div>
+            <BasePagination
+              v-if="totalPages > 1"
+              :total="totalSessions"
+              :current-page="currentPage"
+              :page-size="pageSize"
+              @update:current-page="goToPage"
+              @update:page-size="handlePageSizeChange"
+            />
           </div>
         </div>
       </div>
@@ -237,22 +186,20 @@
       <!-- Session List -->
       <div v-else class="space-y-1.5">
         <div
-          v-for="session in sessions"
+          v-for="(session, index) in sessions"
           :key="session.session_id"
           :class="[
-            'group relative p-2.5 bg-white rounded-lg border transition-colors cursor-pointer',
+            'group relative p-2.5 rounded-lg border border-gray-200 bg-white transition-colors cursor-pointer',
             currentSessionId === session.session_id
-              ? 'border-primary-300 bg-primary-50'
-              : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              ? 'ring-2 ring-primary-300 bg-primary-50 border-primary-300'
+              : 'hover:bg-gray-50'
           ]"
           @click="handleSelectSession(session.session_id)"
         >
           <div class="flex items-center gap-3">
-            <div class="flex-shrink-0 mt-0">
-              <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
-            </div>
+            <span class="text-xs text-gray-400 w-5 text-right flex-shrink-0">
+              {{ (currentPage - 1) * pageSize + index + 1 }}
+            </span>
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2 truncate">
@@ -263,50 +210,30 @@
                     · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
                   </span>
                 </div>
-                <!-- Desktop: hover show -->
-                <div class="hidden md:group-hover:flex items-center gap-1 ml-3">
+                <div class="flex items-center gap-1 ml-3">
                   <span class="text-xs text-gray-400">
                     {{ formatTime(session.updated_at) }}
                   </span>
-                  <button
-                    @click.stop="handleRenameSession(session)"
-                    class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                    title="重命名"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                  </button>
-                  <button
-                    @click.stop="handleDeleteSession(session.session_id)"
-                    class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
-                    title="删除"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </div>
-                <!-- Mobile: always show -->
-                <div class="flex md:hidden items-center gap-1 ml-3">
-                  <button
-                    @click.stop="handleRenameSession(session)"
-                    class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                    title="重命名"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                  </button>
-                  <button
-                    @click.stop="handleDeleteSession(session.session_id)"
-                    class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
-                    title="删除"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  <div class="flex items-center gap-1">
+                    <button
+                      @click.stop="handleRenameSession(session)"
+                      class="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                      title="重命名"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    <button
+                      @click.stop="handleDeleteSession(session.session_id)"
+                      class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
+                      title="删除"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1 1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -315,43 +242,14 @@
       </div>
 
       <!-- Pagination -->
-      <div v-if="totalPages > 1" class="mt-6 flex items-center justify-center">
-        <div class="flex items-center gap-2">
-          <button
-            :disabled="currentPage <= 1"
-            @click="goToPage(currentPage - 1)"
-            class="px-3 py-1.5 text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            上一页
-          </button>
-          <template v-for="(page, idx) in visiblePages" :key="idx">
-            <span v-if="page === -1" class="px-2 text-gray-400">...</span>
-            <button
-              v-else
-              @click="goToPage(page)"
-              :class="[
-                'px-3 py-1.5 text-sm border rounded-lg transition-colors',
-                page === currentPage
-                  ? 'bg-primary-600 text-white border-primary-600'
-                  : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-200'
-              ]"
-            >
-              {{ page }}
-            </button>
-          </template>
-          <button
-            :disabled="currentPage >= totalPages"
-            @click="goToPage(currentPage + 1)"
-            class="px-3 py-1.5 text-sm border rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            下一页
-          </button>
-        </div>
-      </div>
-
-      <div v-if="totalPages > 1" class="mt-2 text-center text-sm text-gray-500">
-        共 {{ totalSessions }} 条会话，第 {{ currentPage }} / {{ totalPages }} 页
-      </div>
+      <BasePagination
+        v-if="totalPages > 1"
+        :total="totalSessions"
+        :current-page="currentPage"
+        :page-size="pageSize"
+        @update:current-page="goToPage"
+        @update:page-size="handlePageSizeChange"
+      />
     </div>
     </div>
 
@@ -394,6 +292,7 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
+import BasePagination from './ui/BasePagination.vue'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import { useDemoAuth } from '@/composables/useDemoAuth'
@@ -433,6 +332,7 @@ const {
   currentPage,
   totalPages,
   totalSessions,
+  pageSize,
   loadSessions,
   goToPage,
   selectSession,
@@ -595,6 +495,13 @@ function goToChat() {
   }
 }
 
+// 处理每页条数变化
+async function handlePageSizeChange(size: number) {
+  pageSize.value = size
+  // 强制刷新，因为 pageSize 变了需要重新加载数据
+  await loadSessions(1, true)
+}
+
 // 登出
 async function handleLogout() {
   if (isTenantMode.value) {
@@ -613,42 +520,6 @@ function handleToggleSidebar() {
     isSidebarCollapsed.value = !isSidebarCollapsed.value
   }
 }
-
-// 计算可见页码（当页数多时只显示当前页附近几页）
-const visiblePages = computed(() => {
-  const pages: number[] = []
-  const total = totalPages.value
-  const current = currentPage.value
-
-  if (total <= 7) {
-    for (let i = 1; i <= total; i++) {
-      pages.push(i)
-    }
-  } else {
-    if (current <= 3) {
-      for (let i = 1; i <= 5; i++) {
-        pages.push(i)
-      }
-      pages.push(-1) // 省略标记
-      pages.push(total)
-    } else if (current >= total - 3) {
-      pages.push(1)
-      pages.push(-1)
-      for (let i = total - 4; i <= total; i++) {
-        pages.push(i)
-      }
-    } else {
-      pages.push(1)
-      pages.push(-1)
-      for (let i = current - 1; i <= current + 1; i++) {
-        pages.push(i)
-      }
-      pages.push(-1)
-      pages.push(total)
-    }
-  }
-  return pages
-})
 
 onMounted(async () => {
   // 初始化租户认证状态（平台管理员访问租户前台时需要）

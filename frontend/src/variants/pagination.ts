@@ -11,7 +11,7 @@ export const pagination = tv({
   variants: {
     active: {
       true: { pageButton: 'bg-primary-600 text-white font-medium' },
-      false: { pageButton: 'text-default hover:bg-gray-100' },
+      false: { pageButton: 'text-default' },
     },
   },
 })
