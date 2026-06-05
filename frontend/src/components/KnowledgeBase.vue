@@ -442,7 +442,7 @@ const columns = [
   { key: 'file_size', label: '大小' },
   { key: 'total_chunks', label: '分块数' },
   { key: 'created_at', label: '上传时间', width: '160px' },
-  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
+  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' as const },
 ]
 
 // ========== 分类状态 ==========
