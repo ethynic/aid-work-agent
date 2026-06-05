@@ -1,28 +1,23 @@
 <template>
   <div class="page-container p-5">
     <div class="page-content flex-1 flex flex-col min-h-0">
-    <div class="page-toolbar">
-      <div class="page-toolbar-left">
-        <h2 class="m-0 text-lg">景点知识库</h2>
+    <div class="flex justify-between items-center gap-4 mb-3 flex-wrap">
+      <div class="flex gap-2.5 items-center">
+        <BaseInput v-model="searchQuery" placeholder="输入关键词搜索景点，如：黄果树 5A景区" class="max-w-[500px]" size="sm" @keyup.enter="doSearch" />
+        <BaseButton size="sm" :disabled="searching" @click="doSearch">{{ searching ? '搜索中...' : '搜索' }}</BaseButton>
+        <BaseButton size="sm" v-if="searched" intent="secondary" @click="clearSearch">显示全部</BaseButton>
+        <BaseButton size="sm" v-if="selectedIds.size > 0" intent="danger" @click="handleBatchDelete">
+          批量删除 ({{ selectedIds.size }})
+        </BaseButton>
       </div>
-      <div class="page-toolbar-right">
+      <div class="flex gap-2 items-center">
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none"
                @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
-        <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
-        <BaseButton :disabled="importing" @click="triggerFileInput(fileInput)">
+        <BaseButton intent="secondary" size="sm" @click="handleDownloadTemplate">下载模板</BaseButton>
+        <BaseButton size="sm" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
         </BaseButton>
       </div>
-    </div>
-
-    <!-- 搜索栏 -->
-    <div class="flex gap-2.5 mb-3 items-center">
-      <BaseInput v-model="searchQuery" placeholder="输入关键词搜索景点，如：黄果树 5A景区" class="max-w-[500px]" size="sm" @keyup.enter="doSearch" />
-      <BaseButton size="sm" :disabled="searching" @click="doSearch">{{ searching ? '搜索中...' : '搜索' }}</BaseButton>
-      <BaseButton size="sm" v-if="searched" intent="secondary" @click="clearSearch">显示全部</BaseButton>
-      <BaseButton size="sm" v-if="selectedIds.size > 0" intent="danger" @click="handleBatchDelete">
-        批量删除 ({{ selectedIds.size }})
-      </BaseButton>
     </div>
 
     <!-- 统计信息 -->

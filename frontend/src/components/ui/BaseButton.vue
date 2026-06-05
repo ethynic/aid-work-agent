@@ -15,7 +15,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
 }>(), {
   intent: 'primary',
-  size: 'md',
+  size: 'sm',
   fullWidth: false,
   disabled: false,
 })

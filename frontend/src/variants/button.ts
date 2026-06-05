@@ -1,7 +1,7 @@
 import { tv, type VariantProps } from 'tailwind-variants'
 
 export const button = tv({
-  base: 'inline-flex items-center justify-center rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none',
+  base: 'inline-flex items-center justify-center rounded-lg font-medium whitespace-nowrap transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none',
   variants: {
     intent: {
       primary: 'bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500',
@@ -21,7 +21,7 @@ export const button = tv({
   },
   defaultVariants: {
     intent: 'primary',
-    size: 'md',
+    size: 'sm',
   },
 })
 

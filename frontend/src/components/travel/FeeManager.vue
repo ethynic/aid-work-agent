@@ -1,10 +1,6 @@
 <template>
   <div class="page-container p-5">
     <div class="page-content flex-1 flex flex-col min-h-0">
-    <div class="flex justify-between items-center mb-5">
-      <h2 class="m-0 text-lg">费用与淡旺季管理</h2>
-    </div>
-
     <!-- Tab 切换 -->
     <div class="flex mb-5 border-b-2 border-gray-200">
       <BaseButton
