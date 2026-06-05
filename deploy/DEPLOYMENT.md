@@ -646,12 +646,15 @@ cd /var/www/agent
 
 # 3. 拉取最新镜像（如果 registry 不支持 HTTPS，同样需要配置 insecure-registries）
 docker pull 124.222.3.254:5005/aid-agent-api:latest
+docker pull 172.17.80.10:5005/aid-agent-api:latest
 
 # 4. 停止旧容器
 docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.test.yml down
 
 # 5. 启动新容器（使用已拉取的镜像，无需 --build）
 docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.test.yml up -d
 
 # 6. 查看容器状态
 docker compose -f docker-compose.prod.yml ps
@@ -711,3 +714,30 @@ chmod +x deploy/update-from-registry.sh
 ./deploy/update-from-registry.sh
 ```
 
+## postgresql 数据库升级 timescale 扩展
+
+```bash
+1. 备份数据（安全第一）
+# 在服务器上执行，备份当前 PG 数据卷
+docker run --rm -v aid-postgres_postgres_data:/data -v $(pwd):/backup alpine tar czf /backup/pg_backup_$(date +%Y%m%d).tar.gz -C /data .
+
+2. 切换镜像
+cd /path/to/deploy
+docker compose -f docker-compose.postgres.yml down
+docker compose -f docker-compose.postgres.yml up -d
+
+3. 验证 pgvector 仍可用
+docker exec -it aid-postgres psql -U aid_user -d aid_work_agent2 -c "SELECT extname, extversion FROM pg_extension WHERE extname='vector';"
+
+4. 创建日志库并启用 TimescaleDB
+# 创建数据库
+docker exec -it aid-postgres psql -U aid_user -d postgres -c "CREATE DATABASE aid_work_logs OWNER aid_user;"
+
+# 启用 TimescaleDB 扩展
+docker exec -it aid-postgres psql -U aid_user -d aid_work_logs -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
+
+5. 验证
+docker exec -it aid-postgres psql -U aid_user -d aid_work_logs -c "SELECT extname, extversion FROM pg_extension;"
+应该看到 timescaledb 和 vector（如果日志库也装了）都已就绪。之后部署应用时，init_logs_tables() 会自动建表并配置 Hypertable 分区策略。
+
+```
