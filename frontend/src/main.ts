@@ -276,12 +276,12 @@ const router = createRouter({
           children: [
             {
               path: 'tickets',
-              name: 'tenant-after-sales-tickets',
+              name: '售后工单',
               component: () => import('./components/after-sales/TicketList.vue')
             },
             {
               path: 'returns',
-              name: 'tenant-after-sales-returns',
+              name: '退换货记录',
               component: () => import('./components/after-sales/ReturnList.vue')
             },
           ]

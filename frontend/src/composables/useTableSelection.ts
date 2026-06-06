@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, type WritableComputedRef } from 'vue'
 
 export interface UseTableSelectionOptions<T = number> {
   /**
@@ -8,9 +8,10 @@ export interface UseTableSelectionOptions<T = number> {
 }
 
 export function useTableSelection<T = number>(options: UseTableSelectionOptions<T>) {
-  const selectedIds = ref<Set<T>>(new Set())
+  // 使用 ref 并通过类型断言确保正确的泛型类型
+  const selectedIds = ref(new Set<T>()) as { value: Set<T> }
 
-  const selectedArr = computed<T[]>({
+  const selectedArr: WritableComputedRef<T[]> = computed({
     get: () => [...selectedIds.value],
     set: (vals: T[]) => {
       selectedIds.value = new Set(vals)

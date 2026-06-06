@@ -33,7 +33,7 @@
     <!-- 表格 -->
     <div class="table-scroll-wrapper flex-1">
     <BaseTable :columns="columns" :data="currentList" row-key="doc_id">
-      <template #checkbox_header="{ index }">
+      <template #checkbox_header>
         <input type="checkbox" :checked="isAllSelected(currentList)" @change="(e: Event) => toggleAll(currentList, (e.target as HTMLInputElement).checked)" />
       </template>
       <template #checkbox="{ row }">
@@ -251,16 +251,6 @@ function clearSearch() {
   searched.value = false
   searchResults.value = []
   clearSelection()
-}
-
-async function showDetail(docId: number) {
-  try {
-    detailData.value = await getAttractionKB(docId)
-    detailVisible.value = true
-  } catch (e) {
-    console.error('获取景点详情失败', e)
-    alert('获取景点详情失败')
-  }
 }
 
 async function openEdit(item: any) {
