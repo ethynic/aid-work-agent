@@ -7,9 +7,19 @@ export const table = tv({
     thead: 'bg-gray-50',
     th: 'px-4 py-3 text-center text-xs font-bold text-muted uppercase tracking-wider',
     tbody: 'divide-y divide-default',
-    tr: 'hover:bg-surface-hover transition-colors',
+    tr: 'transition-colors',
     td: 'px-4 py-1 text-default',
     empty: 'px-4 py-12 text-center text-muted',
+  },
+  variants: {
+    stripe: {
+      odd: {
+        tr: 'bg-white hover:bg-surface-hover',
+      },
+      even: {
+        tr: 'bg-primary-50 hover:bg-primary-100',
+      },
+    },
   },
 })
 

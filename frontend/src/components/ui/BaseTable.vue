@@ -27,7 +27,7 @@
         <tr
           v-for="(row, index) in data"
           :key="rowKey ? row[rowKey] : index"
-          :class="slots.tr()"
+          :class="slots.tr({ stripe: getStripeClass(index) })"
         >
           <td
             v-for="col in columns"
@@ -77,5 +77,10 @@ function getCellTitle(row: Record<string, any>, col: TableColumn): string | unde
   const value = row[col.key]
   if (value == null) return undefined
   return String(value)
+}
+
+// 斑马线：奇数行白色背景，偶数行主题色浅色背景
+function getStripeClass(index: number): 'odd' | 'even' {
+  return index % 2 === 0 ? 'odd' : 'even'
 }
 </script>

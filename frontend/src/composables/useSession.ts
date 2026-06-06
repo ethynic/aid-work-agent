@@ -160,12 +160,13 @@ export function useSession() {
 
   /**
    * 删除会话
+   * @returns 是否删除成功
    */
-  async function removeSession(sessionId: string) {
+  async function removeSession(sessionId: string): Promise<boolean> {
     // 如果已经发生认证错误，不再尝试请求
     if (hasAuthError.value) {
       console.warn('Skipping removeSession due to previous auth error')
-      return
+      return false
     }
 
     try {
@@ -177,6 +178,7 @@ export function useSession() {
       }
       // 成功删除后重置认证错误标志
       hasAuthError.value = false
+      return true
     } catch (e: any) {
       console.error('Failed to delete session:', e)
       // 检查是否为401认证错误
@@ -184,7 +186,12 @@ export function useSession() {
         hasAuthError.value = true
         console.warn('Authentication error (401) detected in removeSession')
         triggerAuthError()
+      } else if (e.status === 404) {
+        // 会话不存在，从本地列表中移除（可能是缓存或并发删除）
+        sessions.value = sessions.value.filter(s => s.session_id !== sessionId)
+        console.warn('Session not found, removed from local list:', sessionId)
       }
+      return false
     }
   }
 

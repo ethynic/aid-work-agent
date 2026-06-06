@@ -461,9 +461,12 @@ function handleSelectSession(sessionId: string) {
 // 删除会话
 async function handleDeleteSession(sessionId: string) {
   if (confirm('确定要删除这个会话吗？')) {
-    await removeSession(sessionId)
-    // 删除后重新加载当前页，更新总数
-    await loadSessions(currentPage.value)
+    const success = await removeSession(sessionId)
+    // 只有删除成功时才刷新列表，确保数据最新
+    // 404 等情况已经在 removeSession 内部处理（从本地列表移除）
+    if (success) {
+      await loadSessions(currentPage.value, true)
+    }
   }
 }
 

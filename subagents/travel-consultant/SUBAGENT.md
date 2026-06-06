@@ -42,7 +42,7 @@ business_pages:
     route: /travel-consultant/meals
   - id: guides
     title: 导游费用
-    icon: "\U0001F9D1‍\U0001F3EB"
+    icon: "\U0001F9D1‍"
     route: /travel-consultant/guides
   - id: fees
     title: 其他费用

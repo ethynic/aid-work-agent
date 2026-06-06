@@ -35,11 +35,11 @@ context:
 business_pages:
   - id: tickets
     title: 售后工单
-    icon: ticket
+    icon: 🎫
     route: /after-sales/tickets
   - id: returns
     title: 退换货记录
-    icon: package
+    icon: 📦
     route: /after-sales/returns
 ---
 
