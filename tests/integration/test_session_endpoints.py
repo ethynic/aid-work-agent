@@ -124,6 +124,47 @@ class TestSessionCRUD:
         retrieved = SessionDB.get_by_id(session_id)
         assert retrieved is None
 
+    def test_delete_session_preserves_chat_records(self, test_user_for_session):
+        """删除会话时必须保留 chat_records（计费/审计数据）"""
+        from src.db.models import SessionDB, MessageDB, ChatRecordDB
+        from src.db.database import get_db_connection
+
+        user_id = test_user_for_session
+        session = SessionDB.create(user_id, title="Billing Test Session")
+        session_id = session["session_id"]
+
+        # 写入一条消息和一条计费记录
+        MessageDB.add(session_id, "user", "测试消息")
+        record = ChatRecordDB.create(
+            session_id=session_id,
+            user_id=user_id,
+            user_message="测试消息",
+            assistant_message="测试回复",
+            total_token_count=100,
+            prompt_tokens=40,
+            completion_tokens=60,
+            model="qwen-test",
+            provider="qwen",
+        )
+        assert record is not None
+        record_id = record["record_id"]
+
+        # 删除会话
+        assert SessionDB.delete(session_id) is True
+
+        # 会话和消息应已删除
+        assert SessionDB.get_by_id(session_id) is None
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS c FROM chat_messages WHERE session_id = %s", (session_id,))
+            assert cursor.fetchone()["c"] == 0
+
+            # chat_records 必须仍然存在，用于计费聚合
+            cursor.execute("SELECT record_id, total_token_count FROM chat_records WHERE record_id = %s", (record_id,))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row["total_token_count"] == 100
+
 
 class TestSessionMessages:
     """会话消息测试"""

@@ -1014,3 +1014,5 @@ ALTER TABLE bs_complaint_handling_followups ADD COLUMN IF NOT EXISTS user_id TEX
 
 -- 19. bs_after_sales_ticket_messages 增加 user_id 字段
 ALTER TABLE bs_after_sales_ticket_messages ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+-- 2026-06-06，调整 SessionDB.delete() 行为：保留 chat_records 不删除，用于计费/审计聚合（无需 SQL 变更）

@@ -643,26 +643,28 @@ class SessionDB:
 
     @staticmethod
     def delete(session_id: str) -> bool:
-        """删除会话及其所有消息和记录"""
+        """删除会话及其消息（保留 chat_records 用于计费审计）"""
         placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                # 先删除子表记录（按外键依赖顺序）
-                cursor.execute(f"DELETE FROM chat_records WHERE session_id = {placeholder}", (session_id,))
+                # 先获取 user_id 用于清除会话列表缓存（在删除之前）
+                cursor.execute(f"SELECT user_id FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
+                session_row = cursor.fetchone()
+                user_id = session_row["user_id"] if session_row else None
+
+                # 保留 chat_records：该表是计费/审计数据，按 tenant_id + user_id + 时间段聚合，
+                # 与会话生命周期解耦，不能跟随会话删除。
                 cursor.execute(f"DELETE FROM chat_messages WHERE session_id = {placeholder}", (session_id,))
-                # 最后删除主表
                 cursor.execute(f"DELETE FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
                 conn.commit()
                 logger.info(f"Chat session deleted: {session_id}")
-                # 获取 user_id 用于清除会话列表缓存
-                cursor.execute(f"SELECT user_id FROM chat_sessions WHERE session_id = {placeholder}", (session_id,))
-                session_row = cursor.fetchone()
+
                 # 清除会话和消息缓存
                 delete_cached(CacheKeys.SESSION, session_id)
                 delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
-                if session_row:
-                    delete_cached_pattern(CacheKeys.USER_SESSIONS, session_row["user_id"], "")
+                if user_id:
+                    delete_cached_pattern(CacheKeys.USER_SESSIONS, user_id, "")
                 return True
             except Exception as e:
                 logger.error(f"Failed to delete chat session: {e}")
@@ -946,16 +948,6 @@ class ChatRecordDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"DELETE FROM chat_records WHERE record_id = {placeholder}", (record_id,))
-            conn.commit()
-            return cursor.rowcount > 0
-
-    @staticmethod
-    def delete_by_session(session_id: str) -> bool:
-        """删除会话的所有记录"""
-        placeholder = "%s"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"DELETE FROM chat_records WHERE session_id = {placeholder}", (session_id,))
             conn.commit()
             return cursor.rowcount > 0
 
