@@ -68,7 +68,7 @@
     </div>
 
     <!-- 新增/编辑弹窗 -->
-    <BaseModal v-model="showEditor" :title="editorMode === 'create' ? '新增回复风格' : editorMode === 'edit' ? '编辑回复风格' : '查看回复风格'" size="lg">
+    <BaseModal v-model="showEditor" :title="editorMode === 'create' ? '新增回复风格' : editorMode === 'edit' ? '编辑回复风格' : '查看回复风格'" size="lg" :mode="editorMode">
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">风格标识 <span class="text-danger-500">*</span></label>
@@ -115,7 +115,7 @@
     </BaseModal>
 
     <!-- 版本历史弹窗 -->
-    <BaseModal v-model="showVersions" :title="`版本历史：${versionsStyleName}`" size="lg">
+    <BaseModal v-model="showVersions" :title="`版本历史：${versionsStyleName}`" size="lg" mode="view">
       <div class="space-y-2">
         <div
           v-for="v in versions"

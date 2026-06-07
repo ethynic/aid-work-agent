@@ -94,7 +94,7 @@
     </div>
 
     <!-- Modal: Schema Review -->
-    <BaseModal v-model="showSchemaReview" :title="'Schema 审核 — ' + (currentSchema?.table_name || '')" size="xl">
+    <BaseModal v-model="showSchemaReview" :title="'Schema 审核 — ' + (currentSchema?.table_name || '')" size="xl" mode="edit">
       <div v-if="reviewSchemas.length > 0 && currentSchema" class="space-y-4">
         <div class="flex justify-between items-center">
           <span class="text-muted text-sm">{{ currentReviewIndex + 1 }} / {{ reviewSchemas.length }}</span>
@@ -136,7 +136,7 @@
     </BaseModal>
 
     <!-- Modal: Connector Create/Edit -->
-    <BaseModal v-model="showConnectorModal" :title="editingConnector ? '编辑连接器' : '新建连接器'" size="md">
+    <BaseModal v-model="showConnectorModal" :title="editingConnector ? '编辑连接器' : '新建连接器'" size="md" :mode="editingConnector ? 'edit' : 'create'">
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">名称 <span class="text-danger-500">*</span></label>
@@ -221,7 +221,7 @@
     </BaseModal>
 
     <!-- Modal: Relations management -->
-    <BaseModal v-model="showRelationsModal" title="关联关系管理" size="xl">
+    <BaseModal v-model="showRelationsModal" title="关联关系管理" size="xl" mode="view">
       <div class="flex justify-between items-center mb-4">
         <BaseButton intent="secondary" :disabled="inferring" @click="inferRelations">
           {{ inferring ? '推断中...' : '自动推断关联' }}

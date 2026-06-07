@@ -141,7 +141,7 @@
     </BaseModal>
 
     <!-- 数字员工授权弹窗 -->
-    <BaseModal v-model="showPermissionDialog" title="数字员工授权" size="md">
+    <BaseModal v-model="showPermissionDialog" title="数字员工授权" size="md" mode="edit">
       <template v-if="currentUser">
         <p class="text-sm text-muted mb-4">{{ currentUser.username || currentUser.phone }}</p>
       </template>

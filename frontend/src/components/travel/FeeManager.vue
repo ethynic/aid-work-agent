@@ -80,7 +80,7 @@
       />
 
       <!-- 费用弹窗 -->
-      <BaseModal v-model="showFeeModal" :title="editingFee ? '编辑费用' : '新增费用'" size="lg">
+      <BaseModal v-model="showFeeModal" :title="editingFee ? '编辑费用' : '新增费用'" size="lg" :mode="editingFee ? 'edit' : 'create'" :is-dirty="isFeeFormDirty">
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="text-sm text-muted mb-1 block">费用名称 <span class="text-danger-500">*</span></label>
@@ -168,7 +168,7 @@
       />
 
       <!-- 季节弹窗 -->
-      <BaseModal v-model="showSeasonModal" :title="editingSeason ? '编辑季节' : '新增季节'" size="lg">
+      <BaseModal v-model="showSeasonModal" :title="editingSeason ? '编辑季节' : '新增季节'" size="lg" :mode="editingSeason ? 'edit' : 'create'" :is-dirty="isSeasonFormDirty">
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="text-sm text-muted mb-1 block">季节类型编码 <span class="text-danger-500">*</span></label>
@@ -205,7 +205,7 @@
     </div>
 
     <!-- 导入结果弹窗 -->
-    <BaseModal v-model="showImportResult" title="导入结果" size="md">
+    <BaseModal v-model="showImportResult" title="导入结果" size="md" mode="view">
       <p>成功导入 <strong>{{ importResult?.total_imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.total_skipped || 0 }}</strong> 条</p>
       <div v-for="r in importResult?.results" :key="r.sheet" class="mb-2 text-[13px]">
         {{ r.sheet }}：导入 {{ r.imported }} 条，跳过 {{ r.skipped }} 条
@@ -289,6 +289,8 @@ const feeForm = ref({
   fee_name: '', fee_category: 'insurance', billing_method: 'per_person',
   unit_price: 0, is_mandatory: false, sort_order: 0, remark: ''
 })
+const feeFormSnapshot = ref<string>('')
+const isFeeFormDirty = () => JSON.stringify(feeForm.value) !== feeFormSnapshot.value
 
 function billingLabel(m: string) {
   const map: Record<string, string> = { per_person: '按人', per_person_per_day: '按人天', per_trip: '按团', per_vehicle_per_day: '按车天' }
@@ -317,6 +319,7 @@ function openFeeCreate() {
 function openFeeEdit(item: any) {
   editingFee.value = item
   feeForm.value = { fee_name: item.fee_name, fee_category: item.fee_category, billing_method: item.billing_method, unit_price: item.unit_price, is_mandatory: item.is_mandatory, sort_order: item.sort_order || 0, remark: item.remark || '' }
+  feeFormSnapshot.value = JSON.stringify(feeForm.value)
   showFeeModal.value = true
 }
 
@@ -368,6 +371,8 @@ const seasonForm = ref({
   season_type: '', season_type_label: '', start_date: '', end_date: '',
   price_multiplier: 1, remark: ''
 })
+const seasonFormSnapshot = ref<string>('')
+const isSeasonFormDirty = () => JSON.stringify(seasonForm.value) !== seasonFormSnapshot.value
 
 async function loadSeasons() {
   seasonLoading.value = true
@@ -388,6 +393,7 @@ function openSeasonCreate() {
 function openSeasonEdit(item: any) {
   editingSeason.value = item
   seasonForm.value = { season_type: item.season_type, season_type_label: item.season_type_label || '', start_date: item.start_date || '', end_date: item.end_date || '', price_multiplier: item.price_multiplier || 1, remark: item.remark || '' }
+  seasonFormSnapshot.value = JSON.stringify(seasonForm.value)
   showSeasonModal.value = true
 }
 

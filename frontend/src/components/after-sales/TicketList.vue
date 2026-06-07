@@ -98,7 +98,7 @@
     />
 
     <!-- Detail Modal -->
-    <BaseModal v-model="showDetail" title="工单详情" size="lg">
+    <BaseModal v-model="showDetail" title="工单详情" size="lg" mode="view">
       <template v-if="detail">
         <!-- Basic Info -->
         <div>

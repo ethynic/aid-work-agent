@@ -98,7 +98,7 @@
     </div>
 
     <!-- 邮件详情弹窗 -->
-    <BaseModal v-model="showEmailModal" :title="'邮件详情 - ' + getExpandedCustomerName()" size="lg">
+    <BaseModal v-model="showEmailModal" :title="'邮件详情 - ' + getExpandedCustomerName()" size="lg" mode="view">
       <div v-if="getCustomerEmails(expandedCustomerId || '').length > 0">
         <BaseTable :columns="emailColumns" :data="getCustomerEmails(expandedCustomerId || '')" row-key="email_id">
           <template #email_subject="{ row }">{{ row.email_subject || '-' }}</template>

@@ -71,7 +71,7 @@
     />
 
     <!-- 编辑弹窗 -->
-    <BaseModal v-model="showModal" title="编辑酒店" size="xl">
+    <BaseModal v-model="showModal" title="编辑酒店" size="xl" :mode="editingItem ? 'edit' : 'create'" :is-dirty="isFormDirty">
       <div>
         <label class="text-sm text-muted mb-1 block">酒店名称</label>
         <BaseInput v-model="form.title" placeholder="酒店名称" />
@@ -101,7 +101,7 @@
     </BaseModal>
 
     <!-- 酒店详情弹窗 -->
-    <BaseModal v-model="detailVisible" :title="detailData.title || '酒店详情'" size="xl">
+    <BaseModal v-model="detailVisible" :title="detailData.title || '酒店详情'" size="xl" mode="view">
       <div v-if="detailData.info" class="mb-4">
         <h4 class="m-0 mb-2 text-sm text-muted">酒店信息</h4>
         <pre class="bg-surface p-3 rounded whitespace-pre-wrap break-words text-[13px] leading-relaxed m-0 font-inherit">{{ detailData.info }}</pre>
@@ -119,7 +119,7 @@
     </BaseModal>
 
     <!-- 导入结果弹窗 -->
-    <BaseModal v-model="showImportResult" title="导入知识库结果" size="md">
+    <BaseModal v-model="showImportResult" title="导入知识库结果" size="md" mode="view">
       <p>共识别 <strong>{{ importResult?.total_hotels || 0 }}</strong> 家酒店，成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 家，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 家</p>
       <div v-for="r in importResult?.details" :key="r.sheet" class="mb-2 text-[13px]">
         {{ r.sheet }}：共 {{ r.total }} 家，导入 {{ r.imported }} 家，跳过 {{ r.skipped }} 家
@@ -187,6 +187,8 @@ const searchQuery = ref('')
 const showModal = ref(false)
 const editingItem = ref<any>(null)
 const form = ref({ title: '', sub_region: '', diamond_level: '', info: '', price_table: '' })
+const formSnapshot = ref<string>('')
+const isFormDirty = () => JSON.stringify(form.value) !== formSnapshot.value
 
 // 详情弹窗
 const detailVisible = ref(false)
@@ -260,8 +262,10 @@ async function openEdit(item: any) {
     if (detail) {
       form.value.price_table = detail.price_table || ''
     }
+    formSnapshot.value = JSON.stringify(form.value)
   } catch (e) {
     console.error('加载酒店详情失败', e)
+    formSnapshot.value = JSON.stringify(form.value)
   }
 }
 

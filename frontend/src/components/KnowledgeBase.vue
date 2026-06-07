@@ -302,7 +302,7 @@
     </div>
 
     <!-- Delete Document Confirmation Modal -->
-    <BaseModal v-model="showDeleteConfirm" title="删除文档" size="md">
+    <BaseModal v-model="showDeleteConfirm" title="删除文档" size="md" mode="view">
       <template v-if="documentToDelete">
         <div class="flex items-center gap-4">
           <div class="w-12 h-12 rounded-full bg-danger-100 flex items-center justify-center">
@@ -322,7 +322,7 @@
     </BaseModal>
 
     <!-- Add Category Modal -->
-    <BaseModal v-model="showAddCategoryModal" title="添加分类" size="md">
+    <BaseModal v-model="showAddCategoryModal" title="添加分类" size="md" mode="create">
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">英文代号 <span class="text-danger-500">*</span></label>
@@ -342,7 +342,7 @@
     </BaseModal>
 
     <!-- Rename Category Modal -->
-    <BaseModal v-model="showRenameCategoryModal" title="重命名分类" size="md">
+    <BaseModal v-model="showRenameCategoryModal" title="重命名分类" size="md" mode="edit">
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">英文代号</label>
@@ -360,7 +360,7 @@
     </BaseModal>
 
     <!-- Chunk Detail Modal -->
-    <BaseModal v-model="showChunkModal" title="分块详情" size="xl">
+    <BaseModal v-model="showChunkModal" title="分块详情" size="xl" mode="view">
       <div class="mb-2 text-sm text-muted">{{ chunkDocTitle }}</div>
       <div v-if="isLoadingChunks" class="flex items-center justify-center py-12">
         <svg class="w-6 h-6 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">

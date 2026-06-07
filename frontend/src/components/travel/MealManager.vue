@@ -68,7 +68,7 @@
       @update:page-size="handlePageSizeChange"
     />
 
-    <BaseModal v-model="showModal" :title="editingItem ? '编辑餐标' : '新增餐标'" size="lg">
+    <BaseModal v-model="showModal" :title="editingItem ? '编辑餐标' : '新增餐标'" size="lg" :mode="editingItem ? 'edit' : 'create'" :is-dirty="isFormDirty">
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="text-sm text-muted mb-1 block">餐标档次 <span class="text-danger-500">*</span></label>
@@ -140,7 +140,7 @@
     </BaseModal>
 
     <!-- 导入结果弹窗 -->
-    <BaseModal v-model="showImportResult" title="导入结果" size="md">
+    <BaseModal v-model="showImportResult" title="导入结果" size="md" mode="view">
       <p>成功导入 <strong>{{ importResult?.total_imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.total_skipped || 0 }}</strong> 条</p>
       <div v-for="r in importResult?.results" :key="r.sheet" class="mb-2 text-[13px]">
         {{ r.sheet }}：导入 {{ r.imported }} 条，跳过 {{ r.skipped }} 条
@@ -212,6 +212,8 @@ const form = ref({
   price_per_person: 0, region_name: '', pax_per_table: 10,
   dishes_standard: '', season_type: 'default', remark: ''
 })
+const formSnapshot = ref<string>('')
+const isFormDirty = () => JSON.stringify(form.value) !== formSnapshot.value
 
 async function loadData() {
   loading.value = true
@@ -236,6 +238,7 @@ function openCreate() {
 function openEdit(item: any) {
   editingItem.value = item
   form.value = { meal_tier: item.meal_tier, meal_tier_label: item.meal_tier_label || '', meal_type: item.meal_type, meal_type_label: item.meal_type_label || '', price_per_person: item.price_per_person, region_name: item.region_name || '', pax_per_table: item.pax_per_table || 10, dishes_standard: item.dishes_standard || '', season_type: item.season_type || 'default', remark: item.remark || '' }
+  formSnapshot.value = JSON.stringify(form.value)
   showModal.value = true
 }
 

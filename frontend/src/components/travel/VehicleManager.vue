@@ -61,7 +61,13 @@
       @update:page-size="handlePageSizeChange"
     />
 
-    <BaseModal v-model="showModal" :title="editingItem ? '编辑车辆' : '新增车辆'" size="lg">
+    <BaseModal
+      v-model="showModal"
+      :title="editingItem ? '编辑车辆' : '新增车辆'"
+      size="lg"
+      :mode="editingItem ? 'edit' : 'create'"
+      :is-dirty="isFormDirty"
+    >
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="text-sm text-muted mb-1 block">车型编码 <span class="text-danger-500">*</span></label>
@@ -122,7 +128,7 @@
     </BaseModal>
 
     <!-- 导入结果弹窗 -->
-    <BaseModal v-model="showImportResult" title="导入结果" size="md">
+    <BaseModal v-model="showImportResult" title="导入结果" size="md" mode="view">
       <p>成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
       <div v-if="importResult?.errors?.length" class="text-danger-600 text-xs mt-2">
         <div v-for="err in importResult.errors" :key="err">{{ err }}</div>
@@ -191,6 +197,8 @@ const defaultForm = {
   remark: ''
 }
 const form = ref({ ...defaultForm })
+const formSnapshot = ref<string>('')
+const isFormDirty = () => JSON.stringify(form.value) !== formSnapshot.value
 
 async function loadData() {
   loading.value = true
@@ -223,6 +231,7 @@ function openEdit(item: any) {
     driver_meal_allowance: item.driver_meal_allowance, driver_accommodation: item.driver_accommodation,
     remark: item.remark || ''
   }
+  formSnapshot.value = JSON.stringify(form.value)
   showModal.value = true
 }
 

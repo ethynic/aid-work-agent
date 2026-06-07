@@ -74,7 +74,7 @@
     />
 
     <!-- Detail Modal -->
-    <BaseModal v-model="showDetailModal" title="跟进记录详情" size="lg">
+    <BaseModal v-model="showDetailModal" title="跟进记录详情" size="lg" mode="view">
       <template v-if="detailRecord">
         <div class="grid grid-cols-2 gap-4">
           <div>

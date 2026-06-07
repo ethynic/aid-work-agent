@@ -67,6 +67,7 @@
       :title="editingId ? '渠道配置 - 编辑' : '渠道配置 - 新增'"
       size="xl"
       :close-on-overlay="false"
+      :mode="editingId ? 'edit' : 'create'"
       :content-class="{ 'modal-fullscreen': isFullscreen }"
     >
       <template #header-extra>
@@ -196,7 +197,7 @@
     </BaseModal>
 
     <!-- ==================== 配置指南弹窗 ==================== -->
-    <BaseModal v-model="showGuideModal" :title="`${channelTypeLabel(guideChannel)} 接入指南`" size="xl">
+    <BaseModal v-model="showGuideModal" :title="`${channelTypeLabel(guideChannel)} 接入指南`" size="xl" mode="view">
       <!-- 步骤指引 -->
       <div class="space-y-4">
         <div v-for="(step, i) in fullGuide.steps" :key="i" class="flex gap-4">

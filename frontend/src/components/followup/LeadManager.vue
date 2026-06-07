@@ -108,7 +108,7 @@
     />
 
     <!-- Add Lead Modal -->
-    <BaseModal v-model="showAddModal" title="添加线索" size="lg">
+    <BaseModal v-model="showAddModal" title="添加线索" size="lg" mode="create">
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="text-sm text-muted mb-1 block">公司名称 <span class="text-danger-500">*</span></label>
