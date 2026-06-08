@@ -1,287 +1,93 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
-    <!-- Toast Messages -->
-    <div class="fixed top-[20%] left-1/2 -translate-x-1/2 z-50 space-y-2">
-      <TransitionGroup name="toast">
-        <div v-for="toast in toasts" :key="toast.id"
-          :class="['px-4 py-2 rounded-lg shadow-lg text-sm flex items-center gap-2',
-            toast.type === 'success' ? 'bg-success-500 text-white' : '',
-            toast.type === 'error' ? 'bg-danger-500 text-white' : '',
-            toast.type === 'info' ? 'bg-info-500 text-white' : ''
-          ]">
-          <svg v-if="toast.type === 'success'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-          </svg>
-          <span>{{ toast.message }}</span>
-        </div>
-      </TransitionGroup>
-    </div>
+  <div class="h-screen flex flex-col bg-canvas">
+    <AppHeader
+      title="内置数字员工"
+      @toggle-sidebar="handleToggleSidebar"
+    />
 
-    <!-- Main Content -->
-    <main class="flex-1 flex overflow-hidden">
-      <!-- Right Content Area -->
-      <div class="flex-1 flex flex-col min-w-0">
-        <!-- Header Bar -->
-        <AppHeader
-          title="数字员工"
-          :is-online="true"
-          :is-logged-in="effectiveIsLoggedIn"
-          :user="demoUser"
-        >
-        </AppHeader>
-
-        <!-- Content Area -->
-        <div class="flex-1 flex overflow-hidden">
-          <!-- Left: List -->
-          <div class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto">
-          <!-- 未授权警告 -->
-          <div v-if="hasNoAllowedAgents" class="p-4 m-3 bg-danger-50 border border-danger-200 rounded-lg">
-            <p class="text-sm font-bold text-danger-700 mb-1">未授权使用数字员工</p>
-            <p class="text-xs text-danger-600">当前账号未被授权使用任何数字员工，请联系企业管理员申请授权。</p>
-          </div>
-        <!-- Builtin -->
-        <div class="p-3">
-          <div class="text-sm font-bold text-gray-500 mb-2">内置 ({{ builtinList.length }})</div>
-          <div v-for="item in builtinList" :key="item.agent_id"
-            @click="selectAgent(item)"
-            :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-info-50 text-info-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
-          >
-            <div class="text-sm font-medium truncate">{{ item.name }}</div>
-            <div class="text-xs text-gray-400 truncate mt-0.5">{{ item.description || '无描述' }}</div>
-          </div>
+    <div class="flex-1 flex overflow-hidden">
+      <!-- 左侧列表 -->
+      <div class="w-64 border-r border-default bg-surface flex flex-col flex-shrink-0">
+        <div class="p-4 border-b border-default">
+          <h2 class="text-sm font-medium text-muted">内置数字员工</h2>
+          <p class="text-xs text-muted mt-1">共 {{ builtinList.length }} 个</p>
         </div>
-        <!-- Custom -->
-        <div class="p-3 border-t border-gray-100">
-          <div class="text-sm font-bold text-gray-500 mb-2">定制 ({{ customList.length }})</div>
-          <div v-for="item in customList" :key="item.agent_id"
-            @click="selectAgent(item)"
-            :class="['p-2 rounded-lg cursor-pointer mb-1 transition-colors', selectedAgent?.agent_id === item.agent_id ? 'bg-info-50 text-info-700 border border-blue-200' : 'hover:bg-gray-50 text-gray-700']"
+        <div class="flex-1 overflow-y-auto">
+          <div
+            v-for="agent in builtinList"
+            :key="agent.agent_id"
+            :class="[
+              'p-3 cursor-pointer border-l-2 transition-colors',
+              selectedAgent?.agent_id === agent.agent_id
+                ? 'border-primary-600 bg-primary-50'
+                : 'border-transparent hover:bg-surface-hover'
+            ]"
+            @click="selectAgent(agent)"
           >
-            <div class="text-sm font-medium truncate">{{ item.name }}</div>
-            <div class="text-xs text-gray-400 truncate mt-0.5">{{ item.description || '无描述' }}</div>
+            <div class="text-sm text-default font-medium truncate">{{ agent.name }}</div>
+            <div class="text-xs text-muted mt-1 line-clamp-2">{{ agent.description || '无描述' }}</div>
           </div>
-          <div v-if="customList.length === 0" class="text-xs text-gray-400 text-center py-4">暂无定制数字员工</div>
+          <div v-if="builtinList.length === 0" class="text-xs text-muted text-center py-4">暂无内置数字员工</div>
         </div>
       </div>
 
-      <!-- Right: Detail/Edit Panel -->
-      <div class="flex-1 overflow-y-auto p-6">
-        <!-- Empty State -->
-        <div v-if="!selectedAgent && !isNewMode" class="flex items-center justify-center h-full text-gray-400">
+      <!-- 右侧详情 -->
+      <div class="flex-1 overflow-y-auto bg-surface">
+        <template v-if="selectedAgent && detail">
+          <div class="p-6">
+            <div class="mb-6">
+              <h1 class="text-lg font-semibold text-default">{{ detail.name }}</h1>
+              <p class="text-sm text-muted mt-1">{{ detail.description || '无描述' }}</p>
+              <span class="inline-block mt-2 px-2 py-0.5 text-xs rounded-full bg-info-100 text-info-700">内置</span>
+            </div>
+
+            <!-- 基本信息 -->
+            <div class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">基本信息</h3>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <div class="text-sm text-muted mb-1">智能体ID</div>
+                  <div class="text-sm text-default font-mono">{{ detail.agent_id }}</div>
+                </div>
+                <div v-if="detail.version">
+                  <div class="text-sm text-muted mb-1">版本</div>
+                  <div class="text-sm text-default">{{ detail.version }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 工具配置 -->
+            <div v-if="detail.tools" class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">工具配置</h3>
+              <div v-if="detail.tools.inherit" class="text-sm text-default">继承全部工具</div>
+              <div v-else-if="detail.tools.list?.length" class="flex flex-wrap gap-2">
+                <BaseBadge v-for="tool in detail.tools.list" :key="tool" intent="warning">{{ tool }}</BaseBadge>
+              </div>
+              <span v-else class="text-sm text-muted">（空）</span>
+            </div>
+
+            <!-- 可用技能 -->
+            <div v-if="detail.skills" class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">可用技能</h3>
+              <div v-if="detail.skills.allowed?.length" class="flex flex-wrap gap-2">
+                <BaseBadge v-for="skill in detail.skills.allowed" :key="skill" intent="primary">{{ skill }}</BaseBadge>
+              </div>
+              <span v-else class="text-sm text-muted">（空）</span>
+            </div>
+
+            <!-- 系统提示词 -->
+            <div v-if="detail.system_prompt" class="mb-6">
+              <h3 class="text-sm font-medium text-default mb-3">系统提示词</h3>
+              <pre class="bg-gray-50 rounded-lg p-4 text-xs text-default whitespace-pre-wrap overflow-auto max-h-96" v-html="renderedMarkdown"></pre>
+            </div>
+          </div>
+        </template>
+
+        <div v-else class="flex items-center justify-center h-full">
           <div class="text-center">
-            <svg class="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            <p class="text-base">选择一个数字员工查看详情</p>
-            <p class="text-sm mt-1">或点击右上角"新建定制"创建</p>
+            <div class="text-4xl mb-4">🤖</div>
+            <div class="text-sm text-muted">选择一个数字员工查看详情</div>
           </div>
-        </div>
-
-        <!-- Read-only View (Builtin) -->
-        <div v-else-if="selectedAgent && !isEditMode" class="flex flex-col h-full">
-          <div class="flex items-center justify-between mb-6 flex-shrink-0">
-            <div>
-              <h2 class="text-base font-semibold text-gray-800">{{ detail?.name }}</h2>
-              <span :class="['inline-block mt-1 px-2 py-0.5 text-xs rounded-full', selectedAgent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700']">
-                {{ selectedAgent.type === 'builtin' ? '内置' : '定制' }}
-              </span>
-            </div>
-            <div class="flex gap-2">
-              <button v-if="selectedAgent.type === 'custom'" @click="enterEdit" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">编辑</button>
-              <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">另存为</button>
-            </div>
-          </div>
-          <div class="space-y-4 flex-1 flex flex-col min-h-0">
-            <div>
-              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">ID</label>
-              <p class="text-sm text-gray-800 bg-gray-50 rounded-lg px-3 py-2 font-mono">{{ detail?.agent_id }}</p>
-            </div>
-            <div>
-              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">描述</label>
-              <p class="text-sm text-gray-800 whitespace-pre-wrap">{{ detail?.description || '无' }}</p>
-            </div>
-            <div>
-              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">工具配置</label>
-              <div v-if="detail?.tools?.inherit" class="text-sm text-gray-800">继承全部工具</div>
-              <div v-else-if="detail?.tools?.list?.length" class="flex flex-wrap gap-1">
-                <span v-for="tool in detail.tools.list" :key="tool" class="px-2 py-0.5 text-xs bg-purple-50 text-purple-700 rounded border border-purple-200">{{ tool }}</span>
-              </div>
-              <span v-else class="text-sm text-gray-400">（空）</span>
-            </div>
-            <div>
-              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">可用技能</label>
-              <div v-if="detail?.skills?.allowed?.length" class="flex flex-wrap gap-1">
-                <span v-for="skill in detail.skills.allowed" :key="skill" class="px-2 py-0.5 text-xs bg-success-50 text-success-700 rounded border border-green-200">{{ skill }}</span>
-              </div>
-              <span v-else class="text-sm text-gray-400">（空）</span>
-            </div>
-            <div>
-              <label class="block text-sm font-bold text-gray-500 mb-1 bg-gray-200 rounded px-2 py-1">系统提示词</label>
-              <div class="bg-gray-50 rounded-lg p-4 flex-1 overflow-y-auto text-sm text-gray-800 whitespace-pre-wrap" v-html="renderedMarkdown"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Edit / Create Mode -->
-        <div v-else class="h-full flex flex-col">
-          <div class="flex items-center justify-between mb-4 flex-shrink-0">
-            <h2 class="text-base font-semibold text-gray-800">{{ isNewMode ? '新建数字员工' : '编辑数字员工' }}</h2>
-            <button @click="cancelEdit" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg">取消</button>
-          </div>
-          <div class="flex-1 flex flex-col min-h-0 space-y-4 overflow-y-auto">
-            <!-- Agent ID -->
-            <div class="flex-shrink-0">
-              <label class="block text-sm font-medium text-gray-500 mb-1">ID (目录名)</label>
-              <input v-model="editForm.agent_id" :disabled="!isNewMode" type="text" placeholder="如 my-custom-agent"
-                class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100" />
-            </div>
-            <!-- Name -->
-            <div class="flex-shrink-0">
-              <label class="block text-sm font-medium text-gray-500 mb-1">显示名称</label>
-              <input v-model="editForm.name" type="text" placeholder="数字员工名称"
-                class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
-            </div>
-            <!-- Description -->
-            <div class="flex-shrink-0">
-              <label class="block text-sm font-medium text-gray-500 mb-1">描述</label>
-              <textarea v-model="editForm.description" rows="2" placeholder="简要描述此数字员工的用途"
-                class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"></textarea>
-            </div>
-            <!-- Tools Configuration -->
-            <div class="flex-shrink-0">
-              <label class="block text-sm font-medium text-gray-500 mb-1">工具配置</label>
-              <div class="flex items-center gap-2">
-                <input v-model="editForm.tools.inherit" type="checkbox" id="tools-inherit" class="w-4 h-4" @change="editForm.tools.list = []" />
-                <label for="tools-inherit" class="text-sm text-gray-700">继承全部工具 (inherit: true)</label>
-              </div>
-              <div v-if="!editForm.tools.inherit" class="mt-2">
-                <div class="flex flex-wrap gap-1 mb-1">
-                  <span v-for="(tool, idx) in editForm.tools.list" :key="tool"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-purple-50 text-purple-700 rounded border border-purple-200">
-                    {{ tool }}
-                    <button @click="editForm.tools.list.splice(idx, 1)" class="hover:text-danger-500">&times;</button>
-                  </span>
-                  <span v-if="!editForm.tools.list?.length" class="text-sm text-gray-400">（空）</span>
-                </div>
-                <button @click="showingTools = !showingTools"
-                  class="px-3 py-1.5 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
-                  {{ showingTools ? '收起工具列表' : '选择工具' }}
-                </button>
-                <div v-if="showingTools" class="mt-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
-                  <div v-for="tool in availableTools" :key="tool.name"
-                    class="flex items-center gap-2 py-1 px-2 hover:bg-gray-50 rounded">
-                    <input :checked="editForm.tools.list.includes(tool.name)" @change="toggleTool($event, tool.name)" type="checkbox" :id="'tool-'+tool.name"
-                      class="w-4 h-4" />
-                    <label :for="'tool-'+tool.name" class="text-sm text-gray-700 cursor-pointer flex-1">{{ tool.display_name || tool.name }}</label>
-                  </div>
-                  <div v-if="availableTools.length === 0" class="text-sm text-gray-400 text-center py-2">
-                    暂无可用工具
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Skills Selection -->
-            <div class="flex-shrink-0">
-              <label class="block text-sm font-medium text-gray-500 mb-1">可用技能</label>
-              <div class="flex flex-wrap gap-1 mb-1">
-                <span v-for="(skill, idx) in editForm.skills.allowed" :key="skill"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-success-50 text-success-700 rounded border border-green-200">
-                  {{ skill }}
-                  <button @click="editForm.skills.allowed.splice(idx, 1)" class="hover:text-danger-500">&times;</button>
-                </span>
-                <span v-if="!editForm.skills.allowed?.length" class="text-sm text-gray-400">（空）</span>
-              </div>
-              <div class="mt-2">
-                <button @click="showingSkills = !showingSkills"
-                  class="px-3 py-1.5 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
-                  {{ showingSkills ? '收起技能列表' : '选择技能' }}
-                </button>
-              </div>
-              <div v-if="showingSkills" class="mt-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
-                <div v-for="skill in availableSkills" :key="skill"
-                  class="flex items-center gap-2 py-1 px-2 hover:bg-gray-50 rounded">
-                  <input :checked="editForm.skills.allowed.includes(skill)" @change="toggleSkill($event, skill)" type="checkbox" :id="'skill-'+skill"
-                    class="w-4 h-4" />
-                  <label :for="'skill-'+skill" class="text-sm text-gray-700 cursor-pointer flex-1">{{ skill }}</label>
-                </div>
-                <div v-if="availableSkills.length === 0" class="text-sm text-gray-400 text-center py-2">
-                  暂无可用技能
-                </div>
-              </div>
-            </div>
-
-            <!-- System Prompt - 撑满剩余空间 -->
-            <div class="flex-1 flex flex-col min-h-0">
-              <div class="flex items-center justify-between mb-1 flex-shrink-0">
-                <label class="block text-sm font-medium text-gray-500">系统提示词 (Markdown)</label>
-                <div class="flex gap-1">
-                  <button @click="promptMode = 'edit'" :class="['px-2 py-1 text-xs rounded', promptMode === 'edit' ? 'bg-info-100 text-info-700' : 'text-gray-400 hover:bg-gray-100']">编辑</button>
-                  <button @click="promptMode = 'preview'" :class="['px-2 py-1 text-xs rounded', promptMode === 'preview' ? 'bg-info-100 text-info-700' : 'text-gray-400 hover:bg-gray-100']">预览</button>
-                </div>
-              </div>
-              <textarea v-if="promptMode === 'edit'" v-model="editForm.system_prompt" placeholder="## 角色定义&#10;&#10;你是一个..."
-                class="flex-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono resize-none min-h-0"></textarea>
-              <div v-else class="flex-1 bg-gray-50 rounded-lg p-4 overflow-y-auto text-sm text-gray-800 whitespace-pre-wrap" v-html="editRenderedMarkdown"></div>
-            </div>
-          </div>
-
-          <!-- Actions - 固定在底部 -->
-          <div class="flex gap-2 mt-4 pt-4 border-t border-gray-200 flex-shrink-0">
-            <button @click="aiEnhance" :disabled="aiEnhancing" class="px-3 py-1.5 text-sm text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
-              {{ aiEnhancing ? 'AI 完善中...' : 'AI 完善' }}
-            </button>
-            <button @click="saveAgent" class="px-4 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">保存</button>
-            <button v-if="!isNewMode && selectedAgent?.type === 'custom'" @click="deleteCurrentAgent" class="px-3 py-1.5 text-sm text-danger-600 bg-danger-50 hover:bg-danger-100 rounded-lg">删除</button>
-            <button @click="showDuplicateDialog = true" class="px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg ml-auto">另存为</button>
-          </div>
-        </div>
-          </div>
-        </div>
-      </div>
-    </main>
-
-    <!-- Duplicate Dialog -->
-    <div v-if="showDuplicateDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-        <h3 class="text-base font-semibold mb-4">另存为</h3>
-        <div class="space-y-3">
-          <div>
-            <label class="block text-sm font-medium text-gray-500 mb-1">新 ID</label>
-            <input v-model="duplicateForm.new_agent_id" type="text" placeholder="新目录名" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-500 mb-1">新名称</label>
-            <input v-model="duplicateForm.new_name" type="text" placeholder="新显示名称" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-          </div>
-        </div>
-        <div class="flex justify-end gap-2 mt-6">
-          <button @click="showDuplicateDialog = false" class="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg">取消</button>
-          <button @click="duplicateAgent" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">确认另存</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- AI Enhance Compare Dialog -->
-    <div v-if="showAiCompareDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col p-6">
-        <div class="flex items-center justify-between mb-4 flex-shrink-0">
-          <h3 class="text-base font-semibold">AI 完善结果</h3>
-          <button @click="showAiCompareDialog = false" class="p-1 text-gray-400 hover:text-gray-600">&times;</button>
-        </div>
-        <div class="flex-1 flex gap-4 overflow-hidden min-h-0">
-          <div class="flex-1 flex flex-col min-w-0">
-            <div class="text-sm font-medium text-gray-500 mb-1">优化前（原始内容）</div>
-            <pre class="flex-1 bg-gray-50 rounded-lg p-3 text-xs text-gray-700 overflow-auto whitespace-pre-wrap font-mono">{{ aiCompareOriginal }}</pre>
-          </div>
-          <div class="flex-1 flex flex-col min-w-0">
-            <div class="text-sm font-medium text-gray-500 mb-1">优化后（AI 建议）</div>
-            <pre class="flex-1 bg-info-50 rounded-lg p-3 text-xs text-gray-700 overflow-auto whitespace-pre-wrap font-mono">{{ aiCompareEnhanced }}</pre>
-          </div>
-        </div>
-        <div class="flex justify-end gap-2 mt-4 flex-shrink-0">
-          <button @click="showAiCompareDialog = false" class="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg">拒绝</button>
-          <button @click="acceptAiEnhance" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg">接受并应用</button>
         </div>
       </div>
     </div>
@@ -292,158 +98,47 @@
 import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
 import AppHeader from './AppHeader.vue'
-import { useDemoAuth } from '@/composables/useDemoAuth'
-import { useTenantAuth } from '@/composables/useTenantAuth'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
+import BaseBadge from '@/components/ui/BaseBadge.vue'
 import {
   listSubagents,
   getSubagentDetail,
-  createSubagent,
-  updateSubagent,
-  deleteSubagent,
-  duplicateSubagent,
-  aiEnhanceSubagent,
-  listAvailableSkills,
-  listAvailableTools,
   type SubagentListItem,
   type SubagentDetail,
 } from '../api/adminSubagent'
 
-const { user: demoUser, isLoggedIn: demoIsLoggedIn } = useDemoAuth()
-const { admin: _tenantAdmin, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
-const isTenantMode = computed(() => window.location.pathname.startsWith('/t/'))
-const effectiveIsLoggedIn = computed(() => isTenantMode.value ? tenantIsLoggedIn.value : demoIsLoggedIn.value)
-
-// State
-const allList = ref<SubagentListItem[]>([])
-const allowedAgentIds = ref<Set<string>>(new Set())
-const hasNoAllowedAgents = computed(() => isTenantMode.value && allowedAgentIds.value.size === 0)
-const selectedAgent = ref<SubagentListItem | null>(null)
-const detail = ref<SubagentDetail | null>(null)
-const isNewMode = ref(false)
-const isEditMode = ref(false)
-const promptMode = ref<'edit' | 'preview'>('edit')
-const loading = ref(false)
-
-// Edit form
-const editForm = ref({
-  agent_id: '',
-  name: '',
-  description: '',
-  tools: { inherit: true, list: [] as string[] },
-  skills: { allowed: [] as string[] },
-  system_prompt: '',
-})
-
-// Available skills
-const availableSkills = ref<string[]>([])
-const showingSkills = ref(false)
-
-// Available tools
-const availableTools = ref<Array<{ name: string; description: string; display_name: string }>>([])
-const showingTools = ref(false)
-
-// Duplicate dialog
-const showDuplicateDialog = ref(false)
-const duplicateForm = ref({ new_agent_id: '', new_name: '' })
-
-// AI enhance
-const aiEnhancing = ref(false)
-const showAiCompareDialog = ref(false)
-const aiCompareOriginal = ref('')
-const aiCompareEnhanced = ref('')
-
-// Toast messages
-const toasts = ref<Array<{ id: number; message: string; type: 'success' | 'error' | 'info' }>>([])
-let toastId = 0
-
-function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
-  const id = toastId++
-  toasts.value.push({ id, message, type })
-  setTimeout(() => {
-    toasts.value = toasts.value.filter(t => t.id !== id)
-  }, 3000)
-}
-
-// Computed
-const builtinList = computed(() => {
-  let list = allList.value.filter(i => i.type === 'builtin')
-  // 租户模式下按权限过滤
-  if (isTenantMode.value && allowedAgentIds.value.size > 0) {
-    list = list.filter(i => allowedAgentIds.value.has(i.agent_id))
-  }
-  return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-})
-const customList = computed(() => {
-  let list = allList.value.filter(i => i.type === 'custom')
-  // 租户模式下按权限过滤
-  if (isTenantMode.value && allowedAgentIds.value.size > 0) {
-    list = list.filter(i => allowedAgentIds.value.has(i.agent_id))
-  }
-  return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-})
+const builtinList = computed(() =>
+  allList.value
+    .filter(i => i.type === 'builtin')
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+)
 
 const renderedMarkdown = computed(() => {
   if (!detail.value?.system_prompt) return ''
   return marked(detail.value.system_prompt, { breaks: true })
 })
 
-const editRenderedMarkdown = computed(() => {
-  if (!editForm.value.system_prompt) return ''
-  return marked(editForm.value.system_prompt, { breaks: true })
-})
+const allList = ref<SubagentListItem[]>([])
+const selectedAgent = ref<SubagentListItem | null>(null)
+const detail = ref<SubagentDetail | null>(null)
+const loading = ref(false)
 
-// Methods
+const handleToggleSidebar = () => {
+  // PortalLayout 提供，可选
+}
+
 async function loadList() {
   try {
     const res = await listSubagents()
     if (res.success) {
       allList.value = res.data || []
     }
-    // 租户模式下，获取当前用户允许访问的列表，用于过滤
-    if (isTenantMode.value) {
-      try {
-        const allowedRes = await getMyAllowedAgents()
-        if (allowedRes.success && allowedRes.data) {
-          allowedAgentIds.value = new Set(allowedRes.data.map(a => a.agent_id))
-        }
-      } catch (e) {
-        console.error('加载权限允许的数字员工失败', e)
-      }
-    }
   } catch (e: any) {
     console.error('加载列表失败', e)
   }
 }
 
-// Load available skills
-async function loadSkills() {
-  try {
-    const res = await listAvailableSkills()
-    if (res.success) {
-      availableSkills.value = res.data || []
-    }
-  } catch (e: any) {
-    console.error('加载技能列表失败', e)
-  }
-}
-
-// Load available tools
-async function loadTools() {
-  try {
-    const res = await listAvailableTools()
-    if (res.success) {
-      availableTools.value = res.data || []
-    }
-  } catch (e: any) {
-    console.error('加载工具列表失败', e)
-  }
-}
-
 async function selectAgent(item: SubagentListItem) {
   selectedAgent.value = item
-  isNewMode.value = false
-  isEditMode.value = false
   loading.value = true
   try {
     const res = await getSubagentDetail(item.agent_id)
@@ -457,197 +152,7 @@ async function selectAgent(item: SubagentListItem) {
   }
 }
 
-
-function enterEdit() {
-  if (!detail.value) return
-  isEditMode.value = true
-  const detailSkills = detail.value.skills || {}
-  const detailTools = detail.value.tools || {}
-  editForm.value = {
-    agent_id: detail.value.agent_id,
-    name: detail.value.name,
-    description: detail.value.description,
-    tools: {
-      inherit: detailTools.inherit ?? true,
-      list: detailTools.list || [],
-    },
-    skills: { allowed: detailSkills.allowed || [] },
-    system_prompt: detail.value.system_prompt,
-  }
-  promptMode.value = 'edit'
-}
-
-function cancelEdit() {
-  if (isNewMode.value) {
-    isNewMode.value = false
-    selectedAgent.value = null
-    detail.value = null
-  } else {
-    isEditMode.value = false
-  }
-}
-
-function toggleSkill(event: Event, skill: string) {
-  const checked = (event.target as HTMLInputElement).checked
-  if (checked) {
-    if (!editForm.value.skills.allowed.includes(skill)) {
-      editForm.value.skills.allowed.push(skill)
-    }
-  } else {
-    editForm.value.skills.allowed = editForm.value.skills.allowed.filter(s => s !== skill)
-  }
-}
-
-function toggleTool(event: Event, toolName: string) {
-  const checked = (event.target as HTMLInputElement).checked
-  if (checked) {
-    if (!editForm.value.tools.list.includes(toolName)) {
-      editForm.value.tools.list.push(toolName)
-    }
-  } else {
-    editForm.value.tools.list = editForm.value.tools.list.filter(t => t !== toolName)
-  }
-}
-
-async function saveAgent() {
-  if (!editForm.value.agent_id.trim() || !editForm.value.name.trim()) {
-    showToast('ID 和名称不能为空', 'error')
-    return
-  }
-  // agent_id 格式校验（只允许字母、数字、下划线、连字符）
-  const validAgentId = editForm.value.agent_id.trim().replace(/[^a-zA-Z0-9_-]/g, '')
-  if (editForm.value.agent_id !== validAgentId) {
-    showToast('ID 只能包含字母、数字、下划线和连字符', 'error')
-    return
-  }
-  try {
-    let res
-    if (isNewMode.value) {
-      res = await createSubagent(editForm.value)
-    } else {
-      res = await updateSubagent(editForm.value.agent_id, editForm.value)
-    }
-    if (res.success) {
-      showToast('保存成功', 'success')
-      // 保存成功后重置新建模式状态
-      if (isNewMode.value) {
-        isNewMode.value = false
-      }
-      await loadList()
-      // Select the saved agent
-      const agentId = isNewMode.value ? editForm.value.agent_id : selectedAgent.value?.agent_id
-      if (agentId) {
-        const found = allList.value.find(i => i.agent_id === agentId)
-        if (found) await selectAgent(found)
-      }
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  } catch (e: any) {
-    showToast(e.message || '保存失败', 'error')
-  }
-}
-
-async function deleteCurrentAgent() {
-  if (!selectedAgent.value) return
-  const name = selectedAgent.value.name
-  if (!confirm(`确定要删除"${name}"吗？此操作不可恢复。`)) return
-  try {
-    const res = await deleteSubagent(selectedAgent.value.agent_id)
-    if (res.success) {
-      showToast('已删除', 'success')
-      selectedAgent.value = null
-      detail.value = null
-      await loadList()
-    } else {
-      showToast(res.error || '删除失败', 'error')
-    }
-  } catch (e: any) {
-    showToast(e.message || '删除失败', 'error')
-  }
-}
-
-async function duplicateAgent() {
-  if (!selectedAgent.value) return
-  if (!duplicateForm.value.new_agent_id.trim() || !duplicateForm.value.new_name.trim()) {
-    showToast('新 ID 和名称不能为空', 'error')
-    return
-  }
-  try {
-    const res = await duplicateSubagent(selectedAgent.value.agent_id, duplicateForm.value)
-    if (res.success) {
-      showToast('另存为成功', 'success')
-      showDuplicateDialog.value = false
-      await loadList()
-      const found = allList.value.find(i => i.agent_id === duplicateForm.value.new_agent_id)
-      if (found) await selectAgent(found)
-    } else {
-      showToast(res.error || '另存为失败', 'error')
-    }
-  } catch (e: any) {
-    showToast(e.message || '另存为失败', 'error')
-  }
-}
-
-async function aiEnhance() {
-  if (!editForm.value.system_prompt.trim()) {
-    showToast('系统提示词不能为空', 'error')
-    return
-  }
-  // Build the full SUBAGENT.md content from current form state
-  const frontmatter = [
-    '---',
-    `name: ${editForm.value.name}`,
-    `description: ${editForm.value.description}`,
-    `version: 1.0.0`,
-    `author: admin`,
-    `tools:\n  inherit: ${editForm.value.tools.inherit}`,
-    editForm.value.skills.allowed.length ? `skills:\n  allowed:\n${editForm.value.skills.allowed.map(s => `    - ${s}`).join('\n')}` : 'skills: {}',
-    '---',
-  ].filter(Boolean).join('\n')
-  const fullContent = `${frontmatter}\n\n${editForm.value.system_prompt}`
-
-  aiEnhancing.value = true
-  try {
-    const agentId = isNewMode.value ? editForm.value.agent_id || 'new' : (selectedAgent.value?.agent_id || 'new')
-    const res = await aiEnhanceSubagent(agentId, fullContent)
-    if (res.success && res.data) {
-      aiCompareOriginal.value = res.data.original_content
-      aiCompareEnhanced.value = res.data.enhanced_content
-      showAiCompareDialog.value = true
-    } else {
-      showToast(res.error || 'AI 完善失败', 'error')
-    }
-  } catch (e: any) {
-    showToast(e.message || 'AI 完善失败', 'error')
-  } finally {
-    aiEnhancing.value = false
-  }
-}
-
-function acceptAiEnhance() {
-  // Extract the system_prompt from the enhanced content (after the second ---)
-  const parts = aiCompareEnhanced.value.split(/^---\s*$/m)
-  if (parts.length >= 3) {
-    // Also try to extract name from YAML frontmatter
-    const yamlPart = parts[1]
-    const nameMatch = yamlPart.match(/name:\s*(.+)/)
-    if (nameMatch?.[1]?.trim()) {
-      editForm.value.name = nameMatch[1].trim()
-    }
-    // The body after the second --- is the system_prompt
-    editForm.value.system_prompt = parts.slice(2).join('---').trim()
-  } else {
-    // Fallback: use the whole content as system_prompt
-    editForm.value.system_prompt = aiCompareEnhanced.value.trim()
-  }
-  showAiCompareDialog.value = false
-  promptMode.value = 'edit'
-}
-
 onMounted(() => {
   loadList()
-  loadSkills()
-  loadTools()
 })
 </script>

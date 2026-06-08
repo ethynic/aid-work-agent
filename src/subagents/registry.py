@@ -472,9 +472,9 @@ class SubagentRegistry:
             config = SubagentConfig(
                 name=row["name"],
                 dir_name=agent_id,
-                description=row.get("description", ""),
+                description=row.get("description") or "",
                 version=row.get("version", "1.0.0"),
-                author=row.get("author"),
+                author=row.get("author") or "unknown",
                 triggers=row.get("triggers", {}),
                 tools=row.get("tools", {}),
                 skills=row.get("skills", {}),

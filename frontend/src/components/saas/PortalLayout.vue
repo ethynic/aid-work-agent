@@ -204,8 +204,8 @@ const tenantStatusColorClass = computed(() => {
 const portalMenuItems = [
   { path: '/portal', label: '仪表盘', icon: '📊' },
   { path: '/portal/tenants', label: '租户管理', icon: '🏢' },
-  { path: '/portal/subagents', label: '数字员工管理', icon: '🤖' },
-  { path: '/portal/agent-definitions', label: '智能体管理', icon: '⚙️' },
+  { path: '/portal/subagents', label: '内置数字员工', icon: '🤖' },
+  { path: '/portal/agent-definitions', label: '自定义数字员工', icon: '⚙️' },
   { path: '/portal/token-usage', label: '平台Token消耗', icon: '📊' },
   { path: '/portal/monitoring', label: '追踪查看', icon: '🔍' },
   { path: '/portal/error-logs', label: '错误日志', icon: '⚠️' },

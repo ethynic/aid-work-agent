@@ -100,9 +100,10 @@ def get_all_available_agents(request: Request):
             "data": []
         }
 
-    # 多 worker 部署时刷新定制 subagent
+    # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
     if registry._custom_dir:
         registry._load_custom(registry._custom_dir)
+    registry.load_from_db()
 
     items = registry.get_all_subagents_with_type()
     # 整理为下拉选择需要的格式
@@ -197,9 +198,10 @@ def get_tenant_available_user_agents(request: Request):
             "data": []
         }
 
-    # 多 worker 部署时刷新定制 subagent
+    # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
     if registry._custom_dir:
         registry._load_custom(registry._custom_dir)
+    registry.load_from_db()
 
     with get_db_connection() as conn:
         tenant_allowed = set(SubscriptionDB.get_allowed_subagent_types(conn, tenant_id))
