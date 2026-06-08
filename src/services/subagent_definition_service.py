@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, List
 from loguru import logger
 
 from src.db.subagent_definition_db import SubagentDefinitionDB
-from src.db.subagent_prompt_section_db import SubagentPromptSectionDB, SECTION_KEYS
+from src.db.subagent_prompt_section_db import SubagentPromptSectionDB
 from src.prompts.prompt_registry_service import PromptRegistryService
 
 
@@ -189,14 +189,8 @@ class SubagentDefinitionService:
 
     @staticmethod
     def get_sections(agent_id: str) -> List[Dict[str, Any]]:
-        """获取智能体的 prompt 分段列表，无分段时返回空分段列表"""
+        """获取智能体的 prompt 分段列表"""
         sections = SubagentPromptSectionDB.get_sections(agent_id)
-        if not sections:
-            # Legacy fallback: 返回 5 个空分段
-            sections = [
-                {"agent_id": agent_id, "section_key": key, "content": "", "updated_by": None}
-                for key in SECTION_KEYS
-            ]
         return [_serialize(s) for s in sections]
 
     @staticmethod
@@ -206,21 +200,39 @@ class SubagentDefinitionService:
         content: str,
         updated_by: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """保存单个分段，并自动组装提交新版本"""
+        """保存单个分段值（写入 subagent_prompt_sections 表）"""
         result = SubagentPromptSectionDB.upsert_section(agent_id, section_key, content, updated_by)
         if not result:
             return None
-
-        # 组装完整 prompt 并提交新版本
-        assembled = SubagentPromptSectionDB.assemble_content(agent_id)
-        SubagentDefinitionService.update_system_prompt(
-            agent_id,
-            content=assembled,
-            commit_message=f"更新分段: {section_key}",
-            created_by=updated_by,
-        )
-
+        # 刷新 Redis 缓存
+        from src.core.cache_utils import CacheKeys, delete_cached
+        delete_cached(CacheKeys.PROMPT_SECTIONS, agent_id)
         return _serialize(result)
+
+    @staticmethod
+    def get_section_keys(agent_id: str) -> List[str]:
+        """从 production 版本的模板中解析出所有 {section_key} 变量名"""
+        prompt_info = SubagentDefinitionService._get_prompt_info(agent_id)
+        if not prompt_info:
+            return []
+        from src.prompts.prompt_registry_service import PromptRegistryService
+        version_data = PromptRegistryService.get_version(
+            str(prompt_info["prompt_id"]), prompt_info["production_version"]
+        )
+        if not version_data:
+            return []
+        import re
+        template = version_data.get("content", "")
+        # 匹配 {variable} 但排除 {{ 转义
+        keys = re.findall(r'(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})', template)
+        # 去重保序
+        seen = set()
+        result = []
+        for k in keys:
+            if k not in seen:
+                seen.add(k)
+                result.append(k)
+        return result
 
     # ========== 辅助方法 ==========
 

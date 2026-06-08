@@ -3,8 +3,8 @@
 > 对应设计文档：[prompt-lifecycle-design.md](./prompt-lifecycle-design.md)
 > 对应调研报告：[prompt-version-management-research.md](../research/prompt-version-management-research.md)
 > 创建日期：2026-06-02
-> 更新日期：2026-06-05（新增 Stage 3.7~3.9：System Prompt 板块化管理 + LLM 智能优化）
-> 状态：Phase 2 代码完成，待验证；Phase 3.1~3.2 已完成；Phase 3.3~3.9 代码完成，待验证
+> 更新日期：2026-06-08（重构 §3.7 为 System Prompt 模板 + 分段变量模式，运行时实时渲染）
+> 状态：Phase 2 代码完成，待验证；Phase 3.1~3.6 已完成；Phase 3.7~3.9 代码完成，待验证
 
 ---
 
@@ -755,59 +755,51 @@ class SetLabelRequest(BaseModel):
 - [ ] LLM 智能优化功能正常，可优化各板块内容
 - [ ] 前端构建无错误
 
-### 阶段 3.7：System Prompt 板块化管理
+### 阶段 3.7：System Prompt 模板 + 分段变量（重构）
 
 > **设计文档**：§八.1.8
-> **核心思想**：DB 子智能体的 system_prompt 从一整块文本拆分为 5 个固定板块（岗位说明、岗位职责、工作流程、回复风格、其他说明），每个板块独立编辑、独立存储、运行时拼接。
+> **核心思想**：`prompt_versions.content` 存模板（含 `{section_key}` 变量），`subagent_prompt_sections` 存变量值。运行时 `_resolve_db_subagent_prompt()` 实时从 DB/Redis 读取并渲染。变量数量可变，由模板决定。
 > **影响范围**：仅影响 DB 定义的子智能体，文件系统 SUBAGENT.md 不受影响。
 
 - [x] **3.7.1 数据库：新增 `subagent_prompt_sections` 表**
   - `deploy/db_update.sql`：添加建表语句（agent_id + section_key + content，UNIQUE(agent_id, section_key)）
   - `deploy/init-postgres.sql`：同步更新
-  - 5 个合法 section_key：`role_description`、`responsibilities`、`workflow`、`reply_style`、`other_notes`
   - ✅ 已完成
 
 - [x] **3.7.2 DB 层：`src/db/subagent_prompt_section_db.py`（新建）**
-  - CRUD 方法：`get_sections(agent_id)`、`get_section(agent_id, section_key)`、`upsert_section(agent_id, section_key, content, updated_by)`、`delete_sections(agent_id)`
-  - `assemble_content(agent_id)`：从 5 个板块按固定顺序拼接为完整 system_prompt
-  - 遵循项目现有 DB 访问模式（RealDictCursor + get_db_connection）
+  - CRUD 方法：`get_sections()`、`get_sections_map()`、`upsert_section()`、`delete_sections()`
+  - 无硬编码 section_key，变量数量由模板决定
   - ✅ 已完成
 
 - [x] **3.7.3 Service 层：`src/services/subagent_definition_service.py` 扩展**
-  - 板块 CRUD 方法（委托给 DB 层）
-  - `save_section()`：upsert + assemble + commit version
-  - `get_sections()`：legacy fallback 返回空分段
+  - `save_section()`：仅写入 subagent_prompt_sections + 刷新 Redis 缓存
+  - `get_section_keys(agent_id)`：从 production 模板中正则解析 `{变量名}`
   - `delete_definition()` 增加清理分段
   - ✅ 已完成
 
 - [x] **3.7.4 API 层：`src/api/agent_definition_sections.py`（新建）**
-  - 路由前缀：`/api/admin/agent-definitions`
-  - 端点：
-    - `GET /{agent_id}/sections` — 获取所有板块
-    - `PUT /{agent_id}/sections/{key}` — 保存单个板块（自动提交新版本）
-    - `POST /{agent_id}/sections/{key}/optimize` — AI 优化板块内容
-  - 注册到 `src/main.py`
+  - `GET /{agent_id}/sections/keys` — 从模板解析变量名列表
+  - `GET /{agent_id}/sections` — 获取所有变量值
+  - `PUT /{agent_id}/sections/{key}` — 保存变量值（不自动提交版本）
+  - `POST /{agent_id}/sections/{key}/optimize` — AI 优化
   - ✅ 已完成
 
-- [ ] **3.7.5 运行时集成**
-  - `src/subagents/factory.py` — `_load_single_from_db()` 改为从 `subagent_prompt_sections` 读取并拼接 system_prompt
-  - `src/subagents/registry.py` — `load_from_db()` 同理
-  - `src/core/agent.py` — `_build_system_prompt()` 中 DB 子智能体的 prompt 拼接逻辑（使用 `_assemble_sections_prompt`）
-  - 缓存：Redis key `prompt_sections:{agent_id}`，保存后主动刷新
-  - 兼容：文件系统子智能体（from_db=False）不受影响
-  - ⬜ 未开始（可延后：当前分段内容保存时已自动提交到 prompt_versions，运行时通过 prompt_resolver.resolve() 读取即可）
+- [x] **3.7.5 运行时集成：`agent.py` _resolve_db_subagent_prompt()**
+  - `_build_system_prompt()` 中 `from_db=True` 调用 `_resolve_db_subagent_prompt()`
+  - 实时从 `prompt_resolver.resolve()` 获取模板 + `SubagentPromptSectionDB.get_sections_map()` 获取变量值
+  - `render_template(template, section_map)` 渲染
+  - Redis 缓存：`prompt_sections:{agent_id}` TTL 300s，保存时刷新
+  - ✅ 已完成
 
-- [x] **3.7.6 前端：Tab 式板块编辑器**
-  - `AgentDefinitionManager.vue` 右侧 Prompt 区从单一 textarea 改为 Tab 式板块编辑器
-  - 5 个 Tab：角色描述、岗位职责、工作流程、回复风格、其他说明
-  - 每个 Tab 对应一个 textarea
-  - "保存分段"按钮保存当前分段并自动提交新版本
-  - "全部保存"按钮保存所有分段
+- [x] **3.7.6 前端：模板 textarea + 动态变量编辑区**
+  - 上半部分：模板 textarea（含 `{变量名}` 占位符），支持版本管理
+  - 下半部分：根据模板中解析的 `{变量名}` 动态生成编辑区，从上到下按出现顺序排列
+  - 每个变量一个 textarea + AI 优化按钮 + "全部保存"按钮
   - ✅ 已完成
 
 - [x] **3.7.7 前端 API 客户端**
-  - `frontend/src/api/agentDefinitions.ts` 新增板块 CRUD API 方法：
-    - `getSections(agentId)`、`saveSection(agentId, key, content)`、`optimizeSection(agentId, key, data)`
+  - `agentDefinitions.ts`：`getSections()`、`saveSection()`、`optimizeSection()`
+  - 前端本地 `parseSectionKeys()` 正则解析模板中的变量名
   - ✅ 已完成
 
 ### 阶段 3.8：LLM 智能优化
@@ -833,13 +825,15 @@ class SetLabelRequest(BaseModel):
 ### 阶段 3.9：验证
 
 - [x] **3.9.1 后端验证**
-  - 板块 CRUD 正常：创建、读取、更新、删除
-  - `assemble_content()` 按固定顺序正确拼接 5 个板块
-  - 保存分段时自动提交新版本到 prompt_versions
+  - 分段 CRUD 正常：读取、更新、删除
+  - `get_section_keys()` 正确从模板解析变量名
+  - `_resolve_db_subagent_prompt()` 正确渲染模板+变量
+  - 修改变量值后下次请求立即生效（Redis 缓存刷新）
   - ✅ 代码完成，待运行验证
 
 - [x] **3.9.2 前端验证**
-  - Tab 切换流畅，内容正确加载和保存
+  - 模板编辑区正确加载和保存，版本管理正常
+  - 变量编辑区动态根据模板中的 `{变量名}` 显示
   - AI 优化按钮返回优化内容，确认后正确覆盖
   - ✅ 前端构建已通过
 
@@ -907,7 +901,7 @@ class SetLabelRequest(BaseModel):
 | Phase 0 | Prompt 内容优化（P0~P3） | 2 天 | ✅ 已完成 |
 | Phase 1 | 版本管理数据库 + 基础服务层 | 1 周 | ✅ 代码完成（e2e 测试通过） |
 | Phase 2 | 独立智能体管理页面（重做） | 1.5 周 | 🔧 代码完成，待验证 |
-| Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages + System Prompt 板块化管理 | 2 周 | 🔧 3.1~3.2 已完成；3.3~3.9 代码完成，待运行验证 |
+| Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages + System Prompt 模板+分段变量 | 2 周 | 🔧 3.1~3.9 代码完成，待运行验证 |
 | Phase 4 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
 
 **总工期：约 6 周**

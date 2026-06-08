@@ -251,13 +251,10 @@ export interface PromptSection {
   updated_at?: string
 }
 
-export const SECTION_KEYS = [
-  { key: 'role_description', label: '角色描述' },
-  { key: 'responsibilities', label: '岗位职责' },
-  { key: 'workflow', label: '工作流程' },
-  { key: 'reply_style', label: '回复风格' },
-  { key: 'other_notes', label: '其他说明' },
-] as const
+export async function getSectionKeys(agentId: string): Promise<{ success: boolean; data: string[] }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections/keys`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
 
 export async function getSections(agentId: string): Promise<{ success: boolean; data: PromptSection[] }> {
   const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections`, { headers: getAuthHeaders() })

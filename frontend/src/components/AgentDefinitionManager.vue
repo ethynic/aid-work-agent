@@ -188,102 +188,71 @@
                 </div>
               </div>
 
-              <!-- Prompt Area (right half) — Tab-based sections editor -->
+              <!-- Prompt Area (right half) — Template + Sections -->
               <div class="w-[55%] flex flex-col overflow-hidden">
                 <div class="p-4 pb-2 flex-shrink-0">
                   <div class="flex items-center justify-between mb-2">
                     <h3 class="text-sm font-semibold text-gray-700">System Prompt</h3>
                     <div class="flex gap-2">
-                      <button @click="saveCurrentSection"
-                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-                        :disabled="promptSaving">
-                        {{ promptSaving ? '保存中...' : '保存分段' }}
+                      <button @click="showVersionHistoryDialog = true"
+                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
+                        版本历史
                       </button>
-                      <button @click="commitAllSections"
+                      <button @click="savePromptDraft"
+                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
+                        :disabled="promptSaving">
+                        {{ promptSaving ? '保存中...' : '保存草稿' }}
+                      </button>
+                      <button @click="commitPromptVersion"
                         class="px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                         :disabled="promptSaving">
-                        全部保存
+                        提交新版本
                       </button>
                     </div>
                   </div>
-                  <div v-if="selectedAgent.production_version" class="text-xs text-gray-400 mb-2">
+                  <div v-if="selectedAgent.production_version" class="text-xs text-gray-400">
                     当前 production: V{{ selectedAgent.production_version }}
+                    <span class="text-info-600 ml-1">（模板含 {{ sectionKeys.length }} 个变量）</span>
                   </div>
                 </div>
 
-                <!-- Section Tabs -->
-                <div class="flex px-4 gap-1 border-b border-gray-200 mb-0 flex-shrink-0">
-                  <button v-for="sk in SECTION_KEYS" :key="sk.key"
-                    @click="activeSectionKey = sk.key"
-                    :class="['px-3 py-1.5 text-xs rounded-t-lg transition-colors whitespace-nowrap',
-                      activeSectionKey === sk.key
-                        ? 'bg-white text-primary-700 font-medium border border-gray-200 border-b-white -mb-px'
-                        : 'text-gray-500 hover:text-gray-700']">
-                    {{ sk.label }}
-                  </button>
-                </div>
+                <div class="flex-1 overflow-y-auto px-4 pb-4">
+                  <!-- Template + Sections Editor (full width) -->
+                  <div class="flex flex-col min-w-0">
+                    <!-- Template textarea -->
+                    <div class="text-xs text-gray-400 mb-1">模板（用 {变量名} 作为分段占位符）</div>
+                    <textarea v-model="promptContent"
+                      class="w-full p-3 text-sm font-mono border border-gray-200 rounded-lg resize-none focus:outline-none focus:border-primary-400"
+                      style="min-height: 200px"
+                      placeholder="输入 System Prompt 模板，用 {变量名} 作为分段占位符..." @input="onPromptInput"></textarea>
 
-                <!-- Section Editor + Version History -->
-                <div class="flex-1 flex overflow-hidden px-4 pb-4">
-                  <!-- Editor -->
-                  <div class="flex-1 flex flex-col min-w-0 pr-3">
-                    <div class="flex items-center justify-between mb-1 mt-2">
-                      <span class="text-xs text-gray-400">
-                        {{ SECTION_KEYS.find(s => s.key === activeSectionKey)?.label }}
-                      </span>
-                      <button v-if="sections[activeSectionKey]"
-                        @click="optimizeCurrentSection"
-                        class="px-2 py-1 text-[10px] text-info-600 bg-info-50 hover:bg-info-100 rounded-lg flex items-center gap-1 disabled:opacity-50"
-                        :disabled="optimizing || !sections[activeSectionKey]?.trim()">
-                        <svg v-if="optimizing" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                        </svg>
-                        {{ optimizing ? '优化中...' : 'AI 优化' }}
-                      </button>
-                    </div>
-                    <textarea v-model="sections[activeSectionKey]"
-                      class="flex-1 w-full p-3 text-sm font-mono border border-gray-200 rounded-lg resize-none focus:outline-none focus:border-primary-400"
-                      :placeholder="`输入 ${SECTION_KEYS.find(s => s.key === activeSectionKey)?.label} 内容...`"></textarea>
-                  </div>
-
-                  <!-- Version History -->
-                  <div class="w-48 flex-shrink-0">
-                    <div class="text-xs font-medium text-gray-500 mb-2">版本历史</div>
-                    <div v-if="versionsLoading" class="text-xs text-gray-400">加载中...</div>
-                    <div v-else-if="versions.length === 0" class="text-xs text-gray-400">暂无版本</div>
-                    <div v-else class="space-y-1.5 max-h-full overflow-y-auto">
-                      <div v-for="v in versions" :key="v.version"
-                        @click="loadVersionContent(v)"
-                        :class="['p-2 rounded-lg cursor-pointer border transition-colors text-xs',
-                          isProduction(v.version) ? 'border-success-200 bg-success-50' : 'border-gray-100 hover:border-gray-200',
-                          selectedVersionNum === v.version ? 'ring-1 ring-info-300' : '']">
-                        <div class="flex items-center gap-1.5">
-                          <span class="font-medium" :class="isProduction(v.version) ? 'text-success-700' : 'text-gray-700'">
-                            V{{ v.version }}
-                          </span>
-                          <span v-if="isProduction(v.version)"
-                            class="px-1 py-0.5 text-[10px] bg-success-100 text-success-700 rounded">prod</span>
+                    <!-- Section Variables Editor (dynamic, from template parsing) -->
+                    <div v-if="sectionKeys.length > 0" class="mt-3 space-y-2">
+                      <div class="flex items-center justify-between">
+                        <div class="text-xs font-medium text-gray-500">分段变量值</div>
+                        <button @click="saveAllSections"
+                          class="px-2 py-1 text-[10px] bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                          :disabled="promptSaving">
+                          {{ promptSaving ? '保存中...' : '全部保存' }}
+                        </button>
+                      </div>
+                      <div v-for="key in sectionKeys" :key="key" class="border border-gray-100 rounded-lg p-2">
+                        <div class="flex items-center justify-between mb-1">
+                          <span class="text-xs font-medium text-primary-700">{{ key }}</span>
+                          <button @click="optimizeSection(key)"
+                            class="px-2 py-0.5 text-[10px] text-info-600 bg-info-50 hover:bg-info-100 rounded disabled:opacity-50"
+                            :disabled="optimizingKey === key || !sections[key]?.trim()">
+                            {{ optimizingKey === key ? '优化中...' : 'AI 优化' }}
+                          </button>
                         </div>
-                        <div class="text-[10px] text-gray-400 mt-0.5">
-                          {{ formatTime(v.created_at) }}
-                        </div>
-                        <div v-if="v.commit_message" class="text-[10px] text-gray-500 mt-0.5 truncate">
-                          {{ v.commit_message }}
-                        </div>
+                        <textarea v-model="sections[key]"
+                          class="w-full p-2 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:border-primary-400 resize-none"
+                          rows="3"
+                          :placeholder="`输入 ${key} 的内容...`"></textarea>
                       </div>
                     </div>
-                    <!-- Diff & Rollback -->
-                    <div v-if="versions.length >= 2" class="mt-2 pt-2 border-t border-gray-100 flex gap-1">
-                      <button @click="showDiffDialog = true"
-                        class="flex-1 px-2 py-1 text-[10px] text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
-                        对比
-                      </button>
-                      <button v-if="selectedVersionNum && !isProduction(selectedVersionNum)"
-                        @click="rollbackVersion(selectedVersionNum)"
-                        class="flex-1 px-2 py-1 text-[10px] text-warning-600 bg-warning-50 hover:bg-warning-100 rounded-lg">
-                        回滚
-                      </button>
+                    <div v-else class="mt-3 text-xs text-gray-400 py-2">
+                      模板中未检测到 {变量名} 占位符。添加如 {role_description} 的占位符后，下方会出现对应的编辑区。
                     </div>
                   </div>
                 </div>
@@ -315,10 +284,10 @@
               class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400" />
           </div>
           <div>
-            <label class="text-xs text-gray-500 mb-1 block">System Prompt <span class="text-danger-500">*</span></label>
+            <label class="text-xs text-gray-500 mb-1 block">System Prompt 模板 <span class="text-danger-500">*</span></label>
             <textarea v-model="createForm.system_prompt" rows="6"
               class="w-full px-3 py-1.5 text-sm font-mono border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400"
-              placeholder="输入初始 System Prompt..."></textarea>
+              placeholder="输入初始 System Prompt 模板，用 {变量名} 作为分段占位符..."></textarea>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-4">
@@ -327,6 +296,51 @@
           <button @click="doCreate" :disabled="creating"
             class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50">
             {{ creating ? '创建中...' : '创建' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Version History Dialog -->
+    <div v-if="showVersionHistoryDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col p-6">
+        <div class="flex items-center justify-between mb-4 flex-shrink-0">
+          <h3 class="text-base font-semibold">版本历史</h3>
+          <button @click="showVersionHistoryDialog = false" class="p-1 text-gray-400 hover:text-gray-600">&times;</button>
+        </div>
+        <div v-if="versionsLoading" class="text-sm text-gray-400 py-4 text-center">加载中...</div>
+        <div v-else-if="versions.length === 0" class="text-sm text-gray-400 py-4 text-center">暂无版本</div>
+        <div v-else class="flex-1 overflow-y-auto space-y-1.5">
+          <div v-for="v in versions" :key="v.version"
+            @click="loadVersionContent(v); showVersionHistoryDialog = false"
+            :class="['p-3 rounded-lg cursor-pointer border transition-colors',
+              isProduction(v.version) ? 'border-success-200 bg-success-50' : 'border-gray-100 hover:border-gray-200',
+              selectedVersionNum === v.version ? 'ring-1 ring-info-300' : '']">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium" :class="isProduction(v.version) ? 'text-success-700' : 'text-gray-700'">
+                V{{ v.version }}
+              </span>
+              <span v-if="isProduction(v.version)"
+                class="px-1.5 py-0.5 text-xs bg-success-100 text-success-700 rounded">production</span>
+            </div>
+            <div class="text-xs text-gray-400 mt-1">
+              {{ formatTime(v.created_at) }}
+              <span v-if="v.created_by" class="ml-2">by {{ v.created_by }}</span>
+            </div>
+            <div v-if="v.commit_message" class="text-xs text-gray-500 mt-1">
+              {{ v.commit_message }}
+            </div>
+          </div>
+        </div>
+        <div v-if="versions.length >= 2" class="mt-3 pt-3 border-t border-gray-100 flex gap-2">
+          <button @click="showVersionHistoryDialog = false; showDiffDialog = true"
+            class="flex-1 px-3 py-2 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
+            版本对比
+          </button>
+          <button v-if="selectedVersionNum && !isProduction(selectedVersionNum)"
+            @click="rollbackVersion(selectedVersionNum); showVersionHistoryDialog = false"
+            class="flex-1 px-3 py-2 text-sm text-warning-600 bg-warning-50 hover:bg-warning-100 rounded-lg">
+            回滚到 V{{ selectedVersionNum }}
           </button>
         </div>
       </div>
@@ -373,16 +387,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import AppHeader from './AppHeader.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
-  updateDefinition, deleteDefinition,
-  listVersions, diffVersions,
-  listLabels, setLabel,
+  updateDefinition, deleteDefinition, updateSystemPrompt,
+  listVersions, getVersion, diffVersions,
+  saveDraft, listLabels, setLabel,
   listToolsMeta, listSkillsMeta, listReplyStylesMeta,
-  getSections, saveSection, optimizeSection,
-  SECTION_KEYS,
+  getSections, saveSection, optimizeSection as apiOptimizeSection,
   type AgentDefinition, type PromptVersion, type DiffResult,
   type ToolMeta, type SkillMeta, type ReplyStyleMeta,
 } from '@/api/agentDefinitions'
@@ -413,18 +426,13 @@ const replyStyles = ref<ReplyStyleMeta[]>([])
 // Business pages
 const businessPages = ref<{ id: string; title: string; icon: string; route: string }[]>([])
 
-// Sections state
-const activeSectionKey = ref('role_description')
-const sections = ref<Record<string, string>>({
-  role_description: '',
-  responsibilities: '',
-  workflow: '',
-  reply_style: '',
-  other_notes: '',
-})
-const optimizing = ref(false)
+// Sections state — dynamic from template parsing
+const sectionKeys = ref<string[]>([])
+const sections = ref<Record<string, string>>({})
+const optimizingKey = ref<string | null>(null)
 
 // Prompt version state
+const promptContent = ref('')
 const promptSaving = ref(false)
 const versions = ref<PromptVersion[]>([])
 const versionsLoading = ref(false)
@@ -438,6 +446,7 @@ const createForm = ref({ agent_id: '', name: '', description: '', system_prompt:
 
 // Diff dialog
 const showDiffDialog = ref(false)
+const showVersionHistoryDialog = ref(false)
 const diffFrom = ref(1)
 const diffTo = ref(2)
 const diffData = ref<DiffResult | null>(null)
@@ -474,6 +483,30 @@ async function loadMetadata() {
   } catch (e) { console.error('加载元数据失败', e) }
 }
 
+// ============== Parse section keys from template ==============
+function parseSectionKeys(template: string): string[] {
+  const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g
+  const keys: string[] = []
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(template)) !== null) {
+    if (!keys.includes(match[1])) {
+      keys.push(match[1])
+    }
+  }
+  return keys
+}
+
+// Watch prompt content changes to update section keys
+watch(promptContent, (val) => {
+  sectionKeys.value = parseSectionKeys(val)
+  // Ensure sections has entries for all keys
+  for (const key of sectionKeys.value) {
+    if (!(key in sections.value)) {
+      sections.value[key] = ''
+    }
+  }
+})
+
 // ============== Data Loading ==============
 async function loadList() {
   try {
@@ -490,6 +523,7 @@ async function selectAgent(item: AgentDefinition) {
       selectedAgent.value = res.data
       populateForm(res.data)
       await loadVersionsAndLabels()
+      await loadLatestPromptContent()
       await loadSections()
     }
   } catch (e) { console.error('加载详情失败', e) }
@@ -514,11 +548,7 @@ async function loadSections() {
   try {
     const res = await getSections(selectedAgentId.value)
     if (res.success) {
-      // Reset all to empty
-      for (const sk of SECTION_KEYS) {
-        sections.value[sk.key] = ''
-      }
-      // Populate from API
+      // Populate sections from API data
       for (const s of res.data) {
         sections.value[s.section_key] = s.content || ''
       }
@@ -544,11 +574,24 @@ async function loadVersionsAndLabels() {
   finally { versionsLoading.value = false }
 }
 
+async function loadLatestPromptContent() {
+  if (!selectedAgent.value?.production_version) {
+    if (versions.value.length > 0) {
+      await loadVersionContent(versions.value[0])
+    } else {
+      promptContent.value = ''
+    }
+    return
+  }
+  try {
+    const res = await getVersion(selectedAgentId.value!, selectedAgent.value.production_version)
+    if (res.success) promptContent.value = res.data.content
+  } catch (e) { console.error('加载 prompt 内容失败', e) }
+}
+
 async function loadVersionContent(v: PromptVersion) {
   selectedVersionNum.value = v.version
-  // When viewing a version, show the monolithic content in a read-only way
-  // by loading it into the sections (best effort — sections are the edit interface)
-  // For now, just highlight the version in the sidebar
+  promptContent.value = v.content
 }
 
 function isProduction(version: number): boolean {
@@ -671,55 +714,74 @@ async function doDelete() {
   }
 }
 
-// ============== Sections Management ==============
-async function saveCurrentSection() {
+// ============== Prompt Management ==============
+function onPromptInput() {
+  // Template content changed — section keys auto-update via watch
+}
+
+async function savePromptDraft() {
   if (!selectedAgentId.value) return
   promptSaving.value = true
   try {
-    const res = await saveSection(
-      selectedAgentId.value,
-      activeSectionKey.value,
-      sections.value[activeSectionKey.value],
-    )
+    const res = await saveDraft(selectedAgentId.value, {
+      content: promptContent.value,
+      base_version: selectedAgent.value?.production_version || undefined,
+    })
     if (res.success) {
-      showToast('分段已保存并提交新版本')
-      await loadList()
-      await loadVersionsAndLabels()
+      showToast('草稿已保存')
     }
   } catch (e: any) {
-    showToast(e.message || '保存失败', 'error')
+    showToast(e.message || '保存草稿失败', 'error')
   } finally { promptSaving.value = false }
 }
 
-async function commitAllSections() {
+async function commitPromptVersion() {
   if (!selectedAgentId.value) return
+  const msg = prompt('提交新版本，变更说明（可选）：')
+  if (msg === null) return
   promptSaving.value = true
   try {
-    for (const sk of SECTION_KEYS) {
-      const content = sections.value[sk.key]
-      if (content !== undefined) {
-        await saveSection(selectedAgentId.value, sk.key, content)
-      }
+    const res = await updateSystemPrompt(selectedAgentId.value, {
+      content: promptContent.value,
+      commit_message: msg || undefined,
+    })
+    if (res.success) {
+      showToast('新版本已提交并标记为 production')
+      await loadList()
+      await selectAgent(agents.value.find(a => a.agent_id === selectedAgentId.value)!)
+    } else {
+      showToast('提交失败', 'error')
     }
-    showToast('所有分段已保存并提交新版本')
-    await loadList()
-    await loadVersionsAndLabels()
   } catch (e: any) {
     showToast(e.message || '提交失败', 'error')
   } finally { promptSaving.value = false }
 }
 
-async function optimizeCurrentSection() {
+// ============== Sections Management ==============
+async function saveAllSections() {
   if (!selectedAgentId.value) return
-  const key = activeSectionKey.value
+  promptSaving.value = true
+  try {
+    for (const key of sectionKeys.value) {
+      const content = sections.value[key] ?? ''
+      await saveSection(selectedAgentId.value, key, content)
+    }
+    showToast('所有分段已保存')
+  } catch (e: any) {
+    showToast(e.message || '保存失败', 'error')
+  } finally { promptSaving.value = false }
+}
+
+async function optimizeSection(key: string) {
+  if (!selectedAgentId.value) return
   const content = sections.value[key]?.trim()
   if (!content) {
     showToast('分段内容为空，无法优化', 'error')
     return
   }
-  optimizing.value = true
+  optimizingKey.value = key
   try {
-    const res = await optimizeSection(selectedAgentId.value, key, {
+    const res = await apiOptimizeSection(selectedAgentId.value, key, {
       content,
       agent_name: selectedAgent.value?.name,
       agent_description: selectedAgent.value?.description || undefined,
@@ -730,7 +792,7 @@ async function optimizeCurrentSection() {
     }
   } catch (e: any) {
     showToast(e.message || 'AI 优化失败', 'error')
-  } finally { optimizing.value = false }
+  } finally { optimizingKey.value = null }
 }
 
 // ============== Version History ==============

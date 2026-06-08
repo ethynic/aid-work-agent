@@ -43,7 +43,8 @@ class CacheKeys:
     DOCS_COUNT = "docs_count"          # docs_count:{tenant}:{user}
     PROMPT_CONTENT = "prompt_content"  # prompt_content:{prompt_id}:{version}
     PROMPT_LABEL = "prompt_label"      # prompt_label:{prompt_id}:{label}
-    PROMPT_REGISTRY = "prompt_reg"     # prompt_reg:{tenant_id}:{scope}:{scope_id}
+    PROMPT_REGISTRY = "prompt_reg"       # prompt_reg:{tenant_id}:{scope}:{scope_id}
+    PROMPT_SECTIONS = "prompt_sections"  # prompt_sections:{agent_id} → {section_key: content} dict
 
 
 # ============== 通用缓存函数 ==============

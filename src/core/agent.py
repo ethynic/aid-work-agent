@@ -698,12 +698,14 @@ class Agent:
         if self.mode == AgentMode.MASTER:
             return self._build_base_system_prompt(include_delegation=True, user=user)
         else:
-            # SUBAGENT 和 STANDALONE：整体降级策略
-            # from_db=True → system_prompt 已在 load_from_db() 时解析好
-            # from_db=False → 直接用文件系统的 system_prompt
             subagent_constraint = ""
             if self.subagent_config:
-                subagent_constraint = self.subagent_config.system_prompt
+                if getattr(self.subagent_config, 'from_db', False):
+                    # DB 子智能体：模板 + 运行时变量渲染
+                    subagent_constraint = self._resolve_db_subagent_prompt()
+                else:
+                    # 文件系统子智能体：直接用 system_prompt
+                    subagent_constraint = self.subagent_config.system_prompt
 
                 # 注入租户级知识库约束
                 ks = self._load_knowledge_sources()
@@ -727,6 +729,34 @@ class Agent:
                 subagent_constraint=subagent_constraint,
                 user=user
             )
+
+    def _resolve_db_subagent_prompt(self) -> str:
+        """DB 子智能体的 system_prompt 实时渲染：模板 + sections 变量"""
+        agent_id = self.subagent_config.dir_name
+
+        # 1. 获取模板（从 prompt_versions production 版本，走缓存）
+        from src.prompts.prompt_resolver import prompt_resolver
+        template = prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
+        if not template:
+            # 降级到 config.system_prompt（load_from_db 时存的模板内容）
+            return self.subagent_config.system_prompt or ""
+
+        # 2. 获取 sections 变量值（走缓存）
+        from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
+        cached_sections = get_cached(CacheKeys.PROMPT_SECTIONS, agent_id)
+        if cached_sections is not None:
+            section_map = cached_sections
+        else:
+            from src.db.subagent_prompt_section_db import SubagentPromptSectionDB
+            section_map = SubagentPromptSectionDB.get_sections_map(agent_id)
+            set_cached(CacheKeys.PROMPT_SECTIONS, agent_id, value=section_map, ttl=300)
+
+        # 3. 渲染模板
+        if section_map:
+            from src.prompts.renderer import render_template
+            return render_template(template, section_map)
+
+        return template
 
     def _load_extra_md(self) -> Optional[str]:
         """加载租户定制的 extra.md 文件"""
