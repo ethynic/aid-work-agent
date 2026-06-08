@@ -164,15 +164,17 @@ class HotelExcelParser:
 
         gateway = self._get_gateway()
         try:
+            # DeepSeek V4 thinking 模型：reasoning_tokens 和 output_tokens 共享 max_tokens 配额
+            # 思考过程可能消耗大量 token，需要给实际输出留足空间
             response = await gateway.chat(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=16384,
+                max_tokens=65536,
             )
 
             content = response.get("content", "")
             if not content:
-                logger.warning(f"[HotelExcelParser] Sheet '{sheet_name}' LLM 返回空内容")
+                logger.warning(f"[HotelExcelParser] Sheet '{sheet_name}' LLM 返回空内容, finish_reason={response.get('finish_reason')}")
                 return []
 
             return self._parse_llm_output(content, sheet_name)
