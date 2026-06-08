@@ -111,7 +111,7 @@ export async function createDefinition(data: {
   llm_provider?: string
   reply_style?: string
 }): Promise<{ success: boolean; data: any }> {
-  const response = await fetch(`${API_BASE}/`, {
+  const response = await fetch(`${API_BASE}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
