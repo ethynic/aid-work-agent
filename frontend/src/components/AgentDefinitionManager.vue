@@ -106,6 +106,8 @@
                     <textarea v-model="form.description" rows="2"
                       class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400"></textarea>
                   </div>
+
+                  <!-- Tools Picker -->
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">工具配置</label>
                     <div class="bg-gray-50 rounded-lg p-2">
@@ -113,38 +115,68 @@
                         <input type="checkbox" v-model="toolsInherit" />
                         继承默认工具
                       </label>
-                      <div v-if="!toolsInherit">
-                        <div v-for="(tool, i) in additionalTools" :key="i"
-                          class="flex items-center gap-1 mb-1">
-                          <input :value="tool" disabled
-                            class="flex-1 px-2 py-1 text-xs bg-white border border-gray-200 rounded-lg" />
-                          <button @click="additionalTools.splice(i, 1)" class="text-danger-400 hover:text-danger-600 text-xs">&times;</button>
-                        </div>
-                        <div class="flex gap-1">
-                          <input v-model="newTool" type="text" placeholder="工具名"
-                            class="flex-1 px-2 py-1 text-xs border border-gray-200 rounded-lg"
-                            @keyup.enter="addTool" />
-                          <button @click="addTool" class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg">+</button>
-                        </div>
+                      <div v-if="!toolsInherit" class="max-h-40 overflow-y-auto space-y-1">
+                        <label v-for="tool in availableTools" :key="tool.id"
+                          class="flex items-center gap-2 px-2 py-1 text-xs bg-white rounded border border-gray-100 hover:border-gray-200 cursor-pointer">
+                          <input type="checkbox" :checked="additionalTools.includes(tool.id)"
+                            @change="toggleTool(tool.id)" />
+                          <span class="font-medium text-gray-700">{{ tool.name }}</span>
+                          <span class="text-gray-400 truncate flex-1">{{ tool.description }}</span>
+                        </label>
+                        <div v-if="availableTools.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
                       </div>
                     </div>
                   </div>
+
+                  <!-- Skills Picker -->
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">技能配置</label>
-                    <div class="flex flex-wrap gap-1 mb-1">
-                      <span v-for="(skill, i) in form.skills?.allowed || []" :key="i"
-                        class="px-2 py-0.5 text-xs bg-success-50 text-success-700 rounded-full flex items-center gap-1">
-                        {{ skill }}
-                        <button @click="removeSkill(i)" class="text-success-400 hover:text-success-600">&times;</button>
-                      </span>
-                    </div>
-                    <div class="flex gap-1">
-                      <input v-model="newSkill" type="text" placeholder="技能名"
-                        class="flex-1 px-2 py-1 text-xs border border-gray-200 rounded-lg"
-                        @keyup.enter="addSkill" />
-                      <button @click="addSkill" class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg">+</button>
+                    <div class="bg-gray-50 rounded-lg p-2 max-h-40 overflow-y-auto space-y-1">
+                      <label v-for="skill in availableSkills" :key="skill.id"
+                        class="flex items-center gap-2 px-2 py-1 text-xs bg-white rounded border border-gray-100 hover:border-gray-200 cursor-pointer">
+                        <input type="checkbox" :checked="form.skills?.allowed?.includes(skill.id)"
+                          @change="toggleSkill(skill.id)" />
+                        <span class="font-medium text-gray-700">{{ skill.name }}</span>
+                        <span class="text-gray-400 truncate flex-1">{{ skill.description }}</span>
+                      </label>
+                      <div v-if="availableSkills.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
                     </div>
                   </div>
+
+                  <!-- Reply Style Selector -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">回复风格</label>
+                    <select v-model="form.reply_style"
+                      class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400">
+                      <option :value="null">默认</option>
+                      <option v-for="style in replyStyles" :key="style.id" :value="style.id">
+                        {{ style.name }} — {{ style.description }}
+                      </option>
+                    </select>
+                  </div>
+
+                  <!-- Business Pages Editor -->
+                  <div>
+                    <label class="text-xs text-gray-500 mb-1 block">业务页面</label>
+                    <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
+                      <div v-for="(page, i) in businessPages" :key="i"
+                        class="flex items-center gap-1 bg-white rounded-lg p-1.5 border border-gray-100">
+                        <input v-model="page.icon" placeholder="图标"
+                          class="w-10 px-1 py-1 text-xs text-center border border-gray-200 rounded" />
+                        <input v-model="page.title" placeholder="标题"
+                          class="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-200 rounded" />
+                        <input v-model="page.route" placeholder="路由"
+                          class="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-200 rounded" />
+                        <button @click="businessPages.splice(i, 1)"
+                          class="text-danger-400 hover:text-danger-600 text-sm px-1">&times;</button>
+                      </div>
+                      <button @click="addBusinessPage"
+                        class="w-full px-2 py-1 text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg">
+                        + 添加页面
+                      </button>
+                    </div>
+                  </div>
+
                   <div>
                     <label class="text-xs text-gray-500 mb-1 block">状态</label>
                     <select v-model="form.status"
@@ -156,40 +188,65 @@
                 </div>
               </div>
 
-              <!-- Prompt Area (right half) -->
+              <!-- Prompt Area (right half) — Tab-based sections editor -->
               <div class="w-[55%] flex flex-col overflow-hidden">
                 <div class="p-4 pb-2 flex-shrink-0">
                   <div class="flex items-center justify-between mb-2">
                     <h3 class="text-sm font-semibold text-gray-700">System Prompt</h3>
                     <div class="flex gap-2">
-                      <button @click="savePromptDraft"
-                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
+                      <button @click="saveCurrentSection"
+                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
                         :disabled="promptSaving">
-                        {{ promptSaving ? '保存中...' : '保存草稿' }}
+                        {{ promptSaving ? '保存中...' : '保存分段' }}
                       </button>
-                      <button @click="commitPromptVersion"
+                      <button @click="commitAllSections"
                         class="px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                         :disabled="promptSaving">
-                        提交新版本
+                        全部保存
                       </button>
                     </div>
                   </div>
                   <div v-if="selectedAgent.production_version" class="text-xs text-gray-400 mb-2">
                     当前 production: V{{ selectedAgent.production_version }}
-                    <span v-if="draftModified" class="text-warning-600 ml-2">（有未提交的修改）</span>
                   </div>
                 </div>
+
+                <!-- Section Tabs -->
+                <div class="flex px-4 gap-1 border-b border-gray-200 mb-0 flex-shrink-0">
+                  <button v-for="sk in SECTION_KEYS" :key="sk.key"
+                    @click="activeSectionKey = sk.key"
+                    :class="['px-3 py-1.5 text-xs rounded-t-lg transition-colors whitespace-nowrap',
+                      activeSectionKey === sk.key
+                        ? 'bg-white text-primary-700 font-medium border border-gray-200 border-b-white -mb-px'
+                        : 'text-gray-500 hover:text-gray-700']">
+                    {{ sk.label }}
+                  </button>
+                </div>
+
+                <!-- Section Editor + Version History -->
                 <div class="flex-1 flex overflow-hidden px-4 pb-4">
                   <!-- Editor -->
                   <div class="flex-1 flex flex-col min-w-0 pr-3">
-                    <textarea v-model="promptContent"
-                      class="flex-1 w-full p-3 text-sm font-mono border border-gray-200 rounded-lg resize-none focus:outline-none focus:border-primary-400"
-                      placeholder="输入 System Prompt 内容..." @input="onPromptInput"></textarea>
-                    <div v-if="commitDialogVisible" class="mt-2 flex gap-2">
-                      <input v-model="commitMessage" type="text" placeholder="变更说明（可选）"
-                        class="flex-1 px-3 py-1.5 text-xs border border-gray-200 rounded-lg" />
+                    <div class="flex items-center justify-between mb-1 mt-2">
+                      <span class="text-xs text-gray-400">
+                        {{ SECTION_KEYS.find(s => s.key === activeSectionKey)?.label }}
+                      </span>
+                      <button v-if="sections[activeSectionKey]"
+                        @click="optimizeCurrentSection"
+                        class="px-2 py-1 text-[10px] text-info-600 bg-info-50 hover:bg-info-100 rounded-lg flex items-center gap-1 disabled:opacity-50"
+                        :disabled="optimizing || !sections[activeSectionKey]?.trim()">
+                        <svg v-if="optimizing" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        {{ optimizing ? '优化中...' : 'AI 优化' }}
+                      </button>
                     </div>
+                    <textarea v-model="sections[activeSectionKey]"
+                      class="flex-1 w-full p-3 text-sm font-mono border border-gray-200 rounded-lg resize-none focus:outline-none focus:border-primary-400"
+                      :placeholder="`输入 ${SECTION_KEYS.find(s => s.key === activeSectionKey)?.label} 内容...`"></textarea>
                   </div>
+
                   <!-- Version History -->
                   <div class="w-48 flex-shrink-0">
                     <div class="text-xs font-medium text-gray-500 mb-2">版本历史</div>
@@ -320,10 +377,14 @@ import { ref, computed, onMounted } from 'vue'
 import AppHeader from './AppHeader.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
-  updateDefinition, deleteDefinition, updateSystemPrompt,
-  listVersions, getVersion, diffVersions,
-  saveDraft, listLabels, setLabel,
+  updateDefinition, deleteDefinition,
+  listVersions, diffVersions,
+  listLabels, setLabel,
+  listToolsMeta, listSkillsMeta, listReplyStylesMeta,
+  getSections, saveSection, optimizeSection,
+  SECTION_KEYS,
   type AgentDefinition, type PromptVersion, type DiffResult,
+  type ToolMeta, type SkillMeta, type ReplyStyleMeta,
 } from '@/api/agentDefinitions'
 
 // ============== Auth (portal mode) ==============
@@ -342,16 +403,29 @@ let toastId = 0
 const form = ref<Record<string, any>>({})
 const toolsInherit = ref(true)
 const additionalTools = ref<string[]>([])
-const newTool = ref('')
-const newSkill = ref('')
 const saving = ref(false)
 
-// Prompt state
-const promptContent = ref('')
-const commitMessage = ref('')
-const commitDialogVisible = ref(false)
+// Metadata for pickers
+const availableTools = ref<ToolMeta[]>([])
+const availableSkills = ref<SkillMeta[]>([])
+const replyStyles = ref<ReplyStyleMeta[]>([])
+
+// Business pages
+const businessPages = ref<{ id: string; title: string; icon: string; route: string }[]>([])
+
+// Sections state
+const activeSectionKey = ref('role_description')
+const sections = ref<Record<string, string>>({
+  role_description: '',
+  responsibilities: '',
+  workflow: '',
+  reply_style: '',
+  other_notes: '',
+})
+const optimizing = ref(false)
+
+// Prompt version state
 const promptSaving = ref(false)
-const draftModified = ref(false)
 const versions = ref<PromptVersion[]>([])
 const versionsLoading = ref(false)
 const selectedVersionNum = ref<number | null>(null)
@@ -386,6 +460,20 @@ function showToast(message: string, type = 'success') {
   setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id) }, 2500)
 }
 
+// ============== Metadata Loading ==============
+async function loadMetadata() {
+  try {
+    const [tRes, sRes, rRes] = await Promise.all([
+      listToolsMeta(),
+      listSkillsMeta(),
+      listReplyStylesMeta(),
+    ])
+    if (tRes.success) availableTools.value = tRes.data
+    if (sRes.success) availableSkills.value = sRes.data
+    if (rRes.success) replyStyles.value = rRes.data
+  } catch (e) { console.error('加载元数据失败', e) }
+}
+
 // ============== Data Loading ==============
 async function loadList() {
   try {
@@ -402,7 +490,7 @@ async function selectAgent(item: AgentDefinition) {
       selectedAgent.value = res.data
       populateForm(res.data)
       await loadVersionsAndLabels()
-      await loadLatestPromptContent()
+      await loadSections()
     }
   } catch (e) { console.error('加载详情失败', e) }
 }
@@ -413,10 +501,29 @@ function populateForm(data: AgentDefinition) {
     name: data.name,
     description: data.description || '',
     skills: { ...data.skills },
+    reply_style: data.reply_style || null,
     status: data.status || 'active',
   }
   toolsInherit.value = data.tools?.inherit !== false
   additionalTools.value = data.tools?.additional || []
+  businessPages.value = (data.business_pages || []).map((p: any) => ({ ...p }))
+}
+
+async function loadSections() {
+  if (!selectedAgentId.value) return
+  try {
+    const res = await getSections(selectedAgentId.value)
+    if (res.success) {
+      // Reset all to empty
+      for (const sk of SECTION_KEYS) {
+        sections.value[sk.key] = ''
+      }
+      // Populate from API
+      for (const s of res.data) {
+        sections.value[s.section_key] = s.content || ''
+      }
+    }
+  } catch (e) { console.error('加载分段失败', e) }
 }
 
 async function loadVersionsAndLabels() {
@@ -437,26 +544,11 @@ async function loadVersionsAndLabels() {
   finally { versionsLoading.value = false }
 }
 
-async function loadLatestPromptContent() {
-  if (!selectedAgent.value?.production_version) {
-    // Try latest version
-    if (versions.value.length > 0) {
-      await loadVersionContent(versions.value[0])
-    } else {
-      promptContent.value = ''
-    }
-    return
-  }
-  try {
-    const res = await getVersion(selectedAgentId.value!, selectedAgent.value.production_version)
-    if (res.success) promptContent.value = res.data.content
-  } catch (e) { console.error('加载 prompt 内容失败', e) }
-}
-
 async function loadVersionContent(v: PromptVersion) {
   selectedVersionNum.value = v.version
-  promptContent.value = v.content
-  draftModified.value = false
+  // When viewing a version, show the monolithic content in a read-only way
+  // by loading it into the sections (best effort — sections are the edit interface)
+  // For now, just highlight the version in the sidebar
 }
 
 function isProduction(version: number): boolean {
@@ -468,6 +560,38 @@ function formatTime(ts: string): string {
   if (!ts) return ''
   const d = new Date(ts)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// ============== Tool/Skill Toggles ==============
+function toggleTool(toolId: string) {
+  const idx = additionalTools.value.indexOf(toolId)
+  if (idx >= 0) {
+    additionalTools.value.splice(idx, 1)
+  } else {
+    additionalTools.value.push(toolId)
+  }
+}
+
+function toggleSkill(skillId: string) {
+  if (!form.value.skills) form.value.skills = { allowed: [] }
+  if (!form.value.skills.allowed) form.value.skills.allowed = []
+  const arr: string[] = form.value.skills.allowed
+  const idx = arr.indexOf(skillId)
+  if (idx >= 0) {
+    arr.splice(idx, 1)
+  } else {
+    arr.push(skillId)
+  }
+}
+
+// ============== Business Pages ==============
+function addBusinessPage() {
+  businessPages.value.push({
+    id: `page_${Date.now()}`,
+    title: '',
+    icon: '📋',
+    route: '',
+  })
 }
 
 // ============== Definition CRUD ==============
@@ -508,6 +632,8 @@ async function saveDefinition() {
       description: form.value.description || null,
       tools: { inherit: toolsInherit.value, additional: additionalTools.value },
       skills: form.value.skills,
+      reply_style: form.value.reply_style || null,
+      business_pages: businessPages.value.length > 0 ? businessPages.value : null,
       status: form.value.status,
     }
     const res = await updateDefinition(selectedAgentId.value, data)
@@ -545,75 +671,69 @@ async function doDelete() {
   }
 }
 
-// ============== Capability / Tool / Skill helpers ==============
-function addTool() {
-  const v = newTool.value.trim()
-  if (v && !additionalTools.value.includes(v)) {
-    additionalTools.value.push(v)
-    newTool.value = ''
-  }
-}
-
-function addSkill() {
-  const v = newSkill.value.trim()
-  if (!v) return
-  if (!form.value.skills) form.value.skills = { allowed: [] }
-  if (!form.value.skills.allowed) form.value.skills.allowed = []
-  if (!form.value.skills.allowed.includes(v)) {
-    form.value.skills.allowed.push(v)
-    newSkill.value = ''
-  }
-}
-
-function removeSkill(i: number) {
-  form.value.skills?.allowed?.splice(i, 1)
-}
-
-// ============== Prompt Management ==============
-function onPromptInput() {
-  draftModified.value = true
-}
-
-async function savePromptDraft() {
+// ============== Sections Management ==============
+async function saveCurrentSection() {
   if (!selectedAgentId.value) return
   promptSaving.value = true
   try {
-    const res = await saveDraft(selectedAgentId.value, {
-      content: promptContent.value,
-      base_version: selectedAgent.value?.production_version || undefined,
-    })
+    const res = await saveSection(
+      selectedAgentId.value,
+      activeSectionKey.value,
+      sections.value[activeSectionKey.value],
+    )
     if (res.success) {
-      showToast('草稿已保存')
-      draftModified.value = false
+      showToast('分段已保存并提交新版本')
+      await loadList()
+      await loadVersionsAndLabels()
     }
   } catch (e: any) {
-    showToast(e.message || '保存草稿失败', 'error')
+    showToast(e.message || '保存失败', 'error')
   } finally { promptSaving.value = false }
 }
 
-async function commitPromptVersion() {
+async function commitAllSections() {
   if (!selectedAgentId.value) return
-  const msg = prompt('提交新版本，变更说明（可选）：')
-  if (msg === null) return // cancelled
   promptSaving.value = true
   try {
-    const res = await updateSystemPrompt(selectedAgentId.value, {
-      content: promptContent.value,
-      commit_message: msg || undefined,
-    })
-    if (res.success) {
-      showToast('新版本已提交并标记为 production')
-      draftModified.value = false
-      await loadList()
-      await selectAgent(agents.value.find(a => a.agent_id === selectedAgentId.value)!)
-    } else {
-      showToast('提交失败', 'error')
+    for (const sk of SECTION_KEYS) {
+      const content = sections.value[sk.key]
+      if (content !== undefined) {
+        await saveSection(selectedAgentId.value, sk.key, content)
+      }
     }
+    showToast('所有分段已保存并提交新版本')
+    await loadList()
+    await loadVersionsAndLabels()
   } catch (e: any) {
     showToast(e.message || '提交失败', 'error')
   } finally { promptSaving.value = false }
 }
 
+async function optimizeCurrentSection() {
+  if (!selectedAgentId.value) return
+  const key = activeSectionKey.value
+  const content = sections.value[key]?.trim()
+  if (!content) {
+    showToast('分段内容为空，无法优化', 'error')
+    return
+  }
+  optimizing.value = true
+  try {
+    const res = await optimizeSection(selectedAgentId.value, key, {
+      content,
+      agent_name: selectedAgent.value?.name,
+      agent_description: selectedAgent.value?.description || undefined,
+    })
+    if (res.success) {
+      sections.value[key] = res.data.content
+      showToast('AI 优化完成，请检查后保存', 'info')
+    }
+  } catch (e: any) {
+    showToast(e.message || 'AI 优化失败', 'error')
+  } finally { optimizing.value = false }
+}
+
+// ============== Version History ==============
 async function rollbackVersion(version: number) {
   if (!selectedAgentId.value) return
   if (!confirm(`确定要回滚到 V${version} 吗？`)) return
@@ -641,5 +761,8 @@ async function loadDiff() {
 }
 
 // ============== Init ==============
-onMounted(loadList)
+onMounted(() => {
+  loadList()
+  loadMetadata()
+})
 </script>

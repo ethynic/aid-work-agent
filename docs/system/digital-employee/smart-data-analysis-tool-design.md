@@ -1298,6 +1298,8 @@ class AnalysisAgent:
         # 收集最终输出
         self._tables_output = []
         self._charts_output = []
+        # 步骤记录：每一步的方法、参数、结果摘要、文件路径
+        self._steps = []
         # Trace spans
         self._spans = []
 
@@ -1307,12 +1309,14 @@ class AnalysisAgent:
         Returns:
             {
                 "success": bool,
-                "summary": str,           # LLM 生成的分析总结
-                "tables": [...],          # to_table 的输出列表
-                "charts": [...],          # to_chart 的输出列表
-                "total_usage": {...},      # token 用量汇总
-                "iterations": int,         # 实际迭代次数
-                "trace_id": str,           # 全链路跟踪 ID
+                "summary": str,                # LLM 生成的分析总结
+                "tables": [...],               # to_table 的输出列表
+                "charts": [...],               # to_chart 的输出列表
+                "steps": [...],                # 每一步的完整记录（方法、参数摘要、结果、文件路径）
+                "intermediate_files": [...],   # 所有中间文件汇总（供上层 Agent 引用）
+                "total_usage": {...},           # token 用量汇总
+                "iterations": int,              # 实际迭代次数
+                "trace_id": str,                # 全链路跟踪 ID
             }
         """
         trace_id = f"tr_{self.analysis_id}_{uuid.uuid4().hex[:8]}"
@@ -1381,6 +1385,8 @@ class AnalysisAgent:
                     "summary": content,
                     "tables": self._tables_output,
                     "charts": self._charts_output,
+                    "steps": self._steps,
+                    "intermediate_files": self._build_intermediate_files(),
                     "total_usage": self._total_usage,
                     "iterations": iteration,
                     "trace_id": trace_id,
@@ -1451,6 +1457,8 @@ class AnalysisAgent:
             "summary": content or "分析完成（达到最大迭代次数）",
             "tables": self._tables_output,
             "charts": self._charts_output,
+            "steps": self._steps,
+            "intermediate_files": self._build_intermediate_files(),
             "total_usage": self._total_usage,
             "iterations": iteration,
             "trace_id": trace_id,
@@ -1463,6 +1471,7 @@ class AnalysisAgent:
         - 数据处理方法返回 DataFrame → 持久化到 CSV 文件 → 文件路径返回给 LLM
         - LLM 在后续步骤中可以把文件路径作为 source 参数传给其他方法
         - 只返回摘要信息（行数、列名、文件路径、前几行预览），不返回完整数据
+        - 每次执行后记录步骤到 self._steps，供上层 Agent 了解分析过程
         """
         if method not in self.ALLOWED_METHODS:
             return {"success": False, "error": f"不允许的方法: {method}"}
@@ -1470,6 +1479,12 @@ class AnalysisAgent:
         analyzer_method = getattr(self.analyzer, method, None)
         if not analyzer_method:
             return {"success": False, "error": f"方法不存在: {method}"}
+
+        step_record = {
+            "step": len(self._steps) + 1,
+            "method": method,
+            "output_var": output_var,
+        }
 
         try:
             if method in ("to_table", "to_chart"):
@@ -1480,6 +1495,16 @@ class AnalysisAgent:
 
                 if method == "to_table":
                     self._tables_output.append(result)
+                    step_record.update({
+                        "description": f"输出结构化表格: {result.get('row_count', 0)} 行",
+                        "result_summary": {
+                            "row_count": result.get("row_count", 0),
+                            "total_count": result.get("total_count", 0),
+                            "columns": result.get("columns", []),
+                            "preview": result.get("rows", [])[:3],
+                        },
+                    })
+                    self._steps.append(step_record)
                     return {
                         "success": True,
                         "type": "table",
@@ -1491,6 +1516,13 @@ class AnalysisAgent:
                     }
                 else:  # to_chart
                     self._charts_output.append(result)
+                    step_record.update({
+                        "description": f"生成{result.get('chart_type', '')}图表: {result.get('title', '')}",
+                        "file_path": result.get("file_path", ""),
+                        "chart_type": result.get("chart_type", ""),
+                        "title": result.get("title", ""),
+                    })
+                    self._steps.append(step_record)
                     return {
                         "success": True,
                         "type": "chart",
@@ -1503,6 +1535,23 @@ class AnalysisAgent:
                 # 数据处理方法：返回 DataFrame → 持久化到文件 → 返回路径 + 摘要
                 df = analyzer_method(**params)
                 file_path = self.analyzer._store(output_var, df)
+
+                # 构建前 3 行预览（供上层 Agent 了解数据内容）
+                preview_rows = []
+                for _, row in df.head(3).iterrows():
+                    preview_rows.append([DataAnalyzer._to_native(v) for v in row])
+
+                step_record.update({
+                    "description": self._describe_method(method, params),
+                    "file_path": file_path,
+                    "result_summary": {
+                        "rows": len(df),
+                        "columns": list(df.columns),
+                        "preview_columns": list(df.columns[:5]),
+                        "preview": preview_rows,
+                    },
+                })
+                self._steps.append(step_record)
 
                 # 给 LLM 的摘要：文件路径 + 元信息，不返回数据本身
                 return {
@@ -1518,7 +1567,77 @@ class AnalysisAgent:
 
         except Exception as e:
             logger.error(f"[AnalysisAgent] 工具执行失败 {method}: {e}")
+            step_record.update({
+                "success": False,
+                "error": str(e),
+            })
+            self._steps.append(step_record)
             return {"success": False, "error": str(e)}
+
+    def _describe_method(self, method: str, params: dict) -> str:
+        """生成方法调用的人类可读描述"""
+        if method == "query":
+            filters = params.get("filters")
+            cols = params.get("columns")
+            desc = "查询数据"
+            if cols:
+                desc += f"，选取列: {', '.join(cols[:3])}{'...' if len(cols) > 3 else ''}"
+            if filters:
+                desc += f"，{len(filters)}个过滤条件"
+            return desc
+        elif method == "aggregate":
+            groups = params.get("group_by", [])
+            aggs = params.get("aggregations", [])
+            return f"按 {', '.join(groups)} 聚合，{len(aggs)}个聚合操作"
+        elif method == "merge":
+            how = params.get("how", "left")
+            return f"{how} 关联 {params.get('left_ref', '?')} 和 {params.get('right_ref', '?')}"
+        elif method == "pivot":
+            return f"透视表: 行={params.get('index', '?')}, 列={params.get('columns', '?')}, 值={params.get('values', '?')}"
+        elif method == "calculate":
+            ops = params.get("operations", [])
+            aliases = [op.get("alias", "?") for op in ops]
+            return f"计算派生列: {', '.join(aliases)}"
+        elif method == "compare":
+            return f"对比分析: {params.get('compare_column', '?')} 按 {params.get('value_column', '?')}"
+        elif method == "trend":
+            freq_map = {"D": "日", "W": "周", "M": "月", "Q": "季", "Y": "年"}
+            freq = freq_map.get(params.get("freq", "M"), "月")
+            group = params.get("group_by")
+            desc = f"{freq}度趋势: {params.get('value_column', '?')}"
+            if group:
+                desc += f"，按 {group} 分组"
+            return desc
+        return method
+
+    def _build_intermediate_files(self) -> list[dict]:
+        """从步骤记录中提取所有中间文件汇总"""
+        files = []
+        for step in self._steps:
+            # 数据处理步骤有 file_path，输出步骤的 to_chart 也有 file_path
+            file_path = step.get("file_path")
+            if not file_path:
+                continue
+            # 去重（同一个 output_var 不重复记录）
+            if any(f["output_var"] == step["output_var"] for f in files):
+                continue
+            entry = {
+                "output_var": step["output_var"],
+                "file_path": file_path,
+                "description": step.get("description", ""),
+                "method": step["method"],
+            }
+            # 补充行数和列信息（数据处理步骤有 result_summary）
+            summary = step.get("result_summary", {})
+            if "rows" in summary:
+                entry["rows"] = summary["rows"]
+                entry["columns"] = summary.get("columns", [])
+            # 图表步骤补充图表类型和标题
+            if "chart_type" in step:
+                entry["chart_type"] = step["chart_type"]
+                entry["title"] = step.get("title", "")
+            files.append(entry)
+        return files
 
     def _build_tables_info(self, tables_metadata: list[dict]) -> str:
         """构建给 LLM 的表信息摘要"""
@@ -1612,7 +1731,90 @@ class AnalysisAgent:
             logger.warning(f"[AnalysisAgent] trace 持久化失败: {e}")
 ```
 
-### 5.5 与多工具方案 / 原规划方案的对比
+### 5.5 步骤记录与上下文透传
+
+`SmartDataAnalysisTool` 作为内嵌 Agent 循环的工具，其执行过程中的中间文件和步骤对上层 Agent 不可见是一个问题。上层 Agent 需要：
+
+1. **向用户解释分析过程**："我先按区域汇总了销售额，然后做了月度趋势分析..."
+2. **引用中间结果**：用户追问"把刚才按区域的数据再按产品线拆一下"，上层 Agent 需要知道已有 `sales_by_region.csv`
+3. **生成 HTML 报告**：报告可能引用多个中间图表和数据表，不仅仅是最终输出
+
+**设计**：每次 `_execute_tool` 执行后，将步骤信息记录到 `self._steps`，返回结果中包含 `steps`（完整步骤记录）和 `intermediate_files`（去重的中间文件汇总）。
+
+**步骤记录结构**：
+
+```json
+// steps[i] — 数据处理步骤
+{
+  "step": 1,
+  "method": "aggregate",
+  "output_var": "sales_by_region",
+  "description": "按 区域 聚合，2个聚合操作",
+  "file_path": "storage/analysis_data/sales_by_region.csv",
+  "result_summary": {
+    "rows": 6,
+    "columns": ["区域", "总销售额", "订单量"],
+    "preview_columns": ["区域", "总销售额", "订单量"],
+    "preview": [["华东", 1200000, 350], ["华南", 980000, 280], ["华北", 850000, 210]]
+  }
+}
+
+// steps[i] — 输出步骤（to_table）
+{
+  "step": 3,
+  "method": "to_table",
+  "output_var": "table_1",
+  "description": "输出结构化表格: 6 行",
+  "result_summary": {
+    "row_count": 6,
+    "total_count": 6,
+    "columns": ["区域", "总销售额", "订单量"],
+    "preview": [["华东", 1200000, 350], ...]
+  }
+}
+
+// steps[i] — 输出步骤（to_chart）
+{
+  "step": 4,
+  "method": "to_chart",
+  "output_var": "chart_1",
+  "description": "生成line图表: 各区域月度销售趋势",
+  "file_path": "storage/analysis_charts/区域趋势_20260604_153000.png",
+  "chart_type": "line",
+  "title": "各区域月度销售趋势"
+}
+```
+
+**中间文件汇总**（`intermediate_files`）：从 `_steps` 中提取，按 `output_var` 去重：
+
+```json
+[
+  {
+    "output_var": "sales_by_region",
+    "file_path": "storage/analysis_data/sales_by_region.csv",
+    "description": "按 区域 聚合，2个聚合操作",
+    "method": "aggregate",
+    "rows": 6,
+    "columns": ["区域", "总销售额", "订单量"]
+  },
+  {
+    "output_var": "chart_1",
+    "file_path": "storage/analysis_charts/区域趋势_20260604_153000.png",
+    "description": "生成line图表: 各区域月度销售趋势",
+    "method": "to_chart",
+    "chart_type": "line",
+    "title": "各区域月度销售趋势"
+  }
+]
+```
+
+**上层 Agent 使用方式**：
+
+- `steps` 数组拼入工具返回结果中，作为 `tool` 消息内容的一部分供上层 LLM 阅读
+- `intermediate_files` 中的 `file_path` 可在用户追问时直接引用（如"基于刚才的 `sales_by_region` 数据再做..."
+- `preview`（前 3 行）让上层 LLM 能判断数据质量，决定是否需要追问或重新分析
+
+### 5.6 与多工具方案 / 原规划方案的对比
 
 | 维度 | 多工具方案 | 原规划-执行方案（已废弃） | 迷你 Agent 循环（当前方案） |
 |------|----------|----------------------|------------------------|
@@ -1649,7 +1851,7 @@ class AnalysisAgent:
 
 ## 七、步骤间数据传递模式
 
-Agent 循环模式下，步骤间数据传递通过 **文件持久化 + 变量名引用** 双通道实现：
+Agent 循环模式下，步骤间数据传递通过 **文件持久化 + 变量名引用 + 步骤记录** 三通道实现：
 
 **文件持久化通道**：
 - 每个数据处理方法执行后，DataFrame 自动保存为 CSV 文件（`storage/analysis_data/{output_var}.csv`）
@@ -1663,6 +1865,12 @@ Agent 循环模式下，步骤间数据传递通过 **文件持久化 + 变量�
 - 内存中是 `df.copy()` 的不可变快照
 - 适合小数据快速传递，不需要重新加载文件
 
+**步骤记录通道**（§5.5 详述）：
+- 每次工具执行后，步骤信息记录到 `AnalysisAgent._steps`
+- 返回结果中包含 `steps`（完整步骤列表）和 `intermediate_files`（去重的中间文件汇总）
+- 上层 Agent 可据此了解完整分析过程、引用中间文件、向用户解释分析步骤
+- 步骤记录中的 `preview`（前 3 行数据）让上层 Agent 无需加载完整文件即可判断数据内容
+
 **LLM 看到的信息**：
 ```json
 {
@@ -1675,6 +1883,29 @@ Agent 循环模式下，步骤间数据传递通过 **文件持久化 + 变量�
 }
 ```
 
+**上层 Agent 看到的信息**（工具返回结果）：
+```json
+{
+  "success": true,
+  "summary": "各区域销售额月度趋势分析...",
+  "tables": [...],
+  "charts": [...],
+  "steps": [
+    {"step": 1, "method": "aggregate", "output_var": "sales_by_region", "description": "按 区域 聚合，2个聚合操作", "file_path": "...", "result_summary": {...}},
+    {"step": 2, "method": "trend", "output_var": "region_trend", "description": "月度趋势: 销售额，按 区域 分组", "file_path": "...", "result_summary": {...}},
+    {"step": 3, "method": "to_chart", "output_var": "chart_1", "description": "生成line图表: 各区域月度销售趋势", "file_path": "...", "chart_type": "line", "title": "各区域月度销售趋势"}
+  ],
+  "intermediate_files": [
+    {"output_var": "sales_by_region", "file_path": "storage/analysis_data/sales_by_region.csv", "rows": 6, "columns": [...]},
+    {"output_var": "region_trend", "file_path": "storage/analysis_data/region_trend.csv", "rows": 36, "columns": [...]},
+    {"output_var": "chart_1", "file_path": "storage/analysis_charts/区域趋势_20260604_153000.png", "chart_type": "line", "title": "各区域月度销售趋势"}
+  ],
+  "total_usage": {...},
+  "iterations": 5,
+  "trace_id": "..."
+}
+```
+
 ---
 
 ## 八、新增代码文件清单
@@ -1684,9 +1915,9 @@ Agent 循环模式下，步骤间数据传递通过 **文件持久化 + 变量�
 | `src/tools/data_analysis/smart_analysis_tool.py` | 统一智能分析工具（对外接口） | ~50 行 |
 | `src/tools/data_analysis/data_analyzer.py` | 分析引擎（pandas/numpy，所有分析方法） | ~400 行 |
 | `src/tools/data_analysis/analysis_tools_schema.py` | 9 个分析方法的 JSON Schema 定义 | ~200 行 |
-| `src/tools/data_analysis/analysis_agent.py` | 迷你 Agent 循环（LLM 编排 + 工具执行 + trace + token 计数） | ~250 行 |
+| `src/tools/data_analysis/analysis_agent.py` | 迷你 Agent 循环（LLM 编排 + 工具执行 + 步骤记录 + trace + token 计数） | ~320 行 |
 
-**总计约 ~900 行新增代码。**
+**总计约 ~970 行新增代码。**
 
 ### 依赖
 

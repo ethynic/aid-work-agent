@@ -7,9 +7,7 @@ QB3.1 是一套基于自研低代码平台的 ERP 系统，支持多租户。本
 ## 1. 通用调用规范
 
 ### 请求地址
-请求地址的 BASE_URL 为： `https://erp{tenant_id}.aidingyi.cn/`
-
-例如，租户 11022 的 BASE_URL 为：`https://erp11022.aidingyi.cn/`
+请求地址的 BASE_URL 为： ${BASE_URL}
 
 ### 请求方式
 
@@ -21,7 +19,7 @@ POST，Body 为 `application/json`
 
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| Api-Authorize-Token | string | 是 | 从 `.env` 环境变量 `{open_token}` 注入 |
+| Api-Authorize-Token | string | 是 | 从 `.env` 环境变量 `${OPEN_TOKEN}` 注入 |
 
 ### 返回响应
 
@@ -88,7 +86,7 @@ POST，Body 为 `application/json`
 ### 接口地址
 
 ```
-{BASE_URL}/api/v1/erp.module/module_listing_view
+${BASE_URL}/api/v1/erp.module/module_listing_view
 ```
 
 ### 请求参数
@@ -150,7 +148,7 @@ POST，Body 为 `application/json`
 ### 接口地址
 
 ```
-{BASE_URL}/api/v1/erp.module/module_prepare_edit
+${BASE_URL}/api/v1/erp.module/module_prepare_edit
 ```
 
 ### 请求参数
@@ -315,7 +313,7 @@ POST，Body 为 `application/json`
 ### 接口地址
 
 ```
-{BASE_URL}/api/v1/erp.module/module_listing_view
+${BASE_URL}/api/v1/erp.module/module_listing_view
 ```
 
 ### 请求参数
@@ -456,7 +454,7 @@ POST，Body 为 `application/json`
 ### 接口地址
 
 ```
-{BASE_URL}/api/v1/erp.module/module_prepare_edit
+${BASE_URL}/api/v1/erp.module/module_prepare_edit
 ```
 
 ### 请求参数

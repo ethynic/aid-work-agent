@@ -1016,3 +1016,16 @@ ALTER TABLE bs_complaint_handling_followups ADD COLUMN IF NOT EXISTS user_id TEX
 ALTER TABLE bs_after_sales_ticket_messages ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 -- 2026-06-06，调整 SessionDB.delete() 行为：保留 chat_records 不删除，用于计费/审计聚合（无需 SQL 变更）
+
+-- 2026-6-5, Phase 3.7 — System Prompt 分段管理
+CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id    TEXT NOT NULL,
+    section_key TEXT NOT NULL,
+    content     TEXT DEFAULT '',
+    updated_by  TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(agent_id, section_key)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_sections_agent ON subagent_prompt_sections(agent_id);

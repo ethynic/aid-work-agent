@@ -204,3 +204,88 @@ export async function setLabel(agentId: string, label: string, version: number):
   })
   return handleResponse(response)
 }
+
+// ============== Meta (Tools/Skills/ReplyStyles Pickers) ==============
+
+export interface ToolMeta {
+  id: string
+  name: string
+  description: string
+}
+
+export interface SkillMeta {
+  id: string
+  name: string
+  description: string
+}
+
+export interface ReplyStyleMeta {
+  id: string
+  name: string
+  description: string
+}
+
+export async function listToolsMeta(): Promise<{ success: boolean; data: ToolMeta[] }> {
+  const response = await fetch(`${API_BASE}/meta/tools`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
+
+export async function listSkillsMeta(): Promise<{ success: boolean; data: SkillMeta[] }> {
+  const response = await fetch(`${API_BASE}/meta/skills`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
+
+export async function listReplyStylesMeta(): Promise<{ success: boolean; data: ReplyStyleMeta[] }> {
+  const response = await fetch(`${API_BASE}/meta/reply-styles`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
+
+// ============== Sections Management ==============
+
+export interface PromptSection {
+  agent_id: string
+  section_key: string
+  content: string
+  updated_by: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export const SECTION_KEYS = [
+  { key: 'role_description', label: '角色描述' },
+  { key: 'responsibilities', label: '岗位职责' },
+  { key: 'workflow', label: '工作流程' },
+  { key: 'reply_style', label: '回复风格' },
+  { key: 'other_notes', label: '其他说明' },
+] as const
+
+export async function getSections(agentId: string): Promise<{ success: boolean; data: PromptSection[] }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
+
+export async function saveSection(
+  agentId: string,
+  sectionKey: string,
+  content: string,
+): Promise<{ success: boolean; data: PromptSection }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections/${encodeURIComponent(sectionKey)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ content, section_key: sectionKey }),
+  })
+  return handleResponse(response)
+}
+
+export async function optimizeSection(
+  agentId: string,
+  sectionKey: string,
+  data: { content: string; agent_name?: string; agent_description?: string },
+): Promise<{ success: boolean; data: { content: string } }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections/${encodeURIComponent(sectionKey)}/optimize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ...data, section_key: sectionKey }),
+  })
+  return handleResponse(response)
+}

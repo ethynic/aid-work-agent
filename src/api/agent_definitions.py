@@ -181,6 +181,60 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
         return _error("创建失败")
 
 
+@router.get("/meta/tools")
+async def list_tools_meta(request: Request):
+    """获取工具元数据列表（供前端选择器使用）"""
+    _require_admin(request)
+    from src.core.agent import master_agent
+    tool_registry = master_agent.tool_registry
+    if not tool_registry:
+        return _success([])
+    tools = []
+    for name, tool in tool_registry._tools.items():
+        tools.append({
+            "id": name,
+            "name": getattr(tool, 'display_name', None) or name,
+            "description": getattr(tool, 'description', '') or '',
+        })
+    return _success(tools)
+
+
+@router.get("/meta/skills")
+async def list_skills_meta(request: Request):
+    """获取技能元数据列表（供前端选择器使用）"""
+    _require_admin(request)
+    from src.core.agent import master_agent
+    skill_registry = master_agent.skill_registry
+    if not skill_registry:
+        return _success([])
+    skills = []
+    for name in skill_registry.list_skills():
+        skill = skill_registry.get(name)
+        skills.append({
+            "id": name,
+            "name": name,
+            "description": skill.description if skill else '',
+        })
+    return _success(skills)
+
+
+@router.get("/meta/reply-styles")
+async def list_reply_styles_meta(request: Request):
+    """获取回复风格元数据列表（供前端选择器使用）"""
+    _require_admin(request)
+    from src.prompts.style_manager import get_style_manager
+    sm = get_style_manager()
+    style_ids = sm.list_styles()
+    styles = []
+    for sid in style_ids:
+        styles.append({
+            "id": sid,
+            "name": sm._get_style_name(sid),
+            "description": sm._get_style_description(sid),
+        })
+    return _success(styles)
+
+
 @router.get("/{agent_id}")
 async def get_definition(request: Request, agent_id: str):
     """获取子智能体定义详情"""

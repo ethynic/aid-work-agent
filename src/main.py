@@ -1675,6 +1675,8 @@ app.include_router(prompt_management.tenant_router)
 # 子智能体定义管理 API
 from src.api import agent_definitions
 app.include_router(agent_definitions.router)
+from src.api import agent_definition_sections
+app.include_router(agent_definition_sections.router)
 app.include_router(travel_quote.router)
 app.include_router(subagent.router)
 

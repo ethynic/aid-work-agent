@@ -653,6 +653,19 @@ CREATE TABLE IF NOT EXISTS prompt_drafts (
     updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- subagent_prompt_sections — System Prompt 分段管理（Phase 3.7）
+CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id    TEXT NOT NULL,
+    section_key TEXT NOT NULL,
+    content     TEXT DEFAULT '',
+    updated_by  TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(agent_id, section_key)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_sections_agent ON subagent_prompt_sections(agent_id);
+
 
 -- 输出初始化完成信息
 DO $$
@@ -1270,6 +1283,19 @@ CREATE TABLE IF NOT EXISTS prompt_drafts (
     updated_by    TEXT,
     updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- subagent_prompt_sections — System Prompt 分段管理（Phase 3.7）
+CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id    TEXT NOT NULL,
+    section_key TEXT NOT NULL,
+    content     TEXT DEFAULT '',
+    updated_by  TEXT,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(agent_id, section_key)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_sections_agent ON subagent_prompt_sections(agent_id);
 
 -- subagent_definitions — 子智能体元数据定义（Phase 2）
 CREATE TABLE IF NOT EXISTS subagent_definitions (

@@ -3,7 +3,7 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.2
 > 关联调研：[Prompt 版本管理与生命周期管理 — 业界调研](../research/prompt-version-management-research.md)
 > 设计日期：2026-05-28
-> 更新日期：2026-06-04（Phase 3 新增回复风格选择器 + business_pages 配置；§八.1.6、§八.1.7）
+> 更新日期：2026-06-05（新增 §八.1.8 System Prompt 板块化管理 + LLM 智能优化）
 > 状态：Phase 2 代码完成，待验证
 
 ---
@@ -89,6 +89,7 @@
 | **Label（标签）** | 指向某个版本的命名指针，如 `production`、`staging`、`experiment-a` |
 | **Snippet（片段）** | 可被其他 Prompt 引用的可复用 Prompt 片段（二期） |
 | **Draft（草稿）** | 未提交的编辑状态，仅存在于前端，不写入版本表 |
+| **Prompt Section（板块）** | DB 子智能体 System Prompt 的结构化分区，固定为 5 个板块（岗位说明、岗位职责、工作流程、回复风格、其他说明），每个板块独立编辑和存储，运行时拼接组装 |
 
 ### 2.2 子智能体 Prompt 管理范围
 
@@ -981,7 +982,184 @@ if self.subagent_config:
 
 **后端无改动**，`business_pages` 字段的读写已在 Phase 2 实现。只需前端增加编辑区。
 
-### 8.2 租户定制 extra.md 集成
+#### 8.1.8 System Prompt 板块化管理（Phase 3）
+
+**问题**：当前 DB 定义的子智能体，其 system_prompt 存储在 `prompt_versions` 表中作为一整块文本。管理员面对巨大的 textarea 编辑，内容难以管理和优化。不同类型的信息（身份、流程、约束）混在一起，局部修改困难。
+
+**方案**：将 DB 子智能体的 system_prompt 拆分为 5 个固定板块，每个板块独立编辑、独立存储、运行时拼接。
+
+**五大板块**：
+
+| 板块 Key | 板块名称 | 用途 | 编辑方式 |
+|----------|---------|------|---------|
+| `role_description` | 岗位说明 | 智能体的身份、人设、性格特征 | 自由文本编辑 |
+| `responsibilities` | 岗位职责 | 智能体负责的核心工作内容 | 自由文本编辑 |
+| `workflow` | 工作流程 | 业务流程、对话阶段、任务执行步骤 | 自由文本编辑 |
+| `reply_style` | 回复风格 | 从风格列表选择，自动填充风格文本 | 下拉选择（reply_styles API） |
+| `other_notes` | 其他说明 | 行为约束、沟通技巧、补充说明 | 自由文本编辑 |
+
+**数据模型**：
+
+```sql
+-- 子智能体 Prompt 板块表（Phase 3 新增）
+CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
+    id SERIAL PRIMARY KEY,
+    agent_id TEXT NOT NULL,              -- 关联 subagent_definitions.agent_id
+    section_key TEXT NOT NULL,           -- role_description | responsibilities | workflow | reply_style | other_notes
+    content TEXT NOT NULL DEFAULT '',    -- 该板块的 Markdown 内容
+    updated_by TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(agent_id, section_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_sections_agent
+    ON subagent_prompt_sections(agent_id);
+```
+
+**设计决策**：
+
+- **不改动 prompt_versions 表**：板块化管理是 DB 子智能体专属特性，`prompt_versions` 是通用的版本管理表，不适合存储结构化板块
+- **与 prompt_versions 共存**：文件系统子智能体仍使用 `prompt_versions` 的整块 system_prompt；DB 子智能体改用 `subagent_prompt_sections` 拼接
+- **回复风格板块特殊处理**：用户通过下拉选择器选择风格 ID（复用 `reply_styles` API），选择后系统自动解析风格文本并存入 `subagent_prompt_sections` 的 `reply_style` 板块。`subagent_definitions.reply_style` 字段保留，作为用户选择的风格 ID 引用
+- **独立于 extra_md**：extra_md 是租户级定制，仍由 Phase 4 实现。板块化管理仅影响平台管理员编辑的子智能体定义层
+
+**运行时组装流程**：
+
+```
+Agent._build_system_prompt(user)
+  │
+  ├── subagent_config.from_db == True
+  │     │
+  │     ▼
+  │   _assemble_sections_prompt(agent_id)
+  │     │
+  │     ├── 从 subagent_prompt_sections 加载 5 个板块
+  │     │
+  │     │  如果 reply_style 板块为空：
+  │     │    从 subagent_definitions.reply_style 解析风格文本填充
+  │     │
+  │     ▼
+  │   按固定顺序拼接为 subagent_constraint：
+  │
+  │   ## 岗位说明
+  │   {role_description 内容}
+  │
+  │   ## 岗位职责
+  │   {responsibilities 内容}
+  │
+  │   ## 工作流程
+  │   {workflow 内容}
+  │
+  │   ## 回复风格
+  │   {reply_style 内容}
+  │
+  │   ## 其他说明
+  │   {other_notes 内容}
+  │
+  │     │
+  │     ▼
+  │   注入到 subagent_base.md 的 {subagent_constraint_section} 位置
+  │
+  ├── subagent_config.from_db == False（文件系统）
+  │     直接使用 config.system_prompt（一整块文本，不变）
+  │
+  └── 后续逻辑不变：加载知识库约束 → 加载 extra_md → 渲染模板
+```
+
+**缓存与实时生效**：
+
+- 板块内容通过 Redis 缓存（key: `prompt_sections:{agent_id}`），TTL 300s
+- 编辑保存后主动刷新缓存，实现实时生效
+- `SubagentRegistry.load_from_db()` 启动时从 `subagent_prompt_sections` 读取并拼接
+- `AgentFactory._load_single_from_db()` 运行时按需加载同理
+
+**后端 API**：
+
+```
+# 板块 CRUD
+GET    /api/admin/agent-definitions/{agent_id}/sections           → 获取所有板块
+GET    /api/admin/agent-definitions/{agent_id}/sections/{key}     → 获取单个板块
+PUT    /api/admin/agent-definitions/{agent_id}/sections/{key}     → 保存单个板块（实时生效）
+
+# 完整预览
+GET    /api/admin/agent-definitions/{agent_id}/sections/preview   → 获取拼接后的完整 Prompt 预览
+
+# AI 智能优化
+POST   /api/admin/agent-definitions/{agent_id}/sections/{key}/optimize → LLM 优化板块内容
+```
+
+**LLM 智能优化**：
+
+每个板块编辑区上方提供"AI 优化"按钮。点击后后端调用 LLM 基于板块标题、子智能体名称和用途、当前内容进行优化。
+
+优化 Prompt 模板：
+
+```
+你是一个 Prompt 工程专家。请优化以下子智能体的"{板块名称}"板块内容。
+
+子智能体名称：{name}
+子智能体用途：{description}
+
+当前内容：
+{content}
+
+优化原则：
+1. 保持原文的核心意图不变
+2. 使指令更加清晰、具体、可执行
+3. 减少模糊和歧义表述
+4. 保持 Markdown 格式
+5. 适合作为 LLM 的 System Prompt
+
+请直接返回优化后的内容，不要加说明文字。
+```
+
+前端展示优化结果后，管理员确认则覆盖原内容，取消则丢弃。
+
+**前端编辑界面改造**：
+
+`AgentDefinitionManager.vue` 右侧 Prompt 区从单一 textarea 改为 Tab 式板块编辑器：
+
+```
+┌─ Prompt 区（System Prompt）─────────────────────────────────────┐
+│                                                                 │
+│  ┌────────────┬────────────┬────────────┬──────────┬──────────┐│
+│  │ 岗位说明   │ 岗位职责   │ 工作流程   │ 回复风格  │ 其他说明 ││
+│  └────────────┴────────────┴────────────┴──────────┴──────────┘│
+│                                                                 │
+│  ┌─────────────────────────────────────┐ ┌──────────────────┐  │
+│  │  当前板块：岗位说明        [AI优化] │ │  预览：完整组装   │  │
+│  │                                     │ │  后的 Prompt      │  │
+│  │  ┌─────────────────────────────┐   │ │                  │  │
+│  │  │ 你是一名热爱旅游行业的      │   │ │  ## 岗位说明     │  │
+│  │  │ 行程规划师...               │   │ │  ...             │  │
+│  │  └─────────────────────────────┘   │ │  ## 岗位职责     │  │
+│  │                                     │ │  ...             │  │
+│  │  [保存]                             │ │  ## 工作流程     │  │
+│  └─────────────────────────────────────┘ │  ...             │  │
+│                                          └──────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**交互说明**：
+
+1. **Tab 切换**：5 个板块用 Tab 切换，每个 Tab 对应一个 textarea（回复风格 Tab 为下拉选择器）
+2. **AI 优化**：非回复风格板块的编辑区上方有"AI 优化"按钮，点击后调用 optimize API，展示优化结果供确认
+3. **右侧预览**：展示 5 个板块拼接后的完整 system_prompt 预览，只读
+4. **回复风格 Tab**：展示下拉选择器（复用 `GET /api/saas/reply-styles`），选择后自动填充风格文本到该板块
+5. **独立保存**：每个板块独立保存，保存后实时生效（刷新 Redis 缓存）
+
+**影响范围**：
+
+- 仅影响 DB 定义的子智能体（`subagent_definitions` 表 + `subagent_prompt_sections` 表）
+- 文件系统子智能体（`SUBAGENT.md`）不受影响，继续使用一整块 system_prompt
+- `prompt_versions` 表中已有的版本数据不受影响
+
+**与现有子智能体创建/编辑流程的关系**：
+
+- **创建子智能体**时，自动在 `subagent_prompt_sections` 中创建 5 个空板块记录
+- **编辑子智能体**时，Prompt 区使用 Tab 式板块编辑器替代原有的 textarea
+- **SubagentRegistry.load_from_db()** 改为从 `subagent_prompt_sections` 读取并拼接，不再从 `prompt_versions` 读取
+- **AgentFactory._load_single_from_db()** 同理
 
 > 改造目标不变：将 extra_md 从文件系统迁移到数据库，纳入版本管理，并在租户前台提供编辑界面。
 

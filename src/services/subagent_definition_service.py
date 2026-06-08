@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 from loguru import logger
 
 from src.db.subagent_definition_db import SubagentDefinitionDB
+from src.db.subagent_prompt_section_db import SubagentPromptSectionDB, SECTION_KEYS
 from src.prompts.prompt_registry_service import PromptRegistryService
 
 
@@ -144,7 +145,10 @@ class SubagentDefinitionService:
 
     @staticmethod
     def delete_definition(agent_id: str) -> bool:
-        """删除子智能体定义 + 级联删除关联的 Prompt"""
+        """删除子智能体定义 + 级联删除关联的 Prompt + 分段"""
+        # 删除 prompt 分段
+        SubagentPromptSectionDB.delete_sections(agent_id)
+
         # 删除 prompt（包含版本、标签、草稿）
         prompt = PromptRegistryService.get_prompt_by_scope(None, "subagent", agent_id)
         if prompt:
@@ -180,6 +184,43 @@ class SubagentDefinitionService:
                 created_by=created_by,
             )
         return result
+
+    # ========== Prompt 分段管理 ==========
+
+    @staticmethod
+    def get_sections(agent_id: str) -> List[Dict[str, Any]]:
+        """获取智能体的 prompt 分段列表，无分段时返回空分段列表"""
+        sections = SubagentPromptSectionDB.get_sections(agent_id)
+        if not sections:
+            # Legacy fallback: 返回 5 个空分段
+            sections = [
+                {"agent_id": agent_id, "section_key": key, "content": "", "updated_by": None}
+                for key in SECTION_KEYS
+            ]
+        return [_serialize(s) for s in sections]
+
+    @staticmethod
+    def save_section(
+        agent_id: str,
+        section_key: str,
+        content: str,
+        updated_by: str = None,
+    ) -> Optional[Dict[str, Any]]:
+        """保存单个分段，并自动组装提交新版本"""
+        result = SubagentPromptSectionDB.upsert_section(agent_id, section_key, content, updated_by)
+        if not result:
+            return None
+
+        # 组装完整 prompt 并提交新版本
+        assembled = SubagentPromptSectionDB.assemble_content(agent_id)
+        SubagentDefinitionService.update_system_prompt(
+            agent_id,
+            content=assembled,
+            commit_message=f"更新分段: {section_key}",
+            created_by=updated_by,
+        )
+
+        return _serialize(result)
 
     # ========== 辅助方法 ==========
 

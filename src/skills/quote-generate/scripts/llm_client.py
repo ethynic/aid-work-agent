@@ -21,6 +21,7 @@ def call_llm(prompt: str) -> str:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             result_format='message',
+            temperature=0.0,
         )
         if resp.status_code == 200:
             return resp.output.choices[0].message.content
@@ -35,6 +36,7 @@ def call_llm(prompt: str) -> str:
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
         )
         return resp.choices[0].message.content
     elif provider == 'deepseek':
@@ -48,7 +50,7 @@ def call_llm(prompt: str) -> str:
         resp = httpx.post(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
-            json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0},
             timeout=300.0,
         )
         resp.raise_for_status()

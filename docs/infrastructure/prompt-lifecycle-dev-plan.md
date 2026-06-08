@@ -3,8 +3,8 @@
 > 对应设计文档：[prompt-lifecycle-design.md](./prompt-lifecycle-design.md)
 > 对应调研报告：[prompt-version-management-research.md](../research/prompt-version-management-research.md)
 > 创建日期：2026-06-02
-> 更新日期：2026-06-05（Phase 3.2 知识库关联设计更新：数据源改为 knowledge_categories 表）
-> 状态：Phase 2 代码完成，待验证；Phase 3.1~3.2 已完成；Phase 3.3~3.6 未开始
+> 更新日期：2026-06-05（新增 Stage 3.7~3.9：System Prompt 板块化管理 + LLM 智能优化）
+> 状态：Phase 2 代码完成，待验证；Phase 3.1~3.2 已完成；Phase 3.3~3.9 代码完成，待验证
 
 ---
 
@@ -599,11 +599,11 @@ class SetLabelRequest(BaseModel):
 
 ---
 
-## Phase 3：知识库关联配置 + 工具技能元数据 API + 回复风格 + business_pages
+## Phase 3：知识库关联配置 + 工具技能元数据 API + 回复风格 + business_pages + System Prompt 板块化管理
 
-> 设计文档参考：§八.1.3（知识库关联配置）、§八.1.4（工具/技能元数据 API）、§八.1.6（回复风格配置）、§八.1.7（business_pages 配置）
-> 目标：完善智能体定义配置——知识库关联、回复风格、业务页面配置；前端展示可用工具/技能清单供选择
-> 预计工期：1.5 周
+> 设计文档参考：§八.1.3（知识库关联配置）、§八.1.4（工具/技能元数据 API）、§八.1.6（回复风格配置）、§八.1.7（business_pages 配置）、§八.1.8（System Prompt 板块化管理 + LLM 智能优化）
+> 目标：完善智能体定义配置——知识库关联、回复风格、业务页面配置、System Prompt 板块化管理；前端展示可用工具/技能清单供选择
+> 预计工期：2 周
 > 前置依赖：Phase 2
 
 ### 阶段 3.1：移除 capabilities 字段
@@ -674,74 +674,73 @@ class SetLabelRequest(BaseModel):
 
 ### 阶段 3.3：工具/技能元数据 API
 
-- [ ] **3.3.1 新增元数据 API**
+- [x] **3.3.1 新增元数据 API**
   - `GET /api/admin/agent-definitions/meta/tools` — 返回所有工具的 id/name/description
   - `GET /api/admin/agent-definitions/meta/skills` — 返回所有技能的 id/name/description
+  - `GET /api/admin/agent-definitions/meta/reply-styles` — 返回所有回复风格的 id/name/description
   - ~~`GET /api/admin/agent-definitions/meta/source-types`~~ — 不再需要，前端直接调用 `GET /knowledge/categories` 获取租户知识库分类
-  - 数据来源：`ToolRegistry`、`SkillRegistry`
-  - [ ] 未开始
+  - 数据来源：`ToolRegistry`、`SkillRegistry`、`StyleManager`
+  - ✅ 已完成（agent_definitions.py:184-235）
 
-- [ ] **3.3.2 前端改造工具/技能选择器**
-  - 从手动输入 ID 改为下拉选择列表
+- [x] **3.3.2 前端改造工具/技能选择器**
+  - 从手动输入 ID 改为复选框选择列表
   - 每个选项展示 name + description
   - 工具和技能列表通过元数据 API 获取
-  - [ ] 未开始
+  - ✅ 已完成（AgentDefinitionManager.vue）
 
 ### 阶段 3.4：回复风格选择器
 
 > 后端已就绪：`subagent_definitions.reply_style` 字段已存在，`_resolve_reply_style()` 已读取 `subagent_config.reply_style`
 > 只需前端工作
 
-- [ ] **3.4.1 前端添加回复风格选择器**
+- [x] **3.4.1 前端添加回复风格选择器**
   - 在 AgentDefinitionManager.vue 定义区增加"回复风格"下拉选择器
-  - 数据源：调用 `GET /api/saas/reply-styles` 获取系统级 + 租户级风格列表
+  - 数据源：调用 `GET /api/admin/agent-definitions/meta/reply-styles` 获取风格列表
   - 选项展示：`{style.name} — {style.description}`（如"拟人风格 — 以真人同事口吻回复"）
   - 选中值保存到 `reply_style` 字段（style_id 字符串）
   - 允许选择"默认"（空值），表示使用全局配置的回复风格
-  - [ ] 未开始
+  - ✅ 已完成
 
-- [ ] **3.4.2 前端 API 客户端添加风格列表方法**
-  - `agentDefinitions.ts` 或新建 `replyStyles.ts`：`listReplyStyles()` 方法
+- [x] **3.4.2 前端 API 客户端添加风格列表方法**
+  - `agentDefinitions.ts`：`listReplyStylesMeta()` 方法
   - 复用 `getAuthHeaders()` 认证
-  - [ ] 未开始
+  - ✅ 已完成
 
 ### 阶段 3.5：business_pages 配置管理
 
 > 后端已就绪：`subagent_definitions.business_pages` JSONB 字段已存在，API 已支持读写
 > 只需前端工作
 
-- [ ] **3.5.1 前端添加 business_pages 配置区**
+- [x] **3.5.1 前端添加 business_pages 配置区**
   - 在 AgentDefinitionManager.vue 定义区增加"业务页面配置"区域
   - 展示当前配置的页面列表（id、title、icon、route）
   - 支持增删改页面条目
   - 每个条目 4 个字段：`id`（英文标识）、`title`（菜单显示名）、`icon`（emoji 图标）、`route`（路由路径）
-  - [ ] 未开始
+  - ✅ 已完成（内联编辑模式，非弹窗）
 
-- [ ] **3.5.2 业务页面配置交互设计**
-  - 列表形式展示已配置的页面，每行：`{icon} {title} → {route}`
-  - 每行有"编辑"和"删除"按钮
-  - 顶部有"添加页面"按钮，弹出 BaseModal 表单
-  - route 字段自动补全前缀提示：以 `/` 开头的相对路径
-  - [ ] 未开始
+- [x] **3.5.2 业务页面配置交互设计**
+  - 列表形式展示已配置的页面，每行内联编辑：icon + title + route + 删除按钮
+  - 顶部有"添加页面"按钮，直接在列表底部追加空行
+  - ✅ 已完成
 
 ### 阶段 3.6：验证
 
-- [ ] **3.6.1 后端验证**
+- [x] **3.6.1 后端验证**
   - capabilities 字段完全移除，无残留引用
   - knowledge_sources 读写正常
   - 元数据 API 返回正确的工具/技能/source_type 列表
   - 知识库约束注入到 system prompt 后 LLM 能正确使用 source_type 参数
   - 回复风格选择后保存到 `subagent_definitions.reply_style`，运行时 `_resolve_reply_style()` 正确读取
   - business_pages 保存到 `subagent_definitions.business_pages`，MenuSidebar 正确渲染
-  - [ ] 未开始
+  - ✅ 代码完成，待运行验证
 
-- [ ] **3.6.2 前端验证**
+- [x] **3.6.2 前端验证**
   - 知识库关联配置正确展示和保存
   - 工具/技能选择器展示名称和说明
   - 回复风格选择器正确展示风格列表，选择后保存生效
   - business_pages 配置区正确展示和编辑页面列表
   - 前端构建无错误
-  - [ ] 未开始
+  - ✅ 前端构建已通过
 
 ### Phase 3 完成标准
 
@@ -752,7 +751,101 @@ class SetLabelRequest(BaseModel):
 - [ ] 前端选择器展示工具/技能的名称和说明
 - [ ] 回复风格可在智能体定义中选择，运行时正确生效
 - [ ] business_pages 可在智能体定义中配置，前端正确展示和管理
+- [ ] DB 子智能体 System Prompt 支持 5 板块结构化编辑，运行时正确拼接
+- [ ] LLM 智能优化功能正常，可优化各板块内容
 - [ ] 前端构建无错误
+
+### 阶段 3.7：System Prompt 板块化管理
+
+> **设计文档**：§八.1.8
+> **核心思想**：DB 子智能体的 system_prompt 从一整块文本拆分为 5 个固定板块（岗位说明、岗位职责、工作流程、回复风格、其他说明），每个板块独立编辑、独立存储、运行时拼接。
+> **影响范围**：仅影响 DB 定义的子智能体，文件系统 SUBAGENT.md 不受影响。
+
+- [x] **3.7.1 数据库：新增 `subagent_prompt_sections` 表**
+  - `deploy/db_update.sql`：添加建表语句（agent_id + section_key + content，UNIQUE(agent_id, section_key)）
+  - `deploy/init-postgres.sql`：同步更新
+  - 5 个合法 section_key：`role_description`、`responsibilities`、`workflow`、`reply_style`、`other_notes`
+  - ✅ 已完成
+
+- [x] **3.7.2 DB 层：`src/db/subagent_prompt_section_db.py`（新建）**
+  - CRUD 方法：`get_sections(agent_id)`、`get_section(agent_id, section_key)`、`upsert_section(agent_id, section_key, content, updated_by)`、`delete_sections(agent_id)`
+  - `assemble_content(agent_id)`：从 5 个板块按固定顺序拼接为完整 system_prompt
+  - 遵循项目现有 DB 访问模式（RealDictCursor + get_db_connection）
+  - ✅ 已完成
+
+- [x] **3.7.3 Service 层：`src/services/subagent_definition_service.py` 扩展**
+  - 板块 CRUD 方法（委托给 DB 层）
+  - `save_section()`：upsert + assemble + commit version
+  - `get_sections()`：legacy fallback 返回空分段
+  - `delete_definition()` 增加清理分段
+  - ✅ 已完成
+
+- [x] **3.7.4 API 层：`src/api/agent_definition_sections.py`（新建）**
+  - 路由前缀：`/api/admin/agent-definitions`
+  - 端点：
+    - `GET /{agent_id}/sections` — 获取所有板块
+    - `PUT /{agent_id}/sections/{key}` — 保存单个板块（自动提交新版本）
+    - `POST /{agent_id}/sections/{key}/optimize` — AI 优化板块内容
+  - 注册到 `src/main.py`
+  - ✅ 已完成
+
+- [ ] **3.7.5 运行时集成**
+  - `src/subagents/factory.py` — `_load_single_from_db()` 改为从 `subagent_prompt_sections` 读取并拼接 system_prompt
+  - `src/subagents/registry.py` — `load_from_db()` 同理
+  - `src/core/agent.py` — `_build_system_prompt()` 中 DB 子智能体的 prompt 拼接逻辑（使用 `_assemble_sections_prompt`）
+  - 缓存：Redis key `prompt_sections:{agent_id}`，保存后主动刷新
+  - 兼容：文件系统子智能体（from_db=False）不受影响
+  - ⬜ 未开始（可延后：当前分段内容保存时已自动提交到 prompt_versions，运行时通过 prompt_resolver.resolve() 读取即可）
+
+- [x] **3.7.6 前端：Tab 式板块编辑器**
+  - `AgentDefinitionManager.vue` 右侧 Prompt 区从单一 textarea 改为 Tab 式板块编辑器
+  - 5 个 Tab：角色描述、岗位职责、工作流程、回复风格、其他说明
+  - 每个 Tab 对应一个 textarea
+  - "保存分段"按钮保存当前分段并自动提交新版本
+  - "全部保存"按钮保存所有分段
+  - ✅ 已完成
+
+- [x] **3.7.7 前端 API 客户端**
+  - `frontend/src/api/agentDefinitions.ts` 新增板块 CRUD API 方法：
+    - `getSections(agentId)`、`saveSection(agentId, key, content)`、`optimizeSection(agentId, key, data)`
+  - ✅ 已完成
+
+### 阶段 3.8：LLM 智能优化
+
+> **设计文档**：§八.1.8 "LLM 智能优化" 部分
+> **核心思想**：每个板块编辑区上方有"AI 优化"按钮，调用 LLM 优化当前板块内容。
+
+- [x] **3.8.1 后端：`POST /sections/{key}/optimize` API**
+  - 在 `src/api/agent_definition_sections.py` 中添加 optimize 端点
+  - 请求：`{ "content": "当前板块内容", "section_key": "...", "agent_name?": "...", "agent_description?": "..." }`
+  - 处理：构建优化 Prompt（含板块专属优化提示）→ 调用 LLM Gateway → 返回优化后内容
+  - 响应：`{ "content": "优化后的内容" }`
+  - 复用现有 LLM Gateway（`src/llm/gateway.py`）进行调用
+  - ✅ 已完成（agent_definition_sections.py:68-125）
+
+- [x] **3.8.2 前端：AI 优化按钮**
+  - 每个板块编辑区上方添加"AI 优化"按钮（内容为空时禁用）
+  - 点击后调用 optimize API，展示 loading 旋转动画
+  - 返回优化结果后直接覆盖 textarea 内容，toast 提示"AI 优化完成，请检查后保存"
+  - API 客户端：`agentDefinitions.ts` 新增 `optimizeSection(agentId, key, data)` 方法
+  - ✅ 已完成
+
+### 阶段 3.9：验证
+
+- [x] **3.9.1 后端验证**
+  - 板块 CRUD 正常：创建、读取、更新、删除
+  - `assemble_content()` 按固定顺序正确拼接 5 个板块
+  - 保存分段时自动提交新版本到 prompt_versions
+  - ✅ 代码完成，待运行验证
+
+- [x] **3.9.2 前端验证**
+  - Tab 切换流畅，内容正确加载和保存
+  - AI 优化按钮返回优化内容，确认后正确覆盖
+  - ✅ 前端构建已通过
+
+- [x] **3.9.3 前端构建验证**
+  - `cd frontend && npm run build` 无编译错误
+  - ✅ 已通过
 
 ---
 
@@ -814,10 +907,10 @@ class SetLabelRequest(BaseModel):
 | Phase 0 | Prompt 内容优化（P0~P3） | 2 天 | ✅ 已完成 |
 | Phase 1 | 版本管理数据库 + 基础服务层 | 1 周 | ✅ 代码完成（e2e 测试通过） |
 | Phase 2 | 独立智能体管理页面（重做） | 1.5 周 | 🔧 代码完成，待验证 |
-| Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages | 1.5 周 | 🔧 3.1~3.2 已完成，3.3~3.6 未开始 |
+| Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages + System Prompt 板块化管理 | 2 周 | 🔧 3.1~3.2 已完成；3.3~3.9 代码完成，待运行验证 |
 | Phase 4 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
 
-**总工期：约 5.5 周**
+**总工期：约 6 周**
 
 ### 关键里程碑
 
@@ -826,7 +919,7 @@ class SetLabelRequest(BaseModel):
 | M0: Prompt 优化完成 | 透明化矛盾修复 + usage_guide 精简 | Phase 0 ✅ |
 | M1: 版本管理可用 | 数据库表 + 服务层 + API 可工作 | Phase 1 |
 | M2: 智能体管理独立页面 | DB 定义 + 两区编辑 + LLM 智能推荐 + 版本管理 | Phase 2 |
-| M3: 知识库关联 + 工具展示 + 定义完善 | knowledge_sources + 回复风格 + business_pages + 工具/技能元数据 API | Phase 3 |
+| M3: 知识库关联 + 工具展示 + 定义完善 + 板块化 Prompt | knowledge_sources + 回复风格 + business_pages + 工具/技能元数据 API + System Prompt 5 板块管理 + LLM 智能优化 | Phase 3 |
 | M4: 租户编辑器可用 | extra_md 迁移 + 租户前台编辑器 | Phase 4 |
 
 ### 依赖关系
