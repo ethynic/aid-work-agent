@@ -17,7 +17,7 @@
     <main class="flex-1 flex overflow-hidden">
       <div class="flex-1 flex flex-col min-w-0">
         <AppHeader
-          title="智能体管理"
+          title="自定义数字员工"
           :is-online="true"
           :is-logged-in="effectiveIsLoggedIn"
           :user="demoUser"

@@ -1,281 +1,215 @@
 <template>
-  <div class="h-full flex flex-col bg-canvas">
-    <!-- 顶部操作栏 -->
-    <div class="flex items-center justify-between px-6 py-4 bg-white border-b border-default">
-      <h1 class="text-xl font-bold text-default">错误日志</h1>
-      <div class="flex items-center gap-3">
-        <!-- 状态筛选 -->
-        <select v-model="filterStatus" @change="loadData"
-          class="px-3 py-1.5 border border-hover rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
+  <div class="page-container">
+    <!-- 工具栏 -->
+    <div class="page-toolbar">
+      <div class="page-toolbar-left">
+        <h2 class="m-0 text-lg">错误日志</h2>
+        <p class="text-sm text-muted mt-0.5 hidden sm:block">平台错误日志管理与追踪</p>
+      </div>
+      <div class="page-toolbar-right">
+        <BaseSelect v-model="filterStatus" size="sm" class="w-28" @update:model-value="handleSearch('')">
           <option value="">全部状态</option>
           <option value="unprocessed">未处理</option>
           <option value="processed">已处理</option>
           <option value="ignored">已忽略</option>
-        </select>
-
-        <!-- 清理旧日志按钮 -->
-        <button @click="showCleanupConfirm = true"
-          class="px-3 py-1.5 bg-danger-500 text-white rounded-lg text-sm hover:bg-danger-600 transition-colors">
-          清理旧日志（30天）
-        </button>
-
-        <!-- 刷新按钮 -->
-        <button @click="loadData" :disabled="loading"
-          class="px-3 py-1.5 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-700 transition-colors disabled:opacity-50">
-          刷新
-        </button>
+        </BaseSelect>
+        <BaseButton size="sm" intent="danger" @click="showCleanupConfirm = true">清理旧日志（30天）</BaseButton>
+        <BaseButton size="sm" intent="secondary" @click="refresh">刷新</BaseButton>
       </div>
     </div>
 
-    <!-- 数据区域 -->
-    <div class="flex-1 overflow-auto p-6">
-      <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
-
-      <template v-else>
-        <div class="bg-white rounded-xl shadow-sm border border-default overflow-hidden">
-          <div v-if="logs.length > 0">
-            <table class="w-full">
-              <thead class="bg-canvas sticky top-0">
-                <tr>
-                  <th class="px-4 py-2 text-left text-xs font-medium text-muted w-36">时间</th>
-                  <th class="px-4 py-2 text-left text-xs font-medium text-muted w-36">模块</th>
-                  <th class="px-4 py-2 text-left text-xs font-medium text-muted w-28">类型</th>
-                  <th class="px-4 py-2 text-left text-xs font-medium text-muted">消息</th>
-                  <th class="px-4 py-2 text-left text-xs font-medium text-muted w-20">状态</th>
-                  <th class="px-4 py-2 text-left text-xs font-medium text-muted w-44">操作</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-default">
-                <tr v-for="log in logs" :key="log.id" class="hover:bg-surface-hover">
-                  <td class="px-4 py-2 text-xs text-muted">{{ formatDateTime(log.timestamp) }}</td>
-                  <td class="px-4 py-2 text-xs text-default font-mono">{{ log.module || '-' }}</td>
-                  <td class="px-4 py-2 text-xs text-default">{{ log.error_type || '-' }}</td>
-                  <td class="px-4 py-2 text-sm text-default max-w-md">
-                    <div class="truncate">{{ log.message }}</div>
-                  </td>
-                  <td class="px-4 py-2">
-                    <span :class="getStatusClass(log.status)" class="px-2 py-0.5 rounded text-xs font-medium">
-                      {{ getStatusLabel(log.status) }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-2">
-                    <div class="flex items-center gap-2">
-                      <button @click="showDetail(log)"
-                        class="px-2 py-1 text-xs bg-primary-100 text-primary-700 rounded hover:bg-primary-200 transition-colors">
-                        详情
-                      </button>
-                      <template v-if="log.status === 'unprocessed'">
-                        <button @click="markAsProcessed(log.id)"
-                          class="px-2 py-1 text-xs bg-success-100 text-success-700 rounded hover:bg-success-200 transition-colors">
-                          处理
-                        </button>
-                        <button @click="markAsIgnored(log.id)"
-                          class="px-2 py-1 text-xs bg-gray-200 text-default rounded hover:bg-gray-300 transition-colors">
-                          忽略
-                        </button>
-                      </template>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+    <!-- 表格 -->
+    <div class="table-scroll-wrapper">
+      <BaseTable :columns="columns" :data="logs" row-key="id">
+        <template #index="{ index }">{{ seqNumber(index) }}</template>
+        <template #timestamp="{ row }">{{ formatDateTime(row.timestamp) }}</template>
+        <template #module="{ row }">
+          <span class="font-mono text-xs">{{ row.module || '-' }}</span>
+        </template>
+        <template #error_type="{ row }">{{ row.error_type || '-' }}</template>
+        <template #message="{ row }">
+          <span class="block max-w-[300px] truncate text-muted">{{ row.message }}</span>
+        </template>
+        <template #status="{ row }">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium" :class="getStatusClass(row.status)">
+            {{ getStatusLabel(row.status) }}
+          </span>
+        </template>
+        <template #actions="{ row }">
+          <div class="flex items-center justify-center gap-1">
+            <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="showDetail(row)">详情</BaseButton>
+            <template v-if="row.status === 'unprocessed'">
+              <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="markAsProcessed(row.id)">处理</BaseButton>
+              <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="markAsIgnored(row.id)">忽略</BaseButton>
+            </template>
           </div>
-          <div v-else class="text-center py-12 text-muted">暂无错误日志</div>
+        </template>
+        <template #empty>
+          <div v-if="loading" class="flex items-center justify-center gap-2">
+            <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            加载中...
+          </div>
+          <span v-else>暂无错误日志</span>
+        </template>
+      </BaseTable>
+    </div>
 
-          <!-- 分页 -->
-          <div v-if="totalPages > 1" class="px-4 py-3 border-t border-default flex items-center justify-between">
-            <span class="text-sm text-muted">共 {{ total }} 条记录</span>
-            <div class="flex items-center gap-2">
-              <button @click="prevPage" :disabled="page <= 1"
-                class="px-2 py-1 text-xs border border-hover rounded hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
-                上一页
-              </button>
-              <span class="text-sm text-default">{{ page }} / {{ totalPages }}</span>
-              <button @click="nextPage" :disabled="page >= totalPages"
-                class="px-2 py-1 text-xs border border-hover rounded hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
-                下一页
-              </button>
-            </div>
+    <!-- 分页器 -->
+    <BasePagination
+      v-if="total > 0"
+      :total="total"
+      v-model:current-page="currentPage"
+      v-model:page-size="pageSize"
+    />
+
+    <!-- 详情 Modal -->
+    <BaseModal v-model="showModal" title="错误详情 #{{ selectedLog?.id }}" size="xl" mode="view">
+      <template v-if="selectedLog">
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <span class="text-muted">时间：</span>
+            <span class="text-default tabular-nums">{{ formatDateTime(selectedLog.timestamp) }}</span>
+          </div>
+          <div>
+            <span class="text-muted">模块：</span>
+            <span class="text-default font-mono text-xs">{{ selectedLog.module || '-' }}</span>
+          </div>
+          <div>
+            <span class="text-muted">错误类型：</span>
+            <span class="text-default">{{ selectedLog.error_type || '-' }}</span>
+          </div>
+          <div>
+            <span class="text-muted">状态：</span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium" :class="getStatusClass(selectedLog.status)">
+              {{ getStatusLabel(selectedLog.status) }}
+            </span>
+          </div>
+          <div v-if="selectedLog.processed_by">
+            <span class="text-muted">处理人：</span>
+            <span class="text-default">{{ selectedLog.processed_by }}</span>
+          </div>
+          <div v-if="selectedLog.processed_at">
+            <span class="text-muted">处理时间：</span>
+            <span class="text-default tabular-nums">{{ formatDateTime(selectedLog.processed_at) }}</span>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <h3 class="text-sm font-medium text-muted mb-2 uppercase tracking-wider">错误消息</h3>
+          <div class="p-3 bg-danger-50 border border-danger-200 rounded-lg text-sm text-danger-700 whitespace-pre-wrap">
+            {{ selectedLog.message }}
+          </div>
+        </div>
+
+        <div v-if="selectedLog.traceback" class="mt-4">
+          <h3 class="text-sm font-medium text-muted mb-2 uppercase tracking-wider">堆栈信息</h3>
+          <div class="p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-success-400 overflow-auto max-h-64 whitespace-pre font-mono">
+            {{ selectedLog.traceback }}
           </div>
         </div>
       </template>
-    </div>
+      <template #footer>
+        <BaseButton size="sm" intent="primary" @click="copyToClipboard">复制全部信息</BaseButton>
+        <BaseButton size="sm" intent="secondary" @click="showModal = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
 
-    <!-- 详情模态框 -->
-    <div v-if="showModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showModal = false">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col m-4">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-default">
-          <h3 class="text-lg font-semibold text-default">错误详情 #{{ selectedLog?.id }}</h3>
-          <button @click="showModal = false" class="text-muted hover:text-default">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div class="flex-1 overflow-auto p-6">
-          <div v-if="selectedLog" class="space-y-4">
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="block text-xs font-medium text-muted mb-1">时间</label>
-                <div class="text-sm text-default">{{ formatDateTime(selectedLog.timestamp) }}</div>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-muted mb-1">模块</label>
-                <div class="text-sm text-default font-mono">{{ selectedLog.module || '-' }}</div>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-muted mb-1">错误类型</label>
-                <div class="text-sm text-default">{{ selectedLog.error_type || '-' }}</div>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-muted mb-1">状态</label>
-                <span :class="getStatusClass(selectedLog.status)" class="inline-block px-2 py-0.5 rounded text-xs font-medium">
-                  {{ getStatusLabel(selectedLog.status) }}
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <label class="block text-xs font-medium text-muted mb-1">错误消息</label>
-              <div class="p-3 bg-danger-50 border border-danger-200 rounded-lg text-sm text-danger-700 whitespace-pre-wrap">
-                {{ selectedLog.message }}
-              </div>
-            </div>
-
-            <div v-if="selectedLog.traceback">
-              <label class="block text-xs font-medium text-muted mb-1">堆栈信息</label>
-              <div class="p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-success-400 overflow-auto max-h-64 whitespace-pre font-mono">
-                {{ selectedLog.traceback }}
-              </div>
-            </div>
-
-            <div v-if="selectedLog.processed_by" class="grid grid-cols-2 gap-4 pt-2 border-t border-default">
-              <div>
-                <label class="block text-xs font-medium text-muted mb-1">处理人</label>
-                <div class="text-sm text-default">{{ selectedLog.processed_by }}</div>
-              </div>
-              <div>
-                <label class="block text-xs font-medium text-muted mb-1">处理时间</label>
-                <div class="text-sm text-default">{{ formatDateTime(selectedLog.processed_at) }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="px-6 py-4 border-t border-default flex justify-end gap-3">
-          <button @click="copyToClipboard"
-            class="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-700 transition-colors">
-            复制全部信息
-          </button>
-          <button @click="showModal = false"
-            class="px-4 py-2 bg-gray-200 text-default rounded-lg text-sm hover:bg-gray-300 transition-colors">
-            关闭
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 清理确认对话框 -->
-    <div v-if="showCleanupConfirm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6 m-4">
-        <h3 class="text-lg font-semibold text-default mb-4">确认清理</h3>
-        <p class="text-sm text-default mb-6">
-          此操作将删除 30 天前的所有错误日志记录（包括数据库记录和日志文件）。<br><br>
-          删除后无法恢复，确定继续吗？
-        </p>
-        <div class="flex justify-end gap-3">
-          <button @click="showCleanupConfirm = false"
-            class="px-4 py-2 bg-gray-200 text-default rounded-lg text-sm hover:bg-gray-300 transition-colors">
-            取消
-          </button>
-          <button @click="doCleanup" :disabled="cleanupLoading"
-            class="px-4 py-2 bg-danger-500 text-white rounded-lg text-sm hover:bg-danger-600 transition-colors disabled:opacity-50">
-            {{ cleanupLoading ? '清理中...' : '确认清理' }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- 清理确认 Modal -->
+    <BaseModal v-model="showCleanupConfirm" title="确认清理" size="sm">
+      <p class="text-sm text-default">
+        此操作将删除 30 天前的所有错误日志记录（包括数据库记录和日志文件）。<br><br>
+        删除后无法恢复，确定继续吗？
+      </p>
+      <template #footer>
+        <BaseButton size="sm" intent="danger" :disabled="cleanupLoading" @click="doCleanup">
+          {{ cleanupLoading ? '清理中...' : '确认清理' }}
+        </BaseButton>
+        <BaseButton size="sm" intent="secondary" @click="showCleanupConfirm = false">取消</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
+import BaseTable from '@/components/ui/BaseTable.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
+import { usePageContext } from '@/composables/usePageContext'
 import {
   getErrorLogs,
   updateErrorLogStatus,
   cleanupOldErrorLogs,
-  ErrorLogItem
+  type ErrorLogItem
 } from '@/api/error-logs'
 
 const toast = useToast()
 
-const loading = ref(false)
-const cleanupLoading = ref(false)
-const filterStatus = ref('')
-const page = ref(1)
-const pageSize = 20
-const total = ref(0)
-const totalPages = ref(0)
-const logs = ref<ErrorLogItem[]>([])
+// ------- Columns -------
+const columns = [
+  { key: 'index', label: '序号', width: '60px' },
+  { key: 'timestamp', label: '时间', width: '180px' },
+  { key: 'module', label: '模块', width: '100px' },
+  { key: 'error_type', label: '类型', width: '80px' },
+  { key: 'message', label: '消息' },
+  { key: 'status', label: '状态', width: '100px' },
+  { key: 'actions', label: '操作', width: '160px', thAlign: 'center' as const },
+]
 
+// ------- State -------
+const filterStatus = ref('')
+const logs = ref<ErrorLogItem[]>([])
+const total = ref(0)
 const showModal = ref(false)
 const selectedLog = ref<ErrorLogItem | null>(null)
-
 const showCleanupConfirm = ref(false)
+const cleanupLoading = ref(false)
 
+// ------- Page Context -------
 async function loadData() {
-  loading.value = true
   try {
-    const response = await getErrorLogs(filterStatus.value || undefined, page.value, pageSize)
+    const response = await getErrorLogs(filterStatus.value || undefined, currentPage.value, pageSize.value)
     if (response.success) {
       logs.value = response.data
       total.value = response.total
-      totalPages.value = response.total_pages
     } else {
       toast.error(response.message || '加载数据失败')
       logs.value = []
       total.value = 0
-      totalPages.value = 0
     }
   } catch (error: any) {
-    console.error('加载错误日志失败:', error)
+    // 前端日志：加载错误日志失败
+    console.error('前端日志：加载错误日志失败:', error)
     toast.error(error.message || '加载数据失败')
     logs.value = []
     total.value = 0
-    totalPages.value = 0
-  } finally {
-    loading.value = false
   }
 }
 
-function prevPage() {
-  if (page.value > 1) {
-    page.value--
-    loadData()
-  }
-}
+const { currentPage, pageSize, loading, seqNumber, handleSearch, refresh } =
+  usePageContext(async () => { await loadData() })
+pageSize.value = 20
 
-function nextPage() {
-  if (page.value < totalPages.value) {
-    page.value++
-    loadData()
-  }
-}
-
-function showDetail(log: ErrorLogItem) {
-  selectedLog.value = log
+// ------- Detail -------
+function showDetail(log: Record<string, any>) {
+  selectedLog.value = log as unknown as ErrorLogItem
   showModal.value = true
 }
 
+// ------- Status Actions -------
 async function markAsProcessed(logId: number) {
   try {
     await updateErrorLogStatus(logId, 'processed')
     toast.success('状态已更新为「已处理」')
-    loadData()
+    refresh()
   } catch (error: any) {
-    console.error('更新状态失败:', error)
+    console.error('前端日志：更新状态失败:', error)
     toast.error(error.message || '更新状态失败')
   }
 }
@@ -284,38 +218,38 @@ async function markAsIgnored(logId: number) {
   try {
     await updateErrorLogStatus(logId, 'ignored')
     toast.success('状态已更新为「已忽略」')
-    loadData()
+    refresh()
   } catch (error: any) {
-    console.error('更新状态失败:', error)
+    console.error('前端日志：更新状态失败:', error)
     toast.error(error.message || '更新状态失败')
   }
 }
 
+// ------- Cleanup -------
 async function doCleanup() {
   cleanupLoading.value = true
   try {
     const result = await cleanupOldErrorLogs()
     toast.success(result.message || '清理完成')
     showCleanupConfirm.value = false
-    loadData()
+    refresh()
   } catch (error: any) {
-    console.error('清理失败:', error)
+    console.error('前端日志：清理失败:', error)
     toast.error(error.message || '清理失败')
   } finally {
     cleanupLoading.value = false
   }
 }
 
+// ------- Copy -------
 function copyToClipboard() {
   if (!selectedLog.value) return
-
   const text = `模块: ${selectedLog.value.module || '-'}
 消息:
 ${selectedLog.value.message}
 堆栈:
 ${selectedLog.value.traceback || '-'}
 `
-
   navigator.clipboard.writeText(text).then(() => {
     toast.success('已复制到剪贴板')
   }).catch(() => {
@@ -323,6 +257,7 @@ ${selectedLog.value.traceback || '-'}
   })
 }
 
+// ------- Formatting -------
 function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
   try {
@@ -347,7 +282,7 @@ function getStatusClass(status: string): string {
     case 'processed':
       return 'bg-success-100 text-success-700'
     case 'ignored':
-      return 'bg-gray-200 text-default'
+      return 'bg-surface-hover text-muted'
     default:
       return 'bg-surface-hover text-default'
   }
@@ -366,5 +301,6 @@ function getStatusLabel(status: string): string {
   }
 }
 
-onMounted(() => loadData())
+// ------- Init -------
+onMounted(() => { refresh() })
 </script>
