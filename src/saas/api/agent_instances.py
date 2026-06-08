@@ -1,6 +1,8 @@
 """
 SaaS 智能体实例管理 API
 
+⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+
 路由：/api/saas/instances/*
 - 实例 CRUD
 - 启动/停止实例

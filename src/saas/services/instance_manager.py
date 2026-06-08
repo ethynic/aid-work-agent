@@ -1,6 +1,8 @@
 """
 智能体实例管理器
 
+⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+
 管理租户的 Agent 实例生命周期。每个实例对应一个独立的 AgentRouter，
 共享底层 master_agent 单例（线程安全，session 隔离由 ShortTermMemory 保证）。
 

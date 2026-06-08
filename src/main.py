@@ -343,9 +343,13 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_dedup_cleanup_loop())
 
     # Start instance lock cleanup background task — 每 60 秒，出错暂停 2 分钟
+    # ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
     if settings.saas.enabled:
         async def _instance_lock_cleanup_loop():
-            """后台定时清理过期的智能体实例锁（每 60 秒，出错暂停 2 分钟）"""
+            """后台定时清理过期的智能体实例锁（每 60 秒，出错暂停 2 分钟）
+
+            ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+            """
             from src.saas.services.instance_service import InstanceService
             interval = 60
             error_cooldown = 120  # 出错后暂停 2 分钟
@@ -1209,6 +1213,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 并发控制：验证并自动锁定实例（如果提供了 instance_id）
     instance_id = request.instance_id
     # TODO: 临时修改 - 屏蔽实例并发控制
+    # ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
     # 当 instance_id 为空时，跳过实例并发控制检查
     # 未来需要恢复实例并发控制逻辑
     if instance_id and settings.saas.enabled and current_user:

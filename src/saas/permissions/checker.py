@@ -30,6 +30,8 @@ def get_agent_quota(tenant_id: str, agent_id: str) -> Tuple[bool, int]:
     """
     获取租户对某个数字员工的访问权限和当前实例配额（优先从 Redis 缓存读取，TTL 5分钟）
 
+    ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+
     Args:
         tenant_id: 租户ID
         agent_id: 数字员工ID (subagent_type)

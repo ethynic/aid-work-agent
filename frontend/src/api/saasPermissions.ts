@@ -152,6 +152,7 @@ export async function getMyAllowedAgents(): Promise<{
 }
 
 // ==================== 实例同步 ====================
+// ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
 
 export async function checkTenantInstances(tenantId: string): Promise<{
   success: boolean

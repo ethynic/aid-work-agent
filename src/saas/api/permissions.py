@@ -321,7 +321,10 @@ def get_my_allowed_agents(request: Request):
 
 @router.get("/tenant/{tenant_id}/check-instances")
 def check_tenant_instances(request: Request, tenant_id: str):
-    """检查租户数字员工实例与配额的匹配情况"""
+    """检查租户数字员工实例与配额的匹配情况
+    
+    ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+    """
     admin = require_admin(request)
     if not admin or admin.get("role") != "platform_admin":
         raise HTTPException(status_code=403, detail="无权限")
@@ -503,7 +506,10 @@ def check_tenant_instances(request: Request, tenant_id: str):
 
 @router.post("/tenant/{tenant_id}/sync-instances")
 def sync_tenant_instances(request: Request, tenant_id: str):
-    """同步租户数字员工实例（根据配额创建/删除实例）"""
+    """同步租户数字员工实例（根据配额创建/删除实例）
+    
+    ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+    """
     admin = require_admin(request)
     if not admin or admin.get("role") != "platform_admin":
         raise HTTPException(status_code=403, detail="无权限")
