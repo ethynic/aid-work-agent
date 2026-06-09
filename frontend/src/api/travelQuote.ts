@@ -343,6 +343,52 @@ export async function exportHotels(): Promise<void> {
 }
 
 // ============================================================
+// 业务表 UUID 导入（Phase 6）
+// ============================================================
+
+export interface UuidImportResult {
+  imported: number
+  updated: number
+  skipped: number
+  errors: string[]
+}
+
+async function uploadImport(path: string, file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { ...getAuthHeader() },
+    body: formData
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '导入失败' }))
+    throw new Error(err.detail || '导入失败')
+  }
+  return res.json()
+}
+
+export async function importVehicles(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/vehicles/import', file)
+}
+
+export async function importMeals(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/meals/import', file)
+}
+
+export async function importGuides(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/guides/import', file)
+}
+
+export async function importFees(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/fees/import', file)
+}
+
+export async function importSeasons(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/seasons/import', file)
+}
+
+// ============================================================
 // 知识库模式 API
 // ============================================================
 

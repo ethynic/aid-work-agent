@@ -130,7 +130,7 @@
 
     <!-- 导入结果弹窗 -->
     <BaseModal v-model="showImportResult" title="导入结果" size="md" mode="view">
-      <p>成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
+      <p>新增 <strong>{{ importResult?.imported || 0 }}</strong> 条，更新 <strong>{{ importResult?.updated || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
       <div v-if="importResult?.errors?.length" class="text-danger-600 text-xs mt-2">
         <div v-for="err in importResult.errors" :key="err">{{ err }}</div>
       </div>
@@ -143,8 +143,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { vehicles, exportVehicles } from '@/api/travelQuote'
-import { useVehicleImport } from '@/composables/useImport'
+import { vehicles, exportVehicles, importVehicles } from '@/api/travelQuote'
+import { useUuidImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -172,7 +172,7 @@ const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
-const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useVehicleImport(loadData)
+const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useUuidImport(importVehicles, loadData)
 
 const total = ref(0)
 const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePageSizeChange } =

@@ -1,6 +1,40 @@
 import { ref } from 'vue'
 import { importExcel, importVehicleExcel, importHotelExcelKB, importAttractionExcelKB, downloadTemplate } from '@/api/travelQuote'
-import type { ImportResult, VehicleImportResult, HotelKBImportResult, AttractionKBImportResult } from '@/api/travelQuote'
+import type { ImportResult, VehicleImportResult, HotelKBImportResult, AttractionKBImportResult, UuidImportResult } from '@/api/travelQuote'
+
+export function useUuidImport(importFn: (file: File) => Promise<{ success: boolean; data: UuidImportResult }>, onSuccess: () => void) {
+  const importing = ref(false)
+  const showImportResult = ref(false)
+  const importResult = ref<UuidImportResult | null>(null)
+
+  async function handleImport(file: File) {
+    importing.value = true
+    try {
+      const res = await importFn(file)
+      importResult.value = res.data
+      showImportResult.value = true
+      if (res.data.imported > 0 || res.data.updated > 0) {
+        onSuccess()
+      }
+    } catch (e: any) {
+      alert(e.message || '导入失败')
+    } finally {
+      importing.value = false
+    }
+  }
+
+  function triggerFileInput(input: HTMLInputElement | null) {
+    input?.click()
+  }
+
+  return {
+    importing,
+    showImportResult,
+    importResult,
+    handleImport,
+    triggerFileInput,
+  }
+}
 
 export function useImport(onSuccess: () => void) {
   const importing = ref(false)

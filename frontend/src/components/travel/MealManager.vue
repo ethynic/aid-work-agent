@@ -22,7 +22,11 @@
           {{ importing ? '导入中...' : '导入 Excel' }}
         </BaseButton>
         <BaseButton intent="secondary" @click="handleExport">导出 Excel</BaseButton>
+        <BaseButton intent="secondary" :disabled="uuidImporting" @click="triggerUuidFileInput(uuidFileInput)">
+          {{ uuidImporting ? 'UUID导入中...' : 'UUID导入' }}
+        </BaseButton>
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
+        <input ref="uuidFileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleUuidImport(e.target.files[0])" />
       </div>
     </div>
 
@@ -153,14 +157,26 @@
         <BaseButton @click="showImportResult = false">确定</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- UUID 导入结果弹窗 -->
+    <BaseModal v-model="showUuidImportResult" title="UUID导入结果" size="md" mode="view">
+      <p>新增 <strong>{{ uuidImportResult?.imported || 0 }}</strong> 条，更新 <strong>{{ uuidImportResult?.updated || 0 }}</strong> 条，跳过 <strong>{{ uuidImportResult?.skipped || 0 }}</strong> 条</p>
+      <div v-if="uuidImportResult?.errors?.length" class="text-danger-600 text-xs mt-2">
+        <div v-for="err in uuidImportResult.errors" :key="err">{{ err }}</div>
+      </div>
+      <template #footer>
+        <BaseButton @click="showUuidImportResult = false">确定</BaseButton>
+      </template>
+    </BaseModal>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { meals, exportMeals } from '@/api/travelQuote'
+import { meals, exportMeals, importMeals } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
+import { useUuidImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -190,7 +206,9 @@ const showModal = ref(false)
 const editingItem = ref<any>(null)
 const filterTier = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+const uuidFileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useImport(loadData)
+const { importing: uuidImporting, showImportResult: showUuidImportResult, importResult: uuidImportResult, handleImport: handleUuidImport, triggerFileInput: triggerUuidFileInput } = useUuidImport(importMeals, loadData)
 
 const total = ref(0)
 const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePageSizeChange } =
