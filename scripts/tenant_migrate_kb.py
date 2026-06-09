@@ -316,7 +316,13 @@ def _migrate_kb(
         # 目标路径：替换 tenant_id
         if target_storage:
             tgt_path = src_path.replace(source_tenant, target_tenant)
-            full_tgt = os.path.join(target_storage, tgt_path) if not os.path.isabs(tgt_path) else tgt_path
+            # 兼容 file_path 中已包含 target_storage 前缀的情况：
+            # 数据库中存的是 storage/uploads/...，target_storage 也是 storage/uploads
+            # 直接 join 会变成 storage/uploads/storage/uploads/...（多一层前缀）
+            if tgt_path.startswith(target_storage):
+                full_tgt = tgt_path
+            else:
+                full_tgt = os.path.join(target_storage, tgt_path) if not os.path.isabs(tgt_path) else tgt_path
         else:
             full_tgt = src_path.replace(source_tenant, target_tenant)
 
