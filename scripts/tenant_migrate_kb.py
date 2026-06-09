@@ -222,7 +222,8 @@ def _migrate_kb(
     # 插入文档
     doc_columns = [
         "user_id", "tenant_id", "title", "source_type", "file_type", "file_path",
-        "file_size", "total_chunks", "embedding_model", "raw_text", "metadata",
+        "file_size", "total_chunks", "embedding_model", "thumbnail_path", "duration",
+        "width", "height", "mime_type", "raw_text", "metadata",
         "summary", "uuid", "created_at", "updated_at",
     ]
     doc_rows = []
@@ -231,14 +232,14 @@ def _migrate_kb(
         doc_rows.append((
             d.get("user_id"), target_tenant, d["title"], d["source_type"], d["file_type"],
             d.get("file_path"), d.get("file_size"), d.get("total_chunks"),
-            d.get("embedding_model"), d.get("raw_text"), d.get("metadata"),
+            d.get("embedding_model"), d.get("thumbnail_path"), d.get("duration"),
+            d.get("width"), d.get("height"), d.get("mime_type"),
+            d.get("raw_text"), d.get("metadata"),
             d.get("summary"), doc_uuid, d.get("created_at"), d.get("updated_at"),
         ))
     _batch_insert(target_conn, "documents", doc_columns, doc_rows)
 
     # 查询 UUID→new_id 映射
-    target_uuids = [d.get("uuid") or f"doc_{uuid_mod.uuid4().hex[:12]}" for d in source_docs]
-    # Actually we need the actual uuids used
     actual_uuids = [row[-3] for row in doc_rows]  # uuid is 3rd from end
     doc_uuid_to_new_id = _build_uuid_id_map(target_conn, "documents", actual_uuids, target_tenant)
 
@@ -322,7 +323,7 @@ def _migrate_kb(
             with target_conn.cursor() as cur:
                 cur.execute(
                     "UPDATE documents SET file_path = %s WHERE id = %s",
-                    (tgt_path if not target_storage else tgt_path, new_doc_id),
+                    (tgt_path, new_doc_id),
                 )
 
     return {
