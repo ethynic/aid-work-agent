@@ -33,9 +33,3 @@ globs:
 
 > **磁盘/数据库是共享的，内存是隔离的。** 任何依赖内存状态且跨请求的读写操作，都必须考虑多 worker 一致性。
 
-### 参考案例
-
-本项目 `SubagentRegistry` 的修复：
-- 写入时：保存配置到磁盘（`storage/subagents2/`）
-- 读取前：`_load_custom()` 从磁盘全量刷新，移除已删除的条目
-- 详见 `src/subagents/registry.py` 和 `src/api/admin_subagent.py`

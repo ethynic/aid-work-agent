@@ -2,10 +2,9 @@
 数字员工管理 API
 
 提供数字员工（子智能体）的 CRUD 管理、另存为、AI 完善等接口。
-仅管理员可访问。
+仅管理员可访问。定制数字员工存入数据库。
 """
 
-from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional
 
@@ -17,14 +16,10 @@ from pydantic import BaseModel, Field
 from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.core.agent import master_agent
-from src.models.subagent import SubagentConfig
-from src.subagents.loader import SubagentLoader
+from src.services.subagent_definition_service import SubagentDefinitionService
 from src.saas.permissions.checker import get_allowed_agent_ids_for_user, is_platform_admin
 
 router = APIRouter(prefix="/api/admin", tags=["数字员工管理"])
-
-# 定制子智能体存储目录
-CUSTOM_SUBAGENTS_DIR = Path("./storage/subagents2")
 
 
 # ============== 请求/响应模型 ==============
@@ -67,7 +62,6 @@ def _check_admin(request: Request) -> Optional[Dict]:
         if user_phone in phone_list:
             return user
 
-    # 如果未配置 admin.phones，默认第一个用户为管理员（开发阶段）
     logger.warning(f"Admin phones not configured or user not in admin list, phone={user.get('phone')}")
     return None
 
@@ -84,7 +78,6 @@ def _sanitize_error_info(error_msg: str) -> str:
     """过滤错误信息中的敏感信息"""
     if not error_msg:
         return error_msg
-    import re
     patterns = [
         r'password["\s:=]+\S+',
         r'passwd["\s:=]+\S+',
@@ -127,18 +120,13 @@ async def list_subagents(request: Request):
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
-        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 从 DB 刷新定制子智能体
+        registry.load_from_db()
 
         items = registry.get_all_subagents_with_type()
 
-        # 数字员工管理是平台级功能：
-        # - 平台管理员：总是看到所有数字员工（不受租户上下文影响）
-        # - 租户管理员：仅返回其租户被授权的数字员工
         user = get_current_user(request)
         if user and not is_platform_admin(user):
-            # 租户管理员才应用过滤
             allowed_ids = set(get_allowed_agent_ids_for_user(user))
             items = [item for item in items if item["agent_id"] in allowed_ids]
 
@@ -181,7 +169,6 @@ async def list_available_tools(request: Request):
         if not tool_registry:
             return {"success": True, "data": []}
 
-        # 获取所有工具的名称和描述
         tools = []
         for name, tool in tool_registry._tools.items():
             tools.append({
@@ -208,9 +195,8 @@ async def get_subagent_detail(request: Request, agent_id: str):
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
-        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 从 DB 刷新定制子智能体
+        registry.load_from_db()
 
         config = registry.get(agent_id)
         if not config:
@@ -253,9 +239,8 @@ async def get_subagent_content(request: Request, agent_id: str):
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
-        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 从 DB 刷新定制子智能体
+        registry.load_from_db()
 
         content = registry.get_content(agent_id)
         if not content:
@@ -270,7 +255,7 @@ async def get_subagent_content(request: Request, agent_id: str):
 
 @router.post("/subagents")
 async def create_subagent(request: Request, body: CreateSubagentRequest):
-    """创建定制数字员工"""
+    """创建定制数字员工（存入数据库）"""
     try:
         admin = _require_admin(request)
         if admin is None:
@@ -280,7 +265,7 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
         if not registry:
             return _error_response("子智能体注册表未初始化", "subagent_registry is None")
 
-        # agent_id 格式校验（只允许字母、数字、下划线、连字符）
+        # agent_id 格式校验
         if not re.match(r'^[a-zA-Z0-9_-]+$', body.agent_id):
             return _error_response("ID 只能包含字母、数字、下划线和连字符", f"invalid agent_id format: {body.agent_id}", 400)
 
@@ -290,27 +275,29 @@ async def create_subagent(request: Request, body: CreateSubagentRequest):
         if not registry.validate_name_uniqueness(body.name):
             return _error_response(f"名称已存在: {body.name}", f"name '{body.name}' already exists", 400)
 
-        # 构建配置并序列化
-        config = SubagentConfig(
+        result = SubagentDefinitionService.create_definition(
+            agent_id=body.agent_id,
             name=body.name,
+            system_prompt=body.system_prompt,
             description=body.description,
             triggers=body.triggers,
             tools=body.tools,
             skills=body.skills,
             context=body.context,
-            system_prompt=body.system_prompt,
-            author=admin.get("username", admin.get("phone", "admin")),
+            created_by=admin.get("user_id") or admin.get("phone", "admin"),
         )
-        content = SubagentLoader.serialize_to_subagent_md(config, body.system_prompt)
+        if not result:
+            return _error_response("创建数字员工失败", "create_definition returned None")
 
-        saved = registry.save_custom_subagent(body.agent_id, config, content)
+        # 刷新 registry
+        registry.load_from_db()
 
         logger.info(f"后端日志：管理员 {admin.get('phone')} 创建数字员工 {body.agent_id}")
         return {
             "success": True,
             "data": {
-                "agent_id": saved.dir_name or body.agent_id,
-                "name": saved.name,
+                "agent_id": body.agent_id,
+                "name": body.name,
                 "type": "custom",
             },
         }
@@ -342,25 +329,35 @@ async def update_subagent(request: Request, agent_id: str, body: CreateSubagentR
         if not registry.validate_name_uniqueness(body.name, exclude_name=existing_name):
             return _error_response(f"名称已存在: {body.name}", f"name '{body.name}' already exists", 400)
 
-        config = SubagentConfig(
+        # 更新定义
+        SubagentDefinitionService.update_definition(
+            agent_id=agent_id,
             name=body.name,
             description=body.description,
             triggers=body.triggers,
             tools=body.tools,
             skills=body.skills,
             context=body.context,
-            system_prompt=body.system_prompt,
+            created_by=admin.get("user_id") or admin.get("phone", "admin"),
         )
-        content = SubagentLoader.serialize_to_subagent_md(config, body.system_prompt)
 
-        saved = registry.save_custom_subagent(agent_id, config, content)
+        # 更新 system_prompt
+        if body.system_prompt:
+            SubagentDefinitionService.update_system_prompt(
+                agent_id=agent_id,
+                content=body.system_prompt,
+                created_by=admin.get("user_id") or admin.get("phone", "admin"),
+            )
+
+        # 刷新 registry
+        registry.load_from_db()
 
         logger.info(f"后端日志：管理员 {admin.get('phone')} 更新数字员工 {agent_id}")
         return {
             "success": True,
             "data": {
-                "agent_id": saved.dir_name or agent_id,
-                "name": saved.name,
+                "agent_id": agent_id,
+                "name": body.name,
                 "type": "custom",
             },
         }
@@ -385,9 +382,12 @@ async def delete_subagent(request: Request, agent_id: str):
         if registry.is_builtin(agent_id):
             return _error_response("内置数字员工不可删除", f"agent_id={agent_id} is builtin", 400)
 
-        success = registry.delete_custom_subagent(agent_id)
+        success = SubagentDefinitionService.delete_definition(agent_id)
         if not success:
             return _error_response(f"数字员工不存在: {agent_id}", f"agent_id={agent_id} not found or delete failed", 404)
+
+        # 刷新 registry
+        registry.load_from_db()
 
         logger.info(f"后端日志：管理员 {admin.get('phone')} 删除数字员工 {agent_id}")
         return {"success": True, "message": f"已删除数字员工: {agent_id}"}
@@ -399,7 +399,7 @@ async def delete_subagent(request: Request, agent_id: str):
 
 @router.post("/subagents/{agent_id}/duplicate")
 async def duplicate_subagent(request: Request, agent_id: str, body: DuplicateSubagentRequest):
-    """另存为（内置/定制 → 新的定制）"""
+    """另存为（内置/定制 → 新的定制，存入数据库）"""
     try:
         admin = _require_admin(request)
         if admin is None:
@@ -413,24 +413,28 @@ async def duplicate_subagent(request: Request, agent_id: str, body: DuplicateSub
         if not registry.validate_id_uniqueness(body.new_agent_id):
             return _error_response(f"ID 已存在: {body.new_agent_id}", f"agent_id '{body.new_agent_id}' already exists", 400)
 
-        # 获取原始内容
-        original_content = registry.get_content(agent_id)
-        if not original_content:
+        # 获取原始定义
+        original = SubagentDefinitionService.get_definition(agent_id)
+        if not original:
             return _error_response(f"数字员工不存在: {agent_id}", f"agent_id={agent_id} not found", 404)
 
-        # 替换 name 字段
-        import re
-        updated_content = re.sub(
-            r"^(name:\s*).+$",
-            rf"\1{body.new_name}",
-            original_content,
-            count=1,
-            flags=re.MULTILINE,
+        result = SubagentDefinitionService.create_definition(
+            agent_id=body.new_agent_id,
+            name=body.new_name,
+            system_prompt=original.get("system_prompt", ""),
+            description=original.get("description", ""),
+            triggers=original.get("triggers", {}),
+            tools=original.get("tools", {}),
+            skills=original.get("skills", {}),
+            context=original.get("context", {}),
+            created_by=admin.get("user_id") or admin.get("phone", "admin"),
+            commit_message=f"从 {agent_id} 另存为",
         )
+        if not result:
+            return _error_response("另存为失败", "create_definition returned None")
 
-        # 保存为新定制
-        SubagentLoader.save_subagent_md(CUSTOM_SUBAGENTS_DIR, body.new_agent_id, updated_content)
-        registry._load_custom(CUSTOM_SUBAGENTS_DIR)
+        # 刷新 registry
+        registry.load_from_db()
 
         logger.info(f"后端日志：管理员 {admin.get('phone')} 另存为数字员工 {agent_id} -> {body.new_agent_id}")
         return {
@@ -465,7 +469,6 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
         if not body.content or not body.content.strip():
             return _error_response("内容不能为空", "content is empty", 400)
 
-        # 系统提示词
         system_prompt = """你是一个数字员工（子智能体）配置优化专家。用户会提供一个 SUBAGENT.md 文件的当前内容，请你优化它。
 
 ## 输出要求
@@ -485,7 +488,6 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
    - 补充工作流程、注意事项、禁止行为等
    - 确保提示词结构化，使用 Markdown 格式"""
 
-        # 调用 LLM
         from src.llm.gateway import llm_gateway
 
         messages = [
@@ -509,7 +511,6 @@ async def ai_enhance_subagent(request: Request, agent_id: str, body: AiEnhanceRe
         # 清理 LLM 可能包裹的 markdown 代码块
         if enhanced_content.startswith("```"):
             lines = enhanced_content.split("\n")
-            # 去掉首尾的 ``` 行
             if lines[0].strip().startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].strip() == "```":

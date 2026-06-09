@@ -334,7 +334,6 @@ CREATE TABLE IF NOT EXISTS prompt_drafts (
 | scope | scope_id 示例 | 现有存储 | 说明 |
 |-------|-------------|---------|------|
 | `subagent` | `order-processing` | `subagents/order-processing/SUBAGENT.md` | 内置子智能体 |
-| `subagent` | `custom-my-agent` | `storage/subagents2/custom-my-agent/SUBAGENT.md` | 自定义子智能体 |
 | `tenant_extra` | `extra:order-processing:tenant_abc` | `storage/subagents/order-processing/extra_tenant_abc.md` | 租户定制 |
 | `skill` | `baidu-search-1.1.3` | `src/skills/baidu-search-1.1.3/SKILL.md` | 技能 Prompt（二期） |
 | `system_template` | `master_agent` | `src/prompts/templates/master_agent.md` | 系统模板（三期） |
@@ -686,7 +685,6 @@ class PromptCache:
 |------|------------------------|-------------------------------|
 | 数据源 | 文件系统（SUBAGENT.md） | PostgreSQL（subagent_definitions） |
 | 加载优先级 | 文件系统唯一来源 | **DB 优先**，DB 有定义+prompt 则覆盖文件系统版本 |
-| 定制子智能体 | storage/subagents2/ 目录 | DB + prompt_versions |
 | DB-only 智能体 | 不支持 | 按需加载支持（文件系统中无需存在） |
 | Prompt 版本 | 无 | 完整版本管理（提交/对比/回滚） |
 

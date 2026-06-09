@@ -27,9 +27,8 @@ async def list_subagents(request: Request):
         if not registry:
             return {"success": False, "error": "子智能体注册表未初始化", "debug": "subagent_registry is None"}
 
-        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 多 worker 部署时从 DB 刷新定制 subagent
+        registry.load_from_db()
 
         items = registry.get_all_subagents_with_type()
 
@@ -77,9 +76,8 @@ async def get_subagent_detail(request: Request, agent_id: str):
         if not registry:
             return {"success": False, "error": "子智能体注册表未初始化", "debug": "subagent_registry is None"}
 
-        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 多 worker 部署时从 DB 刷新定制 subagent
+        registry.load_from_db()
 
         # 处理主智能体请求
         if agent_id == "main":
@@ -133,9 +131,8 @@ async def get_subagent_content(request: Request, agent_id: str):
         if not registry:
             return {"success": False, "error": "子智能体注册表未初始化", "debug": "subagent_registry is None"}
 
-        # 多 worker 部署时从磁盘刷新定制 subagent，确保读到最新数据
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 多 worker 部署时从 DB 刷新定制 subagent
+        registry.load_from_db()
 
         # 处理主智能体请求
         if agent_id == "main":

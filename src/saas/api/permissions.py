@@ -100,9 +100,7 @@ def get_all_available_agents(request: Request):
             "data": []
         }
 
-    # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
-    if registry._custom_dir:
-        registry._load_custom(registry._custom_dir)
+    # 多 worker 部署时从 DB 刷新定制 subagent
     registry.load_from_db()
 
     items = registry.get_all_subagents_with_type()
@@ -198,9 +196,7 @@ def get_tenant_available_user_agents(request: Request):
             "data": []
         }
 
-    # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
-    if registry._custom_dir:
-        registry._load_custom(registry._custom_dir)
+    # 多 worker 部署时从 DB 刷新定制 subagent
     registry.load_from_db()
 
     with get_db_connection() as conn:
@@ -259,9 +255,7 @@ def get_my_allowed_agents(request: Request):
                 "data": []
             }
 
-        # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 多 worker 部署时从 DB 刷新定制 subagent
         registry.load_from_db()
 
         all_items = registry.get_all_subagents_with_type()
@@ -302,9 +296,7 @@ def get_my_allowed_agents(request: Request):
                 "data": []
             }
 
-        # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
-        if registry._custom_dir:
-            registry._load_custom(registry._custom_dir)
+        # 多 worker 部署时从 DB 刷新定制 subagent
         registry.load_from_db()
 
         all_items = registry.get_all_subagents_with_type()

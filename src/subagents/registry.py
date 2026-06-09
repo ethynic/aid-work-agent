@@ -37,64 +37,24 @@ class SubagentRegistry:
         descriptions = registry.get_descriptions()
     """
     
-    def __init__(self, subagents_dir: Optional[Path] = None, custom_dir: Optional[Path] = None):
+    def __init__(self, subagents_dir: Optional[Path] = None):
         """
         初始化Subagent注册表
-        
+
         Args:
             subagents_dir: 内置Subagent目录路径
-            custom_dir: 定制Subagent目录路径
         """
         self._configs: Dict[str, SubagentConfig] = {}
         self._loader: Optional[SubagentLoader] = None
-        self._custom_loader: Optional[SubagentLoader] = None
 
         # 文件模式索引
         self._file_pattern_index: Dict[str, str] = {}
-        
+
         # 内置名称集合
         self._builtin_names: Set[str] = set()
-        # 定制目录路径
-        self._custom_dir: Optional[Path] = None
-        
+
         if subagents_dir:
             self.load_from_directory(subagents_dir)
-        if custom_dir:
-            self._custom_dir = custom_dir
-            self._load_custom(custom_dir)
-
-    def _load_custom(self, custom_dir: Path) -> int:
-        """
-        从定制目录加载Subagent配置（全量刷新，支持删除场景）
-
-        多 worker 部署时，每个 worker 有独立的内存状态，
-        需要从磁盘重新加载以获取其他 worker 写入的变更。
-
-        Returns:
-            加载的配置数量
-        """
-        if not custom_dir.exists():
-            custom_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created custom subagents directory: {custom_dir}")
-
-        self._custom_loader = SubagentLoader(custom_dir)
-        custom_configs = self._custom_loader.configs
-
-        # 全量刷新：先移除旧的定制条目，再合并新的
-        # 仅移除定制条目（不在 _builtin_names 中的），保留内置
-        stale_names = [name for name in self._configs if name not in self._builtin_names]
-        for name in stale_names:
-            self._configs.pop(name, None)
-
-        # 合并：定制不覆盖内置
-        for name, config in custom_configs.items():
-            if name not in self._configs:
-                self._configs[name] = config
-
-        self._build_indices()
-        loaded_count = len(custom_configs)
-        logger.info(f"SubagentRegistry loaded {loaded_count} custom subagents from {custom_dir}")
-        return loaded_count
 
     def is_builtin(self, name: str) -> bool:
         """判断是否为内置子智能体"""
@@ -130,47 +90,6 @@ class SubagentRegistry:
                 return False
         return True
 
-    def save_custom_subagent(self, agent_id: str, config: SubagentConfig, content: str) -> SubagentConfig:
-        """创建或更新定制子智能体"""
-        if not self._custom_dir:
-            raise ValueError("定制目录未配置")
-
-        md_path = SubagentLoader.save_subagent_md(self._custom_dir, agent_id, content)
-
-        # 重新解析以获取完整配置
-        new_config = SubagentLoader(self._custom_dir).get(config.name)
-        if new_config:
-            new_config.dir_name = agent_id
-            self._configs[config.name] = new_config
-            self._build_indices()
-            return new_config
-
-        # 回退：直接用传入的配置
-        config.path = str(md_path)
-        config.dir_name = agent_id
-        self._configs[config.name] = config
-        self._build_indices()
-        return config
-
-    def delete_custom_subagent(self, agent_id: str) -> bool:
-        """删除定制子智能体"""
-        if not self._custom_dir:
-            return False
-        if self.is_builtin(agent_id):
-            logger.warning(f"Cannot delete builtin subagent: {agent_id}")
-            return False
-
-        # 找到对应的 config name
-        config = self.get(agent_id)
-        if not config:
-            return False
-
-        success = SubagentLoader.delete_subagent_dir(self._custom_dir, agent_id)
-        if success:
-            self._configs.pop(config.name, None)
-            self._build_indices()
-        return success
-    
     def load_from_directory(self, subagents_dir: Path) -> int:
         """
         从目录加载所有Subagent配置
