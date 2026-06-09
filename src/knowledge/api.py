@@ -474,8 +474,10 @@ async def download_document(doc_id: int):
     title = row.get("title") or f"document_{doc_id}"
 
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="文件不存在，可能已被删除")
+        logger.warning(f"后端日志：下载文档失败，文件不存在: {file_path}")
+        raise HTTPException(status_code=404, detail=f"文件不存在，可能已被删除 (路径: {file_path})")
 
+    logger.info(f"后端日志：下载文档成功，文件路径: {file_path}")
     # 从实际文件路径提取扩展名，拼到下载文件名上
     ext = Path(file_path).suffix  # 如 ".xlsx"
     download_name = title if title.endswith(ext) else title + ext
