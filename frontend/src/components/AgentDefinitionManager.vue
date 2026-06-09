@@ -150,7 +150,7 @@
                       class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400">
                       <option :value="null">默认</option>
                       <option v-for="style in replyStyles" :key="style.id" :value="style.id">
-                        {{ style.name }} — {{ style.description }}
+                        {{ style.name }}<template v-if="style.description"> — {{ style.description }}</template>
                       </option>
                     </select>
                   </div>

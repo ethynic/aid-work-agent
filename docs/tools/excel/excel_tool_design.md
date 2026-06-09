@@ -31,7 +31,7 @@
 |------|-----------|-----------------|
 | 调用方式 | 外部 Agent 需要精确匹配技能名，调用 `use_skill` → `skill_execute` | 外部 Agent 只需调用 `excel_process`，传 context + file_paths |
 | 参数结构 | 需要外部 Agent 构造精确的 JSON 参数（如 `--operations`） | 内部 LLM Router 自动解析用户意图，生成操作参数 |
-| 能力组合 | 每个脚本是独立的，无法组合（如"读取+分析+导出"需要多次调用） | Pipeline 机制支持多步骤串联（如 `read,analyze,export`） |
+| 能力组合 | 每个脚本是独立的，无法组合（如"读取+导出"需要多次调用） | Pipeline 机制支持多步骤串联（如 `read,export`） |
 | 文件传递 | 脚本间通过临时文件和 JSON 传递，需要外部 Agent 串联 | PipelineContext 自动传递中间结果 |
 | 新增能力 | 每增加一个功能需要新建脚本 + 更新 SKILL.md | 新增子模块 + 在 Router prompt 中添加规则即可 |
 
@@ -48,13 +48,13 @@
 | 1 | **Excel → Markdown** | 将 Excel 内容转为 Markdown 表格，供大模型理解 |
 | 2 | **Markdown/CSV/JSON → Excel** | 将结构化数据导出为格式化的 Excel 文件 |
 | 3 | **模板填充** | 加载 .xlsx 模板，替换占位符 `{{var}}` 为实际数据 |
-| 4 | **数据读取** | 读取指定 Sheet、范围，返回结构化数据 |
+| 4 | **数据读取** | 读取指定 Sheet、范围，返回结构化数据；支持文档级完整读取（元信息、全 Sheet 文本、行数统计） |
 | 5 | **数据修改** | 写入单元格、插入/删除行列、合并单元格 |
 | 6 | **格式化** | 设置字体、边框、背景色、数字格式、列宽行高 |
-| 7 | **图表生成** | 根据数据创建柱状图、折线图、饼图等 |
-| 8 | **数据分析** | 统计摘要、透视分析、异常检测 |
-| 9 | **多文件合并** | 将多个 Excel/CSV 文件合并为一个 |
-| 10 | **文件格式转换** | CSV ↔ Excel、JSON ↔ Excel 互转 |
+| 7 | **多文件合并** | 将多个 Excel/CSV 文件合并为一个 |
+| 8 | **文件格式转换** | CSV ↔ Excel、JSON ↔ Excel 互转 |
+
+> **注意**：数据统计分析（摘要、透视、异常检测等）和图表生成（柱状图、折线图、饼图等）已由 `SmartDataAnalysisTool`（`analyze_data` 工具）统一承接，Excel 工具不再包含这些能力。
 
 ### 2.2 非目标
 
@@ -102,14 +102,12 @@ ExcelRouter (使用 LLMGateway.chat)
     ▼
 Pipeline 执行器 (按顺序分发到各 handler)
     │
-    ├─ excel_reader.py      → read / analyze
+    ├─ excel_reader.py      → read (数据读取 / 文档级完整读取)
     ├─ excel_writer.py      → export / merge / convert
     ├─ excel_modifier.py    → modify (单元格编辑、行列操作)
     ├─ excel_formatter.py   → format (样式、格式)
-    ├─ excel_chart.py       → chart (图表生成)
     ├─ excel_template.py    → fill_template / list_templates
-    ├─ excel_to_md.py       → to_md (Excel → Markdown)
-    └─ excel_analyzer.py    → analyze (数据统计分析)
+    └─ excel_to_md.py       → to_md (Excel → Markdown)
 ```
 
 ---
@@ -124,14 +122,12 @@ src/tools/excel/
 ├── excel_process_tool.py       # 入口：BaseTool 子类 + Pipeline 执行器
 ├── excel_router.py             # 内部 LLM 路由器
 ├── excel_lib.py                # 共享工具函数、常量映射
-├── excel_reader.py             # 读取 Excel 数据
+├── excel_reader.py             # 读取 Excel 数据（含文档级完整读取）
 ├── excel_writer.py             # 导出/创建 Excel
 ├── excel_modifier.py           # 修改 Excel 内容
 ├── excel_formatter.py          # 格式化样式
-├── excel_chart.py              # 图表生成
 ├── excel_template.py           # 模板管理（列表 + 填充）
-├── excel_to_md.py              # Excel → Markdown
-└── excel_analyzer.py           # 数据分析
+└── excel_to_md.py              # Excel → Markdown
 ```
 
 ### 4.2 工具注册
@@ -157,24 +153,29 @@ class ExcelProcessTool(BaseTool):
 
 **TOOL_DESCRIPTION**（对外部 Agent 的说明）：
 
-```
-Excel电子表格处理工具。所有与Excel(.xlsx)相关的操作都通过本工具处理。
+```python
+TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文件的读取、创建、修改、格式化、模板填充、格式转换等操作。
 
 ⚠️ 触发规则 — 遇到以下场景必须调用本工具：
 - 用户要求导出、生成、创建Excel文件
-- 用户要求读取、分析、修改Excel文件
+- 用户要求读取、修改、格式化Excel文件
 - 用户要求将数据(表格、CSV、JSON)转为Excel
 - 用户要求将Excel转为其他格式(Markdown、CSV)
 - 用户要求基于模板填充数据生成Excel报告
-- 用户要求对Excel数据进行统计分析、生成图表
 - 用户上传了.xlsx/.csv文件并要求处理
-不要自己生成文件内容，一律交给本工具。
 
-调用方式：
-- 将用户的原始需求描述和相关内容放在 context 中
-- 如果需要将对话中的表格数据转为Excel，context 中必须包含表格数据（Markdown表格或JSON数组）
+🚫 以下场景不要调用本工具，请使用对应专用工具：
+- 用户要求对数据进行**统计分析、趋势分析、对比分析、异常检测**等 → 调用 analyze_data 工具
+- 用户要求**生成图表**（柱状图、折线图、饼图等） → 调用 analyze_data 工具
+- 用户要求从多个数据源关联分析 → 调用 analyze_data 工具
+
+调用方式（重要）：
+- context 参数必须包含**完整的表格数据**，不能只传用户意图描述
+- 如果需要将数据导出为Excel，context 中必须包含完整的 Markdown表格 或 JSON数组 数据
+- 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 context 中
+- 如果还没有表格数据，Agent 应先通过其他方式准备好数据，再调用本工具
 - 用户上传的附件路径放在 file_paths 中
-工具会自动判断并执行合适的操作。
+工具会自动判断并执行合适的操作。"""
 ```
 
 ### 4.3 内部路由器
@@ -184,18 +185,16 @@ Excel电子表格处理工具。所有与Excel(.xlsx)相关的操作都通过本
 ```python
 class TaskType:
     READ = "read"               # 读取 Excel 数据
-    ANALYZE = "analyze"         # 数据统计分析
     TO_MD = "to_md"             # Excel → Markdown
     EXPORT = "export"           # 创建/导出 Excel（从数据生成新文件）
     MODIFY = "modify"           # 修改已有 Excel
     FORMAT = "format"           # 格式化样式
-    CHART = "chart"             # 生成图表
     FILL_TEMPLATE = "fill_template"  # 模板填充
     LIST_TEMPLATES = "list_templates"  # 列出可用模板
     MERGE = "merge"             # 合并多个文件
     CONVERT = "convert"         # 格式转换（CSV↔Excel、JSON↔Excel）
 
-    ALL = {READ, ANALYZE, TO_MD, EXPORT, MODIFY, FORMAT, CHART,
+    ALL = {READ, TO_MD, EXPORT, MODIFY, FORMAT,
            FILL_TEMPLATE, LIST_TEMPLATES, MERGE, CONVERT}
 ```
 
@@ -210,33 +209,24 @@ class TaskType:
    - 触发：用户想看Excel里有什么数据、查看某个Sheet
    - 参数：{sheet_name: "可选", range: "可选,如A1:D10", include_formulas: false}
 
-2. **analyze** — 对数据进行统计分析
-   - 触发：用户要求分析数据、统计摘要、找异常
-   - 参数：{sheet_name: "可选", analysis_type: "summary|anomaly|pivot", group_by: "可选", aggregations: "可选"}
-
-3. **to_md** — 将 Excel 转为 Markdown 表格
+2. **to_md** — 将 Excel 转为 Markdown 表格
    - 触发：用户要求查看Excel内容（给大模型看的场景）、将Excel转为文本
    - 参数：{sheet_name: "可选", max_rows: 50}
 
-4. **export** — 从数据创建新的 Excel 文件
+3. **export** — 从数据创建新的 Excel 文件
    - 触发：用户要求导出数据为Excel、把表格数据存为Excel、创建报表
    - 参数：{data_type: "markdown|csv|json|table", data: "数据内容或已在context中",
            file_name: "输出文件名", sheet_name: "可选", auto_format: true}
 
-5. **modify** — 修改已有 Excel 文件内容
+4. **modify** — 修改已有 Excel 文件内容
    - 触发：用户要求修改单元格、插入行列、删除行列、合并单元格
    - 参数：{operations: [{type, ...具体参数}], output_name: "可选"}
 
-6. **format** — 设置 Excel 格式样式
+5. **format** — 设置 Excel 格式样式
    - 触发：用户要求设置字体、边框、颜色、列宽、数字格式
    - 参数：{format_operations: [{type, ...具体参数}], output_name: "可选"}
 
-7. **chart** — 生成图表
-   - 触发：用户要求创建图表、画柱状图/折线图/饼图
-   - 参数：{chart_type: "bar|line|pie|scatter", x_column: "", y_columns: [],
-           title: "可选", sheet_name: "可选"}
-
-8. **fill_template** — 使用模板填充数据
+6. **fill_template** — 使用模板填充数据
    - 触发：用户要求基于模板生成Excel、按模板填写数据
    - 模板来源有两种（路由器必须区分）：
      a) 系统模板：用户从已有模板列表中选择 → template_name 参数
@@ -247,17 +237,17 @@ class TaskType:
    - 参数：{template_name: "系统模板名（二选一）", template_file: "用户上传的模板文件路径（二选一）", variables: {key: value}, output_name: "可选"}
    - variables 中：字符串/数字值为单值替换；列表值为行循环数据（占位符模式）或数据行填充（结构感知模式）
 
-9. **list_templates** — 列出可用模板
+7. **list_templates** — 列出可用模板
    - 触发：用户问有哪些模板可用、想选择一个系统模板
    - 参数：{}
 
-10. **merge** — 合并多个文件
-    - 触发：用户要求合并多个Excel/CSV文件
-    - 参数：{output_name: "可选", merge_mode: "rows|columns|sheets"}
+8. **merge** — 合并多个文件
+   - 触发：用户要求合并多个Excel/CSV文件
+   - 参数：{output_name: "可选", merge_mode: "rows|columns|sheets"}
 
-11. **convert** — 格式转换
-    - 触发：用户要求CSV转Excel、Excel转CSV、JSON转Excel
-    - 参数：{source_format: "csv|json|excel", target_format: "csv|json|excel", output_name: "可选"}
+9. **convert** — 格式转换
+   - 触发：用户要求CSV转Excel、Excel转CSV、JSON转Excel
+   - 参数：{source_format: "csv|json|excel", target_format: "csv|json|excel", output_name: "可选"}
 
 ## 决策规则
 
@@ -265,13 +255,11 @@ class TaskType:
 - 有附件且上下文提到"模板"、"按这个格式"、"照着这个填"等 → fill_template（template_file = 附件路径）
 - 要求基于系统模板生成（无附件模板，提到模板名或要求选择） → fill_template（template_name = 模板名）或先 list_templates
 - 有附件且要求转为Markdown理解 → to_md
-- 要求生成图表 → chart（可能需要先 read 获取列信息）
 - 要求修改已有Excel → modify
 - 要求设置样式格式 → format
 - 要求创建新Excel / 导出数据 → export
 - 要求格式转换 → convert
 - 要求合并文件 → merge
-- 要求分析统计 → analyze
 - 要求查看数据内容 → read
 - 仅有附件无明确指令 → to_md（默认将内容转为可理解格式）
 
@@ -279,7 +267,7 @@ class TaskType:
 
 返回严格 JSON，不要包含其他文本：
 {
-  "task": "操作名（可逗号分隔多个，如 read,chart）",
+  "task": "操作名（可逗号分隔多个，如 read,export）",
   "params": { ... 操作对应参数 ... },
   "reason": "判断依据"
 }
@@ -331,6 +319,50 @@ def read_sheet(file_path: str, sheet_name: str = None,
 - 自动识别表头行（第一个非空行）
 - 返回合并单元格信息
 - 支持 `.xlsx` 和 `.csv`（自动检测）
+
+```python
+def read_excel_document(file_path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    读取 Excel 文档的完整内容（增强版），返回结构化数据 + 文本格式化内容 + 文档元信息。
+
+    与 read_sheet() 的区别：
+    - read_sheet(): 读取指定 Sheet/范围的结构化数据（headers, rows, merged_cells, formulas）
+    - read_excel_document(): 读取文档级信息（全 Sheet 文本、文档元信息、行数统计）
+
+    返回：
+    {
+        "sheet_count": 3,                          # Sheet 总数
+        "sheet_names": ["销售数据", "汇总", "备注"],  # 所有 Sheet 名称
+        "sheets_info": [                            # 各 Sheet 概要信息
+            {"name": "销售数据", "rows": 100, "cols": 5},
+            ...
+        ],
+        "current_sheet": "销售数据",                 # 当前 Sheet（默认第一个，或指定）
+        "sheet_data": {                             # 当前 Sheet 的结构化数据
+            "headers": ["产品", "数量", "金额"],
+            "rows": [["产品A", 100, 5000], ...],
+            "row_count": 100,
+            "column_count": 3
+        },
+        "document_info": {                          # 文档元信息
+            "file_name": "report.xlsx",
+            "file_size": "15.2KB",
+            "author": "张三",
+            "created": "2026-01-15T10:30:00",
+            "modified": "2026-06-09T14:20:00"
+        },
+        "content": "## 销售数据\n\n| 产品 | 数量 | 金额 |\n...",  # 全 Sheet 文本格式化内容
+        "total_lines": 150                          # 文本内容总行数
+    }
+    """
+```
+
+**`_handle_read` 路由逻辑**：
+
+| 路由参数 | 使用的函数 | 说明 |
+|---------|-----------|------|
+| 有 `range` 或 `include_formulas` | `read_sheet()` | 精确范围读取、公式读取 |
+| 默认 | `read_excel_document()` | 完整文档信息（元信息、全 Sheet 文本、行数统计） |
 
 #### 4.4.2 excel_writer.py — 创建/导出 Excel
 
@@ -474,42 +506,7 @@ def batch_format(file_path: str, format_operations: List[Dict],
     """
 ```
 
-#### 4.4.5 excel_chart.py — 图表生成
-
-```python
-def create_chart(file_path: str, chart_type: str,
-                 x_column: str, y_columns: List[str],
-                 title: str = None, sheet_name: str = None,
-                 output_name: str = None, **kwargs) -> Dict:
-    """
-    在 Excel 中创建图表。
-
-    chart_type: bar | line | pie | scatter | area
-
-    额外参数（kwargs）：
-    - group_by: 分组列名（簇状柱形图场景）
-    - style: 图表样式编号 (1-48)
-    - width: 图表宽度 (默认 20)
-    - height: 图表高度 (默认 12)
-    - x_title: X轴标题
-    - y_title: Y轴标题
-    - show_legend: 是否显示图例 (默认 true)
-    - show_labels: 是否显示数据标签 (默认 false)
-
-    返回：
-    {
-        "success": true,
-        "file_path": "/tmp/chart_output.xlsx",
-        "chart_type": "bar",
-        "chart_title": "月度销售统计",
-        "data_source": "Sheet1!A1:D13"
-    }
-    """
-```
-
-**设计决策**：图表直接嵌入到 Excel 文件中（而非生成图片），保持 Excel 原生可编辑。
-
-#### 4.4.6 excel_template.py — 模板管理
+#### 4.4.5 excel_template.py — 模板管理
 
 **模板来源分为两种**：
 
@@ -752,7 +749,7 @@ def _expand_row_variables(ws, row_idx, row_vars, variables):
 将 variables 中的列表数据按表头文本映射填入数据区域。
 此模式不需要用户在模板中写任何占位符。
 
-#### 4.4.7 excel_to_md.py — Excel → Markdown
+#### 4.4.6 excel_to_md.py — Excel → Markdown
 
 ```python
 def excel_to_markdown(file_path: str, sheet_name: str = None,
@@ -778,46 +775,7 @@ def excel_to_markdown(file_path: str, sheet_name: str = None,
     """
 ```
 
-#### 4.4.8 excel_analyzer.py — 数据分析
-
-```python
-def analyze_data(file_path: str, sheet_name: str = None,
-                 analysis_type: str = "summary",
-                 **kwargs) -> Dict:
-    """
-    对 Excel 数据进行统计分析。
-
-    analysis_type:
-    - "summary": 基础统计摘要（每列的类型、空值率、唯一值、数值列的 min/max/mean/median）
-    - "correlation": 相关性分析（数值列之间的相关系数矩阵）
-    - "distribution": 分布分析（直方图数据、分位数）
-    - "anomaly": 异常值检测（基于 IQR 或 Z-Score）
-    - "pivot": 透视分析（需指定 group_by 和 aggregations）
-
-    透视分析参数：
-    - group_by: 分组列名
-    - aggregations: [{column: "amount", function: "sum"}, ...]
-    - sort_by: 排序列
-    - sort_order: "asc" | "desc"
-
-    返回：
-    {
-        "success": true,
-        "analysis_type": "summary",
-        "result": {
-            "row_count": 1000,
-            "column_count": 8,
-            "columns": [
-                {"name": "amount", "type": "float", "null_rate": 0.02,
-                 "min": 100, "max": 50000, "mean": 5600, "median": 3200}
-            ],
-            "suggestions": ["amount 列有 5% 的异常值（超出 Q3+1.5*IQR）"]
-        }
-    }
-    """
-```
-
-#### 4.4.9 excel_lib.py — 共享工具
+#### 4.4.7 excel_lib.py — 共享工具
 
 ```python
 # 常量映射
@@ -877,7 +835,6 @@ class PipelineContext:
         self.original_file_paths: List[str] = list(file_paths)
         self.context: Optional[str] = context
         self.read_data: Optional[Dict] = None      # read 操作的结果
-        self.analysis_result: Optional[Dict] = None  # analyze 操作的结果
         self.markdown_content: Optional[str] = None  # to_md 操作的结果
         self.results: List[Dict] = []
 ```
@@ -887,12 +844,10 @@ class PipelineContext:
 | 操作 | 更新行为 |
 |------|----------|
 | read | `ctx.read_data = result` |
-| analyze | `ctx.analysis_result = result` |
 | to_md | `ctx.markdown_content = result["markdown"]` |
 | export | `ctx.file_paths = [result["file_path"]]` |
 | modify | `ctx.file_paths = [result["file_path"]]` |
 | format | `ctx.file_paths = [result["file_path"]]` |
-| chart | `ctx.file_paths = [result["file_path"]]` |
 | fill_template | `ctx.file_paths = [result["file_path"]]` |
 | merge | `ctx.file_paths = [result["file_path"]]` |
 | convert | `ctx.file_paths = [result["file_path"]]` |
@@ -904,15 +859,13 @@ class PipelineContext:
 | 用户需求 | Pipeline | 说明 |
 |----------|----------|------|
 | "看看这个Excel里有什么" | `to_md` | 转为 Markdown 展示给用户 |
-| "分析这个Excel的数据" | `to_md,analyze` | 先读取再分析 |
-| "把这些数据做成图表" | `read,chart` | 先读取列信息，再生成图表 |
 | "把这个表格导出为Excel并加上格式" | `export,format` | 先导出，再格式化 |
-| "修改这个Excel然后生成图表" | `modify,chart` | 先修改数据，再基于修改后的数据画图 |
 | "基于模板生成月度报告" | `fill_template` | 系统模板填充 |
 | "用户上传模板 + 填数据" | `to_md,fill_template` | 先理解模板内容再填充 |
 | "用户上传模板直接说填什么" | `fill_template` | template_file 参数直接用附件路径 |
 | "把这几个CSV合并成一个Excel" | `merge` | 多文件合并 |
 | "把这个CSV转成带格式的Excel" | `convert,format` | 先转换格式，再应用样式 |
+| "修改这个Excel然后导出" | `modify,export` | 先修改数据，再导出为新文件 |
 
 ---
 
@@ -973,7 +926,7 @@ pip install markitdown  # 新增：Excel → Markdown
 
 | 现有功能 | 处置方式 |
 |----------|----------|
-| `src/skills/excel-data-assistant/` | **已删除**。全部功能已迁移至 Excel Tool（export 替代 md_to_excel，analyze 替代 analyze_data，chart 替代 aggregate_chart，excel_lib 复用了 excel_utils 的编码检测和列宽计算逻辑） |
+| `src/skills/excel-data-assistant/` | **已删除**。全部功能已迁移至 Excel Tool（export 替代 md_to_excel，excel_lib 复用了 excel_utils 的编码检测和列宽计算逻辑）。数据分析（analyze_data）和图表生成（aggregate_chart）已由 `SmartDataAnalysisTool` 承接 |
 | `src/tools/file/excel_reader.py` | **保留**。用于通用文件读取（FileReaderTool 链路），不冲突 |
 | `src/knowledge/parsers/excel_parser.py` | **不动**。知识库专用，独立链路 |
 | `src/skills/quote-export/` | **保留**。业务特定逻辑，不通用化 |
@@ -1245,15 +1198,20 @@ Agent 将模板内容展示给用户后，用户说明要填什么，再触发 `
 | `src/tools/excel/excel_process_tool.py` | 入口 + Pipeline |
 | `src/tools/excel/excel_router.py` | 内部 LLM 路由器 |
 | `src/tools/excel/excel_lib.py` | 共享工具函数 |
-| `src/tools/excel/excel_reader.py` | 数据读取 |
+| `src/tools/excel/excel_reader.py` | 数据读取（含文档级完整读取） |
 | `src/tools/excel/excel_writer.py` | 创建/导出 |
 | `src/tools/excel/excel_modifier.py` | 内容修改 |
 | `src/tools/excel/excel_formatter.py` | 格式化样式 |
-| `src/tools/excel/excel_chart.py` | 图表生成 |
 | `src/tools/excel/excel_template.py` | 模板管理 |
 | `src/tools/excel/excel_to_md.py` | Excel → Markdown |
-| `src/tools/excel/excel_analyzer.py` | 数据分析 |
 | `storage/excel_templates/` | 模板存放目录 |
+
+### 已删除文件
+
+| 文件 | 说明 |
+|------|------|
+| `src/tools/excel/excel_chart.py` | 图表生成，已由 `SmartDataAnalysisTool` 替代 |
+| `src/tools/excel/excel_analyzer.py` | 数据分析，已由 `SmartDataAnalysisTool` 替代 |
 
 ### 修改文件
 
@@ -1280,9 +1238,9 @@ Agent 将模板内容展示给用户后，用户说明要填什么，再触发 `
 | 模块 | 能力 | 优先级理由 | 状态 |
 |------|------|-----------|------|
 | excel_template | 模板填充 | 企业高频：基于模板生成报告 | ✅ |
-| excel_chart | 图表生成 | 数据可视化的核心需求 | ✅ |
-| excel_analyzer | 数据分析 | 复用 Skill 已有的分析逻辑 | ✅ |
 | excel_formatter | 格式化 | 提升输出质量 | ✅ |
+
+> **注**：`excel_chart`（图表生成）和 `excel_analyzer`（数据分析）已从 Excel 工具中移除，统一由 `SmartDataAnalysisTool`（`analyze_data` 工具）承接。
 
 ### P2（完善 — 第三批交付）✅ 已完成
 
@@ -1318,7 +1276,7 @@ Agent 将模板内容展示给用户后，用户说明要填什么，再触发 `
 ### 10.4 与现有 Skill 的关系
 
 - Excel Tool 作为主入口后，`excel-data-assistant` Skill 的 `md_to_excel` 功能被 Tool 的 `export` 操作替代
-- Skill 的 `clean_data`、`aggregate_chart` 可保留为独立技能，或未来提取到 Tool 的 `analyze` 操作中
+- Skill 的 `clean_data`、`aggregate_chart` 已分别由 Excel Tool 的格式化能力和 `SmartDataAnalysisTool` 承接
 - ~~excel-data-assistant Skill 已删除~~，全部功能由 Excel Tool 承接，无功能重复
 
 ### 10.5 编码处理

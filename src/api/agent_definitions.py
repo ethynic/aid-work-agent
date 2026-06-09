@@ -220,18 +220,39 @@ async def list_skills_meta(request: Request):
 
 @router.get("/meta/reply-styles")
 async def list_reply_styles_meta(request: Request):
-    """获取回复风格元数据列表（供前端选择器使用）"""
-    _require_admin(request)
-    from src.prompts.style_manager import get_style_manager
-    sm = get_style_manager()
-    style_ids = sm.list_styles()
+    """获取回复风格元数据列表（供前端选择器使用）
+
+    返回系统内置风格 + 当前租户自定义风格，与回复风格管理页面保持一致。
+    """
+    admin = _require_admin(request)
+    tenant_id = admin.get("tenant_id")
     styles = []
-    for sid in style_ids:
+
+    # 1. 系统内置风格（从数据库获取真实的 name 和 description）
+    from src.saas.db.reply_style_db import ReplyStyleDB
+    system_styles = ReplyStyleDB.list_system_styles()
+    seen_ids = set()
+    for s in system_styles:
+        seen_ids.add(s["style_id"])
         styles.append({
-            "id": sid,
-            "name": sm._get_style_name(sid),
-            "description": sm._get_style_description(sid),
+            "id": s["style_id"],
+            "name": s["name"],
+            "description": s.get("description") or "",
         })
+
+    # 2. 当前租户自定义风格（如果有）
+    if tenant_id:
+        from src.saas.db.reply_style_db import SYSTEM_TENANT
+        tenant_styles = ReplyStyleDB.list_active_by_tenant(tenant_id)
+        for s in tenant_styles:
+            if s["style_id"] not in seen_ids and s["tenant_id"] != SYSTEM_TENANT:
+                seen_ids.add(s["style_id"])
+                styles.append({
+                    "id": s["style_id"],
+                    "name": s["name"],
+                    "description": s.get("description") or "",
+                })
+
     return _success(styles)
 
 
