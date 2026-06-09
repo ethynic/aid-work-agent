@@ -259,6 +259,11 @@ def get_my_allowed_agents(request: Request):
                 "data": []
             }
 
+        # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
+        registry.load_from_db()
+
         all_items = registry.get_all_subagents_with_type()
         result = []
         for item in all_items:
@@ -296,6 +301,11 @@ def get_my_allowed_agents(request: Request):
                 "success": True,
                 "data": []
             }
+
+        # 多 worker 部署时刷新定制 subagent（磁盘 + 数据库）
+        if registry._custom_dir:
+            registry._load_custom(registry._custom_dir)
+        registry.load_from_db()
 
         all_items = registry.get_all_subagents_with_type()
         result = []
