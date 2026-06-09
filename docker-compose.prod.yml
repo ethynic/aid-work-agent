@@ -49,6 +49,8 @@ services:
       # 上传附件目录
       - /var/www/qb3_upload/agent_uploads:/app/uploads
       - /var/www/qb3_upload/agent_storage:/app/storage
+      # 用于数据迁移
+      - /var/www/qb3_upload/agent2_storage:/app/source_storage
 
       # 记忆文件目录
       - /var/www/qb3_upload/agent_memories:/app/memories
