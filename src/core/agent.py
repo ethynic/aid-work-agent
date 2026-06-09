@@ -375,6 +375,10 @@ class Agent:
         from src.tools.phone.ai_call_tool import AICallTool
         self.tool_registry.register(AICallTool())
 
+        # 注册智能数据分析工具
+        from src.tools.data_analysis.smart_analysis_tool import SmartDataAnalysisTool
+        self.tool_registry.register(SmartDataAnalysisTool())
+
         # 注册提取的虚拟工具（不放入 tool_registry，由 agent loop 特殊处理）
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool

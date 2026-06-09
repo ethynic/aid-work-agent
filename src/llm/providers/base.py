@@ -142,27 +142,36 @@ class BaseLLMProvider(ABC):
     ) -> Optional[List[Dict[str, Any]]]:
         """
         格式化工具定义（子类可覆盖）
-        
+
+        支持两种输入格式：
+        1. 内部格式: {"name": "...", "description": "...", "input_schema": {...}}
+        2. OpenAI 格式: {"type": "function", "function": {"name": "...", ...}}
+
         Args:
             tools: 原始工具定义列表
-        
+
         Returns:
-            格式化后的工具定义列表
+            统一为 OpenAI function calling 格式
         """
         if not tools:
             return None
-        
+
         formatted_tools = []
         for tool in tools:
-            formatted_tools.append({
-                "type": "function",
-                "function": {
-                    "name": tool.get("name", ""),
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("input_schema", tool.get("parameters", {})),
-                }
-            })
-        
+            # 已经是 OpenAI 格式（有 type="function" 和 function 字段），直接使用
+            if tool.get("type") == "function" and "function" in tool:
+                formatted_tools.append(tool)
+            else:
+                # 内部格式，转换为 OpenAI 格式
+                formatted_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.get("name", ""),
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("input_schema", tool.get("parameters", {})),
+                    }
+                })
+
         return formatted_tools
     
     def _parse_tool_calls(

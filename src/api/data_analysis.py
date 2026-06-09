@@ -98,9 +98,10 @@ class ConnectorUpdate(BaseModel):
 class SchemaSave(BaseModel):
     table_name: str = Field(..., description="表名")
     description: str = Field("", description="表描述")
-    source_info: str = Field("", description="来源信息")
+    source_info: str = Field("", description="来源信息（文件名或连接描述）")
     columns: List[Dict[str, Any]] = Field(..., description="列定义列表")
     connector_id: Optional[str] = None
+    source: Optional[dict] = Field(None, description="数据源定位信息，如 {type:'excel', file_path:'...', sheet_name:'...'} 或 {type:'database', connector_id:'...', db_table_name:'...'}")
 
 
 class RelationItem(BaseModel):
@@ -584,6 +585,8 @@ async def save_schema(req: SchemaSave, request: Request):
             "table_name": req.table_name,
             "columns": req.columns,
         }
+        if req.source:
+            metadata["source"] = req.source
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -695,6 +698,8 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
             "table_name": req.table_name,
             "columns": req.columns,
         }
+        if req.source:
+            metadata["source"] = req.source
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
