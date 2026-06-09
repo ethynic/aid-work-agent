@@ -42,7 +42,6 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20 | 浏览器操作可视化 | 📋 待开发 | Playwright Screencast API 实时推送浏览器操作画面到前端，支持操作标注。2026-05-21 | [设计](tools/browser/browser_visualization_design.md) | — |
-| 21 | Excel 工具重构 | 📋 待开发 | 移除 analyze 和 chart 操作（由数据分析工具替代），增强 read 操作（复制 FileReaderTool 的文档级读取能力）。2026-06-09 | [设计](tools/excel/excel-tool-refactor-design.md) | [计划](tools/excel/excel-tool-refactor-dev-plan.md) |
 
 ## 渠道集成
 

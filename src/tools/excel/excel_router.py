@@ -19,47 +19,39 @@ ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由�
    - 触发：用户想看Excel里有什么数据、查看某个Sheet
    - 参数：{sheet_name: "可选", range: "可选,如A1:D10", include_formulas: false}
 
-2. **analyze** — 对数据进行统计分析
-   - 触发：用户要求分析数据、统计摘要、找异常
-   - 参数：{sheet_name: "可选", analysis_type: "summary|anomaly|pivot", group_by: "可选", aggregations: "可选"}
-
-3. **to_md** — 将 Excel 转为 Markdown 表格
+2. **to_md** — 将 Excel 转为 Markdown 表格
    - 触发：用户要求查看Excel内容、将Excel转为文本
    - 参数：{sheet_name: "可选", max_rows: 100}
 
-4. **export** — 从数据创建新的 Excel 文件
+3. **export** — 从数据创建新的 Excel 文件
    - 触发：用户要求导出数据为Excel、把表格数据存为Excel、创建报表
    - 参数：{data_type: "markdown|csv|json|table", file_name: "输出文件名", sheet_name: "可选", auto_format: true}
 
-5. **modify** — 修改已有 Excel 文件内容
+4. **modify** — 修改已有 Excel 文件内容
    - 触发：用户要求修改单元格、插入行列、删除行列、合并单元格
    - 参数：{operations: [{type, ...具体参数}], output_name: "可选"}
 
-6. **format** — 设置 Excel 格式样式
+5. **format** — 设置 Excel 格式样式
    - 触发：用户要求设置字体、边框、颜色、列宽、数字格式
    - 参数：{format_operations: [{type, ...具体参数}], output_name: "可选"}
 
-7. **chart** — 生成图表
-   - 触发：用户要求创建图表、画柱状图/折线图/饼图
-   - 参数：{chart_type: "bar|line|pie|scatter", x_column: "", y_columns: [], title: "可选", sheet_name: "可选"}
-
-8. **fill_template** — 使用模板填充数据
+6. **fill_template** — 使用模板填充数据
    - 触发：用户要求基于模板生成Excel、按模板填写数据
    - 模板来源：a) template_name=系统模板名 b) template_file=用户上传的模板路径
    - 参数：{template_name: "系统模板名（二选一）", template_file: "用户上传的模板路径（二选一）", variables: {key: value}, output_name: "可选"}
    - variables 中：字符串/数字为单值替换；列表为行循环数据
 
-9. **list_templates** — 列出可用模板
+7. **list_templates** — 列出可用模板
    - 触发：用户问有哪些模板可用
    - 参数：{}
 
-10. **merge** — 合并多个文件
-    - 触发：用户要求合并多个Excel/CSV文件
-    - 参数：{output_name: "可选", merge_mode: "rows|sheets"}
+8. **merge** — 合并多个文件
+   - 触发：用户要求合并多个Excel/CSV文件
+   - 参数：{output_name: "可选", merge_mode: "rows|sheets"}
 
-11. **convert** — 格式转换
-    - 触发：用户要求CSV转Excel、Excel转CSV、JSON转Excel
-    - 参数：{source_format: "csv|json|excel", target_format: "csv|json|excel", output_name: "可选"}
+9. **convert** — 格式转换
+   - 触发：用户要求CSV转Excel、Excel转CSV、JSON转Excel
+   - 参数：{source_format: "csv|json|excel", target_format: "csv|json|excel", output_name: "可选"}
 
 ## 判断规则
 
@@ -67,13 +59,11 @@ ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由�
 - 有附件且上下文提到"模板"、"按这个格式"、"照着这个填"等 → fill_template（template_file = 附件路径）
 - 要求基于系统模板生成（无附件模板，提到模板名或要求选择）→ fill_template（template_name）或先 list_templates
 - 有附件且要求转为Markdown理解 → to_md
-- 要求生成图表 → chart（可能需要先 read 获取列信息）
 - 要求修改已有Excel → modify
 - 要求设置样式格式 → format
 - 要求创建新Excel / 导出数据 → export（但 context 中必须包含实际数据，如果只有用户意图没有数据，则 params 中标注 needs_data: true）
 - 要求格式转换 → convert
 - 要求合并文件 → merge
-- 要求分析统计 → analyze
 - 要求查看数据内容 → read
 - 仅有附件无明确指令 → to_md（默认将内容转为可理解格式）
 
@@ -88,7 +78,7 @@ export 操作必须检查 context 中是否包含实际表格数据（Markdown�
 
 严格输出 JSON，不要输出其他内容：
 {
-  "task": "操作名（可逗号分隔多个，如 read,chart）",
+  "task": "操作名（可逗号分隔多个，如 read,export）",
   "params": { ... 操作对应参数 ... },
   "reason": "判断依据"
 }
@@ -120,8 +110,8 @@ class ExcelRouter:
     """Excel 工具内部 LLM 路由器"""
 
     VALID_TASKS = {
-        "read", "analyze", "to_md", "export", "modify", "format",
-        "chart", "fill_template", "list_templates", "merge", "convert",
+        "read", "to_md", "export", "modify", "format",
+        "fill_template", "list_templates", "merge", "convert",
     }
 
     def __init__(self):

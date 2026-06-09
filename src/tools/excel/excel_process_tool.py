@@ -17,18 +17,16 @@ from src.tools.base import BaseTool
 class TaskType:
     """有效操作类型常量"""
     READ = "read"
-    ANALYZE = "analyze"
     TO_MD = "to_md"
     EXPORT = "export"
     MODIFY = "modify"
     FORMAT = "format"
-    CHART = "chart"
     FILL_TEMPLATE = "fill_template"
     LIST_TEMPLATES = "list_templates"
     MERGE = "merge"
     CONVERT = "convert"
 
-    ALL = {READ, ANALYZE, TO_MD, EXPORT, MODIFY, FORMAT, CHART,
+    ALL = {READ, TO_MD, EXPORT, MODIFY, FORMAT,
            FILL_TEMPLATE, LIST_TEMPLATES, MERGE, CONVERT}
 
 
@@ -54,21 +52,24 @@ class PipelineContext:
         self.original_file_paths: List[str] = list(file_paths) if file_paths else []
         self.context: Optional[str] = context
         self.read_data: Optional[Dict] = None
-        self.analysis_result: Optional[Dict] = None
         self.markdown_content: Optional[str] = None
         self.results: List[Dict] = []
 
 
-TOOL_DESCRIPTION = """Excel电子表格处理工具。所有与Excel(.xlsx)相关的操作都通过本工具处理。
+TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文件的读取、创建、修改、格式化、模板填充、格式转换等操作。
 
 ⚠️ 触发规则 — 遇到以下场景必须调用本工具：
 - 用户要求导出、生成、创建Excel文件
-- 用户要求读取、分析、修改Excel文件
+- 用户要求读取、修改、格式化Excel文件
 - 用户要求将数据(表格、CSV、JSON)转为Excel
 - 用户要求将Excel转为其他格式(Markdown、CSV)
 - 用户要求基于模板填充数据生成Excel报告
-- 用户要求对Excel数据进行统计分析、生成图表
 - 用户上传了.xlsx/.csv文件并要求处理
+
+🚫 以下场景不要调用本工具，请使用对应专用工具：
+- 用户要求对数据进行**统计分析、趋势分析、对比分析、异常检测**等 → 调用 analyze_data 工具
+- 用户要求**生成图表**（柱状图、折线图、饼图等） → 调用 analyze_data 工具
+- 用户要求从多个数据源关联分析 → 调用 analyze_data 工具
 
 调用方式（重要）：
 - context 参数必须包含**完整的表格数据**，不能只传用户意图描述
@@ -149,12 +150,10 @@ class ExcelProcessTool(BaseTool):
     def _get_handler(self, op: str):
         handlers = {
             "read": self._handle_read,
-            "analyze": self._handle_analyze,
             "to_md": self._handle_to_md,
             "export": self._handle_export,
             "modify": self._handle_modify,
             "format": self._handle_format,
-            "chart": self._handle_chart,
             "fill_template": self._handle_fill_template,
             "list_templates": self._handle_list_templates,
             "merge": self._handle_merge,
@@ -177,13 +176,11 @@ class ExcelProcessTool(BaseTool):
         """根据操作结果更新 pipeline 上下文"""
         if op == "read":
             ctx.read_data = result
-        elif op == "analyze":
-            ctx.analysis_result = result
         elif op == "to_md":
             ctx.markdown_content = result.get("markdown", "")
             ctx.read_data = {"headers": [], "rows": [], "markdown": result.get("markdown", "")}
 
-        if op in ("export", "modify", "format", "chart", "fill_template", "merge", "convert"):
+        if op in ("export", "modify", "format", "fill_template", "merge", "convert"):
             if result.get("file_path"):
                 ctx.file_paths = [result["file_path"]]
 
@@ -203,10 +200,13 @@ class ExcelProcessTool(BaseTool):
                     merged["active_sheet"] = r.get("active_sheet", "")
                 if r.get("markdown"):
                     merged["markdown"] = r["markdown"]
-            elif op == "analyze":
-                merged["analysis"] = r.get("result", {})
-                merged["analysis_type"] = r.get("analysis_type", "summary")
-            elif op in ("export", "modify", "format", "chart", "fill_template", "merge", "convert"):
+                if r.get("content"):
+                    merged["content"] = r["content"]
+                    merged["total_lines"] = r.get("total_lines", 0)
+                    merged["document_info"] = r.get("document_info", {})
+                    merged["sheet_count"] = r.get("sheet_count", 0)
+                    merged["sheet_names"] = r.get("sheet_names", [])
+            elif op in ("export", "modify", "format", "fill_template", "merge", "convert"):
                 merged["file_path"] = r.get("file_path", "")
                 merged["file_name"] = r.get("file_name", "")
                 merged["file_size"] = r.get("file_size", 0)
@@ -232,32 +232,26 @@ class ExcelProcessTool(BaseTool):
     # ── 各操作处理器 ──
 
     async def _handle_read(self, ctx: PipelineContext, params: Dict) -> Dict:
-        from src.tools.excel.excel_reader import read_sheet
+        from src.tools.excel.excel_reader import read_sheet, read_excel_document
 
         if not ctx.file_paths:
             return {"success": False, "error": "read 操作需要 file_paths 参数"}
 
         file_path = ctx.file_paths[0]
-        return read_sheet(
+
+        # 精确范围读取 或 公式读取 → 使用 read_sheet（结构化数据）
+        if params.get("range") or params.get("include_formulas"):
+            return read_sheet(
+                file_path,
+                sheet_name=params.get("sheet_name"),
+                cell_range=params.get("range"),
+                include_formulas=params.get("include_formulas", False),
+            )
+
+        # 默认 → 使用 read_excel_document（完整文档信息 + 文本内容）
+        return read_excel_document(
             file_path,
             sheet_name=params.get("sheet_name"),
-            cell_range=params.get("range"),
-            include_formulas=params.get("include_formulas", False),
-        )
-
-    async def _handle_analyze(self, ctx: PipelineContext, params: Dict) -> Dict:
-        from src.tools.excel.excel_analyzer import analyze_data
-
-        if not ctx.file_paths:
-            return {"success": False, "error": "analyze 操作需要 file_paths 参数"}
-
-        file_path = ctx.file_paths[0]
-        return analyze_data(
-            file_path,
-            sheet_name=params.get("sheet_name"),
-            analysis_type=params.get("analysis_type", "summary"),
-            group_by=params.get("group_by"),
-            aggregations=params.get("aggregations"),
         )
 
     async def _handle_to_md(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -386,45 +380,6 @@ class ExcelProcessTool(BaseTool):
         save_result["success"] = True
         save_result["operations_applied"] = result["operations_applied"]
         save_result["message"] = f"已完成{result['operations_applied']}项格式化操作"
-
-        download_info = await self._register_download(save_result["file_path"], output_name)
-        if download_info:
-            save_result["file_id"] = download_info["file_id"]
-            save_result["download_url"] = download_info["download_url"]
-        return save_result
-
-    async def _handle_chart(self, ctx: PipelineContext, params: Dict) -> Dict:
-        from src.tools.excel.excel_chart import create_chart
-        from src.tools.excel.excel_lib import ExcelFileHandler
-
-        if not ctx.file_paths:
-            return {"success": False, "error": "chart 操作需要 file_paths 参数"}
-
-        file_path = ctx.file_paths[0]
-        wb, info = ExcelFileHandler.copy_and_open(file_path)
-
-        result = create_chart(
-            wb,
-            chart_type=params.get("chart_type", "bar"),
-            x_column=params.get("x_column", ""),
-            y_columns=params.get("y_columns", []),
-            title=params.get("title"),
-            sheet_name=params.get("sheet_name"),
-            **{k: v for k, v in params.items() if k not in (
-                "chart_type", "x_column", "y_columns", "title", "sheet_name")},
-        )
-
-        if not result["success"]:
-            wb.close()
-            return result
-
-        output_name = params.get("output_name") or (Path(file_path).stem + "_chart.xlsx")
-        save_result = ExcelFileHandler.save_temp(wb, file_name=output_name)
-        wb.close()
-
-        save_result["success"] = True
-        save_result["chart_type"] = result.get("chart_type", "")
-        save_result["chart_title"] = result.get("chart_title", "")
 
         download_info = await self._register_download(save_result["file_path"], output_name)
         if download_info:
