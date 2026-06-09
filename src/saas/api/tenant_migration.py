@@ -47,7 +47,7 @@ def _sanitize_error(error_msg: str) -> str:
 @router.post("/{tenant_id}/migration/preview")
 async def preview_migration(tenant_id: str, request: MigrationRequest, req: Request):
     """预览迁移数据量（dry-run 模式）"""
-    require_admin(req, tenant_id)
+    require_admin(req)
 
     from scripts.tenant_migrate_kb import run_migration
 
@@ -77,7 +77,7 @@ async def preview_migration(tenant_id: str, request: MigrationRequest, req: Requ
 @router.post("/{tenant_id}/migration/execute")
 async def execute_migration(tenant_id: str, request: MigrationRequest, req: Request):
     """执行数据迁移"""
-    require_admin(req, tenant_id)
+    require_admin(req)
 
     from scripts.tenant_migrate_kb import run_migration
 
