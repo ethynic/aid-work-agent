@@ -302,6 +302,13 @@ def _migrate_kb(
         else:
             full_src = src_path
 
+        # 兼容 file_path 中包含 storage/ 前缀的情况：
+        # 数据库中存的是 storage/uploads/...，source_storage 已经是 /app/source_storage
+        # 直接 join 会变成 /app/source_storage/storage/uploads/...（多一层 storage/）
+        if not os.path.exists(full_src) and source_storage and src_path.startswith("storage/"):
+            alt_path = src_path[len("storage/"):]
+            full_src = os.path.join(source_storage, alt_path) if not os.path.isabs(alt_path) else alt_path
+
         if not os.path.exists(full_src):
             logger.warning(f"源文件不存在: {full_src}")
             continue
