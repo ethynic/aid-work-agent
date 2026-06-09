@@ -38,6 +38,57 @@ from src.channels import callback as channels_api
 from src.services.session_record import SessionRecordManager
 
 
+# ============== 默认子智能体路由 ==============
+
+
+def _resolve_default_subagent(subagent_name, tenant_id, user):
+    """
+    当请求未指定子智能体时，检查租户是否只有 1 个可用智能体。
+    如果是，自动路由到该智能体，跳过主智能体。
+
+    Args:
+        subagent_name: 当前请求的子智能体名称（None 表示未指定）
+        tenant_id: 租户 ID
+        user: 当前用户信息 dict
+
+    Returns:
+        str | None: 自动解析的子智能体名称，或 None（保持原样）
+    """
+    if subagent_name:
+        return subagent_name
+
+    if not tenant_id or not user:
+        return None
+
+    # demo 租户有多个内置智能体，不应自动路由
+    if tenant_id == "demo":
+        return None
+
+    try:
+        from src.saas.permissions.checker import get_allowed_agent_ids_for_user
+        allowed_ids = set(get_allowed_agent_ids_for_user(user))
+        if not allowed_ids:
+            return None
+
+        # 获取所有已注册的子智能体
+        registry = master_agent.subagent_registry
+        if not registry:
+            return None
+
+        all_subagents = registry.get_all_subagents_with_type()
+        # 过滤出用户有权限的
+        available = [s for s in all_subagents if s["agent_id"] in allowed_ids]
+
+        if len(available) == 1:
+            agent_id = available[0]["agent_id"]
+            logger.info(f"[AutoRoute] 租户 {tenant_id} 仅有 1 个可用智能体，自动路由到 {agent_id}")
+            return agent_id
+    except Exception as e:
+        logger.warning(f"[AutoRoute] 解析默认子智能体失败: {e}")
+
+    return None
+
+
 # ============== SSE Session Management ==============
 
 # 全局 worker 标识，用于 Redis pub/sub 去重
@@ -859,6 +910,8 @@ async def chat(request: Request):
         agent = None
         _tenant_id = getattr(request.state, 'tenant_id', None)
         instance_id = getattr(request.state, 'instance_id', None)
+        # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
+        subagent_name = _resolve_default_subagent(subagent_name, _tenant_id, current_user)
         if instance_id and settings.saas.enabled:
             from src.saas.services.instance_manager import instance_manager
             agent = instance_manager.get_agent(instance_id, subagent_name, session_id)
@@ -1386,11 +1439,13 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     agent = None
     _tenant_id = getattr(http_request.state, 'tenant_id', None)
     _instance_id = getattr(http_request.state, 'instance_id', None) if settings.saas.enabled else None
+    # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
+    resolved_subagent = _resolve_default_subagent(request.subagent, _tenant_id, current_user)
     if _instance_id:
         from src.saas.services.instance_manager import instance_manager
-        agent = instance_manager.get_agent(_instance_id, request.subagent, session_id)
+        agent = instance_manager.get_agent(_instance_id, resolved_subagent, session_id)
     if not agent:
-        agent = agent_router.get_agent(request.subagent, session_id, tenant_id=_tenant_id)
+        agent = agent_router.get_agent(resolved_subagent, session_id, tenant_id=_tenant_id)
 
     # 注入 tenant_id（供租户 skills 按需加载使用）
     if _tenant_id and not agent._init_tenant_id:
