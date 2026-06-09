@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
@@ -19,6 +20,7 @@ from loguru import logger
 from src.api.auth import get_current_user
 
 from src.db.database import get_db_connection
+from src.api.export_utils import export_table_to_excel
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -92,8 +94,19 @@ def _crud_get(table: str, record_id: int, tenant_id: str) -> Optional[Dict]:
         return dict(row) if row else None
 
 
+_UUID_PREFIX_MAP = {
+    "bs_travel_quote_vehicles": "tqv",
+    "bs_travel_quote_meals": "tqm",
+    "bs_travel_quote_guides": "tqg",
+    "bs_travel_quote_fees": "tqf",
+    "bs_travel_quote_seasons": "tqs",
+}
+
+
 def _crud_create(table: str, tenant_id: str, data: Dict) -> Dict:
     data['tenant_id'] = tenant_id
+    if table in _UUID_PREFIX_MAP:
+        data['uuid'] = f"{_UUID_PREFIX_MAP[table]}_{uuid.uuid4().hex[:12]}"
     cols = [k for k in data.keys() if k != 'id']
     vals = [data[k] for k in cols]
     placeholders = ', '.join(['%s'] * len(cols))
@@ -617,6 +630,116 @@ async def download_import_template():
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=travel_quote_template.xlsx"}
+    )
+
+
+# ============================================================
+# Excel 导出
+# ============================================================
+
+VEHICLES_EXPORT_COLS = [
+    "uuid", "region_name", "vehicle_type", "vehicle_type_label", "seats_max",
+    "per_km_rate", "driver_meal_allowance", "driver_accommodation",
+    "pricing_mode", "remark",
+]
+
+MEALS_EXPORT_COLS = [
+    "uuid", "region_name", "meal_tier", "meal_tier_label", "meal_type",
+    "meal_type_label", "price_per_person", "pax_per_table",
+    "dishes_standard", "season_type", "remark",
+]
+
+GUIDES_EXPORT_COLS = [
+    "uuid", "region_name", "guide_type", "guide_type_label", "guide_level",
+    "guide_level_label", "billing_method", "daily_rate", "trip_rate",
+    "language_premium", "peak_season_multiplier", "season_type", "remark",
+]
+
+FEES_EXPORT_COLS = [
+    "uuid", "fee_name", "fee_category", "billing_method", "unit_price",
+    "is_mandatory", "sort_order", "remark",
+]
+
+SEASONS_EXPORT_COLS = [
+    "uuid", "season_type", "season_type_label", "start_date", "end_date",
+    "price_multiplier", "remark",
+]
+
+KB_DOC_EXPORT_COLS = [
+    "uuid", "title", "source_type", "file_type", "file_path", "file_size",
+    "total_chunks", "embedding_model", "summary", "metadata",
+]
+
+
+@router.get("/vehicles/export")
+async def export_vehicles(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "bs_travel_quote_vehicles", tid,
+        VEHICLES_EXPORT_COLS, "车辆价格数据",
+        where_clause="AND is_active = true"
+    )
+
+
+@router.get("/meals/export")
+async def export_meals(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "bs_travel_quote_meals", tid,
+        MEALS_EXPORT_COLS, "餐标价格数据",
+        where_clause="AND is_active = true"
+    )
+
+
+@router.get("/guides/export")
+async def export_guides(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "bs_travel_quote_guides", tid,
+        GUIDES_EXPORT_COLS, "导游费用数据",
+        where_clause="AND is_active = true"
+    )
+
+
+@router.get("/fees/export")
+async def export_fees(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "bs_travel_quote_fees", tid,
+        FEES_EXPORT_COLS, "其他费用数据",
+        where_clause="AND is_active = true"
+    )
+
+
+@router.get("/seasons/export")
+async def export_seasons(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "bs_travel_quote_seasons", tid,
+        SEASONS_EXPORT_COLS, "淡旺季数据",
+        where_clause="AND is_active = true"
+    )
+
+
+@router.get("/kb/attractions/export")
+async def export_attractions(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "documents", tid,
+        KB_DOC_EXPORT_COLS, "景点知识库数据",
+        where_clause="AND source_type = %s",
+        where_params=("attraction_resource",)
+    )
+
+
+@router.get("/kb/hotels/export")
+async def export_hotels(request: Request):
+    tid = _get_tenant_id(request)
+    return export_table_to_excel(
+        "documents", tid,
+        KB_DOC_EXPORT_COLS, "酒店知识库数据",
+        where_clause="AND source_type = %s",
+        where_params=("hotel_resource",)
     )
 
 

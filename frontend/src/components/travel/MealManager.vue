@@ -21,6 +21,7 @@
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
         </BaseButton>
+        <BaseButton intent="secondary" @click="handleExport">导出 Excel</BaseButton>
         <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
       </div>
     </div>
@@ -158,7 +159,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { meals } from '@/api/travelQuote'
+import { meals, exportMeals } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -267,6 +268,15 @@ async function handleBatchDelete() {
     await loadData()
     alert('批量删除成功')
   } catch (e) { console.error('批量删除失败', e); alert('批量删除失败') }
+}
+
+async function handleExport() {
+  try {
+    await exportMeals()
+  } catch (e) {
+    console.error('导出失败', e)
+    alert('导出失败')
+  }
 }
 
 onMounted(() => { loadData() })

@@ -17,6 +17,7 @@
         <BaseButton size="sm" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
         </BaseButton>
+        <BaseButton intent="secondary" size="sm" @click="handleExport">导出 Excel</BaseButton>
       </div>
     </div>
 
@@ -148,7 +149,8 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   searchAttractionsKB, listAttractionsKB, getAttractionKB,
-  deleteAttractionKB, batchDeleteAttractionsKB, updateAttractionKB
+  deleteAttractionKB, batchDeleteAttractionsKB, updateAttractionKB,
+  exportAttractions
 } from '@/api/travelQuote'
 import { useAttractionKBImport } from '@/composables/useImport'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -334,6 +336,15 @@ async function handleBatchDelete() {
   } catch (e) {
     console.error('批量删除失败', e)
     alert('批量删除失败')
+  }
+}
+
+async function handleExport() {
+  try {
+    await exportAttractions()
+  } catch (e) {
+    console.error('导出失败', e)
+    alert('导出失败')
   }
 }
 

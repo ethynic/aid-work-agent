@@ -161,11 +161,12 @@ class KnowledgeBaseService:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                category_uuid = f"kc_{uuid.uuid4().hex[:12]}"
                 cursor.execute("""
-                    INSERT INTO knowledge_categories (tenant_id, source_type, display_name)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO knowledge_categories (tenant_id, source_type, display_name, uuid)
+                    VALUES (%s, %s, %s, %s)
                     RETURNING id, created_at
-                """, (tenant_id, source_type, display_name or source_type))
+                """, (tenant_id, source_type, display_name or source_type, category_uuid))
                 row = cursor.fetchone()
                 conn.commit()
                 d = dict(row)
@@ -275,12 +276,13 @@ class KnowledgeBaseService:
                 ext = Path(file_filename).suffix.lower().lstrip('.')
 
                 # 插入文档记录（PostgreSQL 使用 RETURNING 获取 ID）
+                doc_uuid = f"doc_{uuid.uuid4().hex[:12]}"
                 cursor.execute("""
                     INSERT INTO documents (
                         user_id, tenant_id, title, source_type, file_type, file_path,
                         file_size, total_chunks, embedding_model,
-                        raw_text, metadata, summary
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        raw_text, metadata, summary, uuid
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     user_id,
@@ -294,7 +296,8 @@ class KnowledgeBaseService:
                     "text-embedding-v3",
                     parse_result.text if parse_result.text else None,
                     json.dumps(parse_result.metadata) if parse_result.metadata else None,
-                    summary or None
+                    summary or None,
+                    doc_uuid
                 ))
                 # row 是 dict: {"id": ...}，对应 RETURNING id
                 doc_id = cursor.fetchone()["id"]
@@ -302,16 +305,18 @@ class KnowledgeBaseService:
                 # 插入 chunks
                 chunk_ids = []
                 for chunk in chunks:
+                    chunk_uuid = f"chunk_{uuid.uuid4().hex[:12]}"
                     cursor.execute("""
-                        INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata, uuid)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         doc_id,
                         chunk["index"],
                         chunk["text"],
                         chunk["tokens"],
-                        json.dumps({"char_count": len(chunk["text"])})
+                        json.dumps({"char_count": len(chunk["text"])}),
+                        chunk_uuid
                     ))
                     # row 是 dict: {"id": ...}，对应 RETURNING id
                     chunk_ids.append(cursor.fetchone()["id"])

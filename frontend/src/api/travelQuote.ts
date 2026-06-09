@@ -300,6 +300,48 @@ export async function downloadTemplate(): Promise<void> {
   window.URL.revokeObjectURL(url)
 }
 
+async function downloadExport(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('导出失败')
+  const blob = await res.blob()
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  window.URL.revokeObjectURL(url)
+}
+
+export async function exportVehicles(): Promise<void> {
+  return downloadExport('/vehicles/export', '车辆价格数据.xlsx')
+}
+
+export async function exportMeals(): Promise<void> {
+  return downloadExport('/meals/export', '餐标价格数据.xlsx')
+}
+
+export async function exportGuides(): Promise<void> {
+  return downloadExport('/guides/export', '导游费用数据.xlsx')
+}
+
+export async function exportFees(): Promise<void> {
+  return downloadExport('/fees/export', '其他费用数据.xlsx')
+}
+
+export async function exportSeasons(): Promise<void> {
+  return downloadExport('/seasons/export', '淡旺季数据.xlsx')
+}
+
+export async function exportAttractions(): Promise<void> {
+  return downloadExport('/kb/attractions/export', '景点知识库数据.xlsx')
+}
+
+export async function exportHotels(): Promise<void> {
+  return downloadExport('/kb/hotels/export', '酒店知识库数据.xlsx')
+}
+
 // ============================================================
 // 知识库模式 API
 // ============================================================

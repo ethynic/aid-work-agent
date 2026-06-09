@@ -291,6 +291,7 @@ CREATE TABLE IF NOT EXISTS knowledge_categories (
     display_name TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE,
     UNIQUE(tenant_id, source_type)
 );
 
@@ -317,7 +318,8 @@ CREATE TABLE IF NOT EXISTS documents (
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    summary TEXT
+    summary TEXT,
+    uuid TEXT UNIQUE
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
@@ -331,7 +333,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     text TEXT,
     tokens INTEGER,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
@@ -1137,7 +1140,8 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_vehicles (
     effective_to DATE,
     is_active BOOLEAN DEFAULT TRUE,
     remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_travel_vehicles_tenant ON bs_travel_quote_vehicles(tenant_id, is_active);
 
@@ -1163,7 +1167,8 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
     effective_to DATE,
     is_active BOOLEAN DEFAULT TRUE,
     remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_travel_meals_tenant ON bs_travel_quote_meals(tenant_id, is_active);
 
@@ -1185,7 +1190,8 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_guides (
     season_type TEXT DEFAULT 'default',
     is_active BOOLEAN DEFAULT TRUE,
     remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_travel_guides_tenant ON bs_travel_quote_guides(tenant_id, is_active);
 
@@ -1202,7 +1208,8 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_fees (
     is_active BOOLEAN DEFAULT TRUE,
     sort_order INT DEFAULT 0,
     remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_travel_fees_tenant ON bs_travel_quote_fees(tenant_id, is_active);
 
@@ -1218,7 +1225,8 @@ CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
     price_multiplier DECIMAL(3,2) DEFAULT 1.00,
     is_active BOOLEAN DEFAULT TRUE,
     remark TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uuid TEXT UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_travel_seasons_tenant ON bs_travel_quote_seasons(tenant_id, is_active);
 

@@ -1720,7 +1720,7 @@ app.include_router(memory_api.router)
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes
-from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers
+from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
 app.include_router(subscriptions.router)
@@ -1734,6 +1734,7 @@ app.include_router(usage_reports.public_router)
 app.include_router(permissions.router)
 app.include_router(reply_styles.router)
 app.include_router(external_customers.router)
+app.include_router(tenant_migration.router)
 
 
 

@@ -1078,7 +1078,8 @@ def _init_postgresql():
                 metadata TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                summary TEXT
+                summary TEXT,
+                uuid TEXT UNIQUE
             )
         """)
 
@@ -1102,7 +1103,8 @@ def _init_postgresql():
                 text_vec tsvector,
                 tokens INTEGER NOT NULL,
                 metadata TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                uuid TEXT UNIQUE
             )
         """)
 

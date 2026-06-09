@@ -1029,3 +1029,36 @@ CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
     UNIQUE(agent_id, section_key)
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_sections_agent ON subagent_prompt_sections(agent_id);
+
+-- 2026-6-8，数据迁移：为知识库表和业务表添加 uuid 列，支持跨库迁移
+ALTER TABLE knowledge_categories ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE knowledge_categories SET uuid = 'kc_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_categories_uuid ON knowledge_categories(uuid);
+
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE documents SET uuid = 'doc_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_uuid ON documents(uuid);
+
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE chunks SET uuid = 'chunk_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_uuid ON chunks(uuid);
+
+ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE bs_travel_quote_vehicles SET uuid = 'tqv_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_vehicles_uuid ON bs_travel_quote_vehicles(uuid);
+
+ALTER TABLE bs_travel_quote_meals ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE bs_travel_quote_meals SET uuid = 'tqm_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_meals_uuid ON bs_travel_quote_meals(uuid);
+
+ALTER TABLE bs_travel_quote_guides ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE bs_travel_quote_guides SET uuid = 'tqg_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_guides_uuid ON bs_travel_quote_guides(uuid);
+
+ALTER TABLE bs_travel_quote_fees ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE bs_travel_quote_fees SET uuid = 'tqf_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_fees_uuid ON bs_travel_quote_fees(uuid);
+
+ALTER TABLE bs_travel_quote_seasons ADD COLUMN IF NOT EXISTS uuid TEXT;
+UPDATE bs_travel_quote_seasons SET uuid = 'tqs_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_seasons_uuid ON bs_travel_quote_seasons(uuid);

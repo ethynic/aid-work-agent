@@ -39,7 +39,8 @@ TABLE_DEFINITIONS = {
             effective_to DATE,
             is_active BOOLEAN DEFAULT TRUE,
             remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            uuid TEXT UNIQUE
         )""",
     "bs_travel_quote_meals": """
         CREATE TABLE IF NOT EXISTS bs_travel_quote_meals (
@@ -59,7 +60,8 @@ TABLE_DEFINITIONS = {
             effective_to DATE,
             is_active BOOLEAN DEFAULT TRUE,
             remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            uuid TEXT UNIQUE
         )""",
     "bs_travel_quote_guides": """
         CREATE TABLE IF NOT EXISTS bs_travel_quote_guides (
@@ -79,7 +81,8 @@ TABLE_DEFINITIONS = {
             season_type TEXT DEFAULT 'default',
             is_active BOOLEAN DEFAULT TRUE,
             remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            uuid TEXT UNIQUE
         )""",
     "bs_travel_quote_fees": """
         CREATE TABLE IF NOT EXISTS bs_travel_quote_fees (
@@ -94,7 +97,8 @@ TABLE_DEFINITIONS = {
             is_active BOOLEAN DEFAULT TRUE,
             sort_order INT DEFAULT 0,
             remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            uuid TEXT UNIQUE
         )""",
     "bs_travel_quote_seasons": """
         CREATE TABLE IF NOT EXISTS bs_travel_quote_seasons (
@@ -108,7 +112,8 @@ TABLE_DEFINITIONS = {
             price_multiplier DECIMAL(3,2) DEFAULT 1.00,
             is_active BOOLEAN DEFAULT TRUE,
             remark TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            uuid TEXT UNIQUE
         )""",
 }
 

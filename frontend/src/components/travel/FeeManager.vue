@@ -34,6 +34,7 @@
           <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
             {{ importing ? '导入中...' : '导入 Excel' }}
           </BaseButton>
+          <BaseButton intent="secondary" @click="handleFeesExport">导出 Excel</BaseButton>
           <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
         </div>
       </div>
@@ -141,6 +142,7 @@
         <div class="page-toolbar-left"></div>
         <div class="page-toolbar-right">
           <BaseButton @click="openSeasonCreate">新增季节</BaseButton>
+          <BaseButton intent="secondary" @click="handleSeasonsExport">导出 Excel</BaseButton>
         </div>
       </div>
 
@@ -223,7 +225,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { fees, seasons } from '@/api/travelQuote'
+import { fees, seasons, exportFees, exportSeasons } from '@/api/travelQuote'
 import { useImport } from '@/composables/useImport'
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -417,4 +419,22 @@ watch(activeTab, (tab) => {
 })
 
 onMounted(() => { loadFees() })
+
+async function handleFeesExport() {
+  try {
+    await exportFees()
+  } catch (e) {
+    console.error('导出失败', e)
+    alert('导出失败')
+  }
+}
+
+async function handleSeasonsExport() {
+  try {
+    await exportSeasons()
+  } catch (e) {
+    console.error('导出失败', e)
+    alert('导出失败')
+  }
+}
 </script>

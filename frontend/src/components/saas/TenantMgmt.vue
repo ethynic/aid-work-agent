@@ -140,6 +140,18 @@
             数字员工授权
             <span v-if="selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span>
           </button>
+          <button
+            v-if="isEdit"
+            @click="activeTab = 'migration'"
+            :class="[
+              'pb-2 text-sm font-medium border-b-2 transition-colors',
+              activeTab === 'migration'
+                ? 'text-primary-600 border-primary-600'
+                : 'text-muted border-transparent hover:text-default hover:border-hover'
+            ]"
+          >
+            数据迁移
+          </button>
         </div>
       </div>
 
@@ -243,6 +255,11 @@
             >API 配置</button>
           </div>
         </div>
+      </div>
+
+      <!-- 数据迁移标签页 -->
+      <div v-show="activeTab === 'migration'" class="overflow-y-auto" style="max-height: calc(90vh - 220px);">
+        <TenantMigration v-if="currentTenant" :tenant-id="currentTenant.tenant_id" />
       </div>
 
       <div v-if="formError" class="mt-4 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ formError }}</div>
@@ -488,6 +505,7 @@ import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories } from '@/api/saasPermissions'
+import TenantMigration from '@/components/saas/TenantMigration.vue'
 import { TenantStatus, TenantStatusMap } from '@/api/enums'
 
 const toast = useToast()
@@ -532,7 +550,7 @@ const isFormDirty = computed(() => {
 })
 
 // 数字员工授权标签页相关
-const activeTab = ref<'basic' | 'agents'>('basic')
+const activeTab = ref<'basic' | 'agents' | 'migration'>('basic')
 const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const loadingAgents = ref(false)
