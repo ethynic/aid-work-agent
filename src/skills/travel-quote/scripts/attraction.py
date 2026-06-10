@@ -69,7 +69,7 @@ def calculate_attraction_cost(
                 total_people, teacher_count
             )
         except Exception as e:
-            logger.error(f"[quote-generate] 景点 {ua.name} 处理失败: {e}")
+            logger.error(f"[travel-quote] 景点 {ua.name} 处理失败: {e}")
 
     return items
 
@@ -98,7 +98,7 @@ def _merge_attractions(attraction_matches: List[Dict]) -> List[UniqueAttraction]
             )
 
     result = list(doc_map.values())
-    logger.info(f"[quote-generate] 景点去重: {len(attraction_matches)} 条匹配 → {len(result)} 个唯一景点")
+    logger.info(f"[travel-quote] 景点去重: {len(attraction_matches)} 条匹配 → {len(result)} 个唯一景点")
     for ua in result:
         logger.info(f"  - {ua.name} (doc_id={ua.doc_id}), activities={ua.activities}")
 
@@ -231,11 +231,11 @@ def _llm_extract_tickets(
             raw = json_match.group(1)
         result = json.loads(raw.strip())
         ticket_count = len(result.get('tickets') or [])
-        logger.info(f"[quote-generate] LLM门票提取: 搜索='{search_name}', "
+        logger.info(f"[travel-quote] LLM门票提取: 搜索='{search_name}', "
                      f"确认={result.get('confirmed')}, {ticket_count}项门票")
         return result
     except Exception as e:
-        logger.warning(f"[quote-generate] LLM门票提取失败: {e}")
+        logger.warning(f"[travel-quote] LLM门票提取失败: {e}")
         return None
 
 
@@ -310,11 +310,11 @@ def _llm_extract_projects(
             raw = json_match.group(1)
         result = json.loads(raw.strip())
         projects = result.get("projects") or []
-        logger.info(f"[quote-generate] LLM项目匹配: 搜索='{search_name}', "
+        logger.info(f"[travel-quote] LLM项目匹配: 搜索='{search_name}', "
                      f"匹配{len(projects)}项, 输入活动{len(activities)}项")
         return projects
     except Exception as e:
-        logger.warning(f"[quote-generate] LLM项目匹配失败: {e}")
+        logger.warning(f"[travel-quote] LLM项目匹配失败: {e}")
         return None
 
 
@@ -501,7 +501,7 @@ def _fallback_parse_tickets(
             "remark": "",
         })
 
-    logger.info(f"[quote-generate] fallback门票解析: {len(tickets)}项, price_map={price_map}")
+    logger.info(f"[travel-quote] fallback门票解析: {len(tickets)}项, price_map={price_map}")
     return {"confirmed": True, "name": "", "tickets": tickets}
 
 
@@ -565,7 +565,7 @@ def _fallback_parse_projects(
             "matched_activity": activity,
             "remark": "",
         })
-        logger.info(f"[quote-generate] fallback项目匹配: 活动='{activity}' → 匹配='{project_name}', "
+        logger.info(f"[travel-quote] fallback项目匹配: 活动='{activity}' → 匹配='{project_name}', "
                      f"单价={unit_price}, 计费={'按团' if billing_method == 'per_group' else '按人'}")
 
     return projects if projects else None

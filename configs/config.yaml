@@ -136,11 +136,7 @@ skills:
       - weather
       - article-writing
       - contract-approval
-      # word-processing 已迁移为 word_process 工具（src/tools/word/）
-      - excel-data-assitant
-      - trip-planner
-      - quote-generator
-      - quote-export
+      - travel-quote
       - route-distance
   # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
   subagent:

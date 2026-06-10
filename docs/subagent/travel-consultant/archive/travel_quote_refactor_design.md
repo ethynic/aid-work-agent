@@ -4,7 +4,7 @@
 
 ## 1. 背景
 
-`src/skills/quote-generate/scripts/generate.py` 当前约 2246 行，承担了报价生成的全部职责。代码可读性差、维护成本高，且**门票和游玩项目的价格提取存在严重缺陷**（缺项、匹配不准、重复计算），需要重构。
+`src/skills/travel-quote/scripts/generate.py` 当前约 2246 行，承担了报价生成的全部职责。代码可读性差、维护成本高，且**门票和游玩项目的价格提取存在严重缺陷**（缺项、匹配不准、重复计算），需要重构。
 
 ### 1.1 保留不动的部分
 
@@ -45,7 +45,7 @@
 ## 3. 文件拆分方案
 
 ```
-src/skills/quote-generate/scripts/
+src/skills/travel-quote/scripts/
 ├── generate.py              # 主入口 + 主流程编排（约 350 行）
 ├── db.py                    # 数据库连接、表初始化、区域查询（约 100 行）
 ├── season.py                # 季节判断（约 30 行）

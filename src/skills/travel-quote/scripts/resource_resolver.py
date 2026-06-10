@@ -7,7 +7,7 @@ from loguru import logger
 
 def resolve_resources(parsed: dict, tenant_id: str) -> dict:
     """将 LLM 解析出的名称/偏好转换为知识库 doc_id"""
-    logger.info(f"[quote-generate] resolve_resources tenant_id={tenant_id}")
+    logger.info(f"[travel-quote] resolve_resources tenant_id={tenant_id}")
     result = {"attraction_doc_ids": [], "attraction_matches": [], "hotel_doc_id": None, "hotel_stays": []}
 
     # 景点匹配
@@ -56,17 +56,17 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
                                     if act not in existing_activities:
                                         existing["activities"].append(act)
                                         existing_activities.add(act)
-                        logger.info(f"[quote-generate] 景点合并: '{name}' → doc_id={doc_id} (已有，合并activities)")
+                        logger.info(f"[travel-quote] 景点合并: '{name}' → doc_id={doc_id} (已有，合并activities)")
                         continue
                     seen_doc_ids.add(doc_id)
                     result["attraction_doc_ids"].append(doc_id)
                     result["attraction_matches"].append(match_info)
-                    logger.info(f"[quote-generate] 景点匹配: '{name}' → doc_id={doc_id}, "
+                    logger.info(f"[travel-quote] 景点匹配: '{name}' → doc_id={doc_id}, "
                                 f"activities={match_info['activities']}")
                 else:
-                    logger.warning(f"[quote-generate] 景点未匹配: '{name}'")
+                    logger.warning(f"[travel-quote] 景点未匹配: '{name}'")
         except Exception as e:
-            logger.warning(f"[quote-generate] 景点检索失败: {e}")
+            logger.warning(f"[travel-quote] 景点检索失败: {e}")
 
     # 酒店匹配
     hotel_stays = parsed.get("hotel_stays", [])
@@ -83,12 +83,12 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
                 matches = retriever.search(tenant_id, query, top_k=1)
                 stay["hotel_doc_id"] = matches[0]["doc_id"] if matches else None
                 if matches:
-                    logger.info(f"[quote-generate] 酒店匹配: '{city} {area}' → doc_id={matches[0]['doc_id']}")
+                    logger.info(f"[travel-quote] 酒店匹配: '{city} {area}' → doc_id={matches[0]['doc_id']}")
                 else:
-                    logger.warning(f"[quote-generate] 酒店未匹配: '{city} {area}'")
+                    logger.warning(f"[travel-quote] 酒店未匹配: '{city} {area}'")
             result["hotel_stays"] = hotel_stays
         except Exception as e:
-            logger.warning(f"[quote-generate] 酒店检索失败: {e}")
+            logger.warning(f"[travel-quote] 酒店检索失败: {e}")
     elif hotel_pref:
         try:
             from hotel_retriever import HotelRetriever
@@ -96,8 +96,8 @@ def resolve_resources(parsed: dict, tenant_id: str) -> dict:
             matches = retriever.search(tenant_id, hotel_pref, top_k=1)
             if matches:
                 result["hotel_doc_id"] = matches[0]["doc_id"]
-                logger.info(f"[quote-generate] 酒店匹配: '{hotel_pref}' → doc_id={matches[0]['doc_id']}")
+                logger.info(f"[travel-quote] 酒店匹配: '{hotel_pref}' → doc_id={matches[0]['doc_id']}")
         except Exception as e:
-            logger.warning(f"[quote-generate] 酒店检索失败: {e}")
+            logger.warning(f"[travel-quote] 酒店检索失败: {e}")
 
     return result

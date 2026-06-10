@@ -247,7 +247,7 @@ def read_all_sheets(file_path: str) -> Dict[str, Any]:
 
 ### 任务 3: LLM 批量解析实现
 
-**新增文件**: `src/skills/quote-generate/scripts/hotel_excel_parser.py`
+**新增文件**: `src/skills/travel-quote/scripts/hotel_excel_parser.py`
 
 ```python
 class HotelExcelParser:
@@ -365,7 +365,7 @@ def is_info_column(header: str) -> bool:
 
 | 文件 | 说明 |
 |------|------|
-| `src/skills/quote-generate/scripts/hotel_excel_parser.py` | 酒店 Excel 非结构化价格文本 LLM 解析器 |
+| `src/skills/travel-quote/scripts/hotel_excel_parser.py` | 酒店 Excel 非结构化价格文本 LLM 解析器 |
 
 ### 修改文件
 

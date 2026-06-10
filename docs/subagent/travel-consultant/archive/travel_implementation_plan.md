@@ -6,7 +6,7 @@
 
 根据 `docs/design/subagent/travel_subagent_design.md`（v5.1），重构旅游咨询子智能体。核心变更：
 
-1. **3 个 skill 合并为 1 个 `quote-generate`** — trip-planner（规划指导→SUBAGENT.md）、quote-generator + quote-export（查库+计算+导出→合并为一个 skill）
+1. **3 个 skill 合并为 1 个 `travel-quote`** — trip-planner（规划指导→SUBAGENT.md）、quote-generator + quote-export（查库+计算+导出→合并为一个 skill）
 2. **10 张定价数据表** — 从知识库检索改为数据库结构化查询
 3. **extra.md 租户定制** — 人设/风格/策略/模板路径从硬编码改为租户级配置文件
 4. **后台 CRUD API** — 前端管理页面维护定价数据
@@ -46,10 +46,10 @@
 ### Phase 2: SUBAGENT.md 重写 — ✅ 完成
 
 - [x] **Task 2.1**: 重写为通用旅游顾问（v3.0.0）
-  - skills.allowed 改为 `[quote-generate, paddleocr-doc-parsing]`
+  - skills.allowed 改为 `[travel-quote, paddleocr-doc-parsing]`
   - 移除硬编码人设/风格（"小旅"等）
   - 保留通用对话流程（阶段 1-6）和沟通技巧
-  - 更新报价功能说明为单个 quote-generate skill 调用
+  - 更新报价功能说明为单个 travel-quote skill 调用
   - 新增完整的参数收集清单
 
 **修改文件**：
@@ -57,23 +57,23 @@
 
 ---
 
-### Phase 3: 统一 quote-generate Skill — ✅ 完成
+### Phase 3: 统一 travel-quote Skill — ✅ 完成
 
-- [x] **Task 3.1**: 创建 `src/skills/quote-generate/SKILL.md`
-- [x] **Task 3.2**: `src/skills/quote-generate/scripts/generate.py` — 核心脚本（~600行）
+- [x] **Task 3.1**: 创建 `src/skills/travel-quote/SKILL.md`
+- [x] **Task 3.2**: `src/skills/travel-quote/scripts/generate.py` — 核心脚本（~600行）
   - init_tables() 10 张表自动建表
   - 区域展开查询、季节判断
   - 车型推荐算法、排房计算、门票按票种计算
   - 餐饮、导游、其他费用计算
   - Excel 模板导出（支持 {{变量}} + {{#items}} 行复制）
   - 无模板时降级为内置简单格式
-- [x] **Task 3.3**: `src/skills/quote-generate/templates/default.xlsx` — 默认模板
+- [x] **Task 3.3**: `src/skills/travel-quote/templates/default.xlsx` — 默认模板
 
 **新建文件**：
-- `src/skills/quote-generate/SKILL.md`
-- `src/skills/quote-generate/scripts/generate.py`
-- `src/skills/quote-generate/templates/default.xlsx`
-- `src/skills/quote-generate/templates/create_default_template.py`（模板生成辅助脚本）
+- `src/skills/travel-quote/SKILL.md`
+- `src/skills/travel-quote/scripts/generate.py`
+- `src/skills/travel-quote/templates/default.xlsx`
+- `src/skills/travel-quote/templates/create_default_template.py`（模板生成辅助脚本）
 
 ---
 
