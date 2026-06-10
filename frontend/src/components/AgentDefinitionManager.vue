@@ -243,9 +243,10 @@
                           </button>
                         </div>
                         <textarea v-model="sections[key]"
-                          class="w-full p-2 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:border-primary-400 resize-none"
-                          rows="3"
-                          :placeholder="`输入 ${key} 的内容...`"></textarea>
+                          class="section-auto-textarea w-full p-2 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:border-primary-400 resize-none overflow-hidden"
+                          style="min-height: 72px"
+                          :placeholder="`输入 ${key} 的内容...`"
+                          @input="autoResizeTextarea($event.target)"></textarea>
                       </div>
                     </div>
                     <div v-else class="mt-3 text-xs text-gray-400 py-2">
@@ -392,7 +393,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import AppHeader from './AppHeader.vue'
 import PageMetaSelector from './PageMetaSelector.vue'
 import {
@@ -612,6 +613,26 @@ function formatTime(ts: string): string {
   const d = new Date(ts)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+
+// ============== Auto-resize Textarea ==============
+function autoResizeTextarea(el: EventTarget | null) {
+  if (!el) return
+  const ta = el as HTMLTextAreaElement
+  ta.style.height = 'auto'
+  ta.style.height = ta.scrollHeight + 'px'
+}
+
+function autoResizeAll() {
+  nextTick(() => {
+    document.querySelectorAll<HTMLTextAreaElement>('.section-auto-textarea').forEach(ta => {
+      ta.style.height = 'auto'
+      ta.style.height = ta.scrollHeight + 'px'
+    })
+  })
+}
+
+watch(sections, () => autoResizeAll(), { deep: true })
+watch(sectionKeys, () => autoResizeAll())
 
 // ============== Tool/Skill Toggles ==============
 function toggleTool(toolId: string) {

@@ -94,23 +94,14 @@ class SubagentConfig(BaseModel):
         use_enum_values = True
     
     def get_allowed_tools(self, inherit_default: bool = False) -> List[str]:
-        """
-        获取允许使用的工具列表
-        
-        Args:
-            inherit_default: 如果没有配置，是否返回默认继承
-            
-        Returns:
-            工具名称列表
-        """
         if not self.tools:
-            return [] if not inherit_default else []
-        
-        if self.tools.get("inherit", False):
-            # 继承模式：返回空列表表示继承所有
             return []
-        
-        return self.tools.get("allowed", [])
+
+        if self.tools.get("inherit", False):
+            return []
+
+        # 兼容前端使用的 "additional" 和原始的 "allowed" 两种字段名
+        return self.tools.get("allowed", []) or self.tools.get("additional", [])
     
     def get_allowed_skills(self) -> List[str]:
         """获取允许使用的技能列表"""
