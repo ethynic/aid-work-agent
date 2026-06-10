@@ -6,18 +6,41 @@
         <div
           v-for="file in files"
           :key="file.file_id"
-          class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg border border-gray-200"
+          class="flex items-stretch bg-gray-100 rounded-lg border border-gray-200 overflow-hidden"
         >
-          <svg v-if="file.type === 'image'" class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-          <svg v-else class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          <span class="text-sm text-gray-600 max-w-32 truncate">{{ file.name }}</span>
           <button
-            @click="emit('remove', file.file_id)"
-            class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 transition-colors"
+            v-if="file.file_id"
+            type="button"
+            @click="openPreview(file)"
+            class="flex items-center gap-2 pl-3 pr-2 py-1.5 text-left hover:bg-primary-50 transition-colors min-w-0"
+            :title="`预览 ${file.name}`"
+          >
+            <svg v-if="file.type === 'image'" class="w-4 h-4 text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <svg v-else class="w-4 h-4 text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span class="text-sm text-gray-600 max-w-32 truncate">{{ file.name }}</span>
+          </button>
+          <span
+            v-else
+            class="flex items-center gap-2 pl-3 pr-2 py-1.5 min-w-0"
+            :title="`上传中：${file.name}`"
+          >
+            <svg v-if="file.type === 'image'" class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <svg v-else class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span class="text-sm text-gray-400 max-w-32 truncate">{{ file.name }}</span>
+          </span>
+          <button
+            type="button"
+            @click.stop="emit('remove', file.file_id)"
+            class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors"
+            title="移除附件"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -55,9 +78,10 @@
             v-model="inputText"
             @keydown.enter.exact="handleEnter"
             @keydown.shift.enter="newLine"
+            @paste="handlePaste"
             @input="autoResize"
             :disabled="disabled"
-            :placeholder="isMobile ? '输入您的问题或任务...' : '输入您的问题或任务，按Enter发送...'"
+            :placeholder="isMobile ? '输入您的问题或任务...' : '输入您的问题或任务，Ctrl+V 粘贴附件...'"
             rows="1"
             inputmode="text"
             class="box-border w-full min-h-[46px] max-h-[120px] px-4 py-2 bg-white border border-gray-300 rounded-xl text-gray-800 placeholder-gray-400 resize-none outline-none focus:border-primary-500 disabled:opacity-50 overflow-y-auto"
@@ -116,6 +140,10 @@
         <span>按</span>
         <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Shift + Enter</kbd>
         <span>换行</span>
+        <span class="mx-2">|</span>
+        <span>按</span>
+        <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Ctrl + V</kbd>
+        <span>粘贴附件</span>
       </div>
     </div>
   </div>
@@ -124,6 +152,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useMobile } from '@/composables/useMobile'
+import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import type { UploadedFile } from '@/api/agent'
 
 interface Props {
@@ -141,6 +170,7 @@ const emit = defineEmits<{
 }>()
 
 const { isMobile } = useMobile()
+const { openPreview } = useAttachmentPreview()
 const inputText = ref('')
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -229,5 +259,45 @@ function handleFileChange(event: Event) {
     // 清空input以允许重复选择同一文件
     input.value = ''
   }
+}
+
+// 支持的附件后缀（与 <input type="file" accept> 保持一致）
+const ACCEPTED_EXTENSIONS = [
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt',
+  '.png', '.jpg', '.jpeg', '.gif', '.ppt', '.pptx',
+]
+
+function isAcceptedFile(file: File): boolean {
+  const lowerName = file.name.toLowerCase()
+  if (ACCEPTED_EXTENSIONS.some((ext) => lowerName.endsWith(ext))) {
+    return true
+  }
+  // 兜底：按 MIME 类型判断（部分剪贴板截图没有扩展名）
+  return /^image\//.test(file.type)
+    || /^application\/(pdf|msword|vnd\.openxmlformats|vnd\.ms-excel|ms-powerpoint|vnd\.ms-powerpoint)/.test(file.type)
+    || file.type === 'text/plain'
+}
+
+function handlePaste(event: ClipboardEvent) {
+  if (props.disabled || props.isProcessing) return
+  const items = event.clipboardData?.items
+  if (!items || items.length === 0) return
+
+  const files: File[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind === 'file') {
+      const file = item.getAsFile()
+      if (file && isAcceptedFile(file)) {
+        files.push(file)
+      }
+    }
+  }
+
+  if (files.length === 0) return
+
+  // 有可识别的附件：阻止默认粘贴（避免截图等被转成 base64 文字污染输入框）
+  event.preventDefault()
+  files.forEach((file) => emit('upload', file))
 }
 </script>
