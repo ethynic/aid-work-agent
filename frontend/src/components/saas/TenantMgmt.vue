@@ -225,7 +225,7 @@
           <div v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-canvas rounded">
             <input
               type="checkbox"
-              :checked="selectedAgentIds.includes(agent.agent_id)"
+              :checked="isAgentAuthorized(agent.agent_id)"
               @change="toggleAgentSelection(agent.agent_id)"
               class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
             />
@@ -238,21 +238,34 @@
               {{ agent.type === 'builtin' ? '内置' : '定制' }}
             </span>
             <button
+              :disabled="!isAgentAuthorized(agent.agent_id)"
               @click="openEnvVarDialog(agent)"
-              class="ml-2 text-xs px-2 py-1 rounded border border-default text-muted hover:text-primary-600 hover:border-primary-400 transition-colors"
+              class="ml-2 text-xs px-2 py-1 rounded border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:border-primary-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
               title="环境变量设置"
             >环境变量</button>
             <button
+              :disabled="!isAgentAuthorized(agent.agent_id)"
               @click="openKnowledgeDialog(agent)"
-              class="ml-1 text-xs px-2 py-1 rounded border border-default text-muted hover:text-success-600 hover:border-success-400 transition-colors"
+              class="ml-1 text-xs px-2 py-1 rounded border border-success-200 bg-success-50 text-success-700 hover:bg-success-100 hover:border-success-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
               title="知识库关联"
             >知识库</button>
             <button
               v-if="configSupportedAgents.includes(agent.agent_id)"
+              :disabled="!isAgentAuthorized(agent.agent_id)"
               @click="openConfigFileDialog(agent)"
-              class="ml-1 text-xs px-2 py-1 rounded border border-default text-muted hover:text-info-600 hover:border-info-400 transition-colors"
+              class="ml-1 text-xs px-2 py-1 rounded border border-info-200 bg-info-50 text-info-700 hover:bg-info-100 hover:border-info-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
               title="API 配置文件"
             >API 配置</button>
+            <a
+              v-if="isEdit"
+              :href="isAgentAuthorized(agent.agent_id) ? getAgentChatUrl(currentTenant?.tenant_id, agent.agent_id) : undefined"
+              target="_blank"
+              :tabindex="isAgentAuthorized(agent.agent_id) ? 0 : -1"
+              :aria-disabled="!isAgentAuthorized(agent.agent_id)"
+              class="ml-1 text-xs px-2 py-1 rounded border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:border-primary-400 transition-colors aria-disabled:border-default aria-disabled:bg-surface aria-disabled:text-muted aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-surface aria-disabled:hover:border-default aria-disabled:hover:text-muted"
+              :title="isAgentAuthorized(agent.agent_id) ? getAgentChatUrl(currentTenant?.tenant_id, agent.agent_id) : '未授权数字员工不可访问入口链接'"
+              @click="!isAgentAuthorized(agent.agent_id) && $event.preventDefault()"
+            >入口链接</a>
           </div>
         </div>
       </div>
@@ -747,6 +760,10 @@ function openDetailDialog(tenant: any) {
   showDetailDialog.value = true
 }
 
+function isAgentAuthorized(agentId: string) {
+  return selectedAgentIds.value.includes(agentId)
+}
+
 function toggleAgentSelection(agentId: string) {
   const index = selectedAgentIds.value.indexOf(agentId)
   if (index >= 0) {
@@ -1038,6 +1055,13 @@ function getStatusClass(status: number | string | undefined): string {
 
 function getTenantUrl(tenantId: string): string {
   return `${window.location.origin}/t/${tenantId}`
+}
+
+function getAgentChatUrl(tenantId: string, agentId: string): string {
+  if (agentId === 'main') {
+    return `${window.location.origin}/t/${tenantId}/chat`
+  }
+  return `${window.location.origin}/t/${tenantId}/chat/${agentId}`
 }
 
 async function copyTenantUrl(tenantId: string) {

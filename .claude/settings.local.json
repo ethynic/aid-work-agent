@@ -72,7 +72,8 @@
       "Bash(find:*)",
       "Bash(git stash *)",
       "WebFetch(domain:developer.work.weixin.qq.com)",
-      "Bash(echo \"---EXIT: $?\")"
+      "Bash(echo \"---EXIT: $?\")",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
