@@ -232,13 +232,58 @@ GET /api/v1/knowledge/hotels/export?tenant_id=xxx        -- 酒店（从document
 
 **后续推广**：所有业务数据列表页都加入"导出"按钮，使用同一个 `export_table_to_excel` 工具函数。
 
-### 阶段六：业务表 Excel 导入（方案B增强）
+### 阶段六：业务表 Excel 导入
 
-导入时通过 UUID 匹配：
-- UUID 在目标表中已存在 → 更新该行数据
-- UUID 不存在 → 新增行（由目标库 SERIAL 自动生成数字 ID）
+通用导入服务位于 `src/services/import_service.py`，用于将 `.xlsx` Excel 数据按 UUID 智能匹配导入业务表。API 层负责校验文件扩展名，只允许 `.xlsx`，读取文件二进制后调用服务。
 
-此阶段为后续工作，本期先完成导出功能。
+**导入规则**：
+- 有合法 UUID，且命中当前租户数据 → UPDATE 覆盖业务字段
+- 有合法 UUID，但命中其他租户数据 → 生成新 UUID 后 INSERT，表示跨租户复制
+- 有合法 UUID，且没有命中任何数据 → 沿用 Excel UUID 后 INSERT，表示迁移或首次入库
+- 无 UUID 或 UUID 不合法 → 生成新 UUID 后 INSERT，表示全新数据
+
+**调用示例**：
+
+```python
+from src.services.import_service import ImportTableConfig, import_table_by_uuid
+
+cfg = ImportTableConfig(
+    table="bs_travel_quote_vehicles",
+    columns=["uuid", "vehicle_type", "brand", "seats_min", "seats_max", "base_price"],
+    numeric_cols={"seats_min", "seats_max", "base_price"},
+    bool_cols=set(),
+    uuid_prefix="tqv",
+)
+
+result = import_table_by_uuid(
+    cfg=cfg,
+    tenant_id=tenant_id,
+    file_content=content,
+    operator=user_id,
+    sanitize=sanitize_error_info,
+)
+return result.to_dict()
+```
+
+**配置说明**：
+
+| 字段 | 说明 |
+|------|------|
+| `table` | 目标业务表名 |
+| `columns` | 允许从 Excel 表头读取的列名，通常包含 `uuid` 和业务字段 |
+| `numeric_cols` | 需要转为数值的列名集合 |
+| `bool_cols` | 需要转为布尔值的列名集合 |
+| `uuid_prefix` | UUID 前缀，如 `tqv`、`tqm`、`tqg` |
+
+**约束与行为**：
+- `table`、`columns`、`numeric_cols`、`bool_cols` 中的表名和列名必须匹配 `[a-zA-Z_][a-zA-Z0-9_]*`
+- Excel 首行必须是表头，服务只读取 `columns` 中声明且实际存在于表头的列
+- `uuid`、`id`、`tenant_id`、`user_id` 不作为可覆盖业务字段
+- INSERT 时服务会自动写入 `tenant_id`，传入 `operator` 时会写入 `user_id`
+- 目标表应包含 `uuid`、`tenant_id`、`user_id` 以及对应业务字段，`uuid` 应保持唯一
+- 每行导入使用独立 savepoint，单行失败不会中断后续行
+- 返回结果包含 `imported`、`updated`、`skipped`、`cross_tenant`、`errors`
+- 调用方应传入项目统一的错误过滤函数，如 `sanitize_error_info`，避免错误信息包含敏感内容
 
 ---
 

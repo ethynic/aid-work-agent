@@ -3,7 +3,9 @@
 提供 export_table_to_excel() 函数，所有业务表导出共用。
 """
 import io
+import json
 from typing import List, Optional
+from urllib.parse import quote
 from loguru import logger
 import openpyxl
 from fastapi.responses import StreamingResponse
@@ -61,14 +63,18 @@ def export_table_to_excel(
     for row_idx, row in enumerate(rows, 2):
         for col_idx, col_name in enumerate(columns, 1):
             value = row[col_name] if isinstance(row, dict) else row[col_idx - 1]
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
             ws.cell(row=row_idx, column=col_idx, value=value)
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
 
+    encoded_filename = quote(f"{filename}.xlsx")
+
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}.xlsx"}
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
     )

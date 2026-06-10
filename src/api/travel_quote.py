@@ -669,174 +669,89 @@ KB_DOC_EXPORT_COLS = [
     "uuid", "title", "source_type", "file_type", "file_path", "file_size",
     "total_chunks", "embedding_model", "summary", "metadata",
 ]
+KB_DOC_IMPORT_COLS = [c for c in KB_DOC_EXPORT_COLS if c != "source_type"]
 
 # ============================================================
 # 业务表 UUID 导入映射（Phase 6）
 # ============================================================
 
-_IMPORT_TABLE_CONFIG = {
-    "vehicles": {
-        "table": "bs_travel_quote_vehicles",
-        "columns": VEHICLES_EXPORT_COLS,
-        "numeric_cols": {"seats_max", "per_km_rate", "driver_meal_allowance", "driver_accommodation"},
-        "bool_cols": set(),
-        "uuid_prefix": "tqv",
-    },
-    "meals": {
-        "table": "bs_travel_quote_meals",
-        "columns": MEALS_EXPORT_COLS,
-        "numeric_cols": {"price_per_person", "pax_per_table"},
-        "bool_cols": set(),
-        "uuid_prefix": "tqm",
-    },
-    "guides": {
-        "table": "bs_travel_quote_guides",
-        "columns": GUIDES_EXPORT_COLS,
-        "numeric_cols": {"daily_rate", "trip_rate", "language_premium", "peak_season_multiplier"},
-        "bool_cols": set(),
-        "uuid_prefix": "tqg",
-    },
-    "fees": {
-        "table": "bs_travel_quote_fees",
-        "columns": FEES_EXPORT_COLS,
-        "numeric_cols": {"unit_price", "sort_order"},
-        "bool_cols": {"is_mandatory"},
-        "uuid_prefix": "tqf",
-    },
-    "seasons": {
-        "table": "bs_travel_quote_seasons",
-        "columns": SEASONS_EXPORT_COLS,
-        "numeric_cols": {"price_multiplier"},
-        "bool_cols": set(),
-        "uuid_prefix": "tqs",
-    },
+from src.services.import_service import (
+    ImportTableConfig,
+    import_table_by_uuid as _svc_import_table_by_uuid,
+)
+
+_IMPORT_TABLE_CONFIG: Dict[str, ImportTableConfig] = {
+    "vehicles": ImportTableConfig(
+        table="bs_travel_quote_vehicles",
+        columns=VEHICLES_EXPORT_COLS,
+        numeric_cols={"seats_max", "per_km_rate", "driver_meal_allowance", "driver_accommodation"},
+        bool_cols=set(),
+        uuid_prefix="tqv",
+    ),
+    "meals": ImportTableConfig(
+        table="bs_travel_quote_meals",
+        columns=MEALS_EXPORT_COLS,
+        numeric_cols={"price_per_person", "pax_per_table"},
+        bool_cols=set(),
+        uuid_prefix="tqm",
+    ),
+    "guides": ImportTableConfig(
+        table="bs_travel_quote_guides",
+        columns=GUIDES_EXPORT_COLS,
+        numeric_cols={"daily_rate", "trip_rate", "language_premium", "peak_season_multiplier"},
+        bool_cols=set(),
+        uuid_prefix="tqg",
+    ),
+    "fees": ImportTableConfig(
+        table="bs_travel_quote_fees",
+        columns=FEES_EXPORT_COLS,
+        numeric_cols={"unit_price", "sort_order"},
+        bool_cols={"is_mandatory"},
+        uuid_prefix="tqf",
+    ),
+    "seasons": ImportTableConfig(
+        table="bs_travel_quote_seasons",
+        columns=SEASONS_EXPORT_COLS,
+        numeric_cols={"price_multiplier"},
+        bool_cols=set(),
+        uuid_prefix="tqs",
+    ),
+    "attractions": ImportTableConfig(
+        table="documents",
+        columns=KB_DOC_IMPORT_COLS,
+        numeric_cols={"file_size", "total_chunks"},
+        bool_cols=set(),
+        json_cols={"metadata"},
+        uuid_prefix="doc",
+        fixed_values={"source_type": "attraction_resource"},
+    ),
+    "hotels": ImportTableConfig(
+        table="documents",
+        columns=KB_DOC_IMPORT_COLS,
+        numeric_cols={"file_size", "total_chunks"},
+        bool_cols=set(),
+        json_cols={"metadata"},
+        uuid_prefix="doc",
+        fixed_values={"source_type": "hotel_resource"},
+    ),
 }
 
 
 def _import_table_by_uuid(
-    table_name: str,
-    columns: List[str],
+    cfg: ImportTableConfig,
     tenant_id: str,
     file_content: bytes,
-    numeric_cols: set,
-    bool_cols: set,
-    uuid_prefix: str,
+    operator: Optional[str] = None,
 ) -> dict:
-    """通过 UUID 匹配导入 Excel 数据到业务表。
-
-    UUID 存在 → UPDATE，UUID 不存在 → INSERT。
-    """
-    import openpyxl
-
-    wb = openpyxl.load_workbook(io.BytesIO(file_content), read_only=True, data_only=True)
-    ws = wb.active
-
-    rows_iter = ws.iter_rows(values_only=True)
-    try:
-        header = next(rows_iter)
-    except StopIteration:
-        wb.close()
-        return {"imported": 0, "updated": 0, "skipped": 0, "errors": ["Excel 文件为空"]}
-
-    header_list = [str(h).strip() if h else "" for h in header]
-
-    # 建立列名→列索引映射
-    col_indices = {}
-    for col_name in columns:
-        if col_name in header_list:
-            col_indices[col_name] = header_list.index(col_name)
-
-    # 排除 uuid 和 id 之外的业务列（用于 INSERT/UPDATE）
-    business_cols = [c for c in columns if c not in ("uuid", "id") and c in col_indices]
-    has_uuid = "uuid" in col_indices
-
-    imported = 0
-    updated = 0
-    skipped = 0
-    errors = []
-
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        for row_num, row in enumerate(rows_iter, start=2):
-            if not row or all(v is None or (isinstance(v, str) and v.strip() == "") for v in row):
-                continue
-
-            # 读取各列值
-            row_data = {}
-            for col_name, col_idx in col_indices.items():
-                if col_idx < len(row):
-                    row_data[col_name] = _coerce_value(col_name, row[col_idx])
-
-            # 提取 uuid（如有）
-            row_uuid = row_data.get("uuid") if has_uuid else None
-
-            # 构建业务数据
-            business_data = {}
-            for col_name in business_cols:
-                val = row_data.get(col_name)
-                if val is not None:
-                    business_data[col_name] = val
-
-            if not business_data:
-                skipped += 1
-                continue
-
-            try:
-                if row_uuid:
-                    # 查找 UUID 是否已存在
-                    cursor.execute(
-                        f"SELECT id FROM {table_name} WHERE uuid = %s AND tenant_id = %s",
-                        (row_uuid, tenant_id),
-                    )
-                    existing = cursor.fetchone()
-
-                    if existing:
-                        # UPDATE
-                        set_clause = ", ".join(f"{k} = %s" for k in business_data.keys())
-                        vals = list(business_data.values()) + [existing["id"], tenant_id]
-                        cursor.execute(
-                            f"UPDATE {table_name} SET {set_clause} WHERE id = %s AND tenant_id = %s",
-                            tuple(vals),
-                        )
-                        updated += 1
-                        continue
-
-                # INSERT 新记录
-                business_data["tenant_id"] = tenant_id
-                business_data["uuid"] = row_uuid or f"{uuid_prefix}_{uuid.uuid4().hex[:12]}"
-
-                cols = list(business_data.keys())
-                vals = list(business_data.values())
-                placeholders = ", ".join(["%s"] * len(cols))
-                col_names = ", ".join(cols)
-
-                cursor.execute(
-                    f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})",
-                    tuple(vals),
-                )
-                imported += 1
-
-            except Exception as e:
-                skipped += 1
-                error_msg = sanitize_error_info(str(e))
-                errors.append(f"第{row_num}行: {error_msg}")
-                logger.warning(f"[UUIDImport] {table_name} row {row_num}: {error_msg}")
-
-        conn.commit()
-
-    wb.close()
-    logger.info(
-        f"[UUIDImport] {table_name} tenant={tenant_id} "
-        f"imported={imported} updated={updated} skipped={skipped}"
+    """路由层薄封装：调用公共服务并返回 dict 形式结果。"""
+    result = _svc_import_table_by_uuid(
+        cfg=cfg,
+        tenant_id=tenant_id,
+        file_content=file_content,
+        operator=operator,
+        sanitize=sanitize_error_info,
     )
-
-    return {
-        "imported": imported,
-        "updated": updated,
-        "skipped": skipped,
-        "errors": errors[:20],
-    }
+    return result.to_dict()
 
 
 @router.get("/vehicles/export")
@@ -919,12 +834,14 @@ async def export_hotels(request: Request):
 async def import_vehicles(request: Request, file: UploadFile = File(...)):
     """上传车辆价格 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
     tid = _get_tenant_id(request)
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
     content = await file.read()
     cfg = _IMPORT_TABLE_CONFIG["vehicles"]
-    result = _import_table_by_uuid(cfg["table"], cfg["columns"], tid, content,
-                                   cfg["numeric_cols"], cfg["bool_cols"], cfg["uuid_prefix"])
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
     return {"success": True, "data": result}
 
 
@@ -932,12 +849,14 @@ async def import_vehicles(request: Request, file: UploadFile = File(...)):
 async def import_meals(request: Request, file: UploadFile = File(...)):
     """上传餐标价格 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
     tid = _get_tenant_id(request)
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
     content = await file.read()
     cfg = _IMPORT_TABLE_CONFIG["meals"]
-    result = _import_table_by_uuid(cfg["table"], cfg["columns"], tid, content,
-                                   cfg["numeric_cols"], cfg["bool_cols"], cfg["uuid_prefix"])
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
     return {"success": True, "data": result}
 
 
@@ -945,12 +864,14 @@ async def import_meals(request: Request, file: UploadFile = File(...)):
 async def import_guides(request: Request, file: UploadFile = File(...)):
     """上传导游费用 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
     tid = _get_tenant_id(request)
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
     content = await file.read()
     cfg = _IMPORT_TABLE_CONFIG["guides"]
-    result = _import_table_by_uuid(cfg["table"], cfg["columns"], tid, content,
-                                   cfg["numeric_cols"], cfg["bool_cols"], cfg["uuid_prefix"])
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
     return {"success": True, "data": result}
 
 
@@ -958,12 +879,14 @@ async def import_guides(request: Request, file: UploadFile = File(...)):
 async def import_fees(request: Request, file: UploadFile = File(...)):
     """上传其他费用 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
     tid = _get_tenant_id(request)
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
     content = await file.read()
     cfg = _IMPORT_TABLE_CONFIG["fees"]
-    result = _import_table_by_uuid(cfg["table"], cfg["columns"], tid, content,
-                                   cfg["numeric_cols"], cfg["bool_cols"], cfg["uuid_prefix"])
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
     return {"success": True, "data": result}
 
 
@@ -971,12 +894,44 @@ async def import_fees(request: Request, file: UploadFile = File(...)):
 async def import_seasons(request: Request, file: UploadFile = File(...)):
     """上传淡旺季配置 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
     tid = _get_tenant_id(request)
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
     content = await file.read()
     cfg = _IMPORT_TABLE_CONFIG["seasons"]
-    result = _import_table_by_uuid(cfg["table"], cfg["columns"], tid, content,
-                                   cfg["numeric_cols"], cfg["bool_cols"], cfg["uuid_prefix"])
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
+    return {"success": True, "data": result}
+
+
+@router.post("/kb/attractions/import")
+async def import_attractions(request: Request, file: UploadFile = File(...)):
+    """上传景点知识库 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
+    tid = _get_tenant_id(request)
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+    content = await file.read()
+    cfg = _IMPORT_TABLE_CONFIG["attractions"]
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
+    return {"success": True, "data": result}
+
+
+@router.post("/kb/hotels/import")
+async def import_hotels(request: Request, file: UploadFile = File(...)):
+    """上传酒店知识库 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
+    tid = _get_tenant_id(request)
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+    content = await file.read()
+    cfg = _IMPORT_TABLE_CONFIG["hotels"]
+    result = _import_table_by_uuid(
+        cfg, tid, content,
+        operator=getattr(request.state, "user_id", None),
+    )
     return {"success": True, "data": result}
 
 
@@ -987,8 +942,8 @@ async def import_excel(request: Request, file: UploadFile = File(...)):
 
     tid = _get_tenant_id(request)
 
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
 
     content = await file.read()
     wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -1092,8 +1047,8 @@ async def import_vehicle_excel(request: Request, file: UploadFile = File(...)):
     """上传车辆价格 Excel，LLM 智能解析后导入到 bs_travel_quote_vehicles 表"""
     tenant_id = _get_tenant_id(request)
 
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
 
     content = await file.read()
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
@@ -1186,8 +1141,8 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
     if current_user:
         user_id = current_user.get("user_id")
 
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
 
     # 1. 保存到持久目录（供 documents.file_path 引用）
     content = await file.read()
@@ -1353,8 +1308,8 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
     if current_user:
         user_id = current_user.get("user_id")
 
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
 
     # 1. 保存到持久目录（供 documents.file_path 引用）
     content = await file.read()

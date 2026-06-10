@@ -38,8 +38,8 @@
           <BaseButton intent="secondary" :disabled="uuidImporting" @click="triggerUuidFileInput(uuidFileInput)">
             {{ uuidImporting ? 'UUID导入中...' : 'UUID导入' }}
           </BaseButton>
-          <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
-          <input ref="uuidFileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleUuidImport(e.target.files[0])" />
+          <input ref="fileInput" type="file" accept=".xlsx" style="display:none" @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
+          <input ref="uuidFileInput" type="file" accept=".xlsx" style="display:none" @change="(e: any) => e.target.files[0] && handleUuidImport(e.target.files[0])" />
         </div>
       </div>
 
@@ -150,7 +150,7 @@
           <BaseButton intent="secondary" :disabled="seasonUuidImporting" @click="triggerSeasonUuidFileInput(seasonUuidFileInput)">
             {{ seasonUuidImporting ? 'UUID导入中...' : 'UUID导入' }}
           </BaseButton>
-          <input ref="seasonUuidFileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="(e: any) => e.target.files[0] && handleSeasonUuidImport(e.target.files[0])" />
+          <input ref="seasonUuidFileInput" type="file" accept=".xlsx" style="display:none" @change="(e: any) => e.target.files[0] && handleSeasonUuidImport(e.target.files[0])" />
         </div>
       </div>
 

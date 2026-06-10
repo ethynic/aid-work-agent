@@ -350,6 +350,7 @@ export interface UuidImportResult {
   imported: number
   updated: number
   skipped: number
+  cross_tenant: number
   errors: string[]
 }
 
@@ -386,6 +387,14 @@ export async function importFees(file: File): Promise<{ success: boolean; data: 
 
 export async function importSeasons(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
   return uploadImport('/seasons/import', file)
+}
+
+export async function importAttractions(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/kb/attractions/import', file)
+}
+
+export async function importHotels(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/kb/hotels/import', file)
 }
 
 // ============================================================

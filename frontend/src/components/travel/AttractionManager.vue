@@ -11,7 +11,7 @@
         </BaseButton>
       </div>
       <div class="flex gap-2 items-center">
-        <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none"
+        <input ref="fileInput" type="file" accept=".xlsx" style="display:none"
                @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
         <BaseButton intent="secondary" size="sm" @click="handleDownloadTemplate">下载模板</BaseButton>
         <BaseButton size="sm" :disabled="importing" @click="triggerFileInput(fileInput)">
@@ -127,12 +127,9 @@
       </template>
     </BaseModal>
 
-    <!-- 导入知识库结果弹窗 -->
+    <!-- UUID 导入结果弹窗 -->
     <BaseModal v-model="showImportResult" title="导入景点知识库结果" size="md" mode="view">
-      <p>共识别 <strong>{{ importResult?.total_attractions || 0 }}</strong> 个景点，成功导入 <strong>{{ importResult?.imported || 0 }}</strong> 个，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 个</p>
-      <div v-for="r in importResult?.details" :key="r.sheet" class="mb-2 text-[13px]">
-        {{ r.sheet }}：共 {{ r.total }} 个，导入 {{ r.imported }} 个，跳过 {{ r.skipped }} 个
-      </div>
+      <p>新增 <strong>{{ importResult?.imported || 0 }}</strong> 条，更新 <strong>{{ importResult?.updated || 0 }}</strong> 条，跨租户复制 <strong>{{ importResult?.cross_tenant || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
       <div v-if="importResult?.errors?.length" class="mt-3">
         <div class="text-[13px] text-danger-600 mb-1">错误信息：</div>
         <div v-for="err in importResult.errors.slice(0, 10)" :key="err" class="text-danger-600 text-xs">{{ err }}</div>
@@ -150,9 +147,9 @@ import { ref, computed, onMounted } from 'vue'
 import {
   searchAttractionsKB, listAttractionsKB, getAttractionKB,
   deleteAttractionKB, batchDeleteAttractionsKB, updateAttractionKB,
-  exportAttractions
+  exportAttractions, importAttractions, downloadTemplate
 } from '@/api/travelQuote'
-import { useAttractionKBImport } from '@/composables/useImport'
+import { useUuidImport } from '@/composables/useImport'
 import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -179,7 +176,10 @@ const columns = [
 ]
 
 const fileInput = ref<HTMLInputElement | null>(null)
-const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useAttractionKBImport(loadAll)
+const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useUuidImport(importAttractions, loadAll)
+async function handleDownloadTemplate() {
+  await downloadTemplate()
+}
 
 // 列表数据
 const loading = ref(false)
