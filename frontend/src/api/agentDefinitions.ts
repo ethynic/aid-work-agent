@@ -240,6 +240,47 @@ export async function listReplyStylesMeta(): Promise<{ success: boolean; data: R
   return handleResponse(response)
 }
 
+// ============== Page Metadata ==============
+
+export interface PageMeta {
+  page_id: string
+  title: string
+  description: string
+  route: string
+  icon: string
+  domain: string
+  domain_label: string
+}
+
+export interface RecommendedPage {
+  page_id: string
+  title: string
+  reason: string
+  relevance_score: number
+}
+
+export async function listPageMeta(params?: {
+  domain?: string
+}): Promise<{ success: boolean; data: PageMeta[] }> {
+  const query = new URLSearchParams()
+  if (params?.domain) query.set('domain', params.domain)
+  const qs = query.toString()
+  const response = await fetch(`${API_BASE}/meta/pages${qs ? '?' + qs : ''}`, { headers: getAuthHeaders() })
+  return handleResponse(response)
+}
+
+export async function recommendPages(data: {
+  agent_description: string
+  current_pages?: string[]
+}): Promise<{ success: boolean; data: { recommended: RecommendedPage[] } }> {
+  const response = await fetch(`${API_BASE}/meta/pages/recommend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(data),
+  })
+  return handleResponse(response)
+}
+
 // ============== Sections Management ==============
 
 export interface PromptSection {

@@ -93,3 +93,39 @@ context:
 
 ### 添加渠道
 继承 `src/channels/base.py` 的 `ChannelAdapter`，实现 `parse_message`/`send_message`/`verify_signature`，在 `src/main.py` 生命周期中注册。
+
+### 添加业务页面
+
+详细设计见 [page-metadata-registry-design.md](../../docs/system/digital-employee/page-metadata-registry-design.md)。
+
+开发一个新的业务数据页面，按以下顺序操作：
+
+**1. 注册页面元数据**（最早做）
+
+在 `configs/page_metadata.yaml` 的 `pages` 列表中添加条目，status 标为 `planned`：
+
+```yaml
+- page_id: {domain}-{child-route}
+  title: 页面中文名
+  description: 页面功能描述（中文，用于搜索匹配和 AI 推荐）
+  route: /{domain}/{child-route}
+  icon: "emoji"
+  domain: {domain}
+  status: planned
+```
+
+如果对应的 domain 尚不存在，还需在 `domains` 列表中添加域定义。
+
+**2. 创建 Vue 组件**
+
+在 `frontend/src/components/<domain>/` 目录下创建组件，遵循 [list-page-convention.md](./list-page-convention.md) 规范。
+
+**3. 注册路由**
+
+在 `frontend/src/main.ts` 中注册路由，每个业务域的路由需要注册两份（demo 模式 + tenant 模式），参照现有模式。
+
+**4. 发布**
+
+开发完成并测试通过后，将 `configs/page_metadata.yaml` 中的 `status` 改为 `published`。只有 `published` 状态的页面才会出现在业务页面选择器中。
+
+**页面状态**：`planned`（规划中）→ `developing`（开发中）→ `published`（已发布）。只有 `published` 状态对用户可见。

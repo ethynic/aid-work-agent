@@ -256,6 +256,28 @@ async def list_reply_styles_meta(request: Request):
     return _success(styles)
 
 
+# ============== Page Metadata ==============
+
+from src.api.page_metadata import list_pages as _list_pages_meta, recommend_pages as _recommend_pages_meta
+
+
+class RecommendPagesRequest(BaseModel):
+    agent_description: str
+    current_pages: List[str] = Field(default_factory=list)
+
+
+@router.get("/meta/pages")
+async def get_pages_meta(request: Request, domain: Optional[str] = None):
+    """获取已发布的业务页面元数据列表（供前端选择器使用）"""
+    return await _list_pages_meta(request, domain)
+
+
+@router.post("/meta/pages/recommend")
+async def post_pages_recommend(request: Request, body: RecommendPagesRequest):
+    """AI 推荐与智能体描述相关的业务页面"""
+    return await _recommend_pages_meta(request, body.model_dump())
+
+
 @router.get("/{agent_id}")
 async def get_definition(request: Request, agent_id: str):
     """获取子智能体定义详情"""

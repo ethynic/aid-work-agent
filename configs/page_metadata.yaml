@@ -1,0 +1,124 @@
+domains:
+  - id: trade-specialist
+    label: 外贸获客
+  - id: travel-consultant
+    label: 旅游咨询
+  - id: customer-followup
+    label: 客户跟进
+  - id: complaint
+    label: 投诉处理
+  - id: after-sales
+    label: 售后服务
+
+pages:
+  - page_id: trade-specialist-customers
+    title: 客户管理
+    description: 管理外贸客户信息，包括客户基础资料、联系方式、跟进状态等
+    route: /trade-specialist/customers
+    icon: "👥"
+    domain: trade-specialist
+    status: published
+
+  - page_id: travel-consultant-vehicles
+    title: 车辆价格
+    description: 管理旅游用车信息，包括车型、座位数、租车价格等
+    route: /travel-consultant/vehicles
+    icon: "🚗"
+    domain: travel-consultant
+    status: published
+
+  - page_id: travel-consultant-attractions
+    title: 景点门票
+    description: 管理旅游景点信息，包括景点名称、门票价格、开放时间等
+    route: /travel-consultant/attractions
+    icon: "🏛️"
+    domain: travel-consultant
+    status: published
+
+  - page_id: travel-consultant-hotels
+    title: 酒店房型
+    description: 管理酒店及房型信息，包括酒店名称、房型、价格、含早情况等
+    route: /travel-consultant/hotels
+    icon: "🏨"
+    domain: travel-consultant
+    status: published
+
+  - page_id: travel-consultant-meals
+    title: 餐标价格
+    description: 管理餐饮标准信息，包括餐标等级、菜品数量、单价等
+    route: /travel-consultant/meals
+    icon: "🍜"
+    domain: travel-consultant
+    status: published
+
+  - page_id: travel-consultant-guides
+    title: 导游费用
+    description: 管理导游信息，包括导游姓名、语言能力、日收费标准等
+    route: /travel-consultant/guides
+    icon: "🧑‍🏫"
+    domain: travel-consultant
+    status: published
+
+  - page_id: travel-consultant-fees
+    title: 其他费用
+    description: 管理旅游行程中的杂项费用，如保险费、索道费、停车费等
+    route: /travel-consultant/fees
+    icon: "💰"
+    domain: travel-consultant
+    status: published
+
+  - page_id: customer-followup-leads
+    title: 线索管理
+    description: 管理客户线索信息，包括线索来源、意向等级、跟进状态等
+    route: /customer-followup/leads
+    icon: "🎯"
+    domain: customer-followup
+    status: published
+
+  - page_id: customer-followup-followup-records
+    title: 跟进记录
+    description: 记录和查看客户跟进历史，包括跟进方式、沟通内容、下次计划等
+    route: /customer-followup/followup-records
+    icon: "📝"
+    domain: customer-followup
+    status: published
+
+  - page_id: customer-followup-sales-reps
+    title: 销售代表
+    description: 管理销售团队信息，包括销售代表姓名、负责区域、业绩目标等
+    route: /customer-followup/sales-reps
+    icon: "👨‍💼"
+    domain: customer-followup
+    status: published
+
+  - page_id: complaint-list
+    title: 投诉列表
+    description: 查看和管理客户投诉工单，包括投诉内容、处理状态、责任人等
+    route: /complaint/list
+    icon: "📋"
+    domain: complaint
+    status: published
+
+  - page_id: complaint-stats
+    title: 投诉统计
+    description: 投诉数据的统计分析，包括投诉量趋势、类型分布、处理时效等
+    route: /complaint/stats
+    icon: "📊"
+    domain: complaint
+    status: published
+
+  - page_id: after-sales-tickets
+    title: 售后工单
+    description: 管理售后服务工单，包括工单类型、问题描述、处理进度等
+    route: /after-sales/tickets
+    icon: "📦"
+    domain: after-sales
+    status: published
+
+  - page_id: after-sales-returns
+    title: 退换货记录
+    description: 管理退换货申请记录，包括退货原因、商品信息、退款状态等
+    route: /after-sales/returns
+    icon: "🔄"
+    domain: after-sales
+    status: published

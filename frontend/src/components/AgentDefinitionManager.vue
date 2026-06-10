@@ -161,18 +161,15 @@
                     <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
                       <div v-for="(page, i) in businessPages" :key="i"
                         class="flex items-center gap-1 bg-white rounded-lg p-1.5 border border-gray-100">
-                        <input v-model="page.icon" placeholder="图标"
-                          class="w-10 px-1 py-1 text-xs text-center border border-gray-200 rounded" />
-                        <input v-model="page.title" placeholder="标题"
-                          class="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-200 rounded" />
-                        <input v-model="page.route" placeholder="路由"
-                          class="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-200 rounded" />
+                        <span class="text-base">{{ page.icon }}</span>
+                        <span class="text-xs text-default flex-1 truncate">{{ page.title }}</span>
+                        <span class="text-xs text-gray-400 truncate">{{ page.route }}</span>
                         <button @click="businessPages.splice(i, 1)"
                           class="text-danger-400 hover:text-danger-600 text-sm px-1">&times;</button>
                       </div>
-                      <button @click="addBusinessPage"
-                        class="w-full px-2 py-1 text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg">
-                        + 添加页面
+                      <button @click="showPageSelector = true"
+                        class="w-full px-2 py-1 text-xs text-primary-600 bg-primary-50 hover:bg-primary-100 rounded-lg">
+                        从库中选择
                       </button>
                     </div>
                   </div>
@@ -383,12 +380,21 @@
         </div>
       </div>
     </div>
+
+    <!-- Page Meta Selector -->
+    <PageMetaSelector
+      v-model="showPageSelector"
+      :selected-page-ids="selectedPageIds"
+      :agent-description="form.description || ''"
+      @select="onPagesSelected"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import AppHeader from './AppHeader.vue'
+import PageMetaSelector from './PageMetaSelector.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,
@@ -425,6 +431,8 @@ const replyStyles = ref<ReplyStyleMeta[]>([])
 
 // Business pages
 const businessPages = ref<{ id: string; title: string; icon: string; route: string }[]>([])
+const showPageSelector = ref(false)
+const selectedPageIds = computed(() => businessPages.value.map(p => p.id))
 
 // Sections state — dynamic from template parsing
 const sectionKeys = ref<string[]>([])
@@ -628,13 +636,8 @@ function toggleSkill(skillId: string) {
 }
 
 // ============== Business Pages ==============
-function addBusinessPage() {
-  businessPages.value.push({
-    id: `page_${Date.now()}`,
-    title: '',
-    icon: '📋',
-    route: '',
-  })
+function onPagesSelected(pages: Array<{ id: string; title: string; icon: string; route: string }>) {
+  businessPages.value = pages
 }
 
 // ============== Definition CRUD ==============
