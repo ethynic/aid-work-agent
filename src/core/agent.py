@@ -473,8 +473,10 @@ class Agent:
             tools.append(skill_tool)
 
         # 仅 MASTER 模式：添加子智能体委派工具
+        # 注意：available_subagents 必须按租户订阅过滤，否则 LLM 能看到无权使用的子智能体
         if self.mode == AgentMode.MASTER and self.subagent_registry and len(self.subagent_registry) > 0:
-            delegation_tool = self.subagent_registry.get_delegation_tool_definition()
+            available_subagents = self._get_available_subagents()
+            delegation_tool = self.subagent_registry.get_delegation_tool_definition(available_subagents)
             if delegation_tool:
                 tools.append(delegation_tool)
         
@@ -545,6 +547,61 @@ class Agent:
 
         return guides
 
+    def _get_available_subagents(self) -> List[str]:
+        """
+        获取当前请求可用的子智能体 name 列表（按租户订阅过滤）。
+
+        过滤规则：
+        - SaaS 模式 + 有 tenant_id：从 subscriptions 表读取租户订阅的 subagent_type（dir_name），
+          再映射回注册表中对应的 name
+        - 演示模式 / 非 SaaS / 无 tenant_id：返回全部子智能体（排除 dir_name == "main" 的主智能体）
+
+        性能：_get_tools 在 Agent 主循环中每轮都被调用，因此本方法按 (tenant_id, saas.enabled,
+        demo.enabled) 做实例级缓存，避免每轮查 DB。租户上下文切换或配置变化时缓存自动失效。
+
+        Returns:
+            可用的子智能体 name 列表（注册表 _configs 的 key）
+        """
+        if not self.subagent_registry:
+            return []
+
+        from src.saas.context import get_current_tenant_id
+        tenant_id = get_current_tenant_id()
+        cache_key = (tenant_id, bool(settings.saas.enabled), bool(settings.demo.enabled))
+
+        # 实例级缓存：同一请求内多次调用复用结果
+        cached_key = getattr(self, "_available_subagents_cache_key", None)
+        if cached_key == cache_key:
+            cached_value = getattr(self, "_available_subagents_cache_value", None)
+            if cached_value is not None:
+                return cached_value
+
+        # SaaS 模式 + 有租户 ID：从订阅表查询
+        if settings.saas.enabled and not settings.demo.enabled and tenant_id:
+            from src.db.database import get_db_connection
+            from src.saas.db.subscription_db import SubscriptionDB
+
+            with get_db_connection() as conn:
+                allowed_subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
+            # 过滤注册的子智能体，只保留租户订阅的
+            # subagent_type 存的是 dir_name，_configs 的 key 是 name
+            filtered = []
+            for name, config in self.subagent_registry._configs.items():
+                agent_id = config.dir_name or name
+                if agent_id in allowed_subagent_types and agent_id != "main":
+                    filtered.append(name)
+        else:
+            # 演示模式 / 非 SaaS：返回全部（排除主智能体）
+            filtered = [
+                name
+                for name, config in self.subagent_registry._configs.items()
+                if (config.dir_name or name) != "main"
+            ]
+
+        self._available_subagents_cache_key = cache_key
+        self._available_subagents_cache_value = filtered
+        return filtered
+
     def _build_base_system_prompt(
         self,
         include_delegation: bool = True,
@@ -574,44 +631,14 @@ class Agent:
         subagent_descriptions = ""
         available_subagents = []
         if include_delegation and self.subagent_registry:
-            # 获取租户可用的子智能体（SaaS模式时从subscriptions表加载，演示模式用全部）
-            from src.saas.context import get_current_tenant_id
-            tenant_id = get_current_tenant_id()
-
-            # SaaS模式且有租户ID时，从subscriptions表加载可用的子智能体
-            if settings.saas.enabled and not settings.demo.enabled and tenant_id:
-                from src.db.database import get_db_connection
-                from src.saas.db.subscription_db import SubscriptionDB
-
-                with get_db_connection() as conn:
-                    allowed_subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
-                # 过滤注册的子智能体，只保留租户订阅的
-                # 注意：subagent_type 存储的是 dir_name（如 trade-specialist），_configs的key是name（如外贸获客智能体）
-                filtered_configs = []
-                for name, config in self.subagent_registry._configs.items():
-                    agent_id = config.dir_name or name
-                    # 只包含租户订阅的，排除主智能体（CEO智能体，agent_id为"main"）
-                    if agent_id in allowed_subagent_types and agent_id != "main":
-                        filtered_configs.append((name, config))
-                available_subagents = [name for name, _ in filtered_configs]
-                # 生成描述
-                lines = []
-                for name, config in filtered_configs:
+            # 复用 _get_available_subagents()，与 _get_tools() 保持同一份过滤逻辑
+            available_subagents = self._get_available_subagents()
+            lines = []
+            for name in available_subagents:
+                config = self.subagent_registry._configs.get(name)
+                if config:
                     lines.append(f"- {name}: {config.description}")
-                subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
-            else:
-                # 演示模式或非SaaS模式，使用全部子智能体（排除CEO智能体）
-                all_configs = []
-                for name, config in self.subagent_registry._configs.items():
-                    agent_id = config.dir_name or name
-                    if agent_id != "main":
-                        all_configs.append((name, config))
-                available_subagents = [name for name, _ in all_configs]
-                # 生成描述
-                lines = []
-                for name, config in all_configs:
-                    lines.append(f"- {name}: {config.description}")
-                subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
+            subagent_descriptions = "\n".join(lines) if lines else "(no subagents available)"
         
         # 委派工具说明（仅主智能体使用）
         delegation_guide = ""
