@@ -1,6 +1,6 @@
 ---
-name: quote-generate
-description: 研学旅游报价生成技能，传入用户确认的行程方案文本，自动解析行程、检索资源、计算费用、导出 Excel 报价单。
+name: travel-quote
+description: 旅游行程报价技能，专门用于研学/旅游场景，传入用户确认的行程方案文本，自动解析行程、检索资源、计算费用、导出 Excel 报价单。
 metadata:
   version: "2.0.0"
   author: aid-work-agent
@@ -20,7 +20,7 @@ dependencies:
 
 ```python
 skill_execute(
-  skill="quote-generate",
+  skill="travel-quote",
   command="python scripts/generate.py",
   content='<JSON 参数>'
 )

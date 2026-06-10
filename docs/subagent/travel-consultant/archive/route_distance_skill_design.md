@@ -393,7 +393,7 @@ maps: MapsToolConfig = MapsToolConfig()
 ```yaml
 skills:
   allowed:
-    - quote-generate
+    - travel-quote
     - paddleocr-doc-parsing
     - route-distance        # 新增
 ```
@@ -417,7 +417,7 @@ skills:
 
 ### 5.3 报价流程集成
 
-在 `src/skills/quote-generate/scripts/generate.py` 中:
+在 `src/skills/travel-quote/scripts/generate.py` 中:
 
 ```python
 # 报价生成主流程中
@@ -485,7 +485,7 @@ if has_per_km_vehicles(vehicles):
 | `configs/config.yaml` | 新增 `tools.maps.amap_api_key` |
 | `src/config/settings.py` | 新增 `MapsToolConfig` + `maps` 字段 |
 | `subagents/travel-consultant/SUBAGENT.md` | `skills.allowed` 新增 `route-distance` |
-| `src/skills/quote-generate/scripts/generate.py` | 报价流程集成导航距离 |
+| `src/skills/travel-quote/scripts/generate.py` | 报价流程集成导航距离 |
 
 ---
 

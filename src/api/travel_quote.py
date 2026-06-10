@@ -207,7 +207,7 @@ def _update_chunk_embedding(doc_id: int, chunk_index: int, text: str) -> None:
     """更新 chunk 文本并重新计算向量嵌入"""
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1058,7 +1058,7 @@ async def import_vehicle_excel(request: Request, file: UploadFile = File(...)):
     try:
         import sys
         from pathlib import Path
-        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
         if str(skill_dir) not in sys.path:
             sys.path.insert(0, str(skill_dir))
 
@@ -1157,7 +1157,7 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
         # 2. 逐 Sheet 解析并立即写入知识库
         import sys
         from pathlib import Path
-        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
         if str(skill_dir) not in sys.path:
             sys.path.insert(0, str(skill_dir))
 
@@ -1324,7 +1324,7 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
         # 2. 逐 Sheet 解析并立即写入知识库
         import sys
         from pathlib import Path
-        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
         if str(skill_dir) not in sys.path:
             sys.path.insert(0, str(skill_dir))
 
@@ -1474,7 +1474,7 @@ async def search_hotels(request: Request, q: str = Query(..., min_length=1), top
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1495,7 +1495,7 @@ async def list_hotels_kb(request: Request, limit: int = Query(200), offset: int 
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1516,7 +1516,7 @@ async def list_attractions_kb(request: Request, limit: int = Query(200), offset:
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1537,7 +1537,7 @@ async def search_attractions(request: Request, q: str = Query(..., min_length=1)
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1562,7 +1562,7 @@ async def get_hotel_kb(doc_id: int, request: Request):
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1614,7 +1614,7 @@ async def get_attraction_kb(doc_id: int, request: Request):
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1693,7 +1693,7 @@ async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 
@@ -1727,7 +1727,7 @@ async def import_attractions_kb(request: Request, body: ImportAttractionKBReques
 
     import sys
     from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "quote-generate" / "scripts"
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
     if str(skill_dir) not in sys.path:
         sys.path.insert(0, str(skill_dir))
 

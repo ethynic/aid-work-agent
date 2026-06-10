@@ -158,13 +158,13 @@ def calculate_multi_leg_distance(daily_routes: list, region: str = "") -> Tuple[
                             "distance_km": leg_km,
                         })
                         total_km += leg_km
-                        logger.info(f"[quote-generate] D{day_num}: {origin} → {destination}, {leg_km}km")
+                        logger.info(f"[travel-quote] D{day_num}: {origin} → {destination}, {leg_km}km")
                     else:
-                        logger.warning(f"[quote-generate] D{day_num} {origin}→{destination} 计算失败: {_parsed.get('error')}")
+                        logger.warning(f"[travel-quote] D{day_num} {origin}→{destination} 计算失败: {_parsed.get('error')}")
                 else:
-                    logger.warning(f"[quote-generate] D{day_num} {origin}→{destination} 子进程失败")
+                    logger.warning(f"[travel-quote] D{day_num} {origin}→{destination} 子进程失败")
             except Exception as e:
-                logger.warning(f"[quote-generate] D{day_num} {origin}→{destination} 异常: {e}")
+                logger.warning(f"[travel-quote] D{day_num} {origin}→{destination} 异常: {e}")
 
     return round(total_km, 1), leg_details
 
@@ -183,7 +183,7 @@ def calculate_single_leg_distance(origin: str, destination: str) -> Optional[flo
             if _parsed.get('success'):
                 return _parsed['distance_km']
     except Exception as e:
-        logger.warning(f"[quote-generate] 单段距离计算失败: {e}")
+        logger.warning(f"[travel-quote] 单段距离计算失败: {e}")
     return None
 
 

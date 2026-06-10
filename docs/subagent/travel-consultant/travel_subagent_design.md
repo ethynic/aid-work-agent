@@ -9,7 +9,7 @@
 设计一套**通用的旅游行业 AI 顾问系统**，核心思路：
 
 1. **能在 SUBAGENT.md 里说清楚的，就不新建 skill** — 行程规划、对话风格、路线策略都由 LLM 在子智能体说明中直接执行
-2. **只有需要精确程序化操作的才用 skill** — 报价生成（查库+计算+导出 Excel）封装为 `quote-generate` skill，仅注册给旅游子智能体
+2. **只有需要精确程序化操作的才用 skill** — 报价生成（查库+计算+导出 Excel）封装为 `travel-quote` skill，仅注册给旅游子智能体
 3. **租户定制统一用 extra.md** — 每个子智能体每个租户一个 extra.md 文件，包含该租户的个性化配置（对话风格、路线策略、模板路径等），作为 system prompt 的一部分注入，优先级高于 SUBAGENT.md
 4. **定价数据分类存储** — 酒店/景点用向量知识库（语义匹配），车辆用关系型表（算法推荐），详见 [旅游资源定价数据方案](../../subagent/travel-consultant/travel_pricing_resource_design.md)
 
@@ -19,7 +19,7 @@
 |------|---------|---------|
 | 定价数据（酒店/景点） | 向量知识库（documents + chunks + chunks_vec） | 向量搜索 + LLM 取价；景点 3 个 chunk（信息/门票/项目），酒店 2 个 chunk（信息/价格） |
 | 定价数据（车辆） | `bs_travel_quote_vehicles` 关系型表 | 算法推荐 + 按天/按公里计费（支持多段导航距离） |
-| 定价数据（餐标/导游/其他费用） | `bs_travel_quote_*` 关系型表 | `quote-generate` skill 内部查询 |
+| 定价数据（餐标/导游/其他费用） | `bs_travel_quote_*` 关系型表 | `travel-quote` skill 内部查询 |
 | 报价单模板路径 | extra.md 中配置 | skill 读取路径对应的模板文件 |
 | 路线规划策略 | extra.md 中用 Markdown 描述 | LLM 按 prompt 中的策略规则规划 |
 | 拟人化对话风格 | extra.md 中用 Markdown 描述 | LLM 按 prompt 中的人设和风格回复 |
@@ -196,7 +196,7 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
     return dst
 ```
 
-系统内置默认模板文件 `src/skills/quote-generate/templates/default.xlsx`。
+系统内置默认模板文件 `src/skills/travel-quote/templates/default.xlsx`。
 
 ---
 
@@ -208,7 +208,7 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
 
 ### 5.1 输入参数
 
-> 重构后的 `quote-generate` 技能支持**行程文本驱动**模式，LLM 子智能体只需传入用户确认的行程方案全文，技能内部完成行程解析、资源检索、计价、导出全流程。
+> 重构后的 `travel-quote` 技能支持**行程文本驱动**模式，LLM 子智能体只需传入用户确认的行程方案全文，技能内部完成行程解析、资源检索、计价、导出全流程。
 
 **新模式（推荐）**：传入 `itinerary_text`，技能内部自动解析：
 
@@ -286,7 +286,7 @@ class QuoteItem:
 |------|---------|------|
 | 需求咨询 | SUBAGENT.md 中的对话阶段和沟通技巧 | LLM 擅长自然对话 |
 | 行程规划 | SUBAGENT.md 中的路线规划策略 + 知识库检索 | LLM 做规划和推荐 |
-| 报价生成（查询+计算+导出） | **quote-generate skill**（全流程 skill） | 查库+计算+Excel 需要程序精确处理，作为整体封装 |
+| 报价生成（查询+计算+导出） | **travel-quote skill**（全流程 skill） | 查库+计算+Excel 需要程序精确处理，作为整体封装 |
 | 知识库检索 | knowledge_base_search 工具 | 已有工具 |
 
 ### 6.2 为什么用 Skill 而不是 Tool
@@ -301,7 +301,7 @@ Tool（工具）是全局通用的，注册在 `ToolRegistry` 中，所有智能
 
 ```
 travel-consultant (子智能体)
-  ├── quote-generate (报价生成 — 唯一专属 skill)
+  ├── travel-quote (报价生成 — 唯一专属 skill)
   │     ├── 接收行程参数（人数、天数、景点列表、酒店、餐标等）
   │     ├── 查询 bs_travel_quote_* 定价数据表
   │     ├── 组装报价项 + 计算各项费用
@@ -313,14 +313,14 @@ travel-consultant (子智能体)
         └── LLM 直接执行 — 需求咨询、行程规划、对话
 ```
 
-**移除的 skill**：`trip-planner`（规划策略写入 SUBAGENT.md）、`quote-generator`（合并进 quote-generate）、`quote-export`（合并进 quote-generate）
+**移除的 skill**：`trip-planner`（规划策略写入 SUBAGENT.md）、`quote-generator`（合并进 travel-quote）、`quote-export`（合并进 travel-quote）
 
-### 6.4 quote-generate Skill 内部流程
+### 6.4 travel-quote Skill 内部流程
 
 脚本拆分为 14 个独立模块，职责清晰：
 
 ```
-src/skills/quote-generate/scripts/
+src/skills/travel-quote/scripts/
 ├── generate.py           # 主流程编排（入口）
 ├── itinerary_parser.py   # LLM 行程文本解析
 ├── resource_resolver.py  # 景点/酒店向量检索
@@ -632,7 +632,7 @@ extra.md 是自由格式的 Markdown，租户可以写任何想定制的内容�
 ```markdown
 ---
 YAML Frontmatter（固定）
-  name, version, capabilities, tools, skills: [quote-generate]
+  name, version, capabilities, tools, skills: [travel-quote]
 ---
 
 ## 对话阶段管理
@@ -645,8 +645,8 @@ YAML Frontmatter（固定）
 
 ## 沟通技巧
 ## 报价功能说明
-  ### 报价生成流程（什么时候调 quote-generate skill）
-  ### quote-generate 参数说明（LLM 需要传入什么）
+  ### 报价生成流程（什么时候调 travel-quote skill）
+  ### travel-quote 参数说明（LLM 需要传入什么）
   ### 报价导出 — skill 返回结果后的处理
 ## 行为约束
 ```
@@ -663,7 +663,7 @@ YAML Frontmatter（固定）
 
 > 详细的表结构和向量知识库设计见 [旅游资源定价数据方案](../../subagent/travel-consultant/travel_pricing_resource_design.md)
 
-**关系型数据表（6 张，由 quote-generate skill 内部查询）**：
+**关系型数据表（6 张，由 travel-quote skill 内部查询）**：
 
 | 表名 | 说明 |
 |------|------|
@@ -691,7 +691,7 @@ YAML Frontmatter（固定）
 
 | Skill | 说明 |
 |-------|------|
-| `quote-generate` | 报价全流程：查库 + 向量搜索 → 计算 → 模板导出 Excel |
+| `travel-quote` | 报价全流程：查库 + 向量搜索 → 计算 → 模板导出 Excel |
 | `route-distance` | 导航距离计算（高德地图 API），详见 [设计文档](../../subagent/travel-consultant/route_distance_skill_design.md) |
 
 **已删除的表**：
@@ -724,7 +724,7 @@ YAML Frontmatter（固定）
 
 ### 10.2 体系 A：LLM 调用 Skill
 
-旅游报价的完整流程（查库 → 计算 → 导出 Excel）封装在 `quote-generate` skill 中。LLM 只需调用一次 `skill_execute`，传入从对话中收集的行程参数，skill 内部的 Python 脚本完成所有工作。
+旅游报价的完整流程（查库 → 计算 → 导出 Excel）封装在 `travel-quote` skill 中。LLM 只需调用一次 `skill_execute`，传入从对话中收集的行程参数，skill 内部的 Python 脚本完成所有工作。
 
 **为什么不用 Tool 而用 Skill**：
 - Tool 是全局工具，注册在 `ToolRegistry` 中，所有智能体都能调用
@@ -735,13 +735,13 @@ YAML Frontmatter（固定）
 
 ```
 LLM 调用 skill_execute({
-  "skill": "quote-generate",
+  "skill": "travel-quote",
   "command": "python scripts/generate.py",
   "content": '{"tenant_id":"xxx","region_name":"贵阳","total_people":30,...}'
 })
 ```
 
-**LLM 如何知道参数**：`quote-generate` 的 SKILL.md 中定义了完整的参数说明，LLM 加载 skill 后能看到所有参数的名称、类型、含义。LLM 从对话中逐步收集这些信息（人数、天数、景点、酒店偏好等），所有参数齐备后一次性传入。
+**LLM 如何知道参数**：`travel-quote` 的 SKILL.md 中定义了完整的参数说明，LLM 加载 skill 后能看到所有参数的名称、类型、含义。LLM 从对话中逐步收集这些信息（人数、天数、景点、酒店偏好等），所有参数齐备后一次性传入。
 
 #### 10.2.2 Skill 内部处理
 
@@ -766,7 +766,7 @@ Agent.process_message()
     ├─ 第1-5轮: LLM 通过对话确认行程方案
     │    必要时调用 knowledge_base_search 了解景点信息
     │
-    ├─ 第6轮: 行程确认后，LLM 调用 skill_execute({skill: "quote-generate", ...})
+    ├─ 第6轮: 行程确认后，LLM 调用 skill_execute({skill: "travel-quote", ...})
     │    │
     │    ▼ generate.py 内部流程（14 个模块协作）
     │    ├─ itinerary_parser.py → LLM 解析行程文本
@@ -858,7 +858,7 @@ DELETE    /api/v1/subagents/<name>/extra                 # 删除，恢复默认
 
 | 接口 | 调用方 | 触发方式 | LLM 是否参与 |
 |------|--------|---------|-------------|
-| `skill_execute(quote-generate)` | **LLM** | function calling 自动触发 | 是（LLM 传入行程参数） |
+| `skill_execute(travel-quote)` | **LLM** | function calling 自动触发 | 是（LLM 传入行程参数） |
 | `knowledge_base_search` | **LLM** | function calling 自动触发 | 是（LLM 构造查询） |
 | 定价数据 CRUD API | **前端管理页面** | 人工操作 | 否 |
 | Excel 批量导入 API | **前端管理页面** | 人工上传 | 否 |
@@ -893,7 +893,7 @@ DELETE    /api/v1/subagents/<name>/extra                 # 删除，恢复默认
 |--------|------|--------|------|------|
 | P0 | extra.md 租户定制系统 | 小 | ✅ 完成 | 改 agent prompt 拼接逻辑 + 前端编辑器 |
 | P1 | 定价数据表 + 数据导入 | 中 | ✅ 完成 | 核心数据层 |
-| P2 | quote-generate skill | 大 | ✅ 完成 | 查库+计算+模板导出全流程 |
+| P2 | travel-quote skill | 大 | ✅ 完成 | 查库+计算+模板导出全流程 |
 | P3 | 前端业务数据管理页面 | 中 | ✅ 完成 | 7 个 CRUD 管理页面 + Excel 批量导入 + 模板下载，见第 13 节 |
 
 ---

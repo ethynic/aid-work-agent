@@ -799,7 +799,7 @@ GET /api/admin/agent-definitions/meta/skills
 Response: {
     "skills": [
         {"id": "trade-customer-1.0.0", "name": "外贸客户管理", "description": "管理外贸客户信息和跟进记录"},
-        {"id": "quote-generate-1.0.0", "name": "行程报价生成", "description": "生成旅游行程和报价方案"},
+        {"id": "travel-quote-1.0.0", "name": "行程报价生成", "description": "生成旅游行程和报价方案"},
         ...
     ]
 }

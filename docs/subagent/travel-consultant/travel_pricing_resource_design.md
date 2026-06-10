@@ -808,8 +808,8 @@ def _process_single_attraction(items, ua, ...):
 
 | 文件 | 说明 |
 |------|------|
-| `src/skills/quote-generate/scripts/attraction.py` | 门票 + 游玩项目费用计算（统一入口） |
-| `src/skills/quote-generate/scripts/attraction_retriever.py` | 景点向量检索器（3 chunk 读取） |
+| `src/skills/travel-quote/scripts/attraction.py` | 门票 + 游玩项目费用计算（统一入口） |
+| `src/skills/travel-quote/scripts/attraction_retriever.py` | 景点向量检索器（3 chunk 读取） |
 
 ### 已删除的旧代码
 
@@ -1162,11 +1162,11 @@ LLM 映射时需要处理的常见转换：
 
 ---
 
-# 第四部分：quote-generate 技能重构 — 行程文本驱动报价（已完成）
+# 第四部分：travel-quote 技能重构 — 行程文本驱动报价（已完成）
 
 ## C1. 设计目标（已实现）
 
-当前 `quote-generate` 技能要求调用者（LLM 子智能体）手动收集并传入 20+ 个结构化参数（包括 `attraction_ids`、`hotel_id` 等数据库 ID）。
+当前 `travel-quote` 技能要求调用者（LLM 子智能体）手动收集并传入 20+ 个结构化参数（包括 `attraction_ids`、`hotel_id` 等数据库 ID）。
 
 问题：
 1. **LLM 不知道数据库 ID**——景点和酒店在旧表用自增 ID，在知识库用 doc_id，LLM 无法直接获取
@@ -1338,7 +1338,7 @@ def generate_quote(params: dict) -> dict:
 
 报价阶段（阶段四）的参数清单简化为：
 
-> **调用 quote-generate 技能时，只需传入**：
+> **调用 travel-quote 技能时，只需传入**：
 > - `tenant_id`：租户 ID（系统获取）
 > - `itinerary_text`：客户确认的行程方案全文
 > - `start_date`：出发日期
@@ -1351,22 +1351,22 @@ def generate_quote(params: dict) -> dict:
 
 | 文件 | 改动 | 状态 |
 |------|------|------|
-| `src/skills/quote-generate/scripts/generate.py` | 主流程编排，新增 `_validate_headcount()`、`_calculate_route_distance()` | ✅ |
-| `src/skills/quote-generate/scripts/itinerary_parser.py` | 新建：LLM 行程文本解析 | ✅ |
-| `src/skills/quote-generate/scripts/resource_resolver.py` | 新建：景点/酒店向量检索 | ✅ |
-| `src/skills/quote-generate/scripts/attraction.py` | 新建：门票 + 游玩项目费用计算 | ✅ |
-| `src/skills/quote-generate/scripts/attraction_retriever.py` | 新建：景点向量检索器（3 chunk） | ✅ |
-| `src/skills/quote-generate/scripts/hotel.py` | 新建：住宿费用计算（支持多城市 + teacher_subtotal） | ✅ |
-| `src/skills/quote-generate/scripts/hotel_retriever.py` | 新建：酒店向量检索器（2 chunk） | ✅ |
-| `src/skills/quote-generate/scripts/vehicle.py` | 新建：交通费用（按天/按公里 + 多段距离） | ✅ |
-| `src/skills/quote-generate/scripts/meal.py` | 新建：餐饮费用 | ✅ |
-| `src/skills/quote-generate/scripts/guide.py` | 新建：导游费用 | ✅ |
-| `src/skills/quote-generate/scripts/other_fees.py` | 新建：其他费用 | ✅ |
-| `src/skills/quote-generate/scripts/season.py` | 新建：淡旺季判定 | ✅ |
-| `src/skills/quote-generate/scripts/db.py` | 新建：数据库表初始化 + 查询 | ✅ |
-| `src/skills/quote-generate/scripts/excel_export.py` | 新建：Excel 模板导出 | ✅ |
-| `src/skills/quote-generate/scripts/llm_client.py` | 新建：LLM 调用封装 | ✅ |
-| `src/skills/quote-generate/SKILL.md` | 重写输入参数说明（7 个参数） | ✅ |
+| `src/skills/travel-quote/scripts/generate.py` | 主流程编排，新增 `_validate_headcount()`、`_calculate_route_distance()` | ✅ |
+| `src/skills/travel-quote/scripts/itinerary_parser.py` | 新建：LLM 行程文本解析 | ✅ |
+| `src/skills/travel-quote/scripts/resource_resolver.py` | 新建：景点/酒店向量检索 | ✅ |
+| `src/skills/travel-quote/scripts/attraction.py` | 新建：门票 + 游玩项目费用计算 | ✅ |
+| `src/skills/travel-quote/scripts/attraction_retriever.py` | 新建：景点向量检索器（3 chunk） | ✅ |
+| `src/skills/travel-quote/scripts/hotel.py` | 新建：住宿费用计算（支持多城市 + teacher_subtotal） | ✅ |
+| `src/skills/travel-quote/scripts/hotel_retriever.py` | 新建：酒店向量检索器（2 chunk） | ✅ |
+| `src/skills/travel-quote/scripts/vehicle.py` | 新建：交通费用（按天/按公里 + 多段距离） | ✅ |
+| `src/skills/travel-quote/scripts/meal.py` | 新建：餐饮费用 | ✅ |
+| `src/skills/travel-quote/scripts/guide.py` | 新建：导游费用 | ✅ |
+| `src/skills/travel-quote/scripts/other_fees.py` | 新建：其他费用 | ✅ |
+| `src/skills/travel-quote/scripts/season.py` | 新建：淡旺季判定 | ✅ |
+| `src/skills/travel-quote/scripts/db.py` | 新建：数据库表初始化 + 查询 | ✅ |
+| `src/skills/travel-quote/scripts/excel_export.py` | 新建：Excel 模板导出 | ✅ |
+| `src/skills/travel-quote/scripts/llm_client.py` | 新建：LLM 调用封装 | ✅ |
+| `src/skills/travel-quote/SKILL.md` | 重写输入参数说明（7 个参数） | ✅ |
 | `subagents/travel-consultant/SUBAGENT.md` | 简化阶段四的参数清单和调用示例 | ✅ |
 
 ---

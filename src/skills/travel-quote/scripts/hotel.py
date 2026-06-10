@@ -161,14 +161,14 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
 
     price_table = retriever.get_price_table(doc_id)
     if not price_table:
-        logger.warning(f"[quote-generate] 酒店 doc_id={doc_id} 无价格表")
+        logger.warning(f"[travel-quote] 酒店 doc_id={doc_id} 无价格表")
         return items, 0
 
     nights = trip_days - 1
     default_price = _parse_team_price(price_table)
 
     if default_price == 0:
-        logger.warning(f"[quote-generate] 酒店 doc_id={doc_id} 价格表无有效价格")
+        logger.warning(f"[travel-quote] 酒店 doc_id={doc_id} 价格表无有效价格")
         return items, 0
 
     pax_per_room = 2

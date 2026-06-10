@@ -15,7 +15,7 @@ def get_db():
         init_postgres_pool,
     )
     if get_postgres_pool() is None:
-        logger.info("[quote-generate] 子进程中 PostgreSQL 连接池未初始化，正在自动初始化")
+        logger.info("[travel-quote] 子进程中 PostgreSQL 连接池未初始化，正在自动初始化")
         init_postgres_pool()
     return _get_db()
 
@@ -124,7 +124,7 @@ def init_tables():
         for table_name, ddl in TABLE_DEFINITIONS.items():
             conn.execute(ddl)
         conn.commit()
-    logger.info("[quote-generate] 数据库表初始化完成")
+    logger.info("[travel-quote] 数据库表初始化完成")
 
 
 def query_by_region(table: str, tenant_id: str, region_names: List[str],

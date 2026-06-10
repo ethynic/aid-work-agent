@@ -209,7 +209,7 @@ def classify_sheet(sheet_name: str, headers: List[str]) -> str:
 
 对标 HotelRetriever 已有的能力，补齐 AttractionRetriever 缺失的功能。
 
-**修改文件**: `src/skills/quote-generate/scripts/attraction_retriever.py`
+**修改文件**: `src/skills/travel-quote/scripts/attraction_retriever.py`
 
 #### 1.1 新增 `list_all()` 方法
 
@@ -325,7 +325,7 @@ def import_attraction(self, tenant_id: str, attraction_name: str, region: str,
 
 ### 任务 3: 景点 Excel LLM 解析器
 
-**新增文件**: `src/skills/quote-generate/scripts/attraction_excel_parser.py`
+**新增文件**: `src/skills/travel-quote/scripts/attraction_excel_parser.py`
 
 ```python
 class AttractionExcelParser:
@@ -425,13 +425,13 @@ export async function listAttractionsKB(params?: { limit?: number; offset?: numb
 
 | 文件 | 说明 |
 |------|------|
-| `src/skills/quote-generate/scripts/attraction_excel_parser.py` | 景点 Excel LLM 解析器 |
+| `src/skills/travel-quote/scripts/attraction_excel_parser.py` | 景点 Excel LLM 解析器 |
 
 ### 修改文件
 
 | 文件 | 改动 |
 |------|------|
-| `src/skills/quote-generate/scripts/attraction_retriever.py` | 新增 `list_all()`、搜索返回 `source_file/created_at`、`import_attraction()` 增加 `source_file` |
+| `src/skills/travel-quote/scripts/attraction_retriever.py` | 新增 `list_all()`、搜索返回 `source_file/created_at`、`import_attraction()` 增加 `source_file` |
 | `src/api/travel_quote.py` | 新增导入/列表端点、更新详情端点返回字段 |
 | `frontend/src/api/travelQuote.ts` | 新增 `importAttractionExcelKB()`、`listAttractionsKB()` |
 | `frontend/src/composables/useImport.ts` | 新增 `useAttractionKBImport` |

@@ -75,7 +75,7 @@ LIMIT %s
 ```
 
 与现有 `AttractionRetriever.search_by_vector()` 的 SQL 完全一致，区别在于：
-- 不从 quote-generate skill 目录导入，而是工具内独立实现
+- 不从 travel-quote skill 目录导入，而是工具内独立实现
 - `tenant_id` 从 ContextVar 获取而非参数传入
 - 结果格式面向子智能体对话使用（截断长文本、突出区域信息）
 

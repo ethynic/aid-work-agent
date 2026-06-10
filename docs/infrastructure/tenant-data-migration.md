@@ -65,12 +65,12 @@ ALTER TABLE bs_travel_quote_vehicles ADD COLUMN IF NOT EXISTS uuid TEXT;
 
 **同时更新 Python 代码中的表初始化**：
 - `src/db/database.py` 中 `_init_postgresql()` — 确保 `CREATE TABLE IF NOT EXISTS` 包含 `uuid` 列
-- `src/skills/quote-generate/scripts/db.py` 中 `TABLE_DEFINITIONS` — 为5张旅游表增加 `uuid` 列
+- `src/skills/travel-quote/scripts/db.py` 中 `TABLE_DEFINITIONS` — 为5张旅游表增加 `uuid` 列
 
 **同时更新数据插入代码**（创建新记录时生成 UUID）：
 - `src/knowledge/service.py` — `add_document()` 和 `add_chunks()` 中生成 `uuid`
 - `src/api/travel_quote.py` — 各创建接口中生成 `uuid`
-- `src/skills/quote-generate/scripts/db.py` — 如有直接 INSERT 的代码
+- `src/skills/travel-quote/scripts/db.py` — 如有直接 INSERT 的代码
 
 ### 阶段二：迁移脚本核心逻辑
 
@@ -294,7 +294,7 @@ return result.to_dict()
 | `deploy/init-postgres.sql` | 修改 | CREATE TABLE 增加 uuid 列 |
 | `deploy/db_update.sql` | 修改 | ALTER TABLE 增加 uuid 列 + 回填 |
 | `src/db/database.py` | 修改 | `_init_postgresql()` 中表初始化含 uuid |
-| `src/skills/quote-generate/scripts/db.py` | 修改 | TABLE_DEFINITIONS 增加 uuid 列 |
+| `src/skills/travel-quote/scripts/db.py` | 修改 | TABLE_DEFINITIONS 增加 uuid 列 |
 | `src/knowledge/service.py` | 修改 | 创建文档/chunk 时生成 uuid |
 | `src/api/travel_quote.py` | 修改 | 创建记录时生成 uuid；新增导出端点 |
 | `scripts/tenant_migrate_kb.py` | **新建** | 迁移核心逻辑（CLI + 可被API调用） |

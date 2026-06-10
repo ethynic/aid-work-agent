@@ -60,7 +60,7 @@ def generate_quote(params: dict) -> dict:
     if itinerary_text:
         # 新模式：行程文本驱动，LLM 解析 + 向量检索
         parsed = parse_itinerary(itinerary_text)
-        logger.info(f"[quote-generate] 行程解析结果: {json.dumps(parsed, ensure_ascii=False)}")
+        logger.info(f"[travel-quote] 行程解析结果: {json.dumps(parsed, ensure_ascii=False)}")
 
         resources = resolve_resources(parsed, tenant_id)
 
@@ -225,17 +225,17 @@ def _validate_headcount(adults, students, children_half, elders, total_people, t
         if pax_sum > total_people and students > 0 and adults > 0:
             corrected_adults = max(0, total_people - students - children_half - elders)
             logger.warning(
-                f"[quote-generate] 人数校验修正: adults {adults}→{corrected_adults}, "
+                f"[travel-quote] 人数校验修正: adults {adults}→{corrected_adults}, "
                 f"students={students}, total_people={total_people}"
             )
             adults = corrected_adults
         elif pax_sum < total_people:
             adults += total_people - pax_sum
-            logger.warning(f"[quote-generate] 人数不足，补充 adults→{adults}")
+            logger.warning(f"[travel-quote] 人数不足，补充 adults→{adults}")
 
     if adults > 0 and adults == teacher_count and students > 0 and students < total_people:
         logger.warning(
-            f"[quote-generate] 疑似老师混入adults: students={students}→{total_people}, adults→0"
+            f"[travel-quote] 疑似老师混入adults: students={students}→{total_people}, adults→0"
         )
         students = total_people
         adults = 0
@@ -255,17 +255,17 @@ def _calculate_route_distance(parsed, itinerary_text, departure_city, destinatio
                 daily_routes, region=region_name
             )
             if leg_details:
-                logger.info(f"[quote-generate] 多段距离: {route_distance_km}km, {len(leg_details)}段")
+                logger.info(f"[travel-quote] 多段距离: {route_distance_km}km, {len(leg_details)}段")
             else:
                 route_distance_km = None
         except Exception as e:
-            logger.warning(f"[quote-generate] 多段距离计算失败: {e}")
+            logger.warning(f"[travel-quote] 多段距离计算失败: {e}")
 
     if route_distance_km is None and departure_city and destination:
         dist = calculate_single_leg_distance(departure_city, destination)
         if dist:
             route_distance_km = dist
-            logger.info(f"[quote-generate] 单段距离: {departure_city} → {destination}, {dist}km")
+            logger.info(f"[travel-quote] 单段距离: {departure_city} → {destination}, {dist}km")
 
     return route_distance_km, leg_details
 
@@ -323,7 +323,7 @@ def main():
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        logger.error(f"[quote-generate] 报价生成失败: {e}\n{tb}")
+        logger.error(f"[travel-quote] 报价生成失败: {e}\n{tb}")
         print(json.dumps({"success": False, "error": str(e), "traceback": tb}, ensure_ascii=False))
         sys.exit(1)
 
