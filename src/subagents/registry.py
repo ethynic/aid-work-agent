@@ -291,7 +291,6 @@ class SubagentRegistry:
         Returns:
             工具定义字典
         """
-        logger.info(f"[TEMP][DelegateToolDef] available_subagents_arg={available_subagents}")
         # 过滤可用的subagent
         if available_subagents:
             subagent_list = [
@@ -301,13 +300,8 @@ class SubagentRegistry:
             ]
         else:
             subagent_list = list(self._configs.items())
-        logger.info(
-            "[TEMP][DelegateToolDef] subagent_list="
-            f"{[(name, config.dir_name, config.description) for name, config in subagent_list]}"
-        )
 
         if not subagent_list:
-            logger.info("[TEMP][DelegateToolDef] no subagent_list, return None")
             return None
         
         descriptions = "\n".join(

@@ -476,14 +476,8 @@ class Agent:
         # 注意：available_subagents 必须按租户订阅过滤，否则 LLM 能看到无权使用的子智能体
         if self.mode == AgentMode.MASTER and self.subagent_registry and len(self.subagent_registry) > 0:
             available_subagents = self._get_available_subagents()
-            logger.info(
-                f"[TEMP][DelegateFilter] _get_tools agent_id={id(self)}, tenant_id={getattr(self, '_init_tenant_id', None)}, "
-                f"mode={self.mode.value}, available_subagents={available_subagents}"
-            )
             delegation_tool = self.subagent_registry.get_delegation_tool_definition(available_subagents)
             if delegation_tool:
-                enum_values = delegation_tool.get("input_schema", {}).get("properties", {}).get("subagent_name", {}).get("enum", [])
-                logger.info(f"[TEMP][DelegateFilter] delegation_tool enum_values={enum_values}")
                 tools.append(delegation_tool)
         
         return tools
@@ -574,38 +568,28 @@ class Agent:
         from src.saas.context import get_current_tenant_id
         tenant_id = get_current_tenant_id()
         cache_key = (tenant_id, bool(settings.saas.enabled), bool(settings.demo.enabled))
-        logger.info(
-            f"[TEMP][DelegateFilter] _get_available_subagents enter agent_id={id(self)}, context_tenant_id={tenant_id}, "
-            f"init_tenant_id={getattr(self, '_init_tenant_id', None)}, saas_enabled={settings.saas.enabled}, "
-            f"demo_enabled={settings.demo.enabled}, cache_key={cache_key}"
-        )
 
         # 实例级缓存：同一请求内多次调用复用结果
         cached_key = getattr(self, "_available_subagents_cache_key", None)
         if cached_key == cache_key:
             cached_value = getattr(self, "_available_subagents_cache_value", None)
             if cached_value is not None:
-                logger.info(f"[TEMP][DelegateFilter] _get_available_subagents cache_hit value={cached_value}")
                 return cached_value
 
         # SaaS 模式 + 有租户 ID：从订阅表查询
-        if settings.saas.enabled and not settings.demo.enabled and tenant_id:
+        if settings.saas.enabled and tenant_id:
             from src.db.database import get_db_connection
             from src.saas.db.subscription_db import SubscriptionDB
 
             with get_db_connection() as conn:
                 allowed_subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
-            logger.info(f"[TEMP][DelegateFilter] DB allowed_subagent_types={allowed_subagent_types}")
             # 过滤注册的子智能体，只保留租户订阅的
             # subagent_type 存的是 dir_name，_configs 的 key 是 name
             filtered = []
-            registry_mapping = []
             for name, config in self.subagent_registry._configs.items():
                 agent_id = config.dir_name or name
-                registry_mapping.append((name, agent_id))
                 if agent_id in allowed_subagent_types and agent_id != "main":
                     filtered.append(name)
-            logger.info(f"[TEMP][DelegateFilter] registry_mapping={registry_mapping}")
         else:
             # 演示模式 / 非 SaaS：返回全部（排除主智能体）
             filtered = [
@@ -613,9 +597,7 @@ class Agent:
                 for name, config in self.subagent_registry._configs.items()
                 if (config.dir_name or name) != "main"
             ]
-            logger.info(f"[TEMP][DelegateFilter] fallback_all_subagents={filtered}")
 
-        logger.info(f"[TEMP][DelegateFilter] _get_available_subagents result={filtered}")
         self._available_subagents_cache_key = cache_key
         self._available_subagents_cache_value = filtered
         return filtered

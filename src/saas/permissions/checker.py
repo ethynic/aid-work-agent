@@ -107,45 +107,75 @@ def check_agent_access(agent_id: str, user: dict) -> bool:
         return UserAgentPermissionDB.has_permission(conn, user_id, agent_id)
 
 
-def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
-    """获取当前用户允许访问的所有数字员工ID（优先从 Redis 缓存读取，TTL 5分钟）
+def _all_subagent_dir_names() -> List[str]:
+    """返回注册表中所有非主智能体的 dir_name 列表（统一返回 agent_id/dir_name）。"""
+    registry = master_agent.subagent_registry
+    if not registry:
+        return []
+    return [
+        cfg.dir_name or name
+        for name, cfg in registry._configs.items()
+        if (cfg.dir_name or name) != "main"
+    ]
+
+
+def get_allowed_agent_ids_for_user(
+    user: dict, target_tenant_id: Optional[str] = None
+) -> List[str]:
+    """获取当前用户允许访问的所有数字员工 dir_name 列表（统一返回 dir_name/agent_id）。
 
     Args:
         user: 当前用户信息，包含 user_id, role, tenant_id 字段
+        target_tenant_id: 平台管理员代管理的目标租户 ID（优先于 user["tenant_id"]）。
+            用于 platform_admin 通过 X-Tenant-Id 访问其他租户时，
+            按目标租户的订阅过滤，而不是按账号本身的 tenant_id=demo 返回全部。
 
     Returns:
-        List[str]: 允许访问的数字员工ID列表
+        List[str]: 允许访问的数字员工 dir_name 列表（与 subscriptions.subagent_type 一致）。
     """
-    # 平台管理员且不在租户代管理 → 返回所有数字员工
-    if is_platform_admin(user) and get_tenant_id_from_user(user) is None:
-        registry = master_agent.subagent_registry
-        if registry:
-            return list(registry.list_subagents())
-        return []
+    user_id = user.get("user_id") if user else None
 
-    tenant_id = get_tenant_id_from_user(user)
+    # 平台管理员
+    if user and is_platform_admin(user):
+        tenant_id = target_tenant_id or get_tenant_id_from_user(user)
+        # 无任何租户上下文（既无代管理目标，账号本身也无 tenant） → 返回全部
+        if not tenant_id:
+            return _all_subagent_dir_names()
+        # 代管 demo 租户 → 返回全部
+        if tenant_id == "demo":
+            return _all_subagent_dir_names()
+        # 代管其他租户 → 查该租户订阅
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT subagent_type
+                FROM subscriptions
+                WHERE tenant_id = %s
+                  AND status = 'active'
+                  AND starts_at <= CURRENT_TIMESTAMP
+                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            """, (tenant_id,))
+            return [row["subagent_type"] for row in cursor.fetchall()]
+
+    # 普通用户 / 租户管理员
+    tenant_id = target_tenant_id or (get_tenant_id_from_user(user) if user else None)
     if not tenant_id:
         return []
-
-    # Demo 租户：可以访问所有内置的 subagent
     if tenant_id == "demo":
-        registry = master_agent.subagent_registry
-        if registry:
-            return list(registry.list_subagents())
-        return []
-
-    user_id = user.get("user_id")
+        return _all_subagent_dir_names()
     if not user_id:
         return []
 
-    # 普通用户：优先从缓存获取
-    if not is_tenant_admin(user) and not is_platform_admin(user):
-        cached = get_cached(CacheKeys.USER_AGENTS, user_id)
+    # 缓存 key 拼接 target_tenant_id，避免 platform_admin/普通用户跨租户代管时缓存互相污染
+    cache_key_id = f"{user_id}:{tenant_id}"
+
+    # 普通用户：优先从缓存获取（租户管理员不走缓存）
+    if user and not is_tenant_admin(user) and not is_platform_admin(user):
+        cached = get_cached(CacheKeys.USER_AGENTS, cache_key_id)
         if cached is not None:
             return cached
 
     with get_db_connection() as conn:
-        # 获取租户有有效订阅的列表
         cursor = conn.cursor()
         cursor.execute("""
             SELECT DISTINCT subagent_type
@@ -160,8 +190,8 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
         if not tenant_allowed:
             return []
 
-        # 租户管理员 或 平台管理员代管理 → 返回租户允许的全部
-        if is_tenant_admin(user) or is_platform_admin(user):
+        # 租户管理员 → 返回租户允许的全部
+        if user and is_tenant_admin(user):
             return tenant_allowed
 
         # 普通用户 → 取交集（用户允许且租户有订阅）
@@ -169,7 +199,7 @@ def get_allowed_agent_ids_for_user(user: dict) -> List[str]:
         result = [aid for aid in tenant_allowed if aid in user_allowed]
 
         # 写入缓存
-        set_cached(CacheKeys.USER_AGENTS, user_id, value=result, ttl=300)
+        set_cached(CacheKeys.USER_AGENTS, cache_key_id, value=result, ttl=300)
         return result
 
 

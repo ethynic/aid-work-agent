@@ -48,62 +48,43 @@ def _resolve_default_subagent(subagent_name, tenant_id, user):
 
     Args:
         subagent_name: 当前请求的子智能体名称（None 表示未指定）
-        tenant_id: 租户 ID
+        tenant_id: 租户 ID（来自 X-Tenant-Id 解析，可能与 user["tenant_id"] 不同）
         user: 当前用户信息 dict
 
     Returns:
         str | None: 自动解析的子智能体名称，或 None（保持原样）
     """
-    logger.info(
-        f"[TEMP][AutoRoute] enter subagent_name={subagent_name}, request_tenant_id={tenant_id}, "
-        f"user_id={user.get('user_id') if user else None}, user_role={user.get('role') if user else None}, "
-        f"user_tenant_id={user.get('tenant_id') if user else None}"
-    )
-
     if subagent_name:
-        logger.info(f"[TEMP][AutoRoute] skip because request already specified subagent_name={subagent_name}")
         return subagent_name
 
     if not tenant_id or not user:
-        logger.info(f"[TEMP][AutoRoute] skip because tenant_id or user missing: tenant_id={tenant_id}, has_user={bool(user)}")
         return None
 
     # demo 租户有多个内置智能体，不应自动路由
     if tenant_id == "demo":
-        logger.info("[TEMP][AutoRoute] skip because tenant_id=demo")
         return None
 
     try:
         from src.saas.permissions.checker import get_allowed_agent_ids_for_user
-        allowed_ids = set(get_allowed_agent_ids_for_user(user))
-        logger.info(f"[TEMP][AutoRoute] allowed_ids_for_user={sorted(allowed_ids)}")
+        # 透传外层 tenant_id：platform_admin 通过 X-Tenant-Id 代管理时，
+        # 应按目标租户订阅过滤，而非按 user["tenant_id"]=demo 返回全部
+        allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
         if not allowed_ids:
-            logger.info("[TEMP][AutoRoute] skip because allowed_ids is empty")
             return None
 
         # 获取所有已注册的子智能体
         registry = master_agent.subagent_registry
         if not registry:
-            logger.info("[TEMP][AutoRoute] skip because subagent_registry missing")
             return None
 
         all_subagents = registry.get_all_subagents_with_type()
-        logger.info(
-            "[TEMP][AutoRoute] all_subagents="
-            f"{[(s.get('name'), s.get('agent_id'), s.get('dir_name')) for s in all_subagents]}"
-        )
         # 过滤出用户有权限的
         available = [s for s in all_subagents if s["agent_id"] in allowed_ids]
-        logger.info(
-            "[TEMP][AutoRoute] available_after_allowed_filter="
-            f"{[(s.get('name'), s.get('agent_id'), s.get('dir_name')) for s in available]}, count={len(available)}"
-        )
 
         if len(available) == 1:
             agent_id = available[0]["agent_id"]
             logger.info(f"[AutoRoute] 租户 {tenant_id} 仅有 1 个可用智能体，自动路由到 {agent_id}")
             return agent_id
-        logger.info(f"[TEMP][AutoRoute] no auto route because available_count={len(available)}")
     except Exception as e:
         logger.warning(f"[AutoRoute] 解析默认子智能体失败: {e}", exc_info=True)
 
@@ -903,12 +884,6 @@ async def chat(request: Request):
 
         # 从请求头解析用户身份
         current_user = auth.get_current_user(request)
-        logger.info(
-            f"[TEMP][AutoRoute] /api/chat enter request_subagent={subagent_name}, "
-            f"user_id={current_user.get('user_id') if current_user else user_id}, "
-            f"user_role={current_user.get('role') if current_user else None}, "
-            f"user_tenant_id={current_user.get('tenant_id') if current_user else None}"
-        )
 
         # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
         if subagent_name and current_user and current_user.get("tenant_id") != "demo":
@@ -938,12 +913,7 @@ async def chat(request: Request):
         _tenant_id = getattr(request.state, 'tenant_id', None)
         instance_id = getattr(request.state, 'instance_id', None)
         # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
-        original_subagent_name = subagent_name
         subagent_name = _resolve_default_subagent(subagent_name, _tenant_id, current_user)
-        logger.info(
-            f"[TEMP][AutoRoute] /api/chat resolved original_subagent={original_subagent_name}, "
-            f"resolved_subagent={subagent_name}, tenant_id={_tenant_id}, instance_id={instance_id}"
-        )
         if instance_id and settings.saas.enabled:
             from src.saas.services.instance_manager import instance_manager
             agent = instance_manager.get_agent(instance_id, subagent_name, session_id)
@@ -1283,11 +1253,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 从请求头解析用户身份
     current_user = auth.get_current_user(http_request)
     user_id = current_user["user_id"] if current_user else "anonymous"
-    logger.info(
-        f"[TEMP][AutoRoute] stream_chat enter request_subagent={request.subagent}, request_instance_id={request.instance_id}, "
-        f"user_id={user_id}, user_role={current_user.get('role') if current_user else None}, "
-        f"user_tenant_id={current_user.get('tenant_id') if current_user else None}"
-    )
 
     # 权限检查：数字员工访问授权（演示用户tenant_id='demo'豁免）
     if request.subagent and current_user and current_user.get("tenant_id") != "demo":
@@ -1478,10 +1443,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     _instance_id = getattr(http_request.state, 'instance_id', None) if settings.saas.enabled else None
     # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
     resolved_subagent = _resolve_default_subagent(request.subagent, _tenant_id, current_user)
-    logger.info(
-        f"[TEMP][AutoRoute] stream_chat resolved original_subagent={request.subagent}, "
-        f"resolved_subagent={resolved_subagent}, tenant_id={_tenant_id}, instance_id={_instance_id}"
-    )
     if _instance_id:
         from src.saas.services.instance_manager import instance_manager
         agent = instance_manager.get_agent(_instance_id, resolved_subagent, session_id)
