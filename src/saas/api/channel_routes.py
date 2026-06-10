@@ -1114,11 +1114,15 @@ async def _process_tenant_wecom_kf_messages(
                 SessionRecordManager.end_record()
 
                 # 保存助手回复
+                assistant_metadata = None
+                if downloadable_files:
+                    assistant_metadata = {"downloadableFiles": downloadable_files}
                 channel_session_manager.add_message(
                     session_id=session_id,
                     role="assistant",
                     content=response_text,
                     message_type="text",
+                    metadata=assistant_metadata,
                     tenant_id=tenant_id,
                 )
 

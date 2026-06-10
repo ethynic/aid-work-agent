@@ -124,7 +124,15 @@
                   : 'bg-white border border-default text-default rounded-bl-sm shadow-sm'"
               >
                 <div v-if="msg.content" class="whitespace-pre-wrap">{{ msg.content }}</div>
+                <div v-else-if="getDownloadableFiles(msg).length > 0" class="text-muted italic">[文件消息]</div>
                 <div v-else class="text-muted italic">[图片/文件消息]</div>
+                <div v-if="msg.role === 'assistant' && getDownloadableFiles(msg).length > 0" class="mt-3 flex flex-wrap gap-2">
+                  <DownloadFileCard
+                    v-for="file in getDownloadableFiles(msg)"
+                    :key="file.file_id"
+                    :file="file"
+                  />
+                </div>
               </div>
               <div class="text-xs text-muted mt-1 px-1">
                 {{ formatTime(msg.created_at) }}
@@ -153,9 +161,11 @@ import AppHeader from '@/components/AppHeader.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { getUserSourceInfo } from '@/api/enums'
+import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
 
 const toast = useToast()
@@ -357,6 +367,10 @@ function formatTime(timeStr: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function getDownloadableFiles(msg: any): DownloadableFile[] {
+  return msg?.metadata?.downloadableFiles || []
 }
 
 // 监听分页
