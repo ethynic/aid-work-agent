@@ -26,6 +26,7 @@ from src.saas.context import get_current_tenant_id
 from src.services.data_analysis.crypto import decrypt_password, encrypt_password
 from src.services.data_analysis.db_connector import DatabaseConnector
 from src.services.data_analysis.schema_extractor import SchemaExtractor
+from src.services.data_analysis.schema_saver import generate_schema_text, save_schema_to_knowledge
 from src.services.data_analysis.sheet_parser import SheetParser
 
 router = APIRouter(prefix="/api/data-analysis", tags=["数据分析"])
@@ -567,75 +568,19 @@ async def save_schema(req: SchemaSave, request: Request):
     """
     tenant_id = get_current_tenant_id()
 
-    # 从 schema 生成描述文本（用于嵌入）
-    schema_text = _generate_schema_text(req.table_name, req.description, req.columns)
+    result = await save_schema_to_knowledge(
+        tenant_id=tenant_id,
+        table_name=req.table_name,
+        description=req.description,
+        columns=req.columns,
+        source_info=req.source_info or "",
+        connector_id=req.connector_id,
+        source=req.source,
+    )
 
-    try:
-        from src.config.settings import get_embedding_api_key
-        embedding_api_key = get_embedding_api_key()
-        embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
-
-        # 生成嵌入
-        embeddings = await embedding_client.embed_batch([schema_text])
-
-        # 构建元数据
-        metadata = {
-            "connector_id": req.connector_id,
-            "source_info": req.source_info,
-            "table_name": req.table_name,
-            "columns": req.columns,
-        }
-        if req.source:
-            metadata["source"] = req.source
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-
-            # 插入文档
-            cursor.execute(
-                """
-                INSERT INTO documents
-                    (tenant_id, title, source_type, file_type, total_chunks,
-                     embedding_model, raw_text, metadata, summary)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    tenant_id,
-                    f"[数据表] {req.table_name}",
-                    "data-analysis-metadata",
-                    "json",
-                    1,
-                    "text-embedding-v3",
-                    schema_text,
-                    json.dumps(metadata, ensure_ascii=False),
-                    req.description,
-                ),
-            )
-            doc_id = cursor.fetchone()["id"]
-
-            # 插入 chunk
-            cursor.execute(
-                """
-                INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (doc_id, 0, schema_text, len(schema_text), json.dumps({"char_count": len(schema_text)})),
-            )
-            chunk_id = cursor.fetchone()["id"]
-
-            # 插入向量（复用同一个连接）
-            vector_db = get_vector_db(dimension=1024, conn=conn)
-            await vector_db.insert([chunk_id], embeddings)
-
-            conn.commit()
-
-        return {"success": True, "doc_id": doc_id, "message": "Schema 已保存到知识库"}
-
-    except Exception as e:
-        logger.error(f"保存 schema 失败: {e}", exc_info=True)
-        return _error_response("保存 schema 失败", debug=str(e))
+    if not result["success"]:
+        return _error_response("保存 schema 失败", debug=result.get("error", ""))
+    return result
 
 
 @router.get("/schemas")
@@ -684,7 +629,7 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
     """更新 schema（重新生成嵌入）"""
     tenant_id = get_current_tenant_id()
 
-    schema_text = _generate_schema_text(req.table_name, req.description, req.columns)
+    schema_text = generate_schema_text(req.table_name, req.description, req.columns)
 
     try:
         from src.config.settings import get_embedding_api_key
@@ -1051,42 +996,3 @@ async def delete_relation(request: Request):
 
 
 # ============== Helper Functions ==============
-
-
-def _generate_schema_text(
-    table_name: str,
-    description: str,
-    columns: List[Dict[str, Any]],
-) -> str:
-    """
-    从 schema 生成描述文本，用于嵌入。
-
-    格式：
-    表名: xxx
-    描述: xxx
-    列:
-      - 列名(语义名): 类型, 描述, 枚举值
-    """
-    lines = [f"表名: {table_name}"]
-    if description:
-        lines.append(f"描述: {description}")
-    lines.append("列:")
-
-    for col in columns:
-        name = col.get("name", "")
-        semantic_name = col.get("semantic_name", "")
-        data_type = col.get("data_type", "text")
-        col_desc = col.get("description", "")
-        enum_values = col.get("enum_values", [])
-
-        col_line = f"  - {name}"
-        if semantic_name and semantic_name != name:
-            col_line += f"({semantic_name})"
-        col_line += f": {data_type}"
-        if col_desc:
-            col_line += f", {col_desc}"
-        if enum_values:
-            col_line += f", 枚举值: {', '.join(str(v) for v in enum_values[:10])}"
-        lines.append(col_line)
-
-    return "\n".join(lines)
