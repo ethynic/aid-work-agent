@@ -604,7 +604,7 @@ class ChannelSessionManager:
                 SELECT message_id, session_id, role, content, message_type, attachments, metadata, created_at
                 FROM channel_messages
                 WHERE {where_clause}
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
 

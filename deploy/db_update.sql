@@ -384,6 +384,9 @@ ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS subagent_id TEXT;
 DROP INDEX IF EXISTS idx_channel_sessions_tenant_channel;
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id, subagent_id);
 
+-- 2026-6-10，外部用户列表按 channel_sessions.updated_at 倒序排序，新增 user_id 索引
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_user_updated ON channel_sessions(user_id, updated_at DESC) WHERE user_id IS NOT NULL;
+
 -- 2026-5-14，景点区域搜索：为 documents.metadata 添加 GIN 索引（部分索引，仅景点资源）
 CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin
 ON documents USING GIN ((metadata::jsonb))

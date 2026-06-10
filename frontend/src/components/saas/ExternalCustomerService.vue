@@ -12,37 +12,17 @@
       <!-- 左侧：客户列表 -->
       <div class="w-96 border-r border-default bg-surface flex flex-col">
         <!-- 搜索栏 -->
-        <div class="p-4 border-b border-default space-y-3">
-          <div>
-            <label class="text-sm text-muted mb-1 block">用户名</label>
+        <div class="p-4 border-b border-default">
+          <div class="flex gap-2">
             <BaseInput
               v-model="searchUsername"
               placeholder="搜索用户名"
               size="sm"
               clearable
+              class="flex-1"
+              @keyup.enter="handleSearch"
             />
-          </div>
-          <div>
-            <label class="text-sm text-muted mb-1 block">创建时间</label>
-            <div class="flex gap-2">
-              <BaseInput
-                v-model="startDate"
-                type="date"
-                size="sm"
-                class="flex-1"
-              />
-              <span class="text-muted self-center">至</span>
-              <BaseInput
-                v-model="endDate"
-                type="date"
-                size="sm"
-                class="flex-1"
-              />
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <BaseButton size="sm" class="flex-1" @click="handleSearch">搜索</BaseButton>
-            <BaseButton size="sm" intent="secondary" class="flex-1" @click="handleReset">重置</BaseButton>
+            <BaseButton size="sm" @click="handleSearch">搜索</BaseButton>
           </div>
         </div>
 
@@ -69,10 +49,12 @@
                   alt="头像"
                 />
                 <div class="flex-1 min-w-0">
-                  <div class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</div>
-                  <div class="flex items-center gap-2 mt-1">
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted">{{ getUserSourceInfo(user.source).label }}</span>
-                    <span class="text-xs text-muted">{{ formatDate(user.created_at) }}</span>
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-default truncate">{{ user.nickname || user.username || '未知用户' }}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-muted shrink-0">{{ getUserSourceInfo(user.source).label }}</span>
+                  </div>
+                  <div class="text-xs text-muted mt-1">
+                    {{ formatSessionDateRange(user) }}
                   </div>
                 </div>
               </div>
@@ -193,8 +175,6 @@ const effectiveUser = computed(() => {
 
 // 搜索条件
 const searchUsername = ref('')
-const startDate = ref('')
-const endDate = ref('')
 
 // 客户列表
 const userList = ref<any[]>([])
@@ -232,14 +212,6 @@ function handleLogout() {
 }
 
 async function handleSearch() {
-  userPage.value = 1
-  await loadUsers()
-}
-
-async function handleReset() {
-  searchUsername.value = ''
-  startDate.value = ''
-  endDate.value = ''
   userPage.value = 1
   await loadUsers()
 }
@@ -345,6 +317,35 @@ function formatDate(dateStr: string | null): string {
     minute: '2-digit',
   })
   return `${datePart} ${timePart}`
+}
+
+/**
+ * 格式化会话日期区间
+ *
+ * 规则：
+ *  - 同时有首次会话时间（first_session_at）与最近会话时间（last_session_at）：
+ *      "[创建日期] ~ [更新日期]"
+ *  - 只有最近会话时间：仅显示更新时间
+ *  - 都没有：返回空字符串
+ *
+ * 后端 UserDB.list_external_users 在 channel_sessions 上做了 MIN(created_at) /
+ * MAX(updated_at) 聚合，因此 first_session_at / last_session_at 字段含义即
+ * "该用户最早一次渠道会话的创建时间"和"该用户最近一次渠道会话的更新时间"。
+ */
+function formatSessionDateRange(user: any): string {
+  const first = user?.first_session_at
+  const last = user?.last_session_at
+
+  if (first && last) {
+    return `${formatDate(first)} ~ ${formatDate(last)}`
+  }
+  if (last) {
+    return formatDate(last)
+  }
+  if (first) {
+    return formatDate(first)
+  }
+  return ''
 }
 
 function formatTime(timeStr: string | null): string {

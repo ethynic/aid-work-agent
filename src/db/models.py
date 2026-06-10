@@ -334,30 +334,47 @@ class UserDB:
             cursor = conn.cursor()
 
             # 构建查询条件
-            conditions = ["tenant_id = %s", "source IS NOT NULL"]
+            conditions = ["u.tenant_id = %s", "u.source IS NOT NULL"]
             params = [tenant_id]
 
             if username:
-                conditions.append("(username ILIKE %s OR nickname ILIKE %s)")
+                conditions.append("(u.username ILIKE %s OR u.nickname ILIKE %s)")
                 params.append(f"%{username}%")
                 params.append(f"%{username}%")
 
             if source:
-                conditions.append("source = %s")
+                conditions.append("u.source = %s")
                 params.append(source)
 
             where_clause = " AND ".join(conditions)
 
-            # 统计总数
-            cursor.execute(f"SELECT COUNT(*) as cnt FROM users WHERE {where_clause}", params)
+            # 统计总数（去重，确保 LEFT JOIN 后总数正确）
+            cursor.execute(f"""
+                SELECT COUNT(*) as cnt FROM (
+                    SELECT u.user_id FROM users u WHERE {where_clause}
+                ) AS filtered
+            """, params)
             total = cursor.fetchone()["cnt"]
 
-            # 查询列表
+            # 查询列表：按该用户最近一次渠道会话的 updated_at 倒序排序
+            # 没有会话的用户排在最后（NULLS LAST）
+            # 同时返回该用户最早/最近一次渠道会话的 created_at / updated_at，
+            # 用于前端展示"[创建日期] ~ [更新日期]"。
             cursor.execute(f"""
-                SELECT user_id, username, nickname, avatar_url, source, tenant_id, created_at
-                FROM users
+                SELECT u.user_id, u.username, u.nickname, u.avatar_url, u.source, u.tenant_id, u.created_at,
+                       cs.first_session_at,
+                       cs.last_session_at
+                FROM users u
+                LEFT JOIN (
+                    SELECT user_id,
+                           MIN(created_at) AS first_session_at,
+                           MAX(updated_at) AS last_session_at
+                    FROM channel_sessions
+                    WHERE user_id IS NOT NULL
+                    GROUP BY user_id
+                ) cs ON cs.user_id = u.user_id
                 WHERE {where_clause}
-                ORDER BY created_at DESC
+                ORDER BY cs.last_session_at DESC NULLS LAST, u.created_at DESC
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
 
