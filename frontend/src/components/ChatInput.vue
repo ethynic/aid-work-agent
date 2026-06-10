@@ -199,6 +199,20 @@ function autoResize() {
   const textarea = inputRef.value
   if (textarea) {
     textarea.style.height = 'auto'
+    // scrollHeight 包含 padding 但不包含 border；
+    // 由于 textarea 使用 box-sizing: border-box，设置的 height 是 box 总高度，
+    // 需要把上下 border 厚度补回去，否则 box 高度比内容所需小几个像素，
+    // 会导致右侧出现纵向滚动条。
+    const cs = window.getComputedStyle(textarea)
+    const borderVertical =
+      parseFloat(cs.borderTopWidth || '0') + parseFloat(cs.borderBottomWidth || '0')
+    const target = Math.min(textarea.scrollHeight + borderVertical, 120)
+    textarea.style.height = target + 'px'
+  }
+} {
+  const textarea = inputRef.value
+  if (textarea) {
+    textarea.style.height = 'auto'
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
   }
 }
