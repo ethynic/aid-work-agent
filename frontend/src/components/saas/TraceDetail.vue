@@ -77,6 +77,9 @@
                 {{ lastLlmSpan.metadata.usage.prompt_tokens || 0 }}+{{ lastLlmSpan.metadata.usage.completion_tokens || 0 }} tokens
               </span>
               <span>{{ formatDuration(lastLlmSpan.duration_ms) }}</span>
+              <button v-if="lastLlmInput" @click="copyLlmJson" class="px-2 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors" :title="copySuccess ? '已复制' : '复制 JSON'">
+                {{ copySuccess ? '已复制' : '复制' }}
+              </button>
             </div>
           </div>
           <div class="bg-canvas rounded p-3 max-h-96 overflow-auto">
@@ -157,6 +160,7 @@ const trace = ref<TraceDetailType | null>(null)
 const spans = ref<SpanDetail[]>([])
 const loading = ref(false)
 const expandedSpans = ref<Set<string>>(new Set())
+const copySuccess = ref(false)
 
 const lastLlmSpan = computed(() => {
   // 找到最后一个 span_type=generation 的 span
@@ -171,6 +175,15 @@ const lastLlmInput = computed(() => {
 
 function goBack() {
   router.back()
+}
+
+function copyLlmJson() {
+  if (!lastLlmInput.value) return
+  const jsonStr = JSON.stringify(lastLlmInput.value, null, 2)
+  navigator.clipboard.writeText(jsonStr).then(() => {
+    copySuccess.value = true
+    setTimeout(() => { copySuccess.value = false }, 2000)
+  })
 }
 
 function toggleSpan(spanId: string) {
