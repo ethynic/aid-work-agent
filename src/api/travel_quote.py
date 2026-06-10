@@ -20,7 +20,8 @@ from loguru import logger
 from src.api.auth import get_current_user
 
 from src.db.database import get_db_connection
-from src.api.export_utils import export_table_to_excel
+from src.services.export_service import ExportTableConfig
+from src.services.export_service import export_table_to_excel as _svc_export_table_to_excel
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -671,6 +672,54 @@ KB_DOC_EXPORT_COLS = [
 ]
 KB_DOC_IMPORT_COLS = [c for c in KB_DOC_EXPORT_COLS if c != "source_type"]
 
+_EXPORT_TABLE_CONFIG: Dict[str, ExportTableConfig] = {
+    "vehicles": ExportTableConfig(
+        table="bs_travel_quote_vehicles",
+        columns=VEHICLES_EXPORT_COLS,
+        filename="车辆价格数据",
+        where_clause="AND is_active = true",
+    ),
+    "meals": ExportTableConfig(
+        table="bs_travel_quote_meals",
+        columns=MEALS_EXPORT_COLS,
+        filename="餐标价格数据",
+        where_clause="AND is_active = true",
+    ),
+    "guides": ExportTableConfig(
+        table="bs_travel_quote_guides",
+        columns=GUIDES_EXPORT_COLS,
+        filename="导游费用数据",
+        where_clause="AND is_active = true",
+    ),
+    "fees": ExportTableConfig(
+        table="bs_travel_quote_fees",
+        columns=FEES_EXPORT_COLS,
+        filename="其他费用数据",
+        where_clause="AND is_active = true",
+    ),
+    "seasons": ExportTableConfig(
+        table="bs_travel_quote_seasons",
+        columns=SEASONS_EXPORT_COLS,
+        filename="淡旺季数据",
+        where_clause="AND is_active = true",
+    ),
+    "attractions": ExportTableConfig(
+        table="documents",
+        columns=KB_DOC_EXPORT_COLS,
+        filename="景点知识库数据",
+        where_clause="AND source_type = %s",
+        where_params=("attraction_resource",),
+    ),
+    "hotels": ExportTableConfig(
+        table="documents",
+        columns=KB_DOC_EXPORT_COLS,
+        filename="酒店知识库数据",
+        where_clause="AND source_type = %s",
+        where_params=("hotel_resource",),
+    ),
+}
+
+
 # ============================================================
 # 业务表 UUID 导入映射（Phase 6）
 # ============================================================
@@ -743,7 +792,6 @@ def _import_table_by_uuid(
     file_content: bytes,
     operator: Optional[str] = None,
 ) -> dict:
-    """路由层薄封装：调用公共服务并返回 dict 形式结果。"""
     result = _svc_import_table_by_uuid(
         cfg=cfg,
         tenant_id=tenant_id,
@@ -754,76 +802,44 @@ def _import_table_by_uuid(
     return result.to_dict()
 
 
+def _export_table(key: str, request: Request):
+    tid = _get_tenant_id(request)
+    return _svc_export_table_to_excel(_EXPORT_TABLE_CONFIG[key], tid)
+
+
 @router.get("/vehicles/export")
 async def export_vehicles(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "bs_travel_quote_vehicles", tid,
-        VEHICLES_EXPORT_COLS, "车辆价格数据",
-        where_clause="AND is_active = true"
-    )
+    return _export_table("vehicles", request)
 
 
 @router.get("/meals/export")
 async def export_meals(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "bs_travel_quote_meals", tid,
-        MEALS_EXPORT_COLS, "餐标价格数据",
-        where_clause="AND is_active = true"
-    )
+    return _export_table("meals", request)
 
 
 @router.get("/guides/export")
 async def export_guides(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "bs_travel_quote_guides", tid,
-        GUIDES_EXPORT_COLS, "导游费用数据",
-        where_clause="AND is_active = true"
-    )
+    return _export_table("guides", request)
 
 
 @router.get("/fees/export")
 async def export_fees(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "bs_travel_quote_fees", tid,
-        FEES_EXPORT_COLS, "其他费用数据",
-        where_clause="AND is_active = true"
-    )
+    return _export_table("fees", request)
 
 
 @router.get("/seasons/export")
 async def export_seasons(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "bs_travel_quote_seasons", tid,
-        SEASONS_EXPORT_COLS, "淡旺季数据",
-        where_clause="AND is_active = true"
-    )
+    return _export_table("seasons", request)
 
 
 @router.get("/kb/attractions/export")
 async def export_attractions(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "documents", tid,
-        KB_DOC_EXPORT_COLS, "景点知识库数据",
-        where_clause="AND source_type = %s",
-        where_params=("attraction_resource",)
-    )
+    return _export_table("attractions", request)
 
 
 @router.get("/kb/hotels/export")
 async def export_hotels(request: Request):
-    tid = _get_tenant_id(request)
-    return export_table_to_excel(
-        "documents", tid,
-        KB_DOC_EXPORT_COLS, "酒店知识库数据",
-        where_clause="AND source_type = %s",
-        where_params=("hotel_resource",)
-    )
+    return _export_table("hotels", request)
 
 
 # ============================================================

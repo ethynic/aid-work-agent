@@ -1062,3 +1062,76 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_fees_uuid ON bs_travel_quote_fees(u
 ALTER TABLE bs_travel_quote_seasons ADD COLUMN IF NOT EXISTS uuid TEXT;
 UPDATE bs_travel_quote_seasons SET uuid = 'tqs_' || substring(md5(random()::text || id::text), 1, 12) WHERE uuid IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_seasons_uuid ON bs_travel_quote_seasons(uuid);
+
+-- ============================================================
+-- 2026-6-10，为上述 8 张表加 BEFORE INSERT 触发器，新数据自动生成 UUID
+-- 统一的 set_table_uuid() 函数，根据 TG_TABLE_NAME 决定前缀
+-- 注意：BEFORE INSERT 触发器中 NEW.id 通常尚未生成（serial 列还未 nextval），
+--       因此用 clock_timestamp() 而非 id::text 作为哈希盐，保证同一事务内也不重复
+-- ============================================================
+CREATE OR REPLACE FUNCTION set_table_uuid()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_prefix TEXT;
+BEGIN
+    IF NEW.uuid IS NULL OR NEW.uuid = '' THEN
+        v_prefix := CASE TG_TABLE_NAME
+            WHEN 'knowledge_categories'    THEN 'kc_'
+            WHEN 'documents'                THEN 'doc_'
+            WHEN 'chunks'                   THEN 'chunk_'
+            WHEN 'bs_travel_quote_vehicles' THEN 'tqv_'
+            WHEN 'bs_travel_quote_meals'    THEN 'tqm_'
+            WHEN 'bs_travel_quote_guides'   THEN 'tqg_'
+            WHEN 'bs_travel_quote_fees'     THEN 'tqf_'
+            WHEN 'bs_travel_quote_seasons'  THEN 'tqs_'
+            ELSE ''
+        END;
+        NEW.uuid := v_prefix
+                  || substring(
+                       md5(random()::text || clock_timestamp()::text || TG_TABLE_NAME),
+                       1, 12
+                     );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_set_uuid_knowledge_categories ON knowledge_categories;
+CREATE TRIGGER trg_set_uuid_knowledge_categories
+BEFORE INSERT ON knowledge_categories
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_documents ON documents;
+CREATE TRIGGER trg_set_uuid_documents
+BEFORE INSERT ON documents
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_chunks ON chunks;
+CREATE TRIGGER trg_set_uuid_chunks
+BEFORE INSERT ON chunks
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_travel_vehicles ON bs_travel_quote_vehicles;
+CREATE TRIGGER trg_set_uuid_travel_vehicles
+BEFORE INSERT ON bs_travel_quote_vehicles
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_travel_meals ON bs_travel_quote_meals;
+CREATE TRIGGER trg_set_uuid_travel_meals
+BEFORE INSERT ON bs_travel_quote_meals
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_travel_guides ON bs_travel_quote_guides;
+CREATE TRIGGER trg_set_uuid_travel_guides
+BEFORE INSERT ON bs_travel_quote_guides
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_travel_fees ON bs_travel_quote_fees;
+CREATE TRIGGER trg_set_uuid_travel_fees
+BEFORE INSERT ON bs_travel_quote_fees
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+DROP TRIGGER IF EXISTS trg_set_uuid_travel_seasons ON bs_travel_quote_seasons;
+CREATE TRIGGER trg_set_uuid_travel_seasons
+BEFORE INSERT ON bs_travel_quote_seasons
+FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
