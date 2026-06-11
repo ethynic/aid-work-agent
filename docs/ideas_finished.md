@@ -66,3 +66,4 @@
 | # | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 32 | 前端样式统一 | 统一 UI 组件库、语义化 Token、变体系统 | [设计](research/frontend/phase1-unify-foundation-design.md) | [计划](research/frontend/phase1-unify-foundation-plan.md) |
+| 34 | 前端 MyTextarea 通用组件 | 📋 待开发 | 通用大文本框组件：全屏编辑、MD 预览、字数统计，预留 AI 优化/占位符识别 slot。复用现有 marked+highlight.js，自研不引第三方编辑器。2026-06-11 | [选型+设计](research/frontend/my-textarea-component-research.md) | — |

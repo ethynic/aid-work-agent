@@ -216,12 +216,17 @@
                 <div class="flex-1 overflow-y-auto px-4 pb-4">
                   <!-- Template + Sections Editor (full width) -->
                   <div class="flex flex-col min-w-0">
-                    <!-- Template textarea -->
-                    <div class="text-xs text-gray-400 mb-1">模板（用 {变量名} 作为分段占位符）</div>
-                    <textarea v-model="promptContent"
-                      class="w-full p-3 text-sm font-mono border border-gray-200 rounded-lg resize-none focus:outline-none focus:border-primary-400"
-                      style="min-height: 200px"
-                      placeholder="输入 System Prompt 模板，用 {变量名} 作为分段占位符..." @input="onPromptInput"></textarea>
+                  <!-- Template textarea -->
+                  <div class="text-xs text-gray-400 mb-1">模板（用 {变量名} 作为分段占位符）</div>
+                  <MyTextarea
+                    v-model="promptContent"
+                    :rows="6"
+                    monospace
+                    show-char-count
+                    :min-height="'200px'"
+                    placeholder="输入 System Prompt 模板，用 {变量名} 作为分段占位符..."
+                    @input="onPromptInput"
+                  />
 
                     <!-- Section Variables Editor (dynamic, from template parsing) -->
                     <div v-if="sectionKeys.length > 0" class="mt-3 space-y-2">
@@ -234,19 +239,28 @@
                         </button>
                       </div>
                       <div v-for="key in sectionKeys" :key="key" class="border border-gray-100 rounded-lg p-2">
-                        <div class="flex items-center justify-between mb-1">
-                          <span class="text-xs font-medium text-primary-700">{{ key }}</span>
-                          <button @click="optimizeSection(key)"
-                            class="px-2 py-0.5 text-[10px] text-info-600 bg-info-50 hover:bg-info-100 rounded disabled:opacity-50"
-                            :disabled="optimizingKey === key || !sections[key]?.trim()">
-                            {{ optimizingKey === key ? '优化中...' : 'AI 优化' }}
-                          </button>
-                        </div>
-                        <textarea v-model="sections[key]"
-                          class="section-auto-textarea w-full p-2 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:border-primary-400 resize-none overflow-hidden"
-                          style="min-height: 72px"
+                        <MyTextarea
+                          v-model="sections[key]"
+                          :ref="el => bindSectionRef(key, el)"
+                          :rows="3"
+                          monospace
+                          show-char-count
+                          enable-preview
+                          :busy="optimizingKey === key"
+                          :busy-text="`AI 优化 ${key} 中...`"
+                          :min-height="'72px'"
+                          :label="key"
                           :placeholder="`输入 ${key} 的内容...`"
-                          @input="autoResizeTextarea($event.target)"></textarea>
+                          @optimize="optimizeSection(key)"
+                        >
+                          <template #extra>
+                            <button @click="optimizeSection(key)"
+                              class="px-2 py-0.5 text-[10px] text-info-600 bg-info-50 hover:bg-info-100 rounded disabled:opacity-50"
+                              :disabled="optimizingKey === key || !sections[key]?.trim()">
+                              {{ optimizingKey === key ? '优化中...' : 'AI 优化' }}
+                            </button>
+                          </template>
+                        </MyTextarea>
                       </div>
                     </div>
                     <div v-else class="mt-3 text-xs text-gray-400 py-2">
@@ -283,9 +297,13 @@
           </div>
           <div>
             <label class="text-xs text-gray-500 mb-1 block">System Prompt 模板 <span class="text-danger-500">*</span></label>
-            <textarea v-model="createForm.system_prompt" rows="6"
-              class="w-full px-3 py-1.5 text-sm font-mono border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400"
-              placeholder="输入初始 System Prompt 模板，用 {变量名} 作为分段占位符..."></textarea>
+            <MyTextarea
+              v-model="createForm.system_prompt"
+              :rows="6"
+              monospace
+              :min-height="'120px'"
+              placeholder="输入初始 System Prompt 模板，用 {变量名} 作为分段占位符..."
+            />
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-4">
@@ -396,6 +414,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import AppHeader from './AppHeader.vue'
 import PageMetaSelector from './PageMetaSelector.vue'
+import MyTextarea from './ui/MyTextarea.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,
@@ -615,18 +634,22 @@ function formatTime(ts: string): string {
 }
 
 // ============== Auto-resize Textarea ==============
-function autoResizeTextarea(el: EventTarget | null) {
-  if (!el) return
-  const ta = el as HTMLTextAreaElement
-  ta.style.height = 'auto'
-  ta.style.height = ta.scrollHeight + 'px'
+// MyTextarea 内部已自动撑高；这里只保留对外部调用 resize() 的入口，
+// 旧 watch 链路改为遍历保存的 ref map 触发各 MyTextarea 的 resize。
+const sectionRefs = ref<Record<string, InstanceType<typeof MyTextarea> | null>>({})
+
+function bindSectionRef(key: string, el: any) {
+  if (el) {
+    sectionRefs.value[key] = el as InstanceType<typeof MyTextarea>
+  } else {
+    delete sectionRefs.value[key]
+  }
 }
 
 function autoResizeAll() {
   nextTick(() => {
-    document.querySelectorAll<HTMLTextAreaElement>('.section-auto-textarea').forEach(ta => {
-      ta.style.height = 'auto'
-      ta.style.height = ta.scrollHeight + 'px'
+    Object.values(sectionRefs.value).forEach((comp) => {
+      comp?.resize?.()
     })
   })
 }

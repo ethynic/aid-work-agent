@@ -89,7 +89,14 @@
       </div>
       <div class="mt-4">
         <label class="text-sm text-muted mb-1 block">酒店信息</label>
-        <textarea v-model="form.info" rows="8" placeholder="酒店详细信息" class="w-full p-2 border border-default rounded text-[13px] box-border font-inherit"></textarea>
+        <MyTextarea
+          v-model="form.info"
+          :rows="6"
+          :min-height="'160px'"
+          enable-preview
+          :textarea-class="'text-[13px] box-border font-inherit'"
+          placeholder="酒店详细信息"
+        />
       </div>
       <div class="mt-4">
         <label class="text-sm text-muted mb-1 block">价格明细</label>
@@ -148,6 +155,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import MyTextarea from '@/components/ui/MyTextarea.vue'
 
 // 批量选择逻辑
 const { selectedArr, isAllSelected, toggleAll, clearSelection } = useTableSelection<any>({

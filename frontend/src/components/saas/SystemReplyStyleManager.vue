@@ -73,9 +73,15 @@
           </div>
           <div>
             <label class="block text-sm text-default mb-1">风格内容 <span class="text-danger-500">*</span></label>
-            <textarea v-model="editorForm.content"
-              class="w-full px-3 py-2 bg-surface-hover border border-default rounded-lg text-default focus:outline-none focus:border-primary-400 font-mono text-sm"
-              rows="28" placeholder="## 回复风格指南&#10;&#10;..."></textarea>
+            <MyTextarea
+              v-model="editorForm.content"
+              :rows="14"
+              monospace
+              show-char-count
+              enable-preview
+              :min-height="'400px'"
+              placeholder="## 回复风格指南\n\n..."
+            />
           </div>
         </div>
         <div class="flex gap-3 mt-6">
@@ -130,6 +136,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
+import MyTextarea from '@/components/ui/MyTextarea.vue'
 import {
   listSystemStyles, getSystemStyle, createSystemStyle, updateSystemStyle,
   deleteSystemStyle, listSystemVersions, activateSystemVersion,
