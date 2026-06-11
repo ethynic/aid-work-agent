@@ -141,6 +141,11 @@ RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
     playwright install chromium --with-deps || \
     playwright install chromium --with-deps
 
+# 修复 /tmp 权限（python:3.11-slim 镜像的 /tmp 是 755，appuser 无法写入）
+# Playwright 启动 Chromium 时需要在 /tmp 下创建 playwright-artifacts-* 临时目录
+# 必须在 USER appuser 之前以 root 身份执行
+RUN chmod 1777 /tmp
+
 # 切换到非 root 用户
 USER appuser
 

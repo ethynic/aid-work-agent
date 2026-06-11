@@ -10,6 +10,7 @@
 import asyncio
 import hashlib
 import os
+import tempfile
 from typing import Optional
 
 from loguru import logger
@@ -90,6 +91,14 @@ class WeComKfRenderer:
                 await self._cleanup_browser()
 
         from playwright.async_api import async_playwright
+
+        # 解决 /tmp 权限问题：将 Playwright 临时目录指向应用自有目录
+        # python:3.11-slim 镜像的 /tmp 是 755，appuser 无法写入
+        # TMPDIR 必须在 async_playwright().start() 之前设置才能生效
+        artifact_tmp = os.path.join(self._upload_dir, ".playwright_tmp")
+        os.makedirs(artifact_tmp, exist_ok=True)
+        os.environ["TMPDIR"] = artifact_tmp
+        tempfile.tempdir = artifact_tmp
 
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
