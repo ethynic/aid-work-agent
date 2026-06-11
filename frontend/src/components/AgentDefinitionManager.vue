@@ -457,7 +457,19 @@ const selectedPageIds = computed(() => businessPages.value.map(p => p.id))
 // Sections state — dynamic from template parsing
 const sectionKeys = ref<string[]>([])
 const sections = ref<Record<string, string>>({})
+// 记录分段变量从后端加载时的初始值，用于检测未保存修改
+const sectionsInitial = ref<Record<string, string>>({})
 const optimizingKey = ref<string | null>(null)
+
+// 是否存在未保存的分段内容
+const hasUnsavedSections = computed(() => {
+  for (const key of sectionKeys.value) {
+    const cur = sections.value[key] ?? ''
+    const init = sectionsInitial.value[key] ?? ''
+    if (cur !== init) return true
+  }
+  return false
+})
 
 // Prompt version state
 const promptContent = ref('')
@@ -576,10 +588,15 @@ async function loadSections() {
   try {
     const res = await getSections(selectedAgentId.value)
     if (res.success) {
+      // 重置初始值快照
+      const initial: Record<string, string> = {}
       // Populate sections from API data
       for (const s of res.data) {
-        sections.value[s.section_key] = s.content || ''
+        const content = s.content || ''
+        sections.value[s.section_key] = content
+        initial[s.section_key] = content
       }
+      sectionsInitial.value = initial
     }
   } catch (e) { console.error('加载分段失败', e) }
 }
@@ -784,6 +801,11 @@ async function savePromptDraft() {
 
 async function commitPromptVersion() {
   if (!selectedAgentId.value) return
+  // 发布新版本前先保存分段变量，避免未保存的内容被覆盖
+  if (hasUnsavedSections.value) {
+    const ok = await flushUnsavedSections()
+    if (!ok) return
+  }
   const msg = prompt('提交新版本，变更说明（可选）：')
   if (msg === null) return
   promptSaving.value = true
@@ -812,11 +834,39 @@ async function saveAllSections() {
     for (const key of sectionKeys.value) {
       const content = sections.value[key] ?? ''
       await saveSection(selectedAgentId.value, key, content)
+      // 保存后更新初始快照，避免下次误判为未保存
+      sectionsInitial.value[key] = content
     }
     showToast('所有分段已保存')
   } catch (e: any) {
     showToast(e.message || '保存失败', 'error')
   } finally { promptSaving.value = false }
+}
+
+async function flushUnsavedSections(): Promise<boolean> {
+  if (!selectedAgentId.value) return true
+  const dirtyKeys: string[] = []
+  for (const key of sectionKeys.value) {
+    const cur = sections.value[key] ?? ''
+    const init = sectionsInitial.value[key] ?? ''
+    if (cur !== init) dirtyKeys.push(key)
+  }
+  if (dirtyKeys.length === 0) return true
+  promptSaving.value = true
+  try {
+    for (const key of dirtyKeys) {
+      const content = sections.value[key] ?? ''
+      await saveSection(selectedAgentId.value, key, content)
+      sectionsInitial.value[key] = content
+    }
+    showToast(`已自动保存 ${dirtyKeys.length} 个分段`)
+    return true
+  } catch (e: any) {
+    showToast(e.message || '分段保存失败，已取消发布', 'error')
+    return false
+  } finally {
+    promptSaving.value = false
+  }
 }
 
 async function optimizeSection(key: string) {
