@@ -226,7 +226,7 @@ const { importing, showImportResult, importResult, handleImport, handleDownloadT
 const { importing: uuidImporting, showImportResult: showUuidImportResult, importResult: uuidImportResult, handleImport: handleUuidImport, triggerFileInput: triggerUuidFileInput } = useUuidImport(importGuides, loadData)
 
 const total = ref(0)
-const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePageSizeChange } =
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
   usePageContext(async () => {
     await loadData()
   })

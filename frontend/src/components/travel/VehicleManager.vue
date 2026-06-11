@@ -175,7 +175,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useUuidImport(importVehicles, loadData)
 
 const total = ref(0)
-const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePageSizeChange } =
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
   usePageContext(async () => {
     await loadData()
   })
