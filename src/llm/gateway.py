@@ -207,7 +207,7 @@ class LLMGateway:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -264,7 +264,7 @@ class LLMGateway:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
@@ -309,6 +309,7 @@ class LLMGateway:
         tools: List[Dict[str, Any]],
         tool_choice: str = "auto",
         system_prompt: Optional[str] = None,
+        max_tokens: int = 16384,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -319,6 +320,7 @@ class LLMGateway:
             tools: 工具定义列表
             tool_choice: 工具选择策略
             system_prompt: 系统提示词
+            max_tokens: 最大生成token数
             **kwargs: 其他参数
 
         Returns:
@@ -329,7 +331,7 @@ class LLMGateway:
         import time
         cwt_start = time.time()
         logger.info(f"[LLM] chat_with_tools() called, provider={self.provider_name}, messages_count={len(messages)}, tools_count={len(tools) if tools else 0}, has_system_prompt={system_prompt is not None}")
-        
+
         try:
             if system_prompt:
                 messages = [{"role": "system", "content": system_prompt}] + messages
@@ -339,6 +341,7 @@ class LLMGateway:
                     messages=messages,
                     tools=tools,
                     tool_choice=tool_choice,
+                    max_tokens=max_tokens,
                     **kwargs,
                 )
             else:
@@ -346,6 +349,7 @@ class LLMGateway:
                     messages=messages,
                     tools=tools,
                     tool_choice=tool_choice,
+                    max_tokens=max_tokens,
                     **kwargs,
                 )
             

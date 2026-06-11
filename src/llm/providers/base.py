@@ -44,7 +44,7 @@ class BaseLLMProvider(ABC):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -75,7 +75,7 @@ class BaseLLMProvider(ABC):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
