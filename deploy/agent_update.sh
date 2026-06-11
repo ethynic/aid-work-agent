@@ -17,10 +17,11 @@ git config --global --add safe.directory /var/www/agent 2>/dev/null || true
 # 1. 拉取代码
 echo "[1] 拉取最新代码..."
 cd "/var/www/agent"
+OLD_HEAD=$(git rev-parse HEAD)
 git fetch --all
 git reset --hard origin/master
+NEW_HEAD=$(git rev-parse HEAD)
 sudo chmod -R 777 .
-sudo chmod -R 777 log
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 2. 判断前端是否需要编译
