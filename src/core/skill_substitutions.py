@@ -50,8 +50,13 @@ class SkillSubstitutor:
             return body
 
         arguments = context.get("arguments", "")
+        skill_dir = context.get("skill_dir", "")
 
-        # 1. 替换 $ARGUMENTS[N] 和 $N
+        # 1. 替换 <SKILL_ROOT>（Claude Code / Codex / OpenClaw 兼容）
+        if skill_dir and "<SKILL_ROOT>" in body:
+            body = body.replace("<SKILL_ROOT>", skill_dir)
+
+        # 2. 替换 $ARGUMENTS[N] 和 $N
         def replace_indexed(match: re.Match) -> str:
             idx_str = match.group(1) or match.group(2)
             try:
@@ -63,10 +68,10 @@ class SkillSubstitutor:
 
         body = SkillSubstitutor._INDEXED_ARG_PATTERN.sub(replace_indexed, body)
 
-        # 2. 替换 $ARGUMENTS（完整参数）
+        # 3. 替换 $ARGUMENTS（完整参数）
         body = SkillSubstitutor._FULL_ARG_PATTERN.sub(arguments, body)
 
-        # 3. 替换 ${VAR_NAME}
+        # 4. 替换 ${VAR_NAME}
         def replace_var(match: re.Match) -> str:
             var_name = match.group(1)
             # 映射标准变量名到 context 键
