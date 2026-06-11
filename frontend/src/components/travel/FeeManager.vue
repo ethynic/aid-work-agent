@@ -81,7 +81,7 @@
         v-model:current-page="feeCurrentPage"
         :page-size="feePageSize"
         :show-size-changer="true"
-        @update:page-size="feeHandlePageSizeChange"
+        @change="loadFees"
       />
 
       <!-- 费用弹窗 -->
@@ -174,7 +174,7 @@
         v-model:current-page="seasonCurrentPage"
         :page-size="seasonPageSize"
         :show-size-changer="true"
-        @update:page-size="seasonHandlePageSizeChange"
+        @change="loadSeasons"
       />
 
       <!-- 季节弹窗 -->

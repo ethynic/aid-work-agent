@@ -67,6 +67,7 @@
       :total="total"
       v-model:current-page="currentPage"
       :page-size="pageSize"
+      @change="loadReturns"
     />
   </div>
 </template>

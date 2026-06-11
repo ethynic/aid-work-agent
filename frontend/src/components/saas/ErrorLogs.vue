@@ -63,6 +63,7 @@
       :total="total"
       v-model:current-page="currentPage"
       v-model:page-size="pageSize"
+      @change="loadData"
     />
 
     <!-- 详情 Modal -->

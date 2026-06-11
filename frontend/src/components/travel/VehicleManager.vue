@@ -59,7 +59,7 @@
       v-model:current-page="currentPage"
       :page-size="pageSize"
       :show-size-changer="true"
-      @update:page-size="handlePageSizeChange"
+      @change="loadData"
     />
 
     <BaseModal

@@ -72,7 +72,7 @@
       v-model:current-page="currentPage"
       :page-size="pageSize"
       :show-size-changer="true"
-      @update:page-size="handlePageSizeChange"
+      @change="loadData"
     />
 
     <BaseModal v-model="showModal" :title="editingItem ? '编辑导游' : '新增导游'" size="lg" :mode="editingItem ? 'edit' : 'create'" :is-dirty="isFormDirty">

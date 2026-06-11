@@ -105,6 +105,7 @@
       :total="total"
       v-model:current-page="currentPage"
       :page-size="pageSize"
+      @change="loadLeads"
     />
 
     <!-- Add Lead Modal -->
