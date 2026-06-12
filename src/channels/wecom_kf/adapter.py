@@ -414,30 +414,33 @@ class WeComKfAdapter(ChannelAdapter):
         )
         return result.get("errcode", 0) == 0
 
-    async def transfer_to_agent(self, open_kfid: str, external_userid: str) -> bool:
-        """退出人工服务，切回智能助手接待"""
+    async def end_human_service(self, open_kfid: str, external_userid: str) -> bool:
+        """结束人工服务会话（state=3 → state=4）
+
+        根据企业微信状态图，人工接待(3)只能通过API转到结束会话(4)，
+        无法直接切回智能助手接待(1)。结束会话后用户新发消息会自动
+        进入新会话并走智能助手接待流程。
+        """
         result = await self.api_client.trans_service_state(
             open_kfid=open_kfid,
             external_userid=external_userid,
-            service_state=1,  # 智能助手接待
+            service_state=4,  # 结束会话
         )
         if result.get("errcode", 0) == 0:
             return True
 
-        # errcode=95016: not allow transition state，说明微信侧状态已不是人工接待
-        # 查询实际状态，只有确认是智能助手接待(1)才视为成功
-        # 状态2(待接入池)和4(已结束)也不允许机器人发消息
+        # errcode=95016: not allow transition state
         if result.get("errcode") == 95016:
             state_result = await self.api_client.get_service_state(open_kfid, external_userid)
             actual_state = state_result.get("service_state")
-            if actual_state == 1:
+            if actual_state == 4:
                 logger.info(
-                    f"微信客服会话已是智能助手接待状态: "
+                    f"微信客服会话已结束: "
                     f"open_kfid={open_kfid}, external_userid={external_userid}"
                 )
                 return True
             logger.warning(
-                f"微信客服会话状态不允许机器人发消息: "
+                f"微信客服会话无法结束: "
                 f"open_kfid={open_kfid}, external_userid={external_userid}, "
                 f"actual_state={actual_state}"
             )

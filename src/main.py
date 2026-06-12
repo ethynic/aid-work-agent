@@ -564,21 +564,22 @@ async def lifespan(app: FastAPI):
                                 await adapter.close()
                                 continue
 
-                            # 远程仍是人工状态，执行超时退出
+                            # 远程仍是人工状态，执行超时退出（结束会话）
                             adapter.current_open_kfid = open_kfid
-                            result = await adapter.transfer_to_agent(open_kfid, external_userid)
+                            result = await adapter.end_human_service(open_kfid, external_userid)
                             if result:
+                                # 会话结束后用户新发消息会进入新会话，自动走智能助手接待流程
                                 channel_session_manager.update_session(
                                     session_id=session_id,
-                                    metadata={"service_state": 1},
+                                    metadata={"service_state": 4},
                                 )
                                 await adapter.send_text(
                                     f"人工服务已超时（超过{timeout_minutes}分钟无新消息），"
-                                    f"已自动切换回智能助手接待。",
+                                    f"本次会话已结束。如有新问题，请重新发送消息。",
                                     external_userid,
                                 )
                                 logger.info(
-                                    f"[WeCom KF] 超时退出人工服务成功: "
+                                    f"[WeCom KF] 超时结束人工会话成功: "
                                     f"session_id={session_id}"
                                 )
                                 # 清除对话历史，避免下次客户发消息时 Agent 基于之前的转人工上下文再次触发转人工
@@ -594,7 +595,7 @@ async def lifespan(app: FastAPI):
                                     },
                                 )
                                 logger.error(
-                                    f"[WeCom KF] 超时退出人工服务失败，保留人工状态避免远程不一致: "
+                                    f"[WeCom KF] 超时结束人工会话失败，保留人工状态避免远程不一致: "
                                     f"session_id={session_id}"
                                 )
                             await adapter.close()

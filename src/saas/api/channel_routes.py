@@ -1320,19 +1320,20 @@ async def _transfer_kf_to_human(
 async def _exit_kf_human_service(
     adapter, open_kfid: str, external_userid: str, session_id: str
 ) -> None:
-    """退出人工服务，切回智能助手接待"""
+    """退出人工服务（结束会话），用户新发消息自动走智能助手接待流程"""
     try:
-        result = await adapter.transfer_to_agent(open_kfid, external_userid)
+        result = await adapter.end_human_service(open_kfid, external_userid)
 
         if result:
+            # 会话结束后用户新发消息会进入新会话，自动走智能助手接待流程
             channel_session_manager.update_session(
                 session_id=session_id,
-                metadata={"service_state": 1},
+                metadata={"service_state": 4},
             )
-            logger.info(f"[WeCom KF] 已退出人工服务: open_kfid={open_kfid}, user={external_userid}")
+            logger.info(f"[WeCom KF] 已退出人工服务（会话已结束）: open_kfid={open_kfid}, user={external_userid}")
 
             adapter.current_open_kfid = open_kfid
-            await adapter.send_text("已退出人工服务，回到智能助手接待。", external_userid)
+            await adapter.send_text("已退出人工服务，本次会话已结束。如有新问题，请重新发送消息。", external_userid)
         else:
             logger.error(f"[WeCom KF] 退出人工服务失败: open_kfid={open_kfid}")
     except Exception as e:
