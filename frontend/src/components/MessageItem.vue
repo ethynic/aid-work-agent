@@ -209,16 +209,22 @@ const legacyAttachments = computed<{ name: string }[]>(() => {
   return match[1].split(',').map(name => ({ name: name.trim() })).filter(a => a.name)
 })
 
-const downloadableFiles = computed<DownloadableFile[]>(() => {
-  return props.message.downloadableFiles || []
-})
-
 const displayContent = computed(() => {
   let content = props.message.content
   content = content.replace(/<!--process-->[\s\S]*?<!--\/process-->\n?/g, '')
   content = content.replace(/\n\n\[附件:.*?\]$/s, '')
   content = content.replace(/\n\n【已上传文件路径】[\s\S]*?请使用上述路径读取文件内容。/, '')
   return content
+})
+
+const downloadableFiles = computed<DownloadableFile[]>(() => {
+  // 与「正在输入中」用同一套判断逻辑：
+  // 仅当消息不在处理中，或 response 已开始流式（content 非空）时才展示下载卡片
+  // 避免工具执行阶段提前展示中间产物
+  const files = props.message.downloadableFiles || []
+  if (files.length === 0) return []
+  const hasResponse = displayContent.value.trim().length > 0
+  return (!props.isProcessing || hasResponse) ? files : []
 })
 
 const renderedContent = computed(() => {

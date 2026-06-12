@@ -44,6 +44,12 @@ class CpInput(BaseModel):
         None,
         description="注册下载时的显示文件名（可选）。默认使用源文件名。",
     )
+    visible: Optional[bool] = Field(
+        False,
+        description="该 cp 注册的下载文件是否在前端对话中展示下载卡片。"
+        "默认 False（视为中间过程文件，仅记录 file_id 但不在前端展示）。"
+        "如果 cp 本身就是最终交付（如复制用户上传的图片供下载），可设为 True。",
+    )
 
 
 # 禁止的后缀（可执行/脚本）——与 text_file_writer.py 保持一致
@@ -220,7 +226,10 @@ cp(source_file_path="/abs/src/skills/xxx/assets/template.html", file_path="outpu
         return Path(temp_path)
 
     def _register_download(
-        self, file_path: Path, display_name: Optional[str] = None,
+        self,
+        file_path: Path,
+        display_name: Optional[str] = None,
+        visible: bool = False,
     ) -> Dict[str, Any]:
         """将生成的文件注册到下载系统。"""
         from src.core.redis_client import redis_client
@@ -249,6 +258,7 @@ cp(source_file_path="/abs/src/skills/xxx/assets/template.html", file_path="outpu
             "size": file_size,
             "mime_type": mime_type,
             "type": "file",
+            "visible": visible,
         }
 
         key = redis_client.make_key("uploaded_file", file_id)
@@ -265,6 +275,7 @@ cp(source_file_path="/abs/src/skills/xxx/assets/template.html", file_path="outpu
             "file_size": file_size,
             "download_url": download_url,
             "file_path": str(dest_path),
+            "visible": visible,
         }
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -273,6 +284,7 @@ cp(source_file_path="/abs/src/skills/xxx/assets/template.html", file_path="outpu
         overwrite = kwargs.get("overwrite", False)
         register_download = kwargs.get("register_download", True)
         display_name = kwargs.get("display_name")
+        visible = kwargs.get("visible", False)
 
         try:
             # 1. 解析源路径
@@ -308,7 +320,9 @@ cp(source_file_path="/abs/src/skills/xxx/assets/template.html", file_path="outpu
 
             # 7. 注册下载
             if register_download:
-                download_info = self._register_download(dst, display_name or src.name)
+                download_info = self._register_download(
+                    dst, display_name or src.name, visible=visible
+                )
                 # 清理临时文件（register_download 会 copy2 到最终位置）
                 if not file_path:
                     dst.unlink(missing_ok=True)
@@ -323,6 +337,7 @@ cp(source_file_path="/abs/src/skills/xxx/assets/template.html", file_path="outpu
                     "download_url": download_info["download_url"],
                     "file_id": download_info["file_id"],
                     "resolved_source": str(src),
+                    "visible": visible,
                 }
 
             return {

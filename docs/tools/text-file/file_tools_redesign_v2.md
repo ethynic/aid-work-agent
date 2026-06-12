@@ -594,7 +594,17 @@ class CpInput(BaseModel):
         None,
         description="注册下载时的显示文件名（可选）。默认使用源文件名。",
     ),
+    visible: Optional[bool] = Field(
+        False,
+        description="该 cp 注册的下载文件是否在前端对话中展示下载卡片。"
+        "默认 False（视为中间过程文件，仅记录 file_id 但不在前端展示）。"
+        "如果 cp 本身就是最终交付（如复制用户上传的图片供下载），可设为 True。",
+    ),
 ```
+
+**`visible` 字段的设计意图**：cp 的典型用法是"先复制模板，再 edit 改造"，中间产物不应污染前端的下载卡片列表。前端 `useAgent.ts` 在收到 tool_result 时按 `result.visible !== false` 判断是否追加到 `downloadableFiles`：
+- `visible` 缺省（register_download_file / write 注册）→ 视为可见，正常展示
+- `visible=false`（cp 默认）→ 隐藏下载卡片，仅在后端记录 file_id
 
 #### 3.4.3 返回值结构
 
@@ -605,7 +615,8 @@ class CpInput(BaseModel):
     "file_size": 104312,
     "download_url": "/api/files/xxx/download",      # 仅当 register_download=True
     "file_id": "file_xxxxxxxxxxxx",
-    "resolved_source": "/abs/src/skills/guizang-ppt-skill/assets/template-swiss.html"
+    "resolved_source": "/abs/src/skills/guizang-ppt-skill/assets/template-swiss.html",
+    "visible": False                                # 仅当 register_download=True，控制前端展示
 }
 ```
 
@@ -621,6 +632,7 @@ class CpTool(BaseTool):
         overwrite = kwargs.get("overwrite", False)
         register_download = kwargs.get("register_download", True)
         display_name = kwargs.get("display_name")
+        visible = kwargs.get("visible", False)
 
         try:
             src = self._resolve_source(source_file_path)
@@ -640,9 +652,10 @@ class CpTool(BaseTool):
             }
 
             if register_download:
-                dl = self._register_download(dst, display_name or src.name)
+                dl = self._register_download(dst, display_name or src.name, visible=visible)
                 result["download_url"] = dl["download_url"]
                 result["file_id"] = dl["file_id"]
+                result["visible"] = visible
 
             return result
         except Exception as e:

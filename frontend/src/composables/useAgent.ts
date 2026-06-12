@@ -217,20 +217,24 @@ export function useAgent() {
             // 提取下载文件信息到助手消息
             const downloadToolNames = ['register_download_file', 'write', 'cp']
             if (downloadToolNames.includes(toolName) && result?.file_id) {
-              const lastMsg = messages.value[messages.value.length - 1]
-              if (lastMsg && lastMsg.role === 'assistant') {
-                if (!lastMsg.downloadableFiles) {
-                  lastMsg.downloadableFiles = []
-                }
-                // 按 file_id 去重
-                if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
-                  lastMsg.downloadableFiles.push({
-                    file_id: result.file_id,
-                    file_name: result.download_file_name || result.file_name || '未命名文件',
-                    file_size: result.file_size || 0,
-                    download_url: result.download_url || `/api/files/${result.file_id}/download`,
-                    mime_type: result.mime_type || '',
-                  })
+              // 仅当 visible !== false 时才在前端展示下载卡片
+              // visible 缺省（undefined）视为可见；仅 cp 显式返回 visible=false 时隐藏
+              if (result.visible !== false) {
+                const lastMsg = messages.value[messages.value.length - 1]
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  if (!lastMsg.downloadableFiles) {
+                    lastMsg.downloadableFiles = []
+                  }
+                  // 按 file_id 去重
+                  if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
+                    lastMsg.downloadableFiles.push({
+                      file_id: result.file_id,
+                      file_name: result.download_file_name || result.file_name || '未命名文件',
+                      file_size: result.file_size || 0,
+                      download_url: result.download_url || `/api/files/${result.file_id}/download`,
+                      mime_type: result.mime_type || '',
+                    })
+                  }
                 }
               }
             }

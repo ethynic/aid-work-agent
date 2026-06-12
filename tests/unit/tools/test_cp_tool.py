@@ -468,6 +468,133 @@ class TestCpToolRegisterDownload:
         assert mock_redis.hset.call_count >= 5  # file_id, name, path, size, mime_type, type
         mock_redis.expire.assert_called_once_with("uploaded_file:file_test123", 86400)
 
+    @pytest.mark.asyncio
+    async def test_default_visible_is_false(self, tmp_path):
+        """cp 默认 visible=False，_register_download 收到 visible=False 且 execute 返回 dict 含 visible=False"""
+        from src.tools.file.cp_tool import CpTool
+
+        src_file = PROJECT_ROOT / "configs" / "config.yaml"
+        if not src_file.exists():
+            pytest.skip("configs/config.yaml not found")
+
+        tool = CpTool()
+        tool.set_user_id("user_vis_default")
+        tool.set_tenant_id("tenant_vis_default")
+
+        with patch.object(tool, "_register_download") as mock_reg:
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_vis_default",
+                "file_name": "config.yaml",
+                "file_size": 100,
+                "download_url": "/api/files/file_vis_default/download",
+                "file_path": "/tmp/upload/config.yaml",
+                "visible": False,
+            }
+            result = await tool.execute(
+                source_file_path=str(src_file),
+                file_path="output/test_vis_default.yaml",
+                register_download=True,
+            )
+
+        assert isinstance(result, dict)
+        mock_reg.assert_called_once()
+        # 关键：未传 visible 时，_register_download 收到 visible=False
+        assert mock_reg.call_args.kwargs["visible"] is False
+        # execute 返回 dict 也带上 visible=False
+        assert result["visible"] is False
+
+        # 清理
+        cleanup = PROJECT_ROOT / "storage" / "output" / "test_vis_default.yaml"
+        cleanup.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_explicit_visible_true(self, tmp_path):
+        """cp 显式传 visible=True 时，_register_download 收到 visible=True 且 execute 返回 dict 含 visible=True"""
+        from src.tools.file.cp_tool import CpTool
+
+        src_file = PROJECT_ROOT / "configs" / "config.yaml"
+        if not src_file.exists():
+            pytest.skip("configs/config.yaml not found")
+
+        tool = CpTool()
+        tool.set_user_id("user_vis_true")
+        tool.set_tenant_id("tenant_vis_true")
+
+        with patch.object(tool, "_register_download") as mock_reg:
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_vis_true",
+                "file_name": "config.yaml",
+                "file_size": 100,
+                "download_url": "/api/files/file_vis_true/download",
+                "file_path": "/tmp/upload/config.yaml",
+                "visible": True,
+            }
+            result = await tool.execute(
+                source_file_path=str(src_file),
+                file_path="output/test_vis_true.yaml",
+                register_download=True,
+                visible=True,
+            )
+
+        assert isinstance(result, dict)
+        mock_reg.assert_called_once()
+        # 关键：显式 visible=True 时，_register_download 收到 visible=True
+        assert mock_reg.call_args.kwargs["visible"] is True
+        # execute 返回 dict 也带上 visible=True
+        assert result["visible"] is True
+
+        # 清理
+        cleanup = PROJECT_ROOT / "storage" / "output" / "test_vis_true.yaml"
+        cleanup.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_register_download_writes_visible_to_redis(self, tmp_path):
+        """_register_download 把 visible 字段写入 redis file_info"""
+        from src.tools.file.cp_tool import CpTool
+
+        src_file = PROJECT_ROOT / "configs" / "config.yaml"
+        if not src_file.exists():
+            pytest.skip("configs/config.yaml not found")
+
+        tool = CpTool()
+        tool.set_user_id("user_vis_redis")
+        tool.set_tenant_id("tenant_vis_redis")
+
+        mock_redis = MagicMock()
+        mock_redis.make_key = MagicMock(return_value="uploaded_file:file_visredis")
+        mock_redis.hset = MagicMock()
+        mock_redis.expire = MagicMock()
+
+        upload_dir = tmp_path / "uploads"
+        upload_dir.mkdir()
+
+        with (
+            patch("src.core.redis_client.redis_client", mock_redis),
+            patch("src.tools.file.cp_tool._resolve_upload_dir", return_value=upload_dir),
+            patch("src.tools.file.cp_tool.uuid.uuid4") as mock_uuid,
+        ):
+            mock_uuid.return_value = MagicMock(hex="visredisabcdef")
+
+            # 显式 visible=True，便于断言写入值
+            result = await tool.execute(
+                source_file_path=str(src_file),
+                register_download=True,
+                visible=True,
+            )
+
+        assert isinstance(result, dict)
+        assert result["visible"] is True
+
+        # 验证 visible=True 被写入 redis
+        hset_calls = mock_redis.hset.call_args_list
+        visible_calls = [
+            c for c in hset_calls
+            if len(c.args) >= 3 and c.args[1] == "visible" and c.args[2] is True
+        ]
+        assert len(visible_calls) == 1, f"visible=True 未被写入 redis: {hset_calls}"
+
 
 class TestCpToolGetDisplayName:
     """get_display_name 动态显示名测试"""
