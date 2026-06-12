@@ -34,12 +34,6 @@ from src.core.redis_client import redis_client
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
-# 人工转接关键词默认值（租户配置未设置时使用）
-_DEFAULT_HUMAN_KEYWORDS = ["人工", "人工服务", "转人工", "人工客服", "找真人"]
-
-# 退出人工关键词默认值（租户配置未设置时使用）
-_DEFAULT_EXIT_HUMAN_KEYWORDS = ["退出人工", "返回智能助手", "结束人工", "退出人工服务"]
-
 
 class WeComKfAdapter(ChannelAdapter):
     """微信客服适配器"""
@@ -174,30 +168,24 @@ class WeComKfAdapter(ChannelAdapter):
 
     def should_transfer_to_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
         """判断消息是否匹配人工转接关键词。
-        human_transfer_keywords 未设置时使用默认值；设为空数组 [] 时禁用转人工。
+        未配置关键词时默认禁用转人工；设为空数组 [] 时同样禁用；配置了关键词才启用。
         """
         if not text:
             return False
-        if "human_transfer_keywords" in kf_config:
-            keywords = kf_config["human_transfer_keywords"]
-            if not keywords:
-                return False
-        else:
-            keywords = _DEFAULT_HUMAN_KEYWORDS
+        keywords = kf_config.get("human_transfer_keywords")
+        if not keywords:
+            return False
         return any(kw in text for kw in keywords)
 
     def should_exit_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
         """判断消息是否匹配退出人工关键词。
-        exit_human_keywords 未设置时使用默认值；设为空数组 [] 时禁用退出人工。
+        未配置关键词时默认禁用退出人工；设为空数组 [] 时同样禁用；配置了关键词才启用。
         """
         if not text:
             return False
-        if "exit_human_keywords" in kf_config:
-            keywords = kf_config["exit_human_keywords"]
-            if not keywords:
-                return False
-        else:
-            keywords = _DEFAULT_EXIT_HUMAN_KEYWORDS
+        keywords = kf_config.get("exit_human_keywords")
+        if not keywords:
+            return False
         return any(kw in text for kw in keywords)
 
     # ==================== 消息解析 ====================
