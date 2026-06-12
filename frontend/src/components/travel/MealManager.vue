@@ -70,7 +70,7 @@
       v-model:current-page="currentPage"
       :page-size="pageSize"
       :show-size-changer="true"
-      @update:page-size="handlePageSizeChange"
+      @change="loadData"
     />
 
     <BaseModal v-model="showModal" :title="editingItem ? '编辑餐标' : '新增餐标'" size="lg" :mode="editingItem ? 'edit' : 'create'" :is-dirty="isFormDirty">
@@ -211,7 +211,7 @@ const { importing, showImportResult, importResult, handleImport, handleDownloadT
 const { importing: uuidImporting, showImportResult: showUuidImportResult, importResult: uuidImportResult, handleImport: handleUuidImport, triggerFileInput: triggerUuidFileInput } = useUuidImport(importMeals, loadData)
 
 const total = ref(0)
-const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch, handlePageSizeChange } =
+const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
   usePageContext(async () => {
     await loadData()
   })

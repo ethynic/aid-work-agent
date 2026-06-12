@@ -104,6 +104,7 @@
       :total="total"
       v-model:current-page="currentPage"
       :page-size="pageSize"
+      @change="loadComplaints"
     />
 
     <!-- Detail Side Panel -->

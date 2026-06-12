@@ -45,8 +45,15 @@
           </div>
           <div>
             <label class="block text-sm text-default mb-1">SKILL.md 内容</label>
-            <textarea v-model="form.content" rows="16" placeholder="---&#10;name: Skill 名称&#10;description: 描述&#10;---&#10;&#10;Skill 正文内容..."
-              class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default font-mono text-sm focus:outline-none focus:border-primary-400 resize-y"></textarea>
+            <MyTextarea
+              v-model="form.content"
+              :rows="10"
+              monospace
+              show-char-count
+              enable-preview
+              :min-height="'280px'"
+              placeholder="---\nname: Skill 名称\ndescription: 描述\n---\n\nSkill 正文内容..."
+            />
           </div>
         </div>
         <div v-if="formError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ formError }}</div>
@@ -65,6 +72,7 @@
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { listSkills, uploadSkill, updateSkill, deleteSkill } from '@/api/saasTenant'
+import MyTextarea from '@/components/ui/MyTextarea.vue'
 
 const toast = useToast()
 

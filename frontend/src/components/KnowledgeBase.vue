@@ -35,7 +35,7 @@
                   ]"
                 >
                   <span>全部</span>
-                  <span class="text-xs text-muted">{{ totalDocuments }}</span>
+                  <span class="text-xs text-muted">{{ totalAllDocuments }}</span>
                 </button>
 
                 <!-- 分类列表 -->
@@ -556,6 +556,7 @@ async function loadAvailableSubagents() {
 }
 
 const totalDocuments = ref(0)
+const totalAllDocuments = ref(0)
 const { currentPage, pageSize, seqNumber, handlePageChange, handlePageSizeChange } =
   usePageContext(async () => {
     await loadDocuments()
@@ -748,6 +749,10 @@ async function loadDocuments() {
     const result = await listDocuments(pageSize.value, (currentPage.value - 1) * pageSize.value, selectedSourceType.value || undefined)
     documents.value = result.items
     totalDocuments.value = result.total
+    // 选中"全部"分类时，total 才是全部文档的总数
+    if (!selectedSourceType.value) {
+      totalAllDocuments.value = result.total
+    }
   } catch (error: any) {
     console.error('前端日志：加载文档列表失败', error)
   } finally {

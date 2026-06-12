@@ -238,7 +238,30 @@ class SkillExecuteTool(BaseTool):
                 else:
                     logger.info(f"后端日志：[trade-customer诊断] stderr (command succeeded): {stderr_preview}")
             if not result.success:
-                logger.error(f"后端日志：[trade-customer诊断] 命令执行失败! error={result.error}, stderr={result.stderr[:500] if result.stderr else '无'}")
+                # 提取 stdout 末尾 200 字符（命令失败时 stderr 经常为空，stdout 可能含 traceback）
+                stdout_tail = result.stdout[-200:] if result.stdout else "无"
+                stderr_text = result.stderr[:500] if result.stderr else "无"
+
+                # 过滤敏感信息（password/token/api_key 等）
+                try:
+                    from src.utils import sanitize_error_info
+                except Exception:
+                    sanitize_error_info = None
+
+                def _safe(text):
+                    if sanitize_error_info is None:
+                        return text
+                    return sanitize_error_info(str(text))
+
+                logger.error(
+                    f"后端日志：[trade-customer诊断] 命令执行失败! "
+                    f"exit_code={result.exit_code}, "
+                    f"timed_out={result.timed_out}, "
+                    f"duration={result.duration:.2f}s, "
+                    f"error={_safe(result.error) if result.error else '无'}, "
+                    f"stderr={_safe(stderr_text)}, "
+                    f"stdout_tail={_safe(stdout_tail)}"
+                )
 
             # 构建 error 字段：优先使用 result.error，fallback 到 stderr
             exec_error = result.error or result.stderr or f"exit_code={result.exit_code}"

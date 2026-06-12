@@ -81,7 +81,7 @@
         v-model:current-page="feeCurrentPage"
         :page-size="feePageSize"
         :show-size-changer="true"
-        @update:page-size="feeHandlePageSizeChange"
+        @change="loadFees"
       />
 
       <!-- 费用弹窗 -->
@@ -174,7 +174,7 @@
         v-model:current-page="seasonCurrentPage"
         :page-size="seasonPageSize"
         :show-size-changer="true"
-        @update:page-size="seasonHandlePageSizeChange"
+        @change="loadSeasons"
       />
 
       <!-- 季节弹窗 -->
@@ -307,7 +307,7 @@ const editingFee = ref<any>(null)
 const filterCategory = ref('')
 
 const feeTotal = ref(0)
-const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNumber, handleSearch: handleFeeSearch, handlePageSizeChange: feeHandlePageSizeChange } =
+const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNumber, handleSearch: handleFeeSearch } =
   usePageContext(async () => {
     await loadFees()
   })
@@ -394,7 +394,7 @@ const showSeasonModal = ref(false)
 const editingSeason = ref<any>(null)
 
 const seasonTotal = ref(0)
-const { currentPage: seasonCurrentPage, pageSize: seasonPageSize, seqNumber: seasonSeqNumber, handlePageSizeChange: seasonHandlePageSizeChange } =
+const { currentPage: seasonCurrentPage, pageSize: seasonPageSize, seqNumber: seasonSeqNumber } =
   usePageContext(async () => {
     await loadSeasons()
   })

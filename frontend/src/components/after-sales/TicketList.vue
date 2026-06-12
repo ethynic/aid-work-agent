@@ -95,6 +95,7 @@
       :total="total"
       v-model:current-page="currentPage"
       :page-size="pageSize"
+      @change="loadTickets"
     />
 
     <!-- Detail Modal -->

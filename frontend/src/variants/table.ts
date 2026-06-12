@@ -8,7 +8,7 @@ export const table = tv({
     th: 'px-4 py-3 text-center text-xs font-bold text-muted uppercase tracking-wider',
     tbody: 'divide-y divide-default',
     tr: 'transition-colors',
-    td: 'px-4 py-1 text-default',
+    td: 'px-4 py-1 text-center text-default',
     empty: 'px-4 py-12 text-center text-muted',
   },
   variants: {

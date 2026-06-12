@@ -96,13 +96,16 @@
         </div>
         <div>
           <label class="text-sm text-muted mb-1 block">风格内容 <span class="text-danger-500">*</span></label>
-          <textarea
+          <MyTextarea
             v-model="editorForm.content"
+            :rows="14"
+            monospace
+            show-char-count
+            enable-preview
+            :min-height="'400px'"
             :disabled="editorMode === 'view'"
-            class="w-full px-3 py-2 bg-surface-hover border border-default rounded-lg text-default focus:outline-none focus:border-primary-400 font-mono text-sm"
-            rows="28"
-            placeholder="## 回复风格指南&#10;&#10;..."
-          ></textarea>
+            placeholder="## 回复风格指南\n\n..."
+          />
         </div>
       </div>
       <template v-if="editorMode !== 'view'" #footer>
@@ -156,6 +159,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import AppHeader from '@/components/AppHeader.vue'
+import MyTextarea from '@/components/ui/MyTextarea.vue'
 import {
   listStyles, getStyle, createStyle, updateStyle, deleteStyle,
   listVersions, activateVersion,
