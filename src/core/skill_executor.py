@@ -345,6 +345,11 @@ Follow the instructions in the skill above to complete the user's task."""
             # 强制子进程使用 UTF-8 编码，避免 Windows 上 GBK/cp936 导致中文乱码
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'
+            # 注入项目根目录与项目级临时目录，供 skill 脚本写临时文件
+            # 避免依赖系统 /tmp（部分生产环境无写入权限）
+            project_root = str(Path.cwd())
+            env['PROJECT_ROOT'] = project_root
+            env['SKILL_TMP_DIR'] = str(Path(project_root) / 'storage' / 'tmp')
 
             # 后端日志：诊断子进程执行
             is_trade_customer_cmd = "customer_manager" in command or "save-customer" in command or "save-customers" in command

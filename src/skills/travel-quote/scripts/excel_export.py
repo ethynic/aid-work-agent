@@ -7,12 +7,25 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 
 from loguru import logger
 
 # 技能目录
 SKILL_DIR = Path(__file__).resolve().parent.parent
+
+
+def _tmp_path(suffix: str) -> str:
+    """跨平台临时文件路径：优先项目级 storage/tmp（环境变量注入），回退系统 tmp。
+    避免依赖系统 /tmp（部分生产环境无写入权限）。
+    """
+    base = os.environ.get('SKILL_TMP_DIR')
+    if base:
+        d = Path(base)
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / f"{uuid.uuid4().hex}{suffix}")
+    return tempfile.mktemp(suffix=suffix)
 
 
 def export_with_template(quote_data: dict, template_path: str) -> str:
@@ -31,7 +44,7 @@ def export_with_template(quote_data: dict, template_path: str) -> str:
     if not Path(template_path).exists():
         return _export_simple(quote_data)
 
-    dst = tempfile.mktemp(suffix='.xlsx')
+    dst = _tmp_path('.xlsx')
     shutil.copy2(template_path, dst)
     wb = openpyxl.load_workbook(dst)
     ws = wb.active
@@ -209,7 +222,7 @@ def _export_simple(quote_data: dict) -> str:
         from openpyxl.styles import Font, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
     except ImportError:
-        dst = tempfile.mktemp(suffix='.json')
+        dst = _tmp_path('.json')
         with open(dst, 'w', encoding='utf-8') as f:
             json.dump(quote_data, f, ensure_ascii=False, indent=2)
         return dst
@@ -283,6 +296,6 @@ def _export_simple(quote_data: dict) -> str:
     c.font = HEADER_FONT
     c.number_format = '#,##0.00'
 
-    dst = tempfile.mktemp(suffix='.xlsx')
+    dst = _tmp_path('.xlsx')
     wb.save(dst)
     return dst
