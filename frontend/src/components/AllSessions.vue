@@ -328,7 +328,6 @@ const {
   currentSessionId,
   isLoading,
   currentPage,
-  totalPages,
   totalSessions,
   pageSize,
   loadSessions,
