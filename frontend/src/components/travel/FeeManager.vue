@@ -79,7 +79,7 @@
         v-if="feeTotal > 0"
         :total="feeTotal"
         v-model:current-page="feeCurrentPage"
-        :page-size="feePageSize"
+        v-model:page-size="feePageSize"
         :show-size-changer="true"
         @change="loadFees"
       />
@@ -172,7 +172,7 @@
         v-if="seasonTotal > 0"
         :total="seasonTotal"
         v-model:current-page="seasonCurrentPage"
-        :page-size="seasonPageSize"
+        v-model:page-size="seasonPageSize"
         :show-size-changer="true"
         @change="loadSeasons"
       />

@@ -68,7 +68,7 @@
             :total="userTotal"
             v-model:current-page="userPage"
             :page-size="userPageSize"
-            :show-page-size="false"
+            :show-size-changer="false"
           />
         </div>
       </div>
@@ -147,7 +147,7 @@
             :total="messageTotal"
             v-model:current-page="messagePage"
             :page-size="messagePageSize"
-            :show-page-size="false"
+            :show-size-changer="false"
           />
         </div>
       </div>

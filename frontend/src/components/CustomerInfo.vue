@@ -81,7 +81,7 @@
         v-if="total > 0"
         :total="total"
         v-model:current-page="currentPage"
-        :page-size="pageSize"
+        v-model:page-size="pageSize"
       />
     </template>
 

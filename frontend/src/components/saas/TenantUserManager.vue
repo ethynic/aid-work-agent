@@ -79,7 +79,8 @@
             v-if="total > 0"
             :total="total"
             v-model:currentPage="currentPage"
-            :page-size="pageSize"
+            v-model:pageSize="pageSize"
+            @change="loadUsers"
           />
         </template>
 

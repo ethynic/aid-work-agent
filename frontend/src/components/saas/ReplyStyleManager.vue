@@ -62,7 +62,7 @@
         <BasePagination
           :total="total"
           v-model:current-page="currentPage"
-          :page-size="pageSize"
+          v-model:page-size="pageSize"
         />
       </div>
     </div>

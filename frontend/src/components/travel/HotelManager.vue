@@ -65,10 +65,10 @@
       v-if="!searched && totalPages > 1"
       :total="total"
       v-model:current-page="currentPage"
-      :page-size="pageSize"
+      v-model:page-size="pageSize"
       :show-size-changer="true"
       @update:current-page="goPage"
-      @update:page-size="handlePageSizeChange"
+      @change="handlePageSizeChange"
     />
 
     <!-- 编辑弹窗 -->
