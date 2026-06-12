@@ -76,7 +76,6 @@
       </div>
 
       <BasePagination
-        v-if="feeTotal > 0"
         :total="feeTotal"
         v-model:current-page="feeCurrentPage"
         v-model:page-size="feePageSize"
@@ -169,7 +168,6 @@
       </div>
 
       <BasePagination
-        v-if="seasonTotal > 0"
         :total="seasonTotal"
         v-model:current-page="seasonCurrentPage"
         v-model:page-size="seasonPageSize"

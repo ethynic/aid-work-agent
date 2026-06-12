@@ -104,7 +104,6 @@
 
             <!-- Pagination -->
             <BasePagination
-              v-if="totalPages > 1"
               :total="totalSessions"
               :current-page="currentPage"
               :page-size="pageSize"
@@ -243,7 +242,6 @@
 
       <!-- Pagination -->
       <BasePagination
-        v-if="totalPages > 1"
         :total="totalSessions"
         :current-page="currentPage"
         :page-size="pageSize"

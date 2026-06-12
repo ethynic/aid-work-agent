@@ -72,7 +72,7 @@
         </div>
 
         <!-- 分页控件 -->
-        <div v-if="total > 0" class="flex items-center justify-center">
+        <div class="flex items-center justify-center">
           <BasePagination
             :total="total"
             v-model:currentPage="currentPage"

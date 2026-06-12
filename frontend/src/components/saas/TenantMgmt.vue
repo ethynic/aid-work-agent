@@ -87,7 +87,6 @@
 
       <!-- 分页器 -->
       <BasePagination
-        v-if="total > 0"
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
         :total="total"

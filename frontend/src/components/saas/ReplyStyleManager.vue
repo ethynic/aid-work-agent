@@ -58,7 +58,7 @@
       </div>
 
       <!-- 分页 -->
-      <div v-if="total > 0" class="mt-4 flex justify-center">
+      <div class="mt-4 flex justify-center">
         <BasePagination
           :total="total"
           v-model:current-page="currentPage"

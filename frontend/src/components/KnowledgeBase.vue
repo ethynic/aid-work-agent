@@ -206,7 +206,6 @@
                   </div>
 
                   <BasePagination
-                    v-if="totalDocuments > pageSize"
                     :total="totalDocuments"
                     :current-page="currentPage"
                     :page-size="pageSize"

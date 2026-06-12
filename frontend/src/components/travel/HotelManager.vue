@@ -62,7 +62,7 @@
 
     <!-- 分页 -->
     <BasePagination
-      v-if="!searched && totalPages > 1"
+      v-if="!searched"
       :total="total"
       v-model:current-page="currentPage"
       v-model:page-size="pageSize"

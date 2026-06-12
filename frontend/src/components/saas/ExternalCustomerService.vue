@@ -142,7 +142,7 @@
         </div>
 
         <!-- 消息分页 -->
-        <div v-if="selectedUserId && messageTotal > 0" class="p-3 border-t border-default bg-surface">
+        <div v-if="selectedUserId" class="p-3 border-t border-default bg-surface">
           <BasePagination
             :total="messageTotal"
             v-model:current-page="messagePage"

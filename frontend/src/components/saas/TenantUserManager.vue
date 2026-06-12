@@ -76,7 +76,6 @@
           </div>
 
           <BasePagination
-            v-if="total > 0"
             :total="total"
             v-model:currentPage="currentPage"
             v-model:pageSize="pageSize"
