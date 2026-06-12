@@ -66,7 +66,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Gunicorn worker 数量（5用户场景，3个足够，减少内存和磁盘IO）
     WORKERS=3 \
     # Gunicorn worker 超时（秒）
-    WORKER_TIMEOUT=120
+    WORKER_TIMEOUT=120 \
+    # 临时目录（/tmp 权限可能被外部工具重置为 755，使用应用自有目录）
+    TMPDIR=/home/appuser/tmp
 
 # 安装运行时依赖（字体、浏览器等）
 # 使用清华镜像加速 Debian 包下载
@@ -140,6 +142,10 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
     playwright install chromium --with-deps || \
     playwright install chromium --with-deps
+
+# 创建应用临时目录（替代 /tmp，避免外部工具重置权限导致 appuser 无法写入）
+# 注意：此目录不在 volume 挂载范围内，确保每次容器启动时干净
+RUN mkdir -p /home/appuser/tmp && chown appuser:appgroup /home/appuser/tmp
 
 # 修复 /tmp 权限（python:3.11-slim 镜像的 /tmp 是 755，appuser 无法写入）
 # Playwright 启动 Chromium 时需要在 /tmp 下创建 playwright-artifacts-* 临时目录

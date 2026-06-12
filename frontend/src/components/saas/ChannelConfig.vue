@@ -176,7 +176,7 @@
               <div class="col-span-2">
                 <label class="block text-xs text-muted mb-1">转人工关键词</label>
                 <BaseInput v-model="kf.human_transfer_keywords" placeholder="人工服务, 转人工, 人工客服" />
-                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，不设置则使用默认值</p>
+                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，留空则关闭转人工功能，不填则使用默认值</p>
               </div>
             </div>
           </div>
@@ -647,8 +647,8 @@ async function handleSubmit() {
         if (kf.servicer_userid_list) {
           obj.servicer_userid_list = kf.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
         }
-        if (kf.human_transfer_keywords) {
-          obj.human_transfer_keywords = kf.human_transfer_keywords.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+        if ('human_transfer_keywords' in kf) {
+          obj.human_transfer_keywords = (kf.human_transfer_keywords || '').split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
         }
         return obj
       })

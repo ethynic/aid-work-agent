@@ -173,17 +173,31 @@ class WeComKfAdapter(ChannelAdapter):
         return None
 
     def should_transfer_to_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
-        """判断消息是否匹配人工转接关键词"""
+        """判断消息是否匹配人工转接关键词。
+        human_transfer_keywords 未设置时使用默认值；设为空数组 [] 时禁用转人工。
+        """
         if not text:
             return False
-        keywords = kf_config.get("human_transfer_keywords") or _DEFAULT_HUMAN_KEYWORDS
+        if "human_transfer_keywords" in kf_config:
+            keywords = kf_config["human_transfer_keywords"]
+            if not keywords:
+                return False
+        else:
+            keywords = _DEFAULT_HUMAN_KEYWORDS
         return any(kw in text for kw in keywords)
 
     def should_exit_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
-        """判断消息是否匹配退出人工关键词"""
+        """判断消息是否匹配退出人工关键词。
+        exit_human_keywords 未设置时使用默认值；设为空数组 [] 时禁用退出人工。
+        """
         if not text:
             return False
-        keywords = kf_config.get("exit_human_keywords") or _DEFAULT_EXIT_HUMAN_KEYWORDS
+        if "exit_human_keywords" in kf_config:
+            keywords = kf_config["exit_human_keywords"]
+            if not keywords:
+                return False
+        else:
+            keywords = _DEFAULT_EXIT_HUMAN_KEYWORDS
         return any(kw in text for kw in keywords)
 
     # ==================== 消息解析 ====================
