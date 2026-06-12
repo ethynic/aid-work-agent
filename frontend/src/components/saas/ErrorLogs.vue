@@ -28,7 +28,9 @@
         </template>
         <template #error_type="{ row }">{{ row.error_type || '-' }}</template>
         <template #message="{ row }">
-          <span class="block max-w-[300px] truncate text-muted">{{ row.message }}</span>
+          <span class="block max-w-[560px] text-muted leading-snug" :title="row.message" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">
+            {{ row.message }}
+          </span>
         </template>
         <template #status="{ row }">
           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium" :class="getStatusClass(row.status)">
@@ -154,11 +156,11 @@ const toast = useToast()
 // ------- Columns -------
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
-  { key: 'timestamp', label: '时间', width: '180px' },
-  { key: 'module', label: '模块', width: '100px' },
+  { key: 'timestamp', label: '时间', width: '170px' },
+  { key: 'module', label: '模块', width: '80px' },
   { key: 'error_type', label: '类型', width: '80px' },
-  { key: 'message', label: '消息' },
-  { key: 'status', label: '状态', width: '100px' },
+  { key: 'message', label: '消息', minWidth: '480px' },
+  { key: 'status', label: '状态', width: '90px' },
   { key: 'actions', label: '操作', width: '160px', thAlign: 'center' as const },
 ]
 

@@ -53,6 +53,18 @@ class TransferToHumanTool(BaseTool):
         if not adapter or not open_kfid or not external_userid:
             return {"success": False, "error": "缺少必要的会话上下文"}
 
+        # 校验转人工关键词配置：未配置或为空时禁止通过 LLM 工具路径转人工
+        keywords = kf_config.get("human_transfer_keywords")
+        if not keywords:
+            logger.info(
+                f"转人工被拒绝（关键词未配置）: open_kfid={open_kfid}, "
+                f"user={external_userid}, reason={reason}"
+            )
+            return {
+                "success": False,
+                "error": "当前未配置转人工关键词，无法转接人工客服",
+            }
+
         servicer_list = kf_config.get("servicer_userid_list", [])
         if not servicer_list:
             return {"success": False, "error": "未配置人工客服人员"}

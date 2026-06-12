@@ -9,6 +9,7 @@
             :class="slots.th()"
             :style="[
               col.width ? { width: col.width } : undefined,
+              col.minWidth ? { minWidth: col.minWidth } : undefined,
               col.thAlign ? { textAlign: col.thAlign } : undefined
             ]"
           >
@@ -53,6 +54,7 @@ export interface TableColumn {
   key: string
   label: string
   width?: string
+  minWidth?: string
   thAlign?: 'left' | 'center' | 'right'
   /** 自定义悬停提示内容，不填则取 row[col.key] */
   tooltip?: string | ((row: Record<string, any>) => string | undefined)

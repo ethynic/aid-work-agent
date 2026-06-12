@@ -176,7 +176,7 @@
               <div class="col-span-2">
                 <label class="block text-xs text-muted mb-1">转人工关键词</label>
                 <BaseInput v-model="kf.human_transfer_keywords" placeholder="人工服务, 转人工, 人工客服" />
-                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，留空则关闭转人工功能，不填则使用默认值</p>
+                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，留空则关闭转人工功能</p>
               </div>
             </div>
           </div>
