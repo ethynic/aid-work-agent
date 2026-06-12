@@ -1848,22 +1848,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
-                # 兜底检测：LLM 输出转人工文本但未实际调用 transfer_to_human 工具
-                # DeepSeek 推理模型可能出现 reasoning 中明确要调用工具但实际未输出 tool_call 的情况
-                reasoning = response.get("reasoning_content", "")
-                if self._is_transfer_to_human_intent(content, reasoning):
-                    logger.warning(
-                        f"检测到转人工意图但LLM未调用transfer_to_human工具，执行兜底转人工: "
-                        f"session={session_id}, content_preview={content[:50]}"
-                    )
-                    try:
-                        transfer_result = await self.tool_executor.execute(
-                            "transfer_to_human", {"reason": "用户要求人工服务（LLM兜底检测）"}
-                        )
-                        logger.info(f"兜底转人工结果: {transfer_result}")
-                    except Exception as e:
-                        logger.error(f"兜底转人工执行失败: {e}", exc_info=True)
-
                 # 兜底：自动完成所有活跃的 Skill Session
                 if self.has_active_skill_session:
                     for active_skill_name, session in list(self._active_skill_sessions.items()):
@@ -2417,26 +2401,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         finally:
             self._explicit_record_service = None
     
-    def _is_transfer_to_human_intent(self, content: str, reasoning: str = "") -> bool:
-        """检测 LLM 输出是否表达了转人工意图但未实际调用 transfer_to_human 工具。
-
-        DeepSeek 等推理模型可能出现在 reasoning_content 中明确要调用工具，
-        但最终输出只有文本没有 tool_call 的情况，需要兜底检测。
-        """
-        TRANSFER_PATTERNS = [
-            "正在为您转接人工客服",
-            "正在转接人工",
-            "转人工客服",
-            "转接人工",
-            "已帮您转人工",
-        ]
-
-        combined = (content or "") + (reasoning or "")
-        for pattern in TRANSFER_PATTERNS:
-            if pattern in combined:
-                return True
-        return False
-
     def _update_task_record(self, record) -> None:
         """
         子智能体内部方法：更新任务记录到内部存储。
