@@ -6,8 +6,11 @@ LLM 通过 function calling 完成三阶段工作：检索数据表 → 加载�
 
 import asyncio
 import json
+import os
+import re
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -291,6 +294,28 @@ class AnalysisAgent:
         preview_rows = rows[:10]
         preview = [columns] + [[DataAnalyzer._to_native(v) for v in row] for row in preview_rows] if columns else []
 
+        # 导出表格为 Excel 文件供下载
+        download_path = ""
+        try:
+            source_name = params.get("source", output_var)
+            source_df = self.analyzer._resolve_source(source_name)
+            if source_df is not None:
+                os.makedirs(DataAnalyzer.CHART_OUTPUT_DIR, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_title = re.sub(r'[\\/:*?"<>|]', "_", params.get("title") or output_var)
+                download_path = os.path.join(
+                    DataAnalyzer.CHART_OUTPUT_DIR, f"{safe_title}_{timestamp}.xlsx"
+                )
+                # 如果 to_table 做了列筛选，导出时也只导出对应列
+                if columns:
+                    export_df = source_df[columns].head(params.get("max_rows", 50))
+                else:
+                    export_df = source_df.head(params.get("max_rows", 50))
+                export_df.to_excel(download_path, index=False, engine="openpyxl")
+                logger.info(f"[AnalysisAgent] 表格导出: {download_path}")
+        except Exception as e:
+            logger.warning(f"[AnalysisAgent] 表格导出失败，不影响预览: {e}")
+
         artifact = {
             "id": output_var,
             "type": "table",
@@ -299,7 +324,9 @@ class AnalysisAgent:
             "preview": preview,
             "row_count": row_count,
             "total_count": total_count,
-            "ready_for_download": False,  # to_table 默认不落盘为可下载文件，除非主智能体显式导出
+            "download_path": download_path,
+            "format": "xlsx",
+            "ready_for_download": bool(download_path),
         }
         self._artifacts.append(artifact)
 
