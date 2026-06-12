@@ -77,8 +77,13 @@
                 {{ lastLlmSpan.metadata.usage.prompt_tokens || 0 }}+{{ lastLlmSpan.metadata.usage.completion_tokens || 0 }} tokens
               </span>
               <span>{{ formatDuration(lastLlmSpan.duration_ms) }}</span>
-              <button v-if="lastLlmInput" @click="copyLlmJson" class="px-2 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors" :title="copySuccess ? '已复制' : '复制 JSON'">
-                {{ copySuccess ? '已复制' : '复制' }}
+              <button v-if="lastLlmInput" @click="copyLlmJson" class="px-2 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors" :title="copyLlmSuccess ? '已复制' : '复制 JSON'">
+                {{ copyLlmSuccess ? '已复制' : '复制' }}
+              </button>
+              <button v-if="lastLlmInput" @click="llmFullscreenOpen = true" class="px-2 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors" title="全屏查看">
+                <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                </svg>
               </button>
             </div>
           </div>
@@ -88,6 +93,13 @@
           </div>
         </div>
 
+        <!-- 最后一次 LLM 调用上下文 - 全屏 -->
+        <FullscreenJsonViewer
+          v-model="llmFullscreenOpen"
+          title="最后一次 LLM 调用上下文"
+          :data="lastLlmInput"
+        />
+
         <!-- 错误信息 -->
         <div v-if="trace.error_message" class="bg-danger-50 rounded-xl border border-danger-200 p-4">
           <h3 class="text-sm font-medium text-danger-700 mb-1">错误信息</h3>
@@ -96,7 +108,15 @@
 
         <!-- Span 时间线 -->
         <div class="bg-white rounded-xl shadow-sm border border-default p-4">
-          <h3 class="text-sm font-medium text-default mb-3">Span 时间线 ({{ spans.length }})</h3>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-default">Span 时间线 ({{ spans.length }})</h3>
+            <button @click="spanFullscreenOpen = true" class="px-2 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors text-xs flex items-center gap-1" title="全屏查看">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              </svg>
+              <span>全屏</span>
+            </button>
+          </div>
           <div v-if="spans.length === 0" class="text-center py-6 text-muted text-sm">暂无 Span 数据</div>
           <div v-else class="space-y-2">
             <div v-for="span in spans" :key="span.span_id" class="border border-default rounded-lg">
@@ -118,7 +138,12 @@
               <div v-if="expandedSpans.has(span.span_id)" class="px-3 pb-3 border-t border-default">
                 <div class="grid grid-cols-2 gap-3 mt-2">
                   <div>
-                    <h4 class="text-xs text-muted font-medium mb-1">输入</h4>
+                    <div class="flex items-center justify-between mb-1">
+                      <h4 class="text-xs text-muted font-medium">输入</h4>
+                      <button v-if="span.input" @click.stop="copySpanJson(span, 'input')" class="text-[11px] px-1.5 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors" :title="spanCopyMap[span.span_id + '_input'] ? '已复制' : '复制'">
+                        {{ spanCopyMap[span.span_id + '_input'] ? '已复制' : '复制' }}
+                      </button>
+                    </div>
                     <div class="bg-canvas rounded p-2 max-h-60 overflow-auto">
                       <template v-if="span.input">
                         <JsonViewer :data="parseJson(span.input)" :max-preview="80" :default-expand="0" />
@@ -127,7 +152,12 @@
                     </div>
                   </div>
                   <div>
-                    <h4 class="text-xs text-muted font-medium mb-1">输出</h4>
+                    <div class="flex items-center justify-between mb-1">
+                      <h4 class="text-xs text-muted font-medium">输出</h4>
+                      <button v-if="span.output" @click.stop="copySpanJson(span, 'output')" class="text-[11px] px-1.5 py-0.5 rounded text-primary-600 hover:bg-primary-50 transition-colors" :title="spanCopyMap[span.span_id + '_output'] ? '已复制' : '复制'">
+                        {{ spanCopyMap[span.span_id + '_output'] ? '已复制' : '复制' }}
+                      </button>
+                    </div>
                     <div class="bg-canvas rounded p-2 max-h-60 overflow-auto">
                       <template v-if="span.output">
                         <JsonViewer :data="parseJson(span.output)" :max-preview="80" :default-expand="0" />
@@ -140,6 +170,13 @@
             </div>
           </div>
         </div>
+
+        <!-- Span 时间线 - 全屏 -->
+        <FullscreenJsonViewer
+          v-model="spanFullscreenOpen"
+          title="Span 时间线"
+          :data="spansFullscreenData"
+        />
       </template>
       <div v-else class="text-center py-12 text-muted">未找到追踪数据</div>
     </div>
@@ -151,6 +188,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getTraceDetail, type TraceDetail as TraceDetailType, type SpanDetail } from '@/api/monitor'
 import JsonViewer from '@/components/ui/JsonViewer.vue'
+import FullscreenJsonViewer from '@/components/ui/FullscreenJsonViewer.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -160,7 +198,38 @@ const trace = ref<TraceDetailType | null>(null)
 const spans = ref<SpanDetail[]>([])
 const loading = ref(false)
 const expandedSpans = ref<Set<string>>(new Set())
-const copySuccess = ref(false)
+const copyLlmSuccess = ref(false)
+const llmFullscreenOpen = ref(false)
+const spanFullscreenOpen = ref(false)
+const spanCopyMap = ref<Record<string, boolean>>({})
+
+/**
+ * Span 全屏展示数据：保留每个 span 的关键字段，过滤 input/output 长字符串
+ * 方便用户在一屏内快速浏览完整时间线
+ */
+const spansFullscreenData = computed(() => {
+  return spans.value.map((s, idx) => ({
+    index: idx + 1,
+    span_id: s.span_id,
+    name: s.name,
+    span_type: s.span_type,
+    status: s.status,
+    model: s.model,
+    duration_ms: s.duration_ms,
+    prompt_tokens: s.prompt_tokens,
+    completion_tokens: s.completion_tokens,
+    input: s.input ? safeParse(s.input) : null,
+    output: s.output ? safeParse(s.output) : null,
+  }))
+})
+
+function safeParse(text: string): any {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
 
 const lastLlmSpan = computed(() => {
   // 找到最后一个 span_type=generation 的 span
@@ -177,13 +246,58 @@ function goBack() {
   router.back()
 }
 
-function copyLlmJson() {
+async function copyLlmJson() {
   if (!lastLlmInput.value) return
   const jsonStr = JSON.stringify(lastLlmInput.value, null, 2)
-  navigator.clipboard.writeText(jsonStr).then(() => {
-    copySuccess.value = true
-    setTimeout(() => { copySuccess.value = false }, 2000)
-  })
+  const ok = await copyText(jsonStr)
+  if (ok) {
+    copyLlmSuccess.value = true
+    setTimeout(() => { copyLlmSuccess.value = false }, 2000)
+  }
+}
+
+async function copySpanJson(span: SpanDetail, field: 'input' | 'output') {
+  const raw = span[field]
+  if (!raw) return
+  let text = raw
+  try {
+    const parsed = JSON.parse(raw)
+    text = JSON.stringify(parsed, null, 2)
+  } catch {
+    // 非 JSON 字符串直接复制原文
+  }
+  const ok = await copyText(text)
+  if (ok) {
+    const key = span.span_id + '_' + field
+    spanCopyMap.value = { ...spanCopyMap.value, [key]: true }
+    setTimeout(() => {
+      spanCopyMap.value = { ...spanCopyMap.value, [key]: false }
+    }, 2000)
+  }
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    // 降级方案
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+      return true
+    } catch (e) {
+      console.error('复制失败:', e)
+      return false
+    } finally {
+      document.body.removeChild(ta)
+    }
+  }
 }
 
 function toggleSpan(spanId: string) {
