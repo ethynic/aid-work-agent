@@ -125,15 +125,24 @@ class ContentGenerateTool(BaseTool):
             response = await self.llm.chat(
                 messages=messages,
                 temperature=0.7,
-                max_tokens=4096
+                max_tokens=65536
             )
 
-            # 提取生成的content
+            # 提取生成的content（DeepSeek 思考模型可能返回 content: null）
             generated_content = ""
             if isinstance(response, dict):
-                generated_content = response.get("content", "")
+                generated_content = response.get("content") or ""
             elif isinstance(response, str):
                 generated_content = response
+
+            if not generated_content:
+                logger.warning("内容生成返回空内容，可能是思考模型 token 不足")
+                return {
+                    "success": False,
+                    "error": "生成内容为空，可能是 max_tokens 不足以覆盖思考+输出",
+                    "language": language,
+                    "content_type": content_type,
+                }
 
             logger.info(f"内容生成成功: 长度={len(generated_content)}")
 

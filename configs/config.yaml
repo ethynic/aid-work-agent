@@ -138,6 +138,7 @@ skills:
       - contract-approval
       - travel-quote
       - route-distance
+      - guizang-ppt-skill
   # 子智能体默认配置（可在 SUBAGENT.md 中覆盖）
   subagent:
     default_allowed:

@@ -85,11 +85,26 @@ class UseSkillTool(BaseTool):
         guidance_suffix = f"""
 
 ---
-**⚠️ 以上是技能「{skill_name}」的完整操作指南。请严格按照指南中的步骤执行：**
-- 如果指南中有命令/脚本要执行 → 调用 `skill_execute`
-- 如果指南中要求生成内容 → 调用 `content_generate`
-- 如果指南中要求搜索信息 → 调用 `web_search`
+**⚠️ 以上是技能「{skill_name}」的完整操作指南。请严格按照指南中的步骤执行。**
+
+**通用文件工具**：`read` / `write` / `edit` / `cp` 是系统提供的通用文件工具，**不限于 skill 场景**——任何需要读、写、改、复制文件的任务都用它们。下面是技能指南中常见指令到工具的映射，方便你快速选择：
+
+| 指南中的指令 | 调用工具 |
+|---|---|
+| `cp 源文件 目标`、"复制模板"、"基于模板创建副本" | `cp`（source_file_path 支持 `<SKILL_ROOT>` 占位符） |
+| `Read 文件`、"读模板"、"看 references"、"查看文件内容" | `read` |
+| `Edit 文件`、"修改 title"、"`:root` 主题色"、"替换占位符"、"填充内容到 `<section>`" | `edit` |
+| 要求生成纯文本新文件（报告、邮件、Markdown 等非基于模板的全新内容） | `write` |
+| `mkdir` / `touch` / `ls` / `rm` 等其他 shell 命令 | 无对应专用工具，用 `skill_execute` 执行或跳过 |
+
+**其他工具**：
+- 指南中有脚本/可执行命令要运行（如 `node xxx.mjs`、`python xxx.py`） → 调用 `skill_execute`
+- 指南中要求调用大模型生成片段内容（如单页文案、广告语） → 调用 `content_generate`
+- 指南中要求联网搜索 → 调用 `web_search`
+
+**执行规则**：
 - 如果指南中有多个步骤 → 逐步执行，不要跳过
+- 大文件（HTML PPT 100KB+）**不要**把完整内容塞进 `write` 的 content 参数；改用 `cp` 复制模板 + `edit` 替换占位区域的策略
 - 所有步骤完成后，调用 `skill_complete(skill="{skill_name}", summary="结果摘要")` 标记完成
 - 不要直接回复用户"正在执行"，而是立即开始执行第一步"""
 
