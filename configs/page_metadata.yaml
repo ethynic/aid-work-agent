@@ -9,6 +9,8 @@ domains:
     label: 投诉处理
   - id: after-sales
     label: 售后服务
+  - id: data-analysis
+    label: 数据分析
 
 pages:
   - page_id: trade-specialist-customers
@@ -121,4 +123,12 @@ pages:
     route: /after-sales/returns
     icon: "🔄"
     domain: after-sales
+    status: published
+
+  - page_id: data-analysis-sources
+    title: 数据源管理
+    description: 管理数据分析智能体的数据源，包括数据库连接器、Excel/CSV 上传、数据表 schema 维护与关联关系配置
+    route: /data-sources
+    icon: "🗄️"
+    domain: data-analysis
     status: published

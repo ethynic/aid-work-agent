@@ -1505,6 +1505,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
         response_parts = []
         progress_events = []
+        tool_messages_collected = []  # 收集本轮 tool 消息序列，供事务持久化
         error_occurred = None
 
         try:
@@ -1544,6 +1545,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     elif event_type in ("tool_start", "progress", "thinking", "clarification"):
                         record_service.handle_progress_event(event)
                         progress_events.append(event)
+                    elif event_type == "tool_messages":
+                        # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
+                        tool_messages_collected.extend(event.get("messages", []))
 
                     # 旁路收集追踪数据（同步调用，< 1ms）
                     if trace_collector:
@@ -1611,18 +1615,13 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 except Exception as e:
                     logger.warning(f"[Concurrency] Failed to refresh lock: {e}")
 
-            # 保存消息到 DB
+            # 保存消息到 DB（事务：user + tool 消息序列 + assistant 最终回复，要么全成功要么全失败）
             if full_response and not error_occurred:
                 try:
                     user_metadata = {"progressMessages": []}
                     if request.files:
                         user_metadata["attachments"] = request.files
-                    MessageDB.create(
-                        session_id=session_id,
-                        role="user",
-                        content=full_message,
-                        metadata=user_metadata
-                    )
+
                     # 提取可下载文件
                     downloadable_files = []
                     download_tool_names = {"register_download_file", "write", "cp"}
@@ -1643,13 +1642,44 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     assistant_metadata = {"progressMessages": progress_events}
                     if downloadable_files:
                         assistant_metadata["downloadableFiles"] = downloadable_files
-                    MessageDB.create(
-                        session_id=session_id,
-                        role="assistant",
-                        content=full_response,
-                        metadata=assistant_metadata
+
+                    # 构造事务消息列表：user + 本轮 tool 消息序列 + assistant 最终回复
+                    batch_messages = [
+                        {"role": "user", "content": full_message, "metadata": user_metadata},
+                    ]
+                    for tm in tool_messages_collected:
+                        if tm.get("role") == "assistant" and tm.get("tool_calls"):
+                            # assistant(tool_calls): content 清空（丢弃中间思考），reasoning_content 放 metadata
+                            tm_metadata = {"tool_calls": tm["tool_calls"]}
+                            if tm.get("reasoning_content"):
+                                tm_metadata["reasoning_content"] = tm["reasoning_content"]
+                            batch_messages.append({
+                                "role": "assistant",
+                                "content": "",
+                                "metadata": tm_metadata,
+                            })
+                        elif tm.get("role") == "tool":
+                            # tool result content 可能是 dict（工具返回的 JSON），持久化前转字符串
+                            tc = tm.get("content", "")
+                            if isinstance(tc, (dict, list)):
+                                tc = json.dumps(tc, ensure_ascii=False, default=str)
+                            batch_messages.append({
+                                "role": "tool",
+                                "content": tc,
+                                "metadata": {"tool_call_id": tm.get("tool_call_id", "")},
+                            })
+                    batch_messages.append({
+                        "role": "assistant",
+                        "content": full_response,
+                        "metadata": assistant_metadata,
+                    })
+
+                    created = MessageDB.create_batch_transactional(session_id, batch_messages)
+                    if created is None:
+                        raise RuntimeError("create_batch_transactional returned None (transaction rolled back)")
+                    logger.info(
+                        f"[SSE] Messages saved to DB (transactional, {len(created)} rows), session_id={session_id}"
                     )
-                    logger.info(f"[SSE] Messages saved to DB, session_id={session_id}")
                 except Exception as e:
                     logger.error(f"[SSE] Failed to save messages: {e}", exc_info=True)
 

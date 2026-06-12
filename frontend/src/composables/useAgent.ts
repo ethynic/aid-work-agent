@@ -85,14 +85,21 @@ export function useAgent() {
         sessionMessagesCache.delete(newSessionId)
       } else {
         const result = await getSessionMessages(newSessionId)
-        messages.value = result.messages?.map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          timestamp: new Date(m.created_at).getTime(),
-          progressMessages: m.metadata?.progressMessages || [],
-          attachments: m.metadata?.attachments || undefined,
-          downloadableFiles: m.metadata?.downloadableFiles || undefined
-        })) || []
+        messages.value = result.messages
+          ?.filter(m => {
+            // 过滤过程消息：tool 角色、带 tool_calls 的 assistant 不在聊天框显示
+            if (m.role === 'tool') return false
+            if (m.role === 'assistant' && m.metadata?.tool_calls) return false
+            return true
+          })
+          .map(m => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: new Date(m.created_at).getTime(),
+            progressMessages: m.metadata?.progressMessages || [],
+            attachments: m.metadata?.attachments || undefined,
+            downloadableFiles: m.metadata?.downloadableFiles || undefined
+          })) || []
         // 如果数据库也没有消息，确保缓存中也没有，避免下次误读
         if (!result.messages || result.messages.length === 0) {
           sessionMessagesCache.delete(newSessionId)

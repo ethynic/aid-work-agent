@@ -56,9 +56,12 @@ class SmartDataAnalysisTool(BaseTool):
         except Exception:
             pass
 
-        # 3. 预加载表（如果传了 tables_metadata，向后兼容）
+        # 3. 预加载表（仅加载带 table_id/doc_id 的完整 metadata；简化结构交给 AnalysisAgent 自行检索加载）
         if tables_metadata:
             for meta in tables_metadata:
+                table_id = meta.get("table_id") or meta.get("doc_id")
+                if not table_id:
+                    continue
                 try:
                     await analyzer.load_table(meta)
                 except Exception as e:
@@ -72,7 +75,7 @@ class SmartDataAnalysisTool(BaseTool):
 
             analysis_id = f"analysis_{uuid.uuid4().hex[:8]}"
             agent = AnalysisAgent(
-                llm_gateway=master_agent.llm_gateway,
+                llm_gateway=master_agent.llm,
                 analyzer=analyzer,
                 analysis_id=analysis_id,
                 tables_metadata=tables_metadata,

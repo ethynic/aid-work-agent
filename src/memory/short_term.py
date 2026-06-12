@@ -80,22 +80,73 @@ class ShortTermMemory:
     ) -> List[Dict[str, Any]]:
         """
         获取会话上下文
-        
+
+        cache miss（新 worker 进程）时从 chat_messages 表恢复，含 tool 消息（assistant with tool_calls + role:tool 配对）。
+        恢复后填进 deque，后续同 worker 命中走快路径。
+
         Args:
             session_id: 会话ID
-        
+
         Returns:
             消息列表
         """
         if session_id not in self._cache:
-            return []
-        
+            db_messages = self._load_from_db(session_id)
+            if db_messages:
+                self._cache[session_id] = deque(maxlen=self.max_messages)
+                for msg in db_messages:
+                    self._cache[session_id].append(msg)
+                self._timestamps[session_id] = datetime.now()
+            else:
+                return []
+
         # 检查是否过期
         if self._is_expired(session_id):
             self.clear(session_id)
             return []
-        
+
         return list(self._cache[session_id])
+
+    @staticmethod
+    def _load_from_db(session_id: str) -> List[Dict[str, Any]]:
+        """从 chat_messages 表恢复会话消息（含 tool 消息），转换为 LLM messages 格式。
+
+        DB 存储约定：
+        - role=user/assistant/tool
+        - assistant 有两种子情况：最终回复（无 tool_calls）/ 决定调工具（metadata.tool_calls 存在）
+        - assistant(tool_calls) 的 content 存空字符串，reasoning_content 在 metadata
+        """
+        import json
+        from src.db.models import MessageDB
+
+        try:
+            rows = MessageDB.list_by_session(session_id)
+        except Exception:
+            return []
+
+        messages: List[Dict[str, Any]] = []
+        for row in rows:
+            role = row.get("role")
+            content = row.get("content") or ""
+            meta_raw = row.get("metadata")
+            meta = json.loads(meta_raw) if isinstance(meta_raw, str) and meta_raw else (meta_raw or {})
+
+            if role == "user":
+                messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                msg: Dict[str, Any] = {"role": "assistant", "content": content}
+                if meta.get("tool_calls"):
+                    msg["tool_calls"] = meta["tool_calls"]
+                if meta.get("reasoning_content"):
+                    msg["reasoning_content"] = meta["reasoning_content"]
+                messages.append(msg)
+            elif role == "tool":
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": meta.get("tool_call_id", ""),
+                    "content": content,
+                })
+        return messages
     
     def get_recent_messages(
         self,

@@ -1507,22 +1507,52 @@ class Agent:
         # 每次处理前都从 DB 重建 memory，解决 Gunicorn 多 Worker 内存隔离导致的缓存不同步
         try:
             from src.db.models import MessageDB
+            import json as _json
             db_messages = MessageDB.list_by_session(
                 session_id,
                 limit=self.memory.short_term.max_messages,
-                roles=["user", "assistant"],
             )
             # 清除可能过时的内存数据，用 DB 最新历史重建
             self.memory.clear(session_id)
             if db_messages:
-                history_messages = [
-                    {
-                        "role": msg["role"],
-                        "content": msg["content"] or "",
-                        "timestamp": msg.get("created_at", ""),
-                    }
-                    for msg in db_messages
-                ]
+                # 重建时保留工具上下文：tool 角色、assistant 的 tool_calls/tool_call_id
+                history_messages = []
+                for msg in db_messages:
+                    role = msg["role"]
+                    content = msg["content"] or ""
+                    meta = msg.get("metadata") or {}
+                    if isinstance(meta, str):
+                        try:
+                            meta = _json.loads(meta)
+                        except Exception:
+                            meta = {}
+
+                    if role == "tool":
+                        history_messages.append({
+                            "role": "tool",
+                            "tool_call_id": meta.get("tool_call_id", ""),
+                            "content": content,
+                            "timestamp": msg.get("created_at", ""),
+                        })
+                    elif role == "assistant":
+                        entry = {
+                            "role": "assistant",
+                            "content": content,
+                            "timestamp": msg.get("created_at", ""),
+                        }
+                        # 带 tool_calls 的 assistant（决定调工具），从 metadata 恢复
+                        if meta.get("tool_calls"):
+                            entry["tool_calls"] = meta["tool_calls"]
+                        if meta.get("reasoning_content"):
+                            entry["reasoning_content"] = meta["reasoning_content"]
+                        history_messages.append(entry)
+                    else:  # user / system
+                        history_messages.append({
+                            "role": role,
+                            "content": content,
+                            "timestamp": msg.get("created_at", ""),
+                        })
+
                 self.memory.load_history(session_id, history_messages)
                 loaded_roles = []
                 for m in history_messages:
@@ -1531,7 +1561,12 @@ class Agent:
                         content = str(content)[:30]
                     else:
                         content = content[:30]
-                    loaded_roles.append(f"{m['role']}:{content}")
+                    tc_flag = ""
+                    if m.get("tool_calls"):
+                        tc_flag = "[tc]"
+                    elif m.get("tool_call_id"):
+                        tc_flag = "[tool]"
+                    loaded_roles.append(f"{m['role']}{tc_flag}:{content}")
                 logger.debug(
                     f"Rebuilt memory from DB for session {session_id}, "
                     f"loaded={len(history_messages)} msgs | {loaded_roles}"
@@ -1710,7 +1745,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     "content": skill_injection
                 })
                 logger.info(f"Auto-injected skill '{auto_loaded_skill}' into conversation with {len(uploaded_files_info)} files")
-        
+
+        # 记录本轮开始时 messages 的长度，用于末尾收集本轮新增的 tool 消息序列
+        initial_len = len(messages)
+
         max_iterations = 20  # Prevent infinite loops
         iteration = 0
 
@@ -2359,6 +2397,28 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         if iteration >= max_iterations:
             logger.warning(f"Reached max iterations ({max_iterations})")
             yield make_event("response", data="I apologize, but the task is taking too long. Please try again or break it into smaller steps.")
+
+        # 收集本轮 tool 消息序列，供 main.py 持久化
+        tool_messages_for_persist = []
+        for m in messages[initial_len:]:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                entry = {
+                    "role": "assistant",
+                    "content": m.get("content", ""),
+                    "tool_calls": m["tool_calls"],
+                }
+                if m.get("reasoning_content"):
+                    entry["reasoning_content"] = m["reasoning_content"]
+                tool_messages_for_persist.append(entry)
+            elif m.get("role") == "tool":
+                tool_messages_for_persist.append({
+                    "role": "tool",
+                    "tool_call_id": m["tool_call_id"],
+                    "content": m["content"],
+                })
+
+        if tool_messages_for_persist:
+            yield make_event("tool_messages", messages=tool_messages_for_persist)
 
         # 清除子智能体临时注入的环境变量
         for var_name in _injected_env_vars:

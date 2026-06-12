@@ -199,11 +199,11 @@ export async function importTables(
 
 // ===== Upload =====
 
-export async function uploadExcel(file: File): Promise<{ sheets: SchemaInfo[] }> {
+export async function uploadExcel(file: File): Promise<{ schemas: SchemaInfo[] }> {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${API_BASE}/schemas/upload`, {
+  const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
     headers: { ...getAuthHeader() },
     body: formData

@@ -90,13 +90,15 @@ async def save_schema_to_knowledge(
             cursor = conn.cursor()
 
             # 去重：检查是否已存在同名同源 schema
+            # 注意：documents.metadata 字段类型为 TEXT（存 JSON 字符串），
+            # 需要显式转换为 jsonb 才能使用 ->> 操作符
             cursor.execute(
                 """
                 SELECT id FROM documents
                 WHERE tenant_id IS NOT DISTINCT FROM %s
                     AND source_type = 'data-analysis-metadata'
-                    AND metadata->>'table_name' = %s
-                    AND metadata->>'source_info' = %s
+                    AND metadata::jsonb->>'table_name' = %s
+                    AND metadata::jsonb->>'source_info' = %s
                 """,
                 (tenant_id, table_name, source_info),
             )

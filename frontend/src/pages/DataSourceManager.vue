@@ -458,8 +458,9 @@ async function handleFileSelect(e: Event) {
 
   try {
     const result = await uploadExcel(file)
-    if (result.sheets && result.sheets.length > 0) {
-      openSchemaReview(result.sheets)
+    const schemas = result.schemas
+    if (schemas && schemas.length > 0) {
+      openSchemaReview(schemas)
     } else {
       alert('未能识别出有效的数据表结构')
     }

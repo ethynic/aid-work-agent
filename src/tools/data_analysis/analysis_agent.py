@@ -53,8 +53,9 @@ class AnalysisAgent:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
-        self._tables_output: List[Dict] = []
-        self._charts_output: List[Dict] = []
+        # artifacts 是工具返回给主智能体的唯一产物索引（chart/table/data_file）
+        self._artifacts: List[Dict] = []
+        # _steps 仅用于 trace 持久化，不放进对外返回值
         self._steps: List[Dict] = []
         self._spans: List[SpanRecord] = []
 
@@ -279,24 +280,30 @@ class AnalysisAgent:
         }
 
     def _handle_to_table(self, output_var: str, result: Dict, params: Dict) -> Dict[str, Any]:
-        """处理 to_table 输出方法：收集表格数据。"""
+        """处理 to_table 输出方法：收集表格 artifact（含 preview 供主智能体直接回答）。"""
         columns = result.get("columns", [])
         rows = result.get("rows", [])
         row_count = result.get("row_count", len(rows))
         total_count = result.get("total_count", row_count)
 
-        preview = rows[:5]
+        # preview 最多 10 行（含表头），让主智能体能直接回答简单数据问题
+        from src.tools.data_analysis.data_analyzer import DataAnalyzer
+        preview_rows = rows[:10]
+        preview = [columns] + [[DataAnalyzer._to_native(v) for v in row] for row in preview_rows] if columns else []
 
-        # 完整数据收集到最终输出（不受限制）
-        table_output = {
-            "output_var": output_var,
-            "columns": columns,
-            "rows": rows,
+        artifact = {
+            "id": output_var,
+            "type": "table",
+            "title": params.get("title") or output_var,
+            "description": f"{row_count} 行数据" + (f"（共 {total_count} 行）" if total_count != row_count else ""),
+            "preview": preview,
             "row_count": row_count,
             "total_count": total_count,
+            "ready_for_download": False,  # to_table 默认不落盘为可下载文件，除非主智能体显式导出
         }
-        self._tables_output.append(table_output)
+        self._artifacts.append(artifact)
 
+        # 步骤记录（仅 trace 用）
         step = {
             "step": len(self._steps) + 1,
             "method": "to_table",
@@ -306,12 +313,12 @@ class AnalysisAgent:
                 "row_count": row_count,
                 "total_count": total_count,
                 "columns": columns,
-                "preview": preview,
+                "preview": preview_rows,
             },
         }
         self._steps.append(step)
 
-        # 返回给 LLM 的只含摘要，避免上下文膨胀
+        # 返回给 AnalysisAgent 内部 LLM 的摘要
         return {
             "success": True,
             "type": "table",
@@ -319,23 +326,28 @@ class AnalysisAgent:
             "row_count": row_count,
             "total_count": total_count,
             "columns": columns,
-            "preview": preview,
+            "preview": preview_rows,
+            "note": "表格已输出，最终结果由 conclusion 统一描述",
         }
 
     def _handle_to_chart(self, output_var: str, result: Dict, params: Dict) -> Dict[str, Any]:
-        """处理 to_chart 输出方法：收集图表数据。"""
+        """处理 to_chart 输出方法：收集图表 artifact。"""
         file_path = result.get("file_path", "")
         chart_type = result.get("chart_type", params.get("chart_type", ""))
         title = result.get("title", params.get("title", ""))
 
-        chart_output = {
-            "output_var": output_var,
-            "file_path": file_path,
-            "chart_type": chart_type,
+        artifact = {
+            "id": output_var,
+            "type": "chart",
             "title": title,
+            "description": f"{chart_type} 图表",
+            "download_path": file_path,
+            "format": "png",
+            "ready_for_download": bool(file_path),
         }
-        self._charts_output.append(chart_output)
+        self._artifacts.append(artifact)
 
+        # 步骤记录（仅 trace 用）
         step = {
             "step": len(self._steps) + 1,
             "method": "to_chart",
@@ -347,13 +359,14 @@ class AnalysisAgent:
         }
         self._steps.append(step)
 
+        # 返回给 AnalysisAgent 内部 LLM 的摘要
         return {
             "success": True,
             "type": "chart",
             "output_var": output_var,
-            "file_path": file_path,
-            "chart_type": chart_type,
             "title": title,
+            "chart_type": chart_type,
+            "note": "图表已生成，最终结果由 conclusion 统一描述",
         }
 
     def _build_user_message(self, requirement: str) -> str:
@@ -449,34 +462,6 @@ class AnalysisAgent:
 
         return "\n".join(parts) if parts else "无可用数据表"
 
-    def _build_intermediate_files(self) -> List[Dict[str, Any]]:
-        """从步骤记录中构建去重的中间文件列表。"""
-        seen = set()
-        files = []
-        for step in self._steps:
-            var = step.get("output_var", "")
-            if var and var not in seen:
-                seen.add(var)
-                entry: Dict[str, Any] = {
-                    "output_var": var,
-                    "method": step.get("method", ""),
-                }
-                if "file_path" in step:
-                    entry["file_path"] = step["file_path"]
-                summary = step.get("result_summary")
-                if summary:
-                    entry["rows"] = summary.get("rows")
-                    entry["columns"] = summary.get("columns")
-                if "chart_type" in step:
-                    entry["chart_type"] = step["chart_type"]
-                if "title" in step:
-                    entry["title"] = step["title"]
-                desc = step.get("description", "")
-                if desc:
-                    entry["description"] = desc
-                files.append(entry)
-        return files
-
     def _build_result(
         self,
         success: bool,
@@ -514,14 +499,15 @@ class AnalysisAgent:
 
         result = {
             "success": success,
-            "summary": summary,
-            "tables": self._tables_output,
-            "charts": self._charts_output,
-            "steps": self._steps,
-            "intermediate_files": self._build_intermediate_files(),
-            "total_usage": dict(self._total_usage),
-            "iterations": iterations,
-            "trace_id": self.analysis_id,
+            "conclusion": summary or error or "",
+            "artifacts": self._artifacts,
+            "analysis_meta": {
+                "iterations": iterations,
+                "duration_ms": duration_ms,
+                "tokens_used": self._total_usage.get("total_tokens", 0),
+                "tables_used": list(self._loaded_table_ids),
+                "trace_id": self.analysis_id,
+            },
         }
         if error:
             result["error"] = error

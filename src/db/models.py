@@ -725,6 +725,62 @@ class MessageDB:
                 return None
 
     @staticmethod
+    def create_batch_transactional(session_id: str, messages: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+        """事务性批量创建消息。所有消息作为一个原子事务写入，要么全部成功要么全部失败。
+
+        Args:
+            session_id: 会话 ID
+            messages: 消息列表，每条是 {"role": str, "content": str, "metadata": dict|None}
+                      role 可以是 "user" / "assistant" / "tool"
+                      assistant 角色有两种子情况（靠 metadata.tool_calls 是否存在区分），本方法不区分，原样存储
+
+        Returns:
+            成功时返回创建的消息列表（含 message_id）；失败时返回 None
+        """
+        if not messages:
+            return []
+
+        placeholder = "%s"
+        created_messages: List[Dict[str, Any]] = []
+
+        # 单个连接保证所有 INSERT 在同一事务中（psycopg2 默认 autocommit=False）
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                for msg in messages:
+                    message_id = generate_message_id()
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    metadata = msg.get("metadata")
+                    cursor.execute(f"""
+                        INSERT INTO chat_messages (message_id, session_id, role, content, metadata)
+                        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    """, (message_id, session_id, role, content,
+                          json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None))
+                    created_messages.append({
+                        "message_id": message_id,
+                        "session_id": session_id,
+                        "role": role,
+                        "content": content,
+                        "metadata": metadata,
+                    })
+
+                conn.commit()
+
+                # 缓存失效只调一次，避免重复 IO
+                SessionDB.touch(session_id)
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+                return created_messages
+            except Exception as e:
+                # 任何异常必须 rollback，不能留下部分写入的消息
+                try:
+                    conn.rollback()
+                except Exception as rollback_err:
+                    logger.error(f"Failed to rollback batch message insert: {rollback_err}")
+                logger.error(f"Failed to create chat messages batch: {e}")
+                return None
+
+    @staticmethod
     def get_by_id(message_id: str) -> Optional[Dict[str, Any]]:
         """根据消息ID获取消息"""
         placeholder = "%s"

@@ -9,7 +9,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -506,7 +505,8 @@ async def upload_excel(
 ):
     """
     上传 Excel/CSV 文件，解析结构并用 LLM 推断 schema，返回供用户确认。
-    不保存到知识库。
+    不保存到知识库。源文件持久化到 storage/uploads/{tenant_id}/data_sources/，
+    供后续数据分析时加载数据使用。
     """
     tenant_id = get_current_tenant_id()
 
@@ -515,16 +515,24 @@ async def upload_excel(
     if ext not in (".xlsx", ".xls", ".csv"):
         return _error_response(f"不支持的文件格式: {ext}，仅支持 .xlsx、.xls、.csv", status_code=400)
 
-    # 保存到临时文件
-    tmp_dir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, f"upload_{uuid.uuid4().hex[:8]}{ext}")
+    # 持久化源文件到 storage/uploads/{tenant_id}/data_sources/
+    from src.config.settings import settings
+    from pathlib import Path as _Path
+    _project_root = _Path(__file__).resolve().parent.parent.parent
+    persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    file_id = uuid.uuid4().hex[:12]
+    persist_path = persist_dir / f"{file_id}{ext}"
 
     try:
-        with open(tmp_path, "wb") as buffer:
+        with open(persist_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        logger.info(f"[upload_excel] tenant={tenant_id} file={file.filename} persisted to {persist_path}")
+
         # 解析文件
-        sheets = await asyncio.to_thread(sheet_parser.parse_file, tmp_path)
+        sheets = await asyncio.to_thread(sheet_parser.parse_file, str(persist_path))
+        logger.info(f"[upload_excel] parsed {len(sheets)} sheets: {[s['sheet_name'] for s in sheets]}")
 
         # LLM 推断每个 sheet 的 schema
         schemas = []
@@ -538,7 +546,14 @@ async def upload_excel(
             )
             schema["source_type"] = "file"
             schema["source_info"] = file.filename
+            # 持久化定位信息：数据分析时通过此 source 加载真实数据
+            schema["source"] = {
+                "type": "excel",
+                "file_path": str(persist_path),
+                "sheet_name": sheet_info["sheet_name"],
+            }
             schemas.append(schema)
+            logger.info(f"[upload_excel] schema extracted: table={schema.get('table_name')}")
 
         return {"success": True, "schemas": schemas}
 
@@ -547,14 +562,6 @@ async def upload_excel(
     except Exception as e:
         logger.error(f"上传文件解析失败: {e}", exc_info=True)
         return _error_response("文件解析失败", debug=str(e))
-    finally:
-        # 清理临时文件
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            os.rmdir(tmp_dir)
-        except OSError:
-            pass
 
 
 # ============== Schema Management ==============

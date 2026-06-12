@@ -54,7 +54,7 @@ export interface ChatSession {
 export interface ChatMessageRecord {
   message_id: string
   session_id: string
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   metadata?: Record<string, any>
   created_at: string
