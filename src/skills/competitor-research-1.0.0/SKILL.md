@@ -443,7 +443,7 @@ body.cover-page {
 
 ## 4. 材料文件 generate_prompt 模板
 
-每份材料文件通过 `file_write(generate_prompt=...)` 内部生成，搜索结果原文传入 prompt，由 LLM 整理为结构化的 Markdown 文件。
+每份材料文件通过 `write(generate_prompt=...)` 内部生成，搜索结果原文传入 prompt，由 LLM 整理为结构化的 Markdown 文件。
 
 ### 4.1 01_基础信息.md
 
@@ -622,7 +622,7 @@ body.cover-page {
 
 ## 5. HTML 报告页 generate_prompt 模板
 
-每页 HTML 报告通过 `file_write(generate_prompt=...)` 内部生成。以下模板包含完整的 CSS 样式和内容指导，确保 LLM 生成的 HTML 风格统一。
+每页 HTML 报告通过 `write(generate_prompt=...)` 内部生成。以下模板包含完整的 CSS 样式和内容指导，确保 LLM 生成的 HTML 风格统一。
 
 ### 5.1 封面页
 
@@ -945,7 +945,7 @@ storage/competitor_research/{session_id}/
 
 | 规范 | 说明 |
 |------|------|
-| 必须使用 `file_write(generate_prompt=...)` | 禁止先调 `content_generate` 再调 `file_write` 的两步模式 |
+| 必须使用 `write(generate_prompt=...)` | 禁止先调 `content_generate` 再调 `write` 的两步模式 |
 | 内联 CSS | 所有样式在 `<style>` 标签中，不依赖外部资源 |
 | 不含 JavaScript | 子页面 HTML 不包含任何 `<script>` 标签 |
 | 完整 HTML 文档 | 以 `<!DOCTYPE html>` 开头，包含 `<html>`、`<head>`、`<body>` |

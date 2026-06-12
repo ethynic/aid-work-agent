@@ -1,5 +1,11 @@
 # 文件工具使用指南
 
+> ⚠️ **本文档已过时**（描述旧 `file_read` 工具，已废弃）。
+> 当前文件工具集为 `read` / `write` / `edit` / `cp` 四件套，详见：
+> - [设计文档 v2](text-file/file_tools_redesign_v2.md)
+> - [开发计划 v2](text-file/file_tools_redesign_v2_dev_plan.md)
+> - 工具 schema description（src/tools/file/read_tool.py 等）
+
 ## 概述
 
 本指南介绍如何使用 AID Work Agent 中的文件读取工具。该工具提供通用的文本文件读取功能，支持自动编码检测，适用于各种文本文件格式。

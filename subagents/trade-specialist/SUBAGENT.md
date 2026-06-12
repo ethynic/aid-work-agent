@@ -207,7 +207,7 @@ system_prompt: |
 ### 🚫 禁止事项
 - ❌ 禁止使用 web-search 搜索
 - ❌ 禁止使用翻译工具翻译邮件内容
-- ❌ 禁止调用 file_read 等文件读取工具
+- ❌ 禁止调用 read 等文件读取工具
 - ❌ 禁止在中间步骤调用 email_send 发送中间状态
 - ❌ 禁止生成占位符内容，必须调用 content_generate 生成实际内容
 - ❌ **禁止跳过调用 trade-customer skill 保存客户信息和记录邮件**

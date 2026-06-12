@@ -1,5 +1,8 @@
 # file_write 工具集成内容生成 — 优化方案
 
+> ⚠️ **本文档已被取代**。`file_write` 工具已重命名为 `write` 并重构，详见 [file_tools_redesign_v2.md](file_tools_redesign_v2.md)。
+> 本文档仅作历史参考。
+
 > 版本: v1.0 | 创建: 2026-05-19 | 状态: 已实现
 
 ## 一、问题

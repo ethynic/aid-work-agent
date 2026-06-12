@@ -120,7 +120,7 @@ class TestSubagentLoading:
         """body（system prompt）包含关键工具指令"""
         _, body = _parse_frontmatter_and_body(SUBAGENT_MD_PATH)
 
-        key_instructions = ["file_write", "html_report_merger", "generate_prompt"]
+        key_instructions = ["write", "html_report_merger", "generate_prompt"]
         for key in key_instructions:
             assert key in body, (
                 f"System prompt body missing key instruction: '{key}'"
@@ -145,7 +145,7 @@ class TestSubagentLoading:
         assert config.tools.get("inherit") is True
         assert "baidu-search" in config.get_allowed_skills()
         assert config.system_prompt  # body should be used as system_prompt
-        assert "file_write" in config.system_prompt
+        assert "write" in config.system_prompt
 
     def test_subagent_context_limits(self):
         """context 中包含 max_input_tokens 和 max_output_tokens"""

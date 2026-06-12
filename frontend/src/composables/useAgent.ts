@@ -215,7 +215,7 @@ export function useAgent() {
           const toolDisplayName = getToolDisplayName(toolName, {})
           if (success) {
             // 提取下载文件信息到助手消息
-            const downloadToolNames = ['register_download_file', 'file_write']
+            const downloadToolNames = ['register_download_file', 'write', 'cp']
             if (downloadToolNames.includes(toolName) && result?.file_id) {
               const lastMsg = messages.value[messages.value.length - 1]
               if (lastMsg && lastMsg.role === 'assistant') {
@@ -244,7 +244,7 @@ export function useAgent() {
               const content = result?.content || ''
               const preview = content.length > 100 ? content.slice(0, 100) + '...' : content
               addProgress(`✅ ${toolDisplayName}完成\n📝 ${preview}`, 'tool_result', toolName, undefined, result)
-            } else if (toolName === 'file_read') {
+            } else if (toolName === 'read') {
               const content = result?.content || ''
               const preview = content.length > 100 ? content.slice(0, 100) + '...' : content
               addProgress(`✅ ${toolDisplayName}完成\n📄 ${preview}`, 'tool_result', toolName, undefined, result)
@@ -325,9 +325,21 @@ export function useAgent() {
         const skillName = (toolArgs as any)?.skill || ''
         return `加载技能「${skillName}」`
       }
-      case 'file_read': {
+      case 'read': {
         const filePath = (toolArgs as any)?.file_path || ''
         return `读取文件「${filePath}」`
+      }
+      case 'write': {
+        const filePath = (toolArgs as any)?.file_path || ''
+        return filePath ? `写入文件「${filePath}」` : '生成文本文件'
+      }
+      case 'edit': {
+        const filePath = (toolArgs as any)?.file_path || ''
+        return `编辑文件「${filePath}」`
+      }
+      case 'cp': {
+        const src = (toolArgs as any)?.source_file_path || ''
+        return src ? `复制文件「${src.split('/').pop() || ''}」` : '复制文件'
       }
       case 'doc_summarize':
         return '总结文档'

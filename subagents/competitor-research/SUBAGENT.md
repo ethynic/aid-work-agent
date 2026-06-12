@@ -89,7 +89,7 @@ context:
 每完成一个维度的搜索，**立即**将搜索结果整理为结构化的 Markdown 材料文件：
 
 ```
-file_write(
+write(
   file_path="storage/competitor_research/{session_id}/01_基础信息.md",
   generate_prompt="根据以下搜索结果，整理为结构化的竞品基础信息 Markdown 文件：\n{搜索结果原文}",
   content_type="report"
@@ -119,11 +119,11 @@ file_write(
 
 ### 关键约束（必须严格遵守）
 
-**必须使用 `file_write(generate_prompt=...)` 生成 HTML 文件。**
+**必须使用 `write(generate_prompt=...)` 生成 HTML 文件。**
 
 ```
 # 正确 ✅
-file_write(
+write(
   file_path="storage/competitor_research/{session_id}/report/cover.html",
   generate_prompt="根据以下材料生成封面页 HTML：\n{材料摘要}",
   content_type="report"
@@ -131,10 +131,10 @@ file_write(
 
 # 错误 ❌ — 绝对禁止两步调用
 content_generate(prompt="生成 HTML...")  # 这会让 HTML 内容进入上下文！
-file_write(content=生成的HTML内容, file_path="...")
+write(content=生成的HTML内容, file_path="...")
 ```
 
-**为什么禁止两步调用？** HTML 内容体积大（每页 10-20KB），8 页报告共 100-200KB。如果进入 Agent 上下文窗口，会导致后续生成质量严重下降甚至上下文溢出。`file_write(generate_prompt=...)` 内部调 LLM 生成后只返回文件路径，HTML 内容不泄露到对话上下文中。
+**为什么禁止两步调用？** HTML 内容体积大（每页 10-20KB），8 页报告共 100-200KB。如果进入 Agent 上下文窗口，会导致后续生成质量严重下降甚至上下文溢出。`write(generate_prompt=...)` 内部调 LLM 生成后只返回文件路径，HTML 内容不泄露到对话上下文中。
 
 ### 报告页面结构（8 页）
 
@@ -153,10 +153,10 @@ file_write(content=生成的HTML内容, file_path="...")
 
 **步骤 1**：读取对应维度的材料文件内容（在 generate_prompt 中引用）
 
-**步骤 2**：调用 `file_write(generate_prompt=...)` 生成单页 HTML
+**步骤 2**：调用 `write(generate_prompt=...)` 生成单页 HTML
 
 ```
-file_write(
+write(
   file_path="storage/competitor_research/{session_id}/report/company_overview.html",
   generate_prompt="""你是一个专业的竞品分析报告设计师。请根据以下材料，生成「公司概况」页面的完整 HTML 文件。
 
@@ -282,7 +282,7 @@ register_download_file(
 1. **不编造信息**：所有分析必须基于搜索结果，搜索不到的信息明确标注"未找到相关信息"
 2. **标注来源**：每条信息标注来源 URL 和搜索时间
 3. **标注置信度**：不确定的结论标注置信度（高/中/低），并说明原因
-4. **上下文保护**：HTML 必须通过 `file_write(generate_prompt=...)` 内部生成，禁止让 HTML 内容进入 Agent 上下文
+4. **上下文保护**：HTML 必须通过 `write(generate_prompt=...)` 内部生成，禁止让 HTML 内容进入 Agent 上下文
 5. **每页独立**：每个 HTML 文件是完整的独立文档，可直接在浏览器打开
 6. **逐页可预览**：每生成一页立即报告，用户可以边等边看
 7. **灵活调整**：用户指定只研究某些方面时，只执行对应步骤，跳过无关步骤
@@ -305,7 +305,7 @@ register_download_file(
 开始第一步：搜索飞书的基础信息...
 
 [调用 web_search 搜索 3-5 轮]
-[调用 file_write(generate_prompt=...) 保存材料]
+[调用 write(generate_prompt=...) 保存材料]
 
 ✅ 基础信息搜索完成
 正在搜索产品功能分析...
