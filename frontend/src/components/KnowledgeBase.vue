@@ -209,8 +209,7 @@
                     :total="totalDocuments"
                     :current-page="currentPage"
                     :page-size="pageSize"
-                    @update:current-page="handlePageChange"
-                    @update:page-size="handlePageSizeChange"
+                    @change="onPageChange"
                   />
                 </div>
               </div>
@@ -556,10 +555,17 @@ async function loadAvailableSubagents() {
 
 const totalDocuments = ref(0)
 const totalAllDocuments = ref(0)
-const { currentPage, pageSize, seqNumber, handlePageChange, handlePageSizeChange } =
+const { currentPage, pageSize, seqNumber, handlePageChange } =
   usePageContext(async () => {
     await loadDocuments()
   })
+
+// Unified pagination handler: avoids double-request when @update:current-page and @update:page-size fire simultaneously
+function onPageChange(page: number, size: number) {
+  pageSize.value = size
+  currentPage.value = page
+  handlePageChange(page)
+}
 
 // 批量选择
 const { selectedArr, isAllSelected, toggleAll, toggleRow, clearSelection, isSelected } = useTableSelection<any>({

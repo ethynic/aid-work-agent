@@ -67,8 +67,7 @@
       v-model:current-page="currentPage"
       v-model:page-size="pageSize"
       :show-size-changer="true"
-      @update:current-page="goPage"
-      @change="handlePageSizeChange"
+      @change="onPageChange"
     />
 
     <!-- 编辑弹窗 -->
@@ -221,15 +220,9 @@ async function loadAll() {
   }
 }
 
-function goPage(page: number) {
-  currentPage.value = page
-  clearSelection()
-  loadAll()
-}
-
-function handlePageSizeChange(size: number) {
+function onPageChange(page: number, size: number) {
   pageSize.value = size
-  currentPage.value = 1
+  currentPage.value = page
   clearSelection()
   loadAll()
 }

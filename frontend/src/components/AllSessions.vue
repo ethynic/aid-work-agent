@@ -107,8 +107,7 @@
               :total="totalSessions"
               :current-page="currentPage"
               :page-size="pageSize"
-              @update:current-page="goToPage"
-              @update:page-size="handlePageSizeChange"
+              @change="onPageChange"
             />
           </div>
         </div>
@@ -245,8 +244,7 @@
         :total="totalSessions"
         :current-page="currentPage"
         :page-size="pageSize"
-        @update:current-page="goToPage"
-        @update:page-size="handlePageSizeChange"
+        @change="onPageChange"
       />
     </div>
     </div>
@@ -331,7 +329,6 @@ const {
   totalSessions,
   pageSize,
   loadSessions,
-  goToPage,
   selectSession,
   removeSession,
   renameSession
@@ -495,11 +492,11 @@ function goToChat() {
   }
 }
 
-// 处理每页条数变化
-async function handlePageSizeChange(size: number) {
+// 处理每页条数变化和翻页
+function onPageChange(page: number, size: number) {
   pageSize.value = size
-  // 强制刷新，因为 pageSize 变了需要重新加载数据
-  await loadSessions(1, true)
+  currentPage.value = page
+  loadSessions(page, true)
 }
 
 // 登出

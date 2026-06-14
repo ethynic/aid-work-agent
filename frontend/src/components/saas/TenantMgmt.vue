@@ -91,8 +91,7 @@
         v-model:page-size="pageSize"
         :total="total"
         :show-size-changer="true"
-        @update:current-page="clientHandlePageChange"
-        @update:page-size="clientHandlePageSizeChange"
+        @change="onPageChange"
       />
     </div>
 
@@ -656,14 +655,9 @@ async function clientHandleSearch(keyword?: string) {
   applyFilterAndPagination()
 }
 
-async function clientHandlePageChange(page: number) {
-  currentPage.value = page
-  applyFilterAndPagination()
-}
-
-async function clientHandlePageSizeChange(size: number) {
+function onPageChange(page: number, size: number) {
   pageSize.value = size
-  currentPage.value = 1
+  currentPage.value = page
   applyFilterAndPagination()
 }
 
