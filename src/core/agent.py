@@ -2446,6 +2446,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         # Store explicit record_service so the inner process_message()
         # can access it without relying on thread-local storage
         self._explicit_record_service = record_service
+        logger.info(f"[DEBUG] Agent.process_message_sync: user_input={user_input!r}, attachments={attachments}, session_id={session_id}")
         try:
             response_parts = []
             async for event in self.process_message(

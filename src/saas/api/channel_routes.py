@@ -167,18 +167,25 @@ async def _download_and_build_attachments(
     media_item = msg.get(msgtype, {})
     media_id = media_item.get("media_id", "")
 
+    logger.info(f"[DEBUG] [download_attach] msgtype={msgtype}, media_item_keys={list(media_item.keys())}, media_id={media_id}")
+
     if not media_id:
+        logger.warning(f"[DEBUG] [download_attach] media_id 为空，跳过附件下载")
         return []
 
     try:
+        logger.info(f"[DEBUG] [download_attach] 开始调用 download_media: media_id={media_id}")
         content = await api_client.download_media(media_id)
+        logger.info(f"[DEBUG] [download_attach] 下载成功: content_length={len(content)}, first_bytes_hex={content[:10].hex()}")
     except Exception as e:
-        logger.warning(f"[WeCom KF] 下载媒体失败: media_id={media_id}, error={e}")
+        logger.warning(f"[DEBUG] [download_attach] 下载失败: media_id={media_id}, error_type={type(e).__name__}, error={e}")
         return []
 
     # 推断文件信息
     att_type = _get_attachment_type(msgtype)
     file_ext = _get_file_extension(msgtype, media_item.get("filename", ""))
+
+    logger.info(f"[DEBUG] [download_attach] att_type={att_type}, file_ext={file_ext}")
 
     # 文件名：图片/语音没有文件名，使用默认名
     if msgtype == "image":
@@ -212,7 +219,7 @@ async def _download_and_build_attachments(
     # base64 编码用于传递给 agent
     content_b64 = base64.b64encode(content).decode("ascii")
 
-    return [{
+    result = [{
         "type": att_type,
         "media_id": media_id,
         "file_name": file_name,
@@ -222,6 +229,10 @@ async def _download_and_build_attachments(
         "local_path": local_path,
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }]
+
+    logger.info(f"[DEBUG] [download_attach] 构建附件成功: type={result[0]['type']}, file_name={result[0]['file_name']}, mime_type={result[0]['mime_type']}, b64_length={len(content_b64)}, local_path={local_path}")
+
+    return result
 
 
 def _build_user_input_for_agent(msg: dict, attachments: list) -> str:
@@ -1281,14 +1292,18 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 保存用户消息
                 msgtype = msg.get("msgtype", "")
+                logger.info(f"[DEBUG] [WeCom KF] 收到消息: msgtype={msgtype}, msg keys={list(msg.keys())}, msg={msg}")
                 user_attachments = []
                 if msgtype in ("image", "voice", "video", "file"):
+                    logger.info(f"[DEBUG] [WeCom KF] 检测到多媒体消息，开始下载附件: msgtype={msgtype}")
                     user_attachments = await _download_and_build_attachments(
                         adapter.api_client, msg, session_id
                     )
+                    logger.info(f"[DEBUG] [WeCom KF] 附件下载完成: count={len(user_attachments)}, attachments={[{'type': a.get('type'), 'file_name': a.get('file_name'), 'content_len': len(a.get('content',''))} for a in user_attachments]}")
 
                 user_input = _build_user_input_for_agent(msg, user_attachments)
                 user_content = unified_msg.text or user_input
+                logger.info(f"[DEBUG] [WeCom KF] 传递给 agent: user_input={user_input!r}, user_content={user_content!r}, attachments_count={len(user_attachments)}")
 
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
                 user_attachments_meta = []
@@ -1353,6 +1368,7 @@ async def _process_tenant_wecom_kf_messages(
 
                 try:
                     agent_attachments = _build_attachments_for_agent(user_attachments)
+                    logger.info(f"[DEBUG] [agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
                     response_text = await agent.process_message_sync(
                         user_input=user_input,
                         session_id=session_id,
