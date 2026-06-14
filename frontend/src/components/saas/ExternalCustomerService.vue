@@ -123,9 +123,49 @@
                   ? 'bg-primary-500 text-white rounded-br-sm'
                   : 'bg-white border border-default text-default rounded-bl-sm shadow-sm'"
               >
-                <div v-if="msg.content" class="whitespace-pre-wrap">{{ msg.content }}</div>
-                <div v-else-if="getDownloadableFiles(msg).length > 0" class="text-muted italic">[文件消息]</div>
-                <div v-else class="text-muted italic">[图片/文件消息]</div>
+                <!-- 用户消息：文本 -->
+                <template v-if="msg.role === 'user' && msg.content && !hasUserAttachment(msg)">
+                  <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                </template>
+                <!-- 用户消息：附件 -->
+                <template v-if="msg.role === 'user' && hasUserAttachment(msg)">
+                  <!-- 语音：播放器 -->
+                  <template v-for="att in getUserAttachments(msg)" :key="att.media_id">
+                    <div v-if="att.type === 'voice'" class="space-y-1">
+                      <audio controls :src="getAttachmentDownloadUrl(att)" class="max-w-full h-8"></audio>
+                      <div v-if="msg.content && msg.content !== '[语音消息]'" class="text-xs opacity-80">{{ msg.content }}</div>
+                    </div>
+                  </template>
+                  <!-- 图片：预览 -->
+                  <template v-for="att in getUserAttachments(msg)" :key="'img-' + att.media_id">
+                    <div v-if="att.type === 'image'" class="space-y-1">
+                      <img :src="getAttachmentDownloadUrl(att)" class="max-w-[240px] max-h-[240px] rounded-lg cursor-pointer" @click="previewImage(getAttachmentDownloadUrl(att))" alt="用户图片" />
+                      <div class="text-xs opacity-80">{{ att.file_name }} · {{ formatFileSize(att.file_size) }}</div>
+                    </div>
+                  </template>
+                  <!-- 视频：播放器 -->
+                  <template v-for="att in getUserAttachments(msg)" :key="'vid-' + att.media_id">
+                    <div v-if="att.type === 'video'" class="space-y-1">
+                      <video controls :src="getAttachmentDownloadUrl(att)" class="max-w-[320px] max-h-[240px] rounded-lg" preload="metadata"></video>
+                      <div class="text-xs opacity-80">{{ att.file_name }} · {{ formatFileSize(att.file_size) }}</div>
+                    </div>
+                  </template>
+                  <!-- 文件：下载卡片 -->
+                  <template v-for="att in getUserAttachments(msg)" :key="'file-' + att.media_id">
+                    <div v-if="att.type === 'file'" class="mt-3">
+                      <AttachmentCard :attachment="att" :download-url="getAttachmentDownloadUrl(att)" />
+                    </div>
+                  </template>
+                </template>
+                <!-- 用户消息：无内容也无附件 -->
+                <template v-if="msg.role === 'user' && !msg.content && !hasUserAttachment(msg)">
+                  <div class="text-xs opacity-80 italic">[非文本消息]</div>
+                </template>
+                <!-- AI 消息：文本 -->
+                <template v-if="msg.role === 'assistant' && msg.content">
+                  <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                </template>
+                <!-- AI 消息：可下载文件 -->
                 <div v-if="msg.role === 'assistant' && getDownloadableFiles(msg).length > 0" class="mt-3 flex flex-wrap gap-2">
                   <DownloadFileCard
                     v-for="file in getDownloadableFiles(msg)"
@@ -163,6 +203,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
+import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { getUserSourceInfo } from '@/api/enums'
 import type { DownloadableFile } from '@/types'
@@ -371,6 +412,50 @@ function formatTime(timeStr: string | null): string {
 
 function getDownloadableFiles(msg: any): DownloadableFile[] {
   return msg?.metadata?.downloadableFiles || []
+}
+
+/**
+ * 获取用户消息的附件列表
+ */
+function getUserAttachments(msg: any): any[] {
+  return msg?.attachments || []
+}
+
+/**
+ * 判断用户消息是否有附件
+ */
+function hasUserAttachment(msg: any): boolean {
+  return getUserAttachments(msg).length > 0
+}
+
+/**
+ * 构建附件下载 URL
+ */
+function getAttachmentDownloadUrl(att: any): string {
+  if (!att.local_path || !selectedSessionId.value) return ''
+  // local_path 格式: data/attachments/{session_id}/{filename}
+  const parts = att.local_path.split('/')
+  const filename = parts[parts.length - 1]
+  const ref = encodeURIComponent(`${selectedSessionId.value}/${filename}`)
+  return `/api/saas/external-customers/attachments/${ref}/download`
+}
+
+/**
+ * 格式化文件大小
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  const size = (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)
+  return `${size} ${units[i]}`
+}
+
+/**
+ * 图片预览（新窗口打开）
+ */
+function previewImage(url: string) {
+  window.open(url, '_blank')
 }
 
 // 监听分页

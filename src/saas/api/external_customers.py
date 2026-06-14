@@ -174,3 +174,81 @@ async def get_session_messages(
     )
     return {"success": True, **result}
 
+
+@router.get("/attachments/{attachment_ref}/download")
+async def download_attachment(
+    request: Request,
+    attachment_ref: str,
+):
+    """下载已保存的附件（用于外部接待页面回显）
+
+    Args:
+        attachment_ref: 格式为 {session_id}/{local_path_basename}（URL-safe 编码）
+
+    Returns:
+        文件二进制内容
+    """
+    import os as _os
+    from urllib.parse import unquote
+    from fastapi.responses import FileResponse
+
+    if not settings.saas.enabled:
+        raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
+
+    admin = require_admin(request)
+    tenant_id = admin.get("tenant_id")
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="缺少租户信息")
+
+    # 解析 attachment_ref: {session_id}/{filename}
+    decoded_ref = unquote(attachment_ref)
+    parts = decoded_ref.split("/", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="无效的附件引用格式")
+
+    session_id, filename = parts
+
+    # 验证渠道会话属于该租户
+    from src.channels.session import channel_session_manager
+
+    session = channel_session_manager.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if session.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 从附件目录查找文件
+    from src.saas.api.channel_routes import ATTACHMENTS_DIR
+
+    local_path = _os.path.join(ATTACHMENTS_DIR, session_id, filename)
+    if not _os.path.exists(local_path):
+        raise HTTPException(status_code=404, detail="附件文件不存在")
+
+    # 推断 MIME 类型
+    mime_type = "application/octet-stream"
+    ext = _os.path.splitext(filename)[1].lower()
+    _MIME_TYPE_MAP = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+        ".mp3": "audio/mpeg", ".amr": "audio/amr", ".wav": "audio/wav",
+        ".mp4": "video/mp4",
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".txt": "text/plain",
+        ".zip": "application/zip",
+    }
+    mime_type = _MIME_TYPE_MAP.get(ext, "application/octet-stream")
+
+    return FileResponse(
+        path=local_path,
+        media_type=mime_type,
+        filename=filename,
+    )
+

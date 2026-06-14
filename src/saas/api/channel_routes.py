@@ -13,6 +13,8 @@
 """
 
 import asyncio
+import base64
+import os
 import random
 import time
 import xml.etree.ElementTree as ET
@@ -34,6 +36,10 @@ router = APIRouter(tags=["租户渠道回调"])
 
 # 每个租户有独立的消息去重器
 _tenant_dedup_cache: dict[str, MessageDeduplicator] = {}
+
+# 附件保存目录
+ATTACHMENTS_DIR = os.path.join("data", "attachments")
+os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
 
 
 def _get_tenant_dedup(tenant_id: str) -> MessageDeduplicator:
@@ -88,6 +94,176 @@ def _build_merged_message(group: list) -> dict:
     merged_msg = group[-1].copy()
     merged_msg["text"] = {"content": "\n".join(lines)}
     return merged_msg
+
+
+# 文件扩展名 → MIME 类型映射
+_MIME_MAP = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+    ".mp3": "audio/mpeg", ".amr": "audio/amr", ".wav": "audio/wav",
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".txt": "text/plain",
+    ".zip": "application/zip",
+}
+
+
+def _guess_mime_type(filename: str) -> str:
+    """根据文件扩展名推断 MIME 类型"""
+    ext = os.path.splitext(filename)[1].lower()
+    return _MIME_MAP.get(ext, "application/octet-stream")
+
+
+def _get_attachment_type(msgtype: str) -> str:
+    """将微信消息类型映射为附件类型"""
+    type_map = {
+        "image": "image",
+        "voice": "voice",
+        "video": "video",
+        "file": "file",
+    }
+    return type_map.get(msgtype, "file")
+
+
+def _get_file_extension(msgtype: str, filename: str = "") -> str:
+    """根据消息类型和文件名推断文件扩展名"""
+    ext_map = {
+        "image": ".jpg",
+        "voice": ".mp3",
+        "video": ".mp4",
+        "file": "",  # 由文件名决定
+    }
+    if msgtype == "file" and filename:
+        return os.path.splitext(filename)[1].lower()
+    return ext_map.get(msgtype, "")
+
+
+async def _download_and_build_attachments(
+    api_client, msg: dict, session_id: str
+) -> list:
+    """
+    下载微信媒体文件并构建附件列表。
+
+    Returns:
+        [{
+            "type": "image|voice|file",
+            "media_id": "xxx",
+            "file_name": "xxx.jpg",
+            "mime_type": "image/jpeg",
+            "file_size": 12345,
+            "content": "<base64>",  # 用于传递给 agent
+            "local_path": "data/attachments/{session_id}/...",  # 用于持久化
+            "saved_at": "2026-06-14 12:00:00",
+        }]
+    """
+    from datetime import datetime
+
+    msgtype = msg.get("msgtype", "")
+    media_item = msg.get(msgtype, {})
+    media_id = media_item.get("media_id", "")
+
+    if not media_id:
+        return []
+
+    try:
+        content = await api_client.download_media(media_id)
+    except Exception as e:
+        logger.warning(f"[WeCom KF] 下载媒体失败: media_id={media_id}, error={e}")
+        return []
+
+    # 推断文件信息
+    att_type = _get_attachment_type(msgtype)
+    file_ext = _get_file_extension(msgtype, media_item.get("filename", ""))
+
+    # 文件名：图片/语音没有文件名，使用默认名
+    if msgtype == "image":
+        file_name = f"image_{media_id[:8]}.jpg"
+    elif msgtype == "voice":
+        file_name = f"voice_{media_id[:8]}.mp3"
+    elif msgtype == "video":
+        file_name = f"video_{media_id[:8]}.mp4"
+    else:
+        file_name = media_item.get("filename", f"file_{media_id[:8]}{file_ext}")
+        if file_ext and not file_name.lower().endswith(file_ext):
+            file_name += file_ext
+
+    mime_type = _guess_mime_type(file_name)
+    file_size = len(content)
+
+    # 保存到磁盘
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    safe_filename = f"{timestamp}_{media_id}{file_ext}"
+    session_dir = os.path.join(ATTACHMENTS_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+    local_path = os.path.join(session_dir, safe_filename)
+
+    try:
+        with open(local_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        logger.error(f"[WeCom KF] 保存附件失败: {local_path}, error={e}")
+        local_path = ""
+
+    # base64 编码用于传递给 agent
+    content_b64 = base64.b64encode(content).decode("ascii")
+
+    return [{
+        "type": att_type,
+        "media_id": media_id,
+        "file_name": file_name,
+        "mime_type": mime_type,
+        "file_size": file_size,
+        "content": content_b64,
+        "local_path": local_path,
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }]
+
+
+def _build_user_input_for_agent(msg: dict, attachments: list) -> str:
+    """
+    根据消息类型构建传递给 agent 的 user_input。
+
+    - 语音：优先使用 Recognition 文字识别结果
+    - 图片/文件：使用描述文字
+    """
+    msgtype = msg.get("msgtype", "")
+
+    if msgtype == "voice":
+        # 微信语音识别结果（如有）
+        recognition = msg.get("voice", {}).get("recognition", "")
+        return recognition or "[语音消息]"
+    elif msgtype == "image":
+        return "[图片消息]"
+    elif msgtype == "file":
+        filename = msg.get("file", {}).get("filename", "文件")
+        return f"[文件: {filename}]"
+    elif msgtype == "video":
+        return "[视频消息]"
+    else:
+        return "[非文本消息]"
+
+
+def _build_attachments_for_agent(attachments: list) -> list:
+    """
+    构建传递给 agent 的附件格式。
+
+    Returns:
+        [{"type": "image/file/voice", "name": "xxx.jpg", "content": "<base64>", "mime_type": "image/jpeg"}]
+    """
+    result = []
+    for att in attachments:
+        result.append({
+            "type": att["type"],
+            "name": att["file_name"],
+            "content": att["content"],
+            "mime_type": att["mime_type"],
+        })
+    return result
 
 
 async def _process_tenant_channel_message(
@@ -786,7 +962,7 @@ async def _process_tenant_wecom_kf_messages(
 
         while has_more:
             logger.info(f"[WeCom KF] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
-            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100)
+            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=1)
             errcode = result.get("errcode", 0)
             errmsg = result.get("errmsg", "")
             has_more = result.get("has_more", 0) == 1
@@ -1104,18 +1280,42 @@ async def _process_tenant_wecom_kf_messages(
                     continue
 
                 # 保存用户消息
-                if unified_msg.text:
+                msgtype = msg.get("msgtype", "")
+                user_attachments = []
+                if msgtype in ("image", "voice", "video", "file"):
+                    user_attachments = await _download_and_build_attachments(
+                        adapter.api_client, msg, session_id
+                    )
+
+                user_input = _build_user_input_for_agent(msg, user_attachments)
+                user_content = unified_msg.text or user_input
+
+                # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
+                user_attachments_meta = []
+                for att in user_attachments:
+                    user_attachments_meta.append({
+                        "type": att["type"],
+                        "media_id": att["media_id"],
+                        "file_name": att["file_name"],
+                        "mime_type": att["mime_type"],
+                        "file_size": att["file_size"],
+                        "local_path": att["local_path"],
+                        "saved_at": att["saved_at"],
+                    })
+
+                if user_content:
                     channel_session_manager.add_message(
                         session_id=session_id,
                         role="user",
-                        content=unified_msg.text,
+                        content=user_content,
                         message_type=unified_msg.message_type,
-                        metadata={"msgid": msg_id, "msgtype": msg.get("msgtype"), "open_kfid": open_kfid},
+                        attachments=user_attachments_meta if user_attachments_meta else None,
+                        metadata={"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid},
                         tenant_id=tenant_id,
                     )
 
                 # 检查人工转接关键词
-                if adapter.should_transfer_to_human(unified_msg.text, kf_config):
+                if adapter.should_transfer_to_human(user_content, kf_config):
                     await _transfer_kf_to_human(adapter, session, kf_config, open_kfid, unified_msg.user_id, session_id)
                     continue
 
@@ -1126,7 +1326,7 @@ async def _process_tenant_wecom_kf_messages(
                 record_service = SessionRecordManager.start_record(
                     session_id=session_id,
                     user_id=user_id or unified_msg.user_id,
-                    user_message=unified_msg.text,
+                    user_message=user_content,
                     tenant_id=tenant_id,
                     source_type="wecom_kf",
                 )
@@ -1152,11 +1352,13 @@ async def _process_tenant_wecom_kf_messages(
                             })
 
                 try:
+                    agent_attachments = _build_attachments_for_agent(user_attachments)
                     response_text = await agent.process_message_sync(
-                        user_input=unified_msg.text or "[非文本消息]",
+                        user_input=user_input,
                         session_id=session_id,
                         record_service=record_service,
                         progress_callback=collect_files_callback,
+                        attachments=agent_attachments if agent_attachments else None,
                     )
                     record_service.complete(response_text)
                 except Exception as e:

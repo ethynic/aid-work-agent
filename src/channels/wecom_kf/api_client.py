@@ -16,6 +16,9 @@ import httpx
 from loguru import logger
 
 
+MAX_MEDIA_SIZE = 20 * 1024 * 1024  # 20MB
+
+
 class WeComKfApiClient:
     """微信客服 API 客户端"""
 
@@ -303,3 +306,69 @@ class WeComKfApiClient:
                     logger.error(f"上传素材最终失败: {e}")
                     return {"errcode": -1, "errmsg": str(e)}
         return {"errcode": -1, "errmsg": "unknown error"}
+
+    async def download_media(self, media_id: str) -> bytes:
+        """
+        下载临时素材（图片/语音/文件），返回二进制内容（20MB 限制）。
+
+        微信临时素材接口：GET /cgi-bin/media/get?access_token=xxx&media_id=xxx
+
+        - 图片素材返回 Content-Type: image/jpeg 等
+        - 语音素材返回 Content-Type: audio/amr 等
+        - 文件素材返回 Content-Type: application/octet-stream 等
+        - 如果下载失败，微信会返回 JSON 错误（errcode != 0）
+
+        Args:
+            media_id: 临时素材 media_id
+
+        Returns:
+            文件二进制内容
+
+        Raises:
+            RuntimeError: 下载失败时抛出
+        """
+        url = f"{self.BASE_URL}/cgi-bin/media/get"
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                token = await self.get_access_token()
+                client = await self._get_client()
+
+                response = await client.get(
+                    url,
+                    params={"access_token": token, "media_id": media_id},
+                )
+
+                if response.status_code != 200:
+                    raise RuntimeError(f"HTTP {response.status_code}: {response.text[:200]}")
+
+                # 微信下载错误时返回 JSON 而非二进制内容
+                content_type = response.headers.get("Content-Type", "")
+                if "application/json" in content_type or "text/plain" in content_type:
+                    data = response.json()
+                    errcode = data.get("errcode", 0)
+                    if errcode in (40014, 42001):
+                        self._invalidate_token()
+                        continue
+                    if errcode != 0:
+                        raise RuntimeError(
+                            f"下载素材失败: errcode={errcode}, errmsg={data.get('errmsg')}"
+                        )
+                    raise RuntimeError(f"意外 JSON 响应: {data}")
+
+                content = response.content
+                if len(content) > MAX_MEDIA_SIZE:
+                    raise RuntimeError(
+                        f"素材大小 {len(content)} bytes 超过 20MB 限制"
+                    )
+                return content
+
+            except RuntimeError:
+                raise
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"下载素材重试 {attempt + 1}/{max_retries}: {e}")
+                    await asyncio.sleep(1)
+                else:
+                    logger.error(f"下载素材最终失败: {e}")
+                    raise RuntimeError(f"下载素材失败: {e}") from e
