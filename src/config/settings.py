@@ -127,6 +127,15 @@ class MapsToolConfig(BaseModel):
     amap_api_key: str = ""
 
 
+class ASRToolConfig(BaseModel):
+    """语音转文字工具配置（阿里云智能语音交互）"""
+    provider: str = "aliyun"
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_appkey: str = ""  # 智能语音交互项目 Appkey
+    endpoint: str = "nls-gateway.cn-shanghai.aliyuncs.com"
+
+
 class ToolsConfig(BaseModel):
     """工具配置"""
     email: EmailToolConfig = Field(default_factory=EmailToolConfig)
@@ -134,6 +143,7 @@ class ToolsConfig(BaseModel):
     search: SearchToolConfig = Field(default_factory=SearchToolConfig)
     browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
     maps: MapsToolConfig = Field(default_factory=MapsToolConfig)
+    asr: ASRToolConfig = Field(default_factory=ASRToolConfig)
 
 
 class ShortTermMemoryConfig(BaseModel):
@@ -406,6 +416,14 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     # 搜索工具配置
     if os.getenv("TAVILY_API_KEY"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
+
+    # 语音转文字工具配置（阿里云 ASR）
+    if os.getenv("ALIYUN_ASR_ACCESS_KEY_ID"):
+        yaml_config.setdefault("tools", {}).setdefault("asr", {})["aliyun_access_key_id"] = os.getenv("ALIYUN_ASR_ACCESS_KEY_ID")
+    if os.getenv("ALIYUN_ASR_ACCESS_KEY_SECRET"):
+        yaml_config.setdefault("tools", {}).setdefault("asr", {})["aliyun_access_key_secret"] = os.getenv("ALIYUN_ASR_ACCESS_KEY_SECRET")
+    if os.getenv("ALIYUN_ASR_APPKEY"):
+        yaml_config.setdefault("tools", {}).setdefault("asr", {})["aliyun_appkey"] = os.getenv("ALIYUN_ASR_APPKEY")
 
     # 认证相关配置（从环境变量加载）
     if os.getenv("QBTOKEN"):

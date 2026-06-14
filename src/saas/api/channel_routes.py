@@ -277,6 +277,35 @@ def _build_attachments_for_agent(attachments: list) -> list:
     return result
 
 
+async def _transcribe_voice_with_asr(audio_content: str, audio_format: str = "mp3") -> str:
+    """
+    使用语音转文字工具识别语音内容。
+    当微信 Recognition 为空时调用此函数。
+
+    Args:
+        audio_content: base64 编码的音频内容
+        audio_format: 音频格式，默认 mp3
+
+    Returns:
+        识别出的文字，如果识别失败返回 "[语音消息]"
+    """
+    try:
+        from src.tools.asr.speech_to_text_tool import SpeechToTextTool
+        tool = SpeechToTextTool()
+        result = await tool.execute(
+            audio_content=audio_content,
+            format=audio_format,
+        )
+        if result.get("success"):
+            return result.get("text", "")
+        else:
+            logger.warning(f"[WeCom KF] 语音转文字失败: {result.get('error')}")
+            return "[语音消息]"
+    except Exception as e:
+        logger.error(f"[WeCom KF] 调用 ASR 工具异常: {e}")
+        return "[语音消息]"
+
+
 async def _process_tenant_channel_message(
     tenant_id: str,
     channel_type: str,
@@ -1302,6 +1331,14 @@ async def _process_tenant_wecom_kf_messages(
                     logger.info(f"[DEBUG] [WeCom KF] 附件下载完成: count={len(user_attachments)}, attachments={[{'type': a.get('type'), 'file_name': a.get('file_name'), 'content_len': len(a.get('content',''))} for a in user_attachments]}")
 
                 user_input = _build_user_input_for_agent(msg, user_attachments)
+
+                # 语音消息：如果微信 Recognition 为空，调用阿里云 ASR 转文字
+                if msgtype == "voice" and user_input == "[语音消息]" and user_attachments:
+                    logger.info("[DEBUG] [WeCom KF] 微信 Recognition 为空，调用 ASR 语音转文字")
+                    audio_content = user_attachments[0].get("content", "")
+                    audio_format = user_attachments[0].get("file_name", "").split(".")[-1] or "mp3"
+                    user_input = await _transcribe_voice_with_asr(audio_content, audio_format)
+
                 user_content = unified_msg.text or user_input
                 logger.info(f"[DEBUG] [WeCom KF] 传递给 agent: user_input={user_input!r}, user_content={user_content!r}, attachments_count={len(user_attachments)}")
 
