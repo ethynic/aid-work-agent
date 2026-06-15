@@ -43,6 +43,10 @@ services:
       POSTGRES_LOG_DISCONNECTIONS: "on"
       # 时区
       TZ: Asia/Shanghai
+      # 显式指定 locale，避免镜像默认 C.UTF-8 与数据卷历史版本不匹配
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      LANGUAGE: en_US:en
     command:
       - "postgres"
       - "-c"
