@@ -6,7 +6,7 @@
 
 services:
   postgres:
-    image: timescale/timescaledb-ha:pg16
+    image: timescale/timescaledb:latest-pg16
     container_name: aid-postgres
     restart: unless-stopped
     environment:
@@ -123,9 +123,10 @@ services:
     shm_size: 1g
     # tmpfs 内存盘：PostgreSQL 临时文件（排序/哈希/临时表）写入内存，避免磁盘 IO
     tmpfs:
-      - /pg_temp:mode=1777,size=1024m
-      # 修复 timescaledb-ha 镜像 mktemp 权限问题：postgres 用户需要可写 /tmp
-      - /tmp:mode=1777,size=200m
+      - /pg_temp:mode=1777,size=1024m,uid=999,gid=999
+      # 修复 timescaledb 镜像 mktemp 权限问题：tmpfs /tmp 必须显式声明 uid/gid=999(postgres)
+      # 否则 entrypoint 切到 postgres 用户后 mktemp /tmp/passwd.XXXXXX 会 Permission denied
+      - /tmp:mode=1777,size=200m,uid=999,gid=999
     logging:
       driver: json-file
       options:
