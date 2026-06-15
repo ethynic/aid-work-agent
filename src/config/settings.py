@@ -133,7 +133,7 @@ class ASRToolConfig(BaseModel):
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""
     aliyun_appkey: str = ""  # 智能语音交互项目 Appkey
-    endpoint: str = "nls-gateway.cn-shanghai.aliyuncs.com"
+    endpoint: str = "nls-gateway-cn-shanghai.aliyuncs.com"  # 阿里云 NLS 一句话识别官方域名
 
 
 class ToolsConfig(BaseModel):
