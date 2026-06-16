@@ -1978,11 +1978,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 # 发送最终回复进度
                 yield make_event("progress", data="✅ 任务完成，正在生成回复...")
 
-                # Yield the final response
-                # DeepSeek 思考模式下 content 可能为空，但 reasoning_content 有内容
-                yield_content = content or reasoning or ""
-                if yield_content:
-                    yield make_event("response", data=yield_content)
+                # Yield the final response — 只发 content，绝不把 reasoning_content
+                # 暴露给用户（reasoning 是 LLM 内部思考，不属于用户可见回答）
+                if not content and reasoning:
+                    logger.warning(
+                        f"[AGENT] LLM returned empty content with non-empty reasoning_content, "
+                        f"session_id={session_id}, iteration={iteration}, "
+                        f"reasoning_len={len(reasoning)}"
+                    )
+                if content:
+                    yield make_event("response", data=content)
                 break
             
             # Add assistant message with tool calls to history
