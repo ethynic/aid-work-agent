@@ -10,7 +10,7 @@
 """
 import asyncio
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 from loguru import logger
@@ -145,7 +145,7 @@ class WeComKfApiClient:
             open_kfid: 客服账号 ID
             cursor: 上一次拉取的 next_cursor，首次为空
             limit: 本次拉取的消息条数，最大 1000
-            voice_format: 语音消息格式，0=amr，1=mp3
+            voice_format: 语音消息格式，0=amr（AMR-NB，8kHz，微信默认），1=silk（Tencent SILK）
 
         Returns:
             {
@@ -307,9 +307,9 @@ class WeComKfApiClient:
                     return {"errcode": -1, "errmsg": str(e)}
         return {"errcode": -1, "errmsg": "unknown error"}
 
-    async def download_media(self, media_id: str) -> bytes:
+    async def download_media(self, media_id: str) -> Tuple[bytes, str]:
         """
-        下载临时素材（图片/语音/文件），返回二进制内容（20MB 限制）。
+        下载临时素材（图片/语音/文件），返回二进制内容与 Content-Type（20MB 限制）。
 
         微信临时素材接口：GET /cgi-bin/media/get?access_token=xxx&media_id=xxx
 
@@ -322,7 +322,8 @@ class WeComKfApiClient:
             media_id: 临时素材 media_id
 
         Returns:
-            文件二进制内容
+            (content, content_type) 二元组。content_type 来自 HTTP 响应头，
+            可作为辅助线索用于音频格式识别。
 
         Raises:
             RuntimeError: 下载失败时抛出
@@ -361,7 +362,7 @@ class WeComKfApiClient:
                     raise RuntimeError(
                         f"素材大小 {len(content)} bytes 超过 20MB 限制"
                     )
-                return content
+                return content, content_type
 
             except RuntimeError:
                 raise

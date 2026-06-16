@@ -131,10 +131,10 @@ def _get_attachment_type(msgtype: str) -> str:
 
 
 def _get_file_extension(msgtype: str, filename: str = "") -> str:
-    """根据消息类型和文件名推断文件扩展名"""
+    """根据消息类型和文件名推断文件扩展名（仅作参考，最终由 magic bytes 修正）"""
     ext_map = {
         "image": ".jpg",
-        "voice": ".mp3",
+        "voice": ".amr",  # WeCom 微信客服 sync_msg voice_format=0 默认 AMR-NB
         "video": ".mp4",
         "file": "",  # 由文件名决定
     }
@@ -175,15 +175,40 @@ async def _download_and_build_attachments(
 
     try:
         logger.info(f"[DEBUG] [download_attach] 开始调用 download_media: media_id={media_id}")
-        content = await api_client.download_media(media_id)
-        logger.info(f"[DEBUG] [download_attach] 下载成功: content_length={len(content)}, first_bytes_hex={content[:10].hex()}")
+        content, content_type = await api_client.download_media(media_id)
+        logger.info(f"[DEBUG] [download_attach] 下载成功: content_length={len(content)}, first_bytes_hex={content[:10].hex()}, content_type={content_type}")
     except Exception as e:
         logger.warning(f"[DEBUG] [download_attach] 下载失败: media_id={media_id}, error_type={type(e).__name__}, error={e}")
         return []
 
     # 推断文件信息
     att_type = _get_attachment_type(msgtype)
-    file_ext = _get_file_extension(msgtype, media_item.get("filename", ""))
+
+    # 语音消息：通过 magic bytes 识别真实格式，避免 WeCom 标记错误
+    detected_format = None
+    detected_sample_rate = None
+    if msgtype == "voice":
+        from src.utils.audio_format import detect_audio_format
+        detected_format, detected_sample_rate = detect_audio_format(content, content_type)
+        logger.info(
+            f"[DEBUG] [download_attach] 语音格式检测: detected_format={detected_format}, "
+            f"sample_rate={detected_sample_rate}"
+        )
+        # 实际扩展名以检测结果为准
+        ext_for_format = {
+            "amr": ".amr",
+            "amr-wb": ".awb",
+            "wav": ".wav",
+            "mp3": ".mp3",
+            "opus": ".opus",
+            "pcm": ".pcm",
+            "aac": ".aac",
+            "silk_v3": ".silk",
+            "silk_v2": ".silk",
+        }
+        file_ext = ext_for_format.get(detected_format, ".amr")
+    else:
+        file_ext = _get_file_extension(msgtype, media_item.get("filename", ""))
 
     logger.info(f"[DEBUG] [download_attach] att_type={att_type}, file_ext={file_ext}")
 
@@ -191,7 +216,8 @@ async def _download_and_build_attachments(
     if msgtype == "image":
         file_name = f"image_{media_id[:8]}.jpg"
     elif msgtype == "voice":
-        file_name = f"voice_{media_id[:8]}.mp3"
+        # 使用检测到的扩展名（默认 .amr）
+        file_name = f"voice_{media_id[:8]}{file_ext}"
     elif msgtype == "video":
         file_name = f"video_{media_id[:8]}.mp4"
     else:
@@ -229,6 +255,11 @@ async def _download_and_build_attachments(
         "local_path": local_path,
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }]
+
+    # 语音消息：附带检测到的格式与采样率，方便后续 ASR 使用
+    if msgtype == "voice" and detected_format is not None:
+        result[0]["audio_format"] = detected_format
+        result[0]["sample_rate"] = detected_sample_rate
 
     logger.info(f"[DEBUG] [download_attach] 构建附件成功: type={result[0]['type']}, file_name={result[0]['file_name']}, mime_type={result[0]['mime_type']}, b64_length={len(content_b64)}, local_path={local_path}")
 
@@ -280,24 +311,40 @@ def _build_attachments_for_agent(attachments: list) -> list:
     return result
 
 
-async def _transcribe_voice_with_asr(audio_content: str, audio_format: str = "mp3") -> str:
+async def _transcribe_voice_with_asr(
+    audio_content: str,
+    audio_format: str = "amr",
+    sample_rate: int = 8000,
+) -> str:
     """
     使用语音转文字工具识别语音内容。
     当微信 Recognition 为空时调用此函数。
 
     Args:
         audio_content: base64 编码的音频内容
-        audio_format: 音频格式，默认 mp3
+        audio_format: 音频格式，默认 amr（WeCom 微信客服默认格式）
+        sample_rate: 采样率，默认 8000（AMR-NB）
 
     Returns:
         识别出的文字，如果识别失败返回 "[语音消息]"
     """
+    # 提前拦截 SILK 格式：阿里云 ASR 不支持，避免无谓的 400 调用
+    from src.utils.audio_format import is_supported_by_aliyun, get_unsupported_reason
+    if audio_format.startswith("silk"):
+        reason = get_unsupported_reason(audio_format)
+        logger.warning(
+            "[WeCom KF] 语音格式 {} 不被阿里云 ASR 支持: {}",
+            audio_format, reason,
+        )
+        return f"[语音消息 - {reason}]"
+
     try:
         from src.tools.asr.speech_to_text_tool import SpeechToTextTool
         tool = SpeechToTextTool()
         result = await tool.execute(
             audio_content=audio_content,
             format=audio_format,
+            sample_rate=sample_rate,
         )
         if result.get("success"):
             return result.get("text", "")
@@ -1005,7 +1052,7 @@ async def _process_tenant_wecom_kf_messages(
 
         while has_more:
             logger.info(f"[WeCom KF] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
-            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=1)
+            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=0)
             errcode = result.get("errcode", 0)
             errmsg = result.get("errmsg", "")
             has_more = result.get("has_more", 0) == 1
@@ -1339,8 +1386,14 @@ async def _process_tenant_wecom_kf_messages(
                 if msgtype == "voice" and user_input == "[语音消息]" and user_attachments:
                     logger.info("[DEBUG] [WeCom KF] 微信 Recognition 为空，调用 ASR 语音转文字")
                     audio_content = user_attachments[0].get("content", "")
-                    audio_format = user_attachments[0].get("file_name", "").split(".")[-1] or "mp3"
-                    user_input = await _transcribe_voice_with_asr(audio_content, audio_format)
+                    # 优先使用 magic bytes 检测结果（避免 WeCom 错误标记 .mp3）
+                    audio_format = user_attachments[0].get("audio_format") \
+                        or user_attachments[0].get("file_name", "").split(".")[-1] \
+                        or "amr"
+                    audio_sample_rate = user_attachments[0].get("sample_rate") or 8000
+                    user_input = await _transcribe_voice_with_asr(
+                        audio_content, audio_format, audio_sample_rate
+                    )
 
                 user_content = unified_msg.text or user_input
                 logger.info(f"[DEBUG] [WeCom KF] 传递给 agent: user_input={user_input!r}, user_content={user_content!r}, attachments_count={len(user_attachments)}")

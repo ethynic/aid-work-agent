@@ -41,7 +41,7 @@ def mock_asr_config():
 
 @pytest.fixture
 def valid_audio_b64():
-    """合法的 base64 编码音频（伪装的 mp3 字节）"""
+    """合法的 base64 编码音频（实际是 SILK_V3 magic，测试工具能否处理）"""
     return base64.b64encode(b"\x02\x23!SILK_V3" + b"\x00" * 100).decode("utf-8")
 
 
