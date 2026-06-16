@@ -167,18 +167,12 @@ async def _download_and_build_attachments(
     media_item = msg.get(msgtype, {})
     media_id = media_item.get("media_id", "")
 
-    logger.info(f"[DEBUG] [download_attach] msgtype={msgtype}, media_item_keys={list(media_item.keys())}, media_id={media_id}")
-
     if not media_id:
-        logger.warning(f"[DEBUG] [download_attach] media_id 为空，跳过附件下载")
         return []
-
     try:
-        logger.info(f"[DEBUG] [download_attach] 开始调用 download_media: media_id={media_id}")
         content, content_type = await api_client.download_media(media_id)
-        logger.info(f"[DEBUG] [download_attach] 下载成功: content_length={len(content)}, first_bytes_hex={content[:10].hex()}, content_type={content_type}")
     except Exception as e:
-        logger.warning(f"[DEBUG] [download_attach] 下载失败: media_id={media_id}, error_type={type(e).__name__}, error={e}")
+        logger.warning(f"[_download_and_build_attachments] 下载失败: media_id={media_id}, error_type={type(e).__name__}, error={e}")
         return []
 
     # 推断文件信息
@@ -190,10 +184,6 @@ async def _download_and_build_attachments(
     if msgtype == "voice":
         from src.utils.audio_format import detect_audio_format
         detected_format, detected_sample_rate = detect_audio_format(content, content_type)
-        logger.info(
-            f"[DEBUG] [download_attach] 语音格式检测: detected_format={detected_format}, "
-            f"sample_rate={detected_sample_rate}"
-        )
         # 实际扩展名以检测结果为准
         ext_for_format = {
             "amr": ".amr",
@@ -209,8 +199,6 @@ async def _download_and_build_attachments(
         file_ext = ext_for_format.get(detected_format, ".amr")
     else:
         file_ext = _get_file_extension(msgtype, media_item.get("filename", ""))
-
-    logger.info(f"[DEBUG] [download_attach] att_type={att_type}, file_ext={file_ext}")
 
     # 文件名：图片/语音没有文件名，使用默认名
     if msgtype == "image":
@@ -239,7 +227,7 @@ async def _download_and_build_attachments(
         with open(local_path, "wb") as f:
             f.write(content)
     except Exception as e:
-        logger.error(f"[WeCom KF] 保存附件失败: {local_path}, error={e}")
+        logger.error(f"[wecom_kf] 保存附件失败: {local_path}, error={e}")
         local_path = ""
 
     # base64 编码用于传递给 agent
@@ -260,8 +248,6 @@ async def _download_and_build_attachments(
     if msgtype == "voice" and detected_format is not None:
         result[0]["audio_format"] = detected_format
         result[0]["sample_rate"] = detected_sample_rate
-
-    logger.info(f"[DEBUG] [download_attach] 构建附件成功: type={result[0]['type']}, file_name={result[0]['file_name']}, mime_type={result[0]['mime_type']}, b64_length={len(content_b64)}, local_path={local_path}")
 
     return result
 
@@ -333,7 +319,7 @@ async def _transcribe_voice_with_asr(
     if audio_format.startswith("silk"):
         reason = get_unsupported_reason(audio_format)
         logger.warning(
-            "[WeCom KF] 语音格式 {} 不被阿里云 ASR 支持: {}",
+            "[wecom_kf] 语音格式 {} 不被阿里云 ASR 支持: {}",
             audio_format, reason,
         )
         return f"[语音消息 - {reason}]"
@@ -349,10 +335,10 @@ async def _transcribe_voice_with_asr(
         if result.get("success"):
             return result.get("text", "")
         else:
-            logger.warning("[WeCom KF] 语音转文字失败: {}", result.get("error"))
+            logger.warning("[wecom_kf] 语音转文字失败: {}", result.get("error"))
             return "[语音消息]"
     except Exception as e:
-        logger.error("[WeCom KF] 调用 ASR 工具异常: {}", e)
+        logger.error("[wecom_kf] 调用 ASR 工具异常: {}", e)
         return "[语音消息]"
 
 
@@ -976,7 +962,7 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
     try:
         configs = ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
         if not configs:
-            logger.warning(f"[WeCom KF] auto_fill_open_kfid: 租户 {tenant_id} 无 wecom_kf 配置")
+            logger.warning(f"[wecom_kf] auto_fill_open_kfid: 租户 {tenant_id} 无 wecom_kf 配置")
             return
 
         # 筛选 open_kfid 未设置的配置（kf_account 中至少有一条 open_kfid 为空）
@@ -991,13 +977,13 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
 
         if len(candidates) == 0:
             logger.info(
-                f"[WeCom KF] auto_fill_open_kfid: 租户 {tenant_id} 所有配置的 open_kfid 均已设置"
+                f"[wecom_kf] auto_fill_open_kfid: 租户 {tenant_id} 所有配置的 open_kfid 均已设置"
             )
             return
 
         if len(candidates) > 1:
             logger.warning(
-                f"[WeCom KF] auto_fill_open_kfid: 租户 {tenant_id} 存在 {len(candidates)} 条 "
+                f"[wecom_kf] auto_fill_open_kfid: 租户 {tenant_id} 存在 {len(candidates)} 条 "
                 f"open_kfid 未设置的 wecom_kf 配置，无法自动填入"
             )
             return
@@ -1011,11 +997,11 @@ async def _auto_fill_open_kfid(tenant_id: str, open_kfid: str) -> None:
 
         ChannelConfigDB.update(config_id, config_dict)
         logger.info(
-            f"[WeCom KF] auto_fill_open_kfid: 已将 open_kfid={open_kfid} "
+            f"[wecom_kf] auto_fill_open_kfid: 已将 open_kfid={open_kfid} "
             f"自动填入 tenant={tenant_id} config={config_id}"
         )
     except Exception as e:
-        logger.error(f"[WeCom KF] auto_fill_open_kfid 异常: {e}", exc_info=True)
+        logger.error(f"[wecom_kf] auto_fill_open_kfid 异常: {e}", exc_info=True)
 
 
 async def _process_tenant_wecom_kf_messages(
@@ -1031,18 +1017,18 @@ async def _process_tenant_wecom_kf_messages(
         from src.models.message import UnifiedResponse
 
         logger.info(
-            f"[WeCom KF] 后台处理开始: tenant={tenant_id}, config={config_id}, open_kfid={open_kfid}"
+            f"[wecom_kf] 后台处理开始: tenant={tenant_id}, config={config_id}, open_kfid={open_kfid}"
         )
 
         # 查找客服账号配置
         kf_config = adapter.get_kf_config(open_kfid)
         if not kf_config:
-            logger.info(f"[WeCom KF] 新的 open_kfid: {open_kfid}，尝试自动填入配置")
+            logger.info(f"[wecom_kf] 新的 open_kfid: {open_kfid}，尝试自动填入配置")
             await _auto_fill_open_kfid(tenant_id, open_kfid)
             return
 
         subagent_type = kf_config.get("subagent_type", "")
-        logger.info(f"[WeCom KF] 客服配置: subagent_type={subagent_type}, open_kfid={open_kfid}")
+        logger.info(f"[wecom_kf] 客服配置: subagent_type={subagent_type}, open_kfid={open_kfid}")
 
         # 使用 cursor 分页拉取消息
         cursor = adapter.cursor_manager.get_cursor(open_kfid)
@@ -1051,7 +1037,7 @@ async def _process_tenant_wecom_kf_messages(
         processed_messages = 0
 
         while has_more:
-            logger.info(f"[WeCom KF] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
+            logger.info(f"[wecom_kf] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
             result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=0)
             errcode = result.get("errcode", 0)
             errmsg = result.get("errmsg", "")
@@ -1060,11 +1046,11 @@ async def _process_tenant_wecom_kf_messages(
             msg_count = len(result.get("msg_list", []))
             total_messages += msg_count
             logger.info(
-                f"[WeCom KF] sync_msg返回: errcode={errcode}, errmsg={errmsg}, "
+                f"[wecom_kf] sync_msg返回: errcode={errcode}, errmsg={errmsg}, "
                 f"msg_count={msg_count}, has_more={has_more}"
             )
             if result.get("errcode", 0) != 0:
-                logger.error(f"[WeCom KF] sync_msg 失败: errcode={result.get('errcode')}")
+                logger.error(f"[wecom_kf] sync_msg 失败: errcode={result.get('errcode')}")
                 return
 
             # 预处理：过滤非客户消息 + 去重，得到有效消息列表
@@ -1074,19 +1060,19 @@ async def _process_tenant_wecom_kf_messages(
                 msg_origin = msg.get("origin", "")
                 msg_type = msg.get("msgtype", "")
                 logger.debug(
-                    f"[WeCom KF] 消息: msgid={msg_id}, origin={msg_origin}, "
+                    f"[wecom_kf] 消息: msgid={msg_id}, origin={msg_origin}, "
                     f"msgtype={msg_type}, open_kfid={open_kfid}"
                 )
 
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
-                    logger.debug(f"[WeCom KF] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
+                    logger.debug(f"[wecom_kf] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
                     continue
 
                 # 消息去重
                 dedup = _get_tenant_dedup(tenant_id)
                 if await dedup.is_duplicate(msg_id):
-                    logger.info(f"[WeCom KF] 重复消息已跳过: msgid={msg_id}")
+                    logger.info(f"[wecom_kf] 重复消息已跳过: msgid={msg_id}")
                     continue
 
                 valid_msgs.append(msg)
@@ -1095,7 +1081,7 @@ async def _process_tenant_wecom_kf_messages(
             merged_msgs = _merge_consecutive_user_messages(valid_msgs)
             if len(merged_msgs) < len(valid_msgs):
                 logger.info(
-                    f"[WeCom KF] 消息合并: {len(valid_msgs)} -> {len(merged_msgs)}"
+                    f"[wecom_kf] 消息合并: {len(valid_msgs)} -> {len(merged_msgs)}"
                 )
 
             for msg in merged_msgs:
@@ -1107,14 +1093,14 @@ async def _process_tenant_wecom_kf_messages(
                 # 解析消息
                 unified_msg = await adapter.parse_message(msg)
                 logger.info(
-                    f"[WeCom KF] 解析消息: msgid={msg_id}, user={unified_msg.user_id}, "
+                    f"[wecom_kf] 解析消息: msgid={msg_id}, user={unified_msg.user_id}, "
                     f"text_len={len(unified_msg.text or '')}, msgtype={msg.get('msgtype')}"
                 )
 
                 # 获取客户信息（昵称、头像）
                 user_info = await adapter.get_user_info(unified_msg.user_id)
                 logger.info(
-                    f"[WeCom KF] 客户信息: user={unified_msg.user_id}, "
+                    f"[wecom_kf] 客户信息: user={unified_msg.user_id}, "
                     f"name={user_info.get('name')}, has_avatar={bool(user_info.get('avatar'))}"
                 )
 
@@ -1124,7 +1110,7 @@ async def _process_tenant_wecom_kf_messages(
                     user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info, source="wecom_kf")
                     user_info["user_id"] = user_id
                 except Exception as e:
-                    logger.warning(f"[WeCom KF] 自动注册失败: {e}")
+                    logger.warning(f"[wecom_kf] 自动注册失败: {e}")
 
                 # 构建会话元数据（存储头像等扩展信息）
                 session_metadata = {}
@@ -1148,7 +1134,7 @@ async def _process_tenant_wecom_kf_messages(
                 # 检查会话是否已在人工接待中，避免 AI 重复处理
                 session_metadata = session.get("metadata") or {}
                 logger.info(
-                    f"[WeCom KF] 会话状态检查: session_id={session_id}, "
+                    f"[wecom_kf] 会话状态检查: session_id={session_id}, "
                     f"service_state={session_metadata.get('service_state')}, "
                     f"exit_human_timeout_failed_at={session_metadata.get('exit_human_timeout_failed_at', 'N/A')}, "
                     f"has_metadata_keys={list(session_metadata.keys()) if session_metadata else 'None'}"
@@ -1164,7 +1150,7 @@ async def _process_tenant_wecom_kf_messages(
                             if actual_state == 1:
                                 # 微信侧已是智能助手接待，更新本地状态，继续 AI 处理
                                 logger.info(
-                                    f"[WeCom KF] 超时失败会话已恢复为智能助手: "
+                                    f"[wecom_kf] 超时失败会话已恢复为智能助手: "
                                     f"session_id={session_id}"
                                 )
                                 channel_session_manager.update_session(
@@ -1174,14 +1160,14 @@ async def _process_tenant_wecom_kf_messages(
                             elif actual_state == 3:
                                 # 微信侧仍是人工状态，跳过 AI 处理
                                 logger.info(
-                                    f"[WeCom KF] 超时失败会话仍在人工接待中，跳过AI处理: "
+                                    f"[wecom_kf] 超时失败会话仍在人工接待中，跳过AI处理: "
                                     f"session_id={session_id}"
                                 )
                                 continue
                             elif actual_state in (0, 4):
                                 # 微信侧状态为未处理(0)或已结束(4)，尝试切回智能助手
                                 logger.info(
-                                    f"[WeCom KF] 超时失败会话微信侧状态={actual_state}，"
+                                    f"[wecom_kf] 超时失败会话微信侧状态={actual_state}，"
                                     f"尝试切回智能助手: session_id={session_id}"
                                 )
                                 recover_result = await adapter.api_client.trans_service_state(
@@ -1195,26 +1181,26 @@ async def _process_tenant_wecom_kf_messages(
                                         metadata={"service_state": 1},
                                     )
                                     logger.info(
-                                        f"[WeCom KF] 超时失败会话已恢复为智能助手: "
+                                        f"[wecom_kf] 超时失败会话已恢复为智能助手: "
                                         f"session_id={session_id}"
                                     )
                                     # 继续正常 AI 处理（不 continue）
                                 else:
                                     logger.warning(
-                                        f"[WeCom KF] 超时失败会话切回智能助手失败: "
+                                        f"[wecom_kf] 超时失败会话切回智能助手失败: "
                                         f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                     )
                                     continue
                             else:
                                 # 微信侧是待接入池(2)，不允许机器人发消息
                                 logger.warning(
-                                    f"[WeCom KF] 超时失败会话微信侧状态={actual_state}，"
+                                    f"[wecom_kf] 超时失败会话微信侧状态={actual_state}，"
                                     f"不允许发送消息: session_id={session_id}"
                                 )
                                 continue
                         except Exception as e:
                             logger.warning(
-                                f"[WeCom KF] 查询微信侧会话状态失败，跳过AI处理: "
+                                f"[wecom_kf] 查询微信侧会话状态失败，跳过AI处理: "
                                 f"session_id={session_id}, error={e}"
                             )
                             continue
@@ -1232,7 +1218,7 @@ async def _process_tenant_wecom_kf_messages(
                                     metadata={"service_state": 1},
                                 )
                                 logger.info(
-                                    f"[WeCom KF] 远程状态校准：微信侧已恢复智能助手，继续AI处理: "
+                                    f"[wecom_kf] 远程状态校准：微信侧已恢复智能助手，继续AI处理: "
                                     f"session_id={session_id}"
                                 )
                                 # 继续正常 AI 处理（不 continue）
@@ -1249,13 +1235,13 @@ async def _process_tenant_wecom_kf_messages(
                                         metadata={"service_state": 1},
                                     )
                                     logger.info(
-                                        f"[WeCom KF] 远程状态={actual_state}，已切回智能助手: "
+                                        f"[wecom_kf] 远程状态={actual_state}，已切回智能助手: "
                                         f"session_id={session_id}"
                                     )
                                     # 继续正常 AI 处理（不 continue）
                                 else:
                                     logger.warning(
-                                        f"[WeCom KF] 远程状态={actual_state}，切回智能助手失败: "
+                                        f"[wecom_kf] 远程状态={actual_state}，切回智能助手失败: "
                                         f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                     )
                                     continue
@@ -1265,20 +1251,20 @@ async def _process_tenant_wecom_kf_messages(
                                     await _exit_kf_human_service(adapter, open_kfid, unified_msg.user_id, session_id)
                                     continue
                                 logger.info(
-                                    f"[WeCom KF] 会话仍在人工接待中，跳过AI处理: "
+                                    f"[wecom_kf] 会话仍在人工接待中，跳过AI处理: "
                                     f"session_id={session_id}, user={unified_msg.user_id}"
                                 )
                                 continue
                             else:
                                 # 微信侧是待接入池(2)或其他未知状态
                                 logger.warning(
-                                    f"[WeCom KF] 远程状态={actual_state}，不允许发送消息: "
+                                    f"[wecom_kf] 远程状态={actual_state}，不允许发送消息: "
                                     f"session_id={session_id}"
                                 )
                                 continue
                         except Exception as e:
                             logger.warning(
-                                f"[WeCom KF] 查询微信侧会话状态失败，跳过AI处理: "
+                                f"[wecom_kf] 查询微信侧会话状态失败，跳过AI处理: "
                                 f"session_id={session_id}, error={e}"
                             )
                             continue
@@ -1288,7 +1274,7 @@ async def _process_tenant_wecom_kf_messages(
                 try:
                     user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info, source="wecom_kf")
                 except Exception as e:
-                    logger.warning(f"[WeCom KF] 自动注册失败: {e}")
+                    logger.warning(f"[wecom_kf] 自动注册失败: {e}")
 
                 # 设置工具可访问的上下文
                 set_kf_context({
@@ -1306,7 +1292,7 @@ async def _process_tenant_wecom_kf_messages(
                     )
                     remote_service_state = remote_state.get("service_state")
                     logger.info(
-                        f"[WeCom KF] 远程状态校验: session_id={session_id}, "
+                        f"[wecom_kf] 远程状态校验: session_id={session_id}, "
                         f"local_service_state={session_metadata.get('service_state')}, "
                         f"remote_service_state={remote_service_state}"
                     )
@@ -1314,7 +1300,7 @@ async def _process_tenant_wecom_kf_messages(
                         # 远程状态 0(未处理)或 4(已结束)：尝试切回智能助手
                         if remote_service_state in (0, 4):
                             logger.info(
-                                f"[WeCom KF] 远程状态={remote_service_state}，尝试切回智能助手: "
+                                f"[wecom_kf] 远程状态={remote_service_state}，尝试切回智能助手: "
                                 f"session_id={session_id}"
                             )
                             recover_result = await adapter.api_client.trans_service_state(
@@ -1328,19 +1314,19 @@ async def _process_tenant_wecom_kf_messages(
                                     metadata={"service_state": 1},
                                 )
                                 logger.info(
-                                    f"[WeCom KF] 远程状态已恢复为智能助手: "
+                                    f"[wecom_kf] 远程状态已恢复为智能助手: "
                                     f"session_id={session_id}"
                                 )
                                 # 继续正常 AI 处理（不 continue）
                             else:
                                 logger.warning(
-                                    f"[WeCom KF] 远程状态切回智能助手失败: "
+                                    f"[wecom_kf] 远程状态切回智能助手失败: "
                                     f"session_id={session_id}, errcode={recover_result.get('errcode')}"
                                 )
                                 continue
                         else:
                             logger.warning(
-                                f"[WeCom KF] 远程状态不允许机器人发送消息，跳过处理: "
+                                f"[wecom_kf] 远程状态不允许机器人发送消息，跳过处理: "
                                 f"session_id={session_id}, remote_state={remote_service_state}"
                             )
                             # 同步本地状态到远程实际状态
@@ -1351,7 +1337,7 @@ async def _process_tenant_wecom_kf_messages(
                             continue
                 except Exception as e:
                     logger.warning(
-                        f"[WeCom KF] 远程状态校验失败，继续处理: "
+                        f"[wecom_kf] 远程状态校验失败，继续处理: "
                         f"session_id={session_id}, error={e}"
                     )
 
@@ -1371,20 +1357,20 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 保存用户消息
                 msgtype = msg.get("msgtype", "")
-                logger.info(f"[DEBUG] [WeCom KF] 收到消息: msgtype={msgtype}, msg keys={list(msg.keys())}, msg={msg}")
+                logger.info(f"[wecom_kf] 收到消息: msgtype={msgtype}, msg keys={list(msg.keys())}, msg={msg}")
                 user_attachments = []
                 if msgtype in ("image", "voice", "video", "file"):
-                    logger.info(f"[DEBUG] [WeCom KF] 检测到多媒体消息，开始下载附件: msgtype={msgtype}")
+                    logger.info(f"[wecom_kf] 检测到多媒体消息，开始下载附件: msgtype={msgtype}")
                     user_attachments = await _download_and_build_attachments(
                         adapter.api_client, msg, session_id
                     )
-                    logger.info(f"[DEBUG] [WeCom KF] 附件下载完成: count={len(user_attachments)}, attachments={[{'type': a.get('type'), 'file_name': a.get('file_name'), 'content_len': len(a.get('content',''))} for a in user_attachments]}")
+                    logger.info(f"[wecom_kf] 附件下载完成: count={len(user_attachments)}, attachments={[{'type': a.get('type'), 'file_name': a.get('file_name'), 'content_len': len(a.get('content',''))} for a in user_attachments]}")
 
                 user_input = _build_user_input_for_agent(msg, user_attachments)
 
-                # 语音消息：如果微信 Recognition 为空，调用阿里云 ASR 转文字
+                # 语音消息：调用阿里云 ASR 转文字
                 if msgtype == "voice" and user_input == "[语音消息]" and user_attachments:
-                    logger.info("[DEBUG] [WeCom KF] 微信 Recognition 为空，调用 ASR 语音转文字")
+                    logger.info("[wecom_kf] 微信语音，调用 ASR 语音转文字")
                     audio_content = user_attachments[0].get("content", "")
                     # 优先使用 magic bytes 检测结果（避免 WeCom 错误标记 .mp3）
                     audio_format = user_attachments[0].get("audio_format") \
@@ -1396,7 +1382,6 @@ async def _process_tenant_wecom_kf_messages(
                     )
 
                 user_content = unified_msg.text or user_input
-                logger.info(f"[DEBUG] [WeCom KF] 传递给 agent: user_input={user_input!r}, user_content={user_content!r}, attachments_count={len(user_attachments)}")
 
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
                 user_attachments_meta = []
@@ -1461,7 +1446,7 @@ async def _process_tenant_wecom_kf_messages(
 
                 try:
                     agent_attachments = _build_attachments_for_agent(user_attachments)
-                    logger.info(f"[DEBUG] [agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
+                    logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
                     response_text = await agent.process_message_sync(
                         user_input=user_input,
                         session_id=session_id,
@@ -1471,7 +1456,7 @@ async def _process_tenant_wecom_kf_messages(
                     )
                     record_service.complete(response_text)
                 except Exception as e:
-                    logger.error(f"[WeCom KF] Agent 处理异常: {e}")
+                    logger.error(f"[wecom_kf] Agent 处理异常: {e}")
                     record_service.mark_error(str(e))
                     SessionRecordManager.end_record()
                     continue
@@ -1501,7 +1486,7 @@ async def _process_tenant_wecom_kf_messages(
                 )
                 send_result = await adapter.send_message(response)
                 logger.info(
-                    f"[WeCom KF] 回复发送{'成功' if send_result else '失败'}: "
+                    f"[wecom_kf] 回复发送{'成功' if send_result else '失败'}: "
                     f"msgid={msg_id}, user={unified_msg.user_id}, "
                     f"text_len={len(response_text) if response_text else 0}"
                 )
@@ -1511,12 +1496,12 @@ async def _process_tenant_wecom_kf_messages(
             adapter.cursor_manager.set_cursor(open_kfid, cursor)
 
         logger.info(
-            f"[WeCom KF] 后台处理完成: tenant={tenant_id}, open_kfid={open_kfid}, "
+            f"[wecom_kf] 后台处理完成: tenant={tenant_id}, open_kfid={open_kfid}, "
             f"total_messages={total_messages}, processed_messages={processed_messages}"
         )
 
     except Exception as e:
-        logger.error(f"[WeCom KF] 后台处理失败: tenant={tenant_id}, error={e}")
+        logger.error(f"[wecom_kf] 后台处理失败: tenant={tenant_id}, error={e}")
 
 
 async def _handle_kf_enter_session(callback_root, adapter) -> None:
@@ -1537,10 +1522,10 @@ async def _handle_kf_enter_session(callback_root, adapter) -> None:
         adapter.current_open_kfid = open_kfid
         await adapter.send_welcome_message(code, welcome_text)
         logger.info(
-            f"[WeCom KF] 欢迎语已发送: open_kfid={open_kfid}, user={external_userid}"
+            f"[wecom_kf] 欢迎语已发送: open_kfid={open_kfid}, user={external_userid}"
         )
     except Exception as e:
-        logger.error(f"[WeCom KF] enter_session 处理异常: {e}")
+        logger.error(f"[wecom_kf] enter_session 处理异常: {e}")
 
 
 async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> None:
@@ -1563,7 +1548,7 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
         )
 
         logger.info(
-            f"[WeCom KF] 会话状态变更: open_kfid={open_kfid}, "
+            f"[wecom_kf] 会话状态变更: open_kfid={open_kfid}, "
             f"user={external_userid}, state={service_state}, updated_sessions={updated_count}"
         )
 
@@ -1572,7 +1557,7 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
             await _on_kf_session_ended(tenant_id, open_kfid, external_userid)
 
     except Exception as e:
-        logger.error(f"[WeCom KF] session_status_change 处理异常: {e}")
+        logger.error(f"[wecom_kf] session_status_change 处理异常: {e}")
 
 
 async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: str) -> None:
@@ -1583,7 +1568,7 @@ async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: 
         adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf")
         if adapter is None:
             logger.warning(
-                f"[WeCom KF] 结束对话通知：无法创建 adapter: tenant_id={tenant_id}"
+                f"[wecom_kf] 结束对话通知：无法创建 adapter: tenant_id={tenant_id}"
             )
             return
 
@@ -1593,12 +1578,12 @@ async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: 
             external_userid,
         )
         logger.info(
-            f"[WeCom KF] 已向客户发送结束对话通知: "
+            f"[wecom_kf] 已向客户发送结束对话通知: "
             f"open_kfid={open_kfid}, user={external_userid}"
         )
         await adapter.close()
     except Exception as e:
-        logger.error(f"[WeCom KF] 结束对话通知客户失败: {e}")
+        logger.error(f"[wecom_kf] 结束对话通知客户失败: {e}")
 
     # 清除该渠道会话在 chat_messages 表中的历史记录，
     # 避免下次客户发消息时 Agent 基于之前的转人工上下文再次触发转人工
@@ -1628,7 +1613,7 @@ async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: 
                 conn.commit()
                 if deleted > 0:
                     logger.info(
-                        f"[WeCom KF] 已清除会话历史: session_id={sid}, "
+                        f"[wecom_kf] 已清除会话历史: session_id={sid}, "
                         f"deleted_messages={deleted}"
                     )
 
@@ -1649,7 +1634,7 @@ async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: 
                 pass
 
     except Exception as e:
-        logger.error(f"[WeCom KF] 清除会话历史失败: {e}")
+        logger.error(f"[wecom_kf] 清除会话历史失败: {e}")
 
 
 async def _transfer_kf_to_human(
@@ -1659,7 +1644,7 @@ async def _transfer_kf_to_human(
     try:
         servicer_list = kf_config.get("servicer_userid_list", [])
         if not servicer_list:
-            logger.warning(f"[WeCom KF] 未配置人工客服: open_kfid={open_kfid}")
+            logger.warning(f"[wecom_kf] 未配置人工客服: open_kfid={open_kfid}")
             return
 
         servicer_userid = servicer_list[0]
@@ -1675,11 +1660,11 @@ async def _transfer_kf_to_human(
                 session_id=session_id,
                 metadata={"service_state": 3, "transferred_to": servicer_userid},
             )
-            logger.info(f"[WeCom KF] 已转接人工: servicer={servicer_userid}")
+            logger.info(f"[wecom_kf] 已转接人工: servicer={servicer_userid}")
         else:
-            logger.error(f"[WeCom KF] 转接失败: open_kfid={open_kfid}")
+            logger.error(f"[wecom_kf] 转接失败: open_kfid={open_kfid}")
     except Exception as e:
-        logger.error(f"[WeCom KF] 转人工异常: {e}")
+        logger.error(f"[wecom_kf] 转人工异常: {e}")
 
 
 async def _exit_kf_human_service(
@@ -1695,11 +1680,11 @@ async def _exit_kf_human_service(
                 session_id=session_id,
                 metadata={"service_state": 4},
             )
-            logger.info(f"[WeCom KF] 已退出人工服务（会话已结束）: open_kfid={open_kfid}, user={external_userid}")
+            logger.info(f"[wecom_kf] 已退出人工服务（会话已结束）: open_kfid={open_kfid}, user={external_userid}")
 
             adapter.current_open_kfid = open_kfid
             await adapter.send_text("已退出人工服务，本次会话已结束。如有新问题，请重新发送消息。", external_userid)
         else:
-            logger.error(f"[WeCom KF] 退出人工服务失败: open_kfid={open_kfid}")
+            logger.error(f"[wecom_kf] 退出人工服务失败: open_kfid={open_kfid}")
     except Exception as e:
-        logger.error(f"[WeCom KF] 退出人工服务异常: {e}")
+        logger.error(f"[wecom_kf] 退出人工服务异常: {e}")

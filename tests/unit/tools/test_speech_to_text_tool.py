@@ -10,7 +10,7 @@
 - 阿里云 ASR 调用成功 / 失败 / 异常
 - _transcribe_voice_with_asr 入口函数（channel_routes 集成路径）
 
-复现的 Bug：日志中 "[WeCom KF] 调用 ASR 工具异常: unmatched '{' in format spec"
+复现的 Bug：日志中 "[wecom_kf] 调用 ASR 工具异常: unmatched '{' in format spec"
 """
 
 import base64

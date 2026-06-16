@@ -432,7 +432,7 @@ async def lifespan(app: FastAPI):
                     conn.commit()
                     if deleted > 0:
                         logger.info(
-                            f"[WeCom KF] 清除会话历史: session_id={session_id}, "
+                            f"[wecom_kf] 清除会话历史: session_id={session_id}, "
                             f"deleted_messages={deleted}"
                         )
                     cursor.execute("DELETE FROM channel_messages WHERE session_id = %s", (session_id,))
@@ -444,7 +444,7 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     pass
             except Exception as e:
-                logger.error(f"[WeCom KF] 清除会话历史失败: session_id={session_id}, error={e}")
+                logger.error(f"[wecom_kf] 清除会话历史失败: session_id={session_id}, error={e}")
 
         async def _wecom_kf_timeout_check_loop():
             """后台定时检查微信客服人工会话超时，自动退出人工服务"""
@@ -510,7 +510,7 @@ async def lifespan(app: FastAPI):
                                 continue
 
                             logger.info(
-                                f"[WeCom KF] 人工会话超时: session_id={session_id}, "
+                                f"[wecom_kf] 人工会话超时: session_id={session_id}, "
                                 f"elapsed={elapsed_minutes:.1f}min, threshold={timeout_minutes}min"
                             )
 
@@ -521,7 +521,7 @@ async def lifespan(app: FastAPI):
                             )
                             if adapter is None:
                                 logger.warning(
-                                    f"[WeCom KF] 超时检查：无法创建 adapter: "
+                                    f"[wecom_kf] 超时检查：无法创建 adapter: "
                                     f"tenant_id={tenant_id}"
                                 )
                                 continue
@@ -532,7 +532,7 @@ async def lifespan(app: FastAPI):
                             )
                             remote_service_state = remote_state.get("service_state")
                             logger.info(
-                                f"[WeCom KF] 超时检查远程状态: session_id={session_id}, "
+                                f"[wecom_kf] 超时检查远程状态: session_id={session_id}, "
                                 f"local_state=3, remote_state={remote_service_state}"
                             )
 
@@ -543,7 +543,7 @@ async def lifespan(app: FastAPI):
                                     metadata={"service_state": 4},
                                 )
                                 logger.info(
-                                    f"[WeCom KF] 远程已结束，跳过超时处理: "
+                                    f"[wecom_kf] 远程已结束，跳过超时处理: "
                                     f"session_id={session_id}"
                                 )
                                 # 清除对话历史，避免下次转人工
@@ -558,7 +558,7 @@ async def lifespan(app: FastAPI):
                                     metadata={"service_state": remote_service_state},
                                 )
                                 logger.info(
-                                    f"[WeCom KF] 远程状态已变更({remote_service_state})，跳过超时处理: "
+                                    f"[wecom_kf] 远程状态已变更({remote_service_state})，跳过超时处理: "
                                     f"session_id={session_id}"
                                 )
                                 await adapter.close()
@@ -579,7 +579,7 @@ async def lifespan(app: FastAPI):
                                     external_userid,
                                 )
                                 logger.info(
-                                    f"[WeCom KF] 超时结束人工会话成功: "
+                                    f"[wecom_kf] 超时结束人工会话成功: "
                                     f"session_id={session_id}"
                                 )
                                 # 清除对话历史，避免下次客户发消息时 Agent 基于之前的转人工上下文再次触发转人工
@@ -595,18 +595,18 @@ async def lifespan(app: FastAPI):
                                     },
                                 )
                                 logger.error(
-                                    f"[WeCom KF] 超时结束人工会话失败，保留人工状态避免远程不一致: "
+                                    f"[wecom_kf] 超时结束人工会话失败，保留人工状态避免远程不一致: "
                                     f"session_id={session_id}"
                                 )
                             await adapter.close()
 
                         except Exception as e:
                             logger.error(
-                                f"[WeCom KF] 超时检查处理单个会话异常: "
+                                f"[wecom_kf] 超时检查处理单个会话异常: "
                                 f"session_id={session.get('session_id', 'unknown')}: {e}"
                             )
                 except Exception as e:
-                    logger.error(f"[WeCom KF] 超时检查异常: {e}")
+                    logger.error(f"[wecom_kf] 超时检查异常: {e}")
         asyncio.create_task(_wecom_kf_timeout_check_loop())
 
     yield
