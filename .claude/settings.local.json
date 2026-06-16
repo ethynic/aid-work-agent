@@ -75,7 +75,10 @@
       "Bash(echo \"---EXIT: $?\")",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.aliyun.com)",
-      "WebFetch(domain:help.aliyun.com)"
+      "WebFetch(domain:help.aliyun.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:registry.npmmirror.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

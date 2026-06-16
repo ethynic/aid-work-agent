@@ -129,18 +129,25 @@
                 </template>
                 <!-- 用户消息：附件 -->
                 <template v-if="msg.role === 'user' && hasUserAttachment(msg)">
-                  <!-- 语音：播放器 -->
+                  <!-- 语音：自定义播放按钮（AMR 需前端解码，浏览器原生 <audio> 不支持） -->
                   <template v-for="att in getUserAttachments(msg)" :key="att.media_id">
                     <div v-if="att.type === 'voice'" class="space-y-1">
-                      <audio
-                        controls
-                        :src="getAttachmentDownloadUrl(att)"
-                        class="max-w-full h-8"
-                        @loadstart="onAudioLoadStart(att, $event)"
-                        @loadedmetadata="onAudioLoadedMetadata(att, $event)"
-                        @canplay="onAudioCanPlay(att, $event)"
-                        @error="onAudioError(att, $event)"
-                      ></audio>
+                      <button
+                        type="button"
+                        :disabled="amrPlayer.isLoading(att.media_id)"
+                        class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-colors disabled:opacity-60"
+                        :class="amrPlayer.isPlaying(att.media_id)
+                          ? 'bg-primary-500 text-white hover:bg-primary-600'
+                          : 'bg-gray-100 text-default hover:bg-gray-200'"
+                        @click="onPlayVoice(att)"
+                      >
+                        <span v-if="amrPlayer.isLoading(att.media_id)">加载中…</span>
+                        <template v-else>
+                          <span class="text-base leading-none">{{ amrPlayer.isPlaying(att.media_id) ? '⏸' : '▶' }}</span>
+                          <span>{{ amrPlayer.isPlaying(att.media_id) ? '正在播放' : '点击播放' }}</span>
+                          <span v-if="att.duration" class="text-xs opacity-80">{{ att.duration }}"</span>
+                        </template>
+                      </button>
                       <div v-if="msg.content && msg.content !== '[语音消息]'" class="text-xs opacity-80">{{ msg.content }}</div>
                     </div>
                   </template>
@@ -213,12 +220,14 @@ import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useAmrPlayer } from '@/composables/useAmrPlayer'
 import { getUserSourceInfo } from '@/api/enums'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
 
 const toast = useToast()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init, isInitialized } = useTenantAuth()
+const amrPlayer = useAmrPlayer()
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
 const messageContainerRef = ref<HTMLElement | null>(null)
 
@@ -309,6 +318,7 @@ async function selectUser(user: any) {
   messagePage.value = 1
   sessionList.value = []
   selectedSessionId.value = ''
+  amrPlayer.stopAll()
   await loadUserSessions()
 }
 
@@ -451,57 +461,18 @@ function getAttachmentDownloadUrl(att: any): string {
   return `/api/saas/external-customers/attachments/download?${params.toString()}`
 }
 
-// ===== 临时调试：audio 元素事件 =====
-function onAudioLoadStart(att: any, e: Event) {
-  const audio = e.target as HTMLAudioElement
-  console.log('临时调试：audio loadstart', {
-    media_id: att.media_id,
-    src: audio.src,
-    readyState: audio.readyState,
-    networkState: audio.networkState,
-  })
-}
-
-function onAudioLoadedMetadata(att: any, e: Event) {
-  const audio = e.target as HTMLAudioElement
-  console.log('临时调试：audio loadedmetadata', {
-    media_id: att.media_id,
-    duration: audio.duration,
-    readyState: audio.readyState,
-  })
-}
-
-function onAudioCanPlay(att: any, e: Event) {
-  const audio = e.target as HTMLAudioElement
-  console.log('临时调试：audio canplay', {
-    media_id: att.media_id,
-    readyState: audio.readyState,
-  })
-}
-
-function onAudioError(att: any, e: Event) {
-  const audio = e.target as HTMLAudioElement
-  console.error('临时调试：audio error', {
-    media_id: att.media_id,
-    src: audio.src,
-    errorCode: audio.error?.code,
-    errorMessage: audio.error?.message,
-    readyState: audio.readyState,
-    networkState: audio.networkState,
-  })
-}
-
-function checkAmrSupport() {
-  const a = new Audio()
-  const r: Record<string, string> = {
-    'audio/amr': a.canPlayType('audio/amr') || '(空=不支持)',
-    'audio/mpeg': a.canPlayType('audio/mpeg') || '(空=不支持)',
-    'audio/wav': a.canPlayType('audio/wav') || '(空=不支持)',
-    'audio/ogg;codecs=opus': a.canPlayType('audio/ogg;codecs=opus') || '(空=不支持)',
+/**
+ * 播放/暂停语音（前端解码 AMR）
+ */
+async function onPlayVoice(att: any) {
+  const url = getAttachmentDownloadUrl(att)
+  if (!url) return
+  try {
+    await amrPlayer.toggle(att.media_id, url)
+  } catch (e: any) {
+    toast.error(`语音播放失败: ${e?.message || e}`)
   }
-  console.log('临时调试：浏览器音频格式支持', r)
 }
-// ===== 临时调试结束 =====
 
 /**
  * 格式化文件大小
@@ -534,7 +505,6 @@ onMounted(async () => {
   if (!isInitialized.value) {
     await init()
   }
-  checkAmrSupport()  // 临时调试
   await loadUsers()
 })
 </script>
