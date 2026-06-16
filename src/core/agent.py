@@ -1407,6 +1407,74 @@ class Agent:
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> AsyncGenerator[dict, None]:
         """
+        Process a user message and yield AgentEvent dicts (trace-wrapped).
+
+        Wrapper around `_process_message_impl` that attaches a TraceCollector
+        when a SessionRecordService is available, so all channels (Web/wecom/
+        wecom_kf/dingtalk/feishu) produce traces without any caller-side change.
+        Trace failures are swallowed (debug log) and never affect business logic.
+
+        See: docs/infrastructure/observability-channel-sessions-design.md
+        """
+        trace_collector = None
+        try:
+            from src.services.session_record import SessionRecordManager
+            _record = getattr(self, '_explicit_record_service', None) \
+                      or SessionRecordManager.get_current_record()
+            if _record:
+                try:
+                    from src.core.trace_collector import TraceCollector
+                    trace_collector = TraceCollector(
+                        session_id=_record.session_id or session_id,
+                        tenant_id=_record.tenant_id or '',
+                        user_id=_record.user_id or '',
+                        input_msg=_record.user_message or user_input,
+                        source_type=_record.source_type or 'chat',
+                        subagent_id=getattr(self, '_subagent_id', None),
+                    )
+                except Exception as e:
+                    logger.debug(f"Trace collector init skipped: {e}")
+                    trace_collector = None
+        except Exception as e:
+            logger.debug(f"Trace context resolve skipped: {e}")
+
+        try:
+            async for event in self._process_message_impl(
+                user_input=user_input,
+                session_id=session_id,
+                user=user,
+                attachments=attachments,
+                cancel_check=cancel_check,
+            ):
+                if trace_collector:
+                    try:
+                        trace_collector.on_event(event)
+                    except Exception as e:
+                        logger.debug(f"Trace on_event failed: {e}")
+                yield event
+        except Exception as e:
+            if trace_collector:
+                try:
+                    trace_collector.on_error(str(e))
+                except Exception as ce:
+                    logger.debug(f"Trace on_error failed: {ce}")
+            raise
+        finally:
+            if trace_collector:
+                try:
+                    trace_collector.on_complete(_record)
+                except Exception as e:
+                    logger.debug(f"Trace on_complete failed: {e}")
+
+    async def _process_message_impl(
+        self,
+        user_input: str,
+        session_id: str,
+        user: Optional[User] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> AsyncGenerator[dict, None]:
+        """
         Process a user message and yield AgentEvent dicts.
 
         Event types yielded:

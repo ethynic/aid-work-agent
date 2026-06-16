@@ -1487,21 +1487,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         record_service.set_model(agent.llm.get_model_name())
         record_service.set_provider(agent.llm.get_provider_name())
 
-        # 追踪收集器（旁路收集，不阻塞主流程）
-        trace_collector = None
-        try:
-            from src.core.trace_collector import TraceCollector
-            subagent_id = getattr(agent, '_subagent_id', None) or request.subagent
-            trace_collector = TraceCollector(
-                session_id=session_id,
-                tenant_id=chat_tenant_id,
-                user_id=record_user_id,
-                input_msg=full_message,
-                source_type='chat',
-                subagent_id=subagent_id,
-            )
-        except Exception as e:
-            logger.debug(f"Trace collector init skipped: {e}")
+        # TraceCollector 已下沉到 Agent.process_message 内部（见 observability-channel-sessions-design.md 方案 C）
+        # record_service 仍然是 trace 上下文的来源，必须保留。
 
         response_parts = []
         progress_events = []
@@ -1549,18 +1536,9 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
                         tool_messages_collected.extend(event.get("messages", []))
 
-                    # 旁路收集追踪数据（同步调用，< 1ms）
-                    if trace_collector:
-                        try:
-                            trace_collector.on_event(event)
-                        except Exception:
-                            pass
-
             except asyncio.CancelledError:
                 logger.info(f"[SSE] Agent cancelled by user, session_id={session_id}")
                 error_occurred = "Cancelled by user"
-                if trace_collector:
-                    trace_collector.on_event({"type": "cancelled"})
                 try:
                     yield f"data: {json.dumps({'type': 'cancelled', 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
                 except (BrokenPipeError, ConnectionResetError, OSError):
@@ -1571,8 +1549,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             except Exception as e:
                 logger.error(f"[SSE] Agent error, session_id={session_id}, error: {type(e).__name__}: {e}", exc_info=True)
                 error_occurred = str(e)
-                if trace_collector:
-                    trace_collector.on_error(str(e))
                 try:
                     yield f"data: {json.dumps({'type': 'error', 'data': str(e), 'timestamp': int(datetime.now().timestamp() * 1000)}, ensure_ascii=False)}\n\n"
                 except (BrokenPipeError, ConnectionResetError, OSError):
@@ -1587,12 +1563,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 record_service.complete(full_response)
                 SessionRecordManager.end_record()
 
-            # 完成追踪（从 record_service 获取 LLM 数据，异步持久化）
-            if trace_collector:
-                try:
-                    trace_collector.on_complete(record_service)
-                except Exception as e:
-                    logger.debug(f"Trace complete failed: {e}")
+            # TraceCollector.on_complete 已在 Agent.process_message 的 finally 中调用。
 
             # 发送完成消息
             try:

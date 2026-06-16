@@ -242,21 +242,25 @@ SELECT add_retention_policy('obs_scores', INTERVAL '180 days');
 
 ### 3.1 架构：事件流旁路收集
 
-利用已有的结构化事件流，在 SSE handler 中旁路收集追踪数据：
+> **更新（2026-06-15，方案 C）**：原方案在 SSE handler 调用方旁路收集，导致每个新调用方都要各接一遍（4 个渠道全部遗漏）。
+> 现已下沉到 `Agent.process_message()` 内部，自动从 `record_service` 读取所有 trace 上下文（含 source_type），
+> 实现渠道层零改造自动覆盖所有来源。详见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。
+
+利用已有的结构化事件流，在 `Agent.process_message()` 内部旁路收集追踪数据：
 
 ```
-SSE handler 中的 async for event 循环
-  ├── event_type == "tool_start"  → 创建 span（记录开始时间）
-  ├── event_type == "tool_result" → 关闭 span（记录结果、耗时）
-  ├── event_type == "llm_call"   → 创建 generation span（记录完整 messages）
-  ├── event_type == "response"   → 收集最终回复
-  ├── event_type == "progress"   → 记录进度信息
-  └── event_type == "clarification" → 记录澄清事件
+Agent.process_message() 内部 wrapper
+  ├── 从 record_service 解析 trace 上下文（session/tenant/user/source_type/subagent）
+  ├── 初始化 TraceCollector（_record 为空时静默跳过：Gradio/CLI/Scheduler）
+  └── async for event in self._process_message_impl(...):
+        ├── trace_collector.on_event(event)
+        └── yield event
+  try/except/finally 中处理 on_error / on_complete
 LLM 调用信息从已有的 SessionRecordService 获取（token、model、duration）
 ```
 
 **核心优势**：
-- **最小侵入 agent.py**：仅在两个 LLM 调用点后各 yield 一个事件（约 4 行代码）
+- **渠道零改造**：所有现有渠道（Web/wecom/wecom_kf/dingtalk/feishu）和未来新增渠道自动产生 trace，调用方无需任何 trace 相关修改
 - **数据来源已结构化**：事件流本身包含 `type`、`timestamp`、`toolName`、`toolArgs`、`result` 等字段
 - **LLM 调用数据已有**：`SessionRecordService` 已在每个迭代中收集 token 用量、model、provider、duration
 - **LLM 完整上下文**：`llm_call` 事件携带完整 messages 数组，TraceCollector 只保留最后一次（避免重复存储）
@@ -458,6 +462,10 @@ class TraceCollector:
 ```
 
 ### 3.4 在 SSE handler 中集成
+
+> **更新（2026-06-15，方案 C）**：本节原描述的「在 `main.py:event_generator` 中旁路接入」已废弃。
+> TraceCollector 现已在 `Agent.process_message()` 内部接入，`main.py:event_generator` 中的旁路代码已全部移除。
+> 所有非 SSE 渠道路径（channel_routes、scheduler 等）自动产生 trace，无需各接一遍。详见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。
 
 在 `src/main.py` 的 `event_generator()` 中，只需在现有 `async for event` 循环前后各加一行：
 

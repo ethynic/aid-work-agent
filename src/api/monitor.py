@@ -33,6 +33,8 @@ class SessionSummary(BaseModel):
     error_count: int = 0
     last_trace_at: Optional[str] = None
     first_input: Optional[str] = None
+    source_type: Optional[str] = None
+    subagent_id: Optional[str] = None
 
 
 class TraceSummary(BaseModel):
@@ -84,6 +86,7 @@ class TraceDetail(BaseModel):
     source_type: str = "chat"
     error_message: Optional[str] = None
     created_at: Optional[str] = None
+    channel_info: Optional[Dict[str, Any]] = None
 
 
 class SessionListResponse(BaseModel):
@@ -144,6 +147,7 @@ async def list_traced_sessions(
     tenant_id: Optional[str] = Query(None),
     time_range: Optional[str] = Query(None, description="时间范围：1h/24h/7d/30d"),
     status: Optional[str] = Query(None, description="状态筛选：completed/failed/cancelled"),
+    source_type: Optional[str] = Query(None, description="来源筛选：chat/wecom/wecom_kf/dingtalk/feishu"),
     search: Optional[str] = Query(None, description="搜索会话ID"),
 ):
     """获取有追踪数据的会话列表"""
@@ -163,6 +167,10 @@ async def list_traced_sessions(
             if status:
                 where_clauses.append("status = %s")
                 params.append(status)
+
+            if source_type:
+                where_clauses.append("source_type = %s")
+                params.append(source_type)
 
             if search:
                 where_clauses.append("session_id LIKE %s")
@@ -193,7 +201,9 @@ async def list_traced_sessions(
                     SUM(total_tokens) as total_tokens,
                     COUNT(*) FILTER (WHERE status = 'failed') as error_count,
                     MAX(created_at) as last_trace_at,
-                    (array_agg(input ORDER BY created_at ASC))[1] as first_input
+                    (array_agg(input ORDER BY created_at ASC))[1] as first_input,
+                    MIN(source_type) as source_type,
+                    MIN(subagent_id) as subagent_id
                 FROM obs_traces
                 {where_sql}
                 GROUP BY session_id, tenant_id, user_id
@@ -212,6 +222,8 @@ async def list_traced_sessions(
                     error_count=r["error_count"] or 0,
                     last_trace_at=_format_ts(r.get("last_trace_at")),
                     first_input=(r.get("first_input") or "")[:200],
+                    source_type=r.get("source_type"),
+                    subagent_id=r.get("subagent_id"),
                 )
                 for r in rows
             ]
@@ -425,6 +437,27 @@ async def get_trace_detail(
                 error_message=trace_row.get("error_message"),
                 created_at=_format_ts(trace_row.get("created_at")),
             )
+
+            # 渠道来源时，跨库补充 channel_sessions 业务信息（失败不影响 trace 返回）
+            if trace.source_type in ('wecom', 'wecom_kf', 'dingtalk', 'feishu'):
+                try:
+                    from src.db.database import get_db_connection
+                    with get_db_connection() as biz_cur:
+                        biz_cur.execute("""
+                            SELECT title, username, channel_type, channel_user_id, channel_chat_id
+                            FROM channel_sessions WHERE session_id = %s
+                        """, (trace.session_id,))
+                        ch = biz_cur.fetchone()
+                        if ch:
+                            trace.channel_info = {
+                                "title": ch.get("title"),
+                                "username": ch.get("username"),
+                                "channel_type": ch.get("channel_type"),
+                                "channel_user_id": ch.get("channel_user_id"),
+                                "channel_chat_id": ch.get("channel_chat_id"),
+                            }
+                except Exception as e:
+                    logger.warning(f"Failed to load channel info for session {trace.session_id}: {e}")
 
             # 查询 spans
             cur.execute("""

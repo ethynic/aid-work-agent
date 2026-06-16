@@ -22,6 +22,8 @@ export interface SessionSummary {
   error_count: number
   last_trace_at: string | null
   first_input: string | null
+  source_type: string | null
+  subagent_id: string | null
 }
 
 export interface TraceSummary {
@@ -58,6 +60,13 @@ export interface TraceDetail {
   source_type: string
   error_message: string | null
   created_at: string | null
+  channel_info?: {
+    title: string | null
+    username: string | null
+    channel_type: string | null
+    channel_user_id: string | null
+    channel_chat_id: string | null
+  } | null
 }
 
 export interface SpanDetail {
@@ -81,6 +90,7 @@ export async function getTracedSessions(params: {
   tenant_id?: string
   time_range?: string
   status?: string
+  source_type?: string
   search?: string
 }): Promise<{ success: boolean; data: SessionSummary[]; total: number; page: number; page_size: number; total_pages: number }> {
   const query = new URLSearchParams()
@@ -89,6 +99,7 @@ export async function getTracedSessions(params: {
   if (params.tenant_id) query.set('tenant_id', params.tenant_id)
   if (params.time_range) query.set('time_range', params.time_range)
   if (params.status) query.set('status', params.status)
+  if (params.source_type) query.set('source_type', params.source_type)
   if (params.search) query.set('search', params.search)
 
   const res = await fetch(`${API_BASE}/sessions?${query.toString()}`, {

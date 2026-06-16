@@ -16,6 +16,15 @@
           <option value="failed">失败</option>
           <option value="cancelled">已取消</option>
         </select>
+        <select v-model="filterSourceType" @change="loadData"
+          class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
+          <option value="">全部来源</option>
+          <option value="chat">Web</option>
+          <option value="wecom">企微</option>
+          <option value="wecom_kf">企微客服</option>
+          <option value="dingtalk">钉钉</option>
+          <option value="feishu">飞书</option>
+        </select>
         <select v-model="timeRange" @change="loadData"
           class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
           <option value="">全部时间</option>
@@ -41,6 +50,7 @@
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-12">序号</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">会话ID</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">首次输入</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-24">来源</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-20">Trace数</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-24">Token</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-16">错误</th>
@@ -53,6 +63,12 @@
                 <td class="px-4 py-2 text-xs text-muted">{{ (page - 1) * pageSize + idx + 1 }}</td>
                 <td class="px-4 py-2 text-xs text-default font-mono">{{ s.session_id.substring(0, 16) }}...</td>
                 <td class="px-4 py-2 text-sm text-default max-w-xs truncate">{{ s.first_input || '-' }}</td>
+                <td class="px-4 py-2 text-sm">
+                  <span :class="sourceBadgeClass(s.source_type)"
+                    class="inline-block px-1.5 py-0.5 rounded text-xs font-medium">
+                    {{ sourceLabel(s.source_type) }}
+                  </span>
+                </td>
                 <td class="px-4 py-2 text-sm text-default">{{ s.trace_count }}</td>
                 <td class="px-4 py-2 text-sm text-default">{{ formatTokens(s.total_tokens) }}</td>
                 <td class="px-4 py-2 text-sm">
@@ -99,8 +115,35 @@ const pageSize = 20
 const total = ref(0)
 const totalPages = ref(0)
 const filterStatus = ref('')
+const filterSourceType = ref('')
 const timeRange = ref('')
 const search = ref('')
+
+const SOURCE_LABELS: Record<string, string> = {
+  chat: 'Web',
+  wecom: '企微',
+  wecom_kf: '企微客服',
+  dingtalk: '钉钉',
+  feishu: '飞书',
+}
+
+const SOURCE_BADGE_CLASSES: Record<string, string> = {
+  chat: 'bg-gray-100 text-gray-700',
+  wecom: 'bg-success-100 text-success-700',
+  wecom_kf: 'bg-success-100 text-success-700',
+  dingtalk: 'bg-primary-100 text-primary-700',
+  feishu: 'bg-warning-100 text-warning-700',
+}
+
+function sourceLabel(s: string | null): string {
+  if (!s) return '-'
+  return SOURCE_LABELS[s] || s
+}
+
+function sourceBadgeClass(s: string | null): string {
+  if (!s) return 'bg-gray-100 text-gray-700'
+  return SOURCE_BADGE_CLASSES[s] || 'bg-gray-100 text-gray-700'
+}
 
 function goToSession(sessionId: string) {
   router.push(`/portal/monitoring/${sessionId}`)
@@ -126,6 +169,7 @@ async function loadData() {
       page: page.value,
       page_size: pageSize,
       status: filterStatus.value || undefined,
+      source_type: filterSourceType.value || undefined,
       time_range: timeRange.value || undefined,
       search: search.value || undefined,
     })

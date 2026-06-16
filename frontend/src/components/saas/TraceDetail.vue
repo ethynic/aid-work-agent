@@ -13,7 +13,7 @@
       <template v-else-if="trace">
         <!-- 基本信息 -->
         <div class="bg-white rounded-xl shadow-sm border border-default p-4">
-          <div class="grid grid-cols-4 gap-4 text-sm">
+          <div :class="trace.channel_info ? 'grid grid-cols-3 gap-4 text-sm' : 'grid grid-cols-4 gap-4 text-sm'">
             <div>
               <span class="text-muted text-xs">状态</span>
               <div :class="statusClass(trace.status)" class="inline-block px-2 py-0.5 rounded text-xs font-medium mt-1">
@@ -43,6 +43,19 @@
             <div>
               <span class="text-muted text-xs">来源</span>
               <div class="text-default mt-1">{{ trace.source_type }}</div>
+            </div>
+            <div v-if="trace.channel_info">
+              <span class="text-muted text-xs">渠道用户</span>
+              <div class="text-default mt-1">
+                {{ trace.channel_info.username || '-' }}
+                <span v-if="trace.channel_info.channel_user_id" class="text-xs text-muted font-mono">
+                  ({{ trace.channel_info.channel_user_id }})
+                </span>
+              </div>
+            </div>
+            <div v-if="trace.channel_info">
+              <span class="text-muted text-xs">会话标题</span>
+              <div class="text-default mt-1">{{ trace.channel_info.title || '-' }}</div>
             </div>
             <div>
               <span class="text-muted text-xs">时间</span>

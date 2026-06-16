@@ -84,10 +84,9 @@
   - [x] 已完成
 
 - [ ] **1.3.2 在非 SSE 路径中集成追踪（process_message_sync 路径）**
-  - 渠道路由调用 `process_message_sync()` 时，事件通过 `progress_callback` 转发
-  - 在渠道适配器中创建 `TraceCollector`，在 progress_callback 中调用 `on_event`
-  - 或者：在 `process_message_sync` 内部集成 TraceCollector（更简洁）
-  - [ ] 未开始（后续迭代）
+  - ⚠️ **本项已由方案 C 接管**：改为「在 `Agent.process_message()` 内部接入 TraceCollector，从 record_service 自动读取上下文，所有渠道零改造覆盖」
+  - 详见：[observability-channel-sessions-dev-plan.md](./observability-channel-sessions-dev-plan.md) 阶段 A
+  - 原方案（调用方旁路收集）已废弃，理由见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md) §五
 
 - [x] **1.3.3 在 agent.py 中 yield `llm_call` 事件**
   - 在 `process_message()` 主循环和 `execute_as_subagent()` 两个 LLM 调用点后，各 yield 一个 `llm_call` 事件
