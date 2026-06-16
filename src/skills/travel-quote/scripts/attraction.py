@@ -218,11 +218,19 @@ def _llm_extract_tickets(
 1. **取第一个数字价格（挂牌价/原价）**：价格表中每行有多个数字时，第一个数字是挂牌价（用于报价），后面的数字是渠道价/团队价（不用于报价）。例如 "联票 | 全体游客 | 140 | 90" 应取 140
 2. **按票种去重，每种票型只返回一条**：如果价格表中有旺季/淡季多行同票种（如"成人票 | 普通游客 | 120 | 旺季"和"成人票 | 普通游客 | 100 | 淡季"），只取第一个出现的（即旺季价格）
 3. **团队票 vs 成人票**：如果价格表中同时有"成人票"和"团队票"，只保留"团队票"（因为本报价是团队出行）
-4. **只提取团队中有人数的票种**：团队构成中人数为0的票种不要提取。例如学生=0则不要提取学生票
-5. **ticket_type 取值**：adult / student / child_half / elder。如果价格表不区分票种（统一票价），ticket_type 用 "adult"
-6. 景点不匹配时 confirmed=false，但仍提取价格
-7. 门票价格表为空时，tickets 返回空数组
-8. 只返回 JSON，不要其他文字"""
+4. **【严格按价格表提取，禁止脑补】**这是最重要的规则：
+   - 价格表中**明确写了什么票种**，就只返回这些票种
+   - 价格表**没有写**的票种，**绝对不要返回**，也**绝对不要按比例推算**
+   - ❌ 禁止："价格表只有成人 140，团队有儿童，所以儿童票应该是 140÷2=70"——这种半价推算是**严禁**的
+   - ❌ 禁止："价格表只有成人 140，团队有学生，所以学生票应该是 140×0.5=70"——这种比例推算也是严禁的
+   - ❌ 禁止："价格表只有成人 140，团队有老人，所以老人免票"——价格表没写就**不要返回老人票**
+   - ✅ 正确：价格表只有"成人 140"一行，无论团队构成是 30 名学生还是 30 名成人+10 名儿童，都只返回**一条 adult 票（140元）**，所有团队人数（学生/儿童/老人）都按这一个价格计费
+   - ✅ 正确：价格表有"成人 140 / 学生 70 / 老人 0"三行，且团队有学生有老人，返回三条对应票种
+5. **团队构成信息仅供参考**：上面给的"成人/儿童/学生/老人"人数**只用于判断该票种是否需要返回**（如果对应票种在价格表里有但团队人数为 0，则不返回），**绝不用于推算价格**
+6. **ticket_type 取值**：adult / student / child_half / elder。**严格对应价格表里的票种文字**——价格表写"成人"用 adult，写"学生"用 student，写"儿童"用 child_half，写"老人"用 elder；价格表只写"普通游客/全体游客/统一票价"用 adult
+7. 景点不匹配时 confirmed=false，但仍提取价格
+8. 门票价格表为空时，tickets 返回空数组
+9. 只返回 JSON，不要其他文字"""
 
     try:
         raw = call_llm(prompt)
@@ -375,6 +383,9 @@ def _build_ticket_items(
         if teacher_count > 0 and ticket_type in ("adult", "student"):
             teacher_subtotal = round(unit_price * teacher_count, 2)
 
+        # subtotal = 单价 × 数量 ÷ 总人数（团队人均分摊）
+        subtotal = round(unit_price * count / total_people, 2) if total_people > 0 else 0
+
         items.append({
             "category": "门票/项目",
             "name": ticket.get("name") or f"{name}({ticket_type}票)",
@@ -383,7 +394,7 @@ def _build_ticket_items(
             "unit": "人",
             "frequency": 1,
             "freq_unit": "次",
-            "subtotal": unit_price,
+            "subtotal": subtotal,
             "teacher_subtotal": teacher_subtotal,
             "remark": ticket.get("remark") or "",
         })
@@ -409,11 +420,13 @@ def _build_project_items(
         if billing == "per_group":
             quantity = 1
             unit = "团"
+            # 按团计费：行总价 = 单价（团价），subtotal = 团价 ÷ 总人数
             subtotal = round(unit_price / total_people, 2) if total_people > 0 else 0
             teacher_subtotal = 0
         else:
             quantity = total_people
             unit = "人"
+            # 按人计费：行总价 = 单价 × 人数，subtotal = 单价 × 人数 ÷ 总人数 = 单价
             subtotal = unit_price
             teacher_subtotal = round(unit_price * teacher_count, 2) if teacher_count > 0 else 0
 

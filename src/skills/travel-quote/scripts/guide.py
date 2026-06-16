@@ -9,7 +9,7 @@ from db import get_db
 
 def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
                          guide_type: str, trip_days: int,
-                         season_type: str) -> list:
+                         season_type: str, total_people: int = 1) -> list:
     """计算导游费用"""
     with get_db() as conn:
         params = [tenant_id, guide_type]
@@ -34,6 +34,8 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
 
     if guide.get('billing_method') == 'per_trip' and guide.get('trip_rate'):
         cost = float(guide['trip_rate'])
+        # subtotal = 按团总价 ÷ 总人数
+        subtotal = round(cost / total_people, 2) if total_people > 0 else round(cost, 2)
         items.append({
             "category": "导游",
             "name": guide.get('guide_type_label', guide_type),
@@ -42,7 +44,7 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
             "unit": "团",
             "frequency": 1,
             "freq_unit": "次",
-            "subtotal": round(cost, 2),
+            "subtotal": subtotal,
             "teacher_subtotal": 0,
             "remark": "按团计费",
         })
@@ -52,6 +54,8 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
             rate += float(guide['language_premium'])
         multiplier = float(guide.get('peak_season_multiplier', 1.0)) if season_type == 'peak' else 1.0
         total = rate * trip_days * multiplier
+        # subtotal = 按日总价 ÷ 总人数
+        subtotal = round(total / total_people, 2) if total_people > 0 else round(total, 2)
         items.append({
             "category": "导游",
             "name": guide.get('guide_type_label', guide_type),
@@ -60,7 +64,7 @@ def calculate_guide_cost(items: list, tenant_id: str, region_names: List[str],
             "unit": "名",
             "frequency": trip_days,
             "freq_unit": "天",
-            "subtotal": round(total, 2),
+            "subtotal": subtotal,
             "teacher_subtotal": 0,
             "remark": guide.get('guide_level_label', '') + (" 旺季加价" if multiplier > 1 else ""),
         })

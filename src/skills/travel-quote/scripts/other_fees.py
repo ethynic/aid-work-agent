@@ -25,16 +25,20 @@ def calculate_other_fees(items: list, tenant_id: str, total_people: int,
         price = float(fee['unit_price'])
 
         if method == 'per_person':
+            # 行总价 = 单价 × 总人数；subtotal（人均）= 单价 × 总人数 ÷ 总人数 = 单价
             subtotal = price
             teacher_subtotal = round(price * teacher_count, 2) if teacher_count > 0 else 0
         elif method == 'per_person_per_day':
+            # 行总价 = 单价 × 总人数 × 天数；subtotal（人均）= 单价 × 天数
             subtotal = price * trip_days
             teacher_subtotal = round(price * teacher_count * trip_days, 2) if teacher_count > 0 else 0
         elif method == 'per_trip':
-            subtotal = round(price / total_people, 2)
+            # 按团计费：行总价 = 单价；subtotal（人均）= 单价 ÷ 总人数
+            subtotal = round(price / total_people, 2) if total_people > 0 else price
             teacher_subtotal = 0
         elif method == 'per_vehicle_per_day':
-            subtotal = round(price * vehicle_count * trip_days / total_people, 2)
+            # 按车按天：行总价 = 单价 × 车数 × 天数；subtotal（人均）= 行总价 ÷ 总人数
+            subtotal = round(price * vehicle_count * trip_days / total_people, 2) if total_people > 0 else price
             teacher_subtotal = 0
         else:
             subtotal = price

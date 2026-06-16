@@ -52,7 +52,6 @@ def generate_quote(params: dict) -> dict:
     tenant_id = params.get('tenant_id', '')
     itinerary_text = params.get('itinerary_text', '')
     start_date = params.get('start_date', date.today().isoformat())
-    profit_rate = params.get('profit_rate', 0.15)
     course_name = params.get('course_name', '')
     company_name = params.get('company_name', '')
     template_path = params.get('template_path')
@@ -162,7 +161,8 @@ def generate_quote(params: dict) -> dict:
 
     # Step 8: 导游
     items = calculate_guide_cost(
-        items, tenant_id, region_names, guide_type, trip_days, season_type
+        items, tenant_id, region_names, guide_type, trip_days, season_type,
+        total_people=total_people
     )
 
     # Step 9: 其他费用
@@ -174,11 +174,10 @@ def generate_quote(params: dict) -> dict:
     # 过滤价格为0的项目
     items = [item for item in items if (item.get('subtotal') or 0) > 0 or (item.get('unit_price') or 0) > 0]
 
-    # 汇总
+    # 汇总：单价已含利润，直接累加。先算总价再回推人均，确保 人均 × 人数 = 总价 恒等
     cost_per_person = round(sum(item.get('subtotal') or 0 for item in items), 2)
-    total_cost = round(cost_per_person * total_people, 2)
-    quote_per_person = round(cost_per_person * (1 + profit_rate), 2)
-    quote_total = round(quote_per_person * total_people, 2)
+    quote_total = round(cost_per_person * total_people, 2)
+    quote_per_person = round(quote_total / total_people, 2) if total_people > 0 else 0.0
     teacher_total = round(sum(item.get('teacher_subtotal') or 0 for item in items), 2)
 
     # 导出 Excel
@@ -191,11 +190,9 @@ def generate_quote(params: dict) -> dict:
         "total_people": total_people,
         "teacher_count": teacher_count,
         "items": items,
-        "total_cost": total_cost,
         "cost_per_person": cost_per_person,
         "teacher_total": teacher_total,
         "single_supplement": single_supplement,
-        "profit_rate": profit_rate,
         "quote_per_person": quote_per_person,
         "quote_total": quote_total,
     }

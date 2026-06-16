@@ -44,9 +44,14 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
         if room_price == 0:
             room_price = float(default_room.get('agency_price') or default_room['retail_price'])
 
-        pax_per_room = 2
-        subtotal = round(room_price / pax_per_room * nights, 2)
-        teacher_cost = round(subtotal * teacher_count, 2)
+        # 酒店按"间"计费：间数 = ceil(总人数/2)，行总价 = 房价 × 间数 × 夜数
+        # subtotal（人均）= 行总价 ÷ 总人数
+        import math
+        rooms_per_n = math.ceil(total_people / 2) if total_people > 0 else 1
+        room_nights = rooms_per_n * nights
+        row_total = round(room_price * room_nights, 2)
+        subtotal = round(row_total / total_people, 2) if total_people > 0 else 0
+        teacher_cost = round(room_price * nights * teacher_count, 2) if teacher_count > 0 else 0
 
         couple_people = couples * 2
         remaining = total_people - couple_people
@@ -58,13 +63,13 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
             "category": "住宿",
             "name": f"{default_room.get('room_type_label', '标准间')}",
             "unit_price": room_price,
-            "quantity": pax_per_room,
-            "unit": "人",
+            "quantity": rooms_per_n,
+            "unit": "间",
             "frequency": nights,
             "freq_unit": "晚",
             "subtotal": subtotal,
             "teacher_subtotal": teacher_cost,
-            "remark": f"两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
+            "remark": f"两人一间，{rooms_per_n}间×{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
         })
 
         return items, single_supplement
@@ -126,9 +131,14 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
                         hotel_name = parts[-1].strip()
                     break
 
-        pax_per_room = 2
-        subtotal = round(price / pax_per_room * nights, 2)
-        teacher_cost = round(subtotal * teacher_count, 2)
+        # 酒店按"间"计费：间数 = ceil(总人数/2)，行总价 = 房价 × 间数 × 夜数
+        # subtotal（人均）= 行总价 ÷ 总人数
+        import math
+        rooms_per_n = math.ceil(total_people / 2) if total_people > 0 else 1
+        room_nights = rooms_per_n * nights
+        row_total = round(price * room_nights, 2)
+        subtotal = round(row_total / total_people, 2) if total_people > 0 else 0
+        teacher_cost = round(price * nights * teacher_count, 2) if teacher_count > 0 else 0
 
         students = total_people - teacher_count
         couple_people = couples * 2
@@ -140,13 +150,13 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
             "category": "住宿",
             "name": hotel_name,
             "unit_price": price,
-            "quantity": pax_per_room,
-            "unit": "人",
+            "quantity": rooms_per_n,
+            "unit": "间",
             "frequency": nights,
             "freq_unit": "夜",
             "subtotal": subtotal,
             "teacher_subtotal": teacher_cost,
-            "remark": f"{city}{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
+            "remark": f"{city}{nights}晚，{rooms_per_n}间×{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
         })
 
     return items, single_supplement
@@ -171,9 +181,14 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         logger.warning(f"[travel-quote] 酒店 doc_id={doc_id} 价格表无有效价格")
         return items, 0
 
-    pax_per_room = 2
-    subtotal = round(default_price / pax_per_room * nights, 2)
-    teacher_cost = round(subtotal * teacher_count, 2)
+    # 酒店按"间"计费：间数 = ceil(总人数/2)，行总价 = 房价 × 间数 × 夜数
+    # subtotal（人均）= 行总价 ÷ 总人数
+    import math
+    rooms_per_n = math.ceil(total_people / 2) if total_people > 0 else 1
+    room_nights = rooms_per_n * nights
+    row_total = round(default_price * room_nights, 2)
+    subtotal = round(row_total / total_people, 2) if total_people > 0 else 0
+    teacher_cost = round(default_price * nights * teacher_count, 2) if teacher_count > 0 else 0
 
     single_supplement = 0
     students = total_people - teacher_count
@@ -186,13 +201,13 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         "category": "住宿",
         "name": "酒店住宿",
         "unit_price": default_price,
-        "quantity": pax_per_room,
-        "unit": "人",
+        "quantity": rooms_per_n,
+        "unit": "间",
         "frequency": nights,
         "freq_unit": "晚",
         "subtotal": subtotal,
         "teacher_subtotal": teacher_cost,
-        "remark": "两人一间" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
+        "remark": f"两人一间，{rooms_per_n}间×{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
     })
 
     return items, single_supplement
