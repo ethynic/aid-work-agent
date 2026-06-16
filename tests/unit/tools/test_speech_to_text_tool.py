@@ -639,3 +639,39 @@ class TestTranscribeVoiceWithASR:
             assert result == "[语音消息]"
             # 当前实现不做空检查，直接传到底层工具
             assert mock_exec.called
+
+    @pytest.mark.asyncio
+    async def test_warning_log_with_braces_in_error(self, transcribe_fn, valid_audio_b64):
+        """回归测试：ASR 工具返回的 error 含 { } 时，warning 日志不应让 loguru 崩溃"""
+        with patch(
+            "src.tools.asr.speech_to_text_tool.SpeechToTextTool.execute",
+            new=AsyncMock(return_value={
+                "success": False,
+                "error": 'HTTP 500: {"code":"bad {req}"}',
+            }),
+        ):
+            try:
+                result = await transcribe_fn(valid_audio_b64, "mp3")
+            except ValueError as e:
+                if "unmatched '{' in format" in str(e) or "KeyError" in str(e):
+                    pytest.fail(f"loguru 二次解析失败: {e}")
+                raise
+            assert result == "[语音消息]"
+
+    @pytest.mark.asyncio
+    async def test_error_log_with_braces_in_exception(self, transcribe_fn, valid_audio_b64):
+        """回归测试：ASR 工具抛出的异常消息含 { } 时，error 日志不应让 loguru 崩溃
+
+        复现原 bug：'调用 ASR 工具异常: unmatched '{' in format spec'
+        """
+        with patch(
+            "src.tools.asr.speech_to_text_tool.SpeechToTextTool.execute",
+            new=AsyncMock(side_effect=ValueError("unmatched '{' in format spec")),
+        ):
+            try:
+                result = await transcribe_fn(valid_audio_b64, "mp3")
+            except ValueError as e:
+                if "unmatched '{' in format" in str(e):
+                    pytest.fail(f"loguru 二次解析失败（原始 bug 复现）: {e}")
+                raise
+            assert result == "[语音消息]"

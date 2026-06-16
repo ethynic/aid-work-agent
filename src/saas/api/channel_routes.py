@@ -299,10 +299,10 @@ async def _transcribe_voice_with_asr(audio_content: str, audio_format: str = "mp
         if result.get("success"):
             return result.get("text", "")
         else:
-            logger.warning(f"[WeCom KF] 语音转文字失败: {result.get('error')}")
+            logger.warning("[WeCom KF] 语音转文字失败: {}", result.get("error"))
             return "[语音消息]"
     except Exception as e:
-        logger.error(f"[WeCom KF] 调用 ASR 工具异常: {e}")
+        logger.error("[WeCom KF] 调用 ASR 工具异常: {}", e)
         return "[语音消息]"
 
 

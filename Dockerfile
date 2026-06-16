@@ -53,6 +53,7 @@ RUN pip install --no-cache-dir --no-deps 'mcp>=1.27.0' -i https://mirrors.cloud.
     python -c "import mcp; print('mcp loaded OK, version:', mcp.__version__ if hasattr(mcp, '__version__') else 'unknown')"
 
 # ============== 阶段2：运行阶段 ==============
+# syntax=docker/dockerfile:1.4
 FROM python:3.11-slim
 
 # 设置环境变量
@@ -72,7 +73,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # 安装运行时依赖（字体、浏览器等）
 # 使用清华镜像加速 Debian 包下载
-RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
+# BuildKit cache mount 复用 apt 包缓存，避免每次重新下载
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
     echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
     echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -115,8 +119,7 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     libcairo2 \
     libatspi2.0-0 \
     # gosu 用于 entrypoint 中以非 root 用户身份启动 gunicorn（保持 PID 1 信号处理）
-    gosu \
-    && rm -rf /var/lib/apt/lists/*
+    gosu
 
 # 创建非 root 用户及 home 目录（Uvicorn control server 需要）
 # 注意：uid=1000 与宿主机 SMB 挂载的 ubuntu 用户 uid 保持一致
@@ -141,7 +144,9 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 
 # 安装 Playwright Chromium 浏览器（表格渲染为图片）
 # PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
-RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
+# BuildKit cache mount 复用 Playwright 浏览器缓存
+RUN --mount=type=cache,target=/root/.cache/ms-playwright \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
     playwright install chromium --with-deps || \
     playwright install chromium --with-deps
 

@@ -81,3 +81,66 @@ logs/
 *.pdf
 *.zip
 test_uploads/
+
+# 前端开发目录（不进容器）
+frontend-dev
+frontend-dev.bat
+frontend/.nuxt
+frontend/.output
+frontend/.vite
+frontend/coverage
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# 大体积文档/规格
+openspec/
+plans/
+docs/
+ext/
+
+# 子智能体/技能 markdown（运行时由 volumes 挂载）
+subagents/*.md
+src/skills/
+
+# 上传/存储数据
+storage/
+uploads/
+source_storage/
+memories/
+backups/
+test_uploads/
+
+# 本地日志
+*.log
+log/
+
+# 媒体文件
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+*.ico
+
+# Office 文档
+*.docx
+*.xlsx
+*.pptx
+*.tar.gz
+*.tgz
+
+# python 编译产物
+*.pyc
+*.pyo
+__pycache__/
+**/__pycache__/
+
+# playwright 缓存（避免重复传入）
+playwright-report/
+test-results/
+.playwright/
