@@ -436,8 +436,11 @@ function getAttachmentDownloadUrl(att: any): string {
   // local_path 格式: data/attachments/{session_id}/{filename}
   const parts = att.local_path.split('/')
   const filename = parts[parts.length - 1]
-  const ref = encodeURIComponent(`${selectedSessionId.value}/${filename}`)
-  return `/api/saas/external-customers/attachments/${ref}/download`
+  const params = new URLSearchParams({
+    session_id: selectedSessionId.value,
+    filename,
+  })
+  return `/api/saas/external-customers/attachments/download?${params.toString()}`
 }
 
 /**

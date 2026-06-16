@@ -32,13 +32,14 @@ from src.saas.services.channel_factory import ChannelFactory
 from src.channels.session import channel_session_manager
 from src.channels.idempotency import MessageDeduplicator
 from src.services.session_record import SessionRecordManager
+from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
 
 router = APIRouter(tags=["租户渠道回调"])
 
 # 每个租户有独立的消息去重器
 _tenant_dedup_cache: dict[str, MessageDeduplicator] = {}
 
-# 附件保存目录
+# 旧版附件保存目录（保留用于向后兼容，新文件统一存到 storage/tenants/）
 ATTACHMENTS_DIR = os.path.join("data", "attachments")
 os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
 
@@ -145,10 +146,16 @@ def _get_file_extension(msgtype: str, filename: str = "") -> str:
 
 
 async def _download_and_build_attachments(
-    api_client, msg: dict, session_id: str
+    api_client, msg: dict, session_id: str, tenant_id: str = ""
 ) -> list:
     """
     下载微信媒体文件并构建附件列表。
+
+    新版（按 `backend_dev.md` 租户附件存储规范）保存到：
+        `storage/tenants/{tenant_id}/conversation/{filename}`
+
+    旧版仍写入 `data/attachments/{session_id}/`，但仅作为向后兼容兜底，新调用
+    不再产生旧路径文件。
 
     Returns:
         [{
@@ -158,7 +165,7 @@ async def _download_and_build_attachments(
             "mime_type": "image/jpeg",
             "file_size": 12345,
             "content": "<base64>",  # 用于传递给 agent
-            "local_path": "data/attachments/{session_id}/...",  # 用于持久化
+            "local_path": "storage/tenants/{tenant_id}/conversation/...",  # 用于持久化
             "saved_at": "2026-06-14 12:00:00",
         }]
     """
@@ -218,11 +225,21 @@ async def _download_and_build_attachments(
     file_size = len(content)
 
     # 保存到磁盘
+    # 新版路径：storage/tenants/{tenant_id}/conversation/{filename}
+    # 若 tenant_id 缺失则回退到旧版 data/attachments/{session_id}/，避免丢文件
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_filename = f"{timestamp}_{media_id}{file_ext}"
-    session_dir = os.path.join(ATTACHMENTS_DIR, session_id)
-    os.makedirs(session_dir, exist_ok=True)
-    local_path = os.path.join(session_dir, safe_filename)
+
+    if tenant_id:
+        tenant_dir = ensure_tenant_storage_dir(tenant_id, "conversation")
+        local_path = os.path.join(tenant_dir, safe_filename)
+    else:
+        session_dir = os.path.join(ATTACHMENTS_DIR, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        local_path = os.path.join(session_dir, safe_filename)
+        logger.warning(
+            f"[_download_and_build_attachments] tenant_id 缺失，回退旧路径: {local_path}"
+        )
 
     try:
         with open(local_path, "wb") as f:
@@ -1363,7 +1380,7 @@ async def _process_tenant_wecom_kf_messages(
                 if msgtype in ("image", "voice", "video", "file"):
                     logger.info(f"[wecom_kf] 检测到多媒体消息，开始下载附件: msgtype={msgtype}")
                     user_attachments = await _download_and_build_attachments(
-                        adapter.api_client, msg, session_id
+                        adapter.api_client, msg, session_id, tenant_id
                     )
                     logger.info(f"[wecom_kf] 附件下载完成: count={len(user_attachments)}, attachments={[{'type': a.get('type'), 'file_name': a.get('file_name'), 'content_len': len(a.get('content',''))} for a in user_attachments]}")
 

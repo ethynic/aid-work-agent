@@ -230,3 +230,76 @@ cursor.execute(
 - 业务数据表（`bs_` 开头）必须包含 `tenant_id` 字段，详见 [database_dev.md](./database_dev.md)
 - 平台管理员访问租户前台 (`/t/{tenant_id}`) 时，前端必须在所有 API 请求中添加 `X-Tenant-Id` header
 - 租户管理员只能访问自己租户的数据，`require_admin` 会验证 `X-Tenant-Id` 与用户自身 `tenant_id` 是否一致
+
+## 租户附件存储规范
+
+**核心规则**：所有租户产生的附件（上传文件、生成文件、导出文件等），**必须**统一存放到 `storage/tenants/{tenant_id}/` 目录下，并按业务场景建立子目录分类存放。
+
+### 目录结构
+
+```
+storage/
+└── tenants/
+    ├── {tenant_id_a}/
+    │   ├── conversation/         # 对话中产生的附件
+    │   ├── knowledge/            # 知识库附件
+    │   ├── export/               # 业务导出文件
+    │   ├── report/               # 报表/统计文件
+    │   └── ...                   # 其他业务场景
+    └── {tenant_id_b}/
+        └── ...
+```
+
+### 常见业务场景子目录
+
+| 子目录 | 用途 |
+|--------|------|
+| `conversation/` | 对话过程中用户上传/Agent 生成的附件 |
+| `knowledge/` | 知识库文档、向量化文件 |
+| `export/` | 业务数据导出（Excel、CSV 等） |
+| `report/` | 统计报表、运营报告 |
+| `avatar/` | 用户/企业头像、Logo |
+| `temp/` | 临时文件（必须有清理机制） |
+
+### 实现要点
+
+1. **统一路径工具**：禁止在业务代码中直接拼路径字符串，必须通过统一的工具函数或配置项获取：
+
+   ```python
+   # ✅ 正确：使用工具函数
+   from src.core.storage import get_tenant_storage_path
+
+   file_path = get_tenant_storage_path(
+       tenant_id=tenant_id,
+       scene="conversation",
+       filename=filename
+   )
+   # 返回：storage/tenants/{tenant_id}/conversation/{filename}
+
+   # ❌ 错误：硬编码或随意拼路径
+   file_path = f"storage/uploads/tenant_{tenant_id}/files/{filename}"
+   ```
+
+2. **tenant_id 来源**：必须从 `request.state.tenant_id` 或 `TenantContext` 获取，禁止从用户输入或 URL 参数中直接拼接。
+
+3. **目录自动创建**：写入文件前必须确保目标目录存在：
+
+   ```python
+   import os
+   os.makedirs(os.path.dirname(file_path), exist_ok=True)
+   ```
+
+4. **历史目录迁移**：旧的 `storage/uploads/tenant_xxx/` 目录应逐步迁移到新结构，禁止新老结构并存产生歧义。
+
+### 优点
+
+- **备份友好**：备份整个 `storage/tenants/` 即可备份所有租户文件；按租户打包也只需打包对应子目录
+- **统计友好**：按租户维度统计附件数量、占用空间时，遍历一个目录即可
+- **隔离清晰**：删除某个租户时，只需删除其子目录，不会误删其他租户数据
+- **权限清晰**：可针对整个租户目录设置文件系统级别的访问权限
+
+### 注意事项
+
+- 禁止将附件存放到 `storage/` 根目录或 `storage/uploads/` 根目录
+- 禁止在租户目录下跳过场景子目录直接存放文件（如 `storage/tenants/{id}/xxx.pdf`）
+- 文件名必须保证唯一性，建议使用 `{prefix}_{uuid}.{ext}` 格式（如 `file_af08155fe5d9.docx`）

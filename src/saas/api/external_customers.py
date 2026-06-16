@@ -175,21 +175,30 @@ async def get_session_messages(
     return {"success": True, **result}
 
 
-@router.get("/attachments/{attachment_ref}/download")
+@router.get("/attachments/download")
 async def download_attachment(
     request: Request,
-    attachment_ref: str,
+    session_id: str,
+    filename: str,
 ):
     """下载已保存的附件（用于外部接待页面回显）
 
+    路径解析：
+        1. 新版（按 `backend_dev.md` 租户附件存储规范）：
+           `storage/tenants/{tenant_id}/conversation/{filename}`
+        2. 旧版（兼容迁移期历史附件）：
+           `data/attachments/{session_id}/{filename}`
+
+    租户归属校验通过 `channel_sessions.tenant_id` 完成，确保不会跨租户下载文件。
+
     Args:
-        attachment_ref: 格式为 {session_id}/{local_path_basename}（URL-safe 编码）
+        session_id: 会话ID
+        filename: 附件文件名（不含 session_id 子目录）
 
     Returns:
         文件二进制内容
     """
     import os as _os
-    from urllib.parse import unquote
     from fastapi.responses import FileResponse
 
     if not settings.saas.enabled:
@@ -201,13 +210,8 @@ async def download_attachment(
     if not tenant_id:
         raise HTTPException(status_code=400, detail="缺少租户信息")
 
-    # 解析 attachment_ref: {session_id}/{filename}
-    decoded_ref = unquote(attachment_ref)
-    parts = decoded_ref.split("/", 1)
-    if len(parts) != 2:
-        raise HTTPException(status_code=400, detail="无效的附件引用格式")
-
-    session_id, filename = parts
+    # 防止路径穿越：filename 只能取 basename
+    filename = _os.path.basename(filename)
 
     # 验证渠道会话属于该租户
     from src.channels.session import channel_session_manager
@@ -216,14 +220,22 @@ async def download_attachment(
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    if session.get("tenant_id") != tenant_id:
+    session_tenant_id = session.get("tenant_id")
+    if session_tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
-    # 从附件目录查找文件
+    # 解析文件路径：优先新版 storage/tenants/{tenant_id}/conversation/，回退旧版 data/attachments/
+    from src.core.storage import get_tenant_storage_abs_path
     from src.saas.api.channel_routes import ATTACHMENTS_DIR
 
-    local_path = _os.path.join(ATTACHMENTS_DIR, session_id, filename)
-    if not _os.path.exists(local_path):
+    new_path = get_tenant_storage_abs_path(session_tenant_id, "conversation", filename)
+    old_path = _os.path.abspath(_os.path.join(ATTACHMENTS_DIR, session_id, filename))
+
+    if _os.path.exists(new_path):
+        local_path = new_path
+    elif _os.path.exists(old_path):
+        local_path = old_path
+    else:
         raise HTTPException(status_code=404, detail="附件文件不存在")
 
     # 推断 MIME 类型
