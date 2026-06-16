@@ -109,6 +109,32 @@ recreate_db() {
         >/dev/null
 }
 
+# 修复 template1/template0/postgres 的 collation version 异常
+# 服务器上 glibc/locale 升级后常见，pg_database.datcollversion 与实际不一致，
+# 会导致 CREATE DATABASE 报 "template database template1 has a collation version, but no actual..."
+# 先尝试 REFRESH COLLATION VERSION（PG 推荐做法）；失败则清空 datcollversion 跳过检查
+fix_template_collation() {
+    local user="$1" pass="$2"
+    log "  修复 template 数据库的 collation version 异常（如有）..."
+    docker exec "${CONTAINER_NAME}" \
+        env PGPASSWORD="${pass}" \
+        psql -U "${user}" -d postgres -v ON_ERROR_STOP=0 -X <<'SQL' >/dev/null 2>&1
+DO $$
+DECLARE
+    dbname text;
+BEGIN
+    FOREACH dbname IN ARRAY ARRAY['template1', 'template0', 'postgres']
+    LOOP
+        BEGIN
+            EXECUTE format('ALTER DATABASE %I REFRESH COLLATION VERSION', dbname);
+        EXCEPTION WHEN OTHERS THEN
+            EXECUTE format('UPDATE pg_database SET datcollversion = NULL WHERE datname = %L', dbname);
+        END;
+    END LOOP;
+END $$;
+SQL
+}
+
 # 把 .sql.gz 解压后灌进目标库
 restore_from_gz() {
     local gz_file="$1" db="$2" user_val="$3" pass_val="$4"
@@ -178,6 +204,10 @@ log "==== PostgreSQL 恢复任务开始 ===="
 log "  容器: ${CONTAINER_NAME}"
 log "  备份目录: ${BACKUP_DIR}"
 log "  日志文件: ${LOG_FILE}"
+
+# 提前修复 template 数据库 collation version 异常
+# （glibc 升级后常见，不修复会导致 CREATE DATABASE 失败）
+fix_template_collation "${PROD_USER}" "${PROD_PASS}"
 
 # 解析最新的两个备份文件（按文件名前缀匹配）
 PROD_GZ=$(ls -1t "${BACKUP_DIR}/aid_work_agent_"*.sql.gz 2>/dev/null | grep -v "aid_work_agent2_" | head -1 || true)
