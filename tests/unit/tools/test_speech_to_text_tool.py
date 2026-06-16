@@ -224,13 +224,58 @@ class TestSpeechToTextAliyunAPI:
                 token = await tool._get_or_refresh_token(
                     access_key_id=mock_asr_config.aliyun_access_key_id,
                     access_key_secret=mock_asr_config.aliyun_access_key_secret,
-                    appkey=mock_asr_config.aliyun_appkey,
                 )
                 assert token == "test-token"
             except ValueError as e:
                 if "unmatched '{' in format" in str(e):
                     pytest.fail(f"复现 Bug: 'unmatched {{' in format spec' 错误: {e}")
                 raise
+
+    @pytest.mark.asyncio
+    async def test_get_token_uses_createtoken_api(self, tool, mock_asr_config):
+        """回归测试：使用阿里云 OpenAPI CreateToken（Version=2019-02-28），不再使用旧的 GetToken（2018-05-18）
+
+        复现的 Bug：日志中 'GetToken HTTP 404: Specified api is not found'
+        根因：旧代码使用已废弃的 /pop/2018-05-18/GetToken 路径和 Action=GetToken，应改用
+        OpenAPI 风格的 CreateToken（Version=2019-02-28，路径为 /）。
+        """
+        import src.tools.asr.speech_to_text_tool as asr_module
+        asr_module._TOKEN_CACHE["token"] = ""
+        asr_module._TOKEN_CACHE["expire_at"] = 0.0
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.text = AsyncMock(return_value='{"Token":{"Id":"test-token","ExpireTime":9999999999}}')
+
+        mock_session = MagicMock()
+        mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.tools.asr.speech_to_text_tool.aiohttp.ClientSession") as mock_cs:
+            mock_cs.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_cs.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await tool._get_or_refresh_token(
+                access_key_id=mock_asr_config.aliyun_access_key_id,
+                access_key_secret=mock_asr_config.aliyun_access_key_secret,
+            )
+
+            # 断言：URL 应该是 OpenAPI 风格的 / 路径（不是 /pop/2018-05-18/GetToken）
+            assert mock_session.get.called, "未调用 session.get"
+            called_url = mock_session.get.call_args.args[0]
+            assert "nls-meta.cn-shanghai.aliyuncs.com" in called_url, f"域名错误: {called_url}"
+            assert "/pop/2018-05-18/GetToken" not in called_url, (
+                f"不应使用已废弃的 /pop/2018-05-18/GetToken 路径: {called_url}"
+            )
+            # CreateToken 路径应为根路径 /
+            assert called_url.startswith("https://nls-meta.cn-shanghai.aliyuncs.com/?"), (
+                f"URL 应以根路径开头: {called_url}"
+            )
+            # 关键参数校验
+            assert "Action=CreateToken" in called_url, f"应使用 Action=CreateToken: {called_url}"
+            assert "Version=2019-02-28" in called_url, f"应使用 Version=2019-02-28: {called_url}"
+            # CreateToken 不应再带 AppKey 参数
+            assert "AppKey=" not in called_url, f"CreateToken 不应带 AppKey 参数: {called_url}"
 
     @pytest.mark.asyncio
     async def test_get_token_http_error(self, tool, mock_asr_config):
@@ -255,7 +300,6 @@ class TestSpeechToTextAliyunAPI:
                 await tool._get_or_refresh_token(
                     access_key_id=mock_asr_config.aliyun_access_key_id,
                     access_key_secret=mock_asr_config.aliyun_access_key_secret,
-                    appkey=mock_asr_config.aliyun_appkey,
                 )
 
     @pytest.mark.asyncio
@@ -281,7 +325,6 @@ class TestSpeechToTextAliyunAPI:
                 await tool._get_or_refresh_token(
                     access_key_id=mock_asr_config.aliyun_access_key_id,
                     access_key_secret=mock_asr_config.aliyun_access_key_secret,
-                    appkey=mock_asr_config.aliyun_appkey,
                 )
 
     @pytest.mark.asyncio
@@ -294,7 +337,6 @@ class TestSpeechToTextAliyunAPI:
         token = await tool._get_or_refresh_token(
             access_key_id=mock_asr_config.aliyun_access_key_id,
             access_key_secret=mock_asr_config.aliyun_access_key_secret,
-            appkey=mock_asr_config.aliyun_appkey,
         )
         assert token == "cached-token"
 

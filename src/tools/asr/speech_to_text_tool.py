@@ -40,7 +40,7 @@ _TOKEN_CACHE: Dict[str, Any] = {
 }
 _TOKEN_LOCK = asyncio.Lock()
 
-# 阿里云 NLS GetToken 服务域名（与一句话识别域名不同：meta 是 OpenAPI 风格）
+# 阿里云 NLS GetToken 服务域名（OpenAPI 风格，POP 签名）
 _NLS_META_DOMAIN = "nls-meta.cn-shanghai.aliyuncs.com"
 
 
@@ -164,9 +164,12 @@ class SpeechToTextTool(BaseTool):
         self,
         access_key_id: str,
         access_key_secret: str,
-        appkey: str,
     ) -> str:
-        """获取/刷新阿里云 NLS Token（带缓存）"""
+        """获取/刷新阿里云 NLS Token（带缓存）
+
+        使用 OpenAPI 风格的 CreateToken 接口（Version=2019-02-28）。
+        注意：CreateToken 不需要 AppKey，AppKey 仅在一句话识别 /stream/v1/asr 调用时使用。
+        """
         now = time.time()
         if _TOKEN_CACHE["token"] and now < _TOKEN_CACHE["expire_at"] - 600:
             return _TOKEN_CACHE["token"]
@@ -177,18 +180,17 @@ class SpeechToTextTool(BaseTool):
             if _TOKEN_CACHE["token"] and now < _TOKEN_CACHE["expire_at"] - 600:
                 return _TOKEN_CACHE["token"]
 
-            url = f"https://{_NLS_META_DOMAIN}/pop/2018-05-18/GetToken"
+            url = f"https://{_NLS_META_DOMAIN}/"
             params = {
                 "AccessKeyId": access_key_id,
-                "Action": "GetToken",
-                "AppKey": appkey,
+                "Action": "CreateToken",
                 "Format": "JSON",
                 "RegionId": "cn-shanghai",
                 "SignatureMethod": "HMAC-SHA1",
                 "SignatureNonce": str(uuid.uuid4()),
                 "SignatureVersion": "1.0",
                 "Timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "Version": "2018-05-18",
+                "Version": "2019-02-28",
             }
             # 签名：按 Key 排序，拼 query string，HMAC-SHA1
             sorted_query = "&".join(
@@ -253,9 +255,9 @@ class SpeechToTextTool(BaseTool):
         官方文档：https://help.aliyun.com/zh/isi/developer-reference/restful-api-2
         """
         try:
-            # 1) 获取 Token
+            # 1) 获取 Token（CreateToken 不需要 AppKey）
             token = await self._get_or_refresh_token(
-                access_key_id, access_key_secret, appkey
+                access_key_id, access_key_secret
             )
 
             # 2) 构建 URL（注意：endpoint 已含 nls-gateway-cn-shanghai）
