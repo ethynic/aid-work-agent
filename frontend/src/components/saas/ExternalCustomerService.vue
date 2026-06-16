@@ -132,7 +132,15 @@
                   <!-- 语音：播放器 -->
                   <template v-for="att in getUserAttachments(msg)" :key="att.media_id">
                     <div v-if="att.type === 'voice'" class="space-y-1">
-                      <audio controls :src="getAttachmentDownloadUrl(att)" class="max-w-full h-8"></audio>
+                      <audio
+                        controls
+                        :src="getAttachmentDownloadUrl(att)"
+                        class="max-w-full h-8"
+                        @loadstart="onAudioLoadStart(att, $event)"
+                        @loadedmetadata="onAudioLoadedMetadata(att, $event)"
+                        @canplay="onAudioCanPlay(att, $event)"
+                        @error="onAudioError(att, $event)"
+                      ></audio>
                       <div v-if="msg.content && msg.content !== '[语音消息]'" class="text-xs opacity-80">{{ msg.content }}</div>
                     </div>
                   </template>
@@ -443,6 +451,58 @@ function getAttachmentDownloadUrl(att: any): string {
   return `/api/saas/external-customers/attachments/download?${params.toString()}`
 }
 
+// ===== 临时调试：audio 元素事件 =====
+function onAudioLoadStart(att: any, e: Event) {
+  const audio = e.target as HTMLAudioElement
+  console.log('临时调试：audio loadstart', {
+    media_id: att.media_id,
+    src: audio.src,
+    readyState: audio.readyState,
+    networkState: audio.networkState,
+  })
+}
+
+function onAudioLoadedMetadata(att: any, e: Event) {
+  const audio = e.target as HTMLAudioElement
+  console.log('临时调试：audio loadedmetadata', {
+    media_id: att.media_id,
+    duration: audio.duration,
+    readyState: audio.readyState,
+  })
+}
+
+function onAudioCanPlay(att: any, e: Event) {
+  const audio = e.target as HTMLAudioElement
+  console.log('临时调试：audio canplay', {
+    media_id: att.media_id,
+    readyState: audio.readyState,
+  })
+}
+
+function onAudioError(att: any, e: Event) {
+  const audio = e.target as HTMLAudioElement
+  console.error('临时调试：audio error', {
+    media_id: att.media_id,
+    src: audio.src,
+    errorCode: audio.error?.code,
+    errorMessage: audio.error?.message,
+    readyState: audio.readyState,
+    networkState: audio.networkState,
+  })
+}
+
+function checkAmrSupport() {
+  const a = new Audio()
+  const r: Record<string, string> = {
+    'audio/amr': a.canPlayType('audio/amr') || '(空=不支持)',
+    'audio/mpeg': a.canPlayType('audio/mpeg') || '(空=不支持)',
+    'audio/wav': a.canPlayType('audio/wav') || '(空=不支持)',
+    'audio/ogg;codecs=opus': a.canPlayType('audio/ogg;codecs=opus') || '(空=不支持)',
+  }
+  console.log('临时调试：浏览器音频格式支持', r)
+}
+// ===== 临时调试结束 =====
+
 /**
  * 格式化文件大小
  */
@@ -474,6 +534,7 @@ onMounted(async () => {
   if (!isInitialized.value) {
     await init()
   }
+  checkAmrSupport()  // 临时调试
   await loadUsers()
 })
 </script>
