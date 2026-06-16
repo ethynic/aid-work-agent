@@ -114,6 +114,8 @@ RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-
     libpango-1.0-0 \
     libcairo2 \
     libatspi2.0-0 \
+    # gosu 用于 entrypoint 中以非 root 用户身份启动 gunicorn（保持 PID 1 信号处理）
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建非 root 用户及 home 目录（Uvicorn control server 需要）
@@ -147,10 +149,13 @@ RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
 # 注意：此目录不在 volume 挂载范围内，确保每次容器启动时干净
 RUN mkdir -p /home/appuser/tmp && chown appuser:appgroup /home/appuser/tmp
 
-# 修复 /tmp 权限（python:3.11-slim 镜像的 /tmp 是 755，appuser 无法写入）
-# Playwright 启动 Chromium 时需要在 /tmp 下创建 playwright-artifacts-* 临时目录
-# 必须在 USER appuser 之前以 root 身份执行
-RUN chmod 1777 /tmp
+# 安装 fix_tmp.sh 脚本
+# python:3.11-slim 的 /tmp 是 tmpfs，Dockerfile 里的 RUN chmod 1777 /tmp 不会作用到
+# 运行时挂载的 tmpfs。必须在 entrypoint 启动时（容器内运行时）处理。
+# 注意：fix_tmp.sh 需要以 root 身份运行才能 chmod /tmp，
+# 所以脚本必须在 USER appuser 之前/之后通过 entrypoint 切换身份来执行
+COPY --chown=root:root deploy/fix_tmp.sh /usr/local/bin/fix_tmp.sh
+RUN chmod +x /usr/local/bin/fix_tmp.sh
 
 # 切换到非 root 用户
 USER appuser
@@ -168,4 +173,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # 生产模式：Gunicorn 管理多个 UvicornWorker 进程
 # 运行参数统一在 deploy/gunicorn.conf.py 中管理
 # 可通过环境变量覆盖：WORKERS、WORKER_TIMEOUT、SERVER_PORT、LOG_LEVEL
-ENTRYPOINT ["sh", "-c", "gunicorn -c deploy/gunicorn.conf.py src.main:app"]
+# entrypoint 在 root 下执行 fix_tmp.sh 修复 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs，
+# Dockerfile 的 chmod 不会生效），然后用 gosu 切换到 appuser 启动 gunicorn（保持 PID 1）
+ENTRYPOINT ["sh", "-c", "/usr/local/bin/fix_tmp.sh && exec gosu appuser gunicorn -c deploy/gunicorn.conf.py src.main:app"]

@@ -288,7 +288,8 @@ class SpeechToTextTool(BaseTool):
 
                     if resp.status != 200:
                         logger.error(
-                            f"后端日志：阿里云 ASR HTTP 异常 status={resp.status}, body={resp_text[:500]}"
+                            "后端日志：阿里云 ASR HTTP 异常 status={}, body={}",
+                            resp.status, resp_text[:500],
                         )
                         return {
                             "success": False,
@@ -302,7 +303,7 @@ class SpeechToTextTool(BaseTool):
                     # 官方成功码：20000000
                     if status_code == 20000000:
                         text = result_json.get("result", "")
-                        logger.info(f"后端日志：语音转文字成功 text={text[:100]}")
+                        logger.info("后端日志：语音转文字成功 text={}", text[:100])
                         return {
                             "success": True,
                             "text": text,
@@ -312,8 +313,8 @@ class SpeechToTextTool(BaseTool):
                         error_msg = result_json.get("message", "未知错误")
                         task_id = result_json.get("task_id", "")
                         logger.error(
-                            f"后端日志：阿里云 ASR 识别失败 status={status_code}, "
-                            f"task_id={task_id}, message={error_msg}"
+                            "后端日志：阿里云 ASR 识别失败 status={}, task_id={}, message={}",
+                            status_code, task_id, error_msg,
                         )
                         return {
                             "success": False,
@@ -324,14 +325,14 @@ class SpeechToTextTool(BaseTool):
                         }
 
         except aiohttp.ClientError as e:
-            logger.error(f"后端日志：阿里云 ASR 网络错误: {e}", exc_info=True)
+            logger.error("后端日志：阿里云 ASR 网络错误: {}", e, exc_info=True)
             return {
                 "success": False,
                 "error": "阿里云 ASR 网络错误，请稍后重试",
                 "debug": sanitize_error_info(str(e)),
             }
         except Exception as e:
-            logger.error(f"后端日志：阿里云 ASR 未知错误: {e}", exc_info=True)
+            logger.error("后端日志：阿里云 ASR 未知错误: {}", e, exc_info=True)
             return {
                 "success": False,
                 "error": "语音转文字失败",

@@ -205,9 +205,47 @@ log "  容器: ${CONTAINER_NAME}"
 log "  备份目录: ${BACKUP_DIR}"
 log "  日志文件: ${LOG_FILE}"
 
+# 检查关键扩展是否在 shared_preload_libraries 中预加载
+# （timescaledb 必须预加载才能 CREATE EXTENSION，否则半路 psql 进程会被 PG 终止）
+check_shared_preload_libraries() {
+    local user="$1" pass="$2"
+    log "  检查关键扩展是否预加载..."
+    local preloaded
+    preloaded=$(docker exec "${CONTAINER_NAME}" \
+        env PGPASSWORD="${pass}" \
+        psql -U "${user}" -d postgres -tAc \
+        "SELECT current_setting('shared_preload_libraries');" 2>/dev/null)
+
+    local missing=()
+    for lib in timescaledb; do
+        if [[ ",${preloaded}," != *",${lib},"* ]]; then
+            missing+=("${lib}")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log "  ✗ 错误：以下扩展未在 shared_preload_libraries 中预加载：${missing[*]}"
+        log "  当前 shared_preload_libraries = '${preloaded:-<空>}'"
+        log ""
+        log "  修复方法（任选其一）："
+        log "    1) 修改容器内 postgresql.conf："
+        log "       docker exec ${CONTAINER_NAME} bash -c \"echo \\\"shared_preload_libraries = 'timescaledb'\\\" >> /var/lib/postgresql/data/postgresql.conf\""
+        log "       docker restart ${CONTAINER_NAME}"
+        log ""
+        log "    2) 重建容器时使用 timescale/timescaledb:latest-pg16 镜像（见 deploy/docker-compose.postgres.yml）"
+        log ""
+        log "  修好后再重跑本脚本。"
+        return 1
+    fi
+    log "  ✓ shared_preload_libraries = '${preloaded}'"
+}
+
 # 提前修复 template 数据库 collation version 异常
 # （glibc 升级后常见，不修复会导致 CREATE DATABASE 失败）
 fix_template_collation "${PROD_USER}" "${PROD_PASS}"
+
+# 检查预加载扩展（失败则直接退出）
+check_shared_preload_libraries "${PROD_USER}" "${PROD_PASS}" || exit 1
 
 # 解析最新的两个备份文件（按文件名前缀匹配）
 PROD_GZ=$(ls -1t "${BACKUP_DIR}/aid_work_agent_"*.sql.gz 2>/dev/null | grep -v "aid_work_agent2_" | head -1 || true)
