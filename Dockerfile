@@ -53,7 +53,6 @@ RUN pip install --no-cache-dir --no-deps 'mcp>=1.27.0' -i https://mirrors.cloud.
     python -c "import mcp; print('mcp loaded OK, version:', mcp.__version__ if hasattr(mcp, '__version__') else 'unknown')"
 
 # ============== 阶段2：运行阶段 ==============
-# syntax=docker/dockerfile:1.4
 FROM python:3.11-slim
 
 # 设置环境变量
@@ -73,10 +72,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # 安装运行时依赖（字体、浏览器等）
 # 使用清华镜像加速 Debian 包下载
-# BuildKit cache mount 复用 apt 包缓存，避免每次重新下载
-RUN --mount=type=cache,target=/var/cache/apt,sharing=shared \
-    --mount=type=cache,target=/var/lib/apt,sharing=shared \
-    echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
+# 注意：apt-get install 阶段只跑一次，构建缓存依赖 BuildKit 层缓存
+# （Docker 镜像层复用），不依赖 --mount=type=cache（在你的 BuildKit 版本下
+# 会有 /var/lib/apt/lists 锁冲突问题）
+RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
     echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
     echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -145,9 +144,9 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 
 # 安装 Playwright Chromium 浏览器（表格渲染为图片）
 # PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
-# BuildKit cache mount 复用 Playwright 浏览器缓存
-RUN --mount=type=cache,target=/root/.cache/ms-playwright,sharing=shared \
-    PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
+# 浏览器文件留在镜像层中（/root/.cache/ms-playwright），后续构建如果 RUN 不变
+# 就会被 BuildKit 层缓存命中
+RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
     playwright install chromium --with-deps || \
     playwright install chromium --with-deps
 
