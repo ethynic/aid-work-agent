@@ -191,6 +191,12 @@ async def download_attachment(
 
     租户归属校验通过 `channel_sessions.tenant_id` 完成，确保不会跨租户下载文件。
 
+    安全说明：本端点**不**校验管理员 token，原因是 HTML 的 `<img>/<audio>/<video>`
+    标签无法附带 `Authorization` Header。访问控制依赖 `session_id` 本身的不透明性
+    （含租户前缀 + 渠道随机串），等价于"知道 session_id 即拥有查看权限"，与
+    `/api/files/{file_id}/inline` 的设计一致。调用方应仅在已通过 `require_admin`
+    校验的页面（如本文件上方 `/sessions/{id}/messages`）渲染该 URL。
+
     Args:
         session_id: 会话ID
         filename: 附件文件名（不含 session_id 子目录）
@@ -204,16 +210,10 @@ async def download_attachment(
     if not settings.saas.enabled:
         raise HTTPException(status_code=400, detail="未启用 SaaS 模式无法访问")
 
-    admin = require_admin(request)
-    tenant_id = admin.get("tenant_id")
-
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="缺少租户信息")
-
     # 防止路径穿越：filename 只能取 basename
     filename = _os.path.basename(filename)
 
-    # 验证渠道会话属于该租户
+    # 验证渠道会话存在（session_id 本身作为访问令牌）
     from src.channels.session import channel_session_manager
 
     session = channel_session_manager.get_session_by_id(session_id)
@@ -221,8 +221,8 @@ async def download_attachment(
         raise HTTPException(status_code=404, detail="会话不存在")
 
     session_tenant_id = session.get("tenant_id")
-    if session_tenant_id != tenant_id:
-        raise HTTPException(status_code=403, detail="无权访问此会话")
+    if not session_tenant_id:
+        raise HTTPException(status_code=403, detail="会话未关联租户")
 
     # 解析文件路径：优先新版 storage/tenants/{tenant_id}/conversation/，回退旧版 data/attachments/
     from src.core.storage import get_tenant_storage_abs_path
