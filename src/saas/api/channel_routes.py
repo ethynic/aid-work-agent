@@ -14,6 +14,7 @@
 
 import asyncio
 import base64
+import json
 import os
 import random
 import time
@@ -1426,12 +1427,15 @@ async def _process_tenant_wecom_kf_messages(
                 record_service.set_model(agent.llm.get_model_name())
                 record_service.set_provider(agent.llm.get_provider_name())
 
-                # 处理消息（通过 progress_callback 捕获可下载文件）
+                # 处理消息（通过 progress_callback 捕获可下载文件 + 本轮 tool 消息序列）
                 downloadable_files = []
+                tool_messages_collected = []  # 本轮 tool 消息序列，供事务持久化到 chat_messages
 
                 async def collect_files_callback(event):
-                    if (isinstance(event, dict)
-                        and event.get("type") == "tool_result"
+                    if not isinstance(event, dict):
+                        return
+                    event_type = event.get("type")
+                    if (event_type == "tool_result"
                         and event.get("toolName") in ("register_download_file", "write", "cp")
                         and event.get("success") is True):
                         result = event.get("result", {}) or {}
@@ -1443,6 +1447,9 @@ async def _process_tenant_wecom_kf_messages(
                                 "download_url": result.get("download_url", ""),
                                 "mime_type": result.get("mime_type", ""),
                             })
+                    elif event_type == "tool_messages":
+                        # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
+                        tool_messages_collected.extend(event.get("messages", []))
 
                 try:
                     agent_attachments = _build_attachments_for_agent(user_attachments)
@@ -1467,6 +1474,56 @@ async def _process_tenant_wecom_kf_messages(
                 assistant_metadata = None
                 if downloadable_files:
                     assistant_metadata = {"downloadableFiles": downloadable_files}
+
+                # 事务持久化到 chat_messages 表（user + tool 序列 + assistant 最终回复，要么全成功要么全失败）
+                # 与 src/main.py 的 /api/chat/stream 路径对称，保证跨 worker memory 恢复工具调用上下文
+                try:
+                    batch_messages = [
+                        {"role": "user", "content": user_content, "metadata": None},
+                    ]
+                    for tm in tool_messages_collected:
+                        if tm.get("role") == "assistant" and tm.get("tool_calls"):
+                            # assistant(tool_calls): content 清空（丢弃中间思考），reasoning_content 放 metadata
+                            tm_metadata = {"tool_calls": tm["tool_calls"]}
+                            if tm.get("reasoning_content"):
+                                tm_metadata["reasoning_content"] = tm["reasoning_content"]
+                            batch_messages.append({
+                                "role": "assistant",
+                                "content": "",
+                                "metadata": tm_metadata,
+                            })
+                        elif tm.get("role") == "tool":
+                            # tool result content 可能是 dict（工具返回的 JSON），持久化前转字符串
+                            tc = tm.get("content", "")
+                            if isinstance(tc, (dict, list)):
+                                tc = json.dumps(tc, ensure_ascii=False, default=str)
+                            batch_messages.append({
+                                "role": "tool",
+                                "content": tc,
+                                "metadata": {"tool_call_id": tm.get("tool_call_id", "")},
+                            })
+                    batch_messages.append({
+                        "role": "assistant",
+                        "content": response_text,
+                        "metadata": assistant_metadata,
+                    })
+
+                    from src.db.models import MessageDB
+                    created = MessageDB.create_batch_transactional(session_id, batch_messages)
+                    if created is None:
+                        logger.error(
+                            f"[WeCom KF] 工具消息事务写入失败(回滚): session_id={session_id}"
+                        )
+                    else:
+                        logger.info(
+                            f"[WeCom KF] 工具消息事务写入成功: session_id={session_id}, rows={len(created)}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"[WeCom KF] 工具消息事务持久化异常: session_id={session_id}, error={e}",
+                        exc_info=True,
+                    )
+
                 channel_session_manager.add_message(
                     session_id=session_id,
                     role="assistant",
