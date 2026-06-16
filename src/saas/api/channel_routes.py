@@ -239,12 +239,15 @@ def _build_user_input_for_agent(msg: dict, attachments: list) -> str:
     """
     根据消息类型构建传递给 agent 的 user_input。
 
+    - 文本：直接返回 content
     - 语音：优先使用 Recognition 文字识别结果
     - 图片/文件：使用描述文字
     """
     msgtype = msg.get("msgtype", "")
 
-    if msgtype == "voice":
+    if msgtype == "text":
+        return msg.get("text", {}).get("content", "")
+    elif msgtype == "voice":
         # 微信语音识别结果（如有）
         recognition = msg.get("voice", {}).get("recognition", "")
         return recognition or "[语音消息]"
@@ -256,7 +259,7 @@ def _build_user_input_for_agent(msg: dict, attachments: list) -> str:
     elif msgtype == "video":
         return "[视频消息]"
     else:
-        return "[非文本消息]"
+        return f"[{msgtype}消息]"
 
 
 def _build_attachments_for_agent(attachments: list) -> list:

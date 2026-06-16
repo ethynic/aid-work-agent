@@ -48,6 +48,18 @@ sudo docker compose -f docker-compose.test.yml down
 echo "[4] 启动后端服务..."
 sudo docker compose -f docker-compose.test.yml up -d
 
+# 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
+#    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
+#    -u root：必须以 root 身份执行，否则 appuser 在 tmpfs 上无权限改 /tmp
+#    兜底链：先尝试 chmod（多数 tmpfs 上 root 可改），失败则 mount remount
+echo "[5] 修复容器 /tmp 权限..."
+if ! sudo docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null; then
+    echo "  chmod 失败，尝试 mount remount..."
+    sudo docker exec -u root aid-agent-api2 mount -o remount,mode=1777 /tmp 2>/dev/null || \
+        echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
+fi
+sudo docker exec -u root aid-agent-api2 ls -ld /tmp || true
+
 echo ""
 echo "更新完成！"
 echo "=========================================="
