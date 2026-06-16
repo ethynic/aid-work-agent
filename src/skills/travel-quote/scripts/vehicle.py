@@ -27,6 +27,17 @@ def recommend_vehicle(people_count: int, vehicles: List[dict]) -> List[dict]:
     if not vehicles:
         return []
 
+    # 过滤掉无有效价格的车型（daily_rate 或 per_km_rate 为空/0）
+    valid_vehicles = []
+    for v in vehicles:
+        rate = v.get('daily_rate') or v.get('per_km_rate')
+        if rate is not None and float(rate) > 0:
+            valid_vehicles.append(v)
+    if not valid_vehicles:
+        logger.warning(f"[travel-quote] 所有车型 daily_rate/per_km_rate 均为空，无法推荐")
+        return []
+    vehicles = valid_vehicles
+
     single_options = [v for v in vehicles if v['seats_max'] >= people_count]
     if single_options:
         best = min(single_options, key=lambda v: v['seats_max'])
@@ -88,7 +99,10 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
     for c in combo:
         v = c["vehicle"]
         count = c["count"]
-        daily = float(v['daily_rate'])
+        daily = float(v.get('daily_rate') or 0)
+        if daily == 0:
+            logger.warning(f"[travel-quote] 车型 {v.get('vehicle_type')} daily_rate 为空，跳过")
+            continue
         total_rental = daily * trip_days * count
         per_person = round(total_rental / total_people, 2)
 
