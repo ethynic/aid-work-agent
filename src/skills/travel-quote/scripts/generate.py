@@ -202,18 +202,35 @@ def generate_quote(params: dict) -> dict:
 
     file_path = export_with_template(internal_data, template_path)
 
+    # 返回给 LLM 的视图：字段名直接对应 Excel 表头，避免 LLM 误解英文 field 名后自行计算/拼装
+    rows = [
+        {
+            "成本类别": item.get('category', ''),
+            "项目": item.get('name', ''),
+            "单价": item.get('unit_price', 0),
+            "数量": item.get('quantity', 0),
+            "单位": item.get('unit', ''),
+            "次数": item.get('frequency', 0),
+            "单位2": item.get('freq_unit', ''),
+            "费用小计": item.get('subtotal', 0),
+            "随队老师": item.get('teacher_subtotal', 0),
+            "备注": item.get('remark', ''),
+        }
+        for item in items
+    ]
+
     return {
         "course_name": course_name,
         "company_name": company_name,
-        "region_name": region_name,
         "start_date": start_date,
-        "trip_days": trip_days,
         "total_people": total_people,
         "teacher_count": teacher_count,
-        "items": items,
-        "price_per_person": quote_per_person,
-        "total_price": quote_total,
-        "teacher_total": round(sum(item.get('teacher_subtotal') or 0 for item in items), 2),
+        "trip_days": trip_days,
+        "rows": rows,
+        "合计_费用小计": round(sum(item.get('subtotal') or 0 for item in items), 2),
+        "合计_随队老师": round(sum(item.get('teacher_subtotal') or 0 for item in items), 2),
+        "人均报价": quote_per_person,
+        "总价": quote_total,
         "file_path": os.path.abspath(file_path),
     }
 
