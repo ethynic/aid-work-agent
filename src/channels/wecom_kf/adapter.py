@@ -303,16 +303,10 @@ class WeComKfAdapter(ChannelAdapter):
 
     async def _send_table_as_image(self, markdown_table: str, user_id: str) -> bool:
         """将表格渲染为图片并发送，失败时降级为纯文本。"""
-        # 临时调试：记录进入表格图片发送流程
-        logger.debug(f"临时调试：_send_table_as_image 进入, user_id={user_id}, table_len={len(markdown_table) if markdown_table else 0}, render_enabled={self._render_enabled}")
         try:
             image_path = await self.renderer.render_table(markdown_table)
-            # 临时调试：记录渲染结果
-            logger.debug(f"临时调试：render_table 返回 image_path={image_path}, exists={os.path.exists(image_path) if image_path else False}")
             if image_path and os.path.exists(image_path):
                 upload_result = await self.api_client.upload_media(image_path, "image")
-                # 临时调试：记录上传结果
-                logger.debug(f"临时调试：upload_media 结果={upload_result}")
                 media_id = upload_result.get("media_id")
                 if media_id:
                     send_result = await self.api_client.send_msg(
@@ -321,25 +315,13 @@ class WeComKfAdapter(ChannelAdapter):
                         msgtype="image",
                         content={"media_id": media_id},
                     )
-                    # 临时调试：记录图片消息发送结果
-                    logger.debug(f"临时调试：send_msg(image) 结果={send_result}")
                     if send_result.get("errcode", 0) == 0:
                         return True
                     logger.warning(f"表格图片发送失败: {send_result.get('errmsg')}")
-                else:
-                    # 临时调试：上传未返回 media_id
-                    logger.debug(f"临时调试：upload_media 未返回 media_id, upload_result={upload_result}")
-            else:
-                # 临时调试：渲染未产出图片
-                logger.debug(f"临时调试：render_table 未产出有效图片路径, image_path={image_path}")
         except Exception as e:
-            # 临时调试：异常堆栈
-            logger.debug(f"临时调试：表格渲染/上传异常: {e}", exc_info=True)
             logger.warning(f"表格渲染/上传失败，降级为纯文本: {e}")
 
         # 降级：纯文本表格
-        # 临时调试：进入降级分支
-        logger.debug(f"临时调试：_send_table_as_image 降级为纯文本表格, table_preview={markdown_table[:120] if markdown_table else ''}")
         fallback_text = table_to_plain_text(markdown_table)
         return await self._send_text_block(fallback_text, user_id)
 

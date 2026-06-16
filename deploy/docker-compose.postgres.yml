@@ -7,6 +7,13 @@
 services:
   postgres:
     image: timescale/timescaledb:latest-pg16
+    # 注意事项：timescale/timescaledb-ha:pg16 在 2026-06-15 出现 /tmp 权限 bug
+    # 导致 PostgreSQL 容器无法启动，已切换到 timescale/timescaledb:latest-pg16
+    # 当前可用 digest: sha256:ae52c5bef62a6bdd42cd1e8dffef86b9cd284bde9427da79839de7a4b983e7ca
+    # 紧急回滚命令: docker tag timescale/timescaledb:latest-pg16 timescale/timescaledb:pg16-recovery
+    #                 docker save -o /tmp/timescaledb-recovery.tar timescale/timescaledb:pg16-recovery
+    # 注意：PostgreSQL 镜像不锁 digest（需要及时获取安全补丁）
+    # 升级流程见 deploy/update_postgres.sh
     container_name: aid-postgres
     restart: unless-stopped
     environment:
@@ -105,6 +112,14 @@ services:
     volumes:
       # 持久化数据卷
       - postgres_data:/var/lib/postgresql/data
+      # /tmp 权限兜底：debian trixie-slim 上游某次更新导致 /tmp 默认 mode 变成 755，
+      # timescale/timescaledb-ha:pg16 启动时写 /tmp 失败。挂一个 mode=1777 的 tmpfs 强制覆盖。
+      # （和后端容器 fix_tmp.sh 是同一根因：底层 Debian 镜像 tmpfs 配置变化）
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 100m
       # 初始化脚本（首次启动时执行，创建 prod + test 双库）
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:

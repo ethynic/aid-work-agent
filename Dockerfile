@@ -2,6 +2,11 @@
 # 多阶段构建，优化镜像大小并确保安全性
 
 # ============== 阶段1：构建阶段 ==============
+# 注意：不锁定 python:3.11-slim 的 digest，理由：
+# 1) python:3.11-slim 自身不含 apt 源，digest 锁定不会带来 apt 安全更新
+# 2) /tmp tmpfs 权限问题由 fix_tmp.sh（entrypoint）+ tmpfs mount（compose）双重兜底
+# 3) 锁 digest 反而会错过 Python 自身的安全补丁
+# 4) 如未来 digest 漂移再次导致问题，可临时锁定 digest 应急
 FROM python:3.11-slim AS builder
 
 # 设置工作目录

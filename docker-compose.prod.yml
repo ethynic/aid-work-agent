@@ -9,6 +9,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # 不锁定基础镜像 digest（理由见 Dockerfile 注释）
+      # 兜底：/tmp tmpfs mount (mode=1777) + fix_tmp.sh (entrypoint)
     image: aid-agent-api:latest
     container_name: aid-agent-api
     restart: unless-stopped
@@ -36,15 +38,24 @@ services:
     volumes:
       # 挂载整个项目目录到容器（关键：实现代码热更新）
       - .:/app
-      
+
       # 日志目录（独立挂载，便于查看）
       - ./log:/app/log
-      
+
       # 配置文件（独立挂载，便于修改）
       - ./configs:/app/configs
-      
+
       # Skills 目录（独立挂载，便于添加新技能）
       - ./skills:/app/skills
+
+      # /tmp 权限兜底：debian trixie-slim 上游某次更新导致 /tmp 默认 mode 变成 755，
+      # Playwright 启动 Chromium 时写 /tmp 失败。挂一个 mode=1777 的 tmpfs 强制覆盖。
+      # （和 postgres 容器同一根因：底层 Debian 镜像 tmpfs 配置变化）
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
 
       # 上传附件目录
       - /var/www/qb3_upload/agent_uploads:/app/uploads
