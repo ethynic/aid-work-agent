@@ -94,6 +94,8 @@ terminate_connections() {
 # drop 并重建数据库（恢复前清空）
 # 用目标库的 owner 登录 postgres 库执行（owner 拥有该库，且通常带 Create DB 权限）
 # 关键：DROP/CREATE DATABASE 不能在事务块里执行，所以用两个独立 -c 命令
+# 同时显式指定 LC_COLLATE/LC_CTYPE + TEMPLATE=template0，绕开 template1 的 collation version 检查
+# （服务器上 glibc 升级后常见 "template database template1 has a collation version, but no actual..."）
 recreate_db() {
     local db="$1" user="$2" pass="$3"
     log "  重建数据库 ${db}（DROP + CREATE）..."
@@ -105,34 +107,32 @@ recreate_db() {
     docker exec "${CONTAINER_NAME}" \
         env PGPASSWORD="${pass}" \
         psql -U "${user}" -d postgres -v ON_ERROR_STOP=1 \
-            -c "CREATE DATABASE \"${db}\" OWNER \"${user}\";" \
+            -c "CREATE DATABASE \"${db}\" OWNER \"${user}\" TEMPLATE=template0 LC_COLLATE='en_US.UTF-8' LC_CTYPE='en_US.UTF-8';" \
         >/dev/null
 }
 
 # 修复 template1/template0/postgres 的 collation version 异常
-# 服务器上 glibc/locale 升级后常见，pg_database.datcollversion 与实际不一致，
-# 会导致 CREATE DATABASE 报 "template database template1 has a collation version, but no actual..."
-# 先尝试 REFRESH COLLATION VERSION（PG 推荐做法）；失败则清空 datcollversion 跳过检查
+# 服务器上 glibc/locale 升级后常见，pg_database.datcollversion 与实际不一致。
+# REFRESH 命令是 DDL，单独 -c 执行（不能放在事务块里），失败时不报错直接继续
 fix_template_collation() {
     local user="$1" pass="$2"
     log "  修复 template 数据库的 collation version 异常（如有）..."
+    # 独立 -c 执行 ALTER（避免被包进事务块）
     docker exec "${CONTAINER_NAME}" \
         env PGPASSWORD="${pass}" \
-        psql -U "${user}" -d postgres -v ON_ERROR_STOP=0 -X <<'SQL' >/dev/null 2>&1
-DO $$
-DECLARE
-    dbname text;
-BEGIN
-    FOREACH dbname IN ARRAY ARRAY['template1', 'template0', 'postgres']
-    LOOP
-        BEGIN
-            EXECUTE format('ALTER DATABASE %I REFRESH COLLATION VERSION', dbname);
-        EXCEPTION WHEN OTHERS THEN
-            EXECUTE format('UPDATE pg_database SET datcollversion = NULL WHERE datname = %L', dbname);
-        END;
-    END LOOP;
-END $$;
-SQL
+        psql -U "${user}" -d postgres -v ON_ERROR_STOP=0 \
+            -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" \
+        >/dev/null 2>&1 || true
+    docker exec "${CONTAINER_NAME}" \
+        env PGPASSWORD="${pass}" \
+        psql -U "${user}" -d postgres -v ON_ERROR_STOP=0 \
+            -c "ALTER DATABASE template0 REFRESH COLLATION VERSION;" \
+        >/dev/null 2>&1 || true
+    docker exec "${CONTAINER_NAME}" \
+        env PGPASSWORD="${pass}" \
+        psql -U "${user}" -d postgres -v ON_ERROR_STOP=0 \
+            -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" \
+        >/dev/null 2>&1 || true
 }
 
 # 把 .sql.gz 解压后灌进目标库
