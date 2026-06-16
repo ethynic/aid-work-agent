@@ -42,11 +42,14 @@ fi
 
 # 3. 停止旧容器（释放数据库连接）
 echo "[3] 停止旧容器..."
-sudo docker compose -f docker-compose.test.yml down
+sudo docker compose -f docker-compose.test.yml down --remove-orphans
 
 # 4. 启动新容器
+#    --force-recreate：强制走"删了重建"路径，避免 compose 协调器在 down 之后偶发误报
+#                       container name conflict（容器最终会被正确拉起，但脚本会中断）
+#    --wait：等所有容器 healthy 才返回，与 set -e 配合更可预测
 echo "[4] 启动后端服务..."
-sudo docker compose -f docker-compose.test.yml up -d
+sudo docker compose -f docker-compose.test.yml up -d --force-recreate --wait
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）

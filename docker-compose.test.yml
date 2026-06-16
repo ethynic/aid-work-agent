@@ -1,8 +1,6 @@
 # AID Work Agent 在线测试环境 Docker Compose 配置
 # 基于 docker-compose.prod.yml 修改，避免与生产环境端口和路径冲突
 
-version: '3.8'
-
 services:
   # FastAPI 后端服务
   aid-agent-api:
