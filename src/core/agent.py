@@ -1068,14 +1068,38 @@ class Agent:
                 if last_content == current_user_input:
                     channel_msgs.pop()
 
-            return [
-                {
-                    "role": msg["role"],
-                    "content": msg["content"] or "",
-                    "timestamp": msg.get("created_at", ""),
-                }
-                for msg in channel_msgs
-            ]
+            # 字段映射与 chat_messages 主分支（agent.py:1602-1626）对称：
+            # 从 metadata 恢复 tool_calls / tool_call_id / reasoning_content
+            history: List[Dict[str, Any]] = []
+            for msg in channel_msgs:
+                role = msg["role"]
+                content = msg["content"] or ""
+                meta = msg.get("metadata") or {}
+                if role == "tool":
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": meta.get("tool_call_id", ""),
+                        "content": content,
+                        "timestamp": msg.get("created_at", ""),
+                    })
+                elif role == "assistant":
+                    entry: Dict[str, Any] = {
+                        "role": "assistant",
+                        "content": content,
+                        "timestamp": msg.get("created_at", ""),
+                    }
+                    if meta.get("tool_calls"):
+                        entry["tool_calls"] = meta["tool_calls"]
+                    if meta.get("reasoning_content"):
+                        entry["reasoning_content"] = meta["reasoning_content"]
+                    history.append(entry)
+                else:  # user / system
+                    history.append({
+                        "role": role,
+                        "content": content,
+                        "timestamp": msg.get("created_at", ""),
+                    })
+            return history
         except Exception as e:
             logger.warning(f"Failed to load channel history for session {session_id}: {e}")
             return []
