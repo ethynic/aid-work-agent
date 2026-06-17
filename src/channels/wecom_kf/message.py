@@ -48,9 +48,9 @@ def parse_kf_message(msg: Dict[str, Any]) -> UnifiedMessage:
         message_type = MessageType.IMAGE
         content["media_id"] = msg.get("image", {}).get("media_id", "")
     elif msg_type == "voice":
-        # 优先使用识别文本
-        recognition = msg.get("voice", {}).get("Recognition", "")
-        content["text"] = recognition or "[语音消息]"
+        # 微信客服语音不自带识别文字（Recognition 字段永远为空）
+        # 语音转文字由渠道层 channel_routes.py 调用 ASR 完成
+        content["text"] = "[语音消息]"
         content["media_id"] = msg.get("voice", {}).get("media_id", "")
     elif msg_type == "file":
         message_type = MessageType.FILE
