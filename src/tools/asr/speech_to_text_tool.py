@@ -123,6 +123,20 @@ class SpeechToTextTool(BaseTool):
                     "error": "读取音频文件失败",
                     "debug": sanitize_error_info(str(e)),
                 }
+
+            # 文件路径模式：自动检测音频格式（修复调用者未传 format 的问题）
+            from src.utils.audio_format import detect_audio_format
+            detected_format, detected_sample_rate = detect_audio_format(audio_bytes)
+            logger.info(
+                "后端日志：音频文件格式检测 file={}, detected_format={}, detected_sample_rate={}, input_format={}, input_sample_rate={}",
+                os.path.basename(audio_content),
+                detected_format, detected_sample_rate, audio_format, sample_rate,
+            )
+            # 仅当调用者未显式指定时才使用检测值（"mp3" 是默认值，视为未指定）
+            if audio_format == "mp3":
+                audio_format = detected_format
+            if sample_rate == 16000:
+                sample_rate = detected_sample_rate
         else:
             # base64 编码内容
             try:
@@ -255,6 +269,24 @@ class SpeechToTextTool(BaseTool):
         官方文档：https://help.aliyun.com/zh/isi/developer-reference/restful-api-2
         """
         try:
+            # ========== 临时调试日志：音频信息 ==========
+            logger.info(
+                "后端日志：ASR 调试信息 audio_size_kb={}, format={}, sample_rate={}, language={}",
+                round(len(audio_bytes) / 1024, 2),
+                audio_format,
+                sample_rate,
+                language,
+            )
+            # 检查 AMR 文件头（AMR 魔术字节：#!AMR\n 或 #!AMR-WB\n）
+            if audio_format == "amr" and len(audio_bytes) >= 6:
+                header = audio_bytes[:12]
+                logger.info(
+                    "后端日志：AMR 文件头 hex={}, decoded={}",
+                    header.hex(),
+                    header.decode("utf-8", errors="replace"),
+                )
+            # ========== 调试日志结束 ==========
+
             # 1) 获取 Token（CreateToken 不需要 AppKey）
             token = await self._get_or_refresh_token(
                 access_key_id, access_key_secret
@@ -275,6 +307,13 @@ class SpeechToTextTool(BaseTool):
 
             from urllib.parse import urlencode
             full_url = f"{url}?{urlencode(query_params)}"
+
+            # ========== 临时调试日志：请求信息 ==========
+            logger.info(
+                "后端日志：ASR 请求 URL: {}",
+                full_url.replace(token, "***") if token else full_url,
+            )
+            # ========== 调试日志结束 ==========
 
             # 3) 发送请求（X-NLS-Token 鉴权）
             headers = {
