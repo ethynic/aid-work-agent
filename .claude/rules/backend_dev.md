@@ -321,3 +321,42 @@ storage/
 - **禁止硬编码键前缀**：必须使用 `CacheKeys` 类定义的常量
 - **禁止无 TTL 的缓存**：所有缓存必须设置合理的 TTL，防止内存无限增长
 - **禁止跨租户缓存污染**：涉及租户的缓存键必须包含 `tenant_id`，使用复合键隔离
+
+## 文件存储使用规范
+
+**核心文档**：系统文件存储全景见 [file_usage.md](./file_usage.md)，包含目录结构、新旧双轨路径、文件命名规范、清理策略等。
+
+### 租户附件存储
+
+所有由租户产生的附件（上传文件、生成文件、导出文件等），**必须**使用 `src/core/storage.py` 中的工具函数存入 `storage/tenants/{tenant_id}/` 的子目录下：
+
+```python
+from src.core.storage import get_tenant_storage_path, ensure_tenant_storage_dir
+
+# ✅ 正确：使用工具函数
+file_path = get_tenant_storage_path(
+    tenant_id=tenant_id,
+    scene="conversation",  # conversation / knowledge / export / report / avatar / temp
+    filename=filename
+)
+
+# ❌ 错误：自行拼路径
+file_path = f"storage/uploads/tenant_{tenant_id}/files/{filename}"
+```
+
+### 新增文件存储时必须做的事
+
+1. **更新 `file_usage.md`**：在对应分类下记录存储位置、文件类型、命名规范和调用方
+2. **使用标准工具函数**：租户附件必须使用 `src/core/storage.py` 中的 `get_tenant_storage_path` 等函数
+3. **遵循文件命名规范**：使用 `{prefix}_{uuid12}.{ext}` 格式，确保文件名唯一性
+
+### 禁止项
+
+- **禁止写入 `uploads/` 旧路径**：新代码必须写入 `tenants/` 新路径，禁止继续使用 `storage/uploads/{tenant_id}/` 模式
+- **禁止自行拼路径**：必须使用 `src/core/storage.py` 中的工具函数，禁止直接拼接路径字符串
+- **禁止跳过场景子目录**：禁止在租户目录下直接存放文件（如 `storage/tenants/{id}/xxx.pdf`）
+- **禁止写入 `storage/` 根目录或 `storage/uploads/` 根目录**
+
+### 迁移说明
+
+现有 `uploads/` 中的文件暂不迁移，后续择机统一迁移到 `tenants/` 新目录结构。新代码无需考虑旧文件兼容，但读取时可参考 `file_usage.md` 第 5.2 节的兼容桥接模式。
