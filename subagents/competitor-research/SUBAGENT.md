@@ -260,14 +260,7 @@ skill_execute(
 
 合并脚本会在所有子页面的基础上，生成一个带顶部导航栏、左侧目录、翻页功能的完整 HTML 报告。
 
-合并完成后，调用 `register_download_file` 注册完整报告供用户预览：
-
-```
-register_download_file(
-  file_path="storage/competitor_research/{session_id}/report/full_report.html",
-  display_name="竞品分析报告_{竞品名称}.html"
-)
-```
+合并完成后，按系统提示词的「文件交付规则」用 `cp` 注册完整报告（display_name 用 `竞品分析报告_{竞品名称}.html`）供用户预览。
 
 然后向用户报告：
 

@@ -310,7 +310,6 @@ class Agent:
         from src.tools.file.edit_tool import EditTool
         from src.tools.file.cp_tool import CpTool
         from src.tools.file.upload_to_remote import UploadToRemoteTool
-        from src.tools.file.register_download_tool import RegisterDownloadFileTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
         from src.tools.network.http_api import HttpApiTool
 
@@ -332,7 +331,6 @@ class Agent:
         self.tool_registry.register(EditTool())
         self.tool_registry.register(CpTool())
         self.tool_registry.register(UploadToRemoteTool())
-        self.tool_registry.register(RegisterDownloadFileTool())
         
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
@@ -1683,18 +1681,12 @@ class Agent:
             logger.warning(f"Failed to rebuild memory from DB for session {session_id}: {e}")
 
         # 设置工具的 user_id / tenant_id
-        download_tool = None
         file_output_tools = []  # 注册下载的文件工具（write / cp）
         if user:
             for tool_name in ("email_send", "email_read", "email_list_folders"):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user.user_id)
-
-            # 注入 user_id 到文件下载工具
-            download_tool = self.tool_registry.get_tool("register_download_file")
-            if download_tool and hasattr(download_tool, 'set_user_id'):
-                download_tool.set_user_id(user.user_id)
 
             # 注入 user_id 到文件输出工具（write / cp 都会注册下载）
             for tool_name in ("write", "cp"):
@@ -1716,9 +1708,6 @@ class Agent:
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(_resolve_tenant_id)
-            # 注入 tenant_id 到文件下载工具
-            if download_tool and hasattr(download_tool, 'set_tenant_id'):
-                download_tool.set_tenant_id(_resolve_tenant_id)
             # 注入 tenant_id 到文件输出工具
             for tool in file_output_tools:
                 if hasattr(tool, 'set_tenant_id'):

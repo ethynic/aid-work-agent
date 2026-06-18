@@ -1595,7 +1595,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
                     # 提取可下载文件
                     downloadable_files = []
-                    download_tool_names = {"register_download_file", "write", "cp"}
+                    download_tool_names = {"write", "cp"}
                     for evt in progress_events:
                         if (evt.get("type") == "tool_result"
                             and evt.get("toolName") in download_tool_names

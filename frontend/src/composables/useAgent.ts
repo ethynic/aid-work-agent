@@ -222,7 +222,7 @@ export function useAgent() {
           const toolDisplayName = getToolDisplayName(toolName, {})
           if (success) {
             // 提取下载文件信息到助手消息
-            const downloadToolNames = ['register_download_file', 'write', 'cp']
+            const downloadToolNames = ['write', 'cp']
             if (downloadToolNames.includes(toolName) && result?.file_id) {
               // 仅当 visible !== false 时才在前端展示下载卡片
               // visible 缺省（undefined）视为可见；仅 cp 显式返回 visible=false 时隐藏
@@ -261,9 +261,6 @@ export function useAgent() {
               addProgress(`✅ ${toolDisplayName}完成\n📄 ${preview}`, 'tool_result', toolName, undefined, result)
             } else if (toolName === 'browser_open') {
               addProgress(`✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
-            } else if (toolName === 'register_download_file') {
-              const fileName = result?.file_name || '文件'
-              addProgress(`✅ 已生成文件「${fileName}」，可在下方下载`, 'tool_result', toolName, undefined, result)
             } else {
               addProgress(`✅ ${toolDisplayName}执行完成`, 'tool_result', toolName, undefined, result)
             }

@@ -455,7 +455,7 @@ async def _process_tenant_channel_message(
     async def collect_files_callback(event):
         if (isinstance(event, dict)
             and event.get("type") == "tool_result"
-            and event.get("toolName") in ("register_download_file", "write", "cp")
+            and event.get("toolName") in ("write", "cp")
             and event.get("success") is True):
             result = event.get("result", {}) or {}
             if result.get("file_id"):
@@ -600,7 +600,7 @@ async def _process_tenant_wecom_background(
         async def collect_files_callback(event):
             if (isinstance(event, dict)
                 and event.get("type") == "tool_result"
-                and event.get("toolName") in ("register_download_file", "write", "cp")
+                and event.get("toolName") in ("write", "cp")
                 and event.get("success") is True):
                 result = event.get("result", {}) or {}
                 if result.get("file_id"):
@@ -1453,7 +1453,7 @@ async def _process_tenant_wecom_kf_messages(
                         return
                     event_type = event.get("type")
                     if (event_type == "tool_result"
-                        and event.get("toolName") in ("register_download_file", "write", "cp")
+                        and event.get("toolName") in ("write", "cp")
                         and event.get("success") is True):
                         result = event.get("result", {}) or {}
                         if result.get("file_id"):

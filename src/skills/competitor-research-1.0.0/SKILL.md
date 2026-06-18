@@ -848,7 +848,7 @@ body.cover-page {
 **合并步骤**：
 
 1. 逐页生成 8 个子页面 HTML 文件（cover.html, company_overview.html, ...）
-2. 每个子页面生成后通过 `register_download_file` 注册，用户可立即预览
+2. 每个子页面生成后，**按系统提示词的「文件交付规则」用 cp 注册**，用户可立即预览
 3. 全部页面生成完毕后，调用合并脚本：
 
 ```
@@ -872,14 +872,7 @@ skill_execute(
 )
 ```
 
-4. 合并成功后，调用 `register_download_file` 注册完整报告：
-
-```
-register_download_file(
-  file_path="storage/competitor_research/{session_id}/report/full_report.html",
-  display_name="竞品分析报告_{竞品名称}.html"
-)
-```
+4. 合并成功后，**按系统提示词的「文件交付规则」用 cp 注册完整报告**（display_name 用 `竞品分析报告_{竞品名称}.html`）。
 
 合并脚本位于 `scripts/html_report_merger.py`，它将所有子页面的 `<body>` 内容提取出来，嵌入带导航框架的汇总页中。
 
