@@ -10,6 +10,7 @@
 |---|------|------|---------|---------|
 | 3 | LLM 故障转移 | 提供商故障自动切换，多 Key 轮换与降级策略 | [设计](infrastructure/llm-failover-design.md) | [计划](infrastructure/llm-failover-dev-plan.md) |
 | 4 | MCP Server | Model Context Protocol 服务器，支持外部工具集成 | [设计](infrastructure/mcp_server.md) | [计划](infrastructure/mcp_server_dev_plan.md) |
+| 5 | ✅ 主智能体系统提示词优化 | 重写 master_agent.md / subagent_base.md 为原则化结构，新增「文件交付规则」段统一约束"工具生成文件后必须用 cp 注册"。移除与 cp 功能重复的 register_download_file 工具（cp 默认 visible=True、放宽源路径限制）。清理 travel-consultant / competitor-research 的 SUBAGENT.md 与 SKILL.md 冗余注册说明。2026-06-18 完成开发并已测试 | [设计](system/prompt/agent-system-prompt-optimization-design.md) | [计划](../plans/agent-system-prompt-optimization-dev-plan.md) |
 
 ## 系统功能
 
