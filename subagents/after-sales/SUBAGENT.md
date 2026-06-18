@@ -1,5 +1,5 @@
 ---
-name: 售后服务助手
+name: 在线电商客服
 description: 处理用户的订单查询、退换货、商品使用问题等售后服务
 version: 1.0.0
 author: system
