@@ -1,0 +1,546 @@
+# 系统核心表用途与关系
+
+> 本文档介绍智能体系统核心数据表的用途和相互关系，仅覆盖非 `bs_` 前缀的系统表。
+> `bs_` 开头的业务表由各子智能体自行管理，不在此文档范围内。
+
+---
+
+## 1. 表分类总览
+
+系统表按功能分为以下类别：
+
+| 类别 | 表数量 | 说明 |
+|------|--------|------|
+| 用户与认证 | 3 | 用户、Token、验证码 |
+| 对话核心 | 4 | 会话、消息、记录、错误日志 |
+| 渠道适配 | 2 | 渠道会话、渠道消息 |
+| 知识库 | 5 | 分类、文档、文本块、向量、全文搜索 |
+| 数字员工实例 | 3 | 实例、队列、回复风格 |
+| SaaS 多租户 | 5 | 租户、订阅、支付、渠道配置、用户授权 |
+| 定时任务 | 2 | 任务定义、执行日志 |
+| Prompt 版本管理 | 5 | 注册表、版本、标签、草稿、分段 |
+| 子智能体配置 | 4 | 环境变量、知识库关联、定义、Prompt 分段 |
+| 其他 | 4 | Token 成本、远程凭据、邮箱配置、数据连接器 |
+
+---
+
+## 2. 用户与认证
+
+### 2.1 `users` — 用户表
+
+系统所有用户的基础信息，支持多种登录方式（密码、手机验证码、企业微信 OAuth）。
+
+**关键字段**：
+- `user_id` — 全局唯一用户标识
+- `role` — 角色（`user` / `tenant_admin` / `platform_admin`）
+- `tenant_id` — 所属租户（平台管理员为空）
+- `source` — 注册来源
+
+**约束**：同一租户内手机号唯一（`idx_users_tenant_phone`）。
+
+### 2.2 `tokens` — 会话 Token 表
+
+用于多进程共享登录状态。存储一次性认证 Token，替代传统的 JWT 或 Session。
+
+**关系**：`users.user_id` ← `tokens.user_id`
+
+### 2.3 `sms_codes` — 验证码表
+
+手机登录时的一次性验证码，通过 `expires_at` 和 `used` 字段控制有效期和使用状态。
+
+---
+
+## 3. 对话核心
+
+### 3.1 `chat_sessions` — 会话表
+
+用户与智能体的一次对话会话。一个会话包含多条消息和一条或多条记录。
+
+**关键字段**：
+- `session_id` — 会话唯一标识
+- `subagent_id` — 关联的子智能体 ID
+- `instance_id` — 关联的数字员工实例 ID
+- `context_data` — 会话上下文（JSON），用于跨轮次保持状态
+
+**关系**：
+- `chat_messages.session_id` → `chat_sessions.session_id`（一对多）
+- `chat_records.session_id` → `chat_sessions.session_id`（一对多）
+- `agent_instances.instance_id` ← `chat_sessions.instance_id`
+
+### 3.2 `chat_messages` — 消息表
+
+存储用户和 AI 之间的**每一条消息**，用于前端展示聊天历史和构建对话上下文。
+
+**关键字段**：
+- `role` — 消息角色（`user` / `assistant` / `system` / `tool`）
+- `content` — 消息文本内容
+- `metadata` — 附加信息（JSON），如工具调用详情
+
+**与 `chat_records` 的区别**：
+
+| 维度 | `chat_messages` | `chat_records` |
+|------|----------------|----------------|
+| 粒度 | 单条消息（最小单元） | 完整对话交互（用户输入+助手回复） |
+| 用途 | 消息展示、上下文构建 | 用量统计、计费、审计、性能监控 |
+| 数据 | 简单的 role/content/metadata | 含 token 统计、执行详情、状态等 |
+
+两个表存在内容冗余但设计合理，服务于不同业务目的。
+
+### 3.3 `chat_records` — 会话记录表
+
+每次完整对话（用户输入 → AI 回复）的处理记录，是计费和审计的核心数据源。
+
+**关键字段**：
+- `total_token_count` / `prompt_tokens` / `completion_tokens` / `cached_input_tokens` — Token 消耗明细
+- `model` / `provider` — 使用的大模型和提供商
+- `agent_iterations` — 智能体循环迭代次数
+- `subagent_calls` — 子智能体调用记录（JSON）
+- `duration_ms` — 对话耗时
+- `status` — 执行状态（`completed` / `failed` / `cancelled`）
+- `source_type` — 来源类型（`chat` 网页端 / `wecom` / `dingtalk` / `feishu` / `wecom_kf` 等渠道端）
+
+**关系**：
+- `chat_records.user_id` → `users.user_id`
+- `chat_records.tenant_id` → `tenants.tenant_id`
+- `chat_records.session_id` → `chat_sessions.session_id`（网页端）或 `channel_sessions.session_id`（渠道端），无外键约束
+
+### 3.4 `log_error` — 错误日志表
+
+平台级错误日志，仅平台管理员可见。记录系统运行时的异常，支持状态跟踪和处理流程。
+
+**关键字段**：
+- `module` — 错误来源模块（如 `agent.py:process_message:1234`）
+- `status` — 处理状态（`unprocessed` / `processed` / `ignored`）
+- `processed_by` / `processed_at` — 处理人和时间
+
+### 3.5 网页会话 vs 渠道会话
+
+系统存在两套会话存储体系，服务不同的接入场景：
+
+| 维度 | 网页端 | 渠道端 |
+|------|--------|--------|
+| 存储表 | `chat_sessions` + `chat_messages` | `channel_sessions` + `channel_messages` |
+| 会话管理 | 用户可点击"新会话"按钮创建多个会话 | 无可操作按钮，按 `(tenant_id, channel_type, channel_user_id, subagent_id)` 四元组唯一确定，同一渠道同一子智能体下每个渠道用户只有一个会话 |
+| 生命周期 | 用户主动创建/切换/删除 | 首次发消息时自动创建，无用户主动删除入口（代码层面支持删除） |
+| 用途 | 前端展示聊天历史 + 构建对话上下文 | 同上，但需额外记录渠道特有字段（渠道类型、渠道用户ID等） |
+
+**两种会话的生命周期差异**：
+
+```
+网页端：用户 ──→ 会话A（多轮对话）
+             ──→ 点击"新会话" ──→ 会话B（新的多轮对话）
+             ──→ 删除会话A ──→ chat_sessions/chat_messages 记录删除
+
+渠道端：渠道用户 ──→ 首次发消息 ──→ 自动创建会话（唯一，按四元组确定）
+                  ──→ 持续对话 ──→ 所有消息追加到同一会话
+                  ──→ 无可操作按钮，无用户主动删除入口
+```
+
+**`chat_records` 与两套会话的关系**：
+
+无论是网页端还是渠道端，每次完整对话（用户输入 → AI 回复）都会在 `chat_records` 表创建一条记录，用于**计费和审计**。`chat_records` 独立于会话的生命周期：
+
+- **删除网页会话时**：仅删除 `chat_sessions` 和 `chat_messages` 中的记录，`chat_records` **不删除**
+- **删除渠道会话时**：仅删除 `channel_sessions` 和 `channel_messages` 中的记录，`chat_records` **不删除**
+- **原因**：`chat_records` 是计费和审计依据，必须保留完整历史
+- **`chat_records` 的 `session_id` 字段**：可以指向 `chat_sessions.session_id`（网页端）或 `channel_sessions.session_id`（渠道端），靠 `source_type` 字段区分来源（`chat` / `wecom` / `dingtalk` / `feishu` / `wecom_kf` 等）
+
+```
+chat_sessions / channel_sessions（会话）
+    ↓ 1:N（创建记录时，session_id 关联到来源会话）
+chat_records（计费记录，独立存储，不随会话删除）
+```
+
+---
+
+## 4. 渠道适配
+
+### 4.1 `channel_sessions` — 渠道会话表
+
+企业微信、钉钉、飞书等第三方渠道的会话管理。与网页端会话（`chat_sessions`）的核心差异见 [3.5 节](#35-网页会话-vs-渠道会话)。
+
+**关键字段**：
+- `channel_type` — 渠道类型（`wecom` / `dingtalk` / `feishu`）
+- `channel_user_id` — 渠道侧的用户标识
+- `channel_chat_id` — 渠道侧的聊天标识
+
+### 4.2 `channel_messages` — 渠道消息表
+
+渠道会话中的消息，支持多种消息类型和附件。
+
+**关键字段**：
+- `message_type` — 消息类型（`text` / `image` / `file` 等）
+- `attachments` — 附件信息（JSON）
+
+**关系**：
+- `channel_messages.session_id` → `channel_sessions.session_id`
+
+---
+
+## 5. 知识库
+
+知识库采用 RAG（检索增强生成）架构，包含解析 → 分块 → 嵌入 → 向量检索 + 全文检索的完整链路。
+
+```
+documents（文档元数据）
+    ↓ 1:N
+chunks（文本块）
+    ↓ 1:1                  ↓ 1:1
+chunks_vec（向量）      chunks_fts（全文搜索）
+```
+
+### 5.1 `knowledge_categories` — 知识库分类表
+
+租户级知识库分类，按 `source_type` 区分不同来源（如 `upload`、`url`、`attraction_resource` 等）。
+
+**关系**：`documents.source_type` → `knowledge_categories.source_type`（逻辑关联）
+
+### 5.2 `documents` — 文档表
+
+上传文档或知识条目的元数据，包含文件信息、处理状态和摘要。
+
+**关键字段**：
+- `source_type` — 来源类型
+- `file_type` / `file_path` / `file_size` — 文件信息
+- `total_chunks` — 分块数量
+- `embedding_model` — 使用的嵌入模型
+- `raw_text` — 提取的原始文本
+- `summary` — AI 生成的文档摘要
+- `uuid` — 带前缀的业务唯一 ID（如 `doc_abc123def456`）
+
+### 5.3 `chunks` — 文本块表
+
+文档经过分块处理后的文本片段，是检索的基本单元。
+
+**关键字段**：
+- `doc_id` — 所属文档 ID
+- `chunk_index` — 块在文档中的位置序号
+- `text` — 分块后的文本内容
+- `tokens` — Token 数量
+- `uuid` — 带前缀的业务唯一 ID（如 `chunk_abc123def456`）
+
+### 5.4 `chunks_vec` — 向量表
+
+使用 pgvector 扩展存储文本块的向量嵌入，支持 HNSW 索引和余弦相似度搜索。
+
+**关系**：`chunks_vec.chunk_id` → `chunks.id`（1:1）
+
+### 5.5 `chunks_fts` — 全文搜索表
+
+使用 PostgreSQL tsvector 实现全文检索，与向量搜索配合实现混合检索。
+
+**关系**：`chunks_fts.chunk_id` → `chunks.id`（1:1）
+
+---
+
+## 6. 数字员工实例
+
+### 6.1 `agent_instances` — 智能体实例表
+
+租户创建的数字员工实例（如"外贸小明"），是用户实际交互的对象。
+
+**关键字段**：
+- `subagent_type` — 子智能体类型
+- `instance_name` — 实例名称（用户可见）
+- `status` — 运行状态（`idle` / `busy`）
+- `current_session_id` / `current_user_id` — 当前锁定会话和用户
+- `locked_at` / `lock_expires_at` — 锁定时间，用于并发控制
+- `reply_style_id` — 绑定的回复风格 ID
+- `bound_channel_type` — 绑定的渠道类型
+- `allowed_skills` — 允许使用的技能列表
+
+**关系**：
+- `agent_instances.tenant_id` → `tenants.tenant_id`
+- `agent_instances.subscription_id` → `subscriptions.subscription_id`
+- `agent_instances.reply_style_id` → `reply_styles.style_id`
+- `chat_sessions.instance_id` → `agent_instances.instance_id`
+
+### 6.2 `agent_instance_queue` — 实例等待队列表
+
+当数字员工实例正在服务其他用户时，新请求进入此队列等待。
+
+**关键字段**：
+- `position` — 队列中的位置
+- `status` — 状态（`waiting` / `ready` / `expired` / `cancelled`）
+- `wait_timeout_at` — 等待超时时间
+
+**关系**：`agent_instance_queue.instance_id` → `agent_instances.instance_id`
+
+### 6.3 `reply_styles` — 回复风格表
+
+租户级回复风格配置，可绑定到数字员工实例上，控制 AI 的回复语气和风格。
+
+**关键字段**：
+- `style_id` — 风格标识
+- `content` — 回复风格的提示词内容
+- `version` — 版本号
+- `is_active` — 是否启用
+
+---
+
+## 7. SaaS 多租户
+
+### 7.1 `tenants` — 租户表
+
+企业租户的基础信息，是整个 SaaS 体系的核心实体。
+
+**关键字段**：
+- `plan` — 套餐类型（`basic` / `standard` / `enterprise`）
+- `max_instances` — 允许的最大数字员工实例数
+- `max_users` — 允许的最大用户数
+- `expire_at` — 到期时间（时分秒为 23:59:59，当天仍可登录，空表示永久有效）
+- `tenant_code` — 租户短代码，用于 URL 路径
+
+### 7.2 `subscriptions` — 订阅表
+
+租户订阅数字员工服务的记录，包含配额和计费信息。
+
+**关键字段**：
+- `subagent_type` — 订阅的子智能体类型
+- `instance_quota` — 实例并发配额
+- `token_quota` — Token 配额（-1 表示不限制）
+- `tokens_used` — 已使用 Token 数
+- `status` — 订阅状态
+- `payment_status` — 支付状态
+- `starts_at` / `expires_at` — 订阅生效和到期时间
+
+**关系**：
+- `subscriptions.tenant_id` → `tenants.tenant_id`
+- `agent_instances.subscription_id` → `subscriptions.subscription_id`
+
+### 7.3 `payment_orders` — 支付订单表
+
+租户购买订阅时产生的支付记录。
+
+**关系**：
+- `payment_orders.tenant_id` → `tenants.tenant_id`
+- `payment_orders.subscription_id` → `subscriptions.subscription_id`
+
+### 7.4 `tenant_channel_configs` — 租户渠道配置表
+
+租户在各渠道（企业微信、钉钉、飞书）上的配置信息。
+
+**关系**：`tenant_channel_configs.tenant_id` → `tenants.tenant_id`
+
+### 7.5 `user_agent_permissions` — 用户级数字员工授权表
+
+控制哪些用户可以使用哪些数字员工。
+
+**关系**：
+- `user_agent_permissions.user_id` → `users.user_id`
+- `user_agent_permissions.tenant_id` → `tenants.tenant_id`
+
+---
+
+## 8. 定时任务
+
+### 8.1 `scheduled_tasks` — 定时任务表
+
+用户配置的定时任务，支持 cron 表达式和固定间隔两种调度方式。
+
+**关键字段**：
+- `schedule_type` — 调度类型（`cron` / `interval`）
+- `cron_expression` / `interval_seconds` — 调度规则
+- `status` — 任务状态（`active` / `paused` / `completed`）
+- `total_runs` / `success_count` / `fail_count` — 执行统计
+- `next_run_at` — 下次执行时间
+
+**关系**：`scheduled_tasks.user_id` → `users.user_id`
+
+### 8.2 `scheduled_task_logs` — 定时任务执行日志表
+
+每次定时任务执行的详细记录。
+
+**关键字段**：
+- `status` — 执行状态
+- `trigger_type` — 触发方式
+- `duration_ms` / `token_usage` — 资源消耗
+- `result_summary` / `result_detail` — 执行结果
+
+**关系**：`scheduled_task_logs.task_id` → `scheduled_tasks.task_id`
+
+---
+
+## 9. Prompt 版本管理
+
+Prompt 版本管理提供系统提示词的版本控制、标签管理和草稿功能。
+
+```
+prompt_registry（Prompt 注册表，每个 Prompt 一条）
+    ↓ 1:N
+prompt_versions（版本记录，不可变，每次提交创建新版本）
+    ↓ 1:N
+prompt_labels（标签，如 "production" / "staging"，指向特定版本）
+
+prompt_registry（同上）
+    ↓ 1:1
+prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
+```
+
+### 9.1 `prompt_registry` — Prompt 注册表
+
+每个被管理的 Prompt 在此注册一条记录，维护基础信息和最新版本号。
+
+**关键字段**：
+- `scope` / `scope_id` — Prompt 所属的作用域和具体实体（如 `agent` + `agent_id`）
+- `prompt_type` — Prompt 类型
+- `latest_version` — 当前最新版本号
+
+### 9.2 `prompt_versions` — Prompt 版本表
+
+存储每个版本的 Prompt 内容，不可变。
+
+**关键字段**：
+- `version` — 版本号（递增整数）
+- `content` — Prompt 内容
+- `variables` — 模板变量（JSONB）
+- `model_config` — 模型配置（JSONB）
+- `content_hash` — 内容哈希，用于去重和完整性校验
+- `parent_version` — 父版本号，用于追踪变更来源
+
+### 9.3 `prompt_labels` — Prompt 标签表
+
+给特定版本打标签，如 `production`、`staging`、`beta` 等。标签是命名指针，可以快速切换。
+
+**关系**：`prompt_labels.prompt_id` → `prompt_registry.id`
+
+### 9.4 `prompt_drafts` — Prompt 草稿表
+
+每 Prompt 最多一条草稿记录，用于保存未发布的修改。
+
+**关键字段**：
+- `base_version` — 基于的版本号
+
+### 9.5 `subagent_prompt_sections` — 子智能体 Prompt 分段表
+
+将子智能体的 System Prompt 拆分为多个可独立管理的段落（Phase 3.7）。
+
+**关键字段**：
+- `agent_id` — 子智能体 ID
+- `section_key` — 段落标识（如 `role_definition`、`rules`、`examples`）
+- `content` — 段落内容
+
+**关系**：`subagent_prompt_sections.agent_id` → `subagent_definitions.agent_id`
+
+---
+
+## 10. 子智能体配置
+
+### 10.1 `subagent_definitions` — 子智能体定义表
+
+存储子智能体的元数据定义（Phase 2），包括能力描述、工具列表、技能列表等。
+
+**关键字段**：
+- `agent_id` — 子智能体唯一标识
+- `triggers` — 触发条件（文件模式、关键词等，JSONB）
+- `tools` — 可用工具列表（JSONB）
+- `skills` — 可用技能列表（JSONB）
+- `delegatable_to` — 可委托的其他子智能体（JSONB）
+- `reply_style` — 回复风格
+- `business_pages` — 关联的业务页面（JSONB）
+- `knowledge_sources` — 关联的知识库来源（JSONB）
+
+### 10.2 `subagent_env_vars` — 子智能体环境变量表
+
+按租户和子智能体隔离的环境变量配置。
+
+**约束**：`tenant_id + subagent_name + var_name` 联合唯一。
+
+### 10.3 `subagent_knowledge_sources` — 子智能体知识库关联表
+
+租户级子智能体与知识库的关联关系（Phase 3.2）。
+
+**关键字段**：
+- `sources` — 知识库来源列表（JSONB）
+
+**约束**：`tenant_id + subagent_name` 联合唯一。
+
+---
+
+## 11. 其他系统表
+
+### 11.1 `token_cost_prices` — Token 成本价表
+
+存储各模型的 Token 单价，用于成本核算。
+
+**关键字段**：
+- `model_name` — 模型名称
+- `input_price_per_m` — 输入 Token 单价（每百万 Token 价格，元）
+- `output_price_per_m` — 输出 Token 单价（每百万 Token 价格，元）
+
+### 11.2 `remote_credentials` — 远程连接凭据表
+
+存储 SMB/FTP 等远程连接的凭据配置，供智能体访问外部文件系统。
+
+**关键字段**：
+- `connection_type` — 连接类型（`smb` / `ftp` / `sftp` 等）
+- `password` — 加密后的密码
+- `status` — 凭据状态
+
+**关系**：`remote_credentials.user_id` → `users.user_id`
+
+### 11.3 `user_email_settings` — 用户邮箱配置表
+
+用户个人邮箱的 SMTP/IMAP 配置，用于邮件收发功能。
+
+**关系**：`user_email_settings.user_id` → `users.user_id`（1:1）
+
+### 11.4 `data_connectors` — 数据连接器表
+
+数据分析智能体使用的外部数据库连接配置。
+
+**关键字段**：
+- `db_type` — 数据库类型
+- `password_encrypted` — 加密后的密码
+- `imported_tables` — 已导入的表列表（JSONB）
+- `last_sync_at` — 上次同步时间
+
+**关系**：`data_connectors.tenant_id` → `tenants.tenant_id`
+
+---
+
+## 12. 核心表关系图
+
+```
+tenants（租户）
+├── users（用户） ────┬── tokens（认证Token）
+│                     ├── sms_codes（验证码）
+│                     ├── remote_credentials（远程凭据）
+│                     └── user_email_settings（邮箱配置）
+│
+├── subscriptions（订阅） ────┬── payment_orders（支付订单）
+│                              └── agent_instances（数字员工实例）
+│                                   └── chat_sessions（网页会话，用户可创建多个）
+│                                        └── chat_messages（网页消息）
+│                                   └── chat_records（计费记录，不随会话删除）  ← 独立存储
+│
+├── agent_instance_queue（实例队列） ──→ agent_instances
+├── reply_styles（回复风格） ──────────→ agent_instances
+├── tenant_channel_configs（渠道配置）
+├── user_agent_permissions（用户授权）
+│
+├── channel_sessions（渠道会话，一用户一会话） ──→ channel_messages（渠道消息）
+│                                                 └── chat_records（计费记录，同上）  ← 独立存储
+│
+├── knowledge_categories（知识分类） ──→ documents（文档）
+│                                            └── chunks（文本块）
+│                                                 ├── chunks_vec（向量）
+│                                                 └── chunks_fts（全文搜索）
+│
+├── scheduled_tasks（定时任务） ───────→ scheduled_task_logs（任务日志）
+├── data_connectors（数据连接器）
+├── subagent_env_vars（环境变量）
+├── subagent_knowledge_sources（知识库关联）
+│
+├── prompt_registry（Prompt注册表）
+│    ├── prompt_versions（版本）
+│    ├── prompt_labels（标签）
+│    └── prompt_drafts（草稿）
+│
+└── subagent_definitions（子智能体定义）
+     └── subagent_prompt_sections（Prompt分段）
+
+全局表（不归属租户）：
+├── token_cost_prices（Token单价）
+├── log_error（错误日志）
+```
