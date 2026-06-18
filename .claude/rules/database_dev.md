@@ -10,6 +10,8 @@
 
 系统表是智能体运行必需的核心表，维持原命名不变，不需要 `bs_` 前缀。
 
+**详细用途与关系说明**：见 [database_system_table.md](../../docs/system/database_system_table.md)。
+
 **示例表**：
 - `users` - 用户表
 - `chat_sessions` - 会话表
@@ -19,6 +21,8 @@
 - `chunks` - 文本块表
 - `tenants` - 租户表（SaaS）
 - `subscriptions` - 订阅表（SaaS）
+
+**维护要求**：后续开发中新增或修改系统核心表时，必须同步更新 `database_system_table.md`，保持文档与实际表结构一致。
 
 ### 2. 业务数据表（Business Data Tables）
 
