@@ -26,6 +26,7 @@ from src.config.logging import setup_logging
 from src.core.agent import master_agent
 from src.core.agent_router import agent_router
 from src.core.redis_client import redis_client
+from src.core.session_queue import session_queue
 from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, customer, scheduled_task, email_settings
@@ -1506,13 +1507,14 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 return
 
             # 直接在 FastAPI event loop 中迭代 agent
+            session_queue.mark_responding(session_id)
             try:
                 async for event in agent.process_message(
                     user_input=full_message,
                     session_id=session_id,
                     user=agent_user,
                     attachments=attachments,
-                    cancel_check=lambda: sse_manager.is_cancelled(session_id),
+                    cancel_check=lambda: sse_manager.is_cancelled(session_id) or session_queue.check_cancel(session_id),
                 ):
                     # 每个 event 直接序列化为 SSE 帧
                     try:
@@ -1664,6 +1666,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 logger.warning(f"[SSE] Cannot send error message to client, already disconnected, session_id={session_id}")
         finally:
+            session_queue.mark_idle(session_id)
             sse_manager.remove_sse_client(session_id, client_queue)
             logger.info(f"[SSE] SSE cleanup completed, session_id={session_id}")
 

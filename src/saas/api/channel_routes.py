@@ -33,6 +33,7 @@ from src.channels.session import channel_session_manager
 from src.channels.idempotency import MessageDeduplicator
 from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
+from src.core.session_queue import session_queue
 
 router = APIRouter(tags=["租户渠道回调"])
 
@@ -467,13 +468,24 @@ async def _process_tenant_channel_message(
                     "mime_type": result.get("mime_type", ""),
                 })
 
-    try:
-        response_text = await agent.process_message_sync(
+    async def _processor(cancel_check):
+        return await agent.process_message_sync(
             user_input=message.text,
             session_id=session_id,
             record_service=record_service,
             progress_callback=collect_files_callback,
+            cancel_check=cancel_check,
         )
+
+    try:
+        response_text = await session_queue.enqueue_and_process(
+            session_id=session_id,
+            user_input=message.text,
+            processor=_processor,
+        )
+        if not response_text:
+            # 消息被合并/排队，本调用方无需发送回复
+            return "merged"
         record_service.complete(response_text)
     except Exception as e:
         logger.error(f"Agent error for tenant {tenant_id}: {e}")
@@ -494,6 +506,7 @@ async def _process_tenant_channel_message(
 
     # 10. 发送响应
     try:
+        session_queue.mark_responding(session_id)
         from src.models.message import UnifiedResponse, DownloadableFileInfo
         response = UnifiedResponse(
             message_id=f"resp_{message.message_id}",
@@ -502,7 +515,9 @@ async def _process_tenant_channel_message(
             downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
         )
         await adapter.send_message(response)
+        session_queue.mark_idle(session_id)
     except Exception as e:
+        session_queue.mark_idle(session_id)
         logger.error(f"Failed to send response for tenant {tenant_id}: {e}")
 
     return "success"
@@ -591,10 +606,6 @@ async def _process_tenant_wecom_background(
         record_service.set_model(agent.llm.get_model_name())
         record_service.set_provider(agent.llm.get_provider_name())
 
-        # 延迟等待提示：Agent 处理超过阈值时发送等待消息
-        from src.config.settings import settings
-        indicator_config = settings.wecom.waiting_indicator
-
         downloadable_files = []
 
         async def collect_files_callback(event):
@@ -612,29 +623,24 @@ async def _process_tenant_wecom_background(
                         "mime_type": result.get("mime_type", ""),
                     })
 
-        agent_task = asyncio.create_task(
-            agent.process_message_sync(
+        async def _processor(cancel_check):
+            return await agent.process_message_sync(
                 user_input=message.text,
                 session_id=session_id,
                 record_service=record_service,
                 progress_callback=collect_files_callback,
+                cancel_check=cancel_check,
             )
+
+        response_text = await session_queue.enqueue_and_process(
+            session_id=session_id,
+            user_input=message.text,
+            processor=_processor,
         )
+        if not response_text:
+            # 消息被合并/排队，本调用方无需发送回复
+            return
 
-        if indicator_config.enabled and indicator_config.messages:
-            await asyncio.sleep(indicator_config.delay_seconds)
-            if not agent_task.done():
-                indicator_msg = random.choice(indicator_config.messages)
-                try:
-                    await adapter.send_waiting_indicator(message.user_id, indicator_msg)
-                    logger.debug(
-                        f"[Tenant WeCom] 等待提示已发送: user={message.user_id}, "
-                        f"delay={indicator_config.delay_seconds}s"
-                    )
-                except Exception as e:
-                    logger.warning(f"[Tenant WeCom] 等待提示发送失败: {e}")
-
-        response_text = await agent_task
         record_service.complete(response_text)
         SessionRecordManager.end_record()
 
@@ -660,7 +666,9 @@ async def _process_tenant_wecom_background(
             content={"text": response_text},
             downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
         )
+        session_queue.mark_responding(session_id)
         send_result = await adapter.send_message(response)
+        session_queue.mark_idle(session_id)
         logger.info(
             f"[Tenant WeCom] 回复发送{'成功' if send_result else '失败'}: "
             f"user={message.user_id}, session_id={session_id}"
@@ -1468,16 +1476,28 @@ async def _process_tenant_wecom_kf_messages(
                         # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
                         tool_messages_collected.extend(event.get("messages", []))
 
-                try:
-                    agent_attachments = _build_attachments_for_agent(user_attachments)
-                    logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
-                    response_text = await agent.process_message_sync(
+                async def _processor(cancel_check):
+                    return await agent.process_message_sync(
                         user_input=user_input,
                         session_id=session_id,
                         record_service=record_service,
                         progress_callback=collect_files_callback,
                         attachments=agent_attachments if agent_attachments else None,
+                        cancel_check=cancel_check,
                     )
+
+                try:
+                    agent_attachments = _build_attachments_for_agent(user_attachments)
+                    logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
+                    response_text = await session_queue.enqueue_and_process(
+                        session_id=session_id,
+                        user_input=user_input,
+                        processor=_processor,
+                    )
+                    if not response_text:
+                        # 消息被合并/排队，本调用方无需发送回复
+                        SessionRecordManager.end_record()
+                        continue
                     record_service.complete(response_text)
                 except Exception as e:
                     logger.error(f"[wecom_kf] Agent 处理异常: {e}")
@@ -1539,7 +1559,9 @@ async def _process_tenant_wecom_kf_messages(
                     content={"text": response_text},
                     downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
                 )
+                session_queue.mark_responding(session_id)
                 send_result = await adapter.send_message(response)
+                session_queue.mark_idle(session_id)
                 logger.info(
                     f"[wecom_kf] 回复发送{'成功' if send_result else '失败'}: "
                     f"msgid={msg_id}, user={unified_msg.user_id}, "

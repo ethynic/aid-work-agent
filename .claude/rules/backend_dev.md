@@ -303,3 +303,21 @@ storage/
 - 禁止将附件存放到 `storage/` 根目录或 `storage/uploads/` 根目录
 - 禁止在租户目录下跳过场景子目录直接存放文件（如 `storage/tenants/{id}/xxx.pdf`）
 - 文件名必须保证唯一性，建议使用 `{prefix}_{uuid}.{ext}` 格式（如 `file_af08155fe5d9.docx`）
+
+## 缓存使用规范
+
+**核心文档**：系统缓存使用全景见 [cache_usage.md](./cache_usage.md)，包含所有缓存的类型、存储方式、键模式、TTL 和失效策略。
+
+### 新增缓存时必须做的事
+
+1. **更新 `cache_usage.md`**：在对应分类下记录缓存名称、存储类型、键模式、TTL、失效时机和源文件
+2. **在 `cache_utils.py` 中注册前缀**：如需新键前缀，在 `CacheKeys` 类中添加
+3. **定义明确的失效策略**：不能只有 TTL 过期，必须有主动失效入口（如权限变更时清除相关缓存）
+4. **键命名遵循规范**：`{cache_prefix}:{identifier}`，使用 `cache_utils.py` 中的 `CacheKeys` 常量，禁止硬编码字符串
+
+### 禁止项
+
+- **禁止绕过 `redis_client`**：所有缓存操作必须通过 `src/core/redis_client.py`，禁止直接使用 `redis-py`
+- **禁止硬编码键前缀**：必须使用 `CacheKeys` 类定义的常量
+- **禁止无 TTL 的缓存**：所有缓存必须设置合理的 TTL，防止内存无限增长
+- **禁止跨租户缓存污染**：涉及租户的缓存键必须包含 `tenant_id`，使用复合键隔离

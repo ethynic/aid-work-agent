@@ -2572,7 +2572,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         user: Optional[User] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         record_service=None,
-        progress_callback=None
+        progress_callback=None,
+        cancel_check=None,
     ) -> str:
         """Process message and return complete response
 
@@ -2583,6 +2584,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 relying on thread-local SessionRecordManager.
             progress_callback: Optional async callback for progress events
                 (tool_start, tool_result, etc.)
+            cancel_check: Optional callable returning True to cancel processing.
+                Used by channel message serialization to cancel stale requests.
         """
         # Store explicit record_service so the inner process_message()
         # can access it without relying on thread-local storage
@@ -2591,7 +2594,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         try:
             response_parts = []
             async for event in self.process_message(
-                user_input, session_id, user, attachments
+                user_input, session_id, user, attachments, cancel_check=cancel_check
             ):
                 if event.get("type") == "response":
                     response_parts.append(event.get("data", ""))
