@@ -9,12 +9,14 @@ import json
 import os
 import re
 import shutil
+import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -498,6 +500,11 @@ def _map_db_type(db_type_str: str) -> str:
 # ============== Excel Upload ==============
 
 
+def _sse_event(event: Dict[str, Any]) -> str:
+    """格式化为 SSE 事件帧。"""
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
 @router.post("/upload")
 async def upload_excel(
     file: UploadFile = File(...),
@@ -507,61 +514,116 @@ async def upload_excel(
     上传 Excel/CSV 文件，解析结构并用 LLM 推断 schema，返回供用户确认。
     不保存到知识库。源文件持久化到 storage/uploads/{tenant_id}/data_sources/，
     供后续数据分析时加载数据使用。
+
+    采用 SSE 流式响应：推送解析、推断进度，最终 complete 事件携带 schemas。
     """
     tenant_id = get_current_tenant_id()
 
-    # 验证文件格式
+    # 验证文件格式（在生成器外，便于直接返回错误）
     ext = Path(file.filename or "unknown").suffix.lower()
     if ext not in (".xlsx", ".xls", ".csv"):
         return _error_response(f"不支持的文件格式: {ext}，仅支持 .xlsx、.xls、.csv", status_code=400)
 
-    # 持久化源文件到 storage/uploads/{tenant_id}/data_sources/
-    from src.config.settings import settings
-    from pathlib import Path as _Path
-    _project_root = _Path(__file__).resolve().parent.parent.parent
-    persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"
-    persist_dir.mkdir(parents=True, exist_ok=True)
-    file_id = uuid.uuid4().hex[:12]
-    persist_path = persist_dir / f"{file_id}{ext}"
+    filename = file.filename or "unknown"
 
-    try:
-        with open(persist_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    async def event_generator():
+        total_start = time.monotonic()
+        try:
+            # 持久化源文件到 storage/uploads/{tenant_id}/data_sources/
+            from src.config.settings import settings
+            from pathlib import Path as _Path
+            _project_root = _Path(__file__).resolve().parent.parent.parent
+            persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"
+            persist_dir.mkdir(parents=True, exist_ok=True)
+            file_id = uuid.uuid4().hex[:12]
+            persist_path = persist_dir / f"{file_id}{ext}"
 
-        logger.info(f"[upload_excel] tenant={tenant_id} file={file.filename} persisted to {persist_path}")
+            with open(persist_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
-        # 解析文件
-        sheets = await asyncio.to_thread(sheet_parser.parse_file, str(persist_path))
-        logger.info(f"[upload_excel] parsed {len(sheets)} sheets: {[s['sheet_name'] for s in sheets]}")
+            logger.info(f"[upload_excel] tenant={tenant_id} file={filename} persisted to {persist_path}")
+            yield _sse_event({"type": "connected", "filename": filename})
 
-        # LLM 推断每个 sheet 的 schema
-        schemas = []
-        for sheet_info in sheets:
-            table_hint = Path(file.filename).stem
-            if len(sheets) > 1:
-                table_hint = f"{table_hint}_{sheet_info['sheet_name']}"
-            schema = await schema_extractor.extract_schema(
-                sheet_info=sheet_info,
-                table_name_hint=table_hint,
-            )
-            schema["source_type"] = "file"
-            schema["source_info"] = file.filename
-            # 持久化定位信息：数据分析时通过此 source 加载真实数据
-            schema["source"] = {
-                "type": "excel",
-                "file_path": str(persist_path),
-                "sheet_name": sheet_info["sheet_name"],
-            }
-            schemas.append(schema)
-            logger.info(f"[upload_excel] schema extracted: table={schema.get('table_name')}")
+            # 阶段 1：解析文件
+            yield _sse_event({"type": "progress", "stage": "parsing", "message": "正在解析文件结构..."})
+            t0 = time.monotonic()
+            sheets = await asyncio.to_thread(sheet_parser.parse_file, str(persist_path))
+            logger.info(f"[upload_excel] parsing done in {time.monotonic() - t0:.2f}s, {len(sheets)} sheets: {[s['sheet_name'] for s in sheets]}")
 
-        return {"success": True, "schemas": schemas}
+            if not sheets:
+                yield _sse_event({"type": "complete", "schemas": []})
+                return
 
-    except ValueError as e:
-        return _error_response(str(e), status_code=400)
-    except Exception as e:
-        logger.error(f"上传文件解析失败: {e}", exc_info=True)
-        return _error_response("文件解析失败", debug=str(e))
+            # 阶段 2：LLM 推断每个 sheet 的 schema
+            yield _sse_event({
+                "type": "progress",
+                "stage": "extracting",
+                "message": f"正在分析 {len(sheets)} 张工作表..." if len(sheets) > 1 else "正在分析工作表结构...",
+            })
+
+            schemas = []
+            total = len(sheets)
+            for idx, sheet_info in enumerate(sheets):
+                sheet_name = sheet_info.get("sheet_name", f"sheet_{idx + 1}")
+                table_hint = Path(filename).stem
+                if total > 1:
+                    table_hint = f"{table_hint}_{sheet_name}"
+
+                yield _sse_event({
+                    "type": "sheet_progress",
+                    "current": idx + 1,
+                    "total": total,
+                    "sheet_name": sheet_name,
+                })
+
+                t1 = time.monotonic()
+                schema = await schema_extractor.extract_schema(
+                    sheet_info=sheet_info,
+                    table_name_hint=table_hint,
+                )
+                logger.info(f"[upload_excel] schema extracted ({idx + 1}/{total}) sheet='{sheet_name}' table='{schema.get('table_name')}' in {time.monotonic() - t1:.2f}s")
+
+                schema["source_type"] = "file"
+                schema["source_info"] = filename
+                schema["source"] = {
+                    "type": "excel",
+                    "file_path": str(persist_path),
+                    "sheet_name": sheet_name,
+                }
+                schemas.append(schema)
+
+                yield _sse_event({
+                    "type": "sheet_done",
+                    "current": idx + 1,
+                    "total": total,
+                    "sheet_name": sheet_name,
+                    "table_name": schema.get("table_name", ""),
+                })
+
+            logger.info(f"[upload_excel] complete: {len(schemas)} schemas, total {time.monotonic() - total_start:.2f}s")
+            yield _sse_event({"type": "complete", "schemas": schemas})
+
+        except ValueError as e:
+            logger.warning(f"[upload_excel] value error: {e}")
+            yield _sse_event({"type": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"上传文件解析失败: {e}", exc_info=True)
+            yield _sse_event({"type": "error", "message": "文件解析失败"})
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ============== Schema Management ==============

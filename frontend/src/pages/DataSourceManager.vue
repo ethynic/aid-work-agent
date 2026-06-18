@@ -256,6 +256,51 @@
       </template>
     </BaseModal>
 
+    <!-- Modal: Upload Progress -->
+    <BaseModal v-model="uploading" title="正在分析文件..." size="md">
+      <div class="py-4">
+        <div class="flex items-start gap-3 mb-4">
+          <div class="w-2.5 h-2.5 rounded-full bg-primary-500 animate-pulse mt-1.5 shrink-0"></div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm text-default font-medium">{{ uploadStage || '准备中...' }}</div>
+            <div v-if="uploadFilename" class="text-xs text-muted mt-1 truncate">{{ uploadFilename }}</div>
+          </div>
+        </div>
+
+        <div v-if="uploadSheetInfo" class="bg-surface-hover rounded-lg px-4 py-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-muted">分析工作表</span>
+            <span class="text-xs text-muted">{{ uploadSheetInfo.current }} / {{ uploadSheetInfo.total }}</span>
+          </div>
+          <div class="text-sm text-default">{{ uploadSheetInfo.sheetName }}</div>
+          <div class="mt-2 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              class="h-full bg-primary-500 transition-all duration-300"
+              :style="{ width: (uploadSheetInfo.total > 0 ? (uploadSheetInfo.current / uploadSheetInfo.total) * 100 : 0) + '%' }"
+            ></div>
+          </div>
+        </div>
+
+        <div v-if="uploadCompletedSheets.length > 0" class="mt-3 space-y-1">
+          <div
+            v-for="s in uploadCompletedSheets"
+            :key="s.current"
+            class="flex items-center gap-2 text-xs text-muted"
+          >
+            <svg class="w-3.5 h-3.5 text-success-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="truncate">{{ s.sheetName }} → {{ s.tableName || '(未命名)' }}</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" :disabled="uploadCancelling" @click="cancelUpload">
+          {{ uploadCancelling ? '取消中...' : '取消上传' }}
+        </BaseButton>
+      </template>
+    </BaseModal>
+
     <!-- Hidden file input -->
     <input ref="fileInput" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="handleFileSelect" />
   </div>
@@ -277,7 +322,7 @@ import {
   testSavedConnector,
   listRemoteTables,
   importTables,
-  uploadExcel,
+  uploadExcelStream,
   listSchemas,
   saveSchema,
   updateSchema,
@@ -446,8 +491,34 @@ async function handleDeleteSchema(row: any) {
 // ===== Upload =====
 const fileInput = ref<HTMLInputElement | null>(null)
 
+// 上传进度状态
+const uploading = ref(false)
+const uploadFilename = ref('')
+const uploadStage = ref('')
+const uploadSheetInfo = ref<{ current: number; total: number; sheetName: string } | null>(null)
+const uploadCompletedSheets = ref<{ current: number; sheetName: string; tableName: string }[]>([])
+const uploadCancelling = ref(false)
+let uploadAbortHandle: { cancel: () => void } | null = null
+
 function openUploadDialog() {
   fileInput.value?.click()
+}
+
+function resetUploadState() {
+  uploadStage.value = ''
+  uploadSheetInfo.value = null
+  uploadCompletedSheets.value = []
+  uploadFilename.value = ''
+  uploadCancelling.value = false
+  uploadAbortHandle = null
+}
+
+function cancelUpload() {
+  if (!uploadAbortHandle) return
+  uploadCancelling.value = true
+  uploadAbortHandle.cancel()
+  uploading.value = false
+  resetUploadState()
 }
 
 async function handleFileSelect(e: Event) {
@@ -456,17 +527,44 @@ async function handleFileSelect(e: Event) {
   if (!file) return
   input.value = ''
 
-  try {
-    const result = await uploadExcel(file)
-    const schemas = result.schemas
-    if (schemas && schemas.length > 0) {
-      openSchemaReview(schemas)
-    } else {
-      alert('未能识别出有效的数据表结构')
-    }
-  } catch (e: any) {
-    alert(e.message || '上传失败')
-  }
+  // 立即打开进度弹框
+  resetUploadState()
+  uploading.value = true
+  uploadFilename.value = file.name
+  uploadStage.value = '上传文件中...'
+
+  uploadAbortHandle = uploadExcelStream(file, {
+    onConnected: (filename) => {
+      uploadFilename.value = filename
+      uploadStage.value = '文件已接收，准备解析...'
+    },
+    onProgress: (_stage, message) => {
+      uploadStage.value = message
+    },
+    onSheetProgress: (current, total, sheetName) => {
+      uploadSheetInfo.value = { current, total, sheetName }
+    },
+    onSheetDone: (current, total, sheetName, tableName) => {
+      uploadSheetInfo.value = { current, total, sheetName }
+      uploadCompletedSheets.value.push({ current, sheetName, tableName })
+    },
+    onComplete: (schemas) => {
+      uploading.value = false
+      uploadAbortHandle = null
+      if (schemas && schemas.length > 0) {
+        openSchemaReview(schemas)
+      } else {
+        alert('未能识别出有效的数据表结构')
+      }
+      resetUploadState()
+    },
+    onError: (message) => {
+      uploading.value = false
+      uploadAbortHandle = null
+      alert(message || '上传失败')
+      resetUploadState()
+    },
+  })
 }
 
 // ===== Connectors tab =====
