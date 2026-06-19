@@ -265,7 +265,7 @@ async def list_session_traces(
                     agent_iterations, tags, source_type, created_at
                 FROM obs_traces
                 WHERE session_id = %s
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
             """, (session_id,))
 
             rows = cur.fetchall()

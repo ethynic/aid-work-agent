@@ -1413,6 +1413,11 @@ async def _process_tenant_wecom_kf_messages(
 
                 user_content = unified_msg.text or user_input
 
+                # 语音消息：如果 ASR 识别成功，用 "[语音消息] ASR结果" 格式保存
+                # （unified_msg.text 永远是 "[语音消息]"，ASR 结果在 user_input 中）
+                if msgtype == "voice" and user_input != "[语音消息]" and not user_input.startswith("[语音消息 -"):
+                    user_content = f"[语音消息] {user_input}"
+
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
                 user_attachments_meta = []
                 for att in user_attachments:
