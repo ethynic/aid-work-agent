@@ -68,7 +68,7 @@
               </template>
               <template #actions="{ row }">
                 <div class="flex gap-2">
-                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openPermissionDialog(row)">授权</BaseButton>
+                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEditDialog(row)">编辑</BaseButton>
                   <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleRemove(row.user_id)">删除</BaseButton>
                 </div>
               </template>
@@ -91,8 +91,25 @@
     </div>
 
     <!-- 添加用户弹窗 -->
-    <BaseModal v-model="showAdd" title="添加用户" size="md">
-      <div class="space-y-4">
+    <BaseModal v-model="showAdd" title="添加用户" size="lg">
+      <!-- Tab 页签 -->
+      <div class="mb-4 border-b border-default">
+        <div class="flex gap-6">
+          <button
+            type="button"
+            :class="['pb-2 text-sm font-medium border-b-2 transition-colors', activeTab === 'basic' ? 'text-primary-600 border-primary-600' : 'text-muted border-transparent hover:text-default hover:border-hover']"
+            @click="activeTab = 'basic'"
+          >基本信息</button>
+          <button
+            type="button"
+            :class="['pb-2 text-sm font-medium border-b-2 transition-colors', activeTab === 'agents' ? 'text-primary-600 border-primary-600' : 'text-muted border-transparent hover:text-default hover:border-hover']"
+            @click="activeTab = 'agents'"
+          >数字员工授权 <span v-if="addForm.role !== 'tenant_admin' && selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span></button>
+        </div>
+      </div>
+
+      <!-- 基本信息 Tab -->
+      <div v-show="activeTab === 'basic'" class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">用户名 <span class="text-danger-500">*</span></label>
           <BaseInput v-model="addForm.username" placeholder="请输入用户名" />
@@ -113,6 +130,50 @@
           </BaseSelect>
         </div>
       </div>
+
+      <!-- 数字员工授权 Tab -->
+      <div v-show="activeTab === 'agents'">
+        <div v-if="addForm.role === 'tenant_admin'" class="text-sm text-muted">
+          管理员默认拥有全部数字员工权限，无需单独授权
+        </div>
+        <div v-else-if="loadingAgents" class="text-center py-4 text-muted text-sm">加载中...</div>
+        <div v-else-if="availableAgents.length === 0" class="text-sm text-muted">
+          当前租户未授权任何数字员工
+        </div>
+        <div v-else>
+          <div class="flex items-center justify-between mb-2">
+            <label class="flex items-center cursor-pointer text-sm text-default">
+              <input
+                type="checkbox"
+                :checked="selectedAgentIds.length === availableAgents.length"
+                @change="toggleAllAgents"
+                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              />
+              <span class="ml-2">全选 / 取消全选</span>
+            </label>
+            <span class="text-xs text-muted">已选 {{ selectedAgentIds.length }} / {{ availableAgents.length }}</span>
+          </div>
+          <div class="space-y-1 py-1">
+            <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-surface-hover rounded cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="selectedAgentIds.includes(agent.agent_id)"
+                @change="toggleAgentSelection(agent.agent_id)"
+                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              />
+              <div class="ml-3 flex-1">
+                <div class="text-sm font-medium text-default">{{ agent.name }}</div>
+                <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
+              </div>
+              <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
+                :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
+                {{ agent.type === 'builtin' ? '内置' : '定制' }}
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
       <div v-if="addError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">{{ addError }}</div>
       <template #footer>
         <BaseButton intent="secondary" @click="showAdd = false">取消</BaseButton>
@@ -140,39 +201,92 @@
       </template>
     </BaseModal>
 
-    <!-- 数字员工授权弹窗 -->
-    <BaseModal v-model="showPermissionDialog" title="数字员工授权" size="md" mode="edit">
-      <template v-if="currentUser">
-        <p class="text-sm text-muted mb-4">{{ currentUser.username || currentUser.phone }}</p>
-      </template>
-      <div v-if="loadingAgents" class="text-center py-6 text-muted text-sm">加载中...</div>
-      <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-muted text-sm">
-        当前租户未授权任何数字员工，无法给用户授权
+    <!-- 编辑用户弹窗 -->
+    <BaseModal v-model="showEditDialog" title="编辑用户" size="lg">
+      <!-- Tab 页签 -->
+      <div class="mb-4 border-b border-default">
+        <div class="flex gap-6">
+          <button
+            type="button"
+            :class="['pb-2 text-sm font-medium border-b-2 transition-colors', activeTab === 'basic' ? 'text-primary-600 border-primary-600' : 'text-muted border-transparent hover:text-default hover:border-hover']"
+            @click="activeTab = 'basic'"
+          >基本信息</button>
+          <button
+            type="button"
+            :class="['pb-2 text-sm font-medium border-b-2 transition-colors', activeTab === 'agents' ? 'text-primary-600 border-primary-600' : 'text-muted border-transparent hover:text-default hover:border-hover']"
+            @click="activeTab = 'agents'"
+          >数字员工授权 <span v-if="editForm.role !== 'tenant_admin' && selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span></button>
+        </div>
       </div>
-      <div v-else class="space-y-2 py-2">
-        <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-surface-hover rounded cursor-pointer">
-          <input
-            type="checkbox"
-            :checked="selectedAgentIds.includes(agent.agent_id)"
-            @change="toggleAgentSelection(agent.agent_id)"
-            class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
-          />
-          <div class="ml-3 flex-1">
-            <div class="text-sm font-medium text-default">{{ agent.name }}</div>
-            <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
+
+      <!-- 基本信息 Tab -->
+      <div v-show="activeTab === 'basic'" class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-sm text-muted mb-1 block">用户名</label>
+          <BaseInput v-model="editForm.username" placeholder="请输入用户名" />
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">手机号</label>
+          <BaseInput :model-value="editForm.phone" disabled class="bg-gray-50" />
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">角色 <span class="text-danger-500">*</span></label>
+          <BaseSelect v-model="editForm.role">
+            <option value="user">普通用户</option>
+            <option value="tenant_admin">管理员</option>
+          </BaseSelect>
+        </div>
+      </div>
+
+      <!-- 数字员工授权 Tab -->
+      <div v-show="activeTab === 'agents'">
+        <div v-if="editForm.role === 'tenant_admin'" class="text-sm text-muted">
+          管理员默认拥有全部数字员工权限，无需单独授权
+        </div>
+        <div v-else-if="loadingAgents" class="text-center py-4 text-muted text-sm">加载中...</div>
+        <div v-else-if="availableAgents.length === 0" class="text-sm text-muted">
+          当前租户未授权任何数字员工
+        </div>
+        <div v-else>
+          <div class="flex items-center justify-between mb-2">
+            <label class="flex items-center cursor-pointer text-sm text-default">
+              <input
+                type="checkbox"
+                :checked="availableAgents.length > 0 && selectedAgentIds.length === availableAgents.length"
+                @change="toggleAllAgents"
+                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              />
+              <span class="ml-2">全选 / 取消全选</span>
+            </label>
+            <span class="text-xs text-muted">已选 {{ selectedAgentIds.length }} / {{ availableAgents.length }}</span>
           </div>
-          <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
-            :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
-            {{ agent.type === 'builtin' ? '内置' : '定制' }}
-          </span>
-        </label>
+          <div class="space-y-1 py-1">
+            <label v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-surface-hover rounded cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="selectedAgentIds.includes(agent.agent_id)"
+                @change="toggleAgentSelection(agent.agent_id)"
+                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              />
+              <div class="ml-3 flex-1">
+                <div class="text-sm font-medium text-default">{{ agent.name }}</div>
+                <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
+              </div>
+              <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
+                :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
+                {{ agent.type === 'builtin' ? '内置' : '定制' }}
+              </span>
+            </label>
+          </div>
+        </div>
       </div>
-      <div v-if="permissionError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">
-        {{ permissionError }}
+
+      <div v-if="editError" class="mt-3 p-2 bg-danger-50 border border-danger-200 rounded text-danger-600 text-sm">
+        {{ editError }}
       </div>
       <template #footer>
-        <BaseButton intent="secondary" @click="showPermissionDialog = false">取消</BaseButton>
-        <BaseButton :disabled="savingPermissions" @click="saveUserPermissions">{{ savingPermissions ? '保存中...' : '确认保存' }}</BaseButton>
+        <BaseButton intent="secondary" @click="showEditDialog = false">取消</BaseButton>
+        <BaseButton :disabled="savingEdit" @click="handleSaveEdit">{{ savingEdit ? '保存中...' : '保存' }}</BaseButton>
       </template>
     </BaseModal>
 </template>
@@ -195,7 +309,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
-import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser } from '@/api/saasTenant'
+import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser, updateTenantUser } from '@/api/saasTenant'
 import { getTenantAvailableUserAgents, getUserAgentPermissions, setUserAgentPermissions, type AgentItem } from '@/api/saasPermissions'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -268,13 +382,16 @@ const fileInput = ref<HTMLInputElement | null>(null)
 
 const addForm = ref({ phone: '', username: '', department: '', role: 'user' })
 
-const showPermissionDialog = ref(false)
-const currentUser = ref<any>(null)
+const activeTab = ref<'basic' | 'agents'>('basic')
+
+const showEditDialog = ref(false)
+const editForm = ref({ user_id: '', username: '', phone: '', role: 'user' })
+const currentUser = ref<{ username: string; role: string } | null>(null)
 const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const loadingAgents = ref(false)
-const savingPermissions = ref(false)
-const permissionError = ref('')
+const savingEdit = ref(false)
+const editError = ref('')
 
 const total = ref(0)
 const { currentPage, pageSize, searchKeyword, seqNumber, handleSearch } =
@@ -305,15 +422,34 @@ const pagedUsers = computed(() => {
 function openAddUser() {
   addForm.value = { phone: '', username: '', department: '', role: 'user' }
   addError.value = ''
+  activeTab.value = 'basic'
+  selectedAgentIds.value = []
+  availableAgents.value = []
+  loadingAgents.value = true
   showAdd.value = true
+  ;(async () => {
+    try {
+      const res = await getTenantAvailableUserAgents()
+      if (res.success && res.data) {
+        availableAgents.value = res.data
+        selectedAgentIds.value = res.data.map(a => a.agent_id)
+      }
+    } catch (e) {
+      console.error('加载数字员工列表失败:', e)
+    } finally {
+      loadingAgents.value = false
+    }
+  })()
 }
 
-function openPermissionDialog(user: any) {
-  currentUser.value = user
+function openEditDialog(user: any) {
+  editForm.value = { user_id: user.user_id, username: user.username, phone: user.phone, role: user.role || 'user' }
+  currentUser.value = { username: user.username, role: user.role || 'user' }
   selectedAgentIds.value = []
   loadingAgents.value = true
-  permissionError.value = ''
-  showPermissionDialog.value = true
+  editError.value = ''
+  activeTab.value = 'basic'
+  showEditDialog.value = true
   ;(async () => {
     try {
       const [availableRes, permissionsRes] = await Promise.all([
@@ -327,8 +463,8 @@ function openPermissionDialog(user: any) {
         selectedAgentIds.value = permissionsRes.data.agent_ids || []
       }
     } catch (e) {
-      console.error('加载数字员工授权失败:', e)
-      permissionError.value = '加载失败，请重试'
+      console.error('加载数据失败:', e)
+      editError.value = '加载失败，请重试'
     } finally {
       loadingAgents.value = false
     }
@@ -344,19 +480,54 @@ function toggleAgentSelection(agentId: string) {
   }
 }
 
-async function saveUserPermissions() {
-  if (!currentUser.value) return
-  savingPermissions.value = true
-  permissionError.value = ''
+function toggleAllAgents() {
+  if (selectedAgentIds.value.length === availableAgents.value.length) {
+    selectedAgentIds.value = []
+  } else {
+    selectedAgentIds.value = availableAgents.value.map(a => a.agent_id)
+  }
+}
+
+async function handleSaveEdit() {
+  if (!editForm.value.user_id) return
+  if (editForm.value.role !== 'tenant_admin' && selectedAgentIds.value.length === 0) {
+    editError.value = '用户必须至少授权使用1个数字员工'
+    activeTab.value = 'agents'
+    return
+  }
+  savingEdit.value = true
+  editError.value = ''
   try {
-    await setUserAgentPermissions(currentUser.value.user_id, selectedAgentIds.value)
-    toast.success('授权保存成功')
-    showPermissionDialog.value = false
+    // 保存基本信息
+    const updates: { username?: string; role?: string } = {}
+    if (editForm.value.username !== currentUser.value?.username) {
+      updates.username = editForm.value.username
+    }
+    if (editForm.value.role !== currentUser.value?.role) {
+      updates.role = editForm.value.role
+    }
+    if (Object.keys(updates).length > 0) {
+      const res = await updateTenantUser(editForm.value.user_id, updates)
+      if (!res.success) {
+        editError.value = '保存用户信息失败'
+        savingEdit.value = false
+        return
+      }
+    }
+
+    // 保存授权（仅对非管理员）
+    if (editForm.value.role !== 'tenant_admin') {
+      const currentUserId = editForm.value.user_id
+      await setUserAgentPermissions(currentUserId, selectedAgentIds.value)
+    }
+
+    showEditDialog.value = false
     await loadUsers()
+    toast.success('保存成功')
   } catch (e: any) {
-    permissionError.value = e.message || '保存失败'
+    editError.value = e.message || '保存失败'
   } finally {
-    savingPermissions.value = false
+    savingEdit.value = false
   }
 }
 
@@ -398,10 +569,19 @@ async function handleAddUser() {
     addError.value = '请填写用户名'
     return
   }
+  if (addForm.value.role !== 'tenant_admin' && selectedAgentIds.value.length === 0) {
+    addError.value = '用户必须至少授权使用1个数字员工'
+    activeTab.value = 'agents'
+    return
+  }
   adding.value = true
   addError.value = ''
   try {
-    await createTenantUser({ ...addForm.value, tenant_id: tenantId.value })
+    const res = await createTenantUser({ ...addForm.value, tenant_id: tenantId.value })
+    const newUserId = res.user?.user_id
+    if (res.success && newUserId && addForm.value.role !== 'tenant_admin') {
+      await setUserAgentPermissions(newUserId, selectedAgentIds.value)
+    }
     showAdd.value = false
     await loadUsers()
     toast.success('创建用户成功，密码为空，用户首次登录时，需要点击"忘记密码"进行重置')

@@ -38,6 +38,7 @@ class UserCreateRequest(BaseModel):
 
 class UserUpdateRequest(BaseModel):
     username: Optional[str] = Field(None, max_length=50, description="用户名")
+    role: Optional[str] = Field(None, description="角色，user=普通用户，tenant_admin=管理员")
 
 
 class UserListRequest(BaseModel):
@@ -270,6 +271,10 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return {"success": False, "message": "没有需要更新的字段"}
+
+    # 验证角色值
+    if "role" in updates and updates["role"] not in ("user", "tenant_admin"):
+        return {"success": False, "message": "角色值无效，仅支持 user 或 tenant_admin"}
 
     success = UserDB.update(user_id, **updates)
     return {"success": success}

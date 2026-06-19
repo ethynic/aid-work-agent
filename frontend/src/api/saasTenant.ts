@@ -363,6 +363,16 @@ export async function removeTenantUser(userId: string): Promise<{ success: boole
   return res.json()
 }
 
+export async function updateTenantUser(userId: string, data: { username?: string; role?: string }): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('更新用户信息失败')
+  return res.json()
+}
+
 // ==================== Skill 管理 ====================
 
 export async function listSkills(): Promise<{ success: boolean; skills: any[] }> {
