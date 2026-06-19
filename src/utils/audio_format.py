@@ -15,6 +15,8 @@
 - Opus (in WebM)
 """
 
+import io
+import wave
 from typing import Optional, Tuple
 
 
@@ -111,6 +113,8 @@ def detect_audio_format(
             return FORMAT_AMR, AMR_NB_SAMPLE_RATE
         if "wav" in ct_lower or "x-wav" in ct_lower:
             return FORMAT_WAV, 16000
+        if "pcm" in ct_lower:
+            return FORMAT_PCM, 16000
         if "mpeg" in ct_lower or "mp3" in ct_lower:
             return FORMAT_MP3, 16000
         if "ogg" in ct_lower or "opus" in ct_lower:
@@ -150,3 +154,27 @@ def get_unsupported_reason(audio_format: str) -> str:
     if audio_format in (FORMAT_SILK_V3, FORMAT_SILK_V2):
         return "SILK 是微信/QQ 专有音频格式，阿里云语音识别服务不支持该格式"
     return f"阿里云 ASR 暂不支持 {audio_format} 格式"
+
+
+def wrap_pcm_as_wav(pcm_bytes: bytes, sample_rate: int = 16000, sample_width: int = 2) -> bytes:
+    """
+    将原始 PCM 字节包装为 WAV 格式。
+
+    用于微信客服 voice_format=1 返回的原始 PCM 数据（无文件头），
+    包装后浏览器可直接播放，ASR 亦可按 wav 格式提交。
+
+    Args:
+        pcm_bytes: 原始 PCM 字节（16-bit 小端序）
+        sample_rate: 采样率，默认 16000
+        sample_width: 每样本字节数，默认 2（16-bit）
+
+    Returns:
+        WAV 格式字节
+    """
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()

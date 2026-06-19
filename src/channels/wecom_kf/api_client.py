@@ -145,8 +145,8 @@ class WeComKfApiClient:
             open_kfid: 客服账号 ID
             cursor: 上一次拉取的 next_cursor，首次为空
             limit: 本次拉取的消息条数，最大 1000
-            voice_format: 语音消息格式，0=amr（AMR-NB，8kHz，微信默认）。
-                此参数仅指定微信返回的音频格式，与文字识别无关（微信客服语音不自带识别）。
+            voice_format: 语音消息格式，0=amr（AMR-NB，8kHz），1=pcm（PCM，16kHz，16bit，单声道）。
+                默认使用 1（PCM 16kHz），音质更佳，有利于 ASR 识别。
 
         Returns:
             {

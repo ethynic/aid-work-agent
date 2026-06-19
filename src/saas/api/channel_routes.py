@@ -137,7 +137,7 @@ def _get_file_extension(msgtype: str, filename: str = "") -> str:
     """根据消息类型和文件名推断文件扩展名（仅作参考，最终由 magic bytes 修正）"""
     ext_map = {
         "image": ".jpg",
-        "voice": ".amr",  # WeCom 微信客服 sync_msg voice_format=0 默认 AMR-NB
+        "voice": ".wav",  # WeCom 微信客服 sync_msg voice_format=1 返回 PCM 16kHz，包装为 WAV
         "video": ".mp4",
         "file": "",  # 由文件名决定
     }
@@ -191,8 +191,16 @@ async def _download_and_build_attachments(
     detected_format = None
     detected_sample_rate = None
     if msgtype == "voice":
-        from src.utils.audio_format import detect_audio_format
+        from src.utils.audio_format import detect_audio_format, wrap_pcm_as_wav
         detected_format, detected_sample_rate = detect_audio_format(content, content_type)
+        # voice_format=1 请求返回原始 PCM（无文件头），magic bytes 检测会 fallback 为 mp3，
+        # 此处通过排除法识别：既不是已知有头格式、也不是 Content-Type 匹配到的格式时，
+        # 视为来自微信 voice_format=1 的原始 PCM，包装为 WAV 以便浏览器播放和 ASR 提交。
+        _KNOWN_MAGIC_FORMATS = {"amr", "amr-wb", "wav", "mp3", "opus", "aac", "silk_v3", "silk_v2", "flac"}
+        if detected_format not in _KNOWN_MAGIC_FORMATS:
+            content = wrap_pcm_as_wav(content, sample_rate=detected_sample_rate or 16000)
+            detected_format = "wav"
+            detected_sample_rate = 16000
         # 实际扩展名以检测结果为准
         ext_for_format = {
             "amr": ".amr",
@@ -205,7 +213,7 @@ async def _download_and_build_attachments(
             "silk_v3": ".silk",
             "silk_v2": ".silk",
         }
-        file_ext = ext_for_format.get(detected_format, ".amr")
+        file_ext = ext_for_format.get(detected_format, ".wav")
     else:
         file_ext = _get_file_extension(msgtype, media_item.get("filename", ""))
 
@@ -213,7 +221,7 @@ async def _download_and_build_attachments(
     if msgtype == "image":
         file_name = f"image_{media_id[:8]}.jpg"
     elif msgtype == "voice":
-        # 使用检测到的扩展名（默认 .amr）
+        # 使用检测到的扩展名（默认 .wav）
         file_name = f"voice_{media_id[:8]}{file_ext}"
     elif msgtype == "video":
         file_name = f"video_{media_id[:8]}.mp4"
@@ -318,8 +326,8 @@ def _build_attachments_for_agent(attachments: list) -> list:
 
 async def _transcribe_voice_with_asr(
     audio_content: str,
-    audio_format: str = "amr",
-    sample_rate: int = 8000,
+    audio_format: str = "wav",
+    sample_rate: int = 16000,
 ) -> str:
     """
     使用语音转文字工具识别语音内容。
@@ -327,8 +335,8 @@ async def _transcribe_voice_with_asr(
 
     Args:
         audio_content: base64 编码的音频内容
-        audio_format: 音频格式，默认 amr（WeCom 微信客服默认格式）
-        sample_rate: 采样率，默认 8000（AMR-NB）
+        audio_format: 音频格式，默认 wav（WeCom 微信客服 voice_format=1 返回 PCM，已包装为 WAV）
+        sample_rate: 采样率，默认 16000（PCM 16kHz）
 
     Returns:
         识别出的文字，如果识别失败返回 "[语音消息]"
@@ -1064,7 +1072,7 @@ async def _process_tenant_wecom_kf_messages(
 
         while has_more:
             logger.info(f"[wecom_kf] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
-            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=0)
+            result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=1)
             errcode = result.get("errcode", 0)
             errmsg = result.get("errmsg", "")
             has_more = result.get("has_more", 0) == 1
@@ -1402,7 +1410,7 @@ async def _process_tenant_wecom_kf_messages(
                     audio_format = user_attachments[0].get("audio_format") \
                         or user_attachments[0].get("file_name", "").split(".")[-1] \
                         or "amr"
-                    audio_sample_rate = user_attachments[0].get("sample_rate") or 8000
+                    audio_sample_rate = user_attachments[0].get("sample_rate") or 16000
                     user_input = await _transcribe_voice_with_asr(
                         audio_content, audio_format, audio_sample_rate
                     )
