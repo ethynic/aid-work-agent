@@ -1259,6 +1259,7 @@ class ChatRecordDB:
                     cr.user_id,
                     u.username,
                     cr.user_message,
+                    cr.assistant_message,
                     cr.prompt_tokens as input_tokens,
                     cr.completion_tokens as output_tokens,
                     cr.created_at
@@ -1279,6 +1280,7 @@ class ChatRecordDB:
                     "user_id": row["user_id"] or "",
                     "username": row["username"] or "",
                     "user_message": row["user_message"] or "",
+                    "assistant_message": row["assistant_message"] or "",
                     "input_tokens": row["input_tokens"],
                     "output_tokens": row["output_tokens"],
                     "created_at": row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else ""

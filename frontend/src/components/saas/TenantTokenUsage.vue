@@ -57,7 +57,10 @@
               <template #index="{ index }">{{ seqNumber(index) }}</template>
               <template #username="{ row }">{{ row.username || row.user_id || '-' }}</template>
               <template #user_message="{ row }">
-                <span class="truncate" :title="row.user_message">{{ formatMessagePreview(row.user_message) }}</span>
+                <span :title="row.user_message">{{ formatMessagePreview(row.user_message) }}</span>
+              </template>
+              <template #assistant_message="{ row }">
+                <span :title="row.assistant_message">{{ formatMessagePreview(row.assistant_message) }}</span>
               </template>
               <template #input_tokens="{ row }">
                 <span class="text-info-600">{{ formatTokensToMillionsThreeDecimals(row.input_tokens) }}</span>
@@ -138,7 +141,8 @@ const pageSize = ref(20)
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'username', label: '用户' },
-  { key: 'user_message', label: '对话内容' },
+  { key: 'user_message', label: '用户输入' },
+  { key: 'assistant_message', label: '智能体答复' },
   { key: 'input_tokens', label: '输入Token (M)' },
   { key: 'output_tokens', label: '输出Token (M)' },
   { key: 'created_at', label: '时间' },

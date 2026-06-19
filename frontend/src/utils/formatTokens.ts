@@ -33,8 +33,8 @@ export function formatMessagePreview(message: string): string {
   if (!message) return ''
   // 去除换行和多余空格
   const trimmed = message.replace(/\s+/g, ' ').trim()
-  // 截取前10个字符
-  return trimmed.length > 10 ? trimmed.substring(0, 10) + '...' : trimmed
+  // 截取前50个字符
+  return trimmed.length > 50 ? trimmed.substring(0, 50) + '...' : trimmed
 }
 
 /**
