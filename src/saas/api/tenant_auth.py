@@ -422,10 +422,6 @@ async def password_login(http_request: Request, request: AdminPasswordLoginReque
             debug=debug_info
         )
 
-    # 临时调试：打印用户信息
-    logger.debug(f"临时调试：password_login 获取到的 user 信息: user_id={user.get('user_id')}, phone={user.get('phone')}, username={user.get('username')}, role={user.get('role')}, tenant_id={user.get('tenant_id')}, password_hash={user.get('password_hash')}, password_hash类型={type(user.get('password_hash'))}, password_hash bool={bool(user.get('password_hash'))}")
-    logger.debug(f"临时调试：user 所有 keys: {list(user.keys())}")
-
     # 4. 平台管理员登录
     qb_token_pass = False
     if is_phone and admin_phones:   # 以手机号登录
