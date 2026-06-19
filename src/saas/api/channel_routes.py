@@ -1511,12 +1511,14 @@ async def _process_tenant_wecom_kf_messages(
                     agent_attachments = _build_attachments_for_agent(user_attachments)
                     logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
                     logger.info(f"[微信语音] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
+                    logger.debug(f"[临时调试][微信语音] 即将调用 enqueue_and_process: user_input_preview={user_input[:50]!r}")
                     response_text = await session_queue.enqueue_and_process(
                         session_id=session_id,
                         user_input=user_input,
                         processor=_processor,
                     )
                     logger.info(f"[微信语音] 队列处理返回: response_text_len={len(response_text) if response_text else 0}, is_empty={not response_text}")
+                    logger.debug(f"[临时调试][微信语音] enqueue_and_process 返回: response_text_preview={response_text[:100] if response_text else 'EMPTY'!r}")
                     if not response_text:
                         # 消息被合并/排队，本调用方无需发送回复
                         SessionRecordManager.end_record()
