@@ -210,25 +210,18 @@ class SessionMessageQueue:
 
         返回新的回复文本，或 None（不需要重新处理）。
         """
-        # 临时调试日志：验证根因
-        cancel_flag_exists = self.is_cancelled(session_id)
-        logger.debug(f"[临时调试][SessionQueue] _handle_cancel_and_reprocess 进入: session={session_id[:20]}..., cancel_flag_exists={cancel_flag_exists}")
         # 检查是否被取消
         if not self.is_cancelled(session_id):
-            logger.debug(f"[临时调试][SessionQueue] 无 cancel 标志，跳过重新处理")
             return None
         # 检查是否有合并输入
         merge_key = self._key("session_merge", session_id)
         existing = redis_client.get(merge_key)
         if not existing:
-            logger.debug(f"[临时调试][SessionQueue] 无 merge 缓冲区，跳过重新处理")
             return None
         data = json.loads(existing) if isinstance(existing, str) else existing
         merged_input = data.get("text", "")
-        logger.debug(f"[临时调试][SessionQueue] merge 缓冲区内容: merged_len={len(merged_input)}, original_len={len(original_input)}, is_same={merged_input == original_input}")
         # 检查合并输入是否与原始输入不同
         if merged_input == original_input:
-            logger.debug(f"[临时调试][SessionQueue] merge 内容与原始相同，跳过重新处理")
             return None
         # 用合并后的输入重新处理
         logger.info(
@@ -238,15 +231,11 @@ class SessionMessageQueue:
         self.clear_merge(session_id)  # 清除合并缓冲区，防重复重新处理
         # 清除取消标志：重新处理是新一轮完整处理，不应继承上一轮的取消状态，
         # 否则新 processor 会在 cancel_check 时立即返回，造成 response_text 为空
-        logger.debug(f"[临时调试][SessionQueue] 清除 cancel 标志前: is_cancelled={self.is_cancelled(session_id)}")
         self._clear_cancel(session_id)
-        logger.debug(f"[临时调试][SessionQueue] 清除 cancel 标志后: is_cancelled={self.is_cancelled(session_id)}")
         cancel_check = lambda: self.check_cancel(session_id)
-        logger.debug(f"[临时调试][SessionQueue] 开始重新调用 processor")
         response = processor(cancel_check)
         if asyncio.iscoroutine(response):
             response = await response
-        logger.debug(f"[临时调试][SessionQueue] processor 重新调用完成: response_len={len(response) if response else 0}, response_is_none={response is None}")
         return response
 
     async def enqueue_and_process(

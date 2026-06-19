@@ -1890,17 +1890,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             logger.debug(f"Agent iteration {iteration}")
 
             # 检查用户是否已取消
-            # 临时调试日志：验证 cancel_check 调用时机
-            if cancel_check:
-                cancel_result = cancel_check()
-                if cancel_result:
-                    logger.info(f"[AGENT] Cancelled by user at iteration {iteration}, session_id={session_id}")
-                    logger.debug(f"[临时调试][AGENT] cancel_check 返回 True，直接 return（iteration={iteration}）")
-                    return
-                else:
-                    logger.debug(f"[临时调试][AGENT] cancel_check 返回 False，继续处理（iteration={iteration}）")
-            else:
-                logger.debug(f"[临时调试][AGENT] cancel_check 为 None，继续处理（iteration={iteration}）")
+            if cancel_check and cancel_check():
+                logger.info(f"[AGENT] Cancelled by user at iteration {iteration}, session_id={session_id}")
+                return
             
             tools = self._get_tools()
             

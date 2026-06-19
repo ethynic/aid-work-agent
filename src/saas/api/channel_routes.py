@@ -1397,15 +1397,12 @@ async def _process_tenant_wecom_kf_messages(
                 # 语音消息：调用阿里云 ASR 转文字
                 if msgtype == "voice" and user_input == "[语音消息]" and user_attachments:
                     logger.info(f"[微信语音] 匹配到语音分支: msgtype={msgtype}, user_input={user_input}, has_attachments={bool(user_attachments)}")
-                    logger.info("[微信语音] 检测到语音消息，准备调用 ASR")
-                    logger.info(f"[微信语音] 附件信息: format={user_attachments[0].get('audio_format')}, filename={user_attachments[0].get('file_name')}, content_len={len(user_attachments[0].get('content',''))}")
                     audio_content = user_attachments[0].get("content", "")
                     # 优先使用 magic bytes 检测结果（避免 WeCom 错误标记 .mp3）
                     audio_format = user_attachments[0].get("audio_format") \
                         or user_attachments[0].get("file_name", "").split(".")[-1] \
                         or "amr"
                     audio_sample_rate = user_attachments[0].get("sample_rate") or 8000
-                    logger.info(f"[微信语音] ASR 参数: format={audio_format}, sample_rate={audio_sample_rate}")
                     user_input = await _transcribe_voice_with_asr(
                         audio_content, audio_format, audio_sample_rate
                     )
@@ -1426,7 +1423,6 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 语音消息：如果 ASR 识别成功，用 "[语音消息] ASR结果" 格式保存
                 # （unified_msg.text 永远是 "[语音消息]"，ASR 结果在 user_input 中）
-                logger.info(f"[微信语音] 最终用户输入: msgtype={msgtype}, user_input={user_input}, user_content={user_content}")
                 if msgtype == "voice" and not user_input.startswith("[语音消息"):
                     user_content = f"[语音消息] {user_input}"
 
@@ -1511,14 +1507,12 @@ async def _process_tenant_wecom_kf_messages(
                     agent_attachments = _build_attachments_for_agent(user_attachments)
                     logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
                     logger.info(f"[微信语音] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
-                    logger.debug(f"[临时调试][微信语音] 即将调用 enqueue_and_process: user_input_preview={user_input[:50]!r}")
                     response_text = await session_queue.enqueue_and_process(
                         session_id=session_id,
                         user_input=user_input,
                         processor=_processor,
                     )
                     logger.info(f"[微信语音] 队列处理返回: response_text_len={len(response_text) if response_text else 0}, is_empty={not response_text}")
-                    logger.debug(f"[临时调试][微信语音] enqueue_and_process 返回: response_text_preview={response_text[:100] if response_text else 'EMPTY'!r}")
                     if not response_text:
                         # 消息被合并/排队，本调用方无需发送回复
                         SessionRecordManager.end_record()
@@ -1584,7 +1578,6 @@ async def _process_tenant_wecom_kf_messages(
                     content={"text": response_text},
                     downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
                 )
-                logger.info(f"[微信语音] 准备发送回复: response_len={len(response_text)}, session_id={session_id}")
                 session_queue.mark_responding(session_id)
                 send_result = await adapter.send_message(response)
                 logger.info(f"[微信语音] 回复发送完成: send_result={send_result}")
