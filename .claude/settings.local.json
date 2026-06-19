@@ -79,7 +79,9 @@
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:registry.npmmirror.com)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:pypi.org)"
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:open.feishu.cn)",
+      "WebFetch(domain:open.dingtalk.com)"
     ]
   }
 }

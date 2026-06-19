@@ -55,6 +55,7 @@
 |---|------|------|---------|---------|
 | 27 | 企业微信集成 | 应用消息收发、回调处理 | [设计](channel/wecom/wecom-integration.md) | — |
 | 28 | 飞书 / 钉钉集成 | 飞书和钉钉渠道适配器实现 | [设计](channel/feishu-dingtalk/channel_integration.md) | — |
+| 29 | 飞书渠道对接（完整实施） | 修复 FeishuAdapter 错误实现（AES 密钥、签名验证），补齐 crypto/media 子模块、连接池复用、长消息拆分、速率限制、欢迎消息，完善路由层 challenge-response 验证与事件解密。60 项自动化测试全通过。2026-06-19 | [方案](channel/feishu/implementation_plan.md) / [实施](channel/feishu/integration_guide.md) | — |
 
 ## SaaS 多租户
 

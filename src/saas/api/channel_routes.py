@@ -835,42 +835,454 @@ async def tenant_wecom_callback_post(tenant_id: str, config_id: str, request: Re
         return PlainTextResponse("error", status_code=500)
 
 
-# ==================== Dingtalk 租户回调 ====================
+# ==================== DingTalk 租户回调 ====================
+
+# 钉钉事件去重器（按 tenant_id 隔离，TTL 5 分钟）
+_dingtalk_event_dedup: dict[str, MessageDeduplicator] = {}
+
+
+def _get_dingtalk_event_dedup(tenant_id: str) -> MessageDeduplicator:
+    """获取或创建钉钉事件去重器"""
+    if tenant_id not in _dingtalk_event_dedup:
+        _dingtalk_event_dedup[tenant_id] = MessageDeduplicator(ttl_seconds=300)
+    return _dingtalk_event_dedup[tenant_id]
+
 
 @router.get("/t/{tenant_id}/dingtalk/callback")
-async def tenant_dingtalk_callback_get(
-    tenant_id: str,
-    signature: str = Query(...),
-    timestamp: str = Query(...),
-    nonce: str = Query(...),
-    echostr: str = Query(...),
-):
-    """钉钉租户回调验证"""
-    adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
-    if not adapter:
-        return PlainTextResponse("No config", status_code=500)
+async def tenant_dingtalk_callback_get(tenant_id: str):
+    """
+    钉钉回调 GET 兜底
 
-    if not await adapter.verify_signature(signature, timestamp, nonce, echostr):
-        return PlainTextResponse("Invalid signature", status_code=403)
-    return PlainTextResponse(echostr)
+    钉钉机器人回调 URL 验证不依赖 GET（与企微不同）。
+    此路由仅作兼容保留，返回 200 即可。
+    """
+    return JSONResponse({"status": "ok"})
 
 
 @router.post("/t/{tenant_id}/dingtalk/callback")
 async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
-    """钉钉租户消息回调"""
-    body = await request.body()
-    result = await _process_tenant_channel_message(tenant_id, "dingtalk", body, body.decode())
-    return PlainTextResponse(result)
+    """
+    钉钉机器人消息回调统一入口
+
+    流程:
+    1. 查配置 → 构造 adapter
+    2. 读取 timestamp/sign 请求头 → HmacSHA256 签名验证
+    3. 解析 JSON body
+    4. 按 msgId 去重（5 分钟 TTL）
+    5. 立即返回 {"success": True} → 后台 asyncio.create_task 异步处理
+    """
+    try:
+        body = await request.body()
+        body_str = body.decode()
+
+        adapter, _, subagent_type = ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
+        if not adapter:
+            logger.warning(f"[Tenant DingTalk] 配置不存在: tenant={tenant_id}")
+            return JSONResponse({"success": False, "msg": "config not found"}, status_code=404)
+
+        # 1. 签名验证（timestamp + sign 请求头）
+        signature = request.headers.get("sign", "")
+        timestamp = request.headers.get("timestamp", "")
+        if signature:
+            if not await adapter.verify_signature(signature, timestamp, "", ""):
+                logger.warning(f"[Tenant DingTalk] 签名验证失败: tenant={tenant_id}")
+                return JSONResponse({"success": False, "msg": "invalid signature"}, status_code=403)
+
+        # 2. 解析 JSON body
+        try:
+            data = json.loads(body_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[Tenant DingTalk] body JSON 解析失败: tenant={tenant_id}, error={e}")
+            return JSONResponse({"success": False, "msg": "invalid json"}, status_code=400)
+
+        # 3. 空消息/忽略事件
+        msg_type = data.get("msgtype", "text")
+        if msg_type == "empty":
+            logger.debug(f"[Tenant DingTalk] 忽略空消息: tenant={tenant_id}")
+            return JSONResponse({"success": True})
+
+        # 4. 消息去重
+        msg_id = data.get("msgId", "")
+        if msg_id:
+            dedup = _get_dingtalk_event_dedup(tenant_id)
+            if await dedup.is_duplicate(msg_id):
+                logger.debug(f"[Tenant DingTalk] 重复消息: tenant={tenant_id}, msgId={msg_id}")
+                return JSONResponse({"success": True})
+
+        # 5. 立即返回，后台异步处理
+        asyncio.create_task(
+            _process_tenant_dingtalk_background(tenant_id, data, subagent_type=subagent_type)
+        )
+        return JSONResponse({"success": True})
+
+    except Exception as e:
+        logger.error(f"[Tenant DingTalk] POST 处理异常: tenant={tenant_id}, error={e}")
+        return JSONResponse({"success": False, "msg": "internal error"}, status_code=500)
+
+
+async def _process_tenant_dingtalk_background(
+    tenant_id: str,
+    event_data: dict,
+    subagent_type: Optional[str] = None,
+) -> None:
+    """
+    钉钉消息后台异步处理
+
+    在 asyncio.create_task 中执行，不阻塞回调响应。
+
+    Args:
+        tenant_id: 租户 ID
+        event_data: 钉钉回调 JSON dict（含 msgtype/text/senderId/conversationType 等）
+        subagent_type: 关联的数字员工类型
+    """
+    adapter = None
+    try:
+        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
+        if not adapter:
+            logger.error(f"[Tenant DingTalk] adapter 不可用: tenant={tenant_id}")
+            return
+
+        # 解析消息（DingTalk parse_message 直接接受 JSON dict）
+        message = await adapter.parse_message(event_data)
+        if message is None:
+            logger.debug(f"[Tenant DingTalk] 消息被忽略: tenant={tenant_id}")
+            return
+
+        # 自动注册用户
+        user_id = None
+        try:
+            from src.saas.services.auto_register import ensure_user_registered
+            user_id = await ensure_user_registered("dingtalk", message.user_id, tenant_id)
+        except Exception as e:
+            logger.warning(f"[Tenant DingTalk] 自动注册失败: {e}")
+
+        # 提取 conversation_type（"1" 单聊 / "2" 群聊）
+        conversation_type = message.content.get("conversation_type", "1")
+        conversation_id = message.content.get("conversation_id", "")
+
+        # 构建用户信息并创建/获取会话
+        user_info = {"user_id": user_id, "name": getattr(message, "user_name", None) or ""}
+        session = channel_session_manager.get_or_create_session(
+            channel_type="dingtalk",
+            channel_user_id=message.user_id,
+            tenant_id=tenant_id,
+            user_info=user_info,
+            subagent_id=subagent_type or "",
+        )
+        session_id = session["session_id"]
+
+        # 检查隐藏命令
+        from src.core.hidden_commands import is_hidden_command, execute_hidden_command
+        if message.text and is_hidden_command(message.text):
+            reply_text = await execute_hidden_command(message.text, session_id, tenant_id)
+            if reply_text:
+                # 单聊回复到 userId，群聊回复到 openConversationId
+                reply_target = conversation_id if conversation_type == "2" else message.user_id
+                await adapter.send_text(reply_text, reply_target, conversation_type)
+            return
+
+        # 记录用户消息
+        if message.text:
+            channel_session_manager.add_message(
+                session_id=session_id,
+                role="user",
+                content=message.text,
+                message_type=message.message_type,
+                metadata=message.raw_message,
+                tenant_id=tenant_id,
+            )
+
+        # 获取 agent
+        from src.core.agent_router import agent_router
+        agent = agent_router.get_agent(subagent_type, session_id)
+
+        # 开始记录 token 消耗
+        record_service = SessionRecordManager.start_record(
+            session_id=session_id,
+            user_id=user_id or message.user_id,
+            user_message=message.text,
+            tenant_id=tenant_id,
+            source_type="dingtalk",
+        )
+        record_service.set_model(agent.llm.get_model_name())
+        record_service.set_provider(agent.llm.get_provider_name())
+
+        downloadable_files = []
+
+        async def collect_files_callback(event):
+            if (isinstance(event, dict)
+                and event.get("type") == "tool_result"
+                and event.get("toolName") in ("write", "cp")
+                and event.get("success") is True):
+                result = event.get("result", {}) or {}
+                if result.get("file_id"):
+                    downloadable_files.append({
+                        "file_id": result["file_id"],
+                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                        "file_size": result.get("file_size", 0),
+                        "download_url": result.get("download_url", ""),
+                        "mime_type": result.get("mime_type", ""),
+                    })
+
+        async def _processor(cancel_check):
+            return await agent.process_message_sync(
+                user_input=message.text,
+                session_id=session_id,
+                record_service=record_service,
+                progress_callback=collect_files_callback,
+                cancel_check=cancel_check,
+            )
+
+        response_text = await session_queue.enqueue_and_process(
+            session_id=session_id,
+            user_input=message.text,
+            processor=_processor,
+        )
+        if not response_text:
+            return
+
+        record_service.complete(response_text)
+        SessionRecordManager.end_record()
+
+        # 记录助手回复
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=response_text,
+            message_type="text",
+            tenant_id=tenant_id,
+        )
+
+        # 发送回复：单聊用 userId，群聊用 openConversationId
+        reply_target = conversation_id if conversation_type == "2" else message.user_id
+
+        from src.models.message import UnifiedResponse, DownloadableFileInfo
+        response = UnifiedResponse(
+            message_id=f"resp_{message.message_id}",
+            reply_to=reply_target,
+            content={
+                "text": response_text,
+                "conversation_type": conversation_type,
+            },
+            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
+        )
+        session_queue.mark_responding(session_id)
+        await adapter.send_message(response)
+        session_queue.mark_idle(session_id)
+
+    except Exception as e:
+        logger.error(f"[Tenant DingTalk] 后台处理失败: tenant={tenant_id}, error={e}")
+        try:
+            _record = SessionRecordManager.get_current_record()
+            if _record:
+                _record.mark_error(str(e))
+                SessionRecordManager.end_record()
+        except Exception:
+            pass
+        try:
+            if adapter:
+                fallback_user_id = event_data.get("senderId", "")
+                if fallback_user_id:
+                    await adapter.send_text(
+                        "抱歉，处理您的消息时遇到了问题，请稍后重试。",
+                        fallback_user_id,
+                        "1",
+                    )
+        except Exception:
+            pass
 
 
 # ==================== Feishu 租户回调 ====================
+
+# 飞书事件去重器（按 tenant_id 隔离，TTL 5 分钟）
+_feishu_event_dedup: dict[str, MessageDeduplicator] = {}
+
+
+def _get_feishu_event_dedup(tenant_id: str) -> MessageDeduplicator:
+    """获取或创建飞书事件去重器"""
+    if tenant_id not in _feishu_event_dedup:
+        _feishu_event_dedup[tenant_id] = MessageDeduplicator(ttl_seconds=300)
+    return _feishu_event_dedup[tenant_id]
+
+
+async def _process_tenant_feishu_background(
+    tenant_id: str,
+    event_data: dict,
+    subagent_type: Optional[str] = None,
+) -> None:
+    """
+    飞书事件后台异步处理
+
+    在 asyncio.create_task 中执行，不阻塞回调响应。
+    注意：飞书 parse_message 期望 v2.0 事件 dict（含 header + event），
+    而非 {"body": raw_body_str} 包装。
+
+    Args:
+        tenant_id: 租户 ID
+        event_data: 已解密的 v2.0 事件 dict
+        subagent_type: 关联的数字员工类型
+    """
+    adapter = None
+    try:
+        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
+        if not adapter:
+            logger.error(f"[Tenant Feishu] adapter 不可用: tenant={tenant_id}")
+            return
+
+        # 飞书 parse_message 直接接受 v2.0 事件 dict
+        message = await adapter.parse_message(event_data)
+        if message is None:
+            logger.debug(f"[Tenant Feishu] 消息被忽略（群聊未@机器人等）: tenant={tenant_id}")
+            return
+
+        # 自动注册用户
+        user_id = None
+        try:
+            from src.saas.services.auto_register import ensure_user_registered
+            user_id = await ensure_user_registered("feishu", message.user_id, tenant_id)
+        except Exception as e:
+            logger.warning(f"[Tenant Feishu] 自动注册失败: {e}")
+
+        # 构建用户信息并创建/获取会话（带租户隔离）
+        user_info = {"user_id": user_id, "name": getattr(message, "user_name", None) or ""}
+        session = channel_session_manager.get_or_create_session(
+            channel_type="feishu",
+            channel_user_id=message.user_id,
+            tenant_id=tenant_id,
+            user_info=user_info,
+            subagent_id=subagent_type or "",
+        )
+        session_id = session["session_id"]
+
+        # 检查隐藏命令
+        from src.core.hidden_commands import is_hidden_command, execute_hidden_command
+        if message.text and is_hidden_command(message.text):
+            reply_text = await execute_hidden_command(message.text, session_id, tenant_id)
+            if reply_text:
+                await adapter.send_text(reply_text, message.user_id)
+            return
+
+        # 记录用户消息
+        if message.text:
+            channel_session_manager.add_message(
+                session_id=session_id,
+                role="user",
+                content=message.text,
+                message_type=message.message_type,
+                metadata=message.raw_message,
+                tenant_id=tenant_id,
+            )
+
+        # 获取 agent
+        from src.core.agent_router import agent_router
+        agent = agent_router.get_agent(subagent_type, session_id)
+
+        # 开始记录 token 消耗
+        record_service = SessionRecordManager.start_record(
+            session_id=session_id,
+            user_id=user_id or message.user_id,
+            user_message=message.text,
+            tenant_id=tenant_id,
+            source_type="feishu",
+        )
+        record_service.set_model(agent.llm.get_model_name())
+        record_service.set_provider(agent.llm.get_provider_name())
+
+        downloadable_files = []
+
+        async def collect_files_callback(event):
+            if (isinstance(event, dict)
+                and event.get("type") == "tool_result"
+                and event.get("toolName") in ("write", "cp")
+                and event.get("success") is True):
+                result = event.get("result", {}) or {}
+                if result.get("file_id"):
+                    downloadable_files.append({
+                        "file_id": result["file_id"],
+                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
+                        "file_size": result.get("file_size", 0),
+                        "download_url": result.get("download_url", ""),
+                        "mime_type": result.get("mime_type", ""),
+                    })
+
+        async def _processor(cancel_check):
+            return await agent.process_message_sync(
+                user_input=message.text,
+                session_id=session_id,
+                record_service=record_service,
+                progress_callback=collect_files_callback,
+                cancel_check=cancel_check,
+            )
+
+        response_text = await session_queue.enqueue_and_process(
+            session_id=session_id,
+            user_input=message.text,
+            processor=_processor,
+        )
+        if not response_text:
+            return
+
+        record_service.complete(response_text)
+        SessionRecordManager.end_record()
+
+        # 记录助手回复
+        channel_session_manager.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=response_text,
+            message_type="text",
+            tenant_id=tenant_id,
+        )
+
+        # 发送回复
+        from src.models.message import UnifiedResponse, DownloadableFileInfo
+        response = UnifiedResponse(
+            message_id=f"resp_{message.message_id}",
+            reply_to=message.user_id,
+            content={"text": response_text},
+            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
+        )
+        session_queue.mark_responding(session_id)
+        await adapter.send_message(response)
+        session_queue.mark_idle(session_id)
+
+    except Exception as e:
+        logger.error(f"[Tenant Feishu] 后台处理失败: tenant={tenant_id}, error={e}")
+        try:
+            _record = SessionRecordManager.get_current_record()
+            if _record:
+                _record.mark_error(str(e))
+                SessionRecordManager.end_record()
+        except Exception:
+            pass
+        try:
+            if adapter:
+                # 从 event_data 提取 user_id 作为兜底
+                fallback_user_id = (
+                    event_data.get("event", {})
+                    .get("sender", {})
+                    .get("sender_id", {})
+                    .get("open_id", "")
+                )
+                if fallback_user_id:
+                    await adapter.send_text(
+                        "抱歉，处理您的消息时遇到了问题，请稍后重试。",
+                        fallback_user_id,
+                    )
+        except Exception:
+            pass
+
 
 @router.get("/t/{tenant_id}/feishu/callback")
 async def tenant_feishu_callback_get(
     tenant_id: str,
     challenge: str = Query(None),
 ):
-    """飞书租户回调验证"""
+    """
+    飞书回调 GET 兜底
+
+    飞书 URL 验证实际走 POST（url_verification），此 GET 路由仅作兼容保留。
+    """
     if challenge:
         return {"challenge": challenge}
     return {"status": "ok"}
@@ -878,10 +1290,90 @@ async def tenant_feishu_callback_get(
 
 @router.post("/t/{tenant_id}/feishu/callback")
 async def tenant_feishu_callback_post(tenant_id: str, request: Request):
-    """飞书租户消息回调"""
-    body = await request.body()
-    result = await _process_tenant_channel_message(tenant_id, "feishu", body, body.decode())
-    return JSONResponse({"code": 0, "msg": result})
+    """
+    飞书事件统一入口（url_verification 和事件回调都走这里）
+
+    流程:
+    1. 查配置 → 构造 adapter
+    2. 加密事件先解密（url_verification 也可能被加密）
+    3. v2.0 签名校验（X-Lark-Signature 请求头，在原始 body 上计算）
+    4. url_verification: 校验 token，返回 challenge
+    5. 事件去重（event_id，5 分钟 TTL）
+    6. 只处理 im.message.receive_v1，其他事件返回 200
+    7. 立即返回 2xx → 后台 asyncio.create_task 异步处理
+    """
+    try:
+        body = await request.body()
+        body_str = body.decode()
+
+        adapter, _, subagent_type = ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
+        if not adapter:
+            logger.warning(f"[Tenant Feishu] 配置不存在: tenant={tenant_id}")
+            return JSONResponse({"code": 404, "msg": "config not found"}, status_code=404)
+
+        # 解析 JSON body
+        try:
+            data = json.loads(body_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[Tenant Feishu] body JSON 解析失败: tenant={tenant_id}, error={e}")
+            return JSONResponse({"code": 400, "msg": "invalid json"}, status_code=400)
+
+        # 1. v2.0 签名校验（在原始 body 上计算，解密前）
+        if adapter.crypto:
+            signature = request.headers.get("X-Lark-Signature", "")
+            timestamp = request.headers.get("X-Lark-Request-Timestamp", "")
+            nonce = request.headers.get("X-Lark-Request-Nonce", "")
+            if signature:
+                if not adapter.crypto.verify_signature(timestamp, nonce, body_str, signature):
+                    logger.warning(f"[Tenant Feishu] 签名验证失败: tenant={tenant_id}")
+                    return JSONResponse({"code": 403, "msg": "invalid signature"}, status_code=403)
+
+        # 2. 加密事件先解密（url_verification 也可能被加密）
+        if "encrypt" in data and adapter.crypto:
+            try:
+                data = adapter.crypto.decrypt(data["encrypt"])
+            except Exception as e:
+                logger.error(f"[Tenant Feishu] 解密失败: tenant={tenant_id}, error={e}")
+                return JSONResponse({"code": 400, "msg": "decrypt failed"}, status_code=400)
+
+        # 3. url_verification 挑战
+        if data.get("type") == "url_verification":
+            challenge = adapter.crypto.verify_url_verification(data) if adapter.crypto else None
+            if adapter.crypto and challenge is None:
+                return JSONResponse({"code": 403, "msg": "token mismatch"}, status_code=403)
+            # 无加密模式：直接取 challenge
+            if not adapter.crypto:
+                token = data.get("token", "")
+                if token != adapter.verification_token:
+                    return JSONResponse({"code": 403, "msg": "token mismatch"}, status_code=403)
+                challenge = data.get("challenge")
+            if challenge:
+                return {"challenge": challenge}
+            return JSONResponse({"code": 400, "msg": "missing challenge"}, status_code=400)
+
+        # 4. 事件去重
+        event_id = data.get("header", {}).get("event_id", "")
+        if event_id:
+            dedup = _get_feishu_event_dedup(tenant_id)
+            if await dedup.is_duplicate(event_id):
+                logger.debug(f"[Tenant Feishu] 重复事件: tenant={tenant_id}, event_id={event_id}")
+                return JSONResponse({"code": 0, "msg": "duplicate"})
+
+        # 5. 只处理 im.message.receive_v1
+        event_type = data.get("header", {}).get("event_type", "")
+        if event_type != "im.message.receive_v1":
+            logger.debug(f"[Tenant Feishu] 忽略非消息事件: tenant={tenant_id}, event_type={event_type}")
+            return JSONResponse({"code": 0, "msg": "event ignored"})
+
+        # 6. 立即返回 200 → 后台异步处理
+        asyncio.create_task(
+            _process_tenant_feishu_background(tenant_id, data, subagent_type=subagent_type)
+        )
+        return JSONResponse({"code": 0, "msg": "ok"})
+
+    except Exception as e:
+        logger.error(f"[Tenant Feishu] POST 处理异常: tenant={tenant_id}, error={e}")
+        return JSONResponse({"code": 500, "msg": "internal error"}, status_code=500)
 
 
 # ==================== WeCom KF 租户回调 ====================

@@ -59,6 +59,7 @@
 | 27 | wecom_kf 多媒体消息支持 | 🔧 部分完成 | 后端完成：download_media 方法 + channel_routes 消息处理（附件下载/持久化/传递给 agent）+ external_customers 附件下载代理接口。前端完成：ExternalCustomerService 语音播放器/图片预览/文件卡片 + AttachmentCard 组件。待集成测试。2026-06-14 | — | — |
 | 28 | 渠道会话多条消息串行化 | 📋 待开发 | 渠道场景短时间多条消息串行处理，新消息取消旧请求 + 只保留最新意图，解决并发写入混乱和 DeepSeek 400 问题。2026-06-18 | [设计](channel/concurrent-message-serialization-plan.md) | — |
 | 29 | 企业微信个人账号 RPA 接入 | 📋 待开发 | 双轨方案：员工个人账号走 PC RPA（云端工作机 + uiautomation/pyautogui），公司公用账号走安卓无障碍 RPA（WorkTool）。云端调度平台 + 多工作机集群，账号设备 1:1 绑定。Phase 1 不接入会话存档，Phase 2 接入做对账兜底。2026-06-16 | [设计](system/wecom-personal-rpa-design.md) | [计划](../plans/plan-wecom-personal-rpa.md) |
+| 30 | 钉钉渠道接入 | 📋 待开发 | 钉钉开放平台企业机器人接入，支持单聊/群聊消息收发、签名验证（HmacSHA256）、媒体文件处理、长消息拆分。设计文档和实施计划已完成，待开发。2026-06-19 | [设计](channel/dingtalk/integration_guide.md) | [计划](channel/dingtalk/implementation_plan.md) |
 
 ## 前端
 
