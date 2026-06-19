@@ -54,6 +54,14 @@ if ! sudo docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
 fi
 sudo docker exec -u root aid-agent-api ls -ld /tmp || true
 
+# 6. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
+#    新依赖不会自动安装；下次重建镜像后可移除此步骤）
+echo "[6] 增量安装新增依赖..."
+sudo docker exec -u root aid-agent-api \
+    pip install --no-cache-dir -r /app/requirements.txt \
+    -i https://mirrors.cloud.tencent.com/pypi/simple \
+    --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
+
 echo ""
 echo "=========================================="
 echo "  更新完成！"
