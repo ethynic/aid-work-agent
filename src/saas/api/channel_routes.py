@@ -395,7 +395,7 @@ async def _process_tenant_channel_message(
     2. 解析消息 → 通过 agent_router 获取 agent 处理
     """
     # 1. 创建渠道适配器
-    adapter, config_id, subagent_type = ChannelFactory.create_from_tenant_config(tenant_id, channel_type)
+    adapter, config_id, subagent_type = await ChannelFactory.create_from_tenant_config(tenant_id, channel_type)
     if not adapter:
         logger.error(f"No channel config for tenant {tenant_id}/{channel_type}")
         return "error: no channel config"
@@ -563,7 +563,7 @@ async def _process_tenant_wecom_background(
     try:
         # 适配器已在调用方创建并通过 message 的 raw_message 间接使用
         # 这里需要独立的 adapter 用于发送回复
-        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom", config_id=config_id)
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom", config_id=config_id)
         if not adapter:
             logger.error(f"[Tenant WeCom] adapter 不可用: tenant={tenant_id}")
             return
@@ -731,7 +731,7 @@ async def tenant_wecom_callback_get(
 
     流程: 按 config_id 查配置 → 验签 → 解密 echostr → 返回明文
     """
-    adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom", config_id=config_id)
+    adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom", config_id=config_id)
     if not adapter:
         logger.warning(f"[Tenant WeCom] 配置不存在: tenant={tenant_id}, config={config_id}")
         return PlainTextResponse("Config not found", status_code=404)
@@ -771,7 +771,7 @@ async def tenant_wecom_callback_post(tenant_id: str, config_id: str, request: Re
         body = await request.body()
         body_str = body.decode()
 
-        adapter, _, subagent_type = ChannelFactory.create_from_tenant_config(
+        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(
             tenant_id, "wecom", config_id=config_id
         )
         if not adapter:
@@ -875,7 +875,7 @@ async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
         body = await request.body()
         body_str = body.decode()
 
-        adapter, _, subagent_type = ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
+        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
         if not adapter:
             logger.warning(f"[Tenant DingTalk] 配置不存在: tenant={tenant_id}")
             return JSONResponse({"success": False, "msg": "config not found"}, status_code=404)
@@ -937,7 +937,7 @@ async def _process_tenant_dingtalk_background(
     """
     adapter = None
     try:
-        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
         if not adapter:
             logger.error(f"[Tenant DingTalk] adapter 不可用: tenant={tenant_id}")
             return
@@ -1097,6 +1097,9 @@ async def _process_tenant_dingtalk_background(
 # 飞书事件去重器（按 tenant_id 隔离，TTL 5 分钟）
 _feishu_event_dedup: dict[str, MessageDeduplicator] = {}
 
+# 后台任务引用集合：保留强引用避免被 GC 回收，任务完成后自动移除
+_feishu_background_tasks: set = set()
+
 
 def _get_feishu_event_dedup(tenant_id: str) -> MessageDeduplicator:
     """获取或创建飞书事件去重器"""
@@ -1124,7 +1127,7 @@ async def _process_tenant_feishu_background(
     """
     adapter = None
     try:
-        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
         if not adapter:
             logger.error(f"[Tenant Feishu] adapter 不可用: tenant={tenant_id}")
             return
@@ -1276,15 +1279,13 @@ async def _process_tenant_feishu_background(
 @router.get("/t/{tenant_id}/feishu/callback")
 async def tenant_feishu_callback_get(
     tenant_id: str,
-    challenge: str = Query(None),
 ):
     """
     飞书回调 GET 兜底
 
-    飞书 URL 验证实际走 POST（url_verification），此 GET 路由仅作兼容保留。
+    飞书 URL 验证实际走 POST（url_verification），此 GET 路由仅作健康检查保留，
+    不回显任何外部输入，避免被无鉴权滥用为回声端点。
     """
-    if challenge:
-        return {"challenge": challenge}
     return {"status": "ok"}
 
 
@@ -1306,7 +1307,7 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
         body = await request.body()
         body_str = body.decode()
 
-        adapter, _, subagent_type = ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
+        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
         if not adapter:
             logger.warning(f"[Tenant Feishu] 配置不存在: tenant={tenant_id}")
             return JSONResponse({"code": 404, "msg": "config not found"}, status_code=404)
@@ -1366,9 +1367,12 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
             return JSONResponse({"code": 0, "msg": "event ignored"})
 
         # 6. 立即返回 200 → 后台异步处理
-        asyncio.create_task(
+        # 持有 task 强引用避免被 GC 回收，完成后通过回调移除
+        task = asyncio.create_task(
             _process_tenant_feishu_background(tenant_id, data, subagent_type=subagent_type)
         )
+        _feishu_background_tasks.add(task)
+        task.add_done_callback(_feishu_background_tasks.discard)
         return JSONResponse({"code": 0, "msg": "ok"})
 
     except Exception as e:
@@ -1388,7 +1392,7 @@ async def tenant_wecom_kf_callback_get(
     echostr: str = Query(...),
 ):
     """微信客服回调 URL 验证"""
-    adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
+    adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
     if not adapter:
         logger.warning(f"[Tenant WeCom KF] 配置不存在: tenant={tenant_id}, config={config_id}")
         return PlainTextResponse("Config not found", status_code=404)
@@ -1421,7 +1425,7 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
             f"body_len={len(body_str)}, query_params={dict(request.query_params)}"
         )
 
-        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
         if not adapter:
             logger.warning(f"[Tenant WeCom KF] 配置不存在: tenant={tenant_id}, config={config_id}")
             return PlainTextResponse("Config not found", status_code=404)
@@ -2188,7 +2192,7 @@ async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: 
     try:
         from src.saas.services.channel_factory import ChannelFactory
 
-        adapter, _, _ = ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf")
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf")
         if adapter is None:
             logger.warning(
                 f"[wecom_kf] 结束对话通知：无法创建 adapter: tenant_id={tenant_id}"

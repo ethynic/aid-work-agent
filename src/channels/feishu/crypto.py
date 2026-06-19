@@ -20,13 +20,19 @@
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import struct
+import time
 from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from loguru import logger
+
+
+# 飞书允许的时间戳偏差上限（秒），超过即视为重放攻击
+_TIMESTAMP_TOLERANCE_SECONDS = 3600
 
 
 class FeishuCrypto:
@@ -192,6 +198,7 @@ class FeishuCrypto:
 
         算法: SHA256(timestamp + nonce + encrypt_key + body)
         注意：拼接的是 encrypt_key 原文，不是 SHA256 后的 aes_key。
+        额外校验时间戳偏差（±1 小时），防止重放攻击。
 
         Args:
             timestamp: X-Lark-Request-Timestamp
@@ -202,6 +209,19 @@ class FeishuCrypto:
         Returns:
             签名是否有效
         """
+        # 时间戳偏差校验（防重放）
+        try:
+            ts = int(timestamp)
+        except (TypeError, ValueError):
+            logger.warning("[Feishu] 签名校验失败：时间戳非法")
+            return False
+        if abs(time.time() - ts) > _TIMESTAMP_TOLERANCE_SECONDS:
+            logger.warning(
+                f"[Feishu] 签名校验失败：时间戳偏差超限，now={int(time.time())}, ts={ts}"
+            )
+            return False
+
         content = timestamp + nonce + self.encrypt_key + body
         calculated = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        return calculated == signature
+        # 使用常量时间比较，防止时序攻击
+        return hmac.compare_digest(calculated, signature)

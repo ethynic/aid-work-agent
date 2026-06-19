@@ -56,7 +56,7 @@ _REQUIRED_FIELDS = {
         "app_id": "应用App ID",
         "app_secret": "应用App Secret",
         "verification_token": "验证Token",
-        "encrypt_key": "加密密钥",
+        # encrypt_key 可选（不填则非加密模式，仅用于开发/调试）
     },
 }
 
@@ -122,6 +122,13 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
 
     success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type)
     if success:
+        # 配置变更后失效缓存的 adapter，下次回调重建
+        try:
+            await ChannelFactory.invalidate_adapter(
+                existing["tenant_id"], existing["channel_type"], close=True
+            )
+        except Exception as e:
+            logger.warning(f"失效 adapter 缓存失败: {e}")
         updated = ChannelConfigDB.get_by_id(config_id)
         return {"success": True, "channel": updated}
     return {"success": False, "message": "更新失败"}
@@ -142,6 +149,14 @@ async def delete_channel(config_id: str, request: Request):
         raise HTTPException(status_code=403, detail="无权操作此配置")
 
     success = ChannelConfigDB.delete(config_id)
+    if success:
+        # 删除配置后关闭并失效缓存的 adapter
+        try:
+            await ChannelFactory.invalidate_adapter(
+                existing["tenant_id"], existing["channel_type"], close=True
+            )
+        except Exception as e:
+            logger.warning(f"失效 adapter 缓存失败: {e}")
     return {"success": success}
 
 

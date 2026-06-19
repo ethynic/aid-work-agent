@@ -517,7 +517,7 @@ async def lifespan(app: FastAPI):
 
                             # 创建 adapter
                             from src.saas.services.channel_factory import ChannelFactory
-                            adapter, _, _ = ChannelFactory.create_from_tenant_config(
+                            adapter, _, _ = await ChannelFactory.create_from_tenant_config(
                                 tenant_id, "wecom_kf"
                             )
                             if adapter is None:
@@ -638,6 +638,13 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduled task scheduler stopped")
     except Exception:
         pass
+
+    # 关闭所有缓存的渠道 adapter（释放 httpx 连接池）
+    try:
+        from src.saas.services.channel_factory import ChannelFactory
+        await ChannelFactory.close_all()
+    except Exception as e:
+        logger.warning(f"关闭渠道 adapter 失败: {e}")
 
 
 

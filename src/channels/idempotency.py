@@ -57,7 +57,7 @@ class MessageDeduplicator:
             message_id: 消息唯一 ID
 
         Returns:
-            True 表示重复消息，应跳过处理
+            True 表示重复消息，应跳过处理；False 表示新消息或 DB 异常时放行（让上游业务幂等兜底）
         """
         now = time.time()
 
@@ -71,13 +71,17 @@ class MessageDeduplicator:
                 conn.commit()
                 return False
             except psycopg2.IntegrityError:
+                # 主键冲突 = 重复消息
                 conn.rollback()
                 return True
             except Exception as e:
+                # DB 异常（连接抖动 / 死锁 / 不可达）时放行，
+                # 避免静默丢弃用户消息。下游业务需自行幂等兜底。
                 conn.rollback()
-                logger.error(f"去重检查异常: {e}")
-                # 异常时保守处理，视为重复以避免重复处理
-                return True
+                logger.warning(
+                    f"去重检查 DB 异常，放行消息 {message_id}: {e}"
+                )
+                return False
 
     def cleanup_expired(self) -> int:
         """

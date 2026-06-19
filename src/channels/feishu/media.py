@@ -14,13 +14,21 @@
 - 上传文件 POST /open-apis/im/v1/files   (multipart: file_type + file_name + file)
 
 鉴权：Authorization: Bearer <tenant_access_token>
+
+存储路径：遵循 `backend_dev.md` 租户附件存储规范，
+统一存到 `storage/tenants/{tenant_id}/conversation/` 下。
+未设置 tenant_id 时（如单租户 config.yaml 模式）回退到 upload_dir 参数。
 """
 
 import os
+import re
+import urllib.parse
 from typing import Awaitable, Callable, Optional, Tuple
 
 import httpx
 from loguru import logger
+
+from src.core.storage import ensure_tenant_storage_dir
 
 FEISHU_BASE_URL = "https://open.feishu.cn"
 
@@ -40,6 +48,24 @@ _FILE_TYPE_MAP = {
 }
 
 
+# 文件名白名单：仅保留字母数字、汉字、`._-` 和空格，防止路径穿越
+_FILENAME_SAFE_PATTERN = re.compile(r"[^\w一-龥.\- ]")
+
+
+def _sanitize_filename(name: str) -> str:
+    """清洗文件名，移除路径分隔符等危险字符"""
+    if not name:
+        return "file"
+    # 取 basename，去掉任何目录部分
+    name = os.path.basename(name)
+    # 替换不允许的字符为下划线
+    name = _FILENAME_SAFE_PATTERN.sub("_", name)
+    # 防止 . / .. 等
+    if name in (".", "..") or name.startswith("."):
+        name = f"file_{name}"
+    return name or "file"
+
+
 class FeishuMedia:
     """飞书媒体文件管理"""
 
@@ -47,15 +73,32 @@ class FeishuMedia:
         self,
         access_token_getter: Callable[[], Awaitable[str]],
         upload_dir: Optional[str] = None,
+        tenant_id: str = "",
     ):
         """
         Args:
             access_token_getter: 获取 tenant_access_token 的异步函数
-            upload_dir: 媒体文件本地存储目录
+            upload_dir: 媒体文件本地存储目录（无 tenant_id 时使用）
+            tenant_id: 租户 ID，设置后文件存到
+                       `storage/tenants/{tenant_id}/conversation/`
         """
         self._get_access_token = access_token_getter
+        self.tenant_id = tenant_id or ""
         self.upload_dir = upload_dir or "./storage/uploads/feishu"
+
+    def set_tenant_id(self, tenant_id: str) -> None:
+        """设置租户 ID（由 ChannelFactory 在创建 adapter 后注入）"""
+        self.tenant_id = tenant_id or ""
+
+    def _resolve_save_dir(self, save_dir: Optional[str] = None) -> str:
+        """解析最终保存目录，按租户隔离规范优先"""
+        if save_dir:
+            return save_dir
+        if self.tenant_id:
+            return ensure_tenant_storage_dir(self.tenant_id, "conversation")
+        # 单租户模式兜底
         os.makedirs(self.upload_dir, exist_ok=True)
+        return self.upload_dir
 
     async def download_image(
         self, image_key: str, save_dir: Optional[str] = None, image_type: str = "message"
@@ -101,8 +144,9 @@ class FeishuMedia:
 
                 # 根据 Content-Type 推断扩展名
                 ext = _ext_from_content_type(content_type)
+                save_dir_resolved = self._resolve_save_dir(save_dir)
                 local_path = os.path.join(
-                    save_dir or self.upload_dir, f"{image_key}{ext}"
+                    save_dir_resolved, _sanitize_filename(f"{image_key}{ext}")
                 )
                 with open(local_path, "wb") as f:
                     f.write(response.content)
@@ -156,16 +200,17 @@ class FeishuMedia:
                     )
                     return None
 
-                # 文件名：优先使用传入的 file_name，其次 Content-Disposition，最后 file_key
+                # 文件名：优先使用传入的 file_name，其次 Content-Disposition（含 RFC 5987），最后 file_key
                 final_name = file_name
                 if not final_name:
-                    disposition = response.headers.get("Content-Disposition", "")
-                    if "filename=" in disposition:
-                        final_name = disposition.split("filename=")[-1].strip('"')
+                    final_name = _parse_filename_from_disposition(
+                        response.headers.get("Content-Disposition", "")
+                    )
                 if not final_name:
                     final_name = file_key
 
-                local_path = os.path.join(save_dir or self.upload_dir, final_name)
+                save_dir_resolved = self._resolve_save_dir(save_dir)
+                local_path = os.path.join(save_dir_resolved, _sanitize_filename(final_name))
                 with open(local_path, "wb") as f:
                     f.write(response.content)
 
@@ -289,6 +334,48 @@ class FeishuMedia:
         except Exception as e:
             logger.error(f"[Feishu] 上传文件异常: {e}")
             return None
+
+
+def _parse_filename_from_disposition(disposition: str) -> str:
+    """
+    从 Content-Disposition 头解析文件名，支持 RFC 5987 `filename*=UTF-8''xxx`。
+
+    优先使用 filename*（可携带非 ASCII 字符），其次 filename（ASCII 引号包裹）。
+    解析失败返回空字符串，由调用方兜底。
+    """
+    if not disposition:
+        return ""
+
+    # RFC 5987: filename*=UTF-8''<percent-encoded>
+    star_match = re.search(r"filename\*\s*=\s*([^;]+)", disposition, re.IGNORECASE)
+    if star_match:
+        raw = star_match.group(1).strip()
+        # 形如 UTF-8''%E4%B8%AD%E6%96%87.txt
+        if "''" in raw:
+            _, _, encoded = raw.partition("''")
+            try:
+                return urllib.parse.unquote(encoded)
+            except Exception:
+                return ""
+
+    # 普通 filename="xxx" 或 filename=xxx
+    plain_match = re.search(r'filename\s*=\s*"?([^";]+)"?', disposition, re.IGNORECASE)
+    if plain_match:
+        name = plain_match.group(1).strip()
+        try:
+            # 处理可能的 RFC 2047 编码（=?UTF-8?B?...?=）
+            if name.startswith("=?") and "?=" in name:
+                import email.header
+                decoded_parts = email.header.decode_header(name)
+                return "".join(
+                    part.decode(charset or "utf-8") if isinstance(part, bytes) else part
+                    for part, charset in decoded_parts
+                )
+            return name
+        except Exception:
+            return name
+
+    return ""
 
 
 def _ext_from_content_type(content_type: str) -> str:

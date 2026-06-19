@@ -28,6 +28,8 @@ from src.channels.base import ChannelAdapter, build_public_url, format_file_size
 from src.channels.feishu.crypto import FeishuCrypto
 from src.channels.feishu.media import FeishuMedia
 from src.channels.feishu.message_builder import FeishuMessageBuilder
+from src.core.cache_utils import CacheKeys
+from src.core.redis_client import redis_client
 from src.models.message import ChannelType, MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -83,6 +85,7 @@ class FeishuAdapter(ChannelAdapter):
         self.verification_token = verification_token
         self.encrypt_key = encrypt_key
         self.welcome_message = welcome_message
+        self._tenant_id: str = ""
 
         # 消息配置
         self._msg_config = {
@@ -116,6 +119,10 @@ class FeishuAdapter(ChannelAdapter):
         # 机器人 open_id（懒加载，用于群聊 @判断）
         self._bot_open_id: Optional[str] = None
         self._bot_open_id_lock = asyncio.Lock()
+        # bot open_id 获取失败时的下次重试时间，避免每条群聊消息都打飞书接口
+        self._bot_open_id_retry_after: float = 0.0
+        # bot open_id 获取失败后的退避秒数（指数退避，最多 10 分钟）
+        self._bot_open_id_backoff = 30.0
 
         # 速率限制器（每 user 滑动窗口）
         self._rate_limiter: Dict[str, deque] = defaultdict(deque)
@@ -126,6 +133,17 @@ class FeishuAdapter(ChannelAdapter):
     def channel_type(self) -> str:
         """获取渠道类型"""
         return "feishu"
+
+    async def set_tenant_id(self, tenant_id: str) -> None:
+        """
+        注入租户 ID（由 ChannelFactory 在创建 adapter 后调用）。
+
+        设置后媒体文件将存到 `storage/tenants/{tenant_id}/conversation/`，
+        遵循 `backend_dev.md` 租户附件存储规范。
+        """
+        self._tenant_id = tenant_id or ""
+        if hasattr(self.media, "set_tenant_id"):
+            self.media.set_tenant_id(self._tenant_id)
 
     async def _get_client(self) -> httpx.AsyncClient:
         """获取持久化的 HTTP 客户端（连接池）"""
@@ -143,7 +161,9 @@ class FeishuAdapter(ChannelAdapter):
             logger.info("飞书 HTTP 连接池已关闭")
 
     def _check_rate_limit(self, user_id: str) -> bool:
-        """滑动窗口速率限制检查
+        """滑动窗口速率限制检查（基于 Redis ZSET，多 worker 共享）
+
+        Redis 不可用时降级到进程内 deque（仅单 worker 内有效）。
 
         Args:
             user_id: 目标用户 ID
@@ -152,9 +172,33 @@ class FeishuAdapter(ChannelAdapter):
             True 表示允许通过，False 表示已超限
         """
         now = time.time()
+        window_start = now - self._rate_limit_window
+
+        # 优先使用 Redis（多 worker 共享）
+        if redis_client._connected and redis_client._client:
+            try:
+                key = redis_client.make_key(
+                    CacheKeys.CHANNEL_RATE_LIMIT, f"feishu:{user_id}"
+                )
+                client = redis_client._client
+                pipe = client.pipeline()
+                pipe.zremrangebyscore(key, 0, window_start)
+                pipe.zadd(key, {str(now): now})
+                pipe.zcard(key)
+                pipe.expire(key, self._rate_limit_window + 10)
+                _, _, count, _ = pipe.execute()
+                if count > self._rate_limit_max:
+                    logger.warning(f"Rate limit exceeded for user {user_id}")
+                    return False
+                return True
+            except Exception as e:
+                logger.warning(
+                    f"[Feishu] Redis 速率限制降级到内存: user={user_id}, error={e}"
+                )
+
+        # 内存降级（单 worker 内有效）
         window = self._rate_limiter[user_id]
-        # 移除窗口外的记录
-        while window and window[0] < now - self._rate_limit_window:
+        while window and window[0] < window_start:
             window.popleft()
         if len(window) >= self._rate_limit_max:
             logger.warning(f"Rate limit exceeded for user {user_id}")
@@ -235,14 +279,22 @@ class FeishuAdapter(ChannelAdapter):
         """
         获取机器人自身 open_id（懒加载，用于群聊 @判断）
 
-        调用 GET /open-apis/bot/v3/info，结果缓存到 self._bot_open_id
+        调用 GET /open-apis/bot/v3/info，结果缓存到 self._bot_open_id。
+        失败时通过指数退避避免每条群聊消息都打飞书接口。
         """
         if self._bot_open_id:
+            return
+
+        # 失败退避期内不重试
+        now = time.time()
+        if now < self._bot_open_id_retry_after:
             return
 
         async with self._bot_open_id_lock:
             # 双重检查
             if self._bot_open_id:
+                return
+            if time.time() < self._bot_open_id_retry_after:
                 return
 
             try:
@@ -256,13 +308,23 @@ class FeishuAdapter(ChannelAdapter):
                 data = response.json()
                 if data.get("code", 0) != 0:
                     logger.error(f"获取机器人信息失败: {data.get('msg')}")
+                    self._schedule_bot_open_id_retry()
                     return
 
                 self._bot_open_id = data.get("bot", {}).get("open_id")
+                # 成功后重置退避
+                self._bot_open_id_backoff = 30.0
                 logger.info(f"飞书机器人 open_id: {self._bot_open_id}")
 
             except Exception as e:
                 logger.error(f"获取机器人信息异常: {e}")
+                self._schedule_bot_open_id_retry()
+
+    def _schedule_bot_open_id_retry(self) -> None:
+        """安排下一次 bot open_id 重试时间（指数退避，上限 600s）"""
+        backoff = min(self._bot_open_id_backoff, 600.0)
+        self._bot_open_id_retry_after = time.time() + backoff
+        self._bot_open_id_backoff = min(backoff * 2, 600.0)
 
     # ==================== 消息解析 ====================
 
@@ -322,7 +384,12 @@ class FeishuAdapter(ChannelAdapter):
         # 构建 UnifiedMessage
         message_id = message.get("message_id", f"feishu_{int(time.time() * 1000)}")
         user_id = sender.get("sender_id", {}).get("open_id", "")
-        create_time_str = message.get("create_time", str(int(time.time() * 1000)))
+
+        # create_time 容错：飞书返回字符串型毫秒时间戳，非数字时兜底用当前时间
+        try:
+            timestamp = datetime.fromtimestamp(int(message.get("create_time", "")) / 1000)
+        except (TypeError, ValueError):
+            timestamp = datetime.now()
 
         # 处理不同的消息类型
         msg_content: Dict[str, Any] = {}
@@ -348,7 +415,7 @@ class FeishuAdapter(ChannelAdapter):
             user_name="",  # 飞书 v2.0 事件不含用户名，需额外 API 获取
             message_type=msg_type,
             content=msg_content,
-            timestamp=datetime.fromtimestamp(int(create_time_str) / 1000),
+            timestamp=timestamp,
             raw_message=raw_message,
         )
 
@@ -365,19 +432,22 @@ class FeishuAdapter(ChannelAdapter):
         if not mentions:
             return False
 
-        # 懒加载机器人 open_id
+        # 懒加载机器人 open_id（失败时会进入退避，不阻塞本次判断）
         await self._init_bot_open_id()
-        if not self._bot_open_id:
-            logger.warning("机器人 open_id 未获取，无法判断 @")
+
+        # 优先用 bot open_id 精确匹配
+        if self._bot_open_id:
+            for mention in mentions:
+                mention_open_id = mention.get("id", {}).get("open_id", "")
+                if mention_open_id == self._bot_open_id:
+                    return True
+            # bot open_id 已加载但 mentions 中无匹配，确实没 @ 机器人
             return False
 
-        # 检查 mentions 中是否有机器人的 open_id
-        for mention in mentions:
-            mention_open_id = mention.get("id", {}).get("open_id", "")
-            if mention_open_id == self._bot_open_id:
-                return True
-
-        return False
+        # bot open_id 未获取到（如应用无 /bot/v3/info 权限）：
+        # 飞书只会推送 @ 机器人的群聊消息，所以有 mentions 即认为 @ 了机器人。
+        logger.debug("机器人 open_id 未获取，按 mentions 非空判定为 @机器人")
+        return True
 
     def _clean_mentions(self, text: str, mentions: list) -> str:
         """
@@ -517,6 +587,7 @@ class FeishuAdapter(ChannelAdapter):
             是否成功
         """
         backoff_base = 1.0
+        token_refreshed = False  # 标记是否已刷新过 token，避免无限重试
 
         for attempt in range(max_retries):
             try:
@@ -544,10 +615,11 @@ class FeishuAdapter(ChannelAdapter):
                 data = response.json()
                 code = data.get("code", -1)
 
-                # token 过期，刷新后重试
-                if code in (99991663, 99991664):  # token 过期错误码
+                # token 过期，刷新后重试（不消耗 retry 配额）
+                if code in (99991663, 99991664) and not token_refreshed:
                     logger.warning("tenant_access_token 已过期，正在刷新")
                     self._invalidate_token()
+                    token_refreshed = True
                     continue
 
                 if code != 0:
