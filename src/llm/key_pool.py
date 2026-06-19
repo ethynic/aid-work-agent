@@ -20,6 +20,8 @@ class _KeySlot:
         self.key = key
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.max_concurrent = max_concurrent
+        # 独立跟踪可用槽位数，避免依赖 Semaphore._value 私有属性
+        self._available_count: int = max_concurrent
         # 统计用（可选）
         self._total_calls: int = 0
         self._active_calls: int = 0
@@ -27,12 +29,13 @@ class _KeySlot:
     @property
     def available(self) -> bool:
         """当前 Key 是否有空闲并发槽"""
-        return self.semaphore._value > 0  # type: ignore[attr-defined]
+        return self._available_count > 0
 
     async def acquire(self, timeout: float) -> bool:
         """尝试获取并发槽，超时返回 False"""
         try:
             await asyncio.wait_for(self.semaphore.acquire(), timeout=timeout)
+            self._available_count -= 1
             self._active_calls += 1
             self._total_calls += 1
             return True
@@ -40,6 +43,7 @@ class _KeySlot:
             return False
 
     def release(self) -> None:
+        self._available_count += 1
         self.semaphore.release()
         self._active_calls -= 1
 
@@ -131,7 +135,8 @@ class KeyPool:
                 slot = None  # type: ignore
 
         if slot is not None:
-            # 在锁外获取信号量（此时 _value > 0，不会阻塞）
+            # 在锁外获取信号量（此时 _available_count > 0，很可能不阻塞；
+            # 但锁释放到 acquire 之间其他协程可能已占用该槽位，此时会等待至超时）
             acquired = await slot.acquire(timeout=self._queue_timeout)
             if acquired:
                 return slot
@@ -166,7 +171,8 @@ class KeyPool:
                 "请增加 Key 数量或提高每 Key 并发上限"
             )
 
-        # 找到对应的 slot
+        # done 是 set，iter 顺序不确定；任一已完成任务都表示有 slot 可用，
+        # 多个同时完成时取到的不一定是"最先完成"的那个，不影响正确性
         completed_task = next(iter(done))
         for task, slot in tasks:
             if task is completed_task:

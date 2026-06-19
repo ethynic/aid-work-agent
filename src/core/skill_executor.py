@@ -651,52 +651,50 @@ Follow the instructions in the skill above to complete the user's task."""
             if skill.dependencies:
                 await self.prepare_dependencies(skill, context)
             
-            # 执行Python代码 - 直接执行
-            import io
-            import sys
-            
-            # 重定向stdout和stderr
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdout = io.StringIO()
-            sys.stderr = io.StringIO()
-            
-            start_time = time.time()
-            
+            # 执行Python代码 - 写入临时文件后在子进程中执行，避免全局 sys.stdout 并发冲突
+            import tempfile
+            import uuid
+
+            script_name = f"_skill_python_{uuid.uuid4().hex[:8]}.py"
+            script_path = context.workdir / script_name
+
+            header_lines = [
+                "import sys, os",
+                f"sys.path.insert(0, {str(context.workdir)!r})",
+            ]
+            if globals_dict:
+                import json as _json
+                serializable = {}
+                for k, v in globals_dict.items():
+                    try:
+                        _json.dumps(v)
+                        serializable[k] = v
+                    except (TypeError, ValueError):
+                        pass
+                if serializable:
+                    globals_json_path = context.workdir / "_skill_globals.json"
+                    globals_json_path.write_text(
+                        _json.dumps(serializable, ensure_ascii=False), encoding="utf-8"
+                    )
+                    header_lines += [
+                        "import json as _json",
+                        f"_g = _json.loads(open({str(globals_json_path)!r}, encoding='utf-8').read())",
+                        "globals().update(_g)",
+                    ]
+
+            full_code = "\n".join(header_lines) + "\n" + code
+            script_path.write_text(full_code, encoding="utf-8")
+
+            result = await self._execute_command(
+                f"python {script_path}",
+                context.workdir,
+                timeout=300
+            )
+
             try:
-                # 准备执行环境
-                exec_globals = globals_dict or {}
-                exec_globals.update({
-                    "__builtins__": __builtins__,
-                    "workdir": context.workdir,
-                })
-                
-                exec(code, exec_globals)
-                
-                stdout = sys.stdout.getvalue()
-                stderr = sys.stderr.getvalue()
-                duration = time.time() - start_time
-                
-                return ExecutionResult(
-                    success=True,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=0,
-                    duration=duration,
-                )
-            except Exception as e:
-                duration = time.time() - start_time
-                return ExecutionResult(
-                    success=False,
-                    stdout=sys.stdout.getvalue(),
-                    stderr=f"{sys.stderr.getvalue()}\n{str(e)}",
-                    exit_code=1,
-                    duration=duration,
-                    error=str(e),
-                )
-            finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+                script_path.unlink(missing_ok=True)
+            except Exception:
+                pass
         finally:
             context.cleanup()
     

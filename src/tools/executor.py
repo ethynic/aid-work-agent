@@ -82,7 +82,7 @@ class ToolExecutor:
         
         # 执行工具
         try:
-            logger.info(f"执行工具: {tool_name}, 参数: {parameters}")
+            logger.debug(f"执行工具: {tool_name}, 参数: {parameters}")
             result = await tool.execute(**parameters)
             logger.info(f"工具执行成功: {tool_name}")
             return result
@@ -100,14 +100,17 @@ class ToolExecutor:
         user_permissions: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        批量执行工具
-        
+        批量执行工具（快速失败策略）
+
+        按顺序逐个执行任务，遇到第一个失败即停止并返回已完成的结果。
+        此策略适用于任务之间存在依赖关系的场景（后续任务依赖前序结果）。
+
         Args:
             tasks: 任务列表，每个任务包含tool_name和parameters
             user_permissions: 用户权限列表
-        
+
         Returns:
-            执行结果列表
+            执行结果列表（仅包含停止前已完成的任务）
         """
         results = []
         
@@ -126,7 +129,7 @@ class ToolExecutor:
                 "result": result,
             })
             
-            # 如果执行失败，停止后续执行
+            # 快速失败：任务间存在依赖，前序失败则后续无意义
             if not result.get("success", False):
                 break
         

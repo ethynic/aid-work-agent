@@ -440,7 +440,13 @@ class FailoverGateway:
     async def stream_with_failover(
         self, fn_name: str, request_id: Optional[str] = None, **kwargs
     ) -> AsyncGenerator[str, None]:
-        """流式调用 failover（仅连接阶段做 failover）"""
+        """
+        流式调用 failover（仅连接阶段做 failover）。
+
+        限制：failover 仅在建立连接和获取第一个 chunk 时生效。如果流在传输中途断开
+        （如网络波动），不会自动切换到备用 provider，已输出的内容也不会重试。
+        调用方应做好相应的异常处理。
+        """
         if request_id is None:
             request_id = generate_request_id()
 

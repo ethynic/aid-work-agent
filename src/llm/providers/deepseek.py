@@ -11,7 +11,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import httpx
 from loguru import logger
 
-from .base import BaseLLMProvider
+from .base import BaseLLMProvider, get_cached_client
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
 
@@ -67,14 +67,14 @@ class DeepSeekProvider(BaseLLMProvider):
         parsed = None
 
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                response = await client.post(
-                    self.api_url,
-                    headers=self.headers,
-                    json=request_body,
-                )
-                response.raise_for_status()
-                result = response.json()
+            client = get_cached_client(self.base_url or self.DEFAULT_BASE_URL, self.api_key, timeout=300.0)
+            response = await client.post(
+                self.api_url,
+                headers=self.headers,
+                json=request_body,
+            )
+            response.raise_for_status()
+            result = response.json()
 
             parsed = self._parse_response(result)
 
@@ -102,7 +102,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 duration_ms=round(duration_ms, 2),
             )
             logger.error("DeepSeek API请求失败: {}: {}", type(e).__name__, e)
-            raise RuntimeError(f"DeepSeek API请求失败: {e.response.text}") from None
+            raise RuntimeError(f"DeepSeek API请求失败: {e.response.text}") from e
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
@@ -145,13 +145,13 @@ class DeepSeekProvider(BaseLLMProvider):
         full_content = ""
 
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                async with client.stream(
-                    "POST",
-                    self.api_url,
-                    headers=self.headers,
-                    json=request_body,
-                ) as response:
+            client = get_cached_client(self.base_url or self.DEFAULT_BASE_URL, self.api_key, timeout=300.0)
+            async with client.stream(
+                "POST",
+                self.api_url,
+                headers=self.headers,
+                json=request_body,
+            ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
@@ -189,7 +189,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 duration_ms=round(duration_ms, 2),
             )
             logger.error("DeepSeek 流式API请求失败: {}: {}", type(e).__name__, e)
-            raise RuntimeError(f"DeepSeek 流式API请求失败: {e.response.text}") from None
+            raise RuntimeError(f"DeepSeek 流式API请求失败: {e.response.text}") from e
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(

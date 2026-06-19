@@ -5,8 +5,37 @@ LLM提供者基类
 """
 
 import json
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional
+
+import httpx
+
+# 进程级 httpx 客户端缓存，按 (base_url, api_key) 分片，复用 TCP 连接
+_client_cache: Dict[tuple, httpx.AsyncClient] = {}
+_client_cache_lock = threading.Lock()
+
+
+def get_cached_client(base_url: str, api_key: str, timeout: float = 300.0) -> httpx.AsyncClient:
+    """
+    获取缓存的 httpx.AsyncClient 实例，按 (base_url, api_key) 分片。
+
+    同一 provider + api_key 的连续调用复用同一 TCP 连接池，避免每次调用
+    重新建立 TLS 连接（约 100-300ms 延迟）。
+
+    注意：客户端在进程生命周期内复用，不主动关闭（进程退出时自动释放）。
+    """
+    cache_key = (base_url, api_key, timeout)
+    client = _client_cache.get(cache_key)
+    if client is not None and not client.is_closed:
+        return client
+    with _client_cache_lock:
+        client = _client_cache.get(cache_key)
+        if client is not None and not client.is_closed:
+            return client
+        client = httpx.AsyncClient(timeout=timeout)
+        _client_cache[cache_key] = client
+        return client
 
 
 class BaseLLMProvider(ABC):
@@ -122,12 +151,18 @@ class BaseLLMProvider(ABC):
                 })
             elif role == "assistant" and "tool_calls" in msg:
                 # 包含工具调用的assistant消息
-                assistant_msg = {
+                # OpenAI 兼容 API 要求 content 为 str 或 null，list 类型不适用
+                if content is None or content == "":
+                    formatted_content = None
+                elif isinstance(content, str):
+                    formatted_content = content
+                else:
+                    formatted_content = str(content)
+                formatted.append({
                     "role": "assistant",
-                    "content": str(content) if not isinstance(content, str) else content,
+                    "content": formatted_content,
                     "tool_calls": msg.get("tool_calls", [])
-                }
-                formatted.append(assistant_msg)
+                })
             elif isinstance(content, list):
                 # 处理多模态内容
                 formatted.append({"role": role, "content": content})

@@ -128,22 +128,21 @@ class LLMGateway:
         非流式调用：从 Key 池获取一个 Key，构建 Provider 后执行。
         Key 在 async with 块结束时自动归还。
         """
-        import time
         call_start = time.time()
-        logger.info(f"[LLM] _call_with_pool started, provider={self.provider_name}, fn={fn_name}")
-        
+        logger.debug(f"[LLM] _call_with_pool started, provider={self.provider_name}, fn={fn_name}")
+
         try:
             async with self._key_pool.acquire() as api_key:
                 provider = _build_provider(self.provider_name, api_key)
                 method = getattr(provider, fn_name)
                 logger.debug(f"[LLM] Provider built, calling {fn_name}")
-                
+
                 result = await method(**kwargs)
-                
+
                 call_duration = time.time() - call_start
-                logger.info(f"[LLM] _call_with_pool completed, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s")
+                logger.debug(f"[LLM] _call_with_pool completed, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s")
                 return result
-                
+
         except asyncio.TimeoutError as e:
             call_duration = time.time() - call_start
             logger.error(f"[LLM] _call_with_pool timeout, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s")
@@ -159,7 +158,7 @@ class LLMGateway:
         """
         stream_start = time.time()
         chunk_count = 0
-        logger.info(f"[LLM] _stream_with_pool started, provider={self.provider_name}, fn={fn_name}")
+        logger.debug(f"[LLM] _stream_with_pool started, provider={self.provider_name}, fn={fn_name}")
         
         try:
             async with self._key_pool.acquire() as api_key:
@@ -177,7 +176,7 @@ class LLMGateway:
                             logger.debug(f"[LLM] Stream progress, chunks={chunk_count}")
                     
                     stream_duration = time.time() - stream_start
-                    logger.info(f"[LLM] _stream_with_pool completed, provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, chunks={chunk_count}")
+                    logger.debug(f"[LLM] _stream_with_pool completed, provider={self.provider_name}, fn={fn_name}, duration={stream_duration:.2f}s, chunks={chunk_count}")
                     
                 except asyncio.TimeoutError as e:
                     stream_duration = time.time() - stream_start
@@ -224,9 +223,8 @@ class LLMGateway:
         Returns:
             响应字典
         """
-        import time
         chat_start = time.time()
-        logger.info(f"[LLM] chat() called, provider={self.provider_name}, messages_count={len(messages)}, has_tools={tools is not None}")
+        logger.debug(f"[LLM] chat() called, provider={self.provider_name}, messages_count={len(messages)}, has_tools={tools is not None}")
 
         try:
             if self._failover_enabled:
@@ -250,7 +248,7 @@ class LLMGateway:
                 )
             
             chat_duration = time.time() - chat_start
-            logger.info(f"[LLM] chat() completed, duration={chat_duration:.2f}s, has_content={bool(result.get('content'))}, has_tool_calls={bool(result.get('tool_calls'))}")
+            logger.debug(f"[LLM] chat() completed, duration={chat_duration:.2f}s, has_content={bool(result.get('content'))}, has_tool_calls={bool(result.get('tool_calls'))}")
             return result
             
         except Exception as e:
@@ -328,9 +326,8 @@ class LLMGateway:
             - content: 文本内容
             - tool_calls: 工具调用列表（如果有）
         """
-        import time
         cwt_start = time.time()
-        logger.info(f"[LLM] chat_with_tools() called, provider={self.provider_name}, messages_count={len(messages)}, tools_count={len(tools) if tools else 0}, has_system_prompt={system_prompt is not None}")
+        logger.debug(f"[LLM] chat_with_tools() called, provider={self.provider_name}, messages_count={len(messages)}, tools_count={len(tools) if tools else 0}, has_system_prompt={system_prompt is not None}")
 
         try:
             if system_prompt:
@@ -354,7 +351,7 @@ class LLMGateway:
                 )
             
             cwt_duration = time.time() - cwt_start
-            logger.info(f"[LLM] chat_with_tools() completed, duration={cwt_duration:.2f}s")
+            logger.debug(f"[LLM] chat_with_tools() completed, duration={cwt_duration:.2f}s")
             return result
             
         except Exception as e:
