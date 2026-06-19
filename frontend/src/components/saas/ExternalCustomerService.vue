@@ -113,7 +113,7 @@
           </div>
           <div v-else class="space-y-4">
             <div
-              v-for="msg in messageList"
+              v-for="msg in visibleMessages"
               :key="msg.message_id"
               class="flex flex-col"
               :class="msg.role === 'user' ? 'items-end' : 'items-start'"
@@ -257,6 +257,15 @@ const messageTotal = ref(0)
 const messagePage = ref(1)
 const messagePageSize = ref(50)
 const loadingMessages = ref(false)
+
+// 过滤掉智能体中间消息（tool 角色、内容为空且仅含 tool_calls 的 assistant），只展示对用户可见的对话
+const visibleMessages = computed(() =>
+  messageList.value.filter(msg => {
+    if (msg.role === 'tool') return false
+    if (msg.role === 'assistant' && !msg.content) return false
+    return true
+  }),
+)
 
 // 会话列表
 const sessionList = ref<any[]>([])

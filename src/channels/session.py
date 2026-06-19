@@ -584,8 +584,8 @@ class ChannelSessionManager:
         offset = (page - 1) * page_size
         with get_db_connection() as conn:
             cursor = conn.cursor()
-
-            conditions = ["session_id = %s"]
+            # 当前会话下的消息，工具调用类型消息不展示，且内容不为空
+            conditions = ["session_id = %s", "role != 'tool'", "content != ''"]
             params = [session_id]
 
             if content_search:
