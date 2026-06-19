@@ -1446,6 +1446,20 @@ async def _process_tenant_wecom_kf_messages(
                 if msgtype == "voice" and not user_input.startswith("[语音消息"):
                     user_content = f"[语音消息] {user_input}"
 
+                # 语音消息：ASR 短句（<10 字）附加 LLM 提示词，降低识别误差导致的意图偏差
+                # 仅修改 user_input（传给 agent），user_content（历史记录）保持原样
+                if (
+                    msgtype == "voice"
+                    and not user_input.startswith("[语音消息")
+                    and 0 < len(user_input) < 10
+                ):
+                    user_input = (
+                        f"[系统提示] 当前消息来自语音 ASR 识别，仅 {len(user_input)} 字，"
+                        f"短句识别误差风险较高。在回答前请先简述你理解的用户意图，"
+                        f"以防 ASR 识别错误导致意图偏差。\n\n"
+                        f"{user_input}"
+                    )
+
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
                 user_attachments_meta = []
                 for att in user_attachments:
