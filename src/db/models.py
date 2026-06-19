@@ -222,6 +222,9 @@ class UserDB:
     def list_users(page: int = 1, page_size: int = 20, tenant_id: str = None) -> dict:
         """获取用户列表（分页）
 
+        只返回内部用户（source IS NULL），外部用户（如企业微信客服）由
+        /api/saas/external-customers 接口单独管理。
+
         Args:
             page: 页码，从1开始
             page_size: 每页数量
@@ -234,17 +237,22 @@ class UserDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if tenant_id:
-                cursor.execute("SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s", (tenant_id,))
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s AND source IS NULL",
+                    (tenant_id,),
+                )
                 total = cursor.fetchone()["cnt"]
                 cursor.execute(
-                    "SELECT * FROM users WHERE tenant_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    "SELECT * FROM users WHERE tenant_id = %s AND source IS NULL ORDER BY created_at DESC LIMIT %s OFFSET %s",
                     (tenant_id, page_size, offset),
                 )
             else:
-                cursor.execute("SELECT COUNT(*) as cnt FROM users")
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM users WHERE source IS NULL"
+                )
                 total = cursor.fetchone()["cnt"]
                 cursor.execute(
-                    "SELECT * FROM users ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    "SELECT * FROM users WHERE source IS NULL ORDER BY created_at DESC LIMIT %s OFFSET %s",
                     (page_size, offset),
                 )
             users = [dict(row) for row in cursor.fetchall()]

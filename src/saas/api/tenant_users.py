@@ -268,6 +268,10 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
     if not user or user.get("tenant_id") != admin["tenant_id"]:
         raise HTTPException(status_code=404, detail="用户不在此企业中")
 
+    # 外部用户（如企业微信客服）由渠道自动管理，禁止管理员编辑
+    if user.get("source"):
+        return {"success": False, "message": "外部用户不允许编辑"}
+
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return {"success": False, "message": "没有需要更新的字段"}
@@ -296,6 +300,10 @@ async def remove_user(user_id: str, request: Request):
     # 平台管理员不能被移除
     if user.get("role") == "platform_admin":
         return {"success": False, "message": "无法移除平台管理员"}
+
+    # 外部用户（如企业微信客服）由渠道自动管理，禁止管理员移除
+    if user.get("source"):
+        return {"success": False, "message": "外部用户不允许删除"}
 
     # 将 tenant_id 设为 None，而不是删除用户
     # 同时清除该用户的所有数字员工授权

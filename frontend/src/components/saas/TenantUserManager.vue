@@ -51,6 +51,9 @@
                   :class="row.role === 'tenant_admin' ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-gray-700'">
                   {{ row.role === 'tenant_admin' ? '管理员' : '普通用户' }}
                 </span>
+                <span v-if="row.source" class="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-info-100 text-info-700">
+                  {{ getUserSourceInfo(row.source).label }}
+                </span>
               </template>
               <template #agent_auth="{ row }">
                 <span v-if="row.role === 'tenant_admin'"
@@ -68,8 +71,11 @@
               </template>
               <template #actions="{ row }">
                 <div class="flex gap-2">
-                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEditDialog(row)">编辑</BaseButton>
-                  <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleRemove(row.user_id)">删除</BaseButton>
+                  <template v-if="!row.source">
+                    <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEditDialog(row)">编辑</BaseButton>
+                    <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleRemove(row.user_id)">删除</BaseButton>
+                  </template>
+                  <span v-else class="text-xs text-muted">外部用户不可操作</span>
                 </div>
               </template>
             </BaseTable>
@@ -312,6 +318,7 @@ import { useTableSelection } from '@/composables/useTableSelection'
 import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser, updateTenantUser } from '@/api/saasTenant'
 import { getTenantAvailableUserAgents, getUserAgentPermissions, setUserAgentPermissions, type AgentItem } from '@/api/saasPermissions'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { getUserSourceInfo } from '@/api/enums'
 
 const route = useRoute()
 const router = useRouter()
@@ -620,9 +627,21 @@ async function handleRemove(userId: string) {
 
 async function handleBatchDelete() {
   if (selectedArr.value.length === 0) return
-  if (!confirm(`确定要删除选中的 ${selectedArr.value.length} 个用户吗？`)) return
+  // 批量删除时过滤掉外部用户（source 非空）
+  const removable = users.value.filter(
+    (u: any) => selectedArr.value.includes(u.user_id) && !u.source
+  )
+  const skipped = selectedArr.value.length - removable.length
+  if (removable.length === 0) {
+    toast.error('选中的用户均为外部用户，无法删除')
+    return
+  }
+  const tip = skipped > 0
+    ? `选中的 ${selectedArr.value.length} 个用户中，${skipped} 个为外部用户已跳过，确定删除剩余 ${removable.length} 个吗？`
+    : `确定要删除选中的 ${removable.length} 个用户吗？`
+  if (!confirm(tip)) return
   try {
-    for (const userId of selectedArr.value) {
+    for (const userId of removable.map((u: any) => u.user_id)) {
       await removeTenantUser(userId)
     }
     clearSelection()
