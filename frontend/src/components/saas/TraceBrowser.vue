@@ -62,7 +62,7 @@
                 class="hover:bg-surface-hover cursor-pointer" @click="goToSession(s.session_id)">
                 <td class="px-4 py-2 text-xs text-muted">{{ (page - 1) * pageSize + idx + 1 }}</td>
                 <td class="px-4 py-2 text-xs text-default font-mono">{{ s.session_id.substring(0, 16) }}...</td>
-                <td class="px-4 py-2 text-sm text-default max-w-xs truncate">{{ s.first_input || '-' }}</td>
+                <td class="px-4 py-2 text-sm text-default max-w-xs truncate">{{ s.first_content || s.first_input || '-' }}</td>
                 <td class="px-4 py-2 text-sm">
                   <span :class="sourceBadgeClass(s.source_type)"
                     class="inline-block px-1.5 py-0.5 rounded text-xs font-medium">

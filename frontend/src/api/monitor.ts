@@ -22,6 +22,7 @@ export interface SessionSummary {
   error_count: number
   last_trace_at: string | null
   first_input: string | null
+  first_content: string | null
   source_type: string | null
   subagent_id: string | null
 }

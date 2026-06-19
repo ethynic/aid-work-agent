@@ -33,6 +33,7 @@ class SessionSummary(BaseModel):
     error_count: int = 0
     last_trace_at: Optional[str] = None
     first_input: Optional[str] = None
+    first_content: Optional[str] = None
     source_type: Optional[str] = None
     subagent_id: Optional[str] = None
 
@@ -227,6 +228,28 @@ async def list_traced_sessions(
                 )
                 for r in rows
             ]
+
+            # 从 channel_messages 补充首次消息内容（ASR 语音识别文字）
+            if sessions:
+                session_ids = [s.session_id for s in sessions]
+                placeholders = ",".join(["%s"] * len(session_ids))
+                from src.db.database import get_db_connection
+                with get_db_connection() as cur:
+                    cur.execute(f"""
+                        SELECT session_id, content
+                        FROM (
+                            SELECT session_id, content,
+                                   ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at ASC) as rn
+                            FROM channel_messages
+                            WHERE session_id IN ({placeholders})
+                              AND role = 'user'
+                        ) t WHERE rn = 1
+                    """, session_ids)
+                    content_map = {r["session_id"]: (r["content"] or "")[:200] for r in cur.fetchall()}
+                for s in sessions:
+                    s.first_content = content_map.get(s.session_id)
+                    if not s.first_content:
+                        s.first_content = s.first_input
 
             total_pages = (total + page_size - 1) // page_size
 
