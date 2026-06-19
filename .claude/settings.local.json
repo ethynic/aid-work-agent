@@ -78,7 +78,8 @@
       "WebFetch(domain:help.aliyun.com)",
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:registry.npmmirror.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)"
     ]
   }
 }
