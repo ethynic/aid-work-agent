@@ -88,3 +88,6 @@ redis>=5.0.0  # Redis client for shared cross-worker state
 # Security
 bcrypt>=4.1.0  # Password hashing
 
+# Audio
+pysilk-mod>=1.6.0  # SILK v3/v2 音频解码（微信手机端语音格式）
+

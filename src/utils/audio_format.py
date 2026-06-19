@@ -178,3 +178,33 @@ def wrap_pcm_as_wav(pcm_bytes: bytes, sample_rate: int = 16000, sample_width: in
         wf.setframerate(sample_rate)
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
+
+
+def decode_silk_to_wav(silk_bytes: bytes, sample_rate: int = 16000) -> bytes:
+    """
+    将 SILK v3/v2 格式音频解码为 WAV。
+
+    依赖 pysilk-mod（pip install pysilk-mod）。
+    微信手机端录制的语音通常为 SILK 格式，阿里云 ASR 不支持，需先解码。
+
+    Args:
+        silk_bytes: SILK 格式音频字节
+        sample_rate: 输出采样率，默认 16000（ASR 标准采样率）
+
+    Returns:
+        WAV 格式字节
+
+    Raises:
+        RuntimeError: pysilk-mod 未安装或数据无效
+    """
+    try:
+        import pysilk
+    except ImportError:
+        raise RuntimeError(
+            "SILK 音频解码需要 pysilk-mod，请执行: pip install pysilk-mod"
+        )
+    # 最小有效 SILK 文件：10 字节头 + 至少一帧数据（约 30 字节）
+    # 数据过短时 pysilk C 扩展会 segfault，提前拦截
+    if len(silk_bytes) < 50:
+        raise RuntimeError(f"SILK 数据过短（{len(silk_bytes)} 字节），疑似损坏")
+    return pysilk.decode(silk_bytes, to_wav=True, sample_rate=sample_rate)

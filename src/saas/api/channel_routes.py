@@ -191,13 +191,25 @@ async def _download_and_build_attachments(
     detected_format = None
     detected_sample_rate = None
     if msgtype == "voice":
-        from src.utils.audio_format import detect_audio_format, wrap_pcm_as_wav
+        from src.utils.audio_format import (
+            detect_audio_format,
+            wrap_pcm_as_wav,
+            decode_silk_to_wav,
+        )
         detected_format, detected_sample_rate = detect_audio_format(content, content_type)
-        # voice_format=1 请求返回原始 PCM（无文件头），magic bytes 检测会 fallback 为 mp3，
+        # SILK 是微信手机端专有格式（阿里云 ASR 不支持），需解码为 WAV
+        if detected_format in ("silk_v3", "silk_v2"):
+            try:
+                content = decode_silk_to_wav(content, sample_rate=16000)
+                detected_format = "wav"
+                detected_sample_rate = 16000
+                logger.info("[wecom_kf] SILK 语音已解码为 WAV: media_id={}", media_id[:8])
+            except Exception as e:
+                logger.warning("[wecom_kf] SILK 解码失败，保留原格式: media_id={}, error={}", media_id[:8], e)
+        # voice_format=1 请求返回原始 PCM（无文件头），magic bytes 检测会 fallback 为 mp3/pcm，
         # 此处通过排除法识别：既不是已知有头格式、也不是 Content-Type 匹配到的格式时，
         # 视为来自微信 voice_format=1 的原始 PCM，包装为 WAV 以便浏览器播放和 ASR 提交。
-        _KNOWN_MAGIC_FORMATS = {"amr", "amr-wb", "wav", "mp3", "opus", "aac", "silk_v3", "silk_v2", "flac"}
-        if detected_format not in _KNOWN_MAGIC_FORMATS:
+        elif detected_format not in {"amr", "amr-wb", "wav", "mp3", "opus", "aac", "silk_v3", "silk_v2", "flac"}:
             content = wrap_pcm_as_wav(content, sample_rate=detected_sample_rate or 16000)
             detected_format = "wav"
             detected_sample_rate = 16000
