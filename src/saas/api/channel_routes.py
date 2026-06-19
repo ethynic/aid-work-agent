@@ -881,12 +881,21 @@ async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
             return JSONResponse({"success": False, "msg": "config not found"}, status_code=404)
 
         # 1. 签名验证（timestamp + sign 请求头）
+        # 钉钉强制要求签名校验：sign 或 timestamp 头缺失直接拒绝，禁止跳过验证
         signature = request.headers.get("sign", "")
         timestamp = request.headers.get("timestamp", "")
-        if signature:
-            if not await adapter.verify_signature(signature, timestamp, "", ""):
-                logger.warning(f"[Tenant DingTalk] 签名验证失败: tenant={tenant_id}")
-                return JSONResponse({"success": False, "msg": "invalid signature"}, status_code=403)
+        if not signature or not timestamp:
+            logger.warning(
+                f"[Tenant DingTalk] 缺少签名头: tenant={tenant_id}, "
+                f"has_sign={bool(signature)}, has_timestamp={bool(timestamp)}"
+            )
+            return JSONResponse(
+                {"success": False, "msg": "missing signature headers"},
+                status_code=403,
+            )
+        if not await adapter.verify_signature(signature, timestamp, "", ""):
+            logger.warning(f"[Tenant DingTalk] 签名验证失败: tenant={tenant_id}")
+            return JSONResponse({"success": False, "msg": "invalid signature"}, status_code=403)
 
         # 2. 解析 JSON body
         try:
@@ -902,10 +911,12 @@ async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
             return JSONResponse({"success": True})
 
         # 4. 消息去重
+        # 共享表 channel_message_dedup，需加 channel + tenant 前缀避免跨渠道/跨租户碰撞
         msg_id = data.get("msgId", "")
         if msg_id:
             dedup = _get_dingtalk_event_dedup(tenant_id)
-            if await dedup.is_duplicate(msg_id):
+            dedup_key = f"dingtalk:{tenant_id}:{msg_id}"
+            if await dedup.is_duplicate(dedup_key):
                 logger.debug(f"[Tenant DingTalk] 重复消息: tenant={tenant_id}, msgId={msg_id}")
                 return JSONResponse({"success": True})
 

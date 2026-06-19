@@ -346,6 +346,79 @@ class TestDingTalkMediaUploadMedia:
             assert result is None
 
 
+class TestDingTalkMediaUploadFromUrl:
+    """upload_from_url 测试 — 适配 DownloadableFileInfo 只携带 download_url 的场景"""
+
+    @pytest.mark.asyncio
+    async def test_missing_download_url_returns_none(self, media):
+        """download_url 为空 → 直接返回 None"""
+        result = await media.upload_from_url("", "file.txt", "robot_abc")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_download_failure_returns_none(self, media):
+        """下载失败 → 返回 None，不调用 upload_media"""
+        with patch("src.channels.dingtalk.media.httpx.AsyncClient") as mock_client_cls:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 404
+            mock_cm = MagicMock()
+            mock_cm.__enter__.return_value = mock_resp
+            mock_cm.__exit__.return_value = False
+            mock_client = MagicMock()
+            mock_client.stream.return_value = mock_cm
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+            result = await media.upload_from_url(
+                "https://example.com/file.txt", "file.txt", "robot_abc"
+            )
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_download_and_upload_success(self, media, tmp_path):
+        """下载成功 → 落地到 upload_dir → 委托 upload_media 拿到 mediaId"""
+        # 让 upload_dir 指向 tmp_path，避免污染真实目录
+        media.upload_dir = str(tmp_path)
+
+        download_bytes = b"hello world"
+
+        with patch("src.channels.dingtalk.media.httpx.AsyncClient") as mock_client_cls:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.iter_bytes.return_value = [download_bytes[:5], download_bytes[5:]]
+
+            mock_cm = MagicMock()
+            mock_cm.__enter__.return_value = mock_resp
+            mock_cm.__exit__.return_value = False
+
+            mock_client = MagicMock()
+            mock_client.stream.return_value = mock_cm
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+            # mock upload_media 验证委托链路
+            called_with = {}
+
+            async def fake_upload(path, robot_code, media_type):
+                called_with["path"] = path
+                called_with["robot_code"] = robot_code
+                called_with["media_type"] = media_type
+                return "media_id_xyz"
+
+            with patch.object(media, "upload_media", side_effect=fake_upload):
+                result = await media.upload_from_url(
+                    "https://example.com/file.txt",
+                    "file.txt",
+                    "robot_abc",
+                    "file",
+                )
+
+            assert result == "media_id_xyz"
+            assert called_with["robot_code"] == "robot_abc"
+            assert called_with["media_type"] == "file"
+            assert os.path.exists(called_with["path"])
+            with open(called_with["path"], "rb") as f:
+                assert f.read() == download_bytes
+
+
 class TestExtFromContentType:
     """Content-Type 扩展名推断测试"""
 

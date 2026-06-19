@@ -14,6 +14,8 @@
 """
 
 import os
+import re
+import time
 from typing import Awaitable, Callable, Optional, Tuple
 
 import httpx
@@ -200,6 +202,57 @@ class DingTalkMedia:
             logger.error(f"[DingTalk] 下载文件异常: download_code={download_code}, {e}")
             return None
 
+    async def upload_from_url(
+        self,
+        download_url: str,
+        file_name: str,
+        robot_code: str,
+        media_type: str = "file",
+    ) -> Optional[str]:
+        """
+        从公网 URL 下载文件并上传到钉钉
+
+        DownloadableFileInfo 只携带 download_url（不含本地路径），
+        上传前需先落到本地。下载到 self.upload_dir 后委托给 upload_media。
+
+        Args:
+            download_url: 文件的公网下载 URL
+            file_name: 文件名（用于决定保存路径）
+            robot_code: 机器人编码
+            media_type: 媒体类型：image / file / voice / video
+
+        Returns:
+            mediaId 或 None（下载或上传失败时）
+        """
+        if not download_url:
+            logger.warning(f"[DingTalk] upload_from_url 缺少 download_url: {file_name}")
+            return None
+
+        try:
+            safe_name = _sanitize_filename(file_name or f"file_{int(time.time())}")
+            local_path = os.path.join(self.upload_dir, safe_name)
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                with client.stream("GET", download_url) as resp:
+                    if resp.status_code != 200:
+                        logger.error(
+                            f"[DingTalk] 下载待上传文件失败: HTTP {resp.status_code}, "
+                            f"url={download_url}"
+                        )
+                        return None
+                    with open(local_path, "wb") as f:
+                        for chunk in resp.iter_bytes():
+                            if chunk:
+                                f.write(chunk)
+
+            logger.debug(f"[DingTalk] 待上传文件已下载: {file_name} -> {local_path}")
+            return await self.upload_media(local_path, robot_code, media_type)
+
+        except Exception as e:
+            logger.error(
+                f"[DingTalk] upload_from_url 异常: file={file_name}, url={download_url}, {e}"
+            )
+            return None
+
     async def upload_media(
         self, file_path: str, robot_code: str, media_type: str = "file"
     ) -> Optional[str]:
@@ -261,3 +314,19 @@ def _ext_from_content_type(content_type: str) -> str:
         "image/bmp": ".bmp",
         "image/webp": ".webp",
     }.get(ct, ".bin")
+
+
+def _sanitize_filename(name: str) -> str:
+    """清洗文件名：保留常见字符，去除路径分隔符等危险字符"""
+    if not name:
+        return f"file_{int(time.time())}"
+    # 去掉路径分隔符，替换空格和特殊字符
+    cleaned = re.sub(r"[^\w.\-]", "_", name)
+    # 防止文件名过长
+    if len(cleaned) > 128:
+        root, _, ext = cleaned.rpartition(".")
+        if ext:
+            cleaned = cleaned[: 128 - len(ext) - 1] + "." + ext
+        else:
+            cleaned = cleaned[:128]
+    return cleaned or f"file_{int(time.time())}"

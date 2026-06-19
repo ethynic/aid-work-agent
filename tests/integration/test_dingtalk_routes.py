@@ -196,8 +196,8 @@ class TestSignatureVerification:
         assert resp.status_code == 403
         bg.assert_not_called()
 
-    def test_no_signature_header_passes(self, client, dingtalk_adapter):
-        """未提供 sign 头 → 跳过签名校验，直接放行（兼容内网/调试场景）"""
+    def test_no_signature_header_rejected(self, client, dingtalk_adapter):
+        """未提供 sign 或 timestamp 头 → 403（生产环境强制签名校验）"""
         event = _make_event()
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
@@ -206,8 +206,8 @@ class TestSignatureVerification:
                 json=event,
             )
 
-        assert resp.status_code == 200
-        bg.assert_called_once()
+        assert resp.status_code == 403
+        bg.assert_not_called()
 
 
 # ---------- 2. 消息去重 ----------

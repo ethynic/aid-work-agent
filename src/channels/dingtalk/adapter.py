@@ -108,6 +108,7 @@ class DingTalkAdapter(ChannelAdapter):
         self._access_token: Optional[str] = None
         self._token_expires: float = 0
         self._token_lock = asyncio.Lock()
+        self._client_lock = asyncio.Lock()
 
         self._http_client: Optional[httpx.AsyncClient] = None
 
@@ -120,11 +121,18 @@ class DingTalkAdapter(ChannelAdapter):
         return "dingtalk"
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=10.0),
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            )
+        # 快速路径：client 已存在且未关闭
+        if self._http_client is not None and not self._http_client.is_closed:
+            return self._http_client
+        # 加锁串行化创建，避免并发请求各自创建一个 client 造成旧实例泄漏
+        async with self._client_lock:
+            if self._http_client is None or self._http_client.is_closed:
+                self._http_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(30.0, connect=10.0),
+                    limits=httpx.Limits(
+                        max_connections=100, max_keepalive_connections=20
+                    ),
+                )
         return self._http_client
 
     async def close(self):
@@ -322,30 +330,34 @@ class DingTalkAdapter(ChannelAdapter):
             all_success = await self.send_long_message(text, reply_to, conversation_type)
 
         for file_info in message.downloadable_files:
-            ext = file_info.file_name.lower().rsplit(".", 1)[-1]
-            if ext in ("png", "jpg", "jpeg", "gif"):
-                media_id = await self.media.upload_media(
-                    file_info.local_path, self.robot_code, "image"
+            # 速率限制（与 send_long_message 一致）
+            if not self._check_rate_limit(reply_to):
+                logger.warning(
+                    f"[DingTalk] send_message 文件分支被速率限制拦截: target={reply_to}"
                 )
-                if media_id:
-                    text_fallback = f"[图片: {file_info.file_name}]"
-                    ok = await self.send_text(text_fallback, reply_to, conversation_type)
-                    if not ok:
-                        all_success = False
-                else:
-                    all_success = False
-            else:
-                media_id = await self.media.upload_media(
-                    file_info.local_path, self.robot_code, "file"
-                )
-                if media_id:
-                    ok = await self.send_file(
-                        media_id, file_info.file_name, reply_to, conversation_type
-                    )
-                    if not ok:
-                        all_success = False
-                else:
-                    all_success = False
+                all_success = False
+                break
+
+            # DownloadableFileInfo 只携带 download_url（无 local_path），
+            # 先从 URL 下载到本地再上传到钉钉。
+            file_name = file_info.file_name or "未命名文件"
+            ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+            media_type = "image" if ext in ("png", "jpg", "jpeg", "gif") else "file"
+
+            media_id = await self.media.upload_from_url(
+                file_info.download_url, file_name, self.robot_code, media_type
+            )
+            if not media_id:
+                all_success = False
+                continue
+
+            # 钉钉 sampleImageMsg 需要 photoURL（公网 URL），
+            # 上传后只能拿到 mediaId，需走 sampleFile 通道。
+            ok = await self.send_file(
+                media_id, file_name, reply_to, conversation_type
+            )
+            if not ok:
+                all_success = False
 
         return all_success
 
