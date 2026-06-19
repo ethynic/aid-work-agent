@@ -1396,7 +1396,7 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 语音消息：调用阿里云 ASR 转文字
                 if msgtype == "voice" and user_input == "[语音消息]" and user_attachments:
-                    logger.info(f"[微信语音] 匹配到语音 分支: msgtype={msgtype}, user_input={user_input}, has_attachments={bool(user_attachments)}")
+                    logger.info(f"[微信语音] 匹配到语音分支: msgtype={msgtype}, user_input={user_input}, has_attachments={bool(user_attachments)}")
                     logger.info("[微信语音] 检测到语音消息，准备调用 ASR")
                     logger.info(f"[微信语音] 附件信息: format={user_attachments[0].get('audio_format')}, filename={user_attachments[0].get('file_name')}, content_len={len(user_attachments[0].get('content',''))}")
                     audio_content = user_attachments[0].get("content", "")
@@ -1410,12 +1410,24 @@ async def _process_tenant_wecom_kf_messages(
                         audio_content, audio_format, audio_sample_rate
                     )
                     logger.info(f"[微信语音] ASR 转文字完成: result_len={len(user_input)}, preview={user_input[:100]}")
+                elif msgtype == "voice":
+                    logger.warning(
+                        "[微信语音] 未进入 ASR 分支: user_input={user_input!r}, has_attachments={has_attachments}, "
+                        "条件检查: msgtype_voice={c1}, input_is_placeholder={c2}, has_attachments={c3}".format(
+                            user_input=user_input,
+                            has_attachments=bool(user_attachments),
+                            c1=(msgtype == "voice"),
+                            c2=(user_input == "[语音消息]"),
+                            c3=bool(user_attachments),
+                        )
+                    )
 
                 user_content = unified_msg.text or user_input
 
                 # 语音消息：如果 ASR 识别成功，用 "[语音消息] ASR结果" 格式保存
                 # （unified_msg.text 永远是 "[语音消息]"，ASR 结果在 user_input 中）
-                if msgtype == "voice" and user_input != "[语音消息]" and not user_input.startswith("[语音消息 -"):
+                logger.info(f"[微信语音] 最终用户输入: msgtype={msgtype}, user_input={user_input}, user_content={user_content}")
+                if msgtype == "voice" and not user_input.startswith("[语音消息"):
                     user_content = f"[语音消息] {user_input}"
 
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）

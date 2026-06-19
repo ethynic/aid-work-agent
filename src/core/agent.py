@@ -375,9 +375,9 @@ class Agent:
         from src.tools.phone.ai_call_tool import AICallTool
         self.tool_registry.register(AICallTool())
 
-        # 注册语音转文字工具
-        from src.tools.asr.speech_to_text_tool import SpeechToTextTool
-        self.tool_registry.register(SpeechToTextTool())
+        # 语音转文字（ASR）已在渠道层（channel_routes.py）完成，不注册为 LLM 工具
+        # from src.tools.asr.speech_to_text_tool import SpeechToTextTool
+        # self.tool_registry.register(SpeechToTextTool())
 
         # 注册智能数据分析工具
         from src.tools.data_analysis.smart_analysis_tool import SmartDataAnalysisTool
