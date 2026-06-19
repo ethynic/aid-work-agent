@@ -46,7 +46,7 @@ RUN python -c "import redis; print('redis loaded OK:', redis.__version__)" || \
      pip install --no-cache-dir 'redis>=5.0.0' -i https://pypi.org/simple/ && \
      python -c "import redis; print('redis loaded OK:', redis.__version__)")
 
-# MCP 单独安装（zhipuai 限制 pyjwt<2.9，mcp 要求 pyjwt>=2.10，分开装绕过冲突）
+# MCP 单独安装（依赖较多，独立一层便于排查与缓存；zhipuai 已移除，不再存在 pyjwt 冲突）
 RUN pip install --no-cache-dir --no-deps 'mcp>=1.27.0' -i https://mirrors.cloud.tencent.com/pypi/simple && \
     pip install --no-cache-dir \
       'pyjwt>=2.10.1' \

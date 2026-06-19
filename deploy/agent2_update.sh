@@ -71,6 +71,22 @@ sudo docker exec -u root aid-agent-api2 \
     -i https://mirrors.cloud.tencent.com/pypi/simple \
     --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
 
+# 7. 清理已移除的 zhipuai 包（requirements.txt 已不再包含，
+#    旧镜像里残留会拉低 pyjwt 到 <2.9，与 mcp 冲突）
+#    卸载后需确认 pyjwt 仍在 >=2.10.1，否则补装一次
+echo "[7] 清理已移除的 zhipuai（如存在）..."
+if sudo docker exec -u root aid-agent-api2 pip show zhipuai >/dev/null 2>&1; then
+    sudo docker exec -u root aid-agent-api2 pip uninstall -y zhipuai >/dev/null
+    echo "  已卸载 zhipuai"
+    # zhipuai 可能把 pyjwt 锁在 <2.9，卸载后显式升回
+    sudo docker exec -u root aid-agent-api2 \
+        pip install --no-cache-dir --upgrade 'pyjwt>=2.10.1' \
+        -i https://mirrors.cloud.tencent.com/pypi/simple \
+        --quiet || echo "  警告：pyjwt 升级失败，mcp 可能不可用"
+else
+    echo "  zhipuai 未安装，跳过"
+fi
+
 echo ""
 echo "更新完成！"
 echo "=========================================="

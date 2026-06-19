@@ -36,7 +36,6 @@ markdown>=3.5.0  # Markdown to HTML conversion
 fpdf2>=2.8.0  # Pure Python PDF generation
 
 # LLM Providers
-zhipuai>=2.0.0  # Zhipu AI SDK
 dashscope>=1.14.0  # Qwen SDK
 
 # Web Search
@@ -82,7 +81,7 @@ PyMySQL>=1.1.0  # MySQL driver for SQLAlchemy
 # Redis
 redis>=5.0.0  # Redis client for shared cross-worker state
 
-# MCP Server (installed separately in Dockerfile to resolve pyjwt conflict with zhipuai)
+# MCP Server (Dockerfile 中单独安装，避免被其他包间接升级)
 # mcp>=1.27.0  # Model Context Protocol SDK
 
 # Security

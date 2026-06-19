@@ -27,18 +27,22 @@ def call_llm(prompt: str) -> str:
             return resp.output.choices[0].message.content
         raise RuntimeError(f"LLM 调用失败: {resp.message}")
     elif provider == 'zhipu':
-        from zhipuai import ZhipuAI
+        import httpx
         keys = settings.llm.zhipu.get_effective_keys()
         if not keys:
             raise ValueError("ZhipuAI API key 未配置")
-        client = ZhipuAI(api_key=keys[0])
         model = getattr(settings.llm.zhipu, 'model', None) or 'glm-4-flash'
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
+        base_url = getattr(settings.llm.zhipu, 'base_url', None) or 'https://open.bigmodel.cn/api/paas/v4'
+        api_url = f"{base_url.rstrip('/')}/chat/completions"
+        resp = httpx.post(
+            api_url,
+            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0},
+            timeout=300.0,
         )
-        return resp.choices[0].message.content
+        resp.raise_for_status()
+        result = resp.json()
+        return result["choices"][0]["message"]["content"]
     elif provider == 'deepseek':
         import httpx
         keys = settings.llm.deepseek.get_effective_keys()
