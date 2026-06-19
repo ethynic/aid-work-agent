@@ -420,3 +420,95 @@ DROP TRIGGER IF EXISTS trg_set_uuid_travel_seasons ON bs_travel_quote_seasons;
 CREATE TRIGGER trg_set_uuid_travel_seasons
 BEFORE INSERT ON bs_travel_quote_seasons
 FOR EACH ROW EXECUTE FUNCTION set_table_uuid();
+
+-- ============================================================================
+-- 2026-06-19，channel_messages / channel_sessions 增加数字型自增 id + created_at 修正为 TIMESTAMP
+-- 解决同一秒内多条消息无法区分先后顺序的问题
+-- ============================================================================
+
+-- channel_messages：加自增 id，原 message_id 保留唯一约束
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS id SERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_messages_msgid ON channel_messages(message_id);
+-- 如果主键还在 message_id 上（非 id），则交换到 id
+DO $$
+DECLARE
+    pk_on_id boolean;
+BEGIN
+    SELECT EXISTS(
+        SELECT 1 FROM information_schema.key_column_usage kcu
+        JOIN information_schema.table_constraints tc USING (constraint_name, table_name)
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_name = 'channel_messages'
+          AND kcu.column_name = 'id'
+    ) INTO pk_on_id;
+    IF NOT pk_on_id THEN
+        ALTER TABLE channel_messages DROP CONSTRAINT IF EXISTS channel_messages_pkey;
+        ALTER TABLE channel_messages ADD PRIMARY KEY (id);
+    END IF;
+END $$;
+
+-- channel_sessions：加自增 id，原 session_id 保留唯一约束
+ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS id SERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_sessions_sid ON channel_sessions(session_id);
+DO $$
+DECLARE
+    pk_on_id boolean;
+BEGIN
+    SELECT EXISTS(
+        SELECT 1 FROM information_schema.key_column_usage kcu
+        JOIN information_schema.table_constraints tc USING (constraint_name, table_name)
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_name = 'channel_sessions'
+          AND kcu.column_name = 'id'
+    ) INTO pk_on_id;
+    IF NOT pk_on_id THEN
+        ALTER TABLE channel_sessions DROP CONSTRAINT IF EXISTS channel_sessions_pkey;
+        ALTER TABLE channel_sessions ADD PRIMARY KEY (id);
+    END IF;
+END $$;
+
+-- created_at 类型修正：TEXT → TIMESTAMP，添加数据库默认值
+-- 幂等：只在当前类型为 text 时转换（PostgreSQL 会隐式将 text 时间串转 timestamp）
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'channel_messages' AND column_name = 'created_at' AND data_type = 'text';
+    IF FOUND THEN
+        ALTER TABLE channel_messages ALTER COLUMN created_at TYPE TIMESTAMP USING created_at::TIMESTAMP;
+        ALTER TABLE channel_messages ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+        ALTER TABLE channel_messages ALTER COLUMN created_at DROP NOT NULL;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'channel_sessions' AND column_name = 'created_at' AND data_type = 'text';
+    IF FOUND THEN
+        ALTER TABLE channel_sessions ALTER COLUMN created_at TYPE TIMESTAMP USING created_at::TIMESTAMP;
+        ALTER TABLE channel_sessions ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+        ALTER TABLE channel_sessions ALTER COLUMN created_at DROP NOT NULL;
+    END IF;
+END $$;
+
+-- updated_at 类型修正：TEXT → TIMESTAMP（仅 channel_sessions）
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'channel_sessions' AND column_name = 'updated_at' AND data_type = 'text';
+    IF FOUND THEN
+        ALTER TABLE channel_sessions ALTER COLUMN updated_at TYPE TIMESTAMP USING updated_at::TIMESTAMP;
+        ALTER TABLE channel_sessions ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+        ALTER TABLE channel_sessions ALTER COLUMN updated_at DROP NOT NULL;
+    END IF;
+END $$;
+
+-- last_message_at 类型修正：TEXT → TIMESTAMP（仅 channel_sessions，无默认值）
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'channel_sessions' AND column_name = 'last_message_at' AND data_type = 'text';
+    IF FOUND THEN
+        ALTER TABLE channel_sessions ALTER COLUMN last_message_at TYPE TIMESTAMP USING last_message_at::TIMESTAMP;
+    END IF;
+END $$;

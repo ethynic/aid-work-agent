@@ -52,7 +52,7 @@ class ChannelSessionManager:
             # 渠道会话表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS channel_sessions (
-                    session_id TEXT PRIMARY KEY,
+                    session_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT NOT NULL DEFAULT '',
                     channel_type TEXT NOT NULL,
                     channel_user_id TEXT NOT NULL,
@@ -62,9 +62,9 @@ class ChannelSessionManager:
                     username TEXT,
                     title TEXT,
                     context_data TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    last_message_at TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_message_at TIMESTAMP,
                     metadata TEXT
                 )
             """)
@@ -72,7 +72,7 @@ class ChannelSessionManager:
             # 渠道消息表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS channel_messages (
-                    message_id TEXT PRIMARY KEY,
+                    message_id TEXT UNIQUE NOT NULL,
                     session_id TEXT NOT NULL,
                     tenant_id TEXT NOT NULL DEFAULT '',
                     role TEXT NOT NULL,
@@ -80,7 +80,7 @@ class ChannelSessionManager:
                     message_type TEXT DEFAULT 'text',
                     attachments TEXT,
                     metadata TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -181,9 +181,9 @@ class ChannelSessionManager:
                 cursor.execute("""
                     INSERT INTO channel_sessions
                     (session_id, tenant_id, channel_type, channel_user_id, subagent_id,
-                     channel_chat_id, user_id, username, title, context_data, created_at, updated_at,
-                     last_message_at, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     channel_chat_id, user_id, username, title, context_data, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING created_at, updated_at, last_message_at
                 """, (
                     session_id,
                     tenant_id,
@@ -195,11 +195,9 @@ class ChannelSessionManager:
                     user_info.get("name") if user_info else None,
                     title,
                     "{}",  # context_data
-                    now,
-                    now,
-                    now,
                     json.dumps(metadata, ensure_ascii=False) if metadata else None,
                 ))
+                ts_row = cursor.fetchone()
                 conn.commit()
 
                 result = {
@@ -214,9 +212,9 @@ class ChannelSessionManager:
                     "title": title,
                     "context_data": {},
                     "metadata": metadata,
-                    "created_at": now,
-                    "updated_at": now,
-                    "last_message_at": now,
+                    "created_at": ts_row["created_at"],
+                    "updated_at": ts_row["updated_at"],
+                    "last_message_at": ts_row["last_message_at"],
                 }
                 set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
                 return result
@@ -357,8 +355,8 @@ class ChannelSessionManager:
             cursor.execute("""
                 INSERT INTO channel_messages
                 (message_id, session_id, tenant_id, role, content, message_type,
-                 attachments, metadata, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 attachments, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 message_id,
                 session_id,
@@ -368,7 +366,6 @@ class ChannelSessionManager:
                 message_type,
                 json.dumps(attachments, ensure_ascii=False) if attachments else None,
                 json.dumps(metadata, ensure_ascii=False) if metadata else None,
-                now,
             ))
 
             # 更新会话最后消息时间

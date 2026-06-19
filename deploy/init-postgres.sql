@@ -120,7 +120,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_tenant_user ON chat_sessions(tenant
 
 -- 渠道会话表（企业微信/钉钉/飞书等第三方渠道的会话和消息）
 CREATE TABLE IF NOT EXISTS channel_sessions (
-    session_id TEXT PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    session_id TEXT UNIQUE NOT NULL,
     tenant_id TEXT NOT NULL DEFAULT '',
     channel_type TEXT NOT NULL,
     channel_user_id TEXT NOT NULL,
@@ -130,14 +131,15 @@ CREATE TABLE IF NOT EXISTS channel_sessions (
     username TEXT,
     title TEXT,
     context_data TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_message_at TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_message_at TIMESTAMP,
     metadata TEXT
 );
 
 CREATE TABLE IF NOT EXISTS channel_messages (
-    message_id TEXT PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    message_id TEXT UNIQUE NOT NULL,
     session_id TEXT NOT NULL,
     tenant_id TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL,
@@ -145,7 +147,7 @@ CREATE TABLE IF NOT EXISTS channel_messages (
     message_type TEXT DEFAULT 'text',
     attachments TEXT,
     metadata TEXT,
-    created_at TEXT NOT NULL
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
