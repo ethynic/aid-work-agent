@@ -189,6 +189,9 @@ def generate_quote(params: dict) -> dict:
         "trip_days": trip_days,
         "total_people": total_people,
         "teacher_count": teacher_count,
+        "couples": couples,
+        "season_type": season_type,
+        "hotel_stays": hotel_stays or [],
         "items": items,
         "cost_per_person": cost_per_person,
         "teacher_total": teacher_total,
@@ -229,6 +232,10 @@ def generate_quote(params: dict) -> dict:
         "人均报价": quote_per_person,
         "总价": quote_total,
         "file_path": os.path.abspath(file_path),
+        # internal_data 供 update_hotel.py 使用：包含 items 原始结构、hotel_stays、计费参数。
+        # file_path 不放入此处，是顶层独立字段。
+        # LLM 不得修改或解读 internal_data，调用 update_hotel 时原样回传。
+        "internal_data": internal_data,
     }
 
 

@@ -77,11 +77,18 @@ def calculate_hotel_cost(items: list, tenant_id: str, hotel_id: Optional[int],
 
 def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
                           total_people: int, teacher_count: int,
-                          couples: int) -> Tuple[list, float]:
-    """多城市分住不同酒店，每个城市一行 item"""
+                          couples: int,
+                          name_overrides: Optional[dict] = None) -> Tuple[list, float]:
+    """多城市分住不同酒店，每个城市一行 item
+
+    Args:
+        name_overrides: {city: hotel_name} 可选，客户在换酒店场景下指定酒店名时使用，
+                        优先级高于从 retriever 解析出的酒店名
+    """
     from hotel_retriever import HotelRetriever
     retriever = HotelRetriever()
     single_supplement = 0
+    name_overrides = name_overrides or {}
 
     for stay in hotel_stays:
         city = stay.get("city", "")
@@ -121,15 +128,18 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
             })
             continue
 
-        attraction_info = retriever.get_hotel_info(doc_id)
-        hotel_name = f"{city}酒店"
-        if attraction_info:
-            for line in attraction_info.split('\n'):
-                if '酒店名称' in line or '名称' in line:
-                    parts = line.split('：', 1)
-                    if len(parts) > 1:
-                        hotel_name = parts[-1].strip()
-                    break
+        # 酒店名优先级：客户指定 (name_overrides) > retriever 解析 > 默认 "{city}酒店"
+        hotel_name = name_overrides.get(city)
+        if not hotel_name:
+            attraction_info = retriever.get_hotel_info(doc_id)
+            hotel_name = f"{city}酒店"
+            if attraction_info:
+                for line in attraction_info.split('\n'):
+                    if '酒店名称' in line or '名称' in line:
+                        parts = line.split('：', 1)
+                        if len(parts) > 1:
+                            hotel_name = parts[-1].strip()
+                        break
 
         # 酒店按"间"计费：间数 = ceil(总人数/2)，行总价 = 房价 × 间数 × 夜数
         # subtotal（人均）= 行总价 ÷ 总人数

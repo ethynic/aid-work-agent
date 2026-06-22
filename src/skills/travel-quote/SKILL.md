@@ -111,10 +111,55 @@ itinerary_text（行程文本）
     "合计_随队老师": 560.00,
     "人均报价": 2223.33,
     "总价": 66700.00,
-    "file_path": "/tmp/quote_xxx.xlsx"
+    "file_path": "/tmp/quote_xxx.xlsx",
+    "internal_data": {
+      "region_name": "贵州",
+      "couples": 0,
+      "season_type": "peak",
+      "hotel_stays": [
+        {"city": "贵阳", "area": "南明区", "nights": 2, "hotel_doc_id": 101},
+        {"city": "平塘", "area": "", "nights": 1, "hotel_doc_id": 205}
+      ],
+      "items": [
+        {
+          "category": "用车",
+          "name": "大巴(45座)",
+          "unit_price": 1800,
+          "quantity": 1,
+          "unit": "辆",
+          "frequency": 6,
+          "freq_unit": "天",
+          "subtotal": 360.0,
+          "teacher_subtotal": 0,
+          "remark": "含司机餐补"
+        }
+      ],
+      "cost_per_person": 1861.53,
+      "teacher_total": 560.0,
+      "single_supplement": 0,
+      "quote_per_person": 2223.33,
+      "quote_total": 66700.0
+    }
   }
 }
 ```
+
+### `internal_data` 字段说明
+
+**⚠️ LLM 不得修改或解读 `internal_data` 的任何内容**，仅在客户要换酒店时**原样回传**给 `update_hotel.py` 使用。
+
+`internal_data` 包含的内容：
+
+| 字段 | 用途 |
+|------|------|
+| `items` | 原始计费结构（英文 key），`update_hotel.py` 直接复用 |
+| `hotel_stays` | 酒店住宿清单（city / area / nights / hotel_doc_id），按城市定位要换的酒店 |
+| `couples` | 夫妻对数，影响单房差计算 |
+| `season_type` | 季节类型，保留供参考 |
+| `region_name` | 区域名称，保留供参考 |
+| 其他计费字段 | cost_per_person / quote_per_person / quote_total 等，仅作历史记录 |
+
+`file_path` 是顶层独立字段，**不在** `internal_data` 内。
 
 ### 字段含义
 
@@ -131,11 +176,85 @@ itinerary_text（行程文本）
 3. 结果中的 `file_path` 是生成的 Excel 文件路径，**必须按系统提示词的「文件交付规则」用 cp 注册下载**，否则用户看不到文件
 4. 告知客户可下载 Excel 查看完整明细
 
+## 酒店局部更新（换酒店）
+
+当客户对已生成的报价提出换酒店需求时，**不要重跑 `generate.py`**（会导致其他类别也重新匹配、结果不可控），而是调用 `update_hotel.py` 只重算住宿行。
+
+### 调用方式
+
+```python
+skill_execute(
+  skill="travel-quote",
+  command="python scripts/update_hotel.py",
+  content='<JSON 参数>'
+)
+```
+
+### 输入参数（JSON）
+
+```json
+{
+  "tenant_id": "租户ID",
+  "internal_data": {
+    // 上次 generate.py 返回的 internal_data 字段，原样回传，不要修改
+  },
+  "hotel_overrides": [
+    {
+      "city": "贵阳",
+      "hotel_name": "贵阳凯宾斯基酒店"
+    }
+  ],
+  "course_name": "超级贵州研学",
+  "company_name": "贵州天悦旅行社有限公司",
+  "start_date": "2026-07-01",
+  "total_people": 30,
+  "teacher_count": 3,
+  "trip_days": 6,
+  "template_path": null
+}
+```
+
+### 参数说明
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `tenant_id` | string | 是 | 租户ID |
+| `internal_data` | object | 是 | **上次 generate.py 返回的 `internal_data`，原样回传，不得修改** |
+| `hotel_overrides` | array | 是 | 客户要换的酒店列表，按 city 定位 |
+| `course_name` / `company_name` / `start_date` / `total_people` / `teacher_count` / `trip_days` | 各类型 | 否 | 表头信息，不传则沿用 internal_data 中的值 |
+| `template_path` | string | 否 | 报价单模板路径（null 用默认） |
+
+### `hotel_overrides` 元素说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `city` | string | 是 | 要换酒店的城市名（必须能在 `internal_data.hotel_stays` 中找到） |
+| `hotel_name` | string | 是 | 客户选定的酒店**完整名称**（从 `knowledge_base_search` 返回的"酒店名称：XXX"字段取得）。脚本内部按名称反查 doc_id |
+
+**`hotel_name` 取值规范**：
+
+- 必须是 `knowledge_base_search` 返回结果中"酒店名称："字段后的完整名称，**不要带"酒店"前后缀也不要省略**。例如返回 `"酒店名称：荔波四季花园酒店"` 时，传 `"荔波四季花园酒店"`
+- 不要传 `doc_id`——agent 拿不到 doc_id，也不需要传
+- 酒店名歧义（同名多个）或查不到时，脚本会报错，让 agent 用更精确的酒店名重试
+
+### 行为说明
+
+- **只重算住宿行**：其他类别（用车、景点、餐饮、导游、其他费用）原样保留
+- **保持原顺序**：住宿行原位置替换，不挪到末尾
+- **按 city 定位**：客户一次只换某几个城市，未列出的 city 沿用旧酒店
+- **生成新报价单**：返回新的 `file_path`，旧报价单保留便于对比
+- **输入校验严格**：city 未匹配 / 新酒店无价格 / 住宿行数量不一致时立即报错，避免流出错误报价
+
+### 输出格式
+
+与 `generate.py` 完全一致（同 schema），包含新的 `rows`、合计、`file_path`、新的 `internal_data`。
+
 ## 注意事项
 
 - **只需传入行程文本**，技能内部自动完成解析、检索、计算全流程
 - **行程文本应该是客户已确认的完整方案**，包含景点、天数、人数等关键信息
 - **template_path 为 null 时使用系统默认模板**
+- **换酒店时不要重跑 generate.py**，用 `update_hotel.py` 局部更新
 
 ## ⚠️ 对客户的回复口径（必须严格遵守）
 

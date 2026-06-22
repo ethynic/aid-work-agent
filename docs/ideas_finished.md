@@ -32,6 +32,7 @@
 | 15 | 客户跟进智能体 | 客户跟进任务管理、提醒、执行 | [设计](subagent/customer-followup/customer_followup_design.md) | — |
 | 16 | 订单处理智能体 | 订单自动化处理流程 | [设计](subagent/order-processing/design.md) | [计划](subagent/order-processing/dev_plan.md) |
 | 18 | 内容生成通用设计 | 通用内容生成子智能体框架 | [设计](subagent/content_generate_universal_design.md) | — |
+| 19 | 旅游报价酒店局部替换 | 客户换酒店时只重算住宿费用，其他 items 不变；按城市定位、生成新报价单。update_hotel.py 按酒店名匹配（不依赖 LLM 传 doc_id）、generate.py 输出加 internal_data、hotel.py 支持 name_overrides、14 个单元测试全通过、真实环境端到端实测通过。2026-06-22 | [设计](system/design-travel-quote-hotel-swap.md) | [计划](../plans/plan-travel-quote-hotel-swap.md) |
 
 ## 工具
 
