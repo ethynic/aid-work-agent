@@ -5,7 +5,7 @@
 > 登记：[docs/ideas.md](../docs/ideas.md) 渠道集成分区
 > 创建日期：2026-06-16
 > 更新日期：2026-06-22
-> 状态：🔧 部分完成（服务端渠道完整、74 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册+9 个 PowerShell 脚本、准入验证探测工具、WiX v5 MSI 骨架已交付。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、WiX 实编译+签名、14 天验收）
+> 状态：🔧 部分完成（服务端渠道完整、74 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册+9 个 PowerShell 脚本、准入验证探测工具、WiX v5 MSI 骨架已交付；P1.1 管理前端已交付——`frontend/src/components/saas/WecomPersonalRpaManager.vue` 三 Tab 接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、WiX 实编译+签名、14 天验收）
 
 ---
 
@@ -101,12 +101,12 @@
 
 | # | 任务 | 状态 | 产出 |
 |---|------|------|------|
-| 36 | 管理端客户端列表：在线、版本、账号、最后心跳、状态 | 🔧 | wecom_personal_rpa_admin 路由 + db.list_clients 已落，前端管理页待补 |
-| 37 | 账号暂停/恢复：租户级、账号级、会话级 | 🔧 | /pause /resume 路由 + db.set_account_status/set_binding_status 已落 |
-| 38 | 会话绑定：搜索键、展示名、stable_id、人工确认 | 🔧 | db.get_or_create_binding/find_binding_by_search_key + router.check_conversation_authorization 已落 |
-| 39 | 绑定失效处理：重名、群名变化、搜索歧义进入 `needs_review` | 🔧 | check_conversation_authorization 已处理 pending/ambiguous → needs_review |
-| 40 | 审计日志：入站消息、agent 回复、actions、执行结果、暂停恢复 | 🔧 | db.write_audit/list_audit + 路由各分支审计写入已落，查询前端待补 |
-| 41 | 员工授权和撤销：授权记录、撤销后立即停用、清理本地敏感缓存 | 🔧 | 撤销即 set_binding_status=invalid/paused 已支持，清理本地敏感缓存待客户端协同 |
+| 36 | 管理端客户端列表：在线、版本、账号、最后心跳、状态 | ✅ | wecom_personal_rpa_admin 路由 + db.list_clients 已落；前端 `WecomPersonalRpaManager.vue` 客户端 Tab 已交付（编译通过，未真实联调） |
+| 37 | 账号暂停/恢复：租户级、账号级、会话级 | ✅ | /pause /resume 路由 + db.set_account_status/set_binding_status 已落；前端账号/会话/租户三级暂停恢复按钮已接入 |
+| 38 | 会话绑定：搜索键、展示名、stable_id、人工确认 | ✅ | db.get_or_create_binding/find_binding_by_search_key + router.check_conversation_authorization 已落；前端绑定 Tab 已交付 |
+| 39 | 绑定失效处理：重名、群名变化、搜索歧义进入 `needs_review` | ✅ | check_conversation_authorization 已处理 pending/ambiguous → needs_review；前端复核（confirm）已接入 |
+| 40 | 审计日志：入站消息、agent 回复、actions、执行结果、暂停恢复 | ✅ | db.write_audit/list_audit + 路由各分支审计写入已落；前端审计 Tab 已交付（类别/多维过滤 + payload 详情） |
+| 41 | 员工授权和撤销：授权记录、撤销后立即停用、清理本地敏感缓存 | 🔧 | 撤销即 set_binding_status=invalid/paused 已支持（前端可暂停/置失效），清理本地敏感缓存待客户端协同 |
 
 ---
 

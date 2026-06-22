@@ -192,6 +192,7 @@ const router = createRouter({
         { path: 'users', name: 'tenant-users', component: () => import('./components/saas/TenantUserManager.vue') },
         { path: 'knowledge', name: 'tenant-knowledge', component: () => import('./components/KnowledgeBase.vue') },
         { path: 'channels', name: 'tenant-channels', component: () => import('./components/saas/ChannelConfig.vue') },
+        { path: 'wecom-personal-rpa', name: 'tenant-wecom-personal-rpa', component: () => import('./components/saas/WecomPersonalRpaManager.vue') },
         { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },

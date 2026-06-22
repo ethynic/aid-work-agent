@@ -674,6 +674,7 @@ const adminSubMenuItems = computed(() => {
   return [
     { path: `${base}/users`, label: '用户管理', icon: '👥' },
     { path: `${base}/channels`, label: '渠道配置', icon: '📡' },
+    { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: '🤖' },
     { path: `${base}/knowledge`, label: '企业知识库', icon: '📚' },
     { path: `${base}/settings`, label: '企业设置', icon: '⚙️' },
     { path: `${base}/token-usage`, label: 'Token用量', icon: '📊' },

@@ -147,3 +147,69 @@ export function getStatusLabel<T extends string | number>(
 ): string {
   return statusMap[status]?.label ?? '未知';
 }
+
+// ============================================================================
+// 企业微信个人账号 RPA 状态枚举
+//
+// 注意：后端这些状态值目前是 src/channels/wecom_personal_rpa/db.py 中的字符串字面量，
+// 尚未 formalize 进 src/saas/models/enums.py。此处为前端展示映射，后端 db.py 为唯一真源。
+// ============================================================================
+
+/** RPA 客户端状态（wecom_rpa_clients.status） */
+export enum WecomRpaClientStatus {
+  ACTIVE = 'active',       // 正常
+  DISABLED = 'disabled',   // 已停用
+}
+
+export const WecomRpaClientStatusMap = {
+  [WecomRpaClientStatus.ACTIVE]: { label: '正常', color: 'green' },
+  [WecomRpaClientStatus.DISABLED]: { label: '已停用', color: 'gray' },
+} as const;
+
+/** RPA 账号状态（wecom_rpa_accounts.status） */
+export enum WecomRpaAccountStatus {
+  ONLINE = 'online',         // 在线
+  OFFLINE = 'offline',       // 离线
+  NEED_LOGIN = 'need_login', // 待登录
+  PAUSED = 'paused',         // 已暂停
+}
+
+export const WecomRpaAccountStatusMap = {
+  [WecomRpaAccountStatus.ONLINE]: { label: '在线', color: 'green' },
+  [WecomRpaAccountStatus.OFFLINE]: { label: '离线', color: 'gray' },
+  [WecomRpaAccountStatus.NEED_LOGIN]: { label: '待登录', color: 'orange' },
+  [WecomRpaAccountStatus.PAUSED]: { label: '已暂停', color: 'yellow' },
+} as const;
+
+/** RPA 会话绑定状态（wecom_rpa_bindings.status） */
+export enum WecomRpaBindingStatus {
+  PENDING = 'pending',           // 待确认
+  ACTIVE = 'active',             // 正常
+  PAUSED = 'paused',             // 已暂停
+  INVALID = 'invalid',           // 已失效
+  NEEDS_REVIEW = 'needs_review', // 待复核
+}
+
+export const WecomRpaBindingStatusMap = {
+  [WecomRpaBindingStatus.PENDING]: { label: '待确认', color: 'orange' },
+  [WecomRpaBindingStatus.ACTIVE]: { label: '正常', color: 'green' },
+  [WecomRpaBindingStatus.PAUSED]: { label: '已暂停', color: 'yellow' },
+  [WecomRpaBindingStatus.INVALID]: { label: '已失效', color: 'gray' },
+  [WecomRpaBindingStatus.NEEDS_REVIEW]: { label: '待复核', color: 'red' },
+} as const;
+
+/**
+ * BaseBadge intent 与 statusMap color 的映射。
+ * BaseBadge intent: primary | success | warning | danger | info | neutral
+ */
+export function colorToBadgeIntent(color: string): 'primary' | 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
+  switch (color) {
+    case 'green': return 'success'
+    case 'red': return 'danger'
+    case 'orange':
+    case 'yellow': return 'warning'
+    case 'blue': return 'info'
+    case 'gray': return 'neutral'
+    default: return 'neutral'
+  }
+}
