@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WeComRpa.wxs — 企业微信个人账号 RPA 客户端 MSI 安装包（WiX v4/v5 架构）
+
+  架构说明
+  ========
+  - 本文件使用 WiX v4/v5 新架构（命名空间 http://wixtoolset.org/schemas/v4/wxs，
+    根 <Wix> + <Package>），不再使用 WiX v3 的 <Product> 顶层旧 schema。
+  - 编译入口：`wix build installer\wix\WeComRpa.wxs -o publish\WeComRpa-<ver>.msi`
+    或 `msbuild installer\wix\WeComRpa.wixproj`（见同目录 .wixproj）。
+  - 前置条件：必须先执行 scripts\publish.ps1 生成 publish\app\ 与 publish\supervisor\，
+    本文件用 <Files> 通配（Harvest wildcard）整体收入，无需 heat 预生成片段。
+
+  安装行为
+  ========
+  - 安装目录默认 ProgramFiles64Folder\WeComRpa\，用户可在 UI 中修改。
+  - 安装内容：publish\app\** -> INSTALLDIR\app\；publish\supervisor\** -> INSTALLDIR\supervisor\。
+  - Supervisor 注册为 Windows 服务 WeComRpaSupervisor（start=auto），卸载时停止并删除。
+  - Client.App 在「开始菜单」放快捷方式；登录自启通过 HKCU Run 注册表（可注释关闭，改由 Supervisor 拉起）。
+  - 支持 MajorUpgrade：同 UpgradeCode 的低版本会被替换，禁止降级。
+
+  升级与版本
+  ==========
+  - UpgradeCode 一经发布不可更改（否则被识别为不同产品，升级链断裂）。
+  - Version 由 wix build 时通过 -d WixMsiVersion=<x.y.z> 覆盖，默认 1.0.0。
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="企业微信个人账号 RPA 客户端"
+    Manufacturer="WeComRpa Team"
+    Language="2052"
+    Version="$(var.WixMsiVersion)"
+    UpgradeCode="7B2F3A4C-9D81-4E6B-B5C3-1A0F2E3D4C5B">
+
+    <!-- UpgradeCode: 7B2F3A4C-9D81-4E6B-B5C3-1A0F2E3D4C5B
+         一经发布勿改！否则 MajorUpgrade 视为不同产品，升级链断裂。 -->
+
+    <!-- 版本变量：wix build -d WixMsiVersion=1.2.3 可覆盖；默认 1.0.0 -->
+    <?ifndef WixMsiVersion ?>
+    <?define WixMsiVersion = "1.0.0" ?>
+    <?endif ?>
+
+    <!-- ===== 资源路径变量：均可用 wix build -d 覆盖；给默认值保证单独编译可行 ===== -->
+    <!-- Supervisor 主程序全路径（供 ServiceInstall 的 File Source 用） -->
+    <?ifndef SupervisorExePath ?>
+    <?define SupervisorExePath = "..\..\publish\supervisor\Client.Supervisor.exe" ?>
+    <?endif ?>
+
+    <!-- 升级：同 UpgradeCode 高版本替换低版本；禁止降级 -->
+    <MajorUpgrade
+      DowngradeMessage="已安装更高版本的「企业微信个人账号 RPA 客户端」，无法降级安装。请先卸载高版本。" />
+
+    <!-- 媒体/压缩 -->
+    <Media Id="1" Cabinet="WeComRpa.cab" EmbedCab="yes" />
+
+    <!-- 属性：可被命令行覆盖，例如 msiexec /i WeComRpa.msi INSTALLDIR="D:\WeComRpa" -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <!-- 占位：后续可由 signtool / 版本注入脚本使用 -->
+    <Property Id="WECOM_RPA_VERSION" Value="$(var.WixMsiVersion)" />
+
+    <!-- ============ 目录结构 ============ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="WeComRpa">
+        <Directory Id="APPDIR" Name="app" />
+        <Directory Id="SUPDIR" Name="supervisor" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- 开始菜单快捷方式目录 -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuDir" Name="企业微信RPA" />
+    </StandardDirectory>
+
+    <!-- ============ 文件装载（整体收入 publish 产物） ============ -->
+    <!--
+      <Files> 通配在编译期把指定目录树下所有文件收入 MSI。
+      Source 路径相对本 .wxs 文件：..\..\publish\app\** 即 clients\wecom-personal-rpa\publish\app\**
+      前置条件：先跑 scripts\publish.ps1，否则编译报找不到文件。
+
+      注意：主 exe（Client.App.exe / Client.Supervisor.exe）在下方单独声明为
+      带固定 Id 的 <File>（供快捷方式、Run 注册表、ServiceInstall 引用 [#Id]），
+      因此在这里用 <Exclude> 排除，避免重复收入导致 File Id 冲突。
+    -->
+    <DirectoryRef Id="APPDIR">
+      <Component Id="AppFiles" Guid="A1B2C3D4-1111-2222-3333-444455556666">
+        <Files Source="..\..\publish\app\**">
+          <Exclude Source="..\..\publish\app\**\*.pdb" />
+          <Exclude Source="..\..\publish\app\Client.App.exe" />
+        </Files>
+      </Component>
+      <!-- Client.App 主程序（固定 File Id，供快捷方式/自启引用） -->
+      <Component Id="AppExe" Guid="A1B2C3D4-2222-3333-4444-555566667777">
+        <File Id="Client.App.exe"
+              Source="..\..\publish\app\Client.App.exe"
+              KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="SUPDIR">
+      <Component Id="SupervisorFiles" Guid="A1B2C3D4-7777-8888-9999-AAAABBBBCCCC">
+        <Files Source="..\..\publish\supervisor\**">
+          <Exclude Source="..\..\publish\supervisor\**\*.pdb" />
+          <Exclude Source="..\..\publish\supervisor\Client.Supervisor.exe" />
+        </Files>
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============ Supervisor Windows 服务安装 ============ -->
+    <!--
+      等价于 sc.exe create WeComRpaSupervisor binPath= "..." start= auto
+      ServiceInstall 在安装时创建服务；ServiceControl 在卸载/升级时停止并删除。
+      注意：服务的可执行路径必须是绝对路径，用 [#Client.Supervisor.exe] 引用文件全路径。
+    -->
+    <DirectoryRef Id="SUPDIR">
+      <Component Id="SupervisorService" Guid="A1B2C3D4-DDDD-EEEE-FFFF-112233445566">
+        <File Id="Client.Supervisor.exe"
+              Source="$(var.SupervisorExePath)"
+              KeyPath="yes" />
+
+        <ServiceInstall
+          Id="WeComRpaSupervisorSvc"
+          Name="WeComRpaSupervisor"
+          DisplayName="企业微信个人账号 RPA 监督进程"
+          Description="拉起并守护 Client.App，监控健康状态、执行重连与恢复。"
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Interactive="no">
+          <!--
+            默认以 LocalSystem 运行（适合无人值守 RPA 主机）。
+            如需指定服务账户，可通过命令行 msiexec ... SERVICESTARTNAME=... 传入，
+            或在此 <ServiceInstall> 上加 Account="..."。
+          -->
+        </ServiceInstall>
+
+        <ServiceControl
+          Id="WeComRpaSupervisorCtrl"
+          Name="WeComRpaSupervisor"
+          Start="install"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============ Client.App 开始菜单快捷方式 ============ -->
+    <DirectoryRef Id="StartMenuDir">
+      <Component Id="AppShortcut" Guid="A1B2C3D4-1234-5678-9ABC-DEF012345678">
+        <Shortcut
+          Id="WeComRpaAppShortcut"
+          Name="企业微信RPA客户端"
+          Description="启动企业微信个人账号 RPA 客户端（托盘程序）"
+          Target="[#Client.App.exe]"
+          WorkingDirectory="APPDIR" />
+        <!-- 注册表键作为组件 KeyPath（快捷方式本身不能作为 KeyPath） -->
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\WeComRpa\Install"
+          Name="StartMenuShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============ Client.App 登录自启（可选） ============ -->
+    <!--
+      在 HKCU\...\Run 注册 Client.App，登录后自动启动。
+      若改由 Supervisor 拉起 App（Supervisor 为系统服务，无法直接拉起用户态桌面程序时
+      需借助 Session 0 隔离方案），可注释掉此组件。
+      当前默认：注册 HKCU Run，确保用户登录即启动托盘程序。
+    -->
+    <Component Id="AppAutoRun" Guid="A1B2C3D4-ABCD-EF01-2345-678901234567">
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\Microsoft\Windows\CurrentVersion\Run"
+        Name="WeComRpaApp"
+        Type="string"
+        Value="[#Client.App.exe]"
+        KeyPath="yes" />
+    </Component>
+
+    <!-- ============ 图标资源（占位） ============
+      仓库暂无 .ico；如需开始菜单/添加删除程序显示图标，准备 assets\app.ico 后取消注释：
+      <Icon Id="AppIcon.ico" SourceFile="..\..\assets\app.ico" />
+      并在下方 <Shortcut ...> 上加 Icon="AppIcon.ico"。
+    -->
+
+    <!-- ============ 安装 UI ============ -->
+    <!--
+      WixUI_InstallDir 提供目录选择 UI（WixUIExtension 提供）。
+      编译命令需带 -ext WixUIExtension（msbuild 工程已配 ExtensionReference）。
+      首版用 WiX 内置默认位图与无许可协议；后续若需自定义，准备文件后取消注释：
+      <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+      <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+      <WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
+    -->
+    <UIRef Id="WixUI_InstallDir" />
+
+    <!-- ============ 功能树 ============ -->
+    <Feature Id="Complete" Title="企业微信RPA客户端" Level="1"
+             Display="expand" Description="完整安装客户端与监督服务。">
+      <Feature Id="AppFeature" Title="客户端主程序" Level="1"
+               Description="Client.App 托盘程序与配置资产。">
+        <ComponentRef Id="AppFiles" />
+        <ComponentRef Id="AppExe" />
+        <ComponentRef Id="AppShortcut" />
+        <ComponentRef Id="AppAutoRun" />
+      </Feature>
+
+      <Feature Id="SupervisorFeature" Title="监督服务" Level="1"
+               Description="Client.Supervisor 注册为 Windows 服务，开机自启。">
+        <ComponentRef Id="SupervisorFiles" />
+        <ComponentRef Id="SupervisorService" />
+      </Feature>
+    </Feature>
+
+    <!-- ============ 安装/卸载时自定义动作（可选占位） ============ -->
+    <!--
+      后续可在此挂载 CustomAction（如安装后写 Windows 事件日志源、
+      卸载前备份日志等）。首版仅依赖内置 ServiceInstall/ServiceControl。
+    -->
+
+  </Package>
+</Wix>

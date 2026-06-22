@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WeComRpa.wixproj — WiX v5 SDK 风格 MSBuild 工程
+
+  构建方式（二选一）：
+    A) wix CLI（推荐，最简）：
+         wix build installer\wix\WeComRpa.wxs -o publish\WeComRpa-<ver>.msi
+       （build-msi.ps1 即用此路径，无需本 .wixproj）
+    B) msbuild（Visual Studio / CI 场景）：
+         msbuild installer\wix\WeComRpa.wixproj /p:Configuration=Release /p:WixMsiVersion=1.0.0
+       前置：安装 WiX v5 MSBuild SDK（dotnet tool install -g wix，或 VS 扩展市场装 WiX Toolset v5）。
+
+  本工程采用 WiX v5 SDK 风格（Sdk="WixToolset.Sdk/5.0.x"），由 NuGet 还原 WiX 构建任务，
+  不依赖本机 wix.exe。OutputName/OutputPath 与 wix CLI 产物路径对齐。
+-->
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <!-- 输出文件名（不含 .msi） -->
+    <OutputName>WeComRpa-$(WixMsiVersion)</OutputName>
+    <!-- 输出到客户端根的 publish\ 目录，与 wix CLI 路径一致 -->
+    <OutputPath>..\..\publish\</OutputPath>
+    <!-- 目标平台 -->
+    <Platform>x64</Platform>
+    <!-- MSI 版本号：默认 1.0.0，msbuild /p:WixMsiVersion=1.2.3 覆盖 -->
+    <WixMsiVersion Condition="'$(WixMsiVersion)' == ''">1.0.0</WixMsiVersion>
+    <!-- 把 WixMsiVersion 传给 .wxs 预处理（$(var.WixMsiVersion)） -->
+    <DefineConstants>WixMsiVersion=$(WixMsiVersion)</DefineConstants>
+    <!-- 中间产物目录 -->
+    <IntermediateOutputPath>obj\</IntermediateOutputPath>
+    <BaseIntermediateOutputPath>obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 源文件 -->
+    <Compile Include="WeComRpa.wxs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WixUI_InstallDir 依赖 UI 扩展；ServiceInstall 是 WiX 核心内置，不需要 Util 扩展 -->
+    <WixExtension Include="WixToolset.UI.wixext" />
+  </ItemGroup>
+
+</Project>

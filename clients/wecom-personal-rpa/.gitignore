@@ -2,6 +2,10 @@
 bin/
 obj/
 
+# 发布产物（本地 publish.ps1 输出，不入库）
+publish/
+probe-report.yaml
+
 # 用户/IDE 临时文件
 *.user
 *.suo
