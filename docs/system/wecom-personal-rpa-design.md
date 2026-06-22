@@ -730,3 +730,33 @@ CREATE TABLE wecom_rpa_conversation_bindings (
 - C# Client.App 跨工程 using 缺失 + Client.Tests 目标框架偏差，需一次集成修缮。
 - §0 / §5 / §7 全部任务依赖真实 Windows + 企微 + 账号环境，未实现（详见开发计划对应章节的状态说明）。
 
+### 13.5 阶段后续：Client.App 集成修缮 + 操作手册与脚本（2026-06-22）
+
+**Client.App 编译问题已修复**（§13.4 记录的 4 errors / 3 warnings 已在后续提交解决）：
+- `MessageWatcher.cs` 补 `using WeCom.PersonalRpa.Automation.Contracts;`；`SendMessageService.cs` 补 `using WeCom.PersonalRpa.Core.Protocol;` 与 `using System.IO;`；`RpaHost.cs` 补 `using Microsoft.Extensions.DependencyInjection;`（修 `GetService<T>` CS0308）。
+- `App.xaml.cs` 去掉手写 `Main`（CS0017 多入口点）改 `OnStartup` 装配；`TrayApp.cs` 移除不存在的 `TrayLeftMouseDoubleClick` 事件；3 个窗口 `Tag` 加 `new`（CS0108）。
+- 结果：`dotnet build WeComPersonalRpaClient.sln` **0 错误 0 警告**；`dotnet test` **36 passed**。
+
+**操作手册与自动化脚本（`docs/操作手册.md` + `scripts/`）**：
+- 手册 11 节覆盖编译/测试/发布/打包/安装部署/诊断/升级全流程，逐节标注「现在能跑」vs「待 STATUS ③」。
+- 9 个 PowerShell 脚本（UTF-8 BOM、去 emoji、兼容 Windows PowerShell 5.1）：`build / test / publish / run-app / install-service / diagnostics / test-server-callback / run-probe / build-msi`。
+- `test-server-callback.ps1` 的 HMAC 签名与服务端 `auth.compute_signature` **字节对字节一致**（Python/PowerShell 跨语言实测同一 hex 输出），可在无客户端时验证服务端渠道。
+- `publish.ps1` 实测产出 `Client.App.exe`(245MB) + `Client.Supervisor.exe`(69MB) 自包含单文件 + 随包 configs/assets。
+
+### 13.6 准入验证探测工具 + WiX v5 MSI 骨架（2026-06-22）
+
+**准入验证（计划 §0，回填 `wecom_nodes.yaml` 的前置工具已就绪）**：
+- `src/Client.Probe/`（net8.0-windows 诊断控制台，**不入 .sln**，按需运行）：7 步探测（环境基线 / 主窗口定位 / UIA 控件树 / 登录态 / 二维码截图 / 模板匹配 / 焦点夺取），输出 `probe-report.yaml` + 回填建议。复用 `Client.Automation`（`AssemblyInfo.cs` 加 `InternalsVisibleTo("Client.Probe")`，零 P/Invoke 重复）。**绝不 `SendInput`**（仅 `SetForegroundWindow→GetForegroundWindow` 焦点一致性验证），避免误发（设计 §10.3 误发 0 容忍）。
+- `scripts/run-probe.ps1`（构建+运行，参数透传）+ `docs/准入验证手册.md`（6 项验证成功标准 + `probe-report.yaml`→`wecom_nodes.yaml` 字段对照 + Go/No-Go 决策）。
+- 验证：`dotnet build src/Client.Probe` **0 错误**；主解决方案 `dotnet build` **0 错误**（无回归）。**未真实运行**（本会话无企微桌面），节点常量未伪造回填。
+- 已知：`assets/wecom_nodes.yaml`（设计完整模式）与 `src/Client.Automation/assets/wecom_nodes.yaml`（`NodesConfigLoader` 实际加载的简化模式）结构不一致（STATUS 既有占位问题），手册 §9 明确回填目标是后者。
+
+**WiX v5 MSI 骨架（计划 §5，方式 B 打包）**：
+- `installer/wix/WeComRpa.wxs`（WiX v4/v5 架构）+ `WeComRpa.wixproj`（`WixToolset.Sdk/5.0.2`）：`ServiceInstall`/`ServiceControl`（服务名 `WeComRpaSupervisor`，与 `install-service.ps1` 一致）+ `MajorUpgrade` + `<Files>` 收 `publish\`。
+- `scripts/build-msi.ps1`（`wix build` + 可选 `-SignPfx`/`-SignCertThumbprint` 触发 signtool）+ 重写 `installer/wix/README.md`（依赖/构建/签名/安装卸载升级/与方式 A 取舍）。
+- 验证：`.wxs`/`.wixproj` XML 良构（`[xml]` 解析通过）；脚本 PS5.1 解析通过。**MSI 未实编译**（本会话无 WiX 工具链），需在装了 WiX v5（`dotnet tool install -g wix`）+ 签名证书的机器跑 `build-msi.ps1`。
+
+### 13.7 最新提交链（origin/master）
+
+`d7b8d72` 后端渠道（休眠，74 测试）→ `da4eff7` 客户端骨架 + 文档（36 测试，STATUS 三态）→ `7288921` 操作手册 + 7 脚本 → `44cbf96` 准入探测工具 + WiX v5 骨架。
+

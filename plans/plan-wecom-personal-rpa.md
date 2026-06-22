@@ -5,7 +5,7 @@
 > 登记：[docs/ideas.md](../docs/ideas.md) 渠道集成分区
 > 创建日期：2026-06-16
 > 更新日期：2026-06-22
-> 状态：🔧 部分完成（服务端契约+实现+Wire 路由+集成测试通过；C# 客户端 5 工程脚手架完成，Client.App 待一次集成修缮；节点常量/WS 多 worker/真实环境联调待验）
+> 状态：🔧 部分完成（服务端渠道完整、74 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册+9 个 PowerShell 脚本、准入验证探测工具、WiX v5 MSI 骨架已交付。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、WiX 实编译+签名、14 天验收）
 
 ---
 
@@ -29,6 +29,8 @@
 | 6 | 验证交互式会话保活：远控断开、重启、锁屏检测 | ⬜ | 桌面保活报告 |
 
 > **§0 状态说明**：本节 6 项任务全部依赖真实 Windows + 企业微信桌面环境，本会话（无 Windows 企微环境、远程 DB 不可达）未实现，保持 ⬜。客户端自动化层的接口骨架（§2）已落，但节点常量 `wecom_nodes.yaml` 的真实控件/模板路径必须由 §0 准入探测产出后才能填充，属强阻塞。
+>
+> **准入验证工具已就绪**：`clients/wecom-personal-rpa/src/Client.Probe/`（net8.0-windows 诊断台，7 步：环境/主窗口/UIA 树/登录态/二维码截图/模板匹配/焦点夺取，输出 `probe-report.yaml` + 回填建议）+ `scripts/run-probe.ps1` + `docs/准入验证手册.md`（6 项成功标准 + probe-report→wecom_nodes.yaml 字段对照 + Go/No-Go）。在真实 Windows+企微环境运行即可产出回填所需数据。
 
 准入失败规则：
 
@@ -43,11 +45,11 @@
 | # | 任务 | 状态 | 产出 |
 |---|------|------|------|
 | 7 | 新建 `clients/wecom-personal-rpa/WeComPersonalRpaClient.sln` | ✅ | .NET 8 解决方案（5 工程 GUID 对齐） |
-| 8 | `Client.App`：WPF/托盘 UI，展示二维码、状态、暂停恢复、错误 | 🔧 | 工程已建，4 处跨工程 using 缺失（IWeComAutomation/RpaAction/ActionResultPayload），编译失败待修缮 |
+| 8 | `Client.App`：WPF/托盘 UI，展示二维码、状态、暂停恢复、错误 | ✅ | WPF 托盘+二维码/状态/错误窗口+RpaHost 编排，编译 0 错误（跨工程 using 已修）；当前注入 Stubs 桩，真实自动化待 §2 |
 | 9 | `Client.Supervisor`：Windows Service/计划任务监督 App 存活 | ✅ | SupervisorService + OfflineReporter 编译通过 |
 | 10 | `Client.Core`：状态机、配置、限速、协议、队列 | ✅ | 核心库编译通过 |
 | 11 | `Client.Automation`：FlaUI、Win32、OpenCvSharp 封装 | ✅ | 自动化库编译通过 |
-| 12 | 本地 SQLite schema：入站事件、出站 actions、绑定缓存、健康事件、审计缓存 | 🔧 | 队列/状态机 DTO 已落，schema 待真实环境联调 |
+| 12 | 本地 SQLite schema：入站事件、出站 actions、绑定缓存、健康事件、审计缓存 | ✅ | SqliteSendQueue + 幂等 dedup_key + 单元测试通过 |
 | 13 | Serilog + Windows Event Log + 本地日志轮转 | 🔧 | Serilog 接入，Event Log/轮转待真实环境 |
 | 14 | 配置文件加密：client_secret、agent URL、账号配置 | 🔧 | 配置加载框架在，加密待真实环境验证 |
 
@@ -61,7 +63,7 @@
 | 16 | 登录态检测和二维码截图/展示/过期处理 | 🔧 | 登录窗口骨架在，二维码识别待 OpenCV 节点常量 |
 | 17 | 三层定位：FlaUI → Win32 坐标 → OpenCV 模板 | 🔧 | 自动化层封装在，节点常量 wecom_nodes.yaml 待准入验证 |
 | 18 | 会话切换：搜索、候选结果识别、歧义暂停 | 🔧 | 骨架在，真实会话树探测待 §0 |
-| 19 | 消息监听：通知触发 + 会话列表轮询兜底 + 快照去重 | 🔧 | MessageWatcher 骨架在（编译待修缮） |
+| 19 | 消息监听：通知触发 + 会话列表轮询兜底 + 快照去重 | 🔧 | MessageWatcher 编译通过；文本/附件抓取与真实监听待 §0 节点常量回填 |
 | 20 | 文本发送：粘贴、发送、发送后确认、失败暂停 | 🔧 | IActionExecutor 接口在，执行链待真实环境 |
 | 21 | 图片发送：下载、校验、发送、清理、回执 | 🔧 | 接口在，待真实环境 |
 | 22 | 文件发送：下载、校验、发送、清理、回执 | 🔧 | 接口在，待真实环境 |
@@ -112,14 +114,14 @@
 
 | # | 任务 | 状态 | 产出 |
 |---|------|------|------|
-| 42 | WiX/MSIX 安装包和代码签名 | ⬜ | 安装包（installer/wix 目录占位，未实现打包） |
+| 42 | WiX/MSIX 安装包和代码签名 | 🔧 | installer/wix/WeComRpa.wxs + .wixproj（WiX v5，ServiceInstall/ServiceControl + MajorUpgrade）+ scripts/build-msi.ps1 已落；实编译需装 WiX v5 + 签名证书 |
 | 43 | 标准 Windows 镜像：企微版本、DPI、分辨率、窗口基线、远控方式 | ⬜ | 镜像文档 |
-| 44 | 开机自启：计划任务拉起交互式 App，Supervisor 监督 | ⬜ | 自启方案（ScheduledTaskHelper 仅 schtasks 占位 + TODO） |
+| 44 | 开机自启：计划任务拉起交互式 App，Supervisor 监督 | 🔧 | AutostartRegistrar（注册表 Run）+ ScheduledTaskHelper（schtasks 占位）+ install-service.ps1（Supervisor 服务自启）已落，真机验证待 |
 | 45 | 灰度升级：版本检查、下载、安装、回滚 | ⬜ | 升级器 |
-| 46 | 远程诊断包：日志、健康事件、模板版本、配置摘要脱敏导出 | ⬜ | 诊断工具 |
+| 46 | 远程诊断包：日志、健康事件、模板版本、配置摘要脱敏导出 | ✅ | scripts/diagnostics.ps1 导出脱敏诊断包（日志+配置摘要剔除 secret/路径+服务/进程状态） |
 | 47 | 模板和节点配置版本绑定：企微版本 → `wecom_nodes.yaml` | ⬜ | 配置管理 |
 
-> **§5 状态说明**：本节 6 项全部依赖真实 Windows 部署/签名/灰度环境，本会话未实现，保持 ⬜。仅 `installer/wix` 目录与 `ScheduledTaskHelper` 占位骨架存在。
+> **§5 状态说明**：工程化交付已大幅推进——WiX v5 MSI 骨架（#42 🔧）、开机自启三套骨架（#44 🔧）、远程诊断包 `diagnostics.ps1`（#46 ✅）、操作手册 `docs/操作手册.md` + 9 个 PowerShell 脚本（编译/测试/发布/装服务/诊断/服务端冒烟/准入探测/打 MSI）。剩余 ⬜（#43 标准镜像、#45 灰度升级、#47 节点版本绑定）依赖真实部署/灰度/签名环境。
 
 ---
 
