@@ -1241,54 +1241,6 @@ class Agent:
         logger.debug(f"_build_messages result: session_id={session_id}, count={len(messages)}, msgs={result_roles}")
 
         return messages
-    
-    def _validate_tool_call_pairing(self, messages: List[Dict[str, Any]]) -> None:
-        """确保每条 assistant(tool_calls) 的 tool_call_id 都有对应 role=tool 消息。
-
-        DeepSeek 等 API 要求：assistant 消息若带 tool_calls，其后必须紧跟
-        与每个 tool_call_id 一一对应的 tool 消息。若有缺失，注入合成错误工具消息。
-        """
-        i = 0
-        while i < len(messages):
-            msg = messages[i]
-            if msg.get("role") != "assistant" or not msg.get("tool_calls"):
-                i += 1
-                continue
-
-            # 收集该 assistant 消息的所有 tool_call_id
-            tc_ids = [tc.get("id", "") for tc in msg["tool_calls"] if tc.get("id")]
-            if not tc_ids:
-                i += 1
-                continue
-
-            # 向后查找紧跟的 tool 消息，匹配属于该 assistant 的 tool_call_id
-            found_ids = set()
-            j = i + 1
-            while j < len(messages) and messages[j].get("role") == "tool":
-                tid = messages[j].get("tool_call_id", "")
-                if tid in tc_ids:
-                    found_ids.add(tid)
-                j += 1
-
-            # 注入缺失的合成错误消息
-            missing_ids = set(tc_ids) - found_ids
-            if missing_ids:
-                logger.warning(
-                    f"后端日志：_validate_tool_call_pairing 发现 {len(missing_ids)} 个缺失 tool_call_id，"
-                    f"注入合成错误消息: {missing_ids}"
-                )
-                for missing_id in missing_ids:
-                    error_msg = {"success": False, "error": "工具调用 ID 无效或已被清理"}
-                    messages.insert(j, {
-                        "role": "tool",
-                        "tool_call_id": missing_id,
-                        "content": error_msg,
-                    })
-                    j += 1
-                # 跳过刚注入的消息，继续检查下一个 assistant
-                i = j
-            else:
-                i = j if j > i + 1 else i + 1
 
     def _repair_message_sequence(self, messages: List[Dict[str, Any]]) -> None:
         """
@@ -1911,9 +1863,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             import time
             llm_call_start = time.time()
             logger.info(f"[AGENT] LLM call starting, session_id={session_id}, iteration={iteration}, is_master={self.is_master}")
-            
-            # 最终校验：确保每条 assistant(tool_calls) 的 tool_call_id 都有对应 tool 消息
-            self._validate_tool_call_pairing(messages)
 
             try:
                 response = await self.llm.chat_with_tools(
