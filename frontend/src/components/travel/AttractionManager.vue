@@ -133,9 +133,9 @@
       </template>
     </BaseModal>
 
-    <!-- UUID 导入结果弹窗 -->
+    <!-- 景点知识库导入结果弹窗 -->
     <BaseModal v-model="showImportResult" title="导入景点知识库结果" size="md" mode="view">
-      <p>新增 <strong>{{ importResult?.imported || 0 }}</strong> 条，更新 <strong>{{ importResult?.updated || 0 }}</strong> 条，跨租户复制 <strong>{{ importResult?.cross_tenant || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
+      <p>共解析 <strong>{{ importResult?.total_attractions || 0 }}</strong> 个景点，新增 <strong>{{ importResult?.imported || 0 }}</strong> 条，跳过 <strong>{{ importResult?.skipped || 0 }}</strong> 条</p>
       <div v-if="importResult?.errors?.length" class="mt-3">
         <div class="text-[13px] text-danger-600 mb-1">错误信息：</div>
         <div v-for="err in importResult.errors.slice(0, 10)" :key="err" class="text-danger-600 text-xs">{{ err }}</div>
@@ -153,9 +153,9 @@ import { ref, computed, onMounted } from 'vue'
 import {
   searchAttractionsKB, listAttractionsKB, getAttractionKB,
   deleteAttractionKB, batchDeleteAttractionsKB, updateAttractionKB,
-  exportAttractions, importAttractions, downloadTemplate
+  exportAttractions, downloadTemplate
 } from '@/api/travelQuote'
-import { useUuidImport } from '@/composables/useImport'
+import { useAttractionKBImport } from '@/composables/useImport'
 import { useTableSelection } from '@/composables/useTableSelection'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -183,7 +183,7 @@ const columns = [
 ]
 
 const fileInput = ref<HTMLInputElement | null>(null)
-const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useUuidImport(importAttractions, loadAll)
+const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useAttractionKBImport(loadAll)
 async function handleDownloadTemplate() {
   await downloadTemplate()
 }

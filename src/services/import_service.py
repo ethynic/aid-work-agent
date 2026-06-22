@@ -216,6 +216,10 @@ def import_table_by_uuid(
         ]
         has_uuid = "uuid" in col_indices
 
+        if not business_cols:
+            result.errors.append("Excel 列头不匹配，未找到可导入的业务字段")
+            return result
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
@@ -239,11 +243,12 @@ def import_table_by_uuid(
                     val = row_data.get(col_name)
                     if val is not None:
                         business_data[col_name] = val
-                business_data.update(cfg.fixed_values)
 
                 if not business_data:
                     result.skipped += 1
                     continue
+
+                business_data.update(cfg.fixed_values)
 
                 savepoint = f"import_row_{row_num}"
                 cursor.execute(f"SAVEPOINT {savepoint}")
