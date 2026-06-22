@@ -1,0 +1,15 @@
+# .NET 构建产物（禁止入库）
+bin/
+obj/
+
+# 用户/IDE 临时文件
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+
+# 测试结果
+[Tt]est[Rr]esult/
+TestResults/

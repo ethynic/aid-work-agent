@@ -1,0 +1,46 @@
+<Window x:Class="WeCom.PersonalRpa.App.Views.ErrorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="客户端错误" Height="400" Width="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#F5F6F7"
+        ResizeMode="CanMinimize">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+            <Ellipse Width="12" Height="12" Fill="#F5393C" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock Text="发生错误" FontSize="18" FontWeight="SemiBold" Foreground="#1F2329" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="1" x:Name="MessageText"
+                   Text="客户端遇到错误。" FontSize="14" Foreground="#1F2329"
+                   TextWrapping="Wrap" Margin="0,0,0,12" />
+
+        <Border Grid.Row="2" Background="White" CornerRadius="8" Padding="12">
+            <TextBox x:Name="DetailText"
+                    IsReadOnly="True"
+                    FontFamily="Consolas, monospace"
+                    FontSize="12"
+                    VerticalScrollBarVisibility="Auto"
+                    TextWrapping="Wrap"
+                    BorderThickness="0"
+                    Background="Transparent" />
+        </Border>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="ExportButton" Content="导出诊断包" Height="34" Padding="16,0"
+                    Margin="0,0,8,0"
+                    Background="#FFFFFF" Foreground="#1F2329" BorderBrush="#DEE0E3"
+                    Click="Export_Click" />
+            <Button Content="关闭" Height="34" Padding="24,0"
+                    Background="#3370FF" Foreground="White" BorderThickness="0"
+                    Click="Close_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

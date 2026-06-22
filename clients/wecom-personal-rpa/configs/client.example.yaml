@@ -1,0 +1,62 @@
+# 企业微信个人账号 RPA 客户端 —— 示例配置
+# ====================================================================================
+# 复制为 client.yaml 后填入真实值。client_secret 属敏感信息，生产环境由服务端
+# 注册时下发并加密存储，本文件不含任何密钥明文。
+# 契约：docs/system/wecom-personal-rpa-protocol.md §A.1（鉴权头）/ §A.7（rate_limits）。
+# ====================================================================================
+
+# 服务端（aid-work-agent）基址
+agent_base_url: "https://agent.example.com"
+
+# 客户端身份（由服务端注册分配；占位值，部署前替换）
+client_id: "client_PLACEHOLDER"
+
+# 客户端密钥占位：真实 secret 由服务端注册时下发，禁止在此明文长期存储。
+# 客户端启动时从受保护存储（DPAPI / Windows Credential Manager）读取。
+client_secret_ref: "dpapi:Client.WeComPersonalRpa:client_secret"
+
+# 租户 ID（多租户路由用）
+tenant_id: "tenant_PLACEHOLDER"
+
+# 轮询与心跳间隔
+poll_interval_seconds: 5          # outbox 拉取间隔（离线兜底）
+health_report_interval_seconds: 30
+heartbeat_interval_seconds: 15
+
+# 本地存储路径（SQLite 队列 / 日志 / 临时文件）
+storage_path: "./storage"
+
+# 自动化节点配置（assets/wecom_nodes.yaml 路径，支持热更新）
+nodes_config_path: "./assets/wecom_nodes.yaml"
+
+# 限速策略（与服务端 RpaRateLimits 对齐：schemas.py 默认 per_minute=5 / per_day=100 / consecutive_failure_pause=2）
+rate_limits:
+  per_minute: 5
+  per_day: 100
+  consecutive_failure_pause: 2
+
+# 桌面环境约束（design.md §6.1）
+desktop:
+  required_resolution: [1920, 1080]
+  required_dpi_scale: 1.0
+  allow_lock_screen: false          # 锁屏后禁止执行自动化
+  wecom_window_fixed_size: [960, 700]
+
+# 监督进程（Client.Supervisor）
+supervisor:
+  watchdog_interval_seconds: 10     # App 存活检查间隔
+  restart_backoff_initial_seconds: 2
+  restart_backoff_max_seconds: 120
+  restart_failure_threshold: 5      # 连续拉起失败超阈值上报离线
+
+# 日志（Serilog）
+logging:
+  level: "Information"
+  path: "./logs/client-.log"
+  rolling_interval: "Day"
+  retained_file_count: 14
+  # 日志脱敏：禁止打印 secret / 签名 / 二维码 / 完整文件签名 URL（design.md §9.1）
+  redact_patterns:
+    - "X-Signature"
+    - "client_secret"
+    - "qr_image_ref"

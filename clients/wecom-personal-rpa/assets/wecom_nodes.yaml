@@ -1,0 +1,84 @@
+# 企业微信个人账号 RPA 客户端 —— 自动化节点配置
+# ====================================================================================
+# 契约来源：docs/system/wecom-personal-rpa-design.md §6.2（三层自动化策略）与
+#          docs/system/wecom-personal-rpa-protocol.md §C.4（INodesConfig：加载/热更新本文件）。
+#
+# 本文件定义企微 PC 客户端的窗口、控件、坐标、模板路径等自动化节点。
+# 设计上每个节点可声明 strategy（flaui / coordinate / template_match），并带 fallback 链。
+#
+# ⚠️ 准入验证（design.md §10.1）：以下所有 class_name / title_contains / offset / template 值
+#    均为**占位默认值**，必须在编码前准入验证阶段用真实企微版本回填：
+#      - UIA 可见性：FlaUI 能稳定识别主窗口、输入框、部分会话元素
+#      - 模板匹配：OpenCvSharp 可在固定窗口 region 稳定识别发送/搜索/二维码区域
+#      - 桌面保活：远控断开/计划任务重启后交互式会话仍可恢复
+#    回填前不得进入生产准入，避免定位漂移导致误发消息（design.md §10.3：误发 0 容忍）。
+# ====================================================================================
+
+# 全局窗口基线：分辨率固定 1920x1080，DPI 100%，企微窗口固定尺寸（design.md §6.1）
+global:
+  resolution: [1920, 1080]      # TODO(admission): 准入验证回填实际生效分辨率
+  dpi_scale: 1.0                # 100%
+  wecom_process_name: "WXWork"  # TODO(admission): 用真实进程名验证
+
+# 主窗口定位
+main_window:
+  class_name: "WeWorkWindow"            # TODO(admission): FlaUI 读取真实 class name 回填
+  title_contains: "企业微信"             # TODO(admission): 验证不同企微版本标题文本
+  strategy: flaui
+  fallback:
+    strategy: coordinate
+    # 相对主窗口左上角的偏移；占位值，准入阶段用真实截图回填
+    offset: [0, 0]
+    size: [960, 700]                    # TODO(admission): 固定窗口尺寸回填
+
+# 消息输入框
+message_input:
+  strategy: flaui
+  control_type: EditControl             # TODO(admission): UIA 树确认控件类型
+  fallback:
+    strategy: coordinate
+    offset: [400, 580]                  # TODO(admission): 坐标准入回填
+
+# 发送按钮
+send_button:
+  strategy: template_match
+  template: assets/templates/send_btn.png   # TODO(admission): 截取真实模板放入 templates/
+  threshold: 0.85                       # 模板匹配置信度阈值；准入阶段标定
+  fallback:
+    strategy: coordinate
+    offset: [920, 700]                  # TODO(admission): 坐标准入回填
+
+# 会话搜索框（用于切换目标会话）
+search_box:
+  strategy: flaui
+  control_type: EditControl             # TODO(admission): UIA 树确认
+  fallback:
+    strategy: template_match
+    template: assets/templates/search_box.png  # TODO(admission): 截取真实模板
+    threshold: 0.85
+    fallback:
+      strategy: coordinate
+      offset: [120, 60]                 # TODO(admission): 坐标准入回填
+
+# 登录二维码区域（未登录时截图上传给管理端短期展示）
+qr_region:
+  strategy: coordinate
+  offset: [300, 200]                    # TODO(admission): 二维码区域坐标准入回填
+  size: [220, 220]                      # TODO(admission): 区域尺寸回填
+  # 二维码属敏感登录凭证，截图仅短期展示，禁止长期存储（design.md §3.3 / §9.1）
+
+# 会话列表（用于未读轮询）
+conversation_list:
+  strategy: flaui
+  control_type: ListControl             # TODO(admission): UIA 树确认
+  fallback:
+    strategy: coordinate
+    offset: [0, 90]
+    size: [260, 600]                    # TODO(admission): 尺寸回填
+
+# 输入独占：执行发送任务期间锁剪贴板/键盘/鼠标（protocol.md §C.4 IClipboardGuard）
+input_guard:
+  enabled: true
+  lock_clipboard: true
+  lock_keyboard_hotkeys: true           # 仅屏蔽会干扰发送的热键，不全局屏蔽
+  duration_max_ms: 30000                # 单次发送最长独占 30s，超时强制释放避免卡死

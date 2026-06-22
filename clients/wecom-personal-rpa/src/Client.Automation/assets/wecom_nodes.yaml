@@ -1,0 +1,40 @@
+# 企业微信个人账号 RPA 节点默认配置（占位值，需在准入验证阶段回填实测值）
+# 本文件由 NodesConfigLoader 加载为 WeComNodesConfig；运行期只读。
+# 任何「// TODO 回填自准入验证」标注的常量在真机校准前不可上线。
+# 关联：docs/system/wecom-personal-rpa-protocol.md §C.4 INodesConfig、设计文档 §2.3。
+
+main_window:
+  # 企微主窗口类名：FindWindow 按此定位。
+  # 默认值 WeWorkWindow，实测版本可能不同。
+  class_name: WeWorkWindow  # TODO 回填自准入验证
+
+controls:
+  # 搜索框（会话顶部，输入关键词后回车筛选会话）
+  search_box:
+    automation_id: "search_input"  # TODO 回填自准入验证
+    # Win32 坐标降级路径：相对主窗口左上角的偏移量（像素）。
+    click_offset:
+      x: 400   # TODO 回填自准入验证
+      y: 50    # TODO 回填自准入验证
+  # 消息输入框（底部回复区）
+  message_input:
+    automation_id: "message_input"  # TODO 回填自准入验证
+    click_offset:
+      x: 400   # TODO 回填自准入验证
+      y: 580   # TODO 回填自准入验证
+  # 发送按钮（部分版本有显式按钮，部分版本只能 Enter）
+  send_button:
+    name: "发送"  # TODO 回填自准入验证
+
+qr_region:
+  # 二维码区域截图：相对主窗口左上角的矩形，用于登录态二维码上报。
+  x: 520   # TODO 回填自准入验证
+  y: 240   # TODO 回填自准入验证
+  width: 200   # TODO 回填自准入验证
+  height: 200   # TODO 回填自准入验证
+
+vision:
+  # 模板匹配阈值（0..1），低于此值视为未命中。
+  template_match_threshold: 0.85
+  # 模板根目录（相对工程输出目录）。
+  templates_root: "assets/templates"

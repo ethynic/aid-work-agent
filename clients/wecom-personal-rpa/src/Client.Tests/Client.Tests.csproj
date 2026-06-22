@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      任务规格写「目标 net8.0」，但 Client.Tests 通过 ProjectReference 引用 Client.Automation，
+      后者目标 net8.0-windows（Win32/FlaUI/OpenCvSharp 三层自动化依赖 Windows 桌面特性，见
+      protocol.md §C.1）。net8.0 目标无法传递消费 net8.0-windows 引用（SDK 报 NU1201），
+      故本工程必须对齐为 net8.0-windows。这是物理约束驱动的偏差，已记录在 StructuredOutput.issues。
+      protocol.md §C.1 的「Tests 可用 net8.0」是「不依赖 Windows 时的偏好」，非硬约束。
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ProjectGuid>55555555-5555-5555-5555-555555555555</ProjectGuid>
+    <RootNamespace>WeCom.PersonalRpa.Tests</RootNamespace>
+    <AssemblyName>Client.Tests</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 跨工程引用：Client.Core（HmacSigner / 协议 DTO）、Client.Automation（三层自动化） -->
+    <ProjectReference Include="..\Client.Core\Client.Core.csproj" />
+    <ProjectReference Include="..\Client.Automation\Client.Automation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
+</Project>
