@@ -351,6 +351,10 @@ class Agent:
         from src.tools.knowledge.attraction_search_tool import AttractionSearchTool
         self.tool_registry.register(AttractionSearchTool())
 
+        # 注册酒店知识库搜索工具
+        from src.tools.knowledge.hotel_search_tool import HotelSearchTool
+        self.tool_registry.register(HotelSearchTool())
+
         # 注册 Word 文档处理工具
         from src.tools.word.word_process_tool import WordProcessTool
         self.tool_registry.register(WordProcessTool())
@@ -1645,7 +1649,7 @@ class Agent:
             except Exception:
                 pass
         if _resolve_tenant_id:
-            for tool_name in ("attraction_search", "knowledge_base_search"):
+            for tool_name in ("attraction_search", "hotel_search", "knowledge_base_search"):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(_resolve_tenant_id)
@@ -2533,7 +2537,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
         # 注入 tenant_id 到需要租户隔离的工具（子智能体线程中 ContextVar 不可用）
         if self._init_tenant_id:
-            for tool_name in ("attraction_search", "knowledge_base_search"):
+            for tool_name in ("attraction_search", "hotel_search", "knowledge_base_search"):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(self._init_tenant_id)
