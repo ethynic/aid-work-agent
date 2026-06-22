@@ -471,6 +471,38 @@ class TestMdToWord:
         assert result["file_size"] > 0
 
 
+# =============================================================================
+# _find_pandoc 测试
+# =============================================================================
+
+class TestFindPandoc:
+    """Pandoc 可执行文件定位测试"""
+
+    def test_find_pandoc_in_path(self):
+        """PATH 中存在 pandoc 时返回该路径"""
+        from src.tools.word.md_to_word import _find_pandoc
+
+        with patch("shutil.which", return_value="/usr/bin/pandoc"):
+            assert _find_pandoc() == "/usr/bin/pandoc"
+
+    def test_find_pandoc_not_installed_raises_with_guide(self):
+        """Pandoc 未安装时抛 FileNotFoundError，并附带安装指引（Fail loud）。
+
+        WHY：避免 subprocess 抛出难以理解的 [WinError 2]，
+        让 Agent/用户直接看到缺失依赖与解决路径，而不是陷入无意义重试。
+        """
+        from src.tools.word.md_to_word import _find_pandoc
+
+        with patch("shutil.which", return_value=None), \
+             patch("pathlib.Path.exists", return_value=False):
+            with pytest.raises(FileNotFoundError) as exc_info:
+                _find_pandoc()
+
+        msg = str(exc_info.value)
+        assert "Pandoc" in msg
+        assert "pandoc-install-guide" in msg
+
+
 class TestNormalizeMarkdown:
     """Markdown 规范化测试"""
 
