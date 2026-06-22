@@ -111,7 +111,7 @@ def patched_modules(monkeypatch):
 
     # mock calculate_hotel_stays：按 hotel_stays 顺序返回新的住宿行
     def fake_calc(items, tenant_id, hotel_stays, total_people, teacher_count, couples,
-                  name_overrides=None):
+                  name_overrides=None, start_date=None):
         name_overrides = name_overrides or {}
         new_items = []
         import math

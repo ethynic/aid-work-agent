@@ -129,7 +129,7 @@ def update_hotel(params: dict) -> dict:
     # —— 4. 用 calculate_hotel_stays 重算所有住宿行（顺序与 hotel_stays 一致）——
     new_hotel_items, single_supplement = calculate_hotel_stays(
         [], tenant_id, hotel_stays, total_people, teacher_count, couples,
-        name_overrides=name_overrides
+        name_overrides=name_overrides, start_date=start_date
     )
 
     # —— 5. 原位置替换 items 中的住宿行（保持原顺序）——

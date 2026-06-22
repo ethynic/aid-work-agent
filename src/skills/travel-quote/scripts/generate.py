@@ -145,12 +145,13 @@ def generate_quote(params: dict) -> dict:
     # Step 6: 住宿
     if hotel_stays:
         items, single_supplement = calculate_hotel_stays(
-            items, tenant_id, hotel_stays, total_people, teacher_count, couples
+            items, tenant_id, hotel_stays, total_people, teacher_count, couples,
+            start_date=start_date
         )
     else:
         items, single_supplement = calculate_hotel_cost(
             items, tenant_id, hotel_id, total_people, couples, trip_days, season_type,
-            hotel_doc_id=hotel_doc_id, teacher_count=teacher_count
+            hotel_doc_id=hotel_doc_id, teacher_count=teacher_count, start_date=start_date
         )
 
     # Step 7: 餐饮
