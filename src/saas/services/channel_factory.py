@@ -66,6 +66,7 @@ class ChannelFactory:
     _ADAPTER_CLASSES = {
         "wecom": "src.channels.wecom.adapter.WeComAdapter",
         "wecom_kf": "src.channels.wecom_kf.adapter.WeComKfAdapter",
+        "wecom_personal_rpa": "src.channels.wecom_personal_rpa.adapter.WeComPersonalRpaAdapter",
         "dingtalk": "src.channels.dingtalk.adapter.DingTalkAdapter",
         "feishu": "src.channels.feishu.adapter.FeishuAdapter",
     }

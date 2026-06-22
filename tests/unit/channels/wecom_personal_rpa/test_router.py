@@ -1,0 +1,271 @@
+"""企业微信个人账号 RPA 路由器与会话授权单元测试
+
+覆盖点（对齐 docs/system/wecom-personal-rpa-protocol.md §B.2 与任务契约）：
+1. ``WeComPersonalRpaRouter.route`` 格式：
+   - 基础格式 ``wecom_personal_rpa:{account_id}:{conversation_id}``
+   - ``stable_id`` 优先于 ``conversation_id``（保证跨重启路由稳定）
+2. ``check_conversation_authorization`` 授权语义：
+   - ``status=active`` → 放行（needs_review=False, paused=False）
+   - ``status=pending`` → needs_review=True
+   - ``status=paused`` / ``status=invalid`` → paused=True
+   - binding 写入失败（None） → needs_review=True
+   - 同 search_key 多条（重名歧义） → needs_review=True 且 reason="ambiguous"
+
+全部 mock ``src.channels.wecom_personal_rpa.db``，不触碰真实数据库。
+"""
+
+import pytest
+from unittest.mock import patch
+
+from src.channels.wecom_personal_rpa.router import (
+    AuthorizationResult,
+    WeComPersonalRpaRouter,
+    check_conversation_authorization,
+    router,
+)
+
+
+# ============================================================
+# route() 格式与 stable_id 优先级
+# ============================================================
+
+
+class TestRoute:
+    def test_route_basic_format(self):
+        """基础格式：wecom_personal_rpa:{account_id}:{conversation_id}。"""
+        r = WeComPersonalRpaRouter()
+        sid = r.route("wecom_account_001", "binding_abc")
+        assert sid == "wecom_personal_rpa:wecom_account_001:binding_abc"
+
+    def test_route_stable_id_preferred_over_conversation_id(self):
+        """stable_id 非空时优先，保证同一对方跨重启路由稳定。"""
+        r = WeComPersonalRpaRouter()
+        sid = r.route(
+            account_id="wecom_account_001",
+            conversation_id="binding_abc",
+            stable_id="external_userid_zhangsan",
+        )
+        assert sid == "wecom_personal_rpa:wecom_account_001:external_userid_zhangsan"
+
+    def test_route_stable_id_empty_falls_back_to_conversation_id(self):
+        """stable_id=None 时回退到 conversation_id。"""
+        r = WeComPersonalRpaRouter()
+        sid = r.route(
+            account_id="acc1",
+            conversation_id="conv_local_1",
+            stable_id=None,
+        )
+        assert sid == "wecom_personal_rpa:acc1:conv_local_1"
+
+    def test_route_stable_id_empty_string_falls_back(self):
+        """stable_id 为空字符串时也回退（falsy 判定，对齐 stable_id or conversation_id）。"""
+        r = WeComPersonalRpaRouter()
+        sid = r.route(
+            account_id="acc1",
+            conversation_id="conv_local_1",
+            stable_id="",
+        )
+        assert sid == "wecom_personal_rpa:acc1:conv_local_1"
+
+    def test_route_module_singleton_matches_class(self):
+        """模块级单例 router 行为与新建实例一致。"""
+        sid = router.route("acc1", "conv1")
+        assert sid == "wecom_personal_rpa:acc1:conv1"
+
+
+# ============================================================
+# check_conversation_authorization —— 授权语义
+# ============================================================
+
+
+_TENANT = "tenant_001"
+_ACCOUNT = "wecom_account_001"
+_CONV_ID = "binding_abc"
+_CONV_TYPE = "external_user"
+_SEARCH_KEY = "external_userid_zhangsan"
+_DISPLAY_NAME = "张三"
+_STABLE_ID = "external_userid_zhangsan"
+
+
+def _binding(status: str, search_key: str = _SEARCH_KEY):
+    """构造一条 binding dict，模拟 db 返回行。"""
+    return {
+        "id": "rpa_bind_xxx",
+        "tenant_id": _TENANT,
+        "account_id": _ACCOUNT,
+        "conversation_type": _CONV_TYPE,
+        "display_name": _DISPLAY_NAME,
+        "search_key": search_key,
+        "stable_id": _STABLE_ID,
+        "status": status,
+    }
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_active_binding_passes(mock_db):
+    """status=active → 放行：needs_review=False, paused=False, reason=None。"""
+    mock_db.get_or_create_binding.return_value = _binding("active")
+    mock_db.find_binding_by_search_key.return_value = _binding("active")
+    mock_db.list_bindings.return_value = [_binding("active")]
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+        stable_id=_STABLE_ID,
+    )
+
+    assert isinstance(result, AuthorizationResult)
+    assert result.session_id == "wecom_personal_rpa:wecom_account_001:external_userid_zhangsan"
+    assert result.needs_review is False
+    assert result.paused is False
+    assert result.reason is None
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_pending_triggers_needs_review(mock_db):
+    """status=pending（首次见到未确认）→ needs_review=True。"""
+    mock_db.get_or_create_binding.return_value = _binding("pending")
+    mock_db.find_binding_by_search_key.return_value = _binding("pending")
+    mock_db.list_bindings.return_value = [_binding("pending")]
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+        stable_id=None,
+    )
+
+    assert result.needs_review is True
+    assert result.paused is False
+    assert result.reason == "pending"
+    # stable_id=None 时回退到 conversation_id 作为 route_key
+    assert result.session_id == "wecom_personal_rpa:wecom_account_001:binding_abc"
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_paused_status_triggers_paused(mock_db):
+    """status=paused → paused=True（账号/会话被暂停，等待人工恢复）。"""
+    mock_db.get_or_create_binding.return_value = _binding("paused")
+    mock_db.find_binding_by_search_key.return_value = _binding("paused")
+    mock_db.list_bindings.return_value = [_binding("paused")]
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+    )
+
+    assert result.paused is True
+    assert result.needs_review is False
+    assert result.reason == "paused"
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_invalid_status_triggers_paused(mock_db):
+    """status=invalid → paused=True（绑定失效，按暂停语义处理）。"""
+    mock_db.get_or_create_binding.return_value = _binding("invalid")
+    mock_db.find_binding_by_search_key.return_value = _binding("invalid")
+    mock_db.list_bindings.return_value = [_binding("invalid")]
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+    )
+
+    assert result.paused is True
+    assert result.needs_review is False
+    assert result.reason == "invalid"
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_binding_unavailable_triggers_needs_review(mock_db):
+    """get_or_create_binding 返回 None（写入失败）→ 保守触发 needs_review。"""
+    mock_db.get_or_create_binding.return_value = None
+    mock_db.find_binding_by_search_key.return_value = None
+    mock_db.list_bindings.return_value = []
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+    )
+
+    assert result.needs_review is True
+    assert result.paused is False
+    assert result.reason == "binding_unavailable"
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_ambiguous_search_key_triggers_needs_review(mock_db):
+    """同 search_key 在租户内多条（重名歧义）→ needs_review=True 且 reason="ambiguous"。
+
+    场景：两个不同 account 下绑定了同一 external_userid（跨账号重名），或同一 search_key
+    被人工录入多次。客户端暂停该会话自动发送，等待人工区分。
+    """
+    same_key_binding_a = _binding("active", search_key=_SEARCH_KEY)
+    same_key_binding_a["account_id"] = "wecom_account_002"
+    same_key_binding_b = _binding("active", search_key=_SEARCH_KEY)
+
+    mock_db.get_or_create_binding.return_value = same_key_binding_b
+    mock_db.find_binding_by_search_key.return_value = same_key_binding_b
+    mock_db.list_bindings.return_value = [same_key_binding_a, same_key_binding_b]
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+    )
+
+    assert result.needs_review is True
+    assert result.paused is False
+    assert result.reason == "ambiguous"
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_falls_back_to_get_or_create_binding_when_find_misses(mock_db):
+    """find_binding_by_search_key 返回 None（极端竞态：刚 upsert 即被删）时，
+    回退到 get_or_create_binding 的返回值，避免误判。
+    """
+    pending = _binding("pending")
+    mock_db.get_or_create_binding.return_value = pending
+    mock_db.find_binding_by_search_key.return_value = None
+    mock_db.list_bindings.return_value = [pending]
+
+    result = await check_conversation_authorization(
+        tenant_id=_TENANT,
+        account_id=_ACCOUNT,
+        conversation_id=_CONV_ID,
+        conversation_type=_CONV_TYPE,
+        search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME,
+    )
+
+    assert result.needs_review is True
+    assert result.reason == "pending"

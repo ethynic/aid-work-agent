@@ -18,6 +18,7 @@ class ChannelType(str, Enum):
     FEISHU = "feishu"
     WEB = "web"
     WECOM_KF = "wecom_kf"
+    WECOM_PERSONAL_RPA = "wecom_personal_rpa"
 
 
 class MessageType(str, Enum):

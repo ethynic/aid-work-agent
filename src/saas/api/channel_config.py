@@ -46,6 +46,10 @@ _REQUIRED_FIELDS = {
         "token": "回调Token（设置API接收时配置）",
         "encoding_aes_key": "回调EncodingAESKey（设置API接收时配置，43字符Base64）",
     },
+    # 企业微信个人账号 RPA：仅需 client_id（由注册接口分配），subagent 由 subagent_type 字段指定
+    "wecom_personal_rpa": {
+        "client_id": "RPA 客户端 ID（由服务端注册接口分配）",
+    },
     "dingtalk": {
         "app_key": "应用AppKey",
         "app_secret": "应用AppSecret",
@@ -80,7 +84,7 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
 
     admin = require_admin(request)
 
-    if body.channel_type not in ("wecom", "wecom_kf", "dingtalk", "feishu"):
+    if body.channel_type not in ("wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu"):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
     # 验证必填字段

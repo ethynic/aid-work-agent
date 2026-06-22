@@ -1,0 +1,603 @@
+"""企业微信个人账号 RPA 渠道数据库访问层
+
+包含 5 张表的 CRUD：
+- wecom_rpa_clients               客户端注册表
+- wecom_rpa_accounts              个人企微账号表
+- wecom_rpa_conversation_bindings 会话绑定表
+- wecom_rpa_action_outbox         出站动作队列（action_client 离线投递用）
+- wecom_rpa_audit_logs            审计日志
+
+书写规范对齐 src/saas/db/channel_config_db.py：
+- 使用 psycopg2 + ``with get_db_connection() as conn`` 上下文
+- JSON 字段 json.dumps(ensure_ascii=False) 写入，读取时 json.loads
+- 所有读取查询带 tenant_id 过滤，防止跨租户泄漏
+- 返回 dict / None / list[dict]，不返回 ORM 对象
+- 写入附带 user_id（无法确定时 None），created_at 由数据库默认填充
+
+表结构见 deploy/init-postgres.sql 与 deploy/db_update.sql。
+本模块只负责数据访问，不负责建表（建表在 SQL 迁移中幂等完成）。
+"""
+
+import json
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from loguru import logger
+
+from src.db.database import get_db_connection
+
+
+def _new_id(prefix: str) -> str:
+    """生成带前缀的业务 ID。"""
+    return f"{prefix}_{uuid.uuid4().hex[:16]}"
+
+
+def _parse_json_field(value: Optional[str], default: Any = None) -> Any:
+    """安全解析 JSON 字段，失败时返回 default。"""
+    if value is None:
+        return default
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return value
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ===========================================================================
+# clients —— 客户端注册
+# ===========================================================================
+
+
+def create_client(
+    tenant_id: str,
+    client_id: str,
+    name: str,
+    encrypted_secret: str,
+    min_version: str,
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """注册一个新客户端。encrypted_secret 必须是服务端加密后的密文。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO wecom_rpa_clients
+                    (id, tenant_id, user_id, name, encrypted_secret, status, min_version)
+                VALUES (%s, %s, %s, %s, %s, 'active', %s)
+                """,
+                (client_id, tenant_id, user_id, name, encrypted_secret, min_version),
+            )
+            conn.commit()
+            logger.info(f"RPA client created: {client_id} (tenant={tenant_id})")
+            return get_client(client_id)
+        except Exception as e:
+            logger.error(f"Failed to create RPA client {client_id}: {e}")
+            return None
+
+
+def get_client(client_id: str) -> Optional[Dict[str, Any]]:
+    """按 client_id 读取客户端（跨租户可见，client_id 本身全局唯一）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM wecom_rpa_clients WHERE id = %s", (client_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_clients(tenant_id: str) -> List[Dict[str, Any]]:
+    """列出租户下所有客户端。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM wecom_rpa_clients WHERE tenant_id = %s ORDER BY created_at DESC",
+            (tenant_id,),
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def update_client_status(
+    tenant_id: str,
+    client_id: str,
+    status: str,
+) -> bool:
+    """更新客户端状态（active/disabled）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_clients
+            SET status = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (status, client_id, tenant_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def update_last_seen(tenant_id: str, client_id: str) -> bool:
+    """记录客户端最近一次心跳/请求时间。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_clients
+            SET last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (client_id, tenant_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def rotate_secret(
+    tenant_id: str,
+    client_id: str,
+    new_encrypted_secret: str,
+) -> bool:
+    """轮换客户端密钥（密文存储）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_clients
+            SET encrypted_secret = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (new_encrypted_secret, client_id, tenant_id),
+        )
+        conn.commit()
+        success = cursor.rowcount > 0
+        if success:
+            logger.info(f"RPA client secret rotated: {client_id}")
+        return success
+
+
+# ===========================================================================
+# accounts —— 个人企微账号
+# ===========================================================================
+
+
+def upsert_account(
+    tenant_id: str,
+    client_id: str,
+    account_id: str,
+    display_name: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """新增或更新账号（首次发现该账号时插入，后续更新 display_name）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO wecom_rpa_accounts
+                    (id, tenant_id, user_id, client_id, display_name, status)
+                VALUES (%s, %s, %s, %s, %s, 'offline')
+                ON CONFLICT (id) DO UPDATE
+                    SET display_name = COALESCE(EXCLUDED.display_name, wecom_rpa_accounts.display_name),
+                        client_id   = EXCLUDED.client_id,
+                        updated_at  = CURRENT_TIMESTAMP
+                """,
+                (account_id, tenant_id, user_id, client_id, display_name),
+            )
+            conn.commit()
+            return get_account(account_id)
+        except Exception as e:
+            logger.error(f"Failed to upsert RPA account {account_id}: {e}")
+            return None
+
+
+def get_account(account_id: str) -> Optional[Dict[str, Any]]:
+    """读取账号信息。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM wecom_rpa_accounts WHERE id = %s", (account_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_accounts(tenant_id: str, client_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """列出租户（可按 client 过滤）的账号。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if client_id:
+            cursor.execute(
+                """
+                SELECT * FROM wecom_rpa_accounts
+                WHERE tenant_id = %s AND client_id = %s
+                ORDER BY created_at DESC
+                """,
+                (tenant_id, client_id),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM wecom_rpa_accounts WHERE tenant_id = %s ORDER BY created_at DESC",
+                (tenant_id,),
+            )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def set_account_status(
+    tenant_id: str,
+    account_id: str,
+    status: str,
+    paused_reason: Optional[str] = None,
+) -> bool:
+    """更新账号状态（online/offline/need_login/paused/...）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_accounts
+            SET status = %s,
+                paused_reason = %s,
+                last_login_at = CASE WHEN %s = 'online' THEN CURRENT_TIMESTAMP ELSE last_login_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (status, paused_reason, status, account_id, tenant_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_account_status(account_id: str) -> Optional[str]:
+    """读取账号当前状态字符串。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM wecom_rpa_accounts WHERE id = %s", (account_id,))
+        row = cursor.fetchone()
+        return row["status"] if row else None
+
+
+# ===========================================================================
+# bindings —— 会话绑定
+# ===========================================================================
+
+
+def get_or_create_binding(
+    tenant_id: str,
+    account_id: str,
+    conversation_type: str,
+    display_name: str,
+    search_key: str,
+    stable_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """获取或创建会话绑定。
+
+    首次见到某 (account_id, conversation) 时插入一条 pending 绑定，
+    等待人工确认（status=active 后才允许自动发送）。
+    """
+    binding_id = _new_id("rpa_bind")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO wecom_rpa_conversation_bindings
+                    (id, tenant_id, user_id, account_id, conversation_type,
+                     display_name, search_key, stable_id, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                ON CONFLICT (account_id, search_key) DO UPDATE
+                    SET display_name = EXCLUDED.display_name,
+                        stable_id    = COALESCE(EXCLUDED.stable_id, wecom_rpa_conversation_bindings.stable_id),
+                        updated_at   = CURRENT_TIMESTAMP
+                RETURNING id
+                """,
+                (binding_id, tenant_id, user_id, account_id, conversation_type,
+                 display_name, search_key, stable_id),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            actual_id = row["id"] if row else binding_id
+            return get_binding(actual_id)
+        except Exception as e:
+            logger.error(f"Failed to upsert RPA binding (account={account_id}, key={search_key}): {e}")
+            return None
+
+
+def get_binding(binding_id: str) -> Optional[Dict[str, Any]]:
+    """按主键读取绑定。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM wecom_rpa_conversation_bindings WHERE id = %s",
+            (binding_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_bindings(tenant_id: str, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """列出租户（可按 account 过滤）的绑定。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if account_id:
+            cursor.execute(
+                """
+                SELECT * FROM wecom_rpa_conversation_bindings
+                WHERE tenant_id = %s AND account_id = %s
+                ORDER BY created_at DESC
+                """,
+                (tenant_id, account_id),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT * FROM wecom_rpa_conversation_bindings
+                WHERE tenant_id = %s ORDER BY created_at DESC
+                """,
+                (tenant_id,),
+            )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def set_binding_status(
+    tenant_id: str,
+    binding_id: str,
+    status: str,
+) -> bool:
+    """更新绑定状态（pending/active/paused/invalid）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_conversation_bindings
+            SET status = %s,
+                last_verified_at = CASE WHEN %s = 'active' THEN CURRENT_TIMESTAMP ELSE last_verified_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (status, status, binding_id, tenant_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def find_binding_by_search_key(
+    tenant_id: str,
+    account_id: str,
+    search_key: str,
+) -> Optional[Dict[str, Any]]:
+    """按账号 + 搜索键定位绑定（重名识别时用）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM wecom_rpa_conversation_bindings
+            WHERE tenant_id = %s AND account_id = %s AND search_key = %s
+            """,
+            (tenant_id, account_id, search_key),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+# ===========================================================================
+# outbox —— 出站动作队列（action_client 离线投递用）
+# ===========================================================================
+
+
+def enqueue_action(
+    tenant_id: str,
+    account_id: str,
+    conversation_id: str,
+    request_id: str,
+    session_id: str,
+    actions_json: str,
+    dedup_key: str,
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """入队一条出站动作信封。
+
+    actions_json 应为 ActionEnvelope.actions 序列化后的 JSON 字符串。
+    dedup_key 由调用方按 ``wecom_personal_rpa:{tenant_id}:{request_id}`` 生成，
+    数据库 UNIQUE 约束防止重复入队。
+    """
+    action_id = _new_id("rpa_act")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO wecom_rpa_action_outbox
+                    (id, tenant_id, user_id, account_id, conversation_id,
+                     request_id, session_id, actions, status, attempts, dedup_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', 0, %s)
+                ON CONFLICT (dedup_key) DO NOTHING
+                RETURNING id
+                """,
+                (action_id, tenant_id, user_id, account_id, conversation_id,
+                 request_id, session_id, actions_json, dedup_key),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            if row is None:
+                logger.info(f"RPA outbox dedup hit, skipped: {dedup_key}")
+                return None
+            return {
+                "id": row["id"],
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "request_id": request_id,
+                "status": "pending",
+            }
+        except Exception as e:
+            logger.error(f"Failed to enqueue RPA action (request={request_id}): {e}")
+            return None
+
+
+def claim_pending(limit: int = 20) -> List[Dict[str, Any]]:
+    """原子领取 pending 动作，标记为 running。
+
+    多 worker 并发安全依赖 ``WHERE status = 'pending'`` 的行级过滤；
+    生产环境如需更强一致可在外层加 advisory lock。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_action_outbox
+            SET status = 'running',
+                attempts = attempts + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (
+                SELECT id FROM wecom_rpa_action_outbox
+                WHERE status = 'pending'
+                  AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP)
+                ORDER BY created_at
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
+            """,
+            (limit,),
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.commit()
+        for r in rows:
+            r["actions"] = _parse_json_field(r.get("actions"), [])
+        return rows
+
+
+def mark_outbox_status(
+    action_id: str,
+    status: str,
+    error_message: Optional[str] = None,
+    next_retry_at: Optional[datetime] = None,
+) -> bool:
+    """更新出站动作状态（succeeded/retryable/failed/paused）。
+
+    - succeeded: 终态
+    - retryable: 等待重试，需提供 next_retry_at
+    - failed:    终态
+    - paused:    等待人工恢复
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_action_outbox
+            SET status = %s,
+                error_message = %s,
+                next_retry_at = %s,
+                completed_at = CASE WHEN %s IN ('succeeded', 'failed') THEN CURRENT_TIMESTAMP ELSE completed_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (status, error_message, next_retry_at, status, action_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def list_outbox(
+    tenant_id: str,
+    account_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """列出（可过滤）出站动作，按 created_at DESC。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        conditions = ["tenant_id = %s"]
+        params: List[Any] = [tenant_id]
+        if account_id:
+            conditions.append("account_id = %s")
+            params.append(account_id)
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        where_clause = " AND ".join(conditions)
+        params.append(limit)
+        cursor.execute(
+            f"""
+            SELECT * FROM wecom_rpa_action_outbox
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        for r in rows:
+            r["actions"] = _parse_json_field(r.get("actions"), [])
+        return rows
+
+
+# ===========================================================================
+# audit —— 审计日志
+# ===========================================================================
+
+
+def write_audit(
+    tenant_id: str,
+    client_id: Optional[str],
+    account_id: Optional[str],
+    category: str,
+    payload_json: str,
+    action_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Optional[str]:
+    """写一条审计日志。category 如 inbound_message / agent_reply / action_result / pause_resume。
+
+    payload_json 由调用方序列化好（注意脱敏）。返回审计记录 ID。
+    """
+    audit_id = _new_id("rpa_audit")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO wecom_rpa_audit_logs
+                    (id, tenant_id, user_id, client_id, account_id, action_id, category, payload)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (audit_id, tenant_id, user_id, client_id, account_id, action_id, category, payload_json),
+            )
+            conn.commit()
+            return audit_id
+        except Exception as e:
+            logger.error(f"Failed to write RPA audit (category={category}): {e}")
+            return None
+
+
+def list_audit(
+    tenant_id: str,
+    filters: Optional[Dict[str, Any]] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """列出审计日志。filters 支持 account_id / client_id / category / action_id 任一过滤。"""
+    filters = filters or {}
+    conditions = ["tenant_id = %s"]
+    params: List[Any] = [tenant_id]
+    for key in ("client_id", "account_id", "category", "action_id"):
+        val = filters.get(key)
+        if val:
+            conditions.append(f"{key} = %s")
+            params.append(val)
+    where_clause = " AND ".join(conditions)
+    params.append(limit)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT * FROM wecom_rpa_audit_logs
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        for r in rows:
+            r["payload"] = _parse_json_field(r.get("payload"), {})
+        return rows

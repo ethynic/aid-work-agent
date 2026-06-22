@@ -512,3 +512,104 @@ BEGIN
         ALTER TABLE channel_sessions ALTER COLUMN last_message_at TYPE TIMESTAMP USING last_message_at::TIMESTAMP;
     END IF;
 END $$;
+
+
+-- ============================================================================
+-- 2026-06-22 企业微信个人账号 RPA 渠道：新增 5 张服务端表
+-- 客户端注册 / 账号 / 会话绑定 / 出站动作队列 / 审计日志
+-- 规范对齐 .claude/rules/database_dev.md：TEXT 存枚举/状态、必带 tenant_id/user_id/created_at、
+-- 仅主键/唯一键 NOT NULL、无外键、无触发器、幂等。
+-- 表结构必须与 src/channels/wecom_personal_rpa/db.py 保持一致。
+-- ============================================================================
+
+-- 1. 客户端注册表
+CREATE TABLE IF NOT EXISTS wecom_rpa_clients (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    name TEXT,
+    encrypted_secret TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    min_version TEXT,
+    last_seen_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_clients_tenant
+    ON wecom_rpa_clients(tenant_id);
+
+-- 2. 个人企微账号表
+CREATE TABLE IF NOT EXISTS wecom_rpa_accounts (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    client_id TEXT,
+    display_name TEXT,
+    status TEXT NOT NULL DEFAULT 'offline',
+    paused_reason TEXT,
+    last_login_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_accounts_tenant_client
+    ON wecom_rpa_accounts(tenant_id, client_id);
+
+-- 3. 会话绑定表（同账号 + 搜索键唯一，用于重名识别）
+CREATE TABLE IF NOT EXISTS wecom_rpa_conversation_bindings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    account_id TEXT NOT NULL,
+    conversation_type TEXT,
+    display_name TEXT,
+    search_key TEXT NOT NULL,
+    stable_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    last_verified_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, search_key)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_bindings_tenant_account
+    ON wecom_rpa_conversation_bindings(tenant_id, account_id);
+
+-- 4. 出站动作队列（离线客户端拉取执行）
+CREATE TABLE IF NOT EXISTS wecom_rpa_action_outbox (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    account_id TEXT NOT NULL,
+    conversation_id TEXT,
+    request_id TEXT NOT NULL,
+    session_id TEXT,
+    actions TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    error_message TEXT,
+    dedup_key TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_status_retry
+    ON wecom_rpa_action_outbox(status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_tenant_account
+    ON wecom_rpa_action_outbox(tenant_id, account_id);
+
+-- 5. 审计日志表
+CREATE TABLE IF NOT EXISTS wecom_rpa_audit_logs (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    client_id TEXT,
+    account_id TEXT,
+    action_id TEXT,
+    category TEXT,
+    payload TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_account
+    ON wecom_rpa_audit_logs(tenant_id, account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_category
+    ON wecom_rpa_audit_logs(tenant_id, category, created_at DESC);
