@@ -221,6 +221,13 @@ class HotelExcelParser:
             if not info_text and not price_table:
                 continue
 
+            # 确保 info_text 含"酒店名称：xxx"行。
+            # info_text 是唯一被向量化（chunk0 embedding）和 ILIKE 名称检索的字段，
+            # 酒店名只进 documents.title 时不参与检索。LLM 偶尔会漏输出该行，
+            # 此时按酒店名搜索既命中不了名称也匹配不上语义，故强制以"酒店名称：{hotel_name}"开头。
+            if not any(line.strip().startswith("酒店名称") for line in info_text.splitlines()):
+                info_text = f"酒店名称：{hotel_name}\n{info_text}"
+
             region = item.get("region", "").strip()
             metadata = item.get("metadata", {}) or {}
             metadata["source_sheet"] = sheet_name

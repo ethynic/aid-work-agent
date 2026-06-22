@@ -490,6 +490,32 @@ def is_info_column(header: str) -> bool:
 
 ---
 
+## 变更记录
+
+### 2026-06-22：修复"按酒店名搜索搜不到"bug
+
+**现象**：导入酒店 Excel 后前端提示成功，但按酒店名（如"天合盛景"）搜索搜不到。
+
+**根因**：
+1. `HotelExcelParser._parse_llm_output` 解析出的 `info_text`（chunk0，**唯一**被向量化 embedding 和 ILIKE 名称检索的字段）**偶发漏掉"酒店名称：xxx"行**——LLM 在精简规则下偶尔不输出该行（实测 doc 973「西江天合盛景民宿」即中招）。
+2. 酒店名只进了 `documents.title`，而 `HotelRetriever.search_by_name` 只 `ILIKE chunks.text`（info_text），**title 从不参与检索**。
+3. 两者叠加：info_text 无酒店名 → 名称 ILIKE 不命中 → 转向量，但 info_text 内容是地名（雷山县/西江千户苗寨）非酒店名 → 语义也匹配不上 → 搜不到。
+4. 连带：`travel_quote.py` 导入接口的查重同样依赖 `search_by_name`，因此查重一并失效（同一文件可被重复导入）。
+
+**修复**：
+- **方案A（治本）**：`hotel_excel_parser.py` `_parse_llm_output` 中，当 info_text 不含"酒店名称"行时，强制前置 `酒店名称：{hotel_name}`，保证名称进入被检索字段。
+- **方案B（兜底）**：`hotel_retriever.py` `search_by_name` 的 SQL 改为 `c.text ILIKE %s OR d.title ILIKE %s`，title 也参与名称检索。
+
+**老数据回填**：`src/skills/travel-quote/scripts/backfill_hotel_info_name.py` 遍历 `hotel_resource`，从 `documents.title` 提取酒店名补进 info_text 首行，并重新 embedding 更新 `chunks` / `chunks_vec` / `documents.summary`（本次实测仅 1/90 条中招，其余老数据 info_text 本就含名称行）。
+
+**单元测试**：
+- `tests/unit/skills/test_hotel_excel_parser.py`：验证名称行强制补全（漏写/已写/空格/代码块包裹/仅价格表）
+- `tests/unit/skills/test_hotel_retriever.py`：验证 search_by_name 同时匹配 text 与 title（mock conn）
+
+**待办**：`attraction_excel_parser.py` / `attraction_retriever.py` 同构、存在相同的两个 bug，本次按需求仅修酒店，景点模块未改。
+
+---
+
 ## 验收标准
 
 - [ ] 用户在 HotelManager 页面上传酒店 Excel

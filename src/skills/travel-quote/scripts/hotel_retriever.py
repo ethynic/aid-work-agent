@@ -63,7 +63,12 @@ class HotelRetriever:
     # ----------------------------------------------------------
 
     def search_by_name(self, tenant_id: str, name_query: str, top_k: int = 5) -> List[Dict]:
-        """精确/模糊名称匹配（ILIKE）"""
+        """精确/模糊名称匹配（ILIKE）
+
+        同时匹配 chunk0 文本（info_text）和 document 标题，避免 info_text
+        漏写酒店名称行时按酒店名搜不到（标题兜底）。
+        """
+        pattern = f'%{name_query}%'
         with self._get_conn() as conn:
             conn.execute("""
                 SELECT c.doc_id, c.text, d.title, d.metadata, d.file_path, d.created_at
@@ -72,10 +77,10 @@ class HotelRetriever:
                 WHERE d.source_type = %s
                   AND d.tenant_id = %s
                   AND c.chunk_index = 0
-                  AND c.text ILIKE %s
+                  AND (c.text ILIKE %s OR d.title ILIKE %s)
                 ORDER BY d.id
                 LIMIT %s
-            """, (self.SOURCE_TYPE, tenant_id, f'%{name_query}%', top_k))
+            """, (self.SOURCE_TYPE, tenant_id, pattern, pattern, top_k))
             rows = conn.fetchall()
 
         results = []
