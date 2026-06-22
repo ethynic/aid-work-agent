@@ -21,7 +21,8 @@ def _find_pandoc() -> str:
     """查找 pandoc 可执行文件路径。
 
     依次检查：PATH 环境变量 → Windows 常见安装路径。
-    找不到时返回 "pandoc"（让 subprocess 自行报错）。
+    找不到时抛 FileNotFoundError（Fail loud），避免后续 subprocess
+    报出难以理解的 [WinError 2]，让上层直接返回清晰的缺失依赖提示。
     """
     import shutil
     pandoc = shutil.which("pandoc")
@@ -38,7 +39,11 @@ def _find_pandoc() -> str:
         if p.exists():
             return str(p)
 
-    return "pandoc"
+    raise FileNotFoundError(
+        "未检测到 Pandoc。word_process 工具的 Markdown 转 Word 功能依赖 Pandoc 命令行工具，"
+        "请参照《Pandoc 安装与部署指南》(docs/tools/md-to-word/pandoc-install-guide.md) "
+        "安装后重试。"
+    )
 
 
 # ============== 公共 API ==============

@@ -478,7 +478,7 @@ class UserDB:
                 SELECT message_id, session_id, role, content, metadata, created_at
                 FROM chat_messages
                 WHERE {where_clause}
-                ORDER BY created_at ASC
+                ORDER BY id ASC
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
 
@@ -830,14 +830,14 @@ class MessageDB:
                 cursor.execute(f"""
                     SELECT * FROM chat_messages
                     WHERE session_id = {placeholder} AND role IN ({role_placeholders})
-                    ORDER BY created_at ASC
+                    ORDER BY id ASC
                     LIMIT {placeholder}
                 """, (session_id, *roles, limit))
             else:
                 cursor.execute(f"""
                     SELECT * FROM chat_messages
                     WHERE session_id = {placeholder}
-                    ORDER BY created_at ASC
+                    ORDER BY id ASC
                     LIMIT {placeholder}
                 """, (session_id, limit))
             messages = []
