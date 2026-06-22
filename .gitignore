@@ -116,3 +116,4 @@ frontend/npm.tgz
 uploads/
 memories/
 storage/
+plans/cron_user*
