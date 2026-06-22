@@ -56,15 +56,6 @@ class WriteInput(BaseModel):
         False,
         description="是否覆盖已存在的文件，默认 False（已存在时返回错误）。仅 overwrite 模式生效",
     )
-    register_download: Optional[bool] = Field(
-        True,
-        description="是否自动注册到下载系统（生成下载链接），默认 True",
-    )
-    display_name: Optional[str] = Field(
-        None,
-        description="注册下载时的显示文件名（可选），默认使用 file_path 中的文件名。"
-        "file_path 未提供时建议设置此参数，否则使用自动生成的临时文件名",
-    )
     generate_prompt: Optional[str] = Field(
         None,
         description="内容生成指令。提供此参数时，工具内部调用 LLM 生成文件内容，无需再提供 content。"
@@ -206,7 +197,7 @@ class WriteTool(BaseTool):
     """write 工具 -- 文本文件生成"""
 
     name = "write"
-    description = """生成文本文件并注册到下载系统（Markdown、HTML、TXT、CSV、JSON 等）。
+    description = """生成文本文件（Markdown、HTML、TXT、CSV、JSON 等），返回文件路径。
 
 用法一 · 直接写入（短文件，<= 4000 字，相当于 echo "content" > file）：
   write(content="完整内容", file_path="report.md")
@@ -219,7 +210,12 @@ class WriteTool(BaseTool):
   overwrite（默认）：覆盖整个文件，已存在时需 overwrite=True
   append：追加到文件末尾，文件不存在时自动创建
 
-参数互斥：content 与 generate_prompt 同时提供时优先 content。"""
+参数互斥：content 与 generate_prompt 同时提供时优先 content。
+
+📦 生成文件后必须用 cp 注册下载（重要）：
+本工具只生成文件、返回 file_path，不会自动注册下载。生成后必须紧接着调用 cp 工具完成交付：
+    cp(source_file_path="<本工具返回的 file_path>")
+cp 会把文件复制到下载目录、在前端对话中展示下载卡片，用户才能看到并下载。"""
     display_name = "生成文本文件"
     category = "file"
     InputModel = WriteInput
@@ -228,7 +224,7 @@ class WriteTool(BaseTool):
 
 方式一（直接写入·短文件）：
   write(content="完整内容", file_extension="md")
-  -> 自动生成临时文件，用户可直接下载
+  -> 自动生成临时文件
 
 方式二（内部生成·中等文件）：
   write(file_path="report.html", generate_prompt="根据以下材料生成封面页 HTML：...")
@@ -240,7 +236,7 @@ class WriteTool(BaseTool):
 
 注意：
 - 超过 4000 字的内容不要一次性放入 content 参数
-- 所有方式都会自动注册下载，用户都能在前端下载/预览
+- 生成文件后必须调用 cp 工具注册下载，用户才能在前端下载/预览
 - 如果同时提供 content 和 generate_prompt，优先使用 content（直接写入）
 - 路径支持 Windows 和 Linux 格式"""
 
@@ -411,57 +407,6 @@ class WriteTool(BaseTool):
         return None
 
     # ------------------------------------------------------------------
-    # 下载注册
-    # ------------------------------------------------------------------
-
-    def _register_download(
-        self, file_path: Path, display_name: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """将生成的文件注册到下载系统"""
-        from src.core.redis_client import redis_client
-
-        file_id = f"file_{uuid.uuid4().hex[:12]}"
-        suffix = file_path.suffix.lower()
-
-        if not display_name:
-            display_name = file_path.name
-
-        if not display_name.lower().endswith(suffix):
-            display_name += suffix
-
-        mime_type = MIME_MAP.get(suffix, "text/plain")
-
-        upload_dir = _resolve_upload_dir(self._tenant_id, self._user_id)
-        dest_path = upload_dir / f"{file_id}{suffix}"
-        shutil.copy2(str(file_path), str(dest_path))
-
-        file_size = dest_path.stat().st_size
-
-        file_info = {
-            "file_id": file_id,
-            "name": display_name,
-            "path": str(dest_path.absolute()),
-            "size": file_size,
-            "mime_type": mime_type,
-            "type": "file",
-        }
-
-        key = redis_client.make_key("uploaded_file", file_id)
-        for field, value in file_info.items():
-            redis_client.hset(key, field, value)
-        redis_client.expire(key, 86400)
-
-        download_url = f"/api/files/{file_id}/download"
-
-        return {
-            "success": True,
-            "file_id": file_id,
-            "file_name": display_name,
-            "file_size": file_size,
-            "download_url": download_url,
-        }
-
-    # ------------------------------------------------------------------
     # 主入口
     # ------------------------------------------------------------------
 
@@ -473,8 +418,6 @@ class WriteTool(BaseTool):
         file_path = kwargs.get("file_path")
         file_extension = kwargs.get("file_extension")
         overwrite = kwargs.get("overwrite", False)
-        register_download = kwargs.get("register_download", True)
-        display_name = kwargs.get("display_name")
         mode = kwargs.get("mode") or "overwrite"
 
         # 1. mode 校验
@@ -565,15 +508,6 @@ class WriteTool(BaseTool):
                 "file_size": file_size,
                 "is_temp": not bool(file_path),
             }
-
-            # 11. 注册到下载系统
-            if register_download:
-                download_info = self._register_download(path, display_name)
-                if download_info.get("success"):
-                    result["download_url"] = download_info["download_url"]
-                    result["file_id"] = download_info["file_id"]
-                else:
-                    logger.warning("注册下载失败")
 
             return result
 

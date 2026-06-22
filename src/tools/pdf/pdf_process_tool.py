@@ -72,7 +72,15 @@ TOOL_DESCRIPTION = """PDF文档处理工具。所有与PDF文件相关的操作�
 - 将用户的原始需求描述和相关内容放在 context 中
 - 如果需要将对话内容转为PDF，context 中必须包含完整的 Markdown 或 HTML 文本
 - 用户上传的附件路径放在 file_paths 中
-工具会自动判断并执行合适的操作。"""
+工具会自动判断并执行合适的操作。
+
+📦 生成文件后必须用 cp 注册下载（重要）：
+当本工具产生新的 PDF 文件时（Markdown/HTML/Word转PDF、合并、拆分、提取页面，返回结果中含 file_path 或 files），
+必须紧接着调用 cp 工具完成交付，用户才能在前端看到并下载：
+    cp(source_file_path="<本工具返回的 file_path>")
+拆分（split）产生多个文件时，对每个文件分别调用 cp。
+cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
+仅读取/OCR/转Markdown（read/read_tables/ocr/pdf_to_md）不产生新文件，无需调用 cp。"""
 
 
 class PdfProcessTool(BaseTool):
@@ -306,12 +314,6 @@ class PdfProcessTool(BaseTool):
             title=params.get("title", ""),
         )
 
-        if result.get("success") and result.get("file_path"):
-            download_info = await self._register_download(result["file_path"], params.get("output_name") or "document.pdf")
-            if download_info:
-                result["file_id"] = download_info["file_id"]
-                result["download_url"] = download_info["download_url"]
-
         return result
 
     async def _handle_html_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -333,12 +335,6 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        if result.get("success") and result.get("file_path"):
-            download_info = await self._register_download(result["file_path"], params.get("output_name") or "document.pdf")
-            if download_info:
-                result["file_id"] = download_info["file_id"]
-                result["download_url"] = download_info["download_url"]
-
         return result
 
     async def _handle_docx_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -356,12 +352,6 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        if result.get("success") and result.get("file_path"):
-            download_info = await self._register_download(result["file_path"], params.get("output_name") or "document.pdf")
-            if download_info:
-                result["file_id"] = download_info["file_id"]
-                result["download_url"] = download_info["download_url"]
-
         return result
 
     async def _handle_merge(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -376,12 +366,6 @@ class PdfProcessTool(BaseTool):
             file_paths=ctx.file_paths,
             output_name=params.get("output_name"),
         )
-
-        if result.get("success") and result.get("file_path"):
-            download_info = await self._register_download(result["file_path"], params.get("output_name") or "merged.pdf")
-            if download_info:
-                result["file_id"] = download_info["file_id"]
-                result["download_url"] = download_info["download_url"]
 
         return result
 
@@ -405,15 +389,6 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        # 为每个拆分文件注册下载
-        if result.get("success") and result.get("files"):
-            for f in result["files"]:
-                if f.get("file_path"):
-                    download_info = await self._register_download(f["file_path"], Path(f["file_path"]).name)
-                    if download_info:
-                        f["file_id"] = download_info["file_id"]
-                        f["download_url"] = download_info["download_url"]
-
         return result
 
     async def _handle_extract_pages(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -436,12 +411,6 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        if result.get("success") and result.get("file_path"):
-            download_info = await self._register_download(result["file_path"], params.get("output_name") or "extracted.pdf")
-            if download_info:
-                result["file_id"] = download_info["file_id"]
-                result["download_url"] = download_info["download_url"]
-
         return result
 
     # ── 辅助方法 ──
@@ -453,53 +422,3 @@ class PdfProcessTool(BaseTool):
         if not Path(resolved).exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
         return resolved
-
-    async def _register_download(self, file_path: str, display_name: str) -> Dict[str, str]:
-        """自动注册文件到下载系统。"""
-        try:
-            from src.core.redis_client import redis_client
-            import uuid
-
-            src = Path(file_path)
-            if not src.exists():
-                logger.warning(f"注册下载文件失败: 文件不存在 {file_path}")
-                return {}
-
-            file_id = f"file_{uuid.uuid4().hex[:12]}"
-
-            suffix = src.suffix.lower()
-            mime_type_map = {
-                '.pdf': 'application/pdf',
-                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                '.txt': 'text/plain',
-                '.png': 'image/png',
-                '.jpg': 'image/jpeg',
-            }
-            mime_type = mime_type_map.get(suffix, 'application/octet-stream')
-
-            if not display_name.lower().endswith(suffix):
-                display_name += suffix
-
-            file_size = src.stat().st_size
-
-            file_info = {
-                "file_id": file_id,
-                "name": display_name,
-                "path": str(src.absolute()),
-                "size": file_size,
-                "mime_type": mime_type,
-                "type": "image" if mime_type.startswith("image/") else "file",
-            }
-            key = redis_client.make_key("uploaded_file", file_id)
-            for field, value in file_info.items():
-                redis_client.hset(key, field, value)
-            redis_client.expire(key, 86400)
-
-            logger.info(f"文件已注册: file_id={file_id}, name={display_name}, size={file_size}")
-            return {
-                "file_id": file_id,
-                "download_url": f"/api/files/{file_id}/download",
-            }
-        except Exception as e:
-            logger.warning(f"注册下载文件失败: {e}")
-            return {}

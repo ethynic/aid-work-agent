@@ -43,16 +43,8 @@ def tool(tmp_path: Path):
 
 @pytest.fixture
 def mock_register_download():
-    """mock _register_download 避免依赖 Redis"""
-    with patch.object(WriteTool, "_register_download") as mock:
-        mock.return_value = {
-            "success": True,
-            "file_id": "file_test123",
-            "file_name": "test.html",
-            "file_size": 100,
-            "download_url": "/api/files/file_test123/download",
-        }
-        yield mock
+    """write 已不再自动注册下载（统一走 cp 工具），此 fixture 保留为空操作以兼容旧测试签名"""
+    yield None
 
 
 def _resolve_to_tmp(self, file_path: str) -> Path:
@@ -93,6 +85,8 @@ class TestToolDefinition:
         assert "generate_prompt" in props
         # 已删除的字段
         assert "source_file_path" not in props
+        assert "register_download" not in props
+        assert "display_name" not in props
         assert "section_start" not in props
         assert "section_end" not in props
         assert "encoding" not in props
@@ -166,15 +160,6 @@ class TestOverwriteMode:
             result = await tool.execute(content="new content", file_path="report.md", overwrite=True)
         assert isinstance(result, dict)
         assert target.read_text() == "new content"
-
-    @pytest.mark.asyncio
-    async def test_overwrite_registers_download(self, tool, mock_register_download):
-        with patch.object(WriteTool, "_resolve_and_validate_path", _resolve_to_tmp):
-            result = await tool.execute(content="hello", file_path="report.md")
-        assert isinstance(result, dict)
-        mock_register_download.assert_called_once()
-        assert "download_url" in result
-        assert "file_id" in result
 
 
 # ---------------------------------------------------------------------------
@@ -419,32 +404,6 @@ class TestExtensionValidation:
         assert result["file_name"] == "data.abc"
         # 应该有 warning 日志
         mock_logger.warning.assert_called()
-
-
-# ---------------------------------------------------------------------------
-# TestRegisterDownload
-# ---------------------------------------------------------------------------
-
-
-class TestRegisterDownload:
-    @pytest.mark.asyncio
-    async def test_register_download_true(self, tool, mock_register_download):
-        with patch.object(WriteTool, "_resolve_and_validate_path", _resolve_to_tmp):
-            result = await tool.execute(content="hello", file_path="report.md")
-        assert isinstance(result, dict)
-        mock_register_download.assert_called_once()
-        assert result["download_url"] == "/api/files/file_test123/download"
-        assert result["file_id"] == "file_test123"
-
-    @pytest.mark.asyncio
-    async def test_register_download_false(self, tool):
-        with patch.object(WriteTool, "_resolve_and_validate_path", _resolve_to_tmp):
-            result = await tool.execute(
-                content="hello", file_path="report.md", register_download=False
-            )
-        assert isinstance(result, dict)
-        assert "download_url" not in result
-        assert "file_id" not in result
 
 
 # ---------------------------------------------------------------------------

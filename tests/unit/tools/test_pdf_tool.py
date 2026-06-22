@@ -1355,14 +1355,11 @@ class TestPdfProcessPipeline:
             "file_size": 2048,
         }
 
-        with patch("src.tools.pdf.pdf_writer.md_to_pdf", return_value=mock_write_result), \
-             patch.object(tool, "_register_download", return_value={"file_id": "f_123", "download_url": "/api/files/f_123/download"}):
+        with patch("src.tools.pdf.pdf_writer.md_to_pdf", return_value=mock_write_result):
             result = await tool.execute(context="# Test\n\nHello world", file_paths=[])
 
         assert result["success"] is True
         assert result["file_path"] == "/tmp/test.pdf"
-        assert result["file_id"] == "f_123"
-        assert result["download_url"] == "/api/files/f_123/download"
 
     @pytest.mark.asyncio
     async def test_html_to_pdf_pipeline_success(self):
@@ -1376,12 +1373,11 @@ class TestPdfProcessPipeline:
 
         mock_result = {"success": True, "file_path": "/tmp/test.pdf", "file_size": 1024}
 
-        with patch("src.tools.pdf.pdf_writer.html_to_pdf", return_value=mock_result), \
-             patch.object(tool, "_register_download", return_value={"file_id": "f_abc", "download_url": "/api/files/f_abc/download"}):
+        with patch("src.tools.pdf.pdf_writer.html_to_pdf", return_value=mock_result):
             result = await tool.execute(context="<html><body>Hello</body></html>")
 
         assert result["success"] is True
-        assert result["file_id"] == "f_abc"
+        assert result["file_path"] == "/tmp/test.pdf"
 
     @pytest.mark.asyncio
     async def test_docx_to_pdf_pipeline_success(self):
@@ -1396,8 +1392,7 @@ class TestPdfProcessPipeline:
         mock_result = {"success": True, "file_path": "/tmp/test.pdf", "file_size": 1024}
 
         with patch("src.tools.pdf.pdf_writer.docx_to_pdf", return_value=mock_result), \
-             patch.object(tool, "_resolve_file", return_value="/fake/test.docx"), \
-             patch.object(tool, "_register_download", return_value={"file_id": "f_doc", "download_url": "/api/files/f_doc/download"}):
+             patch.object(tool, "_resolve_file", return_value="/fake/test.docx"):
             result = await tool.execute(context="Word转PDF", file_paths=["test.docx"])
 
         assert result["success"] is True
@@ -1420,13 +1415,11 @@ class TestPdfProcessPipeline:
             "source_count": 2,
         }
 
-        with patch("src.tools.pdf.pdf_merger.merge_pdfs", return_value=mock_merge_result), \
-             patch.object(tool, "_register_download", return_value={"file_id": "f_456", "download_url": "/api/files/f_456/download"}):
+        with patch("src.tools.pdf.pdf_merger.merge_pdfs", return_value=mock_merge_result):
             result = await tool.execute(context="合并PDF", file_paths=["a.pdf", "b.pdf"])
 
         assert result["success"] is True
         assert result["source_count"] == 2
-        assert result["file_id"] == "f_456"
 
     @pytest.mark.asyncio
     async def test_split_pipeline_success(self):
@@ -1445,13 +1438,11 @@ class TestPdfProcessPipeline:
         }
 
         with patch("src.tools.pdf.pdf_merger.split_pdf", return_value=mock_split_result), \
-             patch.object(tool, "_resolve_file", return_value="/fake/test.pdf"), \
-             patch.object(tool, "_register_download", return_value={"file_id": "f_789", "download_url": "/api/files/f_789/download"}):
+             patch.object(tool, "_resolve_file", return_value="/fake/test.pdf"):
             result = await tool.execute(context="拆分PDF", file_paths=["test.pdf"])
 
         assert result["success"] is True
         assert result["count"] == 1
-        assert result["files"][0]["file_id"] == "f_789"
 
     @pytest.mark.asyncio
     async def test_extract_pages_pipeline_success(self):
@@ -1472,8 +1463,7 @@ class TestPdfProcessPipeline:
         }
 
         with patch("src.tools.pdf.pdf_merger.extract_pages", return_value=mock_result), \
-             patch.object(tool, "_resolve_file", return_value="/fake/test.pdf"), \
-             patch.object(tool, "_register_download", return_value={"file_id": "f_ext", "download_url": "/api/files/f_ext/download"}):
+             patch.object(tool, "_resolve_file", return_value="/fake/test.pdf"):
             result = await tool.execute(context="提取页面", file_paths=["test.pdf"])
 
         assert result["success"] is True

@@ -40,7 +40,13 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
 - 将用户的原始需求描述和相关内容放在 context 中
 - context 可以是一句话主题，也可以是 Markdown 格式的完整大纲
 - 用户上传的模板文件路径放在 file_paths 中
-工具会自动判断模式并生成PPT。"""
+工具会自动判断模式并生成PPT。
+
+📦 生成文件后必须用 cp 注册下载（重要）：
+本工具生成 .pptx 文件后（返回结果中含 file_path），必须紧接着调用 cp 工具完成交付，
+用户才能在前端看到并下载：
+    cp(source_file_path="<本工具返回的 file_path>")
+cp 会把文件复制到下载目录、在前端对话中展示下载卡片。"""
 
 
 class PptProcessTool(BaseTool):
@@ -155,11 +161,6 @@ class PptProcessTool(BaseTool):
             "message": f"已基于模板生成PPT，共 {len(matches)} 页",
         }
 
-        download_info = await self._register_download(output_path, Path(output_path).name)
-        if download_info:
-            result["file_id"] = download_info["file_id"]
-            result["download_url"] = download_info["download_url"]
-
         return result
 
     async def _generate_ppt(self, plan: dict) -> Dict[str, Any]:
@@ -178,11 +179,6 @@ class PptProcessTool(BaseTool):
             "message": f"已生成PPT，共 {len(plan.get('slides', []))} 页",
         }
 
-        download_info = await self._register_download(output_path, Path(output_path).name)
-        if download_info:
-            result["file_id"] = download_info["file_id"]
-            result["download_url"] = download_info["download_url"]
-
         return result
 
     def _looks_like_outline(self, text: str) -> bool:
@@ -195,42 +191,3 @@ class PptProcessTool(BaseTool):
             __import__("re").search(r"^(\d+[\.\)、]|[-*]\s)", text, re.MULTILINE)
         )
         return has_headings or has_numbering or len(text) > 200
-
-    async def _register_download(self, file_path: str, display_name: str) -> Dict[str, str]:
-        """注册文件到下载系统。"""
-        try:
-            from src.core.redis_client import redis_client
-            import uuid
-
-            src = Path(file_path)
-            if not src.exists():
-                logger.warning(f"注册下载文件失败: 文件不存在 {file_path}")
-                return {}
-
-            file_id = f"file_{uuid.uuid4().hex[:12]}"
-            file_size = src.stat().st_size
-
-            if not display_name.lower().endswith(".pptx"):
-                display_name += ".pptx"
-
-            file_info = {
-                "file_id": file_id,
-                "name": display_name,
-                "path": str(src.absolute()),
-                "size": file_size,
-                "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                "type": "file",
-            }
-            key = redis_client.make_key("uploaded_file", file_id)
-            for field, value in file_info.items():
-                redis_client.hset(key, field, value)
-            redis_client.expire(key, 86400)
-
-            logger.info(f"文件已注册: file_id={file_id}, name={display_name}, size={file_size}")
-            return {
-                "file_id": file_id,
-                "download_url": f"/api/files/{file_id}/download",
-            }
-        except Exception as e:
-            logger.warning(f"注册下载文件失败: {e}")
-            return {}

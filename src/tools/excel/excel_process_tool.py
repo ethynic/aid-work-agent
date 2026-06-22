@@ -77,7 +77,14 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 - 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 context 中
 - 如果还没有表格数据，Agent 应先通过其他方式准备好数据，再调用本工具
 - 用户上传的附件路径放在 file_paths 中
-工具会自动判断并执行合适的操作。"""
+工具会自动判断并执行合适的操作。
+
+📦 生成文件后必须用 cp 注册下载（重要）：
+当本工具产生新的 Excel 文件时（导出/修改/格式化/填充模板/合并/转换，返回结果中含 file_path），
+必须紧接着调用 cp 工具完成交付，用户才能在前端看到并下载：
+    cp(source_file_path="<本工具返回的 file_path>")
+cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
+仅读取/转Markdown（read/to_md）不产生新文件，无需调用 cp。"""
 
 
 class ExcelProcessTool(BaseTool):
@@ -312,13 +319,6 @@ class ExcelProcessTool(BaseTool):
         if not result.get("success"):
             return result
 
-        # 注册下载
-        output_name = params.get("file_name") or "export.xlsx"
-        download_info = await self._register_download(result["file_path"], output_name)
-        if download_info:
-            result["file_id"] = download_info["file_id"]
-            result["download_url"] = download_info["download_url"]
-
         return result
 
     async def _handle_modify(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -348,10 +348,6 @@ class ExcelProcessTool(BaseTool):
         save_result["operations_applied"] = result["operations_applied"]
         save_result["message"] = f"已完成{result['operations_applied']}项修改操作"
 
-        download_info = await self._register_download(save_result["file_path"], output_name)
-        if download_info:
-            save_result["file_id"] = download_info["file_id"]
-            save_result["download_url"] = download_info["download_url"]
         return save_result
 
     async def _handle_format(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -381,10 +377,6 @@ class ExcelProcessTool(BaseTool):
         save_result["operations_applied"] = result["operations_applied"]
         save_result["message"] = f"已完成{result['operations_applied']}项格式化操作"
 
-        download_info = await self._register_download(save_result["file_path"], output_name)
-        if download_info:
-            save_result["file_id"] = download_info["file_id"]
-            save_result["download_url"] = download_info["download_url"]
         return save_result
 
     async def _handle_fill_template(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -415,11 +407,6 @@ class ExcelProcessTool(BaseTool):
         if not result.get("success"):
             return result
 
-        output_name = params.get("output_name") or "filled_template.xlsx"
-        download_info = await self._register_download(result["file_path"], output_name)
-        if download_info:
-            result["file_id"] = download_info["file_id"]
-            result["download_url"] = download_info["download_url"]
         return result
 
     async def _handle_list_templates(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -442,11 +429,6 @@ class ExcelProcessTool(BaseTool):
         if not result.get("success"):
             return result
 
-        output_name = params.get("output_name") or "merged.xlsx"
-        download_info = await self._register_download(result["file_path"], output_name)
-        if download_info:
-            result["file_id"] = download_info["file_id"]
-            result["download_url"] = download_info["download_url"]
         return result
 
     async def _handle_convert(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -467,63 +449,7 @@ class ExcelProcessTool(BaseTool):
         if not result.get("success"):
             return result
 
-        output_name = params.get("output_name") or "converted"
-        download_info = await self._register_download(result["file_path"], output_name)
-        if download_info:
-            result["file_id"] = download_info["file_id"]
-            result["download_url"] = download_info["download_url"]
         return result
-
-    async def _register_download(self, file_path: str, display_name: str) -> Dict[str, str]:
-        """自动注册文件到下载系统"""
-        try:
-            from src.core.redis_client import redis_client
-            import uuid
-
-            src = Path(file_path)
-            if not src.exists():
-                logger.warning(f"注册下载文件失败: 文件不存在 {file_path}")
-                return {}
-
-            file_id = f"file_{uuid.uuid4().hex[:12]}"
-
-            suffix = src.suffix.lower()
-            mime_type_map = {
-                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                '.xls': 'application/vnd.ms-excel',
-                '.csv': 'text/csv',
-                '.pdf': 'application/pdf',
-                '.png': 'image/png',
-                '.jpg': 'image/jpeg',
-            }
-            mime_type = mime_type_map.get(suffix, 'application/octet-stream')
-
-            if not display_name.lower().endswith(suffix):
-                display_name += suffix
-
-            file_size = src.stat().st_size
-
-            file_info = {
-                "file_id": file_id,
-                "name": display_name,
-                "path": str(src.absolute()),
-                "size": file_size,
-                "mime_type": mime_type,
-                "type": "image" if mime_type.startswith("image/") else "file",
-            }
-            key = redis_client.make_key("uploaded_file", file_id)
-            for field, value in file_info.items():
-                redis_client.hset(key, field, value)
-            redis_client.expire(key, 86400)
-
-            logger.info(f"文件已注册: file_id={file_id}, name={display_name}, size={file_size}")
-            return {
-                "file_id": file_id,
-                "download_url": f"/api/files/{file_id}/download",
-            }
-        except Exception as e:
-            logger.warning(f"注册下载文件失败: {e}")
-            return {}
 
 
 def _detect_data_type(text: str) -> str:
