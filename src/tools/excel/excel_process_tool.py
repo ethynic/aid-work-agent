@@ -82,8 +82,9 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 📦 生成文件后必须用 cp 注册下载（重要）：
 当本工具产生新的 Excel 文件时（导出/修改/格式化/填充模板/合并/转换，返回结果中含 file_path），
 必须紧接着调用 cp 工具完成交付，用户才能在前端看到并下载：
-    cp(source_file_path="<本工具返回的 file_path>")
+    cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
 cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
+display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。
 仅读取/转Markdown（read/to_md）不产生新文件，无需调用 cp。"""
 
 

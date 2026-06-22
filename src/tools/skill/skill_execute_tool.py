@@ -70,14 +70,14 @@ class SkillExecuteTool(BaseTool):
         workdir = kwargs.get("workdir")
 
         # 后端日志：诊断 skill_execute 调用
-        logger.info(f"后端日志：[trade-customer诊断] skill_execute 被调用, skill={skill_name}, session_id={session_id}, user_id={user_id}, command={'有' if command else '无'}")
+        logger.info(f"后端日志：[skill_execute] 被调用, skill={skill_name}, session_id={session_id}, user_id={user_id}, command={'有' if command else '无'}")
         if command:
             # 截断过长的命令，只记录关键信息
             cmd_preview = command[:500] if len(command) > 500 else command
-            logger.info(f"后端日志：[trade-customer诊断] 原始命令内容: {cmd_preview}")
+            logger.info(f"后端日志：[skill_execute] 原始命令内容: skill={skill_name}, command={cmd_preview}")
 
         if not skill_name:
-            logger.warning(f"后端日志：[trade-customer诊断] skill_name 为空，直接返回错误")
+            logger.warning("后端日志：[skill_execute] skill_name 为空，直接返回错误")
             return {
                 "success": False,
                 "error": "No skill name provided"
@@ -213,9 +213,9 @@ class SkillExecuteTool(BaseTool):
 
         try:
             # 后端日志：诊断实际提交给执行器的命令
-            logger.info(f"后端日志：[trade-customer诊断] 提交给 skill_executor 执行, skill={skill_name}, real_session_id={real_session_id}, real_user_id={real_user_id}")
+            logger.info(f"后端日志：[skill_execute] 提交给 skill_executor 执行, skill={skill_name}, real_session_id={real_session_id}, real_user_id={real_user_id}")
             cmd_preview = processed_command[:500] if len(processed_command) > 500 else processed_command
-            logger.info(f"后端日志：[trade-customer诊断] 最终命令: {cmd_preview}")
+            logger.info(f"后端日志：[skill_execute] 最终命令: skill={skill_name}, command={cmd_preview}")
 
             result = await self.skill_executor.execute_skill_command(
                 skill_name=skill_name,
@@ -227,16 +227,16 @@ class SkillExecuteTool(BaseTool):
             )
 
             # 后端日志：诊断执行结果
-            logger.info(f"后端日志：[trade-customer诊断] 执行结果: success={result.success}, exit_code={result.exit_code}, duration={result.duration:.2f}s, timed_out={result.timed_out}")
+            logger.info(f"后端日志：[skill_execute] 执行结果: skill={skill_name}, success={result.success}, exit_code={result.exit_code}, duration={result.duration:.2f}s, timed_out={result.timed_out}")
             if result.stdout:
                 stdout_preview = result.stdout[:300] if len(result.stdout) > 300 else result.stdout
-                logger.info(f"后端日志：[trade-customer诊断] stdout: {stdout_preview}")
+                logger.info(f"后端日志：[skill_execute] stdout: skill={skill_name}, {stdout_preview}")
             if result.stderr:
                 stderr_preview = result.stderr[:300] if len(result.stderr) > 300 else result.stderr
                 if not result.success:
-                    logger.warning(f"后端日志：[trade-customer诊断] stderr: {stderr_preview}")
+                    logger.warning(f"后端日志：[skill_execute] stderr: skill={skill_name}, {stderr_preview}")
                 else:
-                    logger.info(f"后端日志：[trade-customer诊断] stderr (command succeeded): {stderr_preview}")
+                    logger.info(f"后端日志：[skill_execute] stderr (command succeeded): skill={skill_name}, {stderr_preview}")
             if not result.success:
                 # 提取 stdout 末尾 200 字符（命令失败时 stderr 经常为空，stdout 可能含 traceback）
                 stdout_tail = result.stdout[-200:] if result.stdout else "无"
@@ -254,7 +254,8 @@ class SkillExecuteTool(BaseTool):
                     return sanitize_error_info(str(text))
 
                 logger.error(
-                    f"后端日志：[trade-customer诊断] 命令执行失败! "
+                    f"后端日志：[skill_execute] 命令执行失败! "
+                    f"skill={skill_name}, "
                     f"exit_code={result.exit_code}, "
                     f"timed_out={result.timed_out}, "
                     f"duration={result.duration:.2f}s, "

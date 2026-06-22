@@ -55,10 +55,12 @@
 任何工具或技能**生成文件后**（Word/Excel/PPT/PDF/文本文件等，工具返回结果含 `file_path`），
 **必须紧接着调用 `cp` 工具注册下载**，用户才能在前端看到并下载：
 
-    cp(source_file_path="<工具返回的 file_path>")
+    cp(source_file_path="<工具返回的 file_path>", display_name="<面向用户的业务文件名>")
 
 这是硬性要求。word/excel/ppt/pdf/write 等文件生成工具**不会自动注册下载**，
-漏掉 cp 用户就拿不到文件。仅在生成中间文件（不需要交付给用户）时才跳过 cp。
+漏掉 cp 用户就拿不到文件。`display_name` 必须使用用户能理解的业务文件名，
+不要直接使用工具临时文件名（如 `agent_copy_xxx.xlsx`、`quote_xxx.xlsx`）。
+仅在生成中间文件（不需要交付给用户）时才跳过 cp。
 {subagent_constraint_section}
 {long_term_memory}
 {user_info_section}

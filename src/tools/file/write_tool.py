@@ -214,8 +214,9 @@ class WriteTool(BaseTool):
 
 📦 生成文件后必须用 cp 注册下载（重要）：
 本工具只生成文件、返回 file_path，不会自动注册下载。生成后必须紧接着调用 cp 工具完成交付：
-    cp(source_file_path="<本工具返回的 file_path>")
-cp 会把文件复制到下载目录、在前端对话中展示下载卡片，用户才能看到并下载。"""
+    cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
+cp 会把文件复制到下载目录、在前端对话中展示下载卡片，用户才能看到并下载。
+display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。"""
     display_name = "生成文本文件"
     category = "file"
     InputModel = WriteInput

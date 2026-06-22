@@ -118,7 +118,7 @@ class CpTool(BaseTool):
     description = """复制文件，相当于 shell 的 cp 命令。
 
 用法：
-cp(source_file_path="/tmp/quote_xxx.xlsx")
+cp(source_file_path="/tmp/quote_xxx.xlsx", display_name="研学旅游报价单.xlsx")
 → 将源文件复制到下载目录，自动注册下载，默认对用户可见可下载
 
 cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt/index.html")
@@ -132,10 +132,12 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="output/ppt
 - register_download：默认 True，复制后自动注册下载。
 - visible：默认 True，注册的文件在前端对话中展示下载卡片。
   仅当作为中间过程文件不需要展示时设为 False。
-- display_name：注册下载时的显示文件名（可选）。默认使用源文件名。
+- display_name：注册下载时的显示文件名（交付给用户时应提供）。
+  必须使用用户能理解的业务文件名，默认才使用源文件名。
 
 任何需要复制文件内容的场景都用本工具：拷贝模板生成新文件、复制用户上传文件、
-把工具/skill 生成的文件注册到下载系统等。零 token 消耗（不读源文件内容到上下文）。"""
+把工具/skill 生成的文件注册到下载系统等。交付用户的文件必须传 display_name，
+避免前端展示临时文件名。零 token 消耗（不读源文件内容到上下文）。"""
     display_name = "复制文件"
     category = "file"
     InputModel = CpInput

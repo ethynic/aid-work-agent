@@ -45,8 +45,9 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
 📦 生成文件后必须用 cp 注册下载（重要）：
 本工具生成 .pptx 文件后（返回结果中含 file_path），必须紧接着调用 cp 工具完成交付，
 用户才能在前端看到并下载：
-    cp(source_file_path="<本工具返回的 file_path>")
-cp 会把文件复制到下载目录、在前端对话中展示下载卡片。"""
+    cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
+cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
+display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。"""
 
 
 class PptProcessTool(BaseTool):

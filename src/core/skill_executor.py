@@ -45,6 +45,8 @@ from src.core.skill_loader import Skill, SkillDependency
 from src.core.skill_registry import SkillRegistry
 from src.config.settings import settings
 
+SKILL_COMMAND_TIMEOUT_SECONDS = 600
+
 
 @dataclass
 class ExecutionResult:
@@ -235,7 +237,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 install_result = await self._execute_command(
                     f"pip install {dep.name}{version_spec}",
                     context.workdir,
-                    timeout=300
+                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS
                 )
                 results[dep.name] = install_result.success
                 
@@ -260,7 +262,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 install_result = await self._execute_command(
                     f"apt-get update && apt-get install -y {dep.name}",
                     context.workdir,
-                    timeout=300
+                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS
                 )
                 results[dep.name] = install_result.success
             
@@ -280,7 +282,7 @@ Follow the instructions in the skill above to complete the user's task."""
                 install_result = await self._execute_command(
                     f"npm install {dep.name}",
                     context.workdir,
-                    timeout=300
+                    timeout=SKILL_COMMAND_TIMEOUT_SECONDS
                 )
                 results[dep.name] = install_result.success
         
@@ -322,7 +324,7 @@ Follow the instructions in the skill above to complete the user's task."""
         self,
         command: str,
         workdir: Path,
-        timeout: int = 300,
+        timeout: int = SKILL_COMMAND_TIMEOUT_SECONDS,
         stdin_content: Optional[bytes] = None,
     ) -> ExecutionResult:
         """
@@ -503,7 +505,7 @@ Follow the instructions in the skill above to complete the user's task."""
             result = await self._execute_command(
                 processed_command,
                 context.workdir,
-                timeout=300,  # 默认5分钟超时
+                timeout=SKILL_COMMAND_TIMEOUT_SECONDS,
                 stdin_content=stdin_content,
             )
             
@@ -590,7 +592,7 @@ Follow the instructions in the skill above to complete the user's task."""
             result = await self._execute_command(
                 f"python {script_path}",
                 context.workdir,
-                timeout=300
+                timeout=SKILL_COMMAND_TIMEOUT_SECONDS
             )
             
             return result
