@@ -403,17 +403,17 @@ class ChannelSessionManager:
             if before_message_id:
                 cursor.execute(f"""
                     SELECT * FROM channel_messages
-                    WHERE session_id = {placeholder} AND created_at < (
-                        SELECT created_at FROM channel_messages WHERE message_id = {placeholder}
+                    WHERE session_id = {placeholder} AND id < (
+                        SELECT id FROM channel_messages WHERE message_id = {placeholder}
                     )
-                    ORDER BY created_at ASC
+                    ORDER BY id ASC
                     LIMIT {limit}
                 """, (session_id, before_message_id))
             else:
                 cursor.execute(f"""
                     SELECT * FROM channel_messages
                     WHERE session_id = {placeholder}
-                    ORDER BY created_at ASC
+                    ORDER BY id ASC
                     LIMIT {limit}
                 """, (session_id,))
 
@@ -601,7 +601,7 @@ class ChannelSessionManager:
                 SELECT message_id, session_id, role, content, message_type, attachments, metadata, created_at
                 FROM channel_messages
                 WHERE {where_clause}
-                ORDER BY created_at DESC
+                ORDER BY id DESC
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
 
