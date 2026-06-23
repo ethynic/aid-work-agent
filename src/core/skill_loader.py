@@ -261,7 +261,9 @@ class SkillLoader:
             body=body.strip(),
             path=path,
             dir=path.parent,
-            version=frontmatter.get("version", "1.0.0"),
+            version=frontmatter.get("version")
+                or (metadata.get("version") if isinstance(metadata, dict) else None)
+                or "1.0.0",
             author=frontmatter.get("author", "unknown"),
             license=frontmatter.get("license"),
             compatibility=frontmatter.get("compatibility"),
@@ -380,7 +382,7 @@ class SkillLoader:
             return "(no skills available)"
 
         return "\n".join(
-            f"- {name}: {skill.description}"
+            f"- {name} (v{skill.version}): {skill.description}"
             for name, skill in self.skills.items()
         )
     

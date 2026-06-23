@@ -1248,6 +1248,119 @@ class Agent:
         """是否有活跃的 Skill Session"""
         return bool(self._active_skill_sessions)
 
+    def _check_skill_version_consistency(
+        self, session_id: str, skill_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        校验该 skill 在本会话上下文中的版本是否与 registry 当前版本一致。
+
+        Args:
+            session_id: 会话ID
+            skill_name: 技能名称
+
+        Returns:
+            None  → 通过，可继续执行
+            dict  → 拦截结果（含 success=False 和提示消息），直接作为 skill_execute 返回给 LLM
+        """
+        if not self.skill_registry:
+            return None
+        skill_obj = self.skill_registry.get(skill_name)
+        if not skill_obj:
+            # skill 不存在交给后续原逻辑报错
+            return None
+        current_version = skill_obj.version
+
+        historical_version = self._get_last_use_skill_version(session_id, skill_name)
+
+        if historical_version == current_version:
+            return None
+
+        # 不一致 / 无历史记录 / 历史返回缺字段 → 拦截
+        if historical_version is None:
+            reason = f"本会话尚未加载过该技能的最新指南（当前版本 v{current_version}）"
+        else:
+            reason = f"技能版本已更新（历史 v{historical_version} → 当前 v{current_version}）"
+        logger.info(f"后端日志：skill_execute 被版本校验拦截", extra={
+            "skill_name": skill_name,
+            "historical_version": historical_version,
+            "current_version": current_version,
+        })
+        return {
+            "success": False,
+            "error": (
+                f"⚠️ {reason}。请先调用 use_skill(skill=\"{skill_name}\") 重新加载最新操作指南，"
+                f"然后再调用 skill_execute 执行脚本。"
+            ),
+            "skill_name": skill_name,
+            "historical_version": historical_version,
+            "current_version": current_version,
+        }
+
+    def _get_last_use_skill_version(
+        self, session_id: str, skill_name: str
+    ) -> Optional[str]:
+        """
+        扫描 session 历史消息，找到该 skill 最近一次 use_skill 调用返回的 skill_version。
+
+        识别方式：
+        - 遍历 memory 中 role=assistant 且带 tool_calls 的消息，找到 function.name == "use_skill"
+          且 arguments.skill == skill_name 的调用，记录其 tool_call_id。
+        - 再在 role=tool 的消息里按 tool_call_id 取出 content（JSON 字符串），
+          解析后取 skill_version 字段。
+
+        Args:
+            session_id: 会话ID
+            skill_name: 技能名称
+
+        Returns:
+            最近一次 use_skill 返回的 skill_version；没找到返回 None。
+        """
+        import json as _json
+        try:
+            messages = self.memory.get_context(session_id) or []
+        except Exception as e:
+            logger.warning(f"后端日志：读取 memory 失败: {e}")
+            return None
+
+        # 第一遍：找到该 skill 最近一次 use_skill 调用的 tool_call_id
+        target_tool_call_id = None
+        for msg in reversed(messages):
+            if msg.get("role") != "assistant":
+                continue
+            tool_calls = msg.get("tool_calls") or []
+            for tc in tool_calls:
+                try:
+                    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    if fn.get("name") != "use_skill":
+                        continue
+                    args_raw = fn.get("arguments", "{}")
+                    args = _json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+                    if args.get("skill") == skill_name:
+                        target_tool_call_id = tc.get("id")
+                        break
+                except (ValueError, TypeError):
+                    continue
+            if target_tool_call_id:
+                break
+
+        if not target_tool_call_id:
+            return None
+
+        # 第二遍：按 tool_call_id 找 tool 返回中的 skill_version
+        for msg in reversed(messages):
+            if msg.get("role") != "tool":
+                continue
+            if msg.get("tool_call_id") != target_tool_call_id:
+                continue
+            content = msg.get("content", "")
+            try:
+                payload = _json.loads(content) if isinstance(content, str) else content
+            except (ValueError, TypeError):
+                return None
+            if isinstance(payload, dict):
+                return payload.get("skill_version")
+        return None
+
     async def _delegate_to_subagent_direct(
         self,
         subagent_name: str,
@@ -2155,6 +2268,20 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     files = tool_args.get("files", {})
                     content = tool_args.get("content")
 
+                    # ⚠️ Skill 版本校验拦截：执行脚本前，必须确认本会话上下文中
+                    # 该 skill 最近一次 use_skill 返回的 skill_version 等于当前 registry 版本。
+                    # 不一致 / 历史无记录 / 历史返回缺 skill_version 字段 → 拒绝执行，
+                    # 要求 LLM 先重新 use_skill 加载最新指南。
+                    version_block = self._check_skill_version_consistency(session_id, skill_name)
+                    if version_block:
+                        skill_exec_result = version_block
+                        yield make_event("tool_result", toolName=tool_name, result=skill_exec_result, success=False)
+                        tool_results.append({
+                            "tool_call_id": tool_id,
+                            "content": skill_exec_result
+                        })
+                        continue
+
                     # 标记任务开始（如果计划中存在）
                     plan = self.plan_manager.get_plan(session_id)
                     skill_task_id = None
@@ -2869,6 +2996,18 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         command = tool_args.get("command", "") or None  # 空字符串转为 None
                         files = tool_args.get("files", {})
                         content = tool_args.get("content")
+
+                        # ⚠️ Skill 版本校验拦截（与主循环一致）
+                        version_block = self._check_skill_version_consistency(self.session_id, skill_name)
+                        if version_block:
+                            tool_result = version_block
+                            await _emit_async(make_event("tool_result", toolName=tool_name, result=tool_result, success=False))
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.get("id", ""),
+                                "content": json.dumps(tool_result, ensure_ascii=False)
+                            })
+                            continue
                         skill_exec_result = await self._skill_execute_tool.execute(
                             skill=skill_name,
                             command=command,

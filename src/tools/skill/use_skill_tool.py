@@ -76,8 +76,11 @@ class UseSkillTool(BaseTool):
                 "available_skills": available
             }
 
+        skill_version = skill.version if skill else "unknown"
+
         logger.info(f"后端日志：UseSkillTool 加载技能", extra={
             "skill_name": skill_name,
+            "skill_version": skill_version,
             "skill_content_length": len(skill_content) if skill_content else 0
         })
 
@@ -113,6 +116,7 @@ class UseSkillTool(BaseTool):
         return {
             "success": True,
             "skill_name": skill_name,
+            "skill_version": skill_version,
             "content": enhanced_content,
-            "message": f"✅ Skill '{skill_name}' loaded."
+            "message": f"✅ Skill '{skill_name}' (v{skill_version}) loaded."
         }

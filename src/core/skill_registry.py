@@ -225,9 +225,9 @@ class SkillRegistry:
         """
         if not self._skills:
             return "(no skills available)"
-        
+
         return "\n".join(
-            f"- {name}: {skill.description}"
+            f"- {name} (v{skill.version}): {skill.description}"
             for name, skill in self._skills.items()
         )
     
