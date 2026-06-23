@@ -4,7 +4,7 @@
 
 import re
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -125,7 +125,13 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
 
         price_table = retriever.get_price_table(doc_id)
         check_in_iso = running_dt.strftime('%Y-%m-%d') if running_dt else None
-        price = _parse_team_price(price_table, check_in_iso)
+        price = _parse_team_price(
+            price_table,
+            check_in_iso,
+            total_people=total_people,
+            couples=couples,
+            teacher_count=teacher_count,
+        )
 
         if price == 0:
             items.append({
@@ -204,7 +210,13 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         return items, 0
 
     nights = trip_days - 1
-    default_price = _parse_team_price(price_table, start_date)
+    default_price = _parse_team_price(
+        price_table,
+        start_date,
+        total_people=total_people,
+        couples=couples,
+        teacher_count=teacher_count,
+    )
 
     if default_price == 0:
         logger.warning(f"[travel-quote] 酒店 doc_id={doc_id} 价格表无有效价格")
@@ -268,57 +280,138 @@ def _extract_first_team_price(price_table: str) -> float:
     return 0
 
 
-def _select_team_price_by_llm(price_table: str, check_in_date: str) -> float:
-    """把完整价格表 + 入住日期交给 LLM，由其按语义返回合适的团队价。
+def _parse_hotel_price_rows(price_table: str) -> List[Dict]:
+    """解析酒店价格表中的有效价格行。"""
+    rows = []
+    if not price_table:
+        return rows
 
-    用 LLM 而非硬编码匹配的原因：节日繁多且别名不一（五一/劳动节、国庆/十一、
-    端午/中秋/春节……）、日期写法多变（"暑期"/"旺季"/"5月"/"7-8月"）、区间表达
-    灵活，正则与关键词列表永远覆盖不全。LLM 理解语义，天然覆盖这些变体。
-    """
+    for idx, line in enumerate(price_table.splitlines()):
+        line = line.strip()
+        if not line or '|' not in line:
+            continue
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) < 3:
+            continue
+
+        price_match = re.search(r'\d+(?:\.\d+)?', parts[2].replace(',', ''))
+        if not price_match:
+            continue
+
+        customer_type = parts[1]
+        is_team = (
+            "团队" in customer_type
+            or "团散同价" in customer_type
+            or "团队/散客" in customer_type
+        )
+
+        rows.append({
+            "room_type": parts[0],
+            "customer_type": customer_type,
+            "price": float(price_match.group(0)),
+            "breakfast": parts[3] if len(parts) >= 4 else "",
+            "date_text": "|".join(parts[4:]).strip() if len(parts) >= 5 else "",
+            "row_index": idx,
+            "raw": line,
+            "is_team": is_team,
+        })
+
+    return rows
+
+
+def _format_team_context(total_people: Optional[int],
+                         couples: Optional[int],
+                         teacher_count: Optional[int]) -> str:
+    parts = []
+    if total_people is not None:
+        parts.append(f"总人数{total_people}人")
+    if couples:
+        parts.append(f"夫妻{couples}对")
+    if teacher_count:
+        parts.append(f"随队老师{teacher_count}人")
+    return "，".join(parts) if parts else "未提供"
+
+
+def _format_check_in_context(check_in_date: str) -> str:
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    try:
+        weekday = weekdays[datetime.fromisoformat(check_in_date).weekday()]
+        return f"{check_in_date}（{weekday}）"
+    except Exception:
+        return check_in_date
+
+
+def _select_team_price_by_llm(price_table: str, check_in_date: str,
+                              total_people: Optional[int] = None,
+                              couples: Optional[int] = None,
+                              teacher_count: Optional[int] = None) -> float:
+    """用短 prompt + 关闭推理选择团队价。"""
     from llm_client import call_llm
 
-    prompt = f"""你是酒店报价助手。下面是某酒店的价格明细表，每行格式为：
-房型 | 客户类型 | 价格(元) | 含早 | 适用日期
+    rows = _parse_hotel_price_rows(price_table)
+    team_rows = [row for row in rows if row.get("is_team")] or rows
+    candidates = "\n".join(
+        f"{idx}. 房型={row['room_type']} | 客户={row['customer_type']} | 价格={row['price']:.0f} | 日期={row.get('date_text', '')}"
+        for idx, row in enumerate(team_rows, 1)
+    )
+    if not candidates:
+        candidates = price_table
 
-价格明细表：
-{price_table}
+    prompt = f"""任务：为酒店住宿从候选价格中选择正确房价，只输出数字。
+入住日期：{_format_check_in_context(check_in_date)}
+团队构成：{_format_team_context(total_people, couples, teacher_count)}
+选择规则：
+1. 优先选择客户类型含“团队”的价格；“团散同价”也可选。
+2. 根据入住日期匹配适用日期，节假日专用价格优先于普通日期区间。
+3. 团队构成只用于判断客户类型，不要按人数重新计算房费。
+4. 如果没有日期覆盖，选择候选中第一条团队价。
+5. 只输出一个数字，不要单位、解释或标点。
 
-入住日期：{check_in_date}
-
-请根据入住日期选出团队房价。判断规则：
-1. 只考虑"客户类型"含"团队"的行（"团队/团散同价"也算团队）。
-2. 取"适用日期"覆盖该入住日期的那一行。
-3. 若入住日同时落在【节假日专用区间】（通常带括号备注，如"（五一）"、"（国庆）"，或含节假日字样）和【普通季节区间】内，优先取节假日专用价。
-4. 若没有任何区间的"适用日期"包含入住日期（例如入住日是淡季但表里只有旺季行），则取所有团队价里按价格表出现顺序的第一条。
-5. 只输出一个整数价格（单位：元），不要任何其他文字、单位、解释、标点。
+候选：
+{candidates}
 
 答案："""
 
-    raw = call_llm(prompt)
+    raw = call_llm(
+        prompt,
+        timeout=8.0,
+        max_tokens=64,
+        task="hotel_price_select",
+        extra_body={"thinking": {"type": "disabled"}},
+    )
     m = re.search(r'\d+(?:\.\d+)?', raw or '')
     if not m:
         raise ValueError(f"LLM 输出无法解析为价格: {raw!r}")
     return float(m.group(0))
 
 
-def _parse_team_price(price_table: str, check_in_date: Optional[str] = None) -> float:
+def _parse_team_price(price_table: str, check_in_date: Optional[str] = None,
+                      total_people: Optional[int] = None,
+                      couples: Optional[int] = None,
+                      teacher_count: Optional[int] = None) -> float:
     """从知识库价格表文本中提取团队房价。
 
     价格表每行格式：房型 | 客户类型 | 价格 | 含早 | 适用日期
 
     Args:
-        check_in_date: 入住日期（ISO 字符串，如 '2026-07-01'）。传入时把完整价格表
-            和入住日期交给 LLM 按语义匹配（覆盖节日别名、模糊日期、各种区间写法）。
-            为 None（如 update_hotel 的"是否有价"校验）或 LLM 调用失败时，回退到
-            首条团队价。
+        check_in_date: 入住日期（ISO 字符串，如 '2026-07-01'）。传入时用短 prompt
+            LLM 根据入住日期和团队构成选择团队价。为 None（如 update_hotel 的
+            "是否有价"校验）或 LLM 调用失败时，回退到首条团队价。
     """
     if not price_table:
         return 0
     fallback = _extract_first_team_price(price_table)
     if not check_in_date:
         return fallback
+
     try:
-        price = _select_team_price_by_llm(price_table, check_in_date)
+        price = _select_team_price_by_llm(
+            price_table,
+            check_in_date,
+            total_people=total_people,
+            couples=couples,
+            teacher_count=teacher_count,
+        )
         if price > 0:
             return price
         logger.warning(f"[travel-quote] LLM 返回非正价格 {price}，回退首条团队价")

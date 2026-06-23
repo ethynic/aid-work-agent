@@ -4,10 +4,26 @@
 
 import json
 import re
+from typing import Any, Dict
 
 from loguru import logger
 
 from llm_client import call_llm
+
+
+def _llm_kwargs(task: str, max_tokens: int, timeout: float = 60.0) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "timeout": timeout,
+        "max_tokens": max_tokens,
+        "task": task,
+    }
+    try:
+        from src.config.settings import settings
+        if settings.llm.provider == "deepseek":
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    except Exception:
+        pass
+    return kwargs
 
 
 def parse_itinerary(itinerary_text: str) -> dict:
@@ -139,9 +155,17 @@ def parse_itinerary(itinerary_text: str) -> dict:
    - **【输出前自检】**：扫描行程文本中所有出现的"乘车前往"、"约 X 小时车程"、"X 公里"、"返回 X"、"接站"、"送站"，每一个都应该对应 daily_routes 中的至少一段。如果有跨城关键词但 daily_routes 里没对应段，必须补上
    - **【天数对齐】**：daily_routes 的长度等于 trip_days，没车的天 legs 为空数组 []
    - **【示例】**：6天5晚行程，D1 贵阳→平塘、D3 平塘→荔波、D6 荔波→贵阳，则只有 D1/D3/D6 各 1 段，D2/D4/D5 legs 为空数组
-8. 只返回 JSON，不要其他文字"""
+8. **关闭推理模式下的硬性自检（必须执行）**：
+   - daily_attractions 要列出所有实际游览的收费/景区景点，即使"游玩项目"列是 "—" 或空，也要输出该景点并让 activities=[]。例如 "天龙屯堡 | —" 必须输出 {{"name":"天龙屯堡","activities":[]}}
+   - 不要因为 activities 为空就删除景点；只删除纯酒店/自由活动/用餐/车程而非景点的天
+   - activities 必须逐字复制"游玩项目"列，保留括号、中文标点和补充说明。例如 "扶梯（单程）" 必须原样输出，不能简化为 "扶梯"
+   - 景点 name 优先使用行程安排中的主景点名；不要把小七孔改成大七孔，不要随意换同义景点
+9. 只返回 JSON，不要其他文字"""
 
-    raw = call_llm(prompt)
+    raw = call_llm(
+        prompt,
+        **_llm_kwargs("itinerary_parse", max_tokens=4096),
+    )
 
     json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
     if json_match:

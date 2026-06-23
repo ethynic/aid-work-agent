@@ -29,6 +29,22 @@ class UniqueAttraction:
     days: List[int] = field(default_factory=list)
 
 
+def _llm_kwargs(task: str, max_tokens: int, timeout: float = 20.0) -> Dict[str, Any]:
+    """景点解析使用 DeepSeek V4 Pro 关闭推理，其他 provider 保持兼容。"""
+    kwargs: Dict[str, Any] = {
+        "timeout": timeout,
+        "max_tokens": max_tokens,
+        "task": task,
+    }
+    try:
+        from src.config.settings import settings
+        if settings.llm.provider == "deepseek":
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    except Exception:
+        pass
+    return kwargs
+
+
 def calculate_attraction_cost(
     items: list,
     tenant_id: str,
@@ -233,11 +249,15 @@ def _llm_extract_tickets(
 9. 只返回 JSON，不要其他文字"""
 
     try:
-        raw = call_llm(prompt)
+        raw = call_llm(
+            prompt,
+            **_llm_kwargs("attraction_ticket_extract", max_tokens=1024),
+        )
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
         if json_match:
             raw = json_match.group(1)
         result = json.loads(raw.strip())
+        result = _prefer_team_ticket_rows(result, ticket_table)
         ticket_count = len(result.get('tickets') or [])
         logger.info(f"[travel-quote] LLM门票提取: 搜索='{search_name}', "
                      f"确认={result.get('confirmed')}, {ticket_count}项门票")
@@ -245,6 +265,74 @@ def _llm_extract_tickets(
     except Exception as e:
         logger.warning(f"[travel-quote] LLM门票提取失败: {e}")
         return None
+
+
+def _prefer_team_ticket_rows(result: Dict, ticket_table: str = "") -> Dict:
+    """同票型同时出现普通成人票和团队票时，保留团队票。"""
+    tickets = result.get("tickets") or []
+    table_team_tickets = _extract_team_tickets_from_table(ticket_table)
+    if table_team_tickets:
+        table_team_types = {ticket.get("ticket_type", "adult") for ticket in table_team_tickets}
+        tickets = [
+            ticket for ticket in tickets
+            if ticket.get("ticket_type", "adult") not in table_team_types
+        ] + table_team_tickets
+        new_result = dict(result)
+        new_result["tickets"] = tickets
+        result = new_result
+
+    if len(tickets) <= 1:
+        return result
+
+    def is_team_ticket(ticket: Dict) -> bool:
+        text = " ".join(str(ticket.get(key) or "") for key in ("name", "remark", "ticket_type"))
+        return "团队" in text
+
+    team_tickets = [ticket for ticket in tickets if is_team_ticket(ticket)]
+    if not team_tickets:
+        return result
+
+    team_types = {ticket.get("ticket_type", "adult") for ticket in team_tickets}
+    filtered = [
+        ticket for ticket in tickets
+        if is_team_ticket(ticket) or ticket.get("ticket_type", "adult") not in team_types
+    ]
+
+    new_result = dict(result)
+    new_result["tickets"] = filtered
+    return new_result
+
+
+def _extract_team_tickets_from_table(ticket_table: str) -> List[Dict]:
+    tickets = []
+    if not ticket_table:
+        return tickets
+
+    for line in ticket_table.splitlines():
+        if '|' not in line:
+            continue
+        parts = [part.strip() for part in line.split('|')]
+        if len(parts) < 3:
+            continue
+        if "团队" not in f"{parts[0]} {parts[1]}":
+            continue
+
+        price_match = None
+        for part in parts[2:]:
+            price_match = re.search(r'\d+(?:\.\d+)?', part.replace(',', ''))
+            if price_match:
+                break
+        if not price_match:
+            continue
+
+        tickets.append({
+            "name": f"{parts[0]}(团队票)",
+            "unit_price": float(price_match.group(0)),
+            "ticket_type": "adult",
+            "remark": "团队票优先",
+        })
+
+    return tickets
 
 
 # ============================================================
@@ -312,7 +400,10 @@ def _llm_extract_projects(
 只返回 JSON，不要其他文字。"""
 
     try:
-        raw = call_llm(prompt)
+        raw = call_llm(
+            prompt,
+            **_llm_kwargs("attraction_project_match", max_tokens=2048),
+        )
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
         if json_match:
             raw = json_match.group(1)
