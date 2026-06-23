@@ -177,6 +177,76 @@
           :show-size-changer="true"
         />
       </div>
+
+      <!-- ========== Tab 4: 监控 ========== -->
+      <div v-show="activeTab === 'monitor'" class="flex flex-col h-full">
+        <div class="page-toolbar">
+          <div class="page-toolbar-left">
+            <BaseSelect v-model="monitorWindowHours" size="sm" class="w-32" @update:model-value="loadMonitor">
+              <option value="1">近 1 小时</option>
+              <option value="24">近 24 小时</option>
+              <option value="168">近 7 天</option>
+            </BaseSelect>
+            <span v-if="metrics" class="text-xs text-muted">生成于 {{ formatTime(metrics.generated_at) }}</span>
+          </div>
+          <div class="page-toolbar-right">
+            <BaseButton intent="secondary" @click="loadMonitor">刷新</BaseButton>
+          </div>
+        </div>
+
+        <div v-if="loadingMonitor && !metrics" class="text-center py-12 text-muted">加载中...</div>
+        <div v-else-if="metrics" class="flex-1 overflow-y-auto space-y-6 mt-2">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="bg-surface rounded-lg border border-default p-4">
+              <div class="text-sm text-muted">客户端在线率</div>
+              <div class="text-2xl font-bold text-default mt-1">{{ pct(metrics.clients.online_rate) }}</div>
+              <div class="text-xs text-muted mt-1">{{ metrics.clients.online }} / {{ metrics.clients.total }} 在线</div>
+            </div>
+            <div class="bg-surface rounded-lg border border-default p-4">
+              <div class="text-sm text-muted">账号在线率</div>
+              <div class="text-2xl font-bold text-default mt-1">{{ pct(metrics.accounts.online_rate) }}</div>
+              <div class="text-xs text-muted mt-1">{{ metrics.accounts.online }} / {{ metrics.accounts.total }} 在线</div>
+            </div>
+            <div class="bg-surface rounded-lg border border-default p-4">
+              <div class="text-sm text-muted">Action 成功率</div>
+              <div class="text-2xl font-bold text-default mt-1">{{ pct(metrics.actions.success_rate) }}</div>
+              <div class="text-xs text-muted mt-1">成功 {{ metrics.actions.succeeded }} / 失败 {{ metrics.actions.failed }}</div>
+            </div>
+            <div class="bg-surface rounded-lg border border-default p-4">
+              <div class="text-sm text-muted">待复核绑定</div>
+              <div class="text-2xl font-bold text-default mt-1">{{ metrics.bindings.needs_review }}</div>
+              <div class="text-xs text-muted mt-1">needs_review</div>
+            </div>
+          </div>
+
+          <div class="bg-surface rounded-lg border border-default p-4">
+            <div class="text-sm font-medium text-default mb-3">近 {{ metrics.window_hours }} 小时活动</div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div><span class="text-muted">入站消息：</span><span class="text-default font-medium">{{ metrics.audit_counts.inbound_message || 0 }}</span></div>
+              <div><span class="text-muted">智能体回复：</span><span class="text-default font-medium">{{ metrics.audit_counts.agent_reply || 0 }}</span></div>
+              <div><span class="text-muted">暂停/恢复：</span><span class="text-default font-medium">{{ metrics.audit_counts.pause_resume || 0 }}</span></div>
+              <div><span class="text-muted">动作回执：</span><span class="text-default font-medium">{{ metrics.audit_counts.action_result || 0 }}</span></div>
+            </div>
+          </div>
+
+          <div class="bg-surface rounded-lg border border-default p-4">
+            <div class="text-sm font-medium text-default mb-3">活跃告警（{{ alerts.length }}）</div>
+            <div v-if="alerts.length === 0" class="text-center py-6">
+              <div class="text-2xl text-success-600 mb-1">✓</div>
+              <div class="text-sm text-muted">无活跃告警</div>
+            </div>
+            <div v-else class="table-scroll-wrapper">
+              <BaseTable :columns="alertColumns" :data="alerts" row-key="_key">
+                <template #rule="{ row }">{{ alertRuleLabel[row.rule] || row.rule }}</template>
+                <template #severity="{ row }">
+                  <BaseBadge :intent="alertSeverityIntent(row.severity)">{{ alertSeverityLabel(row.severity) }}</BaseBadge>
+                </template>
+                <template #empty>无活跃告警</template>
+              </BaseTable>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 注册客户端 Modal -->
@@ -288,7 +358,9 @@ import BasePagination from '@/components/ui/BasePagination.vue'
 import {
   listClients, registerClient, listClientAccounts, rotateClientSecret,
   listBindings, confirmBinding, pause, resume, listAudit,
+  getMetrics, getAlerts,
   type RpaClientSummary, type RpaAccount, type RpaBinding, type RpaAudit,
+  type RpaMetrics, type RpaAlert,
 } from '@/api/wecomPersonalRpa'
 import {
   WecomRpaClientStatusMap, WecomRpaAccountStatusMap, WecomRpaBindingStatusMap,
@@ -331,6 +403,7 @@ const tabs = [
   { key: 'clients', label: '客户端' },
   { key: 'bindings', label: '会话绑定' },
   { key: 'audit', label: '审计日志' },
+  { key: 'monitor', label: '监控' },
 ]
 const activeTab = ref('clients')
 const loadedTabs = ref(new Set<string>())
@@ -341,6 +414,7 @@ async function switchTab(key: string) {
     loadedTabs.value.add(key)
     if (key === 'bindings') await loadBindings()
     else if (key === 'audit') await loadAudit()
+    else if (key === 'monitor') await loadMonitor()
   }
 }
 
@@ -668,6 +742,54 @@ const auditDetail = ref<RpaAudit | null>(null)
 function openAuditDetail(row: any) {
   auditDetail.value = row
   showAuditDetail.value = true
+}
+
+// ==================== Tab 4: 监控 ====================
+const metrics = ref<RpaMetrics | null>(null)
+type AlertRow = RpaAlert & { _key: string }
+const alerts = ref<AlertRow[]>([])
+const loadingMonitor = ref(false)
+const monitorWindowHours = ref('24')
+
+const alertColumns: TableColumn[] = [
+  { key: 'rule', label: '规则', width: '140px' },
+  { key: 'severity', label: '级别', width: '90px' },
+  { key: 'entity_name', label: '对象', width: '160px' },
+  { key: 'message', label: '说明', minWidth: '240px' },
+]
+
+const alertRuleLabel: Record<string, string> = {
+  client_offline: '客户端离线',
+  account_not_logged_in: '账号未登录',
+  consecutive_action_failures: '连续动作失败',
+  needs_review_backlog: '待复核积压',
+}
+
+function alertSeverityIntent(sev: string): 'danger' | 'warning' | 'neutral' {
+  if (sev === 'danger') return 'danger'
+  if (sev === 'warning') return 'warning'
+  return 'neutral'
+}
+function alertSeverityLabel(sev: string): string {
+  if (sev === 'danger') return '严重'
+  if (sev === 'warning') return '警告'
+  return '提示'
+}
+function pct(rate: number): string {
+  return (rate * 100).toFixed(1) + '%'
+}
+
+async function loadMonitor() {
+  loadingMonitor.value = true
+  try {
+    const [m, a] = await Promise.all([getMetrics(Number(monitorWindowHours.value) || 24), getAlerts()])
+    metrics.value = m
+    alerts.value = (a || []).map((x, i) => ({ ...x, _key: String(i) }))
+  } catch (e: any) {
+    toast.error(e.message || '获取监控数据失败')
+  } finally {
+    loadingMonitor.value = false
+  }
 }
 
 // ==================== 初始化 ====================

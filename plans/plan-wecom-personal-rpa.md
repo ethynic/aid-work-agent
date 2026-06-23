@@ -4,8 +4,8 @@
 > 关联调研：[docs/research/wecom-personal-rpa-client-implementation-research.md](../docs/research/wecom-personal-rpa-client-implementation-research.md)
 > 登记：[docs/ideas.md](../docs/ideas.md) 渠道集成分区
 > 创建日期：2026-06-16
-> 更新日期：2026-06-22
-> 状态：🔧 部分完成（服务端渠道完整、74 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册+9 个 PowerShell 脚本、准入验证探测工具、WiX v5 MSI 骨架已交付；P1.1 管理前端已交付——`frontend/src/components/saas/WecomPersonalRpaManager.vue` 三 Tab 接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、WiX 实编译+签名、14 天验收）
+> 更新日期：2026-06-23
+> 状态：🔧 部分完成（服务端渠道完整、83 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册+9 个 PowerShell 脚本、准入验证探测工具、WiX v5 MSI 骨架已交付；P1.1 管理前端已交付——`WecomPersonalRpaManager.vue` 三 Tab 接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调；P1.4 指标+告警已交付——`GET /metrics` + `GET /alerts` + 纯逻辑 `observability.py`（9 单测）+ 前端「监控」Tab，未真实联调。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、WiX 实编译+签名、14 天验收）
 
 ---
 
@@ -129,8 +129,8 @@
 
 | # | 任务 | 状态 | 产出 |
 |---|------|------|------|
-| 48 | 指标：客户端在线率、账号在线率、action 成功率、延迟、暂停数 | 🔧 | 审计日志已埋点（category=inbound_message/agent_reply/action_result），指标聚合/导出待补 |
-| 49 | 告警：客户端离线、账号未登录、连续失败、误发风险、版本过低 | 🔧 | 状态上报链路在，告警规则引擎待补 |
+| 48 | 指标：客户端在线率、账号在线率、action 成功率、延迟、暂停数 | ✅ | `GET /metrics` 聚合端点 + `observability.build_metrics`（客户端/账号在线率、action 成功率、审计/outbox 计数、绑定状态）；前端「监控」Tab 指标卡。**延迟指标未做**（audit payload 无耗时数据源） |
+| 49 | 告警：客户端离线、账号未登录、连续失败、误发风险、版本过低 | 🔧 | `GET /alerts` 按需评估 4 条规则（client_offline / account_not_logged_in / consecutive_action_failures / needs_review_backlog）+ 前端告警列表。**未做**：误发风险（需发送前确认链路）、版本过低（需协议加 client_version）、后台周期推送+冷却（需调度器） |
 | 50 | Trace：`source_type=wecom_personal_rpa` 接入现有记录链路 | ✅ | _process_inbound_message 用 SessionRecordManager.start_record(source_type=...) |
 | 51 | 本地与服务端日志关联：request_id/action_id/event_id | 🔧 | event_id/request_id/action_id 已贯穿审计与回执，客户端本地日志关联待联调 |
 

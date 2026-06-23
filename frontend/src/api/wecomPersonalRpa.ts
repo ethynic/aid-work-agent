@@ -237,3 +237,45 @@ export async function listAudit(params: ListAuditParams = {}): Promise<RpaAudit[
   const body = await parseJson(res, '获取审计日志失败')
   return body.data ?? []
 }
+
+// ==================== 5. 指标 / 告警 ====================
+
+export interface RpaMetrics {
+  window_hours: number
+  generated_at: string
+  clients: { total: number; online: number; online_rate: number }
+  accounts: { total: number; online: number; online_rate: number; by_status: Record<string, number> }
+  actions: {
+    by_status: Record<string, number>
+    succeeded: number
+    failed: number
+    success_rate: number
+  }
+  audit_counts: Record<string, number>
+  bindings: { needs_review: number; by_status: Record<string, number> }
+}
+
+export interface RpaAlert {
+  rule: string
+  severity: 'danger' | 'warning' | 'info'
+  entity_type: 'client' | 'account' | 'binding'
+  entity_id: string
+  entity_name: string
+  message: string
+}
+
+export async function getMetrics(windowHours = 24): Promise<RpaMetrics> {
+  const res = await fetch(`${API_BASE}/metrics${buildQuery({ window_hours: windowHours })}`, {
+    headers: getSaasAuthHeader(),
+  })
+  const body = await parseJson(res, '获取指标失败')
+  return body.data
+}
+
+export async function getAlerts(): Promise<RpaAlert[]> {
+  const res = await fetch(`${API_BASE}/alerts`, {
+    headers: getSaasAuthHeader(),
+  })
+  const body = await parseJson(res, '获取告警失败')
+  return body.data ?? []
+}

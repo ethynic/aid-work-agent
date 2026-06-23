@@ -601,3 +601,108 @@ def list_audit(
         for r in rows:
             r["payload"] = _parse_json_field(r.get("payload"), {})
         return rows
+
+
+# ===========================================================================
+# 指标 / 告警聚合（只读，供 admin /metrics /alerts 端点使用）
+# 对齐 src/saas/db/usage_log_db.py：%s 时间窗参数 + GROUP BY 聚合
+# ===========================================================================
+
+
+def get_audit_counts(tenant_id: str, since_dt: datetime) -> Dict[str, int]:
+    """时间窗内按 category 计数的审计事件。返回 {category: count}。"""
+    since_str = since_dt.strftime("%Y-%m-%d %H:%M:%S")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT category, COUNT(*) AS cnt
+            FROM wecom_rpa_audit_logs
+            WHERE tenant_id = %s AND created_at >= %s
+            GROUP BY category
+            """,
+            (tenant_id, since_str),
+        )
+        return {str(r["category"]): int(r["cnt"]) for r in cursor.fetchall()}
+
+
+def get_outcome_status_counts(tenant_id: str, since_dt: datetime) -> Dict[str, int]:
+    """时间窗内出站动作按 status 计数。返回 {status: count}。"""
+    since_str = since_dt.strftime("%Y-%m-%d %H:%M:%S")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT status, COUNT(*) AS cnt
+            FROM wecom_rpa_action_outbox
+            WHERE tenant_id = %s AND created_at >= %s
+            GROUP BY status
+            """,
+            (tenant_id, since_str),
+        )
+        return {str(r["status"]): int(r["cnt"]) for r in cursor.fetchall()}
+
+
+def get_client_liveness(tenant_id: str) -> List[Dict[str, Any]]:
+    """全部客户端的存活信号：{id, name, status, last_seen_at}。last_seen_at 为 datetime|None。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, name, status, last_seen_at
+            FROM wecom_rpa_clients
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_account_states(tenant_id: str) -> List[Dict[str, Any]]:
+    """全部账号的当前状态：{id, client_id, display_name, status, last_login_at}。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, client_id, display_name, status, last_login_at
+            FROM wecom_rpa_accounts
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_binding_status_counts(tenant_id: str) -> Dict[str, int]:
+    """绑定按 status 计数（当前态）。返回 {status: count}。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT status, COUNT(*) AS cnt
+            FROM wecom_rpa_conversation_bindings
+            WHERE tenant_id = %s
+            GROUP BY status
+            """,
+            (tenant_id,),
+        )
+        return {str(r["status"]): int(r["cnt"]) for r in cursor.fetchall()}
+
+
+def get_recent_outcomes(
+    tenant_id: str, limit: int = 50
+) -> List[Dict[str, Any]]:
+    """最近出站动作（按 created_at DESC），仅取连续失败检测所需字段。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT account_id, status, created_at
+            FROM wecom_rpa_action_outbox
+            WHERE tenant_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (tenant_id, limit),
+        )
+        return [dict(r) for r in cursor.fetchall()]

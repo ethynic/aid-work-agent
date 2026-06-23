@@ -18,6 +18,7 @@
 import json
 import re
 import secrets
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -25,6 +26,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.channels.wecom_personal_rpa import db as rpa_db
+from src.channels.wecom_personal_rpa import observability
 from src.channels.wecom_personal_rpa.secret_crypto import encrypt_secret
 from src.config.settings import settings
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
@@ -647,3 +649,63 @@ async def list_audit(
 
     rows = rpa_db.list_audit(tenant_id, filters=filters, limit=limit)
     return _ok([_audit_public(r) for r in rows])
+
+
+# ===========================================================================
+# 6. 指标 / 告警（只读，不写审计）
+# ===========================================================================
+
+
+@router.get("/metrics")
+async def get_metrics(
+    request: Request,
+    window_hours: int = Query(24, ge=1, le=720, description="聚合时间窗（小时），默认 24h"),
+):
+    """RPA 渠道指标聚合：客户端/账号在线率、action 成功率、审计计数、绑定状态。
+
+    只读端点，不写审计。时间窗内的审计/outbox 聚合 + 当前态的客户端/账号/绑定。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+
+    since_dt = datetime.now() - timedelta(hours=window_hours)
+    try:
+        metrics = observability.build_metrics(
+            client_liveness=rpa_db.get_client_liveness(tenant_id),
+            account_states=rpa_db.get_account_states(tenant_id),
+            audit_counts=rpa_db.get_audit_counts(tenant_id, since_dt),
+            outcome_counts=rpa_db.get_outcome_status_counts(tenant_id, since_dt),
+            binding_counts=rpa_db.get_binding_status_counts(tenant_id),
+            window_hours=window_hours,
+        )
+    except Exception as e:
+        logger.error(f"RPA metrics failed (tenant={tenant_id}): {type(e).__name__}: {e}")
+        raise _fail("指标聚合失败", status_code=500)
+    return _ok(data=metrics)
+
+
+@router.get("/alerts")
+async def get_alerts(request: Request):
+    """按需评估活跃告警：客户端离线 / 账号未登录 / 连续动作失败 / 待复核积压。
+
+    只读端点，不写审计。基于当前态 + 最近 50 条 outbox 评估，无后台调度。
+    版本过低 / 延迟类告警暂未实现（前者需协议增加 client_version，后者无数据源）。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+
+    try:
+        active_alerts = observability.evaluate_alerts(
+            client_liveness=rpa_db.get_client_liveness(tenant_id),
+            account_states=rpa_db.get_account_states(tenant_id),
+            recent_outcomes=rpa_db.get_recent_outcomes(tenant_id),
+            binding_counts=rpa_db.get_binding_status_counts(tenant_id),
+        )
+    except Exception as e:
+        logger.error(f"RPA alerts failed (tenant={tenant_id}): {type(e).__name__}: {e}")
+        raise _fail("告警评估失败", status_code=500)
+    return _ok(data=active_alerts)
