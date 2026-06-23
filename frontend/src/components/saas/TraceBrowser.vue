@@ -9,6 +9,18 @@
           placeholder="搜索会话ID"
           class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-48"
         />
+        <input
+          v-model="filterTenantId"
+          @keyup.enter="loadData"
+          placeholder="租户ID"
+          class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-36"
+        />
+        <input
+          v-model="filterUserId"
+          @keyup.enter="loadData"
+          placeholder="用户ID"
+          class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-36"
+        />
         <select v-model="filterStatus" @change="loadData"
           class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
           <option value="">全部状态</option>
@@ -49,6 +61,8 @@
               <tr>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-12">序号</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">会话ID</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-28">租户</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-28">用户</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">首次输入</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-24">来源</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-20">Trace数</th>
@@ -62,6 +76,8 @@
                 class="hover:bg-surface-hover cursor-pointer" @click="goToSession(s.session_id)">
                 <td class="px-4 py-2 text-xs text-muted">{{ (page - 1) * pageSize + idx + 1 }}</td>
                 <td class="px-4 py-2 text-xs text-default font-mono">{{ s.session_id.substring(0, 16) }}...</td>
+                <td class="px-4 py-2 text-xs text-muted font-mono truncate" :title="s.tenant_id || ''">{{ s.tenant_id ? s.tenant_id.substring(0, 12) + '...' : '-' }}</td>
+                <td class="px-4 py-2 text-xs text-muted font-mono truncate" :title="s.user_id || ''">{{ s.user_id ? s.user_id.substring(0, 12) + '...' : '-' }}</td>
                 <td class="px-4 py-2 text-sm text-default max-w-xs truncate">{{ s.first_content || s.first_input || '-' }}</td>
                 <td class="px-4 py-2 text-sm">
                   <span :class="sourceBadgeClass(s.source_type)"
@@ -118,6 +134,8 @@ const filterStatus = ref('')
 const filterSourceType = ref('')
 const timeRange = ref('')
 const search = ref('')
+const filterTenantId = ref('')
+const filterUserId = ref('')
 
 const SOURCE_LABELS: Record<string, string> = {
   chat: 'Web',
@@ -172,6 +190,8 @@ async function loadData() {
       source_type: filterSourceType.value || undefined,
       time_range: timeRange.value || undefined,
       search: search.value || undefined,
+      tenant_id: filterTenantId.value || undefined,
+      user_id: filterUserId.value || undefined,
     })
     if (res.success) {
       sessions.value = res.data

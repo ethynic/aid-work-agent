@@ -89,6 +89,7 @@ export async function getTracedSessions(params: {
   page?: number
   page_size?: number
   tenant_id?: string
+  user_id?: string
   time_range?: string
   status?: string
   source_type?: string
@@ -98,6 +99,7 @@ export async function getTracedSessions(params: {
   if (params.page) query.set('page', String(params.page))
   if (params.page_size) query.set('page_size', String(params.page_size))
   if (params.tenant_id) query.set('tenant_id', params.tenant_id)
+  if (params.user_id) query.set('user_id', params.user_id)
   if (params.time_range) query.set('time_range', params.time_range)
   if (params.status) query.set('status', params.status)
   if (params.source_type) query.set('source_type', params.source_type)

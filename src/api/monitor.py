@@ -146,6 +146,7 @@ async def list_traced_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     tenant_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
     time_range: Optional[str] = Query(None, description="时间范围：1h/24h/7d/30d"),
     status: Optional[str] = Query(None, description="状态筛选：completed/failed/cancelled"),
     source_type: Optional[str] = Query(None, description="来源筛选：chat/wecom/wecom_kf/dingtalk/feishu"),
@@ -164,6 +165,10 @@ async def list_traced_sessions(
             if tenant_id:
                 where_clauses.append("tenant_id = %s")
                 params.append(tenant_id)
+
+            if user_id:
+                where_clauses.append("user_id = %s")
+                params.append(user_id)
 
             if status:
                 where_clauses.append("status = %s")
