@@ -36,6 +36,14 @@ marked.use(markedHighlight({
   }
 }))
 
+// 统一让所有链接在新 Tab 打开，避免覆盖当前聊天页面
+const linkRenderer = ({ href, title, tokens }: any) => {
+  const text = marked.Parser.parseInline(tokens ?? [])
+  const titleAttr = title ? ` title="${title}"` : ''
+  return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
+}
+marked.use({ renderer: { link: linkRenderer } })
+
 /**
  * 将 markdown 文本渲染为 HTML
  */
