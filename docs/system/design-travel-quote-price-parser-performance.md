@@ -43,6 +43,11 @@ price = _select_team_price_by_llm(price_table, check_in_date)
 房型 | 客户类型 | 价格(元) | 含早 | 适用日期
 ```
 
+> ⚠️ **历史格式**：此为本文档设计时的五列旧格式。现网已升级为六列新格式
+> `房型 | 散客价 | 团客价 | 含早 | 适用日期 | 备注`（第一行为表头），
+> 详见 [hotel_excel_to_kb_design.md](../subagent/travel-consultant/hotel_excel_to_kb_design.md)。
+> 本文档的解析性能优化思路（规则优先 + LLM 只处理日期）仍然适用。
+
 这类数据应当优先由规则解析。LLM 只应处理规则无法识别的少数日期表达。
 
 实测中 3 个酒店 stay 会触发 3 次 LLM 选价，耗时可达到：

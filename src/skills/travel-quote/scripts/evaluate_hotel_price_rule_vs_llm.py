@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+from loguru import logger
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[3]
@@ -96,10 +98,20 @@ def evaluate(tenant_id: str, dates: List[str], limit: int) -> Dict:
 
 
 def _select_team_price_by_legacy_llm(price_table: str, check_in_date: str) -> float:
-    """使用 Phase 1 改造前的完整 LLM prompt，作为精确度对照基线。"""
+    """使用 Phase 1 改造前的完整 LLM prompt，作为精确度对照基线。
+
+    ⚠️ 注意：此基线 prompt 基于"五列旧格式"（房型 | 客户类型 | 价格 | 含早 | 适用日期）。
+    自酒店价格表升级为"六列新格式"（房型 | 散客价 | 团客价 | 含早 | 适用日期 | 备注）后，
+    本基线已与现网数据不兼容，仅作历史对照保留。如需重新建立基线，请基于新格式重写。
+    """
     import re
 
     from llm_client import call_llm
+
+    logger.warning(
+        "[evaluate_hotel_legacy] legacy prompt 基于已废弃的五列格式，"
+        "在六列新格式数据上结果不可靠，仅作历史对照"
+    )
 
     prompt = f"""你是酒店报价助手。下面是某酒店的价格明细表，每行格式为：
 房型 | 客户类型 | 价格(元) | 含早 | 适用日期
