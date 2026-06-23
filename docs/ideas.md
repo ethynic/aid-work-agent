@@ -51,6 +51,8 @@
 | 20 | 浏览器操作可视化 | 📋 待开发 | Playwright Screencast API 实时推送浏览器操作画面到前端，支持操作标注。2026-05-21 | [设计](tools/browser/browser_visualization_design.md) | — |
 | 21 | 文件工具四件套（read/write/edit/cp）v2 | 🔧 部分完成 | 拆分旧 text_file_writer/file_reader/file_list 为四个原子工具，支持 SKILL.md `<SKILL_ROOT>` 占位符。cp 工具新增 `visible` 参数（默认 False），区分中间过程文件与最终交付，避免前端展示多个中间副本下载卡片。2026-06-12 | [设计 v2](tools/text-file/file_tools_redesign_v2.md) | [开发计划 v2](tools/text-file/file_tools_redesign_v2_dev_plan.md) |
 | 22 | Pandoc 安装与部署 | ✅ 已完成 | word_process 工具的 md_to_word 操作依赖 Pandoc 命令行工具。Docker/Linux 部署已内置（`Dockerfile:106`）；Windows/macOS 本地开发需手动安装，缺失时报 `[WinError 2]`。2026-06-22 | [安装部署指南](tools/md-to-word/pandoc-install-guide.md) | — |
+| 23 | 酒店知识库搜索工具（hotel_search） | ✅ 已完成 | 仿 attraction_search 新增酒店专项搜索工具，名称优先+向量兜底检索 source_type='hotel_resource'，返回酒店信息+价格明细表（chunk_index=1，通用 knowledge_base_search 拿不到）。客户直接问酒店或酒店价格时使用。通过 inherit:true 对旅游顾问子智能体可用。2026-06-22 | [设计](subagent/travel-consultant/hotel_search_tool_design.md) | [计划](../plans/plan-hotel-search-tool.md) |
+| 24 | 景点知识库搜索工具（attraction_search） | ✅ 已完成 | 旅游顾问子智能体的景点专项搜索工具，纯向量检索 source_type='attraction_resource'。补登记（此前漏登）。2026-05-14 | [设计](subagent/travel-consultant/attraction_search_tool_design.md) | — |
 | 25 | 旅游报价价格解析性能优化 | 🔧 部分完成 | 酒店、景点门票/项目、行程解析均已改为 DeepSeek V4 Pro 关闭推理；酒店用候选压缩短 prompt，景点保留 LLM 主路径并新增团队票优先后处理，行程解析补充无项目景点/活动名原样保留自检。规则优先仍待后续评估。2026-06-22 | [设计](system/design-travel-quote-price-parser-performance.md) | — |
 
 ## 渠道集成
@@ -60,7 +62,7 @@
 | 26 | 企业微信客服 AI 绑定 | 📋 待开发 | "扫码绑定 AI 机器人"模式，第三方授权与合规接入。2026-05-26 | [设计](channel/wecom-kf/wecom_kf_design.md) | — |
 | 27 | wecom_kf 多媒体消息支持 | 🔧 部分完成 | 后端完成：download_media 方法 + channel_routes 消息处理（附件下载/持久化/传递给 agent）+ external_customers 附件下载代理接口。前端完成：ExternalCustomerService 语音播放器/图片预览/文件卡片 + AttachmentCard 组件。待集成测试。2026-06-14 | — | — |
 | 28 | 渠道会话多条消息串行化 | 📋 待开发 | 渠道场景短时间多条消息串行处理，新消息取消旧请求 + 只保留最新意图，解决并发写入混乱和 DeepSeek 400 问题。2026-06-18 | [设计](channel/concurrent-message-serialization-plan.md) | — |
-| 29 | 企业微信个人账号 RPA 接入 | 📋 待开发 | 双轨方案：员工个人账号走 PC RPA（云端工作机 + uiautomation/pyautogui），公司公用账号走安卓无障碍 RPA（WorkTool）。云端调度平台 + 多工作机集群，账号设备 1:1 绑定。Phase 1 不接入会话存档，Phase 2 接入做对账兜底。2026-06-16 | [设计](system/wecom-personal-rpa-design.md) | [计划](../plans/plan-wecom-personal-rpa.md) |
+| 29 | 企业微信个人账号 RPA 接入 | 🔧 部分完成 | 服务端契约层 + 实现层 + Wire 路由已落地：schemas/db/SQL 表结构锁定共享契约；auth(HMAC)/router/message/action_client/adapter/connection/secret_crypto 七模块按 protocol.md §B 签名实现，68 单元测试通过；callback/config/files/ws 路由接入 main.py，channel_factory/channel_config/ChannelType 枚举注册齐全；新增 6 条集成测试（正确 HMAC→accepted、event_id 去重、action_result 幂等、签名失败 401、离线落 outbox、在线直推）全部通过。C# 客户端 5 工程脚手架完成，Core/Automation/Supervisor/Tests 编译通过，Client.App 有 4 处跨工程 using 缺失（命名空间微调，待一次集成修缮）。管理前端 P1.1 已交付（`frontend/src/components/saas/WecomPersonalRpaManager.vue` 三 Tab，接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调）。待真实环境：节点常量准入验证、WS 多 worker 一致性、客户端联调。2026-06-22 | [协议](system/wecom-personal-rpa-protocol.md) / [设计](system/wecom-personal-rpa-design.md) | [计划](../plans/plan-wecom-personal-rpa.md) |
 | 30 | 钉钉渠道接入 | 🔧 部分完成 | 钉钉开放平台企业机器人接入，支持单聊/群聊消息收发、签名验证（HmacSHA256）、媒体文件处理、长消息拆分。代码（adapter/crypto/media/message_builder/路由/前端配置）已完成，112 单元测试 + 23 集成测试全部通过；待真实钉钉环境联调。2026-06-19 | [设计](channel/dingtalk/integration_guide.md) / [接入手册](channel/dingtalk/onboarding_guide.md) | [计划](channel/dingtalk/implementation_plan.md) |
 | 31 | 飞书渠道接入代码审核 | 🔧 部分完成 | 基于 [integration_guide.md](channel/feishu/integration_guide.md) 审核飞书渠道实现。发现 3 个 P0 问题（adapter 每请求新建导致 token 缓存/速率限制/HTTP 连接池失效 + httpx client 不关闭造成 fd 泄漏；encrypt_key 文档与代码必填规则不一致）、4 个 P1 安全问题（签名比较未用 hmac.compare_digest、时间戳未做偏移校验、GET 回调无鉴权、去重 DB 异常静默丢消息）、4 个 P2 问题（速率限制需迁 Redis、媒体存储违反租户隔离、asyncio.create_task 无引用、bot open_id 失败静默丢群聊消息）。2026-06-19 | — | [审核报告](../plans/feishu-channel-code-review.md) |
 
@@ -88,3 +90,4 @@
 | 前端样式调研 | [frontend-style-research.md](research/frontend/frontend-style-research.md) | 前端样式统一 |
 | 前端 Office 预览调研 | [frontend-office-preview-research.md](research/frontend/frontend-office-preview-research.md) | 前端 Office 预览 |
 | HTML 转 PPTX 技术调研 | [html-to-pptx-conversion-research.md](research/html-to-pptx-conversion-research.md) | PPT 技能 PPTX 导出 |
+| 企业微信个人账号 RPA 生产级客户端技术方案调研 | [wecom-personal-rpa-client-implementation-research.md](research/wecom-personal-rpa-client-implementation-research.md) | 企业微信个人账号 RPA 接入 |

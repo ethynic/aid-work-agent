@@ -12,9 +12,10 @@
 3. [方案二：HTML 解析 + python-pptx 映射](#3-方案二解析映射方案)
 4. [方案三：LibreOffice 命令行转换](#4-方案三libreoffice-转换)
 5. [方案四：dom-to-pptx 等 JS 库](#5-方案四js-库方案)
-6. [方案五：Aspose.Slides 方案](#6-方案五asposeslides-方案)
-7. [方案六：中间格式方案（HTML → PDF → PPTX）](#7-方案六中间格式方案)
-8. [综合对比与推荐方案](#8-综合对比与推荐)
+6. [方案五：Codex / artifact-tool 原生可编辑生成](#6-方案五codex--artifact-tool-原生可编辑生成)
+7. [方案六：Aspose.Slides 方案](#7-方案六asposeslides-方案)
+8. [方案七：中间格式方案（HTML → PDF → PPTX）](#8-方案七中间格式方案)
+9. [综合对比与推荐方案](#9-综合对比与推荐)
 
 ---
 
@@ -386,7 +387,153 @@ await exportToPptx(Array.from(slides), {
 
 ---
 
-## 6. 方案五：Aspose.Slides
+## 6. 方案五：Codex / artifact-tool 原生可编辑生成
+
+> 补充调研日期：2026-06-22
+> 目标：理解 Codex 自身生成可编辑 PPTX 的方式，并提炼到本项目的 HTML PPTX 导出设计中。
+
+### 6.1 关键结论
+
+Codex 的演示文稿能力并不是把任意 HTML 页面直接转换成 PPTX。它采用的是 **原生 PowerPoint 对象生成**：
+
+```
+结构化幻灯片描述 / JSX 布局
+        ↓
+@oai/artifact-tool 生成 Presentation 对象
+        ↓
+原生 PPTX 对象：文本框、形状、图片、表格、图表、连接线
+        ↓
+导出 PPTX + 渲染 PNG / layout JSON 做质量验证
+```
+
+这意味着 Codex 的“可编辑效果”来自两个设计选择：
+
+1. **从一开始就生成 PPTX 原生对象**，而不是先做 HTML 截图。
+2. **用渲染预览反向校验最终 PPTX**，保证布局、重叠、裁剪、换行等问题能被发现。
+
+因此，若本项目希望达到类似 Codex 的效果，不应把“HTML 文件”作为唯一源格式；更稳妥的设计是建立一个中间的**语义幻灯片 AST / JSON**，由它同时驱动 HTML 预览和 PPTX 原生导出。
+
+### 6.2 Codex 可编辑 PPTX 的核心机制
+
+基于本地 Codex Presentations skill 调研，Codex 当前推荐使用 `@oai/artifact-tool`：
+
+| 能力 | Codex 实现方式 | 对本项目的启发 |
+|------|---------------|---------------|
+| 页面尺寸 | `Presentation.create({ slideSize: { width: 1280, height: 720 } })`，单位为 CSS px（96 DPI） | HTML 预览与 PPTX 导出统一使用 1280×720 或 1920×1080 逻辑坐标 |
+| 布局 | JSX/compose 支持 `row`、`column`、`grid`、`layers`、`box` | 不必把 CSS Grid/Flex 反解析为 PPTX；应在中间层保留布局语义 |
+| 文本 | `paragraph` / textbox 生成 PPT 原生文本框 | 文字保持可编辑、可搜索、可复制 |
+| 图形 | `shape` / `slide.shapes.add()` 生成 PPT 原生形状 | 卡片、圆角矩形、分割线、标签等可编辑 |
+| 图片 | `slide.images.add()` 嵌入图片 bytes，支持裁剪、遮罩、圆角 | WebGL、复杂滤镜、不可映射区域作为图片层处理 |
+| 表格/图表 | `table` / `chart` 生成 PowerPoint 原生表格和图表 | 数据型幻灯片不要截图，应走原生 chart/table |
+| QA | 导出 slide PNG、layout JSON、montage，并 inspect 对象树 | 导出后必须渲染检查，不能只看 PPTX 文件生成是否成功 |
+| 模板复用 | 可导入现有 PPTX，inspect 后定位对象并编辑 | 企业模板可作为母版/布局来源，而不是完全从 HTML 复刻 |
+
+### 6.3 与 dom-to-pptx 的本质差异
+
+| 维度 | dom-to-pptx | Codex / artifact-tool |
+|------|-------------|-----------------------|
+| 输入 | 已渲染 DOM 元素 | 结构化幻灯片代码 / JSX / Presentation API |
+| 布局来源 | 浏览器 `getBoundingClientRect()` 和 `getComputedStyle()` | 自己的布局 DSL：row / column / grid / layers |
+| 可编辑性 | 取决于 DOM→PPTX 映射是否成功 | 默认就是 PPTX 原生对象 |
+| 视觉还原 | 对已有 HTML 友好，复杂 CSS 有边界 | 对新生成内容稳定，任意 HTML 不是目标 |
+| 工程可控性 | 依赖第三方库覆盖 CSS 特性 | 可控，但需要建立自己的幻灯片语义层 |
+| 适用场景 | 已有 HTML 页面需要快速导出 | 从 AI 生成 PPT 开始就追求可编辑和稳定交付 |
+
+结论：**dom-to-pptx 更像“已有 HTML 的转换器”；Codex 方案更像“可编辑 PPTX 的原生生成器”。** 对本项目这种 AI PPT 技能，长期应优先学习 Codex 的架构，而不是把 HTML 当成不可改变的源格式。
+
+### 6.4 推荐落地架构：语义 AST 双渲染
+
+建议新增一层 `SlideDeckSpec` 作为唯一事实来源：
+
+```ts
+type SlideDeckSpec = {
+  size: { width: 1280; height: 720 };
+  theme: ThemeTokens;
+  slides: SlideSpec[];
+};
+
+type SlideSpec = {
+  id: string;
+  background?: BackgroundSpec;
+  nodes: SlideNode[];
+};
+
+type SlideNode =
+  | TextNode
+  | ShapeNode
+  | ImageNode
+  | GridNode
+  | RowNode
+  | ColumnNode
+  | ChartNode
+  | TableNode
+  | RasterLayerNode;
+```
+
+然后提供两个渲染器：
+
+```
+SlideDeckSpec
+    ├── HTML Renderer：用于浏览器预览、交互、主题切换
+    └── PPTX Renderer：生成原生文本框、形状、图表、表格、图片
+```
+
+这样可以保留 HTML 预览体验，同时让 PPTX 导出尽量可编辑。WebGL 背景、复杂滤镜、特殊 shader 等无法编辑的视觉层，明确落入 `RasterLayerNode`，作为图片背景或图片层插入 PPTX。
+
+### 6.5 已有 HTML 的兼容路线
+
+如果短期必须从现有单文件 HTML 出发，可采用“浏览器抽取 + 原生重建 + 局部截图”：
+
+```
+HTML → Playwright 打开页面
+    → 注入 DOM extractor
+    → 读取元素 rect / computedStyle / text / z-index
+    → 转为 SlideDeckSpec
+    → PPTX Renderer 生成原生对象
+    → 对 canvas、backdrop-filter、复杂 SVG/滤镜节点截图补层
+```
+
+抽取器建议只支持受控模板，不追求任意网页：
+
+| HTML 元素/样式 | 转换策略 |
+|----------------|----------|
+| `section.slide` | 一个 `SlideSpec` |
+| 标题、段落、列表 | `TextNode`，转 PPT 原生文本框 |
+| 卡片、分割线、标签 | `ShapeNode` |
+| `<img>`、可独立 SVG | `ImageNode`，SVG 尽量保留矢量 |
+| CSS Grid/Flex 结果 | 用浏览器计算后的绝对坐标填充节点 bounds |
+| WebGL canvas | 截图为 `RasterLayerNode` |
+| `backdrop-filter` / `mix-blend-mode` | 优先截图为局部图片层 |
+| 动画 | 不导出动画，只捕获最终状态 |
+
+该路线比“手写 CSS 解析器”现实，也比纯 dom-to-pptx 更可控；但它仍然是兼容方案，不应作为长期主架构。
+
+### 6.6 对本项目设计的修正建议
+
+1. **不要只建设 HTML→PPTX 转换器**：应建设“AI PPT 语义模型 + HTML/PPTX 双渲染器”。
+2. **HTML 作为预览产物，不作为唯一源文件**：避免后续为了导出 PPTX 被迫解析任意 CSS。
+3. **PPTX 导出优先使用原生对象**：文本、形状、表格、图表必须尽量保持可编辑。
+4. **不可编辑区域显式标记**：WebGL、复杂 shader、复杂滤镜、毛玻璃等作为图片层，并在导出报告中说明。
+5. **加入导出 QA 流程**：导出后渲染每页 PNG，检查重叠、裁剪、空白页、字体回退和对象数量。
+6. **保留降级策略**：可编辑导出失败时，自动降级为高保真整页截图版 PPTX。
+
+### 6.7 还原度评分（Codex-like 原生生成）
+
+| 维度 | 评分 | 说明 |
+|------|------|------|
+| 视觉还原 | **80-90/100** | 对受控模板和语义节点很高；任意 HTML 不保证 |
+| 可编辑性 | **90-95/100** | 文本、形状、表格、图表为原生 PPT 对象 |
+| 文件大小 | **80/100** | 原生对象为主，只有复杂背景/滤镜为图片 |
+| 实现难度 | **45-60/100** | 需要重构源格式和双渲染器，短期工作量高 |
+| 稳定性 | **90/100** | 比 CSS 反解析稳定，符合企业场景可预测性要求 |
+
+### 6.8 结论
+
+**这是长期最推荐的方向。** 如果项目仍处于 PPT 技能设计阶段，应优先采用 Codex-like 的原生生成架构；如果已经有大量 HTML 模板，则先做 DOM 抽取兼容层，再逐步把模板迁移为 `SlideDeckSpec`。
+
+---
+
+## 7. 方案六：Aspose.Slides
 
 ### 方案描述
 
@@ -428,7 +575,7 @@ Aspose 支持团队自己也承认："Slides 支持基本文本导入以及有�
 
 ---
 
-## 7. 方案六：中间格式方案（HTML → PDF → PPTX）
+## 8. 方案七：中间格式方案（HTML → PDF → PPTX）
 
 ### 方案描述
 
@@ -488,32 +635,63 @@ PDF → PPTX 的核心问题是**文本重排**：PDF 中的文本是固定位�
 
 ---
 
-## 8. 综合对比与推荐
+## 9. 综合对比与推荐
 
-### 8.1 六方案对比总表
+### 9.1 七方案对比总表
 
 | 方案 | 视觉还原 | 可编辑性 | 文件大小 | 实现难度 | WebGL 支持 | 总评 |
 |------|---------|---------|---------|---------|-----------|------|
 | ① 截图 + python-pptx | **95** | 0 | 30 | 90 | **完美** | 适合"预览/分享"场景 |
 | ② HTML 解析映射 | 40-60 | 80 | 85 | 10 | 不支持 | 工作量巨大，不推荐 |
 | ③ LibreOffice | 10 | 70 | 80 | 95 | 不支持 | 完全不适用 |
-| ④ **dom-to-pptx** | **75** | **90** | **80** | 70 | 需混合 | **最佳平衡** |
-| ⑤ Aspose.Slides | 5 | 50 | 80 | 80 | 不支持 | 功能不匹配 |
-| ⑥ PDF 中间格式 | 60 | 50 | 70 | 75 | 完美 | 双重损失 |
+| ④ **dom-to-pptx** | **75** | **90** | **80** | 70 | 需混合 | 已有 HTML 的最佳平衡 |
+| ⑤ **Codex-like 原生生成** | **80-90** | **90-95** | **80** | 45-60 | 作为图片层 | **长期最推荐** |
+| ⑥ Aspose.Slides | 5 | 50 | 80 | 80 | 不支持 | 功能不匹配 |
+| ⑦ PDF 中间格式 | 60 | 50 | 70 | 75 | 完美 | 双重损失 |
 
-### 8.2 推荐方案：混合方案
+### 9.2 推荐方案：Codex-like 语义 AST 双渲染 + 混合导出
 
-**最终推荐：方案一 + 方案四的混合方案**
+**长期最终推荐：方案五为主，方案一 + 方案四作为兼容和降级。**
+
+```
+SlideDeckSpec / 语义幻灯片 AST
+        ├── HTML Renderer → 浏览器预览
+        └── PPTX Renderer → 原生可编辑 PPTX
+                ├── 文本/形状/图表/表格 → PPT 原生对象
+                └── WebGL/复杂滤镜/特殊背景 → 图片层
+```
+
+#### 推荐实施路径
+
+**Phase 1：短期 PoC（兼容现有 HTML）**
+- 用 Playwright 渲染现有 HTML。
+- 抽取 `section.slide` 内的文本、图片、基础形状、位置和计算后样式。
+- 生成 `SlideDeckSpec`，再导出原生 PPTX。
+- 对 WebGL canvas、复杂滤镜区域截图补层。
+- 同时生成纯截图版 PPTX 作为降级结果。
+
+**Phase 2：中期重构（语义模型优先）**
+- AI 生成 PPT 时直接输出 `SlideDeckSpec`，HTML 只是预览渲染结果。
+- 将常用版式沉淀为 Row/Column/Grid/Layer 组件。
+- 为文字、卡片、指标、时间线、图表、表格建立稳定节点类型。
+- PPTX 导出器不再依赖解析 HTML，而是直接生成原生对象。
+
+**Phase 3：质量保障**
+- 导出后渲染每页 PNG 和对象 layout JSON。
+- 检测空白页、越界、重叠、文本截断、字体回退、图片缺失。
+- 可编辑率统计：文本框数量、图片层数量、原生图表/表格数量。
+
+#### 兼容方案：截图 + dom-to-pptx 混合
+
+对于已经存在且短期不重构的 HTML，可以继续保留原方案：
 
 ```
                   ┌── WebGL Canvas 背景 → Playwright 截图 → 幻灯片背景图片
                   │
 HTML 网页 PPT ────┤
                   │
-                  └── 前景内容（文字/布局/图标）→ dom-to-pptx → 可编辑形状/文本
+                  └── 前景内容（文字/布局/图标）→ DOM 抽取 / dom-to-pptx → 可编辑形状/文本
 ```
-
-#### 具体实现步骤
 
 **Step 1：预处理 HTML**
 - 将 WebGL canvas 截图为高清 PNG
@@ -539,20 +717,21 @@ HTML 网页 PPT ────┤
 | 可编辑性 | **85/100** | 文字、形状完全可编辑；WebGL 背景为图片（不可编辑，但可替换） |
 | 文件大小 | **75/100** | 原生形状 + 嵌入字体 + 背景图片，预计 10-30MB |
 
-#### 备选方案
+#### 降级方案
 
 如果 dom-to-pptx 在实际测试中效果不理想（如 backdrop-filter、伪元素处理不满足需求），**降级为纯截图方案**（方案一）。截图方案虽然不可编辑，但视觉还原度最高，实现最简单。
 
-### 8.3 实施建议
+### 9.3 实施建议
 
-1. **先做 PoC**：用 2-3 页 HTML 测试 dom-to-pptx 的还原效果
+1. **先做 PoC**：用 2-3 页 HTML 同时测试 DOM 抽取 / dom-to-pptx / 原生 PPTX Renderer 的还原效果
 2. **重点测试**：
    - CSS Grid 布局（`.grid-6`, `.grid-3`, `.split`）
    - 渐变色背景（light/dark 主题切换）
    - Google Fonts 嵌入效果
    - `::before`/`::after` 伪元素（遮罩层、荧光标记）
 3. **WebGL 截图策略**：两种 shader（light/dark）各截一张，根据 `data-theme` 属性分配
-4. **降级策略**：如果 dom-to-pptx 效果不够好，立即切换到纯截图方案
+4. **可编辑率指标**：统计每页原生文本框/形状/图表/表格数量，以及截图层数量
+5. **降级策略**：如果可编辑导出效果不够好，立即切换到纯截图方案
 
 ---
 
@@ -563,8 +742,12 @@ HTML 网页 PPT ────┤
 | dom-to-pptx GitHub | https://github.com/atharva9167j/dom-to-pptx |
 | dom-to-pptx 支持的 CSS 特性 | https://github.com/atharva9167j/dom-to-pptx/blob/master/SUPPORTED.md |
 | PptxGenJS 文档 | https://gitbrent.github.io/PptxGenJS/ |
+| PptxGenJS HTML-to-PPTX（表格） | https://gitbrent.github.io/PptxGenJS/html2pptx/ |
 | Playwright 截图文档 | https://playwright.dev/docs/screenshots |
 | python-pptx 文档 | https://python-pptx.readthedocs.io/ |
 | Aspose.Slides HTML 导入论坛 | https://forum.aspose.com/tag/slides-htmlimport |
 | LibreOffice 过滤器名称 | https://help.libreoffice.org/latest/en-US/text/shared/guide/convertfilters.html |
 | ConvertAPI PDF→PPTX | https://www.convertapi.com/pdf-to-pptx |
+| Codex Presentations skill 本地说明 | `C:\Users\ethyn\.codex\plugins\cache\openai-primary-runtime\presentations\26.619.11828\skills\presentations\SKILL.md` |
+| Codex artifact-tool API quick start | `C:\Users\ethyn\.codex\plugins\cache\openai-primary-runtime\presentations\26.619.11828\skills\presentations\artifact_tool\API_QUICK_START.md` |
+| Codex artifact-tool API docs | `C:\Users\ethyn\.codex\plugins\cache\openai-primary-runtime\presentations\26.619.11828\skills\presentations\artifact_tool\api\API_DOCS.md` |
