@@ -172,11 +172,17 @@ export function useAgent() {
     // 添加初始进度消息（在 AI 消息创建之后）
     addProgress('🚀 正在发送请求...', 'progress')
 
+    // 附件数据已浅拷贝到用户消息（152 行）与 SSE 请求参数（下方 connect 调用），
+    // 在这里清空附件输入区，确保用户看到自己消息出现的同时附件框立即清空，
+    // 避免 ChatContainer.handleSend 在某些 return 分支下漏清空导致附件残留。
+    const filesToSend = currentFiles.value.length > 0 ? [...currentFiles.value] : undefined
+    currentFiles.value = []
+
     try {
       await sseManager.connect(
         content,
         effectiveSessionId,
-        currentFiles.value.length > 0 ? [...currentFiles.value] : undefined,
+        filesToSend,
         getEffectiveAuthHeader(), // 传递认证头
         // onProgress - 工具执行进度，仅添加到执行详情
         (data) => {

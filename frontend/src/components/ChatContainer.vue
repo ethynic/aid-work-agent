@@ -487,9 +487,6 @@ async function handleSend(content: string) {
   }
 
   await sendMessage(content, subagentName.value, sid, instanceId.value)
-
-  // 发送成功后清空附件
-  clearAttachments()
 }
 
 async function handleUpload(file: File) {
