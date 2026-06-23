@@ -179,7 +179,9 @@ def generate_quote(params: dict) -> dict:
     cost_per_person = round(sum(item.get('subtotal') or 0 for item in items), 2)
     quote_total = round(cost_per_person * total_people, 2)
     quote_per_person = round(quote_total / total_people, 2) if total_people > 0 else 0.0
-    teacher_total = round(sum(item.get('teacher_subtotal') or 0 for item in items), 2)
+    # 合计_随队老师 = 每位老师人均合计 = Σ各行 teacher_subtotal（各行已是所有老师总价）÷ 老师人数
+    teacher_total_sum = round(sum(item.get('teacher_subtotal') or 0 for item in items), 2)
+    teacher_total = round(teacher_total_sum / teacher_count, 2) if teacher_count > 0 else 0
 
     # 导出 Excel
     internal_data = {
