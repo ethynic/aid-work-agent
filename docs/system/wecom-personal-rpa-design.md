@@ -2,9 +2,14 @@
 
 > 关联调研：[wecom-personal-account-rpa-research.md](../research/wecom-personal-account-rpa-research.md)、[wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
 > 开发计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
+> **视觉定位方案设计（2026-06-23 新增，替代本文 §6.2 失效的三层降级链）**：[wecom-personal-rpa-vision-design.md](./wecom-personal-rpa-vision-design.md)
 > 创建日期：2026-06-16
-> 更新日期：2026-06-22
-> 状态：📋 待开发
+> 更新日期：2026-06-24
+> 状态：🔧 部分完成（视觉定位方案已落地，详见视觉定位设计文档 §12）
+
+---
+
+> **重要更新通知（2026-06-24）**：本文档 §6.2「三层自动化策略」（FlaUI→Win32→OpenCV）经真机验证 **前两层已失效**——UIA3 dump 出 0 控件、MSAA 子对象数为 0。**实际实现改为 Qwen3-VL 多模态视觉定位**，详见 [wecom-personal-rpa-vision-design.md](./wecom-personal-rpa-vision-design.md)。本文档其他章节（架构、协议、安全、合规）仍然适用。
 
 ---
 
@@ -415,6 +420,10 @@ dedup_key = f"wecom_personal_rpa:event:{client_id}:{event_id}"
 | 网络出口 | 固定办公网或固定公网出口，减少异常登录 |
 
 ### 6.2 三层自动化策略
+
+> ⚠️ **本节策略已失效（2026-06-23 真机验证）**：FlaUI UIA3 dump 出 0 控件、MSAA 子对象数为 0、Windows.Media.Ocr 中文识别率 < 10%。
+> **实际实现改为 Qwen3-VL 多模态视觉定位**，详见 [wecom-personal-rpa-vision-design.md](./wecom-personal-rpa-vision-design.md) §0.3 新三层策略。
+> 本节内容保留作为历史决策记录，但不再反映当前实现。
 
 ```
 Layer 1: FlaUI UIA3/UIA2 读取控件树

@@ -7,7 +7,7 @@ namespace WeCom.PersonalRpa.Automation.Win32;
 /// 桌面状态探测器：锁定 / DPI / 屏幕分辨率。
 /// 在 FlaUI 操作之前先 <see cref="IsLocked"/> 判定，避免在锁定 Session 0 上盲目驱动 UI。
 /// </summary>
-internal sealed class DesktopState
+public sealed class DesktopState
 {
     /// <summary>
     /// 判定桌面是否处于锁定 / 屏保运行状态。

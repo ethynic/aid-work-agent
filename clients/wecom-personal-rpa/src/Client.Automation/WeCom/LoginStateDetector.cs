@@ -1,91 +1,86 @@
 using Serilog;
 using WeCom.PersonalRpa.Automation.Contracts;
+using WeCom.PersonalRpa.Automation.Vision;
 using WeCom.PersonalRpa.Core.Protocol;
 
 namespace WeCom.PersonalRpa.Automation.WeCom;
 
 /// <summary>
-/// 企微登录态探测：区分 已登录 / 未登录（待扫码）/ 二维码过期 / 异常。
-/// 输出二维码区域截图供 <see cref="StatusPayload.QrImageRef"/> 短期上报。
+/// 企微登录态探测（阶段 2B 视觉路径重构）。
+/// 判定逻辑：
+/// 1. 用 IVisionLocator 定位"搜索框"input → 命中即 Online；
+/// 2. 未命中搜索框 → 用 IVisionLocator 定位"二维码"icon → 命中按 bbox 截图区域 → 转 base64 PNG 填 QrImageRef → NeedLogin；
+/// 3. 两步都未命中 → 保守返回 Offline（不阻塞上报）。
 /// </summary>
-internal sealed class LoginStateDetector
+public sealed class LoginStateDetector
 {
-    private readonly INodesConfig _nodes;
+    private readonly IVisionLocator _visionLocator;
     private readonly WeComMainWindow _mainWindow;
-    private readonly FlaUi.FlaUiDriver _flaUi;
 
-    public LoginStateDetector(INodesConfig nodes, WeComMainWindow mainWindow, FlaUi.FlaUiDriver flaUi)
+    public LoginStateDetector(IVisionLocator visionLocator, WeComMainWindow mainWindow)
     {
-        _nodes = nodes ?? throw new ArgumentNullException(nameof(nodes));
+        _visionLocator = visionLocator ?? throw new ArgumentNullException(nameof(visionLocator));
         _mainWindow = mainWindow ?? throw new ArgumentNullException(nameof(mainWindow));
-        _flaUi = flaUi ?? throw new ArgumentNullException(nameof(flaUi));
     }
 
-    /// <summary>
-    /// 探测当前登录态。判定优先级：
-    /// 1. 桌面 / 窗口不可用 → 异常类状态；
-    /// 2. FlaUI 主窗口已附加且可见功能区域（消息列表）→ Online；
-    /// 3. 窗口可见但找不到登录态之后的元素 → NeedLogin；
-    /// 4. 二维码元素 / 文本提示「二维码已失效」→ QrExpired；
-    /// 5. 其它未知 → Offline（保守）。
-    /// </summary>
+    /// <summary>探测当前登录态。</summary>
     public LoginState Detect()
     {
-        if (!_mainWindow.IsVisible)
-        {
-            return new LoginState(AccountStatus.WindowNotVisible, null, "企微主窗口不可见", null);
-        }
-
         try
         {
-            bool attached = _flaUi.IsAttached || _flaUi.AttachMainWindow();
-            if (!attached)
+            if (_mainWindow.Handle == IntPtr.Zero)
             {
-                return new LoginState(AccountStatus.Offline, null, "无法附加到企微主窗口", null);
+                _mainWindow.TryFind();
+            }
+            if (!_mainWindow.IsVisible)
+            {
+                return new LoginState(AccountStatus.WindowNotVisible, null, "企微主窗口不可见", null);
             }
 
-            // 已登录启发式：搜索框 / 消息列表元素存在且可交互。
-            var searchBox = _flaUi.FindElementByAutomationId(_nodes.SearchBoxAutomationId);
-            if (searchBox is not null && searchBox.IsAvailable)
+            // 1. Online 判定：搜索框命中
+            var searchProbe = _visionLocator.LocateAsync("input", "搜索").GetAwaiter().GetResult();
+            if (searchProbe is not null)
             {
-                // 尝试取账号显示名（右上角账号信息，AutomationId 各版本不一，这里保守返回 null）。
                 return new LoginState(AccountStatus.Online, null, null, null);
             }
 
-            // 未登录：尝试检测「二维码已失效」文本，区分 QrExpired vs NeedLogin。
-            // 这里用 FlaUI 取主窗口全部文本不可靠（多嵌套），保守归类 NeedLogin，
-            // 后续由 MessageWatcher 轮询补充判断。二维码区域截图留给上层。
-            var qrBytes = CaptureQrRegion();
-            return new LoginState(
-                AccountStatus.NeedLogin,
-                null,
-                "等待扫码登录",
-                qrBytes is null ? null : $"data:image/png;base64,{Convert.ToBase64String(qrBytes)}");
+            // 2. NeedLogin 判定：搜索框未命中 + 二维码 icon 命中 → 按 bbox 截图
+            var qrProbe = _visionLocator.LocateAsync("icon", "二维码").GetAwaiter().GetResult();
+            if (qrProbe is not null)
+            {
+                string? qrImageRef = CaptureQrRegion(qrProbe.Bbox);
+                return new LoginState(AccountStatus.NeedLogin, null, "等待扫码登录", qrImageRef);
+            }
+
+            // 3. 两步都未命中：保守 Offline
+            return new LoginState(AccountStatus.Offline, null, "登录态探测未命中任何关键元素", null);
         }
-        catch (AutomationLayerException ex)
+        catch (Exception ex)
         {
-            Log.Warning(ex, "后端日志：登录态探测 FlaUI 层异常，Layer={Layer}", ex.Layer);
+            Log.Warning(ex, "后端日志：登录态探测异常");
             return new LoginState(AccountStatus.Offline, null, "登录态探测异常", null);
         }
     }
 
-    /// <summary>截取二维码区域为 PNG 字节数组；失败返回 null（不阻断上报）。</summary>
-    private byte[]? CaptureQrRegion()
+    /// <summary>
+    /// 按 bbox 截取二维码区域为 PNG，转 base64 data URI。bbox 是截图坐标系（相对主窗口左上），
+    /// 需要换算成屏幕坐标后用 CopyFromScreen。
+    /// </summary>
+    private string? CaptureQrRegion(BoundingBox bbox)
     {
         try
         {
             var (left, top, _, _) = _mainWindow.GetRect();
-            var region = _nodes.QrRegion;
+            int screenX = left + bbox.X1;
+            int screenY = top + bbox.Y1;
 
-            // GDI+ 截图：使用 System.Drawing.Common（net8.0-windows 已包含）。
-            using var bmp = new System.Drawing.Bitmap(region.Width, region.Height);
+            using var bmp = new System.Drawing.Bitmap(bbox.Width, bbox.Height);
             using var g = System.Drawing.Graphics.FromImage(bmp);
-            g.CopyFromScreen(left + region.X, top + region.Y, 0, 0,
-                new System.Drawing.Size(region.Width, region.Height));
+            g.CopyFromScreen(screenX, screenY, 0, 0, new System.Drawing.Size(bbox.Width, bbox.Height));
 
             using var ms = new MemoryStream();
             bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-            return ms.ToArray();
+            return $"data:image/png;base64,{Convert.ToBase64String(ms.ToArray())}";
         }
         catch (Exception ex)
         {
@@ -96,7 +91,7 @@ internal sealed class LoginStateDetector
 }
 
 /// <summary>登录态探测结果。</summary>
-internal sealed class LoginState
+public sealed class LoginState
 {
     public AccountStatus Status { get; }
     public string? AccountDisplayName { get; }

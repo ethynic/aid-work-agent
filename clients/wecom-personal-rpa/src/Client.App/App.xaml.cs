@@ -5,15 +5,18 @@ using Microsoft.Extensions.Hosting;
 using Serilog;
 using WeCom.PersonalRpa.App.Autostart;
 using WeCom.PersonalRpa.App.Services;
-using WeCom.PersonalRpa.App.Services.Stubs;
 using WeCom.PersonalRpa.App.Tray;
 using WeCom.PersonalRpa.App.Views;
 using WeCom.PersonalRpa.Automation.Contracts;
+using WeCom.PersonalRpa.Automation.Vision;
+using WeCom.PersonalRpa.Automation.WeCom;
+using WeCom.PersonalRpa.Automation.Win32;
 using WeCom.PersonalRpa.Core.AgentApi;
 using WeCom.PersonalRpa.Core.Config;
 using WeCom.PersonalRpa.Core.Queue;
 using WeCom.PersonalRpa.Core.Security;
 using WeCom.PersonalRpa.Core.StateMachine;
+using AutomationActionExecutor = WeCom.PersonalRpa.Automation.WeCom.SendMessageService;
 
 namespace WeCom.PersonalRpa.App;
 
@@ -110,6 +113,11 @@ public partial class App : Application
         // ---- 配置（ClientOptions：非密 + 解密后的密钥） ----
         services.AddSingleton<ClientOptions>(_ => ClientOptionsLoader.Load(DataDirectory));
 
+        // ---- 视觉配置（VisionConfig：API Key 池来自 QWEN_API_KEYS 环境变量） ----
+        // 设计 §5.3 / plan §C：VisionConfig 定义在 Automation 工程，由 Client.App 反射加载并注入。
+        // Core 不引入 Windows-only 依赖，故 Vision 字段不挂在 ClientOptions 上。
+        services.AddSingleton<VisionConfig>(_ => VisionConfigLoader.Load(DataDirectory));
+
         // ---- 签名器（解密后的 secret bytes 来自 ClientOptions.ClientSecret） ----
         services.AddSingleton<RequestSigner>(sp =>
         {
@@ -140,19 +148,69 @@ public partial class App : Application
             new SqliteSendQueue(Path.Combine(DataDirectory, "send_queue.db")));
         services.AddSingleton<ISendQueue>(sp => sp.GetRequiredService<SqliteSendQueue>());
 
-        // ---- Automation 依赖（占位实现；Automation 具体类落地后替换） ----
-        // TODO: Client.Automation 完成后，改用真实实现注册（如 FlaUiActionExecutor 等）
-        services.AddSingleton<IActionExecutor, StubActionExecutor>();
-        services.AddSingleton<IWeComAutomation, StubWeComAutomation>();
-        services.AddSingleton<IHealthSupervisor, StubHealthCapture>();
+        // ---- 视觉模块（阶段 2A 产出，主路径 Qwen3-VL） ----
+        // 截图采集（无状态，单例）；同时暴露实现类型供 QwenVisionLocator 等显式依赖使用。
+        services.AddSingleton<ScreenCapturer>();
+        services.AddSingleton<IScreenCapturer>(sp => sp.GetRequiredService<ScreenCapturer>());
+
+        // 视觉缓存（SQLite 持久化，单例，Dispose 由 DI 容器接管）。
+        services.AddSingleton<VisionCache>(sp =>
+        {
+            var cfg = sp.GetRequiredService<VisionConfig>();
+            var dbPath = string.IsNullOrWhiteSpace(cfg.SQLitePath)
+                ? Path.Combine(DataDirectory, "vision_cache.db")
+                : cfg.SQLitePath;
+            var dir = Path.GetDirectoryName(dbPath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+            return new VisionCache(dbPath, TimeSpan.FromHours(cfg.Cache.TtlHours));
+        });
+        services.AddSingleton<IVisionCache>(sp => sp.GetRequiredService<VisionCache>());
+
+        // Qwen3-VL API 客户端（HttpClient 走 IHttpClientFactory，超时 / BaseAddress 在工厂回调里设）。
+        services.AddHttpClient<QwenVisionApi>((sp, client) =>
+        {
+            var cfg = sp.GetRequiredService<VisionConfig>();
+            client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds > 0 ? cfg.TimeoutSeconds : 120);
+        });
+        services.AddSingleton<IVisionApi>(sp => sp.GetRequiredService<QwenVisionApi>());
+
+        // 视觉定位器（主策略：Qwen3-VL grounding + 缓存）。
+        services.AddSingleton<IVisionLocator, QwenVisionLocator>();
+
+        // ---- 自动化层（阶段 2B 产出，替换原 Stub 实现） ----
+        // Win32 输入执行器：bbox→屏幕坐标点击 + 剪贴板粘贴。无状态，单例。
+        services.AddSingleton<InputExecutor>();
+        // 剪贴板备份/还原守卫。无状态，单例。
+        services.AddSingleton<ClipboardGuard>();
+        // 企微主窗口句柄封装。无状态，单例。
+        services.AddSingleton<WeComMainWindow>();
+        // 桌面状态探测器（锁定 / DPI / 分辨率）。无状态，单例。
+        services.AddSingleton<DesktopState>();
+        // 登录态视觉探测（Automation 层，供 HealthSupervisor 组合）。依赖 IVisionLocator + WeComMainWindow。
+        services.AddSingleton<WeCom.PersonalRpa.Automation.WeCom.LoginStateDetector>();
+        // 会话定位器：依赖 IVisionLocator + InputExecutor + WeComMainWindow。
+        services.AddSingleton<ConversationNavigator>();
+
+        // IActionExecutor：Automation.SendMessageService（视觉路径主实现）。
+        services.AddSingleton<AutomationActionExecutor>();
+        services.AddSingleton<IActionExecutor>(sp => sp.GetRequiredService<AutomationActionExecutor>());
+
+        // IWeComAutomation：阶段 2B 视觉主构造（visionLocator + inputExecutor + clipboardGuard + mainWindow）。
+        services.AddSingleton<IWeComAutomation, WeCom.PersonalRpa.Automation.WeComAutomation>();
+
+        // IHealthSupervisor：Automation.HealthSupervisor（DesktopState + WeComMainWindow + LoginStateDetector 组合）。
+        services.AddSingleton<IHealthSupervisor, WeCom.PersonalRpa.Automation.WeCom.HealthSupervisor>();
 
         // ---- App 编排组件 ----
         services.AddSingleton<InboundReporter>();
-        services.AddSingleton<SendMessageService>();
+        services.AddSingleton<WeCom.PersonalRpa.App.Services.SendMessageService>();
         services.AddSingleton<OutboundActionSource>();
-        services.AddSingleton<HealthSupervisor>();
-        services.AddSingleton<LoginStateDetector>();
-        services.AddSingleton<MessageWatcher>();
+        services.AddSingleton<WeCom.PersonalRpa.App.Services.HealthSupervisor>();
+        services.AddSingleton<WeCom.PersonalRpa.App.Services.LoginStateDetector>();
+        services.AddSingleton<WeCom.PersonalRpa.App.Services.MessageWatcher>();
         services.AddSingleton<AutostartRegistrar>();
 
         // ---- 窗口（瞬态，按需创建） ----

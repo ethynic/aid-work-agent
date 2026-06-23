@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWinUI>false</UseWinUI>
     <ProjectGuid>22222222-2222-2222-2222-222222222222</ProjectGuid>
     <RootNamespace>WeCom.PersonalRpa.Automation</RootNamespace>
     <AssemblyName>Client.Automation</AssemblyName>

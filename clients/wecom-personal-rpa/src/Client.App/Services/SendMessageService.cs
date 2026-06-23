@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using Serilog;
 using WeCom.PersonalRpa.Automation.Contracts;
+using WeCom.PersonalRpa.Core.AgentApi;
 using WeCom.PersonalRpa.Core.Protocol;
 using WeCom.PersonalRpa.Core.Queue;
 using WeCom.PersonalRpa.Core.StateMachine;
@@ -28,6 +29,7 @@ public sealed class SendMessageService
     private readonly ISendQueue _queue;
     private readonly InboundReporter _reporter;
     private readonly IActionExecutor _executor;
+    private readonly IAgentApiClient _agentApiClient;
     private readonly SemaphoreSlim _drainLock = new(1, 1);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -39,12 +41,14 @@ public sealed class SendMessageService
         IStateManager state,
         ISendQueue queue,
         InboundReporter reporter,
-        IActionExecutor executor)
+        IActionExecutor executor,
+        IAgentApiClient agentApiClient)
     {
         _state = state;
         _queue = queue;
         _reporter = reporter;
         _executor = executor;
+        _agentApiClient = agentApiClient ?? throw new ArgumentNullException(nameof(agentApiClient));
     }
 
     /// <summary>串行消费队列中的 Pending 项，直到空或状态变化。</summary>
@@ -185,12 +189,21 @@ public sealed class SendMessageService
         }
     }
 
-    /// <summary>下载文件到临时目录（委托 Core.IAgentApiClient.DownloadFileAsync，首版占位）。</summary>
+    /// <summary>
+    /// 下载文件到临时目录。委托 <see cref="IAgentApiClient.DownloadFileAsync"/> 拉取文件流，
+    /// 流式写入本地临时文件（protocol §A.6：文件类 action 先落盘再发送，发送完成后由调用方删除）。
+    /// </summary>
+    /// <param name="fileUrl">服务端下发的短期签名文件 URL（或文件引用 id）。</param>
+    /// <param name="filename">目标文件名（用于临时文件命名，保留扩展名）。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>本地临时文件绝对路径。</returns>
     private async Task<string> DownloadToTempAsync(string fileUrl, string filename, CancellationToken ct)
     {
-        // TODO: 通过注入的 IAgentApiClient.DownloadFileAsync(fileUrl, ct) 写入临时目录
-        var tmp = Path.Combine(Path.GetTempPath(), $"wecom_rpa_{Guid.NewGuid():N}_{filename}");
-        await File.WriteAllTextAsync(tmp, "", ct); // 占位空文件
+        var safeName = string.IsNullOrWhiteSpace(filename) ? "file.bin" : filename;
+        var tmp = Path.Combine(Path.GetTempPath(), $"wecom_rpa_{Guid.NewGuid():N}_{safeName}");
+        await using var dst = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        await using var src = await _agentApiClient.DownloadFileAsync(fileUrl, ct);
+        await src.CopyToAsync(dst, ct);
         return tmp;
     }
 

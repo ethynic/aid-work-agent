@@ -2,8 +2,9 @@
 <#
 .SYNOPSIS
   本地启动 Client.App（冒烟：看托盘图标、状态窗口、日志是否正常）。
-  注意：当前 Client.App 注入的是 Stubs/AutomationStubs.cs 桩，仅验证骨架健康，
-  不会真实操作企业微信。见 STATUS.md ③。
+  Client.App 已注入真实视觉定位实现（QwenVisionLocator + ScreenCapturer + WeComAutomation），
+  但仍需要真实企微 PC 客户端 + QWEN_API_KEYS 环境变量才能完整跑通端到端。
+  无企微环境时启动仅验证 GUI 骨架健康（托盘图标/状态窗口/日志）。
 .EXAMPLE
   powershell scripts\run-app.ps1
 #>

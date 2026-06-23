@@ -60,3 +60,25 @@ logging:
     - "X-Signature"
     - "client_secret"
     - "qr_image_ref"
+
+# 视觉模块（Qwen3-VL grounding，design §5.3）
+# - api_keys 复用服务端同款 Qwen key 池（逗号分隔），运行期由客户端从环境变量 QWEN_API_KEYS 注入；
+#   严禁在 yaml 中明文长期存储 key。
+# - 未配置 QWEN_API_KEYS 时 vision.enabled 会被客户端启动器自动置为 false（视觉路径降级）。
+vision:
+  enabled: true
+  primary_model: "qwen3-vl-plus"             # 主模型（性价比最高）
+  fallback_model: "qwen3-vl-max"             # 主模型连续失败时降级
+  api_endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  api_keys: ${QWEN_API_KEYS}                  # 由 ClientOptionsLoader 占位符替换为 env 值
+  timeout_seconds: 120                        # 单次 grounding 调用 HTTP 超时
+  max_retries: 3                              # 5xx / 超时重试次数（指数退避）
+  cache:
+    enabled: true
+    ttl_hours: 24                             # 缓存 TTL，防企微静默升级 bbox 失效
+    sqlite_path: "${AppData}/WeComRpa/vision_cache.db"   # 视觉缓存 SQLite 落盘路径
+  screenshot:
+    pre_foreground_check: true                # 截图前校验企微主窗口在前台
+    pixel_sanity_check: true                  # 截图像素自检（防全白/全黑）
+    max_white_ratio: 0.5                      # 白像素占比上限（超过判为可疑截图）
+    min_color_diversity: 30                   # 颜色种类下限（低于判为可疑截图）

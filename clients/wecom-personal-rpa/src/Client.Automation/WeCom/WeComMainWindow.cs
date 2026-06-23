@@ -9,11 +9,12 @@ namespace WeCom.PersonalRpa.Automation.WeCom;
 /// 提供置顶 / 可见性 / 矩形查询。供 <see cref="HealthSupervisor"/> 与
 /// <see cref="ActionLocator"/> 第二层（Win32 坐标）共用。
 /// </summary>
-internal sealed class WeComMainWindow
+public class WeComMainWindow
 {
     private readonly string _className;
 
-    public WeComMainWindow(string className)
+    /// <summary>构造；传入企微主窗口类名（默认 WeWorkWindow）。</summary>
+    public WeComMainWindow(string className = "WeWorkWindow")
     {
         _className = string.IsNullOrWhiteSpace(className) ? "WeWorkWindow" : className;
     }
@@ -21,11 +22,11 @@ internal sealed class WeComMainWindow
     /// <summary>当前主窗口句柄（0 = 未找到）。</summary>
     public IntPtr Handle { get; private set; }
 
-    /// <summary>句柄是否非 0 且窗口可见。</summary>
-    public bool IsVisible => Handle != IntPtr.Zero && NativeMethods.IsWindowVisible(Handle);
+    /// <summary>句柄是否非 0 且窗口可见。virtual 以便单测覆盖（默认走 Win32 IsWindowVisible）。</summary>
+    public virtual bool IsVisible => Handle != IntPtr.Zero && NativeMethods.IsWindowVisible(Handle);
 
-    /// <summary>枚举顶层窗口找到企微主窗口句柄。</summary>
-    public bool TryFind()
+    /// <summary>枚举顶层窗口找到企微主窗口句柄。virtual 以便单测注入假句柄。</summary>
+    public virtual bool TryFind()
     {
         // 先精确 FindWindow。
         IntPtr h = NativeMethods.FindWindowW(_className, null);
@@ -58,8 +59,8 @@ internal sealed class WeComMainWindow
         return found != IntPtr.Zero;
     }
 
-    /// <summary>把主窗口置顶并恢复（解决被遮挡导致自动化失焦）。</summary>
-    public bool BringToForeground()
+    /// <summary>把主窗口置顶并恢复（解决被遮挡导致自动化失焦）。virtual 以便单测覆盖。</summary>
+    public virtual bool BringToForeground()
     {
         if (Handle == IntPtr.Zero)
         {
@@ -75,8 +76,8 @@ internal sealed class WeComMainWindow
         return NativeMethods.SetForegroundWindow(Handle);
     }
 
-    /// <summary>取主窗口屏幕矩形。失败抛 AutomationLayerException。</summary>
-    public (int Left, int Top, int Width, int Height) GetRect()
+    /// <summary>取主窗口屏幕矩形。失败抛 AutomationLayerException。virtual 以便单测覆盖。</summary>
+    public virtual (int Left, int Top, int Width, int Height) GetRect()
     {
         if (Handle == IntPtr.Zero)
         {

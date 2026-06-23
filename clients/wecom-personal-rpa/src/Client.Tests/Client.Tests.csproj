@@ -8,7 +8,9 @@
       故本工程必须对齐为 net8.0-windows。这是物理约束驱动的偏差，已记录在 StructuredOutput.issues。
       protocol.md §C.1 的「Tests 可用 net8.0」是「不依赖 Windows 时的偏好」，非硬约束。
     -->
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWinUI>false</UseWinUI>
     <ProjectGuid>55555555-5555-5555-5555-555555555555</ProjectGuid>
     <RootNamespace>WeCom.PersonalRpa.Tests</RootNamespace>
     <AssemblyName>Client.Tests</AssemblyName>

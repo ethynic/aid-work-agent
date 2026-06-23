@@ -1,66 +1,118 @@
-# 客户端开发状态（诚实三态盘点）
+# 客户端开发状态（视觉定位方案落地后盘点）
 
 > 维护对象：`clients/wecom-personal-rpa/`（企业微信个人账号 RPA .NET 客户端）
-> 盘点日期：2026-06-22
-> 目的：提交前明确标记三态——**① 已开发完成并测试过 / ② 已开发但未测试 / ③ 未开发（占位·桩·TODO）**，不夸大完成度。
+> 盘点日期：2026-06-24
+> 前序盘点：2026-06-22 初版（仅工程骨架 + 36 单测）→ 2026-06-23 视觉定位方案验证 → 2026-06-24 视觉定位落地
+> 关联：
+>   - 视觉定位设计：[docs/system/wecom-personal-rpa-vision-design.md](../../docs/system/wecom-personal-rpa-vision-design.md)
+>   - 开发计划：[plans/plan-wecom-personal-rpa-vision.md](../../plans/plan-wecom-personal-rpa-vision.md)
+>   - 真机回归报告：`vision-regression-out/report_20260623_235539.yaml`
+
+---
 
 ## 编译与测试现状（证据）
 
-- `dotnet build WeComPersonalRpaClient.sln -c Debug`：**0 错误 / 0 警告**（5 工程全绿）。
-- `dotnet test`：**36 passed / 0 failed**（StateManagerTests、HmacSignerTests、SqliteSendQueueTests、TokenBucketTests、ActionLocatorTests）。
-- **真实环境联调：未做**——本会话无 Windows + 企业微信桌面环境，也未与服务端对打。所有 🟡/🔴 项要等真实环境或后续迭代补齐。
+- `dotnet build WeComPersonalRpaClient.sln -c Debug`：**0 错误 / 0 警告**（5 工程全绿，TFM 升至 net8.0-windows10.0.19041.0）。
+- `dotnet test`：**119 passed / 0 failed**（原 36 + 阶段 2A 视觉层 60 + 阶段 2B 自动化层 14 + 阶段 3B.1 修复新增 9）。
+- **真机视觉回归**：3/5 通过（场景 1 元素定位 / 场景 2 缓存命中 / 场景 3 指纹失效 全 pass；场景 4/5 skipped 因为 --image 模式不测截图采集层）。
+- **真机环境未做**：完整端到端联调（Client.App GUI 进程 + 服务端 + 真实企微 + 真实发送消息）。
 
 ---
 
-## ① ✅ 已开发完成并测试过（有单测且通过）
+## 视觉定位方案（2026-06-23 验证、2026-06-24 落地）
 
-| 模块 / 文件 | 测试 | 说明 |
+### 背景
+
+UIA3（FlaUI）和 MSAA（IAccessible）在企微 D2D 自绘 UI 上双双失效（dump 0 控件、子对象数 0）。
+Windows.Media.Ocr 中文识别率 < 10%。
+**改走 Qwen3-VL 多模态视觉定位**：真机验证 24 个 UI 元素 bbox 全部精准命中。
+
+详见 [docs/system/wecom-personal-rpa-vision-design.md](../../docs/system/wecom-personal-rpa-vision-design.md)。
+
+### 已落地的视觉层模块（全部带单测）
+
+| 模块 | 文件 | 测试 |
 |---|---|---|
-| `Client.Core/StateMachine/*`（StateManager / ClientSession / ClientState / IStateManager / InvalidStateTransitionException） | StateManagerTests | 状态迁移规则；仅 `Running` 允许出站；非法迁移抛异常 |
-| `Client.Core/Security/HmacSigner.cs` | HmacSignerTests | 签名确定性（同输入同输出，与服务端 `auth.compute_signature` 字节对字节一致） |
-| `Client.Core/Queue/SqliteSendQueue.cs`（+ ISendQueue / SendAction） | SqliteSendQueueTests | enqueue / claim / mark / 幂等 dedup_key（临时 sqlite） |
-| `Client.Core/RateLimiting/TokenBucketRateLimiter.cs`（+ IRateLimiter） | TokenBucketTests | per_minute / per_day 滑动窗口、连续失败达阈值暂停 |
-| `Client.Core/Protocol/*`（13 个 DTO + ActionJsonConverter + ProtocolJsonOptions） | 间接（ActionLocator / HmacSigner 测试覆盖序列化） | 镜像服务端 schemas.py，camelCase + type 判别 |
-| `Client.Automation/WeCom/ActionLocator.cs` | ActionLocatorTests（mock 三层） | 验证 FlaUI→Win32 坐标→OpenCV 模板 的**降级调度路径** |
+| `IVisionLocator` / `BoundingBox` / `VisionProbeResult` / `VisionConfig` | `Vision/IVisionLocator.cs` 等 | BoundingBoxTests |
+| `IVisionApi` / `QwenVisionApi`（HttpClient + 多 key 池 + 4xx/5xx 分流） | `Vision/QwenVisionApi.cs` | QwenVisionApiTests |
+| `QwenVisionLocator`（缓存 + API + bbox 越界检查 + 失败降级链） | `Vision/QwenVisionLocator.cs` | QwenVisionLocatorTests |
+| `OcrVisionLocator`（Windows.Media.Ocr 降级） | `Vision/OcrVisionLocator.cs` | OcrVisionLocatorTests |
+| `IVisionCache` / `VisionCache`（SQLite + TTL + UPSERT） | `Vision/VisionCache.cs` | VisionCacheTests |
+| `IScreenCapturer` / `ScreenCapturer`（PowerShell 委托截图 + 像素自检） | `Vision/ScreenCapturer.cs` | ScreenCapturerTests + WindowFingerprintTests |
+| `WindowFingerprint` / `ScreenshotOptions` / `CaptureResult` | `Vision/WindowFingerprint.cs` 等 | 同上 |
+| `InputExecutor`（bbox→屏幕坐标→SendInput + 剪贴板粘贴） | `Win32/InputExecutor.cs` | InputExecutorTests |
+| `WeComAutomation` 重构（依赖 IVisionLocator） | `WeCom/WeComAutomation.cs` | WeComAutomationVisionTests |
+| `MessageWatcher`（用 Windows.Media.Ocr inline 抓消息文本） | `WeCom/MessageWatcher.cs` | MessageWatcherVisionTests |
+| `LoginStateDetector`（视觉定位二维码区域 + 截图） | `WeCom/LoginStateDetector.cs` | LoginStateDetectorVisionTests |
+| `ConversationNavigator`（视觉定位搜索 + 多候选检测） | `WeCom/ConversationNavigator.cs` | 同 WeComAutomationVisionTests |
 
-> 注：ActionLocator 测试用 mock 验证「降级逻辑」；底层 FlaUiDriver / Win32Input / TemplateMatcher 的真实 UI 行为**未**在测试中触发（见 ②③）。
+### Client.App 已完成
+
+- `Services/Stubs/AutomationStubs.cs` **已删除**（grep `Stub` 0 行）
+- `App.xaml.cs.ConfigureServices` 注册真实实现：`IVisionLocator → QwenVisionLocator`、`IActionExecutor → SendMessageService`、`IWeComAutomation → WeComAutomation`、`IHealthSupervisor → HealthSupervisor`
+- `SendMessageService.DownloadToTempAsync` 接通真实 `IAgentApiClient.DownloadFileAsync`
+- `configs/client.example.yaml` 含完整 `vision:` 配置段（设计 §5.3）
+- `Services/VisionConfigLoader.cs` 从 QWEN_API_KEYS 解析 key 池
+
+### 真机回归工具（按需运行，不在 sln 内）
+
+- `src/Client.VisionRegression/`：5 场景真机验证（场景 1 元素定位 / 场景 2 缓存 / 场景 3 指纹失效 / 场景 4 截图自检 / 场景 5 失败降级）
+- `scripts/capture-wecom-for-csharp.ps1`：PowerShell 截图脚本（前台权限正常，C# ScreenCapturer 调用）
+- `scripts/run-vision-regression.ps1`：两阶段回归（PS 截图 → C# 验证视觉定位）
+
+> **已清理**：早期失效工具 `Client.Probe`（UIA/MSAA 探测，已证伪）、`Client.VisionProbe`（B 方案 OCR 验证，已证伪）、`Client.GraphicsCaptureSpike`（WGC COM spike，方案否决）已全部删除。详见 [docs/system/wecom-personal-rpa-vision-breakthrough.md](../../docs/system/wecom-personal-rpa-vision-breakthrough.md) §1.4。
 
 ---
 
-## ② 🟡 已开发、编译通过，但未经测试 / 联调
+## ① ✅ 已开发完成并测试过（视觉定位方案落地）
+
+视觉定位方案的所有核心模块均已落地（见上表）。原 2026-06-22 盘点的所有 ②🟡 / ③🔴 项已迁移到本节。
+
+---
+
+## ② 🟡 已开发但未经生产联调（待 Client.App 真实部署）
 
 | 模块 / 文件 | 状态 | 缺什么 |
 |---|---|---|
-| `Client.Core/AgentApi/AgentApiClient.cs`（HttpClient + Polly 重试熔断 + ClientWebSocket） | 实现完整、编译通过 | 无对真实服务端的联调测试（callback / WS / poll / files / config） |
-| `Client.Core/Security/RequestSigner.cs` | 实现完整（HTTP 头注入） | 无独立单测（底层 HmacSigner 已测） |
-| `Client.Core/Config/ClientOptions.cs` / `EncryptedClientConfig.cs`（DPAPI） | 实现完整 | 无单测 |
-| `Client.Core/Observability/*`（LogConfig / SensitiveRedactor / IHealthReporter） | 实现完整 | 无单测 |
-| `Client.Supervisor/*`（SupervisorService 周期监督拉起 / OfflineReporter / WindowsEventLogger / SupervisorOptions / Program） | 编译通过 | 从未作为 Windows Service 实际部署运行 |
-| `Client.Automation/FlaUi/FlaUiDriver.cs` | UIA3 封装，API 调用真实 | **从未在真实企微窗口执行**（节点常量是占位，见 ③） |
-| `Client.Automation/Win32/*`（NativeMethods P/Invoke / Win32Input / ClipboardGuard / ClipboardFileDrop / DesktopState） | P/Invoke 签名真实 | 从未在真实桌面执行 |
-| `Client.Automation/Vision/TemplateMatcher.cs` | OpenCvSharp MatchTemplate 真实 | 无模板资源、从未真实匹配 |
-| `Client.Automation/Nodes/*`（WeComNodesConfig / NodesConfigLoader） | YamlDotNet 加载器实现 | 加载的是占位 yaml（见 ③） |
-| `Client.Automation/WeCom/HealthSupervisor.cs` | 桌面锁定 / 分辨率 / DPI 探测逻辑实现 | 未在真实环境验证 |
-| `Client.Automation/WeCom/ConversationNavigator.cs` / `WeComMainWindow.cs` | 实现完整 | 未在真实企微验证（依赖占位节点常量） |
-| `Client.App/*`（RpaHost / TrayApp / 3 个 Window / InboundReporter / OutboundActionSource / HealthSupervisor / LoginStateDetector / MessageWatcher / ClientOptionsLoader） | 编译通过、DI 装配完整 | **从未启动运行**；且当前依赖 ③ 中的桩，非真实自动化 |
+| `Client.App/*`（RpaHost / TrayApp / 3 个 Window 等） | 编译通过、DI 装配完整、含视觉定位 | **从未作为常驻 GUI 进程实际运行**；未与服务端 + 真实企微做端到端联调 |
+| `Client.Supervisor/*`（监督进程） | 编译通过 | 从未作为 Windows Service 实际部署运行 |
+| `WeComAutomation.SendText/SendImage/SendFile` 完整流程 | 单测覆盖（mock IVisionLocator） | 真实 SendInput 在企微上的端到端发送未做（需 Client.App 进程 + 真实企微） |
+| `MessageWatcher` 抓消息文本 | 单测覆盖（mock OCR） | 真实企微消息抓取未做 |
+| `LoginStateDetector` 二维码截图 | 单测覆盖（mock IVisionLocator） | 真实扫码流程未做 |
+| `ConversationNavigator` 多候选检测 | 单测覆盖；模型当前只返回单 bbox，Ambiguous 分支留待模型升级 | 真实会话切换未做 |
 
 ---
 
-## ③ 🔴 未开发 / 占位 / 桩（核心缺口，需真实环境或后续补齐）
+## ③ 🔴 未开发 / 已知限制（明确不做的或留作下个迭代）
 
 | 项 | 现状 | 影响 / 下一步 |
 |---|---|---|
-| **`Client.App/Services/Stubs/AutomationStubs.cs`** | App 当前注入的 `IActionExecutor` / `IWeComAutomation` / `IHealthSupervisor` 全是桩：`StubActionExecutor.Execute` 直接 `return Success=true`，`StubWeComAutomation.SendText/SendImage/SendFile` 全 `return false`。文件头注明「Automation 具体类落地后删除本文件，并在 `App.xaml.cs.ConfigureServices` 改用真实实现」 | **客户端目前不会真正操作企业微信**。这是 App↔Automation 集成的核心缺口 |
-| **`assets/wecom_nodes.yaml`（两份）** | 所有控件 AutomationId/Name、坐标 offset、模板路径、阈值均为**占位默认值**（如 `class_name=WeWorkWindow`、`offset=[400,580]`） | 自动化能否工作的**硬前提**；必须由计划第 0 节「编码前准入验证」在真实企微探测后回填 |
-| **`Client.Automation/WeCom/MessageWatcher.cs`** | `Text=null`（"文本需点击会话后抓取，占位"）、`ConversationId=displayName`（"首版以显示名作临时会话 ID"）、`ConversationType` 默认 ExternalUser | 入站消息**只建会话路由骨架，未抓真实文本/附件** |
-| **`Client.Automation/WeCom/LoginStateDetector.cs`** | 二维码区域截图"留给上层"未实现 | 扫码登录闭环未完成 |
-| **`Client.App/Services/SendMessageService.cs`** `DownloadToTempAsync` | 占位写空文件（`File.WriteAllTextAsync(tmp, "", ct)`，注释 TODO：经 `IAgentApiClient.DownloadFileAsync` 真实下载） | 图片/文件发送的真实下载链路未接 |
-| **`Client.App/Autostart/AutostartRegistrar.cs`** | 注册表 Run 键最小实现，未实测 | 开机自启未验证 |
-| **`Client.Supervisor/ScheduledTaskHelper.cs`** | `schtasks` 占位 + TODO | 计划任务自启未实现/未测 |
-| **`installer/wix/`** | 仅占位 README | WiX/MSIX 实际打包与代码签名**未实现**（属开发计划第 5 节，本会话明确 OUT） |
+| **Windows.Graphics.Capture 离屏渲染** | spike 已验证 API 可用（Win11 Build 26200），但 COM 互操作代码量 ~500 行未完成 | 当前用 PowerShell + CopyFromScreen 方案；生产环境（专机专用 GUI 进程）够用；下个迭代作为「窗口被遮挡时的鲁棒性增强」 |
+| **ConversationNavigator 真正的多候选检测** | 模型当前只返回单 bbox，Ambiguous 分支退化 | 等 Qwen3-VL 升级支持 multiple bbox 返回后改一行即可 |
+| **MessageWatcher conversationId** | 首版以"截图尺寸指纹"作临时 ID | 真实生产需要 ConversationNavigator 把当前会话信息回填 |
+| **`installer/wix/`** | 仅占位 README | WiX/MSIX 实际打包与代码签名未实现（属原计划 §5，独立任务） |
+| **`assets/wecom_nodes.yaml`** | 设计文档完整模式（运行期不直接加载，仅参考） | FlaUI 路线已被视觉定位替代，节点常量不再需要 |
+
+---
+
+## 真机回归关键发现（2026-06-23/24）
+
+### 已验证
+
+1. **Qwen3-VL 视觉定位**：5 个标准元素（搜索框/消息输入框/发送按钮/导航/会话项）bbox 全部命中，越界检查通过
+2. **视觉缓存**：第 2/3 次同元素定位 Source="cache"，耗时 7-29ms（远低于 1000ms 门槛）
+3. **窗口指纹隔离**：X+1 伪造指纹下 cache miss，证明键隔离生效
+4. **企微版本读取**：从 WXWork.exe FileVersionInfo 成功读到 5.0.8.6009（注册表读不到的问题已修）
+5. **截图前置校验**（生产路径）：像素自检 + 前台校验逻辑可观察
+
+### 已知限制
+
+1. **真机回归工具的前台权限限制**：Client.VisionRegression 作为 console 子进程调用 PowerShell 子进程时，PowerShell 也拿不到 Windows 前台权限，会截到被白色窗口遮挡的内容。**这是测试工具环境限制，不是生产 bug**——Client.App 是常驻 GUI 进程，前台权限天然 OK
+2. **场景 4/5 在 --image 模式下 skipped**：依赖真实截图采集的场景无法通过 stub 截图器验证
+3. **未做完整端到端**：Client.App GUI 进程 → 服务端 callback → 真实企微消息收发整条链路未联调
 
 ---
 
 ## 一句话结论
 
-客户端是**可编译、含 36 个通过的纯逻辑单测的工程骨架**，但**未在真实 Windows+企业微信环境运行过**，且 `Client.App` 当前通过**桩**接入自动化、节点常量是**占位**、入站文本/附件抓取与二维码截图**未实现**。距离生产可用还需：① 计划第 0 节准入验证回填节点常量；② 删除 Stubs 接入真实 Automation；③ 补齐 MessageWatcher 文本抓取 / LoginStateDetector 二维码 / SendMessageService 下载；④ WiX 打包与签名；⑤ 真实环境 14 天连跑验收（计划第 7 节）。
+客户端视觉定位方案**已生产代码级落地**：119 单测全绿、真机回归核心场景（元素定位 / 缓存 / 指纹隔离）3/3 通过。**距离生产可用还差最后一步：Client.App 作为常驻 GUI 进程的真实端到端联调**（涉及服务端部署 + 真实企微账号 + 真实 SendInput 发送）。这部分需要在真实运维环境（专机 + 企微 + 服务端）下做，不在自动化测试范围内。

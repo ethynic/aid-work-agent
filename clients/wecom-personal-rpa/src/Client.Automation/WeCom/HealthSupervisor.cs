@@ -16,7 +16,13 @@ public sealed class HealthSupervisor : IHealthSupervisor
     private readonly WeComMainWindow _mainWindow;
     private readonly LoginStateDetector _loginState;
 
-    internal HealthSupervisor(
+    /// <summary>
+    /// 构造。由 Client.App DI 容器装配时调用。
+    /// </summary>
+    /// <param name="desktop">桌面状态探测器（锁定 / DPI / 分辨率）。</param>
+    /// <param name="mainWindow">企微主窗口句柄封装。</param>
+    /// <param name="loginState">登录态视觉探测器。</param>
+    public HealthSupervisor(
         DesktopState desktop,
         WeComMainWindow mainWindow,
         LoginStateDetector loginState)

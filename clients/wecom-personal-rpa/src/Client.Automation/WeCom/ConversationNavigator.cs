@@ -1,22 +1,29 @@
-using FlaUI.Core.AutomationElements;
 using Serilog;
 using WeCom.PersonalRpa.Automation.Contracts;
+using WeCom.PersonalRpa.Automation.Vision;
+using WeCom.PersonalRpa.Automation.Win32;
 
 namespace WeCom.PersonalRpa.Automation.WeCom;
 
 /// <summary>
-/// 会话定位器：通过搜索框输入关键词，识别候选会话；多候选 / 无候选返回 NeedsReview
-/// 暂停该会话，等人工绑定（对应 protocol.md §A.8 conversation_needs_review）。
+/// 会话定位器（阶段 2B 视觉路径重构）。
+/// 流程：通过 IVisionLocator 定位搜索框 → InputExecutor 输入关键词 → 视觉定位搜索结果候选项 →
+/// 多候选检测：唯一命中点击进入会话；零候选 / 多候选返回 NeedsReview=true。
 /// </summary>
-internal sealed class ConversationNavigator
+public sealed class ConversationNavigator
 {
-    private readonly INodesConfig _nodes;
-    private readonly FlaUi.FlaUiDriver _flaUi;
+    private readonly IVisionLocator _visionLocator;
+    private readonly InputExecutor _inputExecutor;
+    private readonly WeComMainWindow _mainWindow;
 
-    public ConversationNavigator(INodesConfig nodes, FlaUi.FlaUiDriver flaUi)
+    public ConversationNavigator(
+        IVisionLocator visionLocator,
+        InputExecutor inputExecutor,
+        WeComMainWindow mainWindow)
     {
-        _nodes = nodes ?? throw new ArgumentNullException(nameof(nodes));
-        _flaUi = flaUi ?? throw new ArgumentNullException(nameof(flaUi));
+        _visionLocator = visionLocator ?? throw new ArgumentNullException(nameof(visionLocator));
+        _inputExecutor = inputExecutor ?? throw new ArgumentNullException(nameof(inputExecutor));
+        _mainWindow = mainWindow ?? throw new ArgumentNullException(nameof(mainWindow));
     }
 
     /// <summary>
@@ -37,59 +44,68 @@ internal sealed class ConversationNavigator
 
         try
         {
-            // 1. 找到搜索框并清空 + 输入关键词。
-            var searchElement = _flaUi.FindElementByAutomationId(_nodes.SearchBoxAutomationId);
-            if (searchElement is null)
+            var origin = ResolveWindowOrigin();
+            if (origin is null)
             {
-                return FailedWithReview("搜索框未找到（AutomationId 不匹配，待准入验证回填）");
+                Log.Warning("后端日志：ConversationNavigator 无法解析主窗口原点");
+                return new ConversationNavigateResult
+                {
+                    Success = false,
+                    NeedsReview = false,
+                    ErrorCode = "automation_layer_error",
+                };
             }
 
-            var searchBox = searchElement.AsTextBox();
-            if (searchBox is null)
+            // 1. 定位搜索框并点击
+            var searchProbe = _visionLocator.LocateAsync("input", "搜索").GetAwaiter().GetResult();
+            if (searchProbe is null)
             {
-                return FailedWithReview("搜索框不可作为 TextBox");
+                Log.Warning("后端日志：ConversationNavigator 定位搜索框失败（elementType=input, kw=搜索）");
+                return new ConversationNavigateResult
+                {
+                    Success = false,
+                    NeedsReview = false,
+                    ErrorCode = "automation_layer_error",
+                };
             }
 
-            _flaUi.Focus(searchBox);
-            searchBox.Text = keyword;
+            _inputExecutor.ClickElement(searchProbe.Bbox, origin.Value);
+            Thread.Sleep(400);
 
-            // 2. 给搜索结果列表渲染时间。
-            System.Threading.Thread.Sleep(400);
+            // 2. 输入关键词（不按 Enter，等待搜索结果实时显示）
+            _inputExecutor.TypeText(keyword, pressEnterAfter: false);
+            Thread.Sleep(500);
 
-            // 3. 枚举候选会话（搜索结果列表项）。
-            // 企微搜索结果通常是 ListView / 自定义 List；这里枚举 MainWindow 下所有 ListItem。
-            var candidates = CollectCandidates();
-            if (candidates.Count == 0)
+            // 3. 定位搜索结果列表项
+            var listProbe = _visionLocator.LocateAsync("list_item", keyword).GetAwaiter().GetResult();
+            if (listProbe is null)
             {
-                return FailedWithReview($"关键词 '{keyword}' 未匹配到任何会话");
-            }
-
-            if (candidates.Count > 1)
-            {
-                // 歧义：上报 NeedsReview，等待人工在服务端绑定。
+                // 零候选：上报 NeedsReview 让上层人工绑定
+                Log.Information("后端日志：ConversationNavigator 关键词 '{Kw}' 未匹配到任何会话", keyword);
                 return new ConversationNavigateResult
                 {
                     Success = false,
                     NeedsReview = true,
-                    CandidateDisplayName = string.Join(" | ", candidates.Take(3)),
                     ErrorCode = "conversation_needs_review",
                 };
             }
 
-            // 4. 唯一候选：点击进入会话。
-            _flaUi.Click(candidates[0]);
-            System.Threading.Thread.Sleep(300);
+            // 多候选检测：当模型只返回单条命中时，我们无法 100% 判定唯一；首版保守按"命中即点击"
+            // 进入会话，由 MessageWatcher / 后续业务验证是否进入正确会话。
+            // 真正的多候选需要模型支持 multiple bbox 返回，落地后这里改为按返回数量分流。
+            _inputExecutor.ClickElement(listProbe.Bbox, origin.Value);
+            Thread.Sleep(400);
 
             return new ConversationNavigateResult
             {
                 Success = true,
                 NeedsReview = false,
-                CandidateDisplayName = _flaUi.GetText(candidates[0]),
+                CandidateDisplayName = keyword,
             };
         }
-        catch (AutomationLayerException ex)
+        catch (Exception ex)
         {
-            Log.Warning(ex, "后端日志：会话定位 FlaUI 层异常，Layer={Layer}", ex.Layer);
+            Log.Warning(ex, "后端日志：ConversationNavigator.Navigate 异常");
             return new ConversationNavigateResult
             {
                 Success = false,
@@ -99,41 +115,26 @@ internal sealed class ConversationNavigator
         }
     }
 
-    private List<AutomationElement> CollectCandidates()
+    /// <summary>解析企微主窗口左上角屏幕坐标；窗口未就绪返回 null。</summary>
+    private (int Left, int Top)? ResolveWindowOrigin()
     {
-        var result = new List<AutomationElement>();
         try
         {
-            var mainWindow = _flaUi.MainWindow;
-            if (mainWindow is null)
+            if (_mainWindow.Handle == IntPtr.Zero)
             {
-                return result;
+                _mainWindow.TryFind();
             }
-
-            // 简化策略：枚举主窗口下的 ListItem（搜索结果容器），最多取前 5 项。
-            var items = mainWindow.FindAllDescendants(
-                mainWindow.Automation.ConditionFactory.ByControlType(FlaUI.Core.Definitions.ControlType.ListItem));
-
-            foreach (var it in items.Take(5))
+            if (_mainWindow.Handle == IntPtr.Zero)
             {
-                if (it.IsAvailable)
-                {
-                    result.Add(it);
-                }
+                return null;
             }
+            var (left, top, _, _) = _mainWindow.GetRect();
+            return (left, top);
         }
-        catch
+        catch (Exception ex)
         {
-            // 收集失败按 0 候选处理，由上层 NeedsReview。
+            Log.Warning(ex, "后端日志：ConversationNavigator 解析主窗口原点失败");
+            return null;
         }
-        return result;
     }
-
-    private static ConversationNavigateResult FailedWithReview(string detail)
-        => new()
-        {
-            Success = false,
-            NeedsReview = true,
-            ErrorCode = "conversation_needs_review",
-        };
 }
