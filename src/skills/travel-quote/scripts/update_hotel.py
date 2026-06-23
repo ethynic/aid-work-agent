@@ -32,8 +32,7 @@ for p in [str(project_root), str(scripts_dir)]:
         sys.path.insert(0, p)
 
 from db import init_tables
-from hotel import calculate_hotel_stays
-from hotel_retriever import HotelRetriever
+from hotel import calculate_hotel_stays, resolve_hotel_overrides
 from excel_export import export_with_template
 
 
@@ -64,69 +63,10 @@ def update_hotel(params: dict) -> dict:
     if total_people <= 0:
         raise ValueError("total_people 缺失或为 0，无法计算")
 
-    # —— 1. 校验每个 override 的 city 在 hotel_stays 中 ——
-    stay_by_city = {s.get("city", ""): s for s in hotel_stays}
-    for ov in overrides:
-        city = ov.get('city', '')
-        if city not in stay_by_city:
-            raise ValueError(
-                f"未在城市住宿清单中找到 '{city}'，无法替换酒店。"
-                f"本次报价包含的城市：{list(stay_by_city.keys())}"
-            )
-        if not ov.get('hotel_name'):
-            raise ValueError(f"城市 '{city}' 的 hotel_overrides 缺少 hotel_name")
+    # —— 1. 用酒店名反查 doc_id 并覆写 hotel_stays（与 generate.py 共用同一逻辑）——
+    name_overrides = resolve_hotel_overrides(tenant_id, hotel_stays, overrides)
 
-    # —— 2. 用酒店名反查 doc_id（LLM 只知道酒店名，不知道 doc_id）——
-    retriever = HotelRetriever()
-    from hotel import _parse_team_price
-
-    for ov in overrides:
-        city = ov['city']
-        hotel_name = ov['hotel_name']
-        matches = retriever.search_by_name(tenant_id, hotel_name, top_k=10)
-
-        # 在匹配结果中精确比对"酒店名称"字段，避免 ILIKE 模糊匹配误命中多个
-        exact_matches = []
-        for m in matches:
-            parsed_name = _parse_hotel_name(m.get('info', ''))
-            if parsed_name and parsed_name == hotel_name:
-                exact_matches.append(m)
-
-        if not exact_matches:
-            # 退化到 ILIKE 唯一匹配
-            if len(matches) == 1:
-                exact_matches = matches
-            else:
-                raise ValueError(
-                    f"按酒店名 '{hotel_name}' 未找到唯一匹配的酒店"
-                    f"（共匹配 {len(matches)} 条，请使用更精确的酒店全名）"
-                )
-        if len(exact_matches) > 1:
-            titles = [m.get('title', '') for m in exact_matches[:5]]
-            raise ValueError(
-                f"酒店名 '{hotel_name}' 匹配到多个酒店，存在歧义：{titles}。"
-                f"请使用更精确的酒店全名"
-            )
-
-        doc_id = exact_matches[0]['doc_id']
-        price_table = retriever.get_price_table(doc_id)
-        if not price_table:
-            raise ValueError(f"酒店 '{hotel_name}' (doc_id={doc_id}) 在知识库中查不到价格表")
-        if _parse_team_price(price_table) == 0:
-            raise ValueError(f"酒店 '{hotel_name}' (doc_id={doc_id}) 价格表无有效团队价格")
-
-        # 写回 override，供后续步骤使用
-        ov['hotel_doc_id'] = doc_id
-        logger.info(f"[travel-quote/update_hotel] 酒店名 '{hotel_name}' → doc_id={doc_id}")
-
-    # —— 3. 用 overrides 更新 hotel_stays（直接改 stay 对象，会反映回原列表）——
-    name_overrides = {}
-    for ov in overrides:
-        city = ov['city']
-        stay_by_city[city]['hotel_doc_id'] = ov['hotel_doc_id']
-        name_overrides[city] = ov['hotel_name']
-
-    # —— 4. 用 calculate_hotel_stays 重算所有住宿行（顺序与 hotel_stays 一致）——
+    # —— 2. 用 calculate_hotel_stays 重算所有住宿行（顺序与 hotel_stays 一致）——
     new_hotel_items, single_supplement = calculate_hotel_stays(
         [], tenant_id, hotel_stays, total_people, teacher_count, couples,
         name_overrides=name_overrides, start_date=start_date
@@ -144,7 +84,7 @@ def update_hotel(params: dict) -> dict:
     for idx, new_hotel_item in zip(old_hotel_indices, new_hotel_items):
         new_items[idx] = new_hotel_item
 
-    # —— 6. 重新汇总（与 generate.py 一致：单价已含利润，先总价再回推人均）——
+    # —— 3. 重新汇总（与 generate.py 一致：单价已含利润，先总价再回推人均）——
     cost_per_person = round(sum(it.get('subtotal') or 0 for it in new_items), 2)
     quote_total = round(cost_per_person * total_people, 2)
     quote_per_person = round(quote_total / total_people, 2) if total_people > 0 else 0.0
@@ -152,7 +92,7 @@ def update_hotel(params: dict) -> dict:
     teacher_total_sum = round(sum(it.get('teacher_subtotal') or 0 for it in new_items), 2)
     teacher_total = round(teacher_total_sum / teacher_count, 2) if teacher_count > 0 else 0
 
-    # —— 7. 构造新的 internal_data（不含 file_path，file_path 是顶层字段）——
+    # —— 4. 构造新的 internal_data（不含 file_path，file_path 是顶层字段）——
     new_internal_data = {
         "course_name": course_name,
         "company_name": company_name,
@@ -172,7 +112,7 @@ def update_hotel(params: dict) -> dict:
         "quote_total": quote_total,
     }
 
-    # —— 8. 导出新 Excel ——
+    # —— 5. 导出新 Excel ——
     file_path = export_with_template(new_internal_data, template_path)
 
     logger.info(
@@ -180,7 +120,7 @@ def update_hotel(params: dict) -> dict:
         f"新报价：人均 {quote_per_person}，总价 {quote_total}"
     )
 
-    # —— 9. 返回与 generate.py 同 schema ——
+    # —— 6. 返回与 generate.py 同 schema ——
     rows = [
         {
             "成本类别": it.get('category', ''),
@@ -212,18 +152,6 @@ def update_hotel(params: dict) -> dict:
         "file_path": os.path.abspath(file_path),
         "internal_data": new_internal_data,
     }
-
-
-def _parse_hotel_name(info_text: str) -> str:
-    """从酒店信息文本中解析'酒店名称：'字段，与 hotel.py 中 calculate_hotel_stays 的解析口径一致"""
-    if not info_text:
-        return ''
-    for line in info_text.split('\n'):
-        if '酒店名称' in line or '名称' in line:
-            parts = line.split('：', 1)
-            if len(parts) > 1:
-                return parts[-1].strip()
-    return ''
 
 
 def _validate_inputs(internal: dict, overrides: list):

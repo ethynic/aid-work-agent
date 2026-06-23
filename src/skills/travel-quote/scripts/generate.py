@@ -36,7 +36,7 @@ from season import determine_season
 from vehicle import (calculate_vehicle_cost, calculate_multi_leg_distance,
                      calculate_single_leg_distance)
 from attraction import calculate_attraction_cost
-from hotel import calculate_hotel_cost, calculate_hotel_stays
+from hotel import calculate_hotel_cost, calculate_hotel_stays, resolve_hotel_overrides
 from meal import calculate_meal_cost
 from guide import calculate_guide_cost
 from other_fees import calculate_other_fees
@@ -113,6 +113,16 @@ def generate_quote(params: dict) -> dict:
         departure_city = params.get('departure_city') or ''
         destination = params.get('destination') or ''
 
+    # 客户指定酒店覆写：只覆盖指定城市，其他城市保留上方 resolve_resources 的默认匹配
+    overrides = params.get('hotel_overrides') or []
+    name_overrides = {}
+    if overrides:
+        if hotel_stays:
+            name_overrides = resolve_hotel_overrides(tenant_id, hotel_stays, overrides)
+            logger.info(f"[travel-quote] 应用酒店指定: {name_overrides}")
+        else:
+            logger.warning("[travel-quote] 传入 hotel_overrides 但 hotel_stays 为空，忽略")
+
     # Step 1: 区域名称
     region_names = [region_name] if region_name else []
 
@@ -146,7 +156,7 @@ def generate_quote(params: dict) -> dict:
     if hotel_stays:
         items, single_supplement = calculate_hotel_stays(
             items, tenant_id, hotel_stays, total_people, teacher_count, couples,
-            start_date=start_date
+            name_overrides=name_overrides, start_date=start_date
         )
     else:
         items, single_supplement = calculate_hotel_cost(

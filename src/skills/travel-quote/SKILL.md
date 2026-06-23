@@ -37,7 +37,10 @@ skill_execute(
   "start_date": "2026-07-01",
   "course_name": "超级贵州研学",
   "company_name": "贵州天悦旅行社有限公司",
-  "template_path": null
+  "template_path": null,
+  "hotel_overrides": [
+    {"city": "贵阳", "hotel_name": "贵阳凯宾斯基酒店"}
+  ]
 }
 ```
 
@@ -51,6 +54,26 @@ skill_execute(
 | `course_name` | string | 否 | 行程/课程名称 |
 | `company_name` | string | 否 | 公司名称 |
 | `template_path` | string | 否 | 报价单模板路径（null 使用默认模板） |
+| `hotel_overrides` | array | 否 | 客户明确指定的酒店列表，结构同下方"酒店局部更新"的 `hotel_overrides`。**只覆盖指定城市**，其他城市仍走 LLM 默认推荐 |
+
+### `hotel_overrides` 元素说明（与 `update_hotel.py` 完全一致）
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `city` | string | 是 | 要指定酒店的城市名（必须能在 LLM 解析出的 `hotel_stays` 中找到，不带"县/市"后缀） |
+| `hotel_name` | string | 是 | 客户选定的酒店**完整名称**（从 `knowledge_base_search` 返回的"酒店名称：XXX"字段取得）。脚本内部按名称反查 doc_id |
+
+### 何时使用 `hotel_overrides`
+
+- 客户在生成报价前就明确指定了某城市的酒店（如"贵阳住凯宾斯基"）
+- 客户上一版报价已修改过酒店，重新调整行程后想保留该酒店
+- 避免先生成报价再调 `update_hotel.py` 的两步走流程，节省 token 与调用链路
+
+**注意**：
+- `hotel_overrides` 是**可选**参数，不传时行为与原来完全一致
+- 客户只指定部分城市时，**未指定城市走 LLM 默认推荐，不会少**
+- `city` 不在本次报价包含的城市中时会报错（错误消息会列出当前包含的城市）
+- 酒店名歧义（同名多个）或查不到时也会报错，按提示用更精确的酒店全名重试
 
 ### 技能内部处理流程
 
@@ -255,6 +278,7 @@ skill_execute(
 - **只需传入行程文本**，技能内部自动完成解析、检索、计算全流程
 - **行程文本应该是客户已确认的完整方案**，包含景点、天数、人数等关键信息
 - **template_path 为 null 时使用系统默认模板**
+- **客户已明确指定酒店时**，通过 `hotel_overrides` 参数一开始就传入，避免先生成报价再调 `update_hotel.py` 两步走
 - **换酒店时不要重跑 generate.py**，用 `update_hotel.py` 局部更新
 
 ## ⚠️ 对客户的回复口径（必须严格遵守）

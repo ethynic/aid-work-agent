@@ -420,3 +420,90 @@ def _parse_team_price(price_table: str, check_in_date: Optional[str] = None,
             f"[travel-quote] 入住日期 {check_in_date} LLM 选价失败，回退首条团队价: {e}"
         )
     return fallback
+
+
+def _parse_hotel_name(info_text: str) -> str:
+    """从酒店信息文本中解析'酒店名称：'字段"""
+    if not info_text:
+        return ''
+    for line in info_text.split('\n'):
+        if '酒店名称' in line or '名称' in line:
+            parts = line.split('：', 1)
+            if len(parts) > 1:
+                return parts[-1].strip()
+    return ''
+
+
+def resolve_hotel_overrides(tenant_id: str, hotel_stays: list, overrides: list) -> dict:
+    """按酒店名反查 doc_id 并覆写到 hotel_stays 对应城市。
+
+    用于客户明确指定酒店的场景（generate.py 的 hotel_overrides 参数、update_hotel.py 的换酒店流程）。
+    会原地修改 hotel_stays 元素的 hotel_doc_id 字段。
+
+    Args:
+        tenant_id: 租户ID
+        hotel_stays: LLM 解析出的住宿清单，元素需有 city 字段
+        overrides: [{city, hotel_name}]，客户指定的酒店
+
+    Returns:
+        name_overrides: {city: hotel_name}，传给 calculate_hotel_stays 的 name_overrides 参数
+
+    Raises:
+        ValueError: city 未在 hotel_stays 中 / hotel_name 缺失 / 酒店名歧义 /
+                    查不到 / 价格表无有效团队价
+    """
+    from hotel_retriever import HotelRetriever
+
+    stay_by_city = {s.get("city", ""): s for s in hotel_stays}
+
+    for ov in overrides:
+        city = ov.get('city', '')
+        if city not in stay_by_city:
+            raise ValueError(
+                f"未在城市住宿清单中找到 '{city}'，无法替换酒店。"
+                f"本次报价包含的城市：{list(stay_by_city.keys())}"
+            )
+        if not ov.get('hotel_name'):
+            raise ValueError(f"城市 '{city}' 的 hotel_overrides 缺少 hotel_name")
+
+    retriever = HotelRetriever()
+    name_overrides = {}
+
+    for ov in overrides:
+        city = ov['city']
+        hotel_name = ov['hotel_name']
+        matches = retriever.search_by_name(tenant_id, hotel_name, top_k=10)
+
+        exact_matches = []
+        for m in matches:
+            parsed_name = _parse_hotel_name(m.get('info', ''))
+            if parsed_name and parsed_name == hotel_name:
+                exact_matches.append(m)
+
+        if not exact_matches:
+            if len(matches) == 1:
+                exact_matches = matches
+            else:
+                raise ValueError(
+                    f"按酒店名 '{hotel_name}' 未找到唯一匹配的酒店"
+                    f"（共匹配 {len(matches)} 条，请使用更精确的酒店全名）"
+                )
+        if len(exact_matches) > 1:
+            titles = [m.get('title', '') for m in exact_matches[:5]]
+            raise ValueError(
+                f"酒店名 '{hotel_name}' 匹配到多个酒店，存在歧义：{titles}。"
+                f"请使用更精确的酒店全名"
+            )
+
+        doc_id = exact_matches[0]['doc_id']
+        price_table = retriever.get_price_table(doc_id)
+        if not price_table:
+            raise ValueError(f"酒店 '{hotel_name}' (doc_id={doc_id}) 在知识库中查不到价格表")
+        if _parse_team_price(price_table) == 0:
+            raise ValueError(f"酒店 '{hotel_name}' (doc_id={doc_id}) 价格表无有效团队价格")
+
+        stay_by_city[city]['hotel_doc_id'] = doc_id
+        name_overrides[city] = hotel_name
+        logger.info(f"[travel-quote] 酒店名 '{hotel_name}' → doc_id={doc_id}")
+
+    return name_overrides

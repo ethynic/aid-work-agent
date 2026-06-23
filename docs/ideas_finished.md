@@ -33,6 +33,7 @@
 | 16 | 订单处理智能体 | 订单自动化处理流程 | [设计](subagent/order-processing/design.md) | [计划](subagent/order-processing/dev_plan.md) |
 | 18 | 内容生成通用设计 | 通用内容生成子智能体框架 | [设计](subagent/content_generate_universal_design.md) | — |
 | 19 | 旅游报价酒店局部替换 | 客户换酒店时只重算住宿费用，其他 items 不变；按城市定位、生成新报价单。update_hotel.py 按酒店名匹配（不依赖 LLM 传 doc_id）、generate.py 输出加 internal_data、hotel.py 支持 name_overrides、14 个单元测试全通过、真实环境端到端实测通过。2026-06-22 | [设计](system/design-travel-quote-hotel-swap.md) | [计划](../plans/plan-travel-quote-hotel-swap.md) |
+| 26 | 报价单生成支持指定酒店 | ✅ 已完成开发 | generate.py 新增可选参数 hotel_overrides（结构与 update_hotel.py 一致），客户明确指定的酒店一开始就生效，避免 generate + update_hotel 两步走；未指定城市仍走 LLM 默认推荐。抽取共享函数 resolve_hotel_overrides()，generate.py 与 update_hotel.py 共用同一套反查/校验/报错逻辑。真实环境 7 场景测试全部通过。2026-06-23 | [设计](subagent/travel-consultant/generate-quote-hotel-override-design.md) | [开发计划](../plans/plan-generate-quote-hotel-override.md) |
 
 ## 工具
 
