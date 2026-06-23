@@ -598,17 +598,31 @@ class ChannelType(str, Enum):
 
 ### 7.1 转人工工具
 
-新增一个内置工具 `transfer_to_human`，供 Agent 调用：
+新增一个内置工具 `transfer_to_human`，供 Agent 调用。
+
+> **2026-06-23 更新**：详见 [transfer_to_human_optimization.md](./transfer_to_human_optimization.md)。要点：
+> - `reason` 字段必填，用于审计与会话元信息记录
+> - **渠道隔离完全由 execute 段的 `get_kf_context()` 判断**——LLM 推理时拿不到渠道信息，因此 description/usage_guide 不再约束 LLM "仅在微信客服渠道调用"（这种约束无效）
+> - 非微信客服渠道调用时返回友好失败提示 `"当前渠道未提供人工客服"`，LLM 收到后改为直接用文字回复用户
+> - 移除 LLM 路径上的关键词校验（`human_transfer_keywords` 仅用于回调路径拦截）
+> - 新增 `kf_config.allow_agent_transfer` 开关（默认 true），允许租户管理员禁用 Agent 主动转人工
+> - 会话 metadata 新增 `transfer_source=agent`，区别于关键词触发的转接
 
 ```python
+class TransferToHumanInput(BaseModel):
+    reason: str = Field(..., description="转人工原因，必填")
+
 class TransferToHumanTool(BaseTool):
     name = "transfer_to_human"
-    description = "将会话转接给人工客服。当用户明确要求人工服务、投诉或问题无法解决时使用。"
+    description = "将会话转接给人工客服。..."  # 描述何时转人工 + 调用后无需回复
+    usage_guide = ""  # 渠道由 execute 段兜底，不污染系统提示词
 
     async def execute(self, **kwargs):
-        # 1. 调用 WeComKfApiClient.trans_service_state()
-        # 2. 更新 channel session 状态
-        # 3. 返回成功信息
+        # 1. get_kf_context() 为 None → 非微信渠道，返回友好失败
+        # 2. allow_agent_transfer=false → 返回失败
+        # 3. servicer_userid_list 为空 → 返回失败
+        # 4. 调用 adapter.transfer_to_human()
+        # 5. 更新 channel session metadata（含 transfer_source=agent）
 ```
 
 ---

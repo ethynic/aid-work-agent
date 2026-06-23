@@ -1,73 +1,110 @@
 """转人工客服工具
 
 供 Agent 在微信客服场景下调用，将当前会话转接给人工客服人员。
-通过 contextvars 获取当前回调的 adapter/open_kfid 等上下文信息。
+渠道隔离完全由 execute 段的 get_kf_context() 判断：非微信客服渠道
+返回友好失败提示；LLM 推理时拿不到渠道信息，故 description 不
+约束渠道，usage_guide 留空。
 """
 from typing import Any, Dict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.tools.base import BaseTool
 
 
 class TransferToHumanInput(BaseModel):
-    reason: str = "用户要求人工服务"
+    reason: str = Field(
+        ...,
+        description=(
+            "转人工的原因，必填。可选值参考："
+            "「user_request」（用户明确要求人工）、"
+            "「complaint」（用户投诉或情绪强烈不满）、"
+            "「out_of_scope」（问题超出 AI 能力范围）、"
+            "「repeated_failure」（连续多次无法解决用户问题）、"
+            "「other」。也可直接填写简短中文描述。"
+        ),
+    )
 
 
 class TransferToHumanTool(BaseTool):
     """转人工客服工具
 
-    当用户明确要求人工服务、表达强烈不满或问题无法解决时调用。
+    当 Agent 判断需要转人工（用户明确要求、投诉、问题无法解决等）时调用。
+    渠道是否可用由 execute 段判断，不在 description/usage_guide 中约束 LLM。
     """
 
     name = "transfer_to_human"
-    description = "将会话转接给人工客服。当用户明确要求人工服务、投诉或问题无法解决时使用。"
-    usage_guide = (
-        "当用户说'人工服务'、'转人工'、'人工客服'或表达投诉意图时调用此工具。"
-        "调用后需回复客户：'正在为您转接人工客服，请稍候...'"
+    description = (
+        "将会话转接给人工客服。\n\n"
+        "适用场景：\n"
+        "- 用户明确要求人工服务（\"转人工\"、\"找客服\"、\"人工\"等）\n"
+        "- 用户表达强烈不满、投诉情绪\n"
+        "- 用户的问题明确超出你的能力范围（如：涉及资金、法律判断、复杂业务办理）\n"
+        "- 连续多次尝试仍无法解决用户问题\n\n"
+        "不适用场景：\n"
+        "- 用户的问题你能解决（即使解决起来稍慢）\n"
+        "- 用户只是表达轻微的不耐烦\n\n"
+        "调用此工具后，无需再向用户发送任何文字回复（转接动作本身就是对用户的反馈）。"
+        "若工具返回失败，再根据失败原因回复用户。"
     )
+    usage_guide = ""
     display_name = "转人工客服"
     category = "customer_service"
     InputModel = TransferToHumanInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        reason = kwargs.get("reason", "用户要求人工服务")
+        reason = kwargs.get("reason")
+        if not reason:
+            return {
+                "success": False,
+                "error": "缺少转人工原因（reason 字段必填）",
+            }
 
-        # 从 contextvars 获取当前回调上下文
-        try:
-            from src.channels.wecom_kf.context import get_kf_context
-        except ImportError:
-            return {"success": False, "error": "转人工工具未正确初始化"}
+        from src.channels.wecom_kf.context import get_kf_context
 
         ctx = get_kf_context()
         if not ctx:
-            return {"success": False, "error": "不在微信客服会话上下文中"}
+            logger.info(
+                f"转人工被拒绝（非微信客服渠道）: reason={reason}"
+            )
+            return {
+                "success": False,
+                "error": "当前渠道未提供人工客服，请直接用文字回复用户处理其问题",
+                "hint": (
+                    "此工具仅在微信客服渠道下有效，请勿继续尝试转人工。"
+                    "请改为直接用文字回复用户，尝试解决其问题或说明情况。"
+                ),
+            }
 
         adapter = ctx.get("adapter")
         open_kfid = ctx.get("open_kfid", "")
         external_userid = ctx.get("external_userid", "")
-        kf_config = ctx.get("kf_config", {})
+        kf_config = ctx.get("kf_config", {}) or {}
         session_id = ctx.get("session_id", "")
 
         if not adapter or not open_kfid or not external_userid:
             return {"success": False, "error": "缺少必要的会话上下文"}
 
-        # 校验转人工关键词配置：未配置或为空时禁止通过 LLM 工具路径转人工
-        keywords = kf_config.get("human_transfer_keywords")
-        if not keywords:
+        allow_agent_transfer = kf_config.get("allow_agent_transfer", True)
+        if not allow_agent_transfer:
             logger.info(
-                f"转人工被拒绝（关键词未配置）: open_kfid={open_kfid}, "
-                f"user={external_userid}, reason={reason}"
+                f"转人工被拒绝（管理员禁用 Agent 主动转人工）: "
+                f"open_kfid={open_kfid}, user={external_userid}, reason={reason}"
             )
             return {
                 "success": False,
-                "error": "当前未配置转人工关键词，无法转接人工客服",
+                "error": "管理员已禁用 Agent 主动转人工",
+                "hint": "请改为直接用文字回复用户处理其问题",
             }
 
         servicer_list = kf_config.get("servicer_userid_list", [])
         if not servicer_list:
-            return {"success": False, "error": "未配置人工客服人员"}
+            return {
+                "success": False,
+                "error": "当前客服账号未配置人工客服人员，无法转接",
+                "hint": "请联系管理员在客服账号配置中添加 servicer_userid_list",
+            }
 
         servicer_userid = servicer_list[0]
 
@@ -78,7 +115,6 @@ class TransferToHumanTool(BaseTool):
         )
 
         if result:
-            # 更新会话元信息
             try:
                 from src.channels.session import channel_session_manager
                 if session_id:
@@ -88,6 +124,7 @@ class TransferToHumanTool(BaseTool):
                             "service_state": 3,
                             "transferred_to": servicer_userid,
                             "transfer_reason": reason,
+                            "transfer_source": "agent",
                         },
                     )
             except Exception as e:
