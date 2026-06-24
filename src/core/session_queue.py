@@ -16,11 +16,30 @@
 import asyncio
 import json
 import time
-from typing import Any, Callable, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Literal, Optional
 
 from loguru import logger
 
 from src.core.redis_client import redis_client
+
+
+@dataclass
+class EnqueueResult:
+    """
+    enqueue_and_process 的统一返回类型。
+
+    字段说明：
+        status: "success" 表示本调用方应继续发送回复；"merged" 表示本调用方无需发送回复；
+                "error" 表示 processor 抛异常或处理失败，调用方应走错误路径（mark_error + 返回 error）
+        response_text: 本轮最终回复文本（仅 success 非空）
+        merged_input: 合并方实际处理的输入；独立处理时 == 原 user_input
+        was_merged: 是否是合并方（持有锁并跑了最终响应，但用了合并后的输入）
+    """
+    status: Literal["success", "merged", "error"]
+    response_text: str = ""
+    merged_input: str = ""
+    was_merged: bool = False
 
 
 class SessionMessageQueue:
@@ -243,7 +262,7 @@ class SessionMessageQueue:
         session_id: str,
         user_input: str,
         processor,
-    ) -> str:
+    ) -> EnqueueResult:
         """
         渠道消息入口调度。
 
@@ -255,14 +274,16 @@ class SessionMessageQueue:
                 cancel_check 是用于检测取消的函数，processor 需将其传给 process_message_sync。
 
         Returns:
-            回复文本。返回空字符串表示消息被合并/排队，本调用方无需发送回复。
+            EnqueueResult。
+                status="success": 本调用方为最终回复方，应发送 response_text
+                status="merged": 本调用方消息已被合并/排队，无需发送回复
 
         流程：
-        1. 空闲态：获取锁 -> 启动合并窗口 -> 处理 -> 返回结果
+        1. 空闲态：获取锁 -> 启动合并窗口 -> 处理 -> 返回 success
         2. 处理中 + 允许取消：设置取消 + 更新合并缓冲区 -> 等待旧请求结束
-           （旧请求检测到取消后，用合并后的输入重新处理，本调用方返回空字符串）
+           （旧请求检测到取消后，用合并后的输入重新处理，本调用方返回 merged）
         3. 处理中 + 不允许取消（已开始推送）：设置 pending -> 等待旧请求结束
-           （旧请求完成后检测 pending 并处理，本调用方返回空字符串）
+           （旧请求完成后检测 pending 并处理，本调用方返回 merged）
         """
         # 尝试获取锁（首次尝试）
         lock_value = self.acquire_lock(session_id)
@@ -275,47 +296,124 @@ class SessionMessageQueue:
             await self._wait_merge_window(session_id)
             # 获取最终合并后的输入
             final_input = self.get_merged_input(session_id, user_input)
+            was_merged = final_input != user_input
             logger.info(
                 f"[SessionQueue] 空闲态处理 session={session_id[:20]}..., "
-                f"input_len={len(final_input)}, merged={final_input != user_input}"
+                f"input_len={len(final_input)}, merged={was_merged}"
             )
+
+            # P0-5：用 error_result 记录 processor 异常时的返回值。
+            # 调用方（process_and_persist）拿到 status="error" 会走错误路径（mark_error + 返回 error），
+            # 不会误判为 merged 而跳过 user 写入 / 不调 mark_error。
+            error_result: Optional[EnqueueResult] = None
             try:
                 # 调用 processor（process_message_sync）
                 cancel_check = lambda: self.check_cancel(session_id)
-                response = processor(cancel_check)
-                if asyncio.iscoroutine(response):
-                    response = await response
-                return response
+                try:
+                    response = processor(cancel_check)
+                    if asyncio.iscoroutine(response):
+                        response = await response
+                except Exception as e:
+                    logger.error(
+                        f"[SessionQueue] processor 异常 session={session_id[:20]}...: {e}",
+                        exc_info=True,
+                    )
+                    error_result = EnqueueResult(
+                        status="error",
+                        response_text="",
+                        merged_input=final_input,
+                        was_merged=was_merged,
+                    )
+                else:
+                    # processor 成功，立即记录正常返回值
+                    success_result = EnqueueResult(
+                        status="success",
+                        response_text=response or "",
+                        merged_input=final_input,
+                        was_merged=was_merged,
+                    )
             finally:
-                # 1. 检查是否有取消 + 合并输入需要重新处理
-                reprocessed = await self._handle_cancel_and_reprocess(
-                    session_id, final_input, processor
-                )
-                if reprocessed is not None:
-                    self.release_lock(session_id, lock_value)
-                    return reprocessed
-                # 2. 检查是否有排队消息（处理中到达的新消息）
-                if self.has_pending(session_id):
-                    logger.info(f"[SessionQueue] 检测到 pending 消息，继续处理")
-                    pending_input = self.get_pending(session_id)
-                    if pending_input:
-                        self.clear_merge(session_id)
-                        self.set_merge(session_id, pending_input)
-                        cancel_check = lambda: self.check_cancel(session_id)
-                        response = processor(cancel_check)
-                        if asyncio.iscoroutine(response):
-                            response = await response
-                        # pending 处理完后也检查取消+合并
+                # 1. 检查是否有取消 + 合并输入需要重新处理（仅在 processor 未异常时）
+                if error_result is None:
+                    try:
                         reprocessed = await self._handle_cancel_and_reprocess(
-                            session_id, pending_input, processor
+                            session_id, final_input, processor
                         )
-                        if reprocessed is not None:
-                            self.release_lock(session_id, lock_value)
-                            return reprocessed
+                    except Exception as e:
+                        logger.error(
+                            f"[SessionQueue] cancel 重处理异常 session={session_id[:20]}...: {e}",
+                            exc_info=True,
+                        )
+                        reprocessed = None
+                        error_result = EnqueueResult(
+                            status="error",
+                            response_text="",
+                            merged_input=final_input,
+                            was_merged=True,
+                        )
+                    if reprocessed is not None:
                         self.release_lock(session_id, lock_value)
-                        return response
+                        return EnqueueResult(
+                            status="success",
+                            response_text=reprocessed or "",
+                            merged_input=final_input,
+                            was_merged=True,
+                        )
+                    # 2. 检查是否有排队消息（处理中到达的新消息）
+                    if self.has_pending(session_id):
+                        logger.info(f"[SessionQueue] 检测到 pending 消息，继续处理")
+                        pending_input = self.get_pending(session_id)
+                        if pending_input:
+                            self.clear_merge(session_id)
+                            self.set_merge(session_id, pending_input)
+                            cancel_check = lambda: self.check_cancel(session_id)
+                            try:
+                                pending_response = processor(cancel_check)
+                                if asyncio.iscoroutine(pending_response):
+                                    pending_response = await pending_response
+                            except Exception as e:
+                                logger.error(
+                                    f"[SessionQueue] pending processor 异常 session={session_id[:20]}...: {e}",
+                                    exc_info=True,
+                                )
+                                self.release_lock(session_id, lock_value)
+                                return EnqueueResult(
+                                    status="error",
+                                    response_text="",
+                                    merged_input=pending_input,
+                                    was_merged=False,
+                                )
+                            # pending 处理完后也检查取消+合并
+                            try:
+                                reprocessed = await self._handle_cancel_and_reprocess(
+                                    session_id, pending_input, processor
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"[SessionQueue] pending cancel 重处理异常 session={session_id[:20]}...: {e}",
+                                    exc_info=True,
+                                )
+                                reprocessed = None
+                            self.release_lock(session_id, lock_value)
+                            if reprocessed is not None:
+                                return EnqueueResult(
+                                    status="success",
+                                    response_text=reprocessed or "",
+                                    merged_input=pending_input,
+                                    was_merged=False,
+                                )
+                            return EnqueueResult(
+                                status="success",
+                                response_text=pending_response or "",
+                                merged_input=pending_input,
+                                was_merged=False,
+                            )
+                # processor 异常分支：释放锁后返回 error
                 self.release_lock(session_id, lock_value)
-            return ""  # 不应到达这里
+            # error_result 优先（processor 抛异常）
+            if error_result is not None:
+                return error_result
+            return success_result
 
         else:
             # === 处理中态，追加消息 ===
@@ -330,7 +428,7 @@ class SessionMessageQueue:
                 # 等待旧请求完成
                 await self._wait_for_processing_end(session_id)
                 # 旧请求应已处理合并后的输入，本调用方无需发送回复
-                return ""
+                return EnqueueResult(status="merged")
             else:
                 # 已开始推送，不允许取消，加入 pending
                 logger.info(
@@ -340,7 +438,7 @@ class SessionMessageQueue:
                 self.set_pending(session_id, user_input)
                 # 等待旧请求完成
                 await self._wait_for_processing_end(session_id)
-                return ""
+                return EnqueueResult(status="merged")
 
     async def _wait_merge_window(self, session_id: str) -> None:
         """等待合并窗口，期间持续检查取消"""

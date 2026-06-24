@@ -1226,7 +1226,27 @@ class Agent:
                 if content:
                     messages.append({"role": "user", "content": content})
 
-        return messages
+        # P0-3 兜底：清洗连续 user（保留最新一条），防御历史脏数据 / 极端 race。
+        # 连续 user 会导致 LLM API 行为异常（多数提供商把第二条 user 视作新轮次输入，
+        # 历史 assistant 上下文失效）。此处丢弃较早的，仅保留最新 user。
+        cleaned: List[Dict[str, Any]] = []
+        prev_role: Optional[str] = None
+        dropped_user_count = 0
+        for msg in messages:
+            role = msg.get("role")
+            if role == "user" and prev_role == "user":
+                # 前一条 user 已 append，弹出它（丢弃较早的），保留当前最新一条
+                cleaned.pop()
+                dropped_user_count += 1
+            cleaned.append(msg)
+            prev_role = role
+        if dropped_user_count > 0:
+            logger.warning(
+                f"后端日志：_reorder_messages_for_llm 检测到连续 user，"
+                f"已丢弃较早的 {dropped_user_count} 条（保留最新）"
+            )
+
+        return cleaned
 
     # ─── 压缩 Skill 上下文（保留在 Agent 上，因为操作 Agent 内部状态） ───
 
@@ -2260,11 +2280,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                             "tool_call_id": tool_id,
                             "content": {"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}
                         })
+                        yield make_event("tool_result", toolName=tool_name, result={"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}, success=True)
                     else:
                         tool_results.append({
                             "tool_call_id": tool_id,
                             "content": {"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}
                         })
+                        yield make_event("tool_result", toolName=tool_name, result={"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}, success=False)
                     continue
 
                 # Handle skill_execute - execute command directly

@@ -102,7 +102,11 @@ class TestReorderMessages:
         assert [m["role"] for m in out] == ["user", "assistant", "tool", "assistant"]
 
     def test_system_converted_to_user_and_empty_skipped(self):
-        """system 转 user；空 content 的 user/assistant 跳过。"""
+        """system 转 user；空 content 的 user/assistant 跳过。
+
+        P0-2 修复兜底方向后：第一阶段转换产生 [user(你是助手), user(你好)] 连续 user，
+        兜底丢弃较早的，只保留最新一条 user(你好)。
+        """
         history = [
             {"role": "system", "content": "你是助手"},
             {"role": "user", "content": ""},
@@ -111,7 +115,8 @@ class TestReorderMessages:
         ]
         out = Agent._reorder_messages_for_llm(history)
         roles = [(m["role"], m["content"]) for m in out]
-        assert roles == [("user", "你是助手"), ("user", "你好")]
+        # P0-2 兜底保留最新一条 user（丢弃较早的 "你是助手"）
+        assert roles == [("user", "你好")]
 
     def test_reasoning_content_preserved(self):
         """DeepSeek 思考模式的 reasoning_content 在 assistant 消息上保留。"""

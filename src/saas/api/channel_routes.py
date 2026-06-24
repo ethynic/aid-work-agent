@@ -430,16 +430,7 @@ async def _process_tenant_channel_message(
     )
     session_id = session["session_id"]
 
-    # 5. 保存用户消息到 channel_messages
-    if message.text:
-        channel_session_manager.add_message(
-            session_id=session_id,
-            role="user",
-            content=message.text,
-            message_type=message.message_type if hasattr(message, 'message_type') else "text",
-            metadata=getattr(message, 'raw_message', None),
-            tenant_id=tenant_id,
-        )
+    # 5. 保存用户消息到 channel_messages —— P0-2：推迟到 process_and_persist 内统一写入
 
     # 6. 检查隐藏命令
     from src.core.hidden_commands import is_hidden_command, execute_hidden_command
@@ -470,43 +461,25 @@ async def _process_tenant_channel_message(
     record_service.set_model(agent.llm.get_model_name())
     record_service.set_provider(agent.llm.get_provider_name())
 
-    # 9. 处理消息（通过 progress_callback 捕获可下载文件）
-    downloadable_files = []
-
-    async def collect_files_callback(event):
-        if (isinstance(event, dict)
-            and event.get("type") == "tool_result"
-            and event.get("toolName") in ("write", "cp")
-            and event.get("success") is True):
-            result = event.get("result", {}) or {}
-            if result.get("file_id"):
-                downloadable_files.append({
-                    "file_id": result["file_id"],
-                    "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                    "file_size": result.get("file_size", 0),
-                    "download_url": result.get("download_url", ""),
-                    "mime_type": result.get("mime_type", ""),
-                })
-
-    async def _processor(cancel_check):
-        return await agent.process_message_sync(
-            user_input=message.text,
-            session_id=session_id,
-            record_service=record_service,
-            progress_callback=collect_files_callback,
-            cancel_check=cancel_check,
-        )
+    # 9. 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
+    send_response = channel_session_manager.make_send_response(
+        adapter=adapter,
+        message_id=message.message_id,
+        reply_to=message.user_id,
+        log_tag=f"[Channel tenant={tenant_id}]",
+    )
 
     try:
-        response_text = await session_queue.enqueue_and_process(
+        result = await channel_session_manager.process_and_persist(
             session_id=session_id,
-            user_input=message.text,
-            processor=_processor,
+            tenant_id=tenant_id,
+            user_content=message.text,
+            user_metadata=getattr(message, 'raw_message', None),
+            message_type=message.message_type if hasattr(message, 'message_type') else "text",
+            agent=agent,
+            record_service=record_service,
+            send_response=send_response,
         )
-        if not response_text:
-            # 消息被合并/排队，本调用方无需发送回复
-            return "merged"
-        record_service.complete(response_text)
     except Exception as e:
         logger.error(f"Agent error for tenant {tenant_id}: {e}")
         record_service.mark_error(str(e))
@@ -515,30 +488,8 @@ async def _process_tenant_channel_message(
 
     SessionRecordManager.end_record()
 
-    # 10. 保存助手回复到 channel_messages
-    channel_session_manager.add_message(
-        session_id=session_id,
-        role="assistant",
-        content=response_text,
-        message_type="text",
-        tenant_id=tenant_id,
-    )
-
-    # 10. 发送响应
-    try:
-        session_queue.mark_responding(session_id)
-        from src.models.message import UnifiedResponse, DownloadableFileInfo
-        response = UnifiedResponse(
-            message_id=f"resp_{message.message_id}",
-            reply_to=message.user_id,
-            content={"text": response_text},
-            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
-        )
-        await adapter.send_message(response)
-        session_queue.mark_idle(session_id)
-    except Exception as e:
-        session_queue.mark_idle(session_id)
-        logger.error(f"Failed to send response for tenant {tenant_id}: {e}")
+    if result["status"] == "merged":
+        return "merged"
 
     return "success"
 
@@ -595,16 +546,7 @@ async def _process_tenant_wecom_background(
                 await adapter.send_text(reply_text, message.user_id)
             return
 
-        # 记录用户消息
-        if message.text:
-            channel_session_manager.add_message(
-                session_id=session_id,
-                role="user",
-                content=message.text,
-                message_type=message.message_type,
-                metadata=message.raw_message,
-                tenant_id=tenant_id,
-            )
+        # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 获取对话上下文
         history = channel_session_manager.get_conversation_context(
@@ -626,73 +568,28 @@ async def _process_tenant_wecom_background(
         record_service.set_model(agent.llm.get_model_name())
         record_service.set_provider(agent.llm.get_provider_name())
 
-        downloadable_files = []
-
-        async def collect_files_callback(event):
-            if (isinstance(event, dict)
-                and event.get("type") == "tool_result"
-                and event.get("toolName") in ("write", "cp")
-                and event.get("success") is True):
-                result = event.get("result", {}) or {}
-                if result.get("file_id"):
-                    downloadable_files.append({
-                        "file_id": result["file_id"],
-                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                        "file_size": result.get("file_size", 0),
-                        "download_url": result.get("download_url", ""),
-                        "mime_type": result.get("mime_type", ""),
-                    })
-
-        async def _processor(cancel_check):
-            return await agent.process_message_sync(
-                user_input=message.text,
-                session_id=session_id,
-                record_service=record_service,
-                progress_callback=collect_files_callback,
-                cancel_check=cancel_check,
-            )
-
-        response_text = await session_queue.enqueue_and_process(
-            session_id=session_id,
-            user_input=message.text,
-            processor=_processor,
-        )
-        if not response_text:
-            # 消息被合并/排队，本调用方无需发送回复
-            return
-
-        record_service.complete(response_text)
-        SessionRecordManager.end_record()
-
-        # 记录助手回复
-        channel_session_manager.add_message(
-            session_id=session_id,
-            role="assistant",
-            content=response_text,
-            message_type="text",
-            tenant_id=tenant_id,
-        )
-
-        # 发送回复（通过 UnifiedResponse，包含 downloadable_files）
-        logger.info(
-            f"[Tenant WeCom] 开始发送回复: user={message.user_id}, "
-            f"content_len={len(response_text) if response_text else 0}, "
-            f"session_id={session_id}"
-        )
-        from src.models.message import UnifiedResponse, DownloadableFileInfo
-        response = UnifiedResponse(
-            message_id=f"resp_{message.message_id}",
+        # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
+        send_response = channel_session_manager.make_send_response(
+            adapter=adapter,
+            message_id=message.message_id,
             reply_to=message.user_id,
-            content={"text": response_text},
-            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
+            log_tag="[Tenant WeCom]",
         )
-        session_queue.mark_responding(session_id)
-        send_result = await adapter.send_message(response)
-        session_queue.mark_idle(session_id)
-        logger.info(
-            f"[Tenant WeCom] 回复发送{'成功' if send_result else '失败'}: "
-            f"user={message.user_id}, session_id={session_id}"
+
+        result = await channel_session_manager.process_and_persist(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_content=message.text,
+            user_metadata=message.raw_message,
+            message_type=message.message_type,
+            agent=agent,
+            record_service=record_service,
+            send_response=send_response,
         )
+
+        SessionRecordManager.end_record()
+        if result["status"] == "merged":
+            return
 
     except Exception as e:
         logger.error(f"[Tenant WeCom] 后台处理失败: tenant={tenant_id}, error={e}")
@@ -992,16 +889,7 @@ async def _process_tenant_dingtalk_background(
                 await adapter.send_text(reply_text, reply_target, conversation_type)
             return
 
-        # 记录用户消息
-        if message.text:
-            channel_session_manager.add_message(
-                session_id=session_id,
-                role="user",
-                content=message.text,
-                message_type=message.message_type,
-                metadata=message.raw_message,
-                tenant_id=tenant_id,
-            )
+        # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 获取 agent
         from src.core.agent_router import agent_router
@@ -1018,68 +906,32 @@ async def _process_tenant_dingtalk_background(
         record_service.set_model(agent.llm.get_model_name())
         record_service.set_provider(agent.llm.get_provider_name())
 
-        downloadable_files = []
-
-        async def collect_files_callback(event):
-            if (isinstance(event, dict)
-                and event.get("type") == "tool_result"
-                and event.get("toolName") in ("write", "cp")
-                and event.get("success") is True):
-                result = event.get("result", {}) or {}
-                if result.get("file_id"):
-                    downloadable_files.append({
-                        "file_id": result["file_id"],
-                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                        "file_size": result.get("file_size", 0),
-                        "download_url": result.get("download_url", ""),
-                        "mime_type": result.get("mime_type", ""),
-                    })
-
-        async def _processor(cancel_check):
-            return await agent.process_message_sync(
-                user_input=message.text,
-                session_id=session_id,
-                record_service=record_service,
-                progress_callback=collect_files_callback,
-                cancel_check=cancel_check,
-            )
-
-        response_text = await session_queue.enqueue_and_process(
-            session_id=session_id,
-            user_input=message.text,
-            processor=_processor,
-        )
-        if not response_text:
-            return
-
-        record_service.complete(response_text)
-        SessionRecordManager.end_record()
-
-        # 记录助手回复
-        channel_session_manager.add_message(
-            session_id=session_id,
-            role="assistant",
-            content=response_text,
-            message_type="text",
-            tenant_id=tenant_id,
-        )
-
+        # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         # 发送回复：单聊用 userId，群聊用 openConversationId
         reply_target = conversation_id if conversation_type == "2" else message.user_id
 
-        from src.models.message import UnifiedResponse, DownloadableFileInfo
-        response = UnifiedResponse(
-            message_id=f"resp_{message.message_id}",
+        send_response = channel_session_manager.make_send_response(
+            adapter=adapter,
+            message_id=message.message_id,
             reply_to=reply_target,
-            content={
-                "text": response_text,
-                "conversation_type": conversation_type,
-            },
-            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
+            extra_content={"conversation_type": conversation_type},
+            log_tag="[Tenant DingTalk]",
         )
-        session_queue.mark_responding(session_id)
-        await adapter.send_message(response)
-        session_queue.mark_idle(session_id)
+
+        result = await channel_session_manager.process_and_persist(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_content=message.text,
+            user_metadata=message.raw_message,
+            message_type=message.message_type,
+            agent=agent,
+            record_service=record_service,
+            send_response=send_response,
+        )
+
+        SessionRecordManager.end_record()
+        if result["status"] == "merged":
+            return
 
     except Exception as e:
         logger.error(f"[Tenant DingTalk] 后台处理失败: tenant={tenant_id}, error={e}")
@@ -1176,16 +1028,7 @@ async def _process_tenant_feishu_background(
                 await adapter.send_text(reply_text, message.user_id)
             return
 
-        # 记录用户消息
-        if message.text:
-            channel_session_manager.add_message(
-                session_id=session_id,
-                role="user",
-                content=message.text,
-                message_type=message.message_type,
-                metadata=message.raw_message,
-                tenant_id=tenant_id,
-            )
+        # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 获取 agent
         from src.core.agent_router import agent_router
@@ -1202,63 +1045,28 @@ async def _process_tenant_feishu_background(
         record_service.set_model(agent.llm.get_model_name())
         record_service.set_provider(agent.llm.get_provider_name())
 
-        downloadable_files = []
-
-        async def collect_files_callback(event):
-            if (isinstance(event, dict)
-                and event.get("type") == "tool_result"
-                and event.get("toolName") in ("write", "cp")
-                and event.get("success") is True):
-                result = event.get("result", {}) or {}
-                if result.get("file_id"):
-                    downloadable_files.append({
-                        "file_id": result["file_id"],
-                        "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                        "file_size": result.get("file_size", 0),
-                        "download_url": result.get("download_url", ""),
-                        "mime_type": result.get("mime_type", ""),
-                    })
-
-        async def _processor(cancel_check):
-            return await agent.process_message_sync(
-                user_input=message.text,
-                session_id=session_id,
-                record_service=record_service,
-                progress_callback=collect_files_callback,
-                cancel_check=cancel_check,
-            )
-
-        response_text = await session_queue.enqueue_and_process(
-            session_id=session_id,
-            user_input=message.text,
-            processor=_processor,
-        )
-        if not response_text:
-            return
-
-        record_service.complete(response_text)
-        SessionRecordManager.end_record()
-
-        # 记录助手回复
-        channel_session_manager.add_message(
-            session_id=session_id,
-            role="assistant",
-            content=response_text,
-            message_type="text",
-            tenant_id=tenant_id,
-        )
-
-        # 发送回复
-        from src.models.message import UnifiedResponse, DownloadableFileInfo
-        response = UnifiedResponse(
-            message_id=f"resp_{message.message_id}",
+        # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
+        send_response = channel_session_manager.make_send_response(
+            adapter=adapter,
+            message_id=message.message_id,
             reply_to=message.user_id,
-            content={"text": response_text},
-            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
+            log_tag="[Tenant Feishu]",
         )
-        session_queue.mark_responding(session_id)
-        await adapter.send_message(response)
-        session_queue.mark_idle(session_id)
+
+        result = await channel_session_manager.process_and_persist(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_content=message.text,
+            user_metadata=message.raw_message,
+            message_type=message.message_type,
+            agent=agent,
+            record_service=record_service,
+            send_response=send_response,
+        )
+
+        SessionRecordManager.end_record()
+        if result["status"] == "merged":
+            return
 
     except Exception as e:
         logger.error(f"[Tenant Feishu] 后台处理失败: tenant={tenant_id}, error={e}")
@@ -1980,16 +1788,7 @@ async def _process_tenant_wecom_kf_messages(
                         "saved_at": att["saved_at"],
                     })
 
-                if user_content:
-                    channel_session_manager.add_message(
-                        session_id=session_id,
-                        role="user",
-                        content=user_content,
-                        message_type=unified_msg.message_type,
-                        attachments=user_attachments_meta if user_attachments_meta else None,
-                        metadata={"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid},
-                        tenant_id=tenant_id,
-                    )
+                # 保存用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
                 # 检查人工转接关键词
                 if adapter.should_transfer_to_human(user_content, kf_config):
@@ -2012,122 +1811,59 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 处理消息（通过 progress_callback 捕获可下载文件 + 本轮 tool 消息序列）
                 downloadable_files = []
-                tool_messages_collected = []  # 本轮 tool 消息序列，供事务持久化到 chat_messages
+                tool_messages_collected = []  # 本轮 tool 消息序列，供事务持久化到 channel_messages
 
-                async def collect_files_callback(event):
-                    if not isinstance(event, dict):
-                        return
-                    event_type = event.get("type")
-                    if (event_type == "tool_result"
-                        and event.get("toolName") in ("write", "cp")
-                        and event.get("success") is True):
-                        result = event.get("result", {}) or {}
-                        if result.get("file_id"):
-                            downloadable_files.append({
-                                "file_id": result["file_id"],
-                                "file_name": result.get("download_file_name") or result.get("file_name", "未命名文件"),
-                                "file_size": result.get("file_size", 0),
-                                "download_url": result.get("download_url", ""),
-                                "mime_type": result.get("mime_type", ""),
-                            })
-                    elif event_type == "tool_messages":
-                        # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
-                        tool_messages_collected.extend(event.get("messages", []))
+                agent_attachments = _build_attachments_for_agent(user_attachments)
+                logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
+                logger.info(f"[微信语音] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
 
-                async def _processor(cancel_check):
-                    return await agent.process_message_sync(
-                        user_input=user_input,
-                        session_id=session_id,
-                        record_service=record_service,
-                        progress_callback=collect_files_callback,
-                        attachments=agent_attachments if agent_attachments else None,
-                        cancel_check=cancel_check,
-                    )
+                # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
+                send_response = channel_session_manager.make_send_response(
+                    adapter=adapter,
+                    message_id=msg_id,
+                    reply_to=unified_msg.user_id,
+                    log_tag="[wecom_kf]",
+                )
+
+                assistant_metadata = None
+                # 预先构造 assistant_metadata（downloadable_files 当前为空，由 process_and_persist 内部填充）
+                # 实际值在 process_and_persist 内通过 closure 引用重新计算，这里占位为 None
+                # 真正写入时由 process_and_persist 透传：downloadable_files 在 send_response 后已填充，
+                # 但批量写入发生在 send_response 之前——为保持「assistant_metadata 反映 downloadable_files」语义，
+                # 此处不传，改由下方在 process_and_persist 调用前预填：
+                # （downloadable_files 此时为空，故仍为 None；保留这块逻辑用于未来扩展）
 
                 try:
-                    agent_attachments = _build_attachments_for_agent(user_attachments)
-                    logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
-                    logger.info(f"[微信语音] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
-                    response_text = await session_queue.enqueue_and_process(
+                    result = await channel_session_manager.process_and_persist(
                         session_id=session_id,
-                        user_input=user_input,
-                        processor=_processor,
+                        tenant_id=tenant_id,
+                        user_content=user_content,
+                        user_metadata={"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid},
+                        user_attachments_meta=user_attachments_meta if user_attachments_meta else None,
+                        message_type=unified_msg.message_type,
+                        agent=agent,
+                        agent_user_input=user_input,
+                        agent_attachments=agent_attachments if agent_attachments else None,
+                        record_service=record_service,
+                        tool_messages_collected=tool_messages_collected,
+                        assistant_metadata=assistant_metadata,
+                        send_response=send_response,
                     )
-                    logger.info(f"[微信语音] 队列处理返回: response_text_len={len(response_text) if response_text else 0}, is_empty={not response_text}")
-                    if not response_text:
-                        # 消息被合并/排队，本调用方无需发送回复
-                        SessionRecordManager.end_record()
-                        continue
-                    record_service.complete(response_text)
                 except Exception as e:
-                    logger.error(f"[wecom_kf] Agent 处理异常: {e}")
+                    logger.error(f"[wecom_kf] Agent 处理异常: {e}", exc_info=True)
                     record_service.mark_error(str(e))
                     SessionRecordManager.end_record()
                     continue
 
                 SessionRecordManager.end_record()
-
-                # 保存助手回复
-                assistant_metadata = None
-                if downloadable_files:
-                    assistant_metadata = {"downloadableFiles": downloadable_files}
-
-                # 把本轮 tool 消息序列写入 channel_messages（IM 渠道上下文组装走 channel_messages，不走 chat_messages）
-                # 字段约定与 agent.py _load_channel_history 的读取逻辑对称：
-                #   - assistant(tool_calls): content 空串，metadata={tool_calls, reasoning_content?}
-                #   - tool: content=工具结果JSON字符串，metadata={tool_call_id}
-                for tm in tool_messages_collected:
-                    if tm.get("role") == "assistant" and tm.get("tool_calls"):
-                        tm_metadata = {"tool_calls": tm["tool_calls"]}
-                        if tm.get("reasoning_content"):
-                            tm_metadata["reasoning_content"] = tm["reasoning_content"]
-                        channel_session_manager.add_message(
-                            session_id=session_id,
-                            role="assistant",
-                            content="",
-                            message_type="text",
-                            metadata=tm_metadata,
-                            tenant_id=tenant_id,
-                        )
-                    elif tm.get("role") == "tool":
-                        tc = tm.get("content", "")
-                        if isinstance(tc, (dict, list)):
-                            tc = json.dumps(tc, ensure_ascii=False, default=str)
-                        channel_session_manager.add_message(
-                            session_id=session_id,
-                            role="tool",
-                            content=tc,
-                            message_type="text",
-                            metadata={"tool_call_id": tm.get("tool_call_id", "")},
-                            tenant_id=tenant_id,
-                        )
-
-                channel_session_manager.add_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content=response_text,
-                    message_type="text",
-                    metadata=assistant_metadata,
-                    tenant_id=tenant_id,
-                )
-
-                # 发送回复（包含 downloadable_files）
-                from src.models.message import DownloadableFileInfo
-                response = UnifiedResponse(
-                    message_id=f"resp_{msg_id}",
-                    reply_to=unified_msg.user_id,
-                    content={"text": response_text},
-                    downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
-                )
-                session_queue.mark_responding(session_id)
-                send_result = await adapter.send_message(response)
-                logger.info(f"[微信语音] 回复发送完成: send_result={send_result}")
-                session_queue.mark_idle(session_id)
                 logger.info(
-                    f"[wecom_kf] 回复发送{'成功' if send_result else '失败'}: "
-                    f"msgid={msg_id}, user={unified_msg.user_id}, "
-                    f"text_len={len(response_text) if response_text else 0}"
+                    f"[微信语音] 队列处理返回: status={result.get('status')}, "
+                    f"response_text_len={len(result.get('response_text') or '')}"
                 )
+                if result["status"] == "merged":
+                    # 消息被合并/排队，本调用方无需发送回复
+                    continue
+
                 processed_messages += 1
 
             # 更新 cursor

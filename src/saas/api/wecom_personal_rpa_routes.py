@@ -61,7 +61,6 @@ from src.channels.wecom_personal_rpa.schemas import (
     RpaRateLimits,
 )
 from src.core.storage import get_tenant_storage_abs_path
-from src.models.message import DownloadableFileInfo, UnifiedResponse
 
 router = APIRouter(tags=["企业微信个人RPA渠道"])
 
@@ -403,17 +402,8 @@ async def _process_inbound_message(
         )
         channel_session_id = session["session_id"]
 
-        # 5. 落库用户消息
+        # 5. 落库用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
         user_text = um.text or ""
-        if user_text:
-            channel_session_manager.add_message(
-                session_id=channel_session_id,
-                role="user",
-                content=user_text,
-                message_type="text",
-                metadata={"event_id": env.event_id, "client_id": env.client_id},
-                tenant_id=tenant_id,
-            )
 
         # 6. agent 处理（经 session_queue 串行调度）
         agent = agent_router.get_agent(
@@ -433,45 +423,31 @@ async def _process_inbound_message(
         except Exception:
             pass
 
-        # 可下载产物收集（对齐 wecom_kf 的 collect_files_callback）
-        downloadable_files = []
-
-        async def _collect_files(event):
-            if not isinstance(event, dict):
-                return
-            event_type = event.get("type")
-            if (
-                event_type == "tool_result"
-                and event.get("toolName") in ("write", "cp")
-                and event.get("success") is True
-            ):
-                result = event.get("result", {}) or {}
-                if result.get("file_id"):
-                    downloadable_files.append(
-                        {
-                            "file_id": result["file_id"],
-                            "file_name": result.get("download_file_name")
-                            or result.get("file_name", "未命名文件"),
-                            "file_size": result.get("file_size", 0),
-                            "download_url": result.get("download_url", ""),
-                            "mime_type": result.get("mime_type", ""),
-                        }
-                    )
-
-        async def _processor(cancel_check):
-            return await agent.process_message_sync(
-                user_input=user_text,
-                session_id=channel_session_id,
-                record_service=record,
-                progress_callback=_collect_files,
-                cancel_check=cancel_check,
-            )
+        # send_response 回调：通过工厂方法构造（含 RPA 的 set_reply_context 钩子）
+        send_response = channel_session_manager.make_send_response(
+            adapter=adapter,
+            message_id=env.event_id,
+            reply_to=um.user_id,
+            log_tag="[RPA]",
+            pre_send=lambda: adapter.set_reply_context(
+                account_id=env.account_id,
+                conversation_id=conversation_id,
+                session_id=session_id,
+                request_id=env.event_id,
+                tenant_id=tenant_id,
+            ),
+        )
 
         try:
-            response_text = await session_queue.enqueue_and_process(
+            result = await channel_session_manager.process_and_persist(
                 session_id=channel_session_id,
-                user_input=user_text,
-                processor=_processor,
+                tenant_id=tenant_id,
+                user_content=user_text,
+                user_metadata={"event_id": env.event_id, "client_id": env.client_id},
+                message_type="text",
+                agent=agent,
+                record_service=record,
+                send_response=send_response,
             )
         except Exception as e:
             logger.error(
@@ -481,52 +457,14 @@ async def _process_inbound_message(
             SessionRecordManager.end_record()
             return
 
-        if not response_text:
-            # 消息被合并 / 排队，本调用方无需发送回复
-            SessionRecordManager.end_record()
-            return
-
-        record.complete(response_text)
         SessionRecordManager.end_record()
 
-        # 7. 落库助手回复
-        assistant_metadata = (
-            {"downloadableFiles": downloadable_files} if downloadable_files else None
-        )
-        channel_session_manager.add_message(
-            session_id=channel_session_id,
-            role="assistant",
-            content=response_text,
-            message_type="text",
-            metadata=assistant_metadata,
-            tenant_id=tenant_id,
-        )
+        if result["status"] == "merged":
+            # 消息被合并 / 排队，本调用方无需发送回复
+            return
 
-        # 8. 构造 UnifiedResponse 并投递
-        response = UnifiedResponse(
-            message_id=f"resp_{env.event_id}",
-            reply_to=um.user_id,
-            content={"text": response_text},
-            downloadable_files=[DownloadableFileInfo(**f) for f in downloadable_files],
-        )
-
-        # 注入回复上下文（adapter 依赖此上下文决定投递目标）
-        adapter.set_reply_context(
-            account_id=env.account_id,
-            conversation_id=conversation_id,
-            session_id=session_id,
-            request_id=env.event_id,
-            tenant_id=tenant_id,
-        )
-
-        session_queue.mark_responding(channel_session_id)
-        send_ok = await adapter.send_message(response)
-        session_queue.mark_idle(channel_session_id)
-
-        logger.info(
-            f"RPA message 回复投递 event_id={env.event_id} ok={send_ok} "
-            f"text_len={len(response_text)}"
-        )
+        response_text = result.get("response_text") or ""
+        downloadable_files = result.get("downloadable_files") or []
 
         # 9. 审计
         try:
@@ -539,7 +477,7 @@ async def _process_inbound_message(
                     {
                         "event_id": env.event_id,
                         "session_id": session_id,
-                        "send_ok": send_ok,
+                        "send_ok": result.get("status") == "success",
                         "text_len": len(response_text),
                         "files": len(downloadable_files),
                     },
