@@ -1823,7 +1823,13 @@ class Agent:
                 
                 if att_content or att_url:
                     if session_workspace is None:
-                        session_workspace = Path(tempfile.mkdtemp(prefix=f"skill_ws_{session_id}_"))
+                        # 工作目录必须落在租户存储目录下，避免在项目根目录产生 skill_ws_* 散落目录
+                        ws_tenant_id = self._get_effective_tenant_id()
+                        ws_root = None
+                        if ws_tenant_id:
+                            from src.core.storage import ensure_tenant_storage_dir
+                            ws_root = os.path.abspath(ensure_tenant_storage_dir(ws_tenant_id, "temp"))
+                        session_workspace = Path(tempfile.mkdtemp(prefix=f"skill_ws_{session_id}_", dir=ws_root))
                         logger.info(f"Created session workspace: {session_workspace}")
                     
                     file_path = session_workspace / att_name
