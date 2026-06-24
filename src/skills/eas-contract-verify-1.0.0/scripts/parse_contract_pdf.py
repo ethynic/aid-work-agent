@@ -327,19 +327,20 @@ def _get_llm_config() -> Dict[str, str]:
     """
     从环境变量读取 LLM 配置，返回 {provider, api_key, model}
 
-    统一使用 API_KEYS、MODEL_CODE、BASE_URL 环境变量，
-    由 LLM_PROVIDER 决定当前使用的模型提供商。
+    由 LLM_PROVIDER 决定当前使用的模型提供商，密钥/模型从对应 provider 的
+    独立环境变量读取（如 ZHIPU_API_KEYS / ZHIPU_MODEL_CODE）。
     """
     provider = os.getenv("LLM_PROVIDER", os.getenv("LLM_DEFAULT_PROVIDER", "zhipu")).strip().lower()
-
-    api_key = os.getenv("API_KEYS", "").strip().split(",")[0].strip()
-    model = os.getenv("MODEL_CODE", "qwen-plus")
-    base_url = os.getenv("BASE_URL", "")
 
     if provider not in ("zhipu", "qwen"):
         raise ValueError(f"不支持的 LLM 提供者: {provider}，请设置环境变量 LLM_PROVIDER 为 zhipu 或 qwen")
 
-    return {"provider": provider, "api_key": api_key, "model": model, "base_url": base_url}
+    prefix = provider.upper()
+    default_model = "glm-4" if provider == "zhipu" else "qwen-plus"
+    api_key = os.getenv(f"{prefix}_API_KEYS", "").strip().split(",")[0].strip()
+    model = os.getenv(f"{prefix}_MODEL_CODE", default_model)
+
+    return {"provider": provider, "api_key": api_key, "model": model}
 
 
 CONTRACT_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的合同文档分析助手。请根据提供的合同PDF各页文本内容，分析并返回以下信息：
@@ -403,7 +404,7 @@ def _call_llm_analyze(pages_text: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     if not config["api_key"]:
         raise ValueError(
-            f"LLM API Key 未配置，请在 .env 中设置 API_KEYS"
+            f"LLM API Key 未配置，请在 .env 中设置 {config['provider'].upper()}_API_KEYS"
         )
 
     # 构造用户消息

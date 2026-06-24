@@ -353,22 +353,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     yaml_config = load_yaml_config(config_path)
     
     # 从环境变量覆盖配置
+    # 主 provider 由 LLM_PROVIDER 指定，各 provider 的密钥/模型/地址统一通过
+    # 各自的独立环境变量配置（DEEPSEEK_*、QWEN_*、ZHIPU_*）
     if os.getenv("LLM_PROVIDER"):
-        provider = os.getenv("LLM_PROVIDER")
-        yaml_config.setdefault("llm", {})["provider"] = provider
+        yaml_config.setdefault("llm", {})["provider"] = os.getenv("LLM_PROVIDER")
 
-        # 统一环境变量：API_KEYS、BASE_URL、MODEL_CODE
-        # 根据 LLM_PROVIDER 的值，写入对应 provider 的配置
-        # 例如 LLM_PROVIDER=deepseek 时，API_KEYS 写入 llm.deepseek 配置
-        provider_cfg = yaml_config.setdefault("llm", {}).setdefault(provider, {})
-        if os.getenv("API_KEYS"):
-            provider_cfg["api_keys"] = os.getenv("API_KEYS")
-        if os.getenv("BASE_URL"):
-            provider_cfg["base_url"] = os.getenv("BASE_URL")
-        if os.getenv("MODEL_CODE"):
-            provider_cfg["model"] = os.getenv("MODEL_CODE")
-
-    # 各 provider 独立环境变量覆盖（用于 failover 备用 provider 或子智能体指定）
+    # 各 provider 独立环境变量覆盖（主 provider、failover 备用 provider 或子智能体指定）
     # DeepSeek
     ds_cfg = yaml_config.setdefault("llm", {}).setdefault("deepseek", {})
     if os.getenv("DEEPSEEK_API_KEYS"):

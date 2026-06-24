@@ -37,7 +37,7 @@ llm:
     max_concurrent_per_key: 2
     queue_timeout: 30
   failover:
-    enabled: true               # 是否启用 failover（生产环境建议 true）
+    enabled: ${LLM_FAILOVER_ENABLED:-true}   # 是否启用 failover（通过 .env 的 LLM_FAILOVER_ENABLED 控制，生产环境建议 true）
     providers:                    # failover 优先级链（不含主 provider）
       - qwen
     retry:
