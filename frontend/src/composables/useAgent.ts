@@ -178,6 +178,9 @@ export function useAgent() {
     const filesToSend = currentFiles.value.length > 0 ? [...currentFiles.value] : undefined
     currentFiles.value = []
 
+    // 缓存每个工具最后一次 tool_start 的 toolArgs，供 tool_result 回调恢复显示名（SSE 协议 tool_result 不携带 toolArgs）
+    const lastToolArgsMap = new Map<string, object>()
+
     try {
       await sseManager.connect(
         content,
@@ -186,6 +189,11 @@ export function useAgent() {
         getEffectiveAuthHeader(), // 传递认证头
         // onProgress - 工具执行进度，仅添加到执行详情
         (data) => {
+          // 过滤冗余进度：工具开始/完成已有专门事件（tool_start/tool_result），
+          // 后端额外推送的「正在执行...」和「...执行完成」会重复刷屏，这里静默丢弃。
+          if (/^(🔧\s*正在执行|✅\s*.+执行完成$)/.test(data.trim())) {
+            return
+          }
           addProgress(data, 'progress')
           // 不再将进度追加到助手消息内容
         },
@@ -219,13 +227,15 @@ export function useAgent() {
         },
         // onToolStart - 工具开始执行
         (toolName, toolArgs) => {
+          lastToolArgsMap.set(toolName, toolArgs || {})
           const toolDisplayName = getToolDisplayName(toolName, toolArgs)
           addProgress(`🔧 需要调用工具【${toolDisplayName}】`, 'tool_start', toolName, toolArgs)
           inputHintState.value = 'working'
         },
         // onToolResult - 工具执行结果
         (toolName, result, success) => {
-          const toolDisplayName = getToolDisplayName(toolName, {})
+          const cachedArgs = lastToolArgsMap.get(toolName) || {}
+          const toolDisplayName = getToolDisplayName(toolName, cachedArgs)
           if (success) {
             // 提取下载文件信息到助手消息
             const downloadToolNames = ['write', 'cp']
@@ -268,7 +278,7 @@ export function useAgent() {
             } else if (toolName === 'browser_open') {
               addProgress(`✅ ${toolDisplayName}成功`, 'tool_result', toolName, undefined, result)
             } else {
-              addProgress(`✅ ${toolDisplayName}执行完成`, 'tool_result', toolName, undefined, result)
+              addProgress(`✅ 【${toolDisplayName}】执行完成`, 'tool_result', toolName, undefined, result)
             }
           } else {
             const errorMsg = result?.error || '未知错误'
