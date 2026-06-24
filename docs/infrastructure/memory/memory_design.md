@@ -267,6 +267,10 @@ memory:
 
 #### 2.2 中期记忆 — 会话内上下文压缩 ❌ 未实现
 
+> **方案已细化**：完整设计见 [context_compression_design.md](./context_compression_design.md)，开发计划见 [context_compression_dev_plan.md](./context_compression_dev_plan.md)，业界调研见 [context_compression_research.md](../../research/context_compression_research.md)。
+>
+> 下方为早期占位草案，已被上述文档取代，仅保留作为决策对照。
+
 ##### 任务 2.2.1: 设计上下文压缩机制
 
 **核心逻辑**:

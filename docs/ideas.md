@@ -25,7 +25,7 @@
 | 4 | 系统核心表文档 | ✅ 已完成 | 数据库核心表用途与关系文档，覆盖用户/对话/渠道/知识库/数字员工/SaaS/Prompt 管理等 30+ 张系统表。2026-06-18 | [文档](system/database_system_table.md) | — |
 | 5 | 缓存使用情况文档 | ✅ 已完成 | 系统缓存使用全景文档，覆盖 Redis 缓存、内存缓存、数据库去重共 17 类缓存，含键模式、TTL、失效策略。2026-06-18 | [文档](system/cache_usage.md) | — |
 | 6 | 文件存储使用情况文档 | ✅ 已完成 | 系统文件存储全景文档，覆盖新旧双轨路径、文件命名规范、目录结构、清理策略。2026-06-18 | [文档](system/file_usage.md) | — |
-| 7 | 会话内上下文压缩（中期记忆） | 📋 待开发 | 解决单 session 长会话上下文爆 token 问题（web/微信客服/钉钉/飞书/RPA 全渠道通用）。Summary Buffer 策略：双阈值触发 + 保留首尾 + 中间段增量结构化摘要 + 工具结果差异化截断 + 可回滚归档。复用 `MemoryManager.save_conversation_summary` 占位接口落地。同步触发方式按业界共识改为**同步**（用户原提的异步会引入并发竞态）。2026-06-23 | [设计](infrastructure/memory/context_compression_design.md) / [调研](research/context_compression_research.md) | [开发计划](infrastructure/memory/context_compression_dev_plan.md) |
+| 7 | 会话内上下文压缩（中期记忆） | 🔧 部分完成 | 解决单 session 长会话上下文爆 token 问题（web/微信客服/钉钉/飞书/RPA 全渠道通用）。**v2.0 异步方案**：双阈值触发（token 70% 或 消息数 150，均可配置）→ 主流程 fire-and-forget 派发异步压缩任务（Redis SETNX 锁防并发）→ 异步任务执行 LLM 增量摘要 + 原子事务持久化（写 summary + 标记原消息 compacted=true，缺一不可）→ 连续失败 3 次自动转同步降级兜底。保留首尾（HEADER 3 + TAIL 30，可配置）+ 中间段结构化摘要 + 工具结果差异化截断 + 可回滚归档。复用 `MemoryManager.save_conversation_summary` 占位接口落地。**Phase 1+2（基础设施+同步压缩服务）已完成**：4 个 P0 修复（UNIQUE 索引/tenant_id/deepseek 直连/orphan tool 丢弃）+ 6 个 P1 修复，96 单测全通过；待 Phase 3+6（异步派发+Agent 集成）。2026-06-24 | [设计](infrastructure/memory/context_compression_design.md) / [调研](research/context_compression_research.md) | [开发计划](infrastructure/memory/context_compression_dev_plan.md) |
 
 ## 系统功能
 

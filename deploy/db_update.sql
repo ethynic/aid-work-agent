@@ -613,3 +613,40 @@ CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_account
     ON wecom_rpa_audit_logs(tenant_id, account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_category
     ON wecom_rpa_audit_logs(tenant_id, category, created_at DESC);
+
+-- 2026-6-24, 会话内上下文压缩：新增 chat_context_summaries 表 + chat_messages/channel_messages 加 compacted 标记
+CREATE TABLE IF NOT EXISTS chat_context_summaries (
+    id SERIAL PRIMARY KEY,
+    summary_id TEXT UNIQUE NOT NULL,
+    session_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT,
+    subagent_id TEXT,
+    summary_text TEXT NOT NULL,
+    summary_version INTEGER NOT NULL DEFAULT 1,
+    compressed_message_ids BIGINT[] NOT NULL,
+    compressed_message_count INTEGER NOT NULL,
+    original_token_count INTEGER NOT NULL,
+    compressed_token_count INTEGER NOT NULL,
+    compression_ratio REAL NOT NULL,
+    llm_provider TEXT,
+    llm_model TEXT,
+    llm_tokens_used INTEGER,
+    fallback_used BOOLEAN DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    superseded_at TIMESTAMP
+);
+-- 部分唯一索引：保证同一 (session_id, source_type) 同时只有一条 active summary
+-- 修复 P0-1：原非唯一索引无法阻止并发竞态产生多条 active
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ccs_session_active
+    ON chat_context_summaries (session_id, source_type)
+    WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_ccs_session_list
+    ON chat_context_summaries (session_id, source_type, created_at DESC);
+
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;

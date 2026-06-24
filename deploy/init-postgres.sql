@@ -153,6 +153,58 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
 CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(session_id, created_at);
 
+-- 会话内上下文压缩摘要表（mid-term memory）
+-- 每次压缩产生一行，旧的 summary 置为 superseded，永不删除
+CREATE TABLE IF NOT EXISTS chat_context_summaries (
+    id SERIAL PRIMARY KEY,
+    summary_id TEXT UNIQUE NOT NULL,          -- csum_xxxxxxxx 格式
+    session_id TEXT NOT NULL,                 -- chat_sessions.session_id 或 channel_session.session_id
+    source_type TEXT NOT NULL,                -- 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu' / 'wecom_personal_rpa'
+    tenant_id TEXT,                           -- 租户隔离
+    user_id TEXT,
+    subagent_id TEXT,                         -- 关联的子智能体（NULL 表示主智能体）
+
+    -- 摘要内容
+    summary_text TEXT NOT NULL,               -- 完整结构化摘要文本
+    summary_version INTEGER NOT NULL DEFAULT 1, -- 该 session 第几次压缩（递增）
+
+    -- 压缩元数据
+    compressed_message_ids BIGINT[] NOT NULL, -- 被压缩的 chat_messages.id 列表（可追溯）
+    compressed_message_count INTEGER NOT NULL,
+    original_token_count INTEGER NOT NULL,
+    compressed_token_count INTEGER NOT NULL,  -- 摘要 + TAIL 的 token 数
+    compression_ratio REAL NOT NULL,          -- compressed / original
+
+    -- 模型与调用信息
+    llm_provider TEXT,                        -- 'qwen' / 'zhipu' / 'deepseek'
+    llm_model TEXT,
+    llm_tokens_used INTEGER,                  -- 摘要 LLM 调用消耗
+
+    -- 降级标记
+    fallback_used BOOLEAN DEFAULT FALSE,      -- 是否走了同步降级路径
+
+    -- 状态
+    status TEXT NOT NULL DEFAULT 'active',    -- 'active' / 'superseded' / 'rolled_back'
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    superseded_at TIMESTAMP
+);
+
+-- 同一 session 同一 source_type 同时只能有一条 active summary（部分唯一索引）
+-- UNIQUE 保证并发场景下也不会出现两条 active；使用 COALESCE(NULL) 模式无意义，
+-- 这里直接对 (session_id, source_type) 加唯一约束 + WHERE status='active' 过滤即可。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ccs_session_active
+    ON chat_context_summaries (session_id, source_type)
+    WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_ccs_session_list
+    ON chat_context_summaries (session_id, source_type, created_at DESC);
+
+-- chat_messages / channel_messages 加 compacted 标记（CREATE TABLE IF NOT EXISTS 不会更新已存在的表，
+-- 用 ALTER 兜底确保新部署也带上字段）
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
+
 -- 错误日志表（平台级，记录系统错误，仅平台管理员可见）
 CREATE TABLE IF NOT EXISTS log_error (
     id SERIAL PRIMARY KEY,

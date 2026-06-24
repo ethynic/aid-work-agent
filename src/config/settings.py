@@ -152,6 +152,37 @@ class ShortTermMemoryConfig(BaseModel):
     ttl: int = 3600
 
 
+class SummaryLLMConfig(BaseModel):
+    """摘要 LLM 配置（独立于主 LLM，可走便宜模型）"""
+    provider: str = "deepseek"
+    model: str = "deepseek-chat"
+    timeout_sec: int = 30
+
+
+class MidTermMemoryConfig(BaseModel):
+    """中期记忆配置（会话内上下文压缩）
+
+    详见 docs/infrastructure/memory/context_compression_design.md
+    """
+    enabled: bool = True
+    # 触发条件（双阈值，任一满足即触发）
+    token_threshold_ratio: float = 0.7       # token 主阈值：占模型上下文上限的比例
+    message_count_threshold: int = 150       # 消息数兜底阈值（含工具消息）
+    # 分段保留
+    header_keep: int = 3                     # 头部保留消息数
+    tail_keep: int = 30                      # 尾部保留消息数（按工具链边界对齐）
+    # 异步任务（Phase 3+4 用，本阶段先留字段）
+    task_lock_ttl_sec: int = 300             # 压缩任务锁 TTL（兜底防泄漏）
+    max_consecutive_failures: int = 3        # 连续失败多少次后触发同步降级
+    fail_count_window_sec: int = 3600        # 失败计数窗口
+    # 摘要 LLM
+    summary_max_tokens: int = 1500
+    summary_llm_retry: int = 2               # 摘要 LLM 调用重试次数
+    summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig)
+    # 工具结果预处理
+    large_tool_result_truncate_chars: int = 2000
+
+
 class LongTermMemoryConfig(BaseModel):
     """长期记忆配置"""
     enabled: bool = False
@@ -164,6 +195,7 @@ class LongTermMemoryConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """记忆配置"""
     short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
+    mid_term: MidTermMemoryConfig = Field(default_factory=MidTermMemoryConfig)
     long_term: LongTermMemoryConfig = Field(default_factory=LongTermMemoryConfig)
     cleanup_interval: int = 300  # 过期会话清理间隔（秒）
 

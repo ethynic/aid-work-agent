@@ -1579,3 +1579,247 @@ class TokenDB:
             if updated > 0:
                 logger.info(f"Updated {updated} token expires_at for tenant {tenant_id} to {new_expire_at}")
             return updated
+
+
+# ============== 会话内上下文压缩摘要 ==============
+
+def generate_summary_id() -> str:
+    """生成唯一上下文摘要ID"""
+    return f"csum_{uuid.uuid4().hex[:12]}"
+
+
+class ContextSummaryDB:
+    """会话内上下文压缩摘要数据库访问类 - 操作 chat_context_summaries 表
+
+    每次压缩产生一行新记录，旧的 active summary 被置为 'superseded'，永不删除。
+    同一 (session_id, source_type) 同时只能有一条 status='active' 的记录
+    （由部分索引 idx_ccs_session_active 保证）。
+    """
+
+    @staticmethod
+    def create(
+        summary_id: str,
+        session_id: str,
+        source_type: str,
+        tenant_id: Optional[str],
+        user_id: Optional[str],
+        subagent_id: Optional[str],
+        summary_text: str,
+        summary_version: int,
+        compressed_message_ids: List[int],
+        compressed_message_count: int,
+        original_token_count: int,
+        compressed_token_count: int,
+        compression_ratio: float,
+        llm_provider: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        llm_tokens_used: Optional[int] = None,
+        status: str = "active",
+        fallback_used: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """创建新的上下文摘要记录
+
+        Args:
+            summary_id: 摘要唯一 ID（csum_xxx）
+            session_id: 会话 ID
+            source_type: 来源类型（chat / wecom_kf / dingtalk / feishu / wecom_personal_rpa）
+            tenant_id: 租户 ID（租户隔离）
+            user_id: 用户 ID
+            subagent_id: 子智能体 ID（NULL 表示主智能体）
+            summary_text: 摘要文本
+            summary_version: 该 session 第几次压缩（递增）
+            compressed_message_ids: 被压缩的原消息 BIGINT id 列表
+            compressed_message_count: 被压缩的消息数量
+            original_token_count: 压缩前 token 数
+            compressed_token_count: 压缩后 token 数（摘要 + TAIL）
+            compression_ratio: 压缩比（compressed / original）
+            llm_provider: 摘要 LLM 提供者
+            llm_model: 摘要 LLM 模型名
+            llm_tokens_used: 摘要 LLM 调用消耗 token 数
+            status: 初始状态（默认 'active'）
+            fallback_used: 是否走了同步降级路径
+
+        Returns:
+            创建成功的记录字典，失败返回 None
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    f"""
+                    INSERT INTO chat_context_summaries (
+                        summary_id, session_id, source_type, tenant_id, user_id, subagent_id,
+                        summary_text, summary_version,
+                        compressed_message_ids, compressed_message_count,
+                        original_token_count, compressed_token_count, compression_ratio,
+                        llm_provider, llm_model, llm_tokens_used,
+                        fallback_used, status
+                    ) VALUES (
+                        {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                        {placeholder}, {placeholder},
+                        {placeholder}, {placeholder},
+                        {placeholder}, {placeholder}, {placeholder},
+                        {placeholder}, {placeholder}, {placeholder},
+                        {placeholder}, {placeholder}
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        summary_id, session_id, source_type, tenant_id, user_id, subagent_id,
+                        summary_text, summary_version,
+                        list(compressed_message_ids), compressed_message_count,
+                        original_token_count, compressed_token_count, compression_ratio,
+                        llm_provider, llm_model, llm_tokens_used,
+                        fallback_used, status,
+                    ),
+                )
+                row = cursor.fetchone()
+                conn.commit()
+                return dict(row) if row else None
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception as rollback_err:
+                    logger.error(f"Failed to rollback ContextSummaryDB.create: {rollback_err}")
+                logger.error(f"Failed to create context summary: {e}")
+                return None
+
+    @staticmethod
+    def get_active_by_session(
+        session_id: str,
+        source_type: str,
+        tenant_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """获取会话当前 active 的摘要（同一 session 同一 source_type 至多一条）。
+
+        Args:
+            session_id: 会话 ID
+            source_type: 来源类型
+            tenant_id: 租户 ID（租户隔离）。非 SaaS 场景可传 None，此时不加租户过滤。
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if tenant_id is not None:
+                cursor.execute(
+                    f"""
+                    SELECT * FROM chat_context_summaries
+                    WHERE session_id = {placeholder}
+                      AND source_type = {placeholder}
+                      AND tenant_id = {placeholder}
+                      AND status = 'active'
+                    ORDER BY summary_version DESC
+                    LIMIT 1
+                    """,
+                    (session_id, source_type, tenant_id),
+                )
+            else:
+                cursor.execute(
+                    f"""
+                    SELECT * FROM chat_context_summaries
+                    WHERE session_id = {placeholder}
+                      AND source_type = {placeholder}
+                      AND status = 'active'
+                    ORDER BY summary_version DESC
+                    LIMIT 1
+                    """,
+                    (session_id, source_type),
+                )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def mark_superseded(summary_id: str) -> bool:
+        """将指定摘要置为 superseded（被新摘要替代）"""
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    f"""
+                    UPDATE chat_context_summaries
+                    SET status = 'superseded',
+                        superseded_at = CURRENT_TIMESTAMP
+                    WHERE summary_id = {placeholder} AND status = 'active'
+                    """,
+                    (summary_id,),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception as rollback_err:
+                    logger.error(f"Failed to rollback ContextSummaryDB.mark_superseded: {rollback_err}")
+                logger.error(f"Failed to mark summary superseded {summary_id}: {e}")
+                return False
+
+    @staticmethod
+    def list_by_session(
+        session_id: str,
+        source_type: str,
+        include_inactive: bool = False,
+        tenant_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """列出会话的所有摘要记录（默认只看 active）
+
+        Args:
+            session_id: 会话 ID
+            source_type: 来源类型
+            include_inactive: 是否包含已被 superseded 的历史摘要
+            tenant_id: 租户 ID（租户隔离）。非 SaaS 场景可传 None，不加租户过滤。
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = [
+                f"session_id = {placeholder}",
+                f"source_type = {placeholder}",
+            ]
+            params: list = [session_id, source_type]
+            if tenant_id is not None:
+                conditions.append(f"tenant_id = {placeholder}")
+                params.append(tenant_id)
+            if not include_inactive:
+                conditions.append("status = 'active'")
+            where_clause = " AND ".join(conditions)
+            cursor.execute(
+                f"""
+                SELECT * FROM chat_context_summaries
+                WHERE {where_clause}
+                ORDER BY summary_version DESC
+                """,
+                params,
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def get_by_id(
+        summary_id: str,
+        tenant_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """根据 summary_id 获取摘要。
+
+        Args:
+            summary_id: 摘要 ID
+            tenant_id: 租户 ID（租户隔离）。非 SaaS 场景可传 None，不加租户过滤。
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if tenant_id is not None:
+                cursor.execute(
+                    f"""
+                    SELECT * FROM chat_context_summaries
+                    WHERE summary_id = {placeholder} AND tenant_id = {placeholder}
+                    """,
+                    (summary_id, tenant_id),
+                )
+            else:
+                cursor.execute(
+                    f"SELECT * FROM chat_context_summaries WHERE summary_id = {placeholder}",
+                    (summary_id,),
+                )
+            row = cursor.fetchone()
+            return dict(row) if row else None

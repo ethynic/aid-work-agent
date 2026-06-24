@@ -82,6 +82,28 @@ memory:
   short_term:
     max_messages: 100
     ttl: 3600
+  mid_term:
+    # 会话内上下文压缩（详见 docs/infrastructure/memory/context_compression_design.md）
+    enabled: true
+    # 触发条件（双阈值，任一满足即触发）
+    token_threshold_ratio: 0.7       # token 主阈值：占模型上下文上限的比例
+    message_count_threshold: 150     # 消息数兜底阈值（含工具消息）
+    # 分段保留
+    header_keep: 3                   # 头部保留消息数
+    tail_keep: 30                    # 尾部保留消息数（按工具链边界对齐）
+    # 异步任务
+    task_lock_ttl_sec: 300           # 压缩任务锁 TTL（兜底防泄漏）
+    max_consecutive_failures: 3      # 连续失败多少次后触发同步降级
+    fail_count_window_sec: 3600      # 失败计数窗口
+    # 摘要 LLM
+    summary_max_tokens: 1500
+    summary_llm_retry: 2             # 摘要 LLM 调用重试次数
+    summary_llm:
+      provider: deepseek             # 走便宜模型
+      model: deepseek-chat
+      timeout_sec: 30
+    # 工具结果预处理
+    large_tool_result_truncate_chars: 2000
   long_term:
     enabled: true           # 是否启用长期记忆
     storage_dir: "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下
