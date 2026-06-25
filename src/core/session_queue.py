@@ -36,11 +36,14 @@ class EnqueueResult:
         response_text: 本轮最终回复文本（仅 success 非空）
         merged_input: 合并方实际处理的输入；独立处理时 == 原 user_input
         was_merged: 是否是合并方（持有锁并跑了最终响应，但用了合并后的输入）
+        merged_attachments_meta: 合并方累积的附件元数据（被取消方的 attachments_meta 也并入）；
+                                 独立处理时 == 调用方传入的 attachments_meta（或 None）
     """
     status: Literal["success", "merged", "error"]
     response_text: str = ""
     merged_input: str = ""
     was_merged: bool = False
+    merged_attachments_meta: Optional[list] = None
 
 
 class SessionMessageQueue:
@@ -79,6 +82,24 @@ class SessionMessageQueue:
     def release_lock(self, session_id: str, lock_value: str) -> bool:
         """释放会话锁"""
         lock_key = self._key("session_lock", session_id)
+        # 诊断：释放锁前检查合并缓冲区是否仍有未消费内容
+        # 若有，说明重处理期间又有新消息进入合并缓冲区但未被消费 → 该消息会丢失
+        try:
+            merge_key = self._key("session_merge", session_id)
+            leftover = redis_client.get(merge_key)
+            if leftover:
+                data = json.loads(leftover) if isinstance(leftover, str) else leftover
+                leftover_text = data.get("text", "")
+                tlog(
+                    "语音合并",
+                    "[release_lock] 释放锁时合并缓冲区仍有未消费内容（疑似丢消息）"
+                    " session={sid}..., leftover_len={l_len}, leftover_preview={l_prev!r}",
+                    sid=session_id[:20],
+                    l_len=len(leftover_text),
+                    l_prev=leftover_text[:120],
+                )
+        except Exception as _e:
+            tlog("语音合并", "[release_lock] 检查残留合并缓冲区异常: {err}", err=str(_e), level="ERROR")
         # 先清取消标志、推送标记和合并缓冲区
         self._clear_cancel(session_id)
         self._clear_responding(session_id)
@@ -96,34 +117,63 @@ class SessionMessageQueue:
         return str(os.getpid())
 
     # ==================== 合并缓冲区 ====================
+    # 结构：{"text": str, "attachments_meta": List[Dict] | None, "timestamp": float}
+    # text 为各段用 \n 拼接的合并输入（给 agent 用）
+    # attachments_meta 为各段 attachments_meta 的并集（给持久化用）
 
-    def set_merge(self, session_id: str, text: str) -> None:
+    def set_merge(
+        self,
+        session_id: str,
+        text: str,
+        attachments_meta: Optional[list] = None,
+    ) -> None:
         """设置合并缓冲区（首次或覆盖）"""
         key = self._key("session_merge", session_id)
-        data = json.dumps({"text": text, "timestamp": time.time()}, ensure_ascii=False)
+        data = json.dumps(
+            {
+                "text": text,
+                "attachments_meta": attachments_meta,
+                "timestamp": time.time(),
+            },
+            ensure_ascii=False,
+        )
         redis_client.set(key, data, ex=self.MERGE_TTL)
 
-    def append_merge(self, session_id: str, new_text: str) -> str:
+    def append_merge(
+        self,
+        session_id: str,
+        new_text: str,
+        new_attachments_meta: Optional[list] = None,
+    ) -> str:
         """追加新文本到合并缓冲区，返回合并后的完整文本"""
         key = self._key("session_merge", session_id)
         existing = redis_client.get(key)
         if existing:
             data = json.loads(existing) if isinstance(existing, str) else existing
             original = data.get("text", "")
+            existing_meta = data.get("attachments_meta") or []
             # 换行分隔追加
             merged = original + "\n" + new_text
+            merged_meta = list(existing_meta)
+            if new_attachments_meta:
+                merged_meta.extend(new_attachments_meta)
         else:
             merged = new_text
-        self.set_merge(session_id, merged)
+            merged_meta = list(new_attachments_meta) if new_attachments_meta else []
+        self.set_merge(session_id, merged, merged_meta)
         tlog(
             "语音合并",
             "追加合并 session={sid}..., new_text_len={n_len}, "
-            "new_text_preview={n_prev!r}, merged_len={m_len}, merged_preview={m_prev!r}",
+            "new_text_preview={n_prev!r}, merged_len={m_len}, merged_preview={m_prev!r}, "
+            "existing_meta_count={em_n}, new_meta_count={nm_n}, merged_meta_count={mm_n}",
             sid=session_id[:20],
             n_len=len(new_text),
             n_prev=new_text[:50],
             m_len=len(merged),
             m_prev=merged[:80],
+            em_n=len(existing_meta) if existing else 0,
+            nm_n=len(new_attachments_meta) if new_attachments_meta else 0,
+            mm_n=len(merged_meta),
         )
         return merged
 
@@ -135,6 +185,16 @@ class SessionMessageQueue:
             data = json.loads(existing) if isinstance(existing, str) else existing
             return data.get("text", default)
         return default
+
+    def get_merged_attachments_meta(self, session_id: str) -> Optional[list]:
+        """获取合并缓冲区累积的附件元数据，无合并数据时返回 None"""
+        key = self._key("session_merge", session_id)
+        existing = redis_client.get(key)
+        if not existing:
+            return None
+        data = json.loads(existing) if isinstance(existing, str) else existing
+        meta = data.get("attachments_meta")
+        return list(meta) if meta else None
 
     def clear_merge(self, session_id: str) -> None:
         """清除合并缓冲区"""
@@ -239,9 +299,11 @@ class SessionMessageQueue:
         """
         处理器返回后检查是否需要重新处理（取消 + 有合并输入）。
 
-        返回 (新的回复文本, 实际使用的合并输入) 元组，或 None（不需要重新处理）。
-        合并输入必须透传给调用方，否则调用方只能拿到 original_input（陈旧），
-        导致持久化时写入非合并的原始输入，丢失后续追加的消息。
+        循环重处理：每次重处理前若有 cancel + 新合并输入，则用新输入重新跑 processor；
+        重处理后再次检查，若又被取消且有更新的合并输入，继续重处理。
+        直到无 cancel 或无新合并输入为止，避免重处理期间到达的新消息被丢弃。
+
+        返回 (response, merged_input, merged_attachments_meta) 元组，或 None（不需要重处理）。
         """
         # 检查是否被取消
         if not self.is_cancelled(session_id):
@@ -253,47 +315,92 @@ class SessionMessageQueue:
             return None
         data = json.loads(existing) if isinstance(existing, str) else existing
         merged_input = data.get("text", "")
+        merged_meta = data.get("attachments_meta") or None
         # 检查合并输入是否与原始输入不同
         if merged_input == original_input:
             return None
-        # 用合并后的输入重新处理
-        tlog(
-            "语音合并",
-            "检测到取消，重新处理合并输入 session={sid}..., "
-            "original_len={o_len}, merged_len={m_len}, merged_preview={m_prev!r}",
-            sid=session_id[:20],
-            o_len=len(original_input),
-            m_len=len(merged_input),
-            m_prev=merged_input[:80],
-        )
-        self.clear_merge(session_id)  # 清除合并缓冲区，防重复重新处理
-        # 清除取消标志：重新处理是新一轮完整处理，不应继承上一轮的取消状态，
-        # 否则新 processor 会在 cancel_check 时立即返回，造成 response_text 为空
-        self._clear_cancel(session_id)
-        cancel_check = lambda: self.check_cancel(session_id)
-        # 关键：通过 user_input_override 把合并后的完整输入传给 processor，
-        # 否则 processor 闭包绑定的还是原始输入，合并内容会被丢弃
-        response = processor(cancel_check, user_input_override=merged_input)
-        if asyncio.iscoroutine(response):
-            response = await response
-        tlog(
-            "语音合并",
-            "重处理完成 session={sid}..., "
-            "merged_len={m_len}, merged_preview={m_prev!r}, "
-            "response_len={r_len}, response_preview={r_prev!r}",
-            sid=session_id[:20],
-            m_len=len(merged_input),
-            m_prev=merged_input[:80],
-            r_len=len(response) if response else 0,
-            r_prev=(response or "")[:80],
-        )
-        return response, merged_input
+
+        # 循环重处理
+        iteration = 0
+        max_iterations = 10  # 防止极端情况下死循环
+        current_merged_input = merged_input
+        current_merged_meta = merged_meta
+        response = ""
+        while iteration < max_iterations:
+            iteration += 1
+            tlog(
+                "语音合并",
+                "[重处理] 第 {iter} 轮 session={sid}..., "
+                "merged_len={m_len}, merged_preview={m_prev!r}, merged_meta_count={mm_n}",
+                iter=iteration,
+                sid=session_id[:20],
+                m_len=len(current_merged_input),
+                m_prev=current_merged_input[:80],
+                mm_n=len(current_merged_meta) if current_merged_meta else 0,
+            )
+            # 清除合并缓冲区，防重复处理（重处理期间新消息会重新写入合并缓冲区）
+            self.clear_merge(session_id)
+            # 清除取消标志：重新处理是新一轮完整处理，不应继承上一轮的取消状态，
+            # 否则新 processor 会在 cancel_check 时立即返回，造成 response_text 为空
+            self._clear_cancel(session_id)
+            cancel_check = lambda: self.check_cancel(session_id)
+            # 关键：通过 user_input_override 把合并后的完整输入传给 processor，
+            # 否则 processor 闭包绑定的还是原始输入，合并内容会被丢弃
+            response = processor(cancel_check, user_input_override=current_merged_input)
+            if asyncio.iscoroutine(response):
+                response = await response
+            tlog(
+                "语音合并",
+                "[重处理] 第 {iter} 轮完成 session={sid}..., "
+                "response_len={r_len}, response_preview={r_prev!r}, "
+                "was_cancelled_after={cancelled}",
+                iter=iteration,
+                sid=session_id[:20],
+                r_len=len(response) if response else 0,
+                r_prev=(response or "")[:80],
+                cancelled=self.is_cancelled(session_id),
+            )
+            # 重处理后若被取消，检查是否有新合并输入；有则继续重处理，无则跳出
+            if not self.is_cancelled(session_id):
+                break
+            merge_key2 = self._key("session_merge", session_id)
+            existing2 = redis_client.get(merge_key2)
+            if not existing2:
+                break
+            data2 = json.loads(existing2) if isinstance(existing2, str) else existing2
+            new_merged_input = data2.get("text", "")
+            new_merged_meta = data2.get("attachments_meta") or None
+            if new_merged_input == current_merged_input:
+                # 取消标志存在但没有新内容，跳出（避免无意义重跑）
+                tlog(
+                    "语音合并",
+                    "[重处理] 第 {iter} 轮后取消但无新内容，跳出 session={sid}...",
+                    iter=iteration,
+                    sid=session_id[:20],
+                    level="WARNING",
+                )
+                break
+            tlog(
+                "语音合并",
+                "[重处理] 第 {iter} 轮后又取消且有新合并输入，继续重处理 session={sid}..., "
+                "old_merged_len={om_len}, new_merged_len={nm_len}, new_merged_preview={nm_prev!r}",
+                iter=iteration,
+                sid=session_id[:20],
+                om_len=len(current_merged_input),
+                nm_len=len(new_merged_input),
+                nm_prev=new_merged_input[:80],
+            )
+            current_merged_input = new_merged_input
+            current_merged_meta = new_merged_meta
+
+        return response, current_merged_input, current_merged_meta
 
     async def enqueue_and_process(
         self,
         session_id: str,
         user_input: str,
         processor,
+        attachments_meta: Optional[list] = None,
     ) -> EnqueueResult:
         """
         渠道消息入口调度。
@@ -301,9 +408,11 @@ class SessionMessageQueue:
         Args:
             session_id: 会话 ID
             user_input: 用户输入文本
-            processor: 异步回调函数，签名 (cancel_check: Callable) -> str
+            processor: 异步回调函数，签名 (cancel_check: Callable, user_input_override: Optional[str]) -> str
                 负责调用 agent.process_message_sync 并返回回复文本。
                 cancel_check 是用于检测取消的函数，processor 需将其传给 process_message_sync。
+            attachments_meta: 本条用户消息的附件元数据（含 local_path、media_id 等，不含 base64）。
+                合并方会把被取消方的 attachments_meta 累积进来，最终透传给调用方用于持久化。
 
         Returns:
             EnqueueResult。
@@ -323,21 +432,25 @@ class SessionMessageQueue:
         if lock_value is not None:
             # === 空闲态，首次请求 ===
             # 设置合并缓冲区
-            self.set_merge(session_id, user_input)
+            self.set_merge(session_id, user_input, attachments_meta)
             # 等待合并窗口，期间可能有追加消息
             await self._wait_merge_window(session_id)
             # 获取最终合并后的输入
             final_input = self.get_merged_input(session_id, user_input)
+            final_meta = self.get_merged_attachments_meta(session_id)
             was_merged = final_input != user_input
             tlog(
                 "语音合并",
                 "空闲态处理 session={sid}..., original_len={o_len}, "
-                "final_len={f_len}, merged={merged}, final_preview={f_prev!r}",
+                "final_len={f_len}, merged={merged}, final_preview={f_prev!r}, "
+                "original_meta_count={om_n}, final_meta_count={fm_n}",
                 sid=session_id[:20],
                 o_len=len(user_input),
                 f_len=len(final_input),
                 merged=was_merged,
                 f_prev=final_input[:80],
+                om_n=len(attachments_meta) if attachments_meta else 0,
+                fm_n=len(final_meta) if final_meta else 0,
             )
 
             # P0-5：用 error_result 记录 processor 异常时的返回值。
@@ -363,6 +476,7 @@ class SessionMessageQueue:
                         response_text="",
                         merged_input=final_input,
                         was_merged=was_merged,
+                        merged_attachments_meta=final_meta,
                     )
                 else:
                     # processor 成功，立即记录正常返回值
@@ -371,6 +485,7 @@ class SessionMessageQueue:
                         response_text=response or "",
                         merged_input=final_input,
                         was_merged=was_merged,
+                        merged_attachments_meta=final_meta,
                     )
             finally:
                 # 1. 检查是否有取消 + 合并输入需要重新处理（仅在 processor 未异常时）
@@ -390,30 +505,34 @@ class SessionMessageQueue:
                             response_text="",
                             merged_input=final_input,
                             was_merged=True,
+                            merged_attachments_meta=final_meta,
                         )
                     if reprocessed is not None:
-                        reprocessed_text, reprocessed_merged_input = reprocessed
+                        reprocessed_text, reprocessed_merged_input, reprocessed_merged_meta = reprocessed
                         self.release_lock(session_id, lock_value)
                         # 必须使用 _handle_cancel_and_reprocess 透传回来的
                         # reprocessed_merged_input（合并后的完整输入），
                         # 不能用 final_input —— final_input 是合并窗口结束时读到的值，
                         # 此时后续追加的消息尚未进入合并缓冲区，持久化 final_input
                         # 会导致追加的消息丢失（参见会话历史缺消息的 bug）。
+                        # merged_attachments_meta 同理：透传重处理后的累积值，含被取消方的附件元数据
                         tlog(
                             "语音合并",
                             "[idle 路径] 返回重处理结果 session={sid}..., "
                             "final_input_len={fi_len}, remerged_len={rm_len}, "
-                            "remerged_preview={rm_prev!r}",
+                            "remerged_preview={rm_prev!r}, remerged_meta_count={rmm_n}",
                             sid=session_id[:20],
                             fi_len=len(final_input),
                             rm_len=len(reprocessed_merged_input),
                             rm_prev=reprocessed_merged_input[:80],
+                            rmm_n=len(reprocessed_merged_meta) if reprocessed_merged_meta else 0,
                         )
                         return EnqueueResult(
                             status="success",
                             response_text=reprocessed_text or "",
                             merged_input=reprocessed_merged_input,
                             was_merged=True,
+                            merged_attachments_meta=reprocessed_merged_meta,
                         )
                     # 2. 检查是否有排队消息（处理中到达的新消息）
                     if self.has_pending(session_id):
@@ -424,8 +543,10 @@ class SessionMessageQueue:
                         )
                         pending_input = self.get_pending(session_id)
                         if pending_input:
+                            # pending 消息无 attachments_meta 通道（pending 只存 text），
+                            # 故此分支合并的附件元数据仅来自 final_meta（即 idle 窗口内累积的）
                             self.clear_merge(session_id)
-                            self.set_merge(session_id, pending_input)
+                            self.set_merge(session_id, pending_input, None)
                             cancel_check = lambda: self.check_cancel(session_id)
                             tlog(
                                 "语音合并",
@@ -452,6 +573,7 @@ class SessionMessageQueue:
                                     response_text="",
                                     merged_input=pending_input,
                                     was_merged=False,
+                                    merged_attachments_meta=final_meta,
                                 )
                             # pending 处理完后也检查取消+合并
                             try:
@@ -466,29 +588,36 @@ class SessionMessageQueue:
                                 reprocessed = None
                             self.release_lock(session_id, lock_value)
                             if reprocessed is not None:
-                                reprocessed_text, reprocessed_merged_input = reprocessed
+                                reprocessed_text, reprocessed_merged_input, reprocessed_merged_meta = reprocessed
                                 # 同上：使用透传回来的合并输入，而非 pending_input
+                                # merged_meta 合并 final_meta（idle 窗口内）+ 重处理累积的
+                                merged_meta_combined = list(final_meta) if final_meta else []
+                                if reprocessed_merged_meta:
+                                    merged_meta_combined.extend(reprocessed_merged_meta)
                                 tlog(
                                     "语音合并",
                                     "[pending 路径] 返回重处理结果 session={sid}..., "
                                     "pending_input_len={pi_len}, remerged_len={rm_len}, "
-                                    "remerged_preview={rm_prev!r}",
+                                    "remerged_preview={rm_prev!r}, merged_meta_count={mm_n}",
                                     sid=session_id[:20],
                                     pi_len=len(pending_input),
                                     rm_len=len(reprocessed_merged_input),
                                     rm_prev=reprocessed_merged_input[:80],
+                                    mm_n=len(merged_meta_combined),
                                 )
                                 return EnqueueResult(
                                     status="success",
                                     response_text=reprocessed_text or "",
                                     merged_input=reprocessed_merged_input,
                                     was_merged=True,
+                                    merged_attachments_meta=merged_meta_combined if merged_meta_combined else None,
                                 )
                             return EnqueueResult(
                                 status="success",
                                 response_text=pending_response or "",
                                 merged_input=pending_input,
                                 was_merged=False,
+                                merged_attachments_meta=final_meta,
                             )
                 # processor 异常分支：释放锁后返回 error
                 self.release_lock(session_id, lock_value)
@@ -504,19 +633,32 @@ class SessionMessageQueue:
                 tlog(
                     "语音合并",
                     "处理中态（允许取消）session={sid}..., "
-                    "input_len={i_len}, input_preview={i_prev!r}",
+                    "input_len={i_len}, input_preview={i_prev!r}, meta_count={m_n}",
                     sid=session_id[:20],
                     i_len=len(user_input),
                     i_prev=user_input[:50],
+                    m_n=len(attachments_meta) if attachments_meta else 0,
                 )
                 self.set_cancel(session_id)
-                self.append_merge(session_id, user_input)
+                self.append_merge(session_id, user_input, attachments_meta)
                 # 等待旧请求完成
                 await self._wait_for_processing_end(session_id)
                 # 旧请求应已处理合并后的输入，本调用方无需发送回复
                 return EnqueueResult(status="merged")
             else:
                 # 已开始推送，不允许取消，加入 pending
+                # pending 通道仅存 text，attachments_meta 无法累积 → 此处记录告警
+                if attachments_meta:
+                    tlog(
+                        "语音合并",
+                        "[pending 丢附件] 已推送后到达的消息含附件，pending 通道无法累积附件元数据 → "
+                        "该附件元数据将丢失（仅影响持久化，不影响 LLM）session={sid}..., "
+                        "meta_count={m_n}, input_preview={i_prev!r}",
+                        sid=session_id[:20],
+                        m_n=len(attachments_meta),
+                        i_prev=user_input[:50],
+                        level="WARNING",
+                    )
                 logger.info(
                     f"[SessionQueue] 处理中态（已推送，排队）session={session_id[:20]}..., "
                     f"input={user_input[:50]}"

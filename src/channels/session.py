@@ -630,6 +630,7 @@ class ChannelSessionManager:
                 session_id=session_id,
                 user_input=agent_input_text,
                 processor=_processor,
+                attachments_meta=user_attachments_meta,
             )
         except Exception as e:
             logger.error(
@@ -666,17 +667,27 @@ class ChannelSessionManager:
         response_text = result.response_text or ""
         # 合并方应持久化「合并后的输入」，否则用原始 user_content
         user_to_write = result.merged_input if result.was_merged else user_content
+        # 合并方持久化附件元数据：优先用 session_queue 透传的 merged_attachments_meta
+        # （含被取消方的附件元数据，避免语音被并入前一条消息后附件 local_path 丢失）
+        if result.was_merged and result.merged_attachments_meta is not None:
+            attachments_to_write = result.merged_attachments_meta
+        else:
+            attachments_to_write = user_attachments_meta
         if result.was_merged:
             tlog(
                 "语音合并",
                 "持久化用户消息 session={sid}..., was_merged=True, "
                 "user_content_len={uc_len}, merged_input_len={mi_len}, "
-                "write_len={w_len}, write_preview={w_prev!r}",
+                "write_len={w_len}, write_preview={w_prev!r}, "
+                "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
                 sid=session_id[:20],
                 uc_len=len(user_content),
                 mi_len=len(result.merged_input),
                 w_len=len(user_to_write),
                 w_prev=user_to_write[:120],
+                um_n=len(user_attachments_meta) if user_attachments_meta else 0,
+                mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
+                wm_n=len(attachments_to_write) if attachments_to_write else 0,
             )
 
         # 构造批量写入的消息序列
@@ -686,7 +697,7 @@ class ChannelSessionManager:
                 "role": "user",
                 "content": user_to_write,
                 "message_type": message_type,
-                "attachments": user_attachments_meta if user_attachments_meta else None,
+                "attachments": attachments_to_write if attachments_to_write else None,
                 "metadata": user_metadata,
             })
 
@@ -727,6 +738,25 @@ class ChannelSessionManager:
         })
 
         # 事务化批量写入
+        tlog(
+            "语音合并",
+            "[持久化] session={sid}..., was_merged={merged}, "
+            "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
+            "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
+            "user_to_write_len={uw_len}, user_to_write_preview={uw_prev!r}, "
+            "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
+            sid=session_id[:20],
+            merged=result.was_merged,
+            uc_len=len(user_content),
+            uc_prev=user_content[:120],
+            mi_len=len(result.merged_input),
+            mi_prev=result.merged_input[:120],
+            uw_len=len(user_to_write),
+            uw_preview=user_to_write[:120],
+            roles=[m.get("role") for m in batch],
+            r_len=len(response_text),
+            r_prev=response_text[:120],
+        )
         write_ok = self.add_messages_batch_transactional(session_id, tenant_id, batch)
         if write_ok is None:
             logger.error(

@@ -26,6 +26,7 @@ from enum import Enum
 from src.config.settings import settings
 from src.core.agent_logger import log_agent_iteration, log_skill_execute
 from src.core.redis_client import redis_client
+from src.core.temp_logger import tlog
 from src.llm.gateway import llm_gateway
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
@@ -1101,6 +1102,27 @@ class Agent:
                         "content": content,
                         "timestamp": msg.get("created_at", ""),
                     })
+            # 诊断：记录加载到的历史消息概览，用于对比上下文是否缺消息
+            try:
+                from src.core.temp_logger import tlog as _tlog
+                _roles_preview = []
+                for m in history:
+                    c = m.get("content", "")
+                    if not isinstance(c, str):
+                        c = str(c)
+                    _roles_preview.append(f"{m.get('role')}:{c[:40]!r}")
+                _tlog(
+                    "语音合并",
+                    "[加载历史] session={sid}..., count={n}, msgs={preview}, "
+                    "current_user_input_len={cu_len}, current_user_input_preview={cu_prev!r}",
+                    sid=session_id[:20],
+                    n=len(history),
+                    preview=_roles_preview,
+                    cu_len=len(current_user_input),
+                    cu_prev=current_user_input[:80],
+                )
+            except Exception:
+                pass
             return history
         except Exception as e:
             logger.warning(f"Failed to load channel history for session {session_id}: {e}")
