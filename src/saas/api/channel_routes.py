@@ -1754,19 +1754,18 @@ async def _process_tenant_wecom_kf_messages(
                         )
                     )
 
+                # 语音消息：先判断 ASR 是否识别成功（在加前缀之前判断）
+                asr_success = msgtype == "voice" and not user_input.startswith("[语音消息")
+
                 user_content = unified_msg.text or user_input
 
                 # 语音消息：如果 ASR 识别成功，用 "[语音消息] ASR结果" 格式保存
                 # （unified_msg.text 永远是 "[语音消息]"，ASR 结果在 user_input 中）
-                if msgtype == "voice" and not user_input.startswith("[语音消息"):
+                if asr_success:
                     user_content = f"[语音消息] {user_input}"
 
                 # ASR 短句（<10 字）识别误差较高，告诉 LLM 来源是 [语音消息] 以便 LLM 进入宽容模式
-                if (
-                    msgtype == "voice"
-                    and not user_input.startswith("[语音消息")
-                    and 0 < len(user_input) < 10
-                ):
+                if asr_success and 0 < len(user_input) < 10:
                     user_input = f"[语音消息] {user_input}"
 
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
@@ -1808,9 +1807,8 @@ async def _process_tenant_wecom_kf_messages(
                 tool_messages_collected = []  # 本轮 tool 消息序列，供事务持久化到 channel_messages
 
                 # 语音消息：ASR 识别成功后，不再将语音附件传递给 agent，避免 LLM 误以为需要处理语音识别
-                agent_attachments_input = user_attachments
-                if msgtype == "voice" and not user_input.startswith("[语音消息"):
-                    agent_attachments_input = []
+                agent_attachments_input = user_attachments if not asr_success else []
+                if asr_success:
                     logger.info(f"[微信语音] ASR 识别成功，过滤语音附件: user_input={user_input!r}")
 
                 agent_attachments = _build_attachments_for_agent(agent_attachments_input)
