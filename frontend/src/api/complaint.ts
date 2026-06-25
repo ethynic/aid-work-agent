@@ -2,13 +2,20 @@
  * 投诉处理智能体 — API 接口
  */
 
+import { getTenantScopedKey } from './tenantStorage'
+
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function getAuthHeaders(): Record<string, string> {
   const path = window.location.pathname
-  let tokenKey = 'demo_token'
-  if (path.startsWith('/t/')) tokenKey = 'saas_token'
-  else if (path.startsWith('/portal')) tokenKey = 'portal_token'
+  let tokenKey: string
+  if (path.startsWith('/t/')) {
+    tokenKey = getTenantScopedKey('saas_token')
+  } else if (path.startsWith('/portal')) {
+    tokenKey = 'portal_token'
+  } else {
+    tokenKey = 'demo_token'
+  }
   const token = localStorage.getItem(tokenKey)
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`

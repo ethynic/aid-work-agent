@@ -2,6 +2,8 @@
  * 认证相关 API
  */
 
+import { getTenantScopedKey } from './tenantStorage'
+
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/auth`
 
 export interface LoginResponse {
@@ -126,16 +128,16 @@ export async function bindPhone(userId: string, phone: string, code: string): Pr
  * 获取当前用户信息
  */
 export async function getCurrentUser(): Promise<any> {
-  // 根据当前路由模式选择正确的 token
+  // 按当前路由选择正确的 token key（租户前台按 tenant_id 隔离，演示模式用 demo_token）
   const isTenantMode = window.location.pathname.startsWith('/t/')
-  const tokenKey = isTenantMode ? 'saas_token' : 'demo_token'
+  const tokenKey = isTenantMode ? getTenantScopedKey('saas_token') : 'demo_token'
   const token = localStorage.getItem(tokenKey)
   if (!token) return null
 
   const res = await fetch(`${API_BASE}/me`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
-  
+
   if (!res.ok) return null
   return res.json()
 }
@@ -145,7 +147,7 @@ export async function getCurrentUser(): Promise<any> {
  */
 export async function logout(): Promise<void> {
   const isTenantMode = window.location.pathname.startsWith('/t/')
-  const tokenKey = isTenantMode ? 'saas_token' : 'demo_token'
+  const tokenKey = isTenantMode ? getTenantScopedKey('saas_token') : 'demo_token'
   const token = localStorage.getItem(tokenKey)
   if (token) {
     await fetch(`${API_BASE}/logout`, {
@@ -169,11 +171,13 @@ function getCurrentTenantId(): string | null {
 
 export function getAuthHeader(): Record<string, string> {
   const path = window.location.pathname
-  let tokenKey = 'demo_token' // 默认
+  let tokenKey: string
   if (path.startsWith('/t/')) {
-    tokenKey = 'saas_token'
+    tokenKey = getTenantScopedKey('saas_token')
   } else if (path.startsWith('/portal')) {
     tokenKey = 'portal_token'
+  } else {
+    tokenKey = 'demo_token' // 默认
   }
   const token = localStorage.getItem(tokenKey)
   const headers: Record<string, string> = {}

@@ -3,15 +3,11 @@
  * 所有 /api/saas/permissions/* 调用的统一封装
  */
 
+import { getTenantScopedKey } from './tenantStorage'
+
 // 复用 saasTenant 的 getSaasAuthHeader
 function getTokenKey(): string {
-  const path = window.location.pathname
-  if (path.startsWith('/portal')) {
-    return 'portal_token'
-  } else if (path.startsWith('/t/')) {
-    return 'saas_token'
-  }
-  return 'saas_token'
+  return getTenantScopedKey('saas_token')
 }
 
 function getCurrentTenantId(): string | null {

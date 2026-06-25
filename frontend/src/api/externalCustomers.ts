@@ -2,16 +2,22 @@
  * 外部接待客户 API
  */
 
+import { getTenantScopedKey } from './tenantStorage'
+
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/external-customers`
 
 export function getSaasAuthHeader(): Record<string, string> {
   const headers: Record<string, string> = {}
 
-  // 根据路由获取对应的 token
+  // 根据路由获取对应的 token（租户前台按 tenant_id 隔离，portal 共用）
   const path = window.location.pathname
-  let tokenKey = 'saas_token'
+  let tokenKey: string
   if (path.startsWith('/portal')) {
     tokenKey = 'portal_token'
+  } else if (path.startsWith('/t/')) {
+    tokenKey = getTenantScopedKey('saas_token')
+  } else {
+    tokenKey = 'saas_token'
   }
   const token = localStorage.getItem(tokenKey)
   if (token) {

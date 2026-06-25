@@ -2,11 +2,14 @@
  * 租户数据迁移 API Client
  */
 
+import { getTenantScopedKey } from './tenantStorage'
+
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
 
 function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
-  const token = localStorage.getItem('portal_token') || localStorage.getItem('saas_token')
+  // 平台管理后台 portal_token 优先；租户前台按 tenant_id 取 saas_token
+  const token = localStorage.getItem('portal_token') || localStorage.getItem(getTenantScopedKey('saas_token'))
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }

@@ -2,7 +2,10 @@
  * SaaS 租户管理 API Client
  * 所有 /api/saas/* 调用的统一封装
  * 使用独立的 saas_token（与演示模式 demo_token 分离）
+ * 租户前台路由下，saas_token 按 tenant_id 隔离，避免平台管理员多 tab 串号
  */
+
+import { getTenantScopedKey } from './tenantStorage'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
 
@@ -58,18 +61,33 @@ export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Pr
 }
 
 export async function adminLogout(): Promise<void> {
-  const path = window.location.pathname
-  let tokenKey: string
-  if (path.startsWith('/portal')) {
-    tokenKey = 'portal_token'
-  } else if (path.startsWith('/t/')) {
-    tokenKey = 'saas_token'
-  } else {
-    tokenKey = 'saas_token'
+  // 优先复用 useTenantAuth 的登出逻辑，保证读/写/删走同一 key 生成器
+  try {
+    const { useTenantAuth } = await import('@/composables/useTenantAuth')
+    await useTenantAuth().logout()
+    return
+  } catch (e) {
+    console.warn('useTenantAuth.logout() 调用失败，回退到本地清理:', e)
   }
 
-  const adminKey = tokenKey.replace('token', 'admin')
-  const tenantKey = tokenKey.replace('token', 'tenant')
+  // 回退路径：直接按当前路由清理（保持向后兼容）
+  const path = window.location.pathname
+  let tokenKey: string
+  let adminKey: string
+  let tenantKey: string
+  if (path.startsWith('/portal')) {
+    tokenKey = 'portal_token'
+    adminKey = 'portal_admin'
+    tenantKey = 'portal_tenant'
+  } else if (path.startsWith('/t/')) {
+    tokenKey = getTenantScopedKey('saas_token')
+    adminKey = getTenantScopedKey('saas_admin')
+    tenantKey = getTenantScopedKey('saas_tenant')
+  } else {
+    tokenKey = 'saas_token'
+    adminKey = 'saas_admin'
+    tenantKey = 'saas_tenant'
+  }
 
   const token = localStorage.getItem(tokenKey)
   if (token) {
@@ -544,15 +562,9 @@ export async function getUsage(): Promise<{
 
 // ==================== 工具函数 ====================
 
-// 根据当前路由获取对应的 token key
+// 根据当前路由获取对应的 token key（租户前台按 tenant_id 隔离，portal 共用，演示模式保持）
 function getTokenKey(): string {
-  const path = window.location.pathname
-  if (path.startsWith('/portal')) {
-    return 'portal_token'
-  } else if (path.startsWith('/t/')) {
-    return 'saas_token'
-  }
-  return 'saas_token'
+  return getTenantScopedKey('saas_token')
 }
 
 // 获取当前 tenant_id（从 URL 路径 /t/:tenant_id 中提取）

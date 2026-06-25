@@ -48,6 +48,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { getTenantStats, getUsage, listSubscriptions } from '@/api/saasTenant'
+import { getTenantScopedKey } from '@/api/tenantStorage'
 
 const loading = ref(true)
 const error = ref('')
@@ -74,7 +75,9 @@ function formatTokens(n: number): string {
 
 async function loadData() {
   // 未登录时不调用需要认证的 API，根据路由使用正确的 token key
-  const tokenKey = window.location.pathname.startsWith('/portal') ? 'portal_token' : 'saas_token'
+  const tokenKey = window.location.pathname.startsWith('/portal')
+    ? 'portal_token'
+    : getTenantScopedKey('saas_token')
   if (!localStorage.getItem(tokenKey)) {
     loading.value = false
     return

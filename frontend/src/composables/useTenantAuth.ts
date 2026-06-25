@@ -1,12 +1,15 @@
 /**
  * SaaS 租户管理员认证状态管理
- * 根据路由判断使用不同的 token key：
- * - /portal 路由使用 portal_token
- * - /t/:tenant_id 路由使用 saas_token
+ * 根据路由自动按租户隔离 localStorage 中的 saas_token / saas_admin / saas_tenant：
+ * - /portal 路由使用 portal_token / portal_admin / portal_tenant
+ * - /t/:tenant_id 路由使用 saas_token_{tenant_id} / saas_admin_{tenant_id} / saas_tenant_{tenant_id}
+ *   （避免平台管理员同时打开多个租户 tab 时的 token 串号）
+ * - 演示模式 / 保持原 saas_token / saas_admin / saas_tenant
  */
 
 import { ref, computed } from 'vue'
 import { adminLogout as apiLogout } from '@/api/saasTenant'
+import { getTenantScopedKey } from '@/api/tenantStorage'
 
 export interface TenantAdmin {
   user_id: string
@@ -29,35 +32,17 @@ const saasToken = ref<string | null>(null)
 const isLoading = ref(false)
 const isInitialized = ref(false)
 
-// 根据当前路由获取对应的 token key
+// 三个 key 统一按当前路由解析：租户前台按 tenant_id 隔离，portal 共用，演示模式保持
 function getTokenKey(): string {
-  const path = window.location.pathname
-  if (path.startsWith('/portal')) {
-    return 'portal_token'
-  } else if (path.startsWith('/t/')) {
-    return 'saas_token'
-  }
-  return 'saas_token' // 默认
+  return getTenantScopedKey('saas_token')
 }
 
 function getAdminKey(): string {
-  const path = window.location.pathname
-  if (path.startsWith('/portal')) {
-    return 'portal_admin'
-  } else if (path.startsWith('/t/')) {
-    return 'saas_admin'
-  }
-  return 'saas_admin'
+  return getTenantScopedKey('saas_admin')
 }
 
 function getTenantKey(): string {
-  const path = window.location.pathname
-  if (path.startsWith('/portal')) {
-    return 'portal_tenant'
-  } else if (path.startsWith('/t/')) {
-    return 'saas_tenant'
-  }
-  return 'saas_tenant'
+  return getTenantScopedKey('saas_tenant')
 }
 
 export function useTenantAuth() {

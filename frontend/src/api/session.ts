@@ -3,6 +3,7 @@
  */
 
 import { getAuthHeader as getNormalAuthHeader } from './auth'
+import { getTenantScopedKey } from './tenantStorage'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/sessions`
 
@@ -18,9 +19,9 @@ function getAuthHeader(): Record<string, string> {
   const path = window.location.pathname
   let headers: Record<string, string> = {}
 
-  // 租户/平台路由使用 saas_token 或 portal_token
+  // 租户/平台路由使用 saas_token 或 portal_token（租户前台按 tenant_id 隔离）
   if (path.startsWith('/t/')) {
-    const saasToken = localStorage.getItem('saas_token')
+    const saasToken = localStorage.getItem(getTenantScopedKey('saas_token'))
     if (saasToken) headers['Authorization'] = `Bearer ${saasToken}`
   } else if (path.startsWith('/portal')) {
     const portalToken = localStorage.getItem('portal_token')
