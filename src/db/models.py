@@ -827,18 +827,25 @@ class MessageDB:
             cursor = conn.cursor()
             if roles:
                 role_placeholders = ",".join([placeholder] * len(roles))
+                # 取最近 N 条（按 id 倒序取 N 条）再正序返回，避免长会话丢掉最近一轮对话。
                 cursor.execute(f"""
-                    SELECT * FROM chat_messages
-                    WHERE session_id = {placeholder} AND role IN ({role_placeholders})
+                    SELECT * FROM (
+                        SELECT * FROM chat_messages
+                        WHERE session_id = {placeholder} AND role IN ({role_placeholders})
+                        ORDER BY id DESC
+                        LIMIT {placeholder}
+                    ) AS recent
                     ORDER BY id ASC
-                    LIMIT {placeholder}
                 """, (session_id, *roles, limit))
             else:
                 cursor.execute(f"""
-                    SELECT * FROM chat_messages
-                    WHERE session_id = {placeholder}
+                    SELECT * FROM (
+                        SELECT * FROM chat_messages
+                        WHERE session_id = {placeholder}
+                        ORDER BY id DESC
+                        LIMIT {placeholder}
+                    ) AS recent
                     ORDER BY id ASC
-                    LIMIT {placeholder}
                 """, (session_id, limit))
             messages = []
             for row in cursor.fetchall():

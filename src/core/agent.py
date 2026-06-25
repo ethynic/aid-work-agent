@@ -1246,6 +1246,21 @@ class Agent:
                 f"已丢弃较早的 {dropped_user_count} 条（保留最新）"
             )
 
+        # 裁剪窗口起始边界：长会话取最近 N 条后，开头可能落在 assistant（甚至 tool 结果）上，
+        # 而多数 LLM API（DeepSeek/OpenAI 兼容）要求序列首条（system 之后）必须是 user，
+        # 否则报 400。丢弃开头的非 user 消息，直到第一条 user，使截断边界对齐到安全位置。
+        # （孤儿 tool 已在上方被跳过，不会出现在开头；此处主要裁掉开头的 assistant。
+        #   连同其后的 tool 一起被丢弃，不会产生新的孤儿 tool。）
+        start = 0
+        while start < len(cleaned) and cleaned[start].get("role") != "user":
+            start += 1
+        if 0 < start < len(cleaned):
+            logger.info(
+                f"后端日志：_reorder_messages_for_llm 裁剪窗口起始 {start} 条非 user 消息"
+                f"（长会话截断边界对齐到 user，避免首条非 user 触发 LLM API 400）"
+            )
+            cleaned = cleaned[start:]
+
         return cleaned
 
     # ─── 压缩 Skill 上下文（保留在 Agent 上，因为操作 Agent 内部状态） ───
@@ -1680,13 +1695,32 @@ class Agent:
         try:
             from src.db.models import MessageDB
             import json as _json
-            db_messages = MessageDB.list_by_session(
+            # 清除可能过时的内存数据，用 DB 最新历史重建
+            self.memory.clear(session_id)
+
+            # 会话来源分流：渠道会话读 channel_messages，web 会话读 chat_messages，两者严格分离。
+            # 历史误写会让渠道会话的 chat_messages 残留陈旧行，若误用作上下文会劫持真实对话
+            # （详见 docs/research/wecom-kf-context-loss-research.md §9）
+            from src.channels.session import channel_session_manager
+            is_channel = channel_session_manager.is_channel_session(session_id)
+            # 渠道会话不查 chat_messages（避免浪费 + 防止陈旧数据混入）
+            db_messages = [] if is_channel else MessageDB.list_by_session(
                 session_id,
                 limit=self.memory.short_term.max_messages,
             )
-            # 清除可能过时的内存数据，用 DB 最新历史重建
-            self.memory.clear(session_id)
-            if db_messages:
+
+            if is_channel:
+                # 渠道会话（企业微信/钉钉/飞书）：仅从 channel_messages 重建，忽略 chat_messages
+                history_messages = self._load_channel_history(session_id, user_input)
+                if history_messages:
+                    self.memory.load_history(session_id, history_messages)
+                    logger.info(
+                        f"Loaded {len(history_messages)} channel history messages "
+                        f"for session {session_id}"
+                    )
+                else:
+                    logger.debug(f"No channel history for session {session_id}, memory cleared")
+            elif db_messages:
                 # 重建时保留工具上下文：tool 角色、assistant 的 tool_calls/tool_call_id
                 history_messages = []
                 for msg in db_messages:
@@ -1744,17 +1778,8 @@ class Agent:
                     f"loaded={len(history_messages)} msgs | {loaded_roles}"
                 )
             else:
-                # 渠道消息（企业微信/钉钉/飞书）存储在 channel_messages 表，
-                # 与 chat_messages 是独立的表，需 fallback 查询
-                history_messages = self._load_channel_history(session_id, user_input)
-                if history_messages:
-                    self.memory.load_history(session_id, history_messages)
-                    logger.info(
-                        f"Loaded {len(history_messages)} channel history messages "
-                        f"for session {session_id}"
-                    )
-                else:
-                    logger.debug(f"No DB history for session {session_id}, memory cleared")
+                # web 会话且 chat_messages 无历史
+                logger.debug(f"No DB history for session {session_id}, memory cleared")
         except Exception as e:
             logger.warning(f"Failed to rebuild memory from DB for session {session_id}: {e}")
 

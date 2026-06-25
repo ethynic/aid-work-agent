@@ -262,6 +262,25 @@ class ChannelSessionManager:
             set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
             return result
 
+    def is_channel_session(self, session_id: str) -> bool:
+        """
+        判断 session_id 是否为渠道会话（在 channel_sessions 表中登记）。
+
+        用于上下文重建时分流：渠道会话读 channel_messages，web 会话读 chat_messages，
+        两者严格分离，避免历史误写导致渠道会话读到陈旧的 chat_messages。
+        channel_sessions 是渠道会话的权威登记表，web 会话不会出现在此表。
+        """
+        if not session_id:
+            return False
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM channel_sessions WHERE session_id = %s", (session_id,))
+                return cursor.fetchone() is not None
+        except Exception as e:
+            logger.warning(f"后端日志：判断渠道会话失败 session={session_id}: {e}")
+            return False
+
     def update_session(
         self,
         session_id: str,
@@ -905,11 +924,16 @@ class ChannelSessionManager:
                     LIMIT {limit}
                 """, (session_id, before_message_id))
             else:
+                # 取最近 N 条（按 id 倒序取 N 条），再正序返回，保证时间正序且保留最新上下文。
+                # 直接 ORDER BY id ASC LIMIT N 会返回最老的 N 条，长会话会丢掉最近一轮对话。
                 cursor.execute(f"""
-                    SELECT * FROM channel_messages
-                    WHERE session_id = {placeholder}
+                    SELECT * FROM (
+                        SELECT * FROM channel_messages
+                        WHERE session_id = {placeholder}
+                        ORDER BY id DESC
+                        LIMIT {limit}
+                    ) AS recent
                     ORDER BY id ASC
-                    LIMIT {limit}
                 """, (session_id,))
 
             rows = cursor.fetchall()

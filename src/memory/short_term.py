@@ -18,7 +18,7 @@ class ShortTermMemory:
     
     def __init__(
         self,
-        max_messages: int = 100,
+        max_messages: int = 200,
         ttl: int = 3600,
     ):
         """
@@ -118,6 +118,17 @@ class ShortTermMemory:
         """
         import json
         from src.db.models import MessageDB
+
+        # 防御：渠道会话的上下文由 agent._rebuild_memory_from_db 从 channel_messages 重建，
+        # 此 cache-miss 自动恢复路径只服务于 web 会话。渠道会话若误入此路径，不能读 chat_messages
+        # （可能含迁移期残留的陈旧行，会劫持真实对话，见 wecom-kf-context-loss-research.md §9），
+        # 返回空更安全（渠道会话的权威历史已由 agent 重建流程加载）。
+        try:
+            from src.channels.session import channel_session_manager
+            if channel_session_manager.is_channel_session(session_id):
+                return []
+        except Exception:
+            pass
 
         try:
             rows = MessageDB.list_by_session(session_id)

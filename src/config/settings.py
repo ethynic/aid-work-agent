@@ -148,7 +148,7 @@ class ToolsConfig(BaseModel):
 
 class ShortTermMemoryConfig(BaseModel):
     """短期记忆配置"""
-    max_messages: int = 100
+    max_messages: int = 200
     ttl: int = 3600
 
 

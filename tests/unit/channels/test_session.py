@@ -54,6 +54,7 @@ def mock_db():
             cursor._fetch_idx = 0
 
             if "insert into channel_sessions" in sql_lower:
+                # 生产 INSERT 为 11 列 + RETURNING created_at, updated_at, last_message_at
                 row = MockRow(
                     session_id=params[0],
                     tenant_id=params[1],
@@ -65,12 +66,15 @@ def mock_db():
                     username=params[7],
                     title=params[8],
                     context_data=params[9],
-                    created_at=params[10],
-                    updated_at=params[11],
-                    last_message_at=params[12],
-                    metadata=params[13],
+                    metadata=params[10],
                 )
                 memory_store["sessions"][params[0]] = row
+                # RETURNING 子句：供 fetchone() 读取时间戳
+                cursor._fetch_rows = [MockRow(
+                    created_at="2026-01-01 00:00:00",
+                    updated_at="2026-01-01 00:00:00",
+                    last_message_at="2026-01-01 00:00:00",
+                )]
                 cursor.rowcount = 1
 
             elif "update channel_sessions" in sql_lower:
@@ -98,12 +102,23 @@ def mock_db():
                     cursor._fetch_rows = [memory_store["sessions"][sid]]
                 cursor.rowcount = 1 if cursor._fetch_rows else 0
 
+            elif "select 1 from channel_sessions where session_id" in sql_lower:
+                # is_channel_session 判定：渠道会话登记表成员查询
+                sid = params[0]
+                if sid in memory_store["sessions"]:
+                    cursor._fetch_rows = [MockRow(_exists=1)]
+
             elif "select tenant_id, channel_type, channel_user_id" in sql_lower:
-                # update_session 清除缓存时查询租户信息
+                # update_session 清除缓存时查询租户信息（生产按列名取值，需返回 dict 行）
                 sid = params[0]
                 if sid in memory_store["sessions"]:
                     row = memory_store["sessions"][sid]
-                    cursor._fetch_rows = [(row["tenant_id"], row["channel_type"], row["channel_user_id"], row.get("subagent_id", ""))]
+                    cursor._fetch_rows = [MockRow(
+                        tenant_id=row["tenant_id"],
+                        channel_type=row["channel_type"],
+                        channel_user_id=row["channel_user_id"],
+                        subagent_id=row.get("subagent_id", ""),
+                    )]
                 cursor.rowcount = 1 if cursor._fetch_rows else 0
 
             elif "select * from channel_sessions where tenant_id" in sql_lower:
@@ -122,6 +137,7 @@ def mock_db():
                 pass
 
             elif "insert into channel_messages" in sql_lower:
+                # 生产 INSERT 为 8 列（created_at 由 DB 默认值填充）
                 row = MockRow(
                     message_id=params[0],
                     session_id=params[1],
@@ -131,7 +147,7 @@ def mock_db():
                     message_type=params[5],
                     attachments=params[6],
                     metadata=params[7],
-                    created_at=params[8],
+                    created_at="2026-01-01 00:00:00",
                 )
                 memory_store["messages"].append(row)
                 cursor.rowcount = 1
@@ -139,7 +155,12 @@ def mock_db():
             elif "select * from channel_messages" in sql_lower:
                 sid = params[0]
                 rows = [r for r in memory_store["messages"] if r["session_id"] == sid]
-                cursor._fetch_rows = list(reversed(rows))
+                # 生产用子查询「ORDER BY id DESC LIMIT N」取最近 N 条再正序返回。
+                # memory_store 按插入顺序（=id ASC），最近 N 条即末尾 N 条，保持 ASC。
+                import re as _re
+                _m = _re.search(r"limit\s+(\d+)", sql_lower)
+                _lim = int(_m.group(1)) if _m else len(rows)
+                cursor._fetch_rows = rows[-_lim:] if _lim < len(rows) else list(rows)
 
             elif "delete from" in sql_lower:
                 if "channel_messages" in sql_lower:
@@ -376,3 +397,54 @@ class TestSubagentIsolation:
             subagent_id="travel-agent",
         )
         assert session["subagent_id"] == "travel-agent"
+
+
+class TestIsChannelSession:
+    """is_channel_session 判定测试。
+
+    意图（WHY）：上下文重建按会话来源分流——渠道会话读 channel_messages、web 会话读
+    chat_messages，严格分离。判定依据是 channel_sessions 登记表成员。历史误写会让渠道
+    会话的 chat_messages 残留陈旧行，若误判为 web 会话就会读到陈旧行、劫持真实对话
+    （见 wecom-kf-context-loss-research.md §9）。本测试锁定"登记即为渠道会话"这一判定。
+    """
+
+    def test_registered_session_is_channel(self, session_manager, mock_db):
+        """已登记的渠道会话判定为 True（应读 channel_messages）"""
+        sid = "test_tenant_wecom_kf_wmS6o_user1_travel-consultant"
+        # 直接注入 channel_sessions 登记表（绕开 get_or_create_session 的 INSERT mock，
+        # 该 mock 与当前 INSERT 列数不同步是既有问题，与本测试无关）
+        mock_db["sessions"][sid] = {"session_id": sid}
+        assert session_manager.is_channel_session(sid) is True
+
+    def test_unregistered_session_is_not_channel(self, session_manager, mock_db):
+        """未登记的 session_id（web 会话）判定为 False（应读 chat_messages）"""
+        assert session_manager.is_channel_session("session_abc123notregistered") is False
+
+    def test_empty_session_id_is_not_channel(self, session_manager, mock_db):
+        """空 session_id 不查库，直接返回 False"""
+        assert session_manager.is_channel_session("") is False
+        assert session_manager.is_channel_session(None) is False
+
+
+class TestGetMessagesKeepsNewest:
+    """get_messages 裁剪方向回归测试。
+
+    意图（WHY）：长会话超过窗口上限 N 时，必须保留【最近】N 条（丢最老的），
+    否则最近一轮 assistant 回复会被切掉，agent 遗忘用户刚确认的信息、重复提问。
+    见 wecom-kf-context-loss-research.md §10（ORDER BY id ASC LIMIT 取最老N条的 bug）。
+    """
+
+    def test_returns_newest_n_not_oldest(self, session_manager, mock_db):
+        """limit 小于总条数时，返回最近 N 条（正序），不是最老 N 条"""
+        sid = "test_tenant_wecom_kf_user1_travel-consultant"
+        mock_db["sessions"][sid] = {"session_id": sid}
+        for i in range(5):
+            session_manager.add_message(
+                sid,
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"msg{i}",
+                tenant_id="test_tenant",
+            )
+        msgs = session_manager.get_messages(sid, limit=3)
+        contents = [m["content"] for m in msgs]
+        assert contents == ["msg2", "msg3", "msg4"], f"应保留最近3条, 实际: {contents}"

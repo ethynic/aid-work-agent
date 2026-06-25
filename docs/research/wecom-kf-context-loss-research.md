@@ -644,3 +644,149 @@ async def enqueue_and_process(...) -> EnqueueResult:
 | send_response 回调签名变更 | 各渠道改造时统一为 `(response_text, downloadable_files) -> bool` |
 
 **回滚方案**：所有改动集中在 `ChannelSessionManager.process_and_persist` + `session_queue.enqueue_and_process`，回滚只需还原这两个方法 + 调用点还原。
+
+## 9. 复盘补充：真正的病根是 chat_messages 残留劫持（2026-06-25）
+
+> **背景**：§1~§8 的 P0 修复（事务化 + 连续 user 兜底 + 推迟 user 写入）落地后，生产环境仍报同样的症状——wecom_kf 会话"问着问着就忘记之前确认过的信息，反复问人数"。本次复盘在生产库直接取证，发现**真正的病根与 §3 完全不同**，P0 修复并未覆盖。
+
+### 9.1 取证（生产库 `aid_work_agent`，session=`tenant_ea24cd1a1097_wecom_kf_wmS6oOTAAArG8tJMx5wL-5R7n-nIMG6w_travel-consultant`）
+
+| 表 | 条数 | 最新时间 | 内容 |
+|----|------|---------|------|
+| `chat_messages` | 4 | **2026-06-17**（8天前） | `你好`→`我是规划师`→`想去贵州3天`→`你们几个人` |
+| `channel_messages` | 14 | 2026-06-25（当天） | 真实对话：3个人/8岁/黄果树/7月上旬 |
+
+`channel_messages` 序列结构**完全干净**：14 条 user/assistant 严格交替，无 tool、无孤儿、无连续 user。§3 的所有根因（事务失败、孤儿 tool、连续 user）**都不适用**。数据总量仅 3.5KB，**也不是"消息太长被截断"**。
+
+### 9.2 真正的病根：dispatcher 盲信 chat_messages
+
+`src/core/agent.py::_process_message_impl` 的上下文重建逻辑（修复前）：
+
+```python
+db_messages = MessageDB.list_by_session(session_id, ...)   # 查 chat_messages
+self.memory.clear(session_id)
+if db_messages:        # ← 只要 chat_messages 非空，就永不查 channel_messages
+    从 chat_messages 重建
+else:
+    从 channel_messages 重建（_load_channel_history）
+```
+
+**`if db_messages:` 假设"一个 session 要么用 chat_messages、要么用 channel_messages，不会两者都有"。但迁移期破坏了这个假设**：
+
+1. 2026-06-16/06-17 早期 wecom_kf 代码把对话写进了 `chat_messages`（迁移到 `channel_messages` 之前的窗口期）
+2. 迁移后新对话只写 `channel_messages`，但旧数据留在 `chat_messages` 没清
+3. 同一 session_id（同用户+同渠道+同智能体）下，两张表都有了数据
+4. dispatcher 查到 chat_messages **非空（4行）** → 不 fallback → 每轮只读到 06-17 的陈旧 4 行 + 当前消息
+5. agent 上下文最后一句是"你们几个人"，于是反复问人数；channel_messages 里今天的真实对话**完全看不到**
+6. **"一旦出错后续都错"**：这 4 行从不增长，每轮读同一份残缺数据——完美吻合用户现象
+7. **web 端不中招**：web session 只写 chat_messages，自洽，不存在双表冲突
+
+### 9.3 爆炸半径（生产取证）
+
+`chat_messages` 中混入渠道会话残留共 **4 个 wecom_kf session、104 行**，全部来自 06-16/06-17 迁移窗口：
+
+| session（channel_user 片段） | chat 行 | channel 行 | 状态 |
+|----|----|----|----|
+| `wmS6oOTAAArG8tJMx5wL...` | 4（06-17） | 14（06-25） | ❌ 正被劫持（channel 更新但被陈旧 chat 屏蔽） |
+| `wmS6oOTAAAvD4RJ1...` | 50（06-17） | 0 | 🟡 仅 chat 残留（休眠，回访即触发） |
+| `wmS6oOTAAAjZXGTg...` | 11（06-17） | 0 | 🟡 仅 chat 残留 |
+| `wmS6oOTAAAk6rlje...` | 39（06-16） | 0 | 🟡 仅 chat 残留 |
+
+> 关键原则（用户确认）：**web 端只从 chat_messages 组装，所有渠道只从 channel_messages 组装，读写都严格分离**。因此任何渠道 session_id 出现在 chat_messages 里都是污染。
+
+### 9.4 修复（已落地）
+
+**核心原则**：上下文重建必须先按**会话来源**分流，再决定读哪张表——渠道会话只读 `channel_messages`，web 会话只读 `chat_messages`。
+
+判定器选用 `channel_sessions` 表成员（最权威、不依赖 session_id 字符串约定、无 SaaS web `tenant_` 前缀碰撞风险、无需维护渠道类型 marker 列表；渠道会话在 agent 处理前已由 `get_or_create_session` 登记入库）：
+
+| 文件 | 改动 |
+|------|------|
+| `src/channels/session.py` | 新增 `ChannelSessionManager.is_channel_session(session_id)`：`SELECT 1 FROM channel_sessions WHERE session_id=%s` |
+| `src/core/agent.py`（`_process_message_impl` 上下文重建） | 改为 `if is_channel: 读 channel_messages / elif db_messages: 读 chat_messages`；渠道会话不再查 chat_messages（`db_messages = [] if is_channel else ...`） |
+
+**验证**：编译通过；判定器对真实数据判定正确（渠道→True 读 channel_messages，web→False 读 chat_messages）。代码修复**部署后即自动愈合**正在错乱的会话（is_channel=True → 读到 channel_messages 14 行真实对话，4 行陈旧 chat_messages 永不再读）。
+
+### 9.5 残留数据处理（待执行）
+
+代码修复后，4 个污染 session 的 chat_messages 残留**不再造成功能危害**（渠道会话不再读 chat_messages）。但 3 个休眠 session 的历史只躺在 chat_messages（channel_messages 为空），代码修复后这些历史对 agent 不可达。处理方案（二选一，需用户确认）：
+
+- **方案 1（推荐，零数据风险）**：仅部署代码修复。正在错乱的会话自动愈合；3 个休眠 session 的陈旧历史被忽略（06-16/06-17 已结束的对话，低影响）。
+- **方案 2（彻底归位）**：把这 4 个 session 的 chat_messages 行**迁移**到 channel_messages（保留 created_at 原值，按时间正序并入），再删除 chat_messages 残留。历史完整保留且归位正确。
+
+### 9.6 潜在风险（防御性记录，本次不改）
+
+`src/memory/short_term.py::_load_from_db`（`get_context` 缓存为空时自动恢复）仍只读 chat_messages。正常渠道流程中 `_rebuild_memory_from_db` 会先填充缓存，此路径不触发。但若将来出现"rebuild 被跳过 / 缓存中途过期"的极端路径，渠道会话可能再次被 chat_messages 劫持。后续可让 memory 层也感知会话来源，作为防御性收尾。
+
+### 9.7 教训
+
+P0 修复（§3~§8）针对的是"写入侧"的一致性（事务化、连续 user），但**没有审计"读取侧"的分发逻辑**。读取侧的 `if db_messages:` 是一个被迁移期数据击穿的隐式假设。**数据迁移 + 同一主键跨表 = 永远要审计读取分发逻辑**，不能只靠 fallback。
+
+## 10. 第二个病根：消息窗口裁剪方向错误（ORDER BY id ASC LIMIT 取最老 N 条）
+
+> **背景**：§9 修复后，另一个 wecom_kf 会话（`...SMSdmHLipO4KsfioS98aBSw...`，无 chat_messages 残留、是干净会话）仍报"重复细化方案、遗忘上一轮"。生产 trace 取证发现**完全不同的根因**——长会话的窗口裁剪方向反了。
+
+### 10.1 取证（生产库 trace `tr_e90d188ef17342e0` → `tr_d0730ed0adfb44d0`）
+
+| trace | 时间 | 用户输入 | agent 行为 | prompt tokens |
+|-------|------|---------|-----------|--------------|
+| `tr_e90d188...` | 17:51:54 | "可以" | 细化方案 + 问"要不要生成 word？"（正常） | 145139 |
+| `tr_d0730ed...` | 17:52:26 | "OK" | **又重复细化方案**（应为生成 word） | 145139 |
+
+两个连续 trace 的 **prompt tokens 完全相同（145139）**，messages 各 100 条（窗口上限）。对比发现：**两个 trace 的 messages[0..98] 逐条相同**，只有 [99]（当前用户输入）不同。也就是说，trace1 的 assistant 回复（"细化+问生成 word？"）**完全没有出现在 trace2 的上下文里**。
+
+channel_messages 实际存了（id 614~617）：`614(5天行程) → 615(可以) → 616(细化+问生成word) → 617(OK)`。615/616 已持久化，但 trace2 窗口 [98]=614、[99]=617，**615/616 被跳过**。
+
+### 10.2 根因：`ORDER BY id ASC LIMIT N` 返回最老的 N 条
+
+`src/channels/session.py::get_messages` 与 `src/db/models.py::MessageDB.list_by_session` 都是：
+
+```sql
+SELECT * FROM <messages> WHERE session_id=%s ORDER BY id ASC LIMIT N
+```
+
+`ORDER BY id ASC LIMIT N` 返回的是 **id 最小的 N 条（最老的 N 条）**，不是最近的 N 条。对话超过 N 条后，**最近的一轮 assistant 回复被整体切掉**，agent 看不到自己上一轮的提问，用户"OK/可以"失去指代 → 重复执行上一步。
+
+生产快照验证（该 session id≤617 共 104 条）：
+
+| 查询 | 返回范围 | 含 615？ | 含 616？ | 含 617？ |
+|------|---------|---------|---------|---------|
+| BUGGY `ORDER BY id ASC LIMIT 101` | 471..614（最老101） | ❌ | ❌ | ❌ |
+| 正确 子查询最近101条再正序 | 474..617（最近101） | ✅ | ✅ | ✅ |
+
+**影响范围**：web（`list_by_session`）与 channel（`get_messages`）**都有这个 bug**，是系统性的。web 端没暴露只是因为 web 对话很少超过 100 条。
+
+### 10.3 修复
+
+**① 裁剪方向**（两处，取最近 N 条再正序返回）：
+
+```sql
+SELECT * FROM (
+    SELECT * FROM <messages> WHERE session_id=%s ORDER BY id DESC LIMIT N
+) AS recent ORDER BY id ASC
+```
+
+- `src/channels/session.py::get_messages`（channel 路径，无 `before_message_id` 分支）
+- `src/db/models.py::MessageDB.list_by_session`（web 路径，含/不含 roles 两个变体）
+
+**② 截断边界对齐到 user**（关键，防 LLM API 400）：
+
+裁剪方向改对后，窗口第一条可能落在 assistant（甚至 tool 结果）上。DeepSeek/OpenAI 兼容 API 要求序列首条（system 之后）必须是 user，否则报 400。在 `src/core/agent.py::_reorder_messages_for_llm` 末尾（web+channel 共用收口点）增加：丢弃开头的非 user 消息直到第一条 user。孤儿 tool 已在该方法上方被跳过不会出现在开头；连同其后的 tool 一起被丢弃，不产生新孤儿。
+
+生产快照验证：修复后窗口含 615/616/617，leading-trim 裁掉开头 1 条非 user（id 474 assistant）对齐到 id 475(user)。trace2 现在能看到 616"问生成 word"，"OK"有指代。
+
+### 10.4 关于窗口上限 N（已调至 200）
+
+原默认 `ShortTermMemory.max_messages=100`。裁剪方向修对后 100 条已能正确工作，但为保留更长会话历史，已将上限调至 **200**（用户确认模型上下文支持 100 万 token，200 条绰绰有余）。三处默认值同步修改保持一致，避免默认值漂移：
+
+- `configs/config.yaml` → `memory.short_term.max_messages: 200`（部署真实值）
+- `src/config/settings.py::ShortTermMemoryConfig.max_messages` 默认 200（代码默认）
+- `src/memory/short_term.py::__init__` 默认 200（类默认）
+
+> 注意：重 tool 会话（如本次单条 tool 结果 12KB）200 条可能接近 30 万 token，仍在百万窗口内安全。
+
+### 10.5 教训
+
+"取最近 N 条"是滑动窗口的基本语义，但 `ORDER BY ASC LIMIT N` 是最常见的反模式（取了最老的 N 条）。**任何"窗口/最近N条"查询都要用子查询 `ORDER BY DESC LIMIT N` 再正序**。本 bug 从上线起就存在，只是短会话从不触发——长会话一上线就暴露。
+
+

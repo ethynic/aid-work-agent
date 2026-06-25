@@ -167,5 +167,52 @@ class TestConsecutiveUserFallback:
         assert roles.count("user") >= 1, "至少保留一条非空 user"
 
 
+class TestLeadingNonUserTrim:
+    """窗口起始边界裁剪回归测试。
+
+    背景（详见 wecom-kf-context-loss-research.md §10）：长会话取最近 N 条后，
+    窗口第一条可能落在 assistant（甚至 tool 结果）上。DeepSeek/OpenAI 兼容 API
+    要求序列首条（system 之后）必须是 user，否则报 400。
+    _reorder 末尾裁掉开头非 user 消息直到第一条 user，使截断边界对齐到安全位置。
+    """
+
+    def test_leading_assistant_trimmed_to_user(self):
+        """窗口开头是 assistant（截断边界落在此处）→ 裁掉直到第一条 user"""
+        history = [
+            {"role": "assistant", "content": "上一轮回复的尾巴"},
+            {"role": "user", "content": "用户问题"},
+            {"role": "assistant", "content": "回答"},
+            {"role": "user", "content": "当前输入"},
+        ]
+        out = Agent._reorder_messages_for_llm(history)
+        assert out[0]["role"] == "user", f"首条必须是 user, 实际 {out[0]['role']}"
+        assert out[0]["content"] == "用户问题"
+        # 后续 assistant/user 配对完整保留
+        assert _roles(out) == [("user", "用户问题"), ("assistant", "回答"), ("user", "当前输入")]
+
+    def test_leading_assistant_with_tool_calls_trimmed_whole_block(self):
+        """窗口开头是 assistant(tool_calls)+tool → 整块裁掉（不产生孤儿 tool）"""
+        history = [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "tc1", "content": "结果"},
+            {"role": "user", "content": "用户问题"},
+            {"role": "user", "content": "当前输入"},
+        ]
+        out = Agent._reorder_messages_for_llm(history)
+        assert out[0]["role"] == "user", f"首条必须是 user, 实际 {out[0]['role']}"
+        # 不应残留孤儿 tool（被连同其 assistant 一起裁掉）
+        assert "tool" not in [m["role"] for m in out], "裁掉的 tool 不应残留为孤儿"
+
+    def test_already_starting_with_user_unchanged(self):
+        """窗口本来就以 user 开头 → 不裁剪"""
+        history = [
+            {"role": "user", "content": "第一个问题"},
+            {"role": "assistant", "content": "回答"},
+            {"role": "user", "content": "当前输入"},
+        ]
+        out = Agent._reorder_messages_for_llm(history)
+        assert _roles(out)[0] == ("user", "第一个问题")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

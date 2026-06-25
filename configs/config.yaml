@@ -80,7 +80,7 @@ tools:
 # 记忆配置
 memory:
   short_term:
-    max_messages: 100
+    max_messages: 200
     ttl: 3600
   mid_term:
     # 会话内上下文压缩（详见 docs/infrastructure/memory/context_compression_design.md）
