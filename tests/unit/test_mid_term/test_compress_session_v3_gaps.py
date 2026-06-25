@@ -1,11 +1,14 @@
-"""compress_session v3.1 缺口补充测试
+"""compress_session v3.1/v3.2 缺口补充测试
 
 补充既有 137 个测试遗漏的关键场景：
 - LLM 失败 → fallback 时 summary_text 真的是 truncate 结果（不止 fallback_used 标志）
 - _resolve_session_meta 抛异常时 compress_session 的行为（异常透传 or 兜底）
 - _load_messages 抛异常时 compress_session 拿到空 messages
-- force=True + 缓存 token > 0 的交叉场景（force 跳过 _should_compress）
+- force=True + 缓存 token > 0 的交叉场景（force 跳过 check_threshold）
 - 压缩成功路径CompressionResult 字段值的合理性（非空校验）
+
+v3.2 适配：触发阈值改为通过 context_token_count=999999（哨兵值），不再依赖
+count_tokens 全量计算（v3.2 的 _eval_threshold 在缓存=0 时不回退 count_tokens）。
 """
 
 import asyncio
@@ -61,7 +64,7 @@ def _build_msgs(n=50):
 async def test_llm_failure_fallback_summary_is_truncated(service, mock_llm_for_summary, fake_db_connection):
     """LLM 失败走 fallback 时，summary_text 必须来自 _fallback_truncate（不是空字符串），
     通过 spy _fallback_truncate 验证它被调用并其返回值进入 persist。"""
-    _patch_meta(service)
+    _patch_meta(service, context_token_count=999999)
     _patch_load(service, _build_msgs(50))
     service._model_limit_cache = 1_000
 
@@ -103,11 +106,12 @@ async def test_resolve_meta_exception_propagates(service, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_load_messages_exception_returns_empty_no_crash(service, monkeypatch):
-    """_load_messages 抛异常 → compress_session 应拿到 [] → 未达阈值返回 None（不崩）。
+    """_load_messages 抛异常 → compress_session 应让其透传（v3.2: check_threshold 通过后
+    进入 compress_now，compress_now 调 _load_messages 抛异常 → 透传）。
     注意：当前实现 _load_messages 内部已 try/except 返回 []，这里 patch 成 raise 验证
     compress_session 上层没有兜底（会透传）。这个测试记录现状。"""
-    _patch_meta(service)
-    service._model_limit_cache = 128_000
+    _patch_meta(service, context_token_count=999999)
+    service._model_limit_cache = 1_000
 
     async def _boom(session_id, source_type, tenant_id):
         raise RuntimeError("load boom")
@@ -120,15 +124,16 @@ async def test_load_messages_exception_returns_empty_no_crash(service, monkeypat
 
 @pytest.mark.asyncio
 async def test_force_skips_should_compress_completely(service, monkeypatch):
-    """force=True 时完全不调用 _should_compress（即使 cached token=0 也无所谓）。
-    通过让 _should_compress 抛异常验证它根本没被调用。"""
+    """force=True 时完全不调用 check_threshold（v3.2: force 模式跳过整个 check_threshold，
+    自然也不调用 _eval_threshold / _should_compress / _get_model_limit）。
+    通过让 _eval_threshold 抛异常验证它根本没被调用。"""
     _patch_meta(service, context_token_count=0)
     _patch_load(service, _build_msgs(50))
     service._model_limit_cache = 1_000
 
     def _boom(*args, **kwargs):
-        raise AssertionError("_should_compress 不应在 force=True 时被调用")
-    service._should_compress = _boom
+        raise AssertionError("_eval_threshold 不应在 force=True 时被调用")
+    service._eval_threshold = _boom
 
     result = await service.compress_session("sess", "chat", force=True)
     assert result is not None
@@ -137,7 +142,7 @@ async def test_force_skips_should_compress_completely(service, monkeypatch):
 @pytest.mark.asyncio
 async def test_compress_success_result_fields_complete(service, mock_llm_for_summary, fake_db_connection):
     """达阈值压缩成功 → CompressionResult 所有字段都填充合理值（非 None / 非负）"""
-    _patch_meta(service, tenant_id="t1", user_id="u1", subagent_id="sub_x")
+    _patch_meta(service, context_token_count=999999, tenant_id="t1", user_id="u1", subagent_id="sub_x")
     _patch_load(service, _build_msgs(50))
     service._model_limit_cache = 1_000
 
@@ -158,7 +163,7 @@ async def test_compress_success_result_fields_complete(service, mock_llm_for_sum
 @pytest.mark.asyncio
 async def test_channel_source_with_subagent_id_persisted(service, mock_llm_for_summary, fake_db_connection):
     """channel 源 + subagent_id 非 None 时，subagent_id 正确传入 persist（验证不被 strip 掉）"""
-    _patch_meta(service, tenant_id="t_kf", user_id=None, subagent_id="sub_kf")
+    _patch_meta(service, context_token_count=999999, tenant_id="t_kf", user_id=None, subagent_id="sub_kf")
     _patch_load(service, _build_msgs(50))
     service._model_limit_cache = 1_000
 

@@ -66,8 +66,8 @@ async def test_below_threshold_returns_none(service):
 
 @pytest.mark.asyncio
 async def test_above_threshold_returns_result(service, mock_llm_for_summary, fake_db_connection):
-    """达阈值 → CompressionResult，所有字段填充"""
-    _patch_meta(service, tenant_id="t1", user_id="u1")
+    """达阈值 → CompressionResult，所有字段填充（v3.2: 通过 cached_token_count 触发）"""
+    _patch_meta(service, context_token_count=999999, tenant_id="t1", user_id="u1")
     msgs = []
     for i in range(100):
         msgs.append({"role": "user", "content": f"u{i} " + "x" * 50, "id": 2 * i + 1})
@@ -125,10 +125,11 @@ async def test_empty_meta_session_not_exists_skipped(service):
 async def test_cached_token_triggers_without_count_tokens(
     service, mock_llm_for_summary, fake_db_connection, monkeypatch
 ):
-    """缓存 context_token_count=999999 → _should_compress 不调 count_tokens，
-    但 compress_session 后续仍会用 count_tokens 算 original/compressed_token_count
-    （这是设计的一部分，不算缓存路径的失效）。
-    此测试改为：spy count_tokens，验证 _should_compress 路径下不调用它。"""
+    """v3.2.1（P1-2）：缓存 > 0 时 _eval_threshold 不调 count_tokens。
+
+    _should_compress 已被删除；本测试改测 _eval_threshold（v3.2 唯一阈值判断函数），
+    验证 cached_tokens > 0 时不调用 count_tokens 全量计算。
+    """
     _patch_meta(service, context_token_count=999999)
     # 40 条消息（> header=3 + tail=30 = 33，确保 COMPRESS 非空；< 150 消息数阈值）
     msgs = []
@@ -138,7 +139,7 @@ async def test_cached_token_triggers_without_count_tokens(
     _patch_load(service, msgs)
     service._model_limit_cache = 1_000
 
-    # 改为 spy：记录调用次数（但不爆炸）
+    # spy count_tokens
     call_count = {"n": 0}
     from src.memory import mid_term as mt_mod
     orig_count_tokens = mt_mod.count_tokens
@@ -148,26 +149,24 @@ async def test_cached_token_triggers_without_count_tokens(
         return orig_count_tokens(messages)
     monkeypatch.setattr("src.memory.mid_term.count_tokens", _spy)
 
-    # 直接测 _should_compress 路径（这是 v3.1 缓存优化的目标）
-    should, reason = service._should_compress(msgs, 999999, 1_000)
+    # 直接测 _eval_threshold 路径（v3.2 缓存优化的目标）
+    should, reason = service._eval_threshold(999999, len(msgs), 1_000)
     assert should is True
     assert "cached=True" in reason
-    # _should_compress 内部不应调用 count_tokens
-    assert call_count["n"] == 0, "_should_compress 在 cache>0 时不应调 count_tokens"
+    # _eval_threshold 内部不应调用 count_tokens
+    assert call_count["n"] == 0, "_eval_threshold 在 cache>0 时不应调 count_tokens"
 
 
 @pytest.mark.asyncio
 async def test_compress_section_empty_returns_none(service):
-    """触发消息数阈值但 COMPRESS 为空 → None"""
-    _patch_meta(service)
-    # header_keep=80 + tail_keep=80 = 160 > 消息数 150 → COMPRESS 空
+    """触发消息数阈值但 COMPRESS 为空 → None（v3.2: 用 cached_token 触发）"""
     from src.config.settings import MidTermMemoryConfig
     svc = ContextCompressionService(
         settings_cfg=MidTermMemoryConfig(header_keep=80, tail_keep=80, message_count_threshold=150),
         llm_gateway=service._llm_gateway,
     )
     msgs = [{"role": "user", "content": ".", "id": i} for i in range(150)]
-    _patch_meta(svc)
+    _patch_meta(svc, context_token_count=999999)  # v3.2: 触发 token 阈值
     _patch_load(svc, msgs)
     svc._model_limit_cache = 1_000_000
 
@@ -177,8 +176,8 @@ async def test_compress_section_empty_returns_none(service):
 
 @pytest.mark.asyncio
 async def test_channel_source_type_works(service, mock_llm_for_summary, fake_db_connection):
-    """source_type='wecom_kf' 同样工作（meta 用 channel 数据）"""
-    _patch_meta(service, tenant_id="t_kf", user_id=None, subagent_id="sub_x")
+    """source_type='wecom_kf' 同样工作（meta 用 channel 数据；v3.2 通过 cached token 触发）"""
+    _patch_meta(service, context_token_count=999999, tenant_id="t_kf", user_id=None, subagent_id="sub_x")
     msgs = []
     for i in range(100):
         msgs.append({"role": "user", "content": f"u{i} " + "x" * 50, "id": 2 * i + 1})

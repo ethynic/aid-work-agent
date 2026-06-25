@@ -61,8 +61,11 @@ async def test_force_true_compress_empty_returns_none(service):
 
 @pytest.mark.asyncio
 async def test_compress_session_propagates_persist_exception(service, mock_llm_for_summary, fake_db_connection):
-    """_persist_atomically 抛异常 → compress_session 透传（不吞）"""
-    _patch_meta(service, tenant_id="t1", user_id="u1")
+    """_persist_atomically 抛异常 → compress_session 透传（不吞）
+
+    v3.2: 通过 cached_token_count=999999 触发 token 阈值，进入 compress_now。
+    """
+    _patch_meta(service, context_token_count=999999, tenant_id="t1", user_id="u1")
     msgs = []
     for i in range(100):
         msgs.append({"role": "user", "content": f"u{i} " + "x" * 50, "id": 2 * i + 1})
@@ -110,9 +113,12 @@ async def test_compress_session_fallback_records_actual_provider(
     service, mock_llm_for_summary, fake_db_connection
 ):
     """LLM 失败走 fallback 时，CompressionResult.fallback_used=True，
-    llm_provider 仍记录（即使是降级路径，也有 _actual_provider）"""
+    llm_provider 仍记录（即使是降级路径，也有 _actual_provider）
+
+    v3.2: 通过 cached_token_count 触发。
+    """
     mock_llm_for_summary.chat = AsyncMock(side_effect=RuntimeError("llm down"))
-    _patch_meta(service, tenant_id="t1", user_id="u1")
+    _patch_meta(service, context_token_count=999999, tenant_id="t1", user_id="u1")
     msgs = []
     for i in range(100):
         msgs.append({"role": "user", "content": f"u{i} " + "x" * 50, "id": 2 * i + 1})

@@ -45,6 +45,7 @@ async def test_session_not_exists_returns_none_via_real_path(service, monkeypatc
 async def test_fallback_summary_text_starts_with_skeleton(service, monkeypatch):
     """LLM 失败走 fallback 时，persist 写入的 summary_text 来自 _fallback_truncate。
 
+    v3.2: 通过 context_token_count=999999 触发 token 阈值（避免依赖 count_tokens）。
     mutation: 如果有人把 summary_text 在 fallback 路径写成空字符串，
     此测试通过 fallback_used=True 还能过，但本测试通过 summary 内容特征捕获。
     """
@@ -52,7 +53,7 @@ async def test_fallback_summary_text_starts_with_skeleton(service, monkeypatch):
     monkeypatch.setattr(
         models_mod.SessionDB, "get_by_id",
         lambda sid: {"session_id": sid, "tenant_id": "t1", "user_id": "u1",
-                     "subagent_id": None, "context_token_count": 0},
+                     "subagent_id": None, "context_token_count": 999999},
     )
 
     def _fake_load_msgs(sid, limit=10000, **kw):
@@ -93,12 +94,14 @@ async def test_fallback_summary_text_starts_with_skeleton(service, monkeypatch):
 async def test_persist_failure_does_not_swallow(service, monkeypatch):
     """_persist_atomically 失败 → compress_session 透传异常（设计 §6.2），
     不返回 fallback CompressionResult。
+
+    v3.2: 通过 context_token_count=999999 触发。
     """
     import src.db.models as models_mod
     monkeypatch.setattr(
         models_mod.SessionDB, "get_by_id",
         lambda sid: {"session_id": sid, "tenant_id": "t1", "user_id": "u1",
-                     "subagent_id": None, "context_token_count": 0},
+                     "subagent_id": None, "context_token_count": 999999},
     )
 
     def _fake_load_msgs(sid, limit=10000, **kw):
@@ -203,6 +206,7 @@ async def test_compress_session_logs_skipped_when_below_threshold(
 async def test_compress_session_logs_done_when_success(service, monkeypatch):
     """压缩成功时记录 info 日志（含 summary_id、压缩前后 token 数）。
 
+    v3.2: 通过 context_token_count=999999 触发。
     通过 spy loguru.logger.info 捕获。
     """
     import src.db.models as models_mod
@@ -210,7 +214,7 @@ async def test_compress_session_logs_done_when_success(service, monkeypatch):
 
     monkeypatch.setattr(
         models_mod.SessionDB, "get_by_id",
-        lambda sid: {"session_id": sid, "tenant_id": "t1", "context_token_count": 0},
+        lambda sid: {"session_id": sid, "tenant_id": "t1", "context_token_count": 999999},
     )
 
     def _fake_load_msgs(sid, limit=10000, **kw):

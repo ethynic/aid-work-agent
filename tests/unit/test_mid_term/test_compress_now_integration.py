@@ -47,9 +47,13 @@ def _build_large_messages(count: int):
     return msgs
 
 
-def _patch_meta_and_messages(service, msgs, *, context_token_count=0, tenant_id=None, user_id=None, subagent_id=None, monkeypatch=None):
+def _patch_meta_and_messages(service, msgs, *, context_token_count=999999, tenant_id=None, user_id=None, subagent_id=None, monkeypatch=None):
     """patch _resolve_session_meta / _load_messages / _get_model_limit，
-    让 compress_session 用我们准备好的 messages 和 meta。"""
+    让 compress_session 用我们准备好的 messages 和 meta。
+
+    v3.2: 默认 context_token_count=999999（哨兵值），让 check_threshold 通过
+    _eval_threshold 的 token 阈值路径触发。设 model_limit=1_000，确保 999999 > 7000。
+    """
 
     async def _fake_resolve(session_id, source_type):
         return SessionMeta(
@@ -101,10 +105,13 @@ async def test_compress_session_end_to_end_success(service, mock_llm_for_summary
 
 @pytest.mark.asyncio
 async def test_compress_session_below_threshold_returns_none(service, mock_llm_for_summary):
-    """未达阈值 → 返回 None，不写 DB，不调 LLM"""
+    """未达阈值 → 返回 None，不写 DB，不调 LLM
+
+    v3.2: 通过 context_token_count=100 + model_limit=128_000 让 _eval_threshold 不触发。
+    """
     msgs = [{"role": "user", "content": "hi", "id": 1}]
-    _patch_meta_and_messages(service, msgs)
-    # 大 model_limit，确保不触发
+    _patch_meta_and_messages(service, msgs, context_token_count=100)
+    # 大 model_limit，确保不触发（100 < 89600）
     service._model_limit_cache = 128_000
 
     result = await service.compress_session(
@@ -201,7 +208,7 @@ async def test_compress_session_session_not_exists_returns_none_or_empty(service
 async def test_compress_session_cached_token_skips_count_tokens(
     service, mock_llm_for_summary, fake_db_connection, monkeypatch
 ):
-    """v3.1: context_token_count > 0 时 _should_compress 跳过 count_tokens 全量计算。
+    """v3.2.1 P1-2：context_token_count > 0 时 _eval_threshold 跳过 count_tokens 全量计算。
 
     注意：compress_session 后续仍会调 count_tokens 来计算 original_token_count
     （写入 CompressionResult），这是设计的一部分。本测试只验证阈值判断路径
@@ -225,11 +232,12 @@ async def test_compress_session_cached_token_skips_count_tokens(
         return orig_count_tokens(messages)
     monkeypatch.setattr("src.memory.mid_term.count_tokens", _spy)
 
-    # 直接验证 _should_compress 在 cache>0 时不调 count_tokens
-    should, reason = service._should_compress(msgs, 999999, 1_000)
+    # 直接验证 _eval_threshold 在 cache>0 时不调 count_tokens
+    # （_should_compress 已在 v3.2.1 P1-2 删除，本测试改测 _eval_threshold）
+    should, reason = service._eval_threshold(999999, len(msgs), 1_000)
     assert should is True
     assert "cached=True" in reason
-    # _should_compress 阶段不应调用 count_tokens
+    # _eval_threshold 阶段不应调用 count_tokens
     assert call_count["n"] == 0
 
     # compress_session 整体仍能跑通
