@@ -3,6 +3,8 @@
 > 关联设计：[context_compression_design.md](./context_compression_design.md)（v2.0 异步方案）
 > 创建：2026-06-23 | 最后更新：2026-06-24
 > 总工期：约 **16 工作日**（v2.0 异步方案比 v1.0 同步方案多 3 天：异步任务派发 + 失败计数 + 同步降级）
+>
+> **表分离提醒**：压缩按 `source_type` 同时覆盖 `chat_messages`（web）和 `channel_messages`（第三方渠道），两表结构对称（都有 `compacted` 字段）。开发时 web 与渠道分支都要实现，不能只做 chat_messages。详见 [消息表分离规则](../../../.claude/rules/database_dev.md)。
 
 ---
 

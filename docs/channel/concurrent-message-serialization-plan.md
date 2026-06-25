@@ -26,7 +26,7 @@
 
 **问题**：
 1. **意图过时**：用户最终收到 3 条回复，前 2 条基于已经放弃的意图，体验尴尬
-2. **消息历史混乱**：3 个并发写操作交叉写入 `chat_messages` 表和短期记忆，可能导致消息顺序错乱
+2. **消息历史混乱**：3 个并发写操作交叉写入 `channel_messages` 表（渠道消息走 channel_messages，不是 chat_messages）和短期记忆，可能导致消息顺序错乱
 3. **DeepSeek 400 错误**：多 worker 竞态导致 `_build_messages` 加载到不完整的消息历史（assistant 带 tool_calls 但无对应 tool 消息），触发 API 报错
 
 ## 改造目标

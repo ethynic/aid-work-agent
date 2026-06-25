@@ -228,7 +228,8 @@ SELECT add_retention_policy('obs_scores', INTERVAL '180 days');
 | 现有表 | 关系 | 说明 |
 |--------|------|------|
 | `chat_records` | `obs_traces.session_id` = `chat_records.session_id` | 保留 `chat_records` 的计费和审计用途，obs 提供更细粒度追踪 |
-| `chat_messages` | `obs_traces.session_id` = `chat_messages.session_id` | 消息内容仍存在 `chat_messages`，obs 只存摘要 |
+| `chat_messages` | `obs_traces.session_id` = `chat_messages.session_id` | **web 端**消息内容存在 `chat_messages`，obs 只存摘要 |
+| `channel_messages` | `obs_traces.session_id` = `channel_messages.session_id` | **第三方渠道**消息内容存在 `channel_messages`（与 chat_messages 严格分离，按 source_type 区分） |
 | `log_error` | `obs_traces.status = 'failed'` 时关联 | 错误详情仍存在 `log_error`，obs 提供请求级别的上下文 |
 | `token_cost_prices` | 计算 `obs_traces.total_cost` 和 `obs_spans.cost` | 复用已有价格表 |
 

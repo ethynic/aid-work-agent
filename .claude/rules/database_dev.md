@@ -22,6 +22,20 @@
 - `tenants` - 租户表（SaaS）
 - `subscriptions` - 订阅表（SaaS）
 
+#### 消息表分离规则（web vs 第三方渠道，必须严格遵守）
+
+**`chat_messages` 专供 web 端；`channel_` 前缀的表（`channel_sessions` / `channel_messages` 等）专供第三方渠道（wecom_kf / wecom / wecom_personal_rpa / dingtalk / feishu）。读写都按此分离，严禁混用。**
+
+| 来源 | 会话表 | 消息表 | session_id 格式 |
+|------|--------|--------|----------------|
+| web 端 | `chat_sessions` | `chat_messages` | `session_*` / `web_*` / `cli_*` / UUID |
+| 第三方渠道 | `channel_sessions` | `channel_messages` | `tenant_{tid}_{channel}_{channel_user}_{subagent}` |
+
+- 渠道消息**绝不写/读** `chat_messages`；web 消息**绝不写/读** `channel_messages`。
+- 上下文重建必须按会话来源分流：`ChannelSessionManager.is_channel_session(session_id)`（查 `channel_sessions` 登记表）判定，渠道读 `channel_messages`、web 读 `chat_messages`。**不能靠 "表A 有数据就用A 否则用B" 的 fallback**（迁移期残留数据会劫持）。
+- `chat_records`（计费/审计）是**唯一**两端共用的表，靠 `source_type` 区分来源，**不参与上下文重建**。
+- 违反此规则会导致渠道会话读到 web 陈旧数据、上下文错乱。详见 [database_system_table.md §3.5](../../docs/system/database_system_table.md) 和 [context-reconstruction-pitfalls.md](../../docs/research/context-reconstruction-pitfalls.md)。
+
 **维护要求**：后续开发中新增或修改系统核心表时，必须同步更新 `database_system_table.md`，保持文档与实际表结构一致。
 
 ### 2. 业务数据表（Business Data Tables）

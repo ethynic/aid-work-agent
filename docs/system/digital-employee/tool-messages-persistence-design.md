@@ -1,5 +1,7 @@
 # 工具消息持久化设计（事务性）
 
+> **适用范围**：本设计仅适用于 **web 端**（消息存 `chat_messages`，走 `src/main.py` SSE 主路径）。第三方渠道（wecom_kf/wecom/dingtalk/feishu 等）的 tool 消息持久化走 `ChannelSessionManager.process_and_persist`（消息存 `channel_messages`），不在本设计范围。web 与渠道消息表严格分离，详见 [database_dev.md 消息表分离规则](../../../.claude/rules/database_dev.md)。
+>
 > **关联**：
 > - 父功能：[数据分析智能体](../../ideas.md) #9，本设计是其上下文失效问题的根因修复
 > - 上游设计：[数据分析工具返回结构优化](data-analysis-tool-result-redesign.md)

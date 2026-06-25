@@ -159,7 +159,8 @@
 │  T7. 原子事务（缺一不可）：                                                 │
 │       ├─ INSERT chat_context_summaries (新 active)                         │
 │       ├─ UPDATE 旧 active summary → status='superseded'                    │
-│       └─ UPDATE chat_messages SET compacted=true WHERE id IN (...)        │
+│       └─ UPDATE chat_messages/channel_messages SET compacted=true        │
+│          （按 source_type 分流：web→chat_messages，渠道→channel_messages） │
 │  T8. 释放分布式锁                                                          │
 │  T9. 清空失败计数（成功）                                                   │
 └────────────────────────────────────────────────────────────────────────┘
