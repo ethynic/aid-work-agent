@@ -148,12 +148,15 @@ COPY --chown=appuser:appgroup . .
 RUN mkdir -p log/agent && chown -R appuser:appgroup log
 
 # 安装 Playwright Chromium 浏览器（表格渲染为图片）
-# PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
-# 浏览器文件留在镜像层中（/root/.cache/ms-playwright），后续构建如果 RUN 不变
-# 就会被 BuildKit 层缓存命中
-RUN PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.aimir.cn \
-    playwright install chromium --with-deps || \
-    playwright install chromium --with-deps
+# 2026-06: playwright.aimir.cn 镜像源已失效，切换到华为云镜像（服务器实测可达）
+# 说明：
+# 1) 所有系统依赖库（libnss3/libgbm1/libasound2/libpango 等）已在阶段 2 的
+#    apt-get install 中手动安装完成，playwright install 不再需要 --with-deps
+# 2) PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
+# 3) 浏览器文件留在镜像层中（/root/.cache/ms-playwright），后续构建如果 RUN 不变
+#    就会被 BuildKit 层缓存命中
+RUN PLAYWRIGHT_DOWNLOAD_HOST=https://mirrors.huaweicloud.com/playwright \
+    playwright install chromium
 
 # 创建应用临时目录（替代 /tmp，避免外部工具重置权限导致 appuser 无法写入）
 # 注意：此目录不在 volume 挂载范围内，确保每次容器启动时干净
