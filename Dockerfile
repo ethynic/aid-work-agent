@@ -73,7 +73,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Gunicorn worker 超时（秒）
     WORKER_TIMEOUT=120 \
     # 临时目录（/tmp 权限可能被外部工具重置为 755，使用应用自有目录）
-    TMPDIR=/home/appuser/tmp
+    TMPDIR=/home/appuser/tmp \
+    # Playwright 浏览器安装路径（与 Dockerfile 中 PLAYWRIGHT_BROWSERS_PATH 一致）
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 # 安装运行时依赖（字体、浏览器等）
 # 使用腾讯云镜像加速 Debian 包下载（服务器在腾讯云内网，TTFB < 50ms）
@@ -155,8 +157,16 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 # 2) PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
 # 3) 浏览器文件留在镜像层中（/root/.cache/ms-playwright），后续构建如果 RUN 不变
 #    就会被 BuildKit 层缓存命中
-RUN PLAYWRIGHT_DOWNLOAD_HOST=https://mirrors.huaweicloud.com/playwright \
-    playwright install chromium
+# 4) TMPDIR=/tmp 强制覆盖：BuildKit build 阶段 USER=root，但 /home/appuser/tmp
+#    可能在某些 union FS 实现下不可见（ENOENT on mkdtemp），改用 /tmp 最稳
+# 5) 先用 mkdir -p 兜底创建临时目录（针对 root 用户）
+# 6) 浏览器下载到 PLAYWRIGHT_BROWSERS_PATH（/opt/ms-playwright），随镜像保存
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN mkdir -p /opt/ms-playwright /tmp && \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://mirrors.huaweicloud.com/playwright \
+    TMPDIR=/tmp \
+    playwright install chromium && \
+    chown -R appuser:appgroup /opt/ms-playwright
 
 # 创建应用临时目录（替代 /tmp，避免外部工具重置权限导致 appuser 无法写入）
 # 注意：此目录不在 volume 挂载范围内，确保每次容器启动时干净
