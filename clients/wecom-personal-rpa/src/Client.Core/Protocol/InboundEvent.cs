@@ -1,21 +1,23 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using WeCom.PersonalRpa.Core.Serialization;
 
 namespace WeCom.PersonalRpa.Core.Protocol;
 
 /// <summary>
 /// 事件类型枚举，决定 payload 的结构（对应 Python EventType Literal）。
+/// 用 SnakeCaseEnumJsonConverter 序列化为 snake_case 对齐服务端 Pydantic Literal["message", "status", "action_result"]。
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(SnakeCaseEnumJsonConverter<EventType>))]
 public enum EventType
 {
-    /// <summary>入站聊天消息。</summary>
+    /// <summary>入站聊天消息（序列化为 "message"）。</summary>
     Message,
 
-    /// <summary>账号 / 桌面健康状态。</summary>
+    /// <summary>账号 / 桌面健康状态（序列化为 "status"）。</summary>
     Status,
 
-    /// <summary>客户端执行服务端下发 action 后的回执。</summary>
+    /// <summary>客户端执行服务端下发 action 后的回执（序列化为 "action_result"）。</summary>
     ActionResult,
 }
 

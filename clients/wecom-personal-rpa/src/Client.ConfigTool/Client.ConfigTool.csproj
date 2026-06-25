@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 与 Client.Tests 对齐：DPAPI ProtectedData 需要 Windows 桌面特性，
+         net8.0-windows10.0.19041.0 与现有测试/自动化工程保持一致（见 Client.Tests.csproj 注释）。 -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWinUI>false</UseWinUI>
+    <RootNamespace>WeCom.PersonalRpa.ConfigTool</RootNamespace>
+    <AssemblyName>Client.ConfigTool</AssemblyName>
+    <ProjectGuid>{66666666-6666-6666-6666-666666666666}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <UseAppHost>true</UseAppHost>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <Version>1.0.0</Version>
+    <Company>WeCom.PersonalRpa</Company>
+    <Product>WeCom Personal RPA ConfigTool</Product>
+    <Description>客户端配置写入 CLI：交互式/参数式收集 client_id+secret+url+tenant_id，DPAPI 加密落盘 client_config.enc。</Description>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- 不生成 XML 文档（工具工程，无公共 API） -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 测试工程需要可见 internal 类型（ArgsParser / ParsedArgs），便于单元测试参数解析逻辑。 -->
+    <InternalsVisibleTo Include="Client.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 复用 EncryptedClientConfig + ClientOptions；不加多余依赖 -->
+    <ProjectReference Include="..\Client.Core\Client.Core.csproj" />
+  </ItemGroup>
+
+</Project>

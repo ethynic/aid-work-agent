@@ -1,44 +1,46 @@
 using System.Text.Json.Serialization;
+using WeCom.PersonalRpa.Core.Serialization;
 
 namespace WeCom.PersonalRpa.Core.Protocol;
 
-/// <summary>会话类型，决定群/单聊、内外部语义（对应 Python ConversationType）。</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>会话类型，决定群/单聊、内外部语义（对应 Python ConversationType）。
+/// 用 SnakeCaseEnumJsonConverter 序列化为 snake_case 对齐服务端。</summary>
+[JsonConverter(typeof(SnakeCaseEnumJsonConverter<ConversationType>))]
 public enum ConversationType
 {
-    /// <summary>内部单聊。</summary>
+    /// <summary>内部单聊（序列化为 "internal_user"）。</summary>
     InternalUser,
 
-    /// <summary>内部群聊。</summary>
+    /// <summary>内部群聊（序列化为 "internal_group"）。</summary>
     InternalGroup,
 
-    /// <summary>外部单聊。</summary>
+    /// <summary>外部单聊（序列化为 "external_user"）。</summary>
     ExternalUser,
 
-    /// <summary>外部群聊。</summary>
+    /// <summary>外部群聊（序列化为 "external_group"）。</summary>
     ExternalGroup,
 }
 
-/// <summary>入站消息内容类型（对应 Python InboundMessageType）。</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>入站消息内容类型（对应 Python InboundMessageType）。单单词全小写序列化。</summary>
+[JsonConverter(typeof(SnakeCaseEnumJsonConverter<InboundMessageType>))]
 public enum InboundMessageType
 {
-    /// <summary>文本消息。</summary>
+    /// <summary>文本消息（序列化为 "text"）。</summary>
     Text,
 
-    /// <summary>图片消息。</summary>
+    /// <summary>图片消息（序列化为 "image"）。</summary>
     Image,
 
-    /// <summary>文件消息。</summary>
+    /// <summary>文件消息（序列化为 "file"）。</summary>
     File,
 
-    /// <summary>语音消息。</summary>
+    /// <summary>语音消息（序列化为 "voice"）。</summary>
     Voice,
 
-    /// <summary>视频消息。</summary>
+    /// <summary>视频消息（序列化为 "video"）。</summary>
     Video,
 
-    /// <summary>链接消息。</summary>
+    /// <summary>链接消息（序列化为 "link"）。</summary>
     Link,
 }
 

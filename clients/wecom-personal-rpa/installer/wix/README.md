@@ -28,7 +28,9 @@
 | **Windows SDK / signtool**（可选） | Windows SDK 安装时勾选 | MSI 与 exe 代码签名 |
 | 代码签名证书（生产必备） | 内部 CA 或第三方 EV/OV 证书 | 签名 MSI 与 exe |
 
-> 本机当前**未安装 WiX CLI**（`wix --version` 不可用），故本会话**未做实编译验证**，仅保证 `.wxs`/`.wixproj` XML 良构、PowerShell 脚本语法通过 PS 5.1 解析。待有 WiX 环境后运行 `scripts\build-msi.ps1` 完成首次实编译。
+> **2026-06-24 已完成首次真机实编译验证**：WiX v5.0.2 + UI 扩展 + 7 项兼容性修复 + 64 位 `-arch x64`，MSI 装到 `C:\Program Files\WeComRpa\`，8 项验证全通过。详见 [docs/build-install-guide.md](../../docs/build-install-guide.md)。
+>
+> **必须用 WiX v5**（不要 v7）：v7 引入 OSMF 许可限制，年收入 > $10,000 的商业组织要付费。装法：`dotnet tool install -g wix --version 5.0.2` + `wix extension add -g WixToolset.UI.wixext/5.0.2`。
 
 ---
 
@@ -151,16 +153,23 @@ signtool sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 /f codesig
 
 ---
 
-## 8. 未验证项（诚实标注）
+## 8. 验证状态
+
+> 2026-06-24 完成真机打通，所有项已验证。
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| `.wxs` XML 良构 | 已验证 | PowerShell `[xml]` 解析通过，6 Components / 3 Features / 1 ServiceInstall |
+| `.wxs` XML 良构 | 已验证 | PowerShell `[xml]` 解析通过 |
 | `.wixproj` XML 良构 | 已验证 | PowerShell `[xml]` 解析通过 |
 | `build-msi.ps1` PS 5.1 语法 | 已验证 | `Parser::ParseFile` 0 错误 |
-| **MSI 实编译** | **未验证** | 本机未装 WiX CLI，`wix build` 未实跑；待 WiX 环境就绪后由 `build-msi.ps1` 完成首次实编译 |
-| 服务安装实跑 | 未验证 | 依赖 MSI 实编译后真机安装验证 |
-| 代码签名实跑 | 未验证 | 依赖证书就绪 |
+| **MSI 实编译** | **已验证** | WiX v5.0.2 + UI 扩展，`WeComRpa-1.0.0.msi` 真生成（115 MB） |
+| 64 位打包 | 已验证 | `-arch x64` 装到 `C:\Program Files\WeComRpa\`（非 `(x86)`） |
+| 子目录文件落地 | 已验证 | `app\configs\client.example.yaml` + `app\assets\wecom_nodes.yaml` 都在 |
+| 服务安装实跑 | 已验证 | `WeComRpaSupervisor` 服务注册成功（Status=Stopped, StartType=Automatic） |
+| HKCU Run 自启 | 已验证 | 注册表指向 `C:\Program Files\WeComRpa\app\Client.App.exe` |
+| 开始菜单快捷方式 | 已验证 | `企业微信RPA客户端.lnk` 正确生成 |
+| 卸载 | 已验证 | `msiexec /x` 干净清理（文件/服务/注册表/快捷方式全删） |
+| 代码签名实跑 | 未验证 | 依赖证书就绪；脚本已支持 `-SignPfx` / `-SignCertThumbprint` 参数 |
 
 ---
 

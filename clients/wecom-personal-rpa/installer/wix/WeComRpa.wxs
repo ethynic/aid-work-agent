@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <!--
   WeComRpa.wxs — 企业微信个人账号 RPA 客户端 MSI 安装包（WiX v4/v5 架构）
 
@@ -24,11 +24,13 @@
   - UpgradeCode 一经发布不可更改（否则被识别为不同产品，升级链断裂）。
   - Version 由 wix build 时通过 -d WixMsiVersion=<x.y.z> 覆盖，默认 1.0.0。
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Name="企业微信个人账号 RPA 客户端"
     Manufacturer="WeComRpa Team"
     Language="2052"
+    Codepage="65001"
     Version="$(var.WixMsiVersion)"
     UpgradeCode="7B2F3A4C-9D81-4E6B-B5C3-1A0F2E3D4C5B">
 
@@ -41,14 +43,19 @@
     <?endif ?>
 
     <!-- ===== 资源路径变量：均可用 wix build -d 覆盖；给默认值保证单独编译可行 ===== -->
+    <!-- PublishRoot：发布产物根目录（绝对路径由 build-msi.ps1 通过 -d 传入）。
+         v5 的 Source 相对路径基准是 cwd 而非 .wxs 目录，故必须用绝对路径变量避免歧义。 -->
+    <?ifndef PublishRoot ?>
+    <?define PublishRoot = "..\..\publish" ?>
+    <?endif ?>
     <!-- Supervisor 主程序全路径（供 ServiceInstall 的 File Source 用） -->
     <?ifndef SupervisorExePath ?>
-    <?define SupervisorExePath = "..\..\publish\supervisor\Client.Supervisor.exe" ?>
+    <?define SupervisorExePath = "$(var.PublishRoot)\supervisor\Client.Supervisor.exe" ?>
     <?endif ?>
 
     <!-- 升级：同 UpgradeCode 高版本替换低版本；禁止降级 -->
     <MajorUpgrade
-      DowngradeMessage="已安装更高版本的「企业微信个人账号 RPA 客户端」，无法降级安装。请先卸载高版本。" />
+      DowngradeErrorMessage="已安装更高版本的「企业微信个人账号 RPA 客户端」，无法降级安装。请先卸载高版本。" />
 
     <!-- 媒体/压缩 -->
     <Media Id="1" Cabinet="WeComRpa.cab" EmbedCab="yes" />
@@ -61,7 +68,10 @@
     <!-- ============ 目录结构 ============ -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLDIR" Name="WeComRpa">
-        <Directory Id="APPDIR" Name="app" />
+        <Directory Id="APPDIR" Name="app">
+          <Directory Id="APPASSETSDIR" Name="assets" />
+          <Directory Id="APPCONFIGSDIR" Name="configs" />
+        </Directory>
         <Directory Id="SUPDIR" Name="supervisor" />
       </Directory>
     </StandardDirectory>
@@ -83,25 +93,48 @@
     -->
     <DirectoryRef Id="APPDIR">
       <Component Id="AppFiles" Guid="A1B2C3D4-1111-2222-3333-444455556666">
-        <Files Source="..\..\publish\app\**">
-          <Exclude Source="..\..\publish\app\**\*.pdb" />
-          <Exclude Source="..\..\publish\app\Client.App.exe" />
-        </Files>
+        <File Id="Client.Core.xml" Source="$(var.PublishRoot)\app\Client.Core.xml" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\WeComRpa\Install"
+          Name="AppFilesMarker"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
       </Component>
       <!-- Client.App 主程序（固定 File Id，供快捷方式/自启引用） -->
       <Component Id="AppExe" Guid="A1B2C3D4-2222-3333-4444-555566667777">
         <File Id="Client.App.exe"
-              Source="..\..\publish\app\Client.App.exe"
+              Source="$(var.PublishRoot)\app\Client.App.exe"
               KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- app\assets 子目录：必须挂到 APPASSETSDIR 下，WiX v5 才会创建该目录 -->
+    <DirectoryRef Id="APPASSETSDIR">
+      <Component Id="AppAssets" Guid="A1B2C3D4-AAAA-BBBB-CCCC-DDDDEEEE0001">
+        <File Id="app.assets.wecom_nodes.yaml" Source="$(var.PublishRoot)\app\assets\wecom_nodes.yaml" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- app\configs 子目录：同上，挂到 APPCONFIGSDIR 下 -->
+    <DirectoryRef Id="APPCONFIGSDIR">
+      <Component Id="AppConfigs" Guid="A1B2C3D4-AAAA-BBBB-CCCC-DDDDEEEE0002">
+        <File Id="app.configs.client_example.yaml" Source="$(var.PublishRoot)\app\configs\client.example.yaml" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="SUPDIR">
       <Component Id="SupervisorFiles" Guid="A1B2C3D4-7777-8888-9999-AAAABBBBCCCC">
-        <Files Source="..\..\publish\supervisor\**">
-          <Exclude Source="..\..\publish\supervisor\**\*.pdb" />
-          <Exclude Source="..\..\publish\supervisor\Client.Supervisor.exe" />
-        </Files>
+        <File Id="sup.Client.Core.xml" Source="$(var.PublishRoot)\supervisor\Client.Core.xml" />
+        <File Id="sup.e_sqlite3.dll" Source="$(var.PublishRoot)\supervisor\e_sqlite3.dll" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\WeComRpa\Install"
+          Name="SupervisorFilesMarker"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
@@ -195,7 +228,9 @@
       <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
       <WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
     -->
-    <UIRef Id="WixUI_InstallDir" />
+    <UI>
+      <ui:WixUI Id="WixUI_InstallDir" />
+    </UI>
 
     <!-- ============ 功能树 ============ -->
     <Feature Id="Complete" Title="企业微信RPA客户端" Level="1"
@@ -204,6 +239,8 @@
                Description="Client.App 托盘程序与配置资产。">
         <ComponentRef Id="AppFiles" />
         <ComponentRef Id="AppExe" />
+        <ComponentRef Id="AppAssets" />
+        <ComponentRef Id="AppConfigs" />
         <ComponentRef Id="AppShortcut" />
         <ComponentRef Id="AppAutoRun" />
       </Feature>

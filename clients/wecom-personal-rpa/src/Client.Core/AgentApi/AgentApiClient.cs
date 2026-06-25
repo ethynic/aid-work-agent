@@ -65,13 +65,51 @@ public sealed class AgentApiClient : IAgentApiClient
             .Build();
     }
 
-    private static readonly string CallbackPath = "api/v1/channels/wecom-personal-rpa/callback";
     private static readonly string ConfigPath = "api/v1/channels/wecom-personal-rpa/config";
     private static readonly string FilesPath = "api/v1/channels/wecom-personal-rpa/files";
+
+    /// <summary>
+    /// 回调路径所需 tenant_id（拉 /config 后缓存，ClientOptions.TenantId 兜底）。
+    /// volatile：GetConfigAsync（写）与 PostCallbackAsync（读）可能跨线程。
+    /// </summary>
+    private volatile string? _tenantId;
+
+    /// <summary>
+    /// 回调路径所需 config_id（拉 /config 后缓存，来自 tenant_channel_configs 记录 id）。
+    /// volatile：同上。
+    /// </summary>
+    private volatile string? _configId;
+
+    /// <summary>
+    /// 构造 callback 路径：``t/{tenant_id}/wecom_personal_rpa/callback/{config_id}``。
+    /// 服务端路由：src/saas/api/wecom_personal_rpa_routes.py:191。
+    /// </summary>
+    /// <exception cref="InvalidOperationException">尚未拉到 tenant_id / config_id。</exception>
+    private string CallbackPath
+    {
+        get
+        {
+            var tid = _tenantId;
+            var cid = _configId;
+            if (string.IsNullOrEmpty(tid) || string.IsNullOrEmpty(cid))
+            {
+                throw new InvalidOperationException(
+                    "RPA callback 路径缺少 tenant_id 或 config_id："
+                    + "请在 PostCallbackAsync 前先调用 GetConfigAsync 拉取服务端配置。"
+                    + "若持续失败，请检查服务端 tenant_channel_configs 表是否已写入该 client 的记录。");
+            }
+
+            return $"t/{tid}/wecom_personal_rpa/callback/{cid}";
+        }
+    }
 
     /// <inheritdoc />
     public async Task<bool> PostCallbackAsync(InboundEvent env, CancellationToken cancellationToken = default)
     {
+        // 首启顺序保证：callback 路径需要 tenant_id / config_id，未拉过 config 时先同步拉一次。
+        // 拉取失败则抛清晰异常，避免发出路径不匹配的请求被服务端 404/401。
+        await EnsureCallbackRoutingAsync(cancellationToken).ConfigureAwait(false);
+
         var json = JsonSerializer.Serialize(env, _jsonOptions);
         var bodyBytes = Encoding.UTF8.GetBytes(json);
 
@@ -98,7 +136,7 @@ public sealed class AgentApiClient : IAgentApiClient
     /// <inheritdoc />
     public async Task<RpaConfigResponse> GetConfigAsync(CancellationToken cancellationToken = default)
     {
-        return await _httpPipeline.ExecuteAsync(async token =>
+        var resp = await _httpPipeline.ExecuteAsync(async token =>
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, ConfigPath);
             _signer.SignNoBody(request);
@@ -109,6 +147,79 @@ public sealed class AgentApiClient : IAgentApiClient
                     .ConfigureAwait(false))
                    ?? throw new InvalidDataException("GetConfig 反序列化结果为 null");
         }, cancellationToken).ConfigureAwait(false);
+
+        // 缓存 callback/ws 路径所需的 tenant_id / config_id（优先服务端下发，
+        // ClientOptions.TenantId 作为旧服务端（字段缺失）兜底）。
+        ApplyConfigRouting(resp);
+
+        return resp;
+    }
+
+    /// <summary>
+    /// 把 /config 响应里的 tenant_id / config_id 缓存到字段，供 callback/ws 路径拼接。
+    /// 服务端旧版本（未下发这两个字段）时，tenant_id 回退到 ClientOptions.TenantId。
+    /// </summary>
+    private void ApplyConfigRouting(RpaConfigResponse resp)
+    {
+        var respTid = resp.TenantId;
+        if (string.IsNullOrEmpty(respTid))
+        {
+            respTid = _options.TenantId;
+        }
+
+        if (!string.IsNullOrEmpty(respTid))
+        {
+            _tenantId = respTid;
+        }
+        else
+        {
+            _logger?.LogWarning(
+                "RPA /config 响应未返回 tenant_id 且 ClientOptions.TenantId 为空，callback 路径将无法构造");
+        }
+
+        if (!string.IsNullOrEmpty(resp.ConfigId))
+        {
+            _configId = resp.ConfigId;
+        }
+        else
+        {
+            _logger?.LogWarning(
+                "RPA /config 响应未返回 config_id（服务端 tenant_channel_configs 表可能未写入该 client 记录），"
+                + "callback 路径将无法构造");
+        }
+    }
+
+    /// <summary>
+    /// 确保 callback 路由参数（tenant_id / config_id）已就绪；未就绪时同步拉一次 /config。
+    /// 拉取后仍缺失则抛清晰异常，由调用方决定是否重试 / 退避。
+    /// </summary>
+    private async Task EnsureCallbackRoutingAsync(CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrEmpty(_tenantId) && !string.IsNullOrEmpty(_configId))
+        {
+            return;
+        }
+
+        _logger?.LogInformation("RPA callback 首次发送前同步拉取 /config 以获取 tenant_id/config_id");
+        try
+        {
+            await GetConfigAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            throw new InvalidOperationException(
+                "RPA callback 路径参数缺失，且同步拉取 /config 失败，无法发送 callback。"
+                + "请检查 AgentBaseUrl / ClientId / ClientSecret 配置与服务端可达性。", e);
+        }
+
+        if (string.IsNullOrEmpty(_tenantId) || string.IsNullOrEmpty(_configId))
+        {
+            throw new InvalidOperationException(
+                "RPA callback 路径参数仍缺失："
+                + $"tenant_id={(string.IsNullOrEmpty(_tenantId) ? "<空>" : _tenantId)}"
+                + $", config_id={(string.IsNullOrEmpty(_configId) ? "<空>" : _configId)}。"
+                + "请确认服务端已为该 client 在 tenant_channel_configs 表写入记录。");
+        }
     }
 
     /// <inheritdoc />
@@ -140,6 +251,10 @@ public sealed class AgentApiClient : IAgentApiClient
     /// <inheritdoc />
     public async Task<ClientWebSocket> ConnectWebSocketAsync(CancellationToken cancellationToken = default)
     {
+        // WS 路径同样需要 tenant_id / config_id（服务端路由：
+        // /t/{tenant_id}/wecom_personal_rpa/ws/{config_id}），首连前确保就绪。
+        await EnsureCallbackRoutingAsync(cancellationToken).ConfigureAwait(false);
+
         var wsBase = (_options.AgentBaseUrl ?? string.Empty).TrimEnd('/');
         if (wsBase.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
@@ -155,13 +270,36 @@ public sealed class AgentApiClient : IAgentApiClient
             wsBase = "wss://" + wsBase;
         }
 
+        // 动态拼接：t/{tenant_id}/wecom_personal_rpa/ws/{config_id}
         var query = _signer.BuildWebSocketQuery();
-        var uri = new Uri($"{wsBase}/api/v1/channels/wecom-personal-rpa/ws?{query}");
+        var uri = new Uri($"{wsBase}/{WsPath}?{query}");
 
         var ws = new ClientWebSocket();
         // TODO: 实际心跳 / 重连由 App 层的消息循环驱动，此处仅完成握手。
         await ws.ConnectAsync(uri, cancellationToken).ConfigureAwait(false);
         return ws;
+    }
+
+    /// <summary>
+    /// 构造 ws 路径：``t/{tenant_id}/wecom_personal_rpa/ws/{config_id}``。
+    /// 服务端路由：src/saas/api/wecom_personal_rpa_routes.py:817。
+    /// 需在 EnsureCallbackRoutingAsync 后调用。
+    /// </summary>
+    private string WsPath
+    {
+        get
+        {
+            var tid = _tenantId;
+            var cid = _configId;
+            if (string.IsNullOrEmpty(tid) || string.IsNullOrEmpty(cid))
+            {
+                throw new InvalidOperationException(
+                    "RPA ws 路径缺少 tenant_id 或 config_id："
+                    + "请在 ConnectWebSocketAsync 前先调用 GetConfigAsync。");
+            }
+
+            return $"t/{tid}/wecom_personal_rpa/ws/{cid}";
+        }
     }
 
     private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage src, byte[] bodyBytes)

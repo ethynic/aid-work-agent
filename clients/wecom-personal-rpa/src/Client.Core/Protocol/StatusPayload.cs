@@ -1,36 +1,38 @@
 using System.Text.Json.Serialization;
+using WeCom.PersonalRpa.Core.Serialization;
 
 namespace WeCom.PersonalRpa.Core.Protocol;
 
-/// <summary>账号 / 桌面状态枚举（对应 Python AccountStatus）。</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>账号 / 桌面状态枚举（对应 Python AccountStatus Literal）。
+/// 用 SnakeCaseEnumJsonConverter 序列化为 snake_case 对齐服务端。</summary>
+[JsonConverter(typeof(SnakeCaseEnumJsonConverter<AccountStatus>))]
 public enum AccountStatus
 {
-    /// <summary>账号在线。</summary>
+    /// <summary>账号在线（"online"）。</summary>
     Online,
 
-    /// <summary>账号离线。</summary>
+    /// <summary>账号离线（"offline"）。</summary>
     Offline,
 
-    /// <summary>需要扫码登录。</summary>
+    /// <summary>需要扫码登录（"need_login"）。</summary>
     NeedLogin,
 
-    /// <summary>二维码已过期。</summary>
+    /// <summary>二维码已过期（"qr_expired"）。</summary>
     QrExpired,
 
-    /// <summary>账号被限制。</summary>
+    /// <summary>账号被限制（"account_limited"）。</summary>
     AccountLimited,
 
-    /// <summary>桌面被锁定。</summary>
+    /// <summary>桌面被锁定（"desktop_locked"）。</summary>
     DesktopLocked,
 
-    /// <summary>窗口不可见。</summary>
+    /// <summary>窗口不可见（"window_not_visible"）。</summary>
     WindowNotVisible,
 
-    /// <summary>已暂停。</summary>
+    /// <summary>已暂停（"paused"）。</summary>
     Paused,
 
-    /// <summary>恢复中。</summary>
+    /// <summary>恢复中（"recovering"）。</summary>
     Recovering,
 }
 

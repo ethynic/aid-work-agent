@@ -21,10 +21,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $here = Split-Path $PSScriptRoot -Parent
-$clientRoot = Split-Path $here -Parent
 $wxs = Join-Path $here 'installer\wix\WeComRpa.wxs'
 $wixproj = Join-Path $here 'installer\wix\WeComRpa.wixproj'
-$publishDir = Join-Path $clientRoot 'publish'
+$publishDir = Join-Path $here 'publish'
 $appExe = Join-Path $publishDir 'app\Client.App.exe'
 $supExe = Join-Path $publishDir 'supervisor\Client.Supervisor.exe'
 $outMsi = Join-Path $publishDir "WeComRpa-$Version.msi"
@@ -59,7 +58,7 @@ elseif ($wixAvailable) {
     $wixVer = & wix --version
     Write-Ok "wix CLI 可用: $wixVer"
     Write-Step "wix build -> $outMsi"
-    & wix build $wxs -d "WixMsiVersion=$Version" -ext WixUIExtension -o $outMsi
+    & wix build $wxs -arch x64 -d "WixMsiVersion=$Version" -d "PublishRoot=$publishDir" -ext WixToolset.UI.wixext -o $outMsi
     if ($LASTEXITCODE -ne 0) { Die "wix build 失败 (exit $LASTEXITCODE)" }
 }
 else {

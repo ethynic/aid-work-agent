@@ -18,6 +18,12 @@ public sealed class ClientOptions
     /// <summary>客户端密钥明文（仅在内存中，落盘前必须由 EncryptedClientConfig 加密）。</summary>
     public string ClientSecret { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 租户 ID（平台后台「RPA 绑定管理」下发）。当前 callback 路径未带 tenant_id，
+    /// 预留给未来路由变更与租户隔离诊断使用。默认空字符串保证旧配置向前兼容。
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
     /// <summary>轮询间隔（秒，离线拉取 outbox 与心跳）。</summary>
     public int PollIntervalSeconds { get; set; } = 30;
 

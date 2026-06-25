@@ -1,18 +1,20 @@
 using System.Text.Json.Serialization;
+using WeCom.PersonalRpa.Core.Serialization;
 
 namespace WeCom.PersonalRpa.Core.Protocol;
 
-/// <summary>暂停范围（与 Python RpaConfigResponse.paused_scope 字面量对齐）。</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>暂停范围（与 Python RpaConfigResponse.paused_scope 字面量对齐）。
+/// 用 SnakeCaseEnumJsonConverter 序列化为 snake_case 对齐服务端。</summary>
+[JsonConverter(typeof(SnakeCaseEnumJsonConverter<PausedScope>))]
 public enum PausedScope
 {
-    /// <summary>租户级暂停。</summary>
+    /// <summary>租户级暂停（"tenant"）。</summary>
     Tenant,
 
-    /// <summary>账号级暂停。</summary>
+    /// <summary>账号级暂停（"account"）。</summary>
     Account,
 
-    /// <summary>会话级暂停。</summary>
+    /// <summary>会话级暂停（"conversation"）。</summary>
     Conversation,
 }
 
@@ -58,4 +60,16 @@ public sealed class RpaConfigResponse
     /// <summary>服务端当前时间，供客户端校准时钟漂移。</summary>
     [JsonPropertyName("server_time")]
     public DateTimeOffset ServerTime { get; set; }
+
+    /// <summary>当前客户端 ID（与 X-Client-Id 一致），用于构造 callback/ws 路径。可空（旧服务端不返回）。</summary>
+    [JsonPropertyName("client_id")]
+    public string? ClientId { get; set; }
+
+    /// <summary>客户端归属租户 ID，用于构造 callback/ws 路径 t/{tenant_id}/...。可空（旧服务端不返回）。</summary>
+    [JsonPropertyName("tenant_id")]
+    public string? TenantId { get; set; }
+
+    /// <summary>tenant_channel_configs 记录 ID，用于构造 callback/ws 路径 .../callback/{config_id}。可空（旧服务端不返回）。</summary>
+    [JsonPropertyName("config_id")]
+    public string? ConfigId { get; set; }
 }
