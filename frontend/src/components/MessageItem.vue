@@ -4,25 +4,31 @@
     v-if="message.role === 'user'"
     class="message-enter-active message-user-wrapper"
   >
-    <div class="message-user-bubble bg-primary-600">
-      <div class="message-user-content text-white">
-        <div class="leading-relaxed" v-html="renderedContent"></div>
+    <div class="flex flex-col items-end w-full">
+      <div class="message-user-bubble bg-primary-600 w-fit">
+        <div class="message-user-content text-white">
+          <div class="leading-relaxed" v-html="renderedContent"></div>
 
-        <!-- 附件标签 -->
-        <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
-          <AttachmentChip
-            v-for="att in displayAttachments"
-            :key="att.file_id"
-            :attachment="att"
-            @preview="handlePreview(att)"
-          />
-          <AttachmentChip
-            v-for="(att, idx) in legacyAttachments"
-            :key="'legacy-' + idx"
-            :attachment="att"
-            :clickable="false"
-          />
+          <!-- 附件标签 -->
+          <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
+            <AttachmentChip
+              v-for="att in displayAttachments"
+              :key="att.file_id"
+              :attachment="att"
+              @preview="handlePreview(att)"
+            />
+            <AttachmentChip
+              v-for="(att, idx) in legacyAttachments"
+              :key="'legacy-' + idx"
+              :attachment="att"
+              :clickable="false"
+            />
+          </div>
         </div>
+      </div>
+      <!-- 时间戳 - 用户消息右下 -->
+      <div v-if="formattedTime" class="text-xs text-muted mt-1 mr-2">
+        {{ formattedTime }}
       </div>
     </div>
   </div>
@@ -108,6 +114,10 @@
           </div>
         </div>
       </div>
+    </div>
+    <!-- 时间戳 - AI消息左下 -->
+    <div v-if="formattedTime && !showInputHint" class="text-xs text-muted mt-1 ml-2">
+      {{ formattedTime }}
     </div>
   </div>
 </template>
@@ -229,6 +239,17 @@ const downloadableFiles = computed<DownloadableFile[]>(() => {
 
 const renderedContent = computed(() => {
   return renderMarkdown(displayContent.value)
+})
+
+const formattedTime = computed<string | null>(() => {
+  if (!props.message.timestamp) return null
+  const date = new Date(props.message.timestamp)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${month}-${day} ${hours}:${minutes}:${seconds}`
 })
 
 function handlePreview(attachment: AttachmentInfo) {
