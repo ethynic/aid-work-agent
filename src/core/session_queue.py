@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Literal, Optional
 from loguru import logger
 
 from src.core.redis_client import redis_client
+from src.core.temp_logger import tlog
 
 
 @dataclass
@@ -113,6 +114,16 @@ class SessionMessageQueue:
         else:
             merged = new_text
         self.set_merge(session_id, merged)
+        tlog(
+            "语音合并",
+            "追加合并 session={sid}..., new_text_len={n_len}, "
+            "new_text_preview={n_prev!r}, merged_len={m_len}, merged_preview={m_prev!r}",
+            sid=session_id[:20],
+            n_len=len(new_text),
+            n_prev=new_text[:50],
+            m_len=len(merged),
+            m_prev=merged[:80],
+        )
         return merged
 
     def get_merged_input(self, session_id: str, default: str) -> str:
@@ -243,16 +254,23 @@ class SessionMessageQueue:
         if merged_input == original_input:
             return None
         # 用合并后的输入重新处理
-        logger.info(
-            f"[SessionQueue] 检测到取消，重新处理合并输入 session={session_id[:20]}..., "
-            f"original_len={len(original_input)}, merged_len={len(merged_input)}"
+        tlog(
+            "语音合并",
+            "检测到取消，重新处理合并输入 session={sid}..., "
+            "original_len={o_len}, merged_len={m_len}, merged_preview={m_prev!r}",
+            sid=session_id[:20],
+            o_len=len(original_input),
+            m_len=len(merged_input),
+            m_prev=merged_input[:80],
         )
         self.clear_merge(session_id)  # 清除合并缓冲区，防重复重新处理
         # 清除取消标志：重新处理是新一轮完整处理，不应继承上一轮的取消状态，
         # 否则新 processor 会在 cancel_check 时立即返回，造成 response_text 为空
         self._clear_cancel(session_id)
         cancel_check = lambda: self.check_cancel(session_id)
-        response = processor(cancel_check)
+        # 关键：通过 user_input_override 把合并后的完整输入传给 processor，
+        # 否则 processor 闭包绑定的还是原始输入，合并内容会被丢弃
+        response = processor(cancel_check, user_input_override=merged_input)
         if asyncio.iscoroutine(response):
             response = await response
         return response
@@ -297,9 +315,15 @@ class SessionMessageQueue:
             # 获取最终合并后的输入
             final_input = self.get_merged_input(session_id, user_input)
             was_merged = final_input != user_input
-            logger.info(
-                f"[SessionQueue] 空闲态处理 session={session_id[:20]}..., "
-                f"input_len={len(final_input)}, merged={was_merged}"
+            tlog(
+                "语音合并",
+                "空闲态处理 session={sid}..., original_len={o_len}, "
+                "final_len={f_len}, merged={merged}, final_preview={f_prev!r}",
+                sid=session_id[:20],
+                o_len=len(user_input),
+                f_len=len(final_input),
+                merged=was_merged,
+                f_prev=final_input[:80],
             )
 
             # P0-5：用 error_result 记录 processor 异常时的返回值。
@@ -308,9 +332,11 @@ class SessionMessageQueue:
             error_result: Optional[EnqueueResult] = None
             try:
                 # 调用 processor（process_message_sync）
+                # 传入 user_input_override=final_input 确保 processor 使用合并后的输入，
+                # 而非闭包绑定的原始 user_input（语音合并场景的关键）
                 cancel_check = lambda: self.check_cancel(session_id)
                 try:
-                    response = processor(cancel_check)
+                    response = processor(cancel_check, user_input_override=final_input)
                     if asyncio.iscoroutine(response):
                         response = await response
                 except Exception as e:
@@ -361,14 +387,28 @@ class SessionMessageQueue:
                         )
                     # 2. 检查是否有排队消息（处理中到达的新消息）
                     if self.has_pending(session_id):
-                        logger.info(f"[SessionQueue] 检测到 pending 消息，继续处理")
+                        tlog(
+                            "语音合并",
+                            "检测到 pending 消息，继续处理 session={sid}...",
+                            sid=session_id[:20],
+                        )
                         pending_input = self.get_pending(session_id)
                         if pending_input:
                             self.clear_merge(session_id)
                             self.set_merge(session_id, pending_input)
                             cancel_check = lambda: self.check_cancel(session_id)
+                            tlog(
+                                "语音合并",
+                                "处理 pending 输入 session={sid}..., "
+                                "pending_len={p_len}, pending_preview={p_prev!r}",
+                                sid=session_id[:20],
+                                p_len=len(pending_input),
+                                p_prev=pending_input[:80],
+                            )
                             try:
-                                pending_response = processor(cancel_check)
+                                pending_response = processor(
+                                    cancel_check, user_input_override=pending_input
+                                )
                                 if asyncio.iscoroutine(pending_response):
                                     pending_response = await pending_response
                             except Exception as e:
@@ -419,9 +459,13 @@ class SessionMessageQueue:
             # === 处理中态，追加消息 ===
             if self.is_cancel_allowed(session_id):
                 # 尚未开始推送，可以取消
-                logger.info(
-                    f"[SessionQueue] 处理中态（允许取消）session={session_id[:20]}..., "
-                    f"input={user_input[:50]}"
+                tlog(
+                    "语音合并",
+                    "处理中态（允许取消）session={sid}..., "
+                    "input_len={i_len}, input_preview={i_prev!r}",
+                    sid=session_id[:20],
+                    i_len=len(user_input),
+                    i_prev=user_input[:50],
                 )
                 self.set_cancel(session_id)
                 self.append_merge(session_id, user_input)

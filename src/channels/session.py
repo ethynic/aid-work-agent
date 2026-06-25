@@ -15,6 +15,7 @@ from loguru import logger
 from src.db.database import get_db_connection
 from src.models.message import ChannelType
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
+from src.core.temp_logger import tlog
 
 
 class ChannelSessionManager:
@@ -578,9 +579,21 @@ class ChannelSessionManager:
 
         agent_input_text = agent_user_input if agent_user_input is not None else user_content
 
-        async def _processor(cancel_check):
+        async def _processor(cancel_check, user_input_override=None):
+            # 语音合并 / pending 重处理场景下，session_queue 会通过 override
+            # 传入合并后的完整输入，必须优先于闭包绑定的 agent_input_text
+            effective_input = user_input_override if user_input_override is not None else agent_input_text
+            if user_input_override is not None and user_input_override != agent_input_text:
+                tlog(
+                    "语音合并",
+                    "processor 使用 override 输入 session={sid}..., "
+                    "original_len={o_len}, override_len={n_len}",
+                    sid=session_id[:20],
+                    o_len=len(agent_input_text),
+                    n_len=len(user_input_override),
+                )
             kwargs = {
-                "user_input": agent_input_text,
+                "user_input": effective_input,
                 "session_id": session_id,
                 "record_service": record_service,
                 "progress_callback": collect_files_callback,

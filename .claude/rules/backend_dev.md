@@ -16,6 +16,41 @@ logger.error(f'后端日志：数据库连接失败: {e}', exc_info=True)
 logger.debug(f'临时调试：请求参数 {params}')
 ```
 
+### 临时主题日志（tlog）
+
+主日志文件单日可达数千上万条，针对某个具体问题（如「语音合并」「会话取消」）排查时，在主日志中筛选非常低效。**调试某一主题时，使用 `tlog` 把日志单独写到独立文件**，与主日志完全隔离。
+
+```python
+from src.core.temp_logger import tlog
+
+# 基本用法：日志写入 log/agent/temp/语音合并.log
+tlog("语音合并", f"合并 {a} + {b} -> {c}")
+
+# 支持命名占位符（推荐，避免拼接 f-string 时的字段冗余）
+tlog(
+    "语音合并",
+    "处理 session={sid}..., original_len={o_len}, merged={merged}",
+    sid=session_id[:20],
+    o_len=len(original),
+    merged=was_merged,
+)
+
+# 指定日志级别
+tlog("语音合并", "处理失败: {err}", err=e, level="ERROR")
+```
+
+**特点**：
+- 日志文件位于 `log/agent/temp/{topic}.log`，与主日志完全隔离，不在控制台和 `aid-work-agent.log` 中出现
+- 文件名即主题名，中英文均可（非法字符自动替换为 `_`）
+- 主题名按调试场景命名（如 `语音合并`、`会话取消`、`工具超时`），一个主题对应一个文件
+- 多线程写同一主题文件时加锁，避免日志交错
+
+**使用规范**：
+- **仅用于临时调试**，bug 修复后必须删除 `tlog` 调用
+- 主题名应明确指向具体问题，避免 `debug`、`test` 等模糊命名
+- 服务器排查时，直接下载 `log/agent/temp/{topic}.log` 即可，无需在主日志中过滤
+- 整个 `log/agent/temp/` 目录可随时清空，不影响主流程
+
 ## 错误处理规范
 所有 API 错误响应必须包含 `debug` 字段，且必须过滤敏感信息：
 
