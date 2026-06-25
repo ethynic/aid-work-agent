@@ -49,7 +49,7 @@ class SessionMessageQueue:
     # TTL 常量
     LOCK_TTL = 120          # 会话锁 2 分钟，防死锁
     CANCEL_TTL = 10          # 取消标志 10 秒
-    MERGE_TTL = 5            # 合并缓冲区 5 秒
+    MERGE_TTL = 120          # 合并缓冲区 2 分钟，必须覆盖 processor 整个执行时长
     PENDING_TTL = 30         # 排队消息 30 秒
     RESPONDING_TTL = 10      # 推送标记 10 秒
     MERGE_WINDOW = 2         # 合并窗口 2 秒
@@ -79,9 +79,10 @@ class SessionMessageQueue:
     def release_lock(self, session_id: str, lock_value: str) -> bool:
         """释放会话锁"""
         lock_key = self._key("session_lock", session_id)
-        # 先清取消标志和推送标记
+        # 先清取消标志、推送标记和合并缓冲区
         self._clear_cancel(session_id)
         self._clear_responding(session_id)
+        self.clear_merge(session_id)
         return redis_client.release_lock(lock_key, lock_value)
 
     def is_locked(self, session_id: str) -> bool:
