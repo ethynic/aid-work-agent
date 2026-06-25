@@ -172,18 +172,30 @@ class SubscriptionDB:
         """统计租户有效订阅的数字员工数量
 
         替代原 TenantAgentPermissionDB.count_allowed
+        注意：只统计在 registry 中实际存在的数字员工，避免已删除/禁用的影响计数
         """
+        # 获取 registry 中实际存在的数字员工 ID 列表
+        from src.core import master_agent
+        available_agent_ids = {"main"}
+        registry = master_agent.subagent_registry
+        if registry:
+            registry.load_from_db()
+            items = registry.get_all_subagents_with_type()
+            available_agent_ids.update({item["agent_id"] for item in items})
+
         cursor = conn.cursor()
         cursor.execute(f"""
-            SELECT COUNT(DISTINCT subagent_type) as cnt
+            SELECT DISTINCT subagent_type
             FROM subscriptions
             WHERE tenant_id = %s
               AND status = '{SubscriptionStatus.ACTIVE.value}'
               AND starts_at <= CURRENT_TIMESTAMP
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """, (tenant_id,))
-        result = cursor.fetchone()
-        return result["cnt"] if result else 0
+        rows = cursor.fetchall()
+        # 只保留在 registry 中实际存在的数字员工
+        count = sum(1 for row in rows if row["subagent_type"] in available_agent_ids)
+        return count
 
     @staticmethod
     def set_tenant_subscriptions(conn: Any, tenant_id: str, agent_ids: List[str], agent_quotas: Optional[Dict[str, int]] = None) -> None:

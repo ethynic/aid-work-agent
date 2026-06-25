@@ -737,7 +737,10 @@ async function openEditDialog(tenant: any) {
       availableAgents.value = agentsRes.data
     }
     if (permissionsRes.success && permissionsRes.data) {
-      selectedAgentIds.value = permissionsRes.data.agent_ids || []
+      // 只保留在 availableAgents 中存在的 agent_id，避免已删除/禁用的数字员工影响计数
+      const allSelectedIds = permissionsRes.data.agent_ids || []
+      const availableAgentIds = availableAgents.value.map(a => a.agent_id)
+      selectedAgentIds.value = allSelectedIds.filter(id => availableAgentIds.includes(id))
     }
   } catch (e) {
     console.error('加载数字员工授权失败:', e)

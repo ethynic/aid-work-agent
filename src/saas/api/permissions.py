@@ -44,6 +44,16 @@ def get_tenant_agent_permissions(request: Request, tenant_id: str):
     if not admin or admin.get("role") != "platform_admin":
         raise HTTPException(status_code=403, detail="无权限")
 
+    # 获取 registry 中实际存在的数字员工 ID 列表
+    registry = master_agent.subagent_registry
+    available_agent_ids = set()
+    if registry:
+        registry.load_from_db()
+        items = registry.get_all_subagents_with_type()
+        available_agent_ids = {item["agent_id"] for item in items}
+    # 主智能体始终可用
+    available_agent_ids.add("main")
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         # 获取所有有效订阅的 agent_id 和 instance_quota
@@ -57,9 +67,10 @@ def get_tenant_agent_permissions(request: Request, tenant_id: str):
             ORDER BY subagent_type
         """, (tenant_id,))
         rows = cursor.fetchall()
-        allowed = [row["subagent_type"] for row in rows]
+        # 只保留在 registry 中实际存在的数字员工，避免已删除/禁用的影响计数
+        allowed = [row["subagent_type"] for row in rows if row["subagent_type"] in available_agent_ids]
         count = len(allowed)
-        agent_quotas = {row["subagent_type"]: row["instance_quota"] for row in rows}
+        agent_quotas = {row["subagent_type"]: row["instance_quota"] for row in rows if row["subagent_type"] in available_agent_ids}
         return {
             "success": True,
             "data": {
