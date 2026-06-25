@@ -1761,19 +1761,13 @@ async def _process_tenant_wecom_kf_messages(
                 if msgtype == "voice" and not user_input.startswith("[语音消息"):
                     user_content = f"[语音消息] {user_input}"
 
-                # 废弃：ASR 短句（<10 字）附加 LLM 提示词，降低识别误差导致的意图偏差
-                # 仅修改 user_input（传给 agent），user_content（历史记录）保持原样
-                # if (
-                #     msgtype == "voice"
-                #     and not user_input.startswith("[语音消息")
-                #     and 0 < len(user_input) < 10
-                # ):
-                #     user_input = (
-                #         f"[系统提示] 当前消息来自语音 ASR 识别，仅 {len(user_input)} 字，"
-                #         f"短句识别误差风险较高。在回答前请先简述你理解的用户意图，"
-                #         f"以防 ASR 识别错误导致意图偏差。\n\n"
-                #         f"{user_input}"
-                #     )
+                # ASR 短句（<10 字）识别误差较高，告诉 LLM 来源是 [语音消息] 以便 LLM 进入宽容模式
+                if (
+                    msgtype == "voice"
+                    and not user_input.startswith("[语音消息")
+                    and 0 < len(user_input) < 10
+                ):
+                    user_input = f"[语音消息] {user_input}"
 
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
                 user_attachments_meta = []
@@ -1813,7 +1807,13 @@ async def _process_tenant_wecom_kf_messages(
                 downloadable_files = []
                 tool_messages_collected = []  # 本轮 tool 消息序列，供事务持久化到 channel_messages
 
-                agent_attachments = _build_attachments_for_agent(user_attachments)
+                # 语音消息：ASR 识别成功后，不再将语音附件传递给 agent，避免 LLM 误以为需要处理语音识别
+                agent_attachments_input = user_attachments
+                if msgtype == "voice" and not user_input.startswith("[语音消息"):
+                    agent_attachments_input = []
+                    logger.info(f"[微信语音] ASR 识别成功，过滤语音附件: user_input={user_input!r}")
+
+                agent_attachments = _build_attachments_for_agent(agent_attachments_input)
                 logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
                 logger.info(f"[微信语音] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
 
