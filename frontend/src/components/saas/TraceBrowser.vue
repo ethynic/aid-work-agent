@@ -60,9 +60,9 @@
             <thead class="bg-canvas sticky top-0">
               <tr>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-12">序号</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-muted">会话ID</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-28">租户</th>
-                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-28">用户</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-56">会话ID</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-48">租户</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-muted w-48">用户</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted">首次输入</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-24">来源</th>
                 <th class="px-4 py-2 text-left text-xs font-medium text-muted w-20">Trace数</th>
@@ -75,10 +75,10 @@
               <tr v-for="(s, idx) in sessions" :key="s.session_id"
                 class="hover:bg-surface-hover cursor-pointer" @click="goToSession(s.session_id)">
                 <td class="px-4 py-2 text-xs text-muted">{{ (page - 1) * pageSize + idx + 1 }}</td>
-                <td class="px-4 py-2 text-xs text-default font-mono">{{ s.session_id.substring(0, 16) }}...</td>
-                <td class="px-4 py-2 text-xs text-muted font-mono truncate" :title="s.tenant_id || ''">{{ s.tenant_id ? s.tenant_id.substring(0, 12) + '...' : '-' }}</td>
-                <td class="px-4 py-2 text-xs text-muted font-mono truncate" :title="s.user_id || ''">{{ s.user_id ? s.user_id.substring(0, 12) + '...' : '-' }}</td>
-                <td class="px-4 py-2 text-sm text-default max-w-xs truncate">{{ s.first_content || s.first_input || '-' }}</td>
+                <td class="px-4 py-2 text-xs text-default font-mono break-all" :title="s.session_id">{{ s.session_id }}</td>
+                <td class="px-4 py-2 text-xs text-default font-mono break-all" :title="s.tenant_id || ''">{{ s.tenant_id || '-' }}</td>
+                <td class="px-4 py-2 text-xs text-default font-mono break-all" :title="s.user_id || ''">{{ s.user_id || '-' }}</td>
+                <td class="px-4 py-2 text-sm text-default break-words whitespace-normal">{{ s.first_content || s.first_input || '-' }}</td>
                 <td class="px-4 py-2 text-sm">
                   <span :class="sourceBadgeClass(s.source_type)"
                     class="inline-block px-1.5 py-0.5 rounded text-xs font-medium">
@@ -97,19 +97,14 @@
           </table>
           <div v-else class="text-center py-12 text-muted">暂无追踪数据</div>
 
-          <div v-if="totalPages > 1" class="px-4 py-3 border-t border-default flex items-center justify-between">
-            <span class="text-sm text-muted">共 {{ total }} 个会话</span>
-            <div class="flex items-center gap-2">
-              <button @click="page--; loadData()" :disabled="page <= 1"
-                class="px-2 py-1 text-xs border border-default rounded hover:bg-surface-hover disabled:opacity-50">
-                上一页
-              </button>
-              <span class="text-sm text-default">{{ page }} / {{ totalPages }}</span>
-              <button @click="page++; loadData()" :disabled="page >= totalPages"
-                class="px-2 py-1 text-xs border border-default rounded hover:bg-surface-hover disabled:opacity-50">
-                下一页
-              </button>
-            </div>
+          <div v-if="total > 0" class="px-4 py-3 border-t border-default flex items-center justify-center">
+            <BasePagination
+              :total="total"
+              v-model:current-page="page"
+              v-model:page-size="pageSize"
+              :show-size-changer="false"
+              @change="loadData"
+            />
           </div>
         </div>
       </template>
@@ -121,15 +116,15 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getTracedSessions, type SessionSummary } from '@/api/monitor'
+import BasePagination from '@/components/ui/BasePagination.vue'
 
 const router = useRouter()
 
 const sessions = ref<SessionSummary[]>([])
 const loading = ref(false)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
-const totalPages = ref(0)
 const filterStatus = ref('')
 const filterSourceType = ref('')
 const timeRange = ref('')
@@ -185,7 +180,7 @@ async function loadData() {
   try {
     const res = await getTracedSessions({
       page: page.value,
-      page_size: pageSize,
+      page_size: pageSize.value,
       status: filterStatus.value || undefined,
       source_type: filterSourceType.value || undefined,
       time_range: timeRange.value || undefined,
@@ -196,7 +191,6 @@ async function loadData() {
     if (res.success) {
       sessions.value = res.data
       total.value = res.total
-      totalPages.value = res.total_pages
     }
   } catch (e) {
     console.error('Failed to load sessions:', e)
