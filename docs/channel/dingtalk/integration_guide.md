@@ -115,21 +115,21 @@
 
 ### 3.2 单租户模式（config.yaml）
 
-非 SaaS 部署时，可在 `configs/config.yaml` 中配置：
+非 SaaS 部署且不方便用管理后台时，可直接在 `configs/config.yaml` 中配置（注意:项目已不再读取 `DINGTALK_*` 环境变量,需将凭证明文填入配置）：
 
 ```yaml
 channels:
   dingtalk:
     enabled: true
-    app_key: "${DINGTALK_APP_KEY}"
-    app_secret: "${DINGTALK_APP_SECRET}"
+    app_key: "your_dingtalk_app_key"
+    app_secret: "your_dingtalk_app_secret"
     welcome_message: "你好，我是你的智能助手"
     max_bytes: 4000          # 单条消息最大字节数
     rate_limit_window: 60    # 速率限制窗口（秒）
     rate_limit_max: 10       # 每窗口最大消息数
 ```
 
-环境变量优先级高于 config.yaml。
+> **历史变更**: 旧版本支持 `${DINGTALK_APP_KEY}` / `${DINGTALK_APP_SECRET}` 占位符,现已被管理后台取代,请使用上述明文配置或管理后台。
 
 ---
 

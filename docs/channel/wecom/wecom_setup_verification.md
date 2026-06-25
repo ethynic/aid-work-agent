@@ -66,29 +66,23 @@
 
 ## 二、服务端配置（共 3 步）
 
-### Step 6: 环境变量配置
+### Step 6: 在管理后台配置渠道
 
-在服务器 `.env` 文件中添加:
+> 企业微信渠道凭证 **不再通过 `.env` 配置**,改为在管理后台「渠道配置」页面录入并加密存储到 `tenant_channel_configs` 表中。
 
-```bash
-# 启用企业微信渠道
-WECOM_ENABLED=true
+登录管理后台,进入「渠道配置」→「新增渠道」,选择渠道类型 `wecom`,填写从 Step 2 获取的凭证:
 
-# 从管理后台获取的凭证
-WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
-WECOM_AGENT_ID=1000002
-WECOM_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-WECOM_TOKEN=your_token_from_step_3
-WECOM_ENCODING_AES_KEY=your_43_char_key_from_step_3
-```
+| 字段 | 来源 | 必填 |
+|------|------|------|
+| `channel_type` | 固定 `wecom` | ✅ |
+| `corp_id` | 「我的企业」→ 企业信息 | ✅ |
+| `agent_id` | 应用详情页 AgentId | ✅ |
+| `secret` | 应用详情页 Secret | ✅ |
+| `token` | API 接收消息 → Token | ✅ |
+| `encoding_aes_key` | API 接收消息 → EncodingAESKey | ✅ |
+| `welcome_message` | 首次会话欢迎消息 | ❌ |
 
-重启服务使配置生效:
-```bash
-# 根据你的部署方式选择
-python -m src.main
-# 或
-systemctl restart aid-work-agent
-```
+保存后系统会为当前租户创建一条 `ChannelConfig` 记录,无需重启服务即可生效。
 
 ---
 

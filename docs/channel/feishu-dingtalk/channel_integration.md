@@ -56,28 +56,24 @@
 | 获取部门信息 | contact:department:readonly | 获取部门信息 |
 | 发送消息 | im:message | 发送消息 |
 
-### 6. 环境变量配置
+### 6. 在管理后台配置渠道
 
-```bash
-# 飞书配置
-FEISHU_ENABLED=true
-FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxxxx
-FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-FEISHU_VERIFICATION_TOKEN=your_verification_token
-FEISHU_ENCRYPT_KEY=your_encrypt_key_32_chars
-```
+> **重要**: 飞书渠道凭证（App ID、App Secret、Verification Token、Encrypt Key）**不再通过 `.env` 或 `configs/config.yaml` 配置**,改为在管理后台「渠道配置」页面录入,凭证加密存储在 `tenant_channel_configs` 表中。
 
-或在 `configs/config.yaml` 中配置：
+登录管理后台,进入「渠道配置」→「新增渠道」,选择 `feishu`,填写:
 
-```yaml
-channels:
-  feishu:
-    enabled: true
-    app_id: "cli_xxxxxxxxxxxxxxxxxx"
-    app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    verification_token: "your_verification_token"
-    encrypt_key: "your_encrypt_key_32_chars"
-```
+| 字段 | 来源 | 必填 |
+|------|------|------|
+| `channel_type` | 固定 `feishu` | ✅ |
+| `app_id` | 飞书开放平台 App ID | ✅ |
+| `app_secret` | 飞书开放平台 App Secret | ✅ |
+| `verification_token` | 飞书事件订阅 Verification Token | ✅ |
+| `encrypt_key` | 飞书事件订阅 Encrypt Key（可选） | ❌ |
+| `welcome_message` | 首次会话欢迎消息 | ❌ |
+
+保存后系统会为当前租户创建一条 `ChannelConfig` 记录,无需重启服务。
+
+> **历史变更**: 旧版本曾要求在 `.env` 中配置 `FEISHU_ENABLED` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`,这些变量已不再被代码读取。
 
 ---
 
@@ -116,28 +112,25 @@ channels:
 
 在「企业微信管理后台」- 「通讯录」中，确保应用有获取成员的权限。
 
-### 6. 环境变量配置
+### 6. 在管理后台配置渠道
 
-```bash
-# 企业微信配置
-WECOM_ENABLED=true
-WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
-WECOM_AGENT_ID=1000001
-WECOM_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
+> **重要**: 企业微信渠道凭证（CorpID、AgentID、Secret、Token、EncodingAESKey）**不再通过 `.env` 或 `configs/config.yaml` 配置**,改为在管理后台「渠道配置」页面录入,凭证加密存储在 `tenant_channel_configs` 表中。
 
-或在 `configs/config.yaml` 中配置：
+登录管理后台,进入「渠道配置」→「新增渠道」,选择 `wecom`,填写:
 
-```yaml
-channels:
-  wecom:
-    enabled: true
-    corp_id: "wwxxxxxxxxxxxxxxxx"
-    agent_id: "1000001"
-    secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    token: "your_token"
-    encoding_aes_key: "your_encoding_aes_key_43_chars"
-```
+| 字段 | 来源 | 必填 |
+|------|------|------|
+| `channel_type` | 固定 `wecom` | ✅ |
+| `corp_id` | 「我的企业」→ 企业信息 | ✅ |
+| `agent_id` | 应用详情页 AgentId | ✅ |
+| `secret` | 应用详情页 Secret | ✅ |
+| `token` | API 接收消息 → Token | ✅ |
+| `encoding_aes_key` | API 接收消息 → EncodingAESKey | ✅ |
+| `welcome_message` | 首次会话欢迎消息 | ❌ |
+
+保存后系统会为当前租户创建一条 `ChannelConfig` 记录,无需重启服务。
+
+> **历史变更**: 旧版本曾要求在 `.env` 中配置 `WECOM_ENABLED` / `WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_ENCODING_AES_KEY`,这些变量已不再被代码读取。
 
 ---
 
@@ -182,28 +175,22 @@ channels:
 |----------|----------|------|
 | 获取用户信息 | dingtalk:user:employee:readonly | 获取用户基本信息 |
 
-### 6. 环境变量配置
+### 6. 在管理后台配置渠道
 
-```bash
-# 钉钉配置
-DINGTALK_ENABLED=true
-DINGTALK_APP_KEY=dingxxxxxxxxxxxxxxxx
-DINGTALK_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-DINGTALK_TOKEN=your_token
-DINGTALK_ENCODING_AES_KEY=your_encoding_aes_key_43_chars
-```
+> **重要**: 钉钉渠道凭证（AppKey、AppSecret）**不再通过 `.env` 或 `configs/config.yaml` 配置**,改为在管理后台「渠道配置」页面录入,凭证加密存储在 `tenant_channel_configs` 表中。
 
-或在 `configs/config.yaml` 中配置：
+登录管理后台,进入「渠道配置」→「新增渠道」,选择 `dingtalk`,填写:
 
-```yaml
-channels:
-  dingtalk:
-    enabled: true
-    app_key: "dingxxxxxxxxxxxxxxxx"
-    app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    token: "your_token"
-    encoding_aes_key: "your_encoding_aes_key_43_chars"
-```
+| 字段 | 来源 | 必填 |
+|------|------|------|
+| `channel_type` | 固定 `dingtalk` | ✅ |
+| `app_key` | 钉钉开放平台 AppKey | ✅ |
+| `app_secret` | 钉钉开放平台 AppSecret | ✅ |
+| `welcome_message` | 首次会话欢迎消息 | ❌ |
+
+保存后系统会为当前租户创建一条 `ChannelConfig` 记录,无需重启服务。
+
+> **历史变更**: 旧版本曾要求在 `.env` 中配置 `DINGTALK_ENABLED` / `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET` / `DINGTALK_TOKEN` / `DINGTALK_ENCODING_AES_KEY`,这些变量已不再被代码读取。
 
 ---
 
@@ -329,6 +316,6 @@ DELETE /api/channels/sessions/{session_id}
 - [ ] 机器人能力已启用
 - [ ] 消息回调已配置并验证通过
 - [ ] 权限已申请并审批通过
-- [ ] 环境变量或配置文件已正确设置
+- [ ] 管理后台「渠道配置」已正确录入并保存
 - [ ] 数据库表已创建（channel_sessions, channel_messages）
 - [ ] 测试发送消息确认功能正常

@@ -298,7 +298,5 @@ Vue 3 + TypeScript + Vite + TailwindCSS 构建的单页应用。通过 SSE（Eve
 | `MODEL_CODE` | 模型编码 |
 | `BASE_URL` | API Base URL |
 | `DATABASE_URL` | 数据库连接字符串 |
-| `WECOM_CORP_ID` / `WECOM_SECRET` 等 | 企业微信配置 |
-| `DINGTALK_APP_KEY` 等 | 钉钉配置 |
-| `FEISHU_APP_ID` 等 | 飞书配置 |
 | `SMTP_SERVER` / `IMAP_SERVER` 等 | 邮件服务配置 |
+| 企业微信 / 钉钉 / 飞书渠道 | 通过管理后台「渠道配置」配置（不再使用环境变量） |

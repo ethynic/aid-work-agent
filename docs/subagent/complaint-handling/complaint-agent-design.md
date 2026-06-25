@@ -150,8 +150,8 @@ notification:
       default_url: ""
     wechat:
       enabled: false
-      corp_id: "${WECOM_CORP_ID}"
-      agent_id: "${WECOM_AGENT_ID}"
+      corp_id: "your_corp_id"          # 从企业微信「我的企业」获取
+      agent_id: "your_agent_id"        # 应用详情页 AgentId
 ```
 
 ### 2.3 通用分类服务 (`src/services/classification_service.py`) ✅

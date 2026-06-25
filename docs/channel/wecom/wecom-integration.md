@@ -84,11 +84,13 @@ POST https://your-domain.com/wecom/callback?msg_signature=xxx&timestamp=16094592
 | | 单租户模式 | 多租户（SaaS）模式 |
 |---|---|---|
 | **适用场景** | 单个企业自用 | SaaS 平台服务多个企业 |
-| **配置方式** | 环境变量 / config.yaml | 管理后台 API 动态配置 |
+| **配置方式** | 管理后台「渠道配置」 | 管理后台「渠道配置」 |
 | **回调地址** | `/wecom/callback` | `/t/{tenant_id}/wecom/callback` |
-| **凭证存储** | 服务器 .env 文件 | 数据库 `tenant_channel_configs` 表 |
-| **启用方式** | `WECOM_ENABLED=true` | 通过管理后台配置 |
+| **凭证存储** | 数据库 `tenant_channel_configs` 表 | 数据库 `tenant_channel_configs` 表 |
+| **启用方式** | 在管理后台启用 wecom 渠道 | 在管理后台启用 wecom 渠道 |
 | **Agent 实例** | 全局 master_agent | 租户绑定的 agent_instance |
+
+> **历史变更**: 早期版本曾在 `.env` 中通过 `WECOM_CORP_ID` / `WECOM_SECRET` 等变量配置渠道凭证,现已被管理后台取代,环境变量不再被代码读取。
 
 ### 回调地址规则
 
@@ -231,24 +233,18 @@ curl -X POST https://your-domain.com/api/saas/instances/{instance_id}/start \
 
 ---
 
-## 5. 环境变量配置（单租户模式）
+## 5. 渠道配置（管理后台）
 
-### 3.1 前置条件
+> **重要**: 企业微信渠道凭证（CorpID、AgentID、Secret、Token、EncodingAESKey 等）**不再通过 `.env` 或 `configs/config.yaml` 配置**,改为在管理后台「渠道配置」页面录入,凭证加密存储在 `tenant_channel_configs` 表中。
+
+### 5.1 前置条件
 
 - Python 3.10+
 - 公网可访问的服务器（有域名 + SSL 证书）
 - 已安装项目依赖 (`pip install -r requirements.txt`)
 
-### 3.2 配置步骤
+### 5.2 启动服务
 
-1. 复制环境变量模板:
-```bash
-cp .env.example .env
-```
-
-2. 编辑 `.env` 文件，填入企业微信凭证（见下一节）
-
-3. 启动服务:
 ```bash
 # 开发环境
 python -m src.main
@@ -257,95 +253,52 @@ python -m src.main
 gunicorn -c deploy/gunicorn.conf.py src.main:app
 ```
 
-4. 验证服务是否启动:
+启动后验证服务可用:
 ```bash
 curl http://localhost:8000/health
 # 应返回: {"status": "ok"}
 ```
 
-5. 回到企业微信管理后台，点击「保存」完成回调 URL 验证
+### 5.3 在管理后台新增渠道
 
----
+1. 登录管理后台,进入「渠道配置」→「新增渠道」。
+2. 选择渠道类型 `wecom`,填写以下字段:
 
-### 必填变量
+| 字段 | 来源 | 必填 |
+|------|------|------|
+| `channel_type` | 固定 `wecom` | ✅ |
+| `corp_id` | 「我的企业」→ 企业信息 | ✅ |
+| `agent_id` | 应用详情页 AgentId | ✅ |
+| `secret` | 应用详情页 Secret | ✅ |
+| `token` | API 接收消息 → Token | ✅ |
+| `encoding_aes_key` | API 接收消息 → EncodingAESKey | ✅ |
+| `welcome_message` | 首次会话欢迎消息 | ❌ |
 
-### 必填变量
+3. 保存后系统会创建一条 `ChannelConfig` 记录并加密存储,无需重启服务。
+4. 回到企业微信管理后台 Step 3,点击「保存」完成回调 URL 验证。
 
-```bash
-# 启用企业微信渠道
-WECOM_ENABLED=true
+### 5.4 可调参数
 
-# 企业 ID（在「我的企业」页面获取）
-WECOM_CORP_ID=ww1234567890abcdef
-
-# 应用 ID（在应用详情页获取）
-WECOM_AGENT_ID=1000002
-
-# 应用密钥（在应用详情页获取）
-WECOM_SECRET=your-32-character-secret-here
-
-# 回调 Token（设置 API 接收时配置）
-WECOM_TOKEN=your_token_here
-
-# 回调加密密钥（设置 API 接收时配置，43 字符 Base64）
-WECOM_ENCODING_AES_KEY=your-43-char-base64-encoding-aes-key
-```
-
-### 可选变量
-
-以下变量有合理默认值，通常不需要配置:
-
-```bash
-# 默认消息类型: text 或 markdown
-WECOM_MSG_TYPE=markdown
-
-# 单条消息最大字节数（默认 2048）
-WECOM_MSG_MAX_BYTES=2048
-
-# API 调用重试次数（默认 3）
-WECOM_MAX_RETRIES=3
-
-# 每用户每分钟速率限制（默认 10）
-WECOM_RATE_LIMIT=10
-```
-
----
-
-## 6. config.yaml 配置
-
-也可以通过 `configs/config.yaml` 配置（环境变量优先级更高）:
+下列参数在 `configs/config.yaml` 的 `wecom` 节点下配置,均有合理默认值,通常无需修改:
 
 ```yaml
-channels:
-  wecom:
+wecom:
+  waiting_indicator:
     enabled: true
-    corp_id: "ww1234567890abcdef"
-    agent_id: "1000002"
-    secret: "your-secret"
-    token: "your-token"
-    encoding_aes_key: "your-43-char-base64-key"
-
-    # 消息配置
-    message:
-      default_type: "markdown"     # 默认消息类型
-      max_bytes: 2048              # 单条消息最大字节数
-      split_on_paragraph: true     # 按段落拆分
-
-    # 媒体配置
-    media:
-      upload_dir: "./uploads/wecom"  # 媒体文件存储目录
-      max_file_size: 20971520        # 最大文件大小（20MB）
-
-    # 速率限制
-    rate_limit:
-      enabled: true
-      max_per_minute: 10
-
-    # 重试配置
-    retry:
-      max_attempts: 3
-      backoff_base: 1.0
+    delay_seconds: 5
+    messages:
+      - "全力思考中..."
+      - "让我推演一下..."
+      # ... 更多提示语
 ```
+
+可被环境变量覆盖（已废弃,仅保留兼容入口）:
+- `WECOM_WAITING_INDICATOR_ENABLED`
+- `WECOM_WAITING_INDICATOR_DELAY_SECONDS`
+
+---
+
+> **历史变更**: 旧版本曾要求在 `.env` 中配置 `WECOM_CORP_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_ENCODING_AES_KEY` / `WECOM_MSG_TYPE` / `WECOM_MSG_MAX_BYTES` / `WECOM_MAX_RETRIES` / `WECOM_RATE_LIMIT` 等变量。这些变量已不再被代码读取,请使用管理后台或 `configs/config.yaml` 替代。
 
 ---
 
@@ -465,7 +418,7 @@ WeCom 的回调重试机制可能导致同一消息被推送多次。系统通�
 **排查步骤**:
 1. 确认服务器公网可访问: `curl https://your-domain.com/health`
 2. 检查 SSL 证书是否有效
-3. 确认环境变量 `WECOM_TOKEN` 和 `WECOM_ENCODING_AES_KEY` 与管理后台配置一致
+3. 确认管理后台「渠道配置」中的 `token` 和 `encoding_aes_key` 与企业微信管理后台 Step 3 配置一致
 4. 查看服务日志中的验签/解密错误
 5. 检查 Nginx 是否正确代理到后端
 
@@ -474,7 +427,7 @@ WeCom 的回调重试机制可能导致同一消息被推送多次。系统通�
 **现象**: 用户发消息后没有收到回复
 
 **排查步骤**:
-1. 检查日志中是否有 `获取 access_token 失败` 错误 → 确认 `WECOM_SECRET` 正确
+1. 检查日志中是否有 `获取 access_token 失败` 错误 → 确认管理后台「渠道配置」中的 `secret` 正确
 2. 检查日志中是否有 `errcode=60011` → 应用没有发送消息权限
 3. 检查日志中是否有 `errcode=81013` → 用户不在应用可见范围内
 4. 检查可信 IP 是否已配置

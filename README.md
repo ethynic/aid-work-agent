@@ -89,15 +89,10 @@ CLI_MODE=true python -m src.main
 | 通义千问 | 阿里云 | `LLM_PROVIDER=qwen` + `API_KEYS` |
 | 智谱GLM | 智谱AI | `LLM_PROVIDER=zhipu` + `API_KEYS` |
 
-### 企业微信配置
+### 企业微信 / 钉钉 / 飞书渠道配置
 
-| 配置项 | 说明 |
-|--------|------|
-| `WECOM_CORP_ID` | 企业ID |
-| `WECOM_AGENT_ID` | 应用ID |
-| `WECOM_SECRET` | 应用Secret |
-| `WECOM_TOKEN` | 回调Token |
-| `WECOM_ENCODING_AES_KEY` | 加密密钥 |
+渠道凭证（CorpID、AgentID、Secret、AppKey、AppSecret 等）**不再通过环境变量配置**。
+请在管理后台「渠道配置」页面为对应租户录入，凭证会加密存储在 `tenant_channel_configs` 表中。
 
 ## API使用示例
 

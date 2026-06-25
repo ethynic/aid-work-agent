@@ -120,23 +120,23 @@
 
 ### 3.2 单租户模式（config.yaml）
 
-非 SaaS 部署时，可在 `configs/config.yaml` 中配置：
+非 SaaS 部署且不方便用管理后台时，可直接在 `configs/config.yaml` 中配置（注意:项目已不再读取 `FEISHU_*` 环境变量,需将凭证明文填入配置）：
 
 ```yaml
 channels:
   feishu:
     enabled: true
-    app_id: "${FEISHU_APP_ID}"
-    app_secret: "${FEISHU_APP_SECRET}"
-    verification_token: "${FEISHU_VERIFICATION_TOKEN}"
-    encrypt_key: "${FEISHU_ENCRYPT_KEY}"  # 可选
+    app_id: "cli_xxxxxxxxxxxxxxxxxx"
+    app_secret: "your_feishu_app_secret"
+    verification_token: "your_verification_token"
+    encrypt_key: "your_encrypt_key_32_chars"  # 可选
     welcome_message: "你好，我是你的智能助手"
     max_bytes: 4000          # 单条消息最大字节数
     rate_limit_window: 60    # 速率限制窗口（秒）
     rate_limit_max: 10       # 每窗口最大消息数
 ```
 
-环境变量优先级高于 config.yaml。
+> **历史变更**: 旧版本支持 `${FEISHU_APP_ID}` / `${FEISHU_APP_SECRET}` / `${FEISHU_VERIFICATION_TOKEN}` / `${FEISHU_ENCRYPT_KEY}` 占位符,现已被管理后台取代,请使用上述明文配置或管理后台。
 
 ---
 

@@ -133,13 +133,7 @@ WORKER_TIMEOUT=120
 API_PORT=8000
 DEBUG=false
 
-# ========== 企业微信配置 ==========
-WECOM_ENABLED=true
-WECOM_CORP_ID=your_corp_id
-WECOM_AGENT_ID=your_agent_id
-WECOM_SECRET=your_secret
-WECOM_TOKEN=your_token
-WECOM_ENCODING_AES_KEY=your_aes_key
+# 企业微信 / 钉钉 / 飞书渠道不再通过 .env 配置，请登录管理后台「渠道配置」页面录入
 
 # ========== 工具配置 ==========
 SMTP_SERVER=smtp.example.com
