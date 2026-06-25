@@ -13,10 +13,10 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # 安装构建依赖
-# 使用清华镜像加速 Debian 包下载
-RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
-    echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
-    echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
+# 使用腾讯云镜像加速 Debian 包下载（服务器在腾讯云内网，TTFB < 50ms）
+RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
+    echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
+    echo 'deb https://mirrors.cloud.tencent.com/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -76,13 +76,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/home/appuser/tmp
 
 # 安装运行时依赖（字体、浏览器等）
-# 使用清华镜像加速 Debian 包下载
+# 使用腾讯云镜像加速 Debian 包下载（服务器在腾讯云内网，TTFB < 50ms）
 # 注意：apt-get install 阶段只跑一次，构建缓存依赖 BuildKit 层缓存
 # （Docker 镜像层复用），不依赖 --mount=type=cache（在你的 BuildKit 版本下
 # 会有 /var/lib/apt/lists 锁冲突问题）
-RUN echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
-    echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
-    echo 'deb https://mirrors.tuna.tsinghua.edu.cn/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
+RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-firmware' > /etc/apt/sources.list && \
+    echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie-updates main non-free-firmware' >> /etc/apt/sources.list && \
+    echo 'deb https://mirrors.cloud.tencent.com/debian-security/ trixie-security main non-free-firmware' >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
     # 常用工具
     curl \
