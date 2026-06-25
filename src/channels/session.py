@@ -647,6 +647,18 @@ class ChannelSessionManager:
         response_text = result.response_text or ""
         # 合并方应持久化「合并后的输入」，否则用原始 user_content
         user_to_write = result.merged_input if result.was_merged else user_content
+        if result.was_merged:
+            tlog(
+                "语音合并",
+                "持久化用户消息 session={sid}..., was_merged=True, "
+                "user_content_len={uc_len}, merged_input_len={mi_len}, "
+                "write_len={w_len}, write_preview={w_prev!r}",
+                sid=session_id[:20],
+                uc_len=len(user_content),
+                mi_len=len(result.merged_input),
+                w_len=len(user_to_write),
+                w_prev=user_to_write[:120],
+            )
 
         # 构造批量写入的消息序列
         batch: List[Dict[str, Any]] = []

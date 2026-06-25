@@ -234,11 +234,13 @@ class SessionMessageQueue:
         session_id: str,
         original_input: str,
         processor,
-    ) -> Optional[str]:
+    ) -> Optional[tuple]:
         """
         处理器返回后检查是否需要重新处理（取消 + 有合并输入）。
 
-        返回新的回复文本，或 None（不需要重新处理）。
+        返回 (新的回复文本, 实际使用的合并输入) 元组，或 None（不需要重新处理）。
+        合并输入必须透传给调用方，否则调用方只能拿到 original_input（陈旧），
+        导致持久化时写入非合并的原始输入，丢失后续追加的消息。
         """
         # 检查是否被取消
         if not self.is_cancelled(session_id):
@@ -273,7 +275,18 @@ class SessionMessageQueue:
         response = processor(cancel_check, user_input_override=merged_input)
         if asyncio.iscoroutine(response):
             response = await response
-        return response
+        tlog(
+            "语音合并",
+            "重处理完成 session={sid}..., "
+            "merged_len={m_len}, merged_preview={m_prev!r}, "
+            "response_len={r_len}, response_preview={r_prev!r}",
+            sid=session_id[:20],
+            m_len=len(merged_input),
+            m_prev=merged_input[:80],
+            r_len=len(response) if response else 0,
+            r_prev=(response or "")[:80],
+        )
+        return response, merged_input
 
     async def enqueue_and_process(
         self,
@@ -378,11 +391,27 @@ class SessionMessageQueue:
                             was_merged=True,
                         )
                     if reprocessed is not None:
+                        reprocessed_text, reprocessed_merged_input = reprocessed
                         self.release_lock(session_id, lock_value)
+                        # 必须使用 _handle_cancel_and_reprocess 透传回来的
+                        # reprocessed_merged_input（合并后的完整输入），
+                        # 不能用 final_input —— final_input 是合并窗口结束时读到的值，
+                        # 此时后续追加的消息尚未进入合并缓冲区，持久化 final_input
+                        # 会导致追加的消息丢失（参见会话历史缺消息的 bug）。
+                        tlog(
+                            "语音合并",
+                            "[idle 路径] 返回重处理结果 session={sid}..., "
+                            "final_input_len={fi_len}, remerged_len={rm_len}, "
+                            "remerged_preview={rm_prev!r}",
+                            sid=session_id[:20],
+                            fi_len=len(final_input),
+                            rm_len=len(reprocessed_merged_input),
+                            rm_prev=reprocessed_merged_input[:80],
+                        )
                         return EnqueueResult(
                             status="success",
-                            response_text=reprocessed or "",
-                            merged_input=final_input,
+                            response_text=reprocessed_text or "",
+                            merged_input=reprocessed_merged_input,
                             was_merged=True,
                         )
                     # 2. 检查是否有排队消息（处理中到达的新消息）
@@ -436,11 +465,23 @@ class SessionMessageQueue:
                                 reprocessed = None
                             self.release_lock(session_id, lock_value)
                             if reprocessed is not None:
+                                reprocessed_text, reprocessed_merged_input = reprocessed
+                                # 同上：使用透传回来的合并输入，而非 pending_input
+                                tlog(
+                                    "语音合并",
+                                    "[pending 路径] 返回重处理结果 session={sid}..., "
+                                    "pending_input_len={pi_len}, remerged_len={rm_len}, "
+                                    "remerged_preview={rm_prev!r}",
+                                    sid=session_id[:20],
+                                    pi_len=len(pending_input),
+                                    rm_len=len(reprocessed_merged_input),
+                                    rm_prev=reprocessed_merged_input[:80],
+                                )
                                 return EnqueueResult(
                                     status="success",
-                                    response_text=reprocessed or "",
-                                    merged_input=pending_input,
-                                    was_merged=False,
+                                    response_text=reprocessed_text or "",
+                                    merged_input=reprocessed_merged_input,
+                                    was_merged=True,
                                 )
                             return EnqueueResult(
                                 status="success",
