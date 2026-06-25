@@ -24,9 +24,11 @@ except ImportError:
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost/aid_work_agent")
 DATABASE_ECHO = os.getenv("DATABASE_ECHO", "false").lower() == "true"
 
-# PostgreSQL 连接池配置（5用户场景，降低到 5，减少并发连接数）
-DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
-DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
+# PostgreSQL 连接池配置
+# 默认值适配 Gunicorn 多 worker 场景：单 worker 池上限 15，4 worker 总并发 60（PG max_connections=80 仍留有余量）
+# 通过环境变量 DB_POOL_MIN / DB_POOL_MAX 可覆盖
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "15"))
 
 # 追踪库配置（可观测性数据，独立数据库）
 LOGS_DATABASE_URL = os.getenv("LOGS_DATABASE_URL", "")

@@ -604,10 +604,11 @@ async def lifespan(app: FastAPI):
                         except Exception as e:
                             logger.error(
                                 f"[wecom_kf] 超时检查处理单个会话异常: "
-                                f"session_id={session.get('session_id', 'unknown')}: {e}"
+                                f"session_id={session.get('session_id', 'unknown')}: {e}",
+                                exc_info=True
                             )
                 except Exception as e:
-                    logger.error(f"[wecom_kf] 超时检查异常: {e}")
+                    logger.error(f"[wecom_kf] 超时检查异常: {e}", exc_info=True)
         asyncio.create_task(_wecom_kf_timeout_check_loop())
 
     yield
