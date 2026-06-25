@@ -57,6 +57,49 @@ export interface RpaBinding {
   last_verified_at: string | null
   created_at: string | null
   updated_at: string | null
+  /** 租户 id（list_all_bindings 返回，普通 list_bindings 不含） */
+  tenant_id?: string | null
+  /** 租户名（list_all_bindings 返回，普通 list_bindings 不含） */
+  tenant_name?: string | null
+  /** 关联客户端 id（list_all_bindings 返回，普通 list_bindings 可能为 null） */
+  client_id?: string | null
+  /** 关联客户端名称 */
+  client_name?: string | null
+  /** 客户端回填的服务端生产地址（运维排查用） */
+  agent_base_url?: string | null
+  /** 最近一次客户端心跳时间（来自 clients.last_seen_at） */
+  last_heartbeat_at?: string | null
+}
+
+/**
+ * 平台后台「RPA 绑定管理」列表行（一行一 client，聚合视图）。
+ *
+ * 自 2026-06 改造后 ``GET /all_bindings`` 以 wecom_rpa_clients 为基准返回，
+ * 确保创建 client 后即可看到，无需等待 client 真正连上来生成 binding。
+ */
+export interface RpaClientRow {
+  /** 客户端 id（主键） */
+  client_id: string
+  /** 租户 id */
+  tenant_id: string
+  /** 客户端显示名称 */
+  client_name: string | null
+  /** 客户端状态：active / disabled（来自 wecom_rpa_clients.status） */
+  client_status: string
+  /** 客户端回填的服务端生产地址（运维排查用） */
+  agent_base_url: string | null
+  /** 最近一次客户端心跳时间（来自 clients.last_seen_at，NULL 表示从未连上来过） */
+  last_heartbeat_at: string | null
+  /** 允许继续托管的最小客户端版本 */
+  min_version: string | null
+  created_at: string | null
+  updated_at: string | null
+  /** 该 client 下的账号数（0 表示客户端从未注册过任何企微账号） */
+  account_count: number
+  /** 该 client 下的会话绑定总数 */
+  binding_count: number
+  /** 最近一个账号的 display_name（用于列表快速预览，可能为 null） */
+  last_account_name: string | null
 }
 
 export interface RpaAudit {
@@ -152,10 +195,26 @@ function buildQuery(params: Record<string, any>): string {
 
 // ==================== 1. 客户端注册 / 列表 / 密钥轮换 ====================
 
-export async function registerClient(req: RegisterClientReq): Promise<RegisterClientResult> {
+export async function registerClient(
+  req: RegisterClientReq,
+  opts?: {
+    /**
+     * 平台管理员代管理时手动指定目标租户（平台后台路径 /portal/* 不会自动注入 X-Tenant-Id）。
+     * 不传则走 getSaasAuthHeader 的默认逻辑（/t/* 路径自动从 URL 提取）。
+     */
+    tenantId?: string
+  },
+): Promise<RegisterClientResult> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getSaasAuthHeader(),
+  }
+  if (opts?.tenantId) {
+    headers['X-Tenant-Id'] = opts.tenantId
+  }
   const res = await fetch(`${API_BASE}/clients`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    headers,
     body: JSON.stringify(req),
   })
   const body = await parseJson(res, '注册客户端失败')
@@ -178,12 +237,69 @@ export async function listClientAccounts(clientId: string): Promise<RpaAccount[]
   return body.data ?? []
 }
 
-export async function rotateClientSecret(clientId: string): Promise<RotateSecretResult> {
+export async function rotateClientSecret(
+  clientId: string,
+  opts?: {
+    /**
+     * 平台管理员代管理时手动指定目标租户（平台后台路径 /portal/* 不会自动注入 X-Tenant-Id）。
+     * 不传则走 getSaasAuthHeader 的默认逻辑（/t/* 路径自动从 URL 提取）。
+     * 租户后台 WecomPersonalRpaManager.vue 不需要传此参数。
+     */
+    tenantId?: string
+  },
+): Promise<RotateSecretResult> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getSaasAuthHeader(),
+  }
+  if (opts?.tenantId) {
+    headers['X-Tenant-Id'] = opts.tenantId
+  }
   const res = await fetch(`${API_BASE}/clients/${encodeURIComponent(clientId)}/rotate-secret`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    headers,
   })
   const body = await parseJson(res, '轮换密钥失败')
+  return body.data
+}
+
+/** 暂停客户端（active → disabled） */
+export async function pauseClient(
+  clientId: string,
+  opts?: { tenantId?: string },
+): Promise<{ client_id: string; client_status: string }> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getSaasAuthHeader(),
+  }
+  if (opts?.tenantId) {
+    headers['X-Tenant-Id'] = opts.tenantId
+  }
+  const res = await fetch(`${API_BASE}/clients/${encodeURIComponent(clientId)}/pause`, {
+    method: 'POST',
+    headers,
+  })
+  const body = await parseJson(res, '暂停客户端失败')
+  return body.data
+}
+
+/** 恢复客户端（disabled → active） */
+export async function resumeClient(
+  clientId: string,
+  opts?: { tenantId?: string },
+): Promise<{ client_id: string; client_status: string }> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getSaasAuthHeader(),
+  }
+  if (opts?.tenantId) {
+    headers['X-Tenant-Id'] = opts.tenantId
+  }
+  const res = await fetch(`${API_BASE}/clients/${encodeURIComponent(clientId)}/resume`, {
+    method: 'POST',
+    headers,
+  })
+  const body = await parseJson(res, '恢复客户端失败')
   return body.data
 }
 
@@ -195,6 +311,40 @@ export async function listBindings(params: ListBindingsParams = {}): Promise<Rpa
   })
   const body = await parseJson(res, '获取绑定列表失败')
   return body.data ?? []
+}
+
+/**
+ * 平台管理员视角：跨租户列出所有 RPA 客户端（一行一 client，聚合 account/binding）。
+ * 仅 platform_admin 可访问；普通租户管理员调用会被后端 403 拒绝。
+ *
+ * 注意：自 2026-06 改造后 status 参数语义为 client.status（不再是 binding.status）；
+ * 传 'needs_review_only' 会排除 active client。
+ */
+export async function listAllBindings(
+  params: { status?: string; tenant_id?: string } = {},
+): Promise<RpaClientRow[]> {
+  const res = await fetch(`${API_BASE}/all_bindings${buildQuery(params)}`, {
+    headers: getSaasAuthHeader(),
+  })
+  const body = await parseJson(res, '获取客户端列表失败')
+  return body.data ?? []
+}
+
+/**
+ * 更新客户端回填的 agent_base_url（运维排查用）。
+ * 传入空字符串或 null 清除字段。
+ */
+export async function updateClientAgentBaseUrl(
+  clientId: string,
+  agentBaseUrl: string | null,
+): Promise<{ client_id: string; agent_base_url: string | null }> {
+  const res = await fetch(`${API_BASE}/clients/${encodeURIComponent(clientId)}/agent_base_url`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify({ agent_base_url: agentBaseUrl }),
+  })
+  const body = await parseJson(res, '更新 agent_base_url 失败')
+  return body.data
 }
 
 export async function confirmBinding(bindingId: string): Promise<{ binding_id: string; status: string }> {

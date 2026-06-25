@@ -132,8 +132,16 @@ export async function getTenantStats(): Promise<{
   return res.json()
 }
 
-export async function listTenants(): Promise<{ success: boolean; tenants: any[] }> {
-  const res = await fetch(`${API_BASE}/tenants/list_tenants`, {
+export async function listTenants(params?: {
+  page?: number
+  page_size?: number
+}): Promise<{ success: boolean; tenants: any[]; total?: number; page?: number; page_size?: number }> {
+  const sp = new URLSearchParams()
+  if (params?.page) sp.append('page', String(params.page))
+  if (params?.page_size) sp.append('page_size', String(params.page_size))
+  const qs = sp.toString()
+  const url = `${API_BASE}/tenants/list_tenants${qs ? '?' + qs : ''}`
+  const res = await fetch(url, {
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取租户列表失败')
@@ -315,9 +323,19 @@ export async function deleteChannel(configId: string): Promise<{ success: boolea
   return res.json()
 }
 
-export async function getAvailableSubagents(): Promise<{ success: boolean; subagents: string[] }> {
+export async function getAvailableSubagents(opts?: {
+  /**
+   * 平台管理员代管理时手动指定目标租户（平台后台路径 /portal/* 不会自动注入 X-Tenant-Id）。
+   * 不传则走 getSaasAuthHeader 的默认逻辑（/t/* 路径自动从 URL 提取）。
+   */
+  tenantId?: string
+}): Promise<{ success: boolean; subagents: string[] }> {
+  const headers: Record<string, string> = { ...getSaasAuthHeader() }
+  if (opts?.tenantId) {
+    headers['X-Tenant-Id'] = opts.tenantId
+  }
   const res = await fetch(`${API_BASE}/channels/available-subagents`, {
-    headers: getSaasAuthHeader()
+    headers
   })
   if (!res.ok) throw new Error('获取数字员工列表失败')
   return res.json()

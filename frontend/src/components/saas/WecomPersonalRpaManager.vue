@@ -366,6 +366,7 @@ import {
   WecomRpaClientStatusMap, WecomRpaAccountStatusMap, WecomRpaBindingStatusMap,
   colorToBadgeIntent,
 } from '@/api/enums'
+import { useRpaPauseResume } from '@/composables/useRpaPauseResume'
 
 const toast = useToast()
 const { isLoggedIn, admin } = useTenantAuth()
@@ -553,20 +554,21 @@ async function loadAccounts(clientId: string) {
 
 async function toggleAccount(acc: any) {
   const isPaused = acc.status === 'paused'
-  try {
-    if (isPaused) {
-      await resume({ scope: 'account', account_id: acc.account_id })
-      toast.success('已恢复')
-    } else {
-      await pause({ scope: 'account', account_id: acc.account_id })
-      toast.success('已暂停')
-    }
+  // 复用共享 composable（带 confirm + loading 防重复点击 + toast）
+  const ok = isPaused
+    ? await resumeAccountRef(acc.account_id)
+    : await pauseAccountRef(acc.account_id)
+  if (ok) {
     if (currentClient.value) await loadAccounts(currentClient.value.client_id)
     await loadClients()
-  } catch (e: any) {
-    toast.error(e.message || '操作失败')
   }
 }
+
+// 共享 pause/resume composable（供账号 Modal 复用，binding/tenant 级仍走内联 pause/resume）
+const {
+  pauseAccount: pauseAccountRef,
+  resumeAccount: resumeAccountRef,
+} = useRpaPauseResume({})
 
 // 租户级暂停/恢复全部账号
 async function pauseAll() {

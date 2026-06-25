@@ -207,7 +207,9 @@ const portalMenuItems = [
   { path: '/portal/subagents', label: '内置数字员工', icon: '🤖' },
   { path: '/portal/agent-definitions', label: '自定义数字员工', icon: '⚙️' },
   { path: '/portal/token-usage', label: '平台Token消耗', icon: '📊' },
+  { path: '/portal/rpa-bindings', label: 'RPA 绑定管理', icon: '🔗' },
   { path: '/portal/monitoring', label: '追踪查看', icon: '🔍' },
+  { path: '/portal/context-compression', label: '上下文压缩', icon: '📦' },
   { path: '/portal/error-logs', label: '错误日志', icon: '⚠️' },
   { path: '/portal/reply-styles', label: '回复风格', icon: '💬' },
 ]
