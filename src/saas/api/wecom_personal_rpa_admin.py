@@ -137,9 +137,19 @@ def _account_public(acc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _binding_public(b: Dict[str, Any]) -> Dict[str, Any]:
-    """绑定对外字段。"""
+    """绑定对外字段（含客户端心跳与 agent_base_url，便于排查客户端连不上服务端类问题）。
+
+    字段来源：
+    - agent_base_url / last_heartbeat_at / client_id / client_name：来自关联的 wecom_rpa_clients 表。
+      GET /all_bindings 经 LEFT JOIN 携带；list_bindings / accounts/{id}/bindings / confirm 等单 binding
+      直查场景未 join clients 表，这几个字段为 None。
+
+    注意：``GET /all_bindings`` 自 2026-06 改造后以 client 为基准返回，
+    字段集与下方 ``_client_public`` 一致；此函数仅用于 ``/bindings`` 单 binding 视图。
+    """
     return {
-        "binding_id": b.get("id"),
+        "binding_id": b.get("id") or b.get("binding_id"),
+        "tenant_id": b.get("tenant_id"),
         "account_id": b.get("account_id"),
         "conversation_type": b.get("conversation_type"),
         "display_name": b.get("display_name"),
@@ -149,7 +159,42 @@ def _binding_public(b: Dict[str, Any]) -> Dict[str, Any]:
         "last_verified_at": b.get("last_verified_at"),
         "created_at": b.get("created_at"),
         "updated_at": b.get("updated_at"),
+        "client_id": b.get("client_id"),
+        "client_name": b.get("client_name"),
+        "agent_base_url": b.get("agent_base_url"),
+        "last_heartbeat_at": b.get("last_heartbeat_at"),
     }
+
+
+def _client_public(c: Dict[str, Any]) -> Dict[str, Any]:
+    """客户端对外字段（``GET /all_bindings`` 列表专用，一行一 client 聚合视图）。
+
+    字段含义：
+    - client_id / tenant_id / client_name / client_status：来自 wecom_rpa_clients 主表。
+    - agent_base_url：客户端回填的生产服务端 URL（运维排查用）。
+    - last_heartbeat_at：来自 clients.last_seen_at；NULL 表示从未连上来过。
+    - account_count / binding_count / last_account_name：聚合自 accounts / bindings 子表。
+    """
+    return {
+        "client_id": c.get("client_id"),
+        "tenant_id": c.get("tenant_id"),
+        "client_name": c.get("client_name"),
+        "client_status": c.get("client_status"),
+        "agent_base_url": c.get("agent_base_url"),
+        "last_heartbeat_at": c.get("last_heartbeat_at"),
+        "min_version": c.get("min_version"),
+        "created_at": c.get("created_at"),
+        "updated_at": c.get("updated_at"),
+        "account_count": c.get("account_count", 0),
+        "binding_count": c.get("binding_count", 0),
+        "last_account_name": c.get("last_account_name"),
+    }
+
+
+def _require_platform_admin(admin: Dict[str, Any]) -> None:
+    """校验当前 admin 必须是 platform_admin，否则抛 403。"""
+    if admin.get("role") != "platform_admin":
+        raise _fail("仅平台管理员可访问", status_code=403)
 
 
 def _audit_public(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -329,6 +374,89 @@ async def rotate_client_secret(client_id: str, request: Request):
     )
 
 
+@router.post("/clients/{client_id}/pause")
+async def pause_client(client_id: str, request: Request):
+    """暂停客户端（status: active → disabled）。
+
+    暂停后该 client 的所有 account / binding 不再被自动处理（具体由 inbound 路由判定）。
+    平台管理员代管理时必须用 X-Tenant-Id 指定目标租户（对齐 rotate_secret 的隔离模型）。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+    user_id = admin.get("user_id")
+
+    client = rpa_db.get_client(client_id)
+    if not client:
+        raise _fail("客户端不存在", status_code=404)
+    if client.get("tenant_id") != tenant_id:
+        raise _fail("无权操作此客户端", status_code=403)
+
+    if client.get("status") == "disabled":
+        # 幂等
+        return _ok({"client_id": client_id, "client_status": "disabled"})
+
+    ok = rpa_db.update_client_status(tenant_id, client_id, "disabled")
+    if not ok:
+        raise _fail("客户端暂停失败", status_code=500)
+
+    rpa_db.write_audit(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        account_id=None,
+        category="client_pause_resume",
+        payload_json=json.dumps(
+            {"action": "pause", "client_id": client_id}, ensure_ascii=False,
+        ),
+        user_id=user_id,
+    )
+    logger.info(f"RPA client paused: {client_id}")
+    return _ok({"client_id": client_id, "client_status": "disabled"})
+
+
+@router.post("/clients/{client_id}/resume")
+async def resume_client(client_id: str, request: Request):
+    """恢复客户端（status: disabled → active）。
+
+    平台管理员代管理时必须用 X-Tenant-Id 指定目标租户（对齐 rotate_secret 的隔离模型）。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+    user_id = admin.get("user_id")
+
+    client = rpa_db.get_client(client_id)
+    if not client:
+        raise _fail("客户端不存在", status_code=404)
+    if client.get("tenant_id") != tenant_id:
+        raise _fail("无权操作此客户端", status_code=403)
+
+    if client.get("status") == "active":
+        # 幂等
+        return _ok({"client_id": client_id, "client_status": "active"})
+
+    ok = rpa_db.update_client_status(tenant_id, client_id, "active")
+    if not ok:
+        raise _fail("客户端恢复失败", status_code=500)
+
+    rpa_db.write_audit(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        account_id=None,
+        category="client_pause_resume",
+        payload_json=json.dumps(
+            {"action": "resume", "client_id": client_id}, ensure_ascii=False,
+        ),
+        user_id=user_id,
+    )
+    logger.info(f"RPA client resumed: {client_id}")
+    return _ok({"client_id": client_id, "client_status": "active"})
+
+
 # ===========================================================================
 # 2. 账号 / 绑定查询
 # ===========================================================================
@@ -373,6 +501,92 @@ async def list_bindings(
     if status:
         bindings = [b for b in bindings if b.get("status") == status]
     return _ok([_binding_public(b) for b in bindings])
+
+
+@router.get("/all_bindings")
+async def list_all_bindings(
+    request: Request,
+    status: Optional[str] = Query(
+        None,
+        description=(
+            "状态过滤：active / disabled / needs_review_only（默认全部，显示所有 client）。"
+            "注意：自 2026-06 改造后 status 字段语义为 client.status，不再是 binding.status。"
+        ),
+    ),
+    tenant_id: Optional[str] = Query(None, description="按租户过滤（平台管理员专用）"),
+):
+    """平台管理员视角：跨租户列出所有 RPA 客户端（一行一 client，聚合 account/binding）。
+
+    仅 platform_admin 可访问。数据源以 ``wecom_rpa_clients`` 为基准，确保「创建 client 后即可看到」。
+
+    返回字段（``_client_public``）：client_id / tenant_id / client_name / client_status /
+    agent_base_url / last_heartbeat_at / min_version / created_at / updated_at /
+    account_count / binding_count / last_account_name。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+
+    admin = require_admin(request)
+    _require_platform_admin(admin)
+
+    rows = rpa_db.list_all_bindings_rich(
+        tenant_id_filter=tenant_id,
+        status_filter=status,
+    )
+    return _ok([_client_public(c) for c in rows])
+
+
+@router.patch("/clients/{client_id}/agent_base_url")
+async def update_client_agent_base_url(
+    client_id: str,
+    request: Request,
+    body: Dict[str, Any] = None,
+):
+    """更新客户端回填的 agent_base_url（运维排查用）。
+
+    平台管理员可更新任意租户的客户端；租户管理员仅能更新自己租户的客户端（tenant 隔离由 require_admin 保证）。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+
+    admin = require_admin(request)
+    user_id = admin.get("user_id")
+
+    payload = body or {}
+    raw_url = payload.get("agent_base_url")
+    if raw_url is not None and not isinstance(raw_url, str):
+        raise _fail("agent_base_url 必须为字符串")
+    agent_base_url = (raw_url or "").strip() or None
+
+    client = rpa_db.get_client(client_id)
+    if not client:
+        raise _fail("客户端不存在", status_code=404)
+    # 租户管理员只能改自己的；平台管理员任意（require_admin 已切换 tenant_id）
+    if admin.get("role") != "platform_admin" and client.get("tenant_id") != admin.get("tenant_id"):
+        raise _fail("无权操作此客户端", status_code=403)
+
+    ok = rpa_db.update_client_agent_base_url(
+        tenant_id=client["tenant_id"],
+        client_id=client_id,
+        agent_base_url=agent_base_url,
+    )
+    if not ok:
+        raise _fail("更新失败", status_code=500)
+
+    rpa_db.write_audit(
+        tenant_id=client["tenant_id"],
+        client_id=client_id,
+        account_id=None,
+        category="agent_base_url_update",
+        payload_json=json.dumps(
+            {"client_id": client_id, "agent_base_url": agent_base_url},
+            ensure_ascii=False,
+        ),
+        user_id=user_id,
+    )
+    logger.info(f"RPA client agent_base_url updated: {client_id} -> {agent_base_url}")
+
+    return _ok({"client_id": client_id, "agent_base_url": agent_base_url})
 
 
 # ===========================================================================

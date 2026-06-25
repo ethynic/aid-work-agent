@@ -1791,7 +1791,9 @@ app.include_router(memory_api.router)
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
+from src.saas.api import context_compression_routes
 from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_router
+from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_admin_router
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
 app.include_router(subscriptions.router)
@@ -1800,6 +1802,7 @@ app.include_router(channel_config.router)
 app.include_router(tenant_skills.router)
 app.include_router(channel_routes.router)
 app.include_router(wecom_personal_rpa_router)
+app.include_router(wecom_personal_rpa_admin_router)
 app.include_router(tenant_users.router)
 app.include_router(usage_reports.router)
 app.include_router(usage_reports.public_router)
@@ -1807,6 +1810,7 @@ app.include_router(permissions.router)
 app.include_router(reply_styles.router)
 app.include_router(external_customers.router)
 app.include_router(tenant_migration.router)
+app.include_router(context_compression_routes.router)
 
 
 

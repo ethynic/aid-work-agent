@@ -254,6 +254,19 @@ class RpaConfigResponse(BaseModel):
     )
     rate_limits: RpaRateLimits = Field(default_factory=RpaRateLimits, description="限速策略")
     server_time: datetime = Field(..., description="服务端当前时间，供客户端校准时钟漂移")
+    # 回调路径定位参数（客户端据此拼接 callback / ws 路径）
+    client_id: Optional[str] = Field(
+        default=None,
+        description="当前客户端 ID（与 X-Client-Id 一致），客户端用于构造 callback/ws 路径",
+    )
+    tenant_id: Optional[str] = Field(
+        default=None,
+        description="客户端归属租户 ID，用于构造 callback/ws 路径 t/{tenant_id}/...",
+    )
+    config_id: Optional[str] = Field(
+        default=None,
+        description="tenant_channel_configs 表记录 ID，用于构造 callback/ws 路径 .../callback/{config_id}",
+    )
 
 
 # ===========================================================================

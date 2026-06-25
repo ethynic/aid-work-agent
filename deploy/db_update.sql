@@ -645,8 +645,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ccs_session_active
     WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_ccs_session_list
     ON chat_context_summaries (session_id, source_type, created_at DESC);
+-- 2026-6-25, v3.2.1 P1-1：管理后台 list_summaries 按 tenant_id + created_at DESC 查询，
+-- 需要此索引避免全表扫描（租户量大时显著加速）
+CREATE INDEX IF NOT EXISTS idx_ccs_tenant_time
+    ON chat_context_summaries (tenant_id, created_at DESC);
 
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
+
+-- 2026-6-25, v3.1: session 级上下文 token 缓存（Agent 主循环每次 LLM 调用后写入最后一次 prompt+completion tokens）
+-- 压缩服务 _should_compress 优先读此字段，避免每次全量 count_tokens
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS context_token_count INTEGER DEFAULT 0;
+ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS context_token_count INTEGER DEFAULT 0;
+
+-- ============================================================================
+-- 2026-06-24，企业微信个人账号 RPA 平台后台绑定管理：wecom_rpa_clients 增加 agent_base_url 字段
+-- 用途：客户端回填的服务端生产地址，供运维排查"客户端连不上服务端"类问题时快速定位。
+-- 字段非必填（保留向后兼容），前端 UI 使用占位地址 https://agent.example.com。
+-- 规范对齐 database_dev.md：TEXT 类型、可空、无触发器。
+-- ============================================================================
+ALTER TABLE wecom_rpa_clients ADD COLUMN IF NOT EXISTS agent_base_url TEXT;
+
+-- ============================================================================
+-- 2026-06-25，v3.2.1 P2-1：为 chat_messages 增加 (session_id, created_at) 复合索引
+-- 用途：MessageDB.count_messages_by_session（压缩阈值快路径检查）走该索引，
+-- COUNT(*) 性能从 O(n) 顺序扫描降到 O(log n) 索引扫描。
+-- channel_messages 表已有同名索引（init-postgres.sql:154），无需新增。
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
+    ON chat_messages (session_id, created_at DESC);
+

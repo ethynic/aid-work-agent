@@ -136,6 +136,26 @@ def update_last_seen(tenant_id: str, client_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def update_client_agent_base_url(
+    tenant_id: str,
+    client_id: str,
+    agent_base_url: Optional[str],
+) -> bool:
+    """更新客户端回填的 agent_base_url（运维排查用，None 表示清除）。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_clients
+            SET agent_base_url = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (agent_base_url, client_id, tenant_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def rotate_secret(
     tenant_id: str,
     client_id: str,
@@ -337,6 +357,74 @@ def list_bindings(tenant_id: str, account_id: Optional[str] = None) -> List[Dict
                 """,
                 (tenant_id,),
             )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def list_all_bindings_rich(
+    tenant_id_filter: Optional[str] = None,
+    status_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """平台管理员视角：跨租户列出所有 RPA 客户端，聚合账号数与绑定数。
+
+    仅供 platform_admin 使用（调用方需自行鉴权）。
+
+    数据源以 ``wecom_rpa_clients`` 为基准（一行一 client），确保
+    「创建 client 后即可在列表看到，无需等待 client 真正连上来生成 binding」。
+
+    status_filter 语义：
+        - None / ''：全部 client（默认）
+        - 'active' / 'disabled'：按 client.status 过滤
+        - 'needs_review_only'：排除 status='active' 的 client（显示「需关注」）
+
+    返回字段（dict）：
+        client_id, tenant_id, client_name, client_status,
+        agent_base_url, last_heartbeat_at（来自 clients.last_seen_at）,
+        min_version, created_at, updated_at,
+        account_count, binding_count, last_account_name
+    """
+    conditions = []
+    params: List[Any] = []
+    if tenant_id_filter:
+        conditions.append("c.tenant_id = %s")
+        params.append(tenant_id_filter)
+    if status_filter:
+        if status_filter == "needs_review_only":
+            # 排除 active，显示其他状态（disabled 等）
+            conditions.append("c.status <> 'active'")
+        else:
+            conditions.append("c.status = %s")
+            params.append(status_filter)
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT  c.id              AS client_id,
+                    c.tenant_id       AS tenant_id,
+                    c.name            AS client_name,
+                    c.status          AS client_status,
+                    c.agent_base_url  AS agent_base_url,
+                    c.last_seen_at    AS last_heartbeat_at,
+                    c.min_version     AS min_version,
+                    c.created_at      AS created_at,
+                    c.updated_at      AS updated_at,
+                    (SELECT COUNT(*) FROM wecom_rpa_accounts a WHERE a.client_id = c.id) AS account_count,
+                    (SELECT COUNT(*)
+                       FROM wecom_rpa_conversation_bindings b
+                       JOIN wecom_rpa_accounts a ON a.id = b.account_id
+                       WHERE a.client_id = c.id) AS binding_count,
+                    (SELECT a.display_name
+                       FROM wecom_rpa_accounts a
+                       WHERE a.client_id = c.id
+                       ORDER BY a.created_at DESC
+                       LIMIT 1) AS last_account_name
+            FROM wecom_rpa_clients c
+            {where_clause}
+            ORDER BY c.created_at DESC
+            """,
+            tuple(params),
+        )
         return [dict(r) for r in cursor.fetchall()]
 
 

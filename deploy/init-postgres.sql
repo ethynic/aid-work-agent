@@ -152,6 +152,9 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
 CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(session_id, created_at);
+-- v3.2.1 P2-1：chat_messages 表同样需要 (session_id, created_at) 索引，
+-- 供 MessageDB.count_messages_by_session（压缩阈值快路径）走索引扫描
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at DESC);
 
 -- 会话内上下文压缩摘要表（mid-term memory）
 -- 每次压缩产生一行，旧的 summary 置为 superseded，永不删除
@@ -197,6 +200,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ccs_session_active
     WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_ccs_session_list
     ON chat_context_summaries (session_id, source_type, created_at DESC);
+-- v3.2.1 P1-1：管理后台列表按 tenant_id + created_at DESC 排序查询，需要此索引
+CREATE INDEX IF NOT EXISTS idx_ccs_tenant_time
+    ON chat_context_summaries (tenant_id, created_at DESC);
 
 -- chat_messages / channel_messages 加 compacted 标记（CREATE TABLE IF NOT EXISTS 不会更新已存在的表，
 -- 用 ALTER 兜底确保新部署也带上字段）
@@ -204,6 +210,11 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FAL
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted BOOLEAN DEFAULT FALSE;
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS compacted_by TEXT;
+
+-- v3.1: session 级上下文 token 缓存（Agent 主循环每次 LLM 调用后写入最后一次 prompt+completion tokens）
+-- 压缩服务 _should_compress 优先读此字段，避免每次全量 count_tokens
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS context_token_count INTEGER DEFAULT 0;
+ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS context_token_count INTEGER DEFAULT 0;
 
 -- 错误日志表（平台级，记录系统错误，仅平台管理员可见）
 CREATE TABLE IF NOT EXISTS log_error (
@@ -1476,6 +1487,7 @@ CREATE TABLE IF NOT EXISTS wecom_rpa_clients (
     encrypted_secret TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     min_version TEXT,
+    agent_base_url TEXT,
     last_seen_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

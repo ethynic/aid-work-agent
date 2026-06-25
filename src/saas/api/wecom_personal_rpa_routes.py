@@ -183,6 +183,43 @@ def _make_get_secret(tenant_id: str):
     return _get_secret
 
 
+def _make_get_secret_by_client_id():
+    """``/config`` 专用 get_secret：仅按 client_id 查、不校验 tenant_id。
+
+    背景：客户端首次拉 ``/config`` 时还不知道自己的 tenant_id（正是要从响应里拿），
+    无法在请求头或路径里携带。``/config`` 的鉴权已由 HMAC 签名保证（知道 secret 即合法 client），
+    client_id 全局唯一，故无需 tenant_id 二次校验。
+
+    仍校验 ``status == 'active'``，禁用客户端继续被拒。
+    """
+
+    def _get_secret(client_id: str) -> Optional[bytes]:
+        try:
+            client = db.get_client(client_id)
+        except Exception as e:
+            logger.error(f"RPA get_secret_by_client_id: db.get_client 失败 cid={client_id}: {e}")
+            return None
+        if not client:
+            return None
+        if client.get("status") != "active":
+            logger.info(f"RPA get_secret_by_client_id: 客户端已禁用 cid={client_id}")
+            return None
+        encrypted = client.get("encrypted_secret")
+        if not encrypted:
+            return None
+        try:
+            return secret_crypto.decrypt_secret(encrypted)
+        except Exception as e:
+            # 不记录密文/明文；仅记异常类型
+            logger.error(
+                f"RPA get_secret: decrypt_secret 失败 cid={client_id}: "
+                f"{type(e).__name__}"
+            )
+            return None
+
+    return _get_secret
+
+
 # ===========================================================================
 # 1. 入站回调
 # ===========================================================================
@@ -666,17 +703,9 @@ async def wecom_personal_rpa_config(request: Request):
     raw_body = await request.body()  # GET 通常为空，但签名串仍按原始字节构造
     headers = dict(request.headers)
 
-    # 鉴权：复用 callback 的 get_secret，但 tenant_id 来自 X-Tenant-Id 或 client 归属
-    # 先从 headers 取 X-Tenant-Id，没有则鉴权后用 client.tenant_id
-    header_tenant = request.headers.get("X-Tenant-Id") or request.headers.get(
-        "x-tenant-id"
-    )
-
-    # 先用 client_id 查归属租户（鉴权需要 get_secret，依赖 tenant_id）
-    # 若 header 带了 tenant_id 用它；否则用空串占位让 get_secret 走 tenant 不匹配逻辑
-    # （config 接口要求客户端带 X-Tenant-Id 或与注册租户一致）
-    resolve_tenant = header_tenant or ""
-    get_secret = _make_get_secret(resolve_tenant)
+    # /config 鉴权：客户端首启时还不知道自己的 tenant_id（要从响应里拿），
+    # 所以只用 client_id 反查 + HMAC 签名校验，不强制 tenant_id 匹配。
+    get_secret = _make_get_secret_by_client_id()
     vr = auth.verify_request(headers, raw_body, get_secret)
     if not vr.ok:
         return _error_response(
@@ -711,6 +740,20 @@ async def wecom_personal_rpa_config(request: Request):
     except Exception as e:
         logger.warning(f"RPA config list_accounts 失败: {e}")
 
+    # 查 tenant_channel_configs 拿 config_id（客户端据此构造 callback/ws 路径）
+    # config_id 就是 tenant_channel_configs 记录的主键 id（register_client 时写入）
+    config_id = None
+    try:
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type=_CHANNEL_TYPE)
+        if configs:
+            config_id = str(configs[0].get("id"))
+    except Exception as e:
+        logger.warning(
+            f"RPA config 查询 tenant_channel_configs 失败 tenant={tenant_id}: {e}"
+        )
+
     resp = RpaConfigResponse(
         protocol_version=PROTOCOL_VERSION,
         min_client_version=client.get("min_version") or "1.0.0",
@@ -718,6 +761,9 @@ async def wecom_personal_rpa_config(request: Request):
         paused_scope="account" if paused else None,
         rate_limits=RpaRateLimits(),
         server_time=datetime.now(),
+        client_id=vr.client_id,
+        tenant_id=tenant_id,
+        config_id=config_id,
     )
     # 直接返回 Pydantic 模型，由 FastAPI 的 jsonable_encoder 序列化 datetime
     return resp

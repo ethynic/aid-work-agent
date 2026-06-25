@@ -432,3 +432,116 @@ class TestActionDeliverOfflineOutbox:
             m_online.assert_called_once_with(_CLIENT_ID)
             m_send.assert_awaited_once()
             m_enqueue.assert_not_called()
+
+
+# ===========================================================================
+# 6. GET /config 响应字段契约（client_id / tenant_id / config_id）
+# ===========================================================================
+
+
+@pytest.mark.integration
+class TestConfigResponseFields:
+    """GET /api/v1/channels/wecom-personal-rpa/config 响应必须包含
+    client_id / tenant_id / config_id，供客户端构造 callback/ws 路径。"""
+
+    def test_config_response_contains_client_tenant_config_ids(self, client, fake_dedup):
+        """WHY: 客户端 AgentApiClient.CallbackPath 需要这三个字段拼接
+        ``t/{tenant_id}/wecom_personal_rpa/callback/{config_id}``，缺失则客户端无法上报。
+        config_id 必须来自 tenant_channel_configs 表（register_client 时写入）。
+        """
+        fake_db = _patched_db()
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            from src.saas.db import channel_config_db as cfg_mod
+
+            captured = {}
+
+            def _fake_list_by_tenant(tenant_id, channel_type=None):
+                captured["tenant_id"] = tenant_id
+                captured["channel_type"] = channel_type
+                # 真实 tenant_channel_configs 行：id 是主键，register_client 时写入。
+                # 后端用 str(id) 作为 config_id 返回给客户端构造 callback 路径。
+                return [{"id": "cfg_from_db_001"}]
+
+            with patch.object(
+                cfg_mod.ChannelConfigDB, "list_by_tenant", _fake_list_by_tenant
+            ):
+                # /config 路由用 X-Tenant-Id 解析鉴权 get_secret（缺则空串鉴权失败）
+                headers = {**_signed_headers(b""), "X-Tenant-Id": _TENANT_ID}
+                resp = client.get(
+                    "/api/v1/channels/wecom-personal-rpa/config",
+                    headers=headers,
+                )
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["client_id"] == _CLIENT_ID
+        assert body["tenant_id"] == _TENANT_ID
+        assert body["config_id"] == "cfg_from_db_001"
+        # list_by_tenant 收到的过滤参数正确
+        assert captured["tenant_id"] == _TENANT_ID
+        assert captured["channel_type"] == "wecom_personal_rpa"
+
+    def test_config_response_config_id_none_when_no_channel_config(self, client, fake_dedup):
+        """WHY: register_client 时 ChannelConfigDB.create 失败的边缘情况下，
+        tenant_channel_configs 表无该 client 记录 → config_id=None。
+        客户端据此能识别并提示管理员补建（合理失败，不静默）。
+        """
+        fake_db = _patched_db()
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            from src.saas.db import channel_config_db as cfg_mod
+
+            with patch.object(
+                cfg_mod.ChannelConfigDB,
+                "list_by_tenant",
+                lambda tenant_id, channel_type=None: [],
+            ):
+                headers = {**_signed_headers(b""), "X-Tenant-Id": _TENANT_ID}
+                resp = client.get(
+                    "/api/v1/channels/wecom-personal-rpa/config",
+                    headers=headers,
+                )
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["client_id"] == _CLIENT_ID
+        assert body["tenant_id"] == _TENANT_ID
+        assert body["config_id"] is None  # 边缘情况：无 channel_config 记录
+
+    def test_config_response_config_id_none_when_db_query_raises(self, client, fake_dedup):
+        """WHY: ChannelConfigDB.list_by_tenant 抛异常时（如临时 DB 不可达），
+        /config 不能 500，应降级为 config_id=None 并继续返回其它字段。
+        """
+        fake_db = _patched_db()
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            from src.saas.db import channel_config_db as cfg_mod
+
+            def _raise(tenant_id, channel_type=None):
+                raise RuntimeError("db down")
+
+            with patch.object(
+                cfg_mod.ChannelConfigDB, "list_by_tenant", _raise
+            ):
+                headers = {**_signed_headers(b""), "X-Tenant-Id": _TENANT_ID}
+                resp = client.get(
+                    "/api/v1/channels/wecom-personal-rpa/config",
+                    headers=headers,
+                )
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # 降级：client_id / tenant_id 仍返回，config_id 为 None
+        assert body["client_id"] == _CLIENT_ID
+        assert body["tenant_id"] == _TENANT_ID
+        assert body["config_id"] is None
