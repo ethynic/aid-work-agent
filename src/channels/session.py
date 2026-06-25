@@ -15,7 +15,6 @@ from loguru import logger
 from src.db.database import get_db_connection
 from src.models.message import ChannelType
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
-from src.core.temp_logger import tlog
 
 
 class ChannelSessionManager:
@@ -602,15 +601,16 @@ class ChannelSessionManager:
             # 语音合并 / pending 重处理场景下，session_queue 会通过 override
             # 传入合并后的完整输入，必须优先于闭包绑定的 agent_input_text
             effective_input = user_input_override if user_input_override is not None else agent_input_text
-            if user_input_override is not None and user_input_override != agent_input_text:
-                tlog(
-                    "语音合并",
-                    "processor 使用 override 输入 session={sid}..., "
-                    "original_len={o_len}, override_len={n_len}",
-                    sid=session_id[:20],
-                    o_len=len(agent_input_text),
-                    n_len=len(user_input_override),
-                )
+            # 调试 override 输入是否正确透传时启用：
+            # if user_input_override is not None and user_input_override != agent_input_text:
+            #     tlog(
+            #         "语音合并",
+            #         "processor 使用 override 输入 session={sid}..., "
+            #         "original_len={o_len}, override_len={n_len}",
+            #         sid=session_id[:20],
+            #         o_len=len(agent_input_text),
+            #         n_len=len(user_input_override),
+            #     )
             kwargs = {
                 "user_input": effective_input,
                 "session_id": session_id,
@@ -673,22 +673,23 @@ class ChannelSessionManager:
             attachments_to_write = result.merged_attachments_meta
         else:
             attachments_to_write = user_attachments_meta
-        if result.was_merged:
-            tlog(
-                "语音合并",
-                "持久化用户消息 session={sid}..., was_merged=True, "
-                "user_content_len={uc_len}, merged_input_len={mi_len}, "
-                "write_len={w_len}, write_preview={w_prev!r}, "
-                "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
-                sid=session_id[:20],
-                uc_len=len(user_content),
-                mi_len=len(result.merged_input),
-                w_len=len(user_to_write),
-                w_prev=user_to_write[:120],
-                um_n=len(user_attachments_meta) if user_attachments_meta else 0,
-                mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
-                wm_n=len(attachments_to_write) if attachments_to_write else 0,
-            )
+        # 调试合并方持久化内容（user_to_write / attachments）时启用：
+        # if result.was_merged:
+        #     tlog(
+        #         "语音合并",
+        #         "持久化用户消息 session={sid}..., was_merged=True, "
+        #         "user_content_len={uc_len}, merged_input_len={mi_len}, "
+        #         "write_len={w_len}, write_preview={w_prev!r}, "
+        #         "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
+        #         sid=session_id[:20],
+        #         uc_len=len(user_content),
+        #         mi_len=len(result.merged_input),
+        #         w_len=len(user_to_write),
+        #         w_prev=user_to_write[:120],
+        #         um_n=len(user_attachments_meta) if user_attachments_meta else 0,
+        #         mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
+        #         wm_n=len(attachments_to_write) if attachments_to_write else 0,
+        #     )
 
         # 构造批量写入的消息序列
         batch: List[Dict[str, Any]] = []
@@ -738,25 +739,6 @@ class ChannelSessionManager:
         })
 
         # 事务化批量写入
-        tlog(
-            "语音合并",
-            "[持久化] session={sid}..., was_merged={merged}, "
-            "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
-            "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
-            "user_to_write_len={uw_len}, user_to_write_preview={uw_prev!r}, "
-            "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
-            sid=session_id[:20],
-            merged=result.was_merged,
-            uc_len=len(user_content),
-            uc_prev=user_content[:120],
-            mi_len=len(result.merged_input),
-            mi_prev=result.merged_input[:120],
-            uw_len=len(user_to_write),
-            uw_preview=user_to_write[:120],
-            roles=[m.get("role") for m in batch],
-            r_len=len(response_text),
-            r_prev=response_text[:120],
-        )
         write_ok = self.add_messages_batch_transactional(session_id, tenant_id, batch)
         if write_ok is None:
             logger.error(
