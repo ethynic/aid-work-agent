@@ -163,22 +163,28 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 # 5) 先用 mkdir -p 兜底创建临时目录（针对 root 用户）
 # 6) 浏览器下载到 PLAYWRIGHT_BROWSERS_PATH（/opt/ms-playwright），随镜像保存
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-RUN mkdir -p /opt/ms-playwright /tmp && \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    TMPDIR=/tmp \
-    bash -c 'set -e; \
-    for host in https://playwright-akamai.azureedge.net https://playwright-verizon.azureedge.net https://mirrors.huaweicloud.com/playwright; do \
-        echo ">>> Trying Playwright mirror: $$host"; \
-        rm -rf /opt/ms-playwright/* /tmp/playwright-download-* /tmp/pw-*; \
-        if PLAYWRIGHT_DOWNLOAD_HOST=$$host playwright install chromium; then \
-            echo ">>> Playwright installed successfully from $$host"; \
-            exit 0; \
-        fi; \
-        echo ">>> Failed to install from $$host, trying next mirror..."; \
-    done; \
-    echo ">>> ERROR: All Playwright mirrors failed"; \
-    exit 1' && \
-    chown -R appuser:appgroup /opt/ms-playwright
+RUN cat <<'EOF' > /tmp/install_pw.sh
+#!/bin/bash
+set -e
+for host in https://playwright-akamai.azureedge.net https://playwright-verizon.azureedge.net https://mirrors.huaweicloud.com/playwright; do
+    echo ">>> Trying Playwright mirror: $host"
+    rm -rf /opt/ms-playwright/* /tmp/playwright-download-* /tmp/pw-*
+    if PLAYWRIGHT_DOWNLOAD_HOST=$host playwright install chromium; then
+        echo ">>> Playwright installed successfully from $host"
+        exit 0
+    fi
+    echo ">>> Failed to install from $host, trying next mirror..."
+done
+echo ">>> ERROR: All Playwright mirrors failed"
+exit 1
+EOF
+chmod +x /tmp/install_pw.sh
+mkdir -p /opt/ms-playwright /tmp
+PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+TMPDIR=/tmp \
+bash /tmp/install_pw.sh && \
+chown -R appuser:appgroup /opt/ms-playwright && \
+rm -f /tmp/install_pw.sh
 
 # 创建应用临时目录（替代 /tmp，避免外部工具重置权限导致 appuser 无法写入）
 # 注意：此目录不在 volume 挂载范围内，确保每次容器启动时干净
