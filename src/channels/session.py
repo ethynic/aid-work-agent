@@ -743,7 +743,7 @@ class ChannelSessionManager:
             "[持久化] session={sid}..., was_merged={merged}, "
             "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
             "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
-            "user_to_write_len={uw_len}, user_to_write_preview={uw_prev!r}, "
+            "user_to_write_len={uw_len}, user_to_write_full={uw_full!r}, "
             "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
             sid=session_id[:20],
             merged=result.was_merged,
@@ -752,7 +752,7 @@ class ChannelSessionManager:
             mi_len=len(result.merged_input),
             mi_prev=result.merged_input[:120],
             uw_len=len(user_to_write),
-            uw_preview=user_to_write[:120],
+            uw_full=user_to_write,
             roles=[m.get("role") for m in batch],
             r_len=len(response_text),
             r_prev=response_text[:120],
