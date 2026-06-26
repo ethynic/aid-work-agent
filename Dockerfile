@@ -151,11 +151,12 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 
 # 安装 Playwright Chromium 浏览器（表格渲染为图片）
 # 2026-06: playwright.aimir.cn 镜像源已失效，切换到华为云镜像（服务器实测可达）
+# 2026-06-26: 华为云镜像偶发返回损坏 zip，增加多镜像 fallback
 # 说明：
 # 1) 所有系统依赖库（libnss3/libgbm1/libasound2/libpango 等）已在阶段 2 的
 #    apt-get install 中手动安装完成，playwright install 不再需要 --with-deps
-# 2) PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载
-# 3) 浏览器文件留在镜像层中（/root/.cache/ms-playwright），后续构建如果 RUN 不变
+# 2) PLAYWRIGHT_DOWNLOAD_HOST 使用国内镜像加速下载，并配置多个 fallback
+# 3) 浏览器文件留在镜像层中（/opt/ms-playwright），后续构建如果 RUN 不变
 #    就会被 BuildKit 层缓存命中
 # 4) TMPDIR=/tmp 强制覆盖：BuildKit build 阶段 USER=root，但 /home/appuser/tmp
 #    可能在某些 union FS 实现下不可见（ENOENT on mkdtemp），改用 /tmp 最稳
@@ -163,9 +164,20 @@ RUN mkdir -p log/agent && chown -R appuser:appgroup log
 # 6) 浏览器下载到 PLAYWRIGHT_BROWSERS_PATH（/opt/ms-playwright），随镜像保存
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN mkdir -p /opt/ms-playwright /tmp && \
-    PLAYWRIGHT_DOWNLOAD_HOST=https://mirrors.huaweicloud.com/playwright \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     TMPDIR=/tmp \
-    playwright install chromium && \
+    bash -c 'set -e; \
+    for host in https://playwright-akamai.azureedge.net https://playwright-verizon.azureedge.net https://mirrors.huaweicloud.com/playwright; do \
+        echo ">>> Trying Playwright mirror: $$host"; \
+        rm -rf /opt/ms-playwright/* /tmp/playwright-download-* /tmp/pw-*; \
+        if PLAYWRIGHT_DOWNLOAD_HOST=$$host playwright install chromium; then \
+            echo ">>> Playwright installed successfully from $$host"; \
+            exit 0; \
+        fi; \
+        echo ">>> Failed to install from $$host, trying next mirror..."; \
+    done; \
+    echo ">>> ERROR: All Playwright mirrors failed"; \
+    exit 1' && \
     chown -R appuser:appgroup /opt/ms-playwright
 
 # 创建应用临时目录（替代 /tmp，避免外部工具重置权限导致 appuser 无法写入）
