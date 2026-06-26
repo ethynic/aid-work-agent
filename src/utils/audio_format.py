@@ -207,4 +207,9 @@ def decode_silk_to_wav(silk_bytes: bytes, sample_rate: int = 16000) -> bytes:
     # 数据过短时 pysilk C 扩展会 segfault，提前拦截
     if len(silk_bytes) < 50:
         raise RuntimeError(f"SILK 数据过短（{len(silk_bytes)} 字节），疑似损坏")
-    return pysilk.decode(silk_bytes, to_wav=True, sample_rate=sample_rate)
+    # 注意：pysilk.decode 在 to_wav=True 路径下不会把 sample_rate 透传给
+    # Wave.pcm2wav（其 frame_rate 默认 24000），导致 WAV header 标 24000Hz
+    # 但 PCM 数据按传入 sample_rate 解码，播放时语速/音调失真（变快变尖）。
+    # 改为先解码为 PCM，再用 wrap_pcm_as_wav 按正确采样率封装 WAV。
+    pcm_bytes = pysilk.decode(silk_bytes, to_wav=False, sample_rate=sample_rate)
+    return wrap_pcm_as_wav(pcm_bytes, sample_rate=sample_rate, sample_width=2)

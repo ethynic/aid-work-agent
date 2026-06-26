@@ -223,3 +223,49 @@ class TestUnsupportedReason:
     def test_other_reason(self):
         msg = get_unsupported_reason("unknown_format")
         assert "unknown_format" in msg
+
+
+# ============================================================
+# 4. decode_silk_to_wav 采样率正确性（防回归）
+# ============================================================
+
+
+class TestDecodeSilkToWav:
+    """SILK 解码为 WAV 时，WAV header 的采样率必须与 PCM 实际采样率一致
+
+    历史 bug：pysilk-mod 的 decode(to_wav=True) 不把 sample_rate 透传给
+    Wave.pcm2wav（默认 frame_rate=24000），导致 16000Hz PCM 被标 24000Hz
+    header，播放时语速/音调失真（变快变尖）。
+    """
+
+    def test_wav_framerate_matches_sample_rate(self, monkeypatch):
+        import io
+        import math
+        import struct
+        import wave
+        import sys
+        import types
+
+        # 构造 fake pysilk：decode(to_wav=False) 返回按 sample_rate 采样的 PCM
+        fake = types.ModuleType("pysilk")
+
+        def fake_decode(silk_data, to_wav=False, *, sample_rate=24000):
+            pcm = bytearray()
+            for i in range(sample_rate):
+                v = int(16000 * math.sin(2 * math.pi * 440 * i / sample_rate))
+                pcm += struct.pack("<h", v)
+            return bytes(pcm)
+
+        fake.decode = fake_decode
+        monkeypatch.setitem(sys.modules, "pysilk", fake)
+
+        from src.utils.audio_format import decode_silk_to_wav
+
+        silk_data = b"\x02#!SILK_V3" + b"\x00" * 100
+        wav_bytes = decode_silk_to_wav(silk_data, sample_rate=16000)
+
+        with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+            assert w.getframerate() == 16000, "WAV header 采样率必须等于传入 sample_rate"
+            assert w.getnchannels() == 1
+            assert w.getsampwidth() == 2
+            assert w.getnframes() == 16000
