@@ -110,10 +110,11 @@ class TestIdleFirstMessage:
         self, q, fake_redis
     ):
         """合并窗口：首条消息在 _wait_merge_window 期间，外部往 merge buffer 写入第二条 →
-        首条消息处理时读取到的 merged_input 是合并后的 "A\\nB"，was_merged=True。
+        首条消息处理时读取到的 merged_input 是合并后的 "A\\n\\n[用户追加消息]\\nB"，was_merged=True。
 
-        为什么重要：这是「合并方」路径——LLM 实际看到 "A\\nB"，process_and_persist 必须
-        把这个合并后的输入写入 channel_messages（而非原始 "A"），否则存储与 LLM 输入不一致。
+        为什么重要：这是「合并方」路径——LLM 实际看到带 [用户追加消息] 分隔标记的合并输入，
+        process_and_persist 必须把这个合并后的输入写入 channel_messages（而非原始 "A"），
+        否则存储与 LLM 输入不一致。分隔标记用于让 LLM 识别多条独立消息，避免只处理最后一个意图。
         """
         processor = AsyncMock(return_value="reply-AB")
 
@@ -136,8 +137,9 @@ class TestIdleFirstMessage:
         assert result.was_merged is True, (
             "窗口期内有 append，was_merged 必须为 True，否则合并方无法识别自己是合并方"
         )
-        assert result.merged_input == "A\nB", (
-            "merged_input 必须是合并后的文本 A\\nB；实际: " + repr(result.merged_input)
+        assert result.merged_input == "A\n\n[用户追加消息]\nB", (
+            "merged_input 必须是带 [用户追加消息] 分隔标记的合并文本；实际: "
+            + repr(result.merged_input)
         )
 
 
