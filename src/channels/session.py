@@ -611,6 +611,10 @@ class ChannelSessionManager:
                     o_len=len(agent_input_text),
                     n_len=len(user_input_override),
                 )
+                # 同步更新 record_service.user_message，使 TraceCollector.input 与 channel_messages 保持一致
+                # （否则 trace 会话追踪页面只显示原始第一条，丢失合并追加的文本）
+                if record_service is not None:
+                    record_service.user_message = effective_input
             kwargs = {
                 "user_input": effective_input,
                 "session_id": session_id,
