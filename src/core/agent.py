@@ -1973,10 +1973,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             logger.debug(f"Agent iteration {iteration}")
 
             # 检查用户是否已取消
-            _cancel_reason = cancel_check() if cancel_check else None
-            if _cancel_reason:
-                logger.info(f"[AGENT] Cancelled at iteration {iteration}, session_id={session_id}, reason={_cancel_reason}")
-                yield make_event("cancelled", reason=_cancel_reason)
+            if cancel_check and cancel_check():
+                logger.info(f"[AGENT] Cancelled by user at iteration {iteration}, session_id={session_id}")
                 return
             
             tools = self._get_tools()
@@ -2159,10 +2157,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 tool_id = tc["id"]
 
                 # 每个工具执行前检查取消
-                _cancel_reason = cancel_check() if cancel_check else None
-                if _cancel_reason:
-                    logger.info(f"[AGENT] Cancelled before tool {tool_name}, session_id={session_id}, reason={_cancel_reason}")
-                    yield make_event("cancelled", reason=_cancel_reason)
+                if cancel_check and cancel_check():
+                    logger.info(f"[AGENT] Cancelled by user before tool {tool_name}, session_id={session_id}")
                     return
 
                 # 获取工具的用户友好名称

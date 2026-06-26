@@ -103,12 +103,7 @@ class TraceCollector:
             self.trace.tags.append("clarification")
         elif event_type == "cancelled":
             self.trace.status = "cancelled"
-            reason = event.get("reason") or "user"
-            # reason="merged" → 合并引发的取消（消息被新消息覆盖）；
-            # 其他（user/None）→ 用户主动取消
-            tag = "merged_cancelled" if reason == "merged" else "cancelled"
-            if tag not in self.trace.tags:
-                self.trace.tags.append(tag)
+            self.trace.tags.append("cancelled")
 
     def on_error(self, error: str):
         """Agent 执行出错时调用"""

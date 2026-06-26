@@ -23,8 +23,7 @@
                 </span>
                 <span v-if="trace.tags.length > 0" class="flex gap-1">
                   <span v-for="tag in trace.tags" :key="tag"
-                    :class="tagClass(tag)"
-                    class="px-1.5 py-0.5 rounded text-xs">{{ tagLabel(tag) }}</span>
+                    class="px-1.5 py-0.5 bg-warning-100 text-warning-700 rounded text-xs">{{ tag }}</span>
                 </span>
               </div>
               <div class="mb-1">
@@ -84,27 +83,6 @@ function statusClass(status: string): string {
 function statusLabel(status: string): string {
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中' }
   return map[status] || status
-}
-
-// tag → 中文标签与样式映射
-const TAG_LABEL: Record<string, string> = {
-  merged_cancelled: '[合并后取消]',
-  cancelled: '用户取消',
-  clarification: '追问',
-  error: '错误',
-  tool_error: '工具错误',
-}
-const TAG_CLASS: Record<string, string> = {
-  merged_cancelled: 'bg-warning-100 text-warning-700',
-  cancelled: 'bg-gray-200 text-default',
-}
-
-function tagLabel(tag: string): string {
-  return TAG_LABEL[tag] || tag
-}
-
-function tagClass(tag: string): string {
-  return TAG_CLASS[tag] || 'bg-warning-100 text-warning-700'
 }
 
 function formatTokens(n: number): string {

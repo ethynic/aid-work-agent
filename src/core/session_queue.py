@@ -216,25 +216,15 @@ class SessionMessageQueue:
 
     # ==================== 取消标志 ====================
 
-    def set_cancel(self, session_id: str, reason: str = "user") -> None:
-        """设置取消标志，reason 标识取消原因（user/merged），供 trace 区分来源"""
+    def set_cancel(self, session_id: str) -> None:
+        """设置取消标志"""
         key = self._key("session_cancel", session_id)
-        redis_client.set(key, reason or "user", ex=self.CANCEL_TTL)
+        redis_client.set(key, "1", ex=self.CANCEL_TTL)
 
     def is_cancelled(self, session_id: str) -> bool:
         """检查是否被取消（检查 Redis 标志）"""
         key = self._key("session_cancel", session_id)
         return redis_client.exists(key)
-
-    def get_cancel_reason(self, session_id: str) -> Optional[str]:
-        """读取取消原因（user/merged），未设置时返回 None"""
-        key = self._key("session_cancel", session_id)
-        val = redis_client.get(key)
-        if not val:
-            return None
-        if isinstance(val, bytes):
-            val = val.decode("utf-8", errors="ignore")
-        return val or None
 
     def _clear_cancel(self, session_id: str) -> None:
         """清除取消标志"""
@@ -300,18 +290,16 @@ class SessionMessageQueue:
         """注销 cancel_check"""
         self._active_cancel_checks.pop(session_id, None)
 
-    def check_cancel(self, session_id: str) -> Optional[str]:
-        """取消检查：返回 None 表示未取消；返回 reason 字符串（user/merged）表示已取消及原因。
-        兼容历史 bool 返回：调用方 `if cancel_check():` 仍可工作（None 假值、非空字符串真值）。"""
-        # 1. 检查 Redis 取消标志（跨进程），优先返回其 reason
-        reason = self.get_cancel_reason(session_id)
-        if reason:
-            return reason
-        # 2. 检查内存注册的 cancel_check（同进程，外部注册的 user cancel）
+    def check_cancel(self, session_id: str) -> bool:
+        """取消检查：Redis 标志 + 内存注册 cancel_check（供 channel_routes 使用）"""
+        # 1. 检查 Redis 取消标志（跨进程）
+        if self.is_cancelled(session_id):
+            return True
+        # 2. 检查内存注册的 cancel_check（同进程）
         func = self._active_cancel_checks.get(session_id)
         if func and func():
-            return "user"
-        return None
+            return True
+        return False
 
     # ==================== 核心调度方法 ====================
 
@@ -695,7 +683,7 @@ class SessionMessageQueue:
                     i_prev=user_input[:50],
                     m_n=len(attachments_meta) if attachments_meta else 0,
                 )
-                self.set_cancel(session_id, reason="merged")
+                self.set_cancel(session_id)
                 self.append_merge(session_id, user_input, attachments_meta)
                 # 等待旧请求完成
                 await self._wait_for_processing_end(session_id)
