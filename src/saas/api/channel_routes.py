@@ -1759,14 +1759,14 @@ async def _process_tenant_wecom_kf_messages(
 
                 user_content = unified_msg.text or user_input
 
-                # 语音消息：如果 ASR 识别成功，用 "[语音消息] ASR结果" 格式保存
+                # 语音消息：ASR 识别成功后用 "[ASR识别结果] 文本" 格式保存
                 # （unified_msg.text 永远是 "[语音消息]"，ASR 结果在 user_input 中）
                 if asr_success:
-                    user_content = f"[语音消息] {user_input}"
+                    user_content = f"[ASR识别结果] {user_input}"
 
-                # ASR 短句（<10 字）识别误差较高，告诉 LLM 来源是 [语音消息] 以便 LLM 进入宽容模式
+                # ASR 短句（<10 字）识别误差较高，加 [ASR识别结果] 前缀提示 LLM 来源，以便 LLM 进入宽容模式；长句识别率较高，无需宽容模式，不加前缀
                 if asr_success and 0 < len(user_input) < 10:
-                    user_input = f"[语音消息] {user_input}"
+                    user_input = f"[ASR识别结果] {user_input}"
 
                 # 构建用户消息的附件元数据（保存到 channel_messages.attachments，不含 base64）
                 user_attachments_meta = []

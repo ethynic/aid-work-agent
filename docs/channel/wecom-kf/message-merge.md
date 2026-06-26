@@ -54,7 +54,7 @@ def _merge_consecutive_user_messages(msg_list: list) -> list:
 
 ```json
 {
-  "text": "我想去贵州旅游\n[语音消息] 七月初，发",
+  "text": "我想去贵州旅游\n[ASR识别结果] 七月初，发",
   "attachments_meta": [
     {"type": "voice", "media_id": "xxx", "file_name": "voice_xxx.wav", "local_path": "..."},
     {"type": "voice", "media_id": "yyy", "file_name": "voice_yyy.wav", "local_path": "..."}
@@ -190,16 +190,16 @@ else:
 
 **语音文件不影响上下文**。`agent._load_channel_history` 只读 `role/content/metadata`，不读 `attachments`；ASR 成功后 `agent_attachments_input = []`，语音 base64 不进 LLM。语音文件路径仅用于「外部接待客户」页面回放。
 
-## 6. `[语音消息]` 前缀机制
+## 6. `[ASR识别结果]` 前缀机制
 
 ### 6.1 用意
 
-`channel_routes.py` 在 ASR 成功后，对**短句（< 10 字）**语音自动加 `[语音消息]` 前缀：
+`channel_routes.py` 在 ASR 成功后，对**短句（< 10 字）**语音自动加 `[ASR识别结果]` 前缀：
 
 ```python
-# ASR 短句识别误差较高，告诉 LLM 来源是 [语音消息] 以便 LLM 进入宽容模式
+# ASR 短句识别误差较高，告诉 LLM 来源是 [ASR识别结果] 以便 LLM 进入宽容模式
 if asr_success and 0 < len(user_input) < 10:
-    user_input = f"[语音消息] {user_input}"
+    user_input = f"[ASR识别结果] {user_input}"
 ```
 
 用意是让 LLM 知道这段文本来自短语音 ASR，识别误差较高，应进入宽容模式（容忍错别字、口音）。
@@ -213,7 +213,7 @@ if asr_success and 0 < len(user_input) < 10:
 合并缓冲区累积的是各段的 `agent_user_input`（含前缀），所以合并后的 `user_to_write` 自然保留各段的前缀标记。例如：
 
 ```
-合并输入："[语音消息] 我想去贵州旅游\n[语音消息] 七月初，发\n三个人"
+合并输入："[ASR识别结果] 我想去贵州旅游\n[ASR识别结果] 七月初，发\n三个人"
                 ↑ 短语音带前缀            ↑ 短语音带前缀      ↑ 文本无前缀
 ```
 
@@ -279,7 +279,7 @@ async def _processor(cancel_check, user_input_override=None):
 
 **评估**：实际上 Layer B 的 cancel+reprocess 机制已经覆盖了同批次串行场景（`for msg in merged_msgs` 是 await 串行，msg1 持锁期间 msg2 走 cancel+append_merge 路径，msg1 重处理用合并输入）。所以 Layer A 不合并语音**不会**导致上下文割裂，也不会撞 WeCom 5 条限额（只有 1 次回复）。
 
-**结论**：不修。强行修需要把 `_merge_consecutive_user_messages` 改成 async 并内嵌 ASR 调用，与 `[语音消息]` 前缀逻辑耦合，改动大、收益小。
+**结论**：不修。强行修需要把 `_merge_consecutive_user_messages` 改成 async 并内嵌 ASR 调用，与 `[ASR识别结果]` 前缀逻辑耦合，改动大、收益小。
 
 ## 8. 调试日志
 
