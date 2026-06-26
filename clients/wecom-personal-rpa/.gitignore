@@ -4,7 +4,14 @@ obj/
 
 # 发布产物（本地 publish.ps1 输出，不入库）
 publish/
+publish2/
 probe-report.yaml
+
+# 调试脚本输出（debug-navigate.ps1 等运行时产物：截图、标注图、API 响应、状态文件）
+debug-out/
+
+# 视觉回归测试输出
+vision-regression-out/
 
 # 用户/IDE 临时文件
 *.user
