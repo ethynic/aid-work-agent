@@ -129,28 +129,34 @@
                 </template>
                 <!-- 用户消息：附件 -->
                 <template v-if="msg.role === 'user' && hasUserAttachment(msg)">
-                  <!-- 语音：自定义播放按钮（AMR 需前端解码，浏览器原生 <audio> 不支持） -->
-                  <template v-for="att in getUserAttachments(msg)" :key="att.media_id">
-                    <div v-if="att.type === 'voice'" class="space-y-1">
-                      <button
-                        type="button"
-                        :disabled="amrPlayer.isLoading(att.media_id)"
-                        class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-colors disabled:opacity-60"
-                        :class="amrPlayer.isPlaying(att.media_id)
-                          ? 'bg-primary-500 text-white hover:bg-primary-600'
-                          : 'bg-gray-100 text-default hover:bg-gray-200'"
-                        @click="onPlayVoice(att)"
-                      >
-                        <span v-if="amrPlayer.isLoading(att.media_id)">加载中…</span>
-                        <template v-else>
-                          <span class="text-base leading-none">{{ amrPlayer.isPlaying(att.media_id) ? '⏸' : '▶' }}</span>
-                          <span>{{ amrPlayer.isPlaying(att.media_id) ? '正在播放' : '点击播放' }}</span>
-                          <span v-if="att.duration" class="text-xs opacity-80">{{ att.duration }}"</span>
-                        </template>
-                      </button>
-                      <div v-if="msg.content && msg.content !== '[语音消息]'" class="text-xs opacity-80">{{ msg.content }}</div>
-                    </div>
-                  </template>
+                  <!-- 合并后的文本内容：只显示一次（避免每个语音附件都重复渲染） -->
+                  <div
+                    v-if="msg.content && msg.content !== '[语音消息]' && hasUserVoice(msg)"
+                    class="text-xs opacity-80 mb-2 whitespace-pre-wrap"
+                  >
+                    {{ msg.content }}
+                  </div>
+                  <!-- 语音：自定义播放按钮（AMR 需前端解码，浏览器原生 <audio> 不支持），横向排列 -->
+                  <div v-if="hasUserVoice(msg)" class="flex flex-wrap gap-2">
+                    <button
+                      v-for="att in getUserVoiceAttachments(msg)"
+                      :key="att.media_id"
+                      type="button"
+                      :disabled="amrPlayer.isLoading(att.media_id)"
+                      class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-colors disabled:opacity-60"
+                      :class="amrPlayer.isPlaying(att.media_id)
+                        ? 'bg-primary-500 text-white hover:bg-primary-600'
+                        : 'bg-gray-100 text-default hover:bg-gray-200'"
+                      @click="onPlayVoice(att)"
+                    >
+                      <span v-if="amrPlayer.isLoading(att.media_id)">加载中…</span>
+                      <template v-else>
+                        <span class="text-base leading-none">{{ amrPlayer.isPlaying(att.media_id) ? '⏸' : '▶' }}</span>
+                        <span>{{ amrPlayer.isPlaying(att.media_id) ? '正在播放' : '点击播放' }}</span>
+                        <span v-if="att.duration" class="text-xs opacity-80">{{ att.duration }}"</span>
+                      </template>
+                    </button>
+                  </div>
                   <!-- 图片：预览 -->
                   <template v-for="att in getUserAttachments(msg)" :key="'img-' + att.media_id">
                     <div v-if="att.type === 'image'" class="space-y-1">
@@ -453,6 +459,20 @@ function getUserAttachments(msg: any): any[] {
  */
 function hasUserAttachment(msg: any): boolean {
   return getUserAttachments(msg).length > 0
+}
+
+/**
+ * 获取用户消息中的语音附件列表
+ */
+function getUserVoiceAttachments(msg: any): any[] {
+  return getUserAttachments(msg).filter(att => att.type === 'voice')
+}
+
+/**
+ * 判断用户消息是否包含语音附件
+ */
+function hasUserVoice(msg: any): boolean {
+  return getUserVoiceAttachments(msg).length > 0
 }
 
 /**
