@@ -116,33 +116,29 @@ public sealed class TrayApp : IDisposable
     {
         try
         {
-            var host = _sp.GetRequiredService<Services.RpaHost>();
+            // Phase 1：RpaHost 已退役，托盘的暂停/恢复直接走 IStateManager。
+            // Phase 2：PowerShell 后端会重新提供编排入口。
             if (_state.CurrentState == ClientState.PausedByUser)
             {
-                await host.ResumeAsync("托盘手动恢复");
+                _state.TransitionTo(ClientState.Recovering, errorMessage: "托盘手动恢复");
             }
             else
             {
-                await host.PauseAsync("托盘手动暂停");
+                _state.TransitionTo(ClientState.PausedByUser, errorMessage: "托盘手动暂停");
             }
         }
         catch (Exception ex)
         {
             Log.Error(ex, "[{Tag}] 暂停/恢复失败", Tag);
         }
+        await Task.CompletedTask;
     }
 
     private async void OnRelogin()
     {
-        try
-        {
-            var host = _sp.GetRequiredService<Services.RpaHost>();
-            await host.ReloginAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "[{Tag}] 重新登录失败", Tag);
-        }
+        // Phase 1：RpaHost 已退役，重新登录暂未接通；Phase 2 由 PowerShell 后端重写。
+        Log.Information("[{Tag}] 重新登录：Phase 1 阶段 RpaHost 已退役，待 Phase 2 PowerShell 后端接通", Tag);
+        await Task.CompletedTask;
     }
 
     private void ShowStatusWindow()

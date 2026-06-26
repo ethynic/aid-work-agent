@@ -1,24 +1,22 @@
 // ====================================================================================
-// 契约来源：plans/plan-wecom-personal-rpa-vision.md §任务 B（489-572 行）+ design §3.5。
-//
-// InputExecutor 把"视觉定位 bbox → 屏幕绝对坐标 → SendInput 点击"与"剪贴板粘贴文本"
-// 两件事封装成一类操作单元，供 WeComAutomation / SendMessageService / ConversationNavigator
-// 共用，避免每个调用方都重写一遍坐标换算 + SendInput 拼装。
+// InputExecutor：把"屏幕绝对坐标 → SendInput 点击"与"剪贴板粘贴文本"封装成一类操作单元。
 //
 // 设计要点：
-//   1) ClickElement(bbox, windowOrigin) — bbox 是截图坐标系（相对企微主窗口左上），
-//      换算屏幕绝对坐标：ScreenX = windowOrigin.Left + bbox.Center.Cx，
-//      ScreenY = windowOrigin.Top + bbox.Center.Cy。再调 SendInput 绝对坐标点击。
+//   1) ClickElement(windowOrigin, offsetX, offsetY) — 把窗口相对坐标换算为屏幕绝对坐标，
+//      再调 SendInput 绝对坐标点击。
 //   2) TypeText(text, pressEnterAfter) — 写剪贴板 → Ctrl+V → 可选 Enter。
 //      调用方负责 ClipboardGuard 备份 / 清空 / 还原。
 //   3) 失败 loud：坐标越界（超过屏幕分辨率）抛 ArgumentException；SendInput 返回数
 //      不匹配抛 AutomationLayerException。
+//
+// Phase 2：PowerShell 后端会重新决定是否复用本类（坐标点击 + 剪贴板粘贴逻辑通用）。
 // ====================================================================================
 
 using System.Runtime.InteropServices;
 using Serilog;
 using WeCom.PersonalRpa.Automation.Contracts;
-using WeCom.PersonalRpa.Automation.Vision;
+// Phase 2 will replace with PowershellAutomationBackend
+// using WeCom.PersonalRpa.Automation.Vision;
 
 namespace WeCom.PersonalRpa.Automation.Win32;
 
@@ -28,41 +26,42 @@ namespace WeCom.PersonalRpa.Automation.Win32;
 /// </summary>
 public class InputExecutor
 {
-    /// <summary>
-    /// 把 bbox 中心点换算成屏幕绝对坐标后点击。
-    /// </summary>
-    /// <param name="bbox">控件 bbox（截图坐标系，相对企微主窗口左上）。</param>
-    /// <param name="windowOrigin">企微主窗口左上角屏幕坐标 (Left, Top)。</param>
-    /// <exception cref="ArgumentNullException"><paramref name="bbox"/> 为 null。</exception>
-    /// <exception cref="ArgumentException">换算后的屏幕坐标越出屏幕分辨率。</exception>
-    public virtual void ClickElement(BoundingBox bbox, (int Left, int Top) windowOrigin)
-    {
-        if (bbox is null)
-        {
-            throw new ArgumentNullException(nameof(bbox));
-        }
-
-        (int cx, int cy) = bbox.Center;
-        int screenX = windowOrigin.Left + cx;
-        int screenY = windowOrigin.Top + cy;
-
-        int screenW = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
-        int screenH = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
-        if (screenX < 0 || screenY < 0 || screenX > screenW || screenY > screenH)
-        {
-            throw new ArgumentException(
-                $"点击坐标越界：screen=({screenX},{screenY})，分辨率=({screenW},{screenH})，windowOrigin=({windowOrigin.Left},{windowOrigin.Top})，bbox={bbox}");
-        }
-
-        Log.Information(
-            "后端日志：InputExecutor.ClickElement bbox={Bbox} windowOrigin=({L},{T}) → screen=({X},{Y})",
-            bbox, windowOrigin.Left, windowOrigin.Top, screenX, screenY);
-
-        SendAbsoluteClick(screenX, screenY, screenW, screenH);
-
-        // 给目标控件处理点击留出时间（同步降级路径，Thread.Sleep 短时占线程可接受）。
-        Thread.Sleep(80);
-    }
+    // Phase 2 will replace with PowershellAutomationBackend
+    // /// <summary>
+    // /// 把 bbox 中心点换算成屏幕绝对坐标后点击。
+    // /// </summary>
+    // /// <param name="bbox">控件 bbox（截图坐标系，相对企微主窗口左上）。</param>
+    // /// <param name="windowOrigin">企微主窗口左上角屏幕坐标 (Left, Top)。</param>
+    // /// <exception cref="ArgumentNullException"><paramref name="bbox"/> 为 null。</exception>
+    // /// <exception cref="ArgumentException">换算后的屏幕坐标越出屏幕分辨率。</exception>
+    // public virtual void ClickElement(BoundingBox bbox, (int Left, int Top) windowOrigin)
+    // {
+    //     if (bbox is null)
+    //     {
+    //         throw new ArgumentNullException(nameof(bbox));
+    //     }
+    //
+    //     (int cx, int cy) = bbox.Center;
+    //     int screenX = windowOrigin.Left + cx;
+    //     int screenY = windowOrigin.Top + cy;
+    //
+    //     int screenW = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
+    //     int screenH = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
+    //     if (screenX < 0 || screenY < 0 || screenX > screenW || screenY > screenH)
+    //     {
+    //         throw new ArgumentException(
+    //             $"点击坐标越界：screen=({screenX},{screenY})，分辨率=({screenW},{screenH})，windowOrigin=({windowOrigin.Left},{windowOrigin.Top})，bbox={bbox}");
+    //     }
+    //
+    //     Log.Information(
+    //         "后端日志：InputExecutor.ClickElement bbox={Bbox} windowOrigin=({L},{T}) → screen=({X},{Y})",
+    //         bbox, windowOrigin.Left, windowOrigin.Top, screenX, screenY);
+    //
+    //     SendAbsoluteClick(screenX, screenY, screenW, screenH);
+    //
+    //     // 给目标控件处理点击留出时间（同步降级路径，Thread.Sleep 短时占线程可接受）。
+    //     Thread.Sleep(80);
+    // }
 
     /// <summary>
     /// 直接按屏幕绝对坐标点击（几何兜底专用，绕过 bbox 视觉定位）。

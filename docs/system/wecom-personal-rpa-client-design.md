@@ -388,24 +388,28 @@ public interface IMessageWatcher : IDisposable
 | `ChatArchiveListener`（F4） | `message_source.mode = archive` |
 | `FallbackMessageWatcher`（F5 占位） | `message_source.mode = fallback` |
 
-### 6.2 Fallback 方案选择（待定）
+### 6.2 Fallback 方案选择
 
 之前考虑过但**都不够稳**的方案：
 
 | 方案 | 失败原因 | 处置 |
 |------|---------|------|
 | Windows 系统通知监听 | 实测企微 5.x 不走系统 Toast，用自己的私有弹窗；PS 监听 UIA 事件被吞（已验证不可行） | 放弃 |
-| Qwen3-VL 视觉定位 | bbox 不稳定 | 已放弃 |
+| Qwen3-VL bbox 视觉定位（用于点击） | bbox 不稳定 + 偏移，无法用于精确点击 | 已放弃（但 VL 模型识别"未读用户名"仍可用，见下） |
 | OCR 整窗 | 中文 OCR 失败率高 | 已放弃 |
 | 进程内存读 | 合规风险 + 升级就废 | 已放弃 |
 | SQLite/LevelDB 文件监控 | schema 加密，逆向成本极高 | 已放弃 |
 
-**当前候选方向**（待验证）：
-- 红点检测 + 小区域 OCR（仅 OCR 会话名区域，文字少准确率高）
-- 桌面通知 API 实测的"私有弹窗"事件监听（C# 端直接用 UIA，不走 PS 委托）
-- 企业微信 IPC Hook（合规边界外，倾向不用）
+**已选定的 Fallback 方向**：**截企微会话列表 + 多模态 VL 模型识别"哪些会话有未读 + 用户名"**
 
-**决策点**：Fallback 方案**先占位，不开发**。本次只实现 F4（会话存档 API）。若 F4 在某些企业不可用，再单独立项做 F5。
+核心思路（区别于已放弃的"VL bbox 点击"方案）：
+- 不依赖 VL 模型返回 bbox（已知不稳定）
+- 只让 VL 模型做"语义识别"：截图中哪些会话有红色未读角标 + 对应的会话名是什么
+- 拿到未读用户名后，用现有的 `Search-WeComUser`（Enter 方案）进入对应会话读消息
+
+**验证脚本**：[clients/wecom-personal-rpa/scripts/verify-unread-vl.ps1](../../clients/wecom-personal-rpa/scripts/verify-unread-vl.ps1)（含 prompt 在 `scripts/prompts/verify_unread_vl.txt`）。该脚本调 qwen3-vl-plus 识别企微会话列表中的未读会话名，输出 JSON 数组 + 多次调用一致性报告。
+
+**详细设计**待整体其他功能（F1-F7）开发完成后再做，本节仅占位关联。
 
 ### 6.3 占位实现
 

@@ -16,8 +16,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{F680E7C7-470
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Client.ConfigTool", "src\Client.ConfigTool\Client.ConfigTool.csproj", "{66666666-6666-6666-6666-666666666666}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SendTest", "src\SendTest\SendTest.csproj", "{115BF199-0E48-4328-B67D-B1FB4CD63BED}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,10 +46,6 @@ Global
 		{66666666-6666-6666-6666-666666666666}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{66666666-6666-6666-6666-666666666666}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{66666666-6666-6666-6666-666666666666}.Release|Any CPU.Build.0 = Release|Any CPU
-		{115BF199-0E48-4328-B67D-B1FB4CD63BED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{115BF199-0E48-4328-B67D-B1FB4CD63BED}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{115BF199-0E48-4328-B67D-B1FB4CD63BED}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{115BF199-0E48-4328-B67D-B1FB4CD63BED}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -61,6 +55,5 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{66666666-6666-6666-6666-666666666666} = {F680E7C7-4705-4C95-BAA3-C88D74EC1FED}
-		{115BF199-0E48-4328-B67D-B1FB4CD63BED} = {F680E7C7-4705-4C95-BAA3-C88D74EC1FED}
 	EndGlobalSection
 EndGlobal
