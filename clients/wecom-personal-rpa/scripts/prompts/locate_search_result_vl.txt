@@ -1,0 +1,25 @@
+Look at this WeCom (Enterprise WeChat) screenshot. Image dimensions: {IMG_W}x{IMG_H} pixels.
+
+The user just typed a search keyword in the search box at the top. A SEARCH DROPDOWN is now visible below the search box. The dropdown floats over the normal conversation list.
+
+TASK: Find the FIRST occurrence of the keyword "{KEYWORD}" that appears INSIDE THE SEARCH DROPDOWN. Ignore any "{KEYWORD}" appearing in the underlying conversation list (the dropdown may not cover it).
+
+How to identify the dropdown area:
+ * The dropdown starts just below the search box (around y=50-60) and extends downward
+ * The dropdown typically ends with a "查看全部" (View All) link near its bottom
+ * The dropdown contains grouped sections like "联系人" (Contacts), "群聊" (Group chats), "聊天记录" (Chat history)
+ * Each section header is a small label like "联系人" or "群聊"
+ * Below each section header are the matching items
+
+DO NOT report items that appear below "查看全部" — those are from the underlying conversation list, not the dropdown.
+
+Return ONLY a JSON array (no markdown fences, no extra text). Each element is:
+[{{"text": "<the literal text of the item>", "bbox": [x1, y1, x2, y2], "section": "<section label like 联系人/群聊/聊天记录 or empty>"}}, ...]
+
+Rules:
+ * bbox MUST be pixel coordinates relative to top-left of image.
+ * Only include items INSIDE the dropdown (above "查看全部" if it exists, or in the top half of the image).
+ * Include the section label for each item.
+ * Order items top-to-bottom by y.
+ * Output at most 20 items.
+ * If the keyword "{KEYWORD}" is NOT in the dropdown, return an empty array [].

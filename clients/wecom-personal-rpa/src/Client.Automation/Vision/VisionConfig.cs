@@ -15,11 +15,13 @@ public sealed class VisionConfig
     /// <summary>总开关。false 时 Client.App 不向 DI 注册 IVisionLocator。</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>主模型。默认 "qwen3-vl-plus"，性价比最高。</summary>
-    public string PrimaryModel { get; set; } = "qwen3-vl-plus";
+    /// <summary>主模型。默认 "qwen-vl-max"（Qwen2.5-VL 系列）——plus 版本在企微搜索结果列表的 bbox 识别有 Y 偏移
+    /// （bbox 中心比实际项低 ~40px，导致点错会话）。max 版本经真机对比准确率更高。
+    /// 注意：模型名是 qwen-vl-max（Qwen2.5-VL），不是 qwen3-vl-max（不存在）。</summary>
+    public string PrimaryModel { get; set; } = "qwen-vl-max";
 
-    /// <summary>降级模型。默认 "qwen3-vl-max"，主模型连续失败时切换。</summary>
-    public string FallbackModel { get; set; } = "qwen3-vl-max";
+    /// <summary>降级模型。主模型连续失败时切换。</summary>
+    public string FallbackModel { get; set; } = "qwen3-vl-plus";
 
     /// <summary>
     /// OpenAI 兼容协议的 chat/completions 端点。

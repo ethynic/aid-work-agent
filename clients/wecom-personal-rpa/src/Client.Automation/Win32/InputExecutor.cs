@@ -65,6 +65,27 @@ public class InputExecutor
     }
 
     /// <summary>
+    /// 直接按屏幕绝对坐标点击（几何兜底专用，绕过 bbox 视觉定位）。
+    /// 用于视觉定位失败时的降级：调用方按窗口尺寸算出大致坐标后调本方法。
+    /// </summary>
+    public virtual void ClickAtScreen(int screenX, int screenY)
+    {
+        int screenW = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXSCREEN);
+        int screenH = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSCREEN);
+        if (screenX < 0 || screenY < 0 || screenX > screenW || screenY > screenH)
+        {
+            throw new ArgumentException(
+                $"点击坐标越界：screen=({screenX},{screenY})，分辨率=({screenW},{screenH})");
+        }
+
+        Log.Information(
+            "后端日志：InputExecutor.ClickAtScreen screen=({X},{Y}) [几何兜底]",
+            screenX, screenY);
+        SendAbsoluteClick(screenX, screenY, screenW, screenH);
+        Thread.Sleep(80);
+    }
+
+    /// <summary>
     /// 剪贴板粘贴文本（调用方负责 ClipboardGuard 备份 / 清空 / 还原）+ 按 Enter。
     /// </summary>
     /// <param name="text">要粘贴的文本。</param>

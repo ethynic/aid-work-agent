@@ -1,0 +1,5 @@
+# 中文字符串字典。PS 5.1 在中文 Windows 上按 GBK 解析脚本字面量，
+# 把所有中文关键词集中到这个 UTF-8 文件里，由 debug-navigate.ps1 读取。
+search_placeholder = 搜索
+default_keyword = 陆伟
+send_text = 你好啊！

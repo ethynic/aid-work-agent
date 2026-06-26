@@ -1,0 +1,11 @@
+Look at this screenshot. Image dimensions: {IMG_W}x{IMG_H} pixels.
+
+Find ALL text labels and UI elements. Return ONLY a JSON array (no markdown, no extra text):
+[{"text": "<the literal text shown>", "bbox": [x1,y1,x2,y2]}, ...]
+
+Rules:
+ * bbox MUST be pixel coordinates relative to top-left of image.
+ * Include every visible text/label/button/input placeholder.
+ * Do NOT classify or name elements semantically. Just transcribe the text + give bbox.
+ * If an input has placeholder text like "搜索" inside it, include that placeholder as a text element.
+ * Output max 50 elements, ordered top-to-bottom by y.

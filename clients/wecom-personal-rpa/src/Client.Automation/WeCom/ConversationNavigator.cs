@@ -72,9 +72,12 @@ public sealed class ConversationNavigator
             _inputExecutor.ClickElement(searchProbe.Bbox, origin.Value);
             Thread.Sleep(400);
 
-            // 2. 输入关键词（不按 Enter，等待搜索结果实时显示）
+            // 2. 清空搜索框已有内容（Ctrl+A 全选 + Delete）后再输入关键词。
+            // 必要性：搜索框可能保留上次的搜索词；不清空直接 Ctrl+V 会拼接成 "旧词新词"。
+            Win32Input.SelectAllAndDelete();
+            Thread.Sleep(150);
             _inputExecutor.TypeText(keyword, pressEnterAfter: false);
-            Thread.Sleep(500);
+            Thread.Sleep(1500);  // 给企微搜索结果渲染留时间（实测 500ms 不够，结果还没出来）
 
             // 3. 定位搜索结果列表项
             var listProbe = _visionLocator.LocateAsync("list_item", keyword).GetAwaiter().GetResult();
@@ -93,8 +96,10 @@ public sealed class ConversationNavigator
             // 多候选检测：当模型只返回单条命中时，我们无法 100% 判定唯一；首版保守按"命中即点击"
             // 进入会话，由 MessageWatcher / 后续业务验证是否进入正确会话。
             // 真正的多候选需要模型支持 multiple bbox 返回，落地后这里改为按返回数量分流。
+            // 单击搜索结果列表项：企微 5.0.8 单击即进入会话视图。
+            // 注意：不要双击！第二次点击会落在已经切换好的会话视图上，可能误点中历史消息里的图片把它放大。
             _inputExecutor.ClickElement(listProbe.Bbox, origin.Value);
-            Thread.Sleep(400);
+            Thread.Sleep(2500);  // 进入会话视图后给企微充足时间渲染聊天界面 + 消息输入框
 
             return new ConversationNavigateResult
             {

@@ -71,41 +71,35 @@ public sealed class SendMessageService : IActionExecutor
                 var inputProbe = _visionLocator.LocateAsync("input", "消息输入框").GetAwaiter().GetResult();
                 if (inputProbe is null)
                 {
-                    Log.Warning("后端日志：SendText 定位消息输入框失败（elementType=input, kw=消息输入框）");
-                    return new ActionExecResult
-                    {
-                        Success = false,
-                        ErrorCode = "vision_locate_failed",
-                        ErrorMessage = "消息输入框定位失败",
-                    };
+                    // 几何兜底：视觉定位失败时（API 慢导致搜索结果过期等场景），
+                    // 假设企微主窗口右半部分底部 90% 高度处是消息输入框。
+                    Log.Warning("后端日志：SendText 视觉定位消息输入框失败，降级到几何兜底");
+                    var (wLeft, wTop, wWidth, wHeight) = _mainWindow.GetRect();
+                    int fallbackX = wLeft + (int)(wWidth * 0.70);
+                    int fallbackY = wTop + (int)(wHeight * 0.92);
+                    _inputExecutor.ClickAtScreen(fallbackX, fallbackY);
+                    Thread.Sleep(500);
                 }
-                _inputExecutor.ClickElement(inputProbe.Bbox, origin.Value);
-                Thread.Sleep(400);
+                else
+                {
+                    _inputExecutor.ClickElement(inputProbe.Bbox, origin.Value);
+                    Thread.Sleep(400);
+                }
 
-                // 剪贴板备份 → 写入文本（不按 Enter）→ 还原
+                // 剪贴板备份 → 清空输入框 → 写入文本 → Enter 发送（不依赖视觉定位发送按钮）
+                // 必须清空：焦点可能仍在搜索框（残留"文件传输助手"等搜索词），
+                // 直接 Ctrl+V 会拼接成 "搜索词我成功了！" 发出去。
                 _clipboardGuard.BackupAndEmpty();
                 try
                 {
-                    _inputExecutor.TypeText(text, pressEnterAfter: false);
+                    Win32Input.SelectAllAndDelete();  // 清空当前焦点控件
+                    Thread.Sleep(150);
+                    _inputExecutor.TypeText(text, pressEnterAfter: true);
                 }
                 finally
                 {
                     _clipboardGuard.Restore();
                 }
-
-                // 定位发送按钮并点击
-                var sendProbe = _visionLocator.LocateAsync("button", "发送").GetAwaiter().GetResult();
-                if (sendProbe is null)
-                {
-                    Log.Warning("后端日志：SendText 定位发送按钮失败（elementType=button, kw=发送），text_length={Len}", text.Length);
-                    return new ActionExecResult
-                    {
-                        Success = false,
-                        ErrorCode = "vision_locate_failed",
-                        ErrorMessage = "发送按钮定位失败",
-                    };
-                }
-                _inputExecutor.ClickElement(sendProbe.Bbox, origin.Value);
 
                 Log.Information("后端日志：SendText 成功 conversationKey={Key} text_length={Len}",
                     conversationKey, text.Length);

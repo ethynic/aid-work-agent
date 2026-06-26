@@ -178,6 +178,9 @@ internal static class NativeMethods
     internal const ushort VK_RETURN = 0x0D;
     internal const ushort VK_CONTROL = 0x11;
     internal const ushort VK_V = 0x56;
+    internal const ushort VK_ESCAPE = 0x1B;
+    internal const ushort VK_A = 0x41;
+    internal const ushort VK_DELETE = 0x2E;
 
     // 剪贴板格式
     internal const uint CF_UNICODETEXT = 13;

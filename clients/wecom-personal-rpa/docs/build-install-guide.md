@@ -8,7 +8,7 @@
 
 ## ⚠️ 联调会话遗留问题（2026-06-25，新会话必读）
 
-本指南原本只覆盖「编译→打包→安装」，但 2026-06-25 联调会话发现并修复了一系列**前后端协同 bug**。这些修复都已落地（前后端代码 + 文档），但**联调最后一步未完成**——客户端发的 status callback 仍被服务端拒（`event_type Input should be 'status' [input_value='Status']`）。
+本指南原本只覆盖「编译→打包→安装」，但 2026-06-25 联调会话发现并修复了一系列**前后端协同 bug**。**所有阻塞联调的问题都已修复并通过真机验证**（客户端 callback 200，服务端不再报 `event_type` 校验错）。
 
 新会话接手时，**先读本节**，再继续往下看基础流程。
 
@@ -27,32 +27,25 @@
 | 9 | 写 ConfigTool CLI（DPAPI 加密写入 client_config.enc） | `clients/wecom-personal-rpa/src/Client.ConfigTool/`（新工程） |
 | 10 | 写 SnakeCaseEnumJsonConverter（PascalCase 枚举 ⇄ snake_case JSON，对齐服务端 Pydantic Literal） | `clients/wecom-personal-rpa/src/Client.Core/Serialization/SnakeCaseEnumJsonConverter.cs`（新文件） |
 | 11 | 5 个枚举改用 SnakeCaseEnumJsonConverter：EventType / ConversationType / InboundMessageType / PausedScope / AccountStatus / ErrorCode | `clients/wecom-personal-rpa/src/Client.Core/Protocol/*.cs` |
+| 12 | **callback 400 根因修复**：删除 `ProtocolJsonOptions.cs` 里 `new JsonStringEnumConverter()`。`JsonSerializerOptions.Converters` 列表中的转换器优先级**高于**枚举上的 `[JsonConverter]` 特性，所以那个看起来无害的 `JsonStringEnumConverter()` 实际劫持了所有枚举，让 SnakeCaseEnumJsonConverter 特性失效、退回 PascalCase 序列化（`"Status"` 而不是 `"status"`），服务端 Pydantic Literal 校验失败 | `clients/wecom-personal-rpa/src/Client.Core/Protocol/ProtocolJsonOptions.cs` |
+| 13 | `DesktopState.IsLocked` / `GetWorkArea` 的 P/Invoke 修复：删除自造入口 `SystemParametersInfoGetScreensaver` / `SystemParametersInfoGetWorkArea`（user32.dll 不存在这两个导出，导致 `EntryPointNotFoundException`），改为调用真实存在的 `NativeMethods.SystemParametersInfo`，手动用 `Marshal.AllocHGlobal/PtrToStructure` 处理 pvParam | `clients/wecom-personal-rpa/src/Client.Automation/Win32/DesktopState.cs` |
+| 14 | 写 `install-now.ps1` 一键安装脚本（卸所有旧 ProductCode + 清 `Program Files\WeComRpa` 残留 + 装新版 + 验证 LastWriteTime） | `clients/wecom-personal-rpa/scripts/install-now.ps1` |
 
-### 联调最后一步未完成（新会话首要任务）
+### 安装时的隐藏坑（重要）
 
-**症状**：客户端 status callback 仍被服务端 400 拒：
-```
-RPA callback 信封校验失败: event_type
-  Input should be 'message', 'status' or 'action_result'
-  [input_value='Status', input_type=str]
-```
+**问题**：同 UpgradeCode + 同版本号（1.0.0）的 MSI 反复装时，Windows Installer 会因"文件版本相同"跳过文件覆盖。即使你重新 build MSI，msiexec `/i` 后 Program Files 里的 exe 仍是旧的——表现为 LastWriteTime 不更新，callback 仍报 400。
 
-**已做的修复**（但似乎在生产 exe 里没生效）：写了 `SnakeCaseEnumJsonConverter`，5 个枚举都加了 `[JsonConverter(typeof(SnakeCaseEnumJsonConverter<>))]`。
-
-**诊断方向**（按可能性排序）：
-
-1. **客户端 exe 没真正重打**：联调会话最后一次 `build-and-install.ps1` 可能 publish 出错或 MSI 没重装。新会话先确认 `C:\Program Files\WeComRpa\app\Client.App.exe` 的修改时间是不是最新的。
-2. **`ProtocolJsonOptions.Instance` 没注册 SnakeCaseEnumJsonConverter**：枚举上的 `[JsonConverter]` 特性应该自动生效，但 `ProtocolJsonOptions.cs:22` 里有个 `new JsonStringEnumConverter()` 在 Converters 列表里——可能它优先级高于枚举上的特性，把所有枚举都按 PascalCase 序列化了。**这是最可疑的点**。检查 `clients/wecom-personal-rpa/src/Client.Core/Protocol/ProtocolJsonOptions.cs:22`，把 `new JsonStringEnumConverter()` 删掉，让枚举用自己的 `[JsonConverter]`。
-3. **客户端构造 InboundEvent 时绕过了 JsonSerializer**：检查 `AgentApiClient.PostCallbackAsync` 实际用什么序列化 InboundEvent。如果用的是 `_jsonOptions`（来自 `ProtocolJsonOptions.Instance`），就回到怀疑点 2。
-4. **TypeModel 缓存了旧版本**：极少见，但 .NET 偶尔有 JIT 缓存问题。清理 `bin/`、`obj/`、`publish/` 后重打。
-
-**验证手段**：直接看客户端实际发出的 JSON 字节。在 `AgentApiClient.PostCallbackAsync` 里加一行临时日志，把序列化后的 `json` 字符串打出来（**记得事后删，不能泄露 secret 但 event_type 不是 secret**）。看到底是 `"event_type":"Status"` 还是 `"event_type":"status"`。
+**修法**（已固化在 `install-now.ps1`）：
+1. 用 DisplayName 模糊匹配（`*RPA*`，覆盖中英文），把所有同 DisplayName 的旧 ProductCode **逐个卸载**
+2. 强制 `Remove-Item -Recurse C:\Program Files\WeComRpa`
+3. 再装新版 MSI
+4. 用 `Client.App.exe.LastWriteTime` 确认装的是新 exe
 
 ### 其他已知问题（不阻塞主流程，但应修）
 
 | # | 问题 | 影响 |
 |---|------|------|
-| A | `DesktopState.IsLocked` P/Invoke 入口点找不到：`SystemParametersInfoGetScreensaver` 在 user32.dll 不存在 | HealthSupervisor 每次报 `EntryPointNotFoundException`，被 try/catch 吞了但日志刷屏。修法：改成 P/Invoke `SystemParametersInfo`（user32.dll 真实存在），uiAction 用 `SPI_GETSCREENSAVERRUNNING = 0x0072` |
+| A | ~~`DesktopState.IsLocked` P/Invoke 入口点找不到~~ | ✅ 已修，见上表 #13 |
 | B | `TrayApp.OnRelogin` DI 注入报错 `No service for type 'RpaHost'` | 用户点「重新登录」会失败。修法：在 `App.xaml.cs.ConfigureServices` 把 `RpaHost` 注册成 `AddSingleton<RpaHost>` 或修复 `OnRelogin` 的服务定位方式 |
 | C | ConfigTool 默认输出 `%LOCALAPPDATA%\WeComRpa\client_config.enc`，但客户端读 `%LOCALAPPDATA%\WeComPersonalRpa\Client.App\data\client_config.enc` | 用户必须手动 cp 配置文件，否则客户端读不到。修法：ConfigTool 默认输出路径改成跟客户端读取路径一致 |
 | D | `.env` 必须设 `RPA_SECRET_KEY`，否则 `register_client` / `rotate_client_secret` 都会 RuntimeError | 文档没说明。修法：在 `.env.example` 加注释 + 在 `docs/system/wecom-personal-rpa-design.md` 补部署前置条件 |

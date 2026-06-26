@@ -29,9 +29,10 @@ public sealed class ScreenshotOptions
 
     /// <summary>
     /// 白色区域占比阈值（0..1），超过则判定为疑似非企微（VSCode 浅色主题会触发）。
-    /// 默认 0.5（实测企微 0.129）。
+    /// 默认 0.7。注意：企微"空白聊天会话视图"实测白色占比 ~64%（输入框 + 空白消息区都白底），
+    /// 0.5 阈值会误杀合法聊天视图。0.7 既放过合法聊天，又能拦截 VSCode 浅色（>80%）。
     /// </summary>
-    public double MaxWhiteRatio { get; set; } = 0.5;
+    public double MaxWhiteRatio { get; set; } = 0.7;
 
     /// <summary>
     /// 颜色多样性阈值（量化到 16x16 色块后的唯一颜色数），低于则判定为空白截图。

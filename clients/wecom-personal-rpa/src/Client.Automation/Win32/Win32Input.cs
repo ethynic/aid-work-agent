@@ -81,6 +81,71 @@ internal static class Win32Input
         SendEnter();
     }
 
+    /// <summary>发送 Esc：关闭企微搜索结果列表，回到会话视图。</summary>
+    public static void SendEsc()
+    {
+        var inputs = new NativeMethods.INPUT[2];
+
+        inputs[0].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = NativeMethods.VK_ESCAPE;
+        inputs[0].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYDOWN;
+
+        inputs[1].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = NativeMethods.VK_ESCAPE;
+        inputs[1].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYUP;
+
+        uint sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        if (sent != inputs.Length)
+        {
+            throw new AutomationLayerException(
+                "Win32.Input",
+                $"SendInput(Esc) 发送数量不匹配，期望 {inputs.Length}，实际 {sent}");
+        }
+
+        SleepUnblocked(50);
+    }
+
+    /// <summary>全选当前焦点控件的文本并删除（Ctrl+A → Delete）。</summary>
+    public static void SelectAllAndDelete()
+    {
+        // Ctrl+A
+        var inputs = new NativeMethods.INPUT[10];
+        int i = 0;
+        inputs[i].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = NativeMethods.VK_CONTROL;
+        inputs[i].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYDOWN; i++;
+        inputs[i].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = NativeMethods.VK_A;
+        inputs[i].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYDOWN; i++;
+        inputs[i].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = NativeMethods.VK_A;
+        inputs[i].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYUP; i++;
+        inputs[i].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = NativeMethods.VK_CONTROL;
+        inputs[i].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYUP; i++;
+
+        // Delete
+        inputs[i].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = NativeMethods.VK_DELETE;
+        inputs[i].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYDOWN; i++;
+        inputs[i].type = NativeMethods.INPUT_KEYBOARD;
+        inputs[i].u.ki.wVk = NativeMethods.VK_DELETE;
+        inputs[i].u.ki.dwFlags = NativeMethods.KEYEVENTF_KEYUP; i++;
+
+        // 只发送前 i 个
+        Array.Resize(ref inputs, i);
+
+        uint sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        if (sent != inputs.Length)
+        {
+            throw new AutomationLayerException(
+                "Win32.Input",
+                $"SendInput(Ctrl+A,Del) 发送数量不匹配，期望 {inputs.Length}，实际 {sent}");
+        }
+
+        SleepUnblocked(100);
+    }
+
     /// <summary>不阻塞线程池的轻量等待（避免在 async 上下文里 Thread.Sleep 长时间占线程）。</summary>
     private static void SleepUnblocked(int milliseconds)
     {

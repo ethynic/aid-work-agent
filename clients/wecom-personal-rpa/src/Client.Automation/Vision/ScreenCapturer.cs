@@ -25,6 +25,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
 using Serilog;
 
@@ -221,20 +222,23 @@ public sealed class ScreenCapturer : IScreenCapturer
         }
 
         // 像素自检（PowerShell 已经算过，C# 复用结果）
-        bool tooWhite = result.WhiteRatio > _options.MaxWhiteRatio;
-        bool tooSparse = (result.ColorDiversity ?? 0) < _options.MinColorDiversity;
+        // 数值字段统一用 ?? 0 兜底（PowerShell 偶发输出 null 时不至于炸反序列化）
+        double whiteRatio = result.WhiteRatio ?? 0;
+        int colorDiversity = result.ColorDiversity ?? 0;
+        bool tooWhite = whiteRatio > _options.MaxWhiteRatio;
+        bool tooSparse = colorDiversity < _options.MinColorDiversity;
         if (_options.PixelSanityCheck && (tooWhite || tooSparse))
         {
             // 删 PNG（已经判废）
             try { if (File.Exists(result.PngPath)) File.Delete(result.PngPath); } catch { /* ignore */ }
             string reason = tooWhite
-                ? $"白色区域占比 {result.WhiteRatio:P1} 超过阈值 {_options.MaxWhiteRatio:P1}"
-                : $"颜色多样性 {result.ColorDiversity} 低于阈值 {_options.MinColorDiversity}";
+                ? $"白色区域占比 {whiteRatio:P1} 超过阈值 {_options.MaxWhiteRatio:P1}"
+                : $"颜色多样性 {colorDiversity} 低于阈值 {_options.MinColorDiversity}";
             Log.Warning("后端日志：截图像素自检失败 hwnd={Hwnd} {Reason}", result.Hwnd, reason);
             throw new SuspiciousScreenshotException(
                 "截图像素自检失败：" + reason + "。已拒绝下游视觉定位以防止误操作。",
-                result.WhiteRatio,
-                result.ColorDiversity ?? 0);
+                whiteRatio,
+                colorDiversity);
         }
 
         // 加载 PNG 转 Bitmap（C# 自己用 System.Drawing）
@@ -249,25 +253,31 @@ public sealed class ScreenCapturer : IScreenCapturer
             throw new WindowNotForegroundException($"加载截图 PNG 失败：{ex.Message}", ex);
         }
 
+        int left = result.Left ?? 0;
+        int top = result.Top ?? 0;
+        int width = result.Width ?? 0;
+        int height = result.Height ?? 0;
+        double dpiScale = result.DpiScale ?? 1.0;
+
         var fingerprint = new WindowFingerprint(
             WindowClass: _windowClassName,
-            X: result.Left,
-            Y: result.Top,
-            Width: result.Width,
-            Height: result.Height,
-            DpiScale: result.DpiScale,
+            X: left,
+            Y: top,
+            Width: width,
+            Height: height,
+            DpiScale: dpiScale,
             WeComVersion: result.WecomVersion ?? "unknown");
 
         Log.Information(
             "后端日志：截图采集成功 hwnd={Hwnd} rect={Left},{Top} {W}x{H} dpi={Dpi:F2} version={Version} white={White:P1} diversity={Diversity}",
-            result.Hwnd, result.Left, result.Top, result.Width, result.Height,
-            result.DpiScale, result.WecomVersion, result.WhiteRatio, result.ColorDiversity);
+            result.Hwnd, left, top, width, height,
+            dpiScale, result.WecomVersion, whiteRatio, colorDiversity);
 
         return new CaptureResult
         {
             Bitmap = bmp,
             Fingerprint = fingerprint,
-            WindowRect = (result.Left, result.Top, result.Width, result.Height),
+            WindowRect = (left, top, width, height),
             TempPngPath = result.PngPath,
         };
     }
@@ -350,19 +360,22 @@ public static class PixelSanityChecker
 
 /// <summary>
 /// capture-wecom-for-csharp.ps1 脚本的 JSON 输出契约（snake_case 由 PowerShell ConvertTo-Json 产生）。
+/// 注意：PropertyNameCaseInsensitive=true 只忽略大小写，不忽略下划线，
+/// 所以 snake_case 字段必须显式 [JsonPropertyName] 映射到 PascalCase 属性，
+/// 否则 png_path / dpi_scale / wecom_version / white_ratio / color_diversity 全部映射失败。
 /// </summary>
 internal sealed class CaptureScriptResult
 {
     public bool Ok { get; set; }
     public string? Error { get; set; }
-    public string? PngPath { get; set; }
-    public int Left { get; set; }
-    public int Top { get; set; }
-    public int Width { get; set; }
-    public int Height { get; set; }
-    public double DpiScale { get; set; } = 1.0;
-    public string? WecomVersion { get; set; }
+    [JsonPropertyName("png_path")] public string? PngPath { get; set; }
+    public int? Left { get; set; }
+    public int? Top { get; set; }
+    public int? Width { get; set; }
+    public int? Height { get; set; }
+    [JsonPropertyName("dpi_scale")] public double? DpiScale { get; set; } = 1.0;
+    [JsonPropertyName("wecom_version")] public string? WecomVersion { get; set; }
     public string? Hwnd { get; set; }
-    public double WhiteRatio { get; set; }
-    public int? ColorDiversity { get; set; }
+    [JsonPropertyName("white_ratio")] public double? WhiteRatio { get; set; }
+    [JsonPropertyName("color_diversity")] public int? ColorDiversity { get; set; }
 }

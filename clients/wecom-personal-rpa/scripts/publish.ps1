@@ -45,6 +45,11 @@ $assetsOut = Join-Path $appOut 'assets'
 New-Item $assetsOut -ItemType Directory -Force | Out-Null
 Copy-Item (Join-Path $root 'assets\wecom_nodes.yaml') (Join-Path $assetsOut 'wecom_nodes.yaml') -Force
 
+# 拷贝运行时依赖的 PowerShell 脚本（ScreenCapturer 依赖 capture-wecom-for-csharp.ps1）
+$scriptsOut = Join-Path $appOut 'scripts'
+New-Item $scriptsOut -ItemType Directory -Force | Out-Null
+Copy-Item (Join-Path $root 'scripts\capture-wecom-for-csharp.ps1') (Join-Path $scriptsOut 'capture-wecom-for-csharp.ps1') -Force
+
 Write-Host "[OK] 发布完成：$out"
 Write-Host "   App:        $appOut\Client.App.exe"
 Write-Host "   Supervisor: $supOut\Client.Supervisor.exe"

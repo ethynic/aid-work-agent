@@ -1,0 +1,12 @@
+Look at this screenshot of WeCom (Enterprise WeChat) with a search dropdown showing results.
+Image dimensions: {IMG_W}x{IMG_H} pixels.
+
+Return ONLY a JSON array of every text element you can see (no markdown, no extra text):
+[{"text": "<literal text>", "bbox": [x1,y1,x2,y2]}, ...]
+
+Rules:
+ * bbox MUST be pixel coordinates relative to top-left of image.
+ * Include every text label you see: the search box content at top, and every search result row.
+ * Do NOT classify elements. Just transcribe the literal text + give bbox.
+ * For each search result row, the text should be the row's main name (e.g. "文件传输助手", "张三", etc).
+ * Output max 50 elements, ordered top-to-bottom by y.

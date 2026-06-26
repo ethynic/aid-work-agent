@@ -19,7 +19,11 @@ public static class ProtocolJsonOptions
         Converters =
         {
             new ActionJsonConverter(),
-            new JsonStringEnumConverter(),
+            // 不要在这里放 JsonStringEnumConverter：
+            // JsonSerializerOptions.Converters 列表中的转换器优先级高于枚举上的 [JsonConverter] 特性，
+            // 会让所有协议枚举（EventType / AccountStatus / ErrorCode 等）退回 PascalCase 序列化，
+            // 导致服务端 Pydantic Literal 校验失败。
+            // 各协议枚举自行通过 [JsonConverter(typeof(SnakeCaseEnumJsonConverter<>))] 贴特性即可。
         },
     };
 }

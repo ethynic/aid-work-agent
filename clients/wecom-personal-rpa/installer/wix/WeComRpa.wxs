@@ -71,6 +71,7 @@
         <Directory Id="APPDIR" Name="app">
           <Directory Id="APPASSETSDIR" Name="assets" />
           <Directory Id="APPCONFIGSDIR" Name="configs" />
+          <Directory Id="APPSCRIPTSDIR" Name="scripts" />
         </Directory>
         <Directory Id="SUPDIR" Name="supervisor" />
       </Directory>
@@ -121,6 +122,13 @@
     <DirectoryRef Id="APPCONFIGSDIR">
       <Component Id="AppConfigs" Guid="A1B2C3D4-AAAA-BBBB-CCCC-DDDDEEEE0002">
         <File Id="app.configs.client_example.yaml" Source="$(var.PublishRoot)\app\configs\client.example.yaml" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- app\scripts 子目录：ScreenCapturer 运行时依赖的 PowerShell 脚本 -->
+    <DirectoryRef Id="APPSCRIPTSDIR">
+      <Component Id="AppScripts" Guid="A1B2C3D4-AAAA-BBBB-CCCC-DDDDEEEE0003">
+        <File Id="app.scripts.capture_wecom_for_csharp_ps1" Source="$(var.PublishRoot)\app\scripts\capture-wecom-for-csharp.ps1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
@@ -241,6 +249,7 @@
         <ComponentRef Id="AppExe" />
         <ComponentRef Id="AppAssets" />
         <ComponentRef Id="AppConfigs" />
+        <ComponentRef Id="AppScripts" />
         <ComponentRef Id="AppShortcut" />
         <ComponentRef Id="AppAutoRun" />
       </Feature>

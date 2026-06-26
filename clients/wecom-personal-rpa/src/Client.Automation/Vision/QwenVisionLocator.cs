@@ -182,6 +182,16 @@ public sealed class QwenVisionLocator : IVisionLocator, IDisposable
                     Logger.Warning(
                         "后端日志：QwenVisionLocator 模型返回 {Count} 元素但无匹配 type={Type} kw={Kw}",
                         elements.Count, elementType, labelKeyword);
+                    // 临时 debug：dump 前 10 个元素的 role/type/label/bbox，帮助定位匹配失败原因
+                    foreach (var el in elements.Take(10))
+                    {
+                        double cx = el.Bbox is null ? -1 : (el.Bbox.X1 + el.Bbox.X2) / 2.0;
+                        double cy = el.Bbox is null ? -1 : (el.Bbox.Y1 + el.Bbox.Y2) / 2.0;
+                        double relY = (imgH > 0 && el.Bbox is not null) ? cy / imgH : -1;
+                        Logger.Warning(
+                            "后端日志：[DEBUG] el role={Role} type={Type} label={Label} relY={RelY:F2} bbox={Bbox}",
+                            el.Role ?? "(null)", el.Type ?? "(null)", el.Label ?? "(null)", relY, el.Bbox);
+                    }
                     return null;
                 }
 
@@ -318,7 +328,11 @@ public sealed class QwenVisionLocator : IVisionLocator, IDisposable
             {
                 score = 1.0 - relY; // 越靠上分数越高
             }
-            else if (expectedRole == "message_input" && typeStr.IndexOf("input", StringComparison.OrdinalIgnoreCase) >= 0 && relY > 0.65)
+            else if (expectedRole == "message_input" && relY > 0.65 &&
+                     (typeStr.IndexOf("input", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                      typeStr.IndexOf("text", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                      typeStr.IndexOf("area", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                      typeStr.IndexOf("edit", StringComparison.OrdinalIgnoreCase) >= 0))
             {
                 score = relY; // 越靠下分数越高
             }
