@@ -1,15 +1,20 @@
 # 企业微信个人账号 RPA 独立客户端设计
 
-> 关联调研：[wecom-personal-account-rpa-research.md](../research/wecom-personal-account-rpa-research.md)、[wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
-> 开发计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
-> **视觉定位方案设计（2026-06-23 新增，替代本文 §6.2 失效的三层降级链）**：[wecom-personal-rpa-vision-design.md](./wecom-personal-rpa-vision-design.md)
+> ⚠️ **本文档定位调整（2026-06-26）**：
+> - 客户端具体实现（PS 自动化、消息监听、二维码上报等）已迁移到 **[wecom-personal-rpa-client-design.md](./wecom-personal-rpa-client-design.md)**
+> - 本文档保留为**架构 + 协议 + 安全 + 合规**层面的设计参考
+> - §6.2「三层自动化策略」和 §3.4「消息监听」中描述的 FlaUI/UIA3/Qwen3-VL/OCR 方案**已全部废弃**（真机验证失败），仅作历史记录，不再执行
+>
+> 关联：
+> - **客户端实现（最新）**：[wecom-personal-rpa-client-design.md](./wecom-personal-rpa-client-design.md)
+> - 协议：[wecom-personal-rpa-protocol.md](./wecom-personal-rpa-protocol.md)
+> - 绑定管理 Tab：[wecom-personal-rpa-portal-binding-design.md](./wecom-personal-rpa-portal-binding-design.md)
+> - 开发计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md) + [plan-wecom-personal-rpa-client.md](../../plans/plan-wecom-personal-rpa-client.md)
+> - 关联调研：[wecom-personal-account-rpa-research.md](../research/wecom-personal-account-rpa-research.md)、[wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
+>
 > 创建日期：2026-06-16
-> 更新日期：2026-06-24
-> 状态：🔧 部分完成（视觉定位方案已落地，详见视觉定位设计文档 §12）
-
----
-
-> **重要更新通知（2026-06-24）**：本文档 §6.2「三层自动化策略」（FlaUI→Win32→OpenCV）经真机验证 **前两层已失效**——UIA3 dump 出 0 控件、MSAA 子对象数为 0。**实际实现改为 Qwen3-VL 多模态视觉定位**，详见 [wecom-personal-rpa-vision-design.md](./wecom-personal-rpa-vision-design.md)。本文档其他章节（架构、协议、安全、合规）仍然适用。
+> 更新日期：2026-06-26
+> 状态：🔧 部分完成（架构/协议/安全/合规层稳定；客户端实现见 client-design）
 
 ---
 
@@ -210,35 +215,23 @@ clients/
 
 ### 3.4 消息监听
 
-客户端按优先级使用三种方式：
+> ⚠️ **本节内容已迁移到 [client-design.md §F4-F6](./wecom-personal-rpa-client-design.md#f4-会话存档-api-监听主方案)**。这里仅保留结论性指引。
 
-| 优先级 | 方式 | 说明 |
-|------|------|------|
-| P0 | Windows 通知 / 未读角标触发 | 低频、低成本，减少轮询 |
-| P1 | 会话列表轮询 | 每 3-10 秒扫描未读会话和最后消息摘要 |
-| P2 | 会话存档对账 | 已开通官方存档时用于补漏，不作为客户端实时监听前提 |
+客户端消息监听采用**双层方案**（二选一，配置项 `message_source.mode` 决定）：
 
-客户端生成的入站消息必须包含本地去重键：
+| 方案 | 触发条件 | 实现位置 |
+|------|---------|---------|
+| `archive`（主方案） | 企业已开通会话存档 + 拿到 corpid/secret/private_key | client-design §F4 |
+| `fallback`（占位） | archive 不可用时 | client-design §F5（当前未实现） |
 
-```json
-{
-  "event_id": "evt_20260622_xxx",
-  "client_id": "client_001",
-  "account_id": "wecom_account_001",
-  "conversation_id": "binding_abc",
-  "conversation_type": "external_user",
-  "sender": {
-    "display_name": "张三",
-    "stable_id": null
-  },
-  "message": {
-    "type": "text",
-    "text": "你好",
-    "attachments": []
-  },
-  "occurred_at": "2026-06-22T10:00:00+08:00"
-}
-```
+**已废弃方案**（不要再走）：
+- Windows 系统通知监听 → 实测企微 5.x 用私有弹窗，不走系统 Toast
+- Qwen3-VL 视觉定位 → bbox 不稳定 + 偏移
+- PaddleOCR layout-parsing 整窗 → 漏识 placeholder 和密集列表项
+- Windows.Media.Ocr → 中文识别率 < 10%
+- FlaUI/UIA3 控件树 → 企微 Electron dump 出 0 控件
+
+详见 [client-design.md §0 历史背景](./wecom-personal-rpa-client-design.md#0-历史背景看一眼就翻篇)。
 
 ### 3.5 回复执行
 
@@ -419,61 +412,29 @@ dedup_key = f"wecom_personal_rpa:event:{client_id}:{event_id}"
 | 输入独占 | 客户端执行发送任务时独占鼠标、键盘、剪贴板 |
 | 网络出口 | 固定办公网或固定公网出口，减少异常登录 |
 
-### 6.2 三层自动化策略
+### 6.2 客户端自动化实现
 
-> ⚠️ **本节策略已失效（2026-06-23 真机验证）**：FlaUI UIA3 dump 出 0 控件、MSAA 子对象数为 0、Windows.Media.Ocr 中文识别率 < 10%。
-> **实际实现改为 Qwen3-VL 多模态视觉定位**，详见 [wecom-personal-rpa-vision-design.md](./wecom-personal-rpa-vision-design.md) §0.3 新三层策略。
-> 本节内容保留作为历史决策记录，但不再反映当前实现。
-
-```
-Layer 1: FlaUI UIA3/UIA2 读取控件树
-    ↓ 失败
-Layer 2: Win32 窗口相对坐标 + SendInput + 剪贴板输入
-    ↓ 失败
-Layer 3: OpenCvSharp 模板匹配 + 截图定位
-```
-
-所有节点、坐标、模板路径放在客户端配置中：
-
-```yaml
-main_window:
-  class_name: "WeWorkWindow"
-  title_contains: "企业微信"
-
-message_input:
-  strategy: flaui
-  control_type: EditControl
-  fallback:
-    strategy: coordinate
-    offset: [400, 580]
-
-send_button:
-  strategy: template_match
-  template: assets/templates/send_btn.png
-```
+> ⚠️ **本节原「三层自动化策略」（FlaUI → Win32 → OpenCV）已永久废弃**。
+> 真机验证：FlaUI/UIA3 dump 出 0 控件、Qwen3-VL bbox 不稳定、Windows OCR 中文失败率高、企微 Electron 应用不暴露控件树。
+>
+> **当前实现**：C# 客户端通过 Process + JSON 调用 PowerShell 脚本（`wecom-ops.ps1`）操作企微，复用 `debug-navigate.ps1` 已验证的「固定坐标 + Enter + 剪贴板」方案。
+>
+> 详见 **[wecom-personal-rpa-client-design.md §F2 PowerShell 自动化层](./wecom-personal-rpa-client-design.md#f2-powershell-自动化层)**。
 
 ### 6.3 发送文本
 
-```
-1. 定位企业微信主窗口并置顶
-2. 切换到目标会话
-3. 定位输入框
-4. 写入剪贴板并 Ctrl+V 粘贴
-5. 点击发送或按 Enter
-6. 检查发送结果并上报 action result
-```
+详见 [client-design.md §F3 出站执行](./wecom-personal-rpa-client-design.md#f3-出站执行服务端回复--调-ps-发送)。
+
+简述：服务端 `send_text` action → 客户端 PS `Send-WeComText`（搜索会话 → 剪贴板 Ctrl+V → Enter）。
 
 ### 6.4 发送图片和文件
 
-```
-1. 根据 action 的短期 URL 下载文件到本地临时目录
-2. 校验文件大小、MIME、扩展名
-3. 切换到目标会话
-4. 通过文件选择框或剪贴板路径发送
-5. 等待上传完成
-6. 点击发送并上报结果
-7. 删除本地临时文件
-```
+详见 [client-design.md §F3 出站执行](./wecom-personal-rpa-client-design.md#f3-出站执行服务端回复--调-ps-发送)。
+
+简述：
+- `send_image` action → 客户端下载文件 → PS `Send-WeComImage`（`Clipboard.SetImage` + Ctrl+V + Enter）
+- `send_file` action → 客户端下载文件 → PS `Send-WeComFile`（`Clipboard.SetFileDropList` + Ctrl+V + Enter）
+- 完成后立即删除本地临时文件
 
 ### 6.5 限速与冲突控制
 
@@ -672,100 +633,25 @@ CREATE TABLE wecom_rpa_conversation_bindings (
 
 ---
 
-## 13. 实现进度（2026-06-22 起）
 
-本设计已进入实现阶段。首版按「契约先行 → 并行实现 → 接入验证」推进，阶段切分与状态在开发计划中维护。
+## 13. 实现进度
 
-### 13.1 共享契约（阶段1，已完成）
+> 本节原内容（2026-06-22 的阶段验证日志）已删除：所描述的视觉定位/UIA3/Qwen3-VL 路径已全部废弃，对当前方向有误导。
 
-下游服务端实现 agent 与 C# 客户端实现 agent 必须以以下契约为唯一真相源，签名与命名一经锁定不得擅自变更：
+当前实现进度：
 
-- **线协议权威模型**：`src/channels/wecom_personal_rpa/schemas.py`（Pydantic）
-- **数据库访问层**：`src/channels/wecom_personal_rpa/db.py`（5 张表 CRUD）
-- **渠道类型枚举**：`src/models/message.py` 新增 `ChannelType.WECOM_PERSONAL_RPA = "wecom_personal_rpa"`
-- **数据库迁移**：`deploy/db_update.sql`（增量）与 `deploy/init-postgres.sql`（全新部署），新增 5 张表：
-  - `wecom_rpa_clients`（客户端注册）
-  - `wecom_rpa_accounts`（个人企微账号）
-  - `wecom_rpa_conversation_bindings`（会话绑定，账号+搜索键唯一）
-  - `wecom_rpa_action_outbox`（出站动作队列，`dedup_key` UNIQUE）
-  - `wecom_rpa_audit_logs`（审计日志）
+| 层 | 状态 | 说明 |
+|----|------|------|
+| 服务端契约（schemas/db/SQL） | ✅ 已完成 | 5 张表 + Pydantic 模型 + 68 单元测试 + 6 集成测试 |
+| 服务端协议（auth/router/message/adapter） | ✅ 已完成 | HMAC + WebSocket + callback 全链路 |
+| 服务端管理 API（admin routes） | ✅ 已完成 | 客户端/账号/绑定/暂停恢复/审计 |
+| 客户端工程骨架（5 工程 sln） | ✅ 已完成 | 但 `Client.Automation` 内的 FlaUi/Vision 实现已废弃，待清理 |
+| 客户端 PowerShell 自动化 | 🔧 调试脚本验证通过 | `debug-navigate.ps1` 真机 3/3 用户通过；工程化（`wecom-ops.ps1`）待开发 |
+| 客户端会话存档 API 监听 | ❌ 待开发 | 主方案，详见 [client-design.md §F4](./wecom-personal-rpa-client-design.md#f4-会话存档-api-监听主方案) |
+| 客户端二维码截取上报 | ❌ 待开发 | 详见 [client-design.md §F7](./wecom-personal-rpa-client-design.md#f7-未登录二维码截取--上报) |
+| 客户端 Fallback 监听 | ❌ 占位 | 当前候选都不够稳，留待真实需求驱动 |
+| 平台后台绑定管理 Tab | ✅ 已完成 | 详见 [portal-binding-design.md](./wecom-personal-rpa-portal-binding-design.md) |
 
-### 13.2 协议与签名文档
-
-- **线协议逐字段说明 + Python 函数签名契约 + C# 工程约定**：[wecom-personal-rpa-protocol.md](./wecom-personal-rpa-protocol.md)
-
-该文档是下游所有并行 agent 的唯一共享协议文档，包含：
-- 鉴权头、签名串构造、timestamp/nonce 规则、幂等键前缀（`wecom_personal_rpa:`）
-- 错误码语义表
-- `auth.verify_request` / `auth.compute_signature` / `WeComPersonalRpaRouter.route` / `parse_rpa_message` / `deliver_actions` / `WeComPersonalRpaAdapter` / `ClientConnectionRegistry` 等服务端函数签名
-- C# 解决方案结构、命名空间、协议 DTO 镜像表、跨工程接口、状态机枚举（`ClientState`）、队列项状态枚举（`QueueStatus`）、共享包版本
-
-### 13.3 阶段2 并行实现（已完成主体，部分待真实环境）
-
-下游 agent 按契约并行实现：
-- 服务端：`auth.py` / `router.py` / `message.py` / `action_client.py` / `adapter.py` / `connection.py` / `secret_crypto.py` / 管理 API（`wecom_personal_rpa_admin.py` / `wecom_personal_rpa_routes.py`）
-- 客户端：`Client.Core` / `Client.Automation` / `Client.App` / `Client.Supervisor` / `Client.Tests`
-
-详细任务与开发状态见开发计划文档。
-
-### 13.4 阶段4 验证结果（2026-06-22，Verify 会话）
-
-本节如实记录阶段4（测试 / 构建 / 文档同步）的验证产出，遵守 CLAUDE.md Rule 9（失败就说失败、跳过就说跳过）。
-
-**已落地的服务端模块**：`schemas.py`（契约）/ `db.py`（5 表 CRUD）/ `auth.py`（HMAC + nonce 防重放 + 常量时间比较）/ `router.py`（路由 + 会话授权判定）/ `message.py`（入站解析）/ `action_client.py`（在线直推 / 离线落 outbox）/ `adapter.py`（UnifiedResponse→actions + set_reply_context）/ `connection.py`（WS 连接注册表单例）/ `secret_crypto.py`（Fernet 加解密）；Wire 层 `src/saas/api/wecom_personal_rpa_routes.py`（callback / config / files / ws 四类入口）+ `src/saas/api/wecom_personal_rpa_admin.py`（客户端/账号/绑定/暂停恢复/审计管理）。
-
-**已落地的客户端工程**：`clients/wecom-personal-rpa/WeComPersonalRpaClient.sln`（5 工程，GUID 1111…/2222…/3333…/4444…/5555… 与 sln 对齐）；`Client.Core`（net8.0）/ `Client.Automation`（net8.0-windows）/ `Client.Supervisor`（net8.0-windows）/ `Client.Tests`（net8.0-windows）/ `Client.App`（net8.0-windows）。
-
-**测试结果**：
-- 服务端单元测试 `tests/unit/channels/wecom_personal_rpa/`：**68 passed**（11 warnings 均为既有 Pydantic V1 弃用告警，与本渠道无关）。
-- 新增集成测试 `tests/integration/test_wecom_personal_rpa_flow.py`：**6 passed**（pytest.mark.integration），覆盖：① message 事件 + 正确 HMAC → accepted 且后台 task 调度；② 同 event_id 第二次仍 accepted 但去重命中不重复处理；③ action_result 回执按 action_result_id 幂等（mark_outbox_status 仅调用一次）；④ 签名错误 → 401 + RpaErrorResponse(error=auth_failed) 且 debug 不含 secret；⑤ 客户端离线 → `db.enqueue_action` 被调用落 outbox（dedup_key 正确）；⑥ 客户端在线 → 直推不写 outbox。
-  - **采用方式**：路由级最小 FastAPI app + mock 边界（`db` / `MessageDeduplicator` / `secret_crypto.decrypt_secret` / `_process_inbound_message`），未启动完整 `src.main`（避免 master_agent 单例 + apscheduler 重链）。签名使用**真实** `auth.compute_signature` 构造，契约逐字对齐。`tests/integration/conftest.py` 的 autouse DB pool fixture 因本会话远程 PostgreSQL 不可达（连接超时）会触发 `pytest.skip`，本测试文件在模块顶层把 `init_postgres_pool`/`get_postgres_pool`/`close_postgres_pool` 替换为占位以绕过（仅测试隔离用，不进生产）。
-- C# 构建 `dotnet build WeComPersonalRpaClient.sln -c Debug`：**失败**，`Client.Core` / `Client.Automation` / `Client.Supervisor` / `Client.Tests` 四工程编译通过；`Client.App` **4 errors / 3 warnings**：
-  - error CS0246：`MessageWatcher.cs` 未 `using WeCom.PersonalRpa.Automation.Contracts;`（IWeComAutomation 定义在该命名空间，非 protocol.md §C.2 的 `WeCom.PersonalRpa.Automation`）。
-  - error CS0246：`SendMessageService.cs` 未 `using WeCom.PersonalRpa.Core.Protocol;`（RpaAction / ActionResultPayload 定义在该命名空间）。
-  - warning CS0108：`StatusWindow` / `LoginQrWindow` / `ErrorWindow` 的 `Tag` 属性隐藏继承成员，建议加 `new`。
-  - 根因是并行 agent 跨工程盲编的命名空间微调，属 protocol.md §C 已预警的「C# 跨工程盲编可能需一次集成修缮」。**未修复**（不在本会话拥有文件范围内）。
-
-**一致性自检**：
-- ✅ `channel_factory._ADAPTER_CLASSES["wecom_personal_rpa"]` 指向 `WeComPersonalRpaAdapter`；`channel_config` 配置项含 `client_id`；`ChannelType.WECOM_PERSONAL_RPA` 枚举存在；`main.py` include `wecom_personal_rpa_router`。
-- ✅ `adapter.set_reply_context` 被 `wecom_personal_rpa_routes._process_inbound_message` 在 `send_message` 之前正确调用（注入 account_id / conversation_id / session_id / request_id / tenant_id）。
-- ✅ `schemas.py` Pydantic 模型字段与 `db.py` SQL 表名/字段一致（`wecom_rpa_clients` / `wecom_rpa_accounts` / `wecom_rpa_conversation_bindings` / `wecom_rpa_action_outbox` / `wecom_rpa_audit_logs`，`dedup_key` UNIQUE 约束存在）。
-- ✅ C# 5 工程 ProjectGuid 与 `WeComPersonalRpaClient.sln` 的 Project 引用一一对齐（1111…→Core、2222…→Automation、3333…→App、4444…→Supervisor、5555…→Tests）。
-- ⚠️ 命名空间：`IWeComAutomation` 实际定义在 `WeCom.PersonalRpa.Automation.Contracts`（protocol.md §C.2 写的是 `WeCom.PersonalRpa.Automation`），Client.App 未补 using 致编译失败；`Client.Tests` 的 TargetFramework 实际为 `net8.0-windows`，protocol.md §C.7 要求 `net8.0`（Core 不依赖 Windows，Tests 应可在非 Windows CI 跑单测）——属协议与实现的轻微偏差，待一次集成修缮对齐。
-
-**已知 TODO（需真实环境，本会话未实现）**：
-- 节点常量 `wecom_nodes.yaml` 的真实控件/模板路径必须由 §0 准入探测（FlaUI/UIA3/Win32/OpenCV）产出后填充，属强阻塞。
-- WebSocket 在 Gunicorn 多 worker 下的连接注册表一致性：当前 `client_connection_registry` 为模块级单例，多 worker 进程内存隔离，跨 worker 在线判定与 outbox 推送需 Redis 或 sticky session，首版单 worker 可用，多 worker 待加固（对齐 backend_dev.md 多 worker 规范）。
-- C# Client.App 跨工程 using 缺失 + Client.Tests 目标框架偏差，需一次集成修缮。
-- §0 / §5 / §7 全部任务依赖真实 Windows + 企微 + 账号环境，未实现（详见开发计划对应章节的状态说明）。
-
-### 13.5 阶段后续：Client.App 集成修缮 + 操作手册与脚本（2026-06-22）
-
-**Client.App 编译问题已修复**（§13.4 记录的 4 errors / 3 warnings 已在后续提交解决）：
-- `MessageWatcher.cs` 补 `using WeCom.PersonalRpa.Automation.Contracts;`；`SendMessageService.cs` 补 `using WeCom.PersonalRpa.Core.Protocol;` 与 `using System.IO;`；`RpaHost.cs` 补 `using Microsoft.Extensions.DependencyInjection;`（修 `GetService<T>` CS0308）。
-- `App.xaml.cs` 去掉手写 `Main`（CS0017 多入口点）改 `OnStartup` 装配；`TrayApp.cs` 移除不存在的 `TrayLeftMouseDoubleClick` 事件；3 个窗口 `Tag` 加 `new`（CS0108）。
-- 结果：`dotnet build WeComPersonalRpaClient.sln` **0 错误 0 警告**；`dotnet test` **36 passed**。
-
-**操作手册与自动化脚本（`docs/操作手册.md` + `scripts/`）**：
-- 手册 11 节覆盖编译/测试/发布/打包/安装部署/诊断/升级全流程，逐节标注「现在能跑」vs「待 STATUS ③」。
-- 9 个 PowerShell 脚本（UTF-8 BOM、去 emoji、兼容 Windows PowerShell 5.1）：`build / test / publish / run-app / install-service / diagnostics / test-server-callback / run-probe / build-msi`。
-- `test-server-callback.ps1` 的 HMAC 签名与服务端 `auth.compute_signature` **字节对字节一致**（Python/PowerShell 跨语言实测同一 hex 输出），可在无客户端时验证服务端渠道。
-- `publish.ps1` 实测产出 `Client.App.exe`(245MB) + `Client.Supervisor.exe`(69MB) 自包含单文件 + 随包 configs/assets。
-
-### 13.6 准入验证探测工具 + WiX v5 MSI 骨架（2026-06-22）
-
-**准入验证（计划 §0，回填 `wecom_nodes.yaml` 的前置工具已就绪）**：
-- `src/Client.Probe/`（net8.0-windows 诊断控制台，**不入 .sln**，按需运行）：7 步探测（环境基线 / 主窗口定位 / UIA 控件树 / 登录态 / 二维码截图 / 模板匹配 / 焦点夺取），输出 `probe-report.yaml` + 回填建议。复用 `Client.Automation`（`AssemblyInfo.cs` 加 `InternalsVisibleTo("Client.Probe")`，零 P/Invoke 重复）。**绝不 `SendInput`**（仅 `SetForegroundWindow→GetForegroundWindow` 焦点一致性验证），避免误发（设计 §10.3 误发 0 容忍）。
-- `scripts/run-probe.ps1`（构建+运行，参数透传）+ `docs/准入验证手册.md`（6 项验证成功标准 + `probe-report.yaml`→`wecom_nodes.yaml` 字段对照 + Go/No-Go 决策）。
-- 验证：`dotnet build src/Client.Probe` **0 错误**；主解决方案 `dotnet build` **0 错误**（无回归）。**未真实运行**（本会话无企微桌面），节点常量未伪造回填。
-- 已知：`assets/wecom_nodes.yaml`（设计完整模式）与 `src/Client.Automation/assets/wecom_nodes.yaml`（`NodesConfigLoader` 实际加载的简化模式）结构不一致（STATUS 既有占位问题），手册 §9 明确回填目标是后者。
-
-**WiX v5 MSI 骨架（计划 §5，方式 B 打包）**：
-- `installer/wix/WeComRpa.wxs`（WiX v4/v5 架构）+ `WeComRpa.wixproj`（`WixToolset.Sdk/5.0.2`）：`ServiceInstall`/`ServiceControl`（服务名 `WeComRpaSupervisor`，与 `install-service.ps1` 一致）+ `MajorUpgrade` + `<Files>` 收 `publish\`。
-- `scripts/build-msi.ps1`（`wix build` + 可选 `-SignPfx`/`-SignCertThumbprint` 触发 signtool）+ 重写 `installer/wix/README.md`（依赖/构建/签名/安装卸载升级/与方式 A 取舍）。
-- 验证：`.wxs`/`.wixproj` XML 良构（`[xml]` 解析通过）；脚本 PS5.1 解析通过。**MSI 未实编译**（本会话无 WiX 工具链），需在装了 WiX v5（`dotnet tool install -g wix`）+ 签名证书的机器跑 `build-msi.ps1`。
-
-### 13.7 最新提交链（origin/master）
-
-`d7b8d72` 后端渠道（休眠，74 测试）→ `da4eff7` 客户端骨架 + 文档（36 测试，STATUS 三态）→ `7288921` 操作手册 + 7 脚本 → `44cbf96` 准入探测工具 + WiX v5 骨架。
-
+**详细开发任务**见：
+- 服务端 + 部署：[plans/plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
+- 客户端：[plans/plan-wecom-personal-rpa-client.md](../../plans/plan-wecom-personal-rpa-client.md)
