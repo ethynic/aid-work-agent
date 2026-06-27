@@ -120,7 +120,7 @@ class SessionMessageQueue:
 
     # ==================== 合并缓冲区 ====================
     # 结构：{"text": str, "attachments_meta": List[Dict] | None, "timestamp": float}
-    # text 为各段用 "\n\n[用户追加消息]\n" 拼接的合并输入（给 agent 用）
+    # text 为各段用 "\n\n[用户追加消息] " 拼接的合并输入（给 agent 用）
     # attachments_meta 为各段 attachments_meta 的并集（给持久化用）
 
     def set_merge(
@@ -157,7 +157,7 @@ class SessionMessageQueue:
             # 用显式分隔标记拼接，让 LLM 能识别这是用户在短时间内连续发送的
             # 多条独立消息，而非单条多句消息。避免 LLM 只处理最后一个意图
             # 而忽略前面的指令（如"不想去小七孔了。\n天眼那边住的酒店是哪一间？"）
-            merged = original + "\n\n[用户追加消息]\n" + new_text
+            merged = original + "\n\n[用户追加消息] " + new_text
             merged_meta = list(existing_meta)
             if new_attachments_meta:
                 merged_meta.extend(new_attachments_meta)

@@ -201,8 +201,10 @@ RUN mkdir -p /home/appuser/tmp && chown appuser:appgroup /home/appuser/tmp
 COPY --chown=root:root deploy/fix_tmp.sh /usr/local/bin/fix_tmp.sh
 RUN chmod +x /usr/local/bin/fix_tmp.sh
 
-# 切换到非 root 用户
-USER appuser
+# 注意：此处不设置 USER appuser。
+# ENTRYPOINT 需要以 root 身份启动：先执行 fix_tmp.sh（root 才能 chmod /tmp），
+# 再用 gosu 降权到 appuser 启动 gunicorn。若设置 USER appuser，gosu 会因
+# 缺少 CAP_SETUID 失败（"failed switching to appuser: operation not permitted"）。
 
 # 暴露端口
 # 8000: FastAPI 服务

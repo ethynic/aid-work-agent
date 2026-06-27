@@ -48,15 +48,15 @@
               <template #department="{ row }">{{ row.department || '-' }}</template>
               <template #role="{ row }">
                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-                  :class="row.role === 'tenant_admin' ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-gray-700'">
-                  {{ row.role === 'tenant_admin' ? '管理员' : '普通用户' }}
+                  :class="row.role === 'platform_admin' || row.role === 'tenant_admin' ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-gray-700'">
+                  {{ row.role == 'platform_admin' ? '平台管理员' : row.role == 'tenant_admin' ? '租户管理员' :  '普通用户' }}
                 </span>
                 <span v-if="row.source" class="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-info-100 text-info-700">
                   {{ getUserSourceInfo(row.source).label }}
                 </span>
               </template>
               <template #agent_auth="{ row }">
-                <span v-if="row.role === 'tenant_admin'"
+                <span v-if="row.role === 'platform_admin' || row.role === 'tenant_admin'"
                   class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
                   默认全部
                 </span>
@@ -110,7 +110,7 @@
             type="button"
             :class="['pb-2 text-sm font-medium border-b-2 transition-colors', activeTab === 'agents' ? 'text-primary-600 border-primary-600' : 'text-muted border-transparent hover:text-default hover:border-hover']"
             @click="activeTab = 'agents'"
-          >数字员工授权 <span v-if="addForm.role !== 'tenant_admin' && selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span></button>
+          >数字员工授权 <span v-if="addForm.role !== 'tenant_admin' && addForm.role !== 'platform_admin' && selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span></button>
         </div>
       </div>
 
@@ -132,15 +132,15 @@
           <label class="text-sm text-muted mb-1 block">角色</label>
           <BaseSelect v-model="addForm.role">
             <option value="user">普通用户</option>
-            <option value="tenant_admin">管理员</option>
+            <option value="tenant_admin">租户管理员</option>
           </BaseSelect>
         </div>
       </div>
 
       <!-- 数字员工授权 Tab -->
       <div v-show="activeTab === 'agents'">
-        <div v-if="addForm.role === 'tenant_admin'" class="text-sm text-muted">
-          管理员默认拥有全部数字员工权限，无需单独授权
+        <div v-if="addForm.role === 'tenant_admin' || addForm.role === 'platform_admin'" class="text-sm text-muted">
+          租户管理员默认拥有本租户全部数字员工权限，无需单独授权
         </div>
         <div v-else-if="loadingAgents" class="text-center py-4 text-muted text-sm">加载中...</div>
         <div v-else-if="availableAgents.length === 0" class="text-sm text-muted">
@@ -221,7 +221,7 @@
             type="button"
             :class="['pb-2 text-sm font-medium border-b-2 transition-colors', activeTab === 'agents' ? 'text-primary-600 border-primary-600' : 'text-muted border-transparent hover:text-default hover:border-hover']"
             @click="activeTab = 'agents'"
-          >数字员工授权 <span v-if="editForm.role !== 'tenant_admin' && selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span></button>
+          >数字员工授权 <span v-if="editForm.role !== 'platform_admin' && editForm.role !== 'tenant_admin' && selectedAgentIds.length > 0" class="ml-1 text-xs">({{ selectedAgentIds.length }})</span></button>
         </div>
       </div>
 
@@ -239,15 +239,15 @@
           <label class="text-sm text-muted mb-1 block">角色 <span class="text-danger-500">*</span></label>
           <BaseSelect v-model="editForm.role">
             <option value="user">普通用户</option>
-            <option value="tenant_admin">管理员</option>
+            <option value="tenant_admin">租户管理员</option>
           </BaseSelect>
         </div>
       </div>
 
       <!-- 数字员工授权 Tab -->
       <div v-show="activeTab === 'agents'">
-        <div v-if="editForm.role === 'tenant_admin'" class="text-sm text-muted">
-          管理员默认拥有全部数字员工权限，无需单独授权
+        <div v-if="editForm.role === 'platform_admin' || editForm.role === 'tenant_admin'" class="text-sm text-muted">
+          租户管理员默认拥有本租户全部数字员工权限，无需单独授权
         </div>
         <div v-else-if="loadingAgents" class="text-center py-4 text-muted text-sm">加载中...</div>
         <div v-else-if="availableAgents.length === 0" class="text-sm text-muted">
@@ -497,7 +497,7 @@ function toggleAllAgents() {
 
 async function handleSaveEdit() {
   if (!editForm.value.user_id) return
-  if (editForm.value.role !== 'tenant_admin' && selectedAgentIds.value.length === 0) {
+  if (editForm.value.role !== 'platform_admin' && editForm.value.role !== 'tenant_admin' && selectedAgentIds.value.length === 0) {
     editError.value = '用户必须至少授权使用1个数字员工'
     activeTab.value = 'agents'
     return
@@ -523,7 +523,7 @@ async function handleSaveEdit() {
     }
 
     // 保存授权（仅对非管理员）
-    if (editForm.value.role !== 'tenant_admin') {
+    if (editForm.value.role !== 'tenant_admin' && editForm.value.role !== 'platform_admin') {
       const currentUserId = editForm.value.user_id
       await setUserAgentPermissions(currentUserId, selectedAgentIds.value)
     }
@@ -576,7 +576,7 @@ async function handleAddUser() {
     addError.value = '请填写用户名'
     return
   }
-  if (addForm.value.role !== 'tenant_admin' && selectedAgentIds.value.length === 0) {
+  if (addForm.value.role !== 'tenant_admin' && addForm.value.role !== 'platform_admin' && selectedAgentIds.value.length === 0) {
     addError.value = '用户必须至少授权使用1个数字员工'
     activeTab.value = 'agents'
     return
@@ -586,7 +586,7 @@ async function handleAddUser() {
   try {
     const res = await createTenantUser({ ...addForm.value, tenant_id: tenantId.value })
     const newUserId = res.user?.user_id
-    if (res.success && newUserId && addForm.value.role !== 'tenant_admin') {
+    if (res.success && newUserId && addForm.value.role !== 'tenant_admin' && addForm.value.role !== 'platform_admin') {
       await setUserAgentPermissions(newUserId, selectedAgentIds.value)
     }
     showAdd.value = false
