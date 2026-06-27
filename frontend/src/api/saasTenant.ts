@@ -61,16 +61,8 @@ export async function adminPasswordLogin(request: AdminPasswordLoginRequest): Pr
 }
 
 export async function adminLogout(): Promise<void> {
-  // 优先复用 useTenantAuth 的登出逻辑，保证读/写/删走同一 key 生成器
-  try {
-    const { useTenantAuth } = await import('@/composables/useTenantAuth')
-    await useTenantAuth().logout()
-    return
-  } catch (e) {
-    console.warn('useTenantAuth.logout() 调用失败，回退到本地清理:', e)
-  }
-
-  // 回退路径：直接按当前路由清理（保持向后兼容）
+  // 直接按当前路由清理 localStorage 并通知后端登出
+  // 注意：不能调用 useTenantAuth().logout()，因为后者会回调 adminLogout()，形成无限递归
   const path = window.location.pathname
   let tokenKey: string
   let adminKey: string
@@ -91,10 +83,14 @@ export async function adminLogout(): Promise<void> {
 
   const token = localStorage.getItem(tokenKey)
   if (token) {
-    await fetch(`${API_BASE}/auth/admin_logout`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
+    try {
+      await fetch(`${API_BASE}/auth/admin_logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+    } catch (e) {
+      console.warn('admin_logout 调用失败，继续清理本地状态:', e)
+    }
   }
   localStorage.removeItem(tokenKey)
   localStorage.removeItem(adminKey)

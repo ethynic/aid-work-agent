@@ -143,14 +143,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 # 修复虚拟环境所有权（builder 阶段是 root，运行阶段是 appuser）
 RUN chown -R appuser:appgroup /opt/venv
 
-# 复制应用代码
-COPY --chown=appuser:appgroup . .
-
-# 创建必要的目录（日志等）
-RUN mkdir -p log/agent && chown -R appuser:appgroup log
-
 # 安装 Playwright Chromium 浏览器（表格渲染为图片）
-# 2026-06: playwright.aimir.cn 镜像源已失效，切换到华为云镜像（服务器实测可达）
+# 重要：此步骤必须在 `COPY . .` 之前执行，否则任何项目代码改动都会让本层缓存失效，
+# 导致每次 build 重新下载 Chrome（约 150MB）。本层只依赖：
+#   1) apt 系统库（前面已安装）
+#   2) venv 里的 playwright Python 包（已 COPY 进来）
+#   3) PLAYWRIGHT_BROWSERS_PATH 环境变量
+# 这三者稳定时，本层缓存长期命中，浏览器随镜像层保存。
+#
 # 2026-06-26: 华为云镜像偶发返回损坏 zip，增加多镜像 fallback
 # 说明：
 # 1) 所有系统依赖库（libnss3/libgbm1/libasound2/libpango 等）已在阶段 2 的
@@ -188,6 +188,13 @@ RUN printf '%s\n' \
     bash /tmp/install_pw.sh && \
     chown -R appuser:appgroup /opt/ms-playwright && \
     rm -f /tmp/install_pw.sh
+
+# 创建必要的目录（日志等）
+RUN mkdir -p log/agent && chown -R appuser:appgroup log
+
+# 复制应用代码
+# 注意：从这里开始的层会因项目代码改动而失效，所以 Playwright 安装必须放在此行之前。
+COPY --chown=appuser:appgroup . .
 
 # 创建应用临时目录（替代 /tmp，避免外部工具重置权限导致 appuser 无法写入）
 # 注意：此目录不在 volume 挂载范围内，确保每次容器启动时干净
