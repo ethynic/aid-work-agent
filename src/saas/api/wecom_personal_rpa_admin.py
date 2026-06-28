@@ -16,7 +16,6 @@
 """
 
 import json
-import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -58,6 +57,25 @@ class PauseResumeRequest(BaseModel):
         None, description="scope=conversation 时必填（对应 binding.id）"
     )
     reason: Optional[str] = Field(None, description="暂停原因（仅 pause 生效，脱敏后入审计）")
+
+
+class UpdateBindingRequest(BaseModel):
+    """更新绑定可编辑字段（首版仅监控白名单）。
+
+    None 表示"不修改"；显式传空 list 表示"清除该字段"。
+    """
+
+    monitor_user_names: Optional[List[str]] = Field(
+        None, description="监控的发送人显示名数组（任一匹配即上报）；空数组 = 不按名字过滤"
+    )
+    monitor_user_ids: Optional[List[str]] = Field(
+        None,
+        description=(
+            "监控的发送人稳定 ID 数组（external_userid/userid/room_id）；"
+            "空数组 = 不按 ID 过滤。"
+            "两个字段任一非空即按白名单过滤；都为空 = 监控所有（首版默认）。"
+        ),
+    )
 
 
 # ===========================================================================
@@ -163,6 +181,8 @@ def _binding_public(b: Dict[str, Any]) -> Dict[str, Any]:
         "client_name": b.get("client_name"),
         "agent_base_url": b.get("agent_base_url"),
         "last_heartbeat_at": b.get("last_heartbeat_at"),
+        "monitor_user_names": list(b.get("monitor_user_names") or []),
+        "monitor_user_ids": list(b.get("monitor_user_ids") or []),
     }
 
 
@@ -643,6 +663,63 @@ async def confirm_binding(binding_id: str, request: Request):
     logger.info(f"RPA binding confirmed: {binding_id}")
 
     return _ok({"binding_id": binding_id, "status": "active"})
+
+
+@router.patch("/bindings/{binding_id}")
+async def update_binding(binding_id: str, request: Request, body: UpdateBindingRequest):
+    """更新绑定可编辑字段（首版仅监控白名单）。
+
+    None 表示"不修改"；显式传空 list 表示"清除该字段"。
+    平台管理员代管理时通过 X-Tenant-Id 指定目标租户。
+    """
+    if err := _ensure_saas_enabled():
+        return err
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+    user_id = admin.get("user_id")
+
+    binding = rpa_db.get_binding(binding_id)
+    if not binding:
+        raise _fail("绑定不存在", status_code=404)
+    if binding.get("tenant_id") != tenant_id:
+        raise _fail("无权操作此绑定", status_code=403)
+
+    ok = rpa_db.update_binding(
+        tenant_id=tenant_id,
+        binding_id=binding_id,
+        monitor_user_names=body.monitor_user_names,
+        monitor_user_ids=body.monitor_user_ids,
+    )
+    if not ok:
+        raise _fail("绑定更新失败", status_code=500)
+
+    try:
+        rpa_db.write_audit(
+            tenant_id=tenant_id,
+            client_id=None,
+            account_id=binding.get("account_id"),
+            category="binding_update",
+            payload_json=json.dumps(
+                {
+                    "binding_id": binding_id,
+                    "monitor_user_names": body.monitor_user_names,
+                    "monitor_user_ids": body.monitor_user_ids,
+                },
+                ensure_ascii=False,
+            ),
+            user_id=user_id,
+        )
+    except Exception as audit_err:
+        # 审计非强一致：失败不影响主流程，但要记录告警便于事后排查
+        logger.warning(
+            f"update_binding 审计写入失败 binding={binding_id} error={audit_err}"
+        )
+
+    logger.info(f"RPA binding updated: {binding_id}")
+
+    updated = rpa_db.get_binding(binding_id)
+    return _ok(_binding_public(updated))
 
 
 # ===========================================================================

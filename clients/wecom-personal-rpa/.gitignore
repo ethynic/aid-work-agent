@@ -1,6 +1,8 @@
 # .NET 构建产物（禁止入库）
 bin/
 obj/
+# 子智能体临时验证用的 obj 目录变体（obj_alt / obj_phase2 等）
+obj_*/
 
 # 发布产物（本地 publish.ps1 输出，不入库）
 publish/

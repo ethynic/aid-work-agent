@@ -469,6 +469,64 @@ def find_binding_by_search_key(
         return dict(row) if row else None
 
 
+def update_binding(
+    tenant_id: str,
+    binding_id: str,
+    monitor_user_names: Optional[List[str]] = None,
+    monitor_user_ids: Optional[List[str]] = None,
+) -> bool:
+    """更新绑定可编辑字段（首版仅监控白名单）。
+
+    None 表示"不修改该字段"；显式传空 list 表示"清除该字段"。
+    PostgreSQL 数组字段直接传 Python list，psycopg2 自动适配。
+    """
+    sets: List[str] = []
+    params: List[Any] = []
+    if monitor_user_names is not None:
+        sets.append("monitor_user_names = %s")
+        params.append(monitor_user_names)
+    if monitor_user_ids is not None:
+        sets.append("monitor_user_ids = %s")
+        params.append(monitor_user_ids)
+    if not sets:
+        # 无字段需要更新：幂等成功
+        return True
+    sets.append("updated_at = CURRENT_TIMESTAMP")
+    params.extend([binding_id, tenant_id])
+    sql = (
+        "UPDATE wecom_rpa_conversation_bindings SET "
+        + ", ".join(sets)
+        + " WHERE id = %s AND tenant_id = %s"
+    )
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(sql, tuple(params))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def list_bindings_by_client(
+    tenant_id: str,
+    client_id: str,
+) -> List[Dict[str, Any]]:
+    """列出某 client 下所有绑定（通过 account.client_id 关联）。
+
+    供 /config 组装 monitor_users 白名单使用。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT b.* FROM wecom_rpa_conversation_bindings b
+            JOIN wecom_rpa_accounts a ON a.id = b.account_id
+            WHERE b.tenant_id = %s AND a.client_id = %s
+            ORDER BY b.created_at DESC
+            """,
+            (tenant_id, client_id),
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+
 # ===========================================================================
 # outbox —— 出站动作队列（action_client 离线投递用）
 # ===========================================================================

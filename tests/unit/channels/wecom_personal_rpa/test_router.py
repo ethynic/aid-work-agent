@@ -21,6 +21,7 @@ from src.channels.wecom_personal_rpa.router import (
     AuthorizationResult,
     WeComPersonalRpaRouter,
     check_conversation_authorization,
+    is_allowed_by_monitor_whitelist,
     router,
 )
 
@@ -269,3 +270,69 @@ async def test_authorization_falls_back_to_get_or_create_binding_when_find_misse
 
     assert result.needs_review is True
     assert result.reason == "pending"
+
+
+# ============================================================
+# is_allowed_by_monitor_whitelist —— 绑定级监控白名单服务端二次校验
+# ============================================================
+
+
+class TestMonitorWhitelist:
+    """监控白名单服务端二次校验语义。
+
+    客户端缓存白名单只是优化（减少 callback），真正过滤由服务端做。
+    """
+
+    def test_whitelist_empty_allows_all(self):
+        """两个字段都为空 → 允许所有（首版默认行为）。"""
+        binding = {"monitor_user_names": [], "monitor_user_ids": []}
+        assert is_allowed_by_monitor_whitelist(binding, "任何人", "any_id") is True
+
+    def test_whitelist_fields_none_allows_all(self):
+        """字段为 None（兼容旧 binding）→ 允许所有。"""
+        binding = {"monitor_user_names": None, "monitor_user_ids": None}
+        assert is_allowed_by_monitor_whitelist(binding, "任何人", "any_id") is True
+
+    def test_whitelist_binding_none_allows_all(self):
+        """binding 查不到 → 放行（授权层会按 needs_review 拦截）。"""
+        assert is_allowed_by_monitor_whitelist(None, "任何人", "any_id") is True
+
+    def test_whitelist_user_names_filters_non_matching(self):
+        """配置 monitor_user_names=["陆伟"]，sender="孙晨" → 拒绝。"""
+        binding = {"monitor_user_names": ["陆伟"], "monitor_user_ids": []}
+        assert is_allowed_by_monitor_whitelist(binding, "孙晨", "wm_sun") is False
+
+    def test_whitelist_user_names_matches(self):
+        """配置 monitor_user_names=["陆伟"]，sender="陆伟" → 允许。"""
+        binding = {"monitor_user_names": ["陆伟"], "monitor_user_ids": []}
+        assert is_allowed_by_monitor_whitelist(binding, "陆伟", None) is True
+
+    def test_whitelist_user_ids_filters_non_matching(self):
+        """配置 monitor_user_ids=["wm_xxx"]，sender_id="wm_yyy" → 拒绝。"""
+        binding = {"monitor_user_names": [], "monitor_user_ids": ["wm_xxx"]}
+        assert is_allowed_by_monitor_whitelist(binding, "陆伟", "wm_yyy") is False
+
+    def test_whitelist_user_ids_matches(self):
+        """配置 monitor_user_ids=["wm_xxx"]，sender_id="wm_xxx" → 允许。"""
+        binding = {"monitor_user_names": [], "monitor_user_ids": ["wm_xxx"]}
+        assert is_allowed_by_monitor_whitelist(binding, None, "wm_xxx") is True
+
+    def test_whitelist_both_fields_either_matches_name(self):
+        """names=["A"], ids=["B"]；sender_name="A" 通过（name 命中）。"""
+        binding = {"monitor_user_names": ["A"], "monitor_user_ids": ["B"]}
+        assert is_allowed_by_monitor_whitelist(binding, "A", "xxx") is True
+
+    def test_whitelist_both_fields_either_matches_id(self):
+        """names=["A"], ids=["B"]；sender_id="B" 通过（id 命中）。"""
+        binding = {"monitor_user_names": ["A"], "monitor_user_ids": ["B"]}
+        assert is_allowed_by_monitor_whitelist(binding, "路人", "B") is True
+
+    def test_whitelist_both_fields_neither_matches(self):
+        """names=["A"], ids=["B"]；name 和 id 都不命中 → 拒绝。"""
+        binding = {"monitor_user_names": ["A"], "monitor_user_ids": ["B"]}
+        assert is_allowed_by_monitor_whitelist(binding, "路人", "xxx") is False
+
+    def test_whitelist_sender_fields_none_with_strict_whitelist(self):
+        """配置了白名单但 sender 信息缺失 → 拒绝（保守）。"""
+        binding = {"monitor_user_names": ["A"], "monitor_user_ids": ["B"]}
+        assert is_allowed_by_monitor_whitelist(binding, None, None) is False

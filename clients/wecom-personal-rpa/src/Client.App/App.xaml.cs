@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using WeCom.PersonalRpa.App.Autostart;
+using WeCom.PersonalRpa.App.Powershell;
 using WeCom.PersonalRpa.App.Services;
 using WeCom.PersonalRpa.App.Tray;
 using WeCom.PersonalRpa.App.Views;
@@ -111,6 +112,22 @@ public partial class App : Application
     {
         // ---- 配置（ClientOptions：非密 + 解密后的密钥） ----
         services.AddSingleton<ClientOptions>(_ => ClientOptionsLoader.Load(DataDirectory));
+
+        // ---- Phase 2：PowerShell 自动化后端 ----
+        // ClientOptionsLoader 返回 ClientOptions（非 IConfiguration），故用工厂从 ClientOptions.Automation
+        // 派生 PowershellOptions 单例。ILogger<T> 由 Microsoft.Extensions.Logging 抽象提供（Host 已注册）。
+        services.AddSingleton<PowershellOptions>(sp =>
+        {
+            var opts = sp.GetRequiredService<ClientOptions>();
+            var a = opts.Automation;
+            return new PowershellOptions
+            {
+                Executable = a.PowershellExecutable,
+                OpsScript = a.PowershellOpsScript,
+                InvokeTimeoutSeconds = a.InvokeTimeoutSeconds,
+            };
+        });
+        services.AddSingleton<PowershellOpsInvoker>();
 
         // Phase 2 will replace with PowershellAutomationBackend
         // ---- 视觉配置（VisionConfig：API Key 池来自 QWEN_API_KEYS 环境变量） ----

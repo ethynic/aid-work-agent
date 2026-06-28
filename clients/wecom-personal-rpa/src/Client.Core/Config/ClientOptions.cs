@@ -29,4 +29,35 @@ public sealed class ClientOptions
 
     /// <summary>本地存储根路径（队列 SQLite、临时文件、日志）。</summary>
     public string StoragePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// PowerShell 自动化后端配置（Phase 2 新增）。C# 端通过 PowershellOpsInvoker 调起
+    /// wecom-ops.ps1 完成企微操作。详见 docs/system/wecom-personal-rpa-client-design.md §F2/§F3。
+    /// </summary>
+    public AutomationOptions Automation { get; set; } = new();
+}
+
+/// <summary>
+/// PowerShell 自动化后端配置。对应配置段 WeComPersonalRpa:Automation。
+/// </summary>
+public sealed class AutomationOptions
+{
+    /// <summary>PowerShell 可执行文件路径（默认走 PATH 解析）。</summary>
+    public string PowershellExecutable { get; set; } = "powershell.exe";
+
+    /// <summary>wecom-ops.ps1 主入口脚本的相对路径（相对客户端工作目录）。</summary>
+    public string PowershellOpsScript { get; set; } = "scripts/wecom-ops.ps1";
+
+    /// <summary>单次 PS 调用超时（秒）。</summary>
+    public int InvokeTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// 搜索框基准坐标（基于企微 5.0.8 / 1936x2088 / DPI=1.5 校准）。PS 脚本内同样有一份硬编码，
+    /// 此处主要供 C# 端诊断/调试使用。详见 debug-navigate.ps1 Step-LocateSearch 注释。
+    /// </summary>
+    public int SearchBoxBaseX1 { get; set; } = 330;
+    public int SearchBoxBaseY1 { get; set; } = 34;
+    public int SearchBoxBaseX2 { get; set; } = 430;
+    public int SearchBoxBaseY2 { get; set; } = 66;
+    public int SearchBoxBaseWindowWidth { get; set; } = 1936;
 }

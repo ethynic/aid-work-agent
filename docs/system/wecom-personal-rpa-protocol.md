@@ -100,7 +100,8 @@ sig = hmac_sha256(
   "status": "need_login",
   "account_display_name": "销售-王经理",
   "detail": "二维码已展示，等待扫码",
-  "qr_image_ref": "tmp://qr/abc.png"
+  "qr_image_ref": "tmp://qr/abc.png",
+  "qr_image_base64": "iVBORw0KGgoAAAANSUhEUgAA..."
 }
 ```
 
@@ -110,6 +111,7 @@ sig = hmac_sha256(
 | `account_display_name` | str \| null | 账号显示名 |
 | `detail` | str \| null | 脱敏补充说明 |
 | `qr_image_ref` | str \| null | **短期**二维码引用，不长期存储；日志禁止打印 |
+| `qr_image_base64` | str \| null | base64 PNG 二维码，30s TTL；优先于 `qr_image_ref`；不入审计/DB |
 
 ### A.5 event_type=action_result 的 payload（`RpaActionResultPayload`）
 
@@ -178,9 +180,39 @@ WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbo
   "paused": false,
   "paused_scope": null,
   "rate_limits": {"per_minute": 5, "per_day": 100, "consecutive_failure_pause": 2},
-  "server_time": "2026-06-22T10:00:00+08:00"
+  "server_time": "2026-06-22T10:00:00+08:00",
+  "archive_enabled": false,
+  "monitor_users": {
+    "binding_abc": {"user_names": ["陆伟"], "user_ids": ["wm_xxx"]}
+  }
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `archive_enabled` | bool | 服务端是否启用会话存档（客户端按此选择监听方式） |
+| `monitor_users` | Dict[str, MonitorUsersEntry] | 绑定级监控白名单（key=binding_id，仅含白名单非空的 binding） |
+
+`MonitorUsersEntry` 结构：
+
+```json
+{"user_names": ["陆伟"], "user_ids": ["wm_xxx"]}
+```
+
+- `user_names`：服务端不可见的客户端维度用户标识（用于审计显示）
+- `user_ids`：企业微信内部 ID（用于精确匹配 message payload）
+
+#### monitor_users 字段使用说明
+
+客户端拿到 `monitor_users` dict 后，需要通过以下方式找到当前会话对应的 binding_id：
+
+1. **会话存档模式**（archive）：会话存档 API 返回的 `from` + `tolist`/`roomid` 直接是稳定 ID，
+   客户端用这些 ID 反查 binding（按 monitor_user_ids 匹配）。匹配规则见客户端设计文档 §F6。
+2. **绑定关系已知**：客户端启动时拉取 `/config`，dict 的 key（binding_id）本身就是
+   客户端注册时分配的会话标识，客户端本地维护 binding_id ↔ 当前会话的映射。
+
+如果当前会话的 binding_id 不在 `monitor_users` dict 里，说明该 binding 没配置白名单
+（按"监控所有"处理）。
 
 ### A.8 错误码语义（`RpaErrorResponse`）
 
@@ -196,7 +228,9 @@ WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbo
 | `agent_timeout` | agent 推理超时 | 本地稍后重试或转人工 |
 | `unsupported_action` | 客户端不支持该回复类型 | 上报失败，服务端降级文本或转人工 |
 | `bad_request` | 请求体格式错误 | 不重试，记录日志 |
+| `unsupported_file_type` | 媒体上传文件扩展名不在白名单（见 §A.10） | 不重试，向用户提示支持的类型 |
 | `internal_error` | 服务端内部错误 | 指数退避重试 |
+| `monitor_whitelist_filtered` | 白名单过滤（消息发送方不在 `monitor_users` 白名单） | 不算错误，写审计但不投递 agent |
 
 ### A.9 幂等键
 
@@ -207,6 +241,70 @@ WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbo
 | 入站事件去重 | `wecom_personal_rpa:{tenant_id}:{event_id}` | `channel_message_dedup` 表（复用 `MessageDeduplicator`） |
 | action 回执去重 | `wecom_personal_rpa:{tenant_id}:{action_result_id}` | `channel_message_dedup` 表 |
 | 出站动作入队去重 | `wecom_rpa:{tenant_id}:{request_id}` | `wecom_rpa_action_outbox.dedup_key` UNIQUE 约束 |
+
+### A.10 媒体上传（`POST /api/v1/channels/wecom-personal-rpa/media-upload`）
+
+客户端把会话存档拿到的图片/文件回传给服务端，换取 24 小时短期签名下载 URL，
+供后续 agent 推理或审计使用。
+
+**请求**
+
+- 路径：`POST /api/v1/channels/wecom-personal-rpa/media-upload`
+- Content-Type：`multipart/form-data`，字段 `file`
+- 鉴权：HMAC-SHA256，**与 callback 同款请求头**（`X-Client-Id` / `X-Timestamp` / `X-Nonce` / `X-Signature`）
+
+**签名约定（重要）**：HMAC body **不是** multipart 原始字节（boundary 在不同 HTTP
+客户端实现里差异巨大、签名校验脆弱），而是**固定占位串**：
+
+```text
+HMAC-SHA256(key=client_secret, message="media-upload")
+```
+
+即客户端按下式构造签名输入（参考 `src/channels/wecom_personal_rpa/auth.py:compute_signature`）：
+
+```text
+raw_body = b"media-upload"   # 固定占位串，不要写 multipart 原始字节
+message = f"{client_id}\n{timestamp}\n{nonce}\n".encode() + raw_body
+signature = hmac_sha256(secret, message).hexdigest()
+```
+
+**文件大小限制**：100 MB（路由常量 `_MEDIA_MAX_SIZE_BYTES = 100 * 1024 * 1024`）。
+路由先用 `Content-Length` 头做预检（+1024 字节余量给 multipart 开销），超限直接 413。
+
+**文件类型白名单**：仅允许以下扩展名（小写，文件名取 `os.path.splitext` 后比较）：
+
+```
+png, jpg, jpeg, gif, bmp, webp, pdf, docx, xlsx, pptx, zip, txt, csv
+```
+
+不在白名单的扩展名（如 `.exe`/`.bat`/`.ps1`/`.js`）返回 `unsupported_file_type`（HTTP 400），
+错误响应 `message` 字段包含当前允许的扩展名列表，方便客户端调试。
+
+**响应**：
+
+```json
+{
+  "file_id": "a1b2c3d4e5f6_fixture.png",
+  "url": "/api/v1/channels/wecom-personal-rpa/files/a1b2c3d4e5f6_fixture.png?tenant_id=tenant_xxx&sig=1719038400.7c8d...",
+  "expires_at": "2026-06-23T10:00:00+08:00",
+  "size": 12345
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `file_id` | str | 存储文件名（`{uuid12}_{original_filename}`，原文件名取 basename 并截断 64 字符） |
+| `url` | str | 24h 短期签名下载 URL（`GET /files/{file_id}?tenant_id=...&sig=...`） |
+| `expires_at` | datetime | URL 过期时间（ISO，本地时区） |
+| `size` | int | 实际写入字节数 |
+
+**存储路径**：`storage/tenants/{tenant_id}/conversation/`（统一走 `src/core/storage.py`
+工具函数，遵循 `.claude/rules/backend_dev.md` 租户附件存储规范）。
+
+**URL TTL**：24 小时（路由常量 `_MEDIA_TOKEN_TTL_SECONDS = 24 * 3600`）。
+
+**错误码**：参考 §A.8。鉴权失败 → 401 `auth_failed`；超限 → 413 `bad_request`；
+内部错误 → 500 `internal_error`。
 
 ---
 

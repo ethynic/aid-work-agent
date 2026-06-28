@@ -22,7 +22,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 from loguru import logger
 
@@ -59,6 +59,37 @@ class WeComPersonalRpaRouter:
 
 # 模块级单例，供下游直接 import 使用
 router = WeComPersonalRpaRouter()
+
+
+def is_allowed_by_monitor_whitelist(
+    binding: Optional[dict],
+    sender_display_name: Optional[str],
+    sender_stable_id: Optional[str],
+) -> bool:
+    """检查消息是否被绑定级监控白名单允许。
+
+    客户端缓存白名单只是优化（减少 callback），真正的过滤必须服务端做。
+    本函数在 _process_inbound_message 解析消息后调用，不通过则该消息不投递 agent。
+
+    判定规则：
+    - binding 为 None：放行（授权层会按 needs_review 拦截）
+    - monitor_user_names / monitor_user_ids 都为空：放行（未配置白名单）
+    - 任一字段非空：按"任一匹配即允许"过滤
+      * names 命中 sender_display_name → 允许
+      * ids 命中 sender_stable_id → 允许
+      * 否则拒绝
+    """
+    if not binding:
+        return True
+    names: List[str] = binding.get("monitor_user_names") or []
+    ids: List[str] = binding.get("monitor_user_ids") or []
+    if not names and not ids:
+        return True
+    if names and sender_display_name and sender_display_name in names:
+        return True
+    if ids and sender_stable_id and sender_stable_id in ids:
+        return True
+    return False
 
 
 @dataclass

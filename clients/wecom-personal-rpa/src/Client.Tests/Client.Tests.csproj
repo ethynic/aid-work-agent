@@ -27,6 +27,8 @@
     <!-- 跨工程引用：Client.Core（HmacSigner / 协议 DTO）、Client.Automation（三层自动化） -->
     <ProjectReference Include="..\Client.Core\Client.Core.csproj" />
     <ProjectReference Include="..\Client.Automation\Client.Automation.csproj" />
+    <!-- Phase 2：PowershellOpsInvoker 测试需要引用 Client.App 工程（WPF/WinUI 目标，tests 已对齐 net8.0-windows） -->
+    <ProjectReference Include="..\Client.App\Client.App.csproj" />
     <!-- ConfigWriter 测试需要引用 ConfigTool 工程（仅工程级，不带 publish 单文件） -->
     <ProjectReference Include="..\Client.ConfigTool\Client.ConfigTool.csproj" />
   </ItemGroup>

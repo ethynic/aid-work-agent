@@ -677,3 +677,17 @@ ALTER TABLE wecom_rpa_clients ADD COLUMN IF NOT EXISTS agent_base_url TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
     ON chat_messages (session_id, created_at DESC);
 
+
+-- ============================================================================
+-- 2026-6-26，企业微信个人账号 RPA 会话存档：wecom_rpa_conversation_bindings 增加监控白名单字段
+-- 用途：绑定级监控白名单，发送方不在白名单内的消息由服务端二次过滤（不投递 agent）。
+-- 客户端缓存白名单只是优化（减少 callback），真正的过滤必须服务端做。
+-- monitor_user_names：发送人显示名数组（任一匹配即上报）；空数组 = 不按名字过滤
+-- monitor_user_ids：发送人稳定 ID 数组（external_userid/userid/room_id）；空数组 = 不按 ID 过滤
+-- 两个字段任一非空即按白名单过滤；都为空 = 监控所有（首版默认）。
+-- 规范对齐 database_dev.md：TEXT[] 类型、DEFAULT '{}' 数组字面量、ADD COLUMN IF NOT EXISTS 幂等。
+-- ============================================================================
+ALTER TABLE wecom_rpa_conversation_bindings
+    ADD COLUMN IF NOT EXISTS monitor_user_names TEXT[] DEFAULT '{}';
+ALTER TABLE wecom_rpa_conversation_bindings
+    ADD COLUMN IF NOT EXISTS monitor_user_ids TEXT[] DEFAULT '{}';

@@ -35,10 +35,11 @@ import hmac
 import json
 import os
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, File, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
 
@@ -52,9 +53,13 @@ from src.channels.wecom_personal_rpa.message import (
     parse_rpa_message,
     parse_status_event,
 )
-from src.channels.wecom_personal_rpa.router import check_conversation_authorization
+from src.channels.wecom_personal_rpa.router import (
+    check_conversation_authorization,
+    is_allowed_by_monitor_whitelist,
+)
 from src.channels.wecom_personal_rpa.schemas import (
     PROTOCOL_VERSION,
+    MonitorUsersEntry,
     RpaCallbackEnvelope,
     RpaConfigResponse,
     RpaErrorResponse,
@@ -77,6 +82,20 @@ _OUTBOX_DEDUP_PREFIX = "wecom_personal_rpa"
 
 # 文件下载短期签名 token TTL（秒），与 nonce 防重放窗口一致
 _FILE_TOKEN_TTL_SECONDS = 600
+# 媒体上传文件下载 token TTL（秒），24 小时
+_MEDIA_TOKEN_TTL_SECONDS = 24 * 3600
+# 媒体上传文件大小上限（字节），100 MB
+_MEDIA_MAX_SIZE_BYTES = 100 * 1024 * 1024
+# 媒体上传文件扩展名白名单（小写，不含点）。
+# 不在白名单的扩展名返回 unsupported_file_type，避免 .exe/.bat/.ps1/.js 等危险文件
+# 通过签名 URL 下载。
+_MEDIA_ALLOWED_EXTENSIONS = frozenset(
+    {
+        "png", "jpg", "jpeg", "gif", "bmp", "webp",
+        "pdf", "docx", "xlsx", "pptx",
+        "zip", "txt", "csv",
+    }
+)
 # 文件签名主密钥环境变量名（与 secret_crypto 主密钥解耦，单独可配置）
 _FILE_TOKEN_SECRET_ENV = "RPA_FILE_TOKEN_SECRET"
 
@@ -86,6 +105,7 @@ _AUDIT_STATUS = "status_event"
 _AUDIT_ACTION_RESULT = "action_result"
 _AUDIT_NEEDS_REVIEW = "needs_review"
 _AUDIT_AGENT_REPLY = "agent_reply"
+_AUDIT_MONITOR_FILTERED = "monitor_whitelist_filtered"
 
 
 # ===========================================================================
@@ -402,6 +422,50 @@ async def _process_inbound_message(
             return
 
         session_id = authz.session_id
+
+        # 2.5 绑定级监控白名单服务端二次校验
+        # 客户端缓存白名单只是优化（减少 callback），真正的过滤必须服务端做。
+        # 防止客户端绕过白名单上报非白名单内的消息。
+        authoritative_binding = None
+        try:
+            authoritative_binding = db.find_binding_by_search_key(
+                tenant_id=tenant_id,
+                account_id=env.account_id,
+                search_key=search_key,
+            )
+        except Exception as e:
+            logger.warning(
+                f"RPA monitor whitelist 查询 binding 失败 event_id={env.event_id}: {e}"
+            )
+        if not is_allowed_by_monitor_whitelist(
+            binding=authoritative_binding,
+            sender_display_name=sender_display_name,
+            sender_stable_id=sender_stable_id,
+        ):
+            try:
+                db.write_audit(
+                    tenant_id=tenant_id,
+                    client_id=env.client_id,
+                    account_id=env.account_id,
+                    category=_AUDIT_MONITOR_FILTERED,
+                    payload_json=json.dumps(
+                        {
+                            "event_id": env.event_id,
+                            "session_id": session_id,
+                            "sender_display_name": sender_display_name,
+                            "sender_stable_id": sender_stable_id,
+                            "reason": "not_in_monitor_whitelist",
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception as e:
+                logger.warning(f"RPA monitor_whitelist_filtered 审计写入失败: {e}")
+            logger.info(
+                f"RPA message 被监控白名单过滤 event_id={env.event_id} "
+                f"sender={sender_display_name} sid={sender_stable_id}"
+            )
+            return
 
         # 3. 自动注册用户
         user_info = {
@@ -728,7 +792,15 @@ async def wecom_personal_rpa_config(request: Request):
         return _error_response(
             error="auth_failed", message="客户端不存在", status_code=401
         )
-    tenant_id = client.get("tenant_id") or resolve_tenant
+    tenant_id = client.get("tenant_id")
+    if not tenant_id:
+        # 客户端注册时必须有 tenant_id；缺失说明数据异常，应该报错而不是兜底
+        logger.error(f"RPA config client {vr.client_id} 缺少 tenant_id 字段，数据异常")
+        return _error_response(
+            error="internal_error",
+            message="客户端配置异常：缺少 tenant_id",
+            status_code=500,
+        )
 
     # 取该 client 下第一个账号（首版单账号托管）
     paused = False
@@ -764,9 +836,183 @@ async def wecom_personal_rpa_config(request: Request):
         client_id=vr.client_id,
         tenant_id=tenant_id,
         config_id=config_id,
+        archive_enabled=_archive_enabled(),
+        monitor_users=_build_monitor_users(tenant_id, vr.client_id),
     )
     # 直接返回 Pydantic 模型，由 FastAPI 的 jsonable_encoder 序列化 datetime
     return resp
+
+
+def _archive_enabled() -> bool:
+    """会话存档开关：环境变量 WECOM_RPA_ARCHIVE_ENABLED（默认 false）。"""
+    return os.getenv("WECOM_RPA_ARCHIVE_ENABLED", "false").lower() == "true"
+
+
+def _build_monitor_users(tenant_id: str, client_id: str) -> Dict[str, MonitorUsersEntry]:
+    """组装绑定级监控白名单 dict（key = binding_id）。"""
+    monitor_users: Dict[str, MonitorUsersEntry] = {}
+    try:
+        bindings = db.list_bindings_by_client(tenant_id, client_id)
+    except Exception as e:
+        logger.warning(
+            f"RPA config list_bindings_by_client 失败 tenant={tenant_id} client={client_id}: {e}"
+        )
+        return monitor_users
+    for b in bindings or []:
+        names = b.get("monitor_user_names") or []
+        ids = b.get("monitor_user_ids") or []
+        # 仅在白名单非空时下发，节省客户端缓存
+        if not names and not ids:
+            continue
+        binding_id = b.get("id")
+        if not binding_id:
+            continue
+        monitor_users[binding_id] = MonitorUsersEntry(
+            user_names=list(names),
+            user_ids=list(ids),
+        )
+    return monitor_users
+
+
+# ===========================================================================
+# 2.5 媒体文件上传（客户端会话存档拿到的图片/文件）
+# ===========================================================================
+
+
+@router.post("/api/v1/channels/wecom-personal-rpa/media-upload")
+async def upload_media(request: Request, file: UploadFile = File(...)):
+    """客户端上传媒体文件（会话存档拿到的图片/文件），返回 24h 短期签名 URL。
+
+    鉴权：复用 HMAC-SHA256（与 callback 同款头），body 用固定占位串 ``"media-upload"``。
+    文件保存到 ``storage/tenants/{tenant_id}/conversation/`` 下，
+    返回 24 小时有效的下载 URL（复用 wecom_personal_rpa_download_file 签名机制）。
+    """
+    # 1. HMAC 鉴权
+    raw_body = b"media-upload"
+    headers = dict(request.headers)
+    get_secret = _make_get_secret_by_client_id()
+    vr = auth.verify_request(headers, raw_body, get_secret)
+    if not vr.ok:
+        return _error_response(
+            error=vr.error or "auth_failed",
+            message="鉴权失败",
+            status_code=401,
+        )
+    client_id = vr.client_id or ""
+
+    # 2. 解析租户
+    try:
+        client = db.get_client(client_id)
+    except Exception as e:
+        logger.error(f"RPA media-upload db.get_client 失败: {e}")
+        return _error_response(
+            error="internal_error",
+            message="服务端内部错误",
+            status_code=500,
+        )
+    if not client:
+        return _error_response(
+            error="auth_failed", message="客户端不存在", status_code=401
+        )
+    tenant_id = client.get("tenant_id") or ""
+    if not tenant_id:
+        return _error_response(
+            error="auth_failed", message="客户端无租户归属", status_code=401
+        )
+
+    # 3. 大小预检（content-length 头）
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > _MEDIA_MAX_SIZE_BYTES + 1024:
+        return _error_response(
+            error="bad_request",
+            message=f"文件大小超过上限 {_MEDIA_MAX_SIZE_BYTES} 字节",
+            status_code=413,
+        )
+
+    # 4. 流式读取并校验大小
+    from src.core.storage import ensure_tenant_storage_dir
+
+    original_name = file.filename or "media"
+    # 文件扩展名白名单：拒绝 .exe/.bat/.ps1/.js 等危险类型
+    ext = os.path.splitext(original_name)[1].lower()
+    # ext 形如 ".png"；去点后查白名单。无扩展名（ext == ""）也拒绝。
+    ext_clean = ext[1:] if ext.startswith(".") else ext
+    if ext_clean not in _MEDIA_ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(_MEDIA_ALLOWED_EXTENSIONS))
+        return _error_response(
+            error="unsupported_file_type",
+            message=f"不支持的文件类型：{ext or '(无扩展名)'}，允许：{allowed}",
+            status_code=400,
+        )
+    # 文件名：{uuid12}_{original}，防冲突 + 保留原文件名
+    safe_orig = os.path.basename(original_name).replace(os.sep, "_")[:64]
+    file_uuid = uuid.uuid4().hex[:12]
+    stored_filename = f"{file_uuid}_{safe_orig}"
+    try:
+        storage_dir = ensure_tenant_storage_dir(tenant_id, "conversation")
+    except Exception as e:
+        logger.error(f"RPA media-upload ensure storage dir 失败: {e}")
+        return _error_response(
+            error="internal_error",
+            message="存储初始化失败",
+            status_code=500,
+        )
+    abs_path = os.path.join(storage_dir, stored_filename)
+
+    total = 0
+    try:
+        with open(abs_path, "wb") as out:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MEDIA_MAX_SIZE_BYTES:
+                    out.close()
+                    try:
+                        os.remove(abs_path)
+                    except OSError:
+                        pass
+                    return _error_response(
+                        error="bad_request",
+                        message=f"文件大小超过上限 {_MEDIA_MAX_SIZE_BYTES} 字节",
+                        status_code=413,
+                    )
+                out.write(chunk)
+    except Exception as e:
+        logger.error(f"RPA media-upload 写文件失败: {e}", exc_info=True)
+        # 清理半成品
+        try:
+            if os.path.isfile(abs_path):
+                os.remove(abs_path)
+        except OSError:
+            pass
+        return _error_response(
+            error="internal_error",
+            message="文件保存失败",
+            status_code=500,
+        )
+
+    # 5. 生成 24h 短期签名 URL
+    expires = int(time.time()) + _MEDIA_TOKEN_TTL_SECONDS
+    sig_token = _sign_file_token(stored_filename, tenant_id, expires)
+    download_url = (
+        f"/api/v1/channels/wecom-personal-rpa/files/{stored_filename}"
+        f"?tenant_id={tenant_id}&sig={sig_token}"
+    )
+    expires_at = datetime.fromtimestamp(expires)
+
+    logger.info(
+        f"RPA media-upload ok client={client_id} tenant={tenant_id} "
+        f"file={stored_filename} size={total}"
+    )
+
+    return {
+        "file_id": stored_filename,
+        "url": download_url,
+        "expires_at": expires_at,
+        "size": total,
+    }
 
 
 # ===========================================================================

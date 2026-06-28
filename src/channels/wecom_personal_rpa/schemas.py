@@ -134,6 +134,14 @@ class RpaStatusPayload(BaseModel):
         default=None,
         description="二维码短期上传引用（短期凭证，不得长期存储；日志中禁止打印）",
     )
+    qr_image_base64: Optional[str] = Field(
+        default=None,
+        description=(
+            "二维码 base64 PNG（30s TTL，仅在线推送/回调内有效）。"
+            "新客户端优先用本字段渲染；不入审计/DB。"
+            "与 qr_image_ref 二选一，qr_image_base64 优先。"
+        ),
+    )
 
 
 # ===========================================================================
@@ -242,6 +250,16 @@ class RpaRateLimits(BaseModel):
     )
 
 
+class MonitorUsersEntry(BaseModel):
+    """绑定级监控白名单条目（key 为 binding_id）。
+
+    客户端缓存白名单只是优化（减少 callback），真正过滤由服务端做。
+    """
+
+    user_names: List[str] = Field(default_factory=list, description="发送人显示名数组")
+    user_ids: List[str] = Field(default_factory=list, description="发送人稳定 ID 数组")
+
+
 class RpaConfigResponse(BaseModel):
     """GET /config 返回的客户端运行配置。"""
 
@@ -267,6 +285,18 @@ class RpaConfigResponse(BaseModel):
         default=None,
         description="tenant_channel_configs 表记录 ID，用于构造 callback/ws 路径 .../callback/{config_id}",
     )
+    archive_enabled: bool = Field(
+        default=False,
+        description="服务端是否启用会话存档（客户端据此决定是否抓取聊天记录/媒体）",
+    )
+    monitor_users: Dict[str, MonitorUsersEntry] = Field(
+        default_factory=dict,
+        description=(
+            "绑定级监控白名单（key = binding_id，value = 白名单条目）。"
+            "客户端据此缓存白名单，仅对白名单内的会话上报 callback；"
+            "服务端会做二次校验，客户端绕过白名单上报的消息会被服务端过滤。"
+        ),
+    )
 
 
 # ===========================================================================
@@ -281,6 +311,7 @@ ErrorCode = Literal[
     "agent_timeout",
     "unsupported_action",
     "bad_request",
+    "unsupported_file_type",
     "internal_error",
 ]
 

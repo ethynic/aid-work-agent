@@ -1523,6 +1523,12 @@ CREATE TABLE IF NOT EXISTS wecom_rpa_conversation_bindings (
     stable_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     last_verified_at TIMESTAMP,
+    -- 监控白名单（绑定级）：任一非空时按白名单过滤，发送方不在白名单内的消息不上报
+    -- monitor_user_names：监控的发送人显示名数组（可能重名）；空数组 = 不按名字过滤
+    -- monitor_user_ids：监控的发送人稳定 ID 数组（external_userid/userid/room_id）；空数组 = 不按 ID 过滤
+    -- 两个字段任一非空即按白名单过滤；都为空 = 监控所有（首版默认）
+    monitor_user_names TEXT[] DEFAULT '{}',
+    monitor_user_ids TEXT[] DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account_id, search_key)
