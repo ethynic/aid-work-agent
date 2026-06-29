@@ -26,6 +26,12 @@ public sealed class ClientSession
     /// <summary>最近一次心跳时间。</summary>
     public DateTimeOffset LastHeartbeatAt { get; set; }
 
+    /// <summary>
+    /// 暂停状态协调器（Phase 4 块 G）。null 表示未注入 PauseState（典型 Client.Core 单测场景），
+    /// 此时 PauseAsync/ResumeAsync 走 ClientState-only 兜底（设状态位但无 PauseState 单例）。
+    /// </summary>
+    public PauseState? PauseState { get; set; }
+
     /// <summary>线程安全地设置当前状态。</summary>
     public void SetState(ClientState state)
     {
@@ -42,5 +48,70 @@ public sealed class ClientSession
         {
             return CurrentState;
         }
+    }
+
+    // ============================================================
+    // Phase 4 块 G：服务端 paused / resumed 响应
+    // ============================================================
+
+    /// <summary>
+    /// 服务端推送 paused 事件时调用（由 WebSocketConnectionManager 的事件转发）。
+    /// 根据 scope 设置 PauseState 单例对应标志位 + ClientState。
+    /// </summary>
+    /// <param name="scope">暂停作用域。</param>
+    /// <param name="conversationId">scope=conversation 时必填，否则忽略。</param>
+    public Task PauseAsync(PauseScope scope, string? conversationId = null)
+    {
+        switch (scope)
+        {
+            case PauseScope.Tenant:
+                PauseState?.SetTenantPaused(true);
+                SetState(ClientState.PausedByServer);
+                break;
+            case PauseScope.Account:
+                PauseState?.SetAccountPaused(true);
+                SetState(ClientState.PausedByServer);
+                break;
+            case PauseScope.Conversation:
+                if (!string.IsNullOrEmpty(conversationId))
+                {
+                    PauseState?.PauseConversation(conversationId);
+                }
+                // 会话级暂停不切 ClientState（其他会话仍可工作）
+                break;
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 服务端推送 resumed 事件时调用。清除对应 scope 的暂停。
+    /// </summary>
+    public Task ResumeAsync(PauseScope scope, string? conversationId = null)
+    {
+        switch (scope)
+        {
+            case PauseScope.Tenant:
+                PauseState?.SetTenantPaused(false);
+                // 仅当 Account 也未暂停时恢复 Running
+                if (PauseState is null || !PauseState.AccountPaused)
+                {
+                    SetState(ClientState.Running);
+                }
+                break;
+            case PauseScope.Account:
+                PauseState?.SetAccountPaused(false);
+                if (PauseState is null || !PauseState.TenantPaused)
+                {
+                    SetState(ClientState.Running);
+                }
+                break;
+            case PauseScope.Conversation:
+                if (!string.IsNullOrEmpty(conversationId))
+                {
+                    PauseState?.ResumeConversation(conversationId);
+                }
+                break;
+        }
+        return Task.CompletedTask;
     }
 }

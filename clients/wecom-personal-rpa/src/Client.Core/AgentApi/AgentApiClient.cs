@@ -477,4 +477,28 @@ public sealed class AgentApiClient : IAgentApiClient
             throw new InvalidDataException("UploadMedia 响应缺少 url 字段");
         }, cancellationToken).ConfigureAwait(false);
     }
+
+    // ============================================================
+    // Phase 4 块 E：Inbound 入站解析 + 白名单
+    // ============================================================
+
+    /// <inheritdoc />
+    public async Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
+    {
+        // 每次调用都拉新：缓存逻辑在 MonitorUsersCache 里做，这里只负责拉。
+        // 复用 GetConfigAsync 的 Polly 重试机制。
+        var resp = await GetConfigAsync(cancellationToken).ConfigureAwait(false);
+        // 服务端未下发 monitor_users 字段（旧版本）→ 返回空字典，调用方据此判定为"监控所有"。
+        return resp.MonitorUsers ?? new Dictionary<string, MonitorUsersEntry>(0);
+    }
+
+    /// <inheritdoc />
+    public Task<bool> ReportInboundAsync(InboundEvent evt, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        // event_type 由调用方（InboundEventReporter）保证为 Message；此处不强制校验，
+        // 允许 status / action_result 共享同一 envelope 通道（兼容）。
+        // 复用 PostCallbackAsync 的 HMAC 签名 + 重试机制。
+        return PostCallbackAsync(evt, cancellationToken);
+    }
 }

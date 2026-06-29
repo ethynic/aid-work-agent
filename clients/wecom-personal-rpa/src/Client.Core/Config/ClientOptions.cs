@@ -53,6 +53,30 @@ public sealed class ClientOptions
     /// docs/system/wecom-personal-rpa-client-design.md §F7。
     /// </summary>
     public QrCodeOptions QrCode { get; set; } = new();
+
+    /// <summary>
+    /// 入站消息白名单缓存配置（Phase 4 块 E 新增）。详见
+    /// docs/system/wecom-personal-rpa-client-design.md §F6。
+    /// </summary>
+    public MonitorUsersOptions MonitorUsers { get; set; } = new();
+}
+
+/// <summary>
+/// 入站消息白名单缓存配置。对应配置段 WeComPersonalRpa:MonitorUsers。
+/// </summary>
+public sealed class MonitorUsersOptions
+{
+    /// <summary>
+    /// 白名单缓存刷新周期（分钟），默认 60。
+    /// 设计见 §F6：客户端每 60 分钟主动拉一次，服务端 config_invalidate 推送时强制刷新。
+    /// </summary>
+    public int CacheRefreshMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// 当前绑定的 binding_id（首版单 binding，从配置读；用于白名单匹配 key）。
+    /// 多 binding 场景留给后续版本。
+    /// </summary>
+    public string BindingId { get; set; } = string.Empty;
 }
 
 /// <summary>

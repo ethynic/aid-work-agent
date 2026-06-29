@@ -51,6 +51,10 @@ internal sealed class StubAgentApiClient : IAgentApiClient
         => throw new NotSupportedException();
     public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
+    public Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+    public Task<bool> ReportInboundAsync(InboundEvent evt, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
     public void Dispose() { }
 }
 
@@ -288,6 +292,10 @@ internal sealed class ThrowingAgentApiClient : IAgentApiClient
         string? errorCode = null, string? errorMessage = null, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+    public Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+    public Task<bool> ReportInboundAsync(InboundEvent evt, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public void Dispose() { }
 }

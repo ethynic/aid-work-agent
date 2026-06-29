@@ -180,6 +180,35 @@ public sealed class OutboundQueue
         }
     }
 
+    /// <summary>
+    /// P0-5：把指定 action 重新入队（status='running' → 'pending'），用于暂停场景下
+    /// Dispatcher 出队后发现客户端被 PauseState 命中，需要把 item 放回 pending 让下次
+    /// Resume 后重新出队执行。仅当当前状态为 running/failed 时改回 pending，已是 pending 则不动。
+    /// </summary>
+    public async Task RequeueAsync(string actionId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(actionId)) throw new ArgumentNullException(nameof(actionId));
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            const string sql = """
+                UPDATE outbox_local
+                   SET status='pending', updated_at=@Now
+                 WHERE action_id=@Id AND status IN ('running', 'failed');
+                """;
+            using var conn = OpenConnection();
+            await conn.ExecuteAsync(sql, new
+            {
+                Id = actionId,
+                Now = FormatIso(DateTimeOffset.Now),
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>标记失败：retry_count++，写错误码与说明。仍保留 status='failed'，不再被自动 Dequeue。</summary>
     public async Task MarkFailedAsync(string actionId, string? errorCode, string? errorMessage,
         CancellationToken ct = default)

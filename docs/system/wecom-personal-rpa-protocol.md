@@ -306,6 +306,33 @@ png, jpg, jpeg, gif, bmp, webp, pdf, docx, xlsx, pptx, zip, txt, csv
 **错误码**：参考 §A.8。鉴权失败 → 401 `auth_failed`；超限 → 413 `bad_request`；
 内部错误 → 500 `internal_error`。
 
+### A.11 WebSocket 推送事件（服务端 → 客户端）
+
+客户端通过 WebSocket 长连接接收服务端的主动推送事件。鉴权见 §A.1（连接建立时携带），事件载荷统一格式：
+
+```json
+{ "type": "<event-type>", "scope": "<scope>", "conversation_id": "<可选>" }
+```
+
+| `type` | 含义 | 必填字段 | 客户端响应 |
+|--------|------|----------|-----------|
+| `paused` | 暂停指令 | `scope`、`conversation_id`（仅 conversation scope） | 调 `ClientSession.PauseAsync` 写入 `PauseState` |
+| `resumed` | 恢复指令 | `scope`、`conversation_id`（仅 conversation scope） | 调 `ClientSession.ResumeAsync` 清除 `PauseState` |
+| `actions` | 服务端推送 ActionEnvelope（出站指令） | `request_id`、`actions[]` 等（见 §A.6） | 解析后调 `OutboundActionDispatcher.EnvelopeEnqueueAsync` 入队本地 outbox |
+| `config_invalidate` | 配置失效通知（如监控白名单变更） | 无 | 调 `MonitorUsersCache.RefreshAsync` 强制刷新白名单缓存 |
+
+**`scope` 字段语义**（`paused` / `resumed` 共用）：
+
+| scope | 含义 | 客户端动作 |
+|-------|------|-----------|
+| `tenant` | 整租户暂停 | `PauseState.SetTenantPaused(true)`，所有出站动作停止、ChatArchiveListener 暂停上报 |
+| `account` | 单账号暂停（当前客户端绑定账号） | `PauseState.SetAccountPaused(true)`，该账号所有动作停止 + ChatArchiveListener 暂停；其他账号继续 |
+| `conversation` | 单会话暂停（其他会话不受影响） | `PauseState.PauseConversation(conversation_id)`，仅该会话的 `OutboundActionDispatcher` 跳过执行；InboundEventReporter 不受影响 |
+
+**心跳保活**：WebSocket 心跳靠 TCP keepalive + 客户端定时检查 `ClientWebSocket.State == Open` 实现，**不依赖应用层 pong**。客户端定时（默认 30s）发空字节 ping 作为 keepalive（部分代理对长连接静默有超时），离线检测以 `State != Open` 为准。
+
+**未知 `type` / `scope`**：客户端记录 warning 后丢弃单条，不抛异常、不传染（保证后续事件流不被破坏）。
+
 ---
 
 ## B. Python 模块函数签名契约（服务端实现 agent 必须逐字对齐）

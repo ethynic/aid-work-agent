@@ -6,6 +6,7 @@ using WeCom.PersonalRpa.App.Powershell;
 using WeCom.PersonalRpa.Core.AgentApi;
 using WeCom.PersonalRpa.Core.Config;
 using WeCom.PersonalRpa.Core.Protocol;
+using WeCom.PersonalRpa.Core.StateMachine;
 
 namespace WeCom.PersonalRpa.App.Outbound;
 
@@ -31,6 +32,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     private readonly IAgentApiClient _api;
     private readonly ClientOptions _options;
     private readonly IActionSource _source;
+    private readonly PauseState? _pauseState;
     private readonly ILogger<OutboundActionDispatcher>? _logger;
 
     /// <summary>
@@ -54,7 +56,9 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         IAgentApiClient api,
         ClientOptions options,
         IActionSource source,
-        ILogger<OutboundActionDispatcher>? logger = null)
+        ILogger<OutboundActionDispatcher>? logger = null,
+        // P0-5：可选 PauseState（DI 注入时由容器解析；测试场景传 null 跳过暂停检查）
+        PauseState? pauseState = null)
     {
         _queue = queue ?? throw new ArgumentNullException(nameof(queue));
         _downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
@@ -63,6 +67,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _logger = logger;
+        _pauseState = pauseState;
     }
 
     /// <inheritdoc />
@@ -195,6 +200,27 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     public async Task DispatchOneAsync(OutboxItem item, CancellationToken ct)
     {
         var maxRetries = Math.Max(1, _options.Outbound.MaxRetries);
+
+        // P0-5：PauseState 命中检查（Tenant/Account 级或 Conversation 级暂停时跳过执行）。
+        // item 已从队列出队（status='running'），命中暂停则 RequeueAsync 回 pending 让下次 Resume
+        // 后重新出队；同时不上报失败回执（保留 action 等待 Resume）。
+        if (_pauseState is not null)
+        {
+            if (_pauseState.IsPaused)
+            {
+                _logger?.LogDebug("客户端账号/租户暂停中，Requeue action: {ActionId}", item.ActionId);
+                await _queue.RequeueAsync(item.ActionId, ct).ConfigureAwait(false);
+                return;
+            }
+            if (!string.IsNullOrEmpty(item.ConversationKey) &&
+                _pauseState.IsConversationPaused(item.ConversationKey))
+            {
+                _logger?.LogDebug("会话暂停中，Requeue action: {ActionId} conv={Conv}",
+                    item.ActionId, item.ConversationKey);
+                await _queue.RequeueAsync(item.ActionId, ct).ConfigureAwait(false);
+                return;
+            }
+        }
 
         // noop / handoff 不经 PS，直接回执 success
         if (item.ActionType == ActionTypeNames.Noop)

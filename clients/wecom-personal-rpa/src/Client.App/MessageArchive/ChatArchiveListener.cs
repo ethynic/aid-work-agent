@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using WeCom.PersonalRpa.Core.Config;
 using WeCom.PersonalRpa.Core.Protocol;
@@ -28,7 +29,7 @@ namespace WeCom.PersonalRpa.App.MessageArchive;
 /// 重要：监听器不在内部下载媒体（图片/文件/语音/视频）。ArchiveMessage 只透传 MediaSdkFileId +
 /// MediaFileName，由 Phase 4 InboundEventBuilder 调用 ArchiveMediaDownloader 完成。
 /// </summary>
-public sealed class ChatArchiveListener : IMessageWatcher
+public sealed class ChatArchiveListener : IMessageWatcher, IHostedService
 {
     private const string Tag = "ChatArchiveListener";
 

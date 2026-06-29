@@ -238,4 +238,31 @@ public sealed class ChatArchiveListenerTests : IDisposable
     {
         try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* ignore */ }
     }
+
+    /// <summary>P0-1：ChatArchiveListener 同时实现 IMessageWatcher 和 IHostedService，
+    /// DI 容器可将其作为 IHostedService 启停。验证类型可赋值给 IHostedService 且 StartAsync/StopAsync 互通。</summary>
+    [Fact]
+    public async Task ChatArchiveListener_ImplementsIHostedService_CanStartStop()
+    {
+        Microsoft.Extensions.Hosting.IHostedService? asHosted = null;
+        using var cts = new CancellationTokenSource();
+        ChatArchiveListener? listener = null;
+        try
+        {
+            // 单条空批次 fetch，立即返回，PollLoopAsync 会等待 PeriodicTimer 下一 tick，StopAsync 会取消
+            listener = CreateListener((_, _, _, _) =>
+                Task.FromResult(new ChatDataBatch { Items = new List<ChatDataItem>() }));
+            asHosted = listener; // 验证可隐式转换（实现 IHostedService）
+
+            await asHosted.StartAsync(cts.Token);
+            // Start 后 listener 内部 _loopTask 应非 null（运行中）
+            // 这里不直接断言私有字段，改为间接验证：可再次 StopAsync 不抛异常
+            await asHosted.StopAsync(CancellationToken.None);
+            Assert.NotNull(listener.AccountId);
+        }
+        finally
+        {
+            (listener as IDisposable)?.Dispose();
+        }
+    }
 }

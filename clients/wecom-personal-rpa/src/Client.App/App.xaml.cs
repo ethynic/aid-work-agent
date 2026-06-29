@@ -76,11 +76,19 @@ public partial class App : Application
             .MinimumLevel.Information()
             .Enrich.WithProperty("App", AppTag)
             .Enrich.WithProperty("Version", ThisAssemblyInfo.Version)
+            // Phase 4 块 G：脱敏 Enricher（设计 §9.4 / 对齐 Python _sanitize_debug）
+            // 把渲染后的 Message / 字符串属性 / Exception.Message 中的
+            // secret / token / 绝对路径 / base64 二维码替换为占位符。
+            .Enrich.With<WeCom.PersonalRpa.App.Logging.SensitiveDataFilter>()
             .WriteTo.Async(a => a.File(
                 logPath,
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 14,
-                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{App}] {SourceContext} {Message:lj}{NewLine}{Exception}"))
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{App}] {SourceContext} {MessageSanitized:lj}{NewLine}{ExceptionSanitized}"))
+            // TODO(Phase 5)：Windows Event Log sink（需引入 Serilog.Sinks.EventLog NuGet 包，
+            // 任务约束本阶段不引入新依赖）。届时用 .WriteTo.EventLog("WeComPersonalRpaClient",
+            // manageEventSource: true) 启用，关键事件（启动/关闭/PS 失败/崩溃）写入系统事件日志，
+            // 便于运维在客户端崩溃（文件日志未 flush）时排查。
             .CreateLogger();
 
         Log.Information("[{Tag}] 日志目录：{Dir}", AppTag, LogDirectory);
@@ -158,7 +166,18 @@ public partial class App : Application
         services.AddSingleton<IAgentApiClient>(sp => sp.GetRequiredService<AgentApiClient>());
 
         // ---- 状态机（Core 实现） ----
-        services.AddSingleton<ClientSession>();
+        // Phase 4 块 G：先注册 PauseState 单例，再注册 ClientSession，由 PauseState 注入到 ClientSession。
+        // PauseState 设计为单账号作用域共享（OutboundActionDispatcher / ChatArchiveListener /
+        // QrCodeWatcher / DesktopHealthSupervisor / InboundEventReporter 均注入此单例）。
+        services.AddSingleton<WeCom.PersonalRpa.Core.StateMachine.PauseState>();
+        services.AddSingleton<ClientSession>(sp =>
+        {
+            var session = new ClientSession
+            {
+                PauseState = sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>(),
+            };
+            return session;
+        });
         services.AddSingleton<IStateManager, StateManager>();
 
         // ---- 本地出站队列（Core SQLite 实现） ----
@@ -243,6 +262,9 @@ public partial class App : Application
         services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveMediaDownloader>();
         // ChatArchiveListener：单账号实例（以 ClientId 作为 account_id 维度）。
         // 真实多账号场景由后续装配阶段替换。
+        // P0-1：ChatArchiveListener 同时实现 IHostedService，由 AddHostedService 包装随 Host 启停。
+        // DI 启动顺序：Host 按 AddHostedService 注册顺序启动——ChatArchiveListener 注册在前，
+        // InboundEventReporter 注册在后（事件源先启动，订阅者再 subscribe，避免事件丢失）。
         services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>(sp =>
         {
             var opts = sp.GetRequiredService<ClientOptions>();
@@ -253,6 +275,42 @@ public partial class App : Application
                 opts.MessageSource,
                 accountId: opts.ClientId);
         });
+        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>());
+
+        // ---- Phase 4 块 E：Inbound 入站解析 + 白名单 ----
+        // MonitorUsersCache：白名单本地缓存（绑定级）。InitializeAsync 由 MonitorUsersHostedService
+        // 在 Host 启动时触发（Phase 4 测试阶段补齐跨块协调缺口）。
+        services.AddSingleton<WeCom.PersonalRpa.App.Inbound.MonitorUsersCache>();
+        // MonitorUsersHostedService：启动钩子 → MonitorUsersCache.InitializeAsync
+        services.AddHostedService<WeCom.PersonalRpa.App.Inbound.MonitorUsersHostedService>();
+        // InboundEventBuilder：ArchiveMessage → InboundEvent 转换 + 媒体中转。
+        services.AddSingleton<WeCom.PersonalRpa.App.Inbound.InboundEventBuilder>(sp =>
+        {
+            var opts = sp.GetRequiredService<ClientOptions>();
+            return new WeCom.PersonalRpa.App.Inbound.InboundEventBuilder(
+                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveHttpClient>(),
+                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveMediaDownloader>(),
+                sp.GetRequiredService<IAgentApiClient>(),
+                opts,
+                accountId: opts.ClientId);
+        });
+        // InboundEventReporter：构造时注入 ChatArchiveListener + PauseState。
+        // IHostedService.StartAsync 中调 Subscribe(chatArchiveListener) 串联事件链。
+        services.AddSingleton<WeCom.PersonalRpa.App.Inbound.InboundEventReporter>(sp =>
+        {
+            var opts = sp.GetRequiredService<ClientOptions>();
+            var optionsWrapper = Microsoft.Extensions.Options.Options.Create(opts);
+            var pauseState = sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>();
+            var listener = sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>();
+            return new WeCom.PersonalRpa.App.Inbound.InboundEventReporter(
+                sp.GetRequiredService<WeCom.PersonalRpa.App.Inbound.InboundEventBuilder>(),
+                sp.GetRequiredService<WeCom.PersonalRpa.App.Inbound.MonitorUsersCache>(),
+                sp.GetRequiredService<IAgentApiClient>(),
+                optionsWrapper,
+                watcher: listener,
+                pauseState: pauseState);
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.Inbound.InboundEventReporter>());
 
         // ---- Phase 3 块 C：Outbound 出站执行 ----
         // OutboundQueue：本地 SQLite 持久化队列。DbPath 取 ClientOptions.Outbound.DbPath，
@@ -270,7 +328,17 @@ public partial class App : Application
         services.AddSingleton<ChannelActionSource>();
         services.AddSingleton<IActionSource>(sp => sp.GetRequiredService<ChannelActionSource>());
         // OutboundActionDispatcher：单 Worker 串行执行 PS 调用。同时实现 IHostedService。
-        services.AddSingleton<OutboundActionDispatcher>();
+        // P0-5：注入 PauseState 单例，Tenant/Account/Conversation 暂停时 Requeue action。
+        services.AddSingleton<OutboundActionDispatcher>(sp =>
+            new OutboundActionDispatcher(
+                sp.GetRequiredService<OutboundQueue>(),
+                sp.GetRequiredService<AttachmentDownloader>(),
+                sp.GetRequiredService<PowershellOpsInvoker>(),
+                sp.GetRequiredService<IAgentApiClient>(),
+                sp.GetRequiredService<ClientOptions>(),
+                sp.GetRequiredService<IActionSource>(),
+                logger: null,
+                pauseState: sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>()));
         services.AddHostedService(sp => sp.GetRequiredService<OutboundActionDispatcher>());
 
         // ---- Phase 3 块 F：QrCode 二维码监听 ----
@@ -278,6 +346,34 @@ public partial class App : Application
         // 单例 + AddHostedService 让其随 Host 启停。
         services.AddSingleton<WeCom.PersonalRpa.App.QrCode.QrCodeWatcher>();
         services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.QrCode.QrCodeWatcher>());
+
+        // ---- Phase 4 块 G：桌面健康监督 + WebSocket 重连管理 ----
+        // DesktopHealthSupervisor：60s 周期检查桌面环境（企微进程/锁屏/窗口可见），
+        // 异常状态变化时上报 StatusPayload（offline / desktop_locked / window_not_visible）。
+        // P1-12：注入 PauseState，桌面异常时本地 SetAccountPaused(true)，恢复时清本地标记。
+        // 单例 + AddHostedService 让其随 Host 启停。
+        services.AddSingleton<WeCom.PersonalRpa.App.Health.DesktopHealthSupervisor>(sp =>
+            new WeCom.PersonalRpa.App.Health.DesktopHealthSupervisor(
+                sp.GetRequiredService<IAgentApiClient>(),
+                logger: null,
+                pauseState: sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>()));
+        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.Health.DesktopHealthSupervisor>());
+        // WebSocketConnectionManager：自动重连（指数退避 1/2/4/8/16/30s 封顶）+ 30s 心跳 +
+        // 60s 离线检测 + NetworkChange 立即重连 + Reconnected 事件。
+        // 重连成功后触发 Reconnected 事件（OutboundActionDispatcher 订阅做增量 outbox 拉取）。
+        services.AddSingleton<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>();
+        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>());
+
+        // ServerMessageDispatcher：Phase 4 测试阶段补齐跨块协调缺口。
+        // 订阅 WebSocketConnectionManager.MessageReceived，解析 paused/resumed/actions JSON：
+        //   - paused/resumed → 调 ClientSession.PauseAsync/ResumeAsync
+        //   - actions（ActionEnvelope）→ 调 OutboundActionDispatcher.EnvelopeEnqueueAsync 入队
+        // 协议字段对齐 protocol.md §A.11（type/scope/conversation_id）。
+        services.AddHostedService(sp => new WeCom.PersonalRpa.App.Realtime.ServerMessageDispatcher(
+            sp.GetRequiredService<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>(),
+            sp.GetRequiredService<ClientSession>(),
+            logger: null,
+            dispatcher: sp.GetRequiredService<OutboundActionDispatcher>()));
 
         // Phase 1 删除：以下 5 个编排组件依赖已退役的视觉/UIA 链路，
         //             Phase 2 will rework with PowershellAutomationBackend

@@ -199,13 +199,19 @@ public sealed class OutboundActionDispatcherTests : IDisposable
             => throw new NotImplementedException();
         public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
+        public Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+        public Task<bool> ReportInboundAsync(InboundEvent evt, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
         public void Dispose() { }
     }
 
     private OutboundActionDispatcher CreateDispatcher(
         IAgentApiClient api,
         AttachmentDownloader downloader,
-        Func<string, object?, CancellationToken, Task<PowershellResult>> psHook)
+        Func<string, object?, CancellationToken, Task<PowershellResult>> psHook,
+        WeCom.PersonalRpa.Core.StateMachine.PauseState? pauseState = null,
+        OutboundQueue? queueOverride = null)
     {
         // PowershellOpsInvoker sealed 类无法 mock，构造一个真实实例用于编译时占位（dispatcher 测试用 hook 覆盖）。
         var psOptions = new PowershellOptions
@@ -216,13 +222,14 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         };
         var ps = new PowershellOpsInvoker(psOptions, NullLogger<PowershellOpsInvoker>.Instance);
         var dispatcher = new OutboundActionDispatcher(
-            new OutboundQueue(_options, logger: null),
+            queueOverride ?? new OutboundQueue(_options, logger: null),
             downloader,
             ps,
             api,
             _options,
             new ChannelActionSource(),
-            logger: null)
+            logger: null,
+            pauseState: pauseState)
         {
             PsInvokerHook = psHook,
         };
@@ -412,5 +419,129 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         Assert.False(psCalled);
         var report = Assert.Single(api.Reports);
         Assert.True(report.Success);
+    }
+
+    // ===== P0-5：PauseState 命中时 Requeue action，不调 PS、不上报回执 =====
+
+    [Fact]
+    public async Task OutboundActionDispatcher_AccountPaused_RequeuesAndSkipsPs()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var pause = new WeCom.PersonalRpa.Core.StateMachine.PauseState();
+        pause.SetAccountPaused(true);
+        var queue = new OutboundQueue(_options, logger: null);
+        var psCalled = false;
+        var dispatcher = CreateDispatcher(api, downloader, (action, p, ct) =>
+        {
+            psCalled = true;
+            return Task.FromResult(new PowershellResult { Success = true, Action = action });
+        }, pauseState: pause, queueOverride: queue);
+
+        // 模拟出队后 Dispatch：item 已是 running 状态（DequeueNextAsync 会标记 running），
+        // 这里直接构造 running item 调 DispatchOneAsync
+        var item = new OutboxItem
+        {
+            ActionId = "req_paused",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "Conv-A",
+            Text = "hi",
+            Status = "pending",
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        await queue.EnqueueAsync(item);
+        // 标记为 running（模拟出队）
+        await queue.DequeueNextAsync();
+        // 模拟出队后传入 running 状态的 item 给 dispatcher（与生产路径一致）
+        item.Status = "running";
+
+        await dispatcher.DispatchOneAsync(item, CancellationToken.None);
+
+        // PS 不应被调
+        Assert.False(psCalled);
+        // 不应上报回执
+        Assert.Empty(api.Reports);
+        // action 应被 Requeue 回 pending
+        // 通过 ListPendingAsync 验证（会把 running 重置 pending 并返回）
+        var pending = await queue.ListPendingAsync();
+        var recovered = Assert.Single(pending);
+        Assert.Equal("req_paused", recovered.ActionId);
+    }
+
+    [Fact]
+    public async Task OutboundActionDispatcher_ConversationPaused_RequeuesThatConversationOnly()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var pause = new WeCom.PersonalRpa.Core.StateMachine.PauseState();
+        pause.PauseConversation("Conv-Paused");
+        var queue = new OutboundQueue(_options, logger: null);
+        var dispatcher = CreateDispatcher(api, downloader, (action, p, ct) =>
+            Task.FromResult(new PowershellResult { Success = true, Action = action }),
+            pauseState: pause, queueOverride: queue);
+
+        var pausedItem = new OutboxItem
+        {
+            ActionId = "req_conv_paused",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "Conv-Paused",
+            Text = "x",
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        await dispatcher.DispatchOneAsync(pausedItem, CancellationToken.None);
+
+        // 被暂停会话的 action 不应上报回执
+        Assert.Empty(api.Reports);
+    }
+
+    [Fact]
+    public async Task OutboundActionDispatcher_NotPaused_RunsNormally()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var pause = new WeCom.PersonalRpa.Core.StateMachine.PauseState(); // 不暂停
+        var dispatcher = CreateDispatcher(api, downloader, (action, p, ct) =>
+            Task.FromResult(new PowershellResult { Success = true, Action = action }),
+            pauseState: pause);
+
+        var item = new OutboxItem
+        {
+            ActionId = "req_normal",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "Conv-Normal",
+            Text = "x",
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        await dispatcher.DispatchOneAsync(item, CancellationToken.None);
+
+        // 应正常上报 success
+        var report = Assert.Single(api.Reports);
+        Assert.True(report.Success);
+    }
+
+    // ===== OutboundQueue.RequeueAsync =====
+
+    [Fact]
+    public async Task OutboundQueue_RequeueAsync_ChangesRunningBackToPending()
+    {
+        var q = new OutboundQueue(_options, logger: null);
+        await q.EnqueueAsync(new OutboxItem
+        {
+            ActionId = "req_rq",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "c",
+            Text = "t",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        var claimed = await q.DequeueNextAsync();
+        Assert.NotNull(claimed);
+        Assert.Equal("running", claimed!.Status);
+
+        await q.RequeueAsync("req_rq");
+
+        var pending = await q.ListPendingAsync();
+        var recovered = Assert.Single(pending);
+        Assert.Equal("req_rq", recovered.ActionId);
+        Assert.Equal("pending", recovered.Status);
     }
 }

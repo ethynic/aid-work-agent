@@ -72,4 +72,27 @@ public sealed class RpaConfigResponse
     /// <summary>tenant_channel_configs 记录 ID，用于构造 callback/ws 路径 .../callback/{config_id}。可空（旧服务端不返回）。</summary>
     [JsonPropertyName("config_id")]
     public string? ConfigId { get; set; }
+
+    /// <summary>
+    /// 绑定级监控白名单（Phase 4 块 E）：binding_id -> 白名单条目。
+    /// 服务端仅下发白名单非空的 binding（即 monitor_users 字段非空的 tenant_channel_configs 记录）。
+    /// 客户端按 bindingId 查找并做发送方过滤（任一字段匹配即放行）。可空（旧服务端不返回 → 客户端视为监控所有）。
+    /// </summary>
+    [JsonPropertyName("monitor_users")]
+    public Dictionary<string, MonitorUsersEntry>? MonitorUsers { get; set; }
+}
+
+/// <summary>
+/// 单个 binding 的监控白名单条目（对应 Python MonitorUsersEntry）。
+/// 客户端按 user_names + user_ids 任一字段匹配做放行判定。
+/// </summary>
+public sealed class MonitorUsersEntry
+{
+    /// <summary>发送方显示名白名单（user_names 字段，可为空）。</summary>
+    [JsonPropertyName("user_names")]
+    public List<string>? UserNames { get; set; }
+
+    /// <summary>发送方稳定 ID 白名单（user_ids 字段，可为空）。</summary>
+    [JsonPropertyName("user_ids")]
+    public List<string>? UserIds { get; set; }
 }
