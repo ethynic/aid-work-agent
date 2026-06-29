@@ -21,15 +21,14 @@ OLD_HEAD=$(git rev-parse HEAD)
 git fetch --all
 git reset --hard origin/master
 NEW_HEAD=$(git rev-parse HEAD)
-sudo chmod -R 777 .
+# sudo chmod -R 777 .
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 2. 前端编译
-echo "[2] 更新前端（检测到前端代码变更）..."
+echo "[2] 前端编译..."
 sudo rm -rf frontend/dist/*
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm install
 sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm run build
-
 
 # 3. 停止旧容器（释放数据库连接）
 echo "[3] 停止旧容器..."
@@ -40,7 +39,7 @@ sudo docker compose -f docker-compose.prod.yml down --remove-orphans
 #                       container name conflict（容器最终会被正确拉起，但脚本会中断）
 #    --wait：等所有容器 healthy 才返回，与 set -e 配合更可预测
 echo "[4] 启动后端服务..."
-sudo docker compose -f docker-compose.prod.yml up -d --force-recreate --wait
+sudo docker compose -f docker-compose.prod.yml up -d --wait
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
@@ -79,8 +78,5 @@ else
 fi
 
 echo ""
+echo "更新完成！"
 echo "=========================================="
-echo "  更新完成！"
-echo "=========================================="
-
-# /agent2_update.sh
