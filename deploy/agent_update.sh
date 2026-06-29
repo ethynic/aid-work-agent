@@ -21,7 +21,7 @@ OLD_HEAD=$(git rev-parse HEAD)
 git fetch --all
 git reset --hard origin/master
 NEW_HEAD=$(git rev-parse HEAD)
-# sudo chmod -R 777 .
+#sudo chmod -R 777 .
 sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 2. 前端编译
@@ -39,7 +39,7 @@ sudo docker compose -f docker-compose.prod.yml down --remove-orphans
 #                       container name conflict（容器最终会被正确拉起，但脚本会中断）
 #    --wait：等所有容器 healthy 才返回，与 set -e 配合更可预测
 echo "[4] 启动后端服务..."
-sudo docker compose -f docker-compose.prod.yml up -d --wait
+sudo docker compose -f docker-compose.prod.yml up -d --force-recreate --wait
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
@@ -61,22 +61,7 @@ sudo docker exec -u root aid-agent-api \
     -i https://mirrors.cloud.tencent.com/pypi/simple \
     --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
 
-# 7. 清理已移除的 zhipuai 包（requirements.txt 已不再包含，
-#    旧镜像里残留会拉低 pyjwt 到 <2.9，与 mcp 冲突）
-#    卸载后需确认 pyjwt 仍在 >=2.10.1，否则补装一次
-echo "[7] 清理已移除的 zhipuai（如存在）..."
-if sudo docker exec -u root aid-agent-api pip show zhipuai >/dev/null 2>&1; then
-    sudo docker exec -u root aid-agent-api pip uninstall -y zhipuai >/dev/null
-    echo "  已卸载 zhipuai"
-    # zhipuai 可能把 pyjwt 锁在 <2.9，卸载后显式升回
-    sudo docker exec -u root aid-agent-api \
-        pip install --no-cache-dir --upgrade 'pyjwt>=2.10.1' \
-        -i https://mirrors.cloud.tencent.com/pypi/simple \
-        --quiet || echo "  警告：pyjwt 升级失败，mcp 可能不可用"
-else
-    echo "  zhipuai 未安装，跳过"
-fi
-
 echo ""
-echo "更新完成！"
+echo "=========================================="
+echo "  更新完成！"
 echo "=========================================="

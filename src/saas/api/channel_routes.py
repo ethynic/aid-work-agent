@@ -1287,6 +1287,19 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
             f"[Tenant WeCom KF] 回调解析: event={event}, change_type={change_type}, "
             f"open_kfid={open_kfid}, tenant={tenant_id}"
         )
+        # 临时调试：记录完整回调 XML，用于排查"用户撤回"等事件是否被微信推送
+        # 调试主题：微信事件
+        from src.core.temp_logger import tlog
+        tlog(
+            "微信事件",
+            "回调 XML: tenant={tenant}, event={event}, change_type={change_type}, "
+            "open_kfid={open_kfid}, xml={xml}",
+            tenant=tenant_id,
+            event=event,
+            change_type=change_type,
+            open_kfid=open_kfid,
+            xml=decrypted_xml,
+        )
 
         # 消息事件 → 后台异步拉取并处理
         if event == "kf_msg_or_event":
@@ -1424,6 +1437,23 @@ async def _process_tenant_wecom_kf_messages(
                     f"[wecom_kf] 消息: msgid={msg_id}, origin={msg_origin}, "
                     f"msgtype={msg_type}, open_kfid={open_kfid}"
                 )
+                # 临时调试：记录 msg_list 中每条原始条目（含被过滤的事件型条目，如撤回事件）
+                # 调试主题：微信事件
+                from src.core.temp_logger import tlog
+                try:
+                    import json as _json
+                    tlog(
+                        "微信事件",
+                        "sync_msg 条目: open_kfid={open_kfid}, msgid={msgid}, "
+                        "origin={origin}, msgtype={msgtype}, raw={raw}",
+                        open_kfid=open_kfid,
+                        msgid=msg_id,
+                        origin=msg_origin,
+                        msgtype=msg_type,
+                        raw=_json.dumps(msg, ensure_ascii=False),
+                    )
+                except Exception:
+                    pass
 
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
@@ -1813,7 +1843,7 @@ async def _process_tenant_wecom_kf_messages(
 
                 agent_attachments = _build_attachments_for_agent(agent_attachments_input)
                 logger.info(f"[agent_call] agent_attachments: count={len(agent_attachments)}, items={[{'type': a['type'], 'name': a['name'], 'content_len': len(a['content']), 'mime': a['mime_type']} for a in agent_attachments]}")
-                logger.info(f"[微信语音] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
+                logger.info(f"[微信消息] 进入会话队列: session_id={session_id}, user_input_len={len(user_input)}")
 
                 # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
                 send_response = channel_session_manager.make_send_response(
@@ -1855,7 +1885,7 @@ async def _process_tenant_wecom_kf_messages(
 
                 SessionRecordManager.end_record()
                 logger.info(
-                    f"[微信语音] 队列处理返回: status={result.get('status')}, "
+                    f"[微信消息] 队列处理返回: status={result.get('status')}, "
                     f"response_text_len={len(result.get('response_text') or '')}"
                 )
                 if result["status"] == "merged":
