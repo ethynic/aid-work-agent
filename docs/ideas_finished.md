@@ -58,7 +58,7 @@
 | 27 | 企业微信集成 | 应用消息收发、回调处理 | [设计](channel/wecom/wecom-integration.md) | — |
 | 28 | 飞书 / 钉钉集成 | 飞书和钉钉渠道适配器实现 | [设计](channel/feishu-dingtalk/channel_integration.md) | — |
 | 29 | 飞书渠道对接（完整实施） | 修复 FeishuAdapter 错误实现（AES 密钥、签名验证），补齐 crypto/media 子模块、连接池复用、长消息拆分、速率限制、欢迎消息，完善路由层 challenge-response 验证与事件解密。60 项自动化测试全通过。2026-06-19 | [方案](channel/feishu/implementation_plan.md) / [实施](channel/feishu/integration_guide.md) | — |
-| 32 | 微信客服转人工工具优化（schema + 渠道隔离） | ✅ 已完成开发 | 优化 transfer_to_human：①reason 改为必填；②渠道隔离完全由工具 execute 段的 get_kf_context 判断，非微信渠道返回「当前渠道未提供人工服务」友好提示（usage_guide 清空，因 LLM 看不到当前渠道，提示词约束无效）；③移除 LLM 路径上的关键词校验，新增 allow_agent_transfer 开关；④会话 metadata 记录 transfer_source=agent。代码 + 10 单元测试已落地，设计文档与 wecom_kf_design.md §7.1 已同步。2026-06-23 | [设计](channel/wecom-kf/transfer_to_human_optimization.md) | [计划](channel/wecom-kf/transfer_to_human_optimization_plan.md) |
+| 32 | 微信客服转人工工具优化（schema + 渠道隔离） | ✅ 已完成开发 | 优化 transfer_to_human：①reason 改为必填；②渠道隔离完全由工具 execute 段的 get_kf_context 判断，非微信渠道返回「当前渠道未提供人工服务」友好提示（usage_guide 清空，因 LLM 看不到当前渠道，提示词约束无效）；③移除 LLM 路径上的关键词校验，新增 allow_agent_transfer 开关；④会话 metadata 记录 transfer_source=agent。代码 + 10 单元测试已落地，设计文档与 wecom_kf_design.md §7.1 已同步。2026-06-23 | [设计](channel/wecom_kf/transfer_to_human_optimization.md) | [计划](channel/wecom_kf/transfer_to_human_optimization_plan.md) |
 
 ## SaaS 多租户
 

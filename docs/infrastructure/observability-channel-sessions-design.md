@@ -2,7 +2,7 @@
 
 > 关联设计：[可观测性与质量保障设计](./observability-design.md)
 > 关联开发计划：[可观测性与质量保障开发计划](./observability-dev-plan.md)
-> 关联调研：[渠道集成设计](../channel/feishu-dingtalk/channel_integration.md)、[微信客服设计](../channel/wecom-kf/wecom_kf_design.md)
+> 关联调研：[渠道集成设计](../channel/feishu-dingtalk/channel_integration.md)、[微信客服设计](../channel/wecom_kf/wecom_kf_design.md)
 > 设计日期：2026-06-15
 > 状态：草案
 

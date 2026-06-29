@@ -1,7 +1,7 @@
 ---
 关联想法: wecom_kf 转人工工具优化（schema + 渠道隔离）
-关联设计: docs/channel/wecom-kf/transfer_to_human_optimization.md
-关联设计(上游): docs/channel/wecom-kf/wecom_kf_design.md
+关联设计: docs/channel/wecom_kf/transfer_to_human_optimization.md
+关联设计(上游): docs/channel/wecom_kf/wecom_kf_design.md
 状态: 📋 待开发
 创建日期: 2026-06-23
 ---
@@ -44,7 +44,7 @@
 
 | # | 任务 | 涉及文件 | 预计 | 状态 |
 |---|------|---------|------|------|
-| 4.1 | 更新 `wecom_kf_design.md` 第 7.1 节为最新实现 | `docs/channel/wecom-kf/wecom_kf_design.md` | 0.1d | ⏳ |
+| 4.1 | 更新 `wecom_kf_design.md` 第 7.1 节为最新实现 | `docs/channel/wecom_kf/wecom_kf_design.md` | 0.1d | ⏳ |
 | 4.2 | 在 `docs/ideas.md` 登记并更新状态 | `docs/ideas.md` | 0.05d | ⏳ |
 | 4.3 | 开发完成后将条目移至 `docs/ideas_finished.md` | `docs/ideas_finished.md` | 0.05d | ⏳ |
 

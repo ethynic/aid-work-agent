@@ -1,6 +1,6 @@
 ---
 关联想法: wecom_kf 转人工工具优化（schema + 渠道隔离）
-关联设计: docs/channel/wecom-kf/wecom_kf_design.md
+关联设计: docs/channel/wecom_kf/wecom_kf_design.md
 状态: 📋 待开发
 创建日期: 2026-06-23
 ---
