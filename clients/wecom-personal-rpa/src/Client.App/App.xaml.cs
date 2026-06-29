@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using WeCom.PersonalRpa.App.Autostart;
+using WeCom.PersonalRpa.App.Outbound;
 using WeCom.PersonalRpa.App.Powershell;
 using WeCom.PersonalRpa.App.Services;
 using WeCom.PersonalRpa.App.Tray;
@@ -226,6 +227,57 @@ public partial class App : Application
         // 保留：InboundReporter（独立，仅依赖 Core 的 IAgentApiClient/ClientOptions）。
         services.AddSingleton<InboundReporter>();
         services.AddSingleton<AutostartRegistrar>();
+
+        // ---- Phase 3 块 D：会话存档（MessageArchive） ----
+        // ArchiveHttpClient：IHttpClientFactory 创建，base 域名由调用方拼装（企微 endpoint 在类内常量）。
+        services.AddHttpClient<WeCom.PersonalRpa.App.MessageArchive.ArchiveHttpClient>();
+        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveCryptoService>();
+        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveSeqStore>(sp =>
+        {
+            var opts = sp.GetRequiredService<ClientOptions>();
+            var dbPath = string.IsNullOrEmpty(opts.StoragePath)
+                ? Path.Combine(DataDirectory, "archive.db")
+                : Path.Combine(opts.StoragePath, "archive.db");
+            return new WeCom.PersonalRpa.App.MessageArchive.ArchiveSeqStore(dbPath);
+        });
+        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveMediaDownloader>();
+        // ChatArchiveListener：单账号实例（以 ClientId 作为 account_id 维度）。
+        // 真实多账号场景由后续装配阶段替换。
+        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>(sp =>
+        {
+            var opts = sp.GetRequiredService<ClientOptions>();
+            return new WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener(
+                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveHttpClient>(),
+                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveCryptoService>(),
+                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveSeqStore>(),
+                opts.MessageSource,
+                accountId: opts.ClientId);
+        });
+
+        // ---- Phase 3 块 C：Outbound 出站执行 ----
+        // OutboundQueue：本地 SQLite 持久化队列。DbPath 取 ClientOptions.Outbound.DbPath，
+        // 若为相对路径则相对客户端工作目录。
+        services.AddSingleton<OutboundQueue>(sp =>
+        {
+            var opts = sp.GetRequiredService<ClientOptions>();
+            var dbPath = opts.Outbound.DbPath;
+            // 临时：若是相对路径则保留原样（启动时 cd 客户端根目录）；后续可改用 IWebHostEnvironment
+            return new OutboundQueue(opts, sp.GetService<Microsoft.Extensions.Logging.ILogger<OutboundQueue>>());
+        });
+        // AttachmentDownloader：依赖 HttpClient（短期签名 URL 直连）
+        services.AddHttpClient<AttachmentDownloader>();
+        // IActionSource stub：内存 Channel 实现，单测与早期接入使用。Phase 4 接入真实 WebSocket 后替换。
+        services.AddSingleton<ChannelActionSource>();
+        services.AddSingleton<IActionSource>(sp => sp.GetRequiredService<ChannelActionSource>());
+        // OutboundActionDispatcher：单 Worker 串行执行 PS 调用。同时实现 IHostedService。
+        services.AddSingleton<OutboundActionDispatcher>();
+        services.AddHostedService(sp => sp.GetRequiredService<OutboundActionDispatcher>());
+
+        // ---- Phase 3 块 F：QrCode 二维码监听 ----
+        // QrCodeWatcher：周期轮询 PS get_login_state，未登录时截二维码上报。
+        // 单例 + AddHostedService 让其随 Host 启停。
+        services.AddSingleton<WeCom.PersonalRpa.App.QrCode.QrCodeWatcher>();
+        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.QrCode.QrCodeWatcher>());
 
         // Phase 1 删除：以下 5 个编排组件依赖已退役的视觉/UIA 链路，
         //             Phase 2 will rework with PowershellAutomationBackend

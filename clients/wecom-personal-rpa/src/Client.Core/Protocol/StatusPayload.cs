@@ -54,4 +54,11 @@ public sealed class StatusPayload
     /// <summary>二维码短期上传引用（短期凭证，不得长期存储；日志中禁止打印，可空）。</summary>
     [JsonPropertyName("qr_image_ref")]
     public string? QrImageRef { get; set; }
+
+    /// <summary>
+    /// base64 PNG 二维码（need_login/qr_expired 时填，online/offline 时为 null）。
+    /// 协议对齐 protocol.md §A.4：30 秒 TTL，不入审计/DB，优先于 QrImageRef。
+    /// </summary>
+    [JsonPropertyName("qr_image_base64")]
+    public string? QrImageBase64 { get; set; }
 }

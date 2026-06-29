@@ -35,6 +35,61 @@ public sealed class ClientOptions
     /// wecom-ops.ps1 完成企微操作。详见 docs/system/wecom-personal-rpa-client-design.md §F2/§F3。
     /// </summary>
     public AutomationOptions Automation { get; set; } = new();
+
+    /// <summary>
+    /// 出站执行配置（Phase 3 块 C 新增）。本地 outbox SQLite 队列、附件下载、重试策略。
+    /// 详见 docs/system/wecom-personal-rpa-client-design.md §F3。
+    /// </summary>
+    public OutboundOptions Outbound { get; set; } = new();
+
+    /// <summary>
+    /// 消息源配置（Phase 3 块 D 新增）。yaml/json key 为 message_source（camelCase 序列化）。
+    /// 默认 mode=archive，即通过企微会话存档 API 拉取。详见 §F4。
+    /// </summary>
+    public ArchiveOptions MessageSource { get; set; } = new();
+
+    /// <summary>
+    /// 二维码监听配置（Phase 3 块 F 新增）。详见
+    /// docs/system/wecom-personal-rpa-client-design.md §F7。
+    /// </summary>
+    public QrCodeOptions QrCode { get; set; } = new();
+}
+
+/// <summary>
+/// 二维码监听配置。对应配置段 WeComPersonalRpa:QrCode。
+/// </summary>
+public sealed class QrCodeOptions
+{
+    /// <summary>
+    /// 二维码检测周期（秒），默认 25。
+    /// 设计：服务端二维码 TTL=30s，客户端周期 25s 给网络/PS 延迟留 5s 余量，避免偶发空窗。
+    /// </summary>
+    public int PollIntervalSeconds { get; set; } = 25;
+
+    /// <summary>
+    /// 二维码区域 bbox（相对屏幕物理坐标 [x1,y1,x2,y2]），由 PS 端
+    /// Get-WeComLoginStateInternal 用 Get-WeWorkWindowOrigin origin 做平移后截图。
+    /// 默认值基于企微登录窗口 [530, 200, 800, 470]，真机校准留给 Phase 5。
+    /// </summary>
+    public int[] RegionBboxBase { get; set; } = { 530, 200, 800, 470 };
+}
+
+/// <summary>
+/// 出站执行配置。对应配置段 WeComPersonalRpa:Outbound。
+/// </summary>
+public sealed class OutboundOptions
+{
+    /// <summary>本地 outbox SQLite 数据库路径（相对客户端工作目录，默认 data/outbox.db）。</summary>
+    public string DbPath { get; set; } = "data/outbox.db";
+
+    /// <summary>附件下载临时目录（相对客户端工作目录，默认 temp/outbound-downloads）。</summary>
+    public string DownloadTempDir { get; set; } = "temp/outbound-downloads";
+
+    /// <summary>单个附件最大允许体积（MB），超过直接拒收，防 CSRF / 滥用。</summary>
+    public int MaxAttachmentSizeMb { get; set; } = 100;
+
+    /// <summary>wecom_window_not_found 等可重试错误的最大重试次数（含首次执行）。</summary>
+    public int MaxRetries { get; set; } = 3;
 }
 
 /// <summary>

@@ -13,7 +13,8 @@
 #   send_text       入参：{keyword, text}          进入会话并发送文本
 #   send_image      入参：{keyword, image_path}    进入会话并发送图片
 #   send_file       入参：{keyword, file_path}     进入会话并发送文件（图片走 send_image）
-#   get_login_state 入参：{}                        检测企微登录态（占位实现）
+#   get_login_state 入参：{} / {qr_region_bbox:[x1,y1,x2,y2]}
+#                                                   检测企微登录态，未登录时附带二维码 base64
 #
 # 编码：UTF-8 with BOM。PS 5.1 看到 BOM 会按 UTF-8 解析源码，中文字面量不乱码。
 # ====================================================================================
@@ -179,9 +180,9 @@ function Send-WeComImageInternal {
 }
 
 # ---------- 内部：进入会话 + 发送文件 ----------
-# 必要性：企微聊天会话 Ctrl+V 粘贴文件路径（如果是文本路径会变成文本消息），
-# 文件发送需要专门的「发送文件」入口（拖拽或文件传输助手），目前先复用图片粘贴路径，
-# 但只对图片文件有效。非图片文件留待后续完善（占位实现）。
+# 实现：剪贴板 SetFileDropList（系统级文件拖放数据）+ Ctrl+V。
+# 企微对图片走 SetImage（剪贴板图像数据），对任意文件需要 SetFileDropList（文件 drop 列表），
+# 触发企微"发送文件给 X"对话框（再 Enter 确认）。
 function Send-WeComFileInternal {
     param([string]$Keyword, [string]$FilePath)
 
@@ -193,28 +194,185 @@ function Send-WeComFileInternal {
         }
     }
 
-    # 占位：复用图片发送逻辑（仅对图片文件可靠），其他文件类型 TODO
-    return Send-WeComImageInternal -Keyword $Keyword -ImagePath $FilePath
+    # 进入会话
+    $nav = Search-WeComUserInternal -Keyword $Keyword
+    if (-not $nav.success) { return $nav }
+
+    Add-Type -AssemblyName System.Windows.Forms
+
+    # 剪贴板放文件 drop list，重试 3 次（被其他进程占住剪贴板锁时常见）
+    $dropList = $null
+    $setOk = $false
+    $lastErr = ''
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            $dropList = New-Object System.Collections.Specialized.StringCollection
+            $dropList.Add((Resolve-Path $FilePath).Path) | Out-Null
+            [System.Windows.Forms.Clipboard]::SetFileDropList($dropList)
+            $setOk = $true
+            break
+        } catch {
+            $lastErr = $_.Exception.Message
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    if (-not $setOk) {
+        return @{
+            success = $false
+            error_code = 'clipboard_set_failed'
+            error_message = "剪贴板 SetFileDropList 失败（重试 3 次）：$lastErr"
+        }
+    }
+
+    Start-Sleep -Milliseconds 300
+
+    # Ctrl+V（企微弹出"发送给 X"对话框，确认要发送给当前会话）
+    Press-CtrlV
+    Start-Sleep -Milliseconds 1500
+
+    # Enter 确认发送
+    Press-Enter
+    Start-Sleep -Milliseconds 800
+
+    # 清空剪贴板，避免后续操作误用
+    try { [System.Windows.Forms.Clipboard]::Clear() } catch { }
+
+    return @{
+        success = $true
+        keyword = $Keyword
+        sent_file_name = (Split-Path $FilePath -Leaf)
+    }
 }
 
-# ---------- 内部：检测企微登录态（占位） ----------
-# Phase 2 仅占位：找到 WeWorkWindow 即返回 online。
-# 实际登录态识别（区分「未登录二维码页」「已登录主界面」「锁定」）由 Phase 3 F7 详细实现。
+# ---------- 内部：检测企微登录态（Phase 3 F7 详细化） ----------
+# 算法：
+#   1. EnumWindows 找 WeWorkWindow（Get-WeWorkWindowOrigin 已封装）→ 找不到继续找小窗口
+#   2. 启发式判断未登录二维码页：
+#      方法 A（主）：企微登录页通常窗口较小（约 380x540）居中显示，主界面 >=600x400。
+#                    Get-WeWorkWindowOrigin 只接受 >=600x400 的窗口作为主窗口，
+#                    因此返回 null 但存在更小的 WeWorkWindow → 二维码页。
+#      方法 B（兜底）：若主窗口存在但宽 < 500 且高 < 700（罕见，留作降级）。
+#   3. need_login 状态下：从配置取 RegionBboxBase，加上窗口 origin 偏移，截屏 → base64 PNG。
+#
+# 注意：qr_image_base64 为敏感数据，Write-Result 必须输出（契约需要），但 console 日志中
+#       不得打印 base64 内容（仅记录长度）。
 function Get-WeComLoginStateInternal {
     $origin = Get-WeWorkWindowOrigin
+
     if (-not $origin) {
+        # 主窗口（>=600x400 的 WeWorkWindow）不存在。可能是：
+        #   (a) 企微未启动 / 已退出 → offline
+        #   (b) 企微处于登录二维码页（小窗口） → need_login
+        # 区分：枚举所有 WeWorkWindow（不限制尺寸），若存在小窗口（宽 < 500 且高 < 700）→ need_login
+        $smallWnd = Find-SmallWeWorkWindow
+        if ($smallWnd) {
+            $qrBase64 = Capture-QrCodeBase64 -WindowOrigin $smallWnd -RegionBboxBase (Get-QrRegionBBox)
+            return @{
+                success = $true
+                state = 'need_login'
+                hwnd = [string]$smallWnd.Hwnd
+                window_origin = @{ left = $smallWnd.Left; top = $smallWnd.Top; width = $smallWnd.Width; height = $smallWnd.Height }
+                qr_image_base64 = $qrBase64
+                qr_image_length = ($qrBase64 | Measure-Object -Character).Characters
+                message = '检测到登录二维码窗口（小尺寸 WeWorkWindow），等待扫码'
+            }
+        }
         return @{
             success = $true
             state = 'offline'
-            message = '未找到企微主窗口，可能未启动或未登录'
+            message = '未找到企微主窗口，可能未启动或已退出'
         }
     }
+
+    # 主窗口存在（>=600x400）：判定为 online
+    # TODO（Phase 5 真机校准）：补充「二维码已过期」「账号被限制」「桌面锁定」等细化状态识别。
     return @{
         success = $true
         state = 'online'
         hwnd = [string]$origin.Hwnd
         window_origin = @{ left = $origin.Left; top = $origin.Top; width = $origin.Width; height = $origin.Height }
-        message = '占位实现：找到 WeWorkWindow 即视为 online，详细识别见 Phase 3 F7'
+        message = '企微主窗口存在，视为 online'
+    }
+}
+
+# ---------- 枚举所有可见 WeWorkWindow（不限尺寸），返回最小的那个 ----------
+# 必要性：Get-WeWorkWindowOrigin 只挑 >=600x400 的主窗口，登录二维码页（约 380x540）
+#         不满足条件会被跳过。需要单独枚举小窗口判定登录态。
+function Find-SmallWeWorkWindow {
+    $script:wopsSmall = $null
+    $script:wopsSmallArea = [int]::MaxValue
+    [WeOpsWin32]::EnumWindows({
+        param($h, $l)
+        $sb = New-Object System.Text.StringBuilder 256
+        [WeOpsWin32]::GetClassName($h, $sb, 256) | Out-Null
+        if ($sb.ToString() -eq 'WeWorkWindow' -and [WeOpsWin32]::IsWindowVisible($h)) {
+            $r = New-Object WeOpsWin32+RECT
+            [void][WeOpsWin32]::GetWindowRect($h, [ref]$r)
+            $w = $r.Right - $r.Left; $hgt = $r.Bottom - $r.Top
+            # 登录二维码页窗口：宽 < 500 且高 < 700（企微登录窗口典型 380x540）
+            if ($w -lt 500 -and $hgt -lt 700) {
+                $area = $w * $hgt
+                if ($area -lt $script:wopsSmallArea) {
+                    $script:wopsSmallArea = $area
+                    $script:wopsSmall = @{
+                        Hwnd = $h; Left = $r.Left; Top = $r.Top; Width = $w; Height = $hgt
+                    }
+                }
+            }
+        }
+        return $true
+    }, [IntPtr]::Zero) | Out-Null
+    return $script:wopsSmall
+}
+
+# ---------- 从 stdin JSON 参数读取二维码 bbox 配置 ----------
+# 必要性：QrCodeWatcher 通过 stdin JSON 把 RegionBboxBase 传给 PS，
+#         参数 key 为 qr_region_bbox（驼峰）。缺失时用默认 [530,200,800,470]。
+# 注意：$params 在脚本顶部已 ConvertFrom-Json，此处只读。
+function Get-QrRegionBBox {
+    $default = @(530, 200, 800, 470)
+    if ($params -and $params.qr_region_bbox) {
+        $arr = @($params.qr_region_bbox)
+        if ($arr.Count -eq 4) { return @([int]$arr[0], [int]$arr[1], [int]$arr[2], [int]$arr[3]) }
+    }
+    return $default
+}
+
+# ---------- 截取二维码区域并返回 base64 PNG ----------
+# 算法：Graphics.CopyFromScreen 截取 [x1,y1,x2,y2]（屏幕物理坐标）→ Bitmap → PNG → base64。
+# 必要性：登录窗口 origin 由 Find-SmallWeWorkWindow 提供；bbox 为相对窗口左上角的偏移，
+#         截屏前需加上 origin.Left / origin.Top。
+function Capture-QrCodeBase64 {
+    param(
+        [Parameter(Mandatory = $true)]$WindowOrigin,
+        [Parameter(Mandatory = $true)][int[]]$RegionBboxBase
+    )
+    try {
+        Add-Type -AssemblyName System.Drawing
+
+        $x1 = [int]$RegionBboxBase[0] + [int]$WindowOrigin.Left
+        $y1 = [int]$RegionBboxBase[1] + [int]$WindowOrigin.Top
+        $x2 = [int]$RegionBboxBase[2] + [int]$WindowOrigin.Left
+        $y2 = [int]$RegionBboxBase[3] + [int]$WindowOrigin.Top
+        $w = [Math]::Max(1, $x2 - $x1)
+        $h = [Math]::Max(1, $y2 - $y1)
+
+        $bmp = New-Object System.Drawing.Bitmap $w, $h
+        try {
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            try {
+                $g.CopyFromScreen($x1, $y1, 0, 0, (New-Object System.Drawing.Size $w, $h))
+            } finally { $g.Dispose() }
+            $ms = New-Object System.IO.MemoryStream
+            try {
+                $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+                $bytes = $ms.ToArray()
+                return [System.Convert]::ToBase64String($bytes)
+            } finally { $ms.Dispose() }
+        } finally { $bmp.Dispose() }
+    } catch {
+        # 截图失败不致命：返回 null，调用方仍能上报 state=need_login（仅缺二维码）
+        return $null
     }
 }
 

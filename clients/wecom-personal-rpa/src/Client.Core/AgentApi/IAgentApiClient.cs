@@ -37,4 +37,43 @@ public interface IAgentApiClient : IDisposable
     /// <param name="cancellationToken">取消令牌（用于取消连接建立）。</param>
     /// <returns>已连接的 ClientWebSocket。</returns>
     Task<ClientWebSocket> ConnectWebSocketAsync(CancellationToken cancellationToken = default);
+
+    // ============================================================
+    // Phase 3 扩展方法（C/D/F 三块共享）
+    // ============================================================
+
+    /// <summary>
+    /// POST status 事件：上报账号/桌面状态（含 need_login 时的 qr_image_base64）。
+    /// Phase 3 块 F（QrCodeWatcher）使用。
+    /// </summary>
+    /// <param name="payload">status payload（QrImageBase64 可空）。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task<bool> ReportStatusAsync(StatusPayload payload, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// POST action_result 回执：客户端执行完 outbox action 后上报结果。
+    /// Phase 3 块 C（OutboundActionDispatcher）使用。
+    /// </summary>
+    /// <param name="requestId">对应 ActionEnvelope.request_id。</param>
+    /// <param name="success">是否成功。</param>
+    /// <param name="errorCode">失败时的错误码（对齐 protocol.md §A.8）。</param>
+    /// <param name="errorMessage">失败时的脱敏说明。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task<bool> ReportActionResultAsync(
+        string requestId,
+        bool success,
+        string? errorCode = null,
+        string? errorMessage = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// POST 媒体上传：客户端拿到会话存档的图片/文件后，上传到服务端换取短期签名 URL。
+    /// Phase 3 块 D（InboundEventBuilder）使用。
+    ///
+    /// 协议约定（见 protocol.md §A.10）：multipart/form-data，HMAC 签名 body 用固定占位串 "media-upload"。
+    /// </summary>
+    /// <param name="localPath">本地文件绝对路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>服务端返回的短期签名 URL（24h 有效）。</returns>
+    Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default);
 }

@@ -329,4 +329,152 @@ public sealed class AgentApiClient : IAgentApiClient
     {
         // HttpClient 由 IHttpClientFactory 管理生命周期，此处不释放。
     }
+
+    // ============================================================
+    // Phase 3 扩展方法占位实现（3 个块子智能体各自填具体逻辑）
+    // ============================================================
+
+    /// <inheritdoc />
+    public async Task<bool> ReportStatusAsync(StatusPayload payload, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        // 构造 status 事件 envelope（protocol.md §A.4 / §A.6）。
+        // event_id 由客户端生成且全局稳定，client_id/account_id 由签名器在 Header 端补充。
+        // 个人 RPA：account_id == client_id（一人一号绑定）。
+        var envelope = new InboundEvent
+        {
+            EventId = $"st_{Guid.NewGuid():N}",
+            ClientId = _options.ClientId,
+            AccountId = _options.ClientId,
+            EventType = EventType.Status,
+            OccurredAt = DateTimeOffset.Now,
+            Payload = JsonSerializer.SerializeToElement(payload, _jsonOptions),
+        };
+
+        // 日志只记 status + 是否带二维码，绝不打印 base64 内容（敏感数据）
+        _logger?.LogInformation("ReportStatus status={Status} has_qr={HasQr}",
+            payload.Status, !string.IsNullOrEmpty(payload.QrImageBase64));
+
+        return await PostCallbackAsync(envelope, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 构造 action_result 回执 envelope 并上报（protocol.md §A.5）。
+    ///
+    /// payload 字段：
+    ///   - request_id       透传
+    ///   - action_result_id 客户端生成（用于幂等去重），格式 res_{ts_ms}_{guid}
+    ///   - action_index     从 requestId#idx 反推（dispatcher 多 action 拆解时拼），默认 0
+    ///   - action_type      回执对应动作类型；服务端按需读 outbox（这里给 send_text 占位）
+    ///   - success          透传
+    ///   - error_code       透传（已映射为 protocol §A.8 错误码）
+    ///   - error_message    透传
+    ///   - executed_at      当前本地时间（服务端按 ISO 8601 解析）
+    ///
+    /// 鉴权复用 PostCallbackAsync（HMAC 头 + Polly 重试），不再另实现。
+    /// </summary>
+    public async Task<bool> ReportActionResultAsync(
+        string requestId,
+        bool success,
+        string? errorCode = null,
+        string? errorMessage = null,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureCallbackRoutingAsync(cancellationToken).ConfigureAwait(false);
+
+        // requestId 形如 "req_xx" 或 "req_xx#2"，#后是 action_index（dispatcher 多 action 拆解时拼）
+        var idx = 0;
+        var cleanReq = requestId;
+        var hashIdx = requestId.IndexOf('#');
+        if (hashIdx >= 0 && int.TryParse(requestId[(hashIdx + 1)..], out var parsed))
+        {
+            idx = parsed;
+            cleanReq = requestId[..hashIdx];
+        }
+
+        var payload = new
+        {
+            request_id = cleanReq,
+            action_result_id = $"res_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid():N}",
+            action_index = idx,
+            action_type = "send_text", // dispatcher 已按 action 拆解，回执 action_type 服务端按需读 outbox
+            success,
+            error_code = errorCode,
+            error_message = errorMessage,
+            executed_at = DateTimeOffset.Now,
+        };
+
+        var env = new InboundEvent
+        {
+            EventId = $"evt_res_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}_{Guid.NewGuid():N}",
+            ClientId = _options.ClientId,
+            AccountId = string.Empty, // callback 路由不依赖此字段；服务端按 outbox 关联账号
+            EventType = EventType.ActionResult,
+            OccurredAt = DateTimeOffset.Now,
+            Payload = JsonSerializer.SerializeToElement(payload, _jsonOptions),
+        };
+
+        // 复用 PostCallbackAsync 的 HMAC 签名 + 重试机制
+        var posted = await PostCallbackAsync(env, cancellationToken).ConfigureAwait(false);
+        if (!posted)
+        {
+            _logger?.LogWarning("ReportActionResultAsync 上报失败 RequestId={Id}", requestId);
+        }
+        return posted;
+    }
+
+    /// <inheritdoc />
+    public async Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
+    {
+        // 协议约定（protocol.md §A.10）：multipart/form-data 上传到 /media-upload，
+        // HMAC 签名 body 用固定占位串 "media-upload"（不是 multipart 真实字节），
+        // 服务端用同样规则验签。
+        if (!File.Exists(localPath))
+        {
+            throw new FileNotFoundException("待上传媒体文件不存在", localPath);
+        }
+
+        await EnsureCallbackRoutingAsync(cancellationToken).ConfigureAwait(false);
+
+        // HMAC 签名 raw_body：固定占位字面量，UTF-8 编码（不是 multipart 真实 body）
+        var signBody = Encoding.UTF8.GetBytes("media-upload");
+
+        const string path = "api/v1/channels/wecom-personal-rpa/media-upload";
+
+        return await _httpPipeline.ExecuteAsync(async token =>
+        {
+            using var fileStream = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 81920, useAsync: true);
+            using var form = new MultipartFormDataContent();
+            var fileContent = new StreamContent(fileStream);
+            fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            form.Add(fileContent, "file", Path.GetFileName(localPath));
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, path)
+            {
+                Content = form,
+            };
+            // HMAC 签名使用占位 body（不是 multipart body）
+            _signer.Sign(request, signBody);
+
+            using var resp = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
+                .ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger?.LogWarning("UploadMedia 上传失败：{Status}", (int)resp.StatusCode);
+                throw new HttpRequestException($"UploadMedia 失败：HTTP {(int)resp.StatusCode}");
+            }
+
+            await using var rs = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(rs, cancellationToken: token).ConfigureAwait(false);
+            var root = doc.RootElement;
+            // 优先 url；服务端可能下发 file_id（用作服务端引用）/ expires_at（保留字段）。
+            if (root.TryGetProperty("url", out var urlEl) && urlEl.ValueKind == JsonValueKind.String)
+            {
+                return urlEl.GetString() ?? string.Empty;
+            }
+            throw new InvalidDataException("UploadMedia 响应缺少 url 字段");
+        }, cancellationToken).ConfigureAwait(false);
+    }
 }
