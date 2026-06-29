@@ -425,6 +425,7 @@ async def lifespan(app: FastAPI):
         # Start wecom_kf human service timeout check — 每 60 秒检查
         async def _clear_session_chat_history(session_id: str) -> None:
             """清除会话的对话历史，避免下次客户发消息时 Agent 基于旧上下文触发转人工"""
+            from src.db.database import get_db_connection
             try:
                 with get_db_connection() as conn:
                     cursor = conn.cursor()
