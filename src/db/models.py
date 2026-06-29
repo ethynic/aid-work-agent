@@ -932,6 +932,7 @@ class ChatRecordDB:
                             {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    RETURNING *
                 """, (
                     record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                     total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
@@ -941,10 +942,24 @@ class ChatRecordDB:
                     json.dumps(subagent_calls) if subagent_calls else None,
                     status, error_message, duration_ms, source_type
                 ))
+                row = cursor.fetchone()
                 conn.commit()
 
                 logger.info(f"Chat record created: {record_id} for session: {session_id}")
-                return ChatRecordDB.get_by_id(record_id)
+                if not row:
+                    return None
+                result = dict(row)
+                if result.get("execution_details"):
+                    try:
+                        result["execution_details"] = json.loads(result["execution_details"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if result.get("subagent_calls"):
+                    try:
+                        result["subagent_calls"] = json.loads(result["subagent_calls"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                return result
             except Exception as e:
                 logger.error(f"Failed to create chat record: {e}")
                 return None

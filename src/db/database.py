@@ -132,7 +132,7 @@ def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connectio
         # 检查连接是否有效
         try:
             if conn.closed:
-                logger.warning("PostgreSQL 连接已关闭，重新获取 (attempt %d/%d)", attempt + 1, max_retries)
+                logger.warning("PostgreSQL 连接已关闭，重新获取 (attempt {}/{}): {}", attempt + 1, max_retries, conn)
                 _pg_connection_pool.putconn(conn, close=True)
                 continue
             # 用轻量查询检测连接是否真的活着
@@ -140,7 +140,7 @@ def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connectio
             cursor.execute("SELECT 1")
             cursor.close()
         except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-            logger.warning("PostgreSQL 连接失效，重新获取 (attempt %d/%d): %s", attempt + 1, max_retries, e)
+            logger.warning("PostgreSQL 连接失效，重新获取 (attempt {}/{}): {}", attempt + 1, max_retries, e)
             try:
                 _pg_connection_pool.putconn(conn, close=True)
             except Exception:
@@ -148,7 +148,7 @@ def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connectio
             last_error = e
             continue
         except Exception as e:
-            logger.warning("PostgreSQL 连接检查异常: %s，重新获取 (attempt %d/%d)", e, attempt + 1, max_retries)
+            logger.warning("PostgreSQL 连接检查异常: {}，重新获取 (attempt {}/{})", e, attempt + 1, max_retries)
             try:
                 _pg_connection_pool.putconn(conn, close=True)
             except Exception:
