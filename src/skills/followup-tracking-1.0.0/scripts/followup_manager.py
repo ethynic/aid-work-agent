@@ -89,6 +89,11 @@ def output_json(success: bool, data: Any = None, error: str = None, debug: str =
 # ============================================================
 # init_tables
 # ============================================================
+def init_tables():
+    """skill_loader 启动时调用的空初始化（表由 lead-management 创建）"""
+    pass
+
+
 def cmd_init_tables(args):
     """确保跟进相关表存在（表由 lead-management 的 init_tables 创建）"""
     try:

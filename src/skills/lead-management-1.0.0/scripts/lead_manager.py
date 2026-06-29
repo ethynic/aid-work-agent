@@ -136,6 +136,11 @@ def output_json(success: bool, data: Any = None, error: str = None, debug: str =
 # ============================================================
 # init_tables
 # ============================================================
+def init_tables():
+    """skill_loader 启动时调用的空初始化（表通过 CLI init_tables 命令创建）"""
+    pass
+
+
 def cmd_init_tables(args):
     """创建所有业务表"""
     try:

@@ -2,7 +2,7 @@
 name: followup-tracking
 description: 跟进记录管理与质量评估，支持创建跟进记录、待跟进提醒、AI外呼记录、跟进质量评估
 version: 1.0.0
-init_script: scripts/followup_manager.py
+init_script: followup_manager.py
 metadata:
   trigger_keywords:
     - 跟进记录
