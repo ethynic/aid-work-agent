@@ -51,12 +51,20 @@ class SessionMessageQueue:
 
     # TTL 常量
     LOCK_TTL = 120          # 会话锁 2 分钟，防死锁
-    CANCEL_TTL = 10          # 取消标志 10 秒
+    # 取消标志 TTL 必须覆盖 processor 最长执行时间（含工具链如生成 Word/PPT/PDF）。
+    # 历史问题：TTL=10s 时，processor 跑报价+生成文档耗时 >1 分钟，cancel 标志提前过期，
+    # _handle_cancel_and_reprocess 入口 is_cancelled 返回 False 直接退出 →
+    # 重处理分支不触发，追加合并的消息被永久丢弃。
+    # 现 TTL 与 LOCK_TTL 对齐为 120s，并由 watchdog 在持锁期间持续续期，
+    # 仅作为进程崩溃兜底；正常情况下由 release_lock 显式清除。
+    CANCEL_TTL = 120
     MERGE_TTL = 120          # 合并缓冲区 2 分钟，必须覆盖 processor 整个执行时长
     PENDING_TTL = 30         # 排队消息 30 秒
     RESPONDING_TTL = 10      # 推送标记 10 秒
     MERGE_WINDOW = 2         # 合并窗口 2 秒
     PROCESSING_WAIT_TIMEOUT = 120  # 等待旧请求完成最大 120 秒
+    # watchdog 续期间隔（秒）。小于 LOCK_TTL/CANCEL_TTL/MERGE_TTL 的一半，确保 TTL 不会过期。
+    KEEPALIVE_INTERVAL = 30
 
     def __init__(self):
         # 内存中的活跃会话 cancel_check 注册表（同进程内即时取消）
@@ -471,6 +479,12 @@ class SessionMessageQueue:
 
         if lock_value is not None:
             # === 空闲态，首次请求 ===
+            # 启动 watchdog，持锁期间续期 lock/cancel/merge 的 TTL，
+            # 避免长耗时 processor（生成 Word/PPT/PDF 等）导致 cancel/merge 标志提前过期，
+            # 进而触发「追加消息被丢弃」的 bug。
+            watchdog_task = asyncio.create_task(
+                self._keep_alive_loop(session_id, lock_value)
+            )
             # 设置合并缓冲区
             self.set_merge(session_id, user_input, attachments_meta)
             # 等待合并窗口，期间可能有追加消息
@@ -528,6 +542,14 @@ class SessionMessageQueue:
                         merged_attachments_meta=final_meta,
                     )
             finally:
+                # 停止 watchdog：必须在 release_lock 之前 cancel，
+                # 否则 watchdog 可能在锁被释放并被他人 acquire 后继续误续期。
+                if not watchdog_task.done():
+                    watchdog_task.cancel()
+                    try:
+                        await watchdog_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
                 # 1. 检查是否有取消 + 合并输入需要重新处理（仅在 processor 未异常时）
                 if error_result is None:
                     try:
@@ -713,6 +735,59 @@ class SessionMessageQueue:
                 # 等待旧请求完成
                 await self._wait_for_processing_end(session_id)
                 return EnqueueResult(status="merged")
+
+    async def _keep_alive_loop(self, session_id: str, lock_value: str) -> None:
+        """持锁期间续期 lock/cancel/merge 的 TTL，避免长耗时 processor 导致标志过期。
+
+        背景：processor 可能因工具链（生成 Word/PPT/PDF、跑报价）耗时数分钟，
+        若期间 cancel/merge 标志 TTL 过期，会导致：
+        - cancel 过期 → _handle_cancel_and_reprocess 入口直接返回 None，追加消息被丢弃
+        - merge 过期 → append_merge 新建缓冲区，丢历史合并内容
+        - lock 过期 → 其它 worker 抢锁成功，并发处理同一会话
+
+        解决：持锁 worker 启动本协程，每 KEEPALIVE_INTERVAL 秒续期三个 key 的 TTL。
+        正常退出路径（release_lock）会先 cancel 本协程，故不会误续期他人持有的锁；
+        worker 崩溃时本协程随之终止，TTL 兜底自然过期。
+
+        续期失败（如 Redis 抖动）仅记录告警，不中断循环——后续轮次会重试。
+        """
+        while True:
+            try:
+                await asyncio.sleep(self.KEEPALIVE_INTERVAL)
+                # 校验锁仍属于本 worker：lock_value 匹配才续期，防止误续期
+                # （极端场景：watchdog 未及时 cancel，锁已被 release 并被他人 acquire）
+                lock_key = self._key("session_lock", session_id)
+                # redis_client.get 会 json.loads，对纯字符串 lock_value 会失败返回 None，
+                # 故用底层 raw 读取做校验更稳。降级到只检查存在性。
+                lock_alive = redis_client.exists(lock_key)
+                if not lock_alive:
+                    tlog(
+                        "语音合并",
+                        "[watchdog] 锁已不存在，停止续期 session={sid}",
+                        sid=session_id[:20],
+                        level="WARNING",
+                    )
+                    return
+                # 续期 lock/cancel/merge 三个 key；cancel/merge 可能已被清（正常），
+                # expire 对不存在的 key 是 no-op，不会重建
+                redis_client.expire(lock_key, self.LOCK_TTL)
+                redis_client.expire(
+                    self._key("session_cancel", session_id), self.CANCEL_TTL
+                )
+                redis_client.expire(
+                    self._key("session_merge", session_id), self.MERGE_TTL
+                )
+            except asyncio.CancelledError:
+                # 正常退出路径（release_lock 前 cancel watchdog）
+                raise
+            except Exception as e:
+                tlog(
+                    "语音合并",
+                    "[watchdog] 续期异常 session={sid}, err={err}",
+                    sid=session_id[:20],
+                    err=str(e),
+                    level="ERROR",
+                )
 
     async def _wait_merge_window(self, session_id: str) -> None:
         """等待合并窗口，期间持续检查取消"""
