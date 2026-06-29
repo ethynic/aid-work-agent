@@ -4,6 +4,7 @@
 """
 
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, Optional, Any
@@ -38,6 +39,9 @@ LOGS_DB_POOL_MAX = int(os.getenv("LOGS_DB_POOL_MAX", "3"))
 # 模块级连接池
 _pg_connection_pool = None
 _logs_connection_pool = None
+
+# 连接池后台健康检查线程
+_pool_health_check_thread = None
 
 # 数据库类型（默认 PostgreSQL）
 DB_TYPE = "postgresql"
@@ -109,6 +113,43 @@ def init_postgres_pool(minconn: int = None, maxconn: int = None):
         application_name="aid-work-agent"
     )
     logger.info(f"PostgreSQL 连接池初始化完成: min={minconn}, max={maxconn}")
+
+    # 启动后台健康检查线程：定期校验池中空闲连接，主动丢弃失效连接
+    # 必要性：容器经 Docker NAT 访问外部 PG，中间网络层会在 ~30s 空闲后回收 TCP 状态，
+    # 而 psycopg2 的 keepalives 参数在当前环境未生效（OS 默认 7200s）。
+    # 后台线程每 POOL_HEALTH_CHECK_INTERVAL 秒对池内连接做 SELECT 1，保证业务侧
+    # get_pooled_connection 取到的连接总是刚校验过的，避免 "server closed the connection
+    # unexpectedly" 警告。
+    _start_pool_health_check_thread()
+
+
+def _start_pool_health_check_thread():
+    """启动连接池后台健康检查守护线程"""
+    global _pool_health_check_thread
+
+    # 避免重复启动
+    if _pool_health_check_thread is not None and _pool_health_check_thread.is_alive():
+        return
+
+    interval = int(os.getenv("POOL_HEALTH_CHECK_INTERVAL", "120")) # 2分钟，需要显著小于 POSTGRES_IDLE_SESSION_TIMEOUT
+
+    def _loop():
+        while True:
+            try:
+                time.sleep(interval)
+                if _pg_connection_pool is not None:
+                    health_check_pool()
+            except Exception as e:
+                # 线程内异常不能让线程退出，记日志后继续
+                logger.warning(f"PostgreSQL 连接池健康检查线程异常（已忽略，继续运行）: {e}")
+                time.sleep(interval)
+
+    import threading
+    _pool_health_check_thread = threading.Thread(
+        target=_loop, name="pg-pool-health-check", daemon=True
+    )
+    _pool_health_check_thread.start()
+    logger.info(f"PostgreSQL 连接池健康检查线程已启动，检查间隔: {interval}s")
 
 
 def get_postgres_pool():
@@ -307,6 +348,30 @@ def get_logs_connection() -> Generator[Any, None, None]:
         _logs_connection_pool.putconn(conn)
 
 
+def _replenish_pool_to_min():
+    """补充连接池到 minconn 水位（健康检查清理坏连接后调用）
+
+    ThreadedConnectionPool 不会主动维持 minconn，清理坏连接后需要手动补齐，
+    否则池水位会逐渐下降。在锁内创建连接以避免与 getconn 竞争。
+    """
+    if _pg_connection_pool is None:
+        return
+    try:
+        with _pg_connection_pool._lock:
+            needed = _pg_connection_pool.minconn - len(_pg_connection_pool._pool) - len(_pg_connection_pool._used)
+        # 在锁外创建连接（connect 可能阻塞），逐个补齐
+        for _ in range(max(0, needed)):
+            try:
+                new_conn = _pg_connection_pool._connect()
+                with _pg_connection_pool._lock:
+                    _pg_connection_pool._pool.append(new_conn)
+            except Exception as e:
+                logger.warning(f"PostgreSQL 补充连接池失败: {e}")
+                break
+    except Exception as e:
+        logger.warning(f"PostgreSQL 补充连接池异常: {e}")
+
+
 def health_check_pool() -> dict:
     """连接池健康检查：检测并清理坏连接
 
@@ -320,14 +385,25 @@ def health_check_pool() -> dict:
     bad = 0
     bad_details = []
 
-    # 检查池中所有可用连接
-    if hasattr(_pg_connection_pool, '_pool'):
-        connections_to_check = list(_pg_connection_pool._pool)
+    # 检查池中所有可用（空闲）连接
+    # 注意：直接操作 _pool 内部列表。坏连接不能用 putconn(conn, close=True) 回收，
+    # 因为 putconn 期望 conn 来自 _used，对 _pool 中的连接会抛 PoolError。
+    # 这里直接从 _pool 移除并 close，避免坏连接残留导致下次重复失败。
+    if hasattr(_pg_connection_pool, '_pool') and _pg_connection_pool._pool is not None:
+        with _pg_connection_pool._lock:
+            connections_to_check = list(_pg_connection_pool._pool)
         for conn in connections_to_check:
             try:
                 if conn.closed:
                     bad += 1
                     bad_details.append("连接已关闭")
+                    with _pg_connection_pool._lock:
+                        if conn in _pg_connection_pool._pool:
+                            _pg_connection_pool._pool.remove(conn)
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
                     continue
                 cursor = conn.cursor()
                 cursor.execute("SELECT 1")
@@ -337,10 +413,16 @@ def health_check_pool() -> dict:
             except Exception as e:
                 bad += 1
                 bad_details.append(str(e)[:100])
+                # 从池中移除坏连接并关闭
+                with _pg_connection_pool._lock:
+                    if conn in _pg_connection_pool._pool:
+                        _pg_connection_pool._pool.remove(conn)
                 try:
-                    _pg_connection_pool.putconn(conn, close=True)
+                    conn.close()
                 except Exception:
                     pass
+                # 低于 minconn 时，让池自动补充新连接
+                _replenish_pool_to_min()
 
     result = {
         "initialized": True,

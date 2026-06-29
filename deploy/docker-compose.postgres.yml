@@ -42,7 +42,7 @@ services:
       POSTGRES_RANDOM_PAGE_COST: 1.1
       # 连接超时防护
       POSTGRES_IDLE_IN_TRANSACTION_SESSION_TIMEOUT: 60000
-      POSTGRES_IDLE_SESSION_TIMEOUT: 300000
+      POSTGRES_IDLE_SESSION_TIMEOUT: 600000
       # 日志配置
       POSTGRES_LOG_MIN_DURATION_STATEMENT: 1000
       POSTGRES_LOG_CHECKPOINTS: "on"
@@ -94,7 +94,7 @@ services:
       - "-c"
       - "idle_in_transaction_session_timeout=60000"
       - "-c"
-      - "idle_session_timeout=300000"
+      - "idle_session_timeout=600000"
       - "-c"
       - "tcp_keepalives_idle=60"
       - "-c"
