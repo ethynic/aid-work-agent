@@ -126,7 +126,7 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
 
         price_table = retriever.get_price_table(doc_id)
         check_in_iso = running_dt.strftime('%Y-%m-%d') if running_dt else None
-        price = _parse_team_price(
+        selected = _parse_team_price(
             price_table,
             check_in_iso,
             total_people=total_people,
@@ -134,6 +134,9 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
             teacher_count=teacher_count,
             room_type=room_type or None,
         )
+        price = selected["price"]
+        breakfast = selected.get("breakfast", "")
+        selected_room_type = selected.get("room_type", "")
 
         if price == 0:
             # 指定了房型但价格表没匹配到 → 报错，避免静默回退到标准间
@@ -185,12 +188,15 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
         if remaining_students > 0 and remaining_students % 2 == 1:
             single_supplement += round(price * nights / total_people, 2)
 
-        # 名称与备注带上房型（如有），让报价单能看出订的是哪种房
-        display_name = hotel_name
-        remark_parts = [f"{city}{nights}晚", f"{rooms_per_n}间×{nights}晚"]
-        if room_type:
-            display_name = f"{hotel_name}（{room_type}）"
-            remark_parts.append(f"房型={room_type}")
+        # 名称与备注带上房型：价格基于哪个房型，备注就必须明确写出哪个房型
+        # （价格-房型配对原则，让客户能核对报价单）
+        # 房型来源优先级：客户/overrides 显式指定 > LLM 选中行的房型（价格表里的房型名）
+        # 两者都为空（价格表行数据不规范）时兜底"标准间"，避免报价单出现"裸价格"
+        display_room_type = room_type or selected_room_type or "标准间"
+        display_name = f"{hotel_name}（{display_room_type}）"
+        remark_parts = [f"{city}{nights}晚", f"{rooms_per_n}间×{nights}晚", f"房型={display_room_type}"]
+        if breakfast:
+            remark_parts.append(breakfast)
         if couples > 0:
             remark_parts.append(f"含{couples}对夫妻大床房")
 
@@ -228,13 +234,16 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         return items, 0
 
     nights = trip_days - 1
-    default_price = _parse_team_price(
+    selected = _parse_team_price(
         price_table,
         start_date,
         total_people=total_people,
         couples=couples,
         teacher_count=teacher_count,
     )
+    default_price = selected["price"]
+    breakfast = selected.get("breakfast", "")
+    selected_room_type = selected.get("room_type", "")
 
     if default_price == 0:
         logger.warning(f"[travel-quote] 酒店 doc_id={doc_id} 价格表无有效价格")
@@ -256,9 +265,20 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
     if remaining > 0 and remaining % 2 == 1:
         single_supplement = round(default_price * nights / total_people, 2)
 
+    # 名称与备注：透传 LLM 选中行的房型 + 含早（本路径无 room_type 入参，被动透传）
+    # 价格基于哪个房型，备注就必须明确写出哪个房型（价格-房型配对原则）
+    # selected_room_type 为空（价格表数据不规范）时兜底"标准间"
+    display_room_type = selected_room_type or "标准间"
+    display_name = f"酒店住宿（{display_room_type}）"
+    remark_parts = [f"两人一间，{rooms_per_n}间×{nights}晚", f"房型={display_room_type}"]
+    if breakfast:
+        remark_parts.append(breakfast)
+    if couples > 0:
+        remark_parts.append(f"含{couples}对夫妻大床房")
+
     items.append({
         "category": "住宿",
-        "name": "酒店住宿",
+        "name": display_name,
         "unit_price": default_price,
         "quantity": rooms_per_n,
         "unit": "间",
@@ -266,28 +286,37 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
         "freq_unit": "晚",
         "subtotal": subtotal,
         "teacher_subtotal": teacher_cost,
-        "remark": f"两人一间，{rooms_per_n}间×{nights}晚" + (f"，含{couples}对夫妻大床房" if couples > 0 else ""),
+        "remark": "，".join(remark_parts),
     })
 
     return items, single_supplement
 
 
-def _extract_first_team_price(price_table: str, room_type: Optional[str] = None) -> float:
-    """兜底解析：提取价格表里第一条可解析的团队价（团客价列；缺失时回退散客价）。
+def _extract_first_team_price(price_table: str, room_type: Optional[str] = None) -> Dict:
+    """兜底解析：返回价格表里第一条可解析的团队价行信息。
+
+    返回 dict：{"price": float, "breakfast": str, "room_type": str}
+    无任何行时返回 {"price": 0, "breakfast": "", "room_type": ""}。
 
     新版六列格式下，_parse_hotel_price_rows 已保证每行 team_price 在回退后 > 0，
     故此处直接取第一行的 price（即 team_price）。用于无入住日期或 LLM 选价失败时回退。
-    传入 room_type 时，只在该房型对应的行里挑；房型一行都没有时返回 0。
+    传入 room_type 时，只在该房型对应的行里挑；房型一行都没有时返回 price=0 的零值 dict。
     """
+    zero = {"price": 0, "breakfast": "", "room_type": ""}
     if not price_table:
-        return 0
+        return zero
     rows = _parse_hotel_price_rows(price_table)
     if room_type:
         rows = _filter_rows_by_room_type(rows, room_type)
     if not rows:
-        return 0
+        return zero
     team_rows = [r for r in rows if r.get('is_team')] or rows
-    return team_rows[0]['price']
+    row = team_rows[0]
+    return {
+        "price": row['price'],
+        "breakfast": row.get('breakfast', ''),
+        "room_type": row.get('room_type', ''),
+    }
 
 
 def _filter_rows_by_room_type(rows: List[Dict], room_type: str) -> List[Dict]:
@@ -409,18 +438,24 @@ def _select_team_price_by_llm(price_table: str, check_in_date: str,
                               total_people: Optional[int] = None,
                               couples: Optional[int] = None,
                               teacher_count: Optional[int] = None,
-                              room_type: Optional[str] = None) -> float:
-    """用短 prompt + 关闭推理从价格表候选行中选择团队价。
+                              room_type: Optional[str] = None) -> Dict:
+    """用短 prompt + 关闭推理从价格表候选行中选择团队价行。
+
+    返回 dict：{"price": float, "breakfast": str, "room_type": str}
+    房型无任何匹配行时返回 {"price": 0, "breakfast": "", "room_type": ""}，
+    让上游报错（避免静默回退到非客户指定房型）。
 
     新版六列格式：房型 | 散客价 | 团客价 | 含早 | 适用日期 | 备注
     候选行展示"团客价"列（业务对外报价走团队价口径）；团客价列缺失时由
     _parse_hotel_price_rows 已回退到散客价。
 
-    传入 room_type 时，候选行会先按房型模糊过滤；房型无任何匹配行时返回 0，
-    让上游报错（避免静默回退到非客户指定房型）。
+    LLM 输出"选中行的序号"（候选已带 1..N 编号），函数据此直接拿到完整 row，
+    避免让 LLM 抄写价格数字，同时顺带取到 breakfast / room_type 写入 remark。
+    兼容 LLM 偶尔仍输出价格的情况：序号越界时按价格反查首条。
     """
     from llm_client import call_llm
 
+    zero = {"price": 0, "breakfast": "", "room_type": ""}
     rows = _parse_hotel_price_rows(price_table)
     if room_type:
         rows = _filter_rows_by_room_type(rows, room_type)
@@ -428,7 +463,7 @@ def _select_team_price_by_llm(price_table: str, check_in_date: str,
             logger.warning(
                 f"[travel-quote] 房型 '{room_type}' 在价格表中未匹配到任何行"
             )
-            return 0
+            return zero
     team_rows = [row for row in rows if row.get("is_team")] or rows
     candidates = "\n".join(
         f"{idx}. 房型={row['room_type']} | 团客价={row['team_price']:.0f} | 含早={row.get('breakfast', '')} | 日期={row.get('date_text', '')} | 备注={row.get('remark', '')}"
@@ -437,15 +472,21 @@ def _select_team_price_by_llm(price_table: str, check_in_date: str,
     if not candidates:
         candidates = price_table
 
-    prompt = f"""任务：为酒店住宿从候选价格中选择正确团队价，只输出数字。
+    prompt = f"""任务：为酒店住宿从候选价格行中选出适用于入住日期的团队价行，只输出该行的"序号"（数字）。
 入住日期：{_format_check_in_context(check_in_date)}
 团队构成：{_format_team_context(total_people, couples, teacher_count)}
+**重要**：你选中的这一行的"房型"会原样展示在给客户的报价单备注里，客户据此核对"价格↔房型"是否匹配。所以选哪一行，就等于告诉客户订的是哪种房。
+
 选择规则：
-1. 候选已按房型过滤，团客价列即对外团队价，直接从中选一条。
-2. 根据入住日期匹配适用日期，节假日专用价格优先于普通日期区间。
-3. 团队构成只用于判断客户类型，不要按人数重新计算房费。
-4. 如果没有日期覆盖，选择候选中第一条。
-5. 只输出一个数字（团客价），不要单位、解释或标点。
+1. 候选已按房型过滤，每行已带 1..N 序号，团客价列即对外团队价。
+2. 根据入住日期匹配"适用日期"列，节假日专用价格优先于普通日期区间。
+3. **房型必须与团队构成匹配**（价格-房型配对原则）：
+   - 团队构成是"学生/老师"为主时，默认选"标准间/双床房/双人间"等标准房型
+   - 团队构成含夫妻（couples>0）且客户未指定房型时，仍选标准间（夫妻房由备注另行说明，不在这里改房型）
+   - 不要因为某房型更贵就选它，也不要因为更便宜就回避；按"标准入住"语义选最常见的房型
+4. 团队构成只用于判断客户类型，不要按人数重新计算房费。
+5. 如果没有日期覆盖且房型无明确倾向，选序号 1。
+6. 只输出一个数字（行序号），不要单位、解释或标点。
 
 候选：
 {candidates}
@@ -459,18 +500,36 @@ def _select_team_price_by_llm(price_table: str, check_in_date: str,
         task="hotel_price_select",
         extra_body={"thinking": {"type": "disabled"}},
     )
-    m = re.search(r'\d+(?:\.\d+)?', raw or '')
+    m = re.search(r'\d+', raw or '')
     if not m:
-        raise ValueError(f"LLM 输出无法解析为价格: {raw!r}")
-    return float(m.group(0))
+        raise ValueError(f"LLM 输出无法解析为行序号: {raw!r}")
+    num = int(m.group(0))
+    if 1 <= num <= len(team_rows):
+        row = team_rows[num - 1]
+    else:
+        # 兼容 LLM 仍输出价格的情况：按价格反查首条
+        match = next((r for r in team_rows if int(r['price']) == num), None)
+        if not match:
+            raise ValueError(
+                f"LLM 输出序号/价格越界: {num}, 候选数={len(team_rows)}"
+            )
+        row = match
+    return {
+        "price": row['price'],
+        "breakfast": row.get('breakfast', ''),
+        "room_type": row.get('room_type', ''),
+    }
 
 
 def _parse_team_price(price_table: str, check_in_date: Optional[str] = None,
                       total_people: Optional[int] = None,
                       couples: Optional[int] = None,
                       teacher_count: Optional[int] = None,
-                      room_type: Optional[str] = None) -> float:
-    """从知识库价格表文本中提取团队房价（团客价列；缺失时回退散客价）。
+                      room_type: Optional[str] = None) -> Dict:
+    """从知识库价格表文本中提取团队房价行信息。
+
+    返回 dict：{"price": float, "breakfast": str, "room_type": str}
+    price=0 表示价格表无该房型团队价（breakfast/room_type 为空）。
 
     新版六列格式（第一行为表头，会被解析器跳过）：
         房型 | 散客价 | 团客价 | 含早 | 适用日期 | 备注
@@ -480,17 +539,18 @@ def _parse_team_price(price_table: str, check_in_date: Optional[str] = None,
             LLM 根据入住日期和团队构成选择团队价。为 None（如 update_hotel 的
             "是否有价"校验）或 LLM 调用失败时，回退到首条团队价。
         room_type: 客户指定的房型（如"大床房"、"亲子房"）。传入时候选行先按房型
-            模糊包含过滤，过滤后无任何行时返回 0（让上游报错，避免静默回退到
+            模糊包含过滤，过滤后无任何行时返回 price=0（让上游报错，避免静默回退到
             非客户指定的房型）。不传时行为完全不变。
     """
+    zero = {"price": 0, "breakfast": "", "room_type": ""}
     if not price_table:
-        return 0
+        return zero
     fallback = _extract_first_team_price(price_table, room_type=room_type)
     if not check_in_date:
         return fallback
 
     try:
-        price = _select_team_price_by_llm(
+        result = _select_team_price_by_llm(
             price_table,
             check_in_date,
             total_people=total_people,
@@ -498,9 +558,9 @@ def _parse_team_price(price_table: str, check_in_date: Optional[str] = None,
             teacher_count=teacher_count,
             room_type=room_type,
         )
-        if price > 0:
-            return price
-        logger.warning(f"[travel-quote] LLM 返回非正价格 {price}，回退首条团队价")
+        if result["price"] > 0:
+            return result
+        logger.warning(f"[travel-quote] LLM 返回非正价格 {result['price']}，回退首条团队价")
     except Exception as e:
         logger.warning(
             f"[travel-quote] 入住日期 {check_in_date} LLM 选价失败，回退首条团队价: {e}"
@@ -587,7 +647,7 @@ def resolve_hotel_overrides(tenant_id: str, hotel_stays: list, overrides: list) 
         price_table = retriever.get_price_table(doc_id)
         if not price_table:
             raise ValueError(f"酒店 '{hotel_name}' (doc_id={doc_id}) 在知识库中查不到价格表")
-        if _parse_team_price(price_table) == 0:
+        if _parse_team_price(price_table)["price"] == 0:
             raise ValueError(f"酒店 '{hotel_name}' (doc_id={doc_id}) 价格表无有效团队价格")
 
         # 房型校验：客户指定了房型但价格表里没有该房型的任何行 → 立即报错

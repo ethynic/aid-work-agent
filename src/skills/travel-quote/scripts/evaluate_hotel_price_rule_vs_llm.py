@@ -52,7 +52,7 @@ def evaluate(tenant_id: str, dates: List[str], limit: int) -> Dict:
             legacy_price = None
             legacy_error = ""
             try:
-                optimized_price = _select_team_price_by_llm(price_table, check_in_date)
+                optimized_price = _select_team_price_by_llm(price_table, check_in_date)["price"]
             except Exception as exc:
                 optimized_error = str(exc)
             try:

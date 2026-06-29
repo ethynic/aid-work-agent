@@ -45,6 +45,7 @@
 | 9b | 聊天附件数据分析 | 🔧 部分完成 | 聊天中发送 Excel/CSV 附件自动注册到知识库并分析。共享 schema_saver 服务 + upload_data_file 工具。2026-06-09 | [设计](system/digital-employee/chat-attachment-data-analysis-design.md) | — |
 | 17 | CRM 智能体 | 📋 待开发 | 客户关系管理，客户数据整合与智能跟进建议 | [设计](subagent/crm/crm_subagent_design.md) | — |
 | 18 | 业务页面元数据注册表 | 📋 待开发 | 页面元数据注册表 + AI 智能推荐，替代子智能体配置中的手动路由输入。2026-06-10 | [设计](system/digital-employee/page-metadata-registry-design.md) | [开发计划](system/digital-employee/page-metadata-registry-dev-plan.md) |
+| 20 | 社媒内容运营智能体与聚合平台 | 📋 待开发 | 面向租户的可扩展社媒运营闭环：周计划、合规素材、内容母版、AI 平台适配、人工审核、立即/定时/辅助发布和运营数据聚合。采用平台无关领域服务 + 可插拔连接器，后续接入微博、小红书、抖音、快手、今日头条、X、Instagram 时复用计划、审核、调度、审计和数据模型，只独立实现平台内容规格、授权、上传发布、状态和指标映射。首期完成微信公众号官方 API 闭环与微信视频号辅助发布闭环。调研、系统设计和开发计划已完成，尚未开始编码。2026-06-29 | [调研](research/social-media-operations-agent-platform-research.md) / [设计](system/digital-employee/social-media-operations-agent-design.md) | [开发计划](system/digital-employee/social-media-operations-agent-dev-plan.md) |
 
 ## 工具
 
@@ -57,6 +58,7 @@
 | 24 | 景点知识库搜索工具（attraction_search） | ✅ 已完成 | 旅游顾问子智能体的景点专项搜索工具，纯向量检索 source_type='attraction_resource'。补登记（此前漏登）。2026-05-14 | [设计](subagent/travel-consultant/attraction_search_tool_design.md) | — |
 | 25 | 旅游报价价格解析性能优化 | 🔧 部分完成 | 酒店、景点门票/项目、行程解析均已改为 DeepSeek V4 Pro 关闭推理；酒店用候选压缩短 prompt，景点保留 LLM 主路径并新增团队票优先后处理，行程解析补充无项目景点/活动名原样保留自检。规则优先仍待后续评估。2026-06-22 | [设计](system/design-travel-quote-price-parser-performance.md) | — |
 | 27 | 酒店价格表六列格式升级 + 房型合并解析 | 🔧 部分完成 | hotel_excel_parser 由五列（房型\|客户类型\|价格\|含早\|适用日期）升级为六列（房型\|散客价\|团客价\|含早\|适用日期\|备注），第一行强制表头；房型列合并床型/面积/景观等属性便于房型匹配；只解析对外价格、丢弃内部结算价、单价格自动复制到散客/团客两列；hotel.py 的 _parse_hotel_price_rows/_select_team_price_by_llm/_extract_first_team_price 同步适配新结构，对外报价走团客价口径。2026-06-23 | [设计](subagent/travel-consultant/hotel_excel_to_kb_design.md) | — |
+| 28 | 酒店报价房型自动解析 + 含早写入备注 | 🔧 部分完成 | ① itinerary_parser 从行程文本提取房型写入 hotel_stays[].room_type（默认 ""，hotel_overrides.room_type 优先级更高）；② _select_team_price_by_llm 改为让 LLM 输出"行序号"，函数据此返回 {price, breakfast, room_type} dict，含早/选中房型信息不再丢失；③ prompt 强化"价格-房型配对"原则：明确告诉 LLM 选中的房型会原样展示给客户，必须与团队构成匹配（学生/老师团默认标准间，不因价格高低改选）；④ calculate_hotel_stays/_calculate_hotel_cost_from_kb 的 remark 强制写入"房型=XX"（即使客户未指定房型，也用 LLM 选中行的房型；价格表行房型为空时兜底"标准间"）+ 含早原文（如"含双早"），杜绝"裸价格"；⑤ 新增 evaluate_hotel_breakfast_roomtype_stability.py 跑房型+含早 3 轮稳定性测试，旧评估脚本同步兼容 dict 返回值。代码改动完成，3 轮稳定性测试待在能连 DB 的环境运行。2026-06-29 | — | — |
 
 ## 渠道集成
 
@@ -100,3 +102,4 @@
 | HTML 转 PPTX 技术调研 | [html-to-pptx-conversion-research.md](research/html-to-pptx-conversion-research.md) | PPT 技能 PPTX 导出 |
 | 企业微信个人账号 RPA 生产级客户端技术方案调研 | [wecom-personal-rpa-client-implementation-research.md](research/wecom-personal-rpa-client-implementation-research.md) | 企业微信个人账号 RPA 接入 |
 | 会话内上下文压缩业界方案调研 | [context_compression_research.md](research/context_compression_research.md) | 会话内上下文压缩（中期记忆） |
+| 社媒内容运营智能体与聚合平台可行性调研 | [social-media-operations-agent-platform-research.md](research/social-media-operations-agent-platform-research.md) | 社媒内容运营智能体与聚合平台 |

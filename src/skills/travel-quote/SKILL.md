@@ -63,7 +63,7 @@ skill_execute(
 |------|------|------|------|
 | `city` | string | 是 | 要指定酒店的城市名（必须能在 LLM 解析出的 `hotel_stays` 中找到，不带"县/市"后缀） |
 | `hotel_name` | string | 是 | 酒店的**完整名称**。来源二选一：① 来自 `knowledge_base_search` 返回的"酒店名称：XXX"字段；② 来自 `itinerary_text` 中明文写出的酒店名（行程里怎么写就取全名，不要自行补"酒店"后缀也不要省略）。脚本内部按名称反查 doc_id |
-| `room_type` | string | 否 | 客户指定的房型（如"大床房"、"亲子房"、"套房"）。**只要 `itinerary_text` 或客户明确提到了具体房型，就必须传**。脚本按模糊匹配在价格表中找对应房型的团队价：匹配不到时**直接报错**（不会静默回退到标准间），报错信息会列出该酒店实际可用的房型，请改用列表中的房型重试 |
+| `room_type` | string | 否 | 客户指定的房型（如"大床房"、"亲子房"、"套房"）。**只要 `itinerary_text` 或客户明确提到了具体房型，就必须传**（注：`itinerary_parser` 在解析阶段也会自动从行程文本提取房型写入 `hotel_stays[].room_type`；本字段优先级更高，传入时会覆写自动解析值）。脚本按模糊匹配在价格表中找对应房型的团队价：匹配不到时**直接报错**（不会静默回退到标准间），报错信息会列出该酒店实际可用的房型，请改用列表中的房型重试 |
 
 ### 何时使用 `hotel_overrides`（重要）
 
@@ -215,7 +215,7 @@ itinerary_text（行程文本）
 | 字段 | 用途 |
 |------|------|
 | `items` | 原始计费结构（英文 key），`update_hotel.py` 直接复用 |
-| `hotel_stays` | 酒店住宿清单（city / area / nights / hotel_doc_id），按城市定位要换的酒店 |
+| `hotel_stays` | 酒店住宿清单（city / area / nights / hotel_doc_id / room_type），按城市定位要换的酒店；room_type 为行程中提到的房型（空字符串表示未指定，按标准间计价） |
 | `couples` | 夫妻对数，影响单房差计算 |
 | `season_type` | 季节类型，保留供参考 |
 | `region_name` | 区域名称，保留供参考 |
