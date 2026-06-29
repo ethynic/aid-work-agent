@@ -24,6 +24,64 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
+class TestGenerateHotelOverrideLocationFallback:
+    """首次生成报价时，不再对 Agent 已确认的酒店做严格城市审查。"""
+
+    def test_unmatched_scenic_area_applies_to_remaining_stay(self, monkeypatch):
+        """西江与雷山口径不同不应阻断报价，且贵阳仍应精确匹配。"""
+        import hotel
+        import hotel_retriever
+
+        class FakeRetriever:
+            def search_by_name(self, tenant_id, name_query, top_k=10):
+                return [{
+                    "doc_id": 101 if name_query.startswith("西江") else 202,
+                    "title": name_query,
+                    "info": f"酒店名称：{name_query}",
+                }]
+
+            def get_price_table(self, doc_id):
+                return "| 房型 | 团队价 |\n|---|---|\n| 标准间 | 400 |\n"
+
+        monkeypatch.setattr(hotel_retriever, "HotelRetriever", FakeRetriever)
+        stays = [
+            {"city": "雷山", "nights": 2, "hotel_doc_id": 1},
+            {"city": "贵阳", "nights": 1, "hotel_doc_id": 2},
+        ]
+
+        names = hotel.resolve_hotel_overrides(
+            "tenant-1",
+            stays,
+            [
+                {"city": "西江", "hotel_name": "西江千户苗寨大院"},
+                {"city": "贵阳", "hotel_name": "艺龙酒店(贵阳喷水池店)"},
+            ],
+            allow_city_fallback=True,
+        )
+
+        assert stays[0]["hotel_doc_id"] == 101
+        assert stays[1]["hotel_doc_id"] == 202
+        assert names == {
+            "雷山": "西江千户苗寨大院",
+            "贵阳": "艺龙酒店(贵阳喷水池店)",
+        }
+
+    def test_more_overrides_than_stays_raises_structural_error(self):
+        """放宽地理审查不等于静默丢弃无法落到住宿行的酒店。"""
+        import hotel
+
+        with pytest.raises(ValueError, match="指定酒店数量超过可覆盖的住宿项数量"):
+            hotel.resolve_hotel_overrides(
+                "tenant-1",
+                [{"city": "雷山", "nights": 2}],
+                [
+                    {"city": "西江", "hotel_name": "酒店A"},
+                    {"city": "贵阳", "hotel_name": "酒店B"},
+                ],
+                allow_city_fallback=True,
+            )
+
+
 @pytest.fixture
 def base_internal_data():
     """模拟 generate.py 返回的 internal_data：3 城市住宿 + 其他类别"""
@@ -77,6 +135,7 @@ def base_internal_data():
 def patched_modules(monkeypatch):
     """mock 掉 update_hotel 的外部依赖"""
     import update_hotel
+    import hotel_retriever
 
     # 不真正初始化数据库表
     monkeypatch.setattr(update_hotel, 'init_tables', lambda: None)
@@ -107,7 +166,7 @@ def patched_modules(monkeypatch):
         def get_hotel_info(self, doc_id):
             return "酒店名称：新酒店\n"
 
-    monkeypatch.setattr(update_hotel, 'HotelRetriever', FakeRetriever)
+    monkeypatch.setattr(hotel_retriever, 'HotelRetriever', FakeRetriever)
 
     # mock calculate_hotel_stays：按 hotel_stays 顺序返回新的住宿行
     def fake_calc(items, tenant_id, hotel_stays, total_people, teacher_count, couples,
@@ -267,7 +326,8 @@ class TestUpdateHotelValidation:
             def get_price_table(self, doc_id):
                 return "| 房型 | 团队价 |\n|---|---|\n| 标准间 | 400 |\n"
 
-        monkeypatch.setattr(update_hotel, 'HotelRetriever', FakeRetriever)
+        import hotel_retriever
+        monkeypatch.setattr(hotel_retriever, 'HotelRetriever', FakeRetriever)
         monkeypatch.setattr(update_hotel, 'export_with_template',
                             lambda data, tpl: "/tmp/x.xlsx")
 
@@ -294,7 +354,8 @@ class TestUpdateHotelValidation:
 
             def get_price_table(self, doc_id):
                 return None  # 查不到
-        monkeypatch.setattr(update_hotel, 'HotelRetriever', FakeRetriever)
+        import hotel_retriever
+        monkeypatch.setattr(hotel_retriever, 'HotelRetriever', FakeRetriever)
 
         with pytest.raises(ValueError, match="查不到价格表"):
             update_hotel.update_hotel({
@@ -314,7 +375,8 @@ class TestUpdateHotelValidation:
 
             def get_price_table(self, doc_id):
                 return "| 房型 | 团队价 |\n|---|---|\n| 标准间 | N/A |\n"  # 无法解析
-        monkeypatch.setattr(update_hotel, 'HotelRetriever', FakeRetriever)
+        import hotel_retriever
+        monkeypatch.setattr(hotel_retriever, 'HotelRetriever', FakeRetriever)
 
         with pytest.raises(ValueError, match="无有效团队价格"):
             update_hotel.update_hotel({

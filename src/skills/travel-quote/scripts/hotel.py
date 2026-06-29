@@ -580,7 +580,12 @@ def _parse_hotel_name(info_text: str) -> str:
     return ''
 
 
-def resolve_hotel_overrides(tenant_id: str, hotel_stays: list, overrides: list) -> dict:
+def resolve_hotel_overrides(
+    tenant_id: str,
+    hotel_stays: list,
+    overrides: list,
+    allow_city_fallback: bool = False,
+) -> dict:
     """按酒店名反查 doc_id 并覆写到 hotel_stays 对应城市；同时透传客户指定的房型。
 
     用于客户明确指定酒店的场景（generate.py 的 hotel_overrides 参数、update_hotel.py 的换酒店流程）。
@@ -591,21 +596,28 @@ def resolve_hotel_overrides(tenant_id: str, hotel_stays: list, overrides: list) 
         hotel_stays: LLM 解析出的住宿清单，元素需有 city 字段
         overrides: [{city, hotel_name, room_type?}]，客户指定的酒店；
                    room_type 可选，传入时要求价格表必须有该房型的团队价，否则报错
+        allow_city_fallback: city 未精确匹配时，是否按顺序覆盖尚未指定的住宿项。
+                             仅用于首次生成报价；已有报价换酒店仍应严格按 city 定位。
 
     Returns:
         name_overrides: {city: hotel_name}，传给 calculate_hotel_stays 的 name_overrides 参数
 
     Raises:
-        ValueError: city 未在 hotel_stays 中 / hotel_name 缺失 / 酒店名歧义 /
+        ValueError: 无法定位住宿项 / hotel_name 缺失 / 酒店名歧义 /
                     查不到 / 价格表无有效团队价 / 指定房型在该酒店价格表中不存在
     """
     from hotel_retriever import HotelRetriever
 
     stay_by_city = {s.get("city", ""): s for s in hotel_stays}
+    target_city_by_override = {}
+    claimed_cities = set()
 
-    for ov in overrides:
+    for index, ov in enumerate(overrides):
         city = ov.get('city', '')
-        if city not in stay_by_city:
+        if city in stay_by_city and city not in claimed_cities:
+            target_city_by_override[index] = city
+            claimed_cities.add(city)
+        elif not allow_city_fallback:
             raise ValueError(
                 f"未在城市住宿清单中找到 '{city}'，无法替换酒店。"
                 f"本次报价包含的城市：{list(stay_by_city.keys())}"
@@ -613,11 +625,33 @@ def resolve_hotel_overrides(tenant_id: str, hotel_stays: list, overrides: list) 
         if not ov.get('hotel_name'):
             raise ValueError(f"城市 '{city}' 的 hotel_overrides 缺少 hotel_name")
 
+    if allow_city_fallback:
+        remaining_cities = [
+            stay.get("city", "")
+            for stay in hotel_stays
+            if stay.get("city", "") not in claimed_cities
+        ]
+        unmatched_indexes = [
+            index for index in range(len(overrides))
+            if index not in target_city_by_override
+        ]
+        if len(unmatched_indexes) > len(remaining_cities):
+            raise ValueError(
+                f"指定酒店数量超过可覆盖的住宿项数量："
+                f"未定位 {len(unmatched_indexes)} 家，可用住宿项 {len(remaining_cities)} 个"
+            )
+        for index, target_city in zip(unmatched_indexes, remaining_cities):
+            target_city_by_override[index] = target_city
+            logger.info(
+                f"[travel-quote] 指定地点 '{overrides[index].get('city', '')}' "
+                f"未与住宿城市精确匹配，按行程顺序应用到 '{target_city}'"
+            )
+
     retriever = HotelRetriever()
     name_overrides = {}
 
-    for ov in overrides:
-        city = ov['city']
+    for index, ov in enumerate(overrides):
+        city = target_city_by_override[index]
         hotel_name = ov['hotel_name']
         room_type = (ov.get('room_type') or '').strip() or None
         matches = retriever.search_by_name(tenant_id, hotel_name, top_k=10)

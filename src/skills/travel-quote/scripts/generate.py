@@ -118,7 +118,12 @@ def generate_quote(params: dict) -> dict:
     name_overrides = {}
     if overrides:
         if hotel_stays:
-            name_overrides = resolve_hotel_overrides(tenant_id, hotel_stays, overrides)
+            name_overrides = resolve_hotel_overrides(
+                tenant_id,
+                hotel_stays,
+                overrides,
+                allow_city_fallback=True,
+            )
             logger.info(f"[travel-quote] 应用酒店指定: {name_overrides}")
         else:
             logger.warning("[travel-quote] 传入 hotel_overrides 但 hotel_stays 为空，忽略")

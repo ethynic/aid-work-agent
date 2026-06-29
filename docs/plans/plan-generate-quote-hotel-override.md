@@ -6,12 +6,12 @@
 
 | # | 任务 | 文件 | 状态 |
 |---|------|------|------|
-| 1 | 抽取共享函数 `resolve_hotel_overrides()` | `src/skills/travel-quote/scripts/hotel.py` | ⬜ 待开始 |
-| 2 | `generate.py` 读取 `hotel_overrides` 并调用覆写 | `src/skills/travel-quote/scripts/generate.py` | ⬜ 待开始 |
-| 3 | `update_hotel.py` 复用 `resolve_hotel_overrides()` | `src/skills/travel-quote/scripts/update_hotel.py` | ⬜ 待开始 |
-| 4 | SKILL.md 文档新增 `hotel_overrides` 参数说明 | `src/skills/travel-quote/SKILL.md` | ⬜ 待开始 |
-| 5 | 手动测试 7 个场景 | — | ⬜ 待开始 |
-| 6 | 登记 ideas.md / 移动到 ideas_finished.md | `docs/ideas.md` | ⬜ 待开始 |
+| 1 | 抽取共享函数 `resolve_hotel_overrides()` | `src/skills/travel-quote/scripts/hotel.py` | ✅ 已完成 |
+| 2 | `generate.py` 读取 `hotel_overrides` 并调用覆写 | `src/skills/travel-quote/scripts/generate.py` | ✅ 已完成 |
+| 3 | `update_hotel.py` 复用 `resolve_hotel_overrides()` | `src/skills/travel-quote/scripts/update_hotel.py` | ✅ 已完成 |
+| 4 | SKILL.md 文档新增 `hotel_overrides` 参数说明 | `src/skills/travel-quote/SKILL.md` | ✅ 已完成 |
+| 5 | 首次生成放宽城市匹配并补充回归测试 | `hotel.py`、`generate.py`、单元测试 | ✅ 已完成 |
+| 6 | 登记 ideas.md / 移动到 ideas_finished.md | `docs/ideas_finished.md` | ✅ 已完成 |
 
 ## 详细步骤
 
@@ -118,7 +118,15 @@ name_overrides = resolve_hotel_overrides(tenant_id, hotel_stays, overrides)
 |------|------|
 | 抽取共享函数时漏掉边界条件 | 步骤 3 改完后用同一份 internal_data + override 对比新旧输出，必须完全一致 |
 | `generate.py` 中 import 时机不对 | 放在 `resolve_resources()` 之后，与 `update_hotel.py` 调用顺序一致 |
-| LLM 误用 `hotel_overrides`（如行程没提到该城市也硬塞） | SKILL.md 中明确"city 必须在 hotel_stays 中"，且代码会报错兜底 |
+| Agent 传入与行程不合理的酒店 | 由 Agent 在调用报价前确认；报价生成层不重复执行地理合理性审查 |
+
+## 2026-06-29 优化进度
+
+- [x] 设计调整：首次生成报价不再要求覆盖项地点与 LLM 住宿城市完全一致
+- [x] 实现精确匹配优先、未匹配项按剩余住宿顺序应用
+- [x] 保留 `update_hotel.py` 对已有报价住宿行的严格城市定位
+- [x] 新增城市口径差异与覆盖项超量测试通过
+- [ ] 酒店替换测试文件全量通过（当前 15 通过、1 个既有“随队老师合计”口径断言失败，与本次改动无关）
 
 **回滚**：所有改动集中在 4 个文件，回滚 git revert 即可，无数据库变更、无配置变更。
 
