@@ -493,7 +493,15 @@ async def lifespan(app: FastAPI):
                             if not last_message_at_str or not open_kfid or not tenant_id:
                                 continue
 
-                            last_msg_time = datetime.strptime(last_message_at_str, "%Y-%m-%d %H:%M:%S")
+                            # last_message_at 在 PostgreSQL 中是 TIMESTAMP，psycopg2 返回 datetime 对象；
+                            # 极少数情况（旧数据/手动写入）可能是字符串，需兼容处理
+                            last_msg_value = last_message_at_str
+                            if isinstance(last_msg_value, datetime):
+                                last_msg_time = last_msg_value
+                            else:
+                                last_msg_time = datetime.strptime(
+                                    str(last_msg_value), "%Y-%m-%d %H:%M:%S"
+                                )
                             elapsed_minutes = (now - last_msg_time).total_seconds() / 60
 
                             # 从租户渠道配置获取超时时间
