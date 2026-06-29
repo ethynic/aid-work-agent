@@ -1561,11 +1561,14 @@ class Agent:
             if _record:
                 try:
                     from src.core.trace_collector import TraceCollector
+                    # 优先用 user_input（语音合并 / 追加消息后的最终输入），
+                    # _record.user_message 是渠道入口 start_record 时设置的单条原始消息，
+                    # 在 wecom_kf 等渠道的语音合并场景下只有首句，会导致 trace.input 丢失追加内容。
                     trace_collector = TraceCollector(
                         session_id=_record.session_id or session_id,
                         tenant_id=_record.tenant_id or '',
                         user_id=_record.user_id or '',
-                        input_msg=_record.user_message or user_input,
+                        input_msg=user_input or _record.user_message,
                         source_type=_record.source_type or 'chat',
                         subagent_id=getattr(self, '_subagent_id', None),
                     )
