@@ -38,7 +38,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `city` | string | 是 | 城市名，不带"县/市"后缀（与 `hotel_stays.city` 口径一致） |
+| `city` | string | 是 | 酒店所在城市、区县或景区名；首次生成报价时不要求与 `hotel_stays.city` 完全一致 |
 | `hotel_name` | string | 是 | 客户选定的酒店**完整名称**，从 `knowledge_base_search` 返回的"酒店名称：XXX"字段取得；agent 不传 doc_id |
 | `room_type` | string | 否 | 客户指定的房型（如"大床房"、"亲子房"）。传入时候选价格行先按房型模糊包含匹配过滤；该房型在价格表中无任何匹配行时**报错**（列出实际可用房型），不静默回退到标准间 |
 
@@ -85,7 +85,7 @@ def resolve_hotel_overrides(
 ```
 
 逻辑要点（与 `update_hotel.py` 现状一致）：
-1. 校验每个 override 的 `city` 在 `hotel_stays` 中存在
+1. 首次生成报价时先按 `city` 精确匹配；未匹配项按顺序覆盖尚未指定的住宿项。已有报价换酒店时仍按 `city` 严格定位
 2. 用 `HotelRetriever.search_by_name()` 查询，精确比对"酒店名称"字段避免模糊误命中
 3. 歧义（多条）/查不到/价格表无效时立即报错
 4. 写回 `stay['hotel_doc_id']`，收集 `name_overrides`
@@ -142,7 +142,8 @@ if hotel_stays:
 | 场景 | 行为 |
 |------|------|
 | `hotel_overrides` 为空或未传 | 走原有逻辑，零变化 |
-| `hotel_overrides` 中 `city` 不在 LLM 解析的 `hotel_stays` 中 | 报错（与 `update_hotel.py` 一致），提示本次报价包含的城市列表 |
+| 首次生成时 `hotel_overrides.city` 与 LLM 住宿城市口径不同（如“西江”与“雷山”） | 精确匹配其他覆盖项后，按行程顺序应用到尚未指定的住宿项 |
+| 已有报价通过 `update_hotel.py` 换酒店且 `city` 不在 `hotel_stays` 中 | 报错，避免修改错误的已有住宿行 |
 | 酒店名歧义（多个精确匹配） | 报错，提示用更精确的酒店全名 |
 | 酒店名查不到 | 报错，提示匹配条数 |
 | 酒店无价格表 / 价格无效 | 报错 |
@@ -161,10 +162,11 @@ if hotel_stays:
 1. **不传 `hotel_overrides`**：行为与原来完全一致（回归测试）
 2. **传部分城市的 override**：指定城市用客户酒店，其他城市保留 LLM 默认
 3. **传所有城市的 override**：全部用客户指定
-4. **override 的 city 不在 hotel_stays**：报错信息正确
-5. **酒店名歧义**：报错信息列出候选
-6. **酒店查不到价格**：报错
-7. **旧结构化模式（itinerary_text 为空）**：override 被忽略，不报错
+4. **首次生成时 override 的 city 不在 hotel_stays**：按住宿顺序应用，酒店名称和价格正确
+5. **已有报价换酒店时 city 不在 hotel_stays**：仍报错
+6. **酒店名歧义**：报错信息列出候选
+7. **酒店查不到价格**：报错
+8. **旧结构化模式（itinerary_text 为空）**：override 被忽略，不报错
 
 ## 影响面
 
