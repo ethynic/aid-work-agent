@@ -109,3 +109,61 @@ def test_team_ticket_priority_uses_source_table_when_llm_misses_team_ticket():
     assert len(result["tickets"]) == 1
     assert result["tickets"][0]["unit_price"] == 55
     assert "团队票" in result["tickets"][0]["name"]
+
+
+def test_dedupe_identical_ticket_items_removes_exact_duplicate_package():
+    import generate
+
+    duplicate = {
+        "category": "门票/项目",
+        "name": "博物馆门票+电梯+模型搭建",
+        "unit_price": 120.0,
+        "quantity": 3,
+        "unit": "人",
+        "frequency": 1,
+        "freq_unit": "次",
+        "subtotal": 120.0,
+        "teacher_subtotal": 0,
+        "remark": "",
+    }
+
+    result = generate._dedupe_identical_ticket_items([
+        duplicate,
+        dict(duplicate),
+        dict(duplicate),
+    ])
+
+    assert result == [duplicate]
+
+
+def test_dedupe_identical_ticket_items_keeps_distinct_ticket_types():
+    import generate
+
+    adult_ticket = {
+        "category": "门票/项目",
+        "name": "黄果树(成人票)",
+        "unit_price": 160.0,
+        "quantity": 2,
+        "unit": "人",
+        "frequency": 1,
+        "freq_unit": "次",
+        "subtotal": 106.67,
+        "teacher_subtotal": 0,
+        "remark": "挂牌价",
+    }
+    child_ticket = {
+        "category": "门票/项目",
+        "name": "黄果树(儿童票)",
+        "unit_price": 80.0,
+        "quantity": 1,
+        "unit": "人",
+        "frequency": 1,
+        "freq_unit": "次",
+        "subtotal": 26.67,
+        "teacher_subtotal": 0,
+        "remark": "儿童票",
+    }
+
+    result = generate._dedupe_identical_ticket_items([adult_ticket, child_ticket])
+
+    assert result == [adult_ticket, child_ticket]

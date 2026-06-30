@@ -12,7 +12,7 @@ import os
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -189,6 +189,7 @@ def generate_quote(params: dict) -> dict:
 
     # 过滤价格为0的项目
     items = [item for item in items if (item.get('subtotal') or 0) > 0 or (item.get('unit_price') or 0) > 0]
+    items = _dedupe_identical_ticket_items(items)
 
     # 汇总：单价已含利润，直接累加。先算总价再回推人均，确保 人均 × 人数 = 总价 恒等
     cost_per_person = round(sum(item.get('subtotal') or 0 for item in items), 2)
@@ -280,6 +281,59 @@ def _validate_headcount(adults, students, children_half, elders, total_people, t
         adults = 0
 
     return adults, students
+
+
+def _dedupe_identical_ticket_items(items: list) -> list:
+    """Remove exact duplicate ticket/project rows while preserving distinct ticket types."""
+    seen = set()
+    deduped = []
+    duplicate_count = 0
+
+    for item in items:
+        if item.get('category') != '门票/项目':
+            deduped.append(item)
+            continue
+
+        key = _ticket_item_dedupe_key(item)
+        if key in seen:
+            duplicate_count += 1
+            logger.warning(
+                "[travel-quote] 去除重复门票/项目 item: "
+                f"name={item.get('name')}, unit_price={item.get('unit_price')}, "
+                f"quantity={item.get('quantity')}, subtotal={item.get('subtotal')}"
+            )
+            continue
+
+        seen.add(key)
+        deduped.append(item)
+
+    if duplicate_count:
+        logger.info(f"[travel-quote] 门票/项目完全重复项去重: removed={duplicate_count}")
+
+    return deduped
+
+
+def _ticket_item_dedupe_key(item: dict) -> tuple:
+    """Key uses visible quote fields, so adult/child or quantity/remark differences stay distinct."""
+    fields = (
+        'category',
+        'name',
+        'unit_price',
+        'quantity',
+        'unit',
+        'frequency',
+        'freq_unit',
+        'subtotal',
+        'teacher_subtotal',
+        'remark',
+    )
+    return tuple(_normalize_dedupe_value(item.get(field)) for field in fields)
+
+
+def _normalize_dedupe_value(value: Any) -> Any:
+    if isinstance(value, float):
+        return round(value, 6)
+    return value
 
 
 def _calculate_route_distance(parsed, itinerary_text, departure_city, destination, region_name):
