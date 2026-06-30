@@ -78,6 +78,10 @@ class TestPdfProcessToolDefinition:
         assert "input_schema" in defn
         schema = defn["input_schema"]
         properties = schema.get("properties", {})
+        assert "instruction" in properties
+        assert "content" in properties
+        assert "content_type" in properties
+        assert "output_name" in properties
         assert "context" in properties
         assert "file_paths" in properties
         assert "task" not in properties
@@ -1437,6 +1441,124 @@ class TestPdfProcessPipeline:
             result = await tool.execute(context="Word转PDF", file_paths=["test.docx"])
 
         assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_md_to_pdf_structured_content_uses_content_only(self):
+        """instruction + content 调用时，Markdown 正文不被指令污染。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        tool = PdfProcessTool()
+
+        mock_router = AsyncMock()
+        mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+        tool._router = mock_router
+
+        mock_result = {"success": True, "file_path": "/tmp/structured.pdf", "file_size": 1024}
+        md_text = "# 行程安排\n\n| 天数 | 内容 |\n|---|---|\n| D1 | 抵达 |"
+
+        with patch("src.tools.pdf.pdf_writer.md_to_pdf", return_value=mock_result) as mock_md_to_pdf:
+            result = await tool.execute(
+                instruction="生成PDF文件",
+                content=md_text,
+                content_type="markdown",
+                output_name="安顺行程.pdf",
+            )
+
+        assert result["success"] is True
+        kwargs = mock_md_to_pdf.call_args.kwargs
+        assert kwargs["md_text"] == md_text
+        assert kwargs["output_name"] == "安顺行程.pdf"
+
+    @pytest.mark.asyncio
+    async def test_md_to_pdf_legacy_context_strips_instruction_prefix(self):
+        """旧 context 混合指令和正文时，转换正文应剥离指令前缀。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        tool = PdfProcessTool()
+
+        mock_router = AsyncMock()
+        mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+        tool._router = mock_router
+
+        context = "请生成一份PDF文件，下面是Markdown正文：\n\n# 项目报告\n\n- 结论：通过"
+        mock_result = {"success": True, "file_path": "/tmp/report.pdf", "file_size": 1024}
+
+        with patch("src.tools.pdf.pdf_writer.md_to_pdf", return_value=mock_result) as mock_md_to_pdf:
+            result = await tool.execute(context=context)
+
+        assert result["success"] is True
+        kwargs = mock_md_to_pdf.call_args.kwargs
+        assert kwargs["md_text"].startswith("# 项目报告")
+        assert "请生成" not in kwargs["md_text"]
+        assert kwargs["output_name"] == "项目报告.pdf"
+
+    @pytest.mark.asyncio
+    async def test_html_to_pdf_structured_content_uses_content_only(self):
+        """HTML 转 PDF 时优先消费 content，避免自然语言进入 HTML。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        tool = PdfProcessTool()
+
+        mock_router = AsyncMock()
+        mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+        tool._router = mock_router
+
+        html = "<html><body><h1>报价单</h1><table><tr><td>A</td></tr></table></body></html>"
+        mock_result = {"success": True, "file_path": "/tmp/html.pdf", "file_size": 1024}
+
+        with patch("src.tools.pdf.pdf_writer.html_to_pdf", return_value=mock_result) as mock_html_to_pdf:
+            result = await tool.execute(
+                instruction="生成PDF文件",
+                content=html,
+                content_type="html",
+                output_name="报价单.pdf",
+            )
+
+        assert result["success"] is True
+        kwargs = mock_html_to_pdf.call_args.kwargs
+        assert kwargs["html_text"] == html
+        assert kwargs["output_name"] == "报价单.pdf"
+
+    @pytest.mark.asyncio
+    async def test_html_to_pdf_legacy_context_strips_instruction_prefix(self):
+        """旧 context 混合指令和 HTML 时，HTML 结构不应被前缀污染。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        tool = PdfProcessTool()
+
+        mock_router = AsyncMock()
+        mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+        tool._router = mock_router
+
+        context = "请把下面 HTML 生成PDF：\n\n<div><h1>报价单</h1><p>金额 100</p></div>"
+        mock_result = {"success": True, "file_path": "/tmp/html.pdf", "file_size": 1024}
+
+        with patch("src.tools.pdf.pdf_writer.html_to_pdf", return_value=mock_result) as mock_html_to_pdf:
+            result = await tool.execute(context=context)
+
+        assert result["success"] is True
+        html_text = mock_html_to_pdf.call_args.kwargs["html_text"]
+        assert html_text.startswith("<div>")
+        assert "请把下面" not in html_text
+
+    @pytest.mark.asyncio
+    async def test_docx_to_pdf_deterministic_route_with_output_name(self):
+        """DOCX 附件 + PDF 生成意图可确定性路由，并优先使用显式 output_name。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        tool = PdfProcessTool()
+
+        mock_router = AsyncMock()
+        mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+        tool._router = mock_router
+
+        mock_result = {"success": True, "file_path": "/tmp/from_docx.pdf", "file_size": 1024}
+
+        with patch("src.tools.pdf.pdf_writer.docx_to_pdf", return_value=mock_result) as mock_docx_to_pdf, \
+             patch.object(tool, "_resolve_file", return_value="/fake/test.docx"):
+            result = await tool.execute(
+                instruction="把Word转换成PDF",
+                file_paths=["test.docx"],
+                output_name="正式报告.pdf",
+            )
+
+        assert result["success"] is True
+        assert mock_docx_to_pdf.call_args.kwargs["output_name"] == "正式报告.pdf"
 
     @pytest.mark.asyncio
     async def test_merge_pipeline_success(self):

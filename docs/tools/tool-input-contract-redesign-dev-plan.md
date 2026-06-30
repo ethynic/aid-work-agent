@@ -67,21 +67,25 @@
 
 ### Phase 2：PDF 入参拆分与正文提取
 
-状态：待开发
+状态：已完成
 
-改动：
+已完成改动：
 
-1. `PdfProcessInput` 增加同样字段：
+1. `PdfProcessInput` 增加字段：
    - `instruction`
    - `content`
    - `content_type`
    - `output_name`
-2. `md_to_pdf`、`html_to_pdf` 改为优先消费 `content`。
-3. 对旧 `context` 做 Markdown/HTML 正文提取。
-4. 增加规则路由：
+2. 新增输入归一化方法：
+   - 新字段优先。
+   - 旧 `context` 自动拆分为 `instruction/content`。
+3. `md_to_pdf`、`html_to_pdf` 改为优先消费 `content`。
+4. 对旧 `context` 做 Markdown/HTML 正文提取，避免指令前缀进入 PDF 正文。
+5. 增加确定性规则路由：
    - Markdown + PDF 生成 → `md_to_pdf`
    - HTML + PDF 生成 → `html_to_pdf`
    - `.docx` 附件 + PDF 生成 → `docx_to_pdf`
+6. 显式 `output_name` 优先于路由器或标题推断出的文件名。
 
 测试：
 
@@ -89,17 +93,18 @@
 - 指令 + HTML 生成 PDF，HTML 结构不被破坏。
 - 纯 HTML content + instruction 生成 PDF。
 - 旧 `context` 兼容。
+- DOCX 附件 + PDF 生成意图确定性路由。
 
 验收：
 
 - PDF 转换类生成不再直接消费混合 `context`。
-- PDF 全量单测通过。
+- PDF 单测通过：`pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py tests/unit/tools/test_pdf_p0_contracts.py tests/unit/tools/test_pdf_p1_contracts.py -q`，132 passed。
 
 ### Phase 3：Excel export 正文隔离
 
-状态：待开发
+状态：已完成
 
-改动：
+已完成改动：
 
 1. `ExcelProcessInput` 增加：
    - `instruction`
@@ -111,19 +116,22 @@
    - `content`
    - 从旧 `context` 提取出的数据正文
 3. Markdown/CSV/JSON 数据提取与校验独立封装。
-4. 对 `context` 只有意图、无数据的场景继续返回 `needs_data=True`。
+4. 对 `context` 或 `instruction` 只有意图、无数据的场景继续返回 `needs_data=True`。
+5. 显式 `output_name` 优先于路由器推断的文件名。
 
 测试：
 
 - 指令 + Markdown 表格导出 Excel。
 - 指令 + CSV 导出 Excel。
 - 指令 + JSON 数组导出 Excel。
+- 旧 `context` 混合指令 + Markdown 表格时，导出数据不包含指令前缀。
+- CSV 附件 + Excel 转换意图继续走附件转换，不误报缺少数据。
 - 只有“帮我导出 Excel”但无数据时返回 `needs_data=True`。
 
 验收：
 
 - Excel 导出数据不包含自然语言指令。
-- 现有 Excel 单测通过。
+- Excel 单测通过：`pytest tests/unit/tools/test_excel_tool_routing.py -q`，12 passed。
 
 ### Phase 4：PPT 标题与大纲拆分
 

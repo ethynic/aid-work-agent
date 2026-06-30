@@ -3,11 +3,26 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+from unittest.mock import AsyncMock, patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def test_excel_process_schema_has_structured_input_fields():
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    schema = ExcelProcessTool().to_tool_definition()["input_schema"]
+    properties = schema.get("properties", {})
+
+    assert "instruction" in properties
+    assert "content" in properties
+    assert "content_type" in properties
+    assert "output_name" in properties
+    assert "context" in properties
+    assert "file_paths" in properties
 
 
 @pytest.mark.asyncio
@@ -26,6 +41,174 @@ async def test_excel_router_exports_markdown_table_without_llm():
 
     assert result["task"] == "export"
     assert result["params"]["data_type"] == "markdown"
+
+
+@pytest.mark.asyncio
+async def test_excel_process_export_structured_markdown_content():
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+    mock_router = AsyncMock()
+    mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+    tool._router = mock_router
+
+    table = "| 项目 | 金额 |\n|------|------|\n| 门票 | 120 |"
+    mock_result = {
+        "success": True,
+        "file_path": "/tmp/quote.xlsx",
+        "file_name": "quote.xlsx",
+        "file_size": 1024,
+        "row_count": 1,
+    }
+
+    with patch("src.tools.excel.excel_writer.create_excel", return_value=mock_result) as mock_create:
+        result = await tool.execute(
+            instruction="导出Excel文件",
+            content=table,
+            content_type="markdown",
+            output_name="报价单.xlsx",
+        )
+
+    assert result["success"] is True
+    kwargs = mock_create.call_args.kwargs
+    assert kwargs["data"] == table
+    assert kwargs["data_type"] == "markdown"
+    assert kwargs["file_name"] == "报价单.xlsx"
+
+
+@pytest.mark.asyncio
+async def test_excel_process_export_legacy_context_strips_instruction_prefix():
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+    mock_router = AsyncMock()
+    mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+    tool._router = mock_router
+
+    context = "请导出Excel文件，下面是Markdown表格：\n\n| 项目 | 金额 |\n|------|------|\n| 住宿 | 300 |"
+    mock_result = {
+        "success": True,
+        "file_path": "/tmp/export.xlsx",
+        "file_name": "export.xlsx",
+        "file_size": 1024,
+        "row_count": 1,
+    }
+
+    with patch("src.tools.excel.excel_writer.create_excel", return_value=mock_result) as mock_create:
+        result = await tool.execute(context=context)
+
+    assert result["success"] is True
+    data = mock_create.call_args.kwargs["data"]
+    assert data.startswith("| 项目 | 金额 |")
+    assert "请导出" not in data
+
+
+@pytest.mark.asyncio
+async def test_excel_process_export_structured_csv_content():
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+    mock_router = AsyncMock()
+    mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+    tool._router = mock_router
+
+    csv_text = "项目,金额\n门票,120\n住宿,300"
+    mock_result = {
+        "success": True,
+        "file_path": "/tmp/csv.xlsx",
+        "file_name": "csv.xlsx",
+        "file_size": 1024,
+        "row_count": 2,
+    }
+
+    with patch("src.tools.excel.excel_writer.create_excel", return_value=mock_result) as mock_create:
+        result = await tool.execute(
+            instruction="导出Excel文件",
+            content=csv_text,
+            content_type="csv",
+        )
+
+    assert result["success"] is True
+    kwargs = mock_create.call_args.kwargs
+    assert kwargs["data"] == csv_text
+    assert kwargs["data_type"] == "csv"
+
+
+@pytest.mark.asyncio
+async def test_excel_process_export_structured_json_content():
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+    mock_router = AsyncMock()
+    mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+    tool._router = mock_router
+
+    json_text = '[{"项目": "门票", "金额": 120}, {"项目": "住宿", "金额": 300}]'
+    mock_result = {
+        "success": True,
+        "file_path": "/tmp/json.xlsx",
+        "file_name": "json.xlsx",
+        "file_size": 1024,
+        "row_count": 2,
+    }
+
+    with patch("src.tools.excel.excel_writer.create_excel", return_value=mock_result) as mock_create:
+        result = await tool.execute(
+            instruction="导出Excel文件",
+            content=json_text,
+            content_type="json",
+        )
+
+    assert result["success"] is True
+    kwargs = mock_create.call_args.kwargs
+    assert kwargs["data"] == [{"项目": "门票", "金额": 120}, {"项目": "住宿", "金额": 300}]
+    assert kwargs["data_type"] == "dict_list"
+
+
+@pytest.mark.asyncio
+async def test_excel_process_export_needs_data_when_only_intent():
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+    mock_router = AsyncMock()
+    mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+    tool._router = mock_router
+
+    result = await tool.execute(instruction="帮我导出Excel文件")
+
+    assert result["success"] is False
+    assert result["needs_data"] is True
+
+
+@pytest.mark.asyncio
+async def test_excel_process_csv_attachment_converts_without_needs_data(tmp_path):
+    from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+    tool = ExcelProcessTool()
+    mock_router = AsyncMock()
+    mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
+    tool._router = mock_router
+
+    csv_path = tmp_path / "quote.csv"
+    csv_path.write_text("项目,金额\n门票,120\n", encoding="utf-8")
+    mock_result = {
+        "success": True,
+        "file_path": "/tmp/quote.xlsx",
+        "file_name": "quote.xlsx",
+        "file_size": 1024,
+    }
+
+    with patch("src.tools.excel.excel_writer.convert_format", return_value=mock_result) as mock_convert:
+        result = await tool.execute(
+            instruction="把CSV转成Excel",
+            file_paths=[str(csv_path)],
+            output_name="报价单.xlsx",
+        )
+
+    assert result["success"] is True
+    kwargs = mock_convert.call_args.kwargs
+    assert kwargs["target_format"] == "excel"
+    assert kwargs["output_name"] == "报价单.xlsx"
 
 
 @pytest.mark.asyncio

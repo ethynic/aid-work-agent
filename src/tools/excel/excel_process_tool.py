@@ -1,10 +1,12 @@
 """
 Excel 电子表格处理工具 — Agent 唯一入口
 
-Agent 只需传 context（用户需求 + 相关内容）和 file_paths（附件），
-内部 LLM 自动判断操作类型和参数，执行 pipeline 后返回结果。
+Agent 优先传 instruction（用户目的）+ content（待导出数据）+ file_paths（附件），
+旧版 context（用户需求 + 相关内容）继续兼容。工具内部自动判断操作类型和参数，
+执行 pipeline 后返回结果。
 """
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,11 +33,28 @@ class TaskType:
 
 
 class ExcelProcessInput(BaseModel):
+    instruction: Optional[str] = Field(
+        None,
+        description="用户目的描述，如导出Excel、读取、修改、格式化、合并、转换。"
+                    "导出Excel时建议只放目的，不要混入表格数据。"
+    )
+    content: Optional[str] = Field(
+        None,
+        description="待导出的表格数据。导出Excel时优先使用此字段传 Markdown表格、CSV 或 JSON。"
+    )
+    content_type: Optional[str] = Field(
+        None,
+        description="content 的格式类型，可选：markdown、csv、json、auto。默认自动识别。"
+    )
+    output_name: Optional[str] = Field(
+        None,
+        description="输出文件名，可选。导出Excel时可传入业务文件名，如 报价单.xlsx"
+    )
     context: Optional[str] = Field(
         None,
-        description="用户的原始需求描述，包含所有相关内容。"
+        description="兼容旧调用：用户的原始需求描述，包含所有相关内容。"
                     "如果要把对话中的表格数据转为Excel，context 中必须包含表格数据（Markdown表格或JSON数组）；"
-                    "如果涉及附件操作，附件路径通过 file_paths 传入"
+                    "新调用建议改用 instruction + content。"
     )
     file_paths: Optional[List[str]] = Field(
         None,
@@ -47,10 +66,18 @@ class PipelineContext:
     """Pipeline 执行过程中的上下文，在步骤间传递"""
 
     def __init__(self, file_paths: Optional[List[str]] = None,
-                 context: Optional[str] = None):
+                 context: Optional[str] = None,
+                 instruction: Optional[str] = None,
+                 content: Optional[str] = None,
+                 content_type: Optional[str] = None,
+                 output_name: Optional[str] = None):
         self.file_paths: List[str] = list(file_paths) if file_paths else []
         self.original_file_paths: List[str] = list(file_paths) if file_paths else []
         self.context: Optional[str] = context
+        self.instruction: Optional[str] = instruction
+        self.content: Optional[str] = content
+        self.content_type: Optional[str] = content_type
+        self.output_name: Optional[str] = output_name
         self.read_data: Optional[Dict] = None
         self.markdown_content: Optional[str] = None
         self.results: List[Dict] = []
@@ -72,9 +99,11 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 - 用户要求从多个数据源关联分析 → 调用 analyze_data 工具
 
 调用方式（重要）：
-- context 参数必须包含**完整的表格数据**，不能只传用户意图描述
-- 如果需要将数据导出为Excel，context 中必须包含完整的 Markdown表格 或 JSON数组 数据
-- 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 context 中
+- 推荐使用 instruction + content：instruction 放用户目的，content 放待导出的完整表格数据
+- 兼容旧调用：也可以将用户的原始需求描述和相关内容放在 context 中
+- 如果需要将数据导出为Excel，content 或 context 中必须包含完整的 Markdown表格、CSV 或 JSON数组 数据
+- 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 content 中
+- output_name 可传入业务文件名
 - 如果还没有表格数据，Agent 应先通过其他方式准备好数据，再调用本工具
 - 用户上传的附件路径放在 file_paths 中
 工具会自动判断并执行合适的操作。
@@ -107,10 +136,26 @@ class ExcelProcessTool(BaseTool):
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         context = kwargs.get("context")
+        instruction = kwargs.get("instruction")
+        content = kwargs.get("content")
+        content_type = kwargs.get("content_type")
+        output_name = kwargs.get("output_name")
         file_paths = kwargs.get("file_paths")
+        normalized = self._normalize_input(
+            context=context,
+            instruction=instruction,
+            content=content,
+            content_type=content_type,
+            output_name=output_name,
+        )
 
         # 内部 LLM 路由决定操作类型和参数
-        route_result = await self._resolve_task(context, file_paths)
+        route_result = await self._resolve_task(
+            normalized["route_context"],
+            file_paths,
+            instruction=normalized["instruction"],
+            content_type=normalized["content_type"],
+        )
         task_str = route_result.get("task", "")
         params = route_result.get("params", {})
 
@@ -129,7 +174,14 @@ class ExcelProcessTool(BaseTool):
                 return {"success": False, "error": f"内部路由返回了无效操作: {op}"}
 
         # 初始化 pipeline 上下文
-        ctx = PipelineContext(file_paths=file_paths, context=context)
+        ctx = PipelineContext(
+            file_paths=file_paths,
+            context=normalized["route_context"],
+            instruction=normalized["instruction"],
+            content=normalized["content"],
+            content_type=normalized["content_type"],
+            output_name=normalized["output_name"],
+        )
 
         # 按序执行
         for op in operations:
@@ -155,6 +207,47 @@ class ExcelProcessTool(BaseTool):
 
         return self._merge_results(ctx)
 
+    def _normalize_input(
+        self,
+        *,
+        context: Optional[str],
+        instruction: Optional[str],
+        content: Optional[str],
+        content_type: Optional[str],
+        output_name: Optional[str],
+    ) -> Dict[str, Optional[str]]:
+        """统一新旧入参，导出时让执行层只消费表格正文。"""
+        normalized_instruction = (instruction or "").strip() or None
+        normalized_content = (content or "").strip() or None
+        normalized_context = (context or "").strip() or None
+        normalized_content_type = (content_type or "auto").strip().lower()
+        normalized_output_name = self._safe_output_name(output_name)
+
+        if normalized_context and not normalized_content:
+            body = self._extract_data_body(normalized_context, normalized_content_type)
+            if body and body != normalized_context:
+                normalized_content = body
+                if not normalized_instruction:
+                    prefix_end = normalized_context.find(body)
+                    if prefix_end > 0:
+                        normalized_instruction = normalized_context[:prefix_end].strip() or None
+
+        route_parts = []
+        if normalized_instruction:
+            route_parts.append(normalized_instruction)
+        if normalized_content:
+            route_parts.append(normalized_content)
+        elif normalized_context:
+            route_parts.append(normalized_context)
+
+        return {
+            "instruction": normalized_instruction,
+            "content": normalized_content,
+            "content_type": normalized_content_type,
+            "output_name": normalized_output_name,
+            "route_context": "\n\n".join(route_parts).strip() or None,
+        }
+
     def _get_handler(self, op: str):
         handlers = {
             "read": self._handle_read,
@@ -169,9 +262,24 @@ class ExcelProcessTool(BaseTool):
         }
         return handlers.get(op)
 
-    async def _resolve_task(self, context: Optional[str], file_paths: Optional[List[str]]) -> Dict:
+    async def _resolve_task(
+        self,
+        context: Optional[str],
+        file_paths: Optional[List[str]],
+        instruction: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> Dict:
         if not context and not file_paths:
             return {"task": "", "error": "缺少 context 和 file_paths"}
+
+        deterministic = self._resolve_task_deterministic(
+            context,
+            file_paths,
+            instruction=instruction,
+            content_type=content_type,
+        )
+        if deterministic:
+            return deterministic
 
         try:
             router = self._get_router()
@@ -179,6 +287,52 @@ class ExcelProcessTool(BaseTool):
         except Exception as e:
             logger.error(f"[ExcelProcess] LLM 路由异常: {e}", exc_info=True)
             return {"task": "", "error": f"路由服务异常: {e}"}
+
+    def _resolve_task_deterministic(
+        self,
+        context: Optional[str],
+        file_paths: Optional[List[str]],
+        instruction: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """低风险确定性路由，覆盖明确的数据导出 Excel 场景。"""
+        if not context:
+            return None
+        intent = instruction or context or ""
+        if not self._is_excel_export_instruction(intent):
+            return None
+
+        paths = file_paths or []
+        if paths:
+            first_path = Path(paths[0])
+            first_ext = first_path.suffix.lower()
+            if first_ext in (".csv", ".json"):
+                return {
+                    "task": "convert",
+                    "params": {
+                        "source_format": first_ext.lstrip("."),
+                        "target_format": "excel",
+                        "output_name": self._safe_output_name(self._extract_output_name(context))
+                                       or first_path.with_suffix(".xlsx").name,
+                    },
+                    "reason": f"检测到 {first_ext} 附件并要求转换为 Excel",
+                }
+
+        body = self._extract_data_body(context, content_type)
+        data_type = self._detect_data_type_for_export(body, content_type)
+        if not data_type:
+            return {"task": "export", "params": {"needs_data": True}, "reason": "仅检测到导出意图，缺少表格数据"}
+
+        return {
+            "task": "export",
+            "params": {
+                "data_type": data_type,
+                "file_name": self._safe_output_name(self._extract_output_name(context)),
+                "sheet_name": "Sheet1",
+                "auto_format": True,
+            },
+            "reason": f"检测到 {data_type} 表格数据并要求导出 Excel",
+        }
 
     def _update_context(self, ctx: PipelineContext, op: str, result: Dict) -> None:
         """根据操作结果更新 pipeline 上下文"""
@@ -278,12 +432,23 @@ class ExcelProcessTool(BaseTool):
     async def _handle_export(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.excel.excel_writer import create_excel
 
-        # 数据来源优先级：params.data > ctx.context
-        data = params.get("data") or ctx.context
+        if params.get("needs_data"):
+            return {
+                "success": False,
+                "error": "未提供可导出的表格数据。Agent 需要先将完整的 Markdown表格、CSV 或 JSON数组 放入 content 参数中，再调用本工具导出。不能只传用户意图描述。",
+                "needs_data": True,
+            }
+
+        # 数据来源优先级：params.data > ctx.content > ctx.context
+        data = params.get("data") or ctx.content or ctx.context
 
         # 检查 context 是否包含实际表格数据（而非纯意图描述）
         if data:
-            data_type = params.get("data_type")
+            if isinstance(data, str):
+                data = self._extract_data_body(data, params.get("data_type") or ctx.content_type)
+                data_type = params.get("data_type") or self._detect_data_type_for_export(data, ctx.content_type)
+            else:
+                data_type = params.get("data_type") or "dict_list"
             if not data_type or data_type == "markdown":
                 data_type = _detect_data_type(data)
 
@@ -296,7 +461,7 @@ class ExcelProcessTool(BaseTool):
         if not data:
             return {
                 "success": False,
-                "error": "context 中未包含有效的表格数据。Agent 需要先将完整的表格内容（Markdown表格、JSON数组或CSV文本）放入 context 参数中，再调用本工具导出。不能只传用户意图描述。",
+                "error": "content/context 中未包含有效的表格数据。Agent 需要先将完整的表格内容（Markdown表格、JSON数组或CSV文本）放入 content 参数中，再调用本工具导出。不能只传用户意图描述。",
                 "needs_data": True,
             }
 
@@ -312,7 +477,7 @@ class ExcelProcessTool(BaseTool):
         result = create_excel(
             data=data,
             data_type=data_type,
-            file_name=params.get("file_name"),
+            file_name=ctx.output_name or self._safe_output_name(params.get("file_name") or params.get("output_name")),
             sheet_name=params.get("sheet_name", "Sheet1"),
             auto_format=params.get("auto_format", True),
         )
@@ -444,13 +609,120 @@ class ExcelProcessTool(BaseTool):
         result = convert_format(
             file_path,
             target_format=target_format,
-            output_name=params.get("output_name"),
+            output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
         )
 
         if not result.get("success"):
             return result
 
         return result
+
+    @staticmethod
+    def _is_excel_export_instruction(text: str) -> bool:
+        if not text:
+            return False
+        return bool(re.search(
+            r"(导出|生成|创建|制作|转成|转换|保存).{0,30}(Excel|excel|xlsx|电子表格|表格文件)|"
+            r"(Markdown|markdown|CSV|csv|JSON|json|表格).{0,30}(转|转换|导出|生成).{0,20}(Excel|excel|xlsx)",
+            text,
+            re.IGNORECASE,
+        ))
+
+    @staticmethod
+    def _has_markdown_table(text: str) -> bool:
+        table_lines = [
+            line.strip()
+            for line in (text or "").splitlines()
+            if line.strip().startswith("|") and line.strip().endswith("|")
+        ]
+        if len(table_lines) < 2:
+            return False
+        return any(re.match(r"^\|[\s\-:|]+\|$", line) for line in table_lines)
+
+    def _detect_data_type_for_export(self, text: str, content_type: Optional[str] = None) -> str:
+        normalized_type = (content_type or "").lower()
+        if normalized_type in ("markdown", "md", "csv", "json"):
+            return "markdown" if normalized_type == "md" else normalized_type
+        return _detect_data_type(text)
+
+    def _extract_data_body(self, text: str, content_type: Optional[str] = None) -> str:
+        if not text:
+            return ""
+
+        stripped = text.strip()
+        normalized_type = (content_type or "").lower()
+        if normalized_type in ("json",) or stripped.startswith("[") or stripped.startswith("{"):
+            return self._extract_json_body(stripped)
+        if normalized_type == "csv":
+            return self._extract_csv_body(stripped)
+        if self._has_markdown_table(stripped):
+            return self._extract_markdown_table_body(stripped)
+        if "," in stripped and "\n" in stripped:
+            return self._extract_csv_body(stripped)
+        return stripped
+
+    @staticmethod
+    def _extract_markdown_table_body(text: str) -> str:
+        lines = text.strip().splitlines()
+        first_table_idx = None
+        for idx, line in enumerate(lines):
+            s = line.strip()
+            if s.startswith("|") and s.endswith("|"):
+                first_table_idx = idx
+                break
+        if first_table_idx is None or first_table_idx == 0:
+            return text.strip()
+
+        prefix = "\n".join(lines[:first_table_idx]).strip()
+        instruction_re = re.compile(
+            r"(导出|生成|创建|制作|转成|转换|保存).{0,30}(Excel|excel|xlsx|电子表格|表格文件)|"
+            r"(以下|下面).{0,20}(表格|数据|内容|Markdown|markdown)",
+            re.IGNORECASE,
+        )
+        if instruction_re.search(prefix):
+            return "\n".join(lines[first_table_idx:]).strip()
+        return text.strip()
+
+    @staticmethod
+    def _extract_csv_body(text: str) -> str:
+        lines = text.strip().splitlines()
+        first_csv_idx = None
+        for idx, line in enumerate(lines):
+            if "," in line and not re.search(r"(导出|生成|创建|转换|保存).{0,30}(Excel|excel|xlsx)", line, re.IGNORECASE):
+                first_csv_idx = idx
+                break
+        if first_csv_idx is None or first_csv_idx == 0:
+            return text.strip()
+        return "\n".join(lines[first_csv_idx:]).strip()
+
+    @staticmethod
+    def _extract_json_body(text: str) -> str:
+        start_candidates = [idx for idx in (text.find("["), text.find("{")) if idx >= 0]
+        if not start_candidates:
+            return text.strip()
+        start = min(start_candidates)
+        return text[start:].strip()
+
+    @staticmethod
+    def _extract_output_name(text: Optional[str]) -> Optional[str]:
+        match = re.search(r"([\w\u4e00-\u9fff（）()《》+_\- ]+\.xlsx)", text or "")
+        if match:
+            return match.group(1).strip()
+        return None
+
+    @staticmethod
+    def _safe_file_stem(title: str) -> str:
+        stem = re.sub(r'[\\/:*?"<>|\r\n\t]+', "", title).strip(" .")
+        return stem[:80] or "excel_export"
+
+    @classmethod
+    def _safe_output_name(cls, output_name: Optional[str]) -> Optional[str]:
+        if not output_name:
+            return None
+        name = output_name.replace("\\", "/").split("/")[-1].strip()
+        if name.lower().endswith(".xlsx"):
+            name = name[:-5]
+        return f"{cls._safe_file_stem(name)}.xlsx"
 
 
 def _detect_data_type(text: str) -> str:

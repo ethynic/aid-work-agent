@@ -1,10 +1,12 @@
 """
 PDF 文档处理工具 — Agent 唯一入口
 
-Agent 只需传 context（用户需求 + 相关内容）和 file_paths（附件），
-内部 LLM 自动判断操作类型和参数，执行 pipeline 后返回结果。
+Agent 优先传 instruction（用户目的）+ content（待处理正文）+ file_paths（附件），
+旧版 context（用户需求 + 相关内容）继续兼容。工具内部自动判断操作类型和参数，
+执行 pipeline 后返回结果。
 """
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -43,11 +45,29 @@ class TaskType:
 
 
 class PdfProcessInput(BaseModel):
+    instruction: Optional[str] = Field(
+        None,
+        description="用户目的描述，如生成PDF、读取、验证、合并、拆分、加水印。"
+                    "生成PDF时建议只放目的，不要混入正文。"
+    )
+    content: Optional[str] = Field(
+        None,
+        description="待处理正文内容。Markdown/HTML 转 PDF 时优先使用此字段传完整正文，"
+                    "不要把'生成一份PDF'等工具指令写入正文。"
+    )
+    content_type: Optional[str] = Field(
+        None,
+        description="content 的格式类型，可选：markdown、html、text、auto。默认自动识别。"
+    )
+    output_name: Optional[str] = Field(
+        None,
+        description="输出文件名，可选。生成PDF时可传入业务文件名，如 报告.pdf"
+    )
     context: Optional[str] = Field(
         None,
-        description="用户的原始需求描述和相关内容。"
+        description="兼容旧调用：用户的原始需求描述和相关内容。"
                     "如果要把对话中的内容转为PDF，这里必须包含完整的 Markdown 或 HTML 文本；"
-                    "如果涉及附件操作，附件路径通过 file_paths 传入"
+                    "新调用建议改用 instruction + content。"
     )
     file_paths: Optional[List[str]] = Field(
         None,
@@ -59,10 +79,18 @@ class PipelineContext:
     """Pipeline 执行过程中的上下文，在步骤间传递"""
 
     def __init__(self, file_paths: Optional[List[str]] = None,
-                 context: Optional[str] = None):
+                 context: Optional[str] = None,
+                 instruction: Optional[str] = None,
+                 content: Optional[str] = None,
+                 content_type: Optional[str] = None,
+                 output_name: Optional[str] = None):
         self.file_paths: List[str] = list(file_paths) if file_paths else []
         self.original_file_paths: List[str] = list(file_paths) if file_paths else []
         self.context: Optional[str] = context
+        self.instruction: Optional[str] = instruction
+        self.content: Optional[str] = content
+        self.content_type: Optional[str] = content_type
+        self.output_name: Optional[str] = output_name
         self.read_content: Optional[str] = None
         self.results: List[Dict] = []
 
@@ -82,8 +110,10 @@ TOOL_DESCRIPTION = """PDF文档处理工具。所有与PDF文件相关的操作�
 不要自己处理PDF文件，一律交给本工具。
 
 调用方式：
-- 将用户的原始需求描述和相关内容放在 context 中
-- 如果需要将对话内容转为PDF，context 中必须包含完整的 Markdown 或 HTML 文本
+- 推荐使用 instruction + content：instruction 放用户目的，content 放待转换 Markdown/HTML 正文
+- 兼容旧调用：也可以将用户的原始需求描述和相关内容放在 context 中
+- 如果需要将对话内容转为PDF，必须在 content 或 context 中包含完整的 Markdown 或 HTML 文本
+- output_name 可传入业务文件名；不传时工具会从 Markdown 标题推断
 - 用户上传的附件路径放在 file_paths 中
 工具会自动判断并执行合适的操作。
 
@@ -116,10 +146,26 @@ class PdfProcessTool(BaseTool):
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         context = kwargs.get("context")
+        instruction = kwargs.get("instruction")
+        content = kwargs.get("content")
+        content_type = kwargs.get("content_type")
+        output_name = kwargs.get("output_name")
         file_paths = kwargs.get("file_paths")
+        normalized = self._normalize_input(
+            context=context,
+            instruction=instruction,
+            content=content,
+            content_type=content_type,
+            output_name=output_name,
+        )
 
         # 内部 LLM 路由决定操作类型和参数
-        route_result = await self._resolve_task(context, file_paths)
+        route_result = await self._resolve_task(
+            normalized["route_context"],
+            file_paths,
+            instruction=normalized["instruction"],
+            content_type=normalized["content_type"],
+        )
         task_str = route_result.get("task", "")
         params = route_result.get("params", {})
 
@@ -138,7 +184,14 @@ class PdfProcessTool(BaseTool):
                 return {"success": False, "error": f"内部路由返回了无效操作: {op}"}
 
         # 初始化 pipeline 上下文
-        ctx = PipelineContext(file_paths=file_paths, context=context)
+        ctx = PipelineContext(
+            file_paths=file_paths,
+            context=normalized["route_context"],
+            instruction=normalized["instruction"],
+            content=normalized["content"],
+            content_type=normalized["content_type"],
+            output_name=normalized["output_name"],
+        )
 
         # 按序执行
         for op in operations:
@@ -164,6 +217,49 @@ class PdfProcessTool(BaseTool):
 
         return self._merge_results(ctx)
 
+    def _normalize_input(
+        self,
+        *,
+        context: Optional[str],
+        instruction: Optional[str],
+        content: Optional[str],
+        content_type: Optional[str],
+        output_name: Optional[str],
+    ) -> Dict[str, Optional[str]]:
+        """统一新旧入参，确保路由看目的，执行拿正文。"""
+        normalized_instruction = (instruction or "").strip() or None
+        normalized_content = (content or "").strip() or None
+        normalized_context = (context or "").strip() or None
+        normalized_content_type = (content_type or "auto").strip().lower()
+        normalized_output_name = self._safe_output_name(output_name)
+
+        if normalized_context and not normalized_content:
+            body = self._extract_content_body(normalized_context, normalized_content_type)
+            if body and body != normalized_context:
+                normalized_content = body
+                if not normalized_instruction:
+                    prefix_end = normalized_context.find(body)
+                    if prefix_end > 0:
+                        normalized_instruction = normalized_context[:prefix_end].strip() or None
+
+        route_parts = []
+        if normalized_instruction:
+            route_parts.append(normalized_instruction)
+        if normalized_content:
+            route_parts.append(normalized_content)
+        elif normalized_context:
+            route_parts.append(normalized_context)
+
+        route_context = "\n\n".join(route_parts).strip() or None
+
+        return {
+            "instruction": normalized_instruction,
+            "content": normalized_content,
+            "content_type": normalized_content_type,
+            "output_name": normalized_output_name,
+            "route_context": route_context,
+        }
+
     def _get_handler(self, op: str):
         handlers = {
             "read": self._handle_read,
@@ -188,9 +284,24 @@ class PdfProcessTool(BaseTool):
         }
         return handlers.get(op)
 
-    async def _resolve_task(self, context: Optional[str], file_paths: Optional[List[str]]) -> Dict:
+    async def _resolve_task(
+        self,
+        context: Optional[str],
+        file_paths: Optional[List[str]],
+        instruction: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> Dict:
         if not context and not file_paths:
             return {"task": "", "error": "缺少 context 和 file_paths"}
+
+        deterministic = self._resolve_task_deterministic(
+            context,
+            file_paths,
+            instruction=instruction,
+            content_type=content_type,
+        )
+        if deterministic:
+            return deterministic
 
         try:
             router = self._get_router()
@@ -198,6 +309,41 @@ class PdfProcessTool(BaseTool):
         except Exception as e:
             logger.error(f"[PdfProcess] LLM 路由异常: {e}", exc_info=True)
             return {"task": "", "error": f"路由服务异常: {e}"}
+
+    def _resolve_task_deterministic(
+        self,
+        context: Optional[str],
+        file_paths: Optional[List[str]],
+        instruction: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """低风险确定性路由，减少生成 PDF 时对内部 LLM 的依赖。"""
+        paths = file_paths or []
+        lower_paths = [str(p).lower() for p in paths]
+        intent = instruction or context or ""
+
+        if any(p.endswith(".docx") for p in lower_paths) and self._is_pdf_generation_instruction(intent):
+            return {"task": "docx_to_pdf", "params": {}, "reason": "检测到 DOCX 附件并要求生成 PDF"}
+
+        if not context:
+            return None
+
+        normalized_type = (content_type or "").lower()
+        body = self._extract_content_body(context, normalized_type)
+        if normalized_type in ("html", "htm") or self._looks_like_html(body):
+            if self._is_pdf_generation_instruction(intent):
+                return {"task": "html_to_pdf", "params": {}, "reason": "检测到 HTML 正文并要求生成 PDF"}
+
+        if normalized_type in ("markdown", "md") or self._looks_like_markdown_document(body):
+            if self._is_pdf_generation_instruction(intent):
+                params: Dict[str, Any] = {}
+                title = self._extract_title(body)
+                if title:
+                    params["title"] = title
+                    params["output_name"] = f"{self._safe_file_stem(title)}.pdf"
+                return {"task": "md_to_pdf", "params": params, "reason": "检测到 Markdown 正文并要求生成 PDF"}
+
+        return None
 
     def _update_context(self, ctx: PipelineContext, op: str, result: Dict) -> None:
         """根据操作结果更新 pipeline 上下文"""
@@ -354,7 +500,7 @@ class PdfProcessTool(BaseTool):
     async def _handle_md_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        md_text = ctx.context
+        md_text = ctx.content or ctx.context
         if not md_text and ctx.file_paths:
             md_path = ctx.file_paths[0]
             if Path(md_path).exists():
@@ -363,11 +509,13 @@ class PdfProcessTool(BaseTool):
         if not md_text:
             return {"success": False, "error": "md_to_pdf 需要提供 context（Markdown文本）或 file_paths（.md文件路径）"}
 
+        md_text = self._extract_markdown_body(md_text)
+
         import asyncio
         result = await asyncio.to_thread(
             md_to_pdf,
             md_text=md_text,
-            output_name=params.get("output_name"),
+            output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
             css=params.get("css"),
             title=params.get("title", ""),
         )
@@ -377,7 +525,7 @@ class PdfProcessTool(BaseTool):
     async def _handle_html_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_writer import html_to_pdf
 
-        html_text = ctx.context
+        html_text = ctx.content or ctx.context
         if not html_text and ctx.file_paths:
             html_path = ctx.file_paths[0]
             if Path(html_path).exists():
@@ -386,11 +534,13 @@ class PdfProcessTool(BaseTool):
         if not html_text:
             return {"success": False, "error": "html_to_pdf 需要提供 context（HTML文本）或 file_paths（.html文件路径）"}
 
+        html_text = self._extract_html_body(html_text)
+
         import asyncio
         result = await asyncio.to_thread(
             html_to_pdf,
             html_text=html_text,
-            output_name=params.get("output_name"),
+            output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
             css=params.get("css"),
             engine=params.get("engine", "auto"),
         )
@@ -409,7 +559,7 @@ class PdfProcessTool(BaseTool):
         result = await asyncio.to_thread(
             docx_to_pdf,
             file_path=file_path,
-            output_name=params.get("output_name"),
+            output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
         )
 
         return self._validate_generated_result(result, params)
@@ -600,6 +750,126 @@ class PdfProcessTool(BaseTool):
         return self._validate_generated_result(result, params)
 
     # ── 辅助方法 ──
+
+    @staticmethod
+    def _is_pdf_generation_instruction(text: str) -> bool:
+        if not text:
+            return False
+        return bool(re.search(
+            r"(生成|创建|导出|制作|转成|转换|保存).{0,30}(PDF|pdf|文件)|"
+            r"(Markdown|markdown|HTML|html|Word|word|docx).{0,30}(转|转换|导出|生成).{0,20}(PDF|pdf)",
+            text,
+            re.IGNORECASE,
+        ))
+
+    @staticmethod
+    def _looks_like_markdown_document(text: str) -> bool:
+        lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+        if not lines:
+            return False
+
+        has_heading = any(re.match(r"^#{1,6}\s+\S+", line) for line in lines)
+        has_table = any(line.startswith("|") and line.endswith("|") for line in lines)
+        has_table_separator = any(re.match(r"^\|[\s\-:—–―|]+\|$", line) for line in lines)
+        has_structured_label = any(re.match(r"^\*\*[^*]+?\*\*[：:]", line) for line in lines)
+        has_list = any(re.match(r"^([-*+]|\d+\.)\s+\S+", line) for line in lines)
+
+        score = sum([has_heading, has_table and has_table_separator, has_structured_label, has_list])
+        return score >= 2 or (has_heading and has_table)
+
+    @staticmethod
+    def _looks_like_html(text: str) -> bool:
+        if not text:
+            return False
+        return bool(re.search(r"<(html|body|table|div|section|article|h[1-6]|p|ul|ol)\b", text, re.IGNORECASE))
+
+    def _extract_content_body(self, text: str, content_type: Optional[str]) -> str:
+        normalized_type = (content_type or "").lower()
+        if normalized_type in ("html", "htm") or self._looks_like_html(text):
+            return self._extract_html_body(text)
+        return self._extract_markdown_body(text)
+
+    @staticmethod
+    def _extract_markdown_body(text: str) -> str:
+        """从 Agent 传入的混合 context 中提取 Markdown 正文，剥离工具指令前缀。"""
+        if not text:
+            return ""
+
+        stripped = text.strip()
+        fence = re.fullmatch(r"```(?:markdown|md)?\s*\n(.*?)\n```", stripped, flags=re.DOTALL | re.IGNORECASE)
+        if fence:
+            stripped = fence.group(1).strip()
+
+        lines = stripped.splitlines()
+        first_markdown_idx = None
+        for idx, line in enumerate(lines):
+            s = line.strip()
+            if re.match(r"^#{1,6}\s+\S+", s) or (s.startswith("|") and s.endswith("|")):
+                first_markdown_idx = idx
+                break
+
+        if not first_markdown_idx:
+            return stripped
+
+        prefix = "\n".join(lines[:first_markdown_idx]).strip()
+        if not prefix:
+            return stripped
+
+        instruction_re = re.compile(
+            r"(生成|创建|导出|制作|转成|转换|保存).{0,30}(PDF|pdf|文件)|"
+            r"(格式|形式).{0,20}(Markdown|markdown|表格)|"
+            r"(以下|下面).{0,20}(内容|正文|报告|行程|Markdown|markdown)",
+            re.IGNORECASE,
+        )
+        if instruction_re.search(prefix):
+            return "\n".join(lines[first_markdown_idx:]).strip()
+
+        return stripped
+
+    @staticmethod
+    def _extract_html_body(text: str) -> str:
+        """从混合 context 中提取 HTML 正文，避免自然语言指令破坏 HTML 结构。"""
+        if not text:
+            return ""
+
+        stripped = text.strip()
+        fence = re.fullmatch(r"```(?:html)?\s*\n(.*?)\n```", stripped, flags=re.DOTALL | re.IGNORECASE)
+        if fence:
+            stripped = fence.group(1).strip()
+
+        match = re.search(r"<(?:!doctype\s+html|html|body|table|div|section|article|h[1-6]|p|ul|ol)\b", stripped, re.IGNORECASE)
+        if match and match.start() > 0:
+            prefix = stripped[:match.start()].strip()
+            instruction_re = re.compile(
+                r"(生成|创建|导出|制作|转成|转换|保存).{0,30}(PDF|pdf|文件)|"
+                r"(以下|下面).{0,20}(HTML|html|内容|正文)",
+                re.IGNORECASE,
+            )
+            if instruction_re.search(prefix):
+                return stripped[match.start():].strip()
+        return stripped
+
+    @staticmethod
+    def _extract_title(text: str) -> str:
+        for line in (text or "").splitlines():
+            match = re.match(r"^#{1,6}\s+(.+?)\s*$", line.strip())
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _safe_file_stem(title: str) -> str:
+        stem = re.sub(r'[\\/:*?"<>|\r\n\t]+', "", title).strip(" .")
+        return stem[:80] or "pdf_document"
+
+    @classmethod
+    def _safe_output_name(cls, output_name: Optional[str]) -> Optional[str]:
+        if not output_name:
+            return None
+        name = output_name.replace("\\", "/").split("/")[-1].strip()
+        if name.lower().endswith(".pdf"):
+            name = name[:-4]
+        return f"{cls._safe_file_stem(name)}.pdf"
 
     def _resolve_file(self, file_path: str) -> str:
         """解析文件路径"""
