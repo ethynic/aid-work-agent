@@ -25,7 +25,10 @@ class TemplateAnalyzer:
             "slide_width": prs.slide_width,
             "slide_height": prs.slide_height,
             "theme_colors": self._extract_theme_colors(prs),
-            "layouts": [self._analyze_layout(layout) for layout in prs.slide_layouts],
+            "layouts": [
+                self._analyze_layout(layout, index)
+                for index, layout in enumerate(prs.slide_layouts)
+            ],
         }
 
     def _extract_theme_colors(self, prs: Presentation) -> Dict[str, str]:
@@ -37,10 +40,10 @@ class TemplateAnalyzer:
         except (AttributeError, IndexError):
             return {}
 
-    def _analyze_layout(self, layout) -> dict:
+    def _analyze_layout(self, layout, index: int) -> dict:
         """分析单个 Slide Layout。"""
         return {
-            "index": layout.index,
+            "index": index,
             "name": layout.name,
             "inferred_type": self._infer_type(layout),
             "placeholders": [

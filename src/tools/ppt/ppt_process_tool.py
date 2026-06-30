@@ -7,12 +7,14 @@ PPT 生成工具 — Agent 唯一入口
 """
 
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+from src.tools.ppt.ppt_config import get_ppt_config
 
 
 class PptProcessInput(BaseModel):
@@ -69,9 +71,13 @@ class PptProcessTool(BaseTool):
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         context = kwargs.get("context")
-        file_paths = kwargs.get("file_paths")
+        file_paths = [
+            path
+            for path in (kwargs.get("file_paths") or [])
+            if isinstance(path, str) and path.strip()
+        ]
 
-        if not context and not file_paths:
+        if not (context and str(context).strip()) and not file_paths:
             return {"success": False, "error": "请提供主题或内容（context）或模板文件（file_paths）"}
 
         # 判断模式
@@ -84,7 +90,7 @@ class PptProcessTool(BaseTool):
                 return await self._handle_auto(context, file_paths)
         except Exception as e:
             logger.error(f"[PptProcess] 执行失败: {e}", exc_info=True)
-            return {"success": False, "error": f"PPT生成失败: {e}"}
+            return {"success": False, "error": self._format_user_error(e)}
 
     def _detect_mode(self, context: Optional[str], file_paths: Optional[List[str]]) -> str:
         """检测生成模式。"""
@@ -169,6 +175,17 @@ class PptProcessTool(BaseTool):
         from src.tools.ppt.theme import get_theme
         from src.tools.ppt.generator import PPTGenerator
 
+        config = get_ppt_config()
+        warnings = []
+        renderer = config.renderer
+        if config.renderer == "pptxgenjs":
+            renderer_ready = self._check_node_renderer_ready()
+            if renderer_ready:
+                warnings.append("PptxGenJS 渲染器尚未接入，已使用 python-pptx 路径生成")
+            else:
+                warnings.append("PptxGenJS 渲染器依赖不可用，已回退到 python-pptx 路径")
+            renderer = "python_pptx"
+
         theme = get_theme(plan.get("theme_id"), plan.get("style", "soft"))
         generator = PPTGenerator(theme)
         output_path = generator.generate(plan)
@@ -177,18 +194,36 @@ class PptProcessTool(BaseTool):
             "success": True,
             "file_path": output_path,
             "slide_count": len(plan.get("slides", [])),
+            "renderer": renderer,
             "message": f"已生成PPT，共 {len(plan.get('slides', []))} 页",
         }
+        if warnings:
+            result["warnings"] = warnings
 
         return result
+
+    def _check_node_renderer_ready(self) -> bool:
+        """返回 Node 渲染器依赖是否可用。"""
+        from src.tools.ppt.ppt_capabilities import get_capabilities
+
+        try:
+            caps = get_capabilities()
+            return bool(caps.get("node_renderer", {}).get("available"))
+        except Exception as e:
+            logger.warning(f"[PptProcess] Node 渲染器依赖探测失败: {e}")
+            return False
+
+    def _format_user_error(self, error: Exception) -> str:
+        """生成用户可读错误，避免泄漏异常堆栈。"""
+        return "PPT生成失败，请检查输入内容或稍后重试"
 
     def _looks_like_outline(self, text: str) -> bool:
         """判断文本是否像结构化大纲。"""
         # 包含 markdown 标题或编号列表
         has_headings = bool(
-            __import__("re").search(r"^#{1,3}\s", text, re.MULTILINE)
+            re.search(r"^#{1,3}\s", text, re.MULTILINE)
         )
         has_numbering = bool(
-            __import__("re").search(r"^(\d+[\.\)、]|[-*]\s)", text, re.MULTILINE)
+            re.search(r"^(\d+[\.\)、]|[-*]\s)", text, re.MULTILINE)
         )
         return has_headings or has_numbering or len(text) > 200
