@@ -37,6 +37,10 @@ class TestWordProcessToolDefinition:
         assert "input_schema" in defn
         schema = defn["input_schema"]
         properties = schema.get("properties", {})
+        assert "instruction" in properties
+        assert "content" in properties
+        assert "content_type" in properties
+        assert "output_name" in properties
         assert "context" in properties
         assert "file_paths" in properties
         # task 和 params 不再暴露给 Agent
@@ -177,6 +181,115 @@ class TestWordProcessToolExecution:
 
         assert body.startswith("## 安顺坝陵河大桥3天2晚行程")
         assert "生成一份" not in body
+
+    def test_normalize_legacy_context_splits_instruction_and_content(self):
+        """旧 context 调用会拆分为 instruction + content。"""
+        from src.tools.word.word_process_tool import WordProcessTool
+
+        tool = WordProcessTool()
+        context = (
+            "生成一份贵州安顺坝陵河3天2晚行程Word文档，格式为Markdown表格。\n\n"
+            "## 安顺坝陵河大桥3天2晚行程\n\n"
+            "| 天数 | 时段 | 行程安排 |\n"
+            "|------|------|----------|\n"
+            "| D1 | 上午 | 贵阳接站 |"
+        )
+
+        normalized = tool._normalize_input(
+            context=context,
+            instruction=None,
+            content=None,
+            content_type=None,
+            output_name=None,
+        )
+
+        assert normalized["instruction"].startswith("生成一份贵州安顺坝陵河")
+        assert normalized["content"].startswith("## 安顺坝陵河大桥3天2晚行程")
+        assert "生成一份" not in normalized["content"]
+        assert normalized["content_type"] == "auto"
+
+    @pytest.mark.asyncio
+    async def test_execute_structured_instruction_content_to_word(self):
+        """新入参 instruction + content 路径不污染正文，并优先使用 output_name。"""
+        from src.tools.word.word_process_tool import WordProcessTool
+
+        tool = WordProcessTool()
+        mock_router = AsyncMock()
+        tool._router = mock_router
+        content = (
+            "## 安顺坝陵河大桥3天2晚行程\n\n"
+            "**出发日期**：2026年7月11日（周六）\n\n"
+            "| 天数 | 时段 | 行程安排 |\n"
+            "|------|------|----------|\n"
+            "| D1 | 上午 | 贵阳接站 |"
+        )
+
+        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+             patch("src.tools.word.md_to_word.save_as") as mock_save:
+            mock_convert.return_value = MagicMock()
+            mock_save.return_value = {"file_path": "/tmp/custom.docx", "file_size": 123}
+
+            result = await tool.execute(
+                instruction="生成贵州安顺坝陵河3天2晚行程Word文档",
+                content=content,
+                content_type="markdown",
+                output_name="安顺坝陵河3天2晚行程.docx",
+            )
+
+        converted_text = mock_convert.call_args.args[0]
+        assert result["success"] is True
+        assert converted_text.startswith("## 安顺坝陵河大桥3天2晚行程")
+        assert "生成贵州安顺坝陵河" not in converted_text
+        assert mock_save.call_args.kwargs["file_name"] == "安顺坝陵河3天2晚行程.docx"
+        mock_router.route.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_structured_markdown_simple_document_bypasses_router(self):
+        """content_type=markdown 且 instruction 明确生成 Word 时，简单 Markdown 也走规则路由。"""
+        from src.tools.word.word_process_tool import WordProcessTool
+
+        tool = WordProcessTool()
+        mock_router = AsyncMock()
+        tool._router = mock_router
+        content = "# 项目说明\n\n这是一个没有表格和列表的简单 Markdown 文档。"
+
+        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+             patch("src.tools.word.md_to_word.save_as") as mock_save:
+            mock_convert.return_value = MagicMock()
+            mock_save.return_value = {"file_path": "/tmp/project.docx", "file_size": 123}
+
+            result = await tool.execute(
+                instruction="生成Word文档",
+                content=content,
+                content_type="markdown",
+            )
+
+        assert result["success"] is True
+        assert mock_convert.call_args.args[0] == content
+        mock_router.route.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_output_name_is_sanitized(self):
+        """显式 output_name 只作为文件名使用，不允许携带路径片段。"""
+        from src.tools.word.word_process_tool import WordProcessTool
+
+        tool = WordProcessTool()
+        content = "# 项目说明\n\n这是一个简单 Markdown 文档。"
+
+        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+             patch("src.tools.word.md_to_word.save_as") as mock_save:
+            mock_convert.return_value = MagicMock()
+            mock_save.return_value = {"file_path": "/tmp/project.docx", "file_size": 123}
+
+            result = await tool.execute(
+                instruction="生成Word文档",
+                content=content,
+                content_type="markdown",
+                output_name="../阶段一:验证?.docx",
+            )
+
+        assert result["success"] is True
+        assert mock_save.call_args.kwargs["file_name"] == "阶段一验证.docx"
 
     @pytest.mark.asyncio
     async def test_handle_md_to_word_uses_clean_markdown_body(self):
