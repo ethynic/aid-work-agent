@@ -61,6 +61,7 @@
 | 25 | 旅游报价价格解析性能优化 | 🔧 部分完成 | 酒店、景点门票/项目、行程解析均已改为 DeepSeek V4 Pro 关闭推理；酒店用候选压缩短 prompt，景点保留 LLM 主路径并新增团队票优先后处理，行程解析补充无项目景点/活动名原样保留自检。规则优先仍待后续评估。2026-06-22 | [设计](system/design-travel-quote-price-parser-performance.md) | — |
 | 27 | 酒店价格表六列格式升级 + 房型合并解析 | 🔧 部分完成 | hotel_excel_parser 由五列（房型\|客户类型\|价格\|含早\|适用日期）升级为六列（房型\|散客价\|团客价\|含早\|适用日期\|备注），第一行强制表头；房型列合并床型/面积/景观等属性便于房型匹配；只解析对外价格、丢弃内部结算价、单价格自动复制到散客/团客两列；hotel.py 的 _parse_hotel_price_rows/_select_team_price_by_llm/_extract_first_team_price 同步适配新结构，对外报价走团客价口径。2026-06-23 | [设计](subagent/travel-consultant/hotel_excel_to_kb_design.md) | — |
 | 28 | 酒店报价房型自动解析 + 含早写入备注 | 🔧 部分完成 | ① itinerary_parser 从行程文本提取房型写入 hotel_stays[].room_type（默认 ""，hotel_overrides.room_type 优先级更高）；② _select_team_price_by_llm 改为让 LLM 输出"行序号"，函数据此返回 {price, breakfast, room_type} dict，含早/选中房型信息不再丢失；③ prompt 强化"价格-房型配对"原则：明确告诉 LLM 选中的房型会原样展示给客户，必须与团队构成匹配（学生/老师团默认标准间，不因价格高低改选）；④ calculate_hotel_stays/_calculate_hotel_cost_from_kb 的 remark 强制写入"房型=XX"（即使客户未指定房型，也用 LLM 选中行的房型；价格表行房型为空时兜底"标准间"）+ 含早原文（如"含双早"），杜绝"裸价格"；⑤ 新增 evaluate_hotel_breakfast_roomtype_stability.py 跑房型+含早 3 轮稳定性测试，旧评估脚本同步兼容 dict 返回值。代码改动完成，3 轮稳定性测试待在能连 DB 的环境运行。2026-06-29 | — | — |
+| 29 | PDF 工具质量验证增强 | 🔧 部分完成 | P0 已完成：新增 inspect/render_pages/validate、Poppler/PyMuPDF 渲染、结构化检查、生成后自动校验、页码语义统一和依赖探测；修复 split 保存顺序、无效页码静默成功、文件名安全、HTML 表格顺序、测试漂移和旧设计文档不一致问题。PDF 相关单测 100 个通过。P1/P2（水印、加密、reportlab 等）待后续。2026-06-30 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | [开发计划](tools/pdf/pdf_tool_quality_validation_dev_plan.md) |
 
 ## 渠道集成
 

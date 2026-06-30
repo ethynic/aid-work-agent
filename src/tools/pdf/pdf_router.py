@@ -25,6 +25,9 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 8. merge - 合并多个PDF文件
 9. split - 按页码范围拆分PDF
 10. extract_pages - 提取PDF的指定页面为独立文件
+11. inspect - 检查PDF结构、页数、尺寸、元数据、是否加密
+12. render_pages - 将PDF页面渲染成PNG图片用于预览或质检
+13. validate - 验证PDF是否可打开、页数正常、渲染是否基本正常
 
 ## 判断规则
 
@@ -37,6 +40,9 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - 有 .docx 文件且要求转为 PDF → docx_to_pdf
 - 有多个 PDF 文件且要求合并 → merge
 - 有 PDF 文件且要求拆分/按页提取 → split 或 extract_pages
+- 有 PDF 文件且要求检查结构/元数据/页数/是否正常 → inspect
+- 有 PDF 文件且要求渲染页面/生成预览图 → render_pages
+- 有 PDF 文件且要求验证质量/检查能否交付/检查排版是否正常 → validate
 - 不确定 PDF 是文字型还是扫描件 → 先 read，如果结果太少会自动提示用 ocr
 - 操作可组合，如 "先读取内容再转 Markdown" → read,pdf_to_md
 
@@ -46,7 +52,8 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - extract_pages 操作需要在 params 中提供 pages，格式如 [1, 3, 5]（页码，从1开始）
 - merge 操作的文件来自 file_paths（多个文件路径）
 - md_to_pdf / html_to_pdf 可在 params 中提供 title 和 output_name
-- read 操作可在 params 中提供 pages，格式如 [1, 2, 3]（只读取指定页）
+- 所有用户可见页码均从1开始
+- read/read_tables/pdf_to_md/render_pages/validate 操作可在 params 中提供 pages，格式如 [1, 2, 3]（只处理指定页）
 
 ## 输出格式
 
@@ -156,6 +163,7 @@ class PdfRouter:
                 "read", "read_tables", "ocr", "pdf_to_md",
                 "md_to_pdf", "html_to_pdf", "docx_to_pdf",
                 "merge", "split", "extract_pages",
+                "inspect", "render_pages", "validate",
             }
 
             tasks = [t.strip() for t in task.split(",") if t.strip()]

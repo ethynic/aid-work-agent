@@ -40,6 +40,7 @@ class _HtmlTableParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         if tag == "table":
+            self._flush_non_table_html()
             self._in_table = True
             self._current_table = []
             return
@@ -97,28 +98,23 @@ class _HtmlTableParser(HTMLParser):
 
     def get_result(self) -> List[Dict]:
         """返回 [{type: "html", content: str}, {type: "table", data: [[...]]}, ...]"""
-        result = []
-        if self._non_table_html:
-            html_chunk = "".join(self._non_table_html).strip()
-            if html_chunk:
-                result.append({"type": "html", "content": html_chunk})
-            self._non_table_html = []
-        for frag in self.fragments:
-            result.append(frag)
-        return result
+        self._flush_non_table_html()
+        return list(self.fragments)
+
+    def _flush_non_table_html(self) -> None:
+        if not self._non_table_html:
+            return
+        html_chunk = "".join(self._non_table_html).strip()
+        if html_chunk:
+            self.fragments.append({"type": "html", "content": html_chunk})
+        self._non_table_html = []
 
 
 def _split_html_by_tables(html: str) -> List[Dict]:
     """将 HTML 拆分为交替的 HTML 片段和表格数据。"""
     parser = _HtmlTableParser()
     parser.feed(html)
-    result = parser.get_result()
-    # 处理末尾残留的非表格 HTML
-    if parser._non_table_html:
-        html_chunk = "".join(parser._non_table_html).strip()
-        if html_chunk:
-            result.append({"type": "html", "content": html_chunk})
-    return result
+    return parser.get_result()
 
 
 def _strip_html_tags(text: str) -> str:
@@ -271,19 +267,40 @@ def _clean_control_chars(text: str) -> str:
 
 def _md_to_html(md_text: str) -> str:
     """Markdown → HTML，使用 markdown 库。"""
-    import markdown
+    try:
+        import markdown
 
-    extensions = [
-        "tables",
-        "fenced_code",
-        "toc",
-        "smarty",
-        "sane_lists",
-    ]
-    return markdown.markdown(
-        md_text,
-        extensions=extensions,
-    )
+        extensions = [
+            "tables",
+            "fenced_code",
+            "toc",
+            "smarty",
+            "sane_lists",
+        ]
+        return markdown.markdown(
+            md_text,
+            extensions=extensions,
+        )
+    except ImportError:
+        return _basic_markdown_to_html(md_text)
+
+
+def _basic_markdown_to_html(md_text: str) -> str:
+    """markdown 包缺失时的轻量兜底转换，覆盖标题和普通段落。"""
+    import html
+
+    blocks = []
+    for raw in md_text.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            level = len(heading.group(1))
+            blocks.append(f"<h{level}>{html.escape(heading.group(2))}</h{level}>")
+        else:
+            blocks.append(f"<p>{html.escape(line)}</p>")
+    return "\n".join(blocks)
 
 
 def _find_chinese_font() -> Optional[str]:
@@ -581,6 +598,8 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
                 file_name=output_name or "document.pdf",
             )
             save_result["success"] = True
+            if css:
+                save_result["warnings"] = ["当前 fpdf2 生成路径不支持自定义 CSS，已忽略 css 参数"]
             return save_result
 
     except Exception as e:
@@ -604,6 +623,8 @@ def html_to_pdf(html_text: str, output_name: Optional[str] = None,
                 file_name=output_name or "document.pdf",
             )
             save_result["success"] = True
+            if css:
+                save_result["warnings"] = ["当前 fpdf2 生成路径不支持自定义 CSS，已忽略 css 参数"]
             return save_result
 
     except Exception as e:

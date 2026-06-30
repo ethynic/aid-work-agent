@@ -84,44 +84,59 @@ def split_pdf(file_path: str, ranges: List[str],
         doc = fitz.open(file_path)
         base_name = output_name or Path(file_path).stem
         output_files = []
+        warnings = []
 
         for range_str in ranges:
             parts = range_str.split("-")
             if len(parts) != 2:
+                warnings.append(f"忽略无效页码范围: {range_str}")
                 continue
             try:
                 start = int(parts[0].strip()) - 1  # 转为 0-indexed
                 end = int(parts[1].strip())  # end 是闭区间，fitz 用法中 end 独占
             except ValueError:
+                warnings.append(f"忽略无效页码范围: {range_str}")
                 continue
 
             start = max(0, start)
             end = min(end, doc.page_count)
+            if start >= end:
+                warnings.append(f"忽略越界或空页码范围: {range_str}")
+                continue
 
             new_doc = fitz.open()
-            new_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
-            new_doc.close()
+            try:
+                new_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
 
-            # 保存
-            import tempfile
-            with tempfile.TemporaryDirectory() as tmpdir:
-                part_name = f"{base_name}_p{start+1}-{end}.pdf"
-                temp_path = str(Path(tmpdir) / part_name)
-                new_doc.save(temp_path)
+                # 保存
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    part_name = f"{base_name}_p{start+1}-{end}.pdf"
+                    temp_path = str(Path(tmpdir) / part_name)
+                    new_doc.save(temp_path)
+
+                    save_result = PdfFileHandler.save_temp(
+                        source_path=temp_path,
+                        file_name=part_name,
+                    )
+                    output_files.append(save_result)
+            finally:
                 new_doc.close()
 
-                save_result = PdfFileHandler.save_temp(
-                    source_path=temp_path,
-                    file_name=part_name,
-                )
-                output_files.append(save_result)
-
         doc.close()
+
+        if not output_files:
+            return {
+                "success": False,
+                "error": "拆分PDF失败：没有有效的页码范围",
+                "warnings": warnings,
+            }
 
         return {
             "success": True,
             "files": output_files,
             "count": len(output_files),
+            "warnings": warnings,
         }
     except Exception as e:
         logger.error(f"[PdfMerger] 拆分失败: {e}", exc_info=True)
@@ -149,11 +164,18 @@ def extract_pages(file_path: str, pages: List[int],
     try:
         doc = fitz.open(file_path)
         new_doc = fitz.open()
+        valid_pages = []
 
         for page_num in pages:
             idx = page_num - 1  # 转为 0-indexed
             if 0 <= idx < doc.page_count:
                 new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
+                valid_pages.append(page_num)
+
+        if not valid_pages:
+            new_doc.close()
+            doc.close()
+            return {"success": False, "error": "提取页面失败：没有有效的页码"}
 
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -168,8 +190,8 @@ def extract_pages(file_path: str, pages: List[int],
             file_name=part_name,
         )
         save_result["success"] = True
-        save_result["extracted_pages"] = pages
-        save_result["page_count"] = len(pages)
+        save_result["extracted_pages"] = valid_pages
+        save_result["page_count"] = len(valid_pages)
         return save_result
 
     except Exception as e:

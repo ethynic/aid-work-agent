@@ -26,9 +26,13 @@ class TaskType:
     MERGE = "merge"
     SPLIT = "split"
     EXTRACT_PAGES = "extract_pages"
+    INSPECT = "inspect"
+    RENDER_PAGES = "render_pages"
+    VALIDATE = "validate"
 
     ALL = {READ, READ_TABLES, OCR, PDF_TO_MD, MD_TO_PDF,
-           HTML_TO_PDF, DOCX_TO_PDF, MERGE, SPLIT, EXTRACT_PAGES}
+           HTML_TO_PDF, DOCX_TO_PDF, MERGE, SPLIT, EXTRACT_PAGES,
+           INSPECT, RENDER_PAGES, VALIDATE}
 
 
 class PdfProcessInput(BaseModel):
@@ -65,6 +69,7 @@ TOOL_DESCRIPTION = """PDF文档处理工具。所有与PDF文件相关的操作�
 - 用户要求将PDF转为Markdown
 - 用户要求将Markdown/HTML/Word转为PDF
 - 用户要求合并、拆分、提取PDF页面
+- 用户要求检查PDF结构、渲染PDF页面、验证PDF质量
 - 用户上传了.pdf文件并要求处理
 不要自己处理PDF文件，一律交给本工具。
 
@@ -163,6 +168,9 @@ class PdfProcessTool(BaseTool):
             "merge": self._handle_merge,
             "split": self._handle_split,
             "extract_pages": self._handle_extract_pages,
+            "inspect": self._handle_inspect,
+            "render_pages": self._handle_render_pages,
+            "validate": self._handle_validate,
         }
         return handlers.get(op)
 
@@ -236,6 +244,19 @@ class PdfProcessTool(BaseTool):
                     merged["file_id"] = r["file_id"]
                 if r.get("download_url"):
                     merged["download_url"] = r["download_url"]
+            elif op == "inspect":
+                merged["inspection"] = r.get("inspection", r)
+            elif op == "render_pages":
+                merged["rendered_pages"] = r.get("pages", [])
+                merged["count"] = r.get("count", 0)
+                merged["renderer"] = r.get("renderer", "")
+            elif op == "validate":
+                merged["validation"] = r.get("validation", r)
+
+            if r.get("validation"):
+                merged["validation"] = r["validation"]
+            if r.get("warnings"):
+                merged.setdefault("warnings", []).extend(r["warnings"])
 
         if ctx.file_paths:
             merged["final_file_path"] = ctx.file_paths[0]
@@ -251,7 +272,7 @@ class PdfProcessTool(BaseTool):
             return {"success": False, "error": "read 操作需要 file_paths 参数"}
 
         file_path = self._resolve_file(ctx.file_paths[0])
-        pages = params.get("pages")
+        pages = self._normalize_user_pages(file_path, params.get("pages"))
         return read_text(file_path, pages=pages)
 
     async def _handle_read_tables(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -261,7 +282,7 @@ class PdfProcessTool(BaseTool):
             return {"success": False, "error": "read_tables 操作需要 file_paths 参数"}
 
         file_path = self._resolve_file(ctx.file_paths[0])
-        pages = params.get("pages")
+        pages = self._normalize_user_pages(file_path, params.get("pages"))
         return extract_tables(file_path, pages=pages)
 
     async def _handle_ocr(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -290,9 +311,10 @@ class PdfProcessTool(BaseTool):
             return {"success": False, "error": "pdf_to_md 操作需要 file_paths 参数"}
 
         file_path = self._resolve_file(ctx.file_paths[0])
+        pages = self._normalize_user_pages(file_path, params.get("pages"))
 
         import asyncio
-        return await asyncio.to_thread(convert_smart, file_path)
+        return await asyncio.to_thread(convert_smart, file_path, pages=pages)
 
     async def _handle_md_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_writer import md_to_pdf
@@ -315,7 +337,7 @@ class PdfProcessTool(BaseTool):
             title=params.get("title", ""),
         )
 
-        return result
+        return self._validate_generated_result(result, params)
 
     async def _handle_html_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_writer import html_to_pdf
@@ -334,9 +356,10 @@ class PdfProcessTool(BaseTool):
             html_to_pdf,
             html_text=html_text,
             output_name=params.get("output_name"),
+            css=params.get("css"),
         )
 
-        return result
+        return self._validate_generated_result(result, params)
 
     async def _handle_docx_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_writer import docx_to_pdf
@@ -353,7 +376,7 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        return result
+        return self._validate_generated_result(result, params)
 
     async def _handle_merge(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_merger import merge_pdfs
@@ -368,7 +391,7 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        return result
+        return self._validate_generated_result(result, params)
 
     async def _handle_split(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_merger import split_pdf
@@ -390,7 +413,7 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
-        return result
+        return self._validate_generated_result(result, params)
 
     async def _handle_extract_pages(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.pdf.pdf_merger import extract_pages
@@ -412,7 +435,50 @@ class PdfProcessTool(BaseTool):
             output_name=params.get("output_name"),
         )
 
+        return self._validate_generated_result(result, params)
+
+    async def _handle_inspect(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_inspector import inspect_pdf
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "inspect 操作需要 file_paths 参数"}
+
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = inspect_pdf(file_path)
+        if result.get("success"):
+            return {"success": True, "inspection": result}
         return result
+
+    async def _handle_render_pages(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_renderer import render_pages
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "render_pages 操作需要 file_paths 参数"}
+
+        file_path = self._resolve_file(ctx.file_paths[0])
+        return render_pages(
+            file_path,
+            pages=params.get("pages"),
+            dpi=params.get("dpi", 150),
+            max_pages=params.get("max_pages", 10),
+            renderer=params.get("renderer", "auto"),
+        )
+
+    async def _handle_validate(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_validator import validate_pdf
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "validate 操作需要 file_paths 参数"}
+
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = validate_pdf(
+            file_path,
+            level=params.get("level", "structural"),
+            pages=params.get("pages"),
+            render_dpi=params.get("dpi", 150),
+            max_pages=params.get("max_pages", 10),
+        )
+        return {"success": result.get("success", False), "validation": result}
 
     # ── 辅助方法 ──
 
@@ -423,3 +489,76 @@ class PdfProcessTool(BaseTool):
         if not Path(resolved).exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
         return resolved
+
+    def _normalize_user_pages(self, file_path: str, pages: Optional[List[int]]) -> Optional[List[int]]:
+        """外部页码 1-based，转换为内部 PyMuPDF/pdfplumber 使用的 0-based。"""
+        if not pages:
+            return None
+
+        page_count = None
+        try:
+            from src.tools.pdf.pdf_lib import PdfFileHandler
+            page_count = PdfFileHandler.get_page_count(file_path)
+        except Exception:
+            pass
+
+        normalized = []
+        for page in pages:
+            try:
+                p = int(page)
+            except (TypeError, ValueError):
+                continue
+            if p < 1:
+                continue
+            idx = p - 1
+            if page_count is not None and idx >= page_count:
+                continue
+            if idx not in normalized:
+                normalized.append(idx)
+        return normalized
+
+    def _validate_generated_result(self, result: Dict, params: Dict) -> Dict:
+        """对真实存在的生成结果追加 PDF 校验；mock 路径不存在时不阻断单测。"""
+        if not result.get("success"):
+            return result
+
+        file_paths = []
+        if result.get("file_path"):
+            file_paths.append(result["file_path"])
+        for item in result.get("files", []) or []:
+            if item.get("file_path"):
+                file_paths.append(item["file_path"])
+
+        if not file_paths:
+            return result
+
+        validations = []
+        warnings = list(result.get("warnings", []))
+        from src.tools.pdf.pdf_validator import validate_pdf
+
+        for file_path in file_paths:
+            if not Path(file_path).exists():
+                warnings.append(f"跳过PDF校验，文件不存在: {file_path}")
+                continue
+            validation = validate_pdf(
+                file_path,
+                level=params.get("validate_level", "structural"),
+            )
+            validations.append(validation)
+            if not validation.get("success"):
+                result["success"] = False
+                result["error"] = "PDF生成后校验失败: " + "; ".join(validation.get("errors", []))
+                result["validation"] = validation
+                return result
+
+        if len(validations) == 1:
+            result["validation"] = validations[0]
+        elif validations:
+            result["validation"] = {
+                "success": all(v.get("success") for v in validations),
+                "level": params.get("validate_level", "structural"),
+                "files": validations,
+            }
+        if warnings:
+            result["warnings"] = warnings
+        return result

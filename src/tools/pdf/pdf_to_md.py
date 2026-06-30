@@ -44,13 +44,13 @@ def convert(file_path: str, pages: Optional[List[int]] = None) -> Dict[str, Any]
         return {"success": False, "error": f"PDF转Markdown失败: {e}"}
 
 
-def convert_smart(file_path: str) -> Dict[str, Any]:
+def convert_smart(file_path: str, pages: Optional[List[int]] = None) -> Dict[str, Any]:
     """智能转换：自动判断文字型或扫描件。
 
     1. 先尝试 PyMuPDF4LLM 提取（文字型 PDF）
     2. 如果结果为空或极少文本 → 判断为扫描件 → 自动降级到 OCR
     """
-    result = convert(file_path)
+    result = convert(file_path, pages=pages)
     if not result.get("success"):
         # PyMuPDF4LLM 失败，尝试 OCR
         return _ocr_fallback(file_path)

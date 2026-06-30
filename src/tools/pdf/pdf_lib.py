@@ -8,6 +8,7 @@ PDF 工具核心库
 """
 
 import uuid
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -30,12 +31,12 @@ class PdfFileHandler:
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        if not file_name:
-            file_name = f"document_{uuid.uuid4().hex[:8]}.pdf"
-        elif not file_name.lower().endswith(".pdf"):
-            file_name += ".pdf"
+        file_name = PdfFileHandler.sanitize_pdf_filename(file_name)
 
         output_path = save_dir / file_name
+        if output_path.exists():
+            output_path = save_dir / f"{output_path.stem}_{uuid.uuid4().hex[:8]}{output_path.suffix}"
+
         import shutil
         shutil.copy2(str(src), str(output_path))
 
@@ -43,7 +44,27 @@ class PdfFileHandler:
         return {
             "file_path": str(output_path.absolute()),
             "file_size": file_size,
+            "display_name": output_path.name,
         }
+
+    @staticmethod
+    def sanitize_pdf_filename(file_name: Optional[str] = None) -> str:
+        """生成安全的 PDF 文件名，禁止路径穿越并自动补齐 .pdf 后缀。"""
+        if not file_name:
+            return f"document_{uuid.uuid4().hex[:8]}.pdf"
+
+        name = Path(str(file_name)).name.strip()
+        if not name:
+            name = f"document_{uuid.uuid4().hex[:8]}"
+
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
+        name = re.sub(r"\s+", " ", name).strip(" .")
+        if not name:
+            name = f"document_{uuid.uuid4().hex[:8]}"
+
+        if not name.lower().endswith(".pdf"):
+            name += ".pdf"
+        return name
 
     @staticmethod
     def get_session_dir() -> Path:

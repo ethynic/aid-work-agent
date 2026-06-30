@@ -96,6 +96,7 @@ class TestPdfProcessToolDefinition:
             "read", "read_tables", "ocr", "pdf_to_md",
             "md_to_pdf", "html_to_pdf", "docx_to_pdf",
             "merge", "split", "extract_pages",
+            "inspect", "render_pages", "validate",
         }
         assert TaskType.ALL == expected
 
@@ -635,121 +636,89 @@ class TestPdfWriter:
     """
 
     def test_md_to_pdf_success(self):
-        """Markdown 转 PDF 成功 — 通过 mock 整个函数内部依赖"""
+        """Markdown 转 PDF 成功"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_pdf = os.path.join(tmpdir, "output.pdf")
-            with open(output_pdf, "wb") as f:
-                f.write(b"%PDF-1.4 fake content")
 
-            # 直接 mock md_to_pdf 内部调用的关键路径
-            with patch("src.tools.pdf.pdf_writer._find_pandoc", return_value="pandoc"), \
-                 patch("src.tools.pdf.pdf_writer._get_default_css", return_value=""), \
-                 patch("subprocess.run") as mock_run, \
+            def fake_create_pdf(html_body, output_path, title=""):
+                with open(output_path, "wb") as f:
+                    f.write(b"%PDF-1.4")
+
+            with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=fake_create_pdf), \
                  patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": output_pdf, "file_size": 1024}):
-
-                def fake_run(cmd, **kwargs):
-                    # 模拟 pandoc 写出 PDF
-                    o_idx = cmd.index("-o")
-                    with open(cmd[o_idx + 1], "wb") as f:
-                        f.write(b"%PDF-1.4")
-                    return MagicMock(stderr="")
-                mock_run.side_effect = fake_run
                 result = md_to_pdf("# Test\n\nHello world", output_name="test.pdf")
 
             assert result["success"] is True
             assert result["file_path"] == output_pdf
 
-    def test_md_to_pdf_pandoc_failure(self):
-        """Pandoc 生成 PDF 失败（PDF 文件未生成）"""
+    def test_md_to_pdf_no_output_file(self):
+        """fpdf2 未输出文件"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        with patch("src.tools.pdf.pdf_writer._find_pandoc", return_value="pandoc"), \
-             patch("src.tools.pdf.pdf_writer._get_default_css", return_value=""), \
-             patch("subprocess.run", return_value=MagicMock(stderr="Error: conversion failed")):
+        with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", return_value=None):
             result = md_to_pdf("# Test")
 
         assert result["success"] is False
-        assert "PDF 生成失败" in result["error"]
+        assert "fpdf2" in result["error"]
 
-    def test_md_to_pdf_timeout(self):
-        """PDF 生成超时"""
-        import subprocess
+    def test_md_to_pdf_render_exception(self):
+        """fpdf2 渲染异常"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        with patch("src.tools.pdf.pdf_writer._find_pandoc", return_value="pandoc"), \
-             patch("src.tools.pdf.pdf_writer._get_default_css", return_value=""), \
-             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="pandoc", timeout=120)):
+        with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=RuntimeError("render failed")):
             result = md_to_pdf("# Test")
 
         assert result["success"] is False
-        assert "超时" in result["error"]
+        assert "生成PDF失败" in result["error"]
 
-    def test_md_to_pdf_pandoc_not_found(self):
-        """Pandoc 未安装"""
+    def test_md_to_pdf_css_warning(self):
+        """当前 fpdf2 路径忽略 css 参数并返回 warning"""
         from src.tools.pdf.pdf_writer import md_to_pdf
-
-        with patch("src.tools.pdf.pdf_writer._find_pandoc", side_effect=FileNotFoundError("Pandoc not found")):
-            result = md_to_pdf("# Test")
-
-        assert result["success"] is False
-        assert "Pandoc" in result["error"]
-
-    def test_html_to_pdf_pandoc_path(self):
-        """HTML 转 PDF 走 Pandoc 路径"""
-        from src.tools.pdf.pdf_writer import html_to_pdf
-
-        with patch("src.tools.pdf.pdf_writer._html_to_pdf_via_pandoc") as mock_pandoc:
-            mock_pandoc.return_value = {"success": True, "file_path": "/fake/output.pdf", "file_size": 512}
-            result = html_to_pdf("<html><body>Hello</body></html>")
-
-        assert result["success"] is True
-
-    def test_html_to_pdf_weasyprint_fallback(self):
-        """HTML 转 PDF 回退到 WeasyPrint"""
-        from src.tools.pdf.pdf_writer import html_to_pdf
-
-        with patch("src.tools.pdf.pdf_writer._html_to_pdf_via_pandoc", side_effect=RuntimeError("pandoc failed")), \
-             patch("src.tools.pdf.pdf_writer._html_to_pdf_via_weasyprint") as mock_ws:
-            mock_ws.return_value = {"success": True, "file_path": "/fake/output.pdf", "file_size": 256}
-            result = html_to_pdf("<html><body>Hello</body></html>")
-
-        assert result["success"] is True
-        mock_ws.assert_called_once()
-
-    def test_html_to_pdf_via_weasyprint_success(self):
-        """WeasyPrint 直接转换成功"""
-        from src.tools.pdf.pdf_writer import _html_to_pdf_via_weasyprint
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_pdf = os.path.join(tmpdir, "output.pdf")
 
-            mock_ws_module = MagicMock()
-            mock_html = MagicMock()
-            mock_ws_module.HTML.return_value = mock_html
-
-            def fake_write_pdf(path):
-                with open(path, "wb") as f:
+            def fake_create_pdf(html_body, output_path, title=""):
+                with open(output_path, "wb") as f:
                     f.write(b"%PDF-1.4")
-            mock_html.write_pdf.side_effect = fake_write_pdf
 
-            with patch.dict("sys.modules", {"weasyprint": mock_ws_module}), \
+            with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=fake_create_pdf), \
+                 patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": output_pdf, "file_size": 1024}):
+                result = md_to_pdf("# Test", css="/fake/style.css")
+
+        assert result["success"] is True
+        assert "warnings" in result
+
+    def test_html_to_pdf_success(self):
+        """HTML 转 PDF 走 fpdf2 路径"""
+        from src.tools.pdf.pdf_writer import html_to_pdf
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_pdf = os.path.join(tmpdir, "output.pdf")
+
+            def fake_create_pdf(html_body, output_path, title=""):
+                with open(output_path, "wb") as f:
+                    f.write(b"%PDF-1.4")
+
+            with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=fake_create_pdf), \
                  patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": output_pdf, "file_size": 256}):
-                result = _html_to_pdf_via_weasyprint("<html><body>Hello</body></html>")
+                result = html_to_pdf("<html><body>Hello</body></html>")
 
         assert result["success"] is True
 
-    def test_html_to_pdf_via_weasyprint_not_installed(self):
-        """WeasyPrint 未安装"""
-        from src.tools.pdf.pdf_writer import _html_to_pdf_via_weasyprint
+    def test_split_html_by_tables_preserves_order(self):
+        """HTML 表格拆分保持正文/表格顺序"""
+        from src.tools.pdf.pdf_writer import _split_html_by_tables
 
-        # 模拟 ImportError
-        with patch.dict("sys.modules", {"weasyprint": None}):
-            result = _html_to_pdf_via_weasyprint("<html>Hello</html>")
+        parts = _split_html_by_tables("<p>before</p><table><tr><td>A</td></tr></table><p>after</p>")
 
-        assert result["success"] is False
-        assert "WeasyPrint" in result["error"]
+        assert parts[0]["type"] == "html"
+        assert "before" in parts[0]["content"]
+        assert parts[1]["type"] == "table"
+        assert parts[2]["type"] == "html"
+        assert "after" in parts[2]["content"]
 
     def test_docx_to_pdf_file_not_found(self):
         """Word 转 PDF 文件不存在"""
@@ -960,8 +929,8 @@ class TestPdfMerger:
              patch("src.tools.pdf.pdf_merger.Path", side_effect=make_path):
             result = split_pdf("/fake/test.pdf", ["invalid", "a-b"])
 
-        assert result["success"] is True
-        assert result["count"] == 0
+        assert result["success"] is False
+        assert "没有有效的页码范围" in result["error"]
 
     def test_extract_pages_file_not_found(self):
         """提取页面时文件不存在"""
@@ -1184,6 +1153,7 @@ class TestPdfRouter:
             "read", "read_tables", "ocr", "pdf_to_md",
             "md_to_pdf", "html_to_pdf", "docx_to_pdf",
             "merge", "split", "extract_pages",
+            "inspect", "render_pages", "validate",
         ]
         for task in valid_tasks:
             result = router._parse_response(f'{{"task": "{task}", "params": {{}}, "reason": "test"}}')

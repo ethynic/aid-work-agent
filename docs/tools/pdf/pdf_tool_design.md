@@ -1,6 +1,8 @@
 # PDF 工具设计文档
 
-> 版本: v1.1 | 创建日期: 2026-05-09 | 状态: 第一阶段已完成
+> 版本: v1.2 | 创建日期: 2026-05-09 | 最近更新: 2026-06-30 | 状态: 第一阶段已完成，质量验证增强开发中
+
+> **实现校准（2026-06-30）**：本文档早期 v1.1 方案曾以 Pandoc + WeasyPrint 作为 Markdown/HTML 转 PDF 主路径。当前代码已调整为 `markdown` 解析 + `fpdf2` 纯 Python 生成；Pandoc 仅作为 `docx_to_pdf` 的回退路径之一。PDF 质量验证增强、实现质量修复和差距分析见 [PDF 工具能力差距分析与增强设计方案](pdf_tool_gap_analysis_design.md)，开发计划见 [PDF 工具质量验证增强开发计划](pdf_tool_quality_validation_dev_plan.md)。
 
 ## 1. 概述
 
@@ -15,7 +17,9 @@ PDF 工具是一个综合性的 PDF 处理工具包，遵循 Word 工具的架�
 | `PyMuPDF` (fitz) | >=1.23.0 | PDF 文本提取、元数据读取、页面渲染为图片、PDF 合并/拆分 |
 | `pdfplumber` | >=0.10.0 | PDF 表格提取 |
 | `pypdf` | >=4.0.0 | PDF 合并/拆分/旋转/元数据写入（补充操作） |
-| `pandoc` | 系统级安装 | Markdown/HTML/DOCX → PDF 转换 |
+| `markdown` | >=3.5.0 | Markdown → HTML 解析（缺失时有轻量 fallback） |
+| `fpdf2` | >=2.8.0 | Markdown/HTML → PDF 纯 Python 生成 |
+| `pandoc` | 系统级安装，可选 | DOCX → PDF 回退路径 |
 | `PaddleOCR` | 已有工具 | 扫描件 PDF 的 OCR 识别 |
 
 ### 需新增依赖
@@ -23,11 +27,9 @@ PDF 工具是一个综合性的 PDF 处理工具包，遵循 Word 工具的架�
 | 库 | 用途 | 安装命令 |
 |---|---|---|
 | `PyMuPDF4LLM` | PDF → Markdown 结构化转换（基于已有 PyMuPDF） | `pip install PyMuPDF4LLM` |
-| `weasyprint` | HTML/CSS → PDF（作为 pandoc 的 PDF 引擎） | `pip install weasyprint` |
+| `weasyprint` | 可选，仅用于 Pandoc DOCX 回退路径的 PDF 引擎增强 | `pip install weasyprint` |
 
-> **WeasyPrint 说明**：Pandoc 3.x 默认使用 WeasyPrint 作为 HTML→PDF 引擎。安装后 `pandoc -o output.pdf` 自动使用，无需额外配置。
-> WeasyPrint 在 Windows 上需要 GTK 运行时，Docker（Linux）环境下直接 `pip install` 即可。
-> 如果部署环境不便安装 WeasyPrint，可回退到 `pandoc → DOCX → LibreOffice → PDF` 路径。
+> **当前实现说明**：`md_to_pdf` / `html_to_pdf` 不依赖 Pandoc 或 WeasyPrint；复杂 HTML/CSS 高保真转换不在第一阶段承诺范围内。
 
 ---
 
@@ -324,90 +326,54 @@ def convert_smart(file_path: str) -> Dict[str, Any]:
 
 #### `md_to_pdf(md_text, output_name=None, css=None) -> Dict`
 
-利用已有的 Pandoc：
+当前实现使用 `markdown + fpdf2`。`css` 参数暂不做高保真支持，传入时返回 warning。
 
 ```python
 def md_to_pdf(md_text: str, output_name: str = None,
               css: str = None, title: str = "") -> Dict[str, Any]:
-    """Markdown → PDF，通过 Pandoc"""
+    """Markdown → PDF，通过 markdown + fpdf2"""
 
-    # 复用 Word 工具的 markdown 预处理逻辑
-    from src.tools.word.md_to_word import normalize_markdown
-    md_text = normalize_markdown(md_text)
-
+    cleaned_md = _preprocess_markdown(md_text)
+    body_html = _md_to_html(cleaned_md)
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, "input.md")
         output_path = os.path.join(tmpdir, "output.pdf")
-
-        Path(input_path).write_text(md_text, encoding="utf-8")
-
-        cmd = [
-            _find_pandoc(),
-            input_path, "-o", output_path,
-            "-f", "markdown+pipe_tables+raw_html+autolink_bare_uris",
-            "--pdf-engine=weasyprint",
-            "--wrap=none",
-            "-V", f"title={title}",
-        ]
-
-        # 如果提供了 CSS 文件
-        if css and Path(css).exists():
-            cmd.extend(["--css", css])
-        else:
-            # 使用内置的默认 CSS（包含中文字体配置）
-            default_css = os.path.join(os.path.dirname(__file__), "default.css")
-            if Path(default_css).exists():
-                cmd.extend(["--css", default_css])
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
+        _create_pdf_with_html(body_html, output_path, title=title)
         if not Path(output_path).exists():
-            return {
-                "success": False,
-                "error": "PDF 生成失败",
-                "debug": result.stderr[:500],
-            }
+            return {"success": False, "error": "PDF 生成失败：fpdf2 未输出文件"}
 
-        # 保存到会话目录
         save_result = PdfFileHandler.save_temp(
             source_path=output_path,
             file_name=output_name or "document.pdf",
         )
-        return {"success": True, **save_result}
+        if css:
+            save_result["warnings"] = ["当前 fpdf2 生成路径不支持自定义 CSS，已忽略 css 参数"]
+        save_result["success"] = True
+        return save_result
 ```
 
 #### `html_to_pdf(html_text, output_name=None) -> Dict`
 
-两种路径：
-1. **Pandoc 路径**（推荐）：`pandoc input.html -o output.pdf --pdf-engine=weasyprint`
-2. **WeasyPrint 直接调用**（备选）：`weasyprint.HTML(string=html_text).write_pdf()`
+当前实现使用简化 HTML 解析 + `fpdf2` 渲染。支持常见标题、段落、表格；复杂 CSS、图片和深层嵌套结构会在质量验证阶段给出 warning，不承诺高保真。
 
 ```python
 def html_to_pdf(html_text: str, output_name: str = None) -> Dict[str, Any]:
-    """HTML → PDF"""
-    # 尝试 Pandoc 路径
-    try:
-        return _html_to_pdf_via_pandoc(html_text, output_name)
-    except Exception:
-        # 回退到 WeasyPrint 直接调用
-        return _html_to_pdf_via_weasyprint(html_text, output_name)
+    """HTML → PDF，通过 fpdf2"""
 ```
 
 #### `docx_to_pdf(file_path, output_name=None) -> Dict`
 
-路径：Pandoc 转 DOCX → PDF，或者直接调用系统工具。
+路径：优先 LibreOffice，回退 Pandoc。
 
 ```python
 def docx_to_pdf(file_path: str, output_name: str = None) -> Dict[str, Any]:
     """Word → PDF"""
-    # Pandoc 路径
-    cmd = [_find_pandoc(), file_path, "-o", output_path, "--pdf-engine=weasyprint"]
-    # 如果 Pandoc 不支持 docx→pdf，回退到 LibreOffice
-    # soffice --headless --convert-to pdf file.docx
+    result = _docx_to_pdf_via_libreoffice(file_path, output_name)
+    if result.get("success"):
+        return result
+    return _docx_to_pdf_via_pandoc(file_path, output_name)
 ```
 
-> **注意**：Pandoc 可以将 DOCX 转为 PDF（内部先转为 LaTeX/HTML 再转 PDF），但效果可能不如 LibreOffice。
-> 如果部署环境有 LibreOffice，优先使用 `soffice --headless --convert-to pdf`。
+> **注意**：LibreOffice 的 Word 转 PDF 效果通常优于 Pandoc。Pandoc 仅作为回退路径。
 
 ### 5.6 pdf_merger.py — 合并/拆分
 
@@ -477,7 +443,7 @@ class PdfFileHandler:
 
 ### 5.8 default.css — 内置样式
 
-用于 Pandoc + WeasyPrint 的默认 PDF 样式，包含中文字体配置：
+历史上用于 Pandoc + WeasyPrint 的默认 PDF 样式。当前 fpdf2 主路径不再依赖 CSS 文件，中文字体由 `pdf_writer._find_chinese_font()` 自动探测：
 
 ```css
 @page {
@@ -645,8 +611,8 @@ tools:
   pdf:
     # Pandoc 路径（复用 Word 工具的查找逻辑）
     pandoc_path: ""  # 空则自动查找
-    # PDF 引擎选择：weasyprint | xelatex | lualatex
-    pdf_engine: "weasyprint"
+    # PDF 生成引擎：fpdf2（当前默认）| reportlab（计划增强）
+    pdf_engine: "fpdf2"
     # 内置 CSS 样式路径（空则使用默认）
     default_css: ""
     # OCR 降级阈值（提取文本少于此字符数时自动提示 OCR）
@@ -662,14 +628,14 @@ tools:
 ### 开发环境
 
 ```bash
-pip install PyMuPDF4LLM weasyprint
+pip install PyMuPDF4LLM
 ```
 
 ### Docker 环境
 
 ```dockerfile
 # 在现有 Dockerfile 中添加
-RUN pip install PyMuPDF4LLM weasyprint
+RUN pip install PyMuPDF4LLM
 
 # 如果需要高质量排版（可选，增加约 1GB 镜像体积）
 # RUN apt-get update && apt-get install -y texlive-xetex texlive-lang-chinese
@@ -683,12 +649,12 @@ RUN pip install PyMuPDF4LLM weasyprint
 |--------|------|--------|--------|------|
 | P0 | 框架搭建（process_tool + router + lib） | 无 | 2天 | ✅ 已完成 |
 | P0 | `read` — 读取 PDF 文本 | PyMuPDF（已有） | 0.5天 | ✅ 已完成 |
-| P0 | `md_to_pdf` — Markdown 转 PDF | Pandoc + WeasyPrint | 1天 | ✅ 已完成 |
+| P0 | `md_to_pdf` — Markdown 转 PDF | markdown + fpdf2 | 1天 | ✅ 已完成 |
 | P1 | `pdf_to_md` — PDF 转 Markdown | PyMuPDF4LLM | 0.5天 | ✅ 已完成 |
 | P1 | `ocr` — OCR 集成 | PaddleOCR（已有） | 0.5天 | ✅ 已完成 |
 | P1 | `read_tables` — 表格提取 | pdfplumber（已有） | 0.5天 | ✅ 已完成 |
-| P2 | `html_to_pdf` — HTML 转 PDF | Pandoc + WeasyPrint | 0.5天 | ✅ 已完成 |
-| P2 | `docx_to_pdf` — Word 转 PDF | Pandoc | 0.5天 | ✅ 已完成 |
+| P2 | `html_to_pdf` — HTML 转 PDF | 简化 HTML + fpdf2 | 0.5天 | ✅ 已完成 |
+| P2 | `docx_to_pdf` — Word 转 PDF | LibreOffice 优先，Pandoc 回退 | 0.5天 | ✅ 已完成 |
 | P2 | `merge` / `split` / `extract_pages` | PyMuPDF（已有） | 1天 | ✅ 已完成 |
 | P3 | HTTP API 层 | 无 | 1天 | ⏳ 待开发 |
 | P3 | 内置 CSS 样式调优 | 无 | 0.5天 | ✅ 已完成 |
@@ -699,13 +665,13 @@ RUN pip install PyMuPDF4LLM weasyprint
 
 ## 13. 风险与注意事项
 
-1. **WeasyPrint 在 Windows 上的 GTK 依赖**：开发环境可能需要额外安装 GTK 运行时。Docker（Linux）环境无此问题。可提供 `pip install weasyprint` 的替代安装指引。
+1. **复杂 HTML/CSS 高保真限制**：当前 `html_to_pdf` 使用 fpdf2 简化渲染，复杂 CSS、图片和深层嵌套结构不承诺还原。后续如需高保真需单独引入 WeasyPrint 或 Playwright print-to-pdf 路径。
 
 2. **中文字体问题**：WeasyPrint 依赖系统字体。Docker 镜像需要安装中文字体包（`fonts-noto-cjk` 或 `fonts-wqy-zenhei`）。
 
 3. **大文件处理**：PDF 转换可能耗时较长，需要设置合理的超时时间，并在 SSE 流中推送进度。
 
-4. **Pandoc 路径复用**：`_find_pandoc()` 函数在 `md_to_word.py` 中已有实现，PDF 工具应提取到共享位置或直接导入复用。
+4. **Pandoc 使用边界**：当前仅 `docx_to_pdf` 回退路径使用 Pandoc，不再作为 Markdown/HTML 转 PDF 主路径。
 
 5. **OCR 工具的函数调用**：PDF 工具直接调用 `paddleocr_doc_parsing()` 函数（同步函数），在 async handler 中需使用 `asyncio.to_thread()` 包装。
 
@@ -725,6 +691,13 @@ RUN pip install PyMuPDF4LLM weasyprint
 - **内置 CSS**：`default.css` 中文字体配置
 - **Agent 注册**：已在 `src/core/agent.py` 的 `_register_builtin_tools()` 中注册
 - **单元测试**：94 个测试用例全部通过（`tests/unit/tools/test_pdf_tool.py`）
+
+### v1.2 实现校准与质量验证增强（2026-06-30）
+
+- **实现校准**：确认 `md_to_pdf/html_to_pdf` 当前主路径为 `fpdf2`，修正文档和测试中残留的 Pandoc/WeasyPrint 假设。
+- **质量修复**：修复拆分 PDF 保存前关闭文档、无效页码静默成功、文件名安全清洗、HTML 表格顺序保持等问题。
+- **质量验证增强**：新增 `inspect`、`render_pages`、`validate` 操作；生成型操作追加结构化校验结果。
+- **测试更新**：PDF 工具相关单测扩展至 100 个并通过。
 
 ### 待完成（P3）
 
