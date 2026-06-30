@@ -236,3 +236,11 @@ pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py
 - 修复测试漂移：移除 PDF writer 测试中对旧 Pandoc/WeasyPrint 私有函数的 mock。
 - 文档同步：`pdf_tool_design.md` 更新为 v1.2，说明当前 fpdf2 主路径。
 - 验证结果：`pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py -q` 通过，100 passed。
+
+### P1 企业文档增强完成（2026-06-30）
+
+- 新增 `pdf_enhancer.py`，实现 `clean_metadata`、`add_watermark`、`protect`、`compress`、`extract_images`、`rotate`。
+- 接入 `pdf_process` 和内部路由，Agent 仍通过同一个 `pdf_process(context, file_paths)` 入口调用。
+- 密码保护不在返回值中回显明文密码，符合敏感信息不明文返回要求。
+- 保持交付链路不变：增强类生成文件仍返回 `file_path/files`，前端下载仍必须由 Agent 调用 `cp`。
+- 验证结果：`pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py tests/unit/tools/test_pdf_p0_contracts.py tests/unit/tools/test_pdf_p1_contracts.py -q` 通过，119 passed，2 skipped（当前环境缺少 pypdf，真实加密/元数据用例跳过）。

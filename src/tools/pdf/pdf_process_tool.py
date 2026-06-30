@@ -29,10 +29,17 @@ class TaskType:
     INSPECT = "inspect"
     RENDER_PAGES = "render_pages"
     VALIDATE = "validate"
+    CLEAN_METADATA = "clean_metadata"
+    ADD_WATERMARK = "add_watermark"
+    PROTECT = "protect"
+    COMPRESS = "compress"
+    EXTRACT_IMAGES = "extract_images"
+    ROTATE = "rotate"
 
     ALL = {READ, READ_TABLES, OCR, PDF_TO_MD, MD_TO_PDF,
            HTML_TO_PDF, DOCX_TO_PDF, MERGE, SPLIT, EXTRACT_PAGES,
-           INSPECT, RENDER_PAGES, VALIDATE}
+           INSPECT, RENDER_PAGES, VALIDATE, CLEAN_METADATA,
+           ADD_WATERMARK, PROTECT, COMPRESS, EXTRACT_IMAGES, ROTATE}
 
 
 class PdfProcessInput(BaseModel):
@@ -70,6 +77,7 @@ TOOL_DESCRIPTION = """PDF文档处理工具。所有与PDF文件相关的操作�
 - 用户要求将Markdown/HTML/Word转为PDF
 - 用户要求合并、拆分、提取PDF页面
 - 用户要求检查PDF结构、渲染PDF页面、验证PDF质量
+- 用户要求清理PDF元数据、添加水印、加密保护、压缩、提取图片、旋转页面
 - 用户上传了.pdf文件并要求处理
 不要自己处理PDF文件，一律交给本工具。
 
@@ -80,7 +88,7 @@ TOOL_DESCRIPTION = """PDF文档处理工具。所有与PDF文件相关的操作�
 工具会自动判断并执行合适的操作。
 
 📦 生成文件后必须用 cp 注册下载（重要）：
-当本工具产生新的 PDF 文件时（Markdown/HTML/Word转PDF、合并、拆分、提取页面，返回结果中含 file_path 或 files），
+当本工具产生新的 PDF 文件时（Markdown/HTML/Word转PDF、合并、拆分、提取页面、清理元数据、添加水印、加密保护、压缩、旋转，返回结果中含 file_path 或 files），
 必须紧接着调用 cp 工具完成交付，用户才能在前端看到并下载：
     cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
 拆分（split）产生多个文件时，对每个文件分别调用 cp，并传对应的 display_name。
@@ -171,6 +179,12 @@ class PdfProcessTool(BaseTool):
             "inspect": self._handle_inspect,
             "render_pages": self._handle_render_pages,
             "validate": self._handle_validate,
+            "clean_metadata": self._handle_clean_metadata,
+            "add_watermark": self._handle_add_watermark,
+            "protect": self._handle_protect,
+            "compress": self._handle_compress,
+            "extract_images": self._handle_extract_images,
+            "rotate": self._handle_rotate,
         }
         return handlers.get(op)
 
@@ -193,7 +207,10 @@ class PdfProcessTool(BaseTool):
                 or result.get("markdown")
             )
 
-        if op in ("md_to_pdf", "html_to_pdf", "docx_to_pdf", "merge", "split", "extract_pages"):
+        if op in (
+            "md_to_pdf", "html_to_pdf", "docx_to_pdf", "merge", "split", "extract_pages",
+            "clean_metadata", "add_watermark", "protect", "compress", "rotate",
+        ):
             if result.get("file_path"):
                 ctx.file_paths = [result["file_path"]]
             elif result.get("files"):
@@ -252,6 +269,24 @@ class PdfProcessTool(BaseTool):
                 merged["renderer"] = r.get("renderer", "")
             elif op == "validate":
                 merged["validation"] = r.get("validation", r)
+            elif op in ("clean_metadata", "add_watermark", "protect", "compress", "rotate"):
+                merged["file_path"] = r.get("file_path", "")
+                merged["file_size"] = r.get("file_size", 0)
+                if r.get("display_name"):
+                    merged["display_name"] = r["display_name"]
+                if r.get("protected"):
+                    merged["protected"] = r["protected"]
+                if r.get("rotated_pages"):
+                    merged["rotated_pages"] = r["rotated_pages"]
+                if r.get("rotation"):
+                    merged["rotation"] = r["rotation"]
+                if r.get("original_size"):
+                    merged["original_size"] = r["original_size"]
+                if r.get("compressed_size"):
+                    merged["compressed_size"] = r["compressed_size"]
+            elif op == "extract_images":
+                merged["images"] = r.get("images", [])
+                merged["count"] = r.get("count", 0)
 
             if r.get("validation"):
                 merged["validation"] = r["validation"]
@@ -479,6 +514,89 @@ class PdfProcessTool(BaseTool):
             max_pages=params.get("max_pages", 10),
         )
         return {"success": result.get("success", False), "validation": result}
+
+    async def _handle_clean_metadata(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_enhancer import clean_metadata
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "clean_metadata 操作需要 file_paths 参数"}
+
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = clean_metadata(file_path, output_name=params.get("output_name"))
+        return self._validate_generated_result(result, params)
+
+    async def _handle_add_watermark(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_enhancer import add_watermark
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "add_watermark 操作需要 file_paths 参数"}
+
+        text = params.get("text") or params.get("watermark_text")
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = add_watermark(
+            file_path,
+            text=text,
+            output_name=params.get("output_name"),
+            opacity=params.get("opacity", 0.18),
+            font_size=params.get("font_size", 42),
+            rotate=params.get("rotate", 0),
+        )
+        return self._validate_generated_result(result, params)
+
+    async def _handle_protect(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_enhancer import protect_pdf
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "protect 操作需要 file_paths 参数"}
+
+        password = params.get("password")
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = protect_pdf(
+            file_path,
+            password=password,
+            output_name=params.get("output_name"),
+        )
+        # 加密后的 PDF 无法做普通内容校验，避免误报失败。
+        return result
+
+    async def _handle_compress(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_enhancer import compress_pdf
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "compress 操作需要 file_paths 参数"}
+
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = compress_pdf(file_path, output_name=params.get("output_name"))
+        return self._validate_generated_result(result, params)
+
+    async def _handle_extract_images(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_enhancer import extract_images
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "extract_images 操作需要 file_paths 参数"}
+
+        file_path = self._resolve_file(ctx.file_paths[0])
+        return extract_images(
+            file_path,
+            pages=params.get("pages"),
+            output_dir=params.get("output_dir"),
+        )
+
+    async def _handle_rotate(self, ctx: PipelineContext, params: Dict) -> Dict:
+        from src.tools.pdf.pdf_enhancer import rotate_pages
+
+        if not ctx.file_paths:
+            return {"success": False, "error": "rotate 操作需要 file_paths 参数"}
+
+        rotation = params.get("rotation", 90)
+        file_path = self._resolve_file(ctx.file_paths[0])
+        result = rotate_pages(
+            file_path,
+            rotation=rotation,
+            pages=params.get("pages"),
+            output_name=params.get("output_name"),
+        )
+        return self._validate_generated_result(result, params)
 
     # ── 辅助方法 ──
 

@@ -97,6 +97,8 @@ class TestPdfProcessToolDefinition:
             "md_to_pdf", "html_to_pdf", "docx_to_pdf",
             "merge", "split", "extract_pages",
             "inspect", "render_pages", "validate",
+            "clean_metadata", "add_watermark", "protect",
+            "compress", "extract_images", "rotate",
         }
         assert TaskType.ALL == expected
 
@@ -1154,6 +1156,8 @@ class TestPdfRouter:
             "md_to_pdf", "html_to_pdf", "docx_to_pdf",
             "merge", "split", "extract_pages",
             "inspect", "render_pages", "validate",
+            "clean_metadata", "add_watermark", "protect",
+            "compress", "extract_images", "rotate",
         ]
         for task in valid_tasks:
             result = router._parse_response(f'{{"task": "{task}", "params": {{}}, "reason": "test"}}')

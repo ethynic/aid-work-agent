@@ -144,11 +144,12 @@ src/tools/pdf/
 | `inspect` | 读取 PDF 结构信息、元数据、页数、页面尺寸、是否加密、文本覆盖率 | P0 |
 | `render_pages` | 将指定页面渲染为 PNG，返回图片路径列表 | P0 |
 | `validate` | 基于结构检查 + 渲染结果输出质量报告 | P0 |
-| `clean_metadata` | 清理标题、作者、创建工具等元数据 | P1 |
-| `add_watermark` | 添加文字水印或图片水印 | P1 |
-| `protect` | 添加密码保护 | P1 |
-| `compress` | 压缩 PDF，降低体积 | P2 |
-| `extract_images` | 提取嵌入图片 | P2 |
+| `clean_metadata` | 清理标题、作者、创建工具等元数据 | P1 ✅ 已完成 |
+| `add_watermark` | 添加文字水印 | P1 ✅ 已完成 |
+| `protect` | 添加密码保护 | P1 ✅ 已完成 |
+| `rotate` | 旋转 PDF 页面 | P1 ✅ 已完成 |
+| `compress` | 压缩 PDF，降低体积 | P2 ✅ 已完成 |
+| `extract_images` | 提取嵌入图片 | P2 ✅ 已完成 |
 
 ## 6. 核心方案
 
@@ -331,16 +332,19 @@ tools:
 
 ### P1：企业常用增强
 
-1. `clean_metadata`：清理 PDF 元数据，降低敏感信息泄露风险。
-2. `add_watermark`：支持文本水印。
-3. `protect`：支持密码保护，注意不得在回复中明文返回密码。
-4. 强化文件交付约束：生成型操作返回稳定的 `file_path/files` 和建议 `display_name`，但仍必须由 Agent 调用 `cp` 完成交付。
+1. `clean_metadata`：清理 PDF 元数据，降低敏感信息泄露风险。✅ 已完成
+2. `add_watermark`：支持文本水印。✅ 已完成
+3. `protect`：支持密码保护，注意不得在回复中明文返回密码。✅ 已完成
+4. `rotate`：支持按页旋转 PDF。✅ 已完成
+5. 强化文件交付约束：生成型操作返回稳定的 `file_path/files` 和建议 `display_name`，但仍必须由 Agent 调用 `cp` 完成交付。✅ 已完成
 
 ### P2：生成质量升级
 
-1. 引入 `reportlab` 报告生成器，覆盖正式报告、报价单、带页眉页脚的固定版式。
-2. 建立 PDF 视觉回归样本集，保存小型样例 PDF 和预期检查结果。
-3. 评估复杂 HTML 转 PDF 的专用路径，如 WeasyPrint 或 Playwright print-to-pdf。
+1. `compress`：使用 PyMuPDF garbage/deflate 策略压缩 PDF。✅ 已完成
+2. `extract_images`：提取 PDF 内嵌图片。✅ 已完成
+3. 引入 `reportlab` 报告生成器，覆盖正式报告、报价单、带页眉页脚的固定版式。⏳ 待开发
+4. 建立 PDF 视觉回归样本集，保存小型样例 PDF 和预期检查结果。⏳ 待开发
+5. 评估复杂 HTML 转 PDF 的专用路径，如 WeasyPrint 或 Playwright print-to-pdf。⏳ 待开发
 
 ## 9. 测试与验收
 

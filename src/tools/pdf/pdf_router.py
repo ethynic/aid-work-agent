@@ -28,6 +28,12 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 11. inspect - 检查PDF结构、页数、尺寸、元数据、是否加密
 12. render_pages - 将PDF页面渲染成PNG图片用于预览或质检
 13. validate - 验证PDF是否可打开、页数正常、渲染是否基本正常
+14. clean_metadata - 清理PDF元数据
+15. add_watermark - 添加文字水印
+16. protect - 添加PDF打开密码保护
+17. compress - 压缩PDF文件大小
+18. extract_images - 提取PDF内嵌图片
+19. rotate - 旋转PDF页面
 
 ## 判断规则
 
@@ -43,6 +49,12 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - 有 PDF 文件且要求检查结构/元数据/页数/是否正常 → inspect
 - 有 PDF 文件且要求渲染页面/生成预览图 → render_pages
 - 有 PDF 文件且要求验证质量/检查能否交付/检查排版是否正常 → validate
+- 有 PDF 文件且要求清理/删除元数据/作者信息 → clean_metadata
+- 有 PDF 文件且要求添加水印 → add_watermark
+- 有 PDF 文件且要求加密/密码保护 → protect
+- 有 PDF 文件且要求压缩/减小体积 → compress
+- 有 PDF 文件且要求提取图片 → extract_images
+- 有 PDF 文件且要求旋转页面 → rotate
 - 不确定 PDF 是文字型还是扫描件 → 先 read，如果结果太少会自动提示用 ocr
 - 操作可组合，如 "先读取内容再转 Markdown" → read,pdf_to_md
 
@@ -54,6 +66,10 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - md_to_pdf / html_to_pdf 可在 params 中提供 title 和 output_name
 - 所有用户可见页码均从1开始
 - read/read_tables/pdf_to_md/render_pages/validate 操作可在 params 中提供 pages，格式如 [1, 2, 3]（只处理指定页）
+- add_watermark 操作需要 params.text
+- protect 操作需要 params.password；密码属于敏感信息，不得在 reason 中复述
+- rotate 操作需要 params.rotation，支持 90/180/270
+- extract_images/rotate 可提供 pages，页码从1开始
 
 ## 输出格式
 
@@ -164,6 +180,8 @@ class PdfRouter:
                 "md_to_pdf", "html_to_pdf", "docx_to_pdf",
                 "merge", "split", "extract_pages",
                 "inspect", "render_pages", "validate",
+                "clean_metadata", "add_watermark", "protect",
+                "compress", "extract_images", "rotate",
             }
 
             tasks = [t.strip() for t in task.split(",") if t.strip()]
