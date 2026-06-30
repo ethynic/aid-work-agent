@@ -160,6 +160,8 @@ class ExcelFileHandler:
             file_name += ".xlsx"
 
         output_path = save_dir / file_name
+        if output_path.exists():
+            output_path = save_dir / f"{output_path.stem}_{uuid.uuid4().hex[:8]}{output_path.suffix}"
         wb.save(str(output_path))
 
         file_size = output_path.stat().st_size
@@ -172,9 +174,30 @@ class ExcelFileHandler:
     def get_session_dir() -> Path:
         """获取当前用户会话的文件存储目录"""
         try:
-            from src.main import _get_tenant_upload_dir
-            return _get_tenant_upload_dir()
-        except ImportError:
+            from src.config.settings import settings
+            from src.saas.context import get_current_tenant_id, get_current_user_id
+
+            project_root = Path(__file__).resolve().parents[3]
+            upload_root = Path(settings.storage.uploads_dir)
+            if not upload_root.is_absolute():
+                upload_root = project_root / upload_root
+
+            tenant_id = get_current_tenant_id()
+            user_id = get_current_user_id()
+
+            if tenant_id and user_id:
+                save_dir = upload_root / tenant_id / user_id
+            elif tenant_id:
+                save_dir = upload_root / tenant_id
+            elif user_id:
+                save_dir = upload_root / user_id
+            else:
+                save_dir = upload_root / "conversation"
+
+            save_dir.mkdir(parents=True, exist_ok=True)
+            return save_dir
+        except Exception as e:
+            logger.warning(f"[ExcelFileHandler] 获取会话目录失败，使用临时目录: {e}")
             import tempfile
             return Path(tempfile.mkdtemp(prefix="excel_"))
 

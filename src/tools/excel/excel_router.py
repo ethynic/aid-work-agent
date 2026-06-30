@@ -6,6 +6,7 @@ Excel 工具内部 LLM 路由器
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -130,6 +131,14 @@ class ExcelRouter:
         Returns:
             {"task": "export", "params": {...}} 或 {"task": "", "params": {}, "error": "..."}
         """
+        rule_result = self._rule_based_route(context, file_paths)
+        if rule_result.get("task"):
+            logger.info(
+                f"[ExcelRouter] 规则路由结果: task={rule_result['task']}, "
+                f"reason={rule_result.get('reason', '')}"
+            )
+            return rule_result
+
         prompt = self._build_prompt(context, file_paths)
         gateway = self._get_gateway()
 
@@ -143,6 +152,8 @@ class ExcelRouter:
             content = response.get("content", "")
             if not content:
                 logger.warning("[ExcelRouter] LLM 返回空内容")
+                if rule_result.get("task"):
+                    return rule_result
                 return {"task": "", "params": {}, "error": "LLM 返回空内容"}
 
             result = self._parse_response(content)
@@ -151,10 +162,14 @@ class ExcelRouter:
                 return result
 
             logger.warning(f"[ExcelRouter] 无法确定操作: {content[:200]}")
+            if rule_result.get("task"):
+                return rule_result
             return {"task": "", "params": {}, "error": "LLM 无法确定操作类型"}
 
         except Exception as e:
             logger.error(f"[ExcelRouter] LLM 调用失败: {e}")
+            if rule_result.get("task"):
+                return rule_result
             return {"task": "", "params": {}, "error": str(e)}
 
     def _build_prompt(self, context: Optional[str], file_paths: Optional[List[str]]) -> str:
@@ -190,3 +205,100 @@ class ExcelRouter:
         except json.JSONDecodeError:
             logger.warning(f"[ExcelRouter] JSON 解析失败: {content[:200]}")
             return {"task": "", "params": {}, "error": "JSON 解析失败"}
+
+    def _rule_based_route(
+        self,
+        context: Optional[str],
+        file_paths: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Handle deterministic spreadsheet tasks without depending on LLM routing."""
+        ctx = context or ""
+        paths = file_paths or []
+        lower_ctx = ctx.lower()
+
+        first_path = Path(paths[0]) if paths else None
+        first_ext = first_path.suffix.lower() if first_path else ""
+
+        wants_excel = any(
+            token in lower_ctx
+            for token in ("excel", "xlsx", "电子表格", "转为excel", "转成excel", "导出", "创建")
+        )
+
+        if paths and first_ext == ".csv" and wants_excel:
+            return {
+                "task": "convert",
+                "params": {
+                    "source_format": "csv",
+                    "target_format": "excel",
+                    "output_name": first_path.with_suffix(".xlsx").name,
+                },
+                "reason": "规则识别：CSV附件转Excel",
+            }
+
+        if paths and first_ext == ".json" and wants_excel:
+            return {
+                "task": "convert",
+                "params": {
+                    "source_format": "json",
+                    "target_format": "excel",
+                    "output_name": first_path.with_suffix(".xlsx").name,
+                },
+                "reason": "规则识别：JSON附件转Excel",
+            }
+
+        data_type = self._detect_context_data_type(ctx)
+        if data_type and wants_excel:
+            return {
+                "task": "export",
+                "params": {
+                    "data_type": data_type,
+                    "file_name": self._extract_output_name(ctx),
+                    "sheet_name": "Sheet1",
+                    "auto_format": True,
+                },
+                "reason": f"规则识别：context包含{data_type}表格数据并要求导出Excel",
+            }
+
+        if paths and any(token in lower_ctx for token in ("markdown", "文本", "查看", "读取", "内容")):
+            return {
+                "task": "to_md",
+                "params": {},
+                "reason": "规则识别：附件转为可读文本",
+            }
+
+        if len(paths) >= 2 and any(token in lower_ctx for token in ("合并", "merge")):
+            return {
+                "task": "merge",
+                "params": {"merge_mode": "sheets"},
+                "reason": "规则识别：合并多个表格文件",
+            }
+
+        return {"task": "", "params": {}, "error": "规则路由未命中"}
+
+    def _detect_context_data_type(self, context: str) -> str:
+        stripped = (context or "").strip()
+        if not stripped:
+            return ""
+        if self._has_markdown_table(stripped):
+            return "markdown"
+        if stripped.startswith("[") or stripped.startswith("{"):
+            return "json"
+        if "," in stripped and "\n" in stripped:
+            return "csv"
+        return ""
+
+    def _has_markdown_table(self, text: str) -> bool:
+        table_lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().startswith("|") and line.strip().endswith("|")
+        ]
+        if len(table_lines) < 2:
+            return False
+        return any(re.match(r"^\|[\s\-:|]+\|$", line) for line in table_lines)
+
+    def _extract_output_name(self, context: str) -> Optional[str]:
+        match = re.search(r"([\w\u4e00-\u9fff（）()《》+_\- ]+\.xlsx)", context or "")
+        if match:
+            return match.group(1).strip()
+        return None

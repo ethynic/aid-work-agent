@@ -223,15 +223,14 @@ def convert_format(file_path: str, target_format: str = "xlsx",
     file_type = ExcelFileHandler.detect_file_type(file_path)
 
     try:
-        if file_type == "csv" and target_format == "excel":
+        if file_type == "csv" and target_format in ("excel", "xlsx"):
             from src.tools.excel.excel_reader import read_sheet
             result = read_sheet(file_path)
             if not result.get("success"):
                 return result
             headers, rows = result["headers"], result["rows"]
             name = output_name or (src.stem + ".xlsx")
-            return create_excel(data=None, data_type="table", file_name=name,
-                                **{"_headers": headers, "_rows": rows})
+            return create_excel(data=[headers] + rows, data_type="table", file_name=name)
 
         elif file_type == "json" and target_format in ("excel", "xlsx"):
             with open(file_path, "r", encoding="utf-8") as f:
@@ -372,6 +371,7 @@ def _set_cell_value(cell, val):
     # 尝试转为数字
     if isinstance(val, str):
         val_stripped = val.strip().replace(",", "")
+        val_stripped = re.sub(r"^[¥￥$]\s*", "", val_stripped)
         try:
             if "." in val_stripped:
                 cell.value = float(val_stripped)

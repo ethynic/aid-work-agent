@@ -190,23 +190,26 @@ def _read_csv(file_path: str) -> Dict[str, Any]:
     """读取 CSV 文件"""
     try:
         # 编码检测 fallback
+        csv_rows = None
         for encoding in ("utf-8-sig", "utf-8", "gbk", "gb2312", "latin-1"):
             try:
                 with open(file_path, "r", encoding=encoding) as f:
                     sample = f.read(4096)
                     f.seek(0)
-                    sniffer = csv.Sniffer()
-                    dialect = sniffer.sniff(sample)
-                    reader = csv.reader(f, dialect)
+                    try:
+                        dialect = csv.Sniffer().sniff(sample)
+                    except csv.Error:
+                        dialect = csv.excel
+                    csv_rows = list(csv.reader(f, dialect))
                     break
-            except (UnicodeDecodeError, csv.Error):
+            except UnicodeDecodeError:
                 continue
         else:
             return {"success": False, "error": "无法识别 CSV 编码格式"}
 
         headers = []
         rows = []
-        for idx, row in enumerate(reader):
+        for idx, row in enumerate(csv_rows or []):
             if idx == 0:
                 headers = row
             else:
