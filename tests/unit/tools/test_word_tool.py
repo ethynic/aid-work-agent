@@ -139,6 +139,72 @@ class TestWordProcessToolExecution:
         result = await tool.execute(file_paths=["/nonexistent.md"])
         assert result["success"] is False
 
+    @pytest.mark.asyncio
+    async def test_resolve_markdown_context_directly_to_word(self):
+        """纯 Markdown 正文已足够明确时，不依赖内部 LLM 路由。"""
+        from src.tools.word.word_process_tool import WordProcessTool
+        tool = WordProcessTool()
+
+        mock_router = AsyncMock()
+        tool._router = mock_router
+        context = (
+            "## 安顺坝陵河大桥3天2晚行程\n\n"
+            "**出发日期**：2026年7月11日（周六）\n\n"
+            "| 天数 | 时段 | 行程安排 |\n"
+            "|------|------|----------|\n"
+            "| D1 | 上午 | 贵阳接站 |"
+        )
+
+        result = await tool._resolve_task(context, None)
+
+        assert result["task"] == "md_to_word"
+        assert result["params"]["template"] == "default"
+        mock_router.route.assert_not_called()
+
+    def test_extract_markdown_body_removes_tool_instruction(self):
+        """生成指令只用于路由，不应写入 Word 正文。"""
+        from src.tools.word.word_process_tool import WordProcessTool
+
+        context = (
+            "生成一份贵州安顺坝陵河3天2晚行程Word文档，格式为Markdown表格。\n\n"
+            "## 安顺坝陵河大桥3天2晚行程\n\n"
+            "| 天数 | 时段 | 行程安排 |\n"
+            "|------|------|----------|\n"
+            "| D1 | 上午 | 贵阳接站 |"
+        )
+
+        body = WordProcessTool._extract_markdown_body(context)
+
+        assert body.startswith("## 安顺坝陵河大桥3天2晚行程")
+        assert "生成一份" not in body
+
+    @pytest.mark.asyncio
+    async def test_handle_md_to_word_uses_clean_markdown_body(self):
+        """md_to_word 执行前清理 context，避免指令行进入 docx。"""
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        tool = WordProcessTool()
+        context = (
+            "生成一份贵州安顺坝陵河3天2晚行程Word文档，格式为Markdown表格。\n\n"
+            "## 安顺坝陵河大桥3天2晚行程\n\n"
+            "| 天数 | 时段 | 行程安排 |\n"
+            "|------|------|----------|\n"
+            "| D1 | 上午 | 贵阳接站 |"
+        )
+
+        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+             patch("src.tools.word.md_to_word.save_as") as mock_save:
+            mock_convert.return_value = MagicMock()
+            mock_save.return_value = {"file_path": "/tmp/安顺坝陵河大桥3天2晚行程.docx", "file_size": 123}
+
+            result = await tool._handle_md_to_word(PipelineContext(context=context), {})
+
+        converted_text = mock_convert.call_args.args[0]
+        assert result["success"] is True
+        assert converted_text.startswith("## 安顺坝陵河大桥3天2晚行程")
+        assert "生成一份" not in converted_text
+        assert mock_save.call_args.kwargs["file_name"] == "安顺坝陵河大桥3天2晚行程.docx"
+
 
 # =============================================================================
 # WordReader 测试

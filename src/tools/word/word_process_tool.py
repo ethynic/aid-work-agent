@@ -5,6 +5,7 @@ Agent 只需传 context（用户需求 + 相关内容）和 file_paths（附件�
 内部 LLM 自动判断操作类型和参数，执行 pipeline 后返回结果。
 """
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -169,12 +170,107 @@ class WordProcessTool(BaseTool):
         if not context and not file_paths:
             return {"task": "", "error": "缺少 context 和 file_paths"}
 
+        deterministic = self._resolve_task_deterministic(context, file_paths)
+        if deterministic:
+            return deterministic
+
         try:
             router = self._get_router()
             return await router.route(context, file_paths)
         except Exception as e:
             logger.error(f"[WordProcess] LLM 路由异常: {e}", exc_info=True)
             return {"task": "", "error": f"路由服务异常: {e}"}
+
+    def _resolve_task_deterministic(self, context: Optional[str], file_paths: Optional[List[str]]) -> Optional[Dict]:
+        """低风险确定性路由，减少纯 Markdown 生成 Word 时对内部 LLM 的依赖。"""
+        if not context:
+            return None
+
+        paths = file_paths or []
+        has_word_file = any(str(p).lower().endswith((".doc", ".docx")) for p in paths)
+        if has_word_file:
+            return None
+
+        markdown_body = self._extract_markdown_body(context)
+        if not self._looks_like_markdown_document(markdown_body):
+            return None
+
+        title = self._extract_title(markdown_body)
+        params: Dict[str, Any] = {"template": "default"}
+        if title:
+            params["title"] = title
+            params["output_name"] = f"{self._safe_file_stem(title)}.docx"
+
+        return {
+            "task": "md_to_word",
+            "params": params,
+            "reason": "检测到 context 已包含完整 Markdown 文档内容，直接转 Word",
+        }
+
+    @staticmethod
+    def _looks_like_markdown_document(text: str) -> bool:
+        lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+        if not lines:
+            return False
+
+        has_heading = any(re.match(r"^#{1,6}\s+\S+", line) for line in lines)
+        has_table = any(line.startswith("|") and line.endswith("|") for line in lines)
+        has_table_separator = any(re.match(r"^\|[\s\-:—–―|]+\|$", line) for line in lines)
+        has_structured_label = any(re.match(r"^\*\*[^*]+?\*\*[：:]", line) for line in lines)
+        has_list = any(re.match(r"^([-*+]|\d+\.)\s+\S+", line) for line in lines)
+
+        score = sum([has_heading, has_table and has_table_separator, has_structured_label, has_list])
+        return score >= 2 or (has_heading and has_table)
+
+    @staticmethod
+    def _extract_markdown_body(text: str) -> str:
+        """从 Agent 传入的混合 context 中提取正文，剥离给工具的指令前缀。"""
+        if not text:
+            return ""
+
+        stripped = text.strip()
+        fence = re.fullmatch(r"```(?:markdown|md)?\s*\n(.*?)\n```", stripped, flags=re.DOTALL | re.IGNORECASE)
+        if fence:
+            stripped = fence.group(1).strip()
+
+        lines = stripped.splitlines()
+        first_markdown_idx = None
+        for idx, line in enumerate(lines):
+            s = line.strip()
+            if re.match(r"^#{1,6}\s+\S+", s) or (s.startswith("|") and s.endswith("|")):
+                first_markdown_idx = idx
+                break
+
+        if not first_markdown_idx:
+            return stripped
+
+        prefix = "\n".join(lines[:first_markdown_idx]).strip()
+        if not prefix:
+            return stripped
+
+        instruction_re = re.compile(
+            r"(生成|创建|导出|制作|转成|转换|保存).{0,30}(Word|word|文档|docx)|"
+            r"(格式|形式).{0,20}(Markdown|markdown|表格)|"
+            r"(以下|下面).{0,20}(内容|正文|行程|Markdown|markdown)",
+            re.IGNORECASE,
+        )
+        if instruction_re.search(prefix):
+            return "\n".join(lines[first_markdown_idx:]).strip()
+
+        return stripped
+
+    @staticmethod
+    def _extract_title(text: str) -> str:
+        for line in (text or "").splitlines():
+            match = re.match(r"^#{1,6}\s+(.+?)\s*$", line.strip())
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _safe_file_stem(title: str) -> str:
+        stem = re.sub(r'[\\/:*?"<>|\r\n\t]+', "", title).strip(" .")
+        return stem[:80] or "word_document"
 
     def _update_context(self, ctx: PipelineContext, op: str, result: Dict) -> None:
         """根据操作结果更新 pipeline 上下文"""
@@ -280,10 +376,11 @@ class WordProcessTool(BaseTool):
         if not md_text:
             return {"success": False, "error": "md_to_word 需要提供 context（Markdown文本）或 file_paths（.md文件路径）"}
 
+        md_text = self._extract_markdown_body(md_text)
         template = params.get("template")
-        title = params.get("title", "")
+        title = params.get("title") or self._extract_title(md_text)
         author = params.get("author", "")
-        output_name = params.get("output_name")
+        output_name = params.get("output_name") or (f"{self._safe_file_stem(title)}.docx" if title else None)
 
         doc = md_convert(md_text, template=template, title=title, author=author)
         result = save_as(doc, file_name=output_name)
