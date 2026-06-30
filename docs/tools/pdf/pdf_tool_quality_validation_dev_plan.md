@@ -251,5 +251,5 @@ pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py
 - `pdf_process` 的 `html_to_pdf` handler 支持透传 `params.engine`，可选 `auto`、`playwright`、`fpdf2`。
 - 路由 prompt 已明确复杂样式/高保真/网页效果使用 `params.engine="playwright"`。
 - 本次未实现 reportlab 报告生成器，原因是当前优先落地 Playwright print-to-pdf，减少改动面。
-- 本次未实现 PDF 视觉回归样本集。
+- PDF 视觉回归样本集已移入 `docs/ideas.md` 作为低优先级未来项，当前不纳入本开发计划。
 - 验证结果：全量 PDF 单测通过，127 passed；真实 Playwright 生成和结构校验通过。

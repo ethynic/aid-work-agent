@@ -344,7 +344,7 @@ tools:
 2. `extract_images`：提取 PDF 内嵌图片。✅ 已完成
 3. 复杂 HTML/CSS 使用 Playwright print-to-pdf，失败时回退 fpdf2。✅ 已完成
 4. 引入 `reportlab` 报告生成器，覆盖正式报告、报价单、带页眉页脚的固定版式。⏳ 待开发
-5. 建立 PDF 视觉回归样本集，保存小型样例 PDF 和预期检查结果。⏳ 待开发
+5. PDF 视觉回归样本集已移入 `docs/ideas.md` 作为低优先级未来项，当前不纳入本设计的开发范围。
 
 ## 9. 测试与验收
 

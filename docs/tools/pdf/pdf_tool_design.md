@@ -105,27 +105,6 @@ Pipeline 执行器
   └─ extract_pages → pdf_merger.extract_pages()
 ```
 
-### 4.3 HTTP API 层
-
-```
-src/api/pdf.py                  # FastAPI 路由
-```
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/pdf/read` | 读取 PDF 文本内容 |
-| POST | `/api/pdf/read-tables` | 提取 PDF 表格 |
-| POST | `/api/pdf/ocr` | OCR 识别 PDF |
-| POST | `/api/pdf/to-markdown` | PDF 转 Markdown |
-| POST | `/api/pdf/md-to-pdf` | Markdown 转 PDF |
-| POST | `/api/pdf/html-to-pdf` | HTML 转 PDF |
-| POST | `/api/pdf/docx-to-pdf` | Word 转 PDF |
-| POST | `/api/pdf/merge` | 合并 PDF |
-| POST | `/api/pdf/split` | 拆分 PDF |
-| POST | `/api/pdf/extract-pages` | 提取指定页面 |
-
----
-
 ## 5. 各模块详细设计
 
 ### 5.1 pdf_process_tool.py — 主工具入口
@@ -656,7 +635,6 @@ RUN pip install PyMuPDF4LLM
 | P2 | `html_to_pdf` — HTML 转 PDF | 简化 HTML + fpdf2 | 0.5天 | ✅ 已完成 |
 | P2 | `docx_to_pdf` — Word 转 PDF | LibreOffice 优先，Pandoc 回退 | 0.5天 | ✅ 已完成 |
 | P2 | `merge` / `split` / `extract_pages` | PyMuPDF（已有） | 1天 | ✅ 已完成 |
-| P3 | HTTP API 层 | 无 | 1天 | ⏳ 待开发 |
 | P3 | 内置 CSS 样式调优 | 无 | 0.5天 | ✅ 已完成 |
 
 **预计总工期：5-7 天**
@@ -699,6 +677,6 @@ RUN pip install PyMuPDF4LLM
 - **质量验证增强**：新增 `inspect`、`render_pages`、`validate` 操作；生成型操作追加结构化校验结果。
 - **测试更新**：PDF 工具相关单测扩展至 100 个并通过。
 
-### 待完成（P3）
+### 后续说明
 
-- HTTP API 层（`src/api/pdf.py`）
+- 当前 PDF 处理统一由 Agent 调用 `pdf_process` 工具完成。
