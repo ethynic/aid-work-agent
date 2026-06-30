@@ -2,8 +2,9 @@
 关联想法: wecom_kf 用户撤回消息处理（同批次剔除 + 跨批次标记 + 后台可见）
 关联设计: docs/channel/wecom_kf/wecom_kf_design.md
 关联设计(上游): docs/channel/wecom_kf/message-merge.md
-状态: 📋 待开发
+状态: 🔧 开发中（tlog 调试部分已完成）
 创建日期: 2026-06-29
+更新日期: 2026-06-29
 ---
 
 # wecom_kf 用户撤回消息处理 — 开发计划

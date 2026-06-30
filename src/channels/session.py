@@ -923,11 +923,45 @@ class ChannelSessionManager:
                 exc_info=True,
             )
 
+    def find_session(
+        self,
+        channel_type: str,
+        channel_user_id: str,
+        channel_chat_id: str,
+        tenant_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        查找已存在的会话（不创建新会话）
+
+        Args:
+            channel_type: 渠道类型
+            channel_user_id: 渠道用户ID
+            channel_chat_id: 渠道会话/群ID
+            tenant_id: 租户ID
+
+        Returns:
+            会话信息字典，不存在返回 None
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM channel_sessions
+                WHERE tenant_id = %s AND channel_type = %s AND channel_user_id = %s
+            """, (tenant_id, channel_type, channel_user_id))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["context_data"] = self._parse_json_field(result.get("context_data"), {})
+            result["metadata"] = self._parse_json_field(result.get("metadata"))
+            return result
+
     def get_messages(
         self,
         session_id: str,
         limit: int = 50,
         before_message_id: Optional[str] = None,
+        include_recalled: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         获取会话消息
@@ -936,18 +970,24 @@ class ChannelSessionManager:
             session_id: 会话ID
             limit: 限制条数
             before_message_id: 分页基准消息ID
+            include_recalled: 是否包含已撤回的消息（默认 False，LLM 上下文用）
 
         Returns:
             消息列表（按 created_at ASC 时间正序）
         """
+        from src.core.temp_logger import tlog
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             placeholder = "%s"
 
+            # 撤回消息过滤条件
+            recall_condition = "" if include_recalled else "AND is_recalled = FALSE"
+
             if before_message_id:
                 cursor.execute(f"""
                     SELECT * FROM channel_messages
-                    WHERE session_id = {placeholder} AND id < (
+                    WHERE session_id = {placeholder} {recall_condition} AND id < (
                         SELECT id FROM channel_messages WHERE message_id = {placeholder}
                     )
                     ORDER BY id ASC
@@ -959,7 +999,7 @@ class ChannelSessionManager:
                 cursor.execute(f"""
                     SELECT * FROM (
                         SELECT * FROM channel_messages
-                        WHERE session_id = {placeholder}
+                        WHERE session_id = {placeholder} {recall_condition}
                         ORDER BY id DESC
                         LIMIT {limit}
                     ) AS recent
@@ -973,7 +1013,155 @@ class ChannelSessionManager:
                 msg["attachments"] = self._parse_json_field(msg.get("attachments"), [])
                 msg["metadata"] = self._parse_json_field(msg.get("metadata"))
                 messages.append(msg)
+
+            # 记录撤回消息过滤情况
+            if not include_recalled:
+                recalled_count = sum(1 for m in messages if m.get("is_recalled"))
+                if recalled_count > 0:
+                    tlog(
+                        "撤回消息",
+                        "get_messages 过滤已撤回消息: session_id={session_id}, filtered={filtered}, total={total}",
+                        session_id=session_id,
+                        filtered=recalled_count,
+                        total=len(messages),
+                    )
+
             return messages
+
+    def mark_recalled_message(
+        self,
+        session_id: str,
+        recall_msgid: str,
+        tenant_id: str = "",
+    ) -> int:
+        """
+        标记已撤回的消息（单条消息或合并消息的部分撤回）
+
+        Args:
+            session_id: 会话ID
+            recall_msgid: 被撤回的微信原始 msgid
+            tenant_id: 租户ID
+
+        Returns:
+            被标记的消息数量
+        """
+        from src.core.temp_logger import tlog
+        import json
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # ===== 情况1：单条消息命中（metadata.wecom_msgid = recall_msgid）=====
+            cursor.execute("""
+                SELECT id, content, metadata FROM channel_messages
+                WHERE session_id = %s AND metadata->>'msgid' = %s
+            """, (session_id, recall_msgid))
+            single_row = cursor.fetchone()
+
+            if single_row:
+                cursor.execute("""
+                    UPDATE channel_messages
+                    SET is_recalled = TRUE, recalled_at = NOW()
+                    WHERE id = %s
+                """, (single_row["id"],))
+                conn.commit()
+                tlog(
+                    "撤回消息",
+                    "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, row_id={row_id}",
+                    session_id=session_id,
+                    msgid=recall_msgid,
+                    row_id=single_row["id"],
+                )
+                return 1
+
+            # ===== 情况2：合并消息命中（metadata.merged_from_msgids 包含 recall_msgid）=====
+            cursor.execute("""
+                SELECT id, content, metadata FROM channel_messages
+                WHERE session_id = %s
+                  AND jsonb_exists(metadata->'merged_from_msgids', %s)
+            """, (session_id, recall_msgid))
+            merged_row = cursor.fetchone()
+
+            if merged_row:
+                metadata = self._parse_json_field(merged_row.get("metadata"), {})
+                merged_segments = metadata.get("merged_segments", [])
+                merged_from_msgids = metadata.get("merged_from_msgids", [])
+                recalled_part_msgids = metadata.get("recalled_part_msgids", [])
+
+                # 过滤掉被撤回的段，重建 content
+                remaining_segments = [
+                    seg for seg in merged_segments
+                    if seg.get("msgid") != recall_msgid
+                ]
+
+                if len(remaining_segments) == len(merged_segments):
+                    # 未找到对应段，降级为整条标记撤回
+                    cursor.execute("""
+                        UPDATE channel_messages
+                        SET is_recalled = TRUE, recalled_at = NOW()
+                        WHERE id = %s
+                    """, (merged_row["id"],))
+                    conn.commit()
+                    tlog(
+                        "撤回消息",
+                        "合并消息部分撤回降级为整条撤回（未找到对应段）: "
+                        "session_id={session_id}, msgid={msgid}, row_id={row_id}",
+                        session_id=session_id,
+                        msgid=recall_msgid,
+                        row_id=merged_row["id"],
+                    )
+                    return 1
+
+                # 更新 metadata
+                recalled_part_msgids.append(recall_msgid)
+                metadata["recalled_part_msgids"] = recalled_part_msgids
+
+                # 仅首次撤回时保存原始内容
+                if "original_content_before_recall" not in metadata:
+                    metadata["original_content_before_recall"] = merged_row["content"]
+
+                # 重建 content
+                new_content = "\n".join([seg.get("text", "") for seg in remaining_segments])
+                metadata["merged_segments"] = remaining_segments
+
+                # 所有段都被撤回时，整条标记为已撤回
+                all_recalled = len(remaining_segments) == 0
+                if all_recalled:
+                    cursor.execute("""
+                        UPDATE channel_messages
+                        SET is_recalled = TRUE, recalled_at = NOW(), content = %s, metadata = %s
+                        WHERE id = %s
+                    """, (new_content, json.dumps(metadata, ensure_ascii=False), merged_row["id"]))
+                else:
+                    cursor.execute("""
+                        UPDATE channel_messages
+                        SET content = %s, metadata = %s
+                        WHERE id = %s
+                    """, (new_content, json.dumps(metadata, ensure_ascii=False), merged_row["id"]))
+
+                conn.commit()
+                tlog(
+                    "撤回消息",
+                    "合并消息部分撤回重建: session_id={session_id}, msgid={msgid}, "
+                    "row_id={row_id}, segments_before={before}, segments_after={after}, all_recalled={all_recalled}",
+                    session_id=session_id,
+                    msgid=recall_msgid,
+                    row_id=merged_row["id"],
+                    before=len(merged_segments),
+                    after=len(remaining_segments),
+                    all_recalled=all_recalled,
+                )
+                return 1
+
+            # ===== 情况3：未命中 =====
+            tlog(
+                "撤回消息",
+                "未找到可标记的消息（可能尚未持久化或已归档）: "
+                "session_id={session_id}, recall_msgid={msgid}",
+                session_id=session_id,
+                msgid=recall_msgid,
+            )
+            return 0
 
     def get_conversation_context(
         self,
@@ -1201,7 +1389,7 @@ class ChannelSessionManager:
 
     def delete_messages(self, session_id: str, tenant_id: Optional[str] = None) -> bool:
         """
-        仅删除会话中的消息，保留会话本身。
+        仅删除会话中的消息，保留会话本身。隐藏命令“新会话”触发本方法
 
         Args:
             session_id: 会话ID

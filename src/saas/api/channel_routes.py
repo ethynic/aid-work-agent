@@ -1429,6 +1429,7 @@ async def _process_tenant_wecom_kf_messages(
 
             # 预处理：过滤非客户消息 + 去重，得到有效消息列表
             valid_msgs = []
+            recalled_msgids_in_batch = set()  # 本批次内被用户撤回的消息 msgid（供后续剔除用）
             for msg in result.get("msg_list", []):
                 msg_id = msg.get("msgid", "")
                 msg_origin = msg.get("origin", "")
@@ -1437,6 +1438,82 @@ async def _process_tenant_wecom_kf_messages(
                     f"[wecom_kf] 消息: msgid={msg_id}, origin={msg_origin}, "
                     f"msgtype={msg_type}, open_kfid={open_kfid}"
                 )
+
+                # ===== 撤回消息处理：在 origin 过滤之前识别 user_recall_msg 事件 =====
+                if msg_type == "event" and msg.get("event", {}).get("event_type") == "user_recall_msg":
+                    event_data = msg.get("event", {})
+                    recall_msgid = event_data.get("msgid", "")  # 被撤回的原消息 ID
+                    external_userid = event_data.get("external_userid", "")
+
+                    # 事件去重：按撤回事件自身的 msgid 去重，避免同一事件多次推送重复处理
+                    dedup = _get_tenant_dedup(tenant_id)
+                    if await dedup.is_duplicate(f"recall_event:{msg_id}"):
+                        tlog(
+                            "撤回消息",
+                            "撤回事件重复跳过: event_msgid={event_msgid}, recall_msgid={recall_msgid}, "
+                            "open_kfid={open_kfid}, user={user}",
+                            event_msgid=msg_id,
+                            recall_msgid=recall_msgid,
+                            open_kfid=open_kfid,
+                            user=external_userid,
+                        )
+                        continue
+
+                    # 记录本批次的撤回，供后续剔除用
+                    recalled_msgids_in_batch.add(recall_msgid)
+                    tlog(
+                        "撤回消息",
+                        "识别到撤回事件: event_msgid={event_msgid}, recall_msgid={recall_msgid}, "
+                        "open_kfid={open_kfid}, user={user}, batch_size={batch_size}",
+                        event_msgid=msg_id,
+                        recall_msgid=recall_msgid,
+                        open_kfid=open_kfid,
+                        user=external_userid,
+                        batch_size=len(recalled_msgids_in_batch),
+                    )
+
+                    # 跨批次兜底：尝试标记已持久化的消息
+                    from src.channels.session import channel_session_manager
+                    try:
+                        session = channel_session_manager.find_session(
+                            channel_type="wecom_kf",
+                            channel_user_id=external_userid,
+                            channel_chat_id=open_kfid,
+                            tenant_id=tenant_id,
+                        )
+                        if session:
+                            session_id = session["session_id"]
+                            marked_count = channel_session_manager.mark_recalled_message(
+                                session_id=session_id,
+                                recall_msgid=recall_msgid,
+                                tenant_id=tenant_id,
+                            )
+                            tlog(
+                                "撤回消息",
+                                "跨批次标记已持久化消息: session_id={session_id}, recall_msgid={recall_msgid}, "
+                                "marked_count={marked_count}",
+                                session_id=session_id,
+                                recall_msgid=recall_msgid,
+                                marked_count=marked_count,
+                            )
+                        else:
+                            tlog(
+                                "撤回消息",
+                                "跨批次标记未找到会话: recall_msgid={recall_msgid}, user={user}",
+                                recall_msgid=recall_msgid,
+                                user=external_userid,
+                            )
+                    except Exception as e:
+                        tlog(
+                            "撤回消息",
+                            "跨批次标记异常: recall_msgid={recall_msgid}, error={error}",
+                            recall_msgid=recall_msgid,
+                            error=str(e),
+                        )
+
+                    continue  # 撤回事件处理完毕，跳过后续 origin 过滤等逻辑
+                # ===== 撤回消息处理结束 =====
+
                 # 临时调试：记录 msg_list 中每条原始条目（含被过滤的事件型条目，如撤回事件）
                 # 调试主题：微信事件
                 from src.core.temp_logger import tlog
@@ -1467,6 +1544,23 @@ async def _process_tenant_wecom_kf_messages(
                     continue
 
                 valid_msgs.append(msg)
+
+            # ===== 同批次剔除：从 valid_msgs 中剔除被撤回的消息 =====
+            if recalled_msgids_in_batch:
+                original_count = len(valid_msgs)
+                valid_msgs = [m for m in valid_msgs if m.get("msgid") not in recalled_msgids_in_batch]
+                filtered_count = original_count - len(valid_msgs)
+                if filtered_count > 0:
+                    tlog(
+                        "撤回消息",
+                        "同批次剔除: recall_count={recall_count}, filtered={filtered}, "
+                        "remaining={remaining}, recall_msgids={recall_msgids}",
+                        recall_count=len(recalled_msgids_in_batch),
+                        filtered=filtered_count,
+                        remaining=len(valid_msgs),
+                        recall_msgids=list(recalled_msgids_in_batch),
+                    )
+            # ===== 同批次剔除结束 =====
 
             # 同一批次内合并同一用户的连续文本消息，避免逐条回复耗尽 WeCom 5条限额
             merged_msgs = _merge_consecutive_user_messages(valid_msgs)
@@ -1674,6 +1768,7 @@ async def _process_tenant_wecom_kf_messages(
                     "external_userid": unified_msg.user_id,
                     "kf_config": kf_config,
                     "session_id": session_id,
+                    "tenant_id": tenant_id,
                 })
 
                 # 发送前校验微信远程会话状态，防止本地状态与远程不一致导致 95018
@@ -1954,7 +2049,7 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
             f"user={external_userid}, state={service_state}, updated_sessions={updated_count}"
         )
 
-        # 员工结束对话（service_state=4）时，通知客户并清除对话上下文
+        # 员工结束对话（service_state=4）时，通知客户（历史对话保留，由 system 标记消息防止 Agent 误触发转人工）
         if service_state == 4 and updated_count > 0:
             await _on_kf_session_ended(tenant_id, open_kfid, external_userid)
 
@@ -1963,7 +2058,7 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
 
 
 async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: str) -> None:
-    """员工结束微信客服对话后的清理：通知客户 + 清除短期记忆"""
+    """员工结束微信客服对话后：通知客户（不再清除历史对话，转人工防误触发由 system 标记消息承担）"""
     try:
         from src.saas.services.channel_factory import ChannelFactory
 
@@ -1987,57 +2082,6 @@ async def _on_kf_session_ended(tenant_id: str, open_kfid: str, external_userid: 
     except Exception as e:
         logger.error(f"[wecom_kf] 结束对话通知客户失败: {e}")
 
-    # 清除该渠道会话在 chat_messages 表中的历史记录，
-    # 避免下次客户发消息时 Agent 基于之前的转人工上下文再次触发转人工
-    try:
-        from src.db.database import get_db_connection
-
-        # 找到该渠道用户的所有 session_id
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT session_id FROM channel_sessions
-                WHERE tenant_id = %s AND channel_type = 'wecom_kf'
-                  AND channel_user_id = %s
-            """, (tenant_id, external_userid))
-            session_rows = cursor.fetchall()
-
-        for row in session_rows:
-            sid = row["session_id"]
-            # 清除 chat_messages 中的对话历史
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    DELETE FROM chat_messages
-                    WHERE session_id = %s
-                """, (sid,))
-                deleted = cursor.rowcount
-                conn.commit()
-                if deleted > 0:
-                    logger.info(
-                        f"[wecom_kf] 已清除会话历史: session_id={sid}, "
-                        f"deleted_messages={deleted}"
-                    )
-
-            # 清除 channel_messages 中的对话历史
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    DELETE FROM channel_messages
-                    WHERE session_id = %s
-                """, (sid,))
-                conn.commit()
-
-            # 清除进程内短期记忆（当前 worker）
-            try:
-                from src.core.agent_router import agent_router
-                agent_router.master_agent.memory.clear(sid)
-            except Exception:
-                pass
-
-    except Exception as e:
-        logger.error(f"[wecom_kf] 清除会话历史失败: {e}")
-
 
 async def _transfer_kf_to_human(
     adapter, session, kf_config: dict, open_kfid: str, external_userid: str, session_id: str
@@ -2058,10 +2102,39 @@ async def _transfer_kf_to_human(
         result = await adapter.transfer_to_human(open_kfid, external_userid, servicer_userid)
 
         if result:
+            from datetime import datetime as _dt
+            transferred_at = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
             channel_session_manager.update_session(
                 session_id=session_id,
-                metadata={"service_state": 3, "transferred_to": servicer_userid},
+                metadata={
+                    "service_state": 3,
+                    "transferred_to": servicer_userid,
+                    "last_transferred_at": transferred_at,
+                },
             )
+            # 写入 system 标记消息，避免 Agent 后续基于历史中的"转人工"字样再次触发转人工
+            try:
+                tenant_id = (session or {}).get("tenant_id", "") if isinstance(session, dict) else ""
+                channel_session_manager.add_message(
+                    session_id=session_id,
+                    role="system",
+                    content=(
+                        f"[已转人工] 用户此前已请求转人工并已转接给人工客服（{servicer_userid}），"
+                        f"该次请求已处理完成。历史对话中的「转人工」「找客服」「人工」等字样"
+                        f"属于已处理的旧请求，除非用户当前消息再次明确请求人工服务，"
+                        f"否则不要再次调用 transfer_to_human 工具。"
+                    ),
+                    message_type="text",
+                    tenant_id=tenant_id,
+                    metadata={
+                        "kind": "transfer_to_human_marker",
+                        "servicer_userid": servicer_userid,
+                        "transferred_at": transferred_at,
+                        "transfer_source": "keyword",
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[wecom_kf] 写入转人工 system 标记失败: {e}")
             logger.info(f"[wecom_kf] 已转接人工: servicer={servicer_userid}")
         else:
             logger.error(f"[wecom_kf] 转接失败: open_kfid={open_kfid}")

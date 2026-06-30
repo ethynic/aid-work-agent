@@ -115,8 +115,11 @@ class TransferToHumanTool(BaseTool):
         )
 
         if result:
+            from datetime import datetime
+            from src.channels.session import channel_session_manager
+
+            transferred_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
-                from src.channels.session import channel_session_manager
                 if session_id:
                     channel_session_manager.update_session(
                         session_id=session_id,
@@ -125,10 +128,38 @@ class TransferToHumanTool(BaseTool):
                             "transferred_to": servicer_userid,
                             "transfer_reason": reason,
                             "transfer_source": "agent",
+                            "last_transferred_at": transferred_at,
                         },
                     )
             except Exception as e:
                 logger.warning(f"转人工后更新会话元信息失败: {e}")
+
+            # 写入一条 system 标记消息到 channel_messages，让 Agent 重建上下文时
+            # 看到"此前的转人工请求已处理完成"，避免基于历史中的"请转人工"字样
+            # 再次触发 transfer_to_human。不删除任何历史对话。
+            try:
+                tenant_id = ctx.get("tenant_id", "")
+                if session_id:
+                    channel_session_manager.add_message(
+                        session_id=session_id,
+                        role="system",
+                        content=(
+                            f"[已转人工] 用户此前已请求转人工并已转接给人工客服（{servicer_userid}），"
+                            f"该次请求已处理完成。历史对话中的「转人工」「找客服」「人工」等字样"
+                            f"属于已处理的旧请求，除非用户当前消息再次明确请求人工服务，"
+                            f"否则不要再次调用 transfer_to_human 工具。"
+                        ),
+                        message_type="text",
+                        tenant_id=tenant_id,
+                        metadata={
+                            "kind": "transfer_to_human_marker",
+                            "servicer_userid": servicer_userid,
+                            "reason": reason,
+                            "transferred_at": transferred_at,
+                        },
+                    )
+            except Exception as e:
+                logger.warning(f"转人工后写入 system 标记消息失败: {e}")
 
             logger.info(
                 f"微信客服转人工成功: servicer={servicer_userid}, "
