@@ -116,6 +116,89 @@ async def test_markdown_outline_generates_ppt_with_python_pptx(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_instruction_does_not_pollute_markdown_content_or_title(tmp_path, monkeypatch):
+    from src.tools.ppt.generator import PPTGenerator
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    monkeypatch.setenv("PPT_RENDERER", "python_pptx")
+    monkeypatch.setattr(PPTGenerator, "_get_output_dir", lambda self: tmp_path)
+    markdown = "# 数据治理方案\n\n## 背景\n\n- 数据分散"
+    tool = PptProcessTool()
+    planner = FakePlanner(_sample_plan("规划器标题"))
+    tool._planner = planner
+
+    result = await tool.execute(instruction="帮我生成 PPT", content=markdown)
+
+    assert result["success"] is True
+    assert planner.content_calls == [markdown]
+    assert Path(result["file_path"]).name == "数据治理方案.pptx"
+    assert "帮我生成" not in Path(result["file_path"]).name
+
+
+@pytest.mark.asyncio
+async def test_output_name_has_highest_title_priority(tmp_path, monkeypatch):
+    from src.tools.ppt.generator import PPTGenerator
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    monkeypatch.setenv("PPT_RENDERER", "python_pptx")
+    monkeypatch.setattr(PPTGenerator, "_get_output_dir", lambda self: tmp_path)
+    tool = PptProcessTool()
+    tool._planner = FakePlanner(_sample_plan("规划器标题"))
+
+    result = await tool.execute(
+        instruction="生成 PPT",
+        content="# Markdown 标题\n\n## 内容",
+        output_name="董事会汇报.pptx",
+    )
+
+    assert result["success"] is True
+    assert Path(result["file_path"]).name == "董事会汇报.pptx"
+
+
+@pytest.mark.asyncio
+async def test_legacy_mixed_context_remains_compatible(tmp_path, monkeypatch):
+    from src.tools.ppt.generator import PPTGenerator
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    monkeypatch.setenv("PPT_RENDERER", "python_pptx")
+    monkeypatch.setattr(PPTGenerator, "_get_output_dir", lambda self: tmp_path)
+    markdown = "# 兼容标题\n\n## 内容\n\n- 要点"
+    tool = PptProcessTool()
+    planner = FakePlanner(_sample_plan("规划器标题"))
+    tool._planner = planner
+
+    result = await tool.execute(context=f"请生成 PPT\n\n{markdown}")
+
+    assert result["success"] is True
+    assert planner.content_calls == [markdown]
+    assert Path(result["file_path"]).name == "兼容标题.pptx"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "content_type", "expected_error"),
+    [
+        ("<h1>网页演示</h1>", "html", "Phase 4"),
+        ('{"title":"规格演示","slides":[]}', "slide_deck_spec", "Phase 2"),
+    ],
+)
+async def test_unimplemented_modes_return_stable_error(
+    content, content_type, expected_error
+):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    result = await PptProcessTool().execute(
+        instruction="转换为 PPTX",
+        content=content,
+        content_type=content_type,
+    )
+
+    assert result["success"] is False
+    assert "暂不支持" in result["error"]
+    assert expected_error in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_template_pptx_with_content_generates_ppt(tmp_path, monkeypatch):
     from src.tools.ppt.ppt_process_tool import PptProcessTool
     from src.tools.ppt.template_analyzer import TemplateAnalyzer
@@ -164,6 +247,42 @@ async def test_blank_file_paths_are_treated_as_empty_input():
 
     assert result["success"] is False
     assert "请提供主题或内容" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_blank_content_and_instruction_cannot_bypass_execute_validation():
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    result = await PptProcessTool().execute(
+        instruction="  ", content=" ", context="\n", file_paths=[]
+    )
+
+    assert result == {
+        "success": False,
+        "error": "请提供主题或内容（content/context），或提供模板文件（file_paths）",
+    }
+
+
+@pytest.mark.asyncio
+async def test_markdown_file_is_merged_before_routing_and_title_selection(
+    tmp_path, monkeypatch
+):
+    from src.tools.ppt.generator import PPTGenerator
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    monkeypatch.setenv("PPT_RENDERER", "python_pptx")
+    monkeypatch.setattr(PPTGenerator, "_get_output_dir", lambda self: tmp_path)
+    markdown_path = tmp_path / "outline.md"
+    markdown_path.write_text("# 附件标题\n\n## 内容\n\n- 要点", encoding="utf-8")
+    tool = PptProcessTool()
+    planner = FakePlanner(_sample_plan("规划器标题"))
+    tool._planner = planner
+
+    result = await tool.execute(file_paths=[str(markdown_path)])
+
+    assert result["success"] is True
+    assert planner.content_calls == ["# 附件标题\n\n## 内容\n\n- 要点"]
+    assert Path(result["file_path"]).name == "附件标题.pptx"
 
 
 def test_ppt_config_reads_switches(monkeypatch):

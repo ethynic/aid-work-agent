@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：待开发，需先人工审核设计文档  
+> 状态：🔧 部分完成（Phase 0-1 已完成，Phase 1 code review 已通过）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -80,7 +80,7 @@ Python ppt_process
 
 ### Phase 1：PPT 入参语义拆分
 
-状态：待开发
+状态：✅ 开发及 code review 完成（2026-06-30，相关单测 28 passed）
 
 目标：
 

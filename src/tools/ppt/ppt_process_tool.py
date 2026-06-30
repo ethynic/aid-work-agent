@@ -1,33 +1,77 @@
 """
 PPT 生成工具 — Agent 唯一入口
 
-支持两种模式：
-- auto（一键生成）: 用户输入主题或内容，LLM 规划大纲后自动生成 PPT
-- template（模板生成）: 分析用户上传的 .pptx 模板，匹配内容后生成
+支持模板、HTML、规格、大纲和主题五种确定性路由。
 """
 
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from src.tools.base import BaseTool
+from src.tools.ppt.input_normalizer import NormalizedPptInput, PptInputNormalizer
 from src.tools.ppt.ppt_config import get_ppt_config
 
 
 class PptProcessInput(BaseModel):
+    instruction: Optional[str] = Field(
+        None, description="用户目的或操作指令，如“生成PPT”或“基于模板生成”"
+    )
+    content: Optional[str] = Field(
+        None, description="PPT 主题、Markdown 大纲、HTML 或 SlideDeckSpec JSON 正文"
+    )
+    content_type: Optional[
+        Literal["auto", "text", "markdown", "html", "slide_deck_spec", "md", "json", "spec"]
+    ] = Field(
+        None, description="内容类型：auto/text/markdown/html/slide_deck_spec"
+    )
+    output_name: Optional[str] = Field(
+        None, description="输出业务文件名，可含或不含 .pptx 扩展名"
+    )
+    export_mode: Optional[Literal["editable", "high_fidelity", "both"]] = Field(
+        None, description="HTML 导出模式：editable/high_fidelity/both"
+    )
     context: Optional[str] = Field(
         None,
-        description="用户的原始需求描述。可以是一句话主题（如'AI在企业中的应用'），"
-                    "也可以是 Markdown 格式的完整内容大纲。"
-                    "如果涉及附件操作，附件路径通过 file_paths 传入。"
+        description="兼容旧调用的混合输入；新调用请优先使用 instruction + content"
     )
     file_paths: Optional[List[str]] = Field(
         None,
         description="附件文件路径列表（用户上传的 .pptx 模板文件等）"
     )
+
+    @field_validator(
+        "instruction", "content", "content_type", "output_name", "export_mode", "context",
+        mode="before",
+    )
+    @classmethod
+    def strip_optional_strings(cls, value):
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("file_paths", mode="before")
+    @classmethod
+    def clean_file_paths(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            return value
+        paths = [
+            path.strip()
+            for path in value
+            if isinstance(path, str) and path.strip()
+        ]
+        return paths or None
+
+    @model_validator(mode="after")
+    def require_content_or_file(self):
+        if not self.content and not self.context and not self.file_paths:
+            raise ValueError("请提供 content、context 或 file_paths")
+        return self
 
 
 TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 PowerPoint 演示文稿(.pptx)。
@@ -39,8 +83,9 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
 不要自己生成文件内容，一律交给本工具。
 
 调用方式：
-- 将用户的原始需求描述和相关内容放在 context 中
-- context 可以是一句话主题，也可以是 Markdown 格式的完整大纲
+- 推荐将操作要求放在 instruction，将主题、Markdown 大纲或其他正文放在 content
+- 可用 content_type 明确正文类型；output_name 指定业务文件名
+- context 仅用于兼容旧调用，工具会尝试自动拆分指令和正文
 - 用户上传的模板文件路径放在 file_paths 中
 工具会自动判断模式并生成PPT。
 
@@ -62,6 +107,7 @@ class PptProcessTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._planner = None
+        self._normalizer = PptInputNormalizer()
 
     def _get_planner(self):
         if self._planner is None:
@@ -70,79 +116,99 @@ class PptProcessTool(BaseTool):
         return self._planner
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        context = kwargs.get("context")
-        file_paths = [
-            path
-            for path in (kwargs.get("file_paths") or [])
-            if isinstance(path, str) and path.strip()
-        ]
+        try:
+            payload = self.InputModel.model_validate(kwargs)
+        except ValidationError:
+            return {
+                "success": False,
+                "error": "请提供主题或内容（content/context），或提供模板文件（file_paths）",
+            }
 
-        if not (context and str(context).strip()) and not file_paths:
-            return {"success": False, "error": "请提供主题或内容（context）或模板文件（file_paths）"}
+        normalized = self._normalizer.normalize(
+            **payload.model_dump()
+        )
 
-        # 判断模式
-        mode = self._detect_mode(context, file_paths)
+        if not normalized.content and not normalized.file_paths:
+            return {"success": False, "error": "请提供主题或内容（content），或提供模板文件（file_paths）"}
+
+        mode = self._detect_mode(normalized)
 
         try:
             if mode == "template":
-                return await self._handle_template(context, file_paths)
-            else:
-                return await self._handle_auto(context, file_paths)
+                return await self._handle_template(normalized)
+            if mode == "html_to_pptx":
+                return {"success": False, "error": "HTML 转 PPTX 暂不支持，将在 Phase 4 实现"}
+            if mode == "spec_to_pptx":
+                return {"success": False, "error": "SlideDeckSpec 转 PPTX 暂不支持，将在 Phase 2 实现"}
+            return await self._handle_auto(normalized, mode)
         except Exception as e:
             logger.error(f"[PptProcess] 执行失败: {e}", exc_info=True)
             return {"success": False, "error": self._format_user_error(e)}
 
-    def _detect_mode(self, context: Optional[str], file_paths: Optional[List[str]]) -> str:
+    def _detect_mode(self, normalized: NormalizedPptInput) -> str:
         """检测生成模式。"""
-        if file_paths:
-            for fp in file_paths:
+        if normalized.file_paths:
+            for fp in normalized.file_paths:
                 if Path(fp).suffix.lower() == ".pptx":
                     return "template"
-        return "auto"
+        if normalized.content_type == "html":
+            return "html_to_pptx"
+        if normalized.content_type == "slide_deck_spec":
+            return "spec_to_pptx"
+        if normalized.content and self._looks_like_outline(normalized.content):
+            return "outline_to_pptx"
+        return "topic_to_pptx"
 
-    async def _handle_auto(self, context: Optional[str],
-                           file_paths: Optional[List[str]]) -> Dict[str, Any]:
+    async def _handle_auto(
+        self, normalized: NormalizedPptInput, mode: str
+    ) -> Dict[str, Any]:
         """一键生成模式。"""
         planner = self._get_planner()
+        content = normalized.content
 
-        # LLM 规划大纲
-        if file_paths:
+        if normalized.file_paths:
             # 有文件但不是 pptx（可能是 md/txt），读取内容
-            for fp in file_paths:
+            for fp in normalized.file_paths:
                 if Path(fp).suffix.lower() in (".md", ".txt"):
                     try:
-                        content = Path(fp).read_text(encoding="utf-8")
-                        context = f"{context or ''}\n\n{content}" if context else content
+                        file_content = Path(fp).read_text(encoding="utf-8")
+                        content = f"{content}\n\n{file_content}" if content else file_content
                     except Exception:
                         pass
 
-        # 判断是否已有结构化大纲
-        plan = None
-        if context and self._looks_like_outline(context):
-            plan = await planner.plan_from_content(context)
+        merged_mode = (
+            "outline_to_pptx"
+            if content and self._looks_like_outline(content)
+            else mode
+        )
+        if merged_mode == "outline_to_pptx":
+            plan = await planner.plan_from_content(content)
         else:
-            plan = await planner.plan_from_topic(context or "演示文稿")
+            plan = await planner.plan_from_topic(content or "演示文稿")
 
         if "error" in plan:
             return {"success": False, "error": plan["error"]}
 
-        # 补充默认值
-        plan.setdefault("title", context[:30] if context else "演示文稿")
+        plan["title"] = (
+            self._normalizer.output_title(normalized.output_name)
+            or self._normalizer.extract_title(content, normalized.content_type)
+            or plan.get("title")
+            or "演示文稿"
+        )
         plan.setdefault("style", "soft")
 
         # 生成 PPT
         return await self._generate_ppt(plan)
 
-    async def _handle_template(self, context: Optional[str],
-                               file_paths: Optional[List[str]]) -> Dict[str, Any]:
+    async def _handle_template(self, normalized: NormalizedPptInput) -> Dict[str, Any]:
         """模板生成模式。"""
         from src.tools.ppt.template_analyzer import TemplateAnalyzer
 
-        if not file_paths:
+        if not normalized.file_paths:
             return {"success": False, "error": "模板模式需要提供 .pptx 模板文件"}
 
         template_path = None
-        for fp in file_paths:
+        for fp in normalized.file_paths:
             if Path(fp).suffix.lower() == ".pptx":
                 template_path = fp
                 break
@@ -152,9 +218,15 @@ class PptProcessTool(BaseTool):
 
         # LLM 规划内容大纲
         planner = self._get_planner()
-        plan = await planner.plan_from_content(context or "演示文稿")
+        plan = await planner.plan_from_content(normalized.content or "演示文稿")
         if "error" in plan:
             return {"success": False, "error": plan["error"]}
+        plan["title"] = (
+            self._normalizer.output_title(normalized.output_name)
+            or normalized.extracted_title
+            or plan.get("title")
+            or "演示文稿"
+        )
 
         # 分析模板 + 匹配内容 + 生成
         analyzer = TemplateAnalyzer()
