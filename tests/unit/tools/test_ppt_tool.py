@@ -1,5 +1,6 @@
 """PPT 工具 Phase 0 回归测试。"""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -177,10 +178,7 @@ async def test_legacy_mixed_context_remains_compatible(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("content", "content_type", "expected_error"),
-    [
-        ("<h1>网页演示</h1>", "html", "Phase 4"),
-        ('{"title":"规格演示","slides":[]}', "slide_deck_spec", "Phase 2"),
-    ],
+    [("<h1>网页演示</h1>", "html", "Phase 4")],
 )
 async def test_unimplemented_modes_return_stable_error(
     content, content_type, expected_error
@@ -196,6 +194,41 @@ async def test_unimplemented_modes_return_stable_error(
     assert result["success"] is False
     assert "暂不支持" in result["error"]
     assert expected_error in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_slide_deck_spec_renders_directly_without_planner(tmp_path, monkeypatch):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+    from src.tools.ppt.renderer import NodePptRenderer
+
+    def fake_render(self, spec, output_path):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"pptx")
+        return {
+            "file_path": str(output_path),
+            "qa": {"slide_count": 1, "node_count": 1},
+        }
+
+    monkeypatch.setattr(NodePptRenderer, "render", fake_render)
+    monkeypatch.setattr(PptProcessTool, "_get_output_dir", lambda self: tmp_path)
+    tool = PptProcessTool()
+
+    result = await tool.execute(
+        content_type="slide_deck_spec",
+        output_name="直接规格.pptx",
+        content=json.dumps({
+            "title": "原始标题",
+            "slides": [{
+                "id": "s1",
+                "nodes": [{"type": "text", "x": 1, "y": 1, "w": 3, "h": 1, "text": "内容"}],
+            }],
+        }, ensure_ascii=False),
+    )
+
+    assert result["success"] is True
+    assert result["renderer"] == "pptxgenjs"
+    assert Path(result["file_path"]).name == "直接规格.pptx"
+    assert tool._planner is None
 
 
 @pytest.mark.asyncio
@@ -299,12 +332,42 @@ def test_ppt_config_reads_switches(monkeypatch):
     assert config.qa_strict is True
 
 
+def test_ppt_config_defaults_to_node_renderer_with_fallback(monkeypatch):
+    from src.tools.ppt.ppt_config import get_ppt_config
+
+    monkeypatch.delenv("PPT_RENDERER", raising=False)
+    monkeypatch.delenv("PPT_RENDERER_FALLBACK", raising=False)
+
+    config = get_ppt_config()
+
+    assert config.renderer == "pptxgenjs"
+    assert config.renderer_fallback is True
+
+
 def test_ppt_config_invalid_renderer_falls_back(monkeypatch):
     from src.tools.ppt.ppt_config import get_ppt_config
 
     monkeypatch.setenv("PPT_RENDERER", "unknown")
 
     assert get_ppt_config().renderer == "python_pptx"
+
+
+@pytest.mark.asyncio
+async def test_topic_uses_node_renderer_when_available(tmp_path, monkeypatch):
+    from src.tools.ppt.ppt_process_tool import PptProcessTool
+
+    monkeypatch.setenv("PPT_RENDERER", "pptxgenjs")
+    tool = PptProcessTool()
+    tool._planner = FakePlanner(_sample_plan("Node 主路径"))
+    monkeypatch.setattr(tool, "_check_node_renderer_ready", lambda: True)
+    monkeypatch.setattr(tool, "_get_output_dir", lambda: tmp_path)
+
+    result = await tool.execute(content="Node 主路径")
+
+    assert result["success"] is True
+    assert result["renderer"] == "pptxgenjs"
+    assert result["slide_count"] == 3
+    _assert_pptx(result["file_path"], 3)
 
 
 def test_ppt_capabilities_reports_missing_node(monkeypatch, tmp_path):

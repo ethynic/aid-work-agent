@@ -113,6 +113,11 @@ frontend/.env.*.local
 frontend/package/
 frontend/npm.tgz
 
+# PPT Node renderer dependencies and build output
+src/tools/ppt/renderer-node/node_modules/
+src/tools/ppt/renderer-node/dist/
+src/tools/ppt/renderer-node/dist-tests/
+
 uploads/
 memories/
 storage/

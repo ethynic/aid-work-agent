@@ -5,6 +5,7 @@ PPT 生成工具 — Agent 唯一入口
 """
 
 from pathlib import Path
+import json
 import re
 from typing import Any, Dict, List, Literal, Optional
 
@@ -139,7 +140,7 @@ class PptProcessTool(BaseTool):
             if mode == "html_to_pptx":
                 return {"success": False, "error": "HTML 转 PPTX 暂不支持，将在 Phase 4 实现"}
             if mode == "spec_to_pptx":
-                return {"success": False, "error": "SlideDeckSpec 转 PPTX 暂不支持，将在 Phase 2 实现"}
+                return await self._handle_spec(normalized)
             return await self._handle_auto(normalized, mode)
         except Exception as e:
             logger.error(f"[PptProcess] 执行失败: {e}", exc_info=True)
@@ -242,21 +243,44 @@ class PptProcessTool(BaseTool):
 
         return result
 
+    async def _handle_spec(self, normalized: NormalizedPptInput) -> Dict[str, Any]:
+        """Validate and render a SlideDeckSpec without invoking the planner."""
+        from src.tools.ppt.spec import SlideDeckSpec
+
+        try:
+            raw_spec = json.loads(normalized.content or "")
+            spec = SlideDeckSpec.model_validate(raw_spec)
+        except (json.JSONDecodeError, ValidationError):
+            return {"success": False, "error": "SlideDeckSpec 格式或内容无效"}
+
+        output_title = self._normalizer.output_title(normalized.output_name)
+        if output_title:
+            spec = spec.model_copy(update={"title": output_title})
+        return self._render_node_spec(spec)
+
     async def _generate_ppt(self, plan: dict) -> Dict[str, Any]:
         """根据大纲生成 PPT 文件。"""
         from src.tools.ppt.theme import get_theme
         from src.tools.ppt.generator import PPTGenerator
 
         config = get_ppt_config()
-        warnings = []
-        renderer = config.renderer
         if config.renderer == "pptxgenjs":
-            renderer_ready = self._check_node_renderer_ready()
-            if renderer_ready:
-                warnings.append("PptxGenJS 渲染器尚未接入，已使用 python-pptx 路径生成")
-            else:
-                warnings.append("PptxGenJS 渲染器依赖不可用，已回退到 python-pptx 路径")
-            renderer = "python_pptx"
+            from src.tools.ppt.spec_builder import SlideDeckSpecBuilder
+
+            try:
+                if not self._check_node_renderer_ready():
+                    raise RuntimeError("node renderer unavailable")
+                spec = SlideDeckSpecBuilder().from_planner(plan)
+                return self._render_node_spec(spec)
+            except Exception as e:
+                logger.error(f"[PptProcess] PptxGenJS 渲染失败: {e}", exc_info=True)
+                if not config.renderer_fallback:
+                    return {"success": False, "error": "PPT渲染服务暂不可用，请稍后重试"}
+                warning = (
+                    "PptxGenJS 渲染器依赖不可用，已回退到 python-pptx 路径"
+                    if not self._check_node_renderer_ready()
+                    else "PptxGenJS 渲染失败，已回退到 python-pptx 路径"
+                )
 
         theme = get_theme(plan.get("theme_id"), plan.get("style", "soft"))
         generator = PPTGenerator(theme)
@@ -266,13 +290,43 @@ class PptProcessTool(BaseTool):
             "success": True,
             "file_path": output_path,
             "slide_count": len(plan.get("slides", [])),
-            "renderer": renderer,
+            "renderer": "python_pptx",
             "message": f"已生成PPT，共 {len(plan.get('slides', []))} 页",
         }
-        if warnings:
-            result["warnings"] = warnings
+        if config.renderer == "pptxgenjs":
+            result["warnings"] = [warning]
 
         return result
+
+    def _render_node_spec(self, spec) -> Dict[str, Any]:
+        from src.tools.ppt.renderer import NodePptRenderer
+
+        output_dir = self._get_output_dir()
+        safe_name = "".join(
+            character if character.isalnum() or character in "._- " else "_"
+            for character in spec.title
+        ).strip() or "演示文稿"
+        output_path = output_dir / f"{safe_name}.pptx"
+        rendered = NodePptRenderer().render(spec, output_path)
+        qa = rendered["qa"]
+        return {
+            "success": True,
+            "file_path": rendered["file_path"],
+            "slide_count": qa.get("slide_count", len(spec.slides)),
+            "renderer": "pptxgenjs",
+            "qa_summary": {
+                "slide_count": qa.get("slide_count", len(spec.slides)),
+                "node_count": qa.get("node_count", 0),
+            },
+            "message": f"已生成PPT，共 {len(spec.slides)} 页",
+        }
+
+    def _get_output_dir(self) -> Path:
+        try:
+            from src.main import _get_tenant_upload_dir
+            return _get_tenant_upload_dir()
+        except (ImportError, AttributeError):
+            return Path("storage/ppt")
 
     def _check_node_renderer_ready(self) -> bool:
         """返回 Node 渲染器依赖是否可用。"""

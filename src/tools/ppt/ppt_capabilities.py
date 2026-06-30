@@ -63,6 +63,7 @@ def probe_node_renderer(renderer_dir: Path, commands: Dict[str, Any] | None = No
     }
     package_json = renderer_dir / "package.json"
     pptxgenjs_dir = renderer_dir / "node_modules" / "pptxgenjs"
+    renderer_entrypoint = renderer_dir / "dist" / "render.js"
 
     if not commands.get("node", {}).get("available"):
         return {
@@ -81,6 +82,12 @@ def probe_node_renderer(renderer_dir: Path, commands: Dict[str, Any] | None = No
             "available": False,
             "renderer_dir": str(renderer_dir),
             "reason": "Node 渲染器依赖未安装，请在 renderer-node 目录执行 npm install",
+        }
+    if not renderer_entrypoint.is_file():
+        return {
+            "available": False,
+            "renderer_dir": str(renderer_dir),
+            "reason": "Node 渲染器尚未构建，请在 renderer-node 目录执行 npm run build",
         }
 
     return {

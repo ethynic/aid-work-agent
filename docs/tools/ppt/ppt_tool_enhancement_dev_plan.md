@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：🔧 部分完成（Phase 0-1 已完成，Phase 1 code review 已通过）
+> 状态：🔧 部分完成（Phase 0-2 已完成并通过 review）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -128,7 +128,7 @@ Python ppt_process
 
 ### Phase 2：SlideDeckSpec 与 Node/PptxGenJS 渲染器
 
-状态：待开发
+状态：✅ 已完成开发并通过独立测试与 code review（2026-06-30）
 
 目标：
 
@@ -485,15 +485,19 @@ tests/unit/tools/
 新增 Node 依赖：
 
 - `pptxgenjs`
-- `typescript`
-- `tsx` 或构建到 `dist`
-- 视实现需要可加 `zod` 做 Node 侧 schema 校验
+- `typescript`（仅构建/测试）
+- `@types/node`（仅构建/测试）
+
+依赖版本由 `src/tools/ppt/renderer-node/package-lock.json` 锁定。部署构建必须使用
+`npm ci && npm run build`，不提交 `node_modules/` 和 `dist/`。
 
 部署要求：
 
 - Docker 镜像安装 Node.js LTS。
 - 构建阶段执行 `npm ci` 和 `npm run build`。
 - 运行时可执行 `node src/tools/ppt/renderer-node/dist/render.js`。
+- 默认 `PPT_RENDERER=pptxgenjs`；`PPT_RENDERER_FALLBACK=true` 时普通主题/大纲
+  的 Node 渲染失败可回退 `python-pptx`，设为 `false` 可禁止回退。
 - Playwright 浏览器依赖沿用项目已有安装策略；如环境缺失，HTML 导出返回明确错误。
 
 ## 6. 回滚策略
