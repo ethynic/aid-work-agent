@@ -499,6 +499,24 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 
 **关系**：`data_connectors.tenant_id` → `tenants.tenant_id`
 
+### 11.5 社媒运营表
+
+社媒内容运营智能体与聚合平台使用以下租户业务表，均包含 `tenant_id` 并由 API/服务层强制过滤：
+
+- `social_accounts`：平台账号、授权方式、密文凭证和能力声明。
+- `social_content_plans`：周发布计划。
+- `social_content_items`：计划下的日历条目。
+- `social_content_masters`：平台无关内容母版、事实来源和内容 hash。
+- `social_media_assets`：素材来源、授权和统一文件存储引用。
+- `social_content_asset_links`：母版与素材关系。
+- `social_content_variants`：面向具体平台账号的内容版本。
+- `social_review_records`：审核记录，绑定 revision 和 content hash。
+- `social_publish_jobs`：不可变发布快照、幂等键和发布状态。
+- `social_publish_attempts`：每次平台调用或人工交接的脱敏摘要。
+- `social_published_contents`：外部内容标识、链接和确认来源。
+- `social_metric_snapshots`：原始指标与标准化指标快照。
+- `social_data_import_batches`：视频号等人工数据导入批次。
+
 ---
 
 ## 12. 核心表关系图
@@ -531,6 +549,16 @@ tenants（租户）
 │
 ├── scheduled_tasks（定时任务） ───────→ scheduled_task_logs（任务日志）
 ├── data_connectors（数据连接器）
+├── social_accounts（社媒平台账号） ──────┬── social_content_variants（平台内容版本）
+│                                        ├── social_publish_jobs（发布任务）
+│                                        └── social_metric_snapshots（指标快照）
+├── social_content_plans（社媒内容计划） ─→ social_content_items（日历条目）
+├── social_content_masters（内容母版） ───┬→ social_content_variants（平台内容版本）
+│                                        └→ social_content_asset_links → social_media_assets（素材）
+├── social_review_records（社媒审核记录）
+├── social_publish_attempts（发布尝试）
+├── social_published_contents（已发布内容）
+├── social_data_import_batches（数据导入批次）
 ├── subagent_env_vars（环境变量）
 ├── subagent_knowledge_sources（知识库关联）
 │

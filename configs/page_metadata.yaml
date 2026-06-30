@@ -11,6 +11,8 @@ domains:
     label: 售后服务
   - id: data-analysis
     label: 数据分析
+  - id: social-media-operations
+    label: 社媒运营
 
 pages:
   - page_id: trade-specialist-customers
@@ -132,3 +134,11 @@ pages:
     icon: "🗄️"
     domain: data-analysis
     status: published
+
+  - page_id: social-media-operations-workbench
+    title: 社媒运营工作台
+    description: 统一管理微信公众号和微信视频号账号、内容计划、平台版本、审核发布队列和运营数据
+    route: /social-media
+    icon: "📣"
+    domain: social-media-operations
+    status: planned

@@ -1287,6 +1287,16 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback SaaS transaction: {rollback_err}")
 
+        try:
+            from src.social_media.db import init_social_media_tables
+            init_social_media_tables(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize social media tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback social media transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 

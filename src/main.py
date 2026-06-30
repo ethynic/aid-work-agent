@@ -31,6 +31,7 @@ from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
 from src.api import auth, session as session_api, customer, scheduled_task, email_settings
 from src.api import monitor as monitor_api
+from src.api import social_media as social_media_api
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
 from src.api import customer_followup, complaint_handling, after_sales
 from src.knowledge.api import router as knowledge_router
@@ -1761,6 +1762,7 @@ app.include_router(admin_reports.router)
 from src.api import admin_error_logs
 app.include_router(admin_error_logs.router)
 app.include_router(monitor_api.router)
+app.include_router(social_media_api.router)
 
 # 数据分析 API
 from src.api import data_analysis

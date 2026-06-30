@@ -68,6 +68,11 @@ const router = createRouter({
       name: 'data-sources',
       component: () => import('./pages/DataSourceManager.vue')
     },
+    {
+      path: '/social-media',
+      name: 'social-media',
+      component: () => import('./components/social-media/SocialMediaWorkbench.vue')
+    },
     // 外贸获客智能体业务数据页面
     {
       path: '/trade-specialist',
@@ -203,6 +208,7 @@ const router = createRouter({
         { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('./components/saas/ReplyStyleManager.vue') },
         { path: 'external-customers', name: 'tenant-external-customers', component: () => import('./components/saas/ExternalCustomerService.vue') },
         { path: 'data-sources', name: 'tenant-data-sources', component: () => import('./pages/DataSourceManager.vue') },
+        { path: 'social-media', name: 'tenant-social-media', component: () => import('./components/social-media/SocialMediaWorkbench.vue') },
         // 外贸获客智能体业务数据页面
         {
           path: 'trade-specialist',
