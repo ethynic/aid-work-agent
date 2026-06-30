@@ -35,9 +35,9 @@
 
 ### Phase 1：Word 正式入参扩展
 
-状态：待开发
+状态：已完成
 
-改动：
+已完成改动：
 
 1. `WordProcessInput` 增加字段：
    - `instruction`
@@ -50,6 +50,7 @@
 3. `_resolve_task` 优先使用归一化后的结构化信息。
 4. `_handle_md_to_word` 只消费 `content`。
 5. 工具描述更新为推荐新调用方式，保留 `context` 兼容说明。
+6. 显式 `output_name` 优先于路由器或标题推断出的文件名。
 
 测试：
 
@@ -62,6 +63,7 @@
 
 - 旧调用不破坏。
 - 新调用不需要内部 LLM 即可完成确定性 `md_to_word`。
+- Word 单测通过：`74 passed`。
 
 ### Phase 2：PDF 入参拆分与正文提取
 
