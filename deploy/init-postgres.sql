@@ -147,7 +147,9 @@ CREATE TABLE IF NOT EXISTS channel_messages (
     message_type TEXT DEFAULT 'text',
     attachments TEXT,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_recalled BOOLEAN NOT NULL DEFAULT FALSE,
+    recalled_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);

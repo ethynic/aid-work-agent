@@ -2,6 +2,12 @@
 -- 所有SQL语句必须幂等安全（可重复执行），使用 IF NOT EXISTS、DROP TABLE IF EXISTS 等保护措施
 
 -- ============================================================================
+-- 2026-06-30 撤回消息功能：channel_messages 增加 is_recalled 和 recalled_at 字段
+-- ============================================================================
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS is_recalled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS recalled_at TIMESTAMP;
+
+-- ============================================================================
 -- 2026-06-01 回复风格管理系统：新增 reply_styles 表 + agent_instances 增加 reply_style_id 字段
 -- ============================================================================
 

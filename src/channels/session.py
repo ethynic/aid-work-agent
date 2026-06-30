@@ -956,6 +956,16 @@ class ChannelSessionManager:
             result["metadata"] = self._parse_json_field(result.get("metadata"))
             return result
 
+    def _has_is_recalled_column(self) -> bool:
+        """检查 channel_messages 表是否有 is_recalled 列（迁移兼容性）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'channel_messages' AND column_name = 'is_recalled'
+            """)
+            return cursor.fetchone() is not None
+
     def get_messages(
         self,
         session_id: str,
@@ -981,8 +991,9 @@ class ChannelSessionManager:
             cursor = conn.cursor()
             placeholder = "%s"
 
-            # 撤回消息过滤条件
-            recall_condition = "" if include_recalled else "AND is_recalled = FALSE"
+            # 撤回消息过滤条件（兼容迁移前的数据库：is_recalled 列不存在时不启用过滤）
+            has_recall_column = self._has_is_recalled_column()
+            recall_condition = "" if (include_recalled or not has_recall_column) else "AND is_recalled = FALSE"
 
             if before_message_id:
                 cursor.execute(f"""
@@ -1014,8 +1025,8 @@ class ChannelSessionManager:
                 msg["metadata"] = self._parse_json_field(msg.get("metadata"))
                 messages.append(msg)
 
-            # 记录撤回消息过滤情况
-            if not include_recalled:
+            # 记录撤回消息过滤情况（仅当列存在时统计）
+            if not include_recalled and has_recall_column:
                 recalled_count = sum(1 for m in messages if m.get("is_recalled"))
                 if recalled_count > 0:
                     tlog(
@@ -1047,6 +1058,16 @@ class ChannelSessionManager:
         """
         from src.core.temp_logger import tlog
         import json
+
+        # 迁移兼容：is_recalled 列不存在时，直接返回 0
+        if not self._has_is_recalled_column():
+            tlog(
+                "撤回消息",
+                "数据库尚未迁移，is_recalled 列不存在，跳过标记: session_id={session_id}, msgid={msgid}",
+                session_id=session_id,
+                msgid=recall_msgid,
+            )
+            return 0
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
