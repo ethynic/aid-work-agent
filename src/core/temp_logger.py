@@ -8,8 +8,8 @@
     tlog("语音合并", f"合并 {a} + {b} -> {c}")
     tlog("语音合并", "处理失败", level="ERROR")
 
-日志文件位于 log/agent/temp/{topic}.log，与主日志完全隔离。
-bug 修复后删除 tlog 调用即可；整个 log/agent/temp/ 目录可随时清空。
+日志文件位于 log/temp/{topic}.log，与主日志完全隔离。
+bug 修复后删除 tlog 调用即可；整个 log/temp/ 目录可随时清空。
 """
 
 import re
@@ -17,7 +17,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-_TEMP_LOG_DIR = Path("log/agent/temp")
+_TEMP_LOG_DIR = Path("log/temp")
 
 # 文件名非法字符（Windows / Linux 通用）
 _INVALID_CHARS = re.compile(r'[\\/:*?"<>|]')

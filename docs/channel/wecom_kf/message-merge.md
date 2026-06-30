@@ -283,7 +283,7 @@ async def _processor(cancel_check, user_input_override=None):
 
 ## 8. 调试日志
 
-开发期间使用 `tlog` 把调试日志单独写到 `log/agent/temp/语音合并.log`，与主日志完全隔离。bug 修复后已清理，关键位置以注释形式保留 tlog 调用，未来调试时取消注释即可：
+开发期间使用 `tlog` 把调试日志单独写到 `log/temp/语音合并.log`，与主日志完全隔离。bug 修复后已清理，关键位置以注释形式保留 tlog 调用，未来调试时取消注释即可：
 
 | 文件 | 位置 | 用途 |
 |------|------|------|
