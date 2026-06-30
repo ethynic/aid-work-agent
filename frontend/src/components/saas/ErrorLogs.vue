@@ -68,7 +68,7 @@
     />
 
     <!-- 详情 Modal -->
-    <BaseModal v-model="showModal" title="错误详情 #{{ selectedLog?.id }}" size="xl" mode="view">
+    <BaseModal v-model="showModal" :title="`错误详情 #${selectedLog?.id}`" size="xl" mode="view">
       <template v-if="selectedLog">
         <div class="grid grid-cols-2 gap-3 text-sm">
           <div>
