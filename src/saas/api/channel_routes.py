@@ -1473,7 +1473,6 @@ async def _process_tenant_wecom_kf_messages(
                     )
 
                     # 跨批次兜底：尝试标记已持久化的消息
-                    from src.channels.session import channel_session_manager
                     try:
                         session = channel_session_manager.find_session(
                             channel_type="wecom_kf",

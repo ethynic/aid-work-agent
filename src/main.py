@@ -464,20 +464,23 @@ async def lifespan(app: FastAPI):
                             tenant_id = session["tenant_id"]
                             open_kfid = session.get("channel_chat_id", "")
                             external_userid = session["channel_user_id"]
-                            last_message_at_str = session.get("last_message_at")
+                            last_message_at_val = session.get("last_message_at")
 
-                            if not last_message_at_str or not open_kfid or not tenant_id:
+                            if not last_message_at_val or not open_kfid or not tenant_id:
                                 continue
 
-                            # last_message_at 在 PostgreSQL 中是 TIMESTAMP，psycopg2 返回 datetime 对象；
+                            # last_message_at 在 PostgreSQL 中是 TIMESTAMP，psycopg2 通常返回 datetime 对象；
                             # 极少数情况（旧数据/手动写入）可能是字符串，需兼容处理
-                            last_msg_value = last_message_at_str
-                            if isinstance(last_msg_value, datetime):
-                                last_msg_time = last_msg_value
+                            if hasattr(last_message_at_val, "strftime"):
+                                # 是 datetime 对象（或其他实现了 strftime 的类）
+                                last_msg_time = last_message_at_val
                             else:
-                                last_msg_time = datetime.strptime(
-                                    str(last_msg_value), "%Y-%m-%d %H:%M:%S"
-                                )
+                                # 尝试作为字符串解析
+                                last_msg_str = str(last_message_at_val)
+                                # 处理可能带微秒的格式，如 "2026-05-15 11:49:45.429739"
+                                if "." in last_msg_str:
+                                    last_msg_str = last_msg_str.split(".")[0]
+                                last_msg_time = datetime.strptime(last_msg_str, "%Y-%m-%d %H:%M:%S")
                             elapsed_minutes = (now - last_msg_time).total_seconds() / 60
 
                             # 从租户渠道配置获取超时时间
