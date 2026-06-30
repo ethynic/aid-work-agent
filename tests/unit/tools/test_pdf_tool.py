@@ -706,9 +706,76 @@ class TestPdfWriter:
 
             with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=fake_create_pdf), \
                  patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": output_pdf, "file_size": 256}):
-                result = html_to_pdf("<html><body>Hello</body></html>")
+                result = html_to_pdf("<html><body>Hello</body></html>", engine="fpdf2")
 
         assert result["success"] is True
+
+    def test_html_to_pdf_auto_uses_playwright_first(self):
+        """HTML 转 PDF 默认优先走 Playwright print-to-pdf"""
+        from src.tools.pdf.pdf_writer import html_to_pdf
+
+        expected = {"success": True, "file_path": "/fake/playwright.pdf", "file_size": 256, "engine": "playwright"}
+        with patch("src.tools.pdf.pdf_writer._html_to_pdf_via_playwright", return_value=expected) as mock_pw, \
+             patch("src.tools.pdf.pdf_writer._html_to_pdf_via_fpdf2") as mock_fpdf2:
+            result = html_to_pdf("<html><body>Hello</body></html>")
+
+        assert result == expected
+        mock_pw.assert_called_once()
+        mock_fpdf2.assert_not_called()
+
+    def test_html_to_pdf_auto_fallback_to_fpdf2(self):
+        """Playwright 不可用时 auto 回退 fpdf2"""
+        from src.tools.pdf.pdf_writer import html_to_pdf
+
+        fallback = {"success": True, "file_path": "/fake/fpdf2.pdf", "file_size": 128, "engine": "fpdf2"}
+        with patch("src.tools.pdf.pdf_writer._html_to_pdf_via_playwright", return_value={"success": False, "error": "no browser"}), \
+             patch("src.tools.pdf.pdf_writer._html_to_pdf_via_fpdf2", return_value=fallback):
+            result = html_to_pdf("<html><body>Hello</body></html>")
+
+        assert result["success"] is True
+        assert result["engine"] == "fpdf2"
+        assert "warnings" in result
+
+    def test_html_to_pdf_rejects_unknown_engine(self):
+        """未知 HTML 转 PDF 引擎直接返回失败"""
+        from src.tools.pdf.pdf_writer import html_to_pdf
+
+        result = html_to_pdf("<p>Hello</p>", engine="unknown")
+
+        assert result["success"] is False
+        assert "不支持" in result["error"]
+
+    def test_prepare_print_html_uses_inline_css(self):
+        """Playwright 打印 HTML 支持内联 CSS"""
+        from src.tools.pdf.pdf_writer import _prepare_print_html
+
+        result = _prepare_print_html("<p>Hello</p>", css="body { color: red; }")
+
+        assert "body { color: red; }" in result
+        assert "<body>\n<p>Hello</p>" in result
+
+    def test_prepare_print_html_reads_css_file(self, tmp_path):
+        """Playwright 打印 HTML 支持 CSS 文件路径"""
+        from src.tools.pdf.pdf_writer import _prepare_print_html
+
+        css_path = tmp_path / "print.css"
+        css_path.write_text(".title { font-weight: 700; }", encoding="utf-8")
+
+        result = _prepare_print_html(
+            "<html><body><h1 class='title'>Hello</h1></body></html>",
+            css=str(css_path),
+        )
+
+        assert ".title { font-weight: 700; }" in result
+        assert "</style></head><body>" in result
+
+    def test_prepare_print_html_injects_css_when_full_html_has_no_head(self):
+        """完整 HTML 没有 head 时仍注入 CSS"""
+        from src.tools.pdf.pdf_writer import _prepare_print_html
+
+        result = _prepare_print_html("<html><body>Hello</body></html>", css="body { margin: 0; }")
+
+        assert "<head><style>body { margin: 0; }</style></head>" in result
 
     def test_split_html_by_tables_preserves_order(self):
         """HTML 表格拆分保持正文/表格顺序"""

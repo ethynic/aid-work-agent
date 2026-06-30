@@ -20,7 +20,7 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 3. ocr - OCR识别PDF内容（扫描件、图片型PDF）
 4. pdf_to_md - 将PDF转换为Markdown格式
 5. md_to_pdf - 将Markdown文本转换为PDF文件
-6. html_to_pdf - 将HTML内容转换为PDF文件
+6. html_to_pdf - 将HTML内容转换为PDF文件；复杂 HTML/CSS 使用 Playwright print-to-pdf
 7. docx_to_pdf - 将Word文档转换为PDF文件
 8. merge - 合并多个PDF文件
 9. split - 按页码范围拆分PDF
@@ -42,7 +42,7 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - 有 PDF 文件且明确要求 OCR 或识别扫描件 → ocr
 - 有 PDF 文件且要求转为 Markdown → pdf_to_md
 - context 中包含 Markdown 内容（# 标题、| 表格等）且要求生成 PDF → md_to_pdf
-- context 中包含 HTML 内容且要求生成 PDF → html_to_pdf
+- context 中包含 HTML 内容且要求生成 PDF → html_to_pdf；如果强调复杂样式/高保真/网页效果，params.engine="playwright"
 - 有 .docx 文件且要求转为 PDF → docx_to_pdf
 - 有多个 PDF 文件且要求合并 → merge
 - 有 PDF 文件且要求拆分/按页提取 → split 或 extract_pages
@@ -64,6 +64,7 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - extract_pages 操作需要在 params 中提供 pages，格式如 [1, 3, 5]（页码，从1开始）
 - merge 操作的文件来自 file_paths（多个文件路径）
 - md_to_pdf / html_to_pdf 可在 params 中提供 title 和 output_name
+- html_to_pdf 可在 params 中提供 engine，支持 auto/playwright/fpdf2；默认 auto 会优先 Playwright print-to-pdf，失败后回退 fpdf2
 - 所有用户可见页码均从1开始
 - read/read_tables/pdf_to_md/render_pages/validate 操作可在 params 中提供 pages，格式如 [1, 2, 3]（只处理指定页）
 - add_watermark 操作需要 params.text

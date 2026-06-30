@@ -1,8 +1,8 @@
 """
 PDF 生成模块
 
-使用 markdown + fpdf2 生成 PDF（Markdown/HTML → PDF）。
-纯 Python 实现，不依赖 Pandoc、LaTeX 或系统库。
+Markdown 使用 fpdf2 生成 PDF。
+HTML 优先使用 Playwright print-to-pdf，失败时回退 fpdf2。
 """
 
 import os
@@ -608,8 +608,136 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
 
 
 def html_to_pdf(html_text: str, output_name: Optional[str] = None,
-                css: Optional[str] = None) -> Dict[str, Any]:
-    """HTML → PDF，使用 fpdf2。"""
+                css: Optional[str] = None, engine: str = "auto") -> Dict[str, Any]:
+    """HTML → PDF。默认使用 Playwright print-to-pdf，失败时回退 fpdf2。"""
+    engine = (engine or "auto").lower().strip()
+    if engine not in ("auto", "playwright", "fpdf2", "fpdf"):
+        return {"success": False, "error": f"不支持的 HTML 转 PDF 引擎: {engine}"}
+
+    if engine in ("playwright", "auto"):
+        result = _html_to_pdf_via_playwright(html_text, output_name=output_name, css=css)
+        if result.get("success") or engine == "playwright":
+            return result
+
+        fallback = _html_to_pdf_via_fpdf2(html_text, output_name=output_name, css=css)
+        warnings = list(fallback.get("warnings", []))
+        warnings.append(f"Playwright print-to-pdf 不可用，已回退 fpdf2: {result.get('error', '')}")
+        fallback["warnings"] = warnings
+        return fallback
+
+    return _html_to_pdf_via_fpdf2(html_text, output_name=output_name, css=css)
+
+
+def _html_to_pdf_via_playwright(html_text: str, output_name: Optional[str] = None,
+                                css: Optional[str] = None) -> Dict[str, Any]:
+    """通过 Playwright Chromium print-to-pdf 高保真生成 PDF。"""
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "output.pdf")
+            html_doc = _prepare_print_html(html_text, css=css)
+
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page()
+                    page.set_content(html_doc, wait_until="networkidle")
+                    page.pdf(
+                        path=output_path,
+                        format="A4",
+                        print_background=True,
+                        prefer_css_page_size=True,
+                        margin={"top": "16mm", "right": "14mm", "bottom": "16mm", "left": "14mm"},
+                    )
+                finally:
+                    browser.close()
+
+            if not Path(output_path).exists():
+                return {"success": False, "error": "PDF 生成失败：Playwright 未输出文件"}
+
+            save_result = PdfFileHandler.save_temp(
+                source_path=output_path,
+                file_name=output_name or "document.pdf",
+            )
+            save_result["success"] = True
+            save_result["engine"] = "playwright"
+            return save_result
+
+    except Exception as e:
+        logger.warning(f"[PdfWriter] Playwright HTML转PDF失败: {e}")
+        return {"success": False, "error": f"Playwright HTML转PDF失败: {e}"}
+
+
+def _prepare_print_html(html_text: str, css: Optional[str] = None) -> str:
+    """准备用于浏览器打印的完整 HTML。"""
+    css_text = _resolve_print_css(css)
+
+    if re.search(r"<html[\s>]", html_text, flags=re.IGNORECASE):
+        if not css_text:
+            return html_text
+        if "</head>" in html_text.lower():
+            return re.sub(
+                r"</head>",
+                f"<style>{css_text}</style></head>",
+                html_text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        return re.sub(
+            r"<html([^>]*)>",
+            f"<html\\1><head><style>{css_text}</style></head>",
+            html_text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@page {{ size: A4; margin: 16mm 14mm; }}
+body {{
+  font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.55;
+}}
+table {{ border-collapse: collapse; width: 100%; }}
+th, td {{ border: 1px solid #d0d7de; padding: 6px 8px; }}
+thead {{ display: table-header-group; }}
+tr {{ break-inside: avoid; }}
+{css_text}
+</style>
+</head>
+<body>
+{html_text}
+</body>
+</html>"""
+
+
+def _resolve_print_css(css: Optional[str]) -> str:
+    """解析 Playwright 打印 CSS：支持 CSS 文件路径和内联 CSS。"""
+    if not css:
+        return ""
+
+    css_value = str(css)
+    try:
+        css_path = Path(css_value)
+        if css_path.exists() and css_path.is_file():
+            return css_path.read_text(encoding="utf-8")
+    except OSError:
+        pass
+
+    if any(marker in css_value for marker in ("{", "}", ";", "\n")):
+        return css_value
+
+    return ""
+
+
+def _html_to_pdf_via_fpdf2(html_text: str, output_name: Optional[str] = None,
+                           css: Optional[str] = None) -> Dict[str, Any]:
+    """HTML → PDF，使用 fpdf2 简化渲染。"""
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "output.pdf")
@@ -623,12 +751,13 @@ def html_to_pdf(html_text: str, output_name: Optional[str] = None,
                 file_name=output_name or "document.pdf",
             )
             save_result["success"] = True
+            save_result["engine"] = "fpdf2"
             if css:
                 save_result["warnings"] = ["当前 fpdf2 生成路径不支持自定义 CSS，已忽略 css 参数"]
             return save_result
 
     except Exception as e:
-        logger.error(f"[PdfWriter] html_to_pdf 失败: {e}", exc_info=True)
+        logger.error(f"[PdfWriter] fpdf2 HTML转PDF失败: {e}", exc_info=True)
         return {"success": False, "error": f"HTML转PDF失败: {e}"}
 
 

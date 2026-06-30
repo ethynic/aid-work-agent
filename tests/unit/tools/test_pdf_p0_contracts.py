@@ -112,6 +112,7 @@ async def test_html_to_pdf_pipeline_passes_css_for_explicit_warning():
         html_text="<p>Hello</p>",
         output_name="styled.pdf",
         css="body { color: red; }",
+        engine="auto",
     )
 
 

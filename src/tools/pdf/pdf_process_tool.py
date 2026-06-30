@@ -392,6 +392,7 @@ class PdfProcessTool(BaseTool):
             html_text=html_text,
             output_name=params.get("output_name"),
             css=params.get("css"),
+            engine=params.get("engine", "auto"),
         )
 
         return self._validate_generated_result(result, params)

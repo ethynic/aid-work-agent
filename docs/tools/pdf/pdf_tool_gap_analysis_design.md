@@ -259,16 +259,16 @@ storage/uploads/tenant_xxx/pdf_validation/<file_stem>/<run_id>/page-001.png
 
 ### 6.5 生成器策略
 
-保留现有 `fpdf2` 路径作为默认，新增 `reportlab` 专项生成器用于结构化报告类 PDF：
+保留现有 `fpdf2` 路径作为 Markdown 和兜底生成器；复杂 HTML/CSS 生成优先使用 Playwright print-to-pdf；`reportlab` 专项生成器后续再评估。
 
 | 场景 | 推荐生成器 |
 |------|------------|
 | 简单 Markdown、短报告 | 现有 fpdf2 |
-| 表格较多、固定版式报告、页眉页脚要求明确 | reportlab |
+| 表格较多、固定版式报告、页眉页脚要求明确 | reportlab（待后续） |
 | Word 原文转 PDF | LibreOffice |
-| 复杂 HTML/CSS 网页还原 | 不建议承诺高保真；可回退 WeasyPrint/Playwright，但需单独设计 |
+| 复杂 HTML/CSS 网页还原 | Playwright print-to-pdf（已完成，失败时回退 fpdf2） |
 
-第一阶段不强制替换 `fpdf2`，只增加验证；第二阶段再基于真实失败样本决定是否将报告类 PDF 切到 reportlab。
+第一阶段不强制替换 `fpdf2`，只增加验证；复杂 HTML/CSS 生成优先使用 Playwright print-to-pdf；报告类固定版式是否切到 reportlab 后续再评估。
 
 ### 6.6 页码语义统一
 
@@ -342,9 +342,9 @@ tools:
 
 1. `compress`：使用 PyMuPDF garbage/deflate 策略压缩 PDF。✅ 已完成
 2. `extract_images`：提取 PDF 内嵌图片。✅ 已完成
-3. 引入 `reportlab` 报告生成器，覆盖正式报告、报价单、带页眉页脚的固定版式。⏳ 待开发
-4. 建立 PDF 视觉回归样本集，保存小型样例 PDF 和预期检查结果。⏳ 待开发
-5. 评估复杂 HTML 转 PDF 的专用路径，如 WeasyPrint 或 Playwright print-to-pdf。⏳ 待开发
+3. 复杂 HTML/CSS 使用 Playwright print-to-pdf，失败时回退 fpdf2。✅ 已完成
+4. 引入 `reportlab` 报告生成器，覆盖正式报告、报价单、带页眉页脚的固定版式。⏳ 待开发
+5. 建立 PDF 视觉回归样本集，保存小型样例 PDF 和预期检查结果。⏳ 待开发
 
 ## 9. 测试与验收
 

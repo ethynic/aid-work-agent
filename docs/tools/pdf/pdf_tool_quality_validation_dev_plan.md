@@ -244,3 +244,12 @@ pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py
 - 密码保护不在返回值中回显明文密码，符合敏感信息不明文返回要求。
 - 保持交付链路不变：增强类生成文件仍返回 `file_path/files`，前端下载仍必须由 Agent 调用 `cp`。
 - 验证结果：`pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py tests/unit/tools/test_pdf_p0_contracts.py tests/unit/tools/test_pdf_p1_contracts.py -q` 通过，119 passed，2 skipped（当前环境缺少 pypdf，真实加密/元数据用例跳过）。
+
+### 生成质量升级部分完成（2026-06-30）
+
+- 已实现复杂 HTML/CSS 高保真路径：`html_to_pdf` 默认 `engine="auto"`，优先 Playwright Chromium `page.pdf()`，失败后回退 fpdf2。
+- `pdf_process` 的 `html_to_pdf` handler 支持透传 `params.engine`，可选 `auto`、`playwright`、`fpdf2`。
+- 路由 prompt 已明确复杂样式/高保真/网页效果使用 `params.engine="playwright"`。
+- 本次未实现 reportlab 报告生成器，原因是当前优先落地 Playwright print-to-pdf，减少改动面。
+- 本次未实现 PDF 视觉回归样本集。
+- 验证结果：全量 PDF 单测通过，127 passed；真实 Playwright 生成和结构校验通过。
