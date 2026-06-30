@@ -22,41 +22,46 @@ git fetch --all
 git reset --hard origin/master
 NEW_HEAD=$(git rev-parse HEAD)
 #sudo chmod -R 777 .
-sudo find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
+find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
+
+# 清除 Python 字节码缓存（避免旧代码运行）
+echo "[1.1] 清除 Python .pyc 缓存..."
+find . -type f -name "*.pyc" -delete
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 前端编译
 echo "[2] 前端编译..."
-sudo rm -rf frontend/dist/*
-sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm install
-sudo docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm run build
+rm -rf frontend/dist/*
+docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm install
+docker run --rm -v /var/www/agent/frontend:/app -w /app node:22-alpine npm run build
 
 # 3. 停止旧容器（释放数据库连接）
 echo "[3] 停止旧容器..."
-sudo docker compose -f docker-compose.prod.yml down --remove-orphans
+docker compose -f docker-compose.prod.yml down --remove-orphans
 
 # 4. 启动新容器
 #    --force-recreate：强制走"删了重建"路径，避免 compose 协调器在 down 之后偶发误报
 #                       container name conflict（容器最终会被正确拉起，但脚本会中断）
 #    --wait：等所有容器 healthy 才返回，与 set -e 配合更可预测
 echo "[4] 启动后端服务..."
-sudo docker compose -f docker-compose.prod.yml up -d --force-recreate --wait
+docker compose -f docker-compose.prod.yml up -d --force-recreate --wait
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
 #    -u root：必须以 root 身份执行，否则 appuser 在 tmpfs 上无权限改 /tmp
 #    兜底链：先尝试 chmod（多数 tmpfs 上 root 可改），失败则 mount remount
 echo "[5] 修复容器 /tmp 权限..."
-if ! sudo docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
+if ! docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
     echo "  chmod 失败，尝试 mount remount..."
-    sudo docker exec -u root aid-agent-api mount -o remount,mode=1777 /tmp 2>/dev/null || \
+    docker exec -u root aid-agent-api mount -o remount,mode=1777 /tmp 2>/dev/null || \
         echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
-sudo docker exec -u root aid-agent-api ls -ld /tmp || true
+docker exec -u root aid-agent-api ls -ld /tmp || true
 
 # 6. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #    新依赖不会自动安装；下次重建镜像后可移除此步骤）
 echo "[6] 增量安装新增依赖..."
-sudo docker exec -u root aid-agent-api \
+docker exec -u root aid-agent-api \
     pip install --no-cache-dir -r /app/requirements.txt \
     -i https://mirrors.cloud.tencent.com/pypi/simple \
     --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"

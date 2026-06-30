@@ -592,7 +592,15 @@ async def lifespan(app: FastAPI):
                                 exc_info=True
                             )
                 except Exception as e:
-                    logger.error(f"[wecom_kf] 超时检查异常: {e}", exc_info=True)
+                    # 输出原始 SQL，用于确认运行中代码版本（metadata::text LIKE 为新版本）
+                    try:
+                        raw_sql = cursor.query.decode() if cursor and cursor.query else None
+                    except Exception:
+                        raw_sql = None
+                    logger.error(
+                        f"[wecom_kf] 超时检查异常: {e} | raw_sql={raw_sql}",
+                        exc_info=True
+                    )
         asyncio.create_task(_wecom_kf_timeout_check_loop())
 
     yield
