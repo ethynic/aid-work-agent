@@ -629,12 +629,15 @@ class ChannelSessionManager:
             return await agent.process_message_sync(**kwargs)
 
         # ===== 调用 session_queue =====
+        # 从 user_metadata 提取 msgid 透传给 session_queue，供合并缓冲区记录每段 msgid
+        user_msgid = (user_metadata or {}).get("msgid", "") if isinstance(user_metadata, dict) else ""
         try:
             result = await session_queue.enqueue_and_process(
                 session_id=session_id,
                 user_input=agent_input_text,
                 processor=_processor,
                 attachments_meta=user_attachments_meta,
+                msgid=user_msgid,
             )
         except Exception as e:
             logger.error(
@@ -697,12 +700,22 @@ class ChannelSessionManager:
         # 构造批量写入的消息序列
         batch: List[Dict[str, Any]] = []
         if user_to_write:
+            # 合并方用 session_queue 透传的 merged_from_msgids / merged_segments 构造 metadata，
+            # 供撤回时按段重建 content。单条消息保留原 user_metadata（含 msgid）。
+            if result.was_merged and result.merged_from_msgids:
+                merged_user_metadata = {
+                    "open_kfid": (user_metadata or {}).get("open_kfid", "") if isinstance(user_metadata, dict) else "",
+                    "merged_from_msgids": result.merged_from_msgids,
+                    "merged_segments": result.merged_segments or [],
+                }
+            else:
+                merged_user_metadata = user_metadata
             batch.append({
                 "role": "user",
                 "content": user_to_write,
                 "message_type": message_type,
                 "attachments": attachments_to_write if attachments_to_write else None,
-                "metadata": user_metadata,
+                "metadata": merged_user_metadata,
             })
 
         # tool 消息序列（wecom_kf 等需要持久化 tool_calls + tool 结果）
@@ -1076,7 +1089,7 @@ class ChannelSessionManager:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # ===== 情况1：单条消息命中（metadata.wecom_msgid = recall_msgid）=====
+            # ===== 情况1：单条消息命中（metadata.msgid = recall_msgid）=====
             cursor.execute("""
                 SELECT id, content, metadata FROM channel_messages
                 WHERE session_id = %s AND metadata::jsonb->>'msgid' = %s
@@ -1178,13 +1191,28 @@ class ChannelSessionManager:
                 )
                 return 1
 
-            # ===== 情况3：未命中 =====
+            # ===== 情况3：未命中持久化消息，兜底清理合并缓冲区 =====
+            # 撤回事件可能在消息已进 session_queue 合并窗口、尚未落库时到达。
+            # 此时消息在 session_merge 缓冲区里，按 msgid 移除该段。
+            try:
+                from src.core.session_queue import session_queue
+                removed = session_queue.remove_merge_segment(session_id, recall_msgid)
+            except Exception as buf_err:
+                tlog(
+                    "撤回消息",
+                    "清理合并缓冲区异常: session_id={session_id}, msgid={msgid}, error={error}",
+                    session_id=session_id,
+                    msgid=recall_msgid,
+                    error=str(buf_err),
+                )
+                removed = False
             tlog(
                 "撤回消息",
-                "未找到可标记的消息（可能尚未持久化或已归档）: "
-                "session_id={session_id}, recall_msgid={msgid}",
+                "未命中持久化消息，兜底清理合并缓冲区: "
+                "session_id={session_id}, msgid={msgid}, buffer_removed={removed}",
                 session_id=session_id,
                 msgid=recall_msgid,
+                removed=removed,
             )
             return 0
 
@@ -1332,7 +1360,7 @@ class ChannelSessionManager:
         page_size: int = 50,
     ) -> dict:
         """
-        分页获取渠道会话消息（支持内容搜索）
+        分页获取渠道会话消息（支持内容搜索，后台视图用，包含已撤回消息）
 
         Args:
             session_id: 会话ID
@@ -1342,6 +1370,8 @@ class ChannelSessionManager:
 
         Returns:
             {"messages": [...], "total": int, "page": int, "page_size": int}
+            消息含 is_recalled / recalled_at 字段（迁移兼容：列不存在时返回 False/None），
+            部分撤回的合并消息 metadata.recalled_part_msgids 非空。
         """
         offset = (page - 1) * page_size
         with get_db_connection() as conn:
@@ -1359,8 +1389,13 @@ class ChannelSessionManager:
             cursor.execute(f"SELECT COUNT(*) as cnt FROM channel_messages WHERE {where_clause}", params)
             total = cursor.fetchone()["cnt"]
 
+            # 撤回字段（迁移兼容：is_recalled 列不存在时用 NULL 占位，前端统一按 False 处理）
+            has_recall_column = self._has_is_recalled_column()
+            recall_select = "is_recalled, recalled_at" if has_recall_column else "FALSE AS is_recalled, NULL AS recalled_at"
+
             cursor.execute(f"""
-                SELECT message_id, session_id, role, content, message_type, attachments, metadata, created_at
+                SELECT message_id, session_id, role, content, message_type, attachments, metadata, created_at,
+                       {recall_select}
                 FROM channel_messages
                 WHERE {where_clause}
                 ORDER BY id DESC
@@ -1372,6 +1407,8 @@ class ChannelSessionManager:
                 msg = dict(row)
                 msg["attachments"] = self._parse_json_field(msg.get("attachments"), [])
                 msg["metadata"] = self._parse_json_field(msg.get("metadata"))
+                # 统一 is_recalled 类型为 bool（迁移前/NULL 场景）
+                msg["is_recalled"] = bool(msg.get("is_recalled"))
                 messages.append(msg)
 
         return {"messages": messages, "total": total, "page": page, "page_size": page_size}

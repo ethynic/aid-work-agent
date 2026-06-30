@@ -84,7 +84,10 @@ def _merge_consecutive_user_messages(msg_list: list) -> list:
 
 
 def _build_merged_message(group: list) -> dict:
-    """将一组消息合并为一条。单条消息直接返回。"""
+    """将一组消息合并为一条。单条消息直接返回。
+
+    合并消息保留 merged_from_msgids 和 merged_segments，供撤回时按段重建。
+    """
     if len(group) == 1:
         return group[0]
 
@@ -96,6 +99,12 @@ def _build_merged_message(group: list) -> dict:
 
     merged_msg = group[-1].copy()
     merged_msg["text"] = {"content": "\n".join(lines)}
+    # 保留所有被合并的 msgid 和分段，供撤回时按段重建 content
+    merged_msg["merged_from_msgids"] = [m.get("msgid", "") for m in group]
+    merged_msg["merged_segments"] = [
+        {"msgid": m.get("msgid", ""), "text": m.get("text", {}).get("content", "")}
+        for m in group
+    ]
     return merged_msg
 
 
@@ -1443,8 +1452,21 @@ async def _process_tenant_wecom_kf_messages(
                 # ===== 撤回消息处理：在 origin 过滤之前识别 user_recall_msg 事件 =====
                 if msg_type == "event" and msg.get("event", {}).get("event_type") == "user_recall_msg":
                     event_data = msg.get("event", {})
-                    recall_msgid = event_data.get("msgid", "")  # 被撤回的原消息 ID
+                    # 被撤回的原消息 ID 在 event.recall_msgid（事件自身 ID 是外层 msg.msgid）
+                    recall_msgid = event_data.get("recall_msgid", "")
                     external_userid = event_data.get("external_userid", "")
+
+                    # 记录原始事件结构，便于核对字段名
+                    try:
+                        import json as _json
+                        tlog(
+                            "微信事件",
+                            "撤回事件原始结构: event_msgid={event_msgid}, raw={raw}",
+                            event_msgid=msg_id,
+                            raw=_json.dumps(msg, ensure_ascii=False),
+                        )
+                    except Exception:
+                        pass
 
                     # 事件去重：按撤回事件自身的 msgid 去重，避免同一事件多次推送重复处理
                     dedup = _get_tenant_dedup(tenant_id)
@@ -1955,12 +1977,23 @@ async def _process_tenant_wecom_kf_messages(
                 # 此处不传，改由下方在 process_and_persist 调用前预填：
                 # （downloadable_files 此时为空，故仍为 None；保留这块逻辑用于未来扩展）
 
+                # 构造 user_metadata：同批次合并消息写 merged_from_msgids + merged_segments，
+                # 单条消息写 msgid。跨请求合并（session_queue）的 merged 字段由 process_and_persist 内部填充。
+                if "merged_from_msgids" in msg:
+                    user_metadata = {
+                        "open_kfid": open_kfid,
+                        "merged_from_msgids": msg["merged_from_msgids"],
+                        "merged_segments": msg["merged_segments"],
+                    }
+                else:
+                    user_metadata = {"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid}
+
                 try:
                     result = await channel_session_manager.process_and_persist(
                         session_id=session_id,
                         tenant_id=tenant_id,
                         user_content=user_content,
-                        user_metadata={"msgid": msg_id, "msgtype": msgtype, "open_kfid": open_kfid},
+                        user_metadata=user_metadata,
                         user_attachments_meta=user_attachments_meta if user_attachments_meta else None,
                         message_type=unified_msg.message_type,
                         agent=agent,

@@ -1057,6 +1057,7 @@ class Agent:
             channel_msgs = channel_session_manager.get_messages(
                 session_id,
                 limit=self.memory.short_term.max_messages + 1,
+                include_recalled=False,  # LLM 上下文剔除已撤回消息
             )
             if not channel_msgs:
                 return []

@@ -118,10 +118,19 @@
               class="flex flex-col"
               :class="msg.role === 'user' ? 'items-end' : 'items-start'"
             >
+              <!-- 撤回徽章：整条撤回 / 部分撤回 -->
+              <div v-if="isRecalled(msg) || isPartiallyRecalled(msg)" class="mb-1 px-1">
+                <BaseBadge :intent="isRecalled(msg) ? 'danger' : 'warning'">
+                  {{ isRecalled(msg) ? '已撤回' : '部分已撤回' }}
+                </BaseBadge>
+              </div>
               <div class="max-w-[70%] rounded-2xl px-4 py-2 text-sm"
-                :class="msg.role === 'user'
-                  ? 'bg-primary-500 text-white rounded-br-sm'
-                  : 'bg-white border border-default text-default rounded-bl-sm shadow-sm'"
+                :class="[
+                  msg.role === 'user'
+                    ? 'bg-primary-500 text-white rounded-br-sm'
+                    : 'bg-white border border-default text-default rounded-bl-sm shadow-sm',
+                  isRecalled(msg) ? 'opacity-60 line-through' : '',
+                ]"
               >
                 <!-- 用户消息：文本 -->
                 <template v-if="msg.role === 'user' && msg.content && !hasUserAttachment(msg)">
@@ -222,6 +231,7 @@ import AppHeader from '@/components/AppHeader.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import BaseBadge from '@/components/ui/BaseBadge.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
 import AttachmentCard from './AttachmentCard.vue'
@@ -272,6 +282,15 @@ const visibleMessages = computed(() =>
     return true
   }),
 )
+
+// 撤回状态判断
+// - 整条撤回：is_recalled === true
+// - 部分撤回：metadata.recalled_part_msgids 非空（合并消息部分段被撤回，content 已重建）
+const isRecalled = (msg: any) => msg.is_recalled === true
+const isPartiallyRecalled = (msg: any) => {
+  const recalled = msg.metadata?.recalled_part_msgids
+  return Array.isArray(recalled) && recalled.length > 0
+}
 
 // 会话列表
 const sessionList = ref<any[]>([])

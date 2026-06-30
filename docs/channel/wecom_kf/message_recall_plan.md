@@ -2,9 +2,9 @@
 关联想法: wecom_kf 用户撤回消息处理（同批次剔除 + 跨批次标记 + 后台可见）
 关联设计: docs/channel/wecom_kf/wecom_kf_design.md
 关联设计(上游): docs/channel/wecom_kf/message-merge.md
-状态: 🔧 开发中（tlog 调试部分已完成）
+状态: ✅ 核心已完成（同批次剔除 + 跨批次标记 + 合并窗口兜底 + 上下文重建剔除 + 后台视图撤回徽章；trace 视图撤回标记跳过）
 创建日期: 2026-06-29
-更新日期: 2026-06-29
+更新日期: 2026-06-30
 ---
 
 # wecom_kf 用户撤回消息处理 — 开发计划
@@ -83,13 +83,13 @@ ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS recalled_at TIMESTAMP;
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `wecom_msgid` | str | 单条消息：微信原始 msgid。用于跨批次撤回时按 `recall_msgid` 反查 |
+| `msgid` | str | 单条消息：微信原始 msgid。用于跨批次撤回时按 `recall_msgid` 反查 |
 | `merged_from_msgids` | list[str] | 合并消息：所有被合并的微信 msgid 列表（按顺序） |
 | `merged_segments` | list[dict] | 合并消息：每段 `{msgid, text}`，用于部分撤回时重建内容 |
 | `recalled_part_msgids` | list[str] | 合并消息中被撤回的子段 msgid |
 | `original_content_before_recall` | str | 部分撤回时，保留撤回前的完整文本（供后台视图展示） |
 
-单条消息只需 `wecom_msgid`；合并消息需 `merged_from_msgids` + `merged_segments`。
+单条消息只需 `msgid`；合并消息需 `merged_from_msgids` + `merged_segments`。
 
 #### 3.1.3 撤回事件去重
 
@@ -265,7 +265,7 @@ LIMIT %s
 
 | 风险 | 说明 | 缓解 |
 |------|------|------|
-| 撤回事件早于消息持久化 | 极少：user 消息在 `process_and_persist` 入口就写库，撤回事件通常晚到。但理论上同批次内撤回事件可能在消息写库前处理 | `_mark_recalled_message` 未命中时记 tlog，不报错；同批次剔除（3.2）已覆盖此场景 |
+| 撤回事件早于消息持久化 | session_queue 合并窗口内消息尚未落库时撤回事件到达 | `mark_recalled_message` 未命中持久化消息时兜底调 `session_queue.remove_merge_segment`，从合并缓冲区移除被撤回段；所有段都被撤回时清空缓冲区并 `set_cancel` 取消正在跑的 agent |
 | 合并消息部分撤回重建 content 影响已发送的回复 | agent 已基于合并内容回复，撤回后重建 content 会让上下文与已发回复不一致 | 仅影响后续轮次上下文；本期接受此不一致，后续可评估是否在回复中标注 |
 | 撤回事件多次推送 | 同一 `recall_msgid` 跨多次 sync_msg 重复到达 | 按事件自身 msgid 去重（3.1.3） |
 | `merged_segments` 未写入的老数据 | 老的合并消息 metadata 无 `merged_segments`，无法部分撤回重建 | 降级：整条标记 `is_recalled=TRUE`（损失其他段），记 tlog |

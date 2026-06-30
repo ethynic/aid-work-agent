@@ -59,11 +59,15 @@ def _merge_consecutive_user_messages(msg_list: list) -> list:
     {"type": "voice", "media_id": "xxx", "file_name": "voice_xxx.wav", "local_path": "..."},
     {"type": "voice", "media_id": "yyy", "file_name": "voice_yyy.wav", "local_path": "..."}
   ],
-  "timestamp": 1719336000.0
+  "timestamp": 1719336000.0,
+  "segments": [
+    {"msgid": "m1", "text": "我想去贵州旅游"},
+    {"msgid": "m2", "text": "[ASR识别结果] 七月初，发"}
+  ]
 }
 ```
 
-`text` 给 LLM 用，`attachments_meta` 给持久化用（含被取消方的附件，避免语音被并入前一条消息后 `local_path` 丢失）。
+`text` 给 LLM 用，`attachments_meta` 给持久化用（含被取消方的附件，避免语音被并入前一条消息后 `local_path` 丢失）。`segments` 保留每段的微信 msgid 和原始文本，供撤回时按段重建 content（见 §12）。
 
 #### 三种状态的处理路径
 
@@ -337,9 +341,9 @@ async def _processor(cancel_check, user_input_override=None):
 
 | 文件 | 关键函数 |
 |------|---------|
-| `src/core/session_queue.py` | `SessionMessageQueue.enqueue_and_process` / `_handle_cancel_and_reprocess` / `append_merge` |
-| `src/channels/session.py` | `ChannelSessionManager.process_and_persist` / `make_send_response` |
-| `src/saas/api/channel_routes.py` | `_merge_consecutive_user_messages` / `_process_tenant_wecom_kf_messages` / `_transcribe_voice_with_asr` |
+| `src/core/session_queue.py` | `SessionMessageQueue.enqueue_and_process` / `_handle_cancel_and_reprocess` / `append_merge` / `remove_merge_segment` |
+| `src/channels/session.py` | `ChannelSessionManager.process_and_persist` / `make_send_response` / `mark_recalled_message` |
+| `src/saas/api/channel_routes.py` | `_merge_consecutive_user_messages` / `_build_merged_message` / `_process_tenant_wecom_kf_messages` / `_transcribe_voice_with_asr` |
 | `src/core/agent.py` | `Agent._load_channel_history` / `process_message_sync` |
 | `src/channels/wecom_kf/message.py` | `parse_kf_message` |
 
@@ -349,3 +353,59 @@ async def _processor(cancel_check, user_input_override=None):
 - [wecom_kf 部署指南](./wecom_kf_deployment_guide.md)
 - [并发消息串行化方案](../concurrent-message-serialization-plan.md)
 - [上下文重建陷阱](../../research/context-reconstruction-pitfalls.md)
+- [撤回消息处理开发计划](./message_recall_plan.md)
+
+## 12. 撤回事件处理（与合并机制的交互）
+
+撤回事件（`user_recall_msg`）走 sync_msg 路径推送，事件结构：
+
+```json
+{
+  "msgid": "事件自身ID",
+  "origin": 4,
+  "msgtype": "event",
+  "event": {
+    "event_type": "user_recall_msg",
+    "recall_msgid": "被撤回的原消息ID",
+    "external_userid": "...",
+    "open_kfid": "..."
+  }
+}
+```
+
+撤回事件与合并机制的交互分三种状态：
+
+### 12.1 已落库消息撤回（跨批次）
+
+被撤回消息已持久化到 `channel_messages`，撤回事件后续到达。`mark_recalled_message` 按 `metadata.msgid`（单条）或 `metadata.merged_from_msgids`（合并）反查：
+
+- **单条消息命中**：`UPDATE ... SET is_recalled = TRUE, recalled_at = NOW()`
+- **合并消息部分撤回**：读 `metadata.merged_segments` → 过滤掉 `recall_msgid` 对应段 → 用 `\n` 重建 content → 维护 `recalled_part_msgids` 和 `original_content_before_recall`；所有段都被撤回时整条标记 `is_recalled=TRUE`
+- **未命中**：走 12.2 兜底
+
+### 12.2 合并窗口内撤回（缓冲区兜底）
+
+被撤回消息在 `session_merge` 缓冲区里（尚未落库），撤回事件到达。`mark_recalled_message` 查 `channel_messages` 未命中，调 `session_queue.remove_merge_segment(session_id, recall_msgid)`：
+
+1. 读缓冲区 `segments`，过滤掉 `recall_msgid` 对应段
+2. 剩余段用 `"\n\n[用户追加消息] "` 重新拼接 text，写回缓冲区
+3. 所有段都被撤回：`clear_merge` + `set_cancel`（取消正在跑的 agent）
+
+**边界场景**：撤回事件到达时 agent 已用旧输入跑完（`get_merged_input` 之后），撤回此段只能影响落库的 content（重建），无法取消已发回复。后续轮次上下文重建时自然剔除。本期不取消 agent 调用（计划 §6 风险表）。
+
+### 12.3 同批次撤回
+
+撤回事件与被撤回消息在同一次 sync_msg 批次内到达。`_process_tenant_wecom_kf_messages` 在 `origin` 过滤之前识别撤回事件，收集 `recalled_msgids_in_batch`，合并前从 `valid_msgs` 剔除被撤回的消息。事件按自身 msgid 去重（`recall_event:{msgid}`），避免同一事件多次推送重复处理。
+
+### 12.4 合并消息 metadata 字段
+
+持久化合并消息时，`metadata` 写入：
+
+| 字段 | 说明 |
+|------|------|
+| `merged_from_msgids` | 所有段的 msgid 列表（按顺序） |
+| `merged_segments` | 每段 `{msgid, text}` |
+| `recalled_part_msgids` | 被撤回的子段 msgid（撤回时追加） |
+| `original_content_before_recall` | 撤回前的完整 content（首次撤回时写入） |
+
+单条消息 metadata 写 `msgid`（微信原始 msgid），合并消息不写 `msgid`（合并后单一 msgid 无意义）。
