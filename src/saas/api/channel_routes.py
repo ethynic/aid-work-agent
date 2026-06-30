@@ -1389,6 +1389,7 @@ async def _process_tenant_wecom_kf_messages(
         from src.core.agent_router import agent_router
         from src.channels.wecom_kf.context import set_kf_context
         from src.models.message import UnifiedResponse
+        from src.core.temp_logger import tlog
 
         logger.info(
             f"[wecom_kf] 后台处理开始: tenant={tenant_id}, config={config_id}, open_kfid={open_kfid}"
@@ -1515,7 +1516,6 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 临时调试：记录 msg_list 中每条原始条目（含被过滤的事件型条目，如撤回事件）
                 # 调试主题：微信事件
-                from src.core.temp_logger import tlog
                 try:
                     import json as _json
                     tlog(
