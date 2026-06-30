@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：🔧 部分完成（Phase 0-3 已完成，Phase 3 自动化测试通过）
+> 状态：🔧 部分完成（Phase 0-5 已完成，真实 HTML/PPTX 自动化测试通过）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -304,7 +304,7 @@ npm --prefix src/tools/ppt/renderer-node run build
 
 ### Phase 5：HTML 尽量可编辑 PPTX 导出
 
-状态：待开发
+状态：✅ 已完成（2026-06-30）
 
 目标：
 
@@ -349,6 +349,13 @@ npm --prefix src/tools/ppt/renderer-node run build
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests/unit/tools/test_ppt_html_editable_export.py -q
 ```
+
+完成内容：
+
+- 已实现 DOM rect/computed style/selector/z-index 抽取及 viewport 到英寸映射。
+- 已实现文本、基础形状、图片/SVG、表格原生节点和复杂区域局部截图。
+- 已实现可编辑率统计及 `high_fidelity/editable/both` 完整输出行为。
+- 已通过真实 Playwright、双 PPTX 生成与 `python-pptx` 重开测试。
 
 ### Phase 6：模板跟随增强
 

@@ -165,7 +165,7 @@ class PptProcessTool(BaseTool):
         return "topic_to_pptx"
 
     async def _handle_html(self, normalized: NormalizedPptInput) -> Dict[str, Any]:
-        """Render an HTML deck as full-slide raster layers."""
+        """Render an HTML deck in high-fidelity, editable, or combined mode."""
         from src.tools.ppt.html_exporter import HtmlExporter
 
         config = get_ppt_config()
@@ -175,11 +175,6 @@ class PptProcessTool(BaseTool):
                 "error": "HTML 转 PPTX 功能未启用（PPT_ENABLE_HTML_EXPORT=false）",
             }
         export_mode = normalized.export_mode or "high_fidelity"
-        if export_mode == "editable":
-            return {
-                "success": False,
-                "error": "editable HTML 导出将在 Phase 5 实现；当前仅支持 high_fidelity",
-            }
         if not self._check_node_renderer_ready():
             return {"success": False, "error": "HTML 转 PPTX 所需的 Node 渲染器不可用"}
 
@@ -219,28 +214,47 @@ class PptProcessTool(BaseTool):
                 capture_dir,
                 title=title,
                 source_is_file=source_is_file,
+                include_editable=export_mode in {"editable", "both"},
             )
-            result = self._render_node_spec(exported.spec)
-        output_path = Path(result["file_path"])
-        if not output_path.is_file() or output_path.stat().st_size < 10 * 1024:
+            if export_mode == "high_fidelity":
+                result = self._render_node_spec(exported.spec)
+            elif export_mode == "editable":
+                if exported.editable_spec is None:
+                    raise RuntimeError("HTML editable extraction failed")
+                result = self._render_node_spec(
+                    exported.editable_spec, output_stem=f"{safe_asset_name}_editable"
+                )
+            else:
+                if exported.editable_spec is None:
+                    raise RuntimeError("HTML editable extraction failed")
+                result = self._render_node_spec(
+                    exported.editable_spec, output_stem=f"{safe_asset_name}_editable"
+                )
+                high_fidelity = self._render_node_spec(
+                    exported.spec, output_stem=f"{safe_asset_name}_high_fidelity"
+                )
+                result["alternate_file_path"] = high_fidelity["file_path"]
+        output_paths = [Path(result["file_path"])]
+        if result.get("alternate_file_path"):
+            output_paths.append(Path(result["alternate_file_path"]))
+        if any(not path.is_file() or path.stat().st_size < 10 * 1024 for path in output_paths):
             raise RuntimeError("HTML PPTX QA failed")
         result.update(
             {
-                "export_mode": "high_fidelity",
+                "export_mode": export_mode,
                 "screenshots": exported.screenshot_manifest(include_paths=False),
                 "qa_summary": {
                     **result["qa_summary"],
                     "screenshot_count": len(exported.screenshots),
                     "screenshots_nonempty": True,
-                    "pptx_size_bytes": output_path.stat().st_size,
+                    "pptx_size_bytes": output_paths[0].stat().st_size,
+                    **(exported.editability or {}),
                 },
-                "message": f"已生成高保真 HTML PPTX，共 {len(exported.screenshots)} 页",
+                "message": f"已生成 HTML PPTX，共 {len(exported.screenshots)} 页",
             }
         )
-        if export_mode == "both":
-            result["warnings"] = [
-                "editable HTML 导出将在 Phase 5 实现；本次仅生成 high_fidelity 文件"
-            ]
+        if len(output_paths) > 1:
+            result["qa_summary"]["alternate_pptx_size_bytes"] = output_paths[1].stat().st_size
         return result
 
     async def _handle_auto(
@@ -381,13 +395,13 @@ class PptProcessTool(BaseTool):
 
         return result
 
-    def _render_node_spec(self, spec) -> Dict[str, Any]:
+    def _render_node_spec(self, spec, output_stem: str | None = None) -> Dict[str, Any]:
         from src.tools.ppt.renderer import NodePptRenderer
 
         output_dir = self._get_output_dir()
         safe_name = "".join(
             character if character.isalnum() or character in "._- " else "_"
-            for character in spec.title
+            for character in (output_stem or spec.title)
         ).strip() or "演示文稿"
         output_path = output_dir / f"{safe_name}.pptx"
         rendered = NodePptRenderer().render(spec, output_path)

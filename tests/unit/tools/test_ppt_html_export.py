@@ -158,7 +158,7 @@ def test_exporter_rejects_out_of_range_timeout():
 
 
 @pytest.mark.asyncio
-async def test_tool_both_returns_only_high_fidelity_with_warning(tmp_path, monkeypatch):
+async def test_tool_both_returns_distinct_files(tmp_path, monkeypatch):
     from src.tools.ppt.ppt_process_tool import PptProcessTool
     from src.tools.ppt.renderer import NodePptRenderer
 
@@ -184,9 +184,10 @@ async def test_tool_both_returns_only_high_fidelity_with_warning(tmp_path, monke
     )
 
     assert result["success"] is True
-    assert result["export_mode"] == "high_fidelity"
-    assert "Phase 5" in result["warnings"][0]
-    assert "alternate_file_path" not in result
+    assert result["export_mode"] == "both"
+    assert result["file_path"].endswith("_editable.pptx")
+    assert result["alternate_file_path"].endswith("_high_fidelity.pptx")
+    assert result["file_path"] != result["alternate_file_path"]
     assert all("path" not in item for item in result["screenshots"])
     assert not list(tmp_path.glob(".*_html_assets-*"))
 
@@ -218,7 +219,7 @@ async def test_real_tool_renders_before_cleaning_screenshot_directory(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_tool_rejects_editable_without_claiming_success(monkeypatch):
+async def test_tool_supports_editable_export(monkeypatch):
     from src.tools.ppt.ppt_process_tool import PptProcessTool
 
     monkeypatch.setenv("PPT_ENABLE_HTML_EXPORT", "true")
@@ -228,5 +229,6 @@ async def test_tool_rejects_editable_without_claiming_success(monkeypatch):
         export_mode="editable",
     )
 
-    assert result["success"] is False
-    assert "Phase 5" in result["error"]
+    assert result["success"] is True
+    assert result["export_mode"] == "editable"
+    assert result["qa_summary"]["native_text_count"] == 1
