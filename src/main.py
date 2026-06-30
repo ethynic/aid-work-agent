@@ -449,8 +449,8 @@ async def lifespan(app: FastAPI):
                                    last_message_at, metadata
                             FROM channel_sessions
                             WHERE channel_type = 'wecom_kf'
-                              AND metadata LIKE '%"service_state"%3%'
-                              AND metadata NOT LIKE '%"exit_human_timeout_failed_at"%'
+                              AND metadata::text LIKE '%"service_state"%3%'
+                              AND metadata::text NOT LIKE '%"exit_human_timeout_failed_at"%'
                         """)
                         rows = cursor.fetchall()
 
