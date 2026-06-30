@@ -9,30 +9,35 @@ import re
 from typing import Any, Dict, Optional
 
 from loguru import logger
+from src.tools.ppt.layout_registry import LAYOUT_IDS
 
-SYSTEM_PROMPT = """你是一个专业的PPT内容规划师。根据用户输入的主题或内容，生成一份结构化的PPT大纲。
+_LAYOUT_LIST = "/".join(LAYOUT_IDS)
 
-规则：
-1. 每页必须有明确的 type（cover/toc/section/content/summary）
-2. 内容页的 layout 必须从以下选择：bullets/chart/comparison/stat/timeline/image
+SYSTEM_PROMPT = f"""你是一个专业的PPT内容规划师。根据用户输入生成结构化PPT大纲。
+
+硬性规则：
+1. 每页只输出 layout id，必须从以下选择：{_LAYOUT_LIST}
+2. 禁止输出 x/y/w/h/left/top/width/height 等绝对坐标或任何排版参数
 3. 封面页必须有 title 和 subtitle
 4. 目录页必须列出所有 section
 5. 每 3-5 个内容页之间插入一个 section 分隔页
 6. 最后必须是 summary 总结页
-7. 内容简洁精炼，每页要点不超过 5 条
-8. 标题不超过 20 字，要点不超过 30 字
+7. 标题不超过 20 字；单条文本不超过 30 字
+8. bullets/timeline 不超过5项，stat/comparison/image/summary每组不超过4项
+9. chart 不超过8个分类，table 每页不超过8行（含表头）
+10. 内容放不下时主动拆成多页，不缩小字号、不添加坐标
 
-页面类型与布局：
+布局与数据槽位：
 - cover: 封面页（title, subtitle, presenter, date）
 - toc: 目录页（sections 列表，每项有 number 和 title）
 - section: 章节分隔页（number, title, intro）
-- content: 内容页（layout + 对应数据）
-  - bullets: 要点列表（points 数组）
-  - stat: 数据亮点（stats 数组，每项 value/label/trend）
-  - chart: 图表（chart 对象，含 type/labels/series）
-  - comparison: 左右对比（left/right 对象，各含 title + items）
-  - timeline: 时间线（points 数组）
-  - image: 图片页（image_path + caption + points）
+- bullets: 要点列表（points 数组）
+- stat: 数据亮点（stats 数组，每项 value/label/trend）
+- chart: 图表（chart 对象，含 type/labels/series）
+- comparison: 左右对比（left/right 对象，各含 title + items）
+- timeline: 时间线（points 数组）
+- table: 表格（rows 二维数组，首行为表头）
+- image: 图片页（image_path + caption + points）
 - summary: 总结页（takeaways + next_steps + contact）
 
 配色方案选择（根据主题自动选择 1-18）：
@@ -44,8 +49,8 @@ SYSTEM_PROMPT = """你是一个专业的PPT内容规划师。根据用户输入�
 - 环保/自然 → 3 或 11
 - 产品/营销 → 7 或 16
 
-输出严格的 JSON 格式（不要包含 markdown 代码块标记）：
-{"title":"PPT标题","theme_id":数字,"style":"soft","slides":[...]}"""
+输出严格 JSON，不包含 markdown 代码块，不输出 type 和坐标：
+{{"title":"PPT标题","theme_id":数字,"style":"soft","slides":[...]}}"""
 
 
 class PPTPlanner:
@@ -129,4 +134,40 @@ class PPTPlanner:
         if not isinstance(plan["slides"], list):
             return {"error": "slides 字段必须为数组"}
 
-        return plan
+        return self._sanitize_plan(plan)
+
+    @staticmethod
+    def _sanitize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove layout freedom and normalize legacy planner output deterministically."""
+        warnings = [
+            str(item) for item in plan.get("warnings", [])
+            if isinstance(item, str) and item.strip()
+        ]
+        sanitized_slides = []
+        legacy_layouts = {"content": "bullets"}
+        coordinate_keys = {"x", "y", "w", "h", "left", "top", "width", "height", "position"}
+        for index, raw_slide in enumerate(plan["slides"], start=1):
+            slide = dict(raw_slide) if isinstance(raw_slide, dict) else {}
+            legacy_type = str(slide.pop("type", "")).lower()
+            layout = str(slide.get("layout") or legacy_layouts.get(legacy_type) or legacy_type).lower()
+            if layout not in LAYOUT_IDS:
+                warnings.append(
+                    f"slide[{index}] layout '{layout or 'missing'}' replaced with 'bullets'"
+                )
+                layout = "bullets"
+            removed = coordinate_keys.intersection(slide)
+            for key in removed:
+                slide.pop(key, None)
+            if removed:
+                warnings.append(
+                    f"slide[{index}] removed forbidden positioning fields: {','.join(sorted(removed))}"
+                )
+            slide["layout"] = layout
+            sanitized_slides.append(slide)
+        result = dict(plan)
+        result["slides"] = sanitized_slides
+        if warnings:
+            result["warnings"] = warnings
+        else:
+            result.pop("warnings", None)
+        return result

@@ -65,6 +65,7 @@ export type SlideNode = TextNode | ShapeNode | ImageNode | TableNode | ChartNode
 
 export interface SlideSpec {
   id: string;
+  layout?: string | null;
   background: string;
   nodes: SlideNode[];
   notes?: string | null;
@@ -77,22 +78,25 @@ export interface SlideDeckSpec {
   height: number;
   author: string;
   subject?: string | null;
+  warnings: string[];
   slides: SlideSpec[];
 }
 
 export function assertSlideDeckSpec(value: unknown): asserts value is SlideDeckSpec {
   if (!value || typeof value !== "object") throw new Error("invalid spec");
   const spec = value as Partial<SlideDeckSpec>;
-  exactKeys(spec, ["version", "title", "width", "height", "author", "subject", "slides"]);
+  exactKeys(spec, ["version", "title", "width", "height", "author", "subject", "warnings", "slides"]);
   if (spec.version !== "1.0" || typeof spec.title !== "string" || !spec.title.trim()) {
     throw new Error("invalid deck metadata");
   }
   if (!positive(spec.width) || spec.width > 100 || !positive(spec.height) || spec.height > 100 ||
-      typeof spec.author !== "string" || !Array.isArray(spec.slides) || !spec.slides.length) {
+      typeof spec.author !== "string" || !Array.isArray(spec.warnings) ||
+      !spec.warnings.every((warning) => typeof warning === "string") ||
+      !Array.isArray(spec.slides) || !spec.slides.length) {
     throw new Error("invalid deck dimensions or slides");
   }
   for (const slide of spec.slides) {
-    exactKeys(slide, ["id", "background", "nodes", "notes"]);
+    exactKeys(slide, ["id", "layout", "background", "nodes", "notes"]);
     if (!slide || typeof slide.id !== "string" || !slide.id.trim() ||
         typeof slide.background !== "string" || !color(slide.background) ||
         !Array.isArray(slide.nodes)) throw new Error("invalid slide");

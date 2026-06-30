@@ -129,6 +129,7 @@ SlideNode = Annotated[
 
 class SlideSpec(SpecModel):
     id: str
+    layout: str | None = None
     background: str = "FFFFFF"
     nodes: list[SlideNode] = Field(default_factory=list)
     notes: str | None = None
@@ -148,6 +149,7 @@ class SlideDeckSpec(SpecModel):
     height: float = Field(default=7.5, gt=0, le=100)
     author: str = "AID Work Agent"
     subject: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     slides: list[SlideSpec] = Field(min_length=1)
 
     @field_validator("title")

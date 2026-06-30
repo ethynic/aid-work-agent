@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：🔧 部分完成（Phase 0-2 已完成并通过 review）
+> 状态：🔧 部分完成（Phase 0-3 已完成，Phase 3 自动化测试通过）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -192,7 +192,7 @@ npm --prefix src/tools/ppt/renderer-node run build
 
 ### Phase 3：布局库与 Planner 输出约束
 
-状态：待开发
+状态：✅ 已完成（2026-06-30）
 
 目标：
 
@@ -236,6 +236,14 @@ npm --prefix src/tools/ppt/renderer-node run build
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests/unit/tools/test_ppt_spec.py tests/unit/tools/test_ppt_tool.py -q
 ```
+
+完成说明：
+
+- 新增 11 类确定性 layout registry，集中定义场景、槽位、字号、间距、安全边距、文本密度和图片比例。
+- Planner 仅输出 layout id，解析阶段清理绝对坐标并修正未知 layout。
+- Spec builder 统一按 registry 生成节点；要点、目录、指标、表格和图表支持稳定拆页，超长文本和不适合拆页的内容确定性截断。
+- `SlideDeckSpec.warnings` 记录回退、拆页和截断行为，`SlideSpec.layout` 保留实际布局，便于审计。
+- PPT Python 测试 51 passed；Node 测试 5 passed；Node build 通过。
 
 ### Phase 4：HTML 高保真 PPTX 导出
 

@@ -9,7 +9,7 @@ import { renderDeck } from "../src/render";
 
 const spec: SlideDeckSpec = {
   version: "1.0", title: "Node renderer test", width: 13.333, height: 7.5,
-  author: "test",
+  author: "test", warnings: [],
   slides: [{
     id: "slide-1", background: "FFFFFF", nodes: [
       { type: "text", x: 1, y: 1, w: 4, h: 1, text: "Hello", font_size: 24,
