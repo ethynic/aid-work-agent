@@ -2,6 +2,31 @@
 -- 所有SQL语句必须幂等安全（可重复执行），使用 IF NOT EXISTS、DROP TABLE IF EXISTS 等保护措施
 
 -- ============================================================================
+-- 2026-06-30 修复 metadata 字段类型：TEXT 转换为 JSONB
+-- 解决撤回消息功能中 metadata->>'msgid' 操作符不存在的错误
+-- ============================================================================
+
+-- channel_messages.metadata: TEXT → JSONB
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'channel_messages' AND column_name = 'metadata' AND data_type <> 'jsonb';
+    IF FOUND THEN
+        ALTER TABLE channel_messages ALTER COLUMN metadata TYPE JSONB USING metadata::JSONB;
+    END IF;
+END $$;
+
+-- channel_sessions.metadata: TEXT → JSONB
+DO $$
+BEGIN
+    PERFORM 1 FROM information_schema.columns
+    WHERE table_name = 'channel_sessions' AND column_name = 'metadata' AND data_type <> 'jsonb';
+    IF FOUND THEN
+        ALTER TABLE channel_sessions ALTER COLUMN metadata TYPE JSONB USING metadata::JSONB;
+    END IF;
+END $$;
+
+-- ============================================================================
 -- 2026-06-30 撤回消息功能：channel_messages 增加 is_recalled 和 recalled_at 字段
 -- ============================================================================
 ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS is_recalled BOOLEAN NOT NULL DEFAULT FALSE;

@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS channel_sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_message_at TIMESTAMP,
-    metadata TEXT
+    metadata JSONB
 );
 
 CREATE TABLE IF NOT EXISTS channel_messages (
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS channel_messages (
     content TEXT NOT NULL,
     message_type TEXT DEFAULT 'text',
     attachments TEXT,
-    metadata TEXT,
+    metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_recalled BOOLEAN NOT NULL DEFAULT FALSE,
     recalled_at TIMESTAMP

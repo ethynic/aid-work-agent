@@ -53,6 +53,7 @@ class ChannelSessionManager:
             # 渠道会话表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS channel_sessions (
+                    id SERIAL PRIMARY KEY,
                     session_id TEXT UNIQUE NOT NULL,
                     tenant_id TEXT NOT NULL DEFAULT '',
                     channel_type TEXT NOT NULL,
@@ -66,13 +67,14 @@ class ChannelSessionManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_message_at TIMESTAMP,
-                    metadata TEXT
+                    metadata JSONB
                 )
             """)
 
             # 渠道消息表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS channel_messages (
+                    id SERIAL PRIMARY KEY,
                     message_id TEXT UNIQUE NOT NULL,
                     session_id TEXT NOT NULL,
                     tenant_id TEXT NOT NULL DEFAULT '',
@@ -80,8 +82,10 @@ class ChannelSessionManager:
                     content TEXT NOT NULL,
                     message_type TEXT DEFAULT 'text',
                     attachments TEXT,
-                    metadata TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_recalled BOOLEAN NOT NULL DEFAULT FALSE,
+                    recalled_at TIMESTAMP
                 )
             """)
 
@@ -1075,7 +1079,7 @@ class ChannelSessionManager:
             # ===== 情况1：单条消息命中（metadata.wecom_msgid = recall_msgid）=====
             cursor.execute("""
                 SELECT id, content, metadata FROM channel_messages
-                WHERE session_id = %s AND metadata->>'msgid' = %s
+                WHERE session_id = %s AND metadata::jsonb->>'msgid' = %s
             """, (session_id, recall_msgid))
             single_row = cursor.fetchone()
 
@@ -1099,7 +1103,7 @@ class ChannelSessionManager:
             cursor.execute("""
                 SELECT id, content, metadata FROM channel_messages
                 WHERE session_id = %s
-                  AND jsonb_exists(metadata->'merged_from_msgids', %s)
+                  AND jsonb_exists(metadata::jsonb->'merged_from_msgids', %s)
             """, (session_id, recall_msgid))
             merged_row = cursor.fetchone()
 
