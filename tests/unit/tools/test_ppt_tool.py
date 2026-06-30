@@ -176,24 +176,18 @@ async def test_legacy_mixed_context_remains_compatible(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("content", "content_type", "expected_error"),
-    [("<h1>网页演示</h1>", "html", "Phase 4")],
-)
-async def test_unimplemented_modes_return_stable_error(
-    content, content_type, expected_error
-):
+async def test_html_export_feature_gate_returns_stable_error(monkeypatch):
     from src.tools.ppt.ppt_process_tool import PptProcessTool
 
+    monkeypatch.setenv("PPT_ENABLE_HTML_EXPORT", "false")
     result = await PptProcessTool().execute(
         instruction="转换为 PPTX",
-        content=content,
-        content_type=content_type,
+        content="<h1>网页演示</h1>",
+        content_type="html",
     )
 
     assert result["success"] is False
-    assert "暂不支持" in result["error"]
-    assert expected_error in result["error"]
+    assert "PPT_ENABLE_HTML_EXPORT=false" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -324,12 +318,17 @@ def test_ppt_config_reads_switches(monkeypatch):
     monkeypatch.setenv("PPT_RENDERER", "pptxgenjs")
     monkeypatch.setenv("PPT_ENABLE_HTML_EXPORT", "true")
     monkeypatch.setenv("PPT_QA_STRICT", "1")
+    monkeypatch.setenv("PPT_HTML_VIEWPORT_WIDTH", "1600")
+    monkeypatch.setenv("PPT_HTML_IMAGE_FORMAT", "jpeg")
 
     config = get_ppt_config()
 
     assert config.renderer == "pptxgenjs"
     assert config.enable_html_export is True
     assert config.qa_strict is True
+    assert config.html_viewport_width == 1600
+    assert config.html_viewport_height == 1080
+    assert config.html_image_format == "jpeg"
 
 
 def test_ppt_config_defaults_to_node_renderer_with_fallback(monkeypatch):

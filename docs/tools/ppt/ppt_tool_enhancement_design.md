@@ -434,6 +434,8 @@ PPTX -> 渲染 PNG/或 LibreOffice PDF -> 每页检查
 
 ### Phase 4：HTML 高保真 PPTX 导出
 
+状态：✅ 已完成开发（2026-06-30）
+
 - Playwright 渲染 HTML。
 - 按 `section.slide` 或横向 deck 状态逐页截图。
 - 生成整页图片版 PPTX。

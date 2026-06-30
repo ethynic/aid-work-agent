@@ -247,7 +247,7 @@ npm --prefix src/tools/ppt/renderer-node run build
 
 ### Phase 4：HTML 高保真 PPTX 导出
 
-状态：待开发
+状态：✅ 已完成开发（2026-06-30）
 
 目标：
 
@@ -287,6 +287,20 @@ npm --prefix src/tools/ppt/renderer-node run build
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests/unit/tools/test_ppt_html_export.py -q
 ```
+
+完成说明：
+
+- 新增 `html_exporter.py`，支持 HTML 字符串和本地 HTML 文件，默认
+  1920x1080 viewport，可配置 PNG/JPEG、JPEG 质量和超时。
+- 等待字体、图片和双帧绘制完成，结束 CSS/Web Animations；优先按
+  `section.slide` 分页，并重置横向 deck transform 后逐页截图。
+- 截图清单记录路径、像素尺寸、文件大小和耗时；空白页、尺寸不符、
+  截图缺失、超时和不安全文件输入均返回明确错误契约。
+- 每页截图转换为整页 `RasterLayerNode`，由 Node/PptxGenJS 输出 PPTX；
+  QA 校验页数、截图非空及 PPTX 文件和合理大小。
+- `ppt_process` 已接入 `html_to_pptx`。`high_fidelity` 正常输出；
+  `both` 在 Phase 5 前仅返回高保真文件和明确 warning；`editable`
+  明确拒绝，不伪造可编辑结果。功能受 `PPT_ENABLE_HTML_EXPORT` 控制。
 
 ### Phase 5：HTML 尽量可编辑 PPTX 导出
 

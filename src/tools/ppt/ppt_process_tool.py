@@ -5,8 +5,10 @@ PPT 生成工具 — Agent 唯一入口
 """
 
 from pathlib import Path
+import asyncio
 import json
 import re
+import tempfile
 from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
@@ -138,7 +140,7 @@ class PptProcessTool(BaseTool):
             if mode == "template":
                 return await self._handle_template(normalized)
             if mode == "html_to_pptx":
-                return {"success": False, "error": "HTML 转 PPTX 暂不支持，将在 Phase 4 实现"}
+                return await self._handle_html(normalized)
             if mode == "spec_to_pptx":
                 return await self._handle_spec(normalized)
             return await self._handle_auto(normalized, mode)
@@ -152,6 +154,8 @@ class PptProcessTool(BaseTool):
             for fp in normalized.file_paths:
                 if Path(fp).suffix.lower() == ".pptx":
                     return "template"
+            if any(Path(fp).suffix.lower() in {".html", ".htm"} for fp in normalized.file_paths):
+                return "html_to_pptx"
         if normalized.content_type == "html":
             return "html_to_pptx"
         if normalized.content_type == "slide_deck_spec":
@@ -159,6 +163,85 @@ class PptProcessTool(BaseTool):
         if normalized.content and self._looks_like_outline(normalized.content):
             return "outline_to_pptx"
         return "topic_to_pptx"
+
+    async def _handle_html(self, normalized: NormalizedPptInput) -> Dict[str, Any]:
+        """Render an HTML deck as full-slide raster layers."""
+        from src.tools.ppt.html_exporter import HtmlExporter
+
+        config = get_ppt_config()
+        if not config.enable_html_export:
+            return {
+                "success": False,
+                "error": "HTML 转 PPTX 功能未启用（PPT_ENABLE_HTML_EXPORT=false）",
+            }
+        export_mode = normalized.export_mode or "high_fidelity"
+        if export_mode == "editable":
+            return {
+                "success": False,
+                "error": "editable HTML 导出将在 Phase 5 实现；当前仅支持 high_fidelity",
+            }
+        if not self._check_node_renderer_ready():
+            return {"success": False, "error": "HTML 转 PPTX 所需的 Node 渲染器不可用"}
+
+        source: str | Path | None = normalized.content
+        source_is_file = False
+        for file_path in normalized.file_paths:
+            if Path(file_path).suffix.lower() in {".html", ".htm"}:
+                source = Path(file_path)
+                source_is_file = True
+                break
+        if source is None:
+            return {"success": False, "error": "请提供 HTML 内容或 .html/.htm 文件"}
+
+        title = (
+            self._normalizer.output_title(normalized.output_name)
+            or normalized.extracted_title
+            or (Path(source).stem if source_is_file else None)
+            or "HTML 演示文稿"
+        )
+        output_dir = self._get_output_dir()
+        safe_asset_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .")
+        exporter = HtmlExporter(
+            viewport_width=config.html_viewport_width,
+            viewport_height=config.html_viewport_height,
+            image_format=config.html_image_format,
+            jpeg_quality=config.html_jpeg_quality,
+            timeout_ms=config.html_timeout_ms,
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{safe_asset_name or 'html_deck'}_html_assets-",
+            dir=output_dir,
+        ) as capture_dir:
+            exported = await asyncio.to_thread(
+                exporter.export,
+                source,
+                capture_dir,
+                title=title,
+                source_is_file=source_is_file,
+            )
+            result = self._render_node_spec(exported.spec)
+        output_path = Path(result["file_path"])
+        if not output_path.is_file() or output_path.stat().st_size < 10 * 1024:
+            raise RuntimeError("HTML PPTX QA failed")
+        result.update(
+            {
+                "export_mode": "high_fidelity",
+                "screenshots": exported.screenshot_manifest(include_paths=False),
+                "qa_summary": {
+                    **result["qa_summary"],
+                    "screenshot_count": len(exported.screenshots),
+                    "screenshots_nonempty": True,
+                    "pptx_size_bytes": output_path.stat().st_size,
+                },
+                "message": f"已生成高保真 HTML PPTX，共 {len(exported.screenshots)} 页",
+            }
+        )
+        if export_mode == "both":
+            result["warnings"] = [
+                "editable HTML 导出将在 Phase 5 实现；本次仅生成 high_fidelity 文件"
+            ]
+        return result
 
     async def _handle_auto(
         self, normalized: NormalizedPptInput, mode: str
