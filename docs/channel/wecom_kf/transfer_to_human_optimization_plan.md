@@ -19,7 +19,7 @@
 | 1.1 | 重写 `TransferToHumanInput.reason` 为必填，加 Field 描述 | `src/tools/transfer_to_human.py` | 0.1d | ⏳ |
 | 1.2 | 重写 `description`（描述何时转人工 + 调用后无需回复），清空 `usage_guide`（渠道由工具段兜底，不再用提示词约束 LLM） | `src/tools/transfer_to_human.py` | 0.1d | ⏳ |
 | 1.3 | 重写 `execute`：先判断 `get_kf_context()`，非微信渠道返回友好提示 | `src/tools/transfer_to_human.py` | 0.2d | ⏳ |
-| 1.4 | 移除关键词校验逻辑（`human_transfer_keywords` 不再约束 LLM 路径） | `src/tools/transfer_to_human.py` | 0.05d | ⏳ |
+| 1.4 | 【2026-06-30 更新】移除全部关键词校验逻辑（`human_transfer_keywords` 完全废弃） | `src/channels/wecom_kf/adapter.py` | 0.05d | ✅ |
 | 1.5 | 保留 servicer 列表校验，调整错误文案 | `src/tools/transfer_to_human.py` | 0.05d | ⏳ |
 | 1.6 | 会话 metadata 新增 `transfer_source=agent` 字段 | `src/tools/transfer_to_human.py` | 0.05d | ⏳ |
 

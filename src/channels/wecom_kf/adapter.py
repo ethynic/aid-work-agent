@@ -167,15 +167,12 @@ class WeComKfAdapter(ChannelAdapter):
         return None
 
     def should_transfer_to_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
-        """判断消息是否匹配人工转接关键词。
-        未配置关键词时默认禁用转人工；设为空数组 [] 时同样禁用；配置了关键词才启用。
+        """【已废弃】判断消息是否匹配人工转接关键词。
+
+        新设计：转人工完全由 Agent 通过 transfer_to_human 工具调用处理，
+        不再在回调路径进行关键词拦截。此函数保留仅用于兼容旧配置。
         """
-        if not text:
-            return False
-        keywords = kf_config.get("human_transfer_keywords")
-        if not keywords:
-            return False
-        return any(kw in text for kw in keywords)
+        return False
 
     def should_exit_human(self, text: str, kf_config: Dict[str, Any]) -> bool:
         """判断消息是否匹配退出人工关键词。

@@ -275,7 +275,7 @@ Agent 生成回复文本
             "subagent_type": "sales-consultant",
             "welcome_message": "您好，我是AI智能客服，请问有什么可以帮您？",
             "servicer_userid_list": ["zhangsan", "lisi"],
-            "human_transfer_keywords": ["人工服务", "转人工", "人工客服"]
+            "allow_agent_transfer": true
         },
         {
             "open_kfid": "wkyyyyyy",
@@ -283,7 +283,7 @@ Agent 生成回复文本
             "subagent_type": "after-sales",
             "welcome_message": "您好，我是售后AI助手，请描述您的问题。",
             "servicer_userid_list": ["wangwu"],
-            "human_transfer_keywords": ["人工服务", "转人工"]
+            "allow_agent_transfer": true
         }
     ]
 }
@@ -301,7 +301,8 @@ Agent 生成回复文本
 | `kf_account[].open_kfid` | 客服账号 ID（创建客服账号时生成） |
 | `kf_account[].subagent_type` | 该客服账号绑定的子智能体类型 |
 | `kf_account[].servicer_userid_list` | 可转接的人工客服企微 userid 列表 |
-| `kf_account[].human_transfer_keywords` | 触发人工转接的关键词 |
+| `kf_account[].allow_agent_transfer` | 是否允许 Agent 主动转人工（默认 true） |
+| `kf_account[].human_transfer_keywords` | 【已废弃】触发人工转接的关键词，不再使用 |
 
 ### 4.3 会话标识规则
 
@@ -604,7 +605,7 @@ class ChannelType(str, Enum):
 > - `reason` 字段必填，用于审计与会话元信息记录
 > - **渠道隔离完全由 execute 段的 `get_kf_context()` 判断**——LLM 推理时拿不到渠道信息，因此 description/usage_guide 不再约束 LLM "仅在微信客服渠道调用"（这种约束无效）
 > - 非微信客服渠道调用时返回友好失败提示 `"当前渠道未提供人工客服"`，LLM 收到后改为直接用文字回复用户
-> - 移除 LLM 路径上的关键词校验（`human_transfer_keywords` 仅用于回调路径拦截）
+> - **【2026-06-30 更新】移除全部关键词校验**——`human_transfer_keywords` 字段废弃，转人工完全由 Agent 通过 `transfer_to_human` 工具调用处理
 > - 新增 `kf_config.allow_agent_transfer` 开关（默认 true），允许租户管理员禁用 Agent 主动转人工
 > - 会话 metadata 新增 `transfer_source=agent`，区别于关键词触发的转接
 

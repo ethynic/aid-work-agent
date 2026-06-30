@@ -173,10 +173,12 @@
                 <BaseInput v-model="kf.servicer_userid_list" placeholder="zhangsan, lisi" />
                 <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
               </div>
-              <div class="col-span-2">
-                <label class="block text-xs text-muted mb-1">转人工关键词</label>
-                <BaseInput v-model="kf.human_transfer_keywords" placeholder="人工服务, 转人工, 人工客服" />
-                <p class="mt-0.5 text-xs text-muted">多个用逗号分隔，留空则关闭转人工功能</p>
+              <div class="col-span-1">
+                <label class="block text-xs text-muted mb-1">转人工开关</label>
+                <div class="flex items-center h-10">
+                  <input type="checkbox" v-model="kf.allow_agent_transfer" class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+                  <span class="ml-2 text-sm text-default">允许 Agent 主动转人工</span>
+                </div>
               </div>
             </div>
           </div>
@@ -330,7 +332,7 @@ const kfAccounts = ref<Array<{
   subagent_type: string
   welcome_message: string
   servicer_userid_list: string
-  human_transfer_keywords: string
+  allow_agent_transfer: boolean
 }>>([])
 
 function addKfAccount() {
@@ -340,7 +342,7 @@ function addKfAccount() {
     subagent_type: '',
     welcome_message: '',
     servicer_userid_list: '',
-    human_transfer_keywords: '',
+    allow_agent_transfer: true,
   })
 }
 
@@ -591,7 +593,7 @@ function editChannel(ch: any) {
       subagent_type: kf.subagent_type || '',
       welcome_message: kf.welcome_message || '',
       servicer_userid_list: Array.isArray(kf.servicer_userid_list) ? kf.servicer_userid_list.join(', ') : (kf.servicer_userid_list || ''),
-      human_transfer_keywords: Array.isArray(kf.human_transfer_keywords) ? kf.human_transfer_keywords.join(', ') : (kf.human_transfer_keywords || ''),
+      allow_agent_transfer: kf.allow_agent_transfer !== false,  // 默认 true，兼容旧配置
     }))
   } else {
     kfAccounts.value = []
@@ -642,13 +644,11 @@ async function handleSubmit() {
           name: kf.name,
           open_kfid: kf.open_kfid,
           subagent_type: kf.subagent_type || undefined,
+          allow_agent_transfer: kf.allow_agent_transfer,
         }
         if (kf.welcome_message) obj.welcome_message = kf.welcome_message
         if (kf.servicer_userid_list) {
           obj.servicer_userid_list = kf.servicer_userid_list.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
-        }
-        if ('human_transfer_keywords' in kf) {
-          obj.human_transfer_keywords = (kf.human_transfer_keywords || '').split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
         }
         return obj
       })

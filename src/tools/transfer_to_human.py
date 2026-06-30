@@ -144,10 +144,7 @@ class TransferToHumanTool(BaseTool):
                         session_id=session_id,
                         role="system",
                         content=(
-                            f"[已转人工] 用户此前已请求转人工并已转接给人工客服（{servicer_userid}），"
-                            f"该次请求已处理完成。历史对话中的「转人工」「找客服」「人工」等字样"
-                            f"属于已处理的旧请求，除非用户当前消息再次明确请求人工服务，"
-                            f"否则不要再次调用 transfer_to_human 工具。"
+                            f"[已转人工] 用户此前已请求转人工并已转接给人工客服（{servicer_userid}），该次请求已处理完成。"
                         ),
                         message_type="text",
                         tenant_id=tenant_id,

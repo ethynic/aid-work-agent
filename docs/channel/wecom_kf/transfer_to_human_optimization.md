@@ -139,9 +139,9 @@ if not servicer_list:
 kf_account:
   - open_kfid: "xxx"
     servicer_userid_list: ["zhangsan", "lisi"]
-    human_transfer_keywords: ["人工", "转人工"]   # 回调路径拦截关键词
     exit_human_keywords: ["退出人工"]
     allow_agent_transfer: true                    # 是否允许 Agent 主动转人工，默认 true
+    # human_transfer_keywords: ["人工", "转人工"] # 【已废弃】转人工完全由 Agent 工具调用处理
 ```
 
 - `allow_agent_transfer: false` 时，Agent 调用工具直接返回失败，提示「管理员已禁用 Agent 主动转人工」。
