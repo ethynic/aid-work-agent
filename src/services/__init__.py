@@ -7,6 +7,14 @@ from .sentiment_service import SentimentService, SentimentResult
 from .notification_service import NotificationService, NotificationMessage, NotificationChannel, notification_service
 from .classification_service import ClassificationService, ClassificationResult
 from .case_matching_service import CaseMatchingService, CaseMatch, case_matching_service
+from .x_to_image import (
+    XToImageService,
+    x_to_image_service,
+    XToImageInput,
+    XToImageResult,
+    InputType,
+    ImageFormat,
+)
 
 __all__ = [
     "SessionRecordService", "SessionRecordManager",
@@ -14,4 +22,6 @@ __all__ = [
     "NotificationService", "NotificationMessage", "NotificationChannel", "notification_service",
     "ClassificationService", "ClassificationResult",
     "CaseMatchingService", "CaseMatch", "case_matching_service",
+    "XToImageService", "x_to_image_service",
+    "XToImageInput", "XToImageResult", "InputType", "ImageFormat",
 ]

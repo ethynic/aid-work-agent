@@ -65,6 +65,7 @@
 | 30 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。适用场景：结构化业务数据直接生成正式报价单、报告、对账单、审批单等，要求页眉页脚、页码、签章区、复杂跨页表格和版式位置稳定。当前复杂 HTML/CSS 已由 Playwright print-to-pdf 覆盖，不优先投入 reportlab。2026-06-30 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | — |
 | 31 | 文件生成类工具入参语义拆分与路由健壮性 | 🔧 部分完成 | Word/PDF/Excel/PPT 当前普遍用 `context` 同时承载“用户目的 + 待处理正文 + 隐含参数”，导致内部 LLM 路由不稳定、转换正文被工具指令污染。目标：新增 `instruction/content/content_type/output_name` 结构化入参，`context` 仅作兼容；规则路由覆盖高确定性场景，内部 LLM 只处理复杂参数抽取。Word、PDF、Excel 的计划内改造已完成；PPT 已完成完整 Phase 0-8 增强，包括结构化入参、确定性路由、主/子 Agent 与 Skill 调用提示及回归测试。剩余工作仅为该跨工具计划中的旅游顾问提示更新。2026-07-01 | [设计](tools/tool-input-contract-redesign.md) | [开发计划](tools/tool-input-contract-redesign-dev-plan.md) |
 | 32 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。当前已有结构化校验和 Playwright HTML 转 PDF，暂不投入完整样本集建设。2026-06-30 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | — |
+| 33 | x-to-image 内容转图片服务 | 📋 待开发 | 将文本/Markdown/HTML 渲染为一张尺寸可控的长图(PNG)，Playwright **headless** 全页截图 + Pillow 拼接/截断/体积控制；核心逻辑在 src/services/x_to_image/，薄工具 src/tools/image/ 暴露给 agent。输出写入临时目录并返回临时文件路径（不走下载注册）。v1 仅支持文本/MD/HTML，PDF/Word 预留扩展点。2026-07-01 | [设计](tools/x-to-image/x-to-image-design.md) | [开发计划](tools/x-to-image/x-to-image-dev-plan.md) |
 
 ## 渠道集成
 
