@@ -65,6 +65,8 @@ class PPTQualityValidator:
                     errors.append("PPTX 包含空白页")
                 if structure["out_of_bounds_count"]:
                     errors.append("PPTX 包含越界对象")
+                if structure["overlap_count"]:
+                    errors.append("PPTX 包含显著重叠的同类内容对象")
                 if structure["invalid_image_count"]:
                     errors.append("PPTX 包含无效图片")
 
@@ -121,6 +123,7 @@ class PPTQualityValidator:
         out_of_bounds_count = 0
         image_count = 0
         invalid_image_count = 0
+        overlap_count = 0
         width = int(prs.slide_width)
         height = int(prs.slide_height)
 
@@ -165,6 +168,7 @@ class PPTQualityValidator:
                     }
                 )
             empty_count += int(not slide_nonempty)
+            overlap_count += self._count_content_overlaps(objects, "bounds_emu")
             slides.append(
                 {
                     "index": slide_index,
@@ -187,6 +191,7 @@ class PPTQualityValidator:
             "empty_slide_count": empty_count,
             "object_count": object_count,
             "out_of_bounds_count": out_of_bounds_count,
+            "overlap_count": overlap_count,
             "image_count": image_count,
             "invalid_image_count": invalid_image_count,
         }
@@ -332,6 +337,7 @@ class PPTQualityValidator:
         raster_area = 0.0
         slide_area = 0.0
         for slide in renderer.get("slides", []):
+            raster_rectangles: list[tuple[float, float, float, float]] = []
             for item in slide.get("objects", []):
                 if item.get("type") != "raster":
                     continue
@@ -340,9 +346,14 @@ class PPTQualityValidator:
                 readable_count += int(readable)
                 unreadable_count += int(not readable)
                 bounds = item.get("bounds", {})
-                raster_area += max(0.0, bounds.get("w", 0)) * max(
-                    0.0, bounds.get("h", 0)
-                )
+                x = max(0.0, float(bounds.get("x", 0)))
+                y = max(0.0, float(bounds.get("y", 0)))
+                w = max(0.0, float(bounds.get("w", 0)))
+                h = max(0.0, float(bounds.get("h", 0)))
+                raster_rectangles.append((x, y, x + w, y + h))
+            raster_area += PPTQualityValidator._rectangle_union_area(
+                raster_rectangles
+            )
             size = slide.get("slide_size", {})
             slide_area += max(0.0, size.get("width", 0)) * max(
                 0.0, size.get("height", 0)
@@ -374,6 +385,7 @@ class PPTQualityValidator:
             "empty_slide_count": 0,
             "object_count": 0,
             "out_of_bounds_count": 0,
+            "overlap_count": 0,
             "image_count": 0,
             "invalid_image_count": 0,
         }
@@ -386,6 +398,80 @@ class PPTQualityValidator:
             "slide_size_emu": {"width": 0, "height": 0},
             "slides": [],
         }
+
+    @staticmethod
+    def _count_content_overlaps(objects: list[dict], bounds_key: str) -> int:
+        content_types = {"text", "table", "chart", "image"}
+        count = 0
+        for index, first in enumerate(objects):
+            if first.get("type") not in content_types:
+                continue
+            first_bounds = first.get(bounds_key, {})
+            first_area = max(0, first_bounds.get("w", 0)) * max(
+                0, first_bounds.get("h", 0)
+            )
+            if not first_area:
+                continue
+            for second in objects[index + 1 :]:
+                if second.get("type") != first.get("type"):
+                    continue
+                second_bounds = second.get(bounds_key, {})
+                second_area = max(0, second_bounds.get("w", 0)) * max(
+                    0, second_bounds.get("h", 0)
+                )
+                if not second_area:
+                    continue
+                overlap_width = max(
+                    0,
+                    min(
+                        first_bounds.get("x", 0) + first_bounds.get("w", 0),
+                        second_bounds.get("x", 0) + second_bounds.get("w", 0),
+                    )
+                    - max(first_bounds.get("x", 0), second_bounds.get("x", 0)),
+                )
+                overlap_height = max(
+                    0,
+                    min(
+                        first_bounds.get("y", 0) + first_bounds.get("h", 0),
+                        second_bounds.get("y", 0) + second_bounds.get("h", 0),
+                    )
+                    - max(first_bounds.get("y", 0), second_bounds.get("y", 0)),
+                )
+                if overlap_width * overlap_height / min(first_area, second_area) >= 0.1:
+                    count += 1
+        return count
+
+    @staticmethod
+    def _rectangle_union_area(
+        rectangles: list[tuple[float, float, float, float]],
+    ) -> float:
+        rectangles = [
+            rectangle
+            for rectangle in rectangles
+            if rectangle[2] > rectangle[0] and rectangle[3] > rectangle[1]
+        ]
+        x_coordinates = sorted(
+            {coordinate for rectangle in rectangles for coordinate in rectangle[::2]}
+        )
+        area = 0.0
+        for left, right in zip(x_coordinates, x_coordinates[1:]):
+            intervals = sorted(
+                (top, bottom)
+                for x1, top, x2, bottom in rectangles
+                if x1 < right and x2 > left
+            )
+            covered_height = 0.0
+            if intervals:
+                current_top, current_bottom = intervals[0]
+                for top, bottom in intervals[1:]:
+                    if top > current_bottom:
+                        covered_height += current_bottom - current_top
+                        current_top, current_bottom = top, bottom
+                    else:
+                        current_bottom = max(current_bottom, bottom)
+                covered_height += current_bottom - current_top
+            area += (right - left) * covered_height
+        return area
 
     @staticmethod
     def _write_artifacts(path: Path, layout: dict, report: dict) -> None:

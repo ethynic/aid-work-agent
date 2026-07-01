@@ -1,6 +1,7 @@
 """Phase 7 unified PPTX quality validation tests."""
 
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -118,6 +119,41 @@ def test_empty_page_count_mismatch_and_out_of_bounds_are_reported(tmp_path):
     assert report["summary"]["deliverable"] is True
 
 
+def test_significant_peer_text_overlap_is_reported(tmp_path, monkeypatch):
+    path = _presentation(tmp_path / "overlap.pptx")
+    prs = Presentation(path)
+    prs.slides[0].shapes.add_textbox(
+        Inches(1), Inches(0.5), Inches(5), Inches(1)
+    ).text = "重叠内容"
+    prs.save(path)
+    monkeypatch.setattr("src.tools.ppt.quality_validator.shutil.which", lambda _: None)
+
+    report = PPTQualityValidator().validate(path, strict=True)
+
+    assert report["summary"]["overlap_count"] == 1
+    assert report["summary"]["deliverable"] is False
+    assert any("重叠" in error for error in report["errors"])
+
+
+def test_raster_ratio_uses_union_area_for_overlapping_layers(tmp_path, monkeypatch):
+    path = _presentation(tmp_path / "raster-union.pptx")
+    layout = _layout()
+    layout["slides"][0]["objects"].append(
+        {
+            "type": "raster",
+            "bounds": {"x": 0, "y": 0, "w": 5, "h": 7.5},
+            "readable": True,
+        }
+    )
+    monkeypatch.setattr("src.tools.ppt.quality_validator.shutil.which", lambda _: None)
+
+    report = PPTQualityValidator().validate(path, layout=layout)
+
+    assert report["summary"]["raster_layer_count"] == 2
+    assert report["summary"]["raster_area_ratio"] == 0.5
+    assert report["summary"]["editable_ratio"] == 0.5
+
+
 def test_zero_slide_deck_and_preview_page_mismatch_are_errors(
     tmp_path, monkeypatch
 ):
@@ -182,6 +218,37 @@ def test_libreoffice_conversion_failure_degrades_to_warning(tmp_path, monkeypatc
     assert report["summary"]["preview_status"] == "failed"
     assert report["summary"]["qa_passed"] is True
     assert any("已降级" in warning for warning in report["warnings"])
+
+
+def test_libreoffice_timeout_is_sanitized_and_cleans_temp_dir(
+    tmp_path, monkeypatch
+):
+    path = _presentation(tmp_path / "private-preview.pptx")
+    monkeypatch.setattr(
+        "src.tools.ppt.quality_validator.shutil.which",
+        lambda name: "soffice" if name == "soffice" else None,
+    )
+    preview_directories: list[Path] = []
+
+    def time_out(command, **kwargs):
+        profile_argument = next(
+            item for item in command if item.startswith("-env:UserInstallation=")
+        )
+        profile_uri = profile_argument.split("=", 1)[1]
+        preview_directories.append(Path(profile_uri.removeprefix("file:///")))
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(
+        "src.tools.ppt.quality_validator.subprocess.run", time_out
+    )
+
+    report = PPTQualityValidator().validate(path)
+
+    assert report["summary"]["preview_status"] == "failed"
+    assert report["summary"]["qa_passed"] is True
+    assert str(path) not in json.dumps(report, ensure_ascii=False)
+    assert preview_directories
+    assert all(not directory.exists() for directory in preview_directories)
 
 
 def test_tool_strict_blocks_and_non_strict_preserves_delivery(tmp_path, monkeypatch):
