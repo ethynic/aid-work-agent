@@ -462,12 +462,22 @@ class TemplateAnalyzer:
                 try:
                     slide = self._clone_slide(prs, source_slides[source_index])
                 except (AttributeError, KeyError, ValueError):
-                    self.deviations.append(
-                        self._deviation(output_index, "clone_fallback")
+                    deviation = self._deviation(output_index, "clone_fallback")
+                    self.deviations.append(deviation)
+                    frame["strategy"] = "layout"
+                    frame["source_slide_index"] = None
+                    frame.setdefault("deviation_codes", []).append(
+                        deviation["code"]
                     )
             if slide is None:
                 slide = prs.slides.add_slide(prs.slide_layouts[layout_index])
-            self._fill_frame(slide, match["slide"], frame)
+            self._fill_frame(
+                slide,
+                match["slide"],
+                frame,
+                prs.slide_width,
+                prs.slide_height,
+            )
 
         output_dir = self._get_output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -477,7 +487,8 @@ class TemplateAnalyzer:
             prs.save(str(output_path))
         except OSError as exc:
             raise TemplateAnalysisError("模板 PPTX 输出失败") from exc
-        if artifact_dir is not None and self.deviations:
+        if artifact_dir is not None:
+            self._write_json(artifact_dir, self.FRAME_MAP_NAME, self.frame_map)
             self._write_json(
                 artifact_dir,
                 self.DEVIATION_NAME,
@@ -519,7 +530,14 @@ class TemplateAnalyzer:
             shape_tree.insert_element_before(element, "p:extLst")
         return target
 
-    def _fill_frame(self, slide, data: dict, frame: dict) -> None:
+    def _fill_frame(
+        self,
+        slide,
+        data: dict,
+        frame: dict,
+        slide_width: int,
+        slide_height: int,
+    ) -> None:
         placeholders = {
             placeholder.placeholder_format.idx: placeholder
             for placeholder in slide.placeholders
@@ -537,11 +555,18 @@ class TemplateAnalyzer:
             if addition["type"] != "text":
                 continue
             is_title = addition["role"] == "title"
+            margin_x = min(Inches(0.8), int(slide_width * 0.06))
+            title_top = min(Inches(0.5), int(slide_height * 0.07))
+            title_height = min(Inches(0.8), int(slide_height * 0.14))
+            body_top = min(Inches(1.8), int(slide_height * 0.24))
+            right_margin = margin_x
+            width = max(Inches(0.5), slide_width - margin_x - right_margin)
+            body_height = max(Inches(0.5), slide_height - body_top - Inches(0.4))
             textbox = slide.shapes.add_textbox(
-                Inches(0.8),
-                Inches(0.5 if is_title else 1.8),
-                Inches(11.7 if is_title else 8.4),
-                Inches(0.8 if is_title else 4.5),
+                margin_x,
+                title_top if is_title else body_top,
+                width,
+                title_height if is_title else body_height,
             )
             textbox.text_frame.text = (
                 str(data.get("title", "")) if is_title else self._body_text(data)

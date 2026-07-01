@@ -224,6 +224,66 @@ def test_unavailable_requested_layout_records_safe_fallback(tmp_path):
     assert "requested_frame_unavailable" in matches[0]["frame"]["deviation_codes"]
 
 
+def test_clone_failure_updates_persisted_frame_map(tmp_path, monkeypatch):
+    template = _create_template(tmp_path / "template.pptx")
+    artifacts = tmp_path / "artifacts"
+    analyzer = TemplateAnalyzer()
+    monkeypatch.setattr(analyzer, "_get_output_dir", lambda: tmp_path / "output")
+    monkeypatch.setattr(
+        analyzer,
+        "_clone_slide",
+        lambda *_: (_ for _ in ()).throw(ValueError("simulated clone failure")),
+    )
+    plan = _plan(template_slide_index=0)
+    audit = analyzer.analyze(template, artifacts)
+    matches = analyzer.match_content_to_layouts(plan, audit, artifacts)
+
+    output = analyzer.generate_from_template(template, matches, plan, artifacts)
+
+    Presentation(output)
+    persisted = json.loads(
+        (artifacts / "template-frame-map.json").read_text(encoding="utf-8")
+    )
+    frame = persisted["frames"][0]
+    assert frame["strategy"] == "layout"
+    assert frame["source_slide_index"] is None
+    assert "clone_fallback" in frame["deviation_codes"]
+    deviation_log = json.loads(
+        (artifacts / "deviation-log.json").read_text(encoding="utf-8")
+    )
+    assert any(
+        item["code"] == "clone_fallback"
+        for item in deviation_log["deviations"]
+    )
+
+
+def test_added_textboxes_stay_inside_custom_slide_size(tmp_path, monkeypatch):
+    template = tmp_path / "small-template.pptx"
+    prs = Presentation()
+    prs.slide_width = Inches(5)
+    prs.slide_height = Inches(3)
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.save(template)
+    artifacts = tmp_path / "artifacts"
+    analyzer = TemplateAnalyzer()
+    monkeypatch.setattr(analyzer, "_get_output_dir", lambda: tmp_path / "output")
+    audit = analyzer.analyze(template, artifacts)
+    matches = analyzer.match_content_to_layouts(
+        _plan(layout_index=6), audit, artifacts
+    )
+
+    output = analyzer.generate_from_template(template, matches, _plan(), artifacts)
+
+    generated = Presentation(output)
+    assert generated.slide_width == Inches(5)
+    assert generated.slide_height == Inches(3)
+    for shape in generated.slides[0].shapes:
+        assert shape.left >= 0
+        assert shape.top >= 0
+        assert shape.left + shape.width <= generated.slide_width
+        assert shape.top + shape.height <= generated.slide_height
+
+
 def test_invalid_template_error_does_not_expose_path(tmp_path):
     missing = tmp_path / "sensitive-customer-name.pptx"
 
