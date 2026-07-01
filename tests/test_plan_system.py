@@ -85,7 +85,7 @@ async def test_plan_manager():
             {
                 "step_number": 2,
                 "description": "整理票房数据摘要",
-                "tool": "doc_summarize",
+                "tool": "content_generate",
                 "parameters": {"content": "上一步的结果"},
                 "expected_output": "票房摘要",
             },
@@ -102,7 +102,7 @@ async def test_plan_manager():
             }
         ],
         execution_mode="sequential",
-        available_tools=["web_search", "email_send", "doc_summarize"],
+        available_tools=["web_search", "email_send", "content_generate"],
         available_skills=["pdf"],
     )
     

@@ -322,8 +322,6 @@ class Agent:
         self.tool_registry.register(EmailReadTool())
         self.tool_registry.register(EmailListFoldersTool())
         self.tool_registry.register(PaddleOCRDocParsingTool())
-        # doc_summarize 暂时停用：保留工具实现，恢复时重新导入并注册 DocSummarizeTool。
-        # doc_translate 暂时停用：保留工具实现，恢复时重新导入并注册 DocTranslateTool。
         self.tool_registry.register(WebSearchTool())
         
         # 注册浏览器工具
