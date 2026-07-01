@@ -437,6 +437,41 @@ class ChannelSessionManager:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         created_ids: List[str] = []
 
+        # 竞态兜底：读取 recall_pending Set，若 user 消息的 msgid 或 merged_from_msgids
+        # 命中，则落库时直接打上 is_recalled=TRUE。覆盖"消息在 buffer 里被撤回、
+        # 但 processor 已经跑完并进入落库"这个竞态窗口。
+        recall_pending_msgids: set = set()
+        try:
+            from src.core.redis_client import redis_client
+            pending_key = redis_client.make_key(CacheKeys.RECALL_PENDING, session_id)
+            # 内存/Redis 后端都实现了 smembers 语义不一致，这里改用逐个检查更保险
+            for msg in messages:
+                if msg.get("role") != "user":
+                    continue
+                metadata = msg.get("metadata") or {}
+                if not isinstance(metadata, dict):
+                    continue
+                candidate_msgids: List[str] = []
+                single_msgid = metadata.get("msgid")
+                if single_msgid:
+                    candidate_msgids.append(str(single_msgid))
+                merged_from = metadata.get("merged_from_msgids") or []
+                for mid in merged_from:
+                    if mid:
+                        candidate_msgids.append(str(mid))
+                for mid in candidate_msgids:
+                    if redis_client.sismember(pending_key, mid):
+                        recall_pending_msgids.add(mid)
+        except Exception as e:
+            tlog(
+                "撤回消息",
+                "落库前查询 recall_pending 异常: session_id={session_id}, error={error}",
+                session_id=session_id,
+                error=str(e),
+                level="ERROR",
+            )
+        has_recall_col = self._has_is_recalled_column()
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -447,22 +482,60 @@ class ChannelSessionManager:
                     attachments = msg.get("attachments")
                     metadata = msg.get("metadata")
 
+                    # 判断本条 user 消息是否命中 recall_pending
+                    hit_recall = False
+                    if role == "user" and recall_pending_msgids and isinstance(metadata, dict):
+                        row_msgids: List[str] = []
+                        if metadata.get("msgid"):
+                            row_msgids.append(str(metadata["msgid"]))
+                        for mid in metadata.get("merged_from_msgids") or []:
+                            if mid:
+                                row_msgids.append(str(mid))
+                        hit_recall = any(mid in recall_pending_msgids for mid in row_msgids)
+
                     message_id = f"msg_{uuid.uuid4().hex[:16]}"
-                    cursor.execute("""
-                        INSERT INTO channel_messages
-                        (message_id, session_id, tenant_id, role, content, message_type,
-                         attachments, metadata)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        message_id,
-                        session_id,
-                        tenant_id,
-                        role,
-                        content,
-                        message_type,
-                        json.dumps(attachments, ensure_ascii=False) if attachments else None,
-                        json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
-                    ))
+                    if hit_recall and has_recall_col:
+                        cursor.execute("""
+                            INSERT INTO channel_messages
+                            (message_id, session_id, tenant_id, role, content, message_type,
+                             attachments, metadata, is_recalled, recalled_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
+                        """, (
+                            message_id,
+                            session_id,
+                            tenant_id,
+                            role,
+                            content,
+                            message_type,
+                            json.dumps(attachments, ensure_ascii=False) if attachments else None,
+                            json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
+                        ))
+                        tlog(
+                            "撤回消息",
+                            "落库前命中 recall_pending，直接标记 is_recalled=TRUE: "
+                            "session_id={session_id}, message_id={message_id}, "
+                            "role={role}, content_preview={preview!r}",
+                            session_id=session_id,
+                            message_id=message_id,
+                            role=role,
+                            preview=(content or "")[:80],
+                        )
+                    else:
+                        cursor.execute("""
+                            INSERT INTO channel_messages
+                            (message_id, session_id, tenant_id, role, content, message_type,
+                             attachments, metadata)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            message_id,
+                            session_id,
+                            tenant_id,
+                            role,
+                            content,
+                            message_type,
+                            json.dumps(attachments, ensure_ascii=False) if attachments else None,
+                            json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
+                        ))
                     created_ids.append(message_id)
 
                 # 更新会话最后消息时间（只调一次）
@@ -473,6 +546,30 @@ class ChannelSessionManager:
                 """, (now, now, session_id))
 
                 conn.commit()
+
+                # 落库成功后，将本次已处理的 recall_pending msgid 从 Set 中移除，
+                # 防止陈旧 msgid 长期占用 Redis（虽然有 TTL 兜底，但主动清理更干净）
+                if recall_pending_msgids:
+                    try:
+                        from src.core.redis_client import redis_client
+                        pending_key = redis_client.make_key(CacheKeys.RECALL_PENDING, session_id)
+                        for mid in recall_pending_msgids:
+                            redis_client.srem(pending_key, mid)
+                        tlog(
+                            "撤回消息",
+                            "落库后清理 recall_pending: session_id={session_id}, cleared={cleared}",
+                            session_id=session_id,
+                            cleared=list(recall_pending_msgids),
+                        )
+                    except Exception as clr_err:
+                        tlog(
+                            "撤回消息",
+                            "清理 recall_pending 失败: session_id={session_id}, error={error}",
+                            session_id=session_id,
+                            error=str(clr_err),
+                            level="ERROR",
+                        )
+
                 return created_ids
             except Exception as e:
                 try:
@@ -1206,6 +1303,33 @@ class ChannelSessionManager:
                     error=str(buf_err),
                 )
                 removed = False
+
+            # 竞态兜底：processor 可能已经把 buffer 里的输入读走并在跑 agent，
+            # 后续落库时不会再走情况1/2；此处把 msgid 写入 recall_pending Set，
+            # 让 add_messages_batch_transactional 落库前查一次，命中则直接
+            # 打上 is_recalled=TRUE，避免撤回消息被当正常消息保存。
+            try:
+                from src.core.redis_client import redis_client
+                pending_key = redis_client.make_key(CacheKeys.RECALL_PENDING, session_id)
+                redis_client.sadd(pending_key, recall_msgid)
+                redis_client.expire(pending_key, 300)  # 300s 覆盖 processor 最长运行时间
+                tlog(
+                    "撤回消息",
+                    "已登记 recall_pending: session_id={session_id}, msgid={msgid}, pending_key={key}",
+                    session_id=session_id,
+                    msgid=recall_msgid,
+                    key=pending_key,
+                )
+            except Exception as pend_err:
+                tlog(
+                    "撤回消息",
+                    "登记 recall_pending 失败: session_id={session_id}, msgid={msgid}, error={error}",
+                    session_id=session_id,
+                    msgid=recall_msgid,
+                    error=str(pend_err),
+                    level="ERROR",
+                )
+
             tlog(
                 "撤回消息",
                 "未命中持久化消息，兜底清理合并缓冲区: "

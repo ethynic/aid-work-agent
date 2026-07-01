@@ -218,9 +218,10 @@ production 标签缓存 → 标签→版本映射缓存 → Prompt 内容缓存
 | `session_merge:{sid}` | 消息合并标记 | 5s |
 | `session_pending:{sid}` | 待处理消息队列 | 30s |
 | `session_responding:{sid}` | 正在响应标记 | 10s |
+| `recall_pending:{sid}` | 竞态兜底：撤回事件到达时消息还在处理中，落库前查此 SET 命中则打 is_recalled=TRUE | 300s |
 
 **释放策略**：处理完成后释放；TTL 自动过期兜底
-**源文件**：`src/core/session_queue.py`
+**源文件**：`src/core/session_queue.py`；`recall_pending` 由 `src/channels/session.py::mark_recalled_message`（写入）和 `add_messages_batch_transactional`（读取+清理）协作。
 
 ### 7.2 短期记忆（Short-Term Memory）
 

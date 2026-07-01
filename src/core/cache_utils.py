@@ -46,6 +46,7 @@ class CacheKeys:
     PROMPT_REGISTRY = "prompt_reg"       # prompt_reg:{tenant_id}:{scope}:{scope_id}
     PROMPT_SECTIONS = "prompt_sections"  # prompt_sections:{agent_id} → {section_key: content} dict
     CHANNEL_RATE_LIMIT = "ch_rate_limit"  # ch_rate_limit:{channel_type}:{user_id}（ZSET，滑动窗口）
+    RECALL_PENDING = "recall_pending"     # recall_pending:{session_id}（SET，缓存"处理中被撤回的 msgid"，落库时补打 is_recalled）
 
 
 # ============== 通用缓存函数 ==============
