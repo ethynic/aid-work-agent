@@ -17,6 +17,7 @@
 | [.claude/rules/testing.md](.claude/rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
 | [.claude/rules/architecture.md](.claude/rules/architecture.md) | 系统架构、核心组件、扩展点 |
 | [.claude/rules/database_dev.md](.claude/rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
+| [.claude/rules/dev_workflow.md](.claude/rules/dev_workflow.md) | **开发流程规范**：三智能体开发流程（开发→测试→CodeReview），非平凡任务必读 |
 
 **回答简洁**：每个响应不超过 5000 个 token
 **代码输出**：只输出修改的部分，不要输出完整文件
