@@ -3,7 +3,6 @@
 """车型推荐 + 用车费用计算"""
 
 import json
-import math
 import subprocess as _sp
 import sys
 from pathlib import Path
@@ -22,53 +21,57 @@ else:
     _project_root = _script_path.parent
 
 
-def recommend_vehicle(people_count: int, vehicles: List[dict]) -> List[dict]:
-    """根据人数推荐最优车型组合"""
-    if not vehicles:
+def recommend_vehicle(people_count: int, vehicles: List[dict],
+                      rate_field: str = "daily_rate") -> List[dict]:
+    """按最少车辆数、最低总单价、最少空座依次推荐车型组合。"""
+    if not vehicles or people_count <= 0:
         return []
 
-    # 过滤掉无有效价格的车型（daily_rate 或 per_km_rate 为空/0）
     valid_vehicles = []
     for v in vehicles:
-        rate = v.get('daily_rate') or v.get('per_km_rate')
-        if rate is not None and float(rate) > 0:
-            valid_vehicles.append(v)
+        rate = v.get(rate_field)
+        seats = v.get('seats_max')
+        if rate is not None and seats is not None and float(rate) > 0 and int(seats) > 0:
+            valid_vehicles.append((v, int(seats), float(rate)))
     if not valid_vehicles:
-        logger.warning(f"[travel-quote] 所有车型 daily_rate/per_km_rate 均为空，无法推荐")
+        logger.warning(f"[travel-quote] 所有车型 {rate_field} 均为空，无法推荐")
         return []
-    vehicles = valid_vehicles
 
-    single_options = [v for v in vehicles if v['seats_max'] >= people_count]
-    if single_options:
-        best = min(single_options, key=lambda v: v['seats_max'])
-        return [{"vehicle": best, "count": 1}]
+    max_seats = max(seats for _, seats, _ in valid_vehicles)
+    capacity_limit = people_count + max_seats - 1
+    # dp[capacity] = (vehicle_count, total_rate, tuple(vehicle_counts))
+    dp = [None] * (capacity_limit + 1)
+    dp[0] = (0, 0.0, (0,) * len(valid_vehicles))
+    for capacity in range(capacity_limit + 1):
+        state = dp[capacity]
+        if state is None:
+            continue
+        count, total_rate, counts = state
+        for index, (_, seats, rate) in enumerate(valid_vehicles):
+            next_capacity = capacity + seats
+            if next_capacity > capacity_limit:
+                continue
+            next_counts = list(counts)
+            next_counts[index] += 1
+            candidate = (count + 1, total_rate + rate, tuple(next_counts))
+            current = dp[next_capacity]
+            if current is None or candidate[:2] < current[:2]:
+                dp[next_capacity] = candidate
 
-    largest = max(vehicles, key=lambda v: v['seats_max'])
-    best_combo, best_cost = None, float('inf')
+    candidates = [
+        (state[0], state[1], capacity - people_count, state[2])
+        for capacity, state in enumerate(dp)
+        if capacity >= people_count and state is not None
+    ]
+    if not candidates:
+        return []
 
-    for v in sorted(vehicles, key=lambda x: x['seats_max'], reverse=True):
-        full_count = people_count // v['seats_max']
-        remainder = people_count % v['seats_max']
-
-        if remainder == 0:
-            cost = full_count * float(v['daily_rate'])
-            if cost < best_cost:
-                best_cost, best_combo = cost, [{"vehicle": v, "count": full_count}]
-        else:
-            for v2 in vehicles:
-                if v2['seats_max'] >= remainder:
-                    cost = full_count * float(v['daily_rate']) + float(v2['daily_rate'])
-                    if cost < best_cost:
-                        best_cost, best_combo = cost, [
-                            {"vehicle": v, "count": full_count},
-                            {"vehicle": v2, "count": 1},
-                        ]
-                    break
-            cost = (full_count + 1) * float(v['daily_rate'])
-            if cost < best_cost:
-                best_cost, best_combo = cost, [{"vehicle": v, "count": full_count + 1}]
-
-    return best_combo or [{"vehicle": largest, "count": math.ceil(people_count / largest['seats_max'])}]
+    _, _, _, selected_counts = min(candidates)
+    return [
+        {"vehicle": valid_vehicles[index][0], "count": count}
+        for index, count in enumerate(selected_counts)
+        if count > 0
+    ]
 
 
 def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
@@ -93,7 +96,7 @@ def calculate_vehicle_cost(items: list, tenant_id: str, region_names: List[str],
     elif per_km_vehicles and route_distance_km is None:
         vehicles = per_km_vehicles
 
-    combo = recommend_vehicle(total_people, vehicles)
+    combo = recommend_vehicle(total_people, vehicles, "daily_rate")
     total_vehicle_count = sum(c["count"] for c in combo)
 
     for c in combo:
@@ -226,7 +229,7 @@ def _calculate_per_km_cost(items: list, vehicles: list, total_people: int,
                            distance_km: float,
                            leg_details: list = None) -> Tuple[list, int]:
     """按公里计费"""
-    combo = recommend_vehicle(total_people, vehicles)
+    combo = recommend_vehicle(total_people, vehicles, "per_km_rate")
     total_vehicle_count = sum(c["count"] for c in combo)
 
     for c in combo:
