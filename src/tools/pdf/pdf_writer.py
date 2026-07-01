@@ -567,7 +567,7 @@ def _create_pdf_with_html(html_body: str, output_path: str, title: str = "") -> 
 
 def md_to_pdf(md_text: str, output_name: Optional[str] = None,
               css: Optional[str] = None, title: str = "") -> Dict[str, Any]:
-    """Markdown → PDF，通过 markdown + fpdf2。
+    """Markdown → PDF，优先通过 Playwright/Chromium 打印。
 
     Args:
         md_text: Markdown 文本内容
@@ -576,7 +576,7 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
         title: 文档标题
 
     Returns:
-        {"success": True, "file_path": str, "file_size": int}
+        {"success": True, "file_path": str, "file_size": int, "engine": str}
     """
     try:
         # 预处理 Markdown
@@ -585,22 +585,18 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
         # Markdown → HTML
         body_html = _md_to_html(cleaned_md)
 
-        # fpdf2 → PDF
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = os.path.join(tmpdir, "output.pdf")
-            _create_pdf_with_html(body_html, output_path, title=title)
+        if title:
+            import html
+            body_html = f"<h1>{html.escape(title)}</h1>\n{body_html}"
 
-            if not Path(output_path).exists():
-                return {"success": False, "error": "PDF 生成失败：fpdf2 未输出文件"}
-
-            save_result = PdfFileHandler.save_temp(
-                source_path=output_path,
-                file_name=output_name or "document.pdf",
-            )
-            save_result["success"] = True
-            if css:
-                save_result["warnings"] = ["当前 fpdf2 生成路径不支持自定义 CSS，已忽略 css 参数"]
-            return save_result
+        # 浏览器打印对中文字体、复杂表格和 CSS 的支持更稳定；
+        # Playwright 不可用时由 html_to_pdf 统一回退 fpdf2，并返回告警。
+        return html_to_pdf(
+            html_text=body_html,
+            output_name=output_name,
+            css=css,
+            engine="auto",
+        )
 
     except Exception as e:
         logger.error(f"[PdfWriter] md_to_pdf 失败: {e}", exc_info=True)

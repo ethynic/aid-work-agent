@@ -167,8 +167,26 @@ def _strip_code_fences(content: str) -> str:
     这些标记不应写入最终文件。
     """
     stripped = content.strip()
-    stripped = re.sub(r"^```[\w]*\s*\n?", "", stripped)
-    stripped = re.sub(r"\n?```\s*$", "", stripped)
+    full_fence = re.fullmatch(
+        r"```[\w+-]*[^\S\r\n]*\r?\n?(.*?)\r?\n?```",
+        stripped,
+        flags=re.DOTALL,
+    )
+    if full_fence:
+        return full_fence.group(1).strip()
+
+    # HTML 生成场景中，模型偶尔会在围栏前后附加说明文字。只提取包含
+    # 完整 HTML 文档标记的围栏，避免误删 Markdown 正文里的普通代码块。
+    for fenced in re.finditer(
+        r"```(?:html|htm)?[^\S\r\n]*\r?\n(.*?)\r?\n?```",
+        stripped,
+        flags=re.DOTALL | re.IGNORECASE,
+    ):
+        body = fenced.group(1).strip()
+        lowered = body.lower()
+        if any(marker in lowered for marker in ("<!doctype", "<html", "<body")):
+            return body
+
     return stripped
 
 

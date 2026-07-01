@@ -50,7 +50,7 @@
     </div>
 
     <!-- Preview Content -->
-    <div class="flex-1 overflow-auto relative">
+    <div class="flex-1 min-h-0 overflow-hidden relative">
       <!-- Loading -->
       <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
         <div class="flex items-center gap-2 text-gray-400">
@@ -103,10 +103,11 @@
       <!-- HTML Preview -->
       <iframe
         v-if="previewType === 'html' && attachment?.file_id"
+        ref="htmlFrameRef"
         :src="getFileUrl(attachment.file_id)"
-        class="w-full h-full border-0"
+        class="block w-full h-full min-h-0 border-0"
         sandbox="allow-same-origin allow-scripts"
-        @load="loading = false"
+        @load="handleHtmlLoad"
       ></iframe>
 
       <!-- Text/Code Preview -->
@@ -168,6 +169,7 @@ const textContent = ref('')
 const textLanguage = ref('plaintext')
 const docxContainer = ref<HTMLDivElement | null>(null)
 const panelRef = ref<HTMLDivElement | null>(null)
+const htmlFrameRef = ref<HTMLIFrameElement | null>(null)
 const panelWidth = ref(480)
 
 const panelStyle = computed(() => ({
@@ -313,6 +315,42 @@ async function loadDocx() {
 function handleImageError() {
   loading.value = false
   error.value = '图片加载失败，文件可能已过期'
+}
+
+// 生成类 HTML 可能包含面向打印的 100vh/overflow:hidden 样式。
+// 预览时恢复文档滚动，避免长内容在 iframe 中被截断。
+function handleHtmlLoad() {
+  loading.value = false
+
+  try {
+    const doc = htmlFrameRef.value?.contentDocument
+    if (!doc) return
+
+    const style = doc.createElement('style')
+    style.dataset.previewScrollFix = 'true'
+    style.textContent = `
+      html, body {
+        height: auto !important;
+        min-height: 100% !important;
+        max-height: none !important;
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        overscroll-behavior: contain;
+      }
+      body > main,
+      body > .page,
+      body > .container,
+      body > .document,
+      body > .report {
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+    `
+    doc.head?.appendChild(style)
+  } catch {
+    // 跨域或浏览器安全策略阻止访问时，保留 iframe 自身的默认滚动行为。
+  }
 }
 
 // 监听附件变化

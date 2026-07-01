@@ -125,6 +125,22 @@ class TestStripCodeFences:
     def test_fence_with_lang_tag(self):
         assert _strip_code_fences("```markdown\n# Title\n```") == "# Title"
 
+    def test_html_fence_with_model_explanation(self):
+        content = (
+            "这是为您生成的一份可直接打印的 HTML 文档。\n"
+            "```html\n"
+            "<!DOCTYPE html><html><body><h1>贵州行程</h1></body></html>\n"
+            "```\n"
+            "如需调整请告诉我。"
+        )
+        assert _strip_code_fences(content) == (
+            "<!DOCTYPE html><html><body><h1>贵州行程</h1></body></html>"
+        )
+
+    def test_markdown_with_embedded_code_block_is_preserved(self):
+        content = "说明文字\n```python\nprint('hello')\n```\n后续文字"
+        assert _strip_code_fences(content) == content
+
 
 # ---------------------------------------------------------------------------
 # TestOverwriteMode

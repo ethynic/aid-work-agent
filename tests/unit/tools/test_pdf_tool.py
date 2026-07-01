@@ -642,60 +642,71 @@ class TestPdfWriter:
     """
 
     def test_md_to_pdf_success(self):
-        """Markdown 转 PDF 成功"""
+        """Markdown 转 HTML 后优先交给浏览器打印链路"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_pdf = os.path.join(tmpdir, "output.pdf")
+        expected = {
+            "success": True,
+            "file_path": "/fake/test.pdf",
+            "file_size": 1024,
+            "engine": "playwright",
+        }
+        with patch("src.tools.pdf.pdf_writer.html_to_pdf", return_value=expected) as mocked:
+            result = md_to_pdf("# Test\n\nHello world", output_name="test.pdf")
 
-            def fake_create_pdf(html_body, output_path, title=""):
-                with open(output_path, "wb") as f:
-                    f.write(b"%PDF-1.4")
+        assert result == expected
+        assert ">Test</h1>" in mocked.call_args.kwargs["html_text"]
+        assert mocked.call_args.kwargs["engine"] == "auto"
 
-            with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=fake_create_pdf), \
-                 patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": output_pdf, "file_size": 1024}):
-                result = md_to_pdf("# Test\n\nHello world", output_name="test.pdf")
-
-            assert result["success"] is True
-            assert result["file_path"] == output_pdf
-
-    def test_md_to_pdf_no_output_file(self):
-        """fpdf2 未输出文件"""
+    def test_md_to_pdf_propagates_renderer_failure(self):
+        """浏览器与 fpdf2 都失败时原样返回错误"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", return_value=None):
+        with patch(
+            "src.tools.pdf.pdf_writer.html_to_pdf",
+            return_value={"success": False, "error": "所有渲染引擎均不可用"},
+        ):
             result = md_to_pdf("# Test")
 
         assert result["success"] is False
-        assert "fpdf2" in result["error"]
+        assert "所有渲染引擎均不可用" in result["error"]
 
     def test_md_to_pdf_render_exception(self):
-        """fpdf2 渲染异常"""
+        """Markdown 预处理异常"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=RuntimeError("render failed")):
+        with patch("src.tools.pdf.pdf_writer._md_to_html", side_effect=RuntimeError("render failed")):
             result = md_to_pdf("# Test")
 
         assert result["success"] is False
         assert "生成PDF失败" in result["error"]
 
     def test_md_to_pdf_css_warning(self):
-        """当前 fpdf2 路径忽略 css 参数并返回 warning"""
+        """Markdown 转换会把 CSS 传给统一 HTML 渲染链路"""
         from src.tools.pdf.pdf_writer import md_to_pdf
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_pdf = os.path.join(tmpdir, "output.pdf")
-
-            def fake_create_pdf(html_body, output_path, title=""):
-                with open(output_path, "wb") as f:
-                    f.write(b"%PDF-1.4")
-
-            with patch("src.tools.pdf.pdf_writer._create_pdf_with_html", side_effect=fake_create_pdf), \
-                 patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": output_pdf, "file_size": 1024}):
-                result = md_to_pdf("# Test", css="/fake/style.css")
+        expected = {"success": True, "file_path": "/fake/test.pdf", "engine": "playwright"}
+        with patch("src.tools.pdf.pdf_writer.html_to_pdf", return_value=expected) as mocked:
+            result = md_to_pdf("# Test", css="/fake/style.css")
 
         assert result["success"] is True
-        assert "warnings" in result
+        assert mocked.call_args.kwargs["css"] == "/fake/style.css"
+
+    def test_md_to_pdf_preserves_chinese_content(self):
+        """中文标题、正文和表格不得在转 HTML 阶段损坏"""
+        from src.tools.pdf.pdf_writer import md_to_pdf
+
+        markdown = "# 贵州行程\n\n| 天数 | 安排 |\n|---|---|\n| D1 | 黄果树瀑布 |"
+        with patch(
+            "src.tools.pdf.pdf_writer.html_to_pdf",
+            return_value={"success": True, "engine": "playwright"},
+        ) as mocked:
+            md_to_pdf(markdown)
+
+        html_text = mocked.call_args.kwargs["html_text"]
+        assert "贵州行程" in html_text
+        assert "天数" in html_text
+        assert "黄果树瀑布" in html_text
 
     def test_html_to_pdf_success(self):
         """HTML 转 PDF 走 fpdf2 路径"""
