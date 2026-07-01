@@ -2,7 +2,7 @@
 
 > 创建日期：2026-07-01
 > 关联设计：[x-to-image 服务设计文档](x-to-image-design.md)
-> 状态：待开发（v1.1，按反馈调整：强制 headless + 输出临时目录）
+> 状态：✅ v1 已完成开发（Phase 1-5 全部完成，2026-07-01）
 
 ---
 
@@ -16,7 +16,7 @@
 
 ### Phase 1：搭建服务骨架（models / service / base / browser_pool）
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 **目标**：建立 `src/services/x_to_image/` 包结构与核心服务壳，不含具体渲染逻辑。
 
@@ -43,7 +43,7 @@
 
 ### Phase 2：实现三个渲染器（text / markdown / html）
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 **目标**：实现文本、Markdown、HTML 三类输入的渲染（均走 headless Playwright）。
 
@@ -72,7 +72,7 @@
 
 ### Phase 3：实现 image_utils（拼接 / 空白检测 / 截断 / 体积控制）
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 **目标**：实现 `finalize_long_image` 与辅助函数，保证输出「单张、可控」，写入临时工作目录。
 
@@ -98,7 +98,7 @@
 
 ### Phase 4：实现薄工具 + 注册
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 **目标**：以 agent 工具形式暴露，返回临时文件路径。
 
@@ -126,7 +126,7 @@
 
 ### Phase 5：端到端集成测试 + 文档登记
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 待完成改动：
 1. `tests/services/x_to_image/test_integration.py`：文本/MD/HTML 各一条真实样例，端到端调 `x_to_image_service.convert`，断言：
