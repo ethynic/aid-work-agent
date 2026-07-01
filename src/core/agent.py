@@ -303,7 +303,6 @@ class Agent:
         """Register built-in tools"""
         from src.tools.email.email_tool import EmailSendTool, EmailReadTool, EmailListFoldersTool
         from src.tools.ocr import PaddleOCRDocParsingTool
-        from src.tools.document.doc_tool import DocSummarizeTool, DocTranslateTool
         from src.tools.search.search_tool import WebSearchTool
         from src.tools.browser import BrowserAutomationTool
         from src.tools.file.read_tool import ReadTool
@@ -319,8 +318,8 @@ class Agent:
         self.tool_registry.register(EmailReadTool())
         self.tool_registry.register(EmailListFoldersTool())
         self.tool_registry.register(PaddleOCRDocParsingTool())
-        self.tool_registry.register(DocSummarizeTool())
-        self.tool_registry.register(DocTranslateTool())
+        # doc_summarize 暂时停用：保留工具实现，恢复时重新导入并注册 DocSummarizeTool。
+        # doc_translate 暂时停用：保留工具实现，恢复时重新导入并注册 DocTranslateTool。
         self.tool_registry.register(WebSearchTool())
         
         # 注册浏览器工具
