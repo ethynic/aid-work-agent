@@ -43,7 +43,7 @@ class PptProcessInput(BaseModel):
     )
     file_paths: Optional[List[str]] = Field(
         None,
-        description="附件文件路径列表（用户上传的 .pptx 模板文件等）"
+        description="workspace 内的附件路径列表（.pptx 模板或 .html/.htm 文件）；外部文件须先用 cp 复制到 workspace"
     )
 
     @field_validator(
@@ -86,10 +86,17 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
 不要自己生成文件内容，一律交给本工具。
 
 调用方式：
-- 推荐将操作要求放在 instruction，将主题、Markdown 大纲或其他正文放在 content
-- 可用 content_type 明确正文类型；output_name 指定业务文件名
-- context 仅用于兼容旧调用，工具会尝试自动拆分指令和正文
-- 用户上传的模板文件路径放在 file_paths 中
+- 优先将操作要求放在 instruction，将主题、Markdown 大纲、HTML 或规格正文放在 content
+- 不要把完整指令和正文混入 context；context 仅兼容旧调用
+- HTML 转换必须传 content_type="html"，export_mode 可选：
+  · high_fidelity：高保真整页截图版
+  · editable：尽量可编辑版
+  · both：同时返回可编辑版 file_path 和高保真版 alternate_file_path
+- output_name 指定业务文件名
+- 模板或 HTML 文件必须先位于当前 workspace，再将路径放入 file_paths；
+  外部/临时文件先调用
+  cp(source_file_path="<来源路径>", file_path="workspace/<文件名>",
+     register_download=false, visible=false)，再使用 cp 返回的新路径
 工具会自动判断模式并生成PPT。
 
 📦 生成文件后必须用 cp 注册下载（重要）：
@@ -97,7 +104,8 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
 用户才能在前端看到并下载：
     cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
 cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
-display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。"""
+display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。
+both 模式还会返回 alternate_file_path，必须对两条路径分别调用 cp。工具返回失败时不得声称文件已生成。"""
 
 
 class PptProcessTool(BaseTool):
@@ -538,6 +546,51 @@ class PptProcessTool(BaseTool):
 
     def _format_user_error(self, error: Exception) -> str:
         """生成用户可读错误，避免泄漏异常堆栈。"""
+        from src.tools.ppt.html_exporter import (
+            HtmlExportDependencyError,
+            HtmlExportError,
+            HtmlExportSecurityError,
+            HtmlExportTimeoutError,
+        )
+        from src.tools.ppt.renderer import PptRendererError
+        from src.tools.ppt.template_analyzer import TemplateAnalysisError
+
+        if isinstance(error, HtmlExportDependencyError):
+            return "HTML 转 PPTX 所需的浏览器依赖不可用，请联系管理员检查 Playwright/Chromium"
+        if isinstance(error, HtmlExportTimeoutError):
+            return "HTML 页面渲染超时，请简化页面后重试"
+        if isinstance(error, HtmlExportSecurityError):
+            safe_security_errors = {
+                "HTML 内容超过 10MB 安全限制",
+                "HTML 文件不存在或不可访问",
+                "仅支持本地 .html/.htm 文件",
+                "HTML 文件超过 10MB 安全限制",
+            }
+            message = str(error)
+            return (
+                message
+                if message in safe_security_errors
+                else "HTML 文件未通过安全检查"
+            )
+        if isinstance(error, HtmlExportError):
+            return "HTML 转 PPTX 失败，请检查页面内容或 workspace 文件"
+        if isinstance(error, TemplateAnalysisError):
+            safe_template_errors = {
+                "PPTX 模板无效或无法读取",
+                "模板缺少可用版式，无法安全生成",
+                "模板 PPTX 输出失败",
+                "模板审计产物不完整，已停止生成",
+                "PPTX 模板不存在或不可访问",
+                "PPTX 模板无效或超过 50MB 限制",
+            }
+            message = str(error)
+            return (
+                message
+                if message in safe_template_errors
+                else "PPTX 模板处理失败，请检查模板文件"
+            )
+        if isinstance(error, PptRendererError):
+            return "PPTX 渲染器不可用或生成失败，请稍后重试"
         return "PPT生成失败，请检查输入内容或稍后重试"
 
     def _looks_like_outline(self, text: str) -> bool:

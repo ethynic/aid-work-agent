@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：🔧 部分完成（Phase 0-7 已完成，真实 HTML/模板/PPTX 与统一 QA 自动化测试通过）
+> 状态：✅ 已完成开发（Phase 0-8 全部完成，2026-07-01）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -456,7 +456,7 @@ npm --prefix src/tools/ppt/renderer-node run build
 
 ### Phase 8：Agent 提示与文档更新
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 目标：
 
@@ -484,6 +484,15 @@ npm --prefix src/tools/ppt/renderer-node run build
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests/unit/prompts -q
 ```
+
+完成内容：
+
+- 已更新主智能体和子智能体基础提示，PPT 调用优先使用 `instruction + content`，`context` 仅保留兼容。
+- 已明确 HTML 转换的 `content_type=html` 与 `high_fidelity/editable/both` 三种模式及双文件交付。
+- 已明确模板/HTML 文件先通过 `cp` 进入 workspace，再传给 `file_paths`，避免直接读取任意外部路径。
+- 已为 `guizang-ppt-skill` 增加 HTML 直接调用 `ppt_process` 的 PPTX 导出路径。
+- 已补充 Node、HTML、模板失败的脱敏错误提示，以及失败时不得声称生成成功的硬约束。
+- 已新增 prompt 和 PPT 工具契约回归测试。
 
 ## 4. 文件与目录规划
 

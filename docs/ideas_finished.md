@@ -42,6 +42,7 @@
 | 19 | 浏览器自动化工具 | 网页自动化操作、数据采集、Markdown 转换 | [设计](tools/browser/browser_automation_design.md) | — |
 | 19.1 | 知识库检索租户隔离 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露 + 分块 overlap 修复。2026-06-02 | [设计](tools/knowledge-base-search-tenant-isolation-design.md) | [计划](tools/knowledge-base-search-tenant-isolation-dev-plan.md) |
 | 21 | PPT 生成工具 | AI 驱动的 PPT 内容生成与模板渲染 | [设计](tools/ppt/ppt_tool_design.md) | — |
+| 34 | PPT 工具增强与 HTML 转 PPTX 导出 | ✅ 已完成开发。Phase 0-8 全部完成：结构化 `instruction/content/content_type/output_name/export_mode` 入参、SlideDeckSpec、Node/PptxGenJS 渲染与回退、11 类布局、HTML 高保真/可编辑/both 导出、DOM 原生对象重建与局部栅格化、可审计模板跟随、统一 PPTQualityValidator、layout/QA 报告、strict 交付门禁，以及主/子智能体和网页 PPT skill 的直接调用提示。真实 Playwright、模板、损坏 PPTX、双输出、PPTX 重开、prompt/Python/Node 测试通过。2026-07-01 | [设计](tools/ppt/ppt_tool_enhancement_design.md) | [开发计划](tools/ppt/ppt_tool_enhancement_dev_plan.md) |
 | 21 | Word 工具 | Word 文档读取与生成 | [设计](tools/word/word_tool_design.md) | — |
 | 22 | PDF 工具 | PDF 文档解析与处理 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 23 | Excel 工具 | Excel 文件读取与数据提取 | [设计](tools/excel/excel_tool_design.md) | — |

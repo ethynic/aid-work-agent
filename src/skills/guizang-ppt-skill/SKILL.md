@@ -453,6 +453,27 @@ open "项目/XXX/ppt/index.html"
 
 根据用户反馈修改——模板的 CSS 已经高度参数化，90% 的调整都是改 inline style（字号 `font-size:Xvw` / 高度 `height:Yvh` / 间距 `gap:Zvh`）。
 
+### Step 7 · 按需导出 PPTX
+
+用户需要 PowerPoint 文件时，完成 HTML 自检后直接调用现有 `ppt_process` 工具，不要自行拼装 PPTX：
+
+```text
+ppt_process(
+  instruction="将网页演示导出为 PPTX",
+  content_type="html",
+  file_paths=["<workspace 内的 index.html>"],
+  export_mode="both",
+  output_name="<业务名称>"
+)
+```
+
+- `high_fidelity`：视觉优先，整页截图版
+- `editable`：后续编辑优先，复杂视觉区域会局部栅格化
+- `both`：同时生成可编辑版和高保真版，人工审核时优先使用
+- `index.html` 和模板必须在当前 workspace；若来源仍是外部/临时路径，先用 `cp(source_file_path="<来源路径>", file_path="workspace/<文件名>", register_download=false, visible=false)` 复制，并将 cp 返回的新路径交给 `ppt_process`，禁止直接传任意外部路径
+- 工具返回 `success=true` 后，分别对 `file_path` 和可选的 `alternate_file_path` 调用 `cp` 注册下载
+- 工具失败、strict QA 阻止交付或没有返回 `file_path` 时，如实报告错误，不得声称 PPTX 已生成
+
 ---
 
 ## 资源文件导览
