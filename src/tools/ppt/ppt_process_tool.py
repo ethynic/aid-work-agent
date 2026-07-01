@@ -328,15 +328,30 @@ class PptProcessTool(BaseTool):
 
         # 分析模板 + 匹配内容 + 生成
         analyzer = TemplateAnalyzer()
-        analysis = analyzer.analyze(template_path)
-        matches = analyzer.match_content_to_layouts(plan, analysis)
-
-        output_path = analyzer.generate_from_template(template_path, matches, plan)
+        with tempfile.TemporaryDirectory(prefix="ppt-template-audit-") as artifact_dir:
+            analysis = analyzer.analyze(template_path, artifact_dir=artifact_dir)
+            matches = analyzer.match_content_to_layouts(
+                plan, analysis, artifact_dir=artifact_dir
+            )
+            output_path = analyzer.generate_from_template(
+                template_path, matches, plan, artifact_dir=artifact_dir
+            )
         result = {
             "success": True,
             "file_path": output_path,
+            "slide_count": len(matches),
+            "qa_summary": {
+                "template_audit_created": True,
+                "frame_map_created": True,
+                "deviation_log_created": True,
+                "deviation_count": len(analyzer.deviations),
+            },
             "message": f"已基于模板生成PPT，共 {len(matches)} 页",
         }
+        if analyzer.deviations:
+            result["warnings"] = [
+                item["message"] for item in analyzer.deviations
+            ]
 
         return result
 

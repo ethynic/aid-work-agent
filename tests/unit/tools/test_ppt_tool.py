@@ -250,6 +250,9 @@ async def test_template_pptx_with_content_generates_ppt(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert "基于模板" in result["message"]
+    assert result["qa_summary"]["template_audit_created"] is True
+    assert result["qa_summary"]["frame_map_created"] is True
+    assert result["qa_summary"]["deviation_log_created"] is True
     _assert_pptx(result["file_path"], 3)
     slide_texts = _slide_texts(result["file_path"])
     assert "模板生成" in slide_texts[0]

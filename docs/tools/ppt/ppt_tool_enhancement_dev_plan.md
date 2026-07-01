@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：🔧 部分完成（Phase 0-5 已完成，真实 HTML/PPTX 自动化测试通过）
+> 状态：🔧 部分完成（Phase 0-6 已完成，真实 HTML/模板/PPTX 自动化测试通过）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -359,7 +359,7 @@ npm --prefix src/tools/ppt/renderer-node run build
 
 ### Phase 6：模板跟随增强
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 目标：
 
@@ -396,6 +396,14 @@ npm --prefix src/tools/ppt/renderer-node run build
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests/unit/tools/test_ppt_template.py -q
 ```
+
+完成内容：
+
+- 已实现模板尺寸、master/layout、placeholder、主题字体/颜色和原始页面摘要审计。
+- 已实现 `template-audit.json`、`template-frame-map.json`、`deviation-log.json` 临时产物及生成前门禁。
+- 已实现 layout/placeholder 优先生成、显式源页面克隆、缺失占位符声明新增和安全降级 warning。
+- 模板模式仅复用源模板 master/layout，不调用内置 theme；路径与错误信息不对外泄漏。
+- 已通过真实 PPTX 审计、frame map、品牌对象保留、偏差记录和重新打开测试。
 
 ### Phase 7：PPTX QA 与质量报告
 
