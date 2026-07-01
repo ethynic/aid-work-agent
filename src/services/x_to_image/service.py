@@ -28,10 +28,13 @@ class XToImageService:
         self._register_builtin()
 
     def _register_builtin(self):
-        """注册内置渲染器。"""
-        # Phase 2: 注册 TextRenderer / MarkdownRenderer / HtmlRenderer
-        # （renderers 尚未实现，此处暂留空，避免 import 不存在的模块导致 import 崩溃）
-        pass
+        """注册内置渲染器（局部导入，避免 import 时序/循环依赖）。"""
+        from .renderers.text_renderer import TextRenderer
+        from .renderers.markdown_renderer import MarkdownRenderer
+        from .renderers.html_renderer import HtmlRenderer
+        self.register_input_type(InputType.TEXT, TextRenderer())
+        self.register_input_type(InputType.MARKDOWN, MarkdownRenderer())
+        self.register_input_type(InputType.HTML, HtmlRenderer())
 
     def register_input_type(self, content_type: InputType, renderer: ImageRendererBase):
         """注册输入类型渲染器（扩展点）。"""

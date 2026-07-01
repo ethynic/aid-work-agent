@@ -33,6 +33,7 @@ pdfplumber>=0.10.0  # PDF table extraction
 
 # PDF Generation
 markdown>=3.5.0  # Markdown to HTML conversion
+pygments>=2.16.0  # Syntax highlighting for markdown codehilite (x-to-image markdown renderer)
 fpdf2>=2.8.0  # Pure Python PDF generation
 
 # LLM Providers
