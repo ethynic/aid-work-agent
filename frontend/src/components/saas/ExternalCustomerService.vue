@@ -8,7 +8,7 @@
       @logout="handleLogout"
     />
 
-    <div class="flex-1 overflow-hidden flex">
+    <div class="flex-1 overflow-hidden flex relative">
       <!-- 左侧：客户列表 -->
       <div class="w-96 border-r border-default bg-surface flex flex-col">
         <!-- 搜索栏 -->
@@ -221,6 +221,19 @@
           />
         </div>
       </div>
+
+      <!-- 附件预览面板：点击 DownloadFileCard 中的 PDF/HTML/图片/Markdown 会触发 -->
+      <Transition name="slide">
+        <div
+          v-if="isPreviewOpen"
+          class="absolute inset-y-0 right-0 z-50 w-full md:static md:w-auto md:z-auto md:flex-shrink-0"
+        >
+          <AttachmentPreviewPanel
+            :attachment="previewAttachment"
+            @close="closePreview"
+          />
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -233,6 +246,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
+import AttachmentPreviewPanel from '@/components/AttachmentPreviewPanel.vue'
 import { listExternalUsers, getUserSessions, getSessionMessages } from '@/api/externalCustomers'
 import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -240,10 +254,12 @@ import { useAmrPlayer } from '@/composables/useAmrPlayer'
 import { getUserSourceInfo } from '@/api/enums'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
+import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
 const toast = useToast()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init, isInitialized } = useTenantAuth()
 const amrPlayer = useAmrPlayer()
+const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
 const messageContainerRef = ref<HTMLElement | null>(null)
 
@@ -556,3 +572,15 @@ onMounted(async () => {
   await loadUsers()
 })
 </script>
+
+<style scoped>
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.3s ease;
+}
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+</style>
