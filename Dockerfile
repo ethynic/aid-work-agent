@@ -105,6 +105,7 @@ RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-fir
     lsof \
     tree \
     fonts-noto-cjk \
+    libreoffice-writer \
     pandoc \
     libglib2.0-0 \
     libnss3 \
@@ -127,6 +128,9 @@ RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-fir
     # gosu 用于 entrypoint 中以非 root 用户身份启动 gunicorn（保持 PID 1 信号处理）
     gosu \
     && rm -rf /var/lib/apt/lists/*
+
+# 构建时校验文档转换工具，避免依赖缺失延迟到运行时才暴露
+RUN soffice --headless --version && pandoc --version
 
 # 创建非 root 用户及 home 目录（Uvicorn control server 需要）
 # 注意：uid=1000 与宿主机 SMB 挂载的 ubuntu 用户 uid 保持一致

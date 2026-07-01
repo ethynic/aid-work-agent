@@ -24,7 +24,7 @@
 | PDF 转 Markdown | `pdf_to_md` | `PyMuPDF4LLM`，文本过少时降级 OCR |
 | Markdown 转 PDF | `md_to_pdf` | `markdown` 转 HTML，再用 `fpdf2` 生成 |
 | HTML 转 PDF | `html_to_pdf` | 简化 HTML 解析 + `fpdf2` 生成 |
-| Word 转 PDF | `docx_to_pdf` | 优先 LibreOffice，回退 Pandoc |
+| Word 转 PDF | `docx_to_pdf` | LibreOffice |
 | PDF 合并 | `merge` | `PyMuPDF.insert_pdf()` |
 | PDF 拆分 | `split` | `PyMuPDF.insert_pdf()` 按范围复制页面 |
 | 页面提取 | `extract_pages` | `PyMuPDF.insert_pdf()` 指定页面复制 |
@@ -65,7 +65,7 @@
 | 版式风险 | `pdf_writer._render_html_content` | 复杂标签、嵌套列表、代码块、图片等只能部分兜底 | P0 在 validator 中暴露 warnings；P2 再升级生成器 |
 | 文件名风险 | `PdfFileHandler.save_temp()` | `output_name` 未集中做文件名清洗和冲突处理策略说明 | P0 加安全文件名规范，避免路径穿越和覆盖歧义 |
 | 交付约束 | `pdf_process` 工具描述 | 生成文件后必须由 Agent 再调 `cp`，这是前端展示下载卡片的固定链路 | 不改为工具内自动登记；只强化提示词、返回字段和测试约束 |
-| 测试漂移 | `tests/unit/tools/test_pdf_tool.py` | 部分测试仍 mock `_find_pandoc/_html_to_pdf_via_pandoc/_html_to_pdf_via_weasyprint` 等旧实现符号 | P0 重写测试以匹配当前 fpdf2/LibreOffice/Pandoc 回退实现 |
+| 测试漂移 | `tests/unit/tools/test_pdf_tool.py` | 部分测试仍 mock `_find_pandoc/_html_to_pdf_via_pandoc/_html_to_pdf_via_weasyprint` 等旧实现符号 | P0 重写测试以匹配当前 fpdf2/LibreOffice 实现 |
 
 ### 2.5 文档一致性问题
 

@@ -870,6 +870,40 @@ class TestPdfWriter:
         assert result["success"] is False
         assert "超时" in result["error"]
 
+    def test_docx_to_pdf_libreoffice_uses_isolated_profile(self):
+        """LibreOffice 并发转换使用独立用户配置目录"""
+        from src.tools.pdf.pdf_writer import _docx_to_pdf_via_libreoffice
+
+        mock_shutil = MagicMock()
+        mock_shutil.which.return_value = "/usr/bin/soffice"
+
+        with patch.dict("sys.modules", {"shutil": mock_shutil}), \
+             patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="failed")) as mock_run:
+            _docx_to_pdf_via_libreoffice("/fake/test.docx")
+
+        cmd = mock_run.call_args.args[0]
+        assert any(arg.startswith("-env:UserInstallation=file:") for arg in cmd)
+        assert "--nolockcheck" in cmd
+
+    def test_docx_to_pdf_libreoffice_failed_returns_details(self):
+        """LibreOffice 转换失败时保留诊断信息"""
+        from src.tools.pdf.pdf_writer import docx_to_pdf
+
+        with patch("src.tools.pdf.pdf_writer.PdfFileHandler.resolve_path", return_value="/fake/test.docx"), \
+             patch("src.tools.pdf.pdf_writer.Path.exists", return_value=True), \
+             patch(
+                 "src.tools.pdf.pdf_writer._docx_to_pdf_via_libreoffice",
+                 return_value={
+                     "success": False,
+                     "error": "LibreOffice 转换失败",
+                     "debug": "source file could not be loaded",
+                 },
+             ):
+            result = docx_to_pdf("/fake/test.docx")
+
+        assert result["success"] is False
+        assert "source file could not be loaded" in result["debug"]
+
 
 # =============================================================================
 # PdfMerger 测试

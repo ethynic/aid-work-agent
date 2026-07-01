@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.tools.pdf.pdf_lib import PdfFileHandler
+from src.utils import sanitize_error_info
 
 # 蓝色主题色值
 _BLUE_PRIMARY = (41, 98, 168)       # #2962A8 主蓝色
@@ -758,25 +759,12 @@ def _html_to_pdf_via_fpdf2(html_text: str, output_name: Optional[str] = None,
 
 
 def docx_to_pdf(file_path: str, output_name: Optional[str] = None) -> Dict[str, Any]:
-    """Word → PDF。
-
-    优先使用 LibreOffice（效果最佳），回退到 Pandoc。
-    """
+    """使用 LibreOffice 将 Word 转为 PDF。"""
     file_path = PdfFileHandler.resolve_path(file_path)
     if not Path(file_path).exists():
         return {"success": False, "error": f"文件不存在: {file_path}"}
 
-    # 尝试 LibreOffice 路径
-    result = _docx_to_pdf_via_libreoffice(file_path, output_name)
-    if result.get("success"):
-        return result
-
-    # 回退到 Pandoc 路径
-    result = _docx_to_pdf_via_pandoc(file_path, output_name)
-    if result.get("success"):
-        return result
-
-    return {"success": False, "error": "Word转PDF失败：LibreOffice 和 Pandoc 均不可用或转换失败"}
+    return _docx_to_pdf_via_libreoffice(file_path, output_name)
 
 
 def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = None) -> Dict[str, Any]:
@@ -790,8 +778,12 @@ def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = No
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
+            profile_uri = (Path(tmpdir) / "libreoffice-profile").as_uri()
             cmd = [
-                soffice, "--headless", "--convert-to", "pdf",
+                soffice,
+                f"-env:UserInstallation={profile_uri}",
+                "--headless", "--norestore", "--nodefault", "--nolockcheck",
+                "--convert-to", "pdf",
                 "--outdir", tmpdir, file_path,
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -800,7 +792,12 @@ def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = No
             output_path = os.path.join(tmpdir, pdf_name)
 
             if not Path(output_path).exists():
-                return {"success": False, "error": "LibreOffice 转换失败", "debug": result.stderr[:500]}
+                debug = (result.stderr or result.stdout or f"进程退出码: {result.returncode}")[:500]
+                return {
+                    "success": False,
+                    "error": "LibreOffice 转换失败",
+                    "debug": sanitize_error_info(debug),
+                }
 
             save_result = PdfFileHandler.save_temp(
                 source_path=output_path,
@@ -813,42 +810,8 @@ def _docx_to_pdf_via_libreoffice(file_path: str, output_name: Optional[str] = No
         return {"success": False, "error": "LibreOffice 转换超时"}
     except Exception as e:
         logger.error(f"[PdfWriter] LibreOffice 转换失败: {e}", exc_info=True)
-        return {"success": False, "error": f"LibreOffice 转换失败: {e}"}
-
-
-def _docx_to_pdf_via_pandoc(file_path: str, output_name: Optional[str] = None) -> Dict[str, Any]:
-    """通过 Pandoc 将 DOCX 转为 PDF（docx_to_pdf 的回退路径）。"""
-    import shutil
-    import subprocess
-
-    pandoc = shutil.which("pandoc")
-    if not pandoc:
-        return {"success": False, "error": "Pandoc 未安装"}
-
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = os.path.join(tmpdir, "output.pdf")
-
-            cmd = [pandoc, file_path, "-o", output_path]
-
-            try:
-                import weasyprint  # noqa: F401
-                cmd.append("--pdf-engine=weasyprint")
-            except ImportError:
-                pass
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-
-            if not Path(output_path).exists():
-                return {"success": False, "error": "Pandoc 转换失败", "debug": result.stderr[:500]}
-
-            save_result = PdfFileHandler.save_temp(
-                source_path=output_path,
-                file_name=output_name or "document.pdf",
-            )
-            save_result["success"] = True
-            return save_result
-
-    except Exception as e:
-        logger.error(f"[PdfWriter] Pandoc DOCX→PDF 失败: {e}", exc_info=True)
-        return {"success": False, "error": f"Pandoc 转换失败: {e}"}
+        return {
+            "success": False,
+            "error": "LibreOffice 转换失败",
+            "debug": sanitize_error_info(str(e)),
+        }

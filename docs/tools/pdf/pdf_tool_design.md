@@ -1,8 +1,8 @@
 # PDF 工具设计文档
 
-> 版本: v1.2 | 创建日期: 2026-05-09 | 最近更新: 2026-06-30 | 状态: 第一阶段已完成，质量验证增强开发中
+> 版本: v1.2 | 创建日期: 2026-05-09 | 最近更新: 2026-07-01 | 状态: 第一阶段已完成，质量验证增强开发中
 
-> **实现校准（2026-06-30）**：本文档早期 v1.1 方案曾以 Pandoc + WeasyPrint 作为 Markdown/HTML 转 PDF 主路径。当前代码已调整为 `markdown` 解析 + `fpdf2` 纯 Python 生成；Pandoc 仅作为 `docx_to_pdf` 的回退路径之一。PDF 质量验证增强、实现质量修复和差距分析见 [PDF 工具能力差距分析与增强设计方案](pdf_tool_gap_analysis_design.md)，开发计划见 [PDF 工具质量验证增强开发计划](pdf_tool_quality_validation_dev_plan.md)。
+> **实现校准（2026-07-01）**：本文档早期 v1.1 方案曾以 Pandoc + WeasyPrint 作为 Markdown/HTML 转 PDF 主路径。当前代码已调整为 `markdown` 解析 + `fpdf2` 纯 Python 生成；`docx_to_pdf` 统一使用 LibreOffice。PDF 质量验证增强、实现质量修复和差距分析见 [PDF 工具能力差距分析与增强设计方案](pdf_tool_gap_analysis_design.md)，开发计划见 [PDF 工具质量验证增强开发计划](pdf_tool_quality_validation_dev_plan.md)。
 
 ## 1. 概述
 
@@ -19,7 +19,7 @@ PDF 工具是一个综合性的 PDF 处理工具包，遵循 Word 工具的架�
 | `pypdf` | >=4.0.0 | PDF 合并/拆分/旋转/元数据写入（补充操作） |
 | `markdown` | >=3.5.0 | Markdown → HTML 解析（缺失时有轻量 fallback） |
 | `fpdf2` | >=2.8.0 | Markdown/HTML → PDF 纯 Python 生成 |
-| `pandoc` | 系统级安装，可选 | DOCX → PDF 回退路径 |
+| `pandoc` | 系统级安装 | Word 工具的 Markdown → DOCX；PDF 工具不使用 |
 | `PaddleOCR` | 已有工具 | 扫描件 PDF 的 OCR 识别 |
 
 ### 需新增依赖
@@ -27,7 +27,7 @@ PDF 工具是一个综合性的 PDF 处理工具包，遵循 Word 工具的架�
 | 库 | 用途 | 安装命令 |
 |---|---|---|
 | `PyMuPDF4LLM` | PDF → Markdown 结构化转换（基于已有 PyMuPDF） | `pip install PyMuPDF4LLM` |
-| `weasyprint` | 可选，仅用于 Pandoc DOCX 回退路径的 PDF 引擎增强 | `pip install weasyprint` |
+| `weasyprint` | 可选，用于未来 HTML/CSS 高保真 PDF 方案 | `pip install weasyprint` |
 
 > **当前实现说明**：`md_to_pdf` / `html_to_pdf` 不依赖 Pandoc 或 WeasyPrint；复杂 HTML/CSS 高保真转换不在第一阶段承诺范围内。
 
@@ -341,18 +341,15 @@ def html_to_pdf(html_text: str, output_name: str = None) -> Dict[str, Any]:
 
 #### `docx_to_pdf(file_path, output_name=None) -> Dict`
 
-路径：优先 LibreOffice，回退 Pandoc。
+路径：仅使用 LibreOffice。
 
 ```python
 def docx_to_pdf(file_path: str, output_name: str = None) -> Dict[str, Any]:
     """Word → PDF"""
-    result = _docx_to_pdf_via_libreoffice(file_path, output_name)
-    if result.get("success"):
-        return result
-    return _docx_to_pdf_via_pandoc(file_path, output_name)
+    return _docx_to_pdf_via_libreoffice(file_path, output_name)
 ```
 
-> **注意**：LibreOffice 的 Word 转 PDF 效果通常优于 Pandoc。Pandoc 仅作为回退路径。
+> **注意**：DOCX 转 PDF 不使用 Pandoc，避免额外 PDF 引擎依赖和版式差异。
 
 ### 5.6 pdf_merger.py — 合并/拆分
 
@@ -633,7 +630,7 @@ RUN pip install PyMuPDF4LLM
 | P1 | `ocr` — OCR 集成 | PaddleOCR（已有） | 0.5天 | ✅ 已完成 |
 | P1 | `read_tables` — 表格提取 | pdfplumber（已有） | 0.5天 | ✅ 已完成 |
 | P2 | `html_to_pdf` — HTML 转 PDF | 简化 HTML + fpdf2 | 0.5天 | ✅ 已完成 |
-| P2 | `docx_to_pdf` — Word 转 PDF | LibreOffice 优先，Pandoc 回退 | 0.5天 | ✅ 已完成 |
+| P2 | `docx_to_pdf` — Word 转 PDF | LibreOffice | 0.5天 | ✅ 已完成 |
 | P2 | `merge` / `split` / `extract_pages` | PyMuPDF（已有） | 1天 | ✅ 已完成 |
 | P3 | 内置 CSS 样式调优 | 无 | 0.5天 | ✅ 已完成 |
 
@@ -649,7 +646,7 @@ RUN pip install PyMuPDF4LLM
 
 3. **大文件处理**：PDF 转换可能耗时较长，需要设置合理的超时时间，并在 SSE 流中推送进度。
 
-4. **Pandoc 使用边界**：当前仅 `docx_to_pdf` 回退路径使用 Pandoc，不再作为 Markdown/HTML 转 PDF 主路径。
+4. **Pandoc 使用边界**：PDF 工具不使用 Pandoc；Pandoc 仅供 Word 工具的 Markdown → DOCX 功能使用。
 
 5. **OCR 工具的函数调用**：PDF 工具直接调用 `paddleocr_doc_parsing()` 函数（同步函数），在 async handler 中需使用 `asyncio.to_thread()` 包装。
 

@@ -154,7 +154,7 @@ rg -n "_find_pandoc|_html_to_pdf_via_pandoc|_html_to_pdf_via_weasyprint|_get_def
 1. 重写漂移测试：
    - 删除对不存在私有函数的 mock。
    - `md_to_pdf/html_to_pdf` 按 fpdf2 当前行为测试。
-   - `docx_to_pdf` 分别测试 LibreOffice 成功、Pandoc 回退、全部失败。
+   - `docx_to_pdf` 分别测试 LibreOffice 成功、依赖缺失和转换失败。
 
 2. 新增测试：
    - capabilities 探测。
@@ -202,7 +202,7 @@ pytest tests/unit/tools/test_pdf_tool.py tests/unit/tools/test_pdf_validation.py
 - 上传 PDF 后读取内容。
 - PDF 转 Markdown，文字型和扫描件 OCR 降级。
 - Markdown 转 PDF，并返回可下载文件。
-- Word 转 PDF，LibreOffice/Pandoc 均缺失时错误明确。
+- Word 转 PDF，LibreOffice 缺失或转换失败时错误明确。
 - 合并、拆分、提取页面。
 - 文件名包含中文、空格、路径分隔符时的保存行为。
 
