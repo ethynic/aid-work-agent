@@ -93,12 +93,13 @@
       </div>
 
       <!-- PDF Preview -->
-      <iframe
+      <PdfCanvasPreview
         v-if="previewType === 'pdf' && attachment?.file_id"
-        :src="getFileUrl(attachment.file_id)"
-        class="w-full h-full border-0"
-        @load="loading = false"
-      ></iframe>
+        :file-url="getFileUrl(attachment.file_id)"
+        :file-name="attachment.name"
+        @loaded="loading = false"
+        @error="handlePdfPreviewError"
+      />
 
       <!-- HTML Preview -->
       <iframe
@@ -153,6 +154,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { AttachmentInfo } from '@/types'
 import { getFileUrl, getFileDownloadUrl } from '@/api/agent'
 import { renderMarkdown } from '@/utils/markdown'
+import PdfCanvasPreview from './PdfCanvasPreview.vue'
 
 interface Props {
   attachment: AttachmentInfo | null
@@ -315,6 +317,11 @@ async function loadDocx() {
 function handleImageError() {
   loading.value = false
   error.value = '图片加载失败，文件可能已过期'
+}
+
+function handlePdfPreviewError() {
+  loading.value = false
+  error.value = 'PDF预览加载失败，请下载文件查看'
 }
 
 // 生成类 HTML 可能包含面向打印的 100vh/overflow:hidden 样式。
