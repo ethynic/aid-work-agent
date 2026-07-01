@@ -99,6 +99,7 @@ async function loadPdf() {
       canvas.style.aspectRatio = `${viewport.width} / ${viewport.height}`
 
       const renderTask = page.render({
+        canvas,
         canvasContext: context,
         viewport,
         transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
