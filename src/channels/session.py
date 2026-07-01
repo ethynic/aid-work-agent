@@ -624,6 +624,7 @@ class ChannelSessionManager:
         record_service: Optional[Any] = None,
         tool_messages_collected: Optional[List[Dict[str, Any]]] = None,
         assistant_metadata: Optional[Dict[str, Any]] = None,
+        agent_extra_system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         统一渠道消息处理路径。覆盖 P0-1（事务化批量写入）+ P0-2（user 写入推迟）+ 异常兜底。
@@ -659,6 +660,9 @@ class ChannelSessionManager:
             assistant_metadata: 最终 assistant 消息的 metadata 覆盖。
                                 若为 None，则当 downloadable_files 非空时自动构造
                                 {"downloadableFiles": downloadable_files}，否则为 None。
+            agent_extra_system_prompt: 渠道级额外提示词（如 wecom_kf 的渠道能力约束），
+                                透传给 agent.process_message_sync → _build_system_prompt。
+                                None 时行为不变（web/其他渠道默认）。
 
         Returns:
             {
@@ -719,6 +723,8 @@ class ChannelSessionManager:
                 "progress_callback": collect_files_callback,
                 "cancel_check": cancel_check,
             }
+            if agent_extra_system_prompt is not None:
+                kwargs["extra_system_prompt"] = agent_extra_system_prompt
             if agent_user is not None:
                 kwargs["user"] = agent_user
             if agent_attachments is not None:

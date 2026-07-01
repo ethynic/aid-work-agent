@@ -739,15 +739,24 @@ class Agent:
 
         return self.prompt_manager.render(template_name, variables)
     
-    def _build_system_prompt(self, user: Optional[User] = None) -> str:
+    def _build_system_prompt(
+        self,
+        user: Optional[User] = None,
+        extra_system_prompt: Optional[str] = None,
+    ) -> str:
         """
         Build system prompt for the agent
 
         MASTER：包含委派能力
         SUBAGENT / STANDALONE：不包含委派能力，使用子智能体配置的约束 + 租户定制 extra.md
+
+        Args:
+            user: 用户信息
+            extra_system_prompt: 渠道级额外提示词（如 wecom_kf 的渠道能力约束），
+                追加到基础 system prompt 末尾。仅主流程调用方传入，子智能体不传。
         """
         if self.mode == AgentMode.MASTER:
-            return self._build_base_system_prompt(include_delegation=True, user=user)
+            base_prompt = self._build_base_system_prompt(include_delegation=True, user=user)
         else:
             subagent_constraint = ""
             if self.subagent_config:
@@ -775,11 +784,16 @@ class Agent:
             if extra_content:
                 subagent_constraint = subagent_constraint + "\n\n## 租户定制需求\n\n" + extra_content
 
-            return self._build_base_system_prompt(
+            base_prompt = self._build_base_system_prompt(
                 include_delegation=False,
                 subagent_constraint=subagent_constraint,
                 user=user
             )
+
+        # 追加渠道级额外提示词（如 wecom_kf 的渠道能力约束）
+        if extra_system_prompt:
+            base_prompt = base_prompt + "\n" + extra_system_prompt
+        return base_prompt
 
     def _resolve_db_subagent_prompt(self) -> str:
         """DB 子智能体的 system_prompt 实时渲染：模板 + sections 变量"""
@@ -1751,6 +1765,7 @@ class Agent:
         user: Optional[User] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        extra_system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts (trace-wrapped).
@@ -1794,6 +1809,7 @@ class Agent:
                 user=user,
                 attachments=attachments,
                 cancel_check=cancel_check,
+                extra_system_prompt=extra_system_prompt,
             ):
                 if trace_collector:
                     try:
@@ -1822,6 +1838,7 @@ class Agent:
         user: Optional[User] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        extra_system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts.
@@ -2171,7 +2188,7 @@ class Agent:
         await self._handle_remember_intent(user_input, user)
 
         messages = self._build_messages(session_id)
-        system_prompt = self._build_system_prompt(user)
+        system_prompt = self._build_system_prompt(user, extra_system_prompt=extra_system_prompt)
         
         if auto_loaded_skill:
             skill_content = self.skill_registry.get_content(auto_loaded_skill)
@@ -2918,6 +2935,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         record_service=None,
         progress_callback=None,
         cancel_check=None,
+        extra_system_prompt: Optional[str] = None,
     ) -> str:
         """Process message and return complete response
 
@@ -2930,6 +2948,8 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 (tool_start, tool_result, etc.)
             cancel_check: Optional callable returning True to cancel processing.
                 Used by channel message serialization to cancel stale requests.
+            extra_system_prompt: 渠道级额外提示词（如 wecom_kf 的渠道能力约束），
+                透传给 process_message → _build_system_prompt。
         """
         # Store explicit record_service so the inner process_message()
         # can access it without relying on thread-local storage
@@ -2938,7 +2958,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         try:
             response_parts = []
             async for event in self.process_message(
-                user_input, session_id, user, attachments, cancel_check=cancel_check
+                user_input, session_id, user, attachments,
+                cancel_check=cancel_check,
+                extra_system_prompt=extra_system_prompt,
             ):
                 if event.get("type") == "response":
                     response_parts.append(event.get("data", ""))

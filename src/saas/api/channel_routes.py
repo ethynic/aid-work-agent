@@ -1397,6 +1397,7 @@ async def _process_tenant_wecom_kf_messages(
         from src.saas.services.auto_register import ensure_user_registered
         from src.core.agent_router import agent_router
         from src.channels.wecom_kf.context import set_kf_context
+        from src.channels.wecom_kf.prompts import WECOM_KF_CHANNEL_PROMPT
         from src.models.message import UnifiedResponse
         from src.core.temp_logger import tlog
 
@@ -2003,6 +2004,7 @@ async def _process_tenant_wecom_kf_messages(
                         tool_messages_collected=tool_messages_collected,
                         assistant_metadata=assistant_metadata,
                         send_response=send_response,
+                        agent_extra_system_prompt=WECOM_KF_CHANNEL_PROMPT,
                     )
                 except Exception as e:
                     logger.error(f"[wecom_kf] Agent 处理异常: {e}", exc_info=True)
