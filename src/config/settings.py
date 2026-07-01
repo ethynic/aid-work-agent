@@ -167,14 +167,10 @@ class MidTermMemoryConfig(BaseModel):
     enabled: bool = True
     # 触发条件（双阈值，任一满足即触发）
     token_threshold_ratio: float = 0.7       # token 主阈值：占模型上下文上限的比例
-    message_count_threshold: int = 150       # 消息数兜底阈值（含工具消息）
+    message_count_threshold: int = 200       # 消息数兜底阈值（含工具消息）；缓存=0 时靠它兜底极端长会话
     # 分段保留
     header_keep: int = 3                     # 头部保留消息数
     tail_keep: int = 30                      # 尾部保留消息数（按工具链边界对齐）
-    # 异步任务（Phase 3+4 用，本阶段先留字段）
-    task_lock_ttl_sec: int = 300             # 压缩任务锁 TTL（兜底防泄漏）
-    max_consecutive_failures: int = 3        # 连续失败多少次后触发同步降级
-    fail_count_window_sec: int = 3600        # 失败计数窗口
     # 摘要 LLM
     summary_max_tokens: int = 1500
     summary_llm_retry: int = 2               # 摘要 LLM 调用重试次数

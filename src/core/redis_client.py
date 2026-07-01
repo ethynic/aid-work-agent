@@ -62,6 +62,21 @@ class _InMemoryFallback:
                 return 1
             return 0
 
+    def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        """Hash field 原子自增（v3.2.1 P1-4，CompressionMetrics 使用）。
+
+        内存降级路径：用锁保证线程安全，但跨 worker 不一致（无共享存储）。
+        """
+        with self._lock:
+            bucket = self._data.setdefault(key, {})
+            try:
+                current = int(bucket.get(field, 0))
+            except (TypeError, ValueError):
+                current = 0
+            new_val = current + int(amount)
+            bucket[field] = new_val
+            return new_val
+
     def sadd(self, key: str, member: str) -> int:
         with self._lock:
             if key not in self._data:
@@ -329,6 +344,22 @@ class RedisClient:
         except Exception as e:
             logger.warning(f"[Redis] hexists 失败 [{key}:{field}]: {e}")
             return False
+
+    def hincrby(self, key: str, field: str, amount: int = 1) -> Optional[int]:
+        """Hash field 原子自增（v3.2.1 P1-4，CompressionMetrics 使用）。
+
+        Redis 后端：底层 redis-py 的 HINCRBY 在 Redis 端原子执行，多 worker 完全一致。
+        内存降级：通过 _InMemoryFallback 内部锁保证单进程线程安全（跨 worker 不一致）。
+
+        Returns:
+            自增后的新值；Redis 异常时返回 None（调用方自行降级）。
+        """
+        backend = self._get_backend()
+        try:
+            return backend.hincrby(key, field, amount)
+        except Exception as e:
+            logger.warning(f"[Redis] hincrby 失败 [{key}:{field}]: {e}")
+            return None
 
     # ============== Set 操作 ==============
 

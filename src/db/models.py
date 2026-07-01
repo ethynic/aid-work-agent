@@ -667,6 +667,41 @@ class SessionDB:
             return cursor.rowcount > 0
 
     @staticmethod
+    def update_context_token_count(session_id: str, token_count: int) -> bool:
+        """更新 session 的上下文 token 缓存（v3.1）。
+
+        Agent 主循环每次 LLM 调用后写入最后一次 prompt_tokens + completion_tokens，
+        供 ContextCompressionService._should_compress 优先读取，避免全量 count_tokens。
+
+        Args:
+            session_id: 会话 ID
+            token_count: 最后一次 LLM 调用的 prompt+completion token 数
+
+        Returns:
+            是否更新成功（session 不存在时返回 False）
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    f"UPDATE chat_sessions SET context_token_count = {placeholder} "
+                    f"WHERE session_id = {placeholder}",
+                    (int(token_count), session_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.exception(
+                    f"Failed to update context_token_count: session={session_id}, err={e}"
+                )
+                try:
+                    conn.rollback()
+                except Exception as rollback_err:
+                    logger.error(f"rollback failed: {rollback_err}")
+                return False
+
+    @staticmethod
     def delete(session_id: str) -> bool:
         """删除会话及其消息（保留 chat_records 用于计费审计）"""
         placeholder = "%s"
@@ -808,6 +843,7 @@ class MessageDB:
         session_id: str,
         limit: int = 100,
         roles: Optional[List[str]] = None,
+        include_compacted: bool = False,
     ) -> List[Dict[str, Any]]:
         """获取会话的所有消息（优先从 Redis 缓存读取，TTL 60秒）
 
@@ -815,23 +851,31 @@ class MessageDB:
             session_id: 会话 ID
             limit: 最大返回数量
             roles: 可选，只返回指定角色的消息（如 ["user", "assistant"]）
+            include_compacted: 是否包含 compacted=true 的消息（v3.1）。
+                默认 False：前端展示和 Agent 重建 memory 都自动跳过被压缩的历史消息；
+                运维/审计场景可传 True 取回全部消息。
         """
-        # 生成缓存 key（角色不同会影响结果）
+        # 生成缓存 key（角色 / include_compacted 不同会影响结果）
         roles_str = "_".join(sorted(roles)) if roles else "all"
-        cached = get_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str)
+        compacted_flag = "1" if include_compacted else "0"
+        cached = get_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str, compacted_flag)
         if cached is not None:
             return cached
 
         placeholder = "%s"
+        # v3.1: 默认过滤掉 compacted=true 的消息（前端展示与 Agent memory 都跳过）
+        compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if roles:
                 role_placeholders = ",".join([placeholder] * len(roles))
                 # 取最近 N 条（按 id 倒序取 N 条）再正序返回，避免长会话丢掉最近一轮对话。
+                # v3.1: compacted_clause 用于过滤已压缩消息（默认排除）
                 cursor.execute(f"""
                     SELECT * FROM (
                         SELECT * FROM chat_messages
                         WHERE session_id = {placeholder} AND role IN ({role_placeholders})
+                        {compacted_clause}
                         ORDER BY id DESC
                         LIMIT {placeholder}
                     ) AS recent
@@ -842,6 +886,7 @@ class MessageDB:
                     SELECT * FROM (
                         SELECT * FROM chat_messages
                         WHERE session_id = {placeholder}
+                        {compacted_clause}
                         ORDER BY id DESC
                         LIMIT {placeholder}
                     ) AS recent
@@ -861,9 +906,46 @@ class MessageDB:
                 messages.append(result)
 
             # 写入缓存（TTL 60 秒，消息变化频率较高）
-            set_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str,
+            set_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str, compacted_flag,
                        value=messages, ttl=60)
             return messages
+
+    @staticmethod
+    def count_messages_by_session(session_id: str, include_compacted: bool = False) -> int:
+        """统计会话消息条数（v3.2 新增，用于压缩阈值快路径检查）。
+
+        只 SELECT COUNT(*)，不拉数据，走索引，开销 O(log n)。
+
+        Args:
+            session_id: 会话 ID
+            include_compacted: 是否包含 compacted=true 的消息。
+                默认 False：与 list_by_session 默认行为一致（只数未压缩的消息）。
+
+        Returns:
+            消息条数；查询异常时返回 0（容错，让阈值判断降级到 token 缓存）
+        """
+        placeholder = "%s"
+        compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT COUNT(*) AS cnt FROM chat_messages "
+                    f"WHERE session_id = {placeholder}{compacted_clause}",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return 0
+                try:
+                    return int(row.get("cnt") or 0)
+                except (TypeError, ValueError):
+                    return 0
+        except Exception as e:
+            logger.warning(
+                f"MessageDB.count_messages_by_session failed: sid={session_id}, err={e}"
+            )
+            return 0
 
     @staticmethod
     def delete(message_id: str) -> bool:

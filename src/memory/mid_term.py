@@ -4,17 +4,20 @@
 接近模型 token 上限时，把 HEADER（前几条）+ TAIL（最近 N 条）之间的中间段
 调用 LLM 压缩成结构化摘要，原消息物理保留但打上 `compacted=true` 标记。
 
-本文件仅实现 Phase 1+2 同步路径：
-  - 触发判断（双阈值）
-  - 消息分段（HEADER/COMPRESS/TAIL，TAIL 对齐工具链边界）
-  - 工具结果预处理（简单截断策略）
-  - 摘要 LLM 调用（独立超时 + 重试，支持切换到 deepseek 等便宜模型）
-  - 同步降级路径（_fallback_truncate）
-  - 原子事务持久化（_persist_atomically）
+v3.2 架构原则（执行顺序优化）：
+  - 拆分为 `check_threshold`（O(1) 阈值检查）+ `compress_now`（执行压缩）两个职责清晰的方法
+  - 调用方先 check_threshold（不拉 messages），未达阈值时跳过 compress_now 完整 IO
+  - 保留 `compress_session` 作为兼容入口，内部串联 check_threshold + compress_now
+  - check_threshold 用 _eval_threshold 纯函数做双阈值判断；
+    缓存=0 时不回退 count_tokens（让消息数阈值兜底）
 
-异步派发、Redis SETNX 锁、失败计数等 Phase 3+4 内容不在本文件中。
+v3.1 架构原则：
+  - 内部自动从 DB 解析 tenant_id/user_id/subagent_id/context_token_count
+  - 内部自动从 settings.llm 读取 model_limit
+  - 不依赖 Agent / Channel / 工具系统（避免循环依赖）
+  - 同步执行：调用方直接 await，等待压缩完成
 
-设计文档：docs/infrastructure/memory/context_compression_design.md (v2.0)
+设计文档：docs/infrastructure/memory/context_compression_design.md (v3.2)
 """
 
 import asyncio
@@ -24,11 +27,13 @@ import random
 import re
 import threading
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from src.config.settings import settings
+from src.core.cache_utils import CacheKeys, delete_cached_pattern
 from src.db.database import get_db_connection
 from src.db.models import ContextSummaryDB, generate_summary_id
 
@@ -106,6 +111,63 @@ def count_tokens(messages: List[Dict[str, Any]]) -> int:
 def count_text_tokens(text: str) -> int:
     """估算单段文本的 token 数（区分中英文）。"""
     return _count_text_tokens_impl(text)
+
+
+# ============== 数据类（v3.1 Phase 3）==============
+
+
+@dataclass
+class CompressionResult:
+    """compress_session 的返回值（v3.1 Phase 3）。
+
+    设计文档 §5.1 CompressionResult：summary_id、压缩消息数、token 前后值、
+    压缩比、降级标记、实际调用的 provider/model。
+    """
+
+    summary_id: str
+    compressed_message_count: int
+    original_token_count: int
+    compressed_token_count: int
+    compression_ratio: float
+    fallback_used: bool
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    # 触发压缩的原因（force / token_threshold(...) / message_threshold(...)）
+    # 由 check_threshold 返回的 reason 透传（force 时填 "force"）
+    trigger_reason: str = ""
+
+
+@dataclass
+class SessionMeta:
+    """从 DB 解析的 session 元数据（v3.1 Phase 3）。
+
+    `_resolve_session_meta` 返回此结构，供 `compress_session` 内部使用。
+    所有字段在 session 不存在时为空值（不抛异常，让上层判断）。
+    """
+
+    session_id: str
+    source_type: str
+    tenant_id: Optional[str] = None
+    user_id: Optional[str] = None
+    subagent_id: Optional[str] = None
+    context_token_count: int = 0
+
+
+# ============== 模型上下文上限映射（v3.1 Phase 3）==============
+
+# 现役主力模型的上下文上限（token 数）。_get_model_limit 会优先查这里，
+# 找不到时回退到 _DEFAULT_MODEL_LIMIT 并打 warning。
+# 只收录项目实际使用的 model_code（见 configs/config.yaml 的 llm 配置）。
+# 数据来源：各 provider 官方文档（截至 2026-06）。
+_MODEL_CONTEXT_LIMITS: Dict[str, int] = {
+    # DeepSeek（主 provider）。官方标称均为 1M，按 5 折取值（API 实际可用 ~128K-200K，
+    # 且长上下文性能在 150K 以下更稳定，保守打折避免阈值偏晚）
+    "deepseek-v4-pro": 512_000,
+    "deepseek-v4-flash": 512_000,
+}
+
+# 未知模型回退到的保守值（与现役主力模型对齐）
+_DEFAULT_MODEL_LIMIT = 512_000
 
 
 # ============== 摘要 LLM 直连（P0-3）==============
@@ -204,10 +266,25 @@ async def _call_summary_llm_direct(
 # ============== 服务 ==============
 
 class ContextCompressionService:
-    """会话内上下文压缩服务
+    """会话内上下文压缩服务（v3.1 同步模式，业务无关模块）。
 
-    Phase 1+2：提供同步入口 `compress_now`，串联触发判断、分段、摘要、持久化。
-    后续 Phase 3+4 会包装成异步任务（Redis 锁 + 后台派发），但底层调用仍走本类。
+    对外公开方法（v3.2.1 P1-6）：
+    - `compress_session(session_id, source_type, *, force=False)`：触发压缩
+    - `get_active_summary(session_id, source_type)`：读取当前 active 摘要文本
+    - `get_session_tenant_id(session_id, source_type)`：解析 session 归属租户
+      （供 API 层做租户隔离校验，避免直接调用内部 _resolve_session_meta）
+
+    其他内部方法（
+    `_eval_threshold` / `_split_messages` / `_call_summary_llm` /
+    `_persist_atomically` / `_fallback_truncate`）属于实现细节，不应被外部调用。
+
+    v3.2.1 关键设计：
+    - 同步 await：调用方等待压缩完成，本轮 LLM 调用直接享受新上下文
+    - 入参收敛：tenant_id/user_id/subagent_id 由 `_resolve_session_meta` 内部解析
+    - 模型上限自动读取：`_get_model_limit` 从 `settings.llm` 读 model_code
+    - token 缓存优先：`_eval_threshold` 优先读 session.context_token_count
+      字段（v3.1），为 0 时让消息数阈值兜底；消息数 ≥ 80 时再做精确 token 重算
+    - DB 调用全部走 `asyncio.to_thread`：避免阻塞 FastAPI 事件循环（v3.2.1 P0-2）
     """
 
     def __init__(
@@ -220,7 +297,7 @@ class ContextCompressionService:
 
         Args:
             settings_cfg: 中期记忆配置（settings.memory.mid_term），缺省自动取
-            redis_client: Redis 客户端（Phase 3+4 用，本阶段可缺省）
+            redis_client: Redis 客户端（保留参数，v3.1 未使用）
             llm_gateway: LLM 网关（用于摘要调用的 fallback），缺省时延迟到首次调用时获取
         """
         self._settings = settings_cfg or settings.memory.mid_term
@@ -234,6 +311,10 @@ class ContextCompressionService:
         # 实际调用的 provider/model（初始化时未定，首次调用后确定）
         self._actual_provider: Optional[str] = None
         self._actual_model: Optional[str] = None
+        # v3.1: 模型上下文上限覆盖点（仅测试用）。生产代码默认 None，每次解析
+        # settings.llm 拿最新 model_code（P1-2：避免 failover 后缓存陈旧）。
+        # 测试可通过直接赋值注入指定 limit，绕过 settings 解析。
+        self._model_limit_cache: Optional[int] = None
 
     def _get_llm_gateway(self):
         """延迟获取 LLM 网关单例，避免 import 时初始化"""
@@ -243,34 +324,200 @@ class ContextCompressionService:
         self._llm_gateway = _gw
         return self._llm_gateway
 
-    # ========== 触发判断 ==========
+    # ========== session 元数据 / 模型上限解析（v3.1 Phase 3）==========
 
-    def _should_compress(
+    async def _resolve_session_meta(
         self,
-        messages: List[Dict[str, Any]],
-        model_limit: int,
-    ) -> Tuple[bool, str]:
-        """双阈值判断：token 主阈值（70%）或消息数兜底阈值（150）任一满足即触发。
+        session_id: str,
+        source_type: str,
+    ) -> SessionMeta:
+        """从 DB 解析 session 元数据（v3.1 Phase 3；v3.2.1 真正非阻塞）。
+
+        - source_type='chat' → 查 chat_sessions 表（SessionDB.get_by_id）
+        - 其他 source_type（wecom_kf/dingtalk/feishu/wecom_personal_rpa）
+          → 查 channel_sessions 表（ChannelSessionManager.get_session_by_id）
+
+        v3.2.1（P0-2）：底层 DB 调用是同步阻塞的（psycopg2），用 asyncio.to_thread
+        转入线程池执行，避免阻塞 FastAPI 事件循环。FastAPI 单 worker 高并发下，
+        PG 单行查询的几 ms 不再阻塞其他协程。
 
         Args:
-            messages: 当前会话 messages 数组（含所有角色）
+            session_id: 会话 ID
+            source_type: 来源类型
+
+        Returns:
+            SessionMeta。session 不存在时所有可选字段为空，context_token_count=0，
+            不抛异常，让上层（compress_session）根据 session_id 是否为空字符串判断。
+        """
+        return await asyncio.to_thread(
+            self._resolve_session_meta_sync, session_id, source_type
+        )
+
+    def _resolve_session_meta_sync(
+        self,
+        session_id: str,
+        source_type: str,
+    ) -> SessionMeta:
+        """_resolve_session_meta 的同步实现（v3.2.1 P0-2 拆出）。
+
+        在 asyncio.to_thread 中执行；不要直接在 async 调用栈中调用本方法。
+        """
+        # 延迟 import 避免循环依赖
+        from src.db.models import SessionDB
+        from src.channels.session import channel_session_manager
+
+        try:
+            if source_type == "chat":
+                row = SessionDB.get_by_id(session_id)
+            else:
+                # 复用模块级单例，避免每次新建 ChannelSessionManager（P1-4）
+                row = channel_session_manager.get_session_by_id(session_id)
+        except Exception as e:
+            logger.warning(
+                f"ContextCompression _resolve_session_meta failed: "
+                f"sid={session_id}, source={source_type}, err={e}"
+            )
+            return SessionMeta(
+                session_id=session_id,
+                source_type=source_type,
+                tenant_id=None,
+                user_id=None,
+                subagent_id=None,
+                context_token_count=0,
+            )
+
+        if not row:
+            # session 不存在：返回空 meta（不抛异常，让上层判断）
+            return SessionMeta(
+                session_id=session_id,
+                source_type=source_type,
+                tenant_id=None,
+                user_id=None,
+                subagent_id=None,
+                context_token_count=0,
+            )
+
+        # channel_sessions 的 user_id 字段可能为空字符串
+        tenant_id = row.get("tenant_id") or None
+        user_id = row.get("user_id") or None
+        subagent_id = row.get("subagent_id") or None
+        # context_token_count 字段可能不存在（存量数据未升级）或为 None
+        try:
+            cached = row.get("context_token_count")
+            context_token_count = int(cached) if cached else 0
+        except (TypeError, ValueError):
+            context_token_count = 0
+
+        return SessionMeta(
+            session_id=session_id,
+            source_type=source_type,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            subagent_id=subagent_id,
+            context_token_count=context_token_count,
+        )
+
+    def _get_model_limit(self) -> int:
+        """从 settings.llm 读取当前主模型的上下文上限（v3.1 Phase 3）。
+
+        取值优先级：
+        0. 测试注入：若 self._model_limit_cache 非 None（测试通过赋值注入），直接返回
+        1. 主 provider 对应的 model（settings.llm.<provider>.model）
+        2. _MODEL_CONTEXT_LIMITS 映射表
+        3. _DEFAULT_MODEL_LIMIT（512K）+ logger.warning
+
+        生产路径不缓存（每次解析）：解析成本可忽略，避免 provider failover 后
+        缓存陈旧（P1-2）。
+
+        Returns:
+            模型上下文 token 上限
+        """
+        # 测试注入优先
+        if self._model_limit_cache is not None:
+            return self._model_limit_cache
+
+        # 取主 provider 配置的 model_code
+        provider = settings.llm.provider
+        provider_cfg = getattr(settings.llm, provider, None)
+        model_code = ""
+        if provider_cfg is not None:
+            model_code = (provider_cfg.model or "").strip()
+
+        limit = _MODEL_CONTEXT_LIMITS.get(model_code)
+        if limit is None:
+            limit = _DEFAULT_MODEL_LIMIT
+            logger.warning(
+                f"ContextCompression unknown model_code [{model_code}] "
+                f"(provider={provider}), fallback to default limit={limit}"
+            )
+        return limit
+
+    async def _load_messages(
+        self,
+        session_id: str,
+        source_type: str,
+        tenant_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """从 DB 加载 messages（v3.1 Phase 3）。
+
+        - source_type='chat' → MessageDB.list_by_session（默认过滤 compacted=true）
+        - 其他 source_type → ChannelSessionManager.get_messages（默认过滤 compacted=true）
+
+        返回的 messages 包含 id 字段（用于压缩时记录 compressed_message_ids）。
+        """
+        from src.db.models import MessageDB
+        from src.channels.session import channel_session_manager
+
+        try:
+            if source_type == "chat":
+                # limit 给个大值，避免默认 100 截断；实际由 _eval_threshold / 精确回退判断
+                return MessageDB.list_by_session(session_id, limit=10000)
+            # 复用模块级单例，避免每次新建 ChannelSessionManager（P1-4）
+            return channel_session_manager.get_messages(session_id, limit=10000)
+        except Exception as e:
+            logger.warning(
+                f"ContextCompression _load_messages failed: "
+                f"sid={session_id}, source={source_type}, err={e}"
+            )
+            return []
+
+    # ========== 触发判断 ==========
+
+    def _eval_threshold(
+        self,
+        cached_tokens: int,
+        msg_count: int,
+        model_limit: int,
+    ) -> Tuple[bool, str]:
+        """纯函数双阈值判断（v3.2 新增；v3.2.1 P1-2 起成为唯一阈值判断函数）。
+
+        - 不依赖 messages 数组，只用 cached_tokens（session 表缓存）和 msg_count（COUNT 查询）
+        - token 阈值优先：cached_tokens >= model_limit × 70% → 压缩
+        - 缓存 = 0（新 session 首轮 / Agent 异常未写入）时不做 token 判断，
+          等下一轮 LLM 写入缓存后再判；极端长会话由消息数阈值兜底
+        - 消息数阈值兜底：msg_count >= message_count_threshold（默认 200）→ 压缩
+        - 调用方应在 check_threshold 中先做 msg_count 查询（O(log n)），再调用本函数
+
+        Args:
+            cached_tokens: session.context_token_count 缓存值（>0 时用于 token 判断）
+            msg_count: chat_messages / channel_messages 表的 COUNT 查询结果
             model_limit: 当前模型的上下文上限（token 数）
 
         Returns:
-            (是否压缩, 触发原因字符串)
-            原因格式：'token_threshold(cur/threshold, pct%)' 或 'message_threshold(cur/threshold)'
+            (是否压缩, 触发原因字符串)；不压缩时 reason 为空字符串
         """
-        # 阈值 1（主阈值）：token 数达到模型上限的指定比例（默认 70%）
-        token_count = count_tokens(messages)
-        token_threshold = int(model_limit * self._settings.token_threshold_ratio)
-        if token_count >= token_threshold:
-            pct = token_count * 100 // model_limit if model_limit > 0 else 0
-            return True, f"token_threshold({token_count}/{token_threshold}, {pct}%)"
+        # token 阈值优先（用缓存值，不调 count_tokens）
+        # 缓存 = 0 时不做 token 判断，让消息数阈值兜底
+        if cached_tokens > 0:
+            token_threshold = int(model_limit * self._settings.token_threshold_ratio)
+            if cached_tokens >= token_threshold:
+                pct = cached_tokens * 100 // model_limit if model_limit > 0 else 0
+                return True, f"token_threshold({cached_tokens}/{token_threshold}, {pct}%, cached=True)"
 
-        # 阈值 2（兜底）：消息条数达到阈值（默认 150）
+        # 消息数阈值兜底
         msg_threshold = self._settings.message_count_threshold
-        if len(messages) >= msg_threshold:
-            return True, f"message_threshold({len(messages)}/{msg_threshold})"
+        if msg_count >= msg_threshold:
+            return True, f"message_threshold({msg_count}/{msg_threshold})"
 
         return False, ""
 
@@ -669,12 +916,21 @@ class ContextCompressionService:
     ) -> str:
         """原子事务持久化（缺一不可）。
 
-        三步一个事务：
-          ① INSERT chat_context_summaries（status='active'），summary_version 由
+        四步一个事务：
+          ① SELECT 旧 active summary（用于 ③ 步骤 superseded）
+          ② INSERT chat_context_summaries（status='active'），summary_version 由
              INSERT...SELECT COALESCE(MAX(version),0)+1 单 SQL 计算（P1-3，避免竞态）
-          ② UPDATE 旧 active summary → status='superseded'
-          ③ UPDATE chat_messages SET compacted=true, compacted_by=summary_id WHERE id IN (...)
+          ③ UPDATE 旧 active summary → status='superseded'
+          ④ UPDATE compacted=true（按 source_type 分流）：
+             - source_type='chat' → UPDATE chat_messages
+             - 其他 source_type（wecom_kf/dingtalk/feishu/wecom_personal_rpa）
+               → UPDATE channel_messages
         任一步失败 → 整个事务回滚，对外抛异常。
+
+        v3.2.1 P0 修复：第④步必须按 source_type 分流到对应消息表。之前硬编码
+        chat_messages，导致第三方渠道（channel_messages）的 compacted 标记永远
+        写不进去 → 下次请求 list_by_session 不过滤这些消息 → 又注入 active
+        summary → 形成无限重复压缩 + 上下文永不缩小 + summary 越来越多的 P0 bug。
 
         P0-1 配合：DB 层有 UNIQUE 部分索引 (session_id, source_type) WHERE status='active'，
         即使并发产生两条 active 也会被唯一约束拒绝，保证最终至多一条。
@@ -768,11 +1024,18 @@ class ContextCompressionService:
                         (old_id,),
                     )
 
-                # ④ UPDATE chat_messages.compacted = true
+                # ④ UPDATE compacted=true（按 source_type 分流到对应消息表）
+                # v3.2.1 P0 修复：第三方渠道消息在 channel_messages 表，不能硬编码 chat_messages，
+                # 否则 compacted 标记永远写不进去 → 无限重复压缩（详见 _persist_atomically docstring）。
+                # table_name 来自白名单 if/else，非用户输入，用 f-string 拼接是安全的（PG 也不支持表名参数化）。
                 if compressed_message_ids:
+                    if source_type == "chat":
+                        table_name = "chat_messages"
+                    else:
+                        table_name = "channel_messages"
                     cursor.execute(
                         f"""
-                        UPDATE chat_messages
+                        UPDATE {table_name}
                         SET compacted = TRUE,
                             compacted_by = {placeholder}
                         WHERE id = ANY({placeholder}::bigint[])
@@ -787,6 +1050,16 @@ class ContextCompressionService:
                         )
 
                 conn.commit()
+                # 压缩后立即失效该会话的消息列表缓存（list_by_session 缓存 60s）。
+                # 仅 chat_messages 走缓存（channel_messages 的 get_messages 不缓存），
+                # 但这里无条件清理一次也安全、开销极小，避免本轮 memory rebuild 读到压缩前的旧列表。
+                try:
+                    delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+                except Exception as cache_err:
+                    logger.warning(
+                        f"ContextCompression invalidate SESSION_MSGS cache failed: "
+                        f"sid={session_id}, err={cache_err}"
+                    )
                 logger.info(
                     f"ContextCompression persisted summary_id={summary_id}, "
                     f"compacted={compressed_count} msgs, "
@@ -804,86 +1077,144 @@ class ContextCompressionService:
                 )
                 raise
 
-    # ========== 同步入口 ==========
+    # ========== 对外入口（v3.2：拆分为 check_threshold + compress_now）==========
+
+    async def check_threshold(
+        self,
+        session_id: str,
+        source_type: str,
+    ) -> Tuple[bool, str, "SessionMeta"]:
+        """快速阈值检查（v3.2 新增）。
+
+        只做三件事：
+        1. 读 session 表（O(1) 单行查询，含 context_token_count 缓存字段）
+        2. 读消息条数 COUNT（走索引，不拉数据）
+        3. 双阈值判断（_eval_threshold）
+
+        **不**加载完整 messages 列表，避免完整 DB IO。
+
+        Args:
+            session_id: 会话 ID
+            source_type: 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu' / 'wecom_personal_rpa'
+
+        Returns:
+            (should_compress, reason, session_meta)
+            - should_compress=False 时是快路径，调用方跳过 compress_now
+            - reason 为空字符串表示未触发；否则是 'token_threshold(...)' 或 'message_threshold(...)'
+            - session_meta 是 _resolve_session_meta 的结果，传给 compress_now 复用避免重复查询
+
+        **边界权衡**：
+        - 缓存 context_token_count = 0（新 session 首轮 / 存量数据 / Agent 异常未写入）时，
+          **不**做 token 判断（不回退到 count_tokens 全量计算，因为新执行顺序下 memory
+          尚未重建，拉取 messages 等于完整 IO，违背 check_threshold 的快路径初衷）。
+          等下一轮 LLM 写入缓存后再判；极端长会话由消息数阈值（默认 200）兜底。
+        """
+        # 1) 读 session 元数据（含 context_token_count）—— v3.2.1 P0-2：已 to_thread
+        meta = await self._resolve_session_meta(session_id, source_type)
+
+        # 2) 消息数 COUNT 查询（走索引，不拉数据）
+        # v3.2.1（P0-2）：用 asyncio.to_thread 包裹，避免阻塞事件循环
+        try:
+            msg_count = await self._count_messages(session_id, source_type)
+        except Exception as e:
+            logger.warning(
+                f"ContextCompression check_threshold count_msgs failed: "
+                f"sid={session_id}, source={source_type}, err={e}（降级到 0，让 token 缓存兜底）"
+            )
+            msg_count = 0
+
+        # 3) 双阈值判断（token 优先 + 消息数兜底，缓存=0 时跳过 token 判断）
+        model_limit = self._get_model_limit()
+        should, reason = self._eval_threshold(
+            meta.context_token_count, msg_count, model_limit
+        )
+
+        return should, reason, meta
+
+    async def _count_messages(
+        self, session_id: str, source_type: str
+    ) -> int:
+        """COUNT 消息数（v3.2.1 P0-2：用 asyncio.to_thread 包裹同步 DB 调用）。
+
+        - source_type='chat' → MessageDB.count_messages_by_session
+        - 其他 source_type → ChannelSessionManager.count_messages_by_session
+
+        默认过滤 compacted=true（与 _load_messages 保持一致），让消息数兜底阈值
+        基于实际活跃消息数（与 v3.2 行为保持一致）。
+        """
+        if source_type == "chat":
+            from src.db.models import MessageDB
+            return await asyncio.to_thread(
+                MessageDB.count_messages_by_session, session_id
+            )
+        from src.channels.session import channel_session_manager
+        return await asyncio.to_thread(
+            channel_session_manager.count_messages_by_session, session_id
+        )
 
     async def compress_now(
         self,
         session_id: str,
         source_type: str,
-        tenant_id: Optional[str],
-        user_id: Optional[str],
-        subagent_id: Optional[str],
-        model_limit: int,
-        messages: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """同步执行上下文压缩（Phase 1+2 提供给 Phase 6 集成用的入口，也是测试入口）。
+        session_meta: Optional["SessionMeta"] = None,
+        *,
+        force: bool = False,
+        trigger_reason: str = "",
+    ) -> Optional[CompressionResult]:
+        """执行压缩（v3.2 新增；v3.2.1 新增 trigger_reason 参数）。
 
-        串联：触发判断 → 分段 → 预处理 → 摘要 LLM（失败则降级）→ 原子事务持久化。
+        **不再做阈值检查**（假设调用方已通过 check_threshold 判断），直接进入：
+        加载 messages → 分段 → 预处理 → 摘要 LLM → 持久化。
 
         Args:
             session_id: 会话 ID
             source_type: 来源类型
-            tenant_id / user_id / subagent_id: 租户/用户/子智能体
-            model_limit: 模型上下文上限（token 数）
-            messages: 当前 messages 数组，缺省时从 DB 读取（本阶段不实现，必须传入）
+            session_meta: 由 check_threshold 返回的 meta，避免重复查询；
+                          None 时内部重新调 _resolve_session_meta（兼容旧调用方）
+            force: True 时即使阈值未过也强制压缩（运维触发 / Phase 8 调度任务）。
+                   此时 trigger_reason 记为 "force"。
+            trigger_reason: 调用方（如 check_threshold + 主流程）传入的精确触发原因
+                            （'token_threshold(...)' / 'message_threshold(...)'）。
+                            优先级：force=True 时强制 "force"；
+                            否则用 trigger_reason；为空时回退到 "threshold_passed"
+                            （兼容旧调用方）。
 
         Returns:
-            dict: {
-                "compressed": bool, 是否实际执行了压缩,
-                "reason": str, 触发原因或跳过原因,
-                "summary_id": Optional[str], 新 summary_id（未压缩时为 None）,
-                "fallback_used": bool, 是否走了降级路径,
-                "compressed_message_count": int,
-                "original_token_count": int,
-                "compressed_token_count": int,
-            }
+            CompressionResult（含 summary_id / token 数 / 压缩比 / 降级标记）；
+            COMPRESS 区为空时返回 None（极少见，仅当消息数 <= header_keep + tail_keep）；
+            压缩失败时抛异常（事务已回滚，调用方决定是否重试）。
         """
-        if messages is None:
-            # Phase 6 集成时由 agent 传入；本阶段不实现自动从 DB 重建逻辑
-            return {
-                "compressed": False,
-                "reason": "no messages provided",
-                "summary_id": None,
-                "fallback_used": False,
-                "compressed_message_count": 0,
-                "original_token_count": 0,
-                "compressed_token_count": 0,
-            }
+        # 1) session 元数据：复用 check_threshold 传入的，或重新解析
+        if session_meta is not None:
+            meta = session_meta
+        else:
+            meta = await self._resolve_session_meta(session_id, source_type)
 
-        # 1) 触发判断
-        should, reason = self._should_compress(messages, model_limit)
-        if not should:
-            return {
-                "compressed": False,
-                "reason": reason or "below threshold",
-                "summary_id": None,
-                "fallback_used": False,
-                "compressed_message_count": 0,
-                "original_token_count": count_tokens(messages),
-                "compressed_token_count": count_tokens(messages),
-            }
+        # 2) 加载 messages（默认过滤 compacted=true）
+        messages = await self._load_messages(session_id, source_type, meta.tenant_id)
 
-        # 2) 分段（含孤儿 tool 清理）
+        # 3) trigger_reason 优先级：force > 显式传入 > 通用回退
+        # v3.2.1（P0-1）：主流程透传 check_threshold 的精确 reason，
+        # 避免「压缩触发」在生产监控里全部坍缩成 "threshold_passed" 丢失精确性
+        if force:
+            final_reason = "force"
+        else:
+            final_reason = trigger_reason or "threshold_passed"
+
+        # 4) 分段（含孤儿 tool 清理）
         header, compress, tail = self._split_messages(messages)
         if not compress:
-            # 中间段为空，无需压缩
-            return {
-                "compressed": False,
-                "reason": "compress_section_empty",
-                "summary_id": None,
-                "fallback_used": False,
-                "compressed_message_count": 0,
-                "original_token_count": count_tokens(messages),
-                "compressed_token_count": count_tokens(messages),
-            }
+            logger.debug(
+                f"ContextCompression skipped: compress_section_empty, "
+                f"sid={session_id}, total_msgs={len(messages)}"
+            )
+            return None
 
-        # 3) 预处理 COMPRESS 区
+        # 5) 预处理 COMPRESS 区
         processed_compress = self._preprocess_tool_results(compress)
 
-        # 4) 摘要 LLM（失败 → 降级）
-        existing_summary = self.get_active_summary(
-            session_id, source_type, tenant_id=tenant_id
-        )
+        # 6) 摘要 LLM（失败 → 降级）
+        existing_summary = self.get_active_summary(session_id, source_type)
         summary_text = await self._call_summary_llm(existing_summary, processed_compress)
         fallback_used = False
         llm_tokens_used: Optional[int] = None
@@ -900,7 +1231,7 @@ class ContextCompressionService:
                 self._build_summary_prompt(existing_summary, processed_compress)
             ) + count_text_tokens(summary_text)
 
-        # 5) 收集被压缩消息的 BIGINT id
+        # 7) 收集被压缩消息的 BIGINT id
         compressed_ids: List[int] = []
         for m in compress:
             mid = m.get("id")
@@ -910,17 +1241,22 @@ class ContextCompressionService:
                 except (TypeError, ValueError):
                     continue
 
-        # 6) 计算 token 数
+        # 8) 计算 token 数
         original_token_count = count_tokens(messages)
         compressed_token_count = count_tokens(header) + count_text_tokens(summary_text) + count_tokens(tail)
+        ratio = (
+            compressed_token_count / original_token_count
+            if original_token_count > 0
+            else 0.0
+        )
 
-        # 7) 原子事务持久化
+        # 9) 原子事务持久化
         summary_id = self._persist_atomically(
             session_id=session_id,
             source_type=source_type,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            subagent_id=subagent_id,
+            tenant_id=meta.tenant_id,
+            user_id=meta.user_id,
+            subagent_id=meta.subagent_id,
             summary_text=summary_text,
             compressed_message_ids=compressed_ids,
             original_token_count=original_token_count,
@@ -929,15 +1265,65 @@ class ContextCompressionService:
             llm_tokens_used=llm_tokens_used,
         )
 
-        return {
-            "compressed": True,
-            "reason": reason,
-            "summary_id": summary_id,
-            "fallback_used": fallback_used,
-            "compressed_message_count": len(compressed_ids),
-            "original_token_count": original_token_count,
-            "compressed_token_count": compressed_token_count,
-        }
+        logger.info(
+            f"ContextCompression done: sid={session_id}, source={source_type}, "
+            f"summary_id={summary_id}, reason={final_reason}, "
+            f"compacted={len(compressed_ids)} msgs, "
+            f"token {original_token_count}->{compressed_token_count}, "
+            f"fallback={fallback_used}"
+        )
+
+        return CompressionResult(
+            summary_id=summary_id,
+            compressed_message_count=len(compressed_ids),
+            original_token_count=original_token_count,
+            compressed_token_count=compressed_token_count,
+            compression_ratio=ratio,
+            fallback_used=fallback_used,
+            llm_provider=self._actual_provider or self._summary_provider_cfg,
+            llm_model=self._actual_model or self._summary_model_cfg,
+            trigger_reason=final_reason,
+        )
+
+    async def compress_session(
+        self,
+        session_id: str,
+        source_type: str,
+        *,
+        force: bool = False,
+    ) -> Optional[CompressionResult]:
+        """兼容入口（v3.1 Phase 3，v3.2 内部串联 check_threshold + compress_now）。
+
+        保留此方法以兼容既有调用方和测试。新调用方推荐直接使用
+        check_threshold + compress_now 组合，以便在 check_threshold 未通过时
+        跳过 compress_now 的完整 DB IO（v3.2 执行顺序优化）。
+
+        Args:
+            session_id: 会话 ID
+            source_type: 来源类型
+            force: True 时跳过阈值检查直接压缩（运维触发 / Phase 8 调度任务）。
+                   force=True 时不调用 check_threshold，直接进入 compress_now。
+
+        Returns:
+            CompressionResult；未达阈值且 force=False 时返回 None；
+            压缩失败时抛异常（事务已回滚）。
+        """
+        if force:
+            # force 模式：完全跳过 check_threshold（不做 COUNT/单行查询），直接进入压缩
+            return await self.compress_now(session_id, source_type, None, force=True)
+
+        should, reason, meta = await self.check_threshold(session_id, source_type)
+        if not should:
+            logger.debug(
+                f"ContextCompression skipped: sid={session_id}, source={source_type}, "
+                f"reason={reason or 'below threshold'}"
+            )
+            return None
+        # v3.2.1（P0-1）：把 check_threshold 的精确 reason 透传给 compress_now，
+        # 不再事后覆盖 result.trigger_reason（保持两条路径行为一致）
+        return await self.compress_now(
+            session_id, source_type, meta, force=False, trigger_reason=reason
+        )
 
     def get_active_summary(
         self,
@@ -965,6 +1351,31 @@ class ContextCompressionService:
                 f"source={source_type}, tenant={tenant_id}: {e}"
             )
             return None
+
+    async def get_session_tenant_id(
+        self,
+        session_id: str,
+        source_type: str,
+    ) -> Optional[str]:
+        """解析 session 归属租户（v3.2.1 P1-6）。
+
+        公共方法，供 API 层（context_compression_routes.manual_compress）做
+        压缩前的租户隔离校验，避免 API 层直接调用内部 _resolve_session_meta。
+
+        内部无缓存：每次都查 DB（轻量单行查询）。Phase 7 §7.1 的可观测性
+        summary 路由在 rollback 后未失效此缓存（因为根本没有缓存），所以
+        本方法的返回值始终反映 DB 当前状态。
+
+        Args:
+            session_id: 会话 ID
+            source_type: 来源类型（chat / wecom_kf / dingtalk / feishu /
+                         wecom_personal_rpa）
+
+        Returns:
+            session 归属租户的 tenant_id；session 不存在或解析失败时返回 None。
+        """
+        meta = await self._resolve_session_meta(session_id, source_type)
+        return meta.tenant_id
 
 
 # ============== 单例（P1-4：线程安全）==============

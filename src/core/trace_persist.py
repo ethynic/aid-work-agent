@@ -88,6 +88,9 @@ def _do_persist(trace):
                     span_meta["usage"] = span.usage
                 if span.request_id:
                     span_meta["request_id"] = span.request_id
+                # Phase 7 §7.1：压缩 span 的元数据（前端展示用）
+                if span.compression_info:
+                    span_meta["compression_info"] = span.compression_info
 
                 cur.execute("""
                     INSERT INTO obs_spans

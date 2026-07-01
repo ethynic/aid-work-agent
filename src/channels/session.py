@@ -1086,6 +1086,7 @@ class ChannelSessionManager:
         limit: int = 50,
         before_message_id: Optional[str] = None,
         include_recalled: bool = False,
+        include_compacted: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         获取会话消息
@@ -1095,6 +1096,8 @@ class ChannelSessionManager:
             limit: 限制条数
             before_message_id: 分页基准消息ID
             include_recalled: 是否包含已撤回的消息（默认 False，LLM 上下文用）
+            include_compacted: 是否包含 compacted=true 的消息（v3.1）。
+                默认 False：前端展示和 Agent 重建 memory 都自动跳过被压缩的历史消息。
 
         Returns:
             消息列表（按 created_at ASC 时间正序）
@@ -1104,6 +1107,8 @@ class ChannelSessionManager:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             placeholder = "%s"
+            # v3.1: 默认过滤掉 compacted=true 的消息
+            compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
 
             # 撤回消息过滤条件（兼容迁移前的数据库：is_recalled 列不存在时不启用过滤）
             has_recall_column = self._has_is_recalled_column()
@@ -1115,16 +1120,19 @@ class ChannelSessionManager:
                     WHERE session_id = {placeholder} {recall_condition} AND id < (
                         SELECT id FROM channel_messages WHERE message_id = {placeholder}
                     )
+                    {compacted_clause}
                     ORDER BY id ASC
                     LIMIT {limit}
                 """, (session_id, before_message_id))
             else:
                 # 取最近 N 条（按 id 倒序取 N 条），再正序返回，保证时间正序且保留最新上下文。
                 # 直接 ORDER BY id ASC LIMIT N 会返回最老的 N 条，长会话会丢掉最近一轮对话。
+                # v3.1: compacted_clause 用于过滤已压缩消息（默认排除）
                 cursor.execute(f"""
                     SELECT * FROM (
                         SELECT * FROM channel_messages
                         WHERE session_id = {placeholder} {recall_condition}
+                        {compacted_clause}
                         ORDER BY id DESC
                         LIMIT {limit}
                     ) AS recent
@@ -1340,6 +1348,46 @@ class ChannelSessionManager:
             )
             return 0
 
+    def count_messages_by_session(
+        self,
+        session_id: str,
+        include_compacted: bool = False,
+    ) -> int:
+        """统计会话消息条数（v3.2 新增，用于压缩阈值快路径检查）。
+
+        只 SELECT COUNT(*)，不拉数据，走 (session_id, created_at) 索引。
+
+        Args:
+            session_id: 会话 ID
+            include_compacted: 是否包含 compacted=true 的消息。默认 False。
+
+        Returns:
+            消息条数；查询异常时返回 0（容错，让阈值判断降级到 token 缓存）
+        """
+        placeholder = "%s"
+        compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT COUNT(*) AS cnt FROM channel_messages "
+                    f"WHERE session_id = {placeholder}{compacted_clause}",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return 0
+                try:
+                    return int(row.get("cnt") or 0)
+                except (TypeError, ValueError):
+                    return 0
+        except Exception as e:
+            logger.warning(
+                f"ChannelSessionManager.count_messages_by_session failed: "
+                f"sid={session_id}, err={e}"
+            )
+            return 0
+
     def get_conversation_context(
         self,
         session_id: str,
@@ -1475,6 +1523,39 @@ class ChannelSessionManager:
             result["context_data"] = self._parse_json_field(result.get("context_data"), {})
             result["metadata"] = self._parse_json_field(result.get("metadata"))
             return result
+
+    def update_context_token_count(self, session_id: str, token_count: int) -> bool:
+        """更新渠道 session 的上下文 token 缓存（v3.1）。
+
+        Agent 主循环每次 LLM 调用后写入最后一次 prompt_tokens + completion_tokens，
+        供 ContextCompressionService._should_compress 优先读取。
+
+        Args:
+            session_id: 会话 ID
+            token_count: 最后一次 LLM 调用的 prompt+completion token 数
+
+        Returns:
+            是否更新成功（session 不存在时返回 False）
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "UPDATE channel_sessions SET context_token_count = %s "
+                    "WHERE session_id = %s",
+                    (int(token_count), session_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.exception(
+                    f"Failed to update channel context_token_count: session={session_id}, err={e}"
+                )
+                try:
+                    conn.rollback()
+                except Exception as rollback_err:
+                    logger.error(f"rollback failed: {rollback_err}")
+                return False
 
     def get_messages_paginated(
         self,

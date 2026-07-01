@@ -158,10 +158,10 @@ class TestMergingSecondMessage:
         """
         processor_A = AsyncMock(return_value="reply-A")
 
-        async def slow_processor_A(cancel_check):
+        async def slow_processor_A(cancel_check, user_input_override=None):
             # 让 A 长时间持有锁，给 B 到达的机会
             await asyncio.sleep(0.6)
-            return "reply-A"
+            return user_input_override or "reply-A"
 
         async def run_A():
             return await q.enqueue_and_process(
@@ -221,14 +221,14 @@ class TestPendingAfterResponding:
         # 用 event 让 processor_A 在 mark_responding 后发信号，确保 B 到达时 responding 已置位
         responding_ready = asyncio.Event()
 
-        async def processor_A(cancel_check):
+        async def processor_A(cancel_check, user_input_override=None):
             # A 标记 responding，模拟「已经开始 send_message 推送」
             q.mark_responding("sid_pending")
             responding_ready.set()
             # 在 responding 状态下，B 到达
             await asyncio.sleep(0.5)
             processor_calls.append("A")
-            return "reply-A"
+            return user_input_override or "reply-A"
 
         async def run_A():
             return await q.enqueue_and_process(
@@ -306,7 +306,7 @@ class TestProcessorError:
         失败完全静默——既不告知用户，也不持久化失败状态。
         返回 status="error" 让调用方走错误路径（mark_error + 返回 error dict）。
         """
-        async def failing_processor(cancel_check):
+        async def failing_processor(cancel_check, user_input_override=None):
             raise RuntimeError("agent internal error")
 
         result = await q.enqueue_and_process(
@@ -334,7 +334,7 @@ class TestProcessorError:
         调用方拿不到错误信号，user 消息也不写入，失败完全静默。
         本测试锁定「异常 ≠ merged」这一核心契约。
         """
-        async def failing_processor(cancel_check):
+        async def failing_processor(cancel_check, user_input_override=None):
             raise ValueError("simulated agent failure")
 
         result = await q.enqueue_and_process(

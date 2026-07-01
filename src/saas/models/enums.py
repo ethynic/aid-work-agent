@@ -265,3 +265,33 @@ class QueueStatus(str, Enum):
             self.ABANDONED: "已取消",  # 归并为 cancelled 显示
         }
         return mapping.get(self, "未知")
+
+
+# ============== 上下文压缩摘要状态 ==============
+
+class ContextSummaryStatus(str, Enum):
+    """上下文压缩摘要状态枚举（v3.2.1 P1-2）。
+
+    数据库存储：TEXT (chat_context_summaries.status)
+    - active     = 当前生效的摘要（同一 session+source_type 同时只允许一条）
+    - superseded = 已被更新的 active 摘要替代
+    - rolled_back= 已被运维回滚（消息 compacted 标记已清除）
+
+    见 src/saas/api/context_compression_routes.py + src/memory/mid_term.py。
+    """
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    ROLLED_BACK = "rolled_back"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.ACTIVE.value, cls.SUPERSEDED.value, cls.ROLLED_BACK.value]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.ACTIVE: "生效中",
+            self.SUPERSEDED: "已替代",
+            self.ROLLED_BACK: "已回滚",
+        }
+        return mapping.get(self, "未知")

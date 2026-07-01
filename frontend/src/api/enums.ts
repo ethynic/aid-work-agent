@@ -110,6 +110,19 @@ export enum QueueStatus {
   ABANDONED = 'abandoned',
 }
 
+/** 上下文压缩摘要状态（Phase 7 §7.3） */
+export enum ContextSummaryStatus {
+  ACTIVE = 'active',
+  SUPERSEDED = 'superseded',
+  ROLLED_BACK = 'rolled_back',
+}
+
+export const ContextSummaryStatusMap = {
+  [ContextSummaryStatus.ACTIVE]: { label: '生效中', color: 'green' },
+  [ContextSummaryStatus.SUPERSEDED]: { label: '已替代', color: 'gray' },
+  [ContextSummaryStatus.ROLLED_BACK]: { label: '已回滚', color: 'orange' },
+} as const;
+
 /** 用户来源 */
 export enum UserSource {
   WECOM_KF = 'wecom_kf',

@@ -1,17 +1,18 @@
 # 会话内上下文压缩设计方案（Mid-Term Memory）
 
-> 版本: v2.0 | 创建: 2026-06-23 | 最后更新: 2026-06-24 | 状态: 设计完成，待开发
+> 版本: v3.0 | 创建: 2026-06-23 | 最后更新: 2026-06-29 | 状态: 设计完成；同步路径已实现，后台定时任务待开发
 >
-> **v2.0 变更**（按用户反馈重大修订）：
-> - **触发方式从「同步压缩」改为「异步压缩」**（业界担忧的竞态用「同一 session 已有压缩进行中就丢弃新信号」解决）
-> - **触发阈值从 60% 调到 70%**（用户指定，留更多缓冲避免撑爆）
-> - **TAIL 保留区从 20 条调到 30 条**（可配置）
-> - **消息数软阈值从 60 条调到 150 条**（双触发兜底，避免海量短消息场景漏触发）
-> - 失败兜底：异步失败 N 次后，主流程**同步降级**保证对话继续
-> - 明确「50 条上下文」目标**包含所有消息**（user/assistant/tool_calls/tool_result 都算）
+> **v3.0 变更**（相对 v2.0 的架构回归 + 补漏机制）：
+> - **触发方式从「异步 fire-and-forget」回归「同步 await」**：v2.0 曾选择异步（fire-and-forget + Redis SETNX 锁 + fail_count 连续失败降级链路），实践证明工程链路过重、竞态防护复杂。v3.0 回归业界共识的**同步压缩**——主流程在重建 memory 后、追加 user 消息前同步完成压缩，本轮 LLM 调用即享受压缩后上下文。
+> - **新增「后台定时任务扫描」作为补漏机制**（§2.5）：主流程同步压缩是主力，定时任务周期性扫描 `chat_sessions.context_token_count` / `channel_sessions.context_token_count` 超阈值的 session 补压缩，兜底漏网场景（token 缓存为 0 的老 session、Agent 异常未触发同步压缩的 session）。**定时任务待 Phase 8 实现，本文档先完整描述设计。**
+> - **删除 v2.0 异步专有机制**：`check_and_dispatch` / `check_fallback_needed` / `_try_acquire_task_lock` / `_run_compression_task` / Redis fail_count 全部移除；并发保护改由 DB 层部分唯一索引 `idx_ccs_session_active` + `session_queue` 串行化承担。
+> - **v3.1 session 级 token 缓存**：`chat_sessions` / `channel_sessions` 新增 `context_token_count` 字段，主流程每次 LLM 调用后写入 `prompt_tokens + completion_tokens`，阈值判断优先读缓存跳过全量 `count_tokens`。
+> - **失败兜底简化**：摘要 LLM 失败不再走跨请求的 fail_count，而是**同一次调用内**重试 M 次 → 仍失败 → 立即走 `_fallback_truncate` 硬截断降级（无 LLM 调用 < 200ms）。
+> - 保留 v2.0 的：触发阈值 70%、TAIL 30 条、「50 条上下文」含所有消息口径。
+> - **v3.2.2 阈值简化**：消息数软阈值 150 → 200；删除 `_PRECISE_CHECK_MSG_THRESHOLD` 精确检查（缓存=0 时直接跳过 token 判断等下一轮，不再全量 count_tokens）。
 >
 > 反向关联：本方案是 [memory_design.md](./memory_design.md) Phase 2.2「中期记忆 — 会话内上下文压缩」的细化实现。
-> 业界调研依据：[context_compression_research.md](../../research/context_compression-research.md)
+> 业界调研依据：[context_compression_research.md](../../research/context_compression_research.md)
 
 ---
 
@@ -54,181 +55,193 @@
 
 ## 1. 业界共识摘要（决策依据）
 
-详细调研见 [context_compression_research.md](../../research/context-compression-research.md)。
+详细调研见 [context_compression_research.md](../../research/context_compression_research.md)。
 
 | 决策点 | 业界主流 | 本方案采纳 | 备注 |
 |--------|---------|-----------|------|
 | 压缩策略 | Summary Buffer（LangChain/Claude Code/LangGraph 共识） | ✅ 摘要 + 缓冲混合 | 单纯滑窗会丢用户偏好等远期语义 |
-| 触发方式 | 同步（业界共识） | ⚠️ **异步**（按用户指定，见 §1.1） | 用户方案解决了竞态，比业界更合适 |
-| 触发阈值 | 60-95% token | **70% token 或 150 条消息**（可配置） | 双触发，token 主、消息数兜底 |
+| 触发方式 | 同步（业界共识） | ✅ **同步（主流程）+ 后台定时任务（补漏）** | v3.0 回归业界共识，见 §1.1 |
+| 触发阈值 | 60-95% token | **70% token 或 200 条消息**（可配置） | 双触发，token 主、消息数兜底 |
 | TAIL 保留 | Claude Code ~33K token | **30 条消息**（可配置） | 用户指定 |
 | 工具消息 | 工具名+参数保留；工具结果差异化处理 | ✅ | 见 §3.3 工具结果分级策略 |
 | 压缩存储 | 原消息不删除，可追溯 | ✅ | 见 §4 数据模型 |
 | 摘要结构 | 结构化字段（用户事实/决策/待办）优于流水账 | ✅ | 见 §3.4 摘要 prompt |
 | 用户感知 | B 端透明 | ✅ 完全透明 | 与用户需求一致 |
-| 失败兜底 | 降级 | ✅ 异步失败 N 次后同步降级 | 见 §6.2 |
+| 失败兜底 | 降级 | ✅ 同步重试 + 硬截断降级 | 见 §6.1 |
 
-### 1.1 ⚠️ 关于「同步 vs 异步」的设计选择
+### 1.1 关于「同步 vs 异步」的设计选择
 
-**业界共识**：同步压缩——异步会引入「压缩未完成时用户已发新消息」的竞态。
+**业界共识**：同步压缩——异步会引入「压缩未完成时用户已发新消息」的竞态（详见 [context_compression_research.md](../../research/context_compression_research.md) 「同步 vs 异步」节）。
 
-**本方案选择**：**异步压缩**（用户指定）。理由：
+**版本演进**：
+- **v1.0**：同步压缩（早期草案）
+- **v2.0**：改为异步（fire-and-forget + Redis SETNX 锁 + fail_count 连续失败降级），理由是同步会拖慢用户请求
+- **v3.0**：**回归同步**（本版本）
 
-1. **压缩可能耗时较长**（LLM 摘要调用 + 大量消息预处理），同步会显著拖慢用户请求响应。
-2. **业界担忧的竞态可以用工程手段解决**：
-   - 同一 session 有压缩进行中 → **丢弃**新的压缩信号（不排队，因为下一轮请求会再次检查）
-   - 压缩完成后用**原子事务**写入：summary 表 + 原消息 `compacted=true` 标记要么全成功要么全失败
-   - 压缩期间用户新发的消息天然落在 TAIL 保护区，**不会被压缩进程吃掉**
-3. **降级路径同步兜底**：如果异步压缩连续失败 N 次（可配置，默认 3 次），主流程在下一次请求前检测到这个状态，**同步**执行硬截断降级（不调 LLM），保证对话不阻塞。
+**v3.0 为什么回归同步**：
+1. **简单可靠，业界共识**。绝大多数生产系统（LangGraph、Claude Code、OpenAI Assistants）都用同步——压缩作为对话流的一个节点，完成后再继续 LLM 调用。
+2. **v2.0 异步链路过重**。fire-and-forget + SETNX 锁 + fail_count + 跨请求同步降级触发，链路长、竞态防护复杂，工程维护成本高。
+3. **同步的「拖慢用户请求」可控**。摘要 LLM 有独立超时（默认 30s）+ 重试 M 次；重试耗尽后立即走硬截断降级（无 LLM 调用 < 200ms）。最坏情况只阻塞达阈值的那一轮请求，且降级路径极快。
+4. **本轮即享压缩后上下文**。同步完成后立即重建 memory，本轮 LLM 调用拿到的就是压缩后的上下文；异步方案则要等到下一轮才能看到效果。
+5. **竞态天然消失**。同步在主流程内执行，配合 `session_queue` 串行化 + DB 层部分唯一索引，无需额外锁机制。
 
-**异步流程图**（用户描述的完整流程）：
+**v3.0 的补漏机制**：同步方案在 Agent 异常未触发压缩、或 `context_token_count` 缓存为 0 的老 session 上可能漏触发，因此**新增后台定时任务扫描**（§2.5）兜底这些场景。定时任务待 Phase 8 实现。
+
+**同步流程图**（对应 `agent.py` `_run_compression_phase` 的真实行为）：
 
 ```
 用户提问 → 进入 _process_message_impl
               │
               ├─ 重建 memory from DB（含 compacted 过滤）
-              ├─ 检查是否需要触发压缩（§3.1）
+              ├─【同步压缩阶段】检查是否需要触发压缩（§3.1）
               │    │
-              │    ├─ 需要压缩 → 检查 session 是否有进行中的压缩任务
-              │    │    │
-              │    │    ├─ 有 → 跳过本次信号（不阻塞主流程）
-              │    │    └─ 无 → 异步派发压缩任务（fire-and-forget），立即返回
+              │    ├─ 未达阈值 → 继续
               │    │
-              │    └─ 不需要 → 继续
+              │    └─ 达阈值 → 同步执行压缩（compress_now）：
+              │         ① 读 session 当前完整消息
+              │         ② 分段（HEADER + COMPRESS + TAIL）
+              │         ③ 工具结果预处理
+              │         ④ 调用摘要 LLM（独立超时 30s，重试 M 次）
+              │            ├─ 成功 → 原子事务：写 summary + 标记原消息 compacted=true
+              │            └─ M 次都失败 → 同步硬截断降级（_fallback_truncate，无 LLM）
+              │         ⑤ 重新加载 memory（本轮即享压缩后上下文）
               │
-              ├─ 检查是否存在「连续失败的异步压缩」→ 是则同步降级
               ├─ 追加新 user 消息
               └─ 进入 LLM 调用循环
-
-异步压缩任务（后台 worker / asyncio task）：
-   ├─ 加分布式锁（session_id 维度）
-   ├─ 读取当前 session 完整消息
-   ├─ 分段（HEADER + COMPRESS + TAIL）
-   ├─ 工具结果预处理
-   ├─ 调用摘要 LLM（独立超时）
-   ├─ 失败重试 N 次（可配置）
-   ├─ 原子事务：① 写 chat_context_summaries ② UPDATE 原消息 compacted=true
-   └─ 释放锁，记录成功/失败状态
 ```
 
 ---
 
 ## 2. 总体架构
 
-### 2.1 主流程与异步压缩的协作
+### 2.1 主流程同步压缩
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │  Agent._process_message_impl (用户请求主线程)                            │
 │                                                                          │
 │  ① 重建 memory from DB（含 compacted=true 过滤）                          │
 │       │                                                                  │
-│  ②【新增】压缩状态检查                                                    │
+│  ②【同步压缩阶段】_run_compression_phase                                  │
 │       │                                                                  │
-│       ├─ 检查 token/消息数是否达阈值                                       │
+│       ├─ check_threshold：读 context_token_count 缓存 / 全量 token 判断   │
 │       │    │                                                              │
-│       │    ├─ 达阈值 + session 无进行中压缩任务                             │
-│       │    │    → 异步派发压缩任务（fire-and-forget）                       │
+│       │    ├─ 未达阈值 → 跳过，继续                                         │
 │       │    │                                                              │
-│       │    ├─ 达阈值 + session 已有压缩任务进行中                           │
-│       │    │    → 跳过信号（不阻塞，下一轮再检查）                            │
-│       │    │                                                              │
-│       │    └─ 未达阈值 → 继续                                              │
+│       │    └─ 达阈值 → 同步执行 compress_now（await，阻塞本轮请求）：        │
+│       │         │                                                        │
+│       │         ├─ T1. 读 session 当前完整消息列表（_load_messages）        │
+│       │         ├─ T2. 分段：HEADER (前3) / COMPRESS (中间) / TAIL (末30)  │
+│       │         ├─ T3. COMPRESS 区工具结果预处理（_preprocess_tool_results）│
+│       │         ├─ T4. 调用摘要 LLM (_call_summary_llm，独立超时 30s)       │
+│       │         │    ├─ 成功 → 进入 T5                                      │
+│       │         │    └─ 重试 M 次仍失败 → _fallback_truncate 硬截断降级      │
+│       │         │       （无 LLM 调用，标记 fallback_used=true）            │
+│       │         └─ T5. 原子事务（_persist_atomically，缺一不可）：           │
+│       │              ├─ INSERT chat_context_summaries (新 active)          │
+│       │              ├─ UPDATE 旧 active summary → status='superseded'     │
+│       │              └─ UPDATE chat_messages/channel_messages              │
+│       │                 SET compacted=true（按 source_type 分流）          │
 │       │                                                                  │
-│  ③【新增】失败兜底检查                                                     │
-│       │    └─ session 存在「连续失败次数 ≥ N」→ 同步执行降级硬截断            │
-│       │                                                                  │
+│  ③ 重新加载 memory（本轮即享压缩后上下文）                                  │
 │  ④ 追加新 user 消息                                                       │
 │  ⑤ _build_messages 组装 LLM 输入（自动过滤 compacted，注入 active summary） │
 │  ⑥ LLM 调用循环                                                           │
 └────────────────────────────────────────────────────────────────────────┘
-
-                                  ↓ (异步, 独立任务)
-
-┌────────────────────────────────────────────────────────────────────────┐
-│  CompressionTask (后台 asyncio task / worker thread)                     │
-│                                                                          │
-│  T1. 加分布式锁 (session_id, source_type) - TTL 5min                     │
-│  T2. 锁竞争失败 → 标记任务已跳过, 退出                                     │
-│  T3. 读 session 当前完整消息列表                                           │
-│  T4. 分段: HEADER (前3) / COMPRESS (中间) / TAIL (末30)                   │
-│  T5. COMPRESS 区工具结果预处理（按工具类型差异化）                          │
-│  T6. 调用摘要 LLM (独立超时 30s, 支持重试 M 次)                             │
-│       ├─ 成功 → 进入 T7                                                    │
-│       └─ M 次都失败 → 记录失败次数 + 触发告警 + 退出（下次主流程会同步降级）   │
-│  T7. 原子事务（缺一不可）：                                                 │
-│       ├─ INSERT chat_context_summaries (新 active)                         │
-│       ├─ UPDATE 旧 active summary → status='superseded'                    │
-│       └─ UPDATE chat_messages/channel_messages SET compacted=true        │
-│          （按 source_type 分流：web→chat_messages，渠道→channel_messages） │
-│  T8. 释放分布式锁                                                          │
-│  T9. 清空失败计数（成功）                                                   │
-└────────────────────────────────────────────────────────────────────────┘
 ```
 
-**关键设计**：主流程**从不等待**压缩任务完成。主流程只做两件事：
-1. 决定是否派发压缩任务（fire-and-forget）
-2. 决定是否同步降级（仅当连续失败 N 次时）
+**关键设计**：主流程**同步等待**压缩完成。压缩成功后立即重新加载 memory，本轮 `_build_messages` 拿到的就是压缩后的新上下文（active summary 注入 + compacted 消息过滤）。这是 v3.0 相对 v2.0 异步方案的核心收益——**本轮即享压缩后上下文**，无需等到下一轮请求。
+
+**异常隔离**：`_run_compression_phase` 全程 `try/except`，压缩链路任何异常（读消息、调 LLM、写事务）都只记日志、返回 None，**绝不影响主对话流程**——即使压缩完全失败，用户请求仍按未压缩上下文正常响应。
 
 ### 2.2 调用点
 
-主流程插入位置：`Agent._process_message_impl` 中，**重建 memory 之后、追加新 user 消息之前**（`agent.py:1759` 与 `agent.py:1886` 之间）。
+主流程插入位置：`Agent._process_message_impl` 中，**重建 memory 之后、追加新 user 消息之前**。压缩通过 `_run_compression_phase` 同步调用 `compress_session`（内部 `check_threshold` → `compress_now`）。
 
 为什么是这个位置：
 - ✅ 之前：memory 已从 DB 完整重建，token 准确
 - ✅ 之前：还没追加新消息，本轮用户输入不会进入压缩范围（避免「用户问 A，系统去压缩包含 A 的历史」的诡异时序）
-- ✅ 之后：`_build_messages` 拿到的就是压缩后的新上下文
+- ✅ 之后：压缩成功后立即重新加载 memory，`_build_messages` 拿到的就是压缩后的新上下文
 
-### 2.3 并发与去重（核心机制）
+### 2.3 并发保护（无独立锁机制）
 
-**问题场景**：
-- 用户第 1 次提问，触发压缩信号，异步任务开始执行
-- 压缩任务执行较慢（10-30 秒）
-- 用户第 2 次提问，又触发压缩信号 —— 此时不能再次派发，否则会出现两个压缩任务操作同一份历史
+v3.0 删除了 v2.0 的 Redis SETNX session 级压缩锁，并发保护由两道既有防线承担，**无需额外引入锁**：
 
-**解决方案：基于 Redis 的 session 级压缩锁**
+**防线 1：`session_queue` 串行化**
+- `src/core/session_queue.py` 已把同一 `(source_type, session_id)` 的消息**串行化**处理（P0 修复），同一 session 的并发请求天然排队，主流程内同步执行压缩不存在并发竞争。
 
-```python
-# 主流程的信号派发逻辑
-async def _try_dispatch_compression(self, session_id: str, source_type: str) -> None:
-    lock_key = f"context_compression:running:{source_type}:{session_id}"
-    # SETNX（仅当不存在时设置），TTL 5 分钟（兜底，防止任务卡死永远不释放）
-    acquired = await redis_client.set(lock_key, task_id, nx=True, ex=300)
-    if not acquired:
-        # 已有任务在跑 → 静默跳过（不报错，不告警）
-        logger.debug(f"Compression already running for {session_id}, skip signal")
-        return
-    # 异步派发任务（fire-and-forget）
-    asyncio.create_task(self._run_compression_task(session_id, source_type, task_id))
+**防线 2：DB 层部分唯一索引 `idx_ccs_session_active`**
+- `chat_context_summaries` 表上 `CREATE UNIQUE INDEX ... ON (source_type, session_id) WHERE status = 'active'` 保证同一 session 同时只能有一个 active summary。
+- 即使出现极端并发（多 worker + session_queue 失效），两次 `INSERT ... status='active'` 也只有一条能成功，另一条事务回滚，不会产生双 active 状态。
+
+**结论**：同步执行 + session_queue 串行 + DB 唯一索引，三层保证下不存在「两个压缩任务操作同一份历史」的竞态，这是 v3.0 回归同步后能彻底删除锁机制的根本原因。
+
+### 2.4 失败处理（同一次调用内重试 + 降级，无跨请求 fail_count）
+
+v3.0 删除了 v2.0 的 Redis fail_count 连续失败降级机制。失败处理在**同一次 `compress_now` 调用内**完成闭环：
+
+```
+compress_now 调用摘要 LLM
+   │
+   ├─ 成功 → 原子事务持久化 summary + compacted 标记
+   │
+   └─ 失败/超时 → 重试（默认 2 次，可配置）
+        │
+        ├─ 重试中某次成功 → 进入原子事务
+        │
+        └─ 重试耗尽仍失败 → 同一次调用内立即走 _fallback_truncate 硬截断降级：
+             ① 提取关键骨架（user/assistant 原文截断 + 工具调用名+参数）
+             ② 拼成结构化伪摘要（标记 fallback_used=true, llm_tokens_used=0）
+             ③ 原子事务持久化（与成功路径相同的 _persist_atomically）
+             ④ 返回成功（降级路径），主流程照常重新加载 memory
 ```
 
-**为什么用 SETNX 而非普通锁**：异步任务如果崩溃（worker 进程被 kill），普通锁会泄漏；SETNX + TTL 兜底保证最终一定会释放。
+**对比 v2.0**：v2.0 单次失败只记 fail_count，要累计 3 次才触发同步降级，期间多轮请求都在「无压缩 + fail_count 累加」状态。v3.0 在单次调用内重试 + 降级一气呵成，**不存在 fail_count 中间态**，逻辑更简单、状态更可控。详细失败分类见 §6。
 
-### 2.4 失败计数与同步降级触发
+### 2.5 后台定时任务扫描（补漏机制，待 Phase 8 实现）
+
+> **状态：待实现。** 本节为完整设计描述，定时任务尚未编码，主流程同步压缩是当前唯一已实现的压缩路径。
+
+**定位**：主流程同步压缩是主力；定时任务**只兜底漏网 session**，不承担主力职责。漏网场景包括：
+1. `context_token_count` 缓存为 0 的老 session（字段上线前的存量 session，主流程的 `check_threshold` 会回退全量 token 计算但仍可能漏）；
+2. Agent 异常中断、未走到同步压缩阶段就退出的 session；
+3. 单次会话内消息数暴涨、单轮同步压缩后仍超阈值的 session（下一轮才会再次同步触发，定时任务可提前补刀）。
+
+**扫描逻辑**：
 
 ```python
-# 主流程的失败兜底检查
-async def _check_fallback_needed(self, session_id: str, source_type: str) -> bool:
-    fail_count = await redis_client.get(
-        f"context_compression:fail_count:{source_type}:{session_id}"
-    )
-    threshold = settings.memory.mid_term.max_consecutive_failures  # 默认 3
-    return int(fail_count or 0) >= threshold
+# 伪代码（待实现）
+async def scan_and_compress():
+    """定时任务周期执行：扫描 context_token_count 超阈值的 session 补压缩"""
+    threshold_ratio = settings.memory.mid_term.token_threshold_ratio  # 0.7
 
-# 异步任务失败时递增计数
-async def _run_compression_task(...):
-    try:
-        ...  # 摘要 LLM + 原子事务
-        await redis_client.delete(f"context_compression:fail_count:{source_type}:{session_id}")
-    except Exception as e:
-        await redis_client.incr(
-            f"context_compression:fail_count:{source_type}:{session_id}",
-            expire=3600  # 计数器 1 小时窗口
-        )
-        logger.warning(f"Compression task failed: {e}")
+    for table, source_type in [
+        ("chat_sessions", "web"),
+        ("channel_sessions", "chat"),   # 企微/钉钉/飞书等渠道
+    ]:
+        # 复用主流程同一阈值口径：context_token_count 超过 model_limit × 70%
+        sessions = db.query(f"""
+            SELECT session_id, context_token_count
+            FROM {table}
+            WHERE context_token_count > %s   -- = model_limit × threshold_ratio
+              AND context_token_count > 0     -- 排除缓存为 0 的（这些定时任务也判不准，留给主流程）
+        """, [model_limit * threshold_ratio])
+
+        for row in sessions:
+            # 复用 check_threshold（内部已含「压缩中/已压缩」状态判断，天然去重）
+            await service.compress_session(
+                session_id=row.session_id,
+                source_type=source_type,
+                force=False,
+            )
 ```
 
-主流程检测到失败计数 ≥ N 时，**同步**执行硬截断降级（§6.2），保证对话继续。降级成功后清空失败计数。
+**关键设计**：
+- **复用 `compress_session` / `check_threshold`**：定时任务不自己实现压缩逻辑，直接调主流程同一入口；`check_threshold` 内部已判断「该 session 是否已有 active summary / 是否正在压缩」，天然完成去重。
+- **只扫 `context_token_count > 0` 的 session**：缓存为 0 的 session 定时任务判不准 token，留给主流程同步压缩处理（主流程会回退全量计算）。
+- **注册位置**：接入既有 `src/scheduler/manager.py`（APScheduler `BackgroundScheduler`），用 `IntervalTrigger` 周期触发（建议 5-10 分钟）。注意 scheduler 已有 Redis 分布式锁，多 worker 只跑一个实例。
+
+**与主流程的关系**：两者调同一 `compress_session` 入口，靠 `check_threshold` 的状态判断去重，互不冲突——最坏情况是同一 session 被主流程和定时任务同时尝试，DB 唯一索引保证只生成一个 active summary，另一个事务回滚（§2.3 防线 2）。
 
 ---
 
@@ -242,26 +255,27 @@ def _should_compress(messages: list[dict], model_limit: int) -> tuple[bool, str]
     返回 (是否压缩, 原因)
     所有阈值均可通过 configs/config.yaml 配置。
     """
-    # 阈值 1（主阈值）：token 数达到模型上限的 70%（可配置）
-    token_count = count_tokens(messages)
+    # 阈值 1（主阈值）：context_token_count（最后一次 LLM 的 input+output）达到模型上限的 70%
     token_threshold = int(model_limit * settings.memory.mid_term.token_threshold_ratio)  # 默认 0.7
-    if token_count >= token_threshold:
-        return True, f"token_threshold({token_count}/{token_threshold}, {token_count*100//model_limit}%)"
+    if cached_tokens > 0 and cached_tokens >= token_threshold:
+        return True, f"token_threshold({cached_tokens}/{token_threshold}, {cached_tokens*100//model_limit}%)"
 
-    # 阈值 2（兜底）：消息条数达到 150（可配置）
-    msg_threshold = settings.memory.mid_term.message_count_threshold  # 默认 150
-    if len(messages) >= msg_threshold:
-        return True, f"message_threshold({len(messages)}/{msg_threshold})"
+    # 阈值 2（兜底）：消息条数达到 200（可配置）
+    msg_threshold = settings.memory.mid_term.message_count_threshold  # 默认 200
+    if msg_count >= msg_threshold:
+        return True, f"message_threshold({msg_count}/{msg_threshold})"
 
     return False, ""
 ```
 
+> 注：token 阈值用 session 表的 `context_token_count` 缓存值（最后一次 LLM 调用的 prompt+completion token），不调 `count_tokens` 全量计算。缓存=0（新 session 首轮 / Agent 异常未写入）时跳过 token 判断，等下一轮写入缓存后再判。
+
 **为什么用双阈值**：
 - 纯 token 阈值在「对话消息数极多但每条都很短」时（如客服频繁短回复、聊天闲谈），可能 token 还没到但 LLM API 调用的 per-message overhead 已经拖慢响应。
-- 纯消息数阈值在「单条超大工具结果」时（如导出 10000 行 Excel、读大文件），可能没到 150 条就 token 爆。
-- 两个条件**任一满足**即触发，互相兜底。默认值（70% / 150 条）均可配置。
+- 纯消息数阈值在「单条超大工具结果」时（如导出 10000 行 Excel、读大文件），可能没到 200 条就 token 爆。
+- 两个条件**任一满足**即触发，互相兜底。默认值（70% / 200 条）均可配置。
 
-**`model_limit` 来源**：复用 `configs/config.yaml` 中已有的 `llm.model_code` → 模型元数据（通常 128K 或 256K）。
+**`model_limit` 来源**：`_get_model_limit` 从 `settings.llm.<provider>.model` 读 model_code，查 `_MODEL_CONTEXT_LIMITS` 映射表（现役主力 deepseek-v4-pro / deepseek-v4-flash，均 512K）。
 
 ### 3.2 分段保留策略（保留首尾，压缩中间）
 
@@ -281,7 +295,7 @@ def _should_compress(messages: list[dict], model_limit: int) -> tuple[bool, str]
 
 **TAIL 保护区的作用**：
 - 最近轮次的细节（包括尚未完成的工具调用链）必须保留，否则当前任务无法继续。
-- **TAIL 默认 30 条**（用户指定），给异步压缩任务足够的「安全窗口」—— 即使压缩执行 30 秒，用户在此期间发的几条消息也落在 TAIL 内，不会被压缩进程吃掉。
+- **TAIL 默认 30 条**（用户指定），保留足够的最近上下文窗口，让本轮 LLM 调用有完整近期信息可用。
 - TAIL 的边界要对齐到「完整的 user+assistant+tool_calls+tool_results 块」，**不能把工具链拦腰截断**（OpenAI/Anthropic 规范要求 tool_call 后必须紧跟 tool_result）。如果第 30 条恰好是 `assistant(tool_calls)` 而第 31 条是 `tool(result)`，TAIL 向后扩展直到工具链闭合。
 
 **默认配置**（所有数字可配置）：
@@ -291,7 +305,7 @@ memory:
     header_keep: 3              # 头部保留消息数（必须是连续的完整 user+assistant 对）
     tail_keep: 30               # 尾部保留消息数（按工具链边界对齐后可能略多于 30）
     token_threshold_ratio: 0.7  # token 主阈值比例（占模型上限）
-    message_count_threshold: 150  # 消息数兜底阈值
+    message_count_threshold: 200  # 消息数兜底阈值
 ```
 
 ### 3.3 工具结果差异化处理（关键细节）
@@ -445,20 +459,15 @@ memory:
 
     # 触发条件（双阈值，任一满足即触发）
     token_threshold_ratio: 0.7       # token 主阈值：占模型上下文上限的比例
-    message_count_threshold: 150     # 消息数兜底阈值（含工具消息）
+    message_count_threshold: 200     # 消息数兜底阈值（含工具消息）
 
     # 分段保留
     header_keep: 3                   # 头部保留消息数
     tail_keep: 30                    # 尾部保留消息数（按工具链边界对齐）
 
-    # 异步任务
-    task_lock_ttl_sec: 300           # 压缩任务锁 TTL（兜底防泄漏）
-    max_consecutive_failures: 3      # 连续失败多少次后触发同步降级
-    fail_count_window_sec: 3600      # 失败计数窗口
-
     # 摘要 LLM
     summary_max_tokens: 1500
-    summary_llm_retry: 2             # 摘要 LLM 调用重试次数
+    summary_llm_retry: 2             # 摘要 LLM 调用重试次数（重试耗尽走硬截断降级）
     summary_llm:
       provider: deepseek             # 走便宜模型
       model: deepseek-chat
@@ -466,6 +475,12 @@ memory:
 
     # 工具结果预处理
     large_tool_result_truncate_chars: 2000
+
+    # 后台定时任务扫描（Phase 8 待实现，§2.5）
+    # background_scan:
+    #   enabled: false               # 默认关闭，Phase 8 上线后开启
+    #   interval_sec: 600            # 扫描周期，默认 10 分钟
+    #   batch_size: 50               # 单次扫描最多处理 session 数
 ```
 
 `src/config/settings.py`：
@@ -480,20 +495,19 @@ class MidTermMemoryConfig(BaseModel):
     enabled: bool = True
     # 触发条件
     token_threshold_ratio: float = 0.7
-    message_count_threshold: int = 150
+    message_count_threshold: int = 200
     # 分段保留
     header_keep: int = 3
     tail_keep: int = 30
-    # 异步任务
-    task_lock_ttl_sec: int = 300
-    max_consecutive_failures: int = 3
-    fail_count_window_sec: int = 3600
     # 摘要 LLM
     summary_max_tokens: int = 1500
     summary_llm_retry: int = 2
     summary_llm: SummaryLLMConfig = SummaryLLMConfig()
     # 工具结果预处理
     large_tool_result_truncate_chars: int = 2000
+    # 后台定时任务扫描（Phase 8 待实现）
+    background_scan_enabled: bool = False
+    background_scan_interval_sec: int = 600
 
 class MemoryConfig(BaseModel):
     short_term: ShortTermMemoryConfig
@@ -501,7 +515,7 @@ class MemoryConfig(BaseModel):
     long_term: LongTermMemoryConfig
 ```
 
-> **关于 `trigger_mode`**：v1.0 设计中有此字段，v2.0 移除。本方案**只支持异步模式**（用户指定），同步路径仅作为「连续失败兜底」内建，不需要单独配置。
+> **关于 `trigger_mode`**：v1.0/v2.0 设计中曾有此字段（同步/异步切换）。v3.0 已移除——本方案**只支持同步模式**（主流程同步压缩为主），定时任务补漏作为独立的后台扫描机制，不需要 trigger_mode 配置。
 
 ---
 
@@ -511,134 +525,117 @@ class MemoryConfig(BaseModel):
 
 ```python
 class ContextCompressionService:
-    """会话内上下文压缩服务（异步触发模式）"""
+    """会话内上下文压缩服务（v3.0 同步触发模式）"""
 
     def __init__(self, ...):
         self._settings = settings.memory.mid_term
-        self._redis = get_redis_client()
+        self._redis = get_redis_client()  # 仅用于 metrics/缓存，不再做锁
 
-    # ========== 主流程调用 ==========
+    # ========== 对外唯一入口 ==========
 
-    async def check_and_dispatch(
-        self,
-        session_id: str,
-        source_type: str,
-        subagent_id: Optional[str],
-        tenant_id: Optional[str],
-        user_id: Optional[str],
-        current_messages: list[dict],
-    ) -> None:
-        """
-        主流程入口（非阻塞）：
-        1. 检查是否达阈值
-        2. 检查是否有进行中的压缩任务 → 有则跳过
-        3. 检查是否需要同步降级 → 是则同步执行降级
-        4. 否则 fire-and-forget 派发异步任务
-        """
-        ...
-
-    async def check_fallback_needed(self, session_id: str, source_type: str) -> bool:
-        """主流程调用：检查是否需要同步降级"""
-        ...
-
-    def get_active_summary(self, session_id: str, source_type: str) -> Optional[str]:
-        """_build_messages 调用：读取当前 active 摘要"""
-        ...
-
-    # ========== 内部方法 ==========
-
-    def _should_compress(self, messages: list[dict], model_limit: int) -> tuple[bool, str]:
-        """双阈值判断（token 70% 或 消息数 150）"""
-        ...
-
-    async def _try_acquire_task_lock(
-        self, session_id: str, source_type: str
+    async def compress_session(
+        self, session_id: str, source_type: str, *, force: bool = False
     ) -> Optional[str]:
-        """SETNX 抢锁，返回 task_id 或 None（已被占）"""
-        ...
+        """
+        压缩入口（主流程 + 定时任务共用）：
+        1. _resolve_session_meta：自动从 DB 解析 tenant/user/subagent 元数据
+        2. check_threshold：达阈值则进入 compress_now（force=True 时跳过阈值）
+        3. 返回 summary_id 或 None
+        """
 
-    async def _run_compression_task(
-        self,
-        session_id: str,
-        source_type: str,
-        subagent_id: Optional[str],
-        tenant_id: Optional[str],
-        user_id: Optional[str],
-        task_id: str,
-    ) -> None:
-        """异步任务主体：读消息 → 分段 → 摘要 → 原子事务 → 释放锁"""
-        ...
+    # ========== 阈值判断 ==========
+
+    async def check_threshold(
+        self, session_id: str, source_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        优先读 context_token_count 缓存（chat_sessions/channel_sessions），
+        为 0 时回退全量 count_tokens；返回压缩决策信息或 None。
+        """
+
+    def _eval_threshold(self, cached_tokens: int, msg_count: int, model_limit: int) -> tuple[bool, str]:
+        """双阈值判断（token 70% 或 消息数 200）；缓存=0 时跳过 token 判断"""
+
+    def _get_model_limit(self) -> int:
+        """读当前模型上限"""
+
+    # ========== 执行压缩 ==========
+
+    async def compress_now(
+        self, session_id, source_type, subagent_id, tenant_id, user_id, trigger_reason, ...
+    ) -> Optional[str]:
+        """
+        压缩主体（同步执行）：
+        _load_messages → _split_messages → _preprocess_tool_results
+        → _call_summary_llm（失败走 _fallback_truncate）→ _persist_atomically
+        """
+
+    async def _load_messages(self, session_id, source_type) -> list[dict]:
+        """按 source_type 从 chat_messages / channel_messages 读消息"""
 
     def _split_messages(self, messages: list[dict]) -> tuple[list, list, list]:
         """分 HEADER / COMPRESS / TAIL 三段（TAIL 对齐工具链边界）"""
         ...
 
+    def _drop_orphan_tool_messages(self, compress_section: list[dict]) -> list[dict]:
+        """清理孤儿 tool 消息（避免摘要 LLM 报错）"""
+
     def _preprocess_tool_results(self, compress_section: list[dict]) -> list[dict]:
         """按工具类型应用差异化截断策略"""
-        ...
 
-    async def _call_summary_llm_with_retry(
-        self, existing_summary: Optional[str], new_messages: list[dict]
-    ) -> Optional[str]:
-        """调用摘要 LLM，独立超时 + 重试 M 次"""
-        ...
-
-    async def _persist_atomically(
-        self,
-        session_id, source_type, summary_text, compressed_ids,
-        original_tokens, compressed_tokens, llm_usage, ...
-    ) -> str:
-        """
-        原子事务（缺一不可）：
-          ① INSERT chat_context_summaries (status='active')
-          ② UPDATE 旧 active summary → status='superseded'
-          ③ UPDATE chat_messages SET compacted=true, compacted_by=summary_id WHERE id IN (...)
-        三步任一失败 → 整个事务回滚
-        """
-        ...
+    async def _call_summary_llm(self, existing_summary, new_messages) -> Optional[str]:
+        """调用摘要 LLM，独立超时 + 重试 M 次；重试耗尽返回 None（触发降级）"""
 
     def _fallback_truncate(self, compress_section: list[dict]) -> str:
-        """同步降级路径：摘要失败时，硬截断中间段，保留头尾要点（无 LLM 调用）"""
-        ...
+        """硬截断降级：提取关键骨架（user/assistant 原文 + 工具调用名），无 LLM 调用"""
 
-    async def _sync_fallback(
-        self, session_id: str, source_type: str, messages: list[dict]
-    ) -> None:
-        """主流程触发的同步降级（异步失败 N 次后）"""
-        ...
+    async def _persist_atomically(
+        self, session_id, source_type, summary_text, compressed_ids,
+        original_tokens, compressed_tokens, fallback_used, ...
+    ) -> str:
+        """
+        原子事务（缺一不可，任一失败整体回滚）：
+          ① INSERT chat_context_summaries (status='active')
+          ② UPDATE 旧 active summary → status='superseded'
+          ③ UPDATE chat_messages/channel_messages SET compacted=true, compacted_by=summary_id
+             （按 source_type 分流：web→chat_messages，渠道→channel_messages）
+        """
+
+    # ========== 元数据 / 读取 ==========
+
+    async def _resolve_session_meta(self, session_id, source_type) -> dict:
+        """从 DB 解析 tenant_id/user_id/subagent_id（主流程不用传元数据）"""
+
+    def get_active_summary(self, session_id: str, source_type: str) -> Optional[str]:
+        """_build_messages 调用：读取当前 active 摘要"""
+
+    async def get_session_tenant_id(self, session_id, source_type) -> Optional[int]:
+        """管理后台手动压缩前校验租户归属（防越权）"""
 ```
+
+**对外唯一入口**是 `compress_session(session_id, source_type, *, force=False)`——业务无关、渠道无关，内部自动从 DB 解析元数据 + 自动读 model_limit。主流程同步压缩、定时任务补压缩、管理后台手动压缩，三者都走这个入口。
 
 ### 5.2 Agent 集成点
 
-`src/core/agent.py` 的 `_process_message_impl`，在重建 memory（`agent.py:1759`）之后、追加新 user 消息（`agent.py:1886`）之前插入：
+`src/core/agent.py` 的 `_process_message_impl`，在重建 memory 之后、追加新 user 消息之前，封装为 `_run_compression_phase` 同步调用：
 
 ```python
-# === [新增] 上下文压缩 ===
+# === [新增] 上下文压缩（同步） ===
 if settings.memory.mid_term.enabled:
     compression_service = get_compression_service()  # 单例
-    current_messages = self.memory.get_context(session_id)
-
-    # 1) 检查是否需要同步降级（异步任务连续失败时）
-    if await compression_service.check_fallback_needed(session_id, source_type):
-        # 同步执行降级（无 LLM 调用，纯硬截断）
-        await compression_service._sync_fallback(
-            session_id, source_type, current_messages
-        )
-        await self._reload_memory_from_db(session_id)
-    else:
-        # 2) 检查并派发异步压缩任务（fire-and-forget）
-        await compression_service.check_and_dispatch(
-            session_id=session_id,
-            source_type=source_type,
-            subagent_id=self.subagent_id,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            current_messages=current_messages,
-        )
+    # 同步压缩：内部 check_threshold → compress_now，阻塞等待完成
+    # 元数据由 service 内部 _resolve_session_meta 自动从 DB 解析
+    await compression_service.compress_session(
+        session_id=session_id,
+        source_type=source_type,
+        force=False,
+    )
+    # 压缩成功后重新加载 memory，本轮 _build_messages 即享压缩后上下文
+    await self._reload_memory_from_db(session_id)
 # === [新增结束] ===
 ```
 
-**注意**：因为是异步，主流程**不等待**压缩完成，所以不需要 reload memory。当前请求仍用未压缩的上下文（但因为 token 已经超过阈值，本轮 LLM 调用会正常——只是接近上限），下一轮请求时压缩已完成，memory 重建会自动看到新状态。
+**注意**：同步执行，主流程等待 `compress_session` 完成后立即 reload memory，本轮 LLM 调用拿到的就是压缩后的上下文。`_run_compression_phase` 全程 try/except，压缩任何失败都不影响主对话（见 §6.3）。
 
 `_build_messages`（`agent.py:1125`）需要在 messages 数组开头注入 active 摘要：
 
@@ -679,86 +676,76 @@ def _build_messages(self, session_id: str) -> list[dict]:
 
 ---
 
-## 6. 失败处理与降级（v2.0 重写：异步优先 + 同步兜底）
+## 6. 失败处理与降级（v3.0：同一次调用内闭环，无跨请求 fail_count）
 
-### 6.1 异步任务失败（单次）
+### 6.1 摘要 LLM 失败 → 重试 + 同步降级
 
-异步压缩任务中，摘要 LLM 调用失败时的处理：
+`compress_now` 调用摘要 LLM，失败处理在**同一次调用内**完成闭环：
 
 ```
-异步任务执行中
+compress_now
    │
-   ├─ 摘要 LLM 调用 → 失败/超时 30s
+   ├─ _call_summary_llm：摘要 LLM 调用 → 失败/超时 30s
    │    │
    │    ├─ 重试（默认 2 次，可配置）
    │    │
-   │    └─ 重试耗尽仍失败 → 单次任务失败处理：
-   │         ① Redis fail_count += 1（TTL 1 小时窗口）
-   │         ② 释放分布式锁
-   │         ③ logger.warning + 告警通道
-   │         ④ 任务退出（不写入 summary，不更新 compacted）
-   │
-   └─ 任务失败后，主流程下一轮请求的行为：
-        - 如果 fail_count < max_consecutive_failures（默认 3）
-          → 继续尝试派发新的异步任务
-        - 如果 fail_count >= max_consecutive_failures
-          → 进入同步降级（见 §6.2）
-```
-
-**为什么单次失败不立即降级**：LLM 调用偶发失败很常见（网络抖动、模型限流），立即降级会丢失摘要质量。给 N 次重试机会。
-
-### 6.2 连续失败 → 同步降级兜底
-
-当异步任务连续失败 N 次（默认 3 次）后，主流程在下一次请求前检测到这个状态，**同步**执行硬截断降级，保证对话继续：
-
-```
-主流程 _process_message_impl
-   │
-   ├─ 重建 memory
-   ├─【新增】check_fallback_needed(session_id, source_type)
+   │    ├─ 重试中某次成功 → 进入 _persist_atomically（写 summary + compacted）
    │    │
-   │    └─ fail_count >= 3 → True
+   │    └─ 重试耗尽仍失败 → 同一次调用内立即走 _fallback_truncate 硬截断降级：
+   │         1. 分段（HEADER + COMPRESS + TAIL）
+   │         2. 跳过 LLM 调用，提取「关键骨架」：
+   │            - 所有 user 消息原文（截断到 500 字符）
+   │            - 所有 assistant 最终回复原文（截断到 500 字符）
+   │            - 所有工具调用名 + 参数（不含结果）
+   │         3. 拼成结构化但简短的伪摘要
+   │         4. 原子事务（_persist_atomically）：写 summary
+   │            （标记 fallback_used=true, llm_tokens_used=0）+ 更新原消息 compacted=true
+   │         5. 返回成功（降级路径），主流程照常 reload memory
    │
-   ├─ 进入同步降级路径（_sync_fallback）：
-   │    1. 加分布式锁（同步等待，超时 5s）
-   │    2. 读 session 当前完整消息
-   │    3. 分段（HEADER + COMPRESS + TAIL）
-   │    4. 跳过 LLM 调用，直接用 _fallback_truncate 提取「关键骨架」：
-   │       - 所有 user 消息原文（截断到 500 字符）
-   │       - 所有 assistant 最终回复原文（截断到 500 字符）
-   │       - 所有工具调用名 + 参数（不含结果）
-   │    5. 拼成结构化但简短的伪摘要
-   │    6. 原子事务：写 summary（标记 fallback_used=true, llm_tokens_used=0）
-   │                  + 更新原消息 compacted=true
-   │    7. 清空 fail_count（让后续请求恢复尝试异步压缩）
-   │    8. 释放锁
-   │
-   ├─ 重新加载 memory（含新的 active summary + compacted 过滤）
-   └─ 继续 LLM 调用循环
+   └─ 无论 LLM 成功还是降级，都产生一个 active summary，对话继续
 ```
 
-**同步降级的关键保障**：
+**对比 v2.0**：v2.0 单次失败只递增 fail_count、退出任务，要累计 3 次跨请求才触发同步降级，中间多轮请求处于「无压缩」状态。v3.0 在单次调用内重试 + 降级一气呵成，**不存在 fail_count 中间态**，逻辑更简单、状态更可控。
+
+**降级的关键保障**：
 - **耗时极短**（无 LLM 调用，纯本地处理）< 200ms
-- **不阻塞用户请求**（仅 200ms 额外开销，远小于一次 LLM 调用）
 - **保证对话继续**（即使摘要质量稍差，也比撑爆 token 导致 LLM API 报错强）
 
-### 6.3 并发请求冲突（同一 session）
-
-虽然 `src/core/session_queue.py` 已经把同一 session 的消息**串行化**处理（最近的 P0 修复），但异步压缩任务与主流程的并发仍需保护：
-
-- 压缩任务对 `(session_id, source_type)` 加 Redis SETNX 锁（TTL 5 分钟兜底防泄漏）
-- 锁失败（已有任务在跑）→ 主流程的 `check_and_dispatch` 静默跳过信号派发
-- 异步任务执行中即使 worker 崩溃，TTL 到期锁自动释放，不会永久卡死
-
-### 6.4 数据库写入失败（原子事务保障）
+### 6.2 数据库写入失败（原子事务保障）
 
 `_persist_atomically` 失败时（写 `chat_context_summaries`、更新旧 summary 状态、更新 `compacted=true` 三步任一失败），整个事务回滚，**memory 保持压缩前状态**：
 
 - 原消息 `compacted` 标记未被设置 → 下次请求仍会读到这些消息
 - 没有新的 active summary → `_build_messages` 不会注入摘要
-- fail_count += 1，达到阈值后走同步降级（§6.2）
+- 下次请求 / 定时任务会再次尝试压缩
 
 **事务三步必须全部完成才算压缩成功**（用户强调「缺一不可」），任一步失败整个事务回滚。
+
+### 6.3 主流程异常隔离（压缩失败不影响对话）
+
+`_run_compression_phase` 在 `agent.py` 中被 **try/except 全程包裹**，压缩链路的任何异常（读消息、调 LLM、写事务、降级路径）都只记日志、返回 None，**绝不向主对话流程抛异常**：
+
+```
+_run_compression_phase (agent.py)
+   │
+   try:
+       await compression_service.compress_session(...)  # check_threshold → compress_now
+       if 压缩成功:
+           await self._reload_memory_from_db(session_id)  # 本轮即享压缩后上下文
+   except Exception as e:
+       logger.warning(f"压缩阶段异常，跳过: {e}")  # 仅记日志
+       # 不抛出，主流程继续用未压缩上下文响应
+```
+
+**关键设计**：即使压缩完全失败，用户请求仍按未压缩上下文正常响应，最坏情况只是接近 token 上限——不会因为压缩链路故障导致整个对话不可用。这是同步方案「可能阻塞」风险的最终安全网。
+
+### 6.4 并发请求冲突（同一 session）
+
+v3.0 删除了 v2.0 的 Redis SETNX 锁，并发保护来源（详见 §2.3）：
+
+- `session_queue` 把同一 `(source_type, session_id)` 串行化，主流程同步压缩无并发竞争；
+- DB 层部分唯一索引 `idx_ccs_session_active` 保证同 session 同时只有一个 active summary；
+- 定时任务与主流程可能并发尝试同一 session，DB 唯一索引保证只生成一个 active summary，另一个事务回滚，不产生双 active。
 
 ---
 
@@ -787,15 +774,14 @@ class ContextCompressedEvent:
 
 ### 7.2 指标埋点
 
-| 指标 | 来源 | 含义 |
+对应 `src/core/compression_metrics.py` 实际实现：
+
+| 指标 | 类型 | 含义 |
 |------|------|------|
-| `context_compression_signal_total{source_type}` | Counter | 主流程发出的压缩信号次数（含被去重跳过的） |
-| `context_compression_signal_skipped_total{reason}` | Counter | 信号被跳过次数（已有任务在跑 / 未达阈值） |
-| `context_compression_task_total{result}` | Counter | 异步任务完成数（result=success/fallback/failed） |
-| `context_compression_sync_fallback_total` | Counter | 同步降级触发次数 |
-| `context_compression_task_duration_seconds` | Histogram | 异步任务总耗时（含 LLM 调用） |
-| `context_compression_sync_fallback_duration_seconds` | Histogram | 同步降级耗时（应 < 200ms） |
-| `context_compression_ratio` | Histogram | 压缩比 distribution |
+| `context_compression_invocation_total{source_type, result}` | Counter | 压缩执行次数（result=success/fallback/skipped） |
+| `context_compression_duration_seconds` | Histogram | 单次压缩总耗时（含 LLM 调用，降级路径应 < 200ms） |
+| `context_compression_fallback_duration_seconds` | Histogram | 降级路径耗时（标记 fallback_used=true 的那次，应 < 200ms） |
+| `context_compression_ratio` | Histogram | 压缩比 distribution（压缩后 token / 压缩前 token） |
 | `session_active_messages` | Gauge | 各 session 当前活跃消息数（定时采样） |
 | `session_active_summary_count` | Gauge | 各 session 当前已压缩段数（summary_version） |
 
@@ -826,17 +812,20 @@ class ContextCompressedEvent:
 
 > 详细开发任务见 [context_compression_dev_plan.md](./context_compression_dev_plan.md)
 
-| 阶段 | 内容 | 工期 | 验收 |
-|------|------|------|------|
-| Phase 1 | 基础设施：表结构、配置、ContextCompressionService 骨架 | 2 天 | 表创建成功、配置加载、空实现不报错 |
-| Phase 2 | 触发判断 + 分段 + 摘要 LLM 调用 + 原子事务持久化 | 3 天 | 单 session 触顶时压缩成功，事务原子性正确 |
-| Phase 3 | 工具结果差异化策略 + Redis SETNX 锁 + 异步任务派发 | 3 天 | 异步任务正确执行；同一 session 并发信号被去重 |
-| Phase 4 | 失败计数 + 同步降级兜底路径 | 2 天 | 连续失败 3 次后同步降级触发，对话不阻塞 |
-| Phase 5 | Agent 集成（主智能体 + STANDALONE 子智能体） | 2 天 | web 渠道 + 至少 1 个第三方渠道联调通过 |
-| Phase 6 | Trace 集成 + 指标埋点 + 管理后台页面 | 2 天 | 运维可看到压缩记录和指标 |
-| Phase 7 | 回归测试 + 全渠道联调 + 性能调优 | 2 天 | 5 个渠道全部验证；异步任务 P95 < 30s，同步降级 P95 < 200ms |
+| 阶段 | 内容 | 工期 | 验收 | 状态 |
+|------|------|------|------|------|
+| Phase 1 | 基础设施：表结构、配置、ContextCompressionService 骨架 | 2 天 | 表创建成功、配置加载、空实现不报错 | ✅ 已完成 |
+| Phase 2 | 触发判断（双阈值 + token 缓存）+ 分段 + 摘要 LLM + 原子事务 | 3 天 | 单 session 触顶时压缩成功，事务原子性正确 | ✅ 已完成 |
+| Phase 3 | 工具结果预处理 + 孤儿 tool 消息清理 + 失败重试 + 同步降级 | 2 天 | LLM 失败后走硬截断降级，对话不阻塞 | ✅ 已完成 |
+| Phase 4 | Agent 同步集成（主智能体 + STANDALONE 子智能体） | 2 天 | web 渠道 + 至少 1 个第三方渠道联调通过 | ✅ 已完成 |
+| Phase 5 | Trace 集成 + 指标埋点 + 管理后台页面 | 2 天 | 运维可看到压缩记录和指标 | ✅ 已完成 |
+| Phase 6 | 回归测试 + 全渠道联调 + 性能调优 | 2 天 | 5 个渠道全部验证；同步降级 P95 < 200ms | 🔧 部分（联调进行中） |
+| Phase 7 | 工具结果差异化策略（按工具类型分级，替代统一截断） | 2 天 | 不同工具走不同截断策略 | 🔧 部分（当前统一截断） |
+| **Phase 8** | **后台定时任务扫描（§2.5 补漏机制）** | 2 天 | 定时扫描 `context_token_count` 超阈值 session 补压缩 | ⏳ **待开发** |
 
-**总计：约 13 工作日**
+**总计：约 15 工作日**（Phase 1-5 已完成，Phase 6-7 部分，Phase 8 待开发）
+
+> v2.0 的「Redis SETNX 锁 / 异步任务派发 / 失败计数」相关 Phase 在 v3.0 已删除，回归同步后这部分工作量并入 Phase 2/3。
 
 ---
 
@@ -847,9 +836,9 @@ class ContextCompressedEvent:
 | 风险 | 缓解措施 |
 |------|---------|
 | 摘要丢失关键文件路径 | Prompt 明确要求保留路径原文 + 关键文件单独建字段 |
-| 异步压缩未完成时 token 撑爆 | TAIL 30 条 + 阈值 70% 留 30% 缓冲；压缩耗时 P95 < 30s，撑爆概率低 |
-| 异步任务连续失败 | fail_count 达 3 次触发同步降级，保证对话继续 |
-| 多 worker 并发触发 | Redis SETNX 锁 + 5min TTL 兜底 + session_queue 已串行化 |
+| **同步压缩阻塞用户请求** | 摘要 LLM 独立超时 30s + 重试 M 次；重试耗尽走硬截断降级（< 200ms）；最坏只阻塞达阈值那轮，§6.3 异常隔离兜底 |
+| 漏网 session 未压缩（缓存为 0 / Agent 异常） | **Phase 8 后台定时任务扫描** `context_token_count` 超阈值 session 补压缩（§2.5） |
+| 多 worker 并发触发 | session_queue 串行化 + DB 部分唯一索引 `idx_ccs_session_active`（§2.3） |
 | 摘要质量评估难 | 通过「用户重复问老问题」反向指标监控（见 §7.2） |
 | 历史数据未压缩 | 新方案只对未来的对话生效；存量超长 session 可手动触发管理后台的「立即压缩」 |
 
@@ -861,19 +850,19 @@ class ContextCompressedEvent:
 
 ---
 
-## 附录 A：决策对照表（业界 vs 本方案 v2.0）
+## 附录 A：决策对照表（业界 vs 本方案 v3.0）
 
-| 维度 | LangGraph | Claude Code | OpenAI Assistants | MemGPT | **本方案 v2.0** |
+| 维度 | LangGraph | Claude Code | OpenAI Assistants | MemGPT | **本方案 v3.0** |
 |------|-----------|-------------|-------------------|--------|-----------|
 | 策略 | Summary + Remove | Summary + Microcompact | Truncate | Tiered Memory | **Summary Buffer** |
-| 触发 | 开发者控制 | 95% token | 模型上限 | Agent 主动 | **双阈值（token 70% / 消息 150）** |
-| 同步性 | 同步 | 同步 | 同步 | 异步工具 | **异步为主，同步降级兜底** |
+| 触发 | 开发者控制 | 95% token | 模型上限 | Agent 主动 | **双阈值（token 70% / 消息 200）** |
+| 同步性 | 同步 | 同步 | 同步 | 异步工具 | **同步为主，后台定时任务补漏** |
 | 工具消息 | 全摘要 | 局部压缩 | 截断 | 全保留 | **差异化（按工具类型）** |
 | 存储 | SummaryMessage | 内部 | 替换 | 分层 | **独立表 + compacted 标记** |
 | 可追溯 | ✅ | ✅ | ❌ | ✅ | **✅（永不删除原消息）** |
 | 用户感知 | 透明 | 显式提示 | 透明 | 显式 | **透明** |
-| 失败兜底 | 开发者实现 | 内部 | 无 | 内部 | **fail_count + 同步降级** |
+| 失败兜底 | 开发者实现 | 内部 | 无 | 内部 | **同次调用内重试 + 硬截断降级** |
 
 ## 附录 B：参考链接
 
-完整参考见调研报告 [context_compression_research.md](../../research/context-compression-research.md) 第 4 节。
+完整参考见调研报告 [context_compression_research.md](../../research/context_compression_research.md) 第 4 节。

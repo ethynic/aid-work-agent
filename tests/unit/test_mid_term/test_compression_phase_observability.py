@@ -349,7 +349,7 @@ async def test_event_fields_match_compression_result(monkeypatch):
 async def test_trigger_reason_passthrough_force(monkeypatch):
     """force 触发的 reason 也应被透传到 event.trigger_reason。
 
-    验证不同 trigger_reason 值（force / token_threshold / message_threshold / precise_check）
+    验证不同 trigger_reason 值（force / token_threshold / message_threshold）
     都能正确透传。
     """
     agent = _make_minimal_agent()
@@ -358,8 +358,7 @@ async def test_trigger_reason_passthrough_force(monkeypatch):
     for reason in [
         "force",
         "token_threshold(10000/7000, 71%, cached=True)",
-        "message_threshold(160/150)",
-        "precise_check=True",
+        "message_threshold(160/200)",
     ]:
         # 重置 pending event
         agent._pending_compression_event = None

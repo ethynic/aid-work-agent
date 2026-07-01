@@ -19,7 +19,7 @@ class SpanRecord:
     span_id: str
     name: str
     start_time: float
-    span_type: str = 'span'          # span / generation
+    span_type: str = 'span'          # span / generation / context_compressed
     tool_args: Optional[str] = None
     end_time: Optional[float] = None
     result: Optional[str] = None
@@ -30,6 +30,9 @@ class SpanRecord:
     provider: Optional[str] = None
     usage: Optional[Dict] = None
     request_id: Optional[str] = None
+    # 上下文压缩专用字段（仅 context_compressed span 使用，Phase 7 §7.1）
+    # 前端根据 span_type='context_compressed' 渲染为紫色独立 span
+    compression_info: Optional[Dict] = None
 
 
 @dataclass
@@ -93,6 +96,9 @@ class TraceCollector:
             self._handle_tool_result(event)
         elif event_type == "llm_call":
             self._handle_llm_call(event)
+        elif event_type == "context_compressed":
+            # Phase 7 §7.1：压缩完成事件 → 紫色独立 span
+            self._handle_context_compressed(event)
         elif event_type == "response":
             data = event.get("data", "")
             if self.trace.output:
@@ -213,3 +219,44 @@ class TraceCollector:
 
         # 覆盖：只保留最后一次 LLM 调用
         self._last_llm_span = span
+
+    def _handle_context_compressed(self, event: dict):
+        """处理上下文压缩完成事件（Phase 7 §7.1）。
+
+        创建一个独立的 span，span_type='context_compressed'，前端识别此 type
+        并渲染为紫色（区别于 LLM 蓝色 / Tool 绿色）。所有压缩元数据保存在
+        compression_info 字段，trace 详情页展开后可看到。
+        """
+        now = time.time()
+        duration_ms = int(event.get("duration_ms") or 0)
+        # 起止时间反推：end=now，start=end-duration
+        start_time = now - (duration_ms / 1000.0 if duration_ms else 0)
+        info = {
+            "summary_id": event.get("summary_id", ""),
+            "compressed_message_count": event.get("compressed_message_count", 0),
+            "original_token_count": event.get("original_token_count", 0),
+            "compressed_token_count": event.get("compressed_token_count", 0),
+            "compression_ratio": event.get("compression_ratio", 0.0),
+            "fallback_used": bool(event.get("fallback_used", False)),
+            "trigger_reason": event.get("trigger_reason", ""),
+        }
+        span = SpanRecord(
+            span_id=f"sp_{uuid.uuid4().hex[:16]}",
+            name="context_compressed",
+            start_time=start_time,
+            span_type='context_compressed',
+            tool_args=json.dumps(
+                {"trigger_reason": info["trigger_reason"]},
+                ensure_ascii=False,
+            ),
+            result=json.dumps(info, ensure_ascii=False),
+            duration_ms=duration_ms,
+            success=True,
+            model=event.get("llm_model"),
+            provider=event.get("llm_provider"),
+            compression_info=info,
+        )
+        self.trace.spans.append(span)
+        self.trace.tags.append("context_compressed")
+        if info["fallback_used"]:
+            self.trace.tags.append("compression_fallback")

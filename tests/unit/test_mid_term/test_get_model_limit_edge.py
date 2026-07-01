@@ -36,27 +36,27 @@ def test_provider_cfg_model_empty_returns_default(service, monkeypatch):
 
 
 def test_known_model_returns_exact_value(service, monkeypatch):
-    """deepseek-reasoner → 64000（验证不是默认值，而是映射表里精确的值）"""
+    """deepseek-v4-pro → 512000（验证不是默认值，而是映射表里精确的值）"""
     from src.config.settings import LLMConfig, LLMProviderConfig
     fake_llm = LLMConfig(provider="deepseek")
-    fake_llm.deepseek = LLMProviderConfig(api_keys=["x"], model="deepseek-reasoner")
+    fake_llm.deepseek = LLMProviderConfig(api_keys=["x"], model="deepseek-v4-pro")
     monkeypatch.setattr("src.memory.mid_term.settings.llm", fake_llm)
     service._model_limit_cache = None
 
     limit = service._get_model_limit()
-    assert limit == 64_000
+    assert limit == 512_000
 
 
 def test_settings_change_reflects_without_injection(service, monkeypatch):
     """P1-2：生产路径（_model_limit_cache=None）不缓存，settings 切换立即生效"""
     from src.config.settings import LLMConfig, LLMProviderConfig
     fake_llm = LLMConfig(provider="deepseek")
-    fake_llm.deepseek = LLMProviderConfig(api_keys=["x"], model="deepseek-chat")
+    fake_llm.deepseek = LLMProviderConfig(api_keys=["x"], model="deepseek-v4-pro")
     monkeypatch.setattr("src.memory.mid_term.settings.llm", fake_llm)
     service._model_limit_cache = None  # 生产路径，不注入
 
     first = service._get_model_limit()
-    assert first == 128_000
+    assert first == 512_000
 
     # 切换到完全不同的 provider（模拟 failover）
     class _Empty:

@@ -57,7 +57,7 @@ def test_eval_threshold_cached_tokens_triggers(service):
 
 def test_eval_threshold_zero_cache_no_token_check(service):
     """缓存=0 时不做 token 判断（即使 messages 多到理论上 token 高也不触发 token 路径）"""
-    # cached=0, msg_count=10（< 150 消息阈值），不触发
+    # cached=0, msg_count=10（< 200 消息阈值），不触发
     should, reason = service._eval_threshold(
         cached_tokens=0, msg_count=10, model_limit=10_000
     )
@@ -66,7 +66,7 @@ def test_eval_threshold_zero_cache_no_token_check(service):
 
 
 def test_eval_threshold_zero_cache_msg_count_falls_back(service):
-    """缓存=0 时消息数兜底：msg_count >= 150 → True（消息数阈值）"""
+    """缓存=0 时消息数兜底：msg_count >= 200 → True（消息数阈值）"""
     should, reason = service._eval_threshold(
         cached_tokens=0, msg_count=200, model_limit=10_000
     )
@@ -180,32 +180,3 @@ async def test_check_threshold_does_not_load_messages(service, monkeypatch):
 
     should, reason, meta = await service.check_threshold("sess", "chat")
     assert should is False
-
-
-@pytest.mark.asyncio
-async def test_check_threshold_precise_check_when_cache_zero_and_many_messages(service, monkeypatch):
-    """v3.2.1 P1-1: cached=0 + msg_count >= 80 时主动拉 messages + count_tokens 做精确判断。
-
-    场景：Agent 异常未写入 context_token_count（缓存=0），但实际消息累积已撑爆 token。
-    若没有这个保护，session 会因为 msg_count < 150 永不压缩。
-    """
-    _patch_meta(service, context_token_count=0)  # 缓存为 0
-    _patch_msg_count(service, 100)  # 消息数 >= 80 但 < 150
-    service._model_limit_cache = 10_000  # 阈值 7000
-
-    # mock _load_messages 返回大消息列表（每条 1KB，100 条 = 100KB ≈ 30K+ token）
-    big_messages = []
-    for i in range(100):
-        big_messages.append({"role": "user", "content": "x" * 1000, "id": 2 * i + 1})
-        big_messages.append({"role": "assistant", "content": "y" * 1000, "id": 2 * i + 2})
-
-    async def _fake_load(*args, **kwargs):
-        return big_messages
-    monkeypatch.setattr(service, "_load_messages", _fake_load)
-
-    should, reason, meta = await service.check_threshold("sess_precise", "chat")
-
-    # 应该触发（token 超过 7000 阈值）
-    assert should is True, "cached=0 + msg_count>=80 时应主动拉 messages 做精确判断"
-    assert "threshold" in reason or "precise" in reason.lower(), \
-        f"reason 应反映精确计算路径，实际：{reason}"

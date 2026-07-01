@@ -162,7 +162,7 @@ memory:
 
 > 目标：(1) 修复短期记忆的已知问题；(2) 当单次会话历史过长时，自动压缩总结早期对话，控制上下文长度
 > 预计工期：3-5 天
-> 状态：短期记忆修复已完成（2.1.x），中期记忆压缩未实现（2.2.x）
+> 状态：短期记忆修复已完成（2.1.x）；中期记忆压缩 Phase 1-7 已完成（v3.0 同步路径，见 [context_compression_design.md](./context_compression_design.md)），后台定时任务扫描（Phase 8）待开发
 
 #### 设计理念
 
@@ -265,7 +265,7 @@ memory:
 
 ---
 
-#### 2.2 中期记忆 — 会话内上下文压缩 ❌ 未实现
+#### 2.2 中期记忆 — 会话内上下文压缩 🔧 部分完成（同步路径已实现，定时任务待开发）
 
 > **方案已细化**：完整设计见 [context_compression_design.md](./context_compression_design.md)，开发计划见 [context_compression_dev_plan.md](./context_compression_dev_plan.md)，业界调研见 [context_compression_research.md](../../research/context_compression_research.md)。
 >
@@ -1004,11 +1004,13 @@ memory:
 ## 7. 待讨论事项
 
 > 以下问题需要团队讨论确认后再进入开发
+>
+> 注：第 2/3/4 项（压缩时机、延迟/异步、摘要持久化）已在 [context_compression_design.md](./context_compression_design.md) 中解决（双阈值 token+消息数触发、v3.0 采同步压缩 + 后台定时任务补漏、独立 `chat_context_summaries` 表持久化）。
 
 1. **DialogManager 的 memory 是否需要独立？** 需要确认其使用场景
-2. **中期记忆压缩时机**：当前方案基于消息条数（100 条触发），是否需要考虑 token 数？消息条数简单但不精确
-3. **中期记忆压缩的延迟问题**：调用 LLM 做摘要会增加用户请求的响应延迟，是否改为异步压缩？
-4. **中期记忆摘要的存储位置**：目前设计存在 ShortTermMemory 的内存字段中，进程重启会丢失。是否需要持久化摘要？
+2. **中期记忆压缩时机**：✅ 已解决（见 design §3.1 双阈值：token 70% 或 消息数 150）
+3. **中期记忆压缩的延迟问题**：✅ 已解决（v3.0 采同步压缩，独立超时 + 硬截断降级 + 后台定时任务补漏）
+4. **中期记忆摘要的存储位置**：✅ 已解决（独立 `chat_context_summaries` 表持久化，原消息标记 compacted）
 5. **长期记忆的分类是否需要固定？** 当前定义了 7 个预定义分类，是否允许系统/用户自由添加新分类
 6. **每日总结的时机和频率**：凌晨 2 点是否合适？是否需要更频繁（如每 6 小时）
 7. **"记住"意图的识别方式**：关键词匹配 vs LLM 意图识别，前者简单但漏检率高
