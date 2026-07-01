@@ -371,6 +371,10 @@ class Agent:
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
         self.tool_registry.register(PdfProcessTool())
 
+        # 注册 x-to-image 内容转图片工具
+        from src.tools.image.x_to_image_tool import XToImageTool
+        self.tool_registry.register(XToImageTool())
+
         # 注册 PPT 生成工具
         from src.tools.ppt.ppt_process_tool import PptProcessTool
         self.tool_registry.register(PptProcessTool())
