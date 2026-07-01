@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from PIL import Image
+
 from src.tools.ppt.spec import SlideDeckSpec
 
 
@@ -66,9 +68,34 @@ class NodePptRenderer:
                 qa = json.loads(qa_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise PptRendererError("Node PPT renderer QA output is invalid") from exc
+            self._enrich_image_qa(qa, spec)
             self._validate_qa(qa, spec)
+            published_layout = Path(temp_dir) / "published-layout.json"
+            published_layout.write_text(
+                json.dumps(qa, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             os.replace(rendered_path, output)
+            os.replace(published_layout, output.with_suffix(".layout.json"))
         return {"file_path": str(output), "qa": qa}
+
+    @staticmethod
+    def _enrich_image_qa(qa: dict, spec: SlideDeckSpec) -> None:
+        for slide_report, slide in zip(qa.get("slides", []), spec.slides):
+            objects = slide_report.get("objects", [])
+            for object_report, node in zip(objects, slide.nodes):
+                if node.type not in {"image", "raster"}:
+                    continue
+                path = Path(node.path)
+                object_report["source_size_bytes"] = (
+                    path.stat().st_size if path.is_file() else 0
+                )
+                try:
+                    with Image.open(path) as image:
+                        image.verify()
+                    object_report["readable"] = path.stat().st_size > 0
+                except (OSError, ValueError):
+                    object_report["readable"] = False
 
     @staticmethod
     def _validate_qa(qa: object, spec: SlideDeckSpec) -> None:

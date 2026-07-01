@@ -33,6 +33,8 @@ test("validates and reports node counts", () => {
   assert.equal(report.slide_count, 1);
   assert.equal(report.node_count, 4);
   assert.deepEqual(report.slides[0].node_types, { text: 1, shape: 1, table: 1, chart: 1 });
+  assert.deepEqual(report.slides[0].objects[0].bounds, { x: 1, y: 1, w: 4, h: 1 });
+  assert.deepEqual(report.slides[0].slide_size, { width: 13.333, height: 7.5 });
 });
 
 test("rejects nodes outside the slide", () => {

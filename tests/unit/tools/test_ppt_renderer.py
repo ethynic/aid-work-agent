@@ -43,6 +43,9 @@ def test_renderer_writes_temp_spec_checks_output_and_reads_qa(tmp_path, monkeypa
 
     assert result["qa"]["node_count"] == 1
     assert Path(result["file_path"]).read_bytes() == b"pptx"
+    assert json.loads(
+        (tmp_path / "out.layout.json").read_text(encoding="utf-8")
+    )["slide_count"] == 1
 
 
 def test_renderer_failure_does_not_overwrite_existing_output(tmp_path, monkeypatch):

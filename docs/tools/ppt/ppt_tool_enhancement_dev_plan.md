@@ -2,7 +2,7 @@
 
 > 创建日期：2026-06-30  
 > 关联设计：[ppt_tool_enhancement_design.md](ppt_tool_enhancement_design.md)  
-> 状态：🔧 部分完成（Phase 0-6 已完成，真实 HTML/模板/PPTX 自动化测试通过）
+> 状态：🔧 部分完成（Phase 0-7 已完成，真实 HTML/模板/PPTX 与统一 QA 自动化测试通过）
 > 范围：`ppt_process` 入参拆分、Node.js + PptxGenJS 主渲染器、`SlideDeckSpec`、HTML 转 PPTX、模板跟随增强、QA 验证
 
 ## 1. 目标
@@ -407,7 +407,7 @@ npm --prefix src/tools/ppt/renderer-node run build
 
 ### Phase 7：PPTX QA 与质量报告
 
-状态：待开发
+状态：✅ 已完成（2026-07-01）
 
 目标：
 
@@ -444,6 +444,15 @@ npm --prefix src/tools/ppt/renderer-node run build
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests/unit/tools/test_ppt_quality_validator.py -q
 ```
+
+完成内容：
+
+- 已实现统一 `PPTQualityValidator`，覆盖文件/可打开性、页数、空白页、对象越界、图片和 raster 可读性。
+- 已实现 LibreOffice headless PDF、Poppler PNG preview；依赖缺失或转换失败时安全降级并记录 warning。
+- Node renderer `layout.json` 已扩展为脱敏对象树，所有生成路径输出 `.layout.json` 和 `.qa-report.json`。
+- 工具结果稳定返回结构、preview、raster、`editable_ratio`、warning/error 和 deliverable 状态。
+- 已实现 `PPT_QA_STRICT`：严重 QA 错误在 strict 模式下阻止成功交付，非 strict 模式保留文件并明确告警。
+- 已通过真实 PPTX、损坏包/图片、无 LibreOffice、strict/非 strict 和双输出独立 QA 测试。
 
 ### Phase 8：Agent 提示与文档更新
 

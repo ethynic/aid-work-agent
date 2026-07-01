@@ -138,12 +138,16 @@ class PptProcessTool(BaseTool):
 
         try:
             if mode == "template":
-                return await self._handle_template(normalized)
-            if mode == "html_to_pptx":
-                return await self._handle_html(normalized)
-            if mode == "spec_to_pptx":
-                return await self._handle_spec(normalized)
-            return await self._handle_auto(normalized, mode)
+                result = await self._handle_template(normalized)
+            elif mode == "html_to_pptx":
+                result = await self._handle_html(normalized)
+            elif mode == "spec_to_pptx":
+                result = await self._handle_spec(normalized)
+            else:
+                result = await self._handle_auto(normalized, mode)
+            if result.get("success"):
+                return self._apply_quality_validation(result)
+            return result
         except Exception as e:
             logger.error(f"[PptProcess] 执行失败: {e}", exc_info=True)
             return {"success": False, "error": self._format_user_error(e)}
@@ -234,6 +238,7 @@ class PptProcessTool(BaseTool):
                     exported.spec, output_stem=f"{safe_asset_name}_high_fidelity"
                 )
                 result["alternate_file_path"] = high_fidelity["file_path"]
+                result["_alternate_layout_qa"] = high_fidelity.get("_layout_qa")
         output_paths = [Path(result["file_path"])]
         if result.get("alternate_file_path"):
             output_paths.append(Path(result["alternate_file_path"]))
@@ -430,8 +435,88 @@ class PptProcessTool(BaseTool):
                 "slide_count": qa.get("slide_count", len(spec.slides)),
                 "node_count": qa.get("node_count", 0),
             },
+            "_layout_qa": qa,
             "message": f"已生成PPT，共 {len(spec.slides)} 页",
         }
+
+    def _apply_quality_validation(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        from src.tools.ppt.quality_validator import PPTQualityValidator
+
+        strict = get_ppt_config().qa_strict
+        validator = PPTQualityValidator()
+        existing_summary = result.get("qa_summary", {})
+        existing_warnings = result.get("warnings", [])
+        report = validator.validate(
+            result["file_path"],
+            expected_slide_count=result.get("slide_count"),
+            layout=result.pop("_layout_qa", None),
+            editable_ratio=existing_summary.get("editable_ratio"),
+            warnings=existing_warnings,
+            strict=strict,
+        )
+        result["qa_summary"] = {**existing_summary, **report["summary"]}
+        combined_warnings = [
+            *report["warnings"],
+            *(f"QA: {message}" for message in report["errors"]),
+        ]
+
+        alternate_path = result.get("alternate_file_path")
+        alternate_report = None
+        if alternate_path:
+            alternate_report = validator.validate(
+                alternate_path,
+                expected_slide_count=result.get("slide_count"),
+                layout=result.pop("_alternate_layout_qa", None),
+                strict=strict,
+            )
+            result["alternate_qa_summary"] = alternate_report["summary"]
+            combined_warnings.extend(
+                f"备用文件 QA: {message}"
+                for message in alternate_report["warnings"]
+            )
+            combined_warnings.extend(
+                f"备用文件 QA: {message}" for message in alternate_report["errors"]
+            )
+        else:
+            result.pop("_alternate_layout_qa", None)
+
+        combined_warnings = list(dict.fromkeys(combined_warnings))
+        if combined_warnings:
+            result["warnings"] = combined_warnings
+        else:
+            result.pop("warnings", None)
+
+        strict_failed = not report["summary"]["deliverable"] or (
+            alternate_report is not None
+            and not alternate_report["summary"]["deliverable"]
+        )
+        if strict_failed:
+            failed_paths = [result.get("file_path"), result.get("alternate_file_path")]
+            for failed_path in failed_paths:
+                if not failed_path:
+                    continue
+                path = Path(failed_path)
+                for artifact in (
+                    path,
+                    path.with_suffix(".layout.json"),
+                    path.with_suffix(".qa-report.json"),
+                ):
+                    try:
+                        artifact.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("[PptProcess] 无法清理未通过 QA 的输出文件")
+            return {
+                "success": False,
+                "error": "PPT 质量检查未通过，已阻止交付",
+                "qa_summary": result["qa_summary"],
+                **(
+                    {"alternate_qa_summary": result["alternate_qa_summary"]}
+                    if "alternate_qa_summary" in result
+                    else {}
+                ),
+                "warnings": combined_warnings,
+            }
+        return result
 
     def _get_output_dir(self) -> Path:
         try:
