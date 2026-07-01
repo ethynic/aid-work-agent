@@ -181,26 +181,26 @@
 
 ---
 
-## Phase 8：后台定时任务扫描（2 天）⏳ 待开发
+## Phase 8：后台定时任务扫描（2 天）✅ 已完成
 
-> 补漏机制，详见设计 §2.5。主流程同步压缩是主力，定时任务兜底漏网 session。本 Phase 未实现，以下为开发任务。
+> 补漏机制，详见设计 §2.5。主流程同步压缩是主力，定时任务兜底漏网 session。默认关闭（`background_scan_enabled: false`），部署时在 config.yaml 开启。
 
 ### 任务 8.1：扫描逻辑实现
-- [ ] 新建扫描函数：周期性查询 `chat_sessions` / `channel_sessions` 表 `context_token_count` 字段
-- [ ] 筛选条件：`context_token_count > model_limit × token_threshold_ratio` 且 `context_token_count > 0`
-- [ ] 命中 session 调 `compress_session(session_id, source_type, force=False)` 复用主流程入口
-- [ ] 接入既有 `src/scheduler/manager.py`（APScheduler `IntervalTrigger`，建议 5-10 分钟周期）
-- [ ] 复用 scheduler 已有的 Redis 分布式锁，保证多 worker 只跑一个实例
+- [x] 新建扫描函数：`ContextCompressionService.scan_over_threshold_sessions` 一条 SQL UNION 查 `chat_sessions` / `channel_sessions` 表 `context_token_count` 字段
+- [x] 筛选条件：`context_token_count > model_limit × token_threshold_ratio` 且 `context_token_count > 0`
+- [x] 命中 session 调 `compress_session(session_id, source_type, force=False)` 复用主流程入口
+- [x] 接入既有 `src/scheduler/manager.py`（APScheduler `IntervalTrigger`，默认 600s 周期）
+- [x] 复用 scheduler 已有的 Redis 分布式锁，保证多 worker 只跑一个实例
 
 ### 任务 8.2：去重与并发保护
-- [ ] 复用 `check_threshold` 内部的状态判断（已有 active summary / 正在压缩的 session 自动跳过）
-- [ ] 验证定时任务与主流程并发尝试同一 session 时，DB 部分唯一索引保证只生成一个 active summary
-- [ ] 单次扫描批量上限（`background_scan.batch_size`，默认 50），避免单次扫描占用过久
+- [x] 复用 `check_threshold` 内部的状态判断（已有 active summary / 正在压缩的 session 自动跳过）
+- [x] 验证定时任务与主流程并发尝试同一 session 时，DB 部分唯一索引保证只生成一个 active summary
+- [x] 单次扫描批量上限（`background_scan_batch_size`，默认 50），避免单次扫描占用过久
 
 ### 任务 8.3：配置与单测
-- [ ] 在 `configs/config.yaml` `memory.mid_term` 启用 `background_scan` 配置（默认 `enabled: false`，Phase 8 上线后开启）
-- [ ] 在 `src/config/settings.py` 补充 `background_scan_enabled` / `background_scan_interval_sec` 字段
-- [ ] 单测：mock 扫描场景，验证命中/未命中/去重/批量上限
+- [x] 在 `configs/config.yaml` `memory.mid_term` 新增 `background_scan_enabled` / `background_scan_interval_sec` / `background_scan_batch_size` 扁平配置（默认 `false`）
+- [x] 在 `src/config/settings.py` `MidTermMemoryConfig` 补充对应字段
+- [x] 单测：`tests/unit/test_mid_term/test_background_scan.py` 覆盖扫描命中/参数透传/DB 异常容错/补压缩/单 session 异常隔离/关闭跳过（6 用例）
 
 **Phase 8 验收**：
 - 定时任务按周期扫描，超阈值 session 被补压缩
@@ -220,7 +220,7 @@
 | Day 9 | 可观测性（trace+指标+管理后台）完整 | ✅ |
 | Day 11 | 全渠道联调 + 性能调优 | 🔧 部分 |
 | Day 13 | 工具结果差异化策略 | 🔧 部分 |
-| Day 15 | 后台定时任务扫描上线 | ⏳ 待开发 |
+| Day 15 | 后台定时任务扫描上线 | ✅ |
 
 ---
 

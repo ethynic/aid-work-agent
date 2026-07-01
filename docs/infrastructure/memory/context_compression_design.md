@@ -198,9 +198,9 @@ compress_now 调用摘要 LLM
 
 **对比 v2.0**：v2.0 单次失败只记 fail_count，要累计 3 次才触发同步降级，期间多轮请求都在「无压缩 + fail_count 累加」状态。v3.0 在单次调用内重试 + 降级一气呵成，**不存在 fail_count 中间态**，逻辑更简单、状态更可控。详细失败分类见 §6。
 
-### 2.5 后台定时任务扫描（补漏机制，待 Phase 8 实现）
+### 2.5 后台定时任务扫描（补漏机制，Phase 8 已实现）
 
-> **状态：待实现。** 本节为完整设计描述，定时任务尚未编码，主流程同步压缩是当前唯一已实现的压缩路径。
+> **状态：已实现（默认关闭，部署时在 config.yaml 开启 `background_scan_enabled`）。** 定时任务复用主流程同一 `compress_session` 入口，`check_threshold` 内部去重；多 worker 安全由 scheduler 已有的 Redis 分布式锁保证。
 
 **定位**：主流程同步压缩是主力；定时任务**只兜底漏网 session**，不承担主力职责。漏网场景包括：
 1. `context_token_count` 缓存为 0 的老 session（字段上线前的存量 session，主流程的 `check_threshold` 会回退全量 token 计算但仍可能漏）；
@@ -821,9 +821,9 @@ class ContextCompressedEvent:
 | Phase 5 | Trace 集成 + 指标埋点 + 管理后台页面 | 2 天 | 运维可看到压缩记录和指标 | ✅ 已完成 |
 | Phase 6 | 回归测试 + 全渠道联调 + 性能调优 | 2 天 | 5 个渠道全部验证；同步降级 P95 < 200ms | 🔧 部分（联调进行中） |
 | Phase 7 | 工具结果差异化策略（按工具类型分级，替代统一截断） | 2 天 | 不同工具走不同截断策略 | 🔧 部分（当前统一截断） |
-| **Phase 8** | **后台定时任务扫描（§2.5 补漏机制）** | 2 天 | 定时扫描 `context_token_count` 超阈值 session 补压缩 | ⏳ **待开发** |
+| **Phase 8** | **后台定时任务扫描（§2.5 补漏机制）** | 2 天 | 定时扫描 `context_token_count` 超阈值 session 补压缩 | ✅ **已完成**（默认关闭） |
 
-**总计：约 15 工作日**（Phase 1-5 已完成，Phase 6-7 部分，Phase 8 待开发）
+**总计：约 15 工作日**（Phase 1-5、Phase 8 已完成，Phase 6-7 部分）
 
 > v2.0 的「Redis SETNX 锁 / 异步任务派发 / 失败计数」相关 Phase 在 v3.0 已删除，回归同步后这部分工作量并入 Phase 2/3。
 

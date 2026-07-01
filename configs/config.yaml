@@ -100,6 +100,10 @@ memory:
       timeout_sec: 30
     # 工具结果预处理
     large_tool_result_truncate_chars: 2000
+    # 后台定时任务扫描（Phase 8 §2.5 补漏机制）
+    background_scan_enabled: false     # 默认关闭，上线后按需开启
+    background_scan_interval_sec: 600  # 扫描周期，默认 10 分钟
+    background_scan_batch_size: 50     # 单次扫描最多处理 session 数
   long_term:
     enabled: true           # 是否启用长期记忆
     storage_dir: "storage/memory"    # 记忆文件根目录，实际文件在 storage/memory/{tenant_id}/ 下

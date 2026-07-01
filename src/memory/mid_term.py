@@ -1377,6 +1377,49 @@ class ContextCompressionService:
         meta = await self._resolve_session_meta(session_id, source_type)
         return meta.tenant_id
 
+    async def scan_over_threshold_sessions(
+        self, token_threshold: int, batch_size: int = 50
+    ) -> List[Tuple[str, str]]:
+        """扫描 context_token_count 超阈值的 session（Phase 8 §2.5）。
+
+        一条 SQL 扫 chat_sessions + channel_sessions 两张表，返回
+        [(session_id, source_type), ...]。只扫 token_count > 0 的
+        （缓存=0 的判不准，留给主流程同步压缩）。
+
+        查询异常容错返回空列表（定时任务不因 DB 抖动崩溃）。
+        """
+        return await asyncio.to_thread(
+            self._scan_over_threshold_sessions_sync, token_threshold, batch_size
+        )
+
+    def _scan_over_threshold_sessions_sync(
+        self, token_threshold: int, batch_size: int = 50
+    ) -> List[Tuple[str, str]]:
+        """scan_over_threshold_sessions 的同步实现（run in thread）。"""
+        placeholder = "%s"
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT session_id, 'chat' AS source_type FROM chat_sessions
+                    WHERE context_token_count > {placeholder} AND context_token_count > 0
+                    UNION ALL
+                    SELECT session_id, channel_type AS source_type FROM channel_sessions
+                    WHERE context_token_count > {placeholder} AND context_token_count > 0
+                    LIMIT {placeholder}
+                    """,
+                    (token_threshold, token_threshold, batch_size),
+                )
+                rows = cursor.fetchall() or []
+                return [(row["session_id"], row["source_type"]) for row in rows]
+        except Exception as e:
+            logger.warning(
+                f"ContextCompression scan_over_threshold_sessions failed, "
+                f"threshold={token_threshold}, batch={batch_size}: {e}"
+            )
+            return []
+
 
 # ============== 单例（P1-4：线程安全）==============
 
@@ -1393,3 +1436,49 @@ def get_compression_service() -> ContextCompressionService:
             if _compression_service is None:
                 _compression_service = ContextCompressionService()
     return _compression_service
+
+
+async def run_background_compression_scan() -> Dict[str, int]:
+    """Phase 8 定时任务入口：扫描超阈值 session 并补压缩。
+
+    读 settings.memory.mid_term 配置；disabled 时直接返回零统计。
+    单个 session 异常被隔离（记日志继续下一个），不让一个 session 挂掉整轮扫描。
+
+    Returns:
+        {"scanned": N, "compressed": N, "failed": N, "skipped": N}
+    """
+    cfg = settings.memory.mid_term
+    if not (cfg.enabled and cfg.background_scan_enabled):
+        return {"scanned": 0, "compressed": 0, "failed": 0, "skipped": 0}
+
+    service = get_compression_service()
+    model_limit = service._get_model_limit()
+    threshold = int(model_limit * cfg.token_threshold_ratio)
+
+    sessions = await service.scan_over_threshold_sessions(
+        threshold, cfg.background_scan_batch_size
+    )
+
+    compressed = 0
+    skipped = 0
+    failed = 0
+    for sid, source in sessions:
+        try:
+            result = await service.compress_session(sid, source, force=False)
+            if result is not None:
+                compressed += 1
+            else:
+                skipped += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                f"ContextCompression background scan compress failed, "
+                f"sid={sid}, source={source}: {e}"
+            )
+
+    return {
+        "scanned": len(sessions),
+        "compressed": compressed,
+        "failed": failed,
+        "skipped": skipped,
+    }

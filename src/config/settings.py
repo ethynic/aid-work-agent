@@ -177,6 +177,10 @@ class MidTermMemoryConfig(BaseModel):
     summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig)
     # 工具结果预处理
     large_tool_result_truncate_chars: int = 2000
+    # 后台定时任务扫描（Phase 8 补漏机制，§2.5）
+    background_scan_enabled: bool = False       # 默认关闭，部署时在 config.yaml 开启
+    background_scan_interval_sec: int = 600     # 扫描周期，默认 10 分钟
+    background_scan_batch_size: int = 50        # 单次扫描最多处理 session 数
 
 
 class LongTermMemoryConfig(BaseModel):

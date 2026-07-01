@@ -104,6 +104,25 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册记忆总结任务失败: {e}")
 
+        # Phase 8：上下文压缩后台扫描（§2.5 补漏机制）
+        try:
+            mt = settings.memory.mid_term
+            if mt.enabled and mt.background_scan_enabled:
+                self._scheduler.add_job(
+                    self._run_compression_scan,
+                    IntervalTrigger(seconds=mt.background_scan_interval_sec),
+                    id="job_system_compression_scan",
+                    name="Context Compression Scan",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                logger.info(
+                    f"后端日志：已注册上下文压缩扫描任务 "
+                    f"(interval={mt.background_scan_interval_sec}s, batch={mt.background_scan_batch_size})"
+                )
+        except Exception as e:
+            logger.error(f"后端日志：注册压缩扫描任务失败: {e}")
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:
@@ -114,6 +133,22 @@ class ScheduledTaskManager:
             logger.info(f"后端日志：每日记忆总结完成: {stats}")
         except Exception as e:
             logger.error(f"后端日志：每日记忆总结失败: {e}", exc_info=True)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    def _run_compression_scan(self):
+        """Phase 8：上下文压缩后台扫描（APScheduler 回调，后台线程执行）"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            from src.memory.mid_term import run_background_compression_scan
+            stats = loop.run_until_complete(run_background_compression_scan())
+            logger.info(f"后端日志：上下文压缩扫描完成: {stats}")
+        except Exception as e:
+            logger.error(f"后端日志：上下文压缩扫描失败: {e}", exc_info=True)
         finally:
             try:
                 loop.close()
