@@ -471,7 +471,7 @@ ppt_process(
 - `editable`：后续编辑优先，复杂视觉区域会局部栅格化
 - `both`：同时生成可编辑版和高保真版，人工审核时优先使用
 - `index.html` 和模板必须在当前 workspace；若来源仍是外部/临时路径，先用 `cp(source_file_path="<来源路径>", file_path="workspace/<文件名>", register_download=false, visible=false)` 复制，并将 cp 返回的新路径交给 `ppt_process`，禁止直接传任意外部路径
-- 工具返回 `success=true` 后，分别对 `file_path` 和可选的 `alternate_file_path` 调用 `cp` 注册下载
+- 工具返回 `success=true` 后，分别对 `file_path` 和可选的 `alternate_file_path` 调用 `cp` 注册下载，并为每份文件传入业务化 `display_name`
 - 工具失败、strict QA 阻止交付或没有返回 `file_path` 时，如实报告错误，不得声称 PPTX 已生成
 
 ---

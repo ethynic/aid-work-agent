@@ -105,7 +105,8 @@ TOOL_DESCRIPTION = """PPT生成工具。根据用户需求生成可编辑的 Pow
     cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
 cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
 display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。
-both 模式还会返回 alternate_file_path，必须对两条路径分别调用 cp。工具返回失败时不得声称文件已生成。"""
+both 模式还会返回 alternate_file_path，必须对两条路径分别调用 cp，并分别提供业务化 display_name。
+工具返回失败时不得声称文件已生成。"""
 
 
 class PptProcessTool(BaseTool):
@@ -129,10 +130,10 @@ class PptProcessTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         try:
             payload = self.InputModel.model_validate(kwargs)
-        except ValidationError:
+        except ValidationError as error:
             return {
                 "success": False,
-                "error": "请提供主题或内容（content/context），或提供模板文件（file_paths）",
+                "error": self._format_validation_error(error),
             }
 
         normalized = self._normalizer.normalize(
@@ -592,6 +593,20 @@ class PptProcessTool(BaseTool):
         if isinstance(error, PptRendererError):
             return "PPTX 渲染器不可用或生成失败，请稍后重试"
         return "PPT生成失败，请检查输入内容或稍后重试"
+
+    @staticmethod
+    def _format_validation_error(error: ValidationError) -> str:
+        """将 schema 错误映射为稳定、脱敏的用户提示。"""
+        invalid_fields = {
+            str(item["loc"][0])
+            for item in error.errors()
+            if item.get("loc")
+        }
+        if "content_type" in invalid_fields:
+            return "content_type 不受支持，请使用 auto、text、markdown、html 或 slide_deck_spec"
+        if "export_mode" in invalid_fields:
+            return "export_mode 不受支持，请使用 high_fidelity、editable 或 both"
+        return "请提供主题或内容（content/context），或提供模板文件（file_paths）"
 
     def _looks_like_outline(self, text: str) -> bool:
         """判断文本是否像结构化大纲。"""

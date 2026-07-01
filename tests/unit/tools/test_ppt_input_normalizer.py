@@ -147,3 +147,26 @@ def test_user_errors_are_specific_and_do_not_leak_internal_paths():
     combined = html_error + renderer_error + template_error + unsafe_template_error
     assert "secret" not in combined
     assert "private" not in combined
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            {"content": "季度复盘", "content_type": r"C:\tenant\secret.xml"},
+            "content_type 不受支持",
+        ),
+        (
+            {"content": "季度复盘", "export_mode": "secret-mode"},
+            "export_mode 不受支持",
+        ),
+    ],
+)
+async def test_validation_errors_are_specific_and_redacted(payload, expected):
+    result = await PptProcessTool().execute(**payload)
+
+    assert result["success"] is False
+    assert result["error"].startswith(expected)
+    assert "tenant" not in result["error"]
+    assert "secret" not in result["error"]

@@ -41,6 +41,7 @@ def test_agent_prompts_require_workspace_copy_and_truthful_delivery(
     assert "`success=true`" in prompt or "失败或未返回 `file_path`" in prompt
     assert "不得声称" in prompt
     assert "分别调用 `cp`" in prompt
+    assert "`display_name`" in prompt
 
 
 def test_guizang_skill_has_direct_html_to_pptx_path():
@@ -58,6 +59,7 @@ def test_guizang_skill_has_direct_html_to_pptx_path():
     assert 'content_type="html"' in skill
     assert 'export_mode="both"' in skill
     assert "alternate_file_path" in skill
+    assert "display_name" in skill
     assert "不得声称 PPTX 已生成" in skill
 
 
@@ -84,3 +86,14 @@ def test_documented_calls_match_public_tool_schemas():
     assert ppt.content_type == "html"
     assert cp.file_path == "workspace/index.html"
     assert cp.register_download is False
+
+
+def test_master_and_subagent_have_direct_ppt_tool_contracts():
+    project_root = Path(__file__).resolve().parents[3]
+    agent_source = (project_root / "src" / "core" / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    config = (project_root / "configs" / "config.yaml").read_text(encoding="utf-8")
+
+    assert "self.tool_registry.register(PptProcessTool())" in agent_source
+    assert "guizang-ppt-skill" in config
