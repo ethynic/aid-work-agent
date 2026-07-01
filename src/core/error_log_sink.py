@@ -8,6 +8,7 @@
 - 支持敏感信息过滤
 """
 
+import os
 import re
 from datetime import datetime
 from typing import Any
@@ -118,7 +119,12 @@ def register_error_log_sink() -> None:
     注册错误日志 sink 到 Loguru。
 
     在 setup_logging() 之后调用。
+    通过环境变量 WRITE_LOG_ERROR 控制是否启用（默认 false，不写入数据库）。
     """
+    if os.getenv("WRITE_LOG_ERROR", "false").strip().lower() not in ("true", "1", "yes", "on"):
+        logger.info("错误日志数据库 sink 未启用（WRITE_LOG_ERROR=false）")
+        return
+
     logger.add(
         error_log_sink,
         level="ERROR",  # 仅处理 ERROR 及以上级别
