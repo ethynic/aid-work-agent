@@ -40,6 +40,7 @@ export interface TraceSummary {
   tags: string[]
   source_type: string
   created_at: string | null
+  recall_type?: 'full' | 'partial' | null
 }
 
 export interface TraceDetail {

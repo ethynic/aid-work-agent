@@ -21,6 +21,10 @@
                 <span :class="statusClass(trace.status)" class="px-2 py-0.5 rounded text-xs font-medium">
                   {{ statusLabel(trace.status) }}
                 </span>
+                <span v-if="trace.recall_type"
+                  class="px-2 py-0.5 rounded text-xs font-medium bg-danger-100 text-danger-700">
+                  {{ trace.recall_type === 'partial' ? '[用户部分撤回]' : '[用户撤回]' }}
+                </span>
                 <span v-if="trace.tags.length > 0" class="flex gap-1">
                   <span v-for="tag in trace.tags" :key="tag"
                     class="px-1.5 py-0.5 bg-warning-100 text-warning-700 rounded text-xs">{{ tag }}</span>
@@ -28,7 +32,7 @@
               </div>
               <div class="mb-1">
                 <span class="text-xs text-muted">用户：</span>
-                <span class="text-sm text-default">{{ trace.input || '(空)' }}</span>
+                <span :class="['text-sm text-default', trace.recall_type === 'full' ? 'line-through text-muted' : '']">{{ trace.input || '(空)' }}</span>
               </div>
               <div class="mb-2">
                 <span class="text-xs text-muted">回复：</span>

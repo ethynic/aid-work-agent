@@ -51,6 +51,8 @@ class TraceSummary(BaseModel):
     tags: List[str] = []
     source_type: str = "chat"
     created_at: Optional[str] = None
+    # 撤回状态：full=整条撤回，partial=部分撤回（合并消息中部分段被撤回），None=未撤回
+    recall_type: Optional[str] = None
 
 
 class SpanDetail(BaseModel):
@@ -297,25 +299,80 @@ async def list_session_traces(
             """, (session_id,))
 
             rows = cur.fetchall()
-            traces = [
-                TraceSummary(
-                    trace_id=r["trace_id"],
-                    session_id=r.get("session_id"),
-                    input=(r.get("input") or "")[:500],
-                    output=(r.get("output") or "")[:500],
-                    status=r.get("status", "running"),
-                    duration_ms=r.get("duration_ms", 0),
-                    total_tokens=r.get("total_tokens", 0),
-                    tool_calls_count=r.get("tool_calls_count", 0),
-                    agent_iterations=r.get("agent_iterations", 0),
-                    tags=r.get("tags") or [],
-                    source_type=r.get("source_type", "chat"),
-                    created_at=_format_ts(r.get("created_at")),
-                )
-                for r in rows
-            ]
 
-            return {"success": True, "traces": traces}
+        # 从主库 channel_messages 补充撤回状态（obs_traces 与 channel_messages 不在同一库，
+        # 无法直接 JOIN；通过 session_id + 原始内容匹配）
+        recall_map: Dict[str, str] = {}  # 原始内容 -> recall_type('full'|'partial')
+        try:
+            from src.db.database import get_db_connection
+            with get_db_connection() as biz_cur:
+                biz_cur.execute("""
+                    SELECT content, metadata, is_recalled
+                    FROM channel_messages
+                    WHERE session_id = %s
+                      AND role = 'user'
+                      AND (
+                        is_recalled = TRUE
+                        OR (metadata::jsonb ? 'recalled_part_msgids'
+                            AND jsonb_array_length(metadata::jsonb->'recalled_part_msgids') > 0)
+                      )
+                """, (session_id,))
+                for msg_row in biz_cur.fetchall():
+                    meta = msg_row.get("metadata") or {}
+                    if isinstance(meta, str):
+                        try:
+                            import json as _json
+                            meta = _json.loads(meta)
+                        except Exception:
+                            meta = {}
+                    original = meta.get("original_content_before_recall") or msg_row.get("content") or ""
+                    if not original:
+                        continue
+                    recalled_parts = meta.get("recalled_part_msgids") or []
+                    if msg_row.get("is_recalled"):
+                        recall_type = "full"
+                    elif recalled_parts:
+                        recall_type = "partial"
+                    else:
+                        continue
+                    # 全量撤回优先，避免部分撤回覆盖已存在的全量撤回标记
+                    if recall_map.get(original) != "full":
+                        recall_map[original] = recall_type
+        except Exception as re:
+            logger.warning(f"Failed to load recall info for session {session_id}: {re}")
+
+        def _match_recall(trace_input: Optional[str]) -> Optional[str]:
+            if not trace_input or not recall_map:
+                return None
+            # 精确匹配原始内容
+            if trace_input in recall_map:
+                return recall_map[trace_input]
+            # trace.input 有 500 字截断，尝试前缀匹配
+            for original, rtype in recall_map.items():
+                if original.startswith(trace_input) or trace_input.startswith(original[:len(trace_input)]):
+                    return rtype
+            return None
+
+        traces = [
+            TraceSummary(
+                trace_id=r["trace_id"],
+                session_id=r.get("session_id"),
+                input=(r.get("input") or "")[:500],
+                output=(r.get("output") or "")[:500],
+                status=r.get("status", "running"),
+                duration_ms=r.get("duration_ms", 0),
+                total_tokens=r.get("total_tokens", 0),
+                tool_calls_count=r.get("tool_calls_count", 0),
+                agent_iterations=r.get("agent_iterations", 0),
+                tags=r.get("tags") or [],
+                source_type=r.get("source_type", "chat"),
+                created_at=_format_ts(r.get("created_at")),
+                recall_type=_match_recall(r.get("input")),
+            )
+            for r in rows
+        ]
+
+        return {"success": True, "traces": traces}
     except RuntimeError as e:
         if "追踪库" in str(e):
             return {"success": True, "traces": []}
