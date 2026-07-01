@@ -1,7 +1,9 @@
 # PPT 工具设计文档
 
-> 版本: v1.0 | 日期: 2026-05-09 | 状态: 待评审
+> 版本: v1.0 | 日期: 2026-05-09 | 状态: ✅ 基础版本已实现，后续能力由 [PPT 工具增强设计](ppt_tool_enhancement_design.md) 接续
 > 设计参考: [MiniMax pptx-generator](https://github.com/MiniMax-AI/skills/blob/main/skills/pptx-generator/SKILL.md) (MIT License)
+>
+> 文档定位：保留用于追溯初始架构决策；当前实现、入参和交付能力以增强设计及其开发计划为准。
 
 ## 1. 功能概述
 

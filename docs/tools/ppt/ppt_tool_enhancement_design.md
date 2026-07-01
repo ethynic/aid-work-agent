@@ -1,13 +1,15 @@
 # PPT 工具增强设计文档
 
 > 日期：2026-06-30  
-> 状态：待人工评审，评审通过后开发  
+> 状态：✅ 已完成开发（Phase 0-8，2026-07-01）
 > 关联现状：`src/tools/ppt/` 已有 `ppt_process`、planner、generator、template_analyzer 和基础布局渲染器  
 > 关联文档：  
 > - [PPT 工具设计文档](ppt_tool_design.md)  
 > - [PPT 工具深度调研报告](ppt_tool_research.md)  
 > - [HTML 转 PPTX 技术可行性调研](../../research/html-to-pptx-conversion-research.md)  
 > - [文件生成类工具入参语义拆分设计](../tool-input-contract-redesign.md)
+>
+> 实现状态：本文设计已落地；阶段、测试与交付记录见 [开发计划](ppt_tool_enhancement_dev_plan.md)。
 
 ## 1. 背景与目标
 
