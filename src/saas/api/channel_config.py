@@ -10,6 +10,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
+try:
+    from psycopg2 import IntegrityError
+except ImportError:  # psycopg2 未安装（开发/测试场景）
+    IntegrityError = None  # type: ignore[assignment,misc]
+
+from src.channels.wecom_personal_rpa.archive import credential_codec as rpa_credential_codec
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.subscription_db import SubscriptionDB
@@ -32,6 +38,7 @@ class ChannelConfigUpdateRequest(BaseModel):
 
 
 # 各渠道类型必填字段
+# wecom_personal_rpa 走动态校验（见 _validate_rpa_required_fields），不在此静态映射
 _REQUIRED_FIELDS = {
     "wecom": {
         "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
@@ -46,10 +53,6 @@ _REQUIRED_FIELDS = {
         "token": "回调Token（设置API接收时配置）",
         "encoding_aes_key": "回调EncodingAESKey（设置API接收时配置，43字符Base64）",
     },
-    # 企业微信个人账号 RPA：仅需 client_id（由注册接口分配），subagent 由 subagent_type 字段指定
-    "wecom_personal_rpa": {
-        "client_id": "RPA 客户端 ID（由服务端注册接口分配）",
-    },
     "dingtalk": {
         "app_key": "应用AppKey",
         "app_secret": "应用AppSecret",
@@ -63,6 +66,18 @@ _REQUIRED_FIELDS = {
         # encrypt_key 可选（不填则非加密模式，仅用于开发/调试）
     },
 }
+
+
+def _validate_rpa_required_fields(config: dict) -> None:
+    """校验 wecom_personal_rpa 渠道的必填字段。
+
+    根据 listen_mode 动态判断（第一期 MVP 强制 server，client 分支保留为未来开放做准备）。
+    校验失败抛 HTTPException(400)。
+    """
+    missing = rpa_credential_codec.validate_required_fields(config)
+    if missing:
+        detail = "缺少必填字段: " + ", ".join(f"{k}（{v}）" for k, v in missing.items())
+        raise HTTPException(status_code=400, detail=detail)
 
 
 @router.get("")
@@ -87,21 +102,38 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     if body.channel_type not in ("wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu"):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
-    # 验证必填字段
-    required = _REQUIRED_FIELDS.get(body.channel_type, {})
-    missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"缺少必填字段: {', '.join(missing)}",
-        )
+    # wecom_personal_rpa 走动态校验（按 listen_mode），其他渠道走静态必填字段表
+    if body.channel_type == "wecom_personal_rpa":
+        _validate_rpa_required_fields(body.config)
+    else:
+        required = _REQUIRED_FIELDS.get(body.channel_type, {})
+        missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"缺少必填字段: {', '.join(missing)}",
+            )
 
-    config = ChannelConfigDB.create(
-        tenant_id=admin["tenant_id"],
-        channel_type=body.channel_type,
-        config=body.config,
-        subagent_type=body.subagent_type,
-    )
+    try:
+        config = ChannelConfigDB.create(
+            tenant_id=admin["tenant_id"],
+            channel_type=body.channel_type,
+            config=body.config,
+            subagent_type=body.subagent_type,
+        )
+    except Exception as e:
+        # IntegrityError 为 DB 部分唯一索引拦截（如 wecom_personal_rpa 并发创建同租户第二条）
+        if IntegrityError is not None and isinstance(e, IntegrityError):
+            raise HTTPException(
+                status_code=400 if body.channel_type == "wecom_personal_rpa" else 409,
+                detail=(
+                    "该租户已有 wecom_personal_rpa 渠道配置，请编辑现有配置切换模式（同租户仅允许一份该类型配置）"
+                    if body.channel_type == "wecom_personal_rpa"
+                    else f"渠道配置唯一约束冲突（{body.channel_type}）"
+                ),
+            )
+        logger.error(f"create channel exception: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="创建渠道配置失败")
 
     if not config:
         raise HTTPException(status_code=500, detail="创建渠道配置失败")
@@ -123,6 +155,10 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         raise HTTPException(status_code=404, detail="渠道配置不存在")
     if existing["tenant_id"] != admin["tenant_id"]:
         raise HTTPException(status_code=403, detail="无权操作此配置")
+
+    # wecom_personal_rpa 走动态校验（按 listen_mode 判断必填字段）
+    if existing["channel_type"] == "wecom_personal_rpa":
+        _validate_rpa_required_fields(body.config)
 
     success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type)
     if success:

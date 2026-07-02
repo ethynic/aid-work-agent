@@ -946,3 +946,13 @@ CREATE TABLE IF NOT EXISTS social_data_import_batches (
     created_by TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 2026-07-02 wecom_personal_rpa 渠道配置：会话存档服务端拉取模式
+-- 1) 同租户单例约束：同 tenant 只能有一份 wecom_personal_rpa 类型配置
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
+    ON tenant_channel_configs(tenant_id, channel_type)
+    WHERE channel_type = 'wecom_personal_rpa';
+
+-- 2) 客户端表增加 listen_mode 字段（NULL 或 client；服务端拉取模式时客户端拉取禁用）
+--    服务端拉取模式下客户端拉 listen_mode 永远为 server 或 NULL，客户端不启动本地 ChatArchiveListener
+ALTER TABLE wecom_rpa_clients ADD COLUMN IF NOT EXISTS listen_mode TEXT;

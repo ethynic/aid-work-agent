@@ -604,6 +604,12 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
 
+-- wecom_personal_rpa 渠道单例约束：同 tenant 只能有一份该类型配置
+-- （切换 server/client 模式 = 编辑现有配置，不允许创建第二条）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
+    ON tenant_channel_configs(tenant_id, channel_type)
+    WHERE channel_type = 'wecom_personal_rpa';
+
 -- 支付订单表
 CREATE TABLE IF NOT EXISTS payment_orders (
     id SERIAL PRIMARY KEY,
@@ -1142,6 +1148,12 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
 
+-- wecom_personal_rpa 渠道单例约束：同 tenant 只能有一份该类型配置
+-- （切换 server/client 模式 = 编辑现有配置，不允许创建第二条）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
+    ON tenant_channel_configs(tenant_id, channel_type)
+    WHERE channel_type = 'wecom_personal_rpa';
+
 -- 支付订单表
 CREATE TABLE IF NOT EXISTS payment_orders (
     id SERIAL PRIMARY KEY,
@@ -1490,6 +1502,8 @@ CREATE TABLE IF NOT EXISTS wecom_rpa_clients (
     status TEXT NOT NULL DEFAULT 'active',
     min_version TEXT,
     agent_base_url TEXT,
+    -- listen_mode: NULL 或 'client'。服务端拉取模式下永远为 NULL/'server'，客户端不启动本地 ChatArchiveListener
+    listen_mode TEXT,
     last_seen_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
