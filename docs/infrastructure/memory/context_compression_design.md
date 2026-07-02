@@ -63,7 +63,7 @@
 | 触发方式 | 同步（业界共识） | ✅ **同步（主流程）+ 后台定时任务（补漏）** | v3.0 回归业界共识，见 §1.1 |
 | 触发阈值 | 60-95% token | **70% token 或 200 条消息**（可配置） | 双触发，token 主、消息数兜底 |
 | TAIL 保留 | Claude Code ~33K token | **30 条消息**（可配置） | 用户指定 |
-| 工具消息 | 工具名+参数保留；工具结果差异化处理 | ✅ | 见 §3.3 工具结果分级策略 |
+| 工具消息 | 工具名+参数保留；工具结果统一截断 | ✅ | 见 §3.3 工具结果预处理 |
 | 压缩存储 | 原消息不删除，可追溯 | ✅ | 见 §4 数据模型 |
 | 摘要结构 | 结构化字段（用户事实/决策/待办）优于流水账 | ✅ | 见 §3.4 摘要 prompt |
 | 用户感知 | B 端透明 | ✅ 完全透明 | 与用户需求一致 |
@@ -308,18 +308,11 @@ memory:
     message_count_threshold: 200  # 消息数兜底阈值
 ```
 
-### 3.3 工具结果差异化处理（关键细节）
+### 3.3 工具结果预处理（统一截断）
 
-在 COMPRESS 区内，按工具类型对 `role: tool` 消息做不同处理：
+在 COMPRESS 区内，对 `role: tool` 消息做统一截断：所有 tool 消息的 content 截断到 `large_tool_result_truncate_chars`（默认 2000 字符），超出部分转「[原文已存档，可重新调用工具获取]」。
 
-| 工具类型 | 示例 | 处理方式 |
-|---------|------|---------|
-| **大输出工具** | `file_read`、`search_documents`、`export_excel`、`pandas_analyze` | 结果按 2000 字符硬截断，超出部分转「[原文已存档，可重新调用工具获取]」 |
-| **状态类工具** | `email_list`、`customer_search`、`list_orders` | 结果整体进入摘要，保留关键 ID 列表 |
-| **指令类工具** | `create_plan`、`use_skill`、`clarify` | 工具名 + 参数保留原文，结果截断为「执行成功/失败」标记 |
-| **写入类工具** | `send_email`、`word_process`、`text_file_writer` | 工具名 + 关键参数（收件人、文件路径）保留，结果丢弃 |
-
-**实现方式**：在 `src/tools/` 各 BaseTool 子类上新增可选属性 `compression_strategy: Literal["truncate", "summarize", "keep", "drop"]`，默认 `summarize`。压缩服务读取此属性决定预处理方式。
+**设计决策**：曾计划按工具类型分 4 级处理（truncate/summarize/keep/drop），经评估放弃——工具内容丢失后重新调用即可，按工具类型打标的工程成本相对收益不划算。工具输出本身在进入 LLM 上下文时的 token 压缩是独立议题（不属于会话压缩范畴）。
 
 **预处理**发生在 LLM 摘要之前，目的是把工具结果 token 量从动辄数万降到几千，**让摘要 LLM 调用本身的成本可控**。
 
@@ -329,6 +322,14 @@ memory:
 
 ```text
 你是对话摘要助手。请把以下对话历史压缩成结构化摘要，保留长期有效的信息。
+
+压缩原则（核心）：
+- 以「任务/事件」为单位归并：用户围绕同一件事的多轮对话（反复澄清、
+  补充信息、试错）应归并成一条结论，而非逐轮流水账记录。
+- 保留「用户最终需求」+「模型最终方案」：一个完整的任务压成一对结论
+  （要什么 / 怎么解决的）。中间的澄清、试错、工具调用过程可丢弃。
+- 工具调用过程不保留，但工具产出的关键事实（查到的订单号、客户信息、
+  文件路径等）必须按原文保留。
 
 输出格式（严格遵守）：
 
@@ -581,7 +582,7 @@ class ContextCompressionService:
         """清理孤儿 tool 消息（避免摘要 LLM 报错）"""
 
     def _preprocess_tool_results(self, compress_section: list[dict]) -> list[dict]:
-        """按工具类型应用差异化截断策略"""
+        """按统一截断策略预处理工具结果"""
 
     async def _call_summary_llm(self, existing_summary, new_messages) -> Optional[str]:
         """调用摘要 LLM，独立超时 + 重试 M 次；重试耗尽返回 None（触发降级）"""
@@ -820,10 +821,9 @@ class ContextCompressedEvent:
 | Phase 4 | Agent 同步集成（主智能体 + STANDALONE 子智能体） | 2 天 | web 渠道 + 至少 1 个第三方渠道联调通过 | ✅ 已完成 |
 | Phase 5 | Trace 集成 + 指标埋点 + 管理后台页面 | 2 天 | 运维可看到压缩记录和指标 | ✅ 已完成 |
 | Phase 6 | 回归测试 + 全渠道联调 + 性能调优 | 2 天 | 5 个渠道全部验证；同步降级 P95 < 200ms | 🔧 部分（联调进行中） |
-| Phase 7 | 工具结果差异化策略（按工具类型分级，替代统一截断） | 2 天 | 不同工具走不同截断策略 | 🔧 部分（当前统一截断） |
 | **Phase 8** | **后台定时任务扫描（§2.5 补漏机制）** | 2 天 | 定时扫描 `context_token_count` 超阈值 session 补压缩 | ✅ **已完成**（默认关闭） |
 
-**总计：约 15 工作日**（Phase 1-5、Phase 8 已完成，Phase 6-7 部分）
+**总计：约 13 工作日**（Phase 1-5、Phase 8 已完成，Phase 6 部分进行中；原 Phase 7 工具差异化策略已取消）
 
 > v2.0 的「Redis SETNX 锁 / 异步任务派发 / 失败计数」相关 Phase 在 v3.0 已删除，回归同步后这部分工作量并入 Phase 2/3。
 
@@ -857,7 +857,7 @@ class ContextCompressedEvent:
 | 策略 | Summary + Remove | Summary + Microcompact | Truncate | Tiered Memory | **Summary Buffer** |
 | 触发 | 开发者控制 | 95% token | 模型上限 | Agent 主动 | **双阈值（token 70% / 消息 200）** |
 | 同步性 | 同步 | 同步 | 同步 | 异步工具 | **同步为主，后台定时任务补漏** |
-| 工具消息 | 全摘要 | 局部压缩 | 截断 | 全保留 | **差异化（按工具类型）** |
+| 工具消息 | 全摘要 | 局部压缩 | 截断 | 全保留 | **统一截断** |
 | 存储 | SummaryMessage | 内部 | 替换 | 分层 | **独立表 + compacted 标记** |
 | 可追溯 | ✅ | ✅ | ❌ | ✅ | **✅（永不删除原消息）** |
 | 用户感知 | 透明 | 显式提示 | 透明 | 显式 | **透明** |
