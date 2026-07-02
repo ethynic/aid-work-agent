@@ -90,9 +90,10 @@ class TestPdfProcessToolDefinition:
     def test_tool_has_description(self):
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
         tool = PdfProcessTool()
-        # description 瘦身为 ≤80 字符的一句话功能+触发说明（规范 §1.1）
-        assert len(tool.description) <= 80
+        # description 简短描述功能 + 明确声明不支持 Word 转 PDF（让 LLM 选工具时就看到）
+        assert len(tool.description) <= 120
         assert "PDF" in tool.description
+        assert "Word" in tool.description or "docx" in tool.description
 
     def test_tool_description_le_no_tutorial(self):
         """description 不应塞操作菜单/教程（已迁移到 usage_guide）。"""

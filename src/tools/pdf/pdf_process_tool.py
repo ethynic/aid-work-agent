@@ -96,8 +96,8 @@ class PipelineContext:
 
 
 TOOL_DESCRIPTION = (
-    "处理 PDF 文档：读取/转Markdown/OCR/提取表格，以及转PDF/合并/拆分/页面操作。"
-    "遇到 PDF 相关需求时调用。"
+    "处理PDF：读取/转Markdown/OCR/提取表格，以及生成PDF/合并/拆分/页面操作。"
+    "不支持Word(.docx)转PDF，请基于内容用md_to_pdf/html_to_pdf生成。"
 )
 
 TOOL_USAGE_GUIDE = """\
