@@ -313,7 +313,6 @@ class Agent:
         from src.tools.file.write_tool import WriteTool
         from src.tools.file.edit_tool import EditTool
         from src.tools.file.cp_tool import CpTool
-        from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
         from src.tools.network.http_api import HttpApiTool
 
@@ -332,8 +331,7 @@ class Agent:
         self.tool_registry.register(WriteTool())
         self.tool_registry.register(EditTool())
         self.tool_registry.register(CpTool())
-        self.tool_registry.register(UploadToRemoteTool())
-        
+
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
         self.tool_registry.register(HttpApiTool())
