@@ -352,6 +352,17 @@ def _make_mock_db_with_messages(messages):
                                 metadata=json.dumps(meta, ensure_ascii=False) if meta else None,
                             )]
                             break
+            elif "select id from channel_messages" in sql_lower and "role = 'assistant'" in sql_lower:
+                # 配对 assistant 查询：同 session 中 id > after_id 的第一条 assistant
+                sid, after_id = params[0], params[1]
+                for r in memory_store["messages"]:
+                    if (
+                        r["session_id"] == sid
+                        and r["id"] > after_id
+                        and r.get("role") == "assistant"
+                    ):
+                        cursor._fetch_rows = [MockRow(id=r["id"])]
+                        break
             elif "update channel_messages" in sql_lower:
                 # 更新消息
                 for r in memory_store["messages"]:
@@ -494,6 +505,145 @@ class TestMarkRecalledMessage:
         raw = fake_redis._store["session_merge:sid1"]
         data = json.loads(raw)
         assert data["segments"] == [{"msgid": "m2", "text": "想去天眼"}]
+
+    def test_single_recall_marks_following_assistant(self, session_manager):
+        """单条 user 撤回：紧随其后的 assistant 回复也标记 is_recalled=TRUE
+
+        场景：用户撤回 m1，m1 已落库；同 session 中紧随其后有 assistant 回复 a1。
+        标记 m1 后应同步标记 a1，避免下一轮上下文拼接基于已撤回输入生成的回复。
+        """
+        messages = [
+            {
+                "id": 1,
+                "session_id": "sid1",
+                "role": "user",
+                "content": "亲子房呢",
+                "metadata": json.dumps({"msgid": "m1", "msgtype": "text"}),
+                "is_recalled": False,
+            },
+            {
+                "id": 2,
+                "session_id": "sid1",
+                "role": "assistant",
+                "content": "120人团建要亲子房？",
+                "metadata": None,
+                "is_recalled": False,
+            },
+        ]
+        _make_conn, store = _make_mock_db_with_messages(messages)
+
+        with patch("src.channels.session.get_db_connection") as mock_get_conn:
+            mock_get_conn.return_value.__enter__ = MagicMock(return_value=_make_conn())
+            mock_get_conn.return_value.__exit__ = MagicMock(return_value=False)
+            marked = session_manager.mark_recalled_message("sid1", "m1", "tenant1")
+
+        assert marked == 1
+        # user 消息被标记
+        assert store["messages"][0]["is_recalled"] is True
+        # 配对 assistant 回复也被标记
+        assert store["messages"][1]["is_recalled"] is True
+
+    def test_merged_all_recalled_marks_following_assistant(self, session_manager):
+        """合并消息所有段都被撤回：整条标记 + 配对 assistant 也标记"""
+        merged_segments = [{"msgid": "m1", "text": "你好"}]
+        metadata = {
+            "merged_from_msgids": ["m1"],
+            "merged_segments": merged_segments,
+        }
+        messages = [
+            {
+                "id": 10,
+                "session_id": "sid1",
+                "role": "user",
+                "content": "你好",
+                "metadata": json.dumps(metadata, ensure_ascii=False),
+                "is_recalled": False,
+            },
+            {
+                "id": 11,
+                "session_id": "sid1",
+                "role": "assistant",
+                "content": "你好，请问需要什么帮助？",
+                "metadata": None,
+                "is_recalled": False,
+            },
+        ]
+        _make_conn, store = _make_mock_db_with_messages(messages)
+
+        with patch("src.channels.session.get_db_connection") as mock_get_conn:
+            mock_get_conn.return_value.__enter__ = MagicMock(return_value=_make_conn())
+            mock_get_conn.return_value.__exit__ = MagicMock(return_value=False)
+            marked = session_manager.mark_recalled_message("sid1", "m1", "tenant1")
+
+        assert marked == 1
+        # 合并消息整条被标记
+        assert store["messages"][0]["is_recalled"] is True
+        # 配对 assistant 也被标记
+        assert store["messages"][1]["is_recalled"] is True
+
+    def test_merged_partial_recall_does_not_mark_assistant(self, session_manager):
+        """合并消息部分撤回：user 消息仍存在，assistant 回复不应被标记"""
+        merged_segments = [
+            {"msgid": "m1", "text": "你好"},
+            {"msgid": "m2", "text": "想去天眼"},
+        ]
+        metadata = {
+            "merged_from_msgids": ["m1", "m2"],
+            "merged_segments": merged_segments,
+        }
+        messages = [
+            {
+                "id": 10,
+                "session_id": "sid1",
+                "role": "user",
+                "content": "你好\n想去天眼",
+                "metadata": json.dumps(metadata, ensure_ascii=False),
+                "is_recalled": False,
+            },
+            {
+                "id": 11,
+                "session_id": "sid1",
+                "role": "assistant",
+                "content": "好的，天眼在贵州",
+                "metadata": None,
+                "is_recalled": False,
+            },
+        ]
+        _make_conn, store = _make_mock_db_with_messages(messages)
+
+        with patch("src.channels.session.get_db_connection") as mock_get_conn:
+            mock_get_conn.return_value.__enter__ = MagicMock(return_value=_make_conn())
+            mock_get_conn.return_value.__exit__ = MagicMock(return_value=False)
+            marked = session_manager.mark_recalled_message("sid1", "m2", "tenant1")
+
+        assert marked == 1
+        # user 合并消息仍存在（仅部分撤回）
+        assert store["messages"][0]["is_recalled"] is False
+        assert store["messages"][0]["content"] == "你好"
+        # assistant 不应被标记（user 消息仍存在，回复仍有效）
+        assert store["messages"][1]["is_recalled"] is False
+
+    def test_single_recall_no_following_assistant(self, session_manager):
+        """单条 user 撤回：紧随其后没有 assistant 时，仅标记 user，不报错"""
+        messages = [
+            {
+                "id": 1,
+                "session_id": "sid1",
+                "role": "user",
+                "content": "亲子房呢",
+                "metadata": json.dumps({"msgid": "m1", "msgtype": "text"}),
+                "is_recalled": False,
+            },
+        ]
+        _make_conn, store = _make_mock_db_with_messages(messages)
+
+        with patch("src.channels.session.get_db_connection") as mock_get_conn:
+            mock_get_conn.return_value.__enter__ = MagicMock(return_value=_make_conn())
+            mock_get_conn.return_value.__exit__ = MagicMock(return_value=False)
+            marked = session_manager.mark_recalled_message("sid1", "m1", "tenant1")
+
+        assert marked == 1
+        assert store["messages"][0]["is_recalled"] is True
 
 
 if __name__ == "__main__":

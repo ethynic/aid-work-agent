@@ -472,10 +472,31 @@ class ChannelSessionManager:
             )
         has_recall_col = self._has_is_recalled_column()
 
+        # 预扫描：批次内是否有 user 命中 recall_pending；最后一条 assistant 的索引。
+        # 若 user 命中撤回，配对的最终 assistant 回复也应同步标记 is_recalled=TRUE，
+        # 否则下一轮上下文重建会拼接基于已撤回输入生成的回复。
+        batch_has_recalled_user = False
+        last_assistant_idx = -1
+        for i, msg in enumerate(messages):
+            role = msg.get("role")
+            if role == "assistant" and last_assistant_idx < i:
+                last_assistant_idx = i
+            if role == "user" and recall_pending_msgids:
+                metadata = msg.get("metadata") or {}
+                if isinstance(metadata, dict):
+                    row_msgids_pre: List[str] = []
+                    if metadata.get("msgid"):
+                        row_msgids_pre.append(str(metadata["msgid"]))
+                    for mid in metadata.get("merged_from_msgids") or []:
+                        if mid:
+                            row_msgids_pre.append(str(mid))
+                    if any(mid in recall_pending_msgids for mid in row_msgids_pre):
+                        batch_has_recalled_user = True
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                for msg in messages:
+                for i, msg in enumerate(messages):
                     role = msg.get("role")
                     content = msg.get("content", "")
                     message_type = msg.get("message_type", "text")
@@ -493,8 +514,14 @@ class ChannelSessionManager:
                                 row_msgids.append(str(mid))
                         hit_recall = any(mid in recall_pending_msgids for mid in row_msgids)
 
+                    # 批次内 user 命中撤回时，最终 assistant 回复也标记撤回
+                    is_recalled_assistant = (
+                        i == last_assistant_idx and batch_has_recalled_user and role == "assistant"
+                    )
+                    mark_recalled = (hit_recall or is_recalled_assistant) and has_recall_col
+
                     message_id = f"msg_{uuid.uuid4().hex[:16]}"
-                    if hit_recall and has_recall_col:
+                    if mark_recalled:
                         cursor.execute("""
                             INSERT INTO channel_messages
                             (message_id, session_id, tenant_id, role, content, message_type,
@@ -514,10 +541,13 @@ class ChannelSessionManager:
                             "撤回消息",
                             "落库前命中 recall_pending，直接标记 is_recalled=TRUE: "
                             "session_id={session_id}, message_id={message_id}, "
-                            "role={role}, content_preview={preview!r}",
+                            "role={role}, hit_user={hit_user}, is_recalled_assistant={is_assistant}, "
+                            "content_preview={preview!r}",
                             session_id=session_id,
                             message_id=message_id,
                             role=role,
+                            hit_user=hit_recall,
+                            is_assistant=is_recalled_assistant,
                             preview=(content or "")[:80],
                         )
                     else:
@@ -1167,6 +1197,43 @@ class ChannelSessionManager:
 
             return messages
 
+    def _mark_following_assistant_recalled(
+        self,
+        cursor,
+        session_id: str,
+        after_id: int,
+    ) -> Optional[int]:
+        """
+        标记紧随某条 user 消息之后的第一条 assistant 回复为已撤回。
+
+        用户撤回输入后，基于该输入生成的 assistant 回复在下一轮上下文重建中
+        也应被排除，否则 LLM 会把已失效的回复当作历史继续拼接。
+
+        Args:
+            cursor: 数据库游标（由调用方负责 commit）
+            session_id: 会话 ID
+            after_id: 被撤回的 user 消息 row id
+
+        Returns:
+            被标记的 assistant 消息 row id；未找到返回 None
+        """
+        cursor.execute("""
+            SELECT id FROM channel_messages
+            WHERE session_id = %s AND id > %s AND role = 'assistant'
+            ORDER BY id ASC
+            LIMIT 1
+        """, (session_id, after_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        assistant_id = row["id"]
+        cursor.execute("""
+            UPDATE channel_messages
+            SET is_recalled = TRUE, recalled_at = NOW()
+            WHERE id = %s
+        """, (assistant_id,))
+        return assistant_id
+
     def mark_recalled_message(
         self,
         session_id: str,
@@ -1213,13 +1280,20 @@ class ChannelSessionManager:
                     SET is_recalled = TRUE, recalled_at = NOW()
                     WHERE id = %s
                 """, (single_row["id"],))
+                # 同步标记紧随其后的 assistant 回复：用户撤回输入后，
+                # 基于该输入生成的回复在下一轮上下文里也应失效。
+                assistant_row_id = self._mark_following_assistant_recalled(
+                    cursor, session_id, single_row["id"]
+                )
                 conn.commit()
                 tlog(
                     "撤回消息",
-                    "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, row_id={row_id}",
+                    "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, "
+                    "row_id={row_id}, assistant_row_id={assistant_row_id}",
                     session_id=session_id,
                     msgid=recall_msgid,
                     row_id=single_row["id"],
+                    assistant_row_id=assistant_row_id,
                 )
                 return 1
 
@@ -1275,12 +1349,17 @@ class ChannelSessionManager:
 
                 # 所有段都被撤回时，整条标记为已撤回
                 all_recalled = len(remaining_segments) == 0
+                assistant_row_id: Optional[int] = None
                 if all_recalled:
                     cursor.execute("""
                         UPDATE channel_messages
                         SET is_recalled = TRUE, recalled_at = NOW(), content = %s, metadata = %s
                         WHERE id = %s
                     """, (new_content, json.dumps(metadata, ensure_ascii=False), merged_row["id"]))
+                    # 合并消息整条撤回时，同样标记配对 assistant 回复
+                    assistant_row_id = self._mark_following_assistant_recalled(
+                        cursor, session_id, merged_row["id"]
+                    )
                 else:
                     cursor.execute("""
                         UPDATE channel_messages
@@ -1292,13 +1371,15 @@ class ChannelSessionManager:
                 tlog(
                     "撤回消息",
                     "合并消息部分撤回重建: session_id={session_id}, msgid={msgid}, "
-                    "row_id={row_id}, segments_before={before}, segments_after={after}, all_recalled={all_recalled}",
+                    "row_id={row_id}, segments_before={before}, segments_after={after}, "
+                    "all_recalled={all_recalled}, assistant_row_id={assistant_row_id}",
                     session_id=session_id,
                     msgid=recall_msgid,
                     row_id=merged_row["id"],
                     before=len(merged_segments),
                     after=len(remaining_segments),
                     all_recalled=all_recalled,
+                    assistant_row_id=assistant_row_id,
                 )
                 return 1
 
