@@ -603,10 +603,26 @@ async def lifespan(app: FastAPI):
                     )
         asyncio.create_task(_wecom_kf_timeout_check_loop())
 
+    # wecom_personal_rpa 服务端拉取会话存档兜底轮询（Phase 5）
+    # 每 60s 扫描所有 verified 的 wecom_personal_rpa 配置，对每个触发 fetcher.fetch_once
+    # 主路径是回调触发拉取，本模块仅作回调丢失/服务重启/停机后的兜底
+    try:
+        from src.channels.wecom_personal_rpa.archive.poller import poller as _archive_poller
+        await _archive_poller.start()
+    except Exception as e:
+        logger.error(f"[wecom_personal_rpa] archive poller 启动失败（不影响应用启动）: {e}", exc_info=True)
+
     yield
 
     # On shutdown
     logger.info("Application shutting down")
+
+    # 关闭 archive poller（优雅等待在途 fetcher 任务完成）
+    try:
+        from src.channels.wecom_personal_rpa.archive.poller import poller as _archive_poller
+        await _archive_poller.stop()
+    except Exception as e:
+        logger.warning(f"[wecom_personal_rpa] archive poller 关闭异常: {e}")
 
     # Close PostgreSQL connection pool
     close_postgres_pool()
