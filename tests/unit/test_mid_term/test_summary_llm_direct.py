@@ -229,16 +229,26 @@ def test_drop_orphan_tool_messages_no_orphans():
 
 
 def test_drop_orphan_tool_messages_drops_unmatched():
-    """孤儿 tool（前面是 user 或无 tool_calls 的 assistant）应被移除"""
+    """孤儿 tool（前面是 user 或无 tool_calls 的 assistant）应降级为 assistant 文本保留。
+
+    v3.2.2 变更：孤儿 tool 不再删除（删除会导致 COMPRESS 区内容流失、压缩死循环），
+    而是降级为 assistant 文本消息保留，参与摘要。
+    """
     msgs = [
         {"role": "user", "content": "ask"},  # 不是 assistant(tool_calls)
         {"role": "tool", "content": "orphan result", "id": 99},
         {"role": "user", "content": "next"},
     ]
     out = ContextCompressionService._drop_orphan_tool_messages(msgs)
-    assert len(out) == 2
-    # tool 消息被丢弃
+    # 数量不变（降级而非删除）
+    assert len(out) == 3
+    # 孤儿 tool 降级为 assistant，不再有 role=tool
     assert all(m.get("role") != "tool" for m in out)
+    # 降级后的消息 id 保留（用于压缩记录 compressed_ids）
+    assert any(m.get("id") == 99 for m in out)
+    # 降级后的消息 role=assistant
+    downgraded = [m for m in out if m.get("id") == 99][0]
+    assert downgraded["role"] == "assistant"
 
 
 def test_drop_orphan_tool_messages_multi_tool_one_call():
@@ -257,7 +267,11 @@ def test_drop_orphan_tool_messages_multi_tool_one_call():
 
 
 def test_drop_orphan_tool_at_tail_start_idx(mid_term_settings):
-    """P0-4 主场景：TAIL 开头落在孤儿 tool 上 → 应被移除，COMPRESS 末尾无 tool"""
+    """P0-4 主场景：孤儿 tool 应降级为 assistant（v3.2.2：不再删除）。
+
+    孤儿 tool 降级后保留 id，进入 COMPRESS 区参与摘要，不占着消息数却进不了压缩。
+    同时验证 TAIL 边界对齐到安全切断点（user 消息）。
+    """
     service = ContextCompressionService(settings_cfg=mid_term_settings)
     # 构造 35 条：header 3 + 1 user + 1 tool(孤儿) + 30 普通对话
     msgs = []
@@ -270,12 +284,15 @@ def test_drop_orphan_tool_at_tail_start_idx(mid_term_settings):
     assert len(msgs) == 35
 
     header, compress, tail = service._split_messages(msgs)
-    # 孤儿 tool 已被移除
+    # 孤儿 tool 降级为 assistant（不再有 role=tool）
     all_roles = [m.get("role") for m in header + compress + tail]
     assert "tool" not in all_roles
-    # 4 号 id（孤儿 tool）不在任何段中
+    # 4 号 id（降级后的孤儿 tool）保留在结果中（降级而非删除）
     all_ids = [m.get("id") for m in header + compress + tail]
-    assert 4 not in all_ids
+    assert 4 in all_ids
+    # 降级后的消息 role=assistant
+    downgraded = [m for m in (header + compress + tail) if m.get("id") == 4][0]
+    assert downgraded["role"] == "assistant"
 
 
 # ============== P0-2：ContextSummaryDB tenant_id 过滤 ==============
