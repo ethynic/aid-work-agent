@@ -13,8 +13,13 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.tools._helpers import truncate_text
 from src.tools.base import BaseTool
-from src.config.settings import settings
+
+# 注意：settings 不在模块级导入，否则会形成
+# ocr_tool -> src.config.settings -> src.config.__init__ -> src.core.agent
+# -> 注册 PaddleOCRDocParsingTool -> 回到 src.tools.ocr 的循环导入。
+# 在 _get_paddleocr_config() 内部按需导入即可规避（与 pdf_process_tool 的延迟导入模式一致）。
 
 
 # =============================================================================
@@ -63,6 +68,7 @@ def _detect_file_type(path_or_url: str) -> int:
 
 def _get_paddleocr_config() -> tuple[str, str]:
     """Get API URL and token from settings."""
+    from src.config.settings import settings
     config = settings.tools.ocr
 
     api_url = getattr(config, 'paddleocr_api_url', os.getenv("PADDLEOCR_DOC_PARSING_API_URL", "")).strip()
@@ -203,40 +209,38 @@ def paddleocr_doc_parsing(
         {
             "success": True,
             "texts": ["page1 markdown text", "page2 markdown text", ...],
-            "full_text": "所有页面markdown text用\\n\\n连接",
-            "result": {原始API响应},
+            "full_text": "所有页面markdown text用\\n\\n连接（≤5000字符，超出截断）",
+            "truncated": bool,
             "message": "成功解析N页"
         }
         or on error:
         {
             "success": False,
-            "error": "错误描述",
-            "debug": "详细错误信息"
+            "error": "<脱敏一句话>"
         }
     """
     # Validate input
     if not file_path and not file_url:
+        logger.warning("PaddleOCR 调用缺少 file_path/file_url 参数")
         return {
             "success": False,
             "error": "请提供文件路径或URL",
-            "debug": "INPUT_ERROR: file_path or file_url required"
         }
     if file_type is not None and file_type not in (0, 1):
+        logger.warning(f"PaddleOCR 非法 file_type={file_type}")
         return {
             "success": False,
             "error": "文件类型必须是0(PDF)或1(Image)",
-            "debug": "INPUT_ERROR: file_type must be 0 (PDF) or 1 (Image)"
         }
 
     # Get config
     try:
         api_url, token = _get_paddleocr_config()
     except ValueError as e:
-        logger.error(f"后端日志：PaddleOCR配置错误: {e}")
+        logger.error(f"PaddleOCR配置错误: {e}")
         return {
             "success": False,
             "error": "PaddleOCR未配置，请先配置API",
-            "debug": f"CONFIG_ERROR: {str(e)}"
         }
 
     # Build request params
@@ -263,43 +267,43 @@ def paddleocr_doc_parsing(
             params["fileType"] = resolved_file_type
 
     except (ValueError, FileNotFoundError, RuntimeError) as e:
-        logger.error(f"后端日志：PaddleOCR文件处理错误: {e}")
+        logger.error(f"PaddleOCR文件处理错误: {e}", exc_info=True)
         return {
             "success": False,
             "error": "文件处理失败",
-            "debug": f"INPUT_ERROR: {str(e)}"
         }
 
     # Call API
     try:
         result = _make_paddleocr_request(api_url, token, params)
     except RuntimeError as e:
-        logger.error(f"后端日志：PaddleOCR API调用失败: {e}")
+        logger.error(f"PaddleOCR API调用失败: {e}", exc_info=True)
         return {
             "success": False,
             "error": "PaddleOCR API调用失败",
-            "debug": f"API_ERROR: {str(e)}"
         }
 
     # Extract markdown.text from each page
     try:
         texts = _extract_markdown_texts(result)
-        full_text = "\n\n".join(texts)
     except ValueError as e:
-        logger.error(f"后端日志：PaddleOCR结果解析错误: {e}")
+        logger.error(f"PaddleOCR结果解析错误: {e}", exc_info=True)
         return {
             "success": False,
             "error": "结果解析失败",
-            "debug": f"API_ERROR: {str(e)}"
         }
 
-    logger.info(f"后端日志：PaddleOCR文档解析成功，共{len(texts)}页")
+    # full_text 截断到 5000 字符 + truncated 标记（统一规范 §1.4）
+    full_text = "\n\n".join(texts)
+    full_text, truncated = truncate_text(full_text, limit=5000)
+
+    logger.info(f"PaddleOCR文档解析成功，共{len(texts)}页")
     return {
         "success": True,
         "texts": texts,
         "full_text": full_text,
-        "result": result,
-        "message": f"成功解析{len(texts)}页文档"
+        "truncated": truncated,
+        "message": f"成功解析{len(texts)}页",
     }
 
 
@@ -351,10 +355,10 @@ class PaddleOCRDocParsingTool(BaseTool):
         file_type = kwargs.get("file_type")
 
         if not file_url and not file_path:
+            logger.warning("PaddleOCR 工具调用缺少 file_url/file_path 参数")
             return {
                 "success": False,
                 "error": "请提供文件URL或本地路径",
-                "debug": "INPUT_ERROR: file_url or file_path required"
             }
 
         return paddleocr_doc_parsing(

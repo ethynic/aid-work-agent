@@ -90,9 +90,35 @@ class TestPdfProcessToolDefinition:
     def test_tool_has_description(self):
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
         tool = PdfProcessTool()
-        assert len(tool.description) > 50
+        # description 瘦身为 ≤80 字符的一句话功能+触发说明（规范 §1.1）
+        assert len(tool.description) <= 80
         assert "PDF" in tool.description
-        assert "触发规则" in tool.description
+
+    def test_tool_description_le_no_tutorial(self):
+        """description 不应塞操作菜单/教程（已迁移到 usage_guide）。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        tool = PdfProcessTool()
+        # 教程性内容应在 usage_guide，不在 description
+        assert "触发规则" not in tool.description
+        assert "cp 注册" not in tool.description
+        assert tool.usage_guide  # usage_guide 非空，承载迁移内容
+        assert "触发规则" not in tool.usage_guide  # 内容已重组，无旧标题
+        # 操作菜单与 cp 注册说明迁移到了 usage_guide
+        assert "read_tables" in tool.usage_guide
+        assert "cp" in tool.usage_guide.lower()
+
+    def test_content_type_literal_enum(self):
+        """content_type 改用 Literal 枚举，schema 自描述（规范 §1.7）。"""
+        from src.tools.pdf.pdf_process_tool import PdfProcessInput
+        schema = PdfProcessInput.model_json_schema()
+        ct = schema["properties"]["content_type"]
+        # Optional[Literal[...]] 在 Pydantic v2 生成 anyOf（含 enum 约束）
+        enum_branches = [
+            branch for branch in ct.get("anyOf", [])
+            if branch.get("type") == "string" and "enum" in branch
+        ]
+        assert enum_branches, "content_type schema 应含 Literal 枚举约束"
+        assert set(enum_branches[0]["enum"]) == {"markdown", "html", "text", "auto"}
 
     def test_task_type_all(self):
         from src.tools.pdf.pdf_process_tool import TaskType
@@ -1785,3 +1811,104 @@ class TestPdfProcessPipeline:
 
         assert result["success"] is False
         assert result["failed_at"] == "read"
+
+
+# =============================================================================
+# Token 效率：_merge_results 截断行为测试（规范 §1.4）
+# =============================================================================
+
+class TestPdfMergeResultsTruncation:
+    """验证 _merge_results 对全文/表格字段统一截断，避免 token 黑洞。"""
+
+    def _tool(self):
+        from src.tools.pdf.pdf_process_tool import PdfProcessTool
+        return PdfProcessTool()
+
+    def _ctx(self, results):
+        from src.tools.pdf.pdf_process_tool import PipelineContext
+        ctx = PipelineContext()
+        ctx.results = results
+        return ctx
+
+    def test_read_content_truncated_to_2000(self):
+        """read 的 content 超长截断到 2000 字符 + content_truncated 标记。"""
+        tool = self._tool()
+        long_text = "页" * 6000
+        ctx = self._ctx([{"operation": "read", "success": True,
+                          "content": long_text, "pages": [], "metadata": {}}])
+        merged = tool._merge_results(ctx)
+        assert merged["success"] is True
+        assert len(merged["content"]) <= 2000 + 3
+        assert merged["content_truncated"] is True
+        assert merged["page_count"] == 0
+
+    def test_read_content_short_not_truncated(self):
+        """短 content 原样返回，不带截断标记。"""
+        tool = self._tool()
+        ctx = self._ctx([{"operation": "read", "success": True,
+                          "content": "短正文", "pages": [{"page": 1}],
+                          "metadata": {"title": "t"}}])
+        merged = tool._merge_results(ctx)
+        assert merged["content"] == "短正文"
+        assert "content_truncated" not in merged
+        assert merged["page_count"] == 1
+
+    def test_pdf_to_md_markdown_truncated_to_5000(self):
+        """pdf_to_md 的 markdown 全文类截断到 5000 字符 + markdown_truncated。"""
+        tool = self._tool()
+        long_md = "# 标题\n" + "x" * 8000
+        ctx = self._ctx([{"operation": "pdf_to_md", "success": True,
+                          "markdown": long_md, "source": "text_extract"}])
+        merged = tool._merge_results(ctx)
+        assert len(merged["markdown"]) <= 5000 + 3
+        assert merged["markdown_truncated"] is True
+        assert merged["source"] == "text_extract"
+
+    def test_read_tables_becomes_preview(self):
+        """read_tables 不回塞完整表格，转为元信息 + preview 行。"""
+        tool = self._tool()
+        big_table_data = [["c%d" % c for c in range(20)] for _ in range(50)]
+        tables = [{"page": 1, "table_index": 1, "data": big_table_data}]
+        ctx = self._ctx([{"operation": "read_tables", "success": True,
+                          "tables": tables, "count": 1}])
+        merged = tool._merge_results(ctx)
+        assert merged["table_count"] == 1
+        preview_table = merged["tables"][0]
+        assert preview_table["page"] == 1
+        assert preview_table["row_count"] == 50
+        # preview 只取前 5 行，且标记了截断
+        assert len(preview_table["preview"]) == 5
+        assert preview_table["preview_truncated"] is True
+        # 不再回塞完整 data
+        assert "data" not in preview_table
+
+    def test_ocr_content_truncated(self):
+        """ocr 的 content 单字段 ≤2000 截断。"""
+        tool = self._tool()
+        ctx = self._ctx([{"operation": "ocr", "success": True,
+                          "content": "字" * 3000, "page_count": 3}])
+        merged = tool._merge_results(ctx)
+        assert len(merged["content"]) <= 2000 + 3
+        assert merged["content_truncated"] is True
+        assert merged["page_count"] == 3
+
+    def test_inspect_large_blob_truncated(self):
+        """inspect 的结构序列化超长则降级为截断字符串。"""
+        tool = self._tool()
+        big_inspection = {"key": "v" * 6000}
+        ctx = self._ctx([{"operation": "inspect", "success": True,
+                          "inspection": big_inspection}])
+        merged = tool._merge_results(ctx)
+        assert isinstance(merged["inspection"], str)
+        assert len(merged["inspection"]) <= 5000 + 3
+        assert merged["blob_truncated"] is True
+
+    def test_inspect_small_blob_preserved(self):
+        """inspect 小结构保留原对象，不截断。"""
+        tool = self._tool()
+        inspection = {"pages": 3, "title": "t"}
+        ctx = self._ctx([{"operation": "inspect", "success": True,
+                          "inspection": inspection}])
+        merged = tool._merge_results(ctx)
+        assert merged["inspection"] == inspection
+        assert "blob_truncated" not in merged

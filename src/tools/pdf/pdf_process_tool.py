@@ -8,11 +8,12 @@ Agent 优先传 instruction（用户目的）+ content（待处理正文）+ fil
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.tools._helpers import truncate_text
 from src.tools.base import BaseTool
 
 
@@ -55,7 +56,7 @@ class PdfProcessInput(BaseModel):
         description="待处理正文内容。Markdown/HTML 转 PDF 时优先使用此字段传完整正文，"
                     "不要把'生成一份PDF'等工具指令写入正文。"
     )
-    content_type: Optional[str] = Field(
+    content_type: Optional[Literal["markdown", "html", "text", "auto"]] = Field(
         None,
         description="content 的格式类型，可选：markdown、html、text、auto。默认自动识别。"
     )
@@ -95,41 +96,40 @@ class PipelineContext:
         self.results: List[Dict] = []
 
 
-TOOL_DESCRIPTION = """PDF文档处理工具。所有与PDF文件相关的操作都通过本工具处理。
+TOOL_DESCRIPTION = (
+    "处理 PDF 文档：读取/转Markdown/OCR/提取表格，以及转PDF/合并/拆分/页面操作。"
+    "遇到 PDF 相关需求时调用。"
+)
 
-⚠️ 触发规则 — 遇到以下场景必须调用本工具：
-- 用户要求读取、查看PDF文件内容
-- 用户要求提取PDF中的表格
-- 用户要求OCR识别PDF（扫描件）
-- 用户要求将PDF转为Markdown
-- 用户要求将Markdown/HTML/Word转为PDF
-- 用户要求合并、拆分、提取PDF页面
-- 用户要求检查PDF结构、渲染PDF页面、验证PDF质量
-- 用户要求清理PDF元数据、添加水印、加密保护、压缩、提取图片、旋转页面
-- 用户上传了.pdf文件并要求处理
-不要自己处理PDF文件，一律交给本工具。
+TOOL_USAGE_GUIDE = """\
+## pdf_process 使用指南
 
-调用方式：
-- 推荐使用 instruction + content：instruction 放用户目的，content 放待转换 Markdown/HTML 正文
-- 兼容旧调用：也可以将用户的原始需求描述和相关内容放在 context 中
-- 如果需要将对话内容转为PDF，必须在 content 或 context 中包含完整的 Markdown 或 HTML 文本
-- output_name 可传入业务文件名；不传时工具会从 Markdown 标题推断
-- 用户上传的附件路径放在 file_paths 中
-工具会自动判断并执行合适的操作。
+### 支持的操作（工具自动判断操作类型）
+读取/查看内容(read)、提取表格(read_tables)、OCR识别(ocr)、PDF转Markdown(pdf_to_md)、\
+Markdown/HTML/Word转PDF(md_to_pdf/html_to_pdf/docx_to_pdf)、合并(merge)、拆分(split)、\
+提取页面(extract_pages)、检查结构(inspect)、渲染页面(render_pages)、验证(validate)、\
+清理元数据(clean_metadata)、添加水印(add_watermark)、加密保护(protect)、压缩(compress)、\
+提取图片(extract_images)、旋转(rotate)。用户上传 .pdf 文件并要求处理时同样使用本工具。
 
-📦 生成文件后必须用 cp 注册下载（重要）：
-当本工具产生新的 PDF 文件时（Markdown/HTML/Word转PDF、合并、拆分、提取页面、清理元数据、添加水印、加密保护、压缩、旋转，返回结果中含 file_path 或 files），
-必须紧接着调用 cp 工具完成交付，用户才能在前端看到并下载：
-    cp(source_file_path="<本工具返回的 file_path>", display_name="<面向用户的业务文件名>")
-拆分（split）产生多个文件时，对每个文件分别调用 cp，并传对应的 display_name。
-cp 会把文件复制到下载目录、在前端对话中展示下载卡片。
-display_name 必须使用用户能理解的业务文件名，不要使用工具临时文件名。
-仅读取/OCR/转Markdown（read/read_tables/ocr/pdf_to_md）不产生新文件，无需调用 cp。"""
+### 调用方式
+- 推荐使用 instruction + content：instruction 放用户目的，content 放待转换 Markdown/HTML 正文。
+- 兼容旧调用：也可把用户原始需求和相关内容放在 context 中。
+- 若需将对话内容转为PDF，content/context 必须包含完整 Markdown 或 HTML 文本。
+- output_name 可传业务文件名；不传时工具从 Markdown 标题推断。
+- 用户上传的附件路径放在 file_paths 中。
+
+### cp 注册下载（重要）
+本工具产生新 PDF 文件时（转PDF、合并、拆分、提取页面、清理元数据、添加水印、加密保护、压缩、旋转，\
+返回结果含 file_path 或 files），必须紧接着调用 cp 工具完成交付：
+    cp(source_file_path="<返回的 file_path>", display_name="<业务文件名>")
+拆分(split)产生多个文件时，对每个文件分别调用 cp。display_name 用用户能理解的业务文件名。
+仅 read/read_tables/ocr/pdf_to_md 不产生新文件，无需调用 cp。"""
 
 
 class PdfProcessTool(BaseTool):
     name = "pdf_process"
     description = TOOL_DESCRIPTION
+    usage_guide = TOOL_USAGE_GUIDE
     display_name = "PDF文档处理"
     category = "file"
     InputModel = PdfProcessInput
@@ -363,24 +363,42 @@ class PdfProcessTool(BaseTool):
                 ctx.file_paths = [f["file_path"] for f in result["files"] if f.get("file_path")]
 
     def _merge_results(self, ctx: PipelineContext) -> Dict[str, Any]:
-        """合并所有步骤的结果"""
+        """合并所有步骤的结果。
+
+        文本类大字段统一截断（单字段 ≤2000、全文类 ≤5000），并带 truncated 标记，
+        避免把全文/完整表格灌入 LLM 上下文。规范见 tool-development-spec.md §1.4。
+        """
         merged = {"success": True, "steps": len(ctx.results)}
 
         for r in ctx.results:
             op = r["operation"]
             if op == "read":
-                merged["content"] = r.get("content", "")
-                merged["pages"] = r.get("pages", [])
+                # 元信息 + preview，不再回塞全文
+                pages = r.get("pages", [])
+                merged["pages"] = pages
                 merged["metadata"] = r.get("metadata", {})
+                merged["page_count"] = len(pages)
+                content, truncated = truncate_text(r.get("content", ""), limit=2000)
+                merged["content"] = content
+                if truncated:
+                    merged["content_truncated"] = True
             elif op == "read_tables":
-                merged["tables"] = r.get("tables", [])
-                merged["table_count"] = r.get("count", 0)
+                # 每张表保留元信息 + preview 行，不再回塞完整表格数据
+                tables = r.get("tables", [])
+                merged["table_count"] = r.get("count", len(tables))
+                merged["tables"] = [self._table_preview(t) for t in tables]
             elif op == "ocr":
-                merged["content"] = r.get("content", "")
+                content, truncated = truncate_text(r.get("content", ""), limit=2000)
+                merged["content"] = content
                 merged["page_count"] = r.get("page_count", 0)
+                if truncated:
+                    merged["content_truncated"] = True
             elif op == "pdf_to_md":
-                merged["markdown"] = r.get("markdown", "")
+                markdown, truncated = truncate_text(r.get("markdown", ""), limit=5000)
+                merged["markdown"] = markdown
                 merged["source"] = r.get("source", "text_extract")
+                if truncated:
+                    merged["markdown_truncated"] = True
             elif op in ("md_to_pdf", "html_to_pdf", "docx_to_pdf"):
                 merged["file_path"] = r.get("file_path", "")
                 merged["file_size"] = r.get("file_size", 0)
@@ -408,13 +426,13 @@ class PdfProcessTool(BaseTool):
                 if r.get("download_url"):
                     merged["download_url"] = r["download_url"]
             elif op == "inspect":
-                merged["inspection"] = r.get("inspection", r)
+                merged["inspection"] = self._truncate_blob(r.get("inspection", r), merged)
             elif op == "render_pages":
                 merged["rendered_pages"] = r.get("pages", [])
                 merged["count"] = r.get("count", 0)
                 merged["renderer"] = r.get("renderer", "")
             elif op == "validate":
-                merged["validation"] = r.get("validation", r)
+                merged["validation"] = self._truncate_blob(r.get("validation", r), merged)
             elif op in ("clean_metadata", "add_watermark", "protect", "compress", "rotate"):
                 merged["file_path"] = r.get("file_path", "")
                 merged["file_size"] = r.get("file_size", 0)
@@ -435,7 +453,7 @@ class PdfProcessTool(BaseTool):
                 merged["count"] = r.get("count", 0)
 
             if r.get("validation"):
-                merged["validation"] = r["validation"]
+                merged["validation"] = self._truncate_blob(r["validation"], merged)
             if r.get("warnings"):
                 merged.setdefault("warnings", []).extend(r["warnings"])
 
@@ -443,6 +461,40 @@ class PdfProcessTool(BaseTool):
             merged["final_file_path"] = ctx.file_paths[0]
 
         return merged
+
+    @staticmethod
+    def _table_preview(table: Dict) -> Dict:
+        """单张表格只保留元信息 + 有限行预览，不再回塞完整表格数据。"""
+        if not isinstance(table, dict):
+            return table
+        preview: Dict[str, Any] = {
+            "page": table.get("page"),
+            "table_index": table.get("table_index"),
+        }
+        data = table.get("data")
+        if isinstance(data, list):
+            preview["row_count"] = len(data)
+            preview["preview"] = data[:5]
+            cell_count = sum(len(row) for row in data if isinstance(row, list))
+            if cell_count > 50:
+                preview["preview_truncated"] = True
+        else:
+            preview["data"] = data
+        return preview
+
+    @staticmethod
+    def _truncate_blob(value: Any, merged: Dict) -> Any:
+        """inspect/validate 等结构：序列化超长则截断为字符串 + truncated 标记。"""
+        import json as _json
+
+        if not isinstance(value, (dict, list)):
+            return value
+        serialized = _json.dumps(value, ensure_ascii=False)
+        if len(serialized) <= 5000:
+            return value
+        truncated, _ = truncate_text(serialized, limit=5000)
+        merged["blob_truncated"] = True
+        return truncated
 
     # ── 各操作处理器 ──
 
