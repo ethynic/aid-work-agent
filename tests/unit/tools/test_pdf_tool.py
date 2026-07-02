@@ -124,7 +124,7 @@ class TestPdfProcessToolDefinition:
         from src.tools.pdf.pdf_process_tool import TaskType
         expected = {
             "read", "read_tables", "ocr", "pdf_to_md",
-            "md_to_pdf", "html_to_pdf", "docx_to_pdf",
+            "md_to_pdf", "html_to_pdf",
             "merge", "split", "extract_pages",
             "inspect", "render_pages", "validate",
             "clean_metadata", "add_watermark", "protect",
@@ -265,16 +265,23 @@ class TestPdfProcessToolExecution:
         assert "pages" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_execute_docx_to_pdf_no_file(self):
+    async def test_execute_docx_to_pdf_returns_unsupported(self):
+        """Word 转 PDF 已下架：上传 .docx 要求生成 PDF 时返回明确的失败提示。"""
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
         tool = PdfProcessTool()
 
+        # 确定性路由直接拦截，不应调用内部 LLM 路由
         mock_router = AsyncMock()
-        mock_router.route.return_value = {"task": "docx_to_pdf", "params": {}}
+        mock_router.route.side_effect = AssertionError("Word→PDF 应在确定性路由拦截，不调用 LLM")
         tool._router = mock_router
 
-        result = await tool.execute(context="Word转PDF")
+        result = await tool.execute(
+            instruction="把Word转成PDF",
+            file_paths=["test.docx"],
+        )
         assert result["success"] is False
+        assert "Word 转 PDF 已下架" in result["error"]
+        assert "md_to_pdf" in result["error"]
 
     @pytest.mark.asyncio
     async def test_execute_read_tables_no_file(self):
@@ -830,105 +837,11 @@ class TestPdfWriter:
         assert parts[2]["type"] == "html"
         assert "after" in parts[2]["content"]
 
-    def test_docx_to_pdf_file_not_found(self):
-        """Word 转 PDF 文件不存在"""
-        from src.tools.pdf.pdf_writer import docx_to_pdf
-
-        with patch("src.tools.pdf.pdf_writer.PdfFileHandler.resolve_path", return_value="/nonexistent.docx"), \
-             patch("src.tools.pdf.pdf_writer.Path") as mock_path_cls:
-            mock_path_cls.return_value.exists.return_value = False
-            result = docx_to_pdf("/nonexistent.docx")
-
-        assert result["success"] is False
-
-    def test_docx_to_pdf_libreoffice_success(self):
-        """Word 转 PDF 通过 LibreOffice 成功"""
-        from src.tools.pdf.pdf_writer import _docx_to_pdf_via_libreoffice
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdf_path = os.path.join(tmpdir, "test.pdf")
-            with open(pdf_path, "wb") as f:
-                f.write(b"%PDF-1.4 fake")
-
-            def fake_run(cmd, **kwargs):
-                outdir_idx = cmd.index("--outdir")
-                outdir = cmd[outdir_idx + 1]
-                output = os.path.join(outdir, "test.pdf")
-                with open(output, "wb") as f:
-                    f.write(b"%PDF-1.4 fake")
-                return MagicMock(stderr="")
-
-            mock_shutil = MagicMock()
-            mock_shutil.which.return_value = "/usr/bin/soffice"
-
-            with patch.dict("sys.modules", {"shutil": mock_shutil}), \
-                 patch("subprocess.run", side_effect=fake_run), \
-                 patch("src.tools.pdf.pdf_writer.PdfFileHandler.save_temp", return_value={"file_path": pdf_path, "file_size": 100}):
-                result = _docx_to_pdf_via_libreoffice("/fake/test.docx")
-
-        assert result["success"] is True
-
-    def test_docx_to_pdf_libreoffice_not_installed(self):
-        """LibreOffice 未安装"""
-        from src.tools.pdf.pdf_writer import _docx_to_pdf_via_libreoffice
-
-        mock_shutil = MagicMock()
-        mock_shutil.which.return_value = None
-
-        with patch.dict("sys.modules", {"shutil": mock_shutil}):
-            result = _docx_to_pdf_via_libreoffice("/fake/test.docx")
-
-        assert result["success"] is False
-        assert "LibreOffice" in result["error"]
-
-    def test_docx_to_pdf_libreoffice_timeout(self):
-        """LibreOffice 转换超时"""
-        import subprocess
-        from src.tools.pdf.pdf_writer import _docx_to_pdf_via_libreoffice
-
-        mock_shutil = MagicMock()
-        mock_shutil.which.return_value = "/usr/bin/soffice"
-
-        with patch.dict("sys.modules", {"shutil": mock_shutil}), \
-             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="soffice", timeout=120)):
-            result = _docx_to_pdf_via_libreoffice("/fake/test.docx")
-
-        assert result["success"] is False
-        assert "超时" in result["error"]
-
-    def test_docx_to_pdf_libreoffice_uses_isolated_profile(self):
-        """LibreOffice 并发转换使用独立用户配置目录"""
-        from src.tools.pdf.pdf_writer import _docx_to_pdf_via_libreoffice
-
-        mock_shutil = MagicMock()
-        mock_shutil.which.return_value = "/usr/bin/soffice"
-
-        with patch.dict("sys.modules", {"shutil": mock_shutil}), \
-             patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="failed")) as mock_run:
-            _docx_to_pdf_via_libreoffice("/fake/test.docx")
-
-        cmd = mock_run.call_args.args[0]
-        assert any(arg.startswith("-env:UserInstallation=file:") for arg in cmd)
-        assert "--nolockcheck" in cmd
-
-    def test_docx_to_pdf_libreoffice_failed_returns_details(self):
-        """LibreOffice 转换失败时保留诊断信息"""
-        from src.tools.pdf.pdf_writer import docx_to_pdf
-
-        with patch("src.tools.pdf.pdf_writer.PdfFileHandler.resolve_path", return_value="/fake/test.docx"), \
-             patch("src.tools.pdf.pdf_writer.Path.exists", return_value=True), \
-             patch(
-                 "src.tools.pdf.pdf_writer._docx_to_pdf_via_libreoffice",
-                 return_value={
-                     "success": False,
-                     "error": "LibreOffice 转换失败",
-                     "debug": "source file could not be loaded",
-                 },
-             ):
-            result = docx_to_pdf("/fake/test.docx")
-
-        assert result["success"] is False
-        assert "source file could not be loaded" in result["debug"]
+    def test_docx_to_pdf_removed(self):
+        """Word 转 PDF 已下架：pdf_writer 不再提供 docx_to_pdf 函数。"""
+        import src.tools.pdf.pdf_writer as pdf_writer
+        assert not hasattr(pdf_writer, "docx_to_pdf")
+        assert not hasattr(pdf_writer, "_docx_to_pdf_via_libreoffice")
 
 
 # =============================================================================
@@ -1295,7 +1208,7 @@ class TestPdfRouter:
         router = PdfRouter()
         valid_tasks = [
             "read", "read_tables", "ocr", "pdf_to_md",
-            "md_to_pdf", "html_to_pdf", "docx_to_pdf",
+            "md_to_pdf", "html_to_pdf",
             "merge", "split", "extract_pages",
             "inspect", "render_pages", "validate",
             "clean_metadata", "add_watermark", "protect",
@@ -1496,24 +1409,6 @@ class TestPdfProcessPipeline:
         assert result["file_path"] == "/tmp/test.pdf"
 
     @pytest.mark.asyncio
-    async def test_docx_to_pdf_pipeline_success(self):
-        """docx_to_pdf 操作完整 pipeline"""
-        from src.tools.pdf.pdf_process_tool import PdfProcessTool
-        tool = PdfProcessTool()
-
-        mock_router = AsyncMock()
-        mock_router.route.return_value = {"task": "docx_to_pdf", "params": {}}
-        tool._router = mock_router
-
-        mock_result = {"success": True, "file_path": "/tmp/test.pdf", "file_size": 1024}
-
-        with patch("src.tools.pdf.pdf_writer.docx_to_pdf", return_value=mock_result), \
-             patch.object(tool, "_resolve_file", return_value="/fake/test.docx"):
-            result = await tool.execute(context="Word转PDF", file_paths=["test.docx"])
-
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
     async def test_md_to_pdf_structured_content_uses_content_only(self):
         """instruction + content 调用时，Markdown 正文不被指令污染。"""
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
@@ -1607,29 +1502,6 @@ class TestPdfProcessPipeline:
         html_text = mock_html_to_pdf.call_args.kwargs["html_text"]
         assert html_text.startswith("<div>")
         assert "请把下面" not in html_text
-
-    @pytest.mark.asyncio
-    async def test_docx_to_pdf_deterministic_route_with_output_name(self):
-        """DOCX 附件 + PDF 生成意图可确定性路由，并优先使用显式 output_name。"""
-        from src.tools.pdf.pdf_process_tool import PdfProcessTool
-        tool = PdfProcessTool()
-
-        mock_router = AsyncMock()
-        mock_router.route.side_effect = AssertionError("确定性路由不应调用内部 LLM")
-        tool._router = mock_router
-
-        mock_result = {"success": True, "file_path": "/tmp/from_docx.pdf", "file_size": 1024}
-
-        with patch("src.tools.pdf.pdf_writer.docx_to_pdf", return_value=mock_result) as mock_docx_to_pdf, \
-             patch.object(tool, "_resolve_file", return_value="/fake/test.docx"):
-            result = await tool.execute(
-                instruction="把Word转换成PDF",
-                file_paths=["test.docx"],
-                output_name="正式报告.pdf",
-            )
-
-        assert result["success"] is True
-        assert mock_docx_to_pdf.call_args.kwargs["output_name"] == "正式报告.pdf"
 
     @pytest.mark.asyncio
     async def test_merge_pipeline_success(self):

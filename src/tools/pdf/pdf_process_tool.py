@@ -25,7 +25,6 @@ class TaskType:
     PDF_TO_MD = "pdf_to_md"
     MD_TO_PDF = "md_to_pdf"
     HTML_TO_PDF = "html_to_pdf"
-    DOCX_TO_PDF = "docx_to_pdf"
     MERGE = "merge"
     SPLIT = "split"
     EXTRACT_PAGES = "extract_pages"
@@ -40,7 +39,7 @@ class TaskType:
     ROTATE = "rotate"
 
     ALL = {READ, READ_TABLES, OCR, PDF_TO_MD, MD_TO_PDF,
-           HTML_TO_PDF, DOCX_TO_PDF, MERGE, SPLIT, EXTRACT_PAGES,
+           HTML_TO_PDF, MERGE, SPLIT, EXTRACT_PAGES,
            INSPECT, RENDER_PAGES, VALIDATE, CLEAN_METADATA,
            ADD_WATERMARK, PROTECT, COMPRESS, EXTRACT_IMAGES, ROTATE}
 
@@ -106,7 +105,7 @@ TOOL_USAGE_GUIDE = """\
 
 ### 支持的操作（工具自动判断操作类型）
 读取/查看内容(read)、提取表格(read_tables)、OCR识别(ocr)、PDF转Markdown(pdf_to_md)、\
-Markdown/HTML/Word转PDF(md_to_pdf/html_to_pdf/docx_to_pdf)、合并(merge)、拆分(split)、\
+Markdown/HTML转PDF(md_to_pdf/html_to_pdf)、合并(merge)、拆分(split)、\
 提取页面(extract_pages)、检查结构(inspect)、渲染页面(render_pages)、验证(validate)、\
 清理元数据(clean_metadata)、添加水印(add_watermark)、加密保护(protect)、压缩(compress)、\
 提取图片(extract_images)、旋转(rotate)。用户上传 .pdf 文件并要求处理时同样使用本工具。
@@ -268,7 +267,6 @@ class PdfProcessTool(BaseTool):
             "pdf_to_md": self._handle_pdf_to_md,
             "md_to_pdf": self._handle_md_to_pdf,
             "html_to_pdf": self._handle_html_to_pdf,
-            "docx_to_pdf": self._handle_docx_to_pdf,
             "merge": self._handle_merge,
             "split": self._handle_split,
             "extract_pages": self._handle_extract_pages,
@@ -323,7 +321,13 @@ class PdfProcessTool(BaseTool):
         intent = instruction or context or ""
 
         if any(p.endswith(".docx") for p in lower_paths) and self._is_pdf_generation_instruction(intent):
-            return {"task": "docx_to_pdf", "params": {}, "reason": "检测到 DOCX 附件并要求生成 PDF"}
+            return {
+                "task": "",
+                "error": (
+                    "Word 转 PDF 已下架：LibreOffice 无法保证 Word 表格格式保真。"
+                    "请基于 Word 内容直接生成 PDF（使用 md_to_pdf 或 html_to_pdf）。"
+                ),
+            }
 
         if not context:
             return None
@@ -354,7 +358,7 @@ class PdfProcessTool(BaseTool):
             )
 
         if op in (
-            "md_to_pdf", "html_to_pdf", "docx_to_pdf", "merge", "split", "extract_pages",
+            "md_to_pdf", "html_to_pdf", "merge", "split", "extract_pages",
             "clean_metadata", "add_watermark", "protect", "compress", "rotate",
         ):
             if result.get("file_path"):
@@ -399,7 +403,7 @@ class PdfProcessTool(BaseTool):
                 merged["source"] = r.get("source", "text_extract")
                 if truncated:
                     merged["markdown_truncated"] = True
-            elif op in ("md_to_pdf", "html_to_pdf", "docx_to_pdf"):
+            elif op in ("md_to_pdf", "html_to_pdf"):
                 merged["file_path"] = r.get("file_path", "")
                 merged["file_size"] = r.get("file_size", 0)
                 if r.get("file_id"):
@@ -595,23 +599,6 @@ class PdfProcessTool(BaseTool):
             output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
             css=params.get("css"),
             engine=params.get("engine", "auto"),
-        )
-
-        return self._validate_generated_result(result, params)
-
-    async def _handle_docx_to_pdf(self, ctx: PipelineContext, params: Dict) -> Dict:
-        from src.tools.pdf.pdf_writer import docx_to_pdf
-
-        if not ctx.file_paths:
-            return {"success": False, "error": "docx_to_pdf 操作需要 file_paths 参数"}
-
-        file_path = self._resolve_file(ctx.file_paths[0])
-
-        import asyncio
-        result = await asyncio.to_thread(
-            docx_to_pdf,
-            file_path=file_path,
-            output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
         )
 
         return self._validate_generated_result(result, params)

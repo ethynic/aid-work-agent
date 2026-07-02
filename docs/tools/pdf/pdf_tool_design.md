@@ -4,6 +4,8 @@
 
 > **实现校准（2026-07-01）**：本文档早期 v1.1 方案曾以 Pandoc + WeasyPrint 作为 Markdown/HTML 转 PDF 主路径。当前代码已调整为 `markdown` 解析 + `fpdf2` 纯 Python 生成；`docx_to_pdf` 统一使用 LibreOffice。PDF 质量验证增强、实现质量修复和差距分析见 [PDF 工具能力差距分析与增强设计方案](pdf_tool_gap_analysis_design.md)，开发计划见 [PDF 工具质量验证增强开发计划](pdf_tool_quality_validation_dev_plan.md)。
 
+> **能力下架（2026-07-02）**：`docx_to_pdf` 已下架。LibreOffice 转 Word→PDF 时对复杂表格（合并单元格、嵌套表格、复杂列宽）格式保真度差，是架构性缺陷无法通过参数修复；pandoc/mammoth 等替代方案保真度更差；Docker 环境下无可用的 Microsoft Word 高保真替代。代码已删除 `PdfProcessTool` 的 docx_to_pdf 操作、`pdf_writer.docx_to_pdf`/`_docx_to_pdf_via_libreoffice` 函数及相关测试。`TaskType.ALL`、`PdfRouter` valid_tasks、prompt 同步移除。Word→PDF 请求会在确定性路由阶段返回明确错误，引导用户改用 `md_to_pdf`/`html_to_pdf` 直接生成 PDF。Dockerfile 中 `libreoffice-writer` **保留**，因为 PPT 工具的质量校验（`src/tools/ppt/quality_validator.py`）依赖它生成 PPT 预览图。
+
 ## 1. 概述
 
 PDF 工具是一个综合性的 PDF 处理工具包，遵循 Word 工具的架构模式（单一入口 + LLM 路由 + Pipeline 执行）。支持 PDF 的生成、读取、转换、合并拆分等全生命周期操作。

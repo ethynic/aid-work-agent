@@ -21,19 +21,18 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 4. pdf_to_md - 将PDF转换为Markdown格式
 5. md_to_pdf - 将Markdown文本转换为PDF文件
 6. html_to_pdf - 将HTML内容转换为PDF文件；复杂 HTML/CSS 使用 Playwright print-to-pdf
-7. docx_to_pdf - 将Word文档转换为PDF文件
-8. merge - 合并多个PDF文件
-9. split - 按页码范围拆分PDF
-10. extract_pages - 提取PDF的指定页面为独立文件
-11. inspect - 检查PDF结构、页数、尺寸、元数据、是否加密
-12. render_pages - 将PDF页面渲染成PNG图片用于预览或质检
-13. validate - 验证PDF是否可打开、页数正常、渲染是否基本正常
-14. clean_metadata - 清理PDF元数据
-15. add_watermark - 添加文字水印
-16. protect - 添加PDF打开密码保护
-17. compress - 压缩PDF文件大小
-18. extract_images - 提取PDF内嵌图片
-19. rotate - 旋转PDF页面
+7. merge - 合并多个PDF文件
+8. split - 按页码范围拆分PDF
+9. extract_pages - 提取PDF的指定页面为独立文件
+10. inspect - 检查PDF结构、页数、尺寸、元数据、是否加密
+11. render_pages - 将PDF页面渲染成PNG图片用于预览或质检
+12. validate - 验证PDF是否可打开、页数正常、渲染是否基本正常
+13. clean_metadata - 清理PDF元数据
+14. add_watermark - 添加文字水印
+15. protect - 添加PDF打开密码保护
+16. compress - 压缩PDF文件大小
+17. extract_images - 提取PDF内嵌图片
+18. rotate - 旋转PDF页面
 
 ## 判断规则
 
@@ -43,7 +42,7 @@ ROUTING_PROMPT_PREFIX = """你是 PDF 文档处理工具的内部路由器。根
 - 有 PDF 文件且要求转为 Markdown → pdf_to_md
 - context 中包含 Markdown 内容（# 标题、| 表格等）且要求生成 PDF → md_to_pdf
 - context 中包含 HTML 内容且要求生成 PDF → html_to_pdf；如果强调复杂样式/高保真/网页效果，params.engine="playwright"
-- 有 .docx 文件且要求转为 PDF → docx_to_pdf
+- 有 .docx 文件要求转 PDF：Word 转 PDF 已下架（LibreOffice 无法保证表格格式保真），不要返回 docx_to_pdf。若用户附 Word 想生成 PDF，应提示基于 Word 内容直接生成（走 md_to_pdf 或 html_to_pdf）
 - 有多个 PDF 文件且要求合并 → merge
 - 有 PDF 文件且要求拆分/按页提取 → split 或 extract_pages
 - 有 PDF 文件且要求检查结构/元数据/页数/是否正常 → inspect
@@ -178,7 +177,7 @@ class PdfRouter:
 
             valid_tasks = {
                 "read", "read_tables", "ocr", "pdf_to_md",
-                "md_to_pdf", "html_to_pdf", "docx_to_pdf",
+                "md_to_pdf", "html_to_pdf",
                 "merge", "split", "extract_pages",
                 "inspect", "render_pages", "validate",
                 "clean_metadata", "add_watermark", "protect",
