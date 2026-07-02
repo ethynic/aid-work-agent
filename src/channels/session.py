@@ -734,6 +734,10 @@ class ChannelSessionManager:
         agent_input_text = agent_user_input if agent_user_input is not None else user_content
 
         async def _processor(cancel_check, user_input_override=None):
+            # 每次调用（含 cancel 重跑、pending 重跑）都重置收集列表，
+            # 避免被取消的前一轮已生成的文件 / tool 消息泄漏到重跑轮的 send_response
+            downloadable_files.clear()
+            tool_messages_collected.clear()
             # 语音合并 / pending 重处理场景下，session_queue 会通过 override
             # 传入合并后的完整输入，必须优先于闭包绑定的 agent_input_text
             effective_input = user_input_override if user_input_override is not None else agent_input_text
@@ -1777,6 +1781,9 @@ class ChannelSessionManager:
         """
         仅删除会话中的消息，保留会话本身。隐藏命令“新会话”触发本方法
 
+        除 channel_messages 外，同步清理 chat_context_summaries 中该会话的
+        压缩记忆，否则清空后重建上下文会读到旧摘要。
+
         Args:
             session_id: 会话ID
             tenant_id: 租户ID（可选，提供时额外校验租户归属）
@@ -1791,12 +1798,29 @@ class ChannelSessionManager:
                 cursor.execute("""
                     DELETE FROM channel_messages WHERE session_id = %s AND tenant_id = %s
                 """, (session_id, tenant_id))
+                deleted = cursor.rowcount > 0
+                cursor.execute("""
+                    DELETE FROM chat_context_summaries WHERE session_id = %s AND tenant_id = %s
+                """, (session_id, tenant_id))
             else:
                 cursor.execute("""
                     DELETE FROM channel_messages WHERE session_id = %s
                 """, (session_id,))
+                deleted = cursor.rowcount > 0
+                cursor.execute("""
+                    DELETE FROM chat_context_summaries WHERE session_id = %s
+                """, (session_id,))
 
             conn.commit()
-            logger.info(f"后端日志：channel_messages 已清空: session_id={session_id}")
-            return cursor.rowcount > 0# 全局会话管理器
+            # 失效该会话的消息列表缓存，避免读到清空前的旧消息
+            try:
+                from src.core.cache_utils import delete_cached_pattern
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+            except Exception as cache_err:
+                logger.warning(
+                    f"channel_messages 清空后失效 SESSION_MSGS 缓存失败: "
+                    f"sid={session_id}, err={cache_err}"
+                )
+            logger.info(f"后端日志：channel_messages + chat_context_summaries 已清空: session_id={session_id}")
+            return deleted# 全局会话管理器
 channel_session_manager = ChannelSessionManager()
