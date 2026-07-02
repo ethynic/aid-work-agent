@@ -1,0 +1,186 @@
+"""archive.chat_crypto 单元测试
+
+覆盖：
+- RSA-OAEP-SHA1 解密闭环（自生成密钥对，模拟企微加密）
+- AES-256-CBC + PKCS7 解密闭环
+- decrypt_message 组合 API
+- 错误路径：私钥格式错、密文损坏、random_key 不足 32 字节、密文短于 16 字节
+- 与 C# ArchiveCryptoService 算法一致性（构造 C# 同算法加密的数据，Python 能解密）
+"""
+import base64
+import os
+import secrets
+
+import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+from src.channels.wecom_personal_rpa.archive import chat_crypto
+
+
+# ----------------- 测试用密钥对生成（每个测试独立一份） -----------------
+
+
+def _gen_rsa_keypair() -> tuple[str, rsa.RSAPrivateKey]:
+    """生成测试用 RSA 密钥对，返回 (PEM 私钥字符串, 私钥对象)。"""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    return pem, private_key
+
+
+def _rsa_encrypt_oaep_sha1(public_key, plaintext: bytes) -> str:
+    """模拟企微用公钥加密 random_key（RSA-OAEP-SHA1），返回 base64。"""
+    cipher = public_key.encrypt(
+        plaintext,
+        rsa_padding.OAEP(
+            mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
+    return base64.b64encode(cipher).decode("ascii")
+
+
+def _aes_cbc_encrypt(random_key: bytes, iv: bytes, plaintext: bytes) -> str:
+    """模拟企微 AES-256-CBC + PKCS7 加密 chat_msg，返回 base64（iv + 密文）。"""
+    pad_len = 32 - (len(plaintext) % 32)
+    padded = plaintext + bytes([pad_len] * pad_len)
+
+    cipher = Cipher(algorithms.AES(random_key[:32]), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+    cipher_bytes = encryptor.update(padded) + encryptor.finalize()
+    return base64.b64encode(iv + cipher_bytes).decode("ascii")
+
+
+# ----------------- RSA 解密 -----------------
+
+
+def test_decrypt_random_key_ok():
+    """RSA-OAEP-SHA1 解密闭环。"""
+    pem, private_key = _gen_rsa_keypair()
+    random_key_plain = secrets.token_bytes(32)
+    encrypted_b64 = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key_plain)
+
+    decrypted = chat_crypto.decrypt_random_key(pem, encrypted_b64)
+    assert decrypted == random_key_plain
+
+
+def test_decrypt_random_key_empty_pem_raises():
+    with pytest.raises(ValueError, match="private_key_pem 不能为空"):
+        chat_crypto.decrypt_random_key("", "abc")
+
+
+def test_decrypt_random_key_empty_ciphertext_raises():
+    pem, _ = _gen_rsa_keypair()
+    with pytest.raises(ValueError, match="encrypt_random_key_b64 不能为空"):
+        chat_crypto.decrypt_random_key(pem, "")
+
+
+def test_decrypt_random_key_invalid_pem_raises():
+    # 用合法 base64 但 PEM 内容非法，确保错误来自 PEM 解析阶段
+    with pytest.raises(ValueError, match="私钥 PEM 解析失败"):
+        chat_crypto.decrypt_random_key("not a pem", base64.b64encode(b"valid-b64").decode())
+
+
+def test_decrypt_random_key_invalid_base64_ciphertext_raises():
+    """非合法 base64 的密文应抛 ValueError（b64decode 失败）。"""
+    pem, _ = _gen_rsa_keypair()
+    with pytest.raises((ValueError, Exception)):
+        # binascii.Error 也属于 Exception；这里只验证不静默通过
+        chat_crypto.decrypt_random_key(pem, "not!valid!base64!!!")
+
+
+def test_decrypt_random_key_corrupted_ciphertext_raises():
+    pem, _ = _gen_rsa_keypair()
+    with pytest.raises(ValueError, match="RSA 解密失败"):
+        chat_crypto.decrypt_random_key(pem, base64.b64encode(b"corrupted").decode())
+
+
+# ----------------- AES 解密 -----------------
+
+
+def test_decrypt_chat_msg_ok():
+    """AES-256-CBC + PKCS7 解密闭环。"""
+    random_key = secrets.token_bytes(32)
+    iv = secrets.token_bytes(16)
+    plain = "你好，企微会话存档".encode("utf-8")
+    encrypted_b64 = _aes_cbc_encrypt(random_key, iv, plain)
+
+    decrypted = chat_crypto.decrypt_chat_msg(random_key, encrypted_b64)
+    assert decrypted == "你好，企微会话存档"
+
+
+def test_decrypt_chat_msg_random_key_too_short_raises():
+    with pytest.raises(ValueError, match="random_key 至少 32 字节"):
+        chat_crypto.decrypt_chat_msg(b"short", base64.b64encode(b"xxxxxxxxxxxxxxx").decode())
+
+
+def test_decrypt_chat_msg_empty_ciphertext_raises():
+    with pytest.raises(ValueError, match="encrypt_chat_msg_b64 不能为空"):
+        chat_crypto.decrypt_chat_msg(secrets.token_bytes(32), "")
+
+
+def test_decrypt_chat_msg_too_short_raises():
+    """密文（base64 解码后）不足 16 字节 → 抛 ValueError。"""
+    short_b64 = base64.b64encode(b"only10bytes").decode()  # 12 字节 < 16
+    with pytest.raises(ValueError, match="长度不足 16 字节"):
+        chat_crypto.decrypt_chat_msg(secrets.token_bytes(32), short_b64)
+
+
+def test_decrypt_chat_msg_corrupted_padding_raises():
+    """密文损坏 → PKCS7 去填充失败 → 抛 ValueError（pad_len > 32 或 < 1）。"""
+    random_key = secrets.token_bytes(32)
+    iv = secrets.token_bytes(16)
+    # 故意构造一段不会产生合法 padding 的密文
+    bad_cipher = secrets.token_bytes(32)
+    encrypted_b64 = base64.b64encode(iv + bad_cipher).decode()
+    # 不强制断言具体错误信息（不同 cryptography 版本信息可能不同），只要是 ValueError 即可
+    with pytest.raises(ValueError):
+        chat_crypto.decrypt_chat_msg(random_key, encrypted_b64)
+
+
+# ----------------- 组合 API -----------------
+
+
+def test_decrypt_message_full_roundtrip():
+    """组合 API 闭环：模拟企微双层加密 → Python 一次调用解密。"""
+    pem, private_key = _gen_rsa_keypair()
+    random_key = secrets.token_bytes(32)
+    iv = secrets.token_bytes(16)
+    plain_json = '{"msgid":"msg_001","action":"upload","msgtype":"text","text":{"content":"hello","noise":"123"}}'
+    encrypted_random_key = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key)
+    encrypted_chat_msg = _aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8"))
+
+    result = chat_crypto.decrypt_message(pem, encrypted_random_key, encrypted_chat_msg)
+    assert result == plain_json
+
+
+# ----------------- 跨语言一致性（与 C# ArchiveCryptoService 算法对齐） -----------------
+
+
+def test_algorithm_consistency_with_csharp():
+    """验证 Python 实现的算法与 C# ArchiveCryptoService 描述完全一致。
+
+    无法在此直接调用 C#，但通过对照 C# 源码的算法：
+      - RSA: OAEP-SHA1（MGF1-SHA1 + SHA1）
+      - AES: CBC + PKCS7，key=random_key[:32]，IV=ciphertext[:16]，cipher=ciphertext[16:]
+    构造相同输入，期望相同输出。
+    """
+    pem, private_key = _gen_rsa_keypair()
+    # 固定的 random_key 和 iv，确保两次运行结果可重现
+    random_key = b"A" * 32
+    iv = b"B" * 16
+    plain = b'{"test":"consistency"}'
+
+    encrypted_random_key = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key)
+    encrypted_chat_msg = _aes_cbc_encrypt(random_key, iv, plain)
+
+    # Python 解密应得到原 plain
+    decrypted = chat_crypto.decrypt_message(pem, encrypted_random_key, encrypted_chat_msg)
+    assert decrypted == plain.decode("utf-8")

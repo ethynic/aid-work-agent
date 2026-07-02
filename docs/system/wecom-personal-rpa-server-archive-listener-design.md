@@ -513,22 +513,28 @@ class ServerArchiveFetcher:
 
 #### 5.3.2 `chat_crypto.py`（拉取路径的 RSA 解密）
 
-移植 C# `ArchiveCryptoService`：
+移植 C# `ArchiveCryptoService`（与 C# 客户端解密算法完全一致，确保跨语言互通）：
 
 - `decrypt_random_key(private_key_pem: str, encrypt_random_key_b64: str) -> bytes`
-  - RSA-OAEP-SHA1 解密 `encrypt_random_key`
+  - **RSA-OAEP-SHA1** 解密 `encrypt_random_key`（企微官方规范，与 Java 默认一致）
+  - 返回 random_key 字节（典型 32 字节）
 - `decrypt_chat_msg(random_key: bytes, encrypt_chat_msg_b64: str) -> str`
-  - AES-GCM 解密 `encrypt_chat_msg`
+  - **AES-256-CBC + PKCS7**（不是 GCM，与 C# 客户端一致）
+  - key = random_key 前 32 字节
+  - IV = base64 解码后的 encrypt_chat_msg 前 16 字节
+  - 密文 = encrypt_chat_msg 剩余字节
 
 #### 5.3.3 `http_client.py`
 
-封装企微会话存档 HTTP API：
+封装企微会话存档 HTTP API（与 C# `ArchiveHttpClient` 端点一致）：
 
 - `get_access_token(tenant_id, corpid, secret) -> str`
-  - Redis 缓存：key=`wecom_rpa:archive:token:{tenant_id}:{corpid}`，TTL 7000s
+  - GET `https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=X&corpsecret=Y`
+  - Redis 缓存：key=`wecom_rpa:archive:token:{tenant_id}:{corpid}`，TTL = `expires_in - 300`（提前 5 分钟刷新）
 - `get_chat_data(access_token, seq, limit) -> ChatDataBatch`
-  - POST `https://qyapi.weixin.qq.com/cgi-bin/chat_check_in/list?access_token=...`
-  - 处理 45009 → 抛 `WeComRateLimitException(retry_after_seconds)`
+  - POST `https://qyapi.weixin.qq.com/cgi-bin/msg/get_chat_data?access_token=...`
+  - body: `{"seq": ..., "limit": ..., "proxy": "", "last_snap_shot": 0}`
+  - 处理 45009 → 抛 `WeComRateLimitException(retry_after_seconds=60)`
 
 ### 5.4 兜底轮询（`poller.py`）
 
