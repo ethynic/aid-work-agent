@@ -222,7 +222,7 @@ ChatArchiveListener (C# 客户端)
 
 8. 企微有新消息 → POST 到 `/t/{tenant_id}/wecom_personal_rpa/callback/{config_id}`。
 9. 路由函数**双验签兼容**：先试企微官方签名（Token + EncodingAESKey），通过则走 server 路径。
-10. **Token 验签 + EncodingAESKey AES 解密**：得到事件 JSON。
+10. **Token 验签 + EncodingAESKey AES 解密**：得到事件明文（企微会话存档回调事件明文为 XML，由 callback_handler 解析）。
 11. 立即 200 OK 响应企微 + 异步触发拉取。
 12. `ServerArchiveFetcher.fetch_once(tenant_id)`：
     - Redis 分布式锁 `wecom_rpa:archive:lock:{tenant_id}`（防多 worker 并发）
@@ -453,7 +453,7 @@ async def wecom_personal_rpa_callback(
   - AES-CBC-256 解密（key = base64decode(encoding_aes_key + "=")）
   - 返回 (明文 bytes, receiveid)
 - `verify_and_decode_echostr(token, encoding_aes_key, msg_signature, timestamp, nonce, echostr) -> str`
-- `verify_and_decrypt_event(token, encoding_aes_key, msg_signature, timestamp, nonce, encrypt_field) -> dict`
+- `verify_and_decrypt_event(token, encoding_aes_key, msg_signature, timestamp, nonce, encrypt_field) -> str`（返回事件明文，**不绑定 JSON/XML 格式**；会话存档回调明文为 XML，由 callback_handler 自行解析）
 
 > 💡 **可直接参考 `src/channels/wecom_kf/adapter.py` 的 crypto 模块**，几乎 1:1 复用（企微加解密算法所有渠道通用）。
 
