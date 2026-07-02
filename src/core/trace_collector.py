@@ -56,6 +56,10 @@ class TraceRecord:
     provider: Optional[str] = None
     agent_iterations: int = 0
     duration_ms: int = 0
+    # 关联 channel_messages.message_id，用于 monitor.py 精确匹配撤回状态。
+    # process_and_persist 在写入 channel_messages 后回填（覆盖 worker 未处理 + 已处理两种时序）。
+    # 历史该字段为 NULL，monitor.py 不显示撤回标记（用户已确认接受降级）。
+    user_message_id: Optional[str] = None
 
     def __post_init__(self):
         if not self.start_time:
@@ -85,6 +89,26 @@ class TraceCollector:
         self._active_spans: Dict[str, SpanRecord] = {}
         self._tool_name_counter: Dict[str, int] = {}
         self._last_llm_span: Optional[SpanRecord] = None  # 只保留最后一次 LLM 调用
+
+    @property
+    def trace_id(self) -> str:
+        """当前 trace 的唯一 ID，用于回填 user_message_id 时定位记录"""
+        return self.trace.trace_id
+
+    def set_user_message_id(self, mid: Optional[str]):
+        """
+        回填 user_message_id（关联 channel_messages.message_id）。
+
+        process_and_persist 在 add_messages_batch_transactional 拿到 created_ids[0]
+        后调用，覆盖 trace_persist worker 尚未处理的场景。worker 已处理的情况
+        由 trace_persist.update_user_message_id UPDATE 数据库补救。
+
+        失败不抛异常（trace_collector 的所有操作都不应影响业务）。
+        """
+        try:
+            self.trace.user_message_id = mid
+        except Exception as e:
+            logger.debug(f"set_user_message_id failed (trace_id={self.trace.trace_id}): {e}")
 
     def on_event(self, event: dict):
         """处理从 agent.process_message() yield 出来的每个事件"""

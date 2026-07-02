@@ -52,9 +52,11 @@ def _do_persist(trace):
                      input, output, metadata, tags,
                      total_tokens, total_cost, duration_ms, agent_iterations,
                      tool_calls_count, status, error_message, source_type,
+                     user_message_id,
                      created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, 0, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        %s, 0, %s, %s, %s, %s, %s, %s, %s,
+                        NOW(), NOW())
                 ON CONFLICT (trace_id) DO UPDATE SET
                     output = EXCLUDED.output,
                     status = EXCLUDED.status,
@@ -64,6 +66,7 @@ def _do_persist(trace):
                     agent_iterations = EXCLUDED.agent_iterations,
                     tool_calls_count = EXCLUDED.tool_calls_count,
                     tags = EXCLUDED.tags,
+                    user_message_id = COALESCE(EXCLUDED.user_message_id, obs_traces.user_message_id),
                     updated_at = NOW()
             """, (
                 trace.trace_id, trace.session_id, trace.tenant_id,
@@ -74,6 +77,7 @@ def _do_persist(trace):
                 trace.tags, trace.total_tokens, trace.duration_ms,
                 trace.agent_iterations, len(trace.spans),
                 trace.status, trace.error_message, trace.source_type,
+                getattr(trace, 'user_message_id', None),
             ))
 
             # INSERT spans
@@ -121,3 +125,32 @@ def _do_persist(trace):
             logger.debug(f"Trace persisted: {trace.trace_id}, spans={len(trace.spans)}")
     except Exception as e:
         logger.error(f"Failed to persist trace {getattr(trace, 'trace_id', '?')}: {e}")
+
+
+def update_user_message_id(trace_id: str, user_message_id: str):
+    """
+    process_and_persist 在写入 channel_messages 后回填 obs_traces.user_message_id。
+
+    用途：trace_persist worker 是独立线程，可能在 process_and_persist 拿到
+    created_ids[0] 之前或之后写入 obs_traces。
+    - worker 未处理：set_user_message_id 已在内存 trace 设置，worker 写入时携带该值
+    - worker 已处理：obs_traces 已有记录但 user_message_id 为 NULL，本函数 UPDATE 补救
+
+    失败只记 debug log，不影响业务（最坏情况是 trace.user_message_id 为 NULL，
+    monitor.py 不显示撤回标记，属可接受降级）。
+    """
+    try:
+        from src.db.database import get_logs_connection
+        with get_logs_connection() as cur:
+            cur.execute(
+                "UPDATE obs_traces "
+                "SET user_message_id = %s, updated_at = NOW() "
+                "WHERE trace_id = %s",
+                (user_message_id, trace_id),
+            )
+            cur.commit()
+    except Exception as e:
+        logger.debug(
+            f"update_user_message_id failed (trace_id={trace_id}, "
+            f"user_message_id={user_message_id}): {e}"
+        )

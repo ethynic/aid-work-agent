@@ -1792,6 +1792,11 @@ class Agent:
                         source_type=_record.source_type or 'chat',
                         subagent_id=getattr(self, '_subagent_id', None),
                     )
+                    # 注入 trace_collector 引用，process_and_persist 写入
+                    # channel_messages 后通过它回填 user_message_id（用于
+                    # monitor.py 精确匹配撤回状态）
+                    if _record:
+                        _record.trace_collector = trace_collector
                 except Exception as e:
                     logger.debug(f"Trace collector init skipped: {e}")
                     trace_collector = None

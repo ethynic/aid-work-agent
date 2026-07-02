@@ -292,7 +292,8 @@ async def list_session_traces(
                 SELECT
                     trace_id, session_id, input, output, status,
                     duration_ms, total_tokens, tool_calls_count,
-                    agent_iterations, tags, source_type, created_at
+                    agent_iterations, tags, source_type, created_at,
+                    user_message_id
                 FROM obs_traces
                 WHERE session_id = %s
                 ORDER BY created_at DESC
@@ -300,21 +301,17 @@ async def list_session_traces(
 
             rows = cur.fetchall()
 
-        # 从主库 channel_messages 补充撤回状态（obs_traces 与 channel_messages 不在同一库，
-        # 无法直接 JOIN；通过 session_id + 原始内容匹配）
-        # 注意：channel_messages.content 对语音消息总是保存为 "[ASR识别结果] 文本"，
-        # 但 obs_traces.input 只有短句（<10 字）才带该前缀，因此匹配前需要归一化去前缀
-        recall_map: Dict[str, str] = {}  # 归一化后的原始内容 -> recall_type('full'|'partial')
-
-        def _normalize(s: str) -> str:
-            prefix = "[ASR识别结果] "
-            return s[len(prefix):] if s.startswith(prefix) else s
+        # 从主库 channel_messages 补充撤回状态：obs_traces 与 channel_messages 不在同一库，
+        # 但都通过 message_id 关联（obs_traces.user_message_id = channel_messages.message_id）。
+        # 按 message_id 精确匹配，彻底消除"内容相同/前缀模糊"导致的误标。
+        # 历史 trace 的 user_message_id 为 NULL，撤回标记不显示（可接受降级）。
+        recall_map: Dict[str, str] = {}  # message_id -> recall_type('full'|'partial')
 
         try:
             from src.db.database import get_db_connection
             with get_db_connection() as biz_cur:
                 biz_cur.execute("""
-                    SELECT content, metadata, is_recalled
+                    SELECT message_id, metadata, is_recalled
                     FROM channel_messages
                     WHERE session_id = %s
                       AND role = 'user'
@@ -332,9 +329,6 @@ async def list_session_traces(
                             meta = _json.loads(meta)
                         except Exception:
                             meta = {}
-                    original = meta.get("original_content_before_recall") or msg_row.get("content") or ""
-                    if not original:
-                        continue
                     recalled_parts = meta.get("recalled_part_msgids") or []
                     if msg_row.get("is_recalled"):
                         recall_type = "full"
@@ -342,25 +336,20 @@ async def list_session_traces(
                         recall_type = "partial"
                     else:
                         continue
-                    key = _normalize(original)
+                    mid = msg_row.get("message_id")
+                    if not mid:
+                        continue
                     # 全量撤回优先，避免部分撤回覆盖已存在的全量撤回标记
-                    if recall_map.get(key) != "full":
-                        recall_map[key] = recall_type
+                    if recall_map.get(mid) != "full":
+                        recall_map[mid] = recall_type
         except Exception as re:
             logger.warning(f"Failed to load recall info for session {session_id}: {re}")
 
-        def _match_recall(trace_input: Optional[str]) -> Optional[str]:
-            if not trace_input or not recall_map:
+        def _match_recall(user_message_id: Optional[str]) -> Optional[str]:
+            """按 user_message_id 精确匹配撤回类型。NULL 或未命中返回 None。"""
+            if not user_message_id or not recall_map:
                 return None
-            ti = _normalize(trace_input)
-            # 精确匹配原始内容
-            if ti in recall_map:
-                return recall_map[ti]
-            # trace.input 有 500 字截断，尝试前缀匹配
-            for original, rtype in recall_map.items():
-                if original.startswith(ti) or ti.startswith(original[:len(ti)]):
-                    return rtype
-            return None
+            return recall_map.get(user_message_id)
 
         traces = [
             TraceSummary(
@@ -376,7 +365,7 @@ async def list_session_traces(
                 tags=r.get("tags") or [],
                 source_type=r.get("source_type", "chat"),
                 created_at=_format_ts(r.get("created_at")),
-                recall_type=_match_recall(r.get("input")),
+                recall_type=_match_recall(r.get("user_message_id")),
             )
             for r in rows
         ]

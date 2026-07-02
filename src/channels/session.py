@@ -944,6 +944,30 @@ class ChannelSessionManager:
                 "merged_input": result.merged_input,
             }
 
+        # 回填 trace.user_message_id（user 消息对应 batch[0]），用于 monitor.py
+        # 精确匹配撤回状态。双轨覆盖：set_user_message_id 覆盖 trace_persist worker
+        # 未处理的场景（内存 trace 携带该值写入），update_user_message_id UPDATE
+        # 覆盖 worker 已处理的场景。整个回填失败只记 debug log，不影响业务。
+        try:
+            user_msg_id = (
+                write_ok[0]
+                if write_ok and batch and batch[0].get("role") == "user"
+                else None
+            )
+            if user_msg_id and record_service is not None:
+                tc = getattr(record_service, "trace_collector", None)
+                trace_id = None
+                if tc is not None:
+                    tc.set_user_message_id(user_msg_id)  # 覆盖 worker 未处理
+                    trace_id = tc.trace_id
+                if trace_id:
+                    from src.core.trace_persist import update_user_message_id
+                    update_user_message_id(trace_id, user_msg_id)  # 覆盖 worker 已处理
+        except Exception as e:
+            logger.debug(
+                f"后端日志：trace user_message_id 回填失败 session={session_id}: {e}"
+            )
+
         # response_text 为空（agent 内部异常被吞掉返回空字符串）→ 标记错误状态
         if not response_text:
             logger.warning(
