@@ -1439,6 +1439,7 @@ class ChannelSessionManager:
         self,
         session_id: str,
         include_compacted: bool = False,
+        include_recalled: bool = False,
     ) -> int:
         """统计会话消息条数（v3.2 新增，用于压缩阈值快路径检查）。
 
@@ -1447,18 +1448,25 @@ class ChannelSessionManager:
         Args:
             session_id: 会话 ID
             include_compacted: 是否包含 compacted=true 的消息。默认 False。
+            include_recalled: 是否包含已撤回的消息。默认 False，与 get_messages
+                保持一致。撤回消息不参与压缩（既不会被摘要、也不会被打 compacted
+                标记），若计入 COUNT 会导致阈值误触发 + 死循环（撤回消息永远
+                compacted=FALSE，每轮 COUNT 都重新数进去）。
 
         Returns:
             消息条数；查询异常时返回 0（容错，让阈值判断降级到 token 缓存）
         """
         placeholder = "%s"
         compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
+        # 撤回消息过滤条件（兼容迁移前的数据库：is_recalled 列不存在时不启用过滤）
+        has_recall_column = self._has_is_recalled_column()
+        recall_condition = "" if (include_recalled or not has_recall_column) else " AND is_recalled = FALSE"
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     f"SELECT COUNT(*) AS cnt FROM channel_messages "
-                    f"WHERE session_id = {placeholder}{compacted_clause}",
+                    f"WHERE session_id = {placeholder}{compacted_clause}{recall_condition}",
                     (session_id,),
                 )
                 row = cursor.fetchone()
