@@ -349,7 +349,10 @@ async def wecom_personal_rpa_callback(
 
 
 async def _process_inbound_message(
-    tenant_id: str, env: RpaCallbackEnvelope, env_raw: dict
+    tenant_id: str,
+    env: RpaCallbackEnvelope,
+    env_raw: dict,
+    source: str = "client_callback",
 ) -> None:
     """处理入站聊天消息事件。
 
@@ -359,6 +362,11 @@ async def _process_inbound_message(
     - ensure_user_registered → channel_session_manager.get_or_create_session
     - agent.process_message_sync（经 session_queue 串行调度）
     - adapter.set_reply_context + adapter.send_message（走 action_client 投递）
+
+    source 参数仅用于日志/审计区分来源：
+    - "client_callback"（默认）：C# 客户端上报的回调（已有路径）
+    - "server_fetcher"：服务端 archive fetcher 拉取后调用（Phase 4 新增）
+    两种来源行为完全等价，复用同一处理链路。
     """
     # 延迟 import：避免顶层 import src.core.* 触发 master_agent 单例创建链副作用
     from src.core.agent_router import agent_router
