@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from loguru import logger
 
 from src.channels.wecom_personal_rpa.archive import callback_crypto, fetcher
+from src.channels.wecom_personal_rpa.archive import audit as archive_audit
 from src.channels.wecom_personal_rpa.archive.callback_crypto import SignatureError
 from src.channels.wecom_personal_rpa.archive.credential_codec import FORCED_LISTEN_MODE
 from src.saas.db.channel_config_db import ChannelConfigDB
@@ -129,10 +130,14 @@ async def handle_archive_echostr(
         logger.info(
             f"[ArchiveCallback] GET echostr 验证成功 tenant={tenant_id} config={config_id}"
         )
+        archive_audit.log_callback_received(tenant_id, config_id, verify_ok=True)
         return PlainTextResponse(plain_echostr)
     except SignatureError as e:
         logger.warning(
             f"[ArchiveCallback] GET echostr 验签失败 tenant={tenant_id} config={config_id}: {e}"
+        )
+        archive_audit.log_callback_received(
+            tenant_id, config_id, verify_ok=False, detail=str(e)
         )
         return PlainTextResponse("verify failed", status_code=401)
 
@@ -189,6 +194,9 @@ async def handle_archive_event(
         logger.warning(
             f"[ArchiveCallback] POST 验签失败 tenant={tenant_id} config={config_id}: {e}"
         )
+        archive_audit.log_callback_received(
+            tenant_id, config_id, verify_ok=False, detail=str(e)
+        )
         # 防御性：若 listen_mode='server' 验签失败，路由层不应再回退到客户端 HMAC
         # （理论上 server 模式租户的回调不会带 HMAC，回退会误判）
         return JSONResponse({"code": -1, "msg": "verify failed"}, status_code=401)
@@ -196,6 +204,7 @@ async def handle_archive_event(
     # 立即响应 200，异步触发 fetcher（5s 超时硬约束由企微约定）
     asyncio.create_task(fetcher.fetcher.fetch_once(tenant_id, config_id))
 
+    archive_audit.log_callback_received(tenant_id, config_id, verify_ok=True)
     logger.info(
         f"[ArchiveCallback] POST 事件接收成功 tenant={tenant_id} config={config_id} "
         f"plain_preview={plain[:80]!r}"

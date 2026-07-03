@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
 from src.channels.wecom_personal_rpa.archive import callback_crypto, chat_crypto, http_client
+from src.channels.wecom_personal_rpa.archive import audit as archive_audit
 from src.channels.wecom_personal_rpa.archive.credential_codec import (
     FORCED_LISTEN_MODE,
     decrypt_sensitive_fields,
@@ -83,14 +84,24 @@ class ServerArchiveFetcher:
                 f"[ServerArchiveFetcher] fetch_once 超时 {_FETCH_TIMEOUT_SECONDS}s tenant={tenant_id}"
             )
             await self._mark_error(tenant_id, config_id, f"fetch_once 超时 {_FETCH_TIMEOUT_SECONDS}s")
+            archive_audit.log_fetch_error(
+                tenant_id, config_id, "TimeoutError",
+                f"fetch_once 超时 {_FETCH_TIMEOUT_SECONDS}s", stage="fetch_once"
+            )
         except WeComRateLimitException as e:
             # 45009：标记错误，下次 poller 周期会跳过该 tenant（暂时由 poller 间隔 + Redis 锁兜底；
             # 后续可加 status='paused' 字段做更精细的暂停）
             logger.warning(f"[ServerArchiveFetcher] 45009 tenant={tenant_id} pause={e.retry_after_seconds}s")
             await self._mark_error(tenant_id, config_id, f"企微 45009 频率限制，暂停 {e.retry_after_seconds}s")
+            archive_audit.log_fetch_rate_limited(
+                tenant_id, config_id, e.retry_after_seconds
+            )
         except Exception as e:
             logger.warning(f"[ServerArchiveFetcher] fetch_once 异常 tenant={tenant_id}: {type(e).__name__}: {e}")
             await self._mark_error(tenant_id, config_id, f"{type(e).__name__}: {e}")
+            archive_audit.log_fetch_error(
+                tenant_id, config_id, type(e).__name__, str(e), stage="fetch_once"
+            )
         finally:
             redis_client.release_lock(lock_key, lock_value)
 
@@ -187,6 +198,17 @@ class ServerArchiveFetcher:
         logger.info(
             f"[ServerArchiveFetcher] 拉取完成 tenant={tenant_id} batch={len(batch.items)} "
             f"processed={processed_count} last_seq={last_seq}"
+        )
+        # audit：拉取成功（source 由调用栈推断：callback_handler 调用 vs poller 调用）
+        # 简化做法：根据调用上下文不区分，统一记 fetch_success，统计意义已足够
+        archive_audit.log_fetch_success(
+            tenant_id=tenant_id,
+            config_id=config_id,
+            source="fetcher",
+            batch_size=len(batch.items),
+            processed=processed_count,
+            last_seq=last_seq,
+            account_id=account_id or None,
         )
 
     # ----------------- envelope 构造 -----------------
