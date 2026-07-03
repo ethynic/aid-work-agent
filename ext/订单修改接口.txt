@@ -1,0 +1,44 @@
+Request URL:
+https://erp11022.aidingyi.cn/api/v1/erp.module/module_data_update
+Request Method:
+POST
+
+Payload:
+{
+  "module": "kehudingdan",
+  "did": 1,
+  "tables": [
+    {
+      "data": [
+        {
+          "dingdanzhuangtai": "已取消",
+          "update_time": "2026-06-02 17:05:16",
+          "id": 1
+        }
+      ],
+      "method": "update",
+      "table": "t_kehudingdan"
+    }
+  ],
+  "temp": false
+}
+
+Response:
+{
+  "Code": 0,
+  "Debug": "",
+  "Error": "",
+  "Response": [],
+  "Slow": [],
+  "Trace": ""
+}
+
+不同场景允许修改的字段：
+1. 订单状态为“待支付”时，允许：
+- 取消订单，即将`订单状态`改为“已取消”
+
+2. 订单状态为“待支付”、“已支付”时，允许：
+- 修改收货人相关信息，包括`收货人`、`手机`、`省市区`、`详细地址`字段
+
+2. 订单状态为“已支付”、“已发货”、“已完成”时，允许：
+- 客户发起退货，即修改【订单产品】子表的`退单数量`、`退货原因`、`退货状态`。其中`退单数量`必须等于`发货数量`，不允许部分退货；`退货状态`必须为“待处理”。
