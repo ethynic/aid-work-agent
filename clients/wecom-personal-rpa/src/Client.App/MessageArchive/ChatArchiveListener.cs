@@ -82,6 +82,21 @@ public sealed class ChatArchiveListener : IMessageWatcher, IHostedService
     /// <summary>本监听器对应的企微账号 ID（用于 seq 隔离）。</summary>
     public string AccountId { get; }
 
+    /// <summary>
+    /// 会话存档拉取模式开关（Phase 7+）：
+    /// - ListenMode.Server（默认，第一期）：服务端拉取，客户端**跳过本地轮询**
+    /// - ListenMode.Client：客户端本地拉取（第一期不开放，前端禁用）
+    ///
+    /// 设置时机：ClientSession 在 GET /config 拿到 RpaConfigResponse.ListenMode 后
+    /// 设置此属性。但 DI 阶段 ChatArchiveListener 已注册为 IHostedService，StartAsync
+    /// 在 ClientSession 之前被 Host 调起——所以采用「StartAsync 时不立即启动 PollLoop，
+    /// 改为由 ClientSession 在拉 config 后显式调用 EnablePolling()」。
+    ///
+    /// 第一期简化：默认 DisablePolling=true（不启动 PollLoop），等 listen_mode='client'
+    /// 时才 EnablePolling。这与服务端「永远下发 server」一致。
+    /// </summary>
+    public bool DisablePolling { get; set; } = true;
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -90,10 +105,30 @@ public sealed class ChatArchiveListener : IMessageWatcher, IHostedService
             _logger?.LogWarning("[{Tag}] 已在运行，忽略重复 Start", Tag);
             return Task.CompletedTask;
         }
+        if (DisablePolling)
+        {
+            // Phase 7+：服务端拉取模式下客户端不启动本地轮询
+            // listen_mode=client 时由 ClientSession 在拉 config 后调 EnablePolling()
+            _logger?.LogInformation(
+                "[{Tag}] DisablePolling=true，跳过本地轮询启动（服务端拉取模式）account={Aid}",
+                Tag, AccountId
+            );
+            return Task.CompletedTask;
+        }
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _loopTask = Task.Run(() => PollLoopAsync(_cts.Token), _cts.Token);
         _logger?.LogInformation("[{Tag}] 启动监听 account={Aid} 间隔={Interval}s", Tag, AccountId, _opts.PollIntervalSeconds);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 由 ClientSession 在 GET /config 后调用，启用本地轮询（仅 listen_mode=client 时）。
+    /// 第一期服务端永远不下发 client，此方法实际不会被调用。
+    /// </summary>
+    public Task EnablePollingAsync(CancellationToken cancellationToken = default)
+    {
+        DisablePolling = false;
+        return StartAsync(cancellationToken);
     }
 
     /// <inheritdoc />

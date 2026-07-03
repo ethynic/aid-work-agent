@@ -849,15 +849,23 @@ async def wecom_personal_rpa_config(request: Request):
     except Exception as e:
         logger.warning(f"RPA config list_accounts 失败: {e}")
 
-    # 查 tenant_channel_configs 拿 config_id（客户端据此构造 callback/ws 路径）
+    # 查 tenant_channel_configs 拿 config_id + listen_mode（客户端据此决定是否拉存档）
     # config_id 就是 tenant_channel_configs 记录的主键 id（register_client 时写入）
+    # listen_mode 第一期强制 'server'（codec 已写入），客户端据此跳过本地 ChatArchiveListener
     config_id = None
+    listen_mode = "server"  # 默认 server（无 tenant_channel_configs 配置时也走 server）
     try:
         from src.saas.db.channel_config_db import ChannelConfigDB
 
         configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type=_CHANNEL_TYPE)
         if configs:
             config_id = str(configs[0].get("id"))
+            # 注意：list_by_tenant 返回的 config 字段是 mask 后的（敏感字段掩码），
+            # 但 listen_mode 是明文字段，可直接读取
+            config_data = configs[0].get("config") or {}
+            lm = config_data.get("listen_mode")
+            if lm in ("server", "client"):
+                listen_mode = lm
     except Exception as e:
         logger.warning(
             f"RPA config 查询 tenant_channel_configs 失败 tenant={tenant_id}: {e}"
@@ -874,6 +882,7 @@ async def wecom_personal_rpa_config(request: Request):
         tenant_id=tenant_id,
         config_id=config_id,
         archive_enabled=_archive_enabled(),
+        listen_mode=listen_mode,
         monitor_users=_build_monitor_users(tenant_id, vr.client_id),
     )
     # 直接返回 Pydantic 模型，由 FastAPI 的 jsonable_encoder 序列化 datetime
