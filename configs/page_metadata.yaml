@@ -14,12 +14,15 @@ domains:
   - id: social-media-operations
     label: 社媒运营
 
+# icon 字段为统一的 SVG path 数据（24×24 viewBox，stroke 描边风格）
+# 由前端 MenuIcon 组件渲染
+
 pages:
   - page_id: trade-specialist-customers
     title: 客户管理
     description: 管理外贸客户信息，包括客户基础资料、联系方式、跟进状态等
     route: /trade-specialist/customers
-    icon: "👥"
+    icon: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"
     domain: trade-specialist
     status: published
 
@@ -27,7 +30,7 @@ pages:
     title: 车辆价格
     description: 管理旅游用车信息，包括车型、座位数、租车价格等
     route: /travel-consultant/vehicles
-    icon: "🚗"
+    icon: "M3 17h2l1-4h12l1 4h2v-3l-2-5a2 2 0 00-1.9-1.4H6.9A2 2 0 005 5L3 9v8zM7 17a1.5 1.5 0 100 3 1.5 1.5 0 000-3zM17 17a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"
     domain: travel-consultant
     status: published
 
@@ -35,7 +38,7 @@ pages:
     title: 景点门票
     description: 管理旅游景点信息，包括景点名称、门票价格、开放时间等
     route: /travel-consultant/attractions
-    icon: "🏛️"
+    icon: "M3 21h18M5 21V8l7-4 7 4v13M9 21v-6h6v6"
     domain: travel-consultant
     status: published
 
@@ -43,7 +46,7 @@ pages:
     title: 酒店房型
     description: 管理酒店及房型信息，包括酒店名称、房型、价格、含早情况等
     route: /travel-consultant/hotels
-    icon: "🏨"
+    icon: "M3 18v-6a2 2 0 012-2h14a2 2 0 012 2v6M3 18h18M3 18v3M21 18v3M7 10V6a1 1 0 011-1h2a1 1 0 011 1v4"
     domain: travel-consultant
     status: published
 
@@ -51,7 +54,7 @@ pages:
     title: 餐标价格
     description: 管理餐饮标准信息，包括餐标等级、菜品数量、单价等
     route: /travel-consultant/meals
-    icon: "🍜"
+    icon: "M5 3v18M5 3h10a4 4 0 014 4v0a4 4 0 01-4 4H5M19 3v18"
     domain: travel-consultant
     status: published
 
@@ -59,7 +62,7 @@ pages:
     title: 导游费用
     description: 管理导游信息，包括导游姓名、语言能力、日收费标准等
     route: /travel-consultant/guides
-    icon: "🧑‍🏫"
+    icon: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"
     domain: travel-consultant
     status: published
 
@@ -67,7 +70,7 @@ pages:
     title: 其他费用
     description: 管理旅游行程中的杂项费用，如保险费、索道费、停车费等
     route: /travel-consultant/fees
-    icon: "💰"
+    icon: "M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"
     domain: travel-consultant
     status: published
 
@@ -75,7 +78,7 @@ pages:
     title: 线索管理
     description: 管理客户线索信息，包括线索来源、意向等级、跟进状态等
     route: /customer-followup/leads
-    icon: "🎯"
+    icon: "M12 22a10 10 0 100-20 10 10 0 000 20zM12 6v6l4 2M22 2l-5 5M17 2h5v5"
     domain: customer-followup
     status: published
 
@@ -83,7 +86,7 @@ pages:
     title: 跟进记录
     description: 记录和查看客户跟进历史，包括跟进方式、沟通内容、下次计划等
     route: /customer-followup/followup-records
-    icon: "📝"
+    icon: "M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 113 3L12 15l-4 1 1-4 9.5-9.5z"
     domain: customer-followup
     status: published
 
@@ -91,7 +94,7 @@ pages:
     title: 销售代表
     description: 管理销售团队信息，包括销售代表姓名、负责区域、业绩目标等
     route: /customer-followup/sales-reps
-    icon: "👨‍💼"
+    icon: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1M16 4l2 2 4-4"
     domain: customer-followup
     status: published
 
@@ -99,7 +102,7 @@ pages:
     title: 投诉列表
     description: 查看和管理客户投诉工单，包括投诉内容、处理状态、责任人等
     route: /complaint/list
-    icon: "📋"
+    icon: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
     domain: complaint
     status: published
 
@@ -107,7 +110,7 @@ pages:
     title: 投诉统计
     description: 投诉数据的统计分析，包括投诉量趋势、类型分布、处理时效等
     route: /complaint/stats
-    icon: "📊"
+    icon: "M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7"
     domain: complaint
     status: published
 
@@ -115,7 +118,7 @@ pages:
     title: 售后工单
     description: 管理售后服务工单，包括工单类型、问题描述、处理进度等
     route: /after-sales/tickets
-    icon: "📦"
+    icon: "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"
     domain: after-sales
     status: published
 
@@ -123,7 +126,7 @@ pages:
     title: 退换货记录
     description: 管理退换货申请记录，包括退货原因、商品信息、退款状态等
     route: /after-sales/returns
-    icon: "🔄"
+    icon: "M3 7v6h6M21 17a9 9 0 11-3-6.7L21 13M21 7v6h-6"
     domain: after-sales
     status: published
 
@@ -131,7 +134,7 @@ pages:
     title: 数据源管理
     description: 管理数据分析智能体的数据源，包括数据库连接器、Excel/CSV 上传、数据表 schema 维护与关联关系配置
     route: /data-sources
-    icon: "🗄️"
+    icon: "M4 6a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM6 11h12"
     domain: data-analysis
     status: published
 
@@ -139,6 +142,6 @@ pages:
     title: 社媒运营工作台
     description: 统一管理微信公众号和微信视频号账号、内容计划、平台版本、审核发布队列和运营数据
     route: /social-media
-    icon: "📣"
+    icon: "M3 11l18-8v18l-18-8zM11.6 16.8a3 3 0 11-5.8-1.6"
     domain: social-media-operations
     status: planned

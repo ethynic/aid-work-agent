@@ -48,19 +48,19 @@ context:
 business_pages:
   - id: order-list
     title: 订单管理
-    icon: document
+    icon: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
     route: /order-processing/orders
   - id: inventory
     title: 库存查询
-    icon: package
+    icon: "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"
     route: /order-processing/inventory
   - id: shipping-records
     title: 发货记录
-    icon: truck
+    icon: "M3 17h2l1-4h12l1 4h2v-3l-2-5a2 2 0 00-1.9-1.4H6.9A2 2 0 005 5L3 9v8zM7 17a1.5 1.5 0 100 3 1.5 1.5 0 000-3zM17 17a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"
     route: /order-processing/shipping
   - id: order-stats
     title: 订单统计
-    icon: chart
+    icon: "M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7"
     route: /order-processing/stats
 ---
 

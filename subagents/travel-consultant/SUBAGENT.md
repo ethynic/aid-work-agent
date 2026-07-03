@@ -23,30 +23,31 @@ skills:
     - route-distance
 
 # 业务数据页面配置
+# icon 字段为统一的 SVG path 数据（24×24 viewBox，stroke 描边风格），由前端 MenuIcon 组件渲染
 business_pages:
   - id: vehicles
     title: 车辆价格
-    icon: "\U0001F690"
+    icon: "M3 17h2l1-4h12l1 4h2v-3l-2-5a2 2 0 00-1.9-1.4H6.9A2 2 0 005 5L3 9v8zM7 17a1.5 1.5 0 100 3 1.5 1.5 0 000-3zM17 17a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"
     route: /travel-consultant/vehicles
   - id: attractions
     title: 景点门票
-    icon: "\U0001F3D4️"
+    icon: "M3 21h18M5 21V8l7-4 7 4v13M9 21v-6h6v6"
     route: /travel-consultant/attractions
   - id: hotels
     title: 酒店房型
-    icon: "\U0001F3E8"
+    icon: "M3 18v-6a2 2 0 012-2h14a2 2 0 012 2v6M3 18h18M3 18v3M21 18v3M7 10V6a1 1 0 011-1h2a1 1 0 011 1v4"
     route: /travel-consultant/hotels
   - id: meals
     title: 餐标价格
-    icon: "\U0001F37D️"
+    icon: "M5 3v18M5 3h10a4 4 0 014 4v0a4 4 0 01-4 4H5M19 3v18"
     route: /travel-consultant/meals
   - id: guides
     title: 导游费用
-    icon: "\U0001F9D1‍"
+    icon: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"
     route: /travel-consultant/guides
   - id: fees
     title: 其他费用
-    icon: "\U0001F4B0"
+    icon: "M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"
     route: /travel-consultant/fees
 context:
   max_input_tokens: 12000

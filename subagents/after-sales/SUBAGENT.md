@@ -35,11 +35,11 @@ context:
 business_pages:
   - id: tickets
     title: 售后工单
-    icon: 🎫
+    icon: "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"
     route: /after-sales/tickets
   - id: returns
     title: 退换货记录
-    icon: 📦
+    icon: "M3 7v6h6M21 17a9 9 0 11-3-6.7L21 13M21 7v6h-6"
     route: /after-sales/returns
 ---
 
