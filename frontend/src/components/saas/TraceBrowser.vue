@@ -52,71 +52,74 @@
       </div>
     </div>
 
-    <div class="flex-1 overflow-auto p-6">
+    <div class="flex-1 flex flex-col min-h-0 p-6">
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
       <template v-else>
-        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-          <BaseTable
-            :columns="columns"
-            :data="sessions"
-            row-key="session_id"
-            :on-row-click="(row: any) => goToSession(row.session_id)"
-          >
-            <template #seq="{ index }">
-              {{ (page - 1) * pageSize + index + 1 }}
-            </template>
-            <template #session_id="{ row }">
-              <span class="text-xs text-default font-mono break-all" :title="row.session_id">
-                {{ row.session_id.length > 60 ? row.session_id.slice(0, 60) + '...' : row.session_id }}
-              </span>
-            </template>
-            <template #tenant_id="{ row }">
-              <span class="text-xs text-default font-mono break-all" :title="row.tenant_id || ''">
-                {{ row.tenant_id || '-' }}
-              </span>
-            </template>
-            <template #user_id="{ row }">
-              <span class="text-xs text-default font-mono break-all" :title="row.user_id || ''">
-                {{ row.user_id || '-' }}
-              </span>
-            </template>
-            <template #first_input="{ row }">
-              <span class="text-sm text-default break-words whitespace-normal">
-                {{ row.first_content || row.first_input || '-' }}
-              </span>
-            </template>
-            <template #source_type="{ row }">
-              <span :class="sourceBadgeClass(row.source_type)"
-                class="inline-block px-1.5 py-0.5 rounded text-xs font-medium">
-                {{ sourceLabel(row.source_type) }}
-              </span>
-            </template>
-            <template #trace_count="{ row }">
-              <span class="text-xs text-default">{{ row.trace_count }}</span>
-            </template>
-            <template #total_tokens="{ row }">
-              <span class="text-xs text-default">{{ formatTokens(row.total_tokens) }}</span>
-            </template>
-            <template #error_count="{ row }">
-              <span v-if="row.error_count > 0" class="text-danger-600 font-medium">{{ row.error_count }}</span>
-              <span v-else class="text-muted">0</span>
-            </template>
-            <template #last_trace_at="{ row }">
-              <span class="text-xs text-muted">{{ formatDateTime(row.last_trace_at) }}</span>
-            </template>
-            <template #empty>暂无追踪数据</template>
-          </BaseTable>
-
-          <div v-if="total > 0" class="px-4 py-3 border-t border-default flex items-center justify-center">
-            <BasePagination
-              :total="total"
-              v-model:current-page="page"
-              v-model:page-size="pageSize"
-              @change="loadData"
-            />
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden flex-1 flex flex-col min-h-0">
+          <div class="table-scroll-wrapper flex-1">
+            <BaseTable
+              :columns="columns"
+              :data="sessions"
+              row-key="session_id"
+              :on-row-click="(row: any) => goToSession(row.session_id)"
+            >
+              <template #seq="{ index }">
+                {{ (page - 1) * pageSize + index + 1 }}
+              </template>
+              <template #session_id="{ row }">
+                <span class="text-xs text-default font-mono break-all" :title="row.session_id">
+                  {{ row.session_id.length > 60 ? row.session_id.slice(0, 60) + '...' : row.session_id }}
+                </span>
+              </template>
+              <template #tenant_id="{ row }">
+                <span class="text-xs text-default font-mono break-all" :title="row.tenant_id || ''">
+                  {{ row.tenant_id || '-' }}
+                </span>
+              </template>
+              <template #user_id="{ row }">
+                <span class="text-xs text-default font-mono break-all" :title="row.user_id || ''">
+                  {{ row.user_id || '-' }}
+                </span>
+              </template>
+              <template #first_input="{ row }">
+                <span class="text-sm text-default break-words whitespace-normal">
+                  {{ row.first_content || row.first_input || '-' }}
+                </span>
+              </template>
+              <template #source_type="{ row }">
+                <span :class="sourceBadgeClass(row.source_type)"
+                  class="inline-block px-1.5 py-0.5 rounded text-xs font-medium">
+                  {{ sourceLabel(row.source_type) }}
+                </span>
+              </template>
+              <template #trace_count="{ row }">
+                <span class="text-xs text-default">{{ row.trace_count }}</span>
+              </template>
+              <template #total_tokens="{ row }">
+                <span class="text-xs text-default">{{ formatTokens(row.total_tokens) }}</span>
+              </template>
+              <template #error_count="{ row }">
+                <span v-if="row.error_count > 0" class="text-danger-600 font-medium">{{ row.error_count }}</span>
+                <span v-else class="text-muted">0</span>
+              </template>
+              <template #last_trace_at="{ row }">
+                <span class="text-xs text-muted">{{ formatDateTime(row.last_trace_at) }}</span>
+              </template>
+              <template #empty>暂无追踪数据</template>
+            </BaseTable>
           </div>
         </div>
       </template>
+    </div>
+
+    <!-- 分页器：固定在内容区底部 -->
+    <div v-if="total > 0" class="px-6 py-3 bg-white border-t border-default flex items-center justify-center flex-shrink-0">
+      <BasePagination
+        :total="total"
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        @change="loadData"
+      />
     </div>
   </div>
 </template>
