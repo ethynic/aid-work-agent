@@ -245,6 +245,32 @@ function handleToggleSidebar() {
 
 如果发现已有页面存在此问题，必须按上述标准模板重构。
 
+### 业务子菜单图标规范
+
+租户前台侧边栏的"业务子菜单"（如"商品管理 / 车辆价格 / 订单管理"等）的图标，**不依赖数据库 `subagent_definitions.business_pages[].icon` 字段**，而是由前端在 `frontend/src/components/ui/BusinessPageIcon.vue` 中按 `page.title` 关键字匹配，**统一渲染固定 SVG 图标库**。
+
+**原因**：
+- 数据库历史数据中的 `icon` 字段可能含 emoji、Python 转义字符、英文单词等不一致内容，清理成本高
+- 业务子菜单通常只覆盖十几种固定语义，前端维护一份固定图标库更可控
+
+**添加新业务页面后必须同步更新 `BusinessPageIcon.vue`**：
+
+1. 在 `subagents/<agent>/SUBAGENT.md` 的 `business_pages` 列表中添加新页面（`title` / `route`）
+2. 在 `BusinessPageIcon.vue` 的 `ICON_RULES` 数组中**按 `title` 关键字**新增一条规则：
+   - 关键字放在最具体的优先位置（例如 "商品类目" 优先于 "商品"）
+   - 选一个语义贴切的 SVG path（24×24 viewBox，`stroke="currentColor"`，`stroke-width="1.6"`，`stroke-linecap="round"`，`stroke-linejoin="round"`）
+3. 如果新页面没有合适的关键字匹配，会回退到 `DEFAULT_ICON`（通用文档图标），但**应当显式新增规则**以保证图标语义准确
+4. 同一关键字被多条规则覆盖时，`ICON_RULES` 中**靠前的规则优先生效**
+
+**示例**：新增"发票管理"业务页面：
+```typescript
+{ keywords: ['发票管理', '发票'], path: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zM14 2v6h6M9 13h6M9 17h6' }
+```
+
+**注意**：
+- `BusinessPageIcon.vue` 只被 `MenuSidebar.vue` 中业务子菜单引用；其它场景（管理后台菜单、选择器预览）使用 `MenuIcon.vue` 仍依赖 `page.icon` 字段
+- 新增规则后，Vite HMR 立即生效，无需重启后端
+
 ### 枚举值定义规范
 **涉及到字段枚举值的判断代码，必须以 `frontend/src/api/enums.ts` 为准。**
 
