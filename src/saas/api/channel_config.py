@@ -202,13 +202,49 @@ async def delete_channel(config_id: str, request: Request):
 
 @router.post("/{config_id}/verify")
 async def verify_channel(config_id: str, request: Request):
-    """验证渠道凭证有效性"""
+    """验证渠道凭证有效性
+
+    对 wecom_personal_rpa 类型走专属验证（按 listen_mode 分支）：
+    - server 模式：拉一批密文 + RSA 解密一条 + 自测验签 AES 解密，5 步链路自测
+    - client 模式：函数代码保留，路由层注释（第一期不开放）
+
+    其他渠道走原有 ChannelFactory.create_adapter 路径。
+    """
     if not settings.saas.enabled:
         return {"success": False, "message": "未启用 SaaS 模式无法访问"}
 
     admin = require_admin(request)
-    config = ChannelConfigDB.get_by_id(config_id)
 
+    # wecom_personal_rpa 需要明文凭证做实测，用 get_by_id_decrypted
+    if _is_wecom_personal_rpa(config_id):
+        from src.channels.wecom_personal_rpa.archive import verifier as rpa_verifier
+
+        config = ChannelConfigDB.get_by_id_decrypted(config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="渠道配置不存在")
+        if config["tenant_id"] != admin["tenant_id"]:
+            raise HTTPException(status_code=403, detail="无权操作此配置")
+
+        config_data = config.get("config") or {}
+        listen_mode = config_data.get("listen_mode", "server")
+
+        if listen_mode == "server":
+            result = await rpa_verifier.verify_archive_server_mode(
+                config_data, admin["tenant_id"]
+            )
+        else:
+            # 第一期永远不会进入此分支（codec 强制 server）
+            # 代码保留为未来开放 client 模式做准备
+            result = await rpa_verifier.verify_archive_client_mode(
+                config_data, admin["tenant_id"]
+            )
+
+        # 根据验证结果更新 verified 字段
+        ChannelConfigDB.set_verified(config_id, bool(result.get("verified")))
+        return result
+
+    # 其他渠道走原有 ChannelFactory 路径
+    config = ChannelConfigDB.get_by_id(config_id)
     if not config:
         raise HTTPException(status_code=404, detail="渠道配置不存在")
     if config["tenant_id"] != admin["tenant_id"]:
@@ -221,6 +257,15 @@ async def verify_channel(config_id: str, request: Request):
     except Exception as e:
         ChannelConfigDB.set_verified(config_id, False)
         return {"success": False, "message": f"验证失败: {str(e)}", "verified": False}
+
+
+def _is_wecom_personal_rpa(config_id: str) -> bool:
+    """判断 config_id 对应的配置是否是 wecom_personal_rpa 类型。
+
+    用于 verify 路由分流。查不到配置返回 False（让后续 404 检查处理）。
+    """
+    cfg = ChannelConfigDB.get_by_id(config_id)
+    return bool(cfg and cfg.get("channel_type") == "wecom_personal_rpa")
 
 
 @router.get("/available-subagents")
