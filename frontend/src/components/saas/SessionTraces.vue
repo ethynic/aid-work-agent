@@ -11,9 +11,13 @@
     <div class="flex-1 overflow-auto p-6 space-y-3">
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
       <template v-else>
+        <div class="text-sm text-muted px-1">
+          共 <span class="font-semibold text-default">{{ traces.length }}</span> 条消息
+        </div>
         <div v-if="traces.length === 0" class="text-center py-12 text-muted">该会话暂无追踪数据</div>
         <div v-for="(trace, idx) in traces" :key="trace.trace_id"
-          class="bg-white rounded-xl shadow-sm border border-default p-4 hover:shadow-md transition-shadow">
+          :class="['rounded-xl shadow-sm border border-default p-4 hover:shadow-md transition-shadow',
+                   idx % 2 === 0 ? 'bg-white' : 'bg-primary-50']">
           <div class="flex items-start justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-2">
