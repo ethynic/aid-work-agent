@@ -453,17 +453,30 @@
 
 | Phase | 状态 | 完成人 | 备注 |
 |-------|------|--------|------|
-| 1 | 📋 待开发 | — | |
-| 2 | 📋 待开发 | — | |
-| 3 | 📋 待开发 | — | |
-| 4 | 📋 待开发 | — | |
-| 5 | 📋 待开发 | — | |
-| 6 | 📋 待开发 | — | |
-| 7 | 📋 待开发 | — | |
-| 8 | 📋 待开发 | — | |
-| 9 | 📋 待开发 | — | |
-| 10 | 📋 待开发 | — | |
-| 11 | 📋 待开发 | — | |
-| 12 | 📋 待开发 | — | |
+| 1 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-02 |
+| 2 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-02 |
+| 3 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-02 |
+| 4 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-02 |
+| 5 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-02 |
+| 6 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-03 |
+| 7 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-03 |
+| 8 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-03 |
+| 9 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-03 |
+| 10 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-03 |
+| 11 | ✅ 已完成 | Claude（开发）+ 测试智能体 + CodeReview 智能体 | 2026-07-03 |
+| 12 | ✅ 已完成 | Claude（文档登记） | 2026-07-03 |
 
+> **第一期 MVP 完成总结（2026-07-03）**
+>
+> Phase 1-12 全部完成，工时约 32.5h（实际 4 工作日）。214 个单元/集成测试通过，archive 模块覆盖率 91%。
+>
+> 关键产出：
+> - **8 个新模块**（archive/__init__.py / credential_codec.py / callback_crypto.py / chat_crypto.py / http_client.py / fetcher.py / poller.py / callback_handler.py / verifier.py / audit.py）
+> - **3 个改造**（schemas.py 加 listen_mode / wecom_personal_rpa_routes.py 加 source 参数 + GET echostr 路由 + POST 双验签分流 / channel_config.py 加 wecom_personal_rpa verify 分支）
+> - **1 个前端改造**（ChannelConfig.vue 加 wecom_personal_rpa 类型支持 + listen_mode 单选锁定 server + RSA 私钥 file input）
+> - **1 个 main.py 集成**（lifespan 启停 archive poller）
+> - **2 个 SQL 变更**（wecom_rpa_clients 加 listen_mode 字段 + tenant_channel_configs 加 wecom_personal_rpa 单例索引）
+>
+> 第一期 listen_mode 强制 'server'（前端禁用 client + 后端 codec 兜底），客户端 ChatArchiveListener 永不启动。未来开放 client 模式增量工时约 3h。
+>
 > **状态更新规则**：开发开始时改为 🔧 部分完成；完成时改为 ✅ 已完成开发，并把整个条目从 `docs/ideas.md` 移动到 `docs/ideas_finished.md`。

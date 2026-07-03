@@ -244,6 +244,20 @@ POST /api/saas/wecom-personal-rpa/resume
 | 客户端构建指南 | [clients/wecom-personal-rpa/docs/build-install-guide.md](../../clients/wecom-personal-rpa/docs/build-install-guide.md) |
 | 开发计划 | [plans/plan-wecom-personal-rpa-portal-binding.md](../../plans/plan-wecom-personal-rpa-portal-binding.md) |
 
+### 7.1 与服务端拉取会话存档模式的关系（2026-07-03）
+
+本设计的「绑定管理 Tab」管理的是**租户 ↔ 客户端实例 ↔ 企微账号**的运维绑定关系（停用/恢复/审计），与服务端拉取会话存档模式（`listen_mode` 字段）是**两个不同维度**：
+
+| 维度 | 管理对象 | 入口 | 数据模型 |
+|------|---------|------|---------|
+| 绑定管理 Tab（本文档） | 客户端实例 + 企微账号 + 监控白名单 | 平台后台 `RpaBindingPanel.vue` | `wecom_rpa_clients` / `wecom_rpa_accounts` / `wecom_rpa_conversation_bindings` |
+| 服务端拉取模式（listen_mode） | 渠道配置的 5 个凭证 + 拉取模式开关 | 租户前台 `ChannelConfig.vue` | `tenant_channel_configs.config` JSON |
+
+两者互不影响：
+- 第一期 listen_mode 永远 'server'，绑定管理 Tab 的所有运维动作（停用/恢复/审计）对 server 模式同样生效
+- 服务端拉取的消息仍按 `monitor_user_names` / `monitor_user_ids` 白名单过滤（绑定管理 Tab 管理）
+- `wecom_rpa_clients.listen_mode` 字段（Phase 7 新增）由 `/config` 路由同步给客户端，但第一期服务端永远下发 'server'，该字段值实际不可达
+
 ---
 
 ## 8. 设计摘要
