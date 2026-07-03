@@ -17,7 +17,11 @@
           class="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-gray-800"
           :class="isActive(item.path) ? 'bg-gray-800 text-primary-400 border-r-2 border-primary-400' : 'text-gray-300'"
         >
-          <span class="text-base">{{ item.icon }}</span>
+          <span class="w-5 h-5 flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path :d="item.icon" />
+            </svg>
+          </span>
           <span>{{ item.label }}</span>
         </router-link>
         <!-- 清空缓存 -->
@@ -25,9 +29,11 @@
           @click="handleClearCache"
           class="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-danger-400 transition-colors"
         >
-          <svg class="w-5 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
+          <span class="w-5 h-5 flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </span>
           <span>清空缓存</span>
         </button>
       </nav>
@@ -201,17 +207,28 @@ const tenantStatusColorClass = computed(() => {
 })
 
 // /portal 下的菜单（仅平台管理员）
+// icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
 const portalMenuItems = [
-  { path: '/portal', label: '仪表盘', icon: '📊' },
-  { path: '/portal/tenants', label: '租户管理', icon: '🏢' },
-  { path: '/portal/subagents', label: '内置数字员工', icon: '🤖' },
-  { path: '/portal/agent-definitions', label: '自定义数字员工', icon: '⚙️' },
-  { path: '/portal/token-usage', label: '平台Token消耗', icon: '📊' },
-  { path: '/portal/rpa-bindings', label: 'RPA 绑定管理', icon: '🔗' },
-  { path: '/portal/monitoring', label: '追踪查看', icon: '🔍' },
-  { path: '/portal/context-compression', label: '上下文压缩', icon: '📦' },
-  { path: '/portal/error-logs', label: '错误日志', icon: '⚠️' },
-  { path: '/portal/reply-styles', label: '回复风格', icon: '💬' },
+  // 仪表盘：九宫格统计图（与参考图风格一致）
+  { path: '/portal', label: '仪表盘', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
+  // 租户管理：办公建筑
+  { path: '/portal/tenants', label: '租户管理', icon: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 12h.01M9 15h.01M9 18h.01M15 9h.01M15 12h.01M15 15h.01M15 18h.01' },
+  // 内置数字员工：机器人/Agent
+  { path: '/portal/subagents', label: '内置数字员工', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6' },
+  // 自定义数字员工：工具/扳手
+  { path: '/portal/agent-definitions', label: '自定义数字员工', icon: 'M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.4 2.4-2.6-2.6 2.4-2.4z' },
+  // 平台Token消耗：柱状图
+  { path: '/portal/token-usage', label: '平台Token消耗', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
+  // RPA 绑定管理：链接/链条
+  { path: '/portal/rpa-bindings', label: 'RPA 绑定管理', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71' },
+  // 追踪查看：搜索/放大镜
+  { path: '/portal/monitoring', label: '追踪查看', icon: 'M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z' },
+  // 上下文压缩：压缩/方块缩小
+  { path: '/portal/context-compression', label: '上下文压缩', icon: 'M4 9h6V3M20 15h-6v6M4 15l4-4M20 9l-4 4' },
+  // 错误日志：三角警告
+  { path: '/portal/error-logs', label: '错误日志', icon: 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01' },
+  // 回复风格：对话气泡
+  { path: '/portal/reply-styles', label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
 ]
 
 // 根据路由选择菜单
