@@ -245,17 +245,46 @@ def _make_get_secret_by_client_id():
 # ===========================================================================
 
 
+@router.get("/t/{tenant_id}/wecom_personal_rpa/callback/{config_id}")
+async def wecom_personal_rpa_callback_get(
+    tenant_id: str, config_id: str, request: Request
+):
+    """企微会话存档回调 URL 验证（GET echostr）。
+
+    仅 server 模式生效（企微后台首次配置回调时触发）。
+    client 模式不需要此验证。
+    """
+    from src.channels.wecom_personal_rpa.archive import callback_handler
+
+    return await callback_handler.handle_archive_echostr(tenant_id, config_id, request)
+
+
 @router.post("/t/{tenant_id}/wecom_personal_rpa/callback/{config_id}")
 async def wecom_personal_rpa_callback(
     tenant_id: str, config_id: str, request: Request
 ):
-    """RPA 客户端上报事件入口。
+    """RPA 入站回调入口（双验签兼容）。
 
-    鉴权 → 信封校验 → 去重 → 按 event_type 分发（message task 化），
-    全部路径立即返回 ``{"result": "accepted"}``。
+    Phase 6 起改为双模式兼容：
+    - body 是 XML 格式 → 企微会话存档回调（server 模式，走 archive_handler）
+    - body 是 JSON 格式 → 客户端 HMAC 上报（client 模式，原有路径不变）
+
+    两种模式由 body 格式天然区分，无需试错。第一期仅 server 模式可用，
+    client 模式代码保留为未来开放做准备。
     """
-    # 1. 原始字节 + headers（签名依赖原始字节，禁止 re-serialize）
+    # 1. 原始字节（签名依赖原始字节，禁止 re-serialize）
     raw_body = await request.body()
+
+    # 2. body 格式分流：XML → 企微回调，JSON → 客户端 HMAC
+    from src.channels.wecom_personal_rpa.archive import callback_handler
+
+    if callback_handler.is_archive_callback_request(request, raw_body):
+        # server 模式：企微会话存档回调
+        return await callback_handler.handle_archive_event(
+            tenant_id, config_id, request, raw_body
+        )
+
+    # client 模式：原有客户端 HMAC 上报路径（本期不开放，代码保留）
     headers = dict(request.headers)
 
     # 2. 鉴权
