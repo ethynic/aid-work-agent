@@ -66,9 +66,9 @@
             class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
           >
             <div class="flex items-center gap-3">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
               <span>管理菜单</span>
             </div>
@@ -93,7 +93,7 @@
                   : 'text-gray-600 hover:bg-gray-50'
               ]"
             >
-              <span class="text-base">{{ item.icon }}</span>
+              <MenuIcon :icon="item.icon" />
               <span>{{ item.label }}</span>
             </button>
           </div>
@@ -155,7 +155,7 @@
             class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
           >
             <div class="flex items-center gap-3">
-              <span class="text-base">📊</span>
+              <MenuIcon icon="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
               <span>{{ getSubagentDisplayName(group.subagent) }}</span>
             </div>
             <svg
@@ -178,7 +178,7 @@
               ]"
               @click="navigateToBusinessPage(page, group.subagent.agent_id)"
             >
-              <span class="text-base">{{ page.icon }}</span>
+              <BusinessPageIcon :title="page.title" />
               <span>{{ page.title }}</span>
             </div>
           </div>
@@ -515,6 +515,8 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
 import SettingsDialog from './SettingsDialog.vue'
+import MenuIcon from './ui/MenuIcon.vue'
+import BusinessPageIcon from './ui/BusinessPageIcon.vue'
 
 import type { SubagentListItem, BusinessPage } from '@/api/subagent'
 
@@ -668,18 +670,27 @@ const sidebarTitle = computed(() => {
 })
 
 // 管理子菜单项（租户管理员可见）
+// icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
 const adminSubMenuItems = computed(() => {
   if (!tenantId.value) return []
   const base = `/t/${tenantId.value}`
   return [
-    { path: `${base}/users`, label: '用户管理', icon: '👥' },
-    { path: `${base}/channels`, label: '渠道配置', icon: '📡' },
-    { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: '🤖' },
-    { path: `${base}/knowledge`, label: '企业知识库', icon: '📚' },
-    { path: `${base}/settings`, label: '企业设置', icon: '⚙️' },
-    { path: `${base}/token-usage`, label: 'Token用量', icon: '📊' },
-    { path: `${base}/reply-styles`, label: '回复风格', icon: '💬' },
-    { path: `${base}/external-customers`, label: '外部接待客户', icon: '👤' },
+    // 用户管理：人形 + 多人
+    { path: `${base}/users`, label: '用户管理', icon: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' },
+    // 渠道配置：信号波
+    { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01' },
+    // 企微个人RPA：机器人
+    { path: `${base}/wecom-personal-rpa`, label: '企微个人RPA', icon: 'M12 4v3M5 8h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM9 13h.01M15 13h.01M9 17h6' },
+    // 企业知识库：书本
+    { path: `${base}/knowledge`, label: '企业知识库', icon: 'M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z' },
+    // 企业设置：齿轮（简化版）
+    { path: `${base}/settings`, label: '企业设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h0a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h0a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v0a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z' },
+    // Token用量：柱状图
+    { path: `${base}/token-usage`, label: 'Token用量', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
+    // 回复风格：对话气泡
+    { path: `${base}/reply-styles`, label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
+    // 外部接待客户：人形
+    { path: `${base}/external-customers`, label: '外部接待客户', icon: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z' },
   ]
 })
 

@@ -582,15 +582,30 @@ def init_logs_tables():
         logger.warning(f"追踪库初始化脚本不存在: {sql_file}")
         return
 
+    # 多 worker 并发执行 DDL 会因 AccessExclusiveLock 互相等待导致死锁
+    # 用 advisory lock 串行化（key 与主库 123456 区分，避免冲突）
+    LOGS_INIT_LOCK_KEY = 654321
+
     conn = None
     try:
         conn = _logs_connection_pool.getconn()
         conn.autocommit = True
-        sql_content = sql_file.read_text(encoding='utf-8')
         cur = conn.cursor()
-        cur.execute(sql_content)
-        cur.close()
-        logger.info("追踪库表初始化完成")
+
+        # 阻塞式获取 advisory lock，确保只有一个 worker 执行 DDL
+        cur.execute("SELECT pg_advisory_lock(%s)", (LOGS_INIT_LOCK_KEY,))
+        logger.info(f"[pid={os.getpid()}] 已获取追踪库初始化 advisory lock (key={LOGS_INIT_LOCK_KEY})")
+
+        try:
+            sql_content = sql_file.read_text(encoding='utf-8')
+            cur.execute(sql_content)
+            logger.info("追踪库表初始化完成")
+        finally:
+            try:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (LOGS_INIT_LOCK_KEY,))
+            except Exception as unlock_err:
+                logger.warning(f"释放追踪库 advisory lock 失败: {unlock_err}")
+            cur.close()
     except Exception as e:
         logger.warning(f"追踪库表初始化失败（不影响业务）: {e}")
     finally:

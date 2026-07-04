@@ -128,6 +128,11 @@ class SessionRecordService:
         # LLM调用计数
         self._llm_call_count = 0
 
+        # 关联的 TraceCollector 引用（由 agent.process_message 在创建 TraceCollector 后注入）。
+        # process_and_persist 写入 channel_messages 后通过它回填 user_message_id，
+        # 用于 monitor.py 精确匹配撤回状态。类型为 Any 避免循环依赖。
+        self.trace_collector: Optional[AnyType] = None
+
     def create_progress_callback(self):
         """创建用于传递给Agent的progress_callback"""
         async def progress_callback(event: Dict[str, Any]):

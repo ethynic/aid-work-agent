@@ -472,10 +472,31 @@ class ChannelSessionManager:
             )
         has_recall_col = self._has_is_recalled_column()
 
+        # 预扫描：批次内是否有 user 命中 recall_pending；最后一条 assistant 的索引。
+        # 若 user 命中撤回，配对的最终 assistant 回复也应同步标记 is_recalled=TRUE，
+        # 否则下一轮上下文重建会拼接基于已撤回输入生成的回复。
+        batch_has_recalled_user = False
+        last_assistant_idx = -1
+        for i, msg in enumerate(messages):
+            role = msg.get("role")
+            if role == "assistant" and last_assistant_idx < i:
+                last_assistant_idx = i
+            if role == "user" and recall_pending_msgids:
+                metadata = msg.get("metadata") or {}
+                if isinstance(metadata, dict):
+                    row_msgids_pre: List[str] = []
+                    if metadata.get("msgid"):
+                        row_msgids_pre.append(str(metadata["msgid"]))
+                    for mid in metadata.get("merged_from_msgids") or []:
+                        if mid:
+                            row_msgids_pre.append(str(mid))
+                    if any(mid in recall_pending_msgids for mid in row_msgids_pre):
+                        batch_has_recalled_user = True
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                for msg in messages:
+                for i, msg in enumerate(messages):
                     role = msg.get("role")
                     content = msg.get("content", "")
                     message_type = msg.get("message_type", "text")
@@ -493,8 +514,14 @@ class ChannelSessionManager:
                                 row_msgids.append(str(mid))
                         hit_recall = any(mid in recall_pending_msgids for mid in row_msgids)
 
+                    # 批次内 user 命中撤回时，最终 assistant 回复也标记撤回
+                    is_recalled_assistant = (
+                        i == last_assistant_idx and batch_has_recalled_user and role == "assistant"
+                    )
+                    mark_recalled = (hit_recall or is_recalled_assistant) and has_recall_col
+
                     message_id = f"msg_{uuid.uuid4().hex[:16]}"
-                    if hit_recall and has_recall_col:
+                    if mark_recalled:
                         cursor.execute("""
                             INSERT INTO channel_messages
                             (message_id, session_id, tenant_id, role, content, message_type,
@@ -514,10 +541,13 @@ class ChannelSessionManager:
                             "撤回消息",
                             "落库前命中 recall_pending，直接标记 is_recalled=TRUE: "
                             "session_id={session_id}, message_id={message_id}, "
-                            "role={role}, content_preview={preview!r}",
+                            "role={role}, hit_user={hit_user}, is_recalled_assistant={is_assistant}, "
+                            "content_preview={preview!r}",
                             session_id=session_id,
                             message_id=message_id,
                             role=role,
+                            hit_user=hit_recall,
+                            is_assistant=is_recalled_assistant,
                             preview=(content or "")[:80],
                         )
                     else:
@@ -704,6 +734,10 @@ class ChannelSessionManager:
         agent_input_text = agent_user_input if agent_user_input is not None else user_content
 
         async def _processor(cancel_check, user_input_override=None):
+            # 每次调用（含 cancel 重跑、pending 重跑）都重置收集列表，
+            # 避免被取消的前一轮已生成的文件 / tool 消息泄漏到重跑轮的 send_response
+            downloadable_files.clear()
+            tool_messages_collected.clear()
             # 语音合并 / pending 重处理场景下，session_queue 会通过 override
             # 传入合并后的完整输入，必须优先于闭包绑定的 agent_input_text
             effective_input = user_input_override if user_input_override is not None else agent_input_text
@@ -913,6 +947,30 @@ class ChannelSessionManager:
                 "was_merged": result.was_merged,
                 "merged_input": result.merged_input,
             }
+
+        # 回填 trace.user_message_id（user 消息对应 batch[0]），用于 monitor.py
+        # 精确匹配撤回状态。双轨覆盖：set_user_message_id 覆盖 trace_persist worker
+        # 未处理的场景（内存 trace 携带该值写入），update_user_message_id UPDATE
+        # 覆盖 worker 已处理的场景。整个回填失败只记 debug log，不影响业务。
+        try:
+            user_msg_id = (
+                write_ok[0]
+                if write_ok and batch and batch[0].get("role") == "user"
+                else None
+            )
+            if user_msg_id and record_service is not None:
+                tc = getattr(record_service, "trace_collector", None)
+                trace_id = None
+                if tc is not None:
+                    tc.set_user_message_id(user_msg_id)  # 覆盖 worker 未处理
+                    trace_id = tc.trace_id
+                if trace_id:
+                    from src.core.trace_persist import update_user_message_id
+                    update_user_message_id(trace_id, user_msg_id)  # 覆盖 worker 已处理
+        except Exception as e:
+            logger.debug(
+                f"后端日志：trace user_message_id 回填失败 session={session_id}: {e}"
+            )
 
         # response_text 为空（agent 内部异常被吞掉返回空字符串）→ 标记错误状态
         if not response_text:
@@ -1167,6 +1225,43 @@ class ChannelSessionManager:
 
             return messages
 
+    def _mark_following_assistant_recalled(
+        self,
+        cursor,
+        session_id: str,
+        after_id: int,
+    ) -> Optional[int]:
+        """
+        标记紧随某条 user 消息之后的第一条 assistant 回复为已撤回。
+
+        用户撤回输入后，基于该输入生成的 assistant 回复在下一轮上下文重建中
+        也应被排除，否则 LLM 会把已失效的回复当作历史继续拼接。
+
+        Args:
+            cursor: 数据库游标（由调用方负责 commit）
+            session_id: 会话 ID
+            after_id: 被撤回的 user 消息 row id
+
+        Returns:
+            被标记的 assistant 消息 row id；未找到返回 None
+        """
+        cursor.execute("""
+            SELECT id FROM channel_messages
+            WHERE session_id = %s AND id > %s AND role = 'assistant'
+            ORDER BY id ASC
+            LIMIT 1
+        """, (session_id, after_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        assistant_id = row["id"]
+        cursor.execute("""
+            UPDATE channel_messages
+            SET is_recalled = TRUE, recalled_at = NOW()
+            WHERE id = %s
+        """, (assistant_id,))
+        return assistant_id
+
     def mark_recalled_message(
         self,
         session_id: str,
@@ -1213,13 +1308,20 @@ class ChannelSessionManager:
                     SET is_recalled = TRUE, recalled_at = NOW()
                     WHERE id = %s
                 """, (single_row["id"],))
+                # 同步标记紧随其后的 assistant 回复：用户撤回输入后，
+                # 基于该输入生成的回复在下一轮上下文里也应失效。
+                assistant_row_id = self._mark_following_assistant_recalled(
+                    cursor, session_id, single_row["id"]
+                )
                 conn.commit()
                 tlog(
                     "撤回消息",
-                    "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, row_id={row_id}",
+                    "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, "
+                    "row_id={row_id}, assistant_row_id={assistant_row_id}",
                     session_id=session_id,
                     msgid=recall_msgid,
                     row_id=single_row["id"],
+                    assistant_row_id=assistant_row_id,
                 )
                 return 1
 
@@ -1275,12 +1377,17 @@ class ChannelSessionManager:
 
                 # 所有段都被撤回时，整条标记为已撤回
                 all_recalled = len(remaining_segments) == 0
+                assistant_row_id: Optional[int] = None
                 if all_recalled:
                     cursor.execute("""
                         UPDATE channel_messages
                         SET is_recalled = TRUE, recalled_at = NOW(), content = %s, metadata = %s
                         WHERE id = %s
                     """, (new_content, json.dumps(metadata, ensure_ascii=False), merged_row["id"]))
+                    # 合并消息整条撤回时，同样标记配对 assistant 回复
+                    assistant_row_id = self._mark_following_assistant_recalled(
+                        cursor, session_id, merged_row["id"]
+                    )
                 else:
                     cursor.execute("""
                         UPDATE channel_messages
@@ -1292,13 +1399,15 @@ class ChannelSessionManager:
                 tlog(
                     "撤回消息",
                     "合并消息部分撤回重建: session_id={session_id}, msgid={msgid}, "
-                    "row_id={row_id}, segments_before={before}, segments_after={after}, all_recalled={all_recalled}",
+                    "row_id={row_id}, segments_before={before}, segments_after={after}, "
+                    "all_recalled={all_recalled}, assistant_row_id={assistant_row_id}",
                     session_id=session_id,
                     msgid=recall_msgid,
                     row_id=merged_row["id"],
                     before=len(merged_segments),
                     after=len(remaining_segments),
                     all_recalled=all_recalled,
+                    assistant_row_id=assistant_row_id,
                 )
                 return 1
 
@@ -1358,6 +1467,7 @@ class ChannelSessionManager:
         self,
         session_id: str,
         include_compacted: bool = False,
+        include_recalled: bool = False,
     ) -> int:
         """统计会话消息条数（v3.2 新增，用于压缩阈值快路径检查）。
 
@@ -1366,18 +1476,25 @@ class ChannelSessionManager:
         Args:
             session_id: 会话 ID
             include_compacted: 是否包含 compacted=true 的消息。默认 False。
+            include_recalled: 是否包含已撤回的消息。默认 False，与 get_messages
+                保持一致。撤回消息不参与压缩（既不会被摘要、也不会被打 compacted
+                标记），若计入 COUNT 会导致阈值误触发 + 死循环（撤回消息永远
+                compacted=FALSE，每轮 COUNT 都重新数进去）。
 
         Returns:
             消息条数；查询异常时返回 0（容错，让阈值判断降级到 token 缓存）
         """
         placeholder = "%s"
         compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
+        # 撤回消息过滤条件（兼容迁移前的数据库：is_recalled 列不存在时不启用过滤）
+        has_recall_column = self._has_is_recalled_column()
+        recall_condition = "" if (include_recalled or not has_recall_column) else " AND is_recalled = FALSE"
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     f"SELECT COUNT(*) AS cnt FROM channel_messages "
-                    f"WHERE session_id = {placeholder}{compacted_clause}",
+                    f"WHERE session_id = {placeholder}{compacted_clause}{recall_condition}",
                     (session_id,),
                 )
                 row = cursor.fetchone()
@@ -1664,6 +1781,9 @@ class ChannelSessionManager:
         """
         仅删除会话中的消息，保留会话本身。隐藏命令“新会话”触发本方法
 
+        除 channel_messages 外，同步清理 chat_context_summaries 中该会话的
+        压缩记忆，否则清空后重建上下文会读到旧摘要。
+
         Args:
             session_id: 会话ID
             tenant_id: 租户ID（可选，提供时额外校验租户归属）
@@ -1678,12 +1798,29 @@ class ChannelSessionManager:
                 cursor.execute("""
                     DELETE FROM channel_messages WHERE session_id = %s AND tenant_id = %s
                 """, (session_id, tenant_id))
+                deleted = cursor.rowcount > 0
+                cursor.execute("""
+                    DELETE FROM chat_context_summaries WHERE session_id = %s AND tenant_id = %s
+                """, (session_id, tenant_id))
             else:
                 cursor.execute("""
                     DELETE FROM channel_messages WHERE session_id = %s
                 """, (session_id,))
+                deleted = cursor.rowcount > 0
+                cursor.execute("""
+                    DELETE FROM chat_context_summaries WHERE session_id = %s
+                """, (session_id,))
 
             conn.commit()
-            logger.info(f"后端日志：channel_messages 已清空: session_id={session_id}")
-            return cursor.rowcount > 0# 全局会话管理器
+            # 失效该会话的消息列表缓存，避免读到清空前的旧消息
+            try:
+                from src.core.cache_utils import delete_cached_pattern
+                delete_cached_pattern(CacheKeys.SESSION_MSGS, session_id, "")
+            except Exception as cache_err:
+                logger.warning(
+                    f"channel_messages 清空后失效 SESSION_MSGS 缓存失败: "
+                    f"sid={session_id}, err={cache_err}"
+                )
+            logger.info(f"后端日志：channel_messages + chat_context_summaries 已清空: session_id={session_id}")
+            return deleted# 全局会话管理器
 channel_session_manager = ChannelSessionManager()

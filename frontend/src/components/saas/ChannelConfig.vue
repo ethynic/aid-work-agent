@@ -114,13 +114,41 @@
 
         <!-- 表单字段（一行4个） -->
         <div class="grid grid-cols-4 gap-3">
+          <!-- 企微个人号 RPA 特有：会话存档模式开关（第一期固定 server，client 禁用） -->
+          <div v-if="form.channel_type === 'wecom_personal_rpa'" class="col-span-4">
+            <label class="text-sm text-muted mb-1 block">会话存档拉取模式</label>
+            <div class="flex items-center gap-4">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" value="server" v-model="form.config.listen_mode"
+                  class="w-4 h-4 text-primary-600 focus:ring-primary-500" />
+                <span class="text-sm text-default">服务端拉取（推荐）：凭证存服务端，企微推送回调</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-not-allowed opacity-60" title="即将开放">
+                <input type="radio" value="client" disabled
+                  class="w-4 h-4 text-primary-600" />
+                <span class="text-sm text-muted">客户端拉取（即将开放）</span>
+              </label>
+            </div>
+            <p class="mt-1 text-xs text-warning-700">⚠️ 第一期仅支持服务端拉取模式。客户端拉取模式代码已就绪，前端暂未开放。</p>
+          </div>
+
           <div v-for="field in channelFields" :key="field.key">
             <label class="text-sm text-muted mb-1 block">{{ field.label }}</label>
+            <!-- file 类型：用 input[type=file] 上传，读为文本后存入 config -->
+            <input
+              v-if="field.type === 'file'"
+              type="file"
+              accept=".pem,.key,.txt"
+              @change="(e: any) => handleFileUpload(field.key, e)"
+              class="block w-full text-sm text-default file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 cursor-pointer"
+            />
             <BaseInput
+              v-else
               v-model="form.config[field.key]"
               :placeholder="field.placeholder"
             />
             <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
+            <p v-if="field.type === 'file' && form.config[field.key]" class="mt-1 text-xs text-success-700">✓ 已上传</p>
           </div>
 
           <!-- 关联数字员工 -->
@@ -374,18 +402,25 @@ function closeModal() {
 const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
+  { value: 'wecom_personal_rpa', label: '企微个人号RPA', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
 ]
 
 function channelTypeLabel(type: string) {
-  const map: Record<string, string> = { wecom: '企业微信', wecom_kf: '企业微信客服', dingtalk: '钉钉', feishu: '飞书' }
+  const map: Record<string, string> = {
+    wecom: '企业微信',
+    wecom_kf: '企业微信客服',
+    wecom_personal_rpa: '企微个人号RPA（会话存档）',
+    dingtalk: '钉钉',
+    feishu: '飞书',
+  }
   return map[type] || type
 }
 
 // ==================== 字段定义（含获取位置说明） ====================
 
-const channelFieldMap: Record<string, { key: string; label: string; placeholder: string; hint?: string; location: string }[]> = {
+const channelFieldMap: Record<string, { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' }[]> = {
   wecom: [
     { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
     { key: 'agent_id', label: '应用 AgentId', placeholder: '1000002', location: '「应用管理」→ 应用详情页' },
@@ -398,6 +433,16 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     { key: 'secret', label: '应用 Secret', placeholder: '', hint: '自建应用的 Secret（微信客服无独立 Secret）', location: '「应用管理」→ 自建应用详情页' },
     { key: 'token', label: '回调 Token', placeholder: '', hint: '设置 API 接收时自行设定或随机生成', location: '「微信客服」→「API」→ 回调配置' },
     { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「微信客服」→「API」→ 回调配置' },
+  ],
+  // 企业微信个人号 RPA：服务端拉取模式（第一期唯一可选）
+  // listen_mode 单选固定为 server（client 选项禁用灰显「即将开放」）
+  // private_key 用 file input 上传 .pem 文件，读为文本后与其他字段一起提交
+  wecom_personal_rpa: [
+    { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
+    { key: 'archive_secret', label: '会话存档 Secret', placeholder: '', hint: '会话存档专用 Secret（与自建应用 Secret 不同）', location: '「管理后台」→「会话内容存档」→「API 基本信息」' },
+    { key: 'private_key', label: 'RSA 私钥', placeholder: '点击上传 .pem 文件', hint: '上传后会以文本形式保存（加密存储）', location: '「会话内容存档」→「生成密钥对」下载私钥', type: 'file' },
+    { key: 'token', label: '回调 Token', placeholder: '', hint: '企微后台「接收消息服务器」生成', location: '「会话内容存档」→「接收消息服务器」' },
+    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「会话内容存档」→「接收消息服务器」' },
   ],
   dingtalk: [
     { key: 'app_key', label: 'App Key', placeholder: '', location: '「基础信息」页面' },
@@ -440,6 +485,18 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
     ],
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
+  },
+  wecom_personal_rpa: {
+    title: '企业微信个人号 RPA 接入步骤（服务端拉取模式）',
+    steps: [
+      '前往企业微信管理后台 →「管理后台」→「会话内容存档」→ 开通功能',
+      '在「会话内容存档 → API 基本信息」记录 CorpID 和会话存档 Secret',
+      '在「会话内容存档 → 密钥管理」生成密钥对，下载 RSA 私钥 .pem 文件',
+      '在「会话内容存档 → 接收消息服务器」配置回调地址（下方 URL）+ Token + EncodingAESKey',
+      '先在此页面保存所有凭证（含 RSA 私钥），再到企业微信后台点击保存完成验证',
+      '保存后点「验证连接」自测 5 步链路：access_token / 拉取 / RSA 解密 / 自测验签',
+    ],
+    docUrl: 'https://developer.work.weixin.qq.com/document/path/91360',
   },
   dingtalk: {
     title: '钉钉接入步骤',
@@ -603,6 +660,21 @@ function editChannel(ch: any) {
   showForm.value = true
 }
 
+// 处理 RSA 私钥文件上传：读取 .pem 文件内容为文本存入 config
+function handleFileUpload(fieldKey: string, event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    form.value.config[fieldKey] = String(reader.result || '')
+  }
+  reader.onerror = () => {
+    formError.value = `文件读取失败：${file.name}`
+  }
+  reader.readAsText(file)
+}
+
 function showGuide(ch: any) {
   guideChannel.value = ch.channel_type
   showGuideModal.value = true
@@ -636,6 +708,11 @@ async function handleSubmit() {
     const payload: Record<string, any> = {
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
+    }
+    // wecom_personal_rpa：第一期强制 listen_mode='server'（前端禁用 client，
+    // 此处兜底防止用户通过 DevTools 改单选值提交 client）
+    if (form.value.channel_type === 'wecom_personal_rpa') {
+      payload.config.listen_mode = 'server'
     }
     // 微信客服特有：序列化客服账号配置
     if (form.value.channel_type === 'wecom_kf' && kfAccounts.value.length > 0) {

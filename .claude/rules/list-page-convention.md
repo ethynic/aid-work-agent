@@ -80,15 +80,25 @@
 
 ---
 
-## 4. 表格列规范
+## 4. 表格规范
 
-### 序号列
+### 表格组件
+
+列表页表格**必须使用** `BaseTable.vue` 组件（`frontend/src/components/ui/BaseTable.vue`），禁止手写原生 `<table>` 或引入第三方表格组件。
+
+- 统一通过 `:columns` 和 `:data` 传入列定义与数据，使用 `row-key` 指定唯一键。
+- 统一由 `BaseTable` 提供斑马线、表头样式、单元格 `title` 提示、空状态等基础能力。
+- 自定义列通过具名 slot（如 `#actions="{ row, index }"`）实现，但表格主体结构仍由 `BaseTable` 渲染。
+
+### 表格列规范
+
+#### 序号列
 
 - 列宽：`60px`。
 - 列头："序号"。
 - 序号值由前端计算：有分页时 `(currentPage - 1) * pageSize + index + 1`，无分页时 `index + 1`。
 
-### 操作列
+#### 操作列
 
 - 列宽：`100px~200px`（根据操作按钮数量调整，2个按钮、每个按钮2个字时，建议列宽 `120px`）。
 - 列头："操作"，水平居中。
@@ -97,7 +107,7 @@
 - 删除按钮使用 `intent="danger-ghost"`（灰底红字），避免红色背景过于醒目；其他操作按钮使用 `ghost`。
 - "编辑"和"详情"一般不同时出现，只读场景仅保留"详情"。
 
-### 数据列
+#### 数据列
 
 - 列头：`text-xs font-medium text-muted uppercase tracking-wider`（BaseTable 内置）。
 - 单元格：`text-sm text-default`（BaseTable 内置）。

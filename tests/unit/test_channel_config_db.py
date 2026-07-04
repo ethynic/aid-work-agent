@@ -180,6 +180,12 @@ class TestChannelConfigDBUpdate:
 
         mock_cursor = MagicMock()
         mock_cursor.rowcount = 1
+        # update 现在会先 SELECT 取现有配置（判断 channel_type + 保留运行时字段）
+        # 用非 wecom_personal_rpa 类型，避免触发加密路径
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wecom",
+            "config": json.dumps({"corp_id": "wx_old"}),
+        }
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
 
@@ -192,9 +198,10 @@ class TestChannelConfigDBUpdate:
                 subagent_type="new-subagent",
             )
 
-            call_args = mock_cursor.execute.call_args
-            sql = call_args[0][0]
-            params = call_args[0][1]
+            # 最后一次 execute 是 UPDATE 语句
+            update_call = mock_cursor.execute.call_args
+            sql = update_call[0][0]
+            params = update_call[0][1]
 
             assert "subagent_type = %s" in sql
             assert params[1] == "new-subagent"  # 第二个参数是 subagent_type
@@ -206,6 +213,10 @@ class TestChannelConfigDBUpdate:
 
         mock_cursor = MagicMock()
         mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wecom",
+            "config": json.dumps({"corp_id": "wx_old"}),
+        }
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
 
@@ -218,8 +229,8 @@ class TestChannelConfigDBUpdate:
                 subagent_type=None,
             )
 
-            call_args = mock_cursor.execute.call_args
-            params = call_args[0][1]
+            update_call = mock_cursor.execute.call_args
+            params = update_call[0][1]
 
             assert params[1] is None
             assert result is True

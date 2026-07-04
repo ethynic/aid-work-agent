@@ -37,15 +37,15 @@ context:
 business_pages:
   - id: customers
     title: 我的客户
-    icon: 👥
+    icon: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"
     route: /trade-specialist/customers
   - id: email-records
     title: 邮件记录
-    icon: 📧
+    icon: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6"
     route: /trade-specialist/email-records
   - id: match-stats
     title: 匹配统计
-    icon: 📊
+    icon: "M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7"
     route: /trade-specialist/match-stats
 
 # 系统提示词（专业领域约束，会追加到主智能体基础提示词后面）

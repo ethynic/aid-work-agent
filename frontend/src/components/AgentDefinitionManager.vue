@@ -161,7 +161,7 @@
                     <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
                       <div v-for="(page, i) in businessPages" :key="i"
                         class="flex items-center gap-1 bg-white rounded-lg p-1.5 border border-gray-100">
-                        <span class="text-base">{{ page.icon }}</span>
+                        <MenuIcon :icon="page.icon" />
                         <span class="text-xs text-default flex-1 truncate">{{ page.title }}</span>
                         <span class="text-xs text-gray-400 truncate">{{ page.route }}</span>
                         <button @click="businessPages.splice(i, 1)"
@@ -415,6 +415,7 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import AppHeader from './AppHeader.vue'
 import PageMetaSelector from './PageMetaSelector.vue'
 import MyTextarea from './ui/MyTextarea.vue'
+import MenuIcon from './ui/MenuIcon.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,

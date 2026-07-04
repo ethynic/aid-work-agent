@@ -255,6 +255,8 @@
 
 ## 5. F4 会话存档 API 监听（主方案）
 
+> ⚠️ **2026-07-03 调整**：消息监听主方案已改为**服务端直接拉取企微会话存档**，详见 [服务端监听存档设计](wecom-personal-rpa-server-archive-listener-design.md)。本章节描述的客户端 ChatArchiveListener 路径**第一期已禁用**（`listen_mode` 永远下发 'server'，客户端 `DisablePolling=true` 默认不启动本地轮询）。代码保留为未来开放 client 模式做准备，详见下文 §5.5。
+
 ### 5.1 前置条件
 
 | 项 | 要求 |
@@ -359,6 +361,23 @@ message_source:
 | 私钥文件 | `archive_private_key.pem` 文件权限 600（仅当前 Windows 用户可读） |
 | 日志脱敏 | chat_data 明文不入日志；只记 msgid + msgtype + 时间 |
 | 员工撤销授权 | 服务端 `agree/disagree` 事件触发时，客户端停止该账号的拉取 |
+
+---
+
+### 5.9 第一期状态（2026-07-03）
+
+第一期 `listen_mode` 永远下发 `'server'`，**ChatArchiveListener 永远不启动**：
+- `RpaConfigResponse.ListenMode` 字段（Phase 7 新增）由服务端 `/config` 路由从 `tenant_channel_configs.config.listen_mode` 读取（默认 'server'，codec 强制不可绕过）
+- `ChatArchiveListener.DisablePolling = true`（Phase 7 默认值），`StartAsync` 检测到 DisablePolling 直接返回 Task.CompletedTask，不启动 PollLoop
+- `InboundEventReporter` 订阅 listener.NewMessageReceived，因 listener 不触发事件，reporter 实际空转
+
+未来开放 client 模式时的增量工作（约 3h）：
+1. 前端 ChannelConfig.vue：移除 listen_mode 单选中 client 选项的 `disabled`，移除 forceValue 锁定
+2. 后端 channel_config_db：移除 `encrypt_sensitive_fields` 强制 server 的逻辑
+3. 客户端 `ClientSession`：拉 config 后若 `ListenMode==Client` 调 `ChatArchiveListener.EnablePollingAsync`
+4. 启用 `verifier.verify_archive_client_mode` 调用入口（路由层 if 分支取消注释）
+
+详见 [服务端监听存档设计](wecom-personal-rpa-server-archive-listener-design.md) §2.2「客户端模式的处置」。
 
 ---
 

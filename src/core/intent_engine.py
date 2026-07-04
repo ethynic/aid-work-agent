@@ -111,17 +111,6 @@ class IntentEngine:
             "required_entities": ["关键词"],
             "optional_entities": ["发件人", "时间范围"],
         },
-        # 文档处理
-        "doc_summarize": {
-            "description": "文档摘要",
-            "required_entities": ["文档"],
-            "optional_entities": ["摘要长度"],
-        },
-        "doc_translate": {
-            "description": "文档翻译",
-            "required_entities": ["文档", "目标语言"],
-            "optional_entities": ["源语言"],
-        },
         # OCR识别
         "ocr_image": {
             "description": "图片文字识别",
@@ -259,20 +248,7 @@ class IntentEngine:
                 confidence=0.85,
                 entities={"关键词": keyword} if keyword else {},
             )
-        
-        # 文档摘要
-        if re.search(r"(摘要|总结|概括|提炼)", user_input):
-            return IntentResult(intent="doc_summarize", confidence=0.8)
-        
-        # 文档翻译
-        if re.search(r"(翻译|translate)", user_input):
-            target_lang = self._extract_language(user_input)
-            return IntentResult(
-                intent="doc_translate",
-                confidence=0.85,
-                entities={"目标语言": target_lang} if target_lang else {},
-            )
-        
+
         # OCR识别
         if re.search(r"(识别|ocr|文字识别|图片.*文字)", user_input):
             if re.search(r"pdf", user_input):
@@ -400,38 +376,7 @@ class IntentEngine:
                     if keyword:
                         return keyword
         return None
-    
-    def _extract_language(self, text: str) -> Optional[str]:
-        """
-        提取目标语言
-        
-        Args:
-            text: 输入文本
-        
-        Returns:
-            语言或None
-        """
-        language_map = {
-            "英文": "英语",
-            "英语": "英语",
-            "中文": "中文",
-            "汉语": "中文",
-            "日文": "日语",
-            "日语": "日语",
-            "韩文": "韩语",
-            "韩语": "韩语",
-            "法文": "法语",
-            "法语": "法语",
-            "德文": "德语",
-            "德语": "德语",
-        }
-        
-        for key, value in language_map.items():
-            if key in text:
-                return value
-        
-        return None
-    
+
     def get_intent_info(self, intent: str) -> Dict[str, Any]:
         """
         获取意图信息

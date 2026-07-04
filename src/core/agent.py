@@ -313,7 +313,6 @@ class Agent:
         from src.tools.file.write_tool import WriteTool
         from src.tools.file.edit_tool import EditTool
         from src.tools.file.cp_tool import CpTool
-        from src.tools.file.upload_to_remote import UploadToRemoteTool
         from src.tools.llm.content_generate_tool import ContentGenerateTool
         from src.tools.network.http_api import HttpApiTool
 
@@ -322,8 +321,6 @@ class Agent:
         self.tool_registry.register(EmailReadTool())
         self.tool_registry.register(EmailListFoldersTool())
         self.tool_registry.register(PaddleOCRDocParsingTool())
-        # doc_summarize 暂时停用：保留工具实现，恢复时重新导入并注册 DocSummarizeTool。
-        # doc_translate 暂时停用：保留工具实现，恢复时重新导入并注册 DocTranslateTool。
         self.tool_registry.register(WebSearchTool())
         
         # 注册浏览器工具
@@ -334,8 +331,7 @@ class Agent:
         self.tool_registry.register(WriteTool())
         self.tool_registry.register(EditTool())
         self.tool_registry.register(CpTool())
-        self.tool_registry.register(UploadToRemoteTool())
-        
+
         # 注册LLM内容生成工具
         self.tool_registry.register(ContentGenerateTool())
         self.tool_registry.register(HttpApiTool())
@@ -1796,6 +1792,11 @@ class Agent:
                         source_type=_record.source_type or 'chat',
                         subagent_id=getattr(self, '_subagent_id', None),
                     )
+                    # 注入 trace_collector 引用，process_and_persist 写入
+                    # channel_messages 后通过它回填 user_message_id（用于
+                    # monitor.py 精确匹配撤回状态）
+                    if _record:
+                        _record.trace_collector = trace_collector
                 except Exception as e:
                     logger.debug(f"Trace collector init skipped: {e}")
                     trace_collector = None

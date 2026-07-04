@@ -2,7 +2,7 @@
 
 > 关联设计：[context_compression_design.md](./context_compression_design.md)（v3.0 同步方案）
 > 创建：2026-06-23 | 最后更新：2026-06-29
-> 总工期：约 **15 工作日**（Phase 1-5 已完成，Phase 6-7 部分，Phase 8 待开发）
+> 总工期：约 **13 工作日**（Phase 1-5、Phase 8 已完成，Phase 6 部分进行中；原 Phase 7 工具差异化策略已取消——统一截断够用，工具内容丢失重新调用即可）
 >
 > **v3.0 相对 v2.0 的计划调整**：删除 v2.0 的「Phase 3 异步任务派发与锁」「Phase 4 失败计数与同步降级」（同步方案不需要 SETNX 锁 / fail_count），相应工作量并入触发与失败处理；新增「Phase 8 后台定时任务扫描」作为补漏机制（待开发）。
 >
@@ -159,28 +159,6 @@
 
 ---
 
-## Phase 7：工具结果差异化策略（2 天）🔧 部分完成
-
-> 当前 `_preprocess_tool_results` 是统一截断（Phase 5 简化实现），本 Phase 升级为按工具类型分级。
-
-### 任务 7.1：工具类型注解
-- [ ] 在 `src/tools/base.py` 的 `BaseTool` 新增 `compression_strategy` 属性（默认 `summarize`）
-- [ ] 给大输出工具打标：`file_read` / `search_documents` / `export_excel` / `pandas_analyze` → `truncate`
-- [ ] 给状态类工具打标：`email_list` / `customer_search` / `list_orders` → `summarize`（默认）
-- [ ] 给指令类工具打标：`create_plan` / `use_skill` / `clarify` → `keep_args`
-- [ ] 给写入类工具打标：`send_email` / `word_process` / `text_file_writer` → `drop_result`
-
-### 任务 7.2：工具结果预处理升级
-- [ ] 改造 `_preprocess_tool_results` 按 strategy 处理 COMPRESS 区内所有 tool 消息
-- [ ] truncate：> 2000 字符截断 + 「[原文已存档，可重新调用工具获取]」后缀
-- [ ] keep_args：保留 tool_call 的 function+arguments，丢弃 result content
-- [ ] drop_result：tool 消息整条从 COMPRESS 区移除（不进摘要 LLM）
-- [ ] 单测：每种 strategy 一组场景
-
-**Phase 7 验收**：大输出工具结果（如 10000 行 Excel）能正常进摘要且 token 可控；不同工具类型的处理策略符合预期。
-
----
-
 ## Phase 8：后台定时任务扫描（2 天）✅ 已完成
 
 > 补漏机制，详见设计 §2.5。主流程同步压缩是主力，定时任务兜底漏网 session。默认关闭（`background_scan_enabled: false`），部署时在 config.yaml 开启。
@@ -219,8 +197,7 @@
 | Day 7 | Agent 同步集成完成，Web 渠道可灰度 | ✅ |
 | Day 9 | 可观测性（trace+指标+管理后台）完整 | ✅ |
 | Day 11 | 全渠道联调 + 性能调优 | 🔧 部分 |
-| Day 13 | 工具结果差异化策略 | 🔧 部分 |
-| Day 15 | 后台定时任务扫描上线 | ✅ |
+| Day 13 | 后台定时任务扫描上线 | ✅ |
 
 ---
 

@@ -56,19 +56,19 @@ context:
 business_pages:
   - id: leads
     title: 线索管理
-    icon: 🎯
+    icon: "M12 22a10 10 0 100-20 10 10 0 000 20zM12 6v6l4 2M22 2l-5 5M17 2h5v5"
     route: /customer-followup/leads
   - id: followup-records
     title: 跟进记录
-    icon: 📝
+    icon: "M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 113 3L12 15l-4 1 1-4 9.5-9.5z"
     route: /customer-followup/followup-records
   - id: funnel
     title: 转化漏斗
-    icon: 📊
+    icon: "M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7"
     route: /customer-followup/funnel
   - id: sales-reps
     title: 销售人员
-    icon: 👥
+    icon: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1M16 4l2 2 4-4"
     route: /customer-followup/sales-reps
 ---
 

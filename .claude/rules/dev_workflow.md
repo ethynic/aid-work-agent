@@ -50,7 +50,7 @@ fetch + commit + push
 2. 遵循项目既有代码风格（中文注释、命名规范、错误处理范式）。
 3. 配置变更要 `settings.py` 和 `configs/config.yaml` **同步**（字段名一致）。
 4. 写单测，覆盖核心路径（命中/未命中/异常/边界）。
-5. 自测：`python -m pytest <相关测试> -p no:cacheprovider -q` 必须全绿。
+5. 自测：`./scripts/dev_test.sh <相关测试> -p no:cacheprovider -q` 必须全绿（脚本自动探测环境，容器在跑走 `docker exec aid-agent-api`，否则走宿主机 `python`，详见 §8）。
 6. **不提交、不 push**。完成后报告：改动文件、测试结果、遇到的问题。
 
 ### 交接给测试智能体
@@ -67,12 +67,13 @@ fetch + commit + push
 独立运行测试，验证质量，修复**明显的**问题。
 
 ### 要求
-1. 跑新功能的测试：`python -m pytest <新测试文件> -p no:cacheprovider -q -v`
+1. 跑新功能的测试：`./scripts/dev_test.sh <新测试文件> -p no:cacheprovider -q -v`
 2. **回归测试**：跑改动模块的全量测试 + 相邻模块，确认没破坏既有功能。
 3. **启动安全检查**（关键，避免服务器挂）：
-   - `python -c "import ast; ast.parse(open('<改动文件>',encoding='utf-8').read())"` 语法检查
-   - `python -c "from <改动模块> import <新增符号>"` import 检查
-   - 涉及配置：`python -c "from src.config.settings import create_settings; s=create_settings(); print(...)"` 验证配置加载
+   - `./scripts/dev_test.sh` 自动走容器/宿主机环境，下面命令同样需要走对应环境（见 §8）：
+     - 语法检查：`docker exec aid-agent-api python -c "import ast; ast.parse(open('<改动文件>',encoding='utf-8').read())"`（宿主机环境去掉 `docker exec aid-agent-api` 前缀）
+     - import 检查：`docker exec aid-agent-api python -c "from <改动模块> import <新增符号>"`
+     - 涉及配置：`docker exec aid-agent-api python -c "from src.config.settings import create_settings; s=create_settings(); print(...)"`
    - 涉及前端：`cd frontend && npm run build` 必须 0 错误
 4. 自己读一遍实现，检查明显 bug（列名拼错、异常未隔离、参数未参数化等）。
 5. 修复**明显的**问题（import 错误、SQL 错误、签名不匹配、测试断言被弱化）。修复要最小化、外科手术式。
@@ -112,8 +113,8 @@ fetch + commit + push
 
 三个智能体都通过后，**主控者**（即接收用户指令的那个 agent）自己做最终验证：
 
-1. **import/build 终检**（自己跑一遍，不依赖智能体报告）：
-   - 后端：`python -c "from src.scheduler.manager import ..."` 等关键启动路径 import
+1. **import/build 终检**（自己跑一遍，不依赖智能体报告，环境走法见 §8）：
+   - 后端：`docker exec aid-agent-api python -c "from src.scheduler.manager import ..."` 等关键启动路径 import（宿主机环境去掉 `docker exec aid-agent-api` 前缀）
    - 前端：`cd frontend && npm run build`（若有前端改动）
 2. **fetch 最新远程**：`git fetch origin`，若有新提交需先合并解决冲突。
 3. **暂存相关文件**：排除无关的 untracked 文件（只提交本次任务的改动）。
@@ -143,3 +144,29 @@ fetch + commit + push
 - 每个智能体的 prompt 必须**自包含**：告知仓库路径、背景、改了什么文件、要做什么、约束（不提交不 push）、报告格式。
 - 智能体返回后，主控者**核验关键结论**（如测试通过数、import 是否真的 OK），不能盲信报告。
 - 涉及"提交代码可能导致服务器更新"的场景，主控者必须亲自做 import/build 终检。
+
+---
+
+## 8. 本机执行环境（容器 vs 宿主机）
+
+项目依赖（PostgreSQL 连接池、Redis 降级、skill 加载链路、loguru 等）在团队成员间有两种部署：
+
+| 环境 | 部署方式 | 识别方法 |
+|------|---------|---------|
+| 容器环境 | 所有依赖在 `aid-agent-api` docker 容器内 | `docker ps` 能看到 `aid-agent-api` |
+| 宿主机环境 | 依赖直接装在宿主机 python | `docker ps` 无 `aid-agent-api` |
+
+**统一入口**：`./scripts/dev_test.sh <pytest 参数>` 自动探测环境——容器在跑走 `docker exec aid-agent-api python -m pytest`，否则走宿主机 `python -m pytest`。
+
+**命令前缀规则**：
+
+| 命令类型 | 容器环境 | 宿主机环境 |
+|---------|---------|-----------|
+| pytest | `./scripts/dev_test.sh ...` | `./scripts/dev_test.sh ...`（脚本自动降级） |
+| python -c | `docker exec aid-agent-api python -c "..."` | `python -c "..."` |
+| 前端 build | `cd frontend && npm run build`（两端相同） | 同左 |
+
+**智能体约定**：
+- pytest 命令一律走 `./scripts/dev_test.sh`，不要直接写 `python -m pytest` 或 `docker exec ... pytest`。
+- `python -c` 类命令在容器环境下加 `docker exec aid-agent-api` 前缀，宿主机环境直接 `python -c`。智能体首次执行前可先跑 `docker ps | grep aid-agent-api` 探测一次，后续命令统一前缀。
+

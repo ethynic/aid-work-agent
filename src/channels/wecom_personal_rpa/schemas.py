@@ -289,6 +289,16 @@ class RpaConfigResponse(BaseModel):
         default=False,
         description="服务端是否启用会话存档（客户端据此决定是否抓取聊天记录/媒体）",
     )
+    listen_mode: Optional[Literal["server", "client"]] = Field(
+        default="server",
+        description=(
+            "会话存档拉取模式（Phase 7+）："
+            "'server'（默认）= 服务端直接拉取，客户端跳过本地 ChatArchiveListener；"
+            "'client' = 客户端本地拉取并上报（第一期不开放，前端禁用）。"
+            "Pydantic v2 行为：显式传 None 时字段值为 None（不被 default 覆盖，"
+            "序列化为 null）；路由层永远传 'server' 或 'client' 字符串，None 路径不可达。"
+        ),
+    )
     monitor_users: Dict[str, MonitorUsersEntry] = Field(
         default_factory=dict,
         description=(

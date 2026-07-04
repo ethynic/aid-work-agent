@@ -59,10 +59,14 @@ class _DatedFileSink:
                 "a", encoding="utf-8"
             )
             # 日期切换时触发一次惰性清理（每天一次）
-            try:
-                cleanup_old_logs()
-            except Exception:
-                pass
+            # ⚠️ 暂时禁用：在 _DatedFileSink.__call__（loguru 消费者线程）中调用
+            #    cleanup_old_logs 会在 sink 执行期间再次向 loguru 队列塞入大量 INFO 日志，
+            #    主线程同步等待时可能死锁/挂起（Windows 上观察到的启动卡死现象）。
+            #    启动清理已在 setup_logging 末尾（主线程）执行一次，足够覆盖日常场景。
+            # try:
+            #     cleanup_old_logs()
+            # except Exception:
+            #     pass
         return self._file
 
     def __call__(self, message):

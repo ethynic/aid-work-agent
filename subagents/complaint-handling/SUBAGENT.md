@@ -36,11 +36,11 @@ context:
 business_pages:
   - id: complaint-list
     title: 投诉记录
-    icon: 📋
+    icon: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
     route: /complaint/list
   - id: complaint-stats
     title: 投诉统计
-    icon: 📊
+    icon: "M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7"
     route: /complaint/stats
 ---
 

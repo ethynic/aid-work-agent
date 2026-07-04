@@ -82,12 +82,12 @@ PyMySQL>=1.1.0  # MySQL driver for SQLAlchemy
 # Redis
 redis>=5.0.0  # Redis client for shared cross-worker state
 
-# MCP Server (Dockerfile 中单独安装，避免被其他包间接升级)
+# MCP Server (installed separately in Dockerfile to avoid indirect upgrades)
 # mcp>=1.27.0  # Model Context Protocol SDK
 
 # Security
 bcrypt>=4.1.0  # Password hashing
 
 # Audio
-pysilk-mod>=1.6.0  # SILK v3/v2 音频解码（微信手机端语音格式）
+pysilk-mod>=1.6.0  # SILK v3/v2 audio decoding (WeChat mobile voice format)
 

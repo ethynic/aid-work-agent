@@ -471,15 +471,33 @@ class ContextCompressionService:
         try:
             if source_type == "chat":
                 # limit 给个大值，避免默认 100 截断；实际由 _eval_threshold / 精确回退判断
-                return MessageDB.list_by_session(session_id, limit=10000)
-            # 复用模块级单例，避免每次新建 ChannelSessionManager（P1-4）
-            return channel_session_manager.get_messages(session_id, limit=10000)
+                messages = MessageDB.list_by_session(session_id, limit=10000)
+            else:
+                # 复用模块级单例，避免每次新建 ChannelSessionManager（P1-4）
+                messages = channel_session_manager.get_messages(session_id, limit=10000)
         except Exception as e:
             logger.warning(
                 f"ContextCompression _load_messages failed: "
                 f"sid={session_id}, source={source_type}, err={e}"
             )
             return []
+
+        # tool_calls 还原：DB 层把 tool_calls 存在 metadata 里（写入见 session.py:826-827），
+        # 但压缩后续逻辑（_drop_orphan_tool_messages / _split_messages TAIL 对齐）检查的是
+        # 顶层 tool_calls 字段。这里统一还原，与主流程 short_term.py:149 / agent.py:1227 一致。
+        # 不还原会导致所有 tool 消息被判为孤儿删除，COMPRESS 区内容流失，压缩死循环。
+        for m in messages:
+            if m.get("role") != "assistant" or m.get("tool_calls"):
+                continue
+            meta = m.get("metadata")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            if isinstance(meta, dict) and meta.get("tool_calls"):
+                m["tool_calls"] = meta["tool_calls"]
+        return messages
 
     # ========== 触发判断 ==========
 
@@ -529,16 +547,21 @@ class ContextCompressionService:
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """分 HEADER / COMPRESS / TAIL 三段。
 
-        - HEADER：前 header_keep 条，保留原文
-        - TAIL：最近 tail_keep 条，按工具链边界对齐；TAIL 末尾必到 messages 末尾，无需向后扩展
+        - HEADER：前 header_keep 条（边界对齐到完整对话单元），保留原文
+        - TAIL：最近 tail_keep 条（边界对齐到完整对话单元），保留原文
         - COMPRESS：中间所有消息，进入摘要 LLM
 
-        孤儿 tool 处理（P0-4）：如果 TAIL 开头是 tool 消息，向前回溯寻找配对的
-        assistant(tool_calls)。若一直回溯到 HEADER 边界仍找不到配对（说明这是孤儿
-        tool，前面没有对应的 tool_calls），则将这些孤儿 tool 从 messages 中移除
-        并记录 warning，重新分段。避免孤儿 tool 落入 COMPRESS 区末尾导致摘要 LLM 报错。
+        **边界对齐原则（v3.2.2 治本修复）**：HEADER 终点和 TAIL 起点都必须落在
+        「安全切断点」（_is_safe_split_point）上，即一个完整对话单元的边界。
+        对话单元 = user → [assistant(tool_calls) → tool...] → assistant(最终回复)，
+        绝不在 assistant(tool_calls) 与 tool 之间切断，否则会产生孤儿 tool
+        （配对的 assistant 被压走、tool 留下），导致 COMPRESS 区内容流失、压缩死循环。
 
-        如果消息总数太少（≤ header_keep + tail_keep），COMPRESS 为空。
+        孤儿 tool 兜底（P0-4）：历史压缩可能已遗留孤儿 tool（配对 assistant 已被压走），
+        这些 tool 由 _drop_orphan_tool_messages 降级为 assistant 文本保留（不删除），
+        避免占着消息数却进不了 COMPRESS 区。
+
+        如果消息总数太少（≤ header_keep + tail_keep），COMPRESS 区为空。
 
         Returns:
             (header, compress, tail) 三段
@@ -546,9 +569,7 @@ class ContextCompressionService:
         header_keep = self._settings.header_keep
         tail_keep = self._settings.tail_keep
 
-        # 预处理：移除整段 messages 中所有「孤儿 tool」。
-        # 孤儿 tool 定义：在 messages 中向前回溯，最近一个非 tool 消息不是带 tool_calls 的 assistant。
-        # 这种 tool 没有对应的 tool_calls，LLM 会拒绝（"messages must contain tool_calls"）。
+        # 预处理：降级孤儿 tool（配对 assistant 已被历史压缩的 tool）为 assistant 文本
         messages = self._drop_orphan_tool_messages(messages)
         total = len(messages)
 
@@ -556,47 +577,105 @@ class ContextCompressionService:
         if total <= header_keep + tail_keep:
             return list(messages), [], []
 
-        # ---------- HEADER ----------
-        header = messages[:header_keep]
+        is_safe = ContextCompressionService._is_safe_split_point
 
-        # ---------- TAIL 边界对齐 ----------
-        # TAIL 末尾固定到 messages 末尾（tail_keep 条），无需向后扩展。
-        # （设计文档 §3.2 原本允许 TAIL 向后扩展到工具链闭合，但当前实现 TAIL 末尾 == total，
-        #  不存在「后续还有 tool 结果在 TAIL 外」的场景。若未来 tail 不固定到末尾，需重新实现。）
+        # ---------- HEADER 终点对齐 ----------
+        # header_end_idx 从 header_keep 向后找，直到落在安全切断点。
+        # 即 messages[header_end_idx] 是 user 或 assistant(无 tool_calls)。
+        # 这样 HEADER 区的末尾必是一个完整单元的结束，不会把 assistant(tool_calls)
+        # 留在 HEADER 而 tool 结果落到 COMPRESS。
+        header_end_idx = header_keep
+        while header_end_idx < total and not is_safe(messages[header_end_idx]):
+            header_end_idx += 1
+        header = messages[:header_end_idx]
+
+        # ---------- TAIL 起点对齐 ----------
+        # tail_start_idx 从 total - tail_keep 向前找，直到落在安全切断点。
+        # 即 messages[tail_start_idx] 是 user 或 assistant(无 tool_calls)。
+        # 这样 TAIL 区的开头必是一个完整单元的开始，不会把 tool 结果留在 TAIL
+        # 而对应的 assistant(tool_calls) 落到 COMPRESS。
         tail_start_idx = total - tail_keep
-
-        # 向前对齐：如果 TAIL 第一条是 tool，向前回溯把对应的 assistant(tool_calls) 拉进 TAIL。
-        # 由于 _drop_orphan_tool_messages 已保证每个 tool 前面必能找到 assistant(tool_calls)，
-        # 这里回溯最多到 header_keep 边界，一定能找到配对（否则该 tool 已被丢弃）。
-        while tail_start_idx > header_keep:
-            cur = messages[tail_start_idx]
-            role = cur.get("role")
-            if role == "tool":
-                tail_start_idx -= 1
-                continue
-            if role == "assistant" and cur.get("tool_calls"):
-                break
-            break
+        # 不能侵入 HEADER 区
+        min_tail_start = header_end_idx
+        while tail_start_idx > min_tail_start and not is_safe(messages[tail_start_idx]):
+            tail_start_idx -= 1
 
         tail = messages[tail_start_idx:total]
-        compress = messages[header_keep:tail_start_idx]
+        compress = messages[header_end_idx:tail_start_idx]
         return header, compress, tail
+
+    @staticmethod
+    def _extract_tool_calls(msg: Dict[str, Any]) -> list:
+        """读取 assistant 的 tool_calls，兼容顶层和 metadata 两种存储。
+
+        DB 层把 tool_calls 存在 metadata 里（写入见 session.py:826-827），
+        _load_messages 会还原到顶层，但为防御其他数据源（如直接构造的测试数据、
+        未走 _load_messages 的路径），这里兜底同时检查两处。与 short_term.py:149 一致。
+        """
+        tc = msg.get("tool_calls")
+        if tc:
+            return tc
+        meta = msg.get("metadata")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                return []
+        if isinstance(meta, dict):
+            return meta.get("tool_calls") or []
+        return []
+
+    @staticmethod
+    def _is_safe_split_point(msg: Optional[Dict[str, Any]]) -> bool:
+        """判断该位置是否为安全的分段切断点（一个完整对话单元的边界）。
+
+        一个完整对话单元：user → [assistant(tool_calls) → tool...] → assistant(最终回复)。
+        安全切断点 = 上一个单元已结束、下一个单元尚未开始的边界位置：
+        - user 消息（新对话轮的开始）✓
+        - assistant 无 tool_calls（上一轮的结束）✓
+        - tool 消息（单元中间，切断会导致孤儿 tool）✗
+        - assistant 有 tool_calls（后面还有 tool 结果，切断会断链）✗
+
+        HEADER 终点和 TAIL 起点都必须落在安全切断点上，才能保证：
+        1. COMPRESS 区和 TAIL 区都不会出现孤儿 tool（配对的 assistant(tc) 和 tool 要么
+           同在一段、要么同在另一段，不被切断）
+        2. 任何一段单独送给摘要 LLM 或主对话 LLM 都是完整的消息序列
+        """
+        if not msg:
+            return True
+        role = msg.get("role")
+        if role == "user":
+            return True
+        if role == "assistant":
+            return not ContextCompressionService._extract_tool_calls(msg)
+        return False
 
     @staticmethod
     def _drop_orphan_tool_messages(
         messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """移除孤儿 tool 消息（P0-4）。
+        """处理孤儿 tool 消息（P0-4）。
 
         遍历 messages，对每条 role=tool 的消息向前回溯：
         - 若最近一个非 tool 消息是 assistant(tool_calls) → 配对成功，保留
-        - 否则（user、无 tool_calls 的 assistant，或回溯到头部）→ 孤儿 tool，移除
+        - 否则（user、无 tool_calls 的 assistant，或回溯到头部）→ 孤儿 tool
+
+        孤儿 tool 的处理（v3.2.2 修复死循环）：**不删除**，而是降级为 assistant 文本
+        消息保留在 messages 中。原因：
+        1. 删除会导致 COMPRESS 区内容流失（孤儿 tool 本该被压缩），消息数永远降不下来
+           → 死循环触发压缩（生产实证：2 小时触发 13 次）
+        2. 孤儿 tool 的产生往往是因为配对的 assistant(tool_calls) 已被历史压缩，
+           这些 tool 内容仍有摘要价值，应参与摘要而非丢弃
+        3. 摘要 LLM 把所有消息格式化为纯文本（_format_messages_for_prompt），
+           不要求 tool 消息配对，降级为 assistant 文本不影响摘要质量
+        4. 降级为 assistant（而非保留 role=tool）可避免 _split_messages 的 TAIL 对齐
+           逻辑把它们误吞进 TAIL（while 循环遇 role=tool 会无限向前回溯）
 
         连续多个 tool 结果可能对应同一次 tool_calls（multi-tool 场景），所以回溯时
         允许跨过其他 tool 消息。
 
         Returns:
-            清理后的 messages（可能与入参相同，也可能是新列表）
+            处理后的 messages（孤儿 tool 已降级为 assistant，数量不变）
         """
         if not messages:
             return messages
@@ -613,7 +692,10 @@ class ContextCompressionService:
                     j -= 1
                     continue
                 # 找到非 tool 消息：判断是否为带 tool_calls 的 assistant
-                if prev_role == "assistant" and messages[j].get("tool_calls"):
+                # （兼容 tool_calls 存在 metadata 的存储，见 _extract_tool_calls）
+                if prev_role == "assistant" and ContextCompressionService._extract_tool_calls(
+                    messages[j]
+                ):
                     paired = True
                 break
             if not paired:
@@ -623,10 +705,30 @@ class ContextCompressionService:
             return messages
 
         logger.warning(
-            f"orphan tool message dropped: count={len(orphan_indices)}, "
+            f"orphan tool message downgraded to assistant: count={len(orphan_indices)}, "
             f"total_msgs={len(messages)}, indices={sorted(orphan_indices)}"
         )
-        return [m for i, m in enumerate(messages) if i not in orphan_indices]
+        # 降级孤儿 tool：role 改为 assistant，保留 content 和 id（id 用于压缩记录 compressed_ids）
+        result = []
+        for i, m in enumerate(messages):
+            if i in orphan_indices:
+                m = dict(m)
+                # 读取工具名（兼容 metadata 为 dict / JSON 字符串 / None）
+                tool_name = ""
+                meta = m.get("metadata")
+                if isinstance(meta, str):
+                    try:
+                        meta = json.loads(meta)
+                    except Exception:
+                        meta = {}
+                if isinstance(meta, dict):
+                    tool_name = meta.get("tool_name") or ""
+                m["role"] = "assistant"
+                if tool_name:
+                    m["content"] = f"[工具结果:{tool_name}] {m.get('content') or ''}"
+                m.pop("tool_calls", None)
+            result.append(m)
+        return result
 
     # ========== 工具结果预处理 ==========
 
@@ -678,6 +780,17 @@ class ContextCompressionService:
         new_block = self._format_messages_for_prompt(new_messages)
         return f"""你是对话摘要助手。请把以下对话历史压缩成结构化摘要，保留长期有效的信息。
 
+压缩原则（核心）：
+- 以「任务/事件」为单位归并：用户围绕同一件事的多轮对话（反复澄清、
+  补充信息、试错）应归并成一条结论，而非逐轮流水账记录。
+- 保留「用户最终需求」+「模型最终方案」：一个完整的任务压成一对结论
+  （要什么 / 怎么解决的）。中间的澄清、试错、工具调用过程可丢弃。
+- 工具调用过程不保留，但工具产出的关键事实（查到的订单号、客户信息等）必须按原文保留。
+- **文件路径不可省略（最高优先级）**：对话中 cp 工具返回的 file_path / download_url
+  是用户后续下载文件的唯一入口。即使为控制长度省略其他内容，每个生成过文件的任务
+  都必须在「已完成的任务」里内联保留其 download_url 原文，格式：
+  「已生成XX文档（下载：download_url原文）」。路径丢失 = 用户找不到文件。
+
 输出格式（严格遵守）：
 
 ## 用户与背景
@@ -687,7 +800,8 @@ class ContextCompressionService:
 - 已确认的事实、已做的决策（含决策原因）
 
 ## 已完成的任务
-- 已经做完的事情，含产出物路径（重要！）
+- 已经做完的事情。每个生成/交付了文件的任务，**必须**在同一行内联标注下载路径，
+  格式：「任务描述（下载：<download_url原文>）」。不可遗漏，不可仅写"已生成"而不带路径。
 
 ## 进行中的事项
 - 尚未完成的任务、待跟进的待办
@@ -701,7 +815,8 @@ class ContextCompressionService:
 要求：
 1. 每个字段只写必要条目，不要扩写
 2. 文件路径、ID、URL 必须保留原文，不要改写
-3. 总长度不超过 {max_tokens} tokens
+3. **cp 工具返回的 download_url 必须内联到对应任务条目，不得省略**（用户靠它下载文件）
+4. 总长度不超过 {max_tokens} tokens
 
 已有摘要（如有，请合并增量信息）：
 {existing_block}

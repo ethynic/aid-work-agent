@@ -28,8 +28,6 @@ class Planner:
         "email_send": "email_send",
         "email_read": "email_read",
         "email_search": "email_search",
-        "doc_summarize": "doc_summarize",
-        "doc_translate": "doc_translate",
         "ocr_image": "ocr_image",
         "ocr_pdf": "ocr_pdf",
         "web_search": "web_search",
@@ -319,17 +317,6 @@ class Planner:
             parameters = {
                 "keyword": entities.get("关键词", ""),
                 "sender": entities.get("发件人", ""),
-            }
-        elif intent == "doc_summarize":
-            parameters = {
-                "document": entities.get("文档", ""),
-                "length": entities.get("摘要长度", "medium"),
-            }
-        elif intent == "doc_translate":
-            parameters = {
-                "document": entities.get("文档", ""),
-                "target_language": entities.get("目标语言", "英语"),
-                "source_language": entities.get("源语言", ""),
             }
         elif intent in ["ocr_image", "ocr_pdf"]:
             parameters = {

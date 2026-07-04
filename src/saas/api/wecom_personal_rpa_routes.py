@@ -245,17 +245,46 @@ def _make_get_secret_by_client_id():
 # ===========================================================================
 
 
+@router.get("/t/{tenant_id}/wecom_personal_rpa/callback/{config_id}")
+async def wecom_personal_rpa_callback_get(
+    tenant_id: str, config_id: str, request: Request
+):
+    """企微会话存档回调 URL 验证（GET echostr）。
+
+    仅 server 模式生效（企微后台首次配置回调时触发）。
+    client 模式不需要此验证。
+    """
+    from src.channels.wecom_personal_rpa.archive import callback_handler
+
+    return await callback_handler.handle_archive_echostr(tenant_id, config_id, request)
+
+
 @router.post("/t/{tenant_id}/wecom_personal_rpa/callback/{config_id}")
 async def wecom_personal_rpa_callback(
     tenant_id: str, config_id: str, request: Request
 ):
-    """RPA 客户端上报事件入口。
+    """RPA 入站回调入口（双验签兼容）。
 
-    鉴权 → 信封校验 → 去重 → 按 event_type 分发（message task 化），
-    全部路径立即返回 ``{"result": "accepted"}``。
+    Phase 6 起改为双模式兼容：
+    - body 是 XML 格式 → 企微会话存档回调（server 模式，走 archive_handler）
+    - body 是 JSON 格式 → 客户端 HMAC 上报（client 模式，原有路径不变）
+
+    两种模式由 body 格式天然区分，无需试错。第一期仅 server 模式可用，
+    client 模式代码保留为未来开放做准备。
     """
-    # 1. 原始字节 + headers（签名依赖原始字节，禁止 re-serialize）
+    # 1. 原始字节（签名依赖原始字节，禁止 re-serialize）
     raw_body = await request.body()
+
+    # 2. body 格式分流：XML → 企微回调，JSON → 客户端 HMAC
+    from src.channels.wecom_personal_rpa.archive import callback_handler
+
+    if callback_handler.is_archive_callback_request(request, raw_body):
+        # server 模式：企微会话存档回调
+        return await callback_handler.handle_archive_event(
+            tenant_id, config_id, request, raw_body
+        )
+
+    # client 模式：原有客户端 HMAC 上报路径（本期不开放，代码保留）
     headers = dict(request.headers)
 
     # 2. 鉴权
@@ -349,7 +378,10 @@ async def wecom_personal_rpa_callback(
 
 
 async def _process_inbound_message(
-    tenant_id: str, env: RpaCallbackEnvelope, env_raw: dict
+    tenant_id: str,
+    env: RpaCallbackEnvelope,
+    env_raw: dict,
+    source: str = "client_callback",
 ) -> None:
     """处理入站聊天消息事件。
 
@@ -359,6 +391,11 @@ async def _process_inbound_message(
     - ensure_user_registered → channel_session_manager.get_or_create_session
     - agent.process_message_sync（经 session_queue 串行调度）
     - adapter.set_reply_context + adapter.send_message（走 action_client 投递）
+
+    source 参数仅用于日志/审计区分来源：
+    - "client_callback"（默认）：C# 客户端上报的回调（已有路径）
+    - "server_fetcher"：服务端 archive fetcher 拉取后调用（Phase 4 新增）
+    两种来源行为完全等价，复用同一处理链路。
     """
     # 延迟 import：避免顶层 import src.core.* 触发 master_agent 单例创建链副作用
     from src.core.agent_router import agent_router
@@ -812,15 +849,23 @@ async def wecom_personal_rpa_config(request: Request):
     except Exception as e:
         logger.warning(f"RPA config list_accounts 失败: {e}")
 
-    # 查 tenant_channel_configs 拿 config_id（客户端据此构造 callback/ws 路径）
+    # 查 tenant_channel_configs 拿 config_id + listen_mode（客户端据此决定是否拉存档）
     # config_id 就是 tenant_channel_configs 记录的主键 id（register_client 时写入）
+    # listen_mode 第一期强制 'server'（codec 已写入），客户端据此跳过本地 ChatArchiveListener
     config_id = None
+    listen_mode = "server"  # 默认 server（无 tenant_channel_configs 配置时也走 server）
     try:
         from src.saas.db.channel_config_db import ChannelConfigDB
 
         configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type=_CHANNEL_TYPE)
         if configs:
             config_id = str(configs[0].get("id"))
+            # 注意：list_by_tenant 返回的 config 字段是 mask 后的（敏感字段掩码），
+            # 但 listen_mode 是明文字段，可直接读取
+            config_data = configs[0].get("config") or {}
+            lm = config_data.get("listen_mode")
+            if lm in ("server", "client"):
+                listen_mode = lm
     except Exception as e:
         logger.warning(
             f"RPA config 查询 tenant_channel_configs 失败 tenant={tenant_id}: {e}"
@@ -837,6 +882,7 @@ async def wecom_personal_rpa_config(request: Request):
         tenant_id=tenant_id,
         config_id=config_id,
         archive_enabled=_archive_enabled(),
+        listen_mode=listen_mode,
         monitor_users=_build_monitor_users(tenant_id, vr.client_id),
     )
     # 直接返回 Pydantic 模型，由 FastAPI 的 jsonable_encoder 序列化 datetime

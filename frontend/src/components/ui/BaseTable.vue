@@ -28,12 +28,16 @@
         <tr
           v-for="(row, index) in data"
           :key="rowKey ? row[rowKey] : index"
-          :class="slots.tr({ stripe: getStripeClass(index) })"
+          :class="[slots.tr({ stripe: getStripeClass(index) }), onRowClick ? 'cursor-pointer' : '']"
+          @click="onRowClick?.(row)"
         >
           <td
             v-for="col in columns"
             :key="col.key"
             :class="slots.td()"
+            :style="[
+              col.tdAlign ? { textAlign: col.tdAlign } : undefined
+            ]"
             :title="getCellTitle(row, col)"
           >
             <slot :name="col.key" :row="row" :index="index">
@@ -56,6 +60,7 @@ export interface TableColumn {
   width?: string
   minWidth?: string
   thAlign?: 'left' | 'center' | 'right'
+  tdAlign?: 'left' | 'center' | 'right'
   /** 自定义悬停提示内容，不填则取 row[col.key] */
   tooltip?: string | ((row: Record<string, any>) => string | undefined)
 }
@@ -64,6 +69,8 @@ defineProps<{
   columns: TableColumn[]
   data: Record<string, any>[]
   rowKey?: string
+  /** 行点击回调，传入当前行数据 */
+  onRowClick?: (row: Record<string, any>) => void
 }>()
 
 const slots = computed(() => table())

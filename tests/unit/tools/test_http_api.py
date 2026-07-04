@@ -140,7 +140,57 @@ class TestParseResponse:
         result = _parse_response(mock_response)
         assert result["success"] is True
         assert len(result["data"]) < 10000
-        assert "截断" in result["data"]
+        # 超长文本走 truncate_text 截断，带 truncated 标记 + "..." 后缀
+        assert result["data"].endswith("...")
+        assert result["truncated"] is True
+
+    def test_parse_short_text_not_truncated(self):
+        """短文本响应不截断、不带 truncated 标记。"""
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("not json")
+        mock_response.text = "short body"
+
+        result = _parse_response(mock_response)
+        assert result["success"] is True
+        assert result["data"] == "short body"
+        assert "truncated" not in result
+
+    def test_parse_json_success_preserves_object(self):
+        """小 JSON 响应保留原始对象结构语义，不转字符串。"""
+        from src.tools.network.http_api import _parse_response
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"id": 123, "name": "test"}
+
+        result = _parse_response(mock_response)
+        assert result["success"] is True
+        assert result["data"] == {"id": 123, "name": "test"}
+        # 未截断时 data 仍是原始对象，且无 truncated 标记
+        assert "truncated" not in result
+
+    def test_parse_large_json_truncated(self):
+        """大 JSON 响应截断为字符串 + truncated 标记（防 token 黑洞）。"""
+        import json as _json
+
+        from src.tools.network.http_api import _parse_response
+
+        big_data = {"items": [{"v": i} for i in range(2000)]}
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = big_data
+
+        result = _parse_response(mock_response)
+        assert result["success"] is True
+        # 超长时 data 降级为截断字符串
+        assert isinstance(result["data"], str)
+        assert len(result["data"]) <= 5000 + 3  # limit + 默认后缀
+        assert result["truncated"] is True
+        # 原始大对象未整体回塞
+        assert _json.dumps(big_data, ensure_ascii=False) not in result["data"]
 
     def test_parse_server_error(self):
         from src.tools.network.http_api import _parse_response

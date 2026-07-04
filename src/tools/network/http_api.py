@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from pathlib import Path
@@ -7,6 +8,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.tools._helpers import truncate_text
 from src.tools.base import BaseTool
 from src.utils import sanitize_error_info
 
@@ -27,7 +29,7 @@ class HttpApiInput(BaseModel):
     )
     headers: Optional[Dict[str, str]] = Field(
         default=None,
-        description="请求头，如 {'Authorization': 'Bearer ${API_TOKEN}', 'Content-Type': 'application/json'}",
+        description="请求头字典，键值对形式。支持 ${ENV_VAR} 凭据占位符。",
     )
     query_params: Optional[Dict[str, str]] = Field(
         default=None,
@@ -63,9 +65,8 @@ class HttpApiTool(BaseTool):
 
     name = "http_api"
     description = (
-        "调用外部 HTTP API 接口。支持 GET/POST/PUT/DELETE/PATCH 方法，"
-        "支持 JSON body、表单数据、文件上传、自定义请求头。"
-        "URL 和 headers 中的 ${VAR_NAME} 会被替换为环境变量值。"
+        "调用外部 HTTP API（GET/POST/PUT/DELETE/PATCH、文件上传）。"
+        "${VAR_NAME} 自动替换为环境变量。"
     )
     usage_guide = """\
 ## http_api 工具使用指南
@@ -77,15 +78,10 @@ files: {"file": "/path/to/document.pdf"}
 ```
 也可以与 form_data 同时使用，实现带额外字段的文件上传。
 
-### 凭据替换
-URL 和 headers 中可以使用 `${ENV_VAR}` 占位符，运行时自动替换为实际值。
-
 ### 常见认证模式
 1. Bearer Token: `{"Authorization": "Bearer ${API_TOKEN}"}`
 2. API Key Header: `{"X-API-Key": "${API_KEY}"}`
-3. Basic Auth: `{"Authorization": "Basic ${BASIC_AUTH}"}`
-4. URL 参数: `https://api.example.com?key=${API_KEY}`
-"""
+3. Basic Auth: `{"Authorization": "Basic ${BASIC_AUTH}"}`"""
     display_name = "HTTP API 调用"
     category = "network"
     InputModel = HttpApiInput
@@ -270,17 +266,25 @@ def _parse_response(response: httpx.Response) -> Dict[str, Any]:
     }
 
     try:
-        result["data"] = response.json()
+        data = response.json()
+        # JSON 响应同样需要截断（与 text 一视同仁），避免大响应灌入上下文。
+        # 优先保留原始 JSON 结构语义；序列化后超长才降级为截断字符串 + truncated 标记。
+        serialized = json.dumps(data, ensure_ascii=False)
+        truncated_data, truncated = truncate_text(serialized, limit=5000)
+        if truncated:
+            result["data"] = truncated_data
+            result["truncated"] = True
+        else:
+            result["data"] = data
     except Exception:
         text = response.text
-        if len(text) > 5000:
-            text = text[:5000] + "...(截断)"
-        result["data"] = text
+        truncated_text, truncated = truncate_text(text, limit=5000)
+        result["data"] = truncated_text
+        if truncated:
+            result["truncated"] = True
 
     if not success:
-        error_data = str(result["data"])
-        if len(error_data) > 500:
-            error_data = error_data[:500]
+        error_data, _ = truncate_text(str(result["data"]), limit=500, suffix="")
         result["error"] = f"HTTP {status_code}: {error_data}"
 
     return result

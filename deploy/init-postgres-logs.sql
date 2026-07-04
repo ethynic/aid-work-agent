@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS obs_traces (
     status TEXT DEFAULT 'running',
     error_message TEXT,
     source_type TEXT DEFAULT 'chat',
+    user_message_id TEXT,  -- 关联 channel_messages.message_id，用于精确匹配撤回状态
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -38,6 +39,8 @@ CREATE INDEX IF NOT EXISTS idx_obs_traces_tenant_time ON obs_traces(tenant_id, c
 CREATE INDEX IF NOT EXISTS idx_obs_traces_session ON obs_traces(session_id);
 CREATE INDEX IF NOT EXISTS idx_obs_traces_status ON obs_traces(status);
 CREATE INDEX IF NOT EXISTS idx_obs_traces_tags ON obs_traces USING GIN(tags);
+-- user_message_id 索引：monitor.py 按该字段精确匹配撤回标记
+CREATE INDEX IF NOT EXISTS idx_obs_traces_user_msg_id ON obs_traces(user_message_id);
 
 -- TimescaleDB Hypertable（开发环境可能不支持 TimescaleDB，用 DO 块容错）
 DO $$
@@ -123,3 +126,11 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'TimescaleDB setup skipped for obs_scores: %', SQLERRM;
 END $$;
+
+-- ============================================================================
+-- 2026-07-02 obs_traces 新增 user_message_id 字段，用于精确关联
+-- channel_messages.message_id，修复会话追踪页面撤回标记误标问题
+-- （deploy/db_update.sql 中有对应注释说明，实际 ALTER 在此文件幂等执行）
+-- ============================================================================
+ALTER TABLE obs_traces ADD COLUMN IF NOT EXISTS user_message_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_obs_traces_user_msg_id ON obs_traces(user_message_id);

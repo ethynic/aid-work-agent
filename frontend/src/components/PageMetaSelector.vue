@@ -41,7 +41,7 @@
             <input type="checkbox" :checked="localSelectedIds.has(page.page_id)"
               @click.stop="toggleSelect(page.page_id)"
               class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
-            <span class="text-base">{{ page.icon }}</span>
+            <MenuIcon :icon="page.icon" />
             <div class="flex-1 min-w-0">
               <div class="text-sm text-default">{{ page.title }}</div>
               <div class="text-xs text-muted truncate">{{ page.description }}</div>
@@ -68,6 +68,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import MenuIcon from '@/components/ui/MenuIcon.vue'
 import { listPageMeta, recommendPages } from '@/api/agentDefinitions'
 import type { PageMeta, RecommendedPage } from '@/api/agentDefinitions'
 
