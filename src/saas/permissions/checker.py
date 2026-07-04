@@ -13,12 +13,12 @@ from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cache
 
 def is_platform_admin(user: dict) -> bool:
     """检查是否为平台管理员"""
-    return user.get("role") == "platform_admin"
+    return bool(user) and user.get("role") == "platform_admin"
 
 
 def is_tenant_admin(user: dict) -> bool:
     """检查是否为租户管理员"""
-    return user.get("role") == "tenant_admin"
+    return bool(user) and user.get("role") == "tenant_admin"
 
 
 def get_tenant_id_from_user(user: dict) -> Optional[str]:

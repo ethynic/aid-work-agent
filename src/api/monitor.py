@@ -127,6 +127,8 @@ def _get_logs_conn():
 
 def _check_admin(user):
     """检查平台管理员权限"""
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
     if not is_platform_admin(user):
         raise HTTPException(status_code=403, detail="需要平台管理员权限")
 
