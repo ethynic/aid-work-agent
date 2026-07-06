@@ -30,6 +30,7 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 5 | 知识库能力增强 | 🔧 部分完成 | Phase 0 知识库分类管理已完成（左侧分类导航 + 分类 CRUD + 文档过滤）。Phase 1-2 待开发：LLM Rerank、文档级权限、查询改写、质量评估。2026-06-04 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) |
+| 10 | Redis 缓存管理页 | 📋 待开发 | 平台管理后台新增「Redis 缓存」页面，供平台管理员枚举、查看、搜索、删除 Redis 键值。SCAN 游标式枚举（禁用 KEYS），按 `CacheKeys` 26 个前缀分组 + 裸键告警，单键详情按 Redis 类型分支渲染，敏感值脱敏，删除操作二次确认 + `tlog` 审计。Phase 1 MVP（列表/查看/单键删除），Phase 2 增强批量删除 + overview 缓存。与 [cache_usage.md](system/cache_usage.md) 互补：规范约束写入，工具支撑排查。2026-07-06 | [设计](system/design-redis-cache-admin.md) | — |
 
 ## 数字员工 / 子智能体
 
