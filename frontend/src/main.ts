@@ -186,6 +186,7 @@ const router = createRouter({
         { path: 'monitoring/trace/:trace_id', name: 'portal-trace-detail', component: () => import('./components/saas/TraceDetail.vue') },
         { path: 'context-compression', name: 'portal-context-compression', component: () => import('./components/saas/ContextCompressionManager.vue') },
         { path: 'rpa-bindings', name: 'portal-rpa-bindings', component: () => import('./components/saas/RpaBindingPanel.vue') },
+        { path: 'redis-cache', name: 'portal-redis-cache', component: () => import('./components/saas/RedisCacheManager.vue') },
       ]
     },
     // 租户入口 /t/:tenant_id（所有用户）

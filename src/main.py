@@ -33,6 +33,7 @@ from src.api import auth, session as session_api, customer, scheduled_task, emai
 from src.api import monitor as monitor_api
 from src.api import social_media as social_media_api
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
+from src.api import admin_redis
 from src.api import customer_followup, complaint_handling, after_sales
 from src.knowledge.api import router as knowledge_router
 from src.db.models import SessionDB, MessageDB
@@ -1751,6 +1752,7 @@ app.include_router(knowledge_router)
 from src.api import chat_instances
 app.include_router(chat_instances.router)
 app.include_router(admin_subagent.router)
+app.include_router(admin_redis.router)
 app.include_router(subagent_extra.router)
 
 # Prompt 版本管理 API

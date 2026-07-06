@@ -24,18 +24,6 @@
           </span>
           <span>{{ item.label }}</span>
         </router-link>
-        <!-- 清空缓存 -->
-        <button
-          @click="handleClearCache"
-          class="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-danger-400 transition-colors"
-        >
-          <span class="w-5 h-5 flex items-center justify-center flex-shrink-0">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </span>
-          <span>清空缓存</span>
-        </button>
       </nav>
 
       <!-- 底部操作 -->
@@ -109,7 +97,7 @@ import { TenantStatus } from '@/api/enums'
 
 const router = useRouter()
 const route = useRoute()
-const { admin, tenant, isLoggedIn, init, logout, getAuthHeader } = useTenantAuth()
+const { admin, tenant, isLoggedIn, init, logout } = useTenantAuth()
 const toast = useToast()
 const { isMobile } = useMobile()
 
@@ -227,6 +215,8 @@ const portalMenuItems = [
   { path: '/portal/context-compression', label: '上下文压缩', icon: 'M4 9h6V3M20 15h-6v6M4 15l4-4M20 9l-4 4' },
   // 错误日志：三角警告
   { path: '/portal/error-logs', label: '错误日志', icon: 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01' },
+  // Redis 缓存：数据库/缓存层
+  { path: '/portal/redis-cache', label: 'Redis缓存', icon: 'M4 6h16v4H4zM4 14h16v4H4zM8 6v4M8 14v4M16 6v4M16 14v4' },
   // 回复风格：对话气泡
   { path: '/portal/reply-styles', label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
 ]
@@ -249,24 +239,6 @@ async function handleLogout() {
     router.push(`/t/${tenantId.value}/login`)
   } else {
     router.push('/portal/login')
-  }
-}
-
-async function handleClearCache() {
-  try {
-    const response = await fetch('/api/clear_cache', {
-      method: 'GET',
-      credentials: 'include',
-      headers: { ...getAuthHeader() },
-    })
-    const data = await response.json()
-    if (data.success) {
-      toast.success(`已清空缓存，删除了 ${data.deleted} 个 key`)
-    } else {
-      toast.error(data.message || '清空缓存失败')
-    }
-  } catch (e: any) {
-    toast.error(e.message || '清空缓存失败')
   }
 }
 

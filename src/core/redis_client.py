@@ -10,9 +10,10 @@ Redis Client - 统一的 Redis 连接和操作封装
 4. 连接失败时降级到内存存储，记录 warning
 """
 
+import fnmatch
 import json
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -24,35 +25,73 @@ class _InMemoryFallback:
 
     def __init__(self):
         self._data: Dict[str, Any] = {}
+        self._types: Dict[str, str] = {}  # 键 → Redis 类型标记：string/hash/list/set/zset
+        self._ttls: Dict[str, float] = {}  # 键 → 过期时间戳（秒），不存在表示永不过期
         self._lock = threading.Lock()
 
     def _make_key(self, key: str) -> str:
         return key
 
+    def _is_expired(self, key: str) -> bool:
+        """检查键是否已过期（过期则清理并返回 True）。调用方需持锁。"""
+        import time
+        exp = self._ttls.get(key)
+        if exp is None:
+            return False
+        if time.time() >= exp:
+            self._data.pop(key, None)
+            self._types.pop(key, None)
+            self._ttls.pop(key, None)
+            return True
+        return False
+
     def get(self, key: str) -> Optional[Any]:
         with self._lock:
+            if self._is_expired(key):
+                return None
             return self._data.get(key)
 
     def set(self, key: str, value: Any, ex: Optional[int] = None) -> None:
         with self._lock:
+            # ex<=0 等价于立即删除（Redis 语义）
+            if ex is not None and ex <= 0:
+                self._data.pop(key, None)
+                self._types.pop(key, None)
+                self._ttls.pop(key, None)
+                return
             self._data[key] = value
+            self._types[key] = "string"
+            if ex is not None:
+                import time
+                self._ttls[key] = time.time() + ex
+            else:
+                self._ttls.pop(key, None)
 
     def delete(self, key: str) -> int:
         with self._lock:
-            return 1 if self._data.pop(key, None) is not None else 0
+            existed = key in self._data
+            self._data.pop(key, None)
+            self._types.pop(key, None)
+            self._ttls.pop(key, None)
+            return 1 if existed else 0
 
     def hset(self, key: str, field: str, value: Any) -> None:
         with self._lock:
-            if key not in self._data:
+            if key not in self._data or self._types.get(key) != "hash":
                 self._data[key] = {}
+                self._types[key] = "hash"
             self._data[key][field] = value
 
     def hget(self, key: str, field: str) -> Optional[Any]:
         with self._lock:
+            if self._is_expired(key):
+                return None
             return self._data.get(key, {}).get(field)
 
     def hgetall(self, key: str) -> Dict[str, Any]:
         with self._lock:
+            if self._is_expired(key):
+                return {}
             return dict(self._data.get(key, {}))
 
     def hdel(self, key: str, field: str) -> int:
@@ -79,13 +118,16 @@ class _InMemoryFallback:
 
     def sadd(self, key: str, member: str) -> int:
         with self._lock:
-            if key not in self._data:
+            if key not in self._data or self._types.get(key) != "set":
                 self._data[key] = set()
+                self._types[key] = "set"
             self._data[key].add(member)
             return 1
 
     def sismember(self, key: str, member: str) -> bool:
         with self._lock:
+            if self._is_expired(key):
+                return False
             return member in self._data.get(key, set())
 
     def srem(self, key: str, member: str) -> int:
@@ -97,26 +139,38 @@ class _InMemoryFallback:
 
     def exists(self, key: str) -> bool:
         with self._lock:
+            if self._is_expired(key):
+                return False
             return key in self._data
 
     def expire(self, key: str, seconds: int) -> bool:
         with self._lock:
-            return key in self._data
+            if key not in self._data:
+                return False
+            import time
+            if seconds > 0:
+                self._ttls[key] = time.time() + seconds
+            else:
+                # seconds <= 0 等价于立即删除
+                self._data.pop(key, None)
+                self._types.pop(key, None)
+                self._ttls.pop(key, None)
+            return True
 
     def keys(self, pattern: str) -> List[str]:
         with self._lock:
-            # 简单匹配：支持 * 后缀匹配
-            if pattern.endswith("*"):
-                prefix = pattern[:-1]
-                return [k for k in self._data.keys() if k.startswith(prefix)]
-            return [k for k in self._data.keys() if k == pattern]
+            # 先清理过期键
+            expired = [k for k in list(self._data.keys()) if self._is_expired(k)]
+            # 简单匹配：支持 * 通配符（fnmatch）
+            return [k for k in self._data.keys() if fnmatch.fnmatch(k, pattern)]
 
     # ============== Sorted Set 降级操作 ==============
 
     def zadd(self, key: str, mapping: dict) -> int:
         with self._lock:
-            if key not in self._data:
+            if key not in self._data or self._types.get(key) != "zset":
                 self._data[key] = []
+                self._types[key] = "zset"
             items = self._data[key]
             for member, score in mapping.items():
                 items = [(m, s) for m, s in items if m != member]
@@ -152,6 +206,94 @@ class _InMemoryFallback:
     def publish(self, channel: str, message: str) -> int:
         # 内存降级不支持 pub/sub，静默忽略
         return 0
+
+    # ============== 管理页扩展方法 ==============
+
+    def scan(self, cursor: int, match: str, count: int = 100) -> Tuple[int, List[str]]:
+        """游标式扫描键（内存降级版：一次返回全部匹配结果，cursor 立即归零）"""
+        with self._lock:
+            # 清理过期键
+            for k in list(self._data.keys()):
+                self._is_expired(k)
+            matched = [k for k in self._data.keys() if fnmatch.fnmatch(k, match)]
+            return 0, matched
+
+    def type(self, key: str) -> str:
+        """获取键的 Redis 类型"""
+        with self._lock:
+            if self._is_expired(key):
+                return "none"
+            if key not in self._data:
+                return "none"
+            return self._types.get(key, "string")
+
+    def ttl(self, key: str) -> int:
+        """获取 TTL（秒）：-1=永不过期，-2=键不存在"""
+        import time
+        with self._lock:
+            if self._is_expired(key):
+                return -2
+            if key not in self._data:
+                return -2
+            exp = self._ttls.get(key)
+            if exp is None:
+                return -1
+            remaining = int(exp - time.time())
+            return max(remaining, 1)
+
+    def hkeys(self, key: str) -> List[str]:
+        """获取 Hash 的所有 field 名"""
+        with self._lock:
+            if self._is_expired(key):
+                return []
+            bucket = self._data.get(key, {})
+            if not isinstance(bucket, dict):
+                return []
+            return list(bucket.keys())
+
+    def llen(self, key: str) -> int:
+        """获取 List 长度"""
+        with self._lock:
+            if self._is_expired(key):
+                return 0
+            bucket = self._data.get(key, [])
+            if not isinstance(bucket, list):
+                return 0
+            return len(bucket)
+
+    def lrange(self, key: str, start: int, end: int) -> List[Any]:
+        """获取 List 范围元素"""
+        with self._lock:
+            if self._is_expired(key):
+                return []
+            bucket = self._data.get(key, [])
+            if not isinstance(bucket, list):
+                return []
+            if end == -1:
+                return list(bucket[start:])
+            return list(bucket[start:end + 1])
+
+    def smembers(self, key: str) -> List[str]:
+        """获取 Set 所有成员"""
+        with self._lock:
+            if self._is_expired(key):
+                return []
+            bucket = self._data.get(key, set())
+            if not isinstance(bucket, set):
+                return []
+            return list(bucket)
+
+    def memory_usage(self, key: str) -> Optional[int]:
+        """获取单键内存占用（字节）。内存降级无真实值，返回 None"""
+        return None
+
+    def dbsize(self) -> int:
+        """当前 db 键总数"""
+        with self._lock:
+            # 清理过期键后再统计
+            for k in list(self._data.keys()):
+                self._is_expired(k)
+            return len(self._data)
 
     def acquire_lock(self, key: str, value: str, ex: int = 60) -> bool:
         with self._lock:
@@ -424,6 +566,140 @@ class RedisClient:
         except Exception as e:
             logger.warning(f"[Redis] keys 失败 [{pattern}]: {e}")
             return []
+
+    # ============== 管理页扩展方法（Phase 1） ==============
+
+    def scan(self, cursor: int, match: str, count: int = 100) -> Tuple[int, List[str]]:
+        """游标式扫描键（生产安全，替代 KEYS）
+
+        Returns:
+            (next_cursor, keys) —— next_cursor=0 表示遍历结束
+        """
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                next_cursor, batch = backend.scan(cursor=cursor, match=match, count=count)
+                decoded = [k.decode('utf-8') if isinstance(k, bytes) else k for k in batch]
+                return int(next_cursor), decoded
+            return self._fallback.scan(cursor, match, count)
+        except Exception as e:
+            logger.warning(f"[Redis] scan 失败 [cursor={cursor} match={match}]: {e}")
+            return 0, []
+
+    def type(self, key: str) -> str:
+        """获取键的 Redis 类型：string/hash/list/set/zset/none"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                result = backend.type(key)
+                if isinstance(result, bytes):
+                    result = result.decode('utf-8')
+                return result
+            return self._fallback.type(key)
+        except Exception as e:
+            logger.warning(f"[Redis] type 失败 [{key}]: {e}")
+            return "none"
+
+    def ttl(self, key: str) -> int:
+        """获取 TTL（秒）：-1=永不过期，-2=键不存在"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return int(backend.ttl(key))
+            return self._fallback.ttl(key)
+        except Exception as e:
+            logger.warning(f"[Redis] ttl 失败 [{key}]: {e}")
+            return -2
+
+    def hkeys(self, key: str) -> List[str]:
+        """获取 Hash 的所有 field 名"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                result = backend.hkeys(key)
+                return [k.decode('utf-8') if isinstance(k, bytes) else k for k in result]
+            return self._fallback.hkeys(key)
+        except Exception as e:
+            logger.warning(f"[Redis] hkeys 失败 [{key}]: {e}")
+            return []
+
+    def llen(self, key: str) -> int:
+        """获取 List 长度"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return int(backend.llen(key))
+            return self._fallback.llen(key)
+        except Exception as e:
+            logger.warning(f"[Redis] llen 失败 [{key}]: {e}")
+            return 0
+
+    def lrange(self, key: str, start: int, end: int) -> List[Any]:
+        """获取 List 范围元素（JSON 反序列化）"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                raw_list = backend.lrange(key, start, end)
+                result = []
+                for raw in raw_list:
+                    if isinstance(raw, bytes):
+                        raw = raw.decode('utf-8')
+                    try:
+                        result.append(json.loads(raw))
+                    except (json.JSONDecodeError, TypeError):
+                        result.append(raw)
+                return result
+            return self._fallback.lrange(key, start, end)
+        except Exception as e:
+            logger.warning(f"[Redis] lrange 失败 [{key}]: {e}")
+            return []
+
+    def smembers(self, key: str) -> List[Any]:
+        """获取 Set 所有成员（JSON 反序列化）"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                raw_set = backend.smembers(key)
+                result = []
+                for raw in raw_set:
+                    if isinstance(raw, bytes):
+                        raw = raw.decode('utf-8')
+                    try:
+                        result.append(json.loads(raw))
+                    except (json.JSONDecodeError, TypeError):
+                        result.append(raw)
+                return result
+            return self._fallback.smembers(key)
+        except Exception as e:
+            logger.warning(f"[Redis] smembers 失败 [{key}]: {e}")
+            return []
+
+    def memory_usage(self, key: str) -> Optional[int]:
+        """获取单键内存占用（字节），Redis 4.0+。降级模式返回 None"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return backend.memory_usage(key)
+            return self._fallback.memory_usage(key)
+        except Exception as e:
+            logger.warning(f"[Redis] memory_usage 失败 [{key}]: {e}")
+            return None
+
+    def dbsize(self) -> int:
+        """当前 db 键总数"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                return int(backend.dbsize())
+            return self._fallback.dbsize()
+        except Exception as e:
+            logger.warning(f"[Redis] dbsize 失败: {e}")
+            return 0
+
+    @property
+    def connected(self) -> bool:
+        """Redis 是否已连接（用于概览页展示降级状态）"""
+        return self._connected
 
     # ============== Sorted Set 操作 ==============
 
