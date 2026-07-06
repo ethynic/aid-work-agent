@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
+from loguru import logger
+
+from src.core.temp_logger import tlog
 from src.models.message import (
     ChannelType,
     MessageType,
@@ -175,11 +178,24 @@ def segment_markdown(md: str) -> List[ContentBlock]:
         ContentBlock 列表，按原始顺序排列
     """
     if not md:
+        tlog("wecom_kf表格图片", "segment_markdown 入口：md 为空，返回空 blocks")
         return []
+
+    tlog(
+        "wecom_kf表格图片",
+        "segment_markdown 入口：md_len={md_len}, md_head={md_head}",
+        md_len=len(md),
+        md_head=md[:500].replace("\n", "\\n"),
+    )
 
     # 检查是否为独立链接消息
     link_block = _try_extract_standalone_link(md)
     if link_block:
+        tlog(
+            "wecom_kf表格图片",
+            "segment_markdown 命中独立链接分支，url={url}",
+            url=link_block.meta.get("url", ""),
+        )
         return [link_block]
 
     lines = md.split('\n')
@@ -192,18 +208,35 @@ def segment_markdown(md: str) -> List[ContentBlock]:
 
         # 检测表格起始行（以 | 开头且不是分隔行）
         if stripped.startswith('|') and not _TABLE_SEPARATOR_RE.match(stripped):
+            tlog(
+                "wecom_kf表格图片",
+                "segment_markdown 识别到表格起始行 line_idx={idx}, line={line}",
+                idx=i,
+                line=stripped[:200].replace("\n", "\\n"),
+            )
             # 收集表格行
             table_lines = [stripped]
             j = i + 1
             while j < len(lines) and lines[j].strip().startswith('|'):
                 table_lines.append(lines[j].strip())
                 j += 1
+            tlog(
+                "wecom_kf表格图片",
+                "segment_markdown 收集到表格行数={rows}, end_idx={end_idx}",
+                rows=len(table_lines),
+                end_idx=j,
+            )
 
             # 刷新之前累积的文本
             if current_text_lines:
                 text_content = '\n'.join(current_text_lines).strip()
                 if text_content:
                     blocks.append(ContentBlock(type="text", content=text_content))
+                    tlog(
+                        "wecom_kf表格图片",
+                        "segment_markdown 刷新前置 text 块 head={head}",
+                        head=text_content[:200].replace("\n", "\\n"),
+                    )
                 current_text_lines = []
 
             # 修复表格（复用 pdf_writer 的修复逻辑）
@@ -213,6 +246,13 @@ def segment_markdown(md: str) -> List[ContentBlock]:
                 content='\n'.join(fixed_table),
                 meta={"rows": len(fixed_table) - 2, "cols": len(fixed_table[0].strip('|').split('|')) if fixed_table else 0},
             ))
+            tlog(
+                "wecom_kf表格图片",
+                "segment_markdown 生成 table 块 rows={rows}, cols={cols}, content_head={head}",
+                rows=len(fixed_table) - 2,
+                cols=len(fixed_table[0].strip('|').split('|')) if fixed_table else 0,
+                head='\n'.join(fixed_table)[:300].replace("\n", "\\n"),
+            )
             i = j
         else:
             current_text_lines.append(lines[i])
@@ -223,7 +263,18 @@ def segment_markdown(md: str) -> List[ContentBlock]:
         text_content = '\n'.join(current_text_lines).strip()
         if text_content:
             blocks.append(ContentBlock(type="text", content=text_content))
+            tlog(
+                "wecom_kf表格图片",
+                "segment_markdown 刷新末尾 text 块 head={head}",
+                head=text_content[:200].replace("\n", "\\n"),
+            )
 
+    tlog(
+        "wecom_kf表格图片",
+        "segment_markdown 出口：blocks_count={count}, types={types}",
+        count=len(blocks),
+        types=",".join(b.type for b in blocks),
+    )
     return blocks
 
 
