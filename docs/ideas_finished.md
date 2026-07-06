@@ -11,6 +11,11 @@
 | 3 | LLM 故障转移 | 提供商故障自动切换，多 Key 轮换与降级策略 | [设计](infrastructure/llm-failover-design.md) | [计划](infrastructure/llm-failover-dev-plan.md) |
 | 4 | MCP Server | Model Context Protocol 服务器，支持外部工具集成 | [设计](infrastructure/mcp_server.md) | [计划](infrastructure/mcp_server_dev_plan.md) |
 | 5 | ✅ 主智能体系统提示词优化 | 重写 master_agent.md / subagent_base.md 为原则化结构，新增「文件交付规则」段统一约束"工具生成文件后必须用 cp 注册"。移除与 cp 功能重复的 register_download_file 工具（cp 默认 visible=True、放宽源路径限制）。清理 travel-consultant / competitor-research 的 SUBAGENT.md 与 SKILL.md 冗余注册说明。2026-06-18 完成开发并已测试 | [设计](system/prompt/agent-system-prompt-optimization-design.md) | [计划](../plans/agent-system-prompt-optimization-dev-plan.md) |
+| 4 | 系统核心表文档 | 数据库核心表用途与关系文档，覆盖用户/对话/渠道/知识库/数字员工/SaaS/Prompt 管理等 30+ 张系统表。2026-06-18 | [文档](system/database_system_table.md) | — |
+| 5 | 缓存使用情况文档 | 系统缓存使用全景文档，覆盖 Redis 缓存、内存缓存、数据库去重共 17 类缓存，含键模式、TTL、失效策略。2026-06-18 | [文档](system/cache_usage.md) | — |
+| 6 | 文件存储使用情况文档 | 系统文件存储全景文档，覆盖新旧双轨路径、文件命名规范、目录结构、清理策略。2026-06-18 | [文档](system/file_usage.md) | — |
+| 8 | 服务器部署现状文档 | 记录腾讯云服务器（124.222.3.254）当前部署架构：Nginx 反代 + 生产/测试双 Docker 容器 + PostgreSQL 单实例双库 + 腾讯云 Redis，含端口/目录速查、运维命令、故障排查与关联文档索引。2026-06-29 | [文档](../deploy/服务器部署现状.md) | — |
+| 10 | 三智能体开发流程规范 | 非平凡开发任务（新功能/Phase/多文件改动）的标准流程：开发智能体→测试智能体（独立测试+回归+启动安全检查）→CodeReview智能体（独立审查+修复必要问题）→主控者提交前终检（import/build）→fetch+commit+push。三智能体串行、独立判断，避免"自己写自己测"盲区，确保提交即上线不挂服务器。ZCode/Claude Code/Codex 三工具共同遵循。2026-07-01 | [规范](../.claude/rules/dev_workflow.md) | — |
 
 ## 系统功能
 
@@ -19,6 +24,7 @@
 | 6 | 记忆系统 | 短期记忆（滑动窗口）+ 长期记忆（摘要压缩），会话上下文管理 | [设计](memory/memory_design.md) | [计划](memory/memory_phase1_plan.md) |
 | 7 | 回复风格系统 | 可配置回复风格，不同场景的语气和格式控制 | [设计](system/design-reply-style.md) | — |
 | 8 | 对话体验优化 | SSE 流式输出优化、消息渲染改进、交互体验提升 | [设计](system/design-chat-experience-optimization.md) | — |
+| 19 | Skill 版本化触发重载 | 会话中已加载过的 skill，当 SKILL.md frontmatter `version` 提升后，强制 LLM 重新 `use_skill` 获取最新指南。**纯 prompt 驱动方案在 DeepSeek 上验证不可靠**（LLM 看到上下文有旧指南就跳过 use_skill），改为代码层兜底。改动：①`SkillRegistry.get_descriptions`/`SkillLoader.get_skill_descriptions` 在每条描述末尾追加 `(vx.y.z)`；②`UseSkillTool.execute` 返回新增独立 `skill_version` 字段；③`SkillLoader.parse_skill_md` 读取 version 时优先顶层 `version`，缺失则回退 `metadata.version`，兼容项目中 8 个 skill 把版本写在 `metadata.version` 的约定；④`Agent` 新增 `_get_last_use_skill_version` / `_check_skill_version_consistency` 两个辅助方法；⑤`skill_execute` 执行前强制版本校验：扫会话 memory 历史，取该 skill 最近一次 `use_skill` 返回的 `skill_version`，与 registry 当前版本比较，不一致/无记录/缺字段 → 拒绝执行脚本，返回错误"技能版本已更新 vX→vY，请先 use_skill 重新加载"，主循环 + 子智能体循环两处拦截；⑥prompt 模板移除版本校验规则段（已由代码兜底）。2026-06-23 | — | — |
 
 ## 数字员工 / 子智能体
 
@@ -53,6 +59,10 @@
 | 21 | Excel 工具重构 | ✅ 已完成开发 | 移除 analyze 和 chart 操作（由数据分析工具替代），增强 read 操作（复制 FileReaderTool 的文档级读取能力）。2026-06-09 | [设计](tools/excel/excel-tool-refactor-design.md) | [计划](tools/excel/excel-tool-refactor-dev-plan.md) |
 | 24 | HTTP API 适配器 | 通用 HTTP API 调用适配器 | [设计](tools/http_api_adapter_design.md) | [指南](tools/http_api_skill_developer_guide.md) |
 | 25 | 文本文件生成工具 | 文本/Markdown 文件生成与内容写入优化 | [设计](tools/text-file/text_file_generator_design.md) | — |
+| 22 | Pandoc 安装与部署 | word_process 工具的 md_to_word 操作依赖 Pandoc 命令行工具。Docker/Linux 部署已内置（`Dockerfile:106`）；Windows/macOS 本地开发需手动安装，缺失时报 `[WinError 2]`。2026-06-22 | [安装部署指南](tools/md-to-word/pandoc-install-guide.md) | — |
+| 23 | 酒店知识库搜索工具（hotel_search） | 仿 attraction_search 新增酒店专项搜索工具，名称优先+向量兜底检索 source_type='hotel_resource'，返回酒店信息+价格明细表（chunk_index=1，通用 knowledge_base_search 拿不到）。客户直接问酒店或酒店价格时使用。通过 inherit:true 对旅游顾问子智能体可用。2026-06-22 | [设计](subagent/travel-consultant/hotel_search_tool_design.md) | [计划](../plans/plan-hotel-search-tool.md) |
+| 24 | 景点知识库搜索工具（attraction_search） | 旅游顾问子智能体的景点专项搜索工具，纯向量检索 source_type='attraction_resource'。补登记（此前漏登）。2026-05-14 | [设计](subagent/travel-consultant/attraction_search_tool_design.md) | — |
+| 33 | x-to-image 内容转图片服务 | 将文本/Markdown/HTML 渲染为一张尺寸可控的长图(PNG)，Playwright **headless** 全页截图 + Pillow 拼接/截断/体积控制；核心逻辑在 src/services/x_to_image/，薄工具 src/tools/image/ 暴露给 agent。输出写入临时目录并返回临时文件路径（不走下载注册）。v1（文本/MD/HTML）已完成开发，Phase 1-5 全部通过（单元 90+集成 7 测试），PDF/Word 预留扩展点待 v2。2026-07-01 | [设计](tools/x-to-image/x-to-image-design.md) | [开发计划](tools/x-to-image/x-to-image-dev-plan.md) |
 | 22.1 | 研学报价技能 Prompt 稳定性优化（方案 A） | ① 同一行程多次报价金额漂移，通过固化 itinerary_parser 的 prompt 规则收敛方差，实测 5 次连续调用 hash 完全一致；② 重构 generate.py 返回结构：items→rows 字段名对齐 Excel 中文表头；③ 修复人均报价与总价÷人数不恒等的取整误差；④ SKILL.md 加"对客户回复口径"硬约束，避免 AI 对客户提及"成本/利润"；⑤ attraction.py prompt 新增禁脑补规则，禁止按比例推算儿童票/老人票；⑥ SUBAGENT.md 加景点/项目白名单硬约束（搜索原则+详细行程格式+输出自检三处）；⑦ itinerary_parser.py 第7条 prompt 强化跨城用车段提取；⑧ subtotal 字段统一为团队人均口径（门票÷人数、酒店按"间"计费、导游÷人数等）；⑨ 彻底移除 profit_rate（单价本身已含利润），不再二次加价。2026-06-14~16 | [设计](system/design-travel-quote-prompt-stability.md) | [计划](../plans/plan-travel-quote-prompt-stability.md) |
 | 21 | 文件操作工具集重新设计 v2 | ✅ 已完成开发。拆分为 read/write/edit/cp 四个工具（对齐 Claude Code 命名），删除 file_list 工具，edit 三种编辑模式（replace_string/replace_section/replace_lines）。Phase 0-8 全部完成，4 个工具 122 单元测试 + 端到端 guizang-ppt-skill 实测通过。2026-06-12 | [设计](tools/text-file/file_tools_redesign_v2.md) | [计划](tools/text-file/file_tools_redesign_v2_dev_plan.md) |
 
@@ -64,6 +74,8 @@
 | 28 | 飞书 / 钉钉集成 | 飞书和钉钉渠道适配器实现 | [设计](channel/feishu-dingtalk/channel_integration.md) | — |
 | 29 | 飞书渠道对接（完整实施） | 修复 FeishuAdapter 错误实现（AES 密钥、签名验证），补齐 crypto/media 子模块、连接池复用、长消息拆分、速率限制、欢迎消息，完善路由层 challenge-response 验证与事件解密。60 项自动化测试全通过。2026-06-19 | [方案](channel/feishu/implementation_plan.md) / [实施](channel/feishu/integration_guide.md) | — |
 | 32 | 微信客服转人工工具优化（schema + 渠道隔离） | ✅ 已完成开发 | 优化 transfer_to_human：①reason 改为必填；②渠道隔离完全由工具 execute 段的 get_kf_context 判断，非微信渠道返回「当前渠道未提供人工服务」友好提示（usage_guide 清空，因 LLM 看不到当前渠道，提示词约束无效）；③移除 LLM 路径上的关键词校验，新增 allow_agent_transfer 开关；④会话 metadata 记录 transfer_source=agent。代码 + 10 单元测试已落地，设计文档与 wecom_kf_design.md §7.1 已同步。2026-06-23 | [设计](channel/wecom_kf/transfer_to_human_optimization.md) | [计划](channel/wecom_kf/transfer_to_human_optimization_plan.md) |
+| 33 | 渠道上下文丢失修复（channel_messages 事务化 + 连续 user 兜底 + 合并写入时机 + send_response 统一封装） | 已通过用户手工测试。P0-1/P0-2/P0-3 全部落地，**一次改造全渠道复用**（wecom_kf/wecom/wecom_personal_rpa/dingtalk/feishu 共 6 个调用点统一走 `ChannelSessionManager.process_and_persist`）。改动：①`src/core/session_queue.py` `enqueue_and_process` 返回 `EnqueueResult`（含 status/merged_input/was_merged，新增 status="error"）；②`src/channels/session.py` 新增 `add_messages_batch_transactional`（事务批量写入）+ `process_and_persist`（user 写入推迟到合并决策后 + 异常兜底）+ `make_send_response`（消除 6 处 _send_response 重复，净减 70 行）；③`src/core/agent.py` `_reorder_messages_for_llm` 连续 user 兜底（保留最新一条）；④6 个渠道调用点全部替换。修复 P0 必修项 6 个（兜底方向写反 / record 时序 / 异常 fall-through 丢失 user / 批量写入失败返回 error / 测试更新 / wecom_kf NameError）。新增 40 个单元测试全通过，零回归。2026-06-24 | [调研](research/wecom-kf-context-loss-research.md) | — |
+| 37 | wecom_kf 用户撤回消息处理（同批次剔除 + 跨批次标记 + 后台可见） | 已完成：①撤回事件识别（origin=4，event_type=user_recall_msg，读 event.recall_msgid 而非 event.msgid）+ 事件去重；②同批次剔除（recalled_msgids_in_batch）；③channel_messages 加 is_recalled/recalled_at 字段；④合并消息 metadata 写入 merged_from_msgids/merged_segments（同批次 _build_merged_message + 跨批次 session_queue 缓冲区 segments 升级）；⑤跨批次标记 mark_recalled_message（单条/合并部分撤回重建 content）；⑥合并窗口内撤回兜底 remove_merge_segment 清理缓冲区；⑦上下文重建剔除（_load_channel_history 显式 include_recalled=False，get_messages 默认过滤）；⑧外部接待客户后台视图撤回徽章（get_messages_paginated 返回 is_recalled/recalled_at，前端 BaseBadge 整条撤回/部分撤回 + 删除线）；⑨trace 视图撤回标记精确关联（2026-07-02 新增）：obs_traces 新增 user_message_id 字段，process_and_persist 写入 channel_messages 后回填（双轨覆盖：set_user_message_id 覆盖 worker 未处理 + update_user_message_id UPDATE 覆盖 worker 已处理），monitor.py 改为按 message_id 精确匹配，彻底消除"内容相同/前缀模糊"导致的误标；历史 trace user_message_id 为 NULL 时不显示撤回标记（可接受降级）。2026-07-02 | — | [开发计划](channel/wecom_kf/message_recall_plan.md) |
 
 ## SaaS 多租户
 
