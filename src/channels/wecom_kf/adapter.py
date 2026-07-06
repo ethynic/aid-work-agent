@@ -31,7 +31,6 @@ from src.channels.wecom_kf.message import (
 )
 from src.channels.wecom_kf.renderer import WeComKfRenderer
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -217,35 +216,13 @@ class WeComKfAdapter(ChannelAdapter):
         all_success = True
         text = message.text
 
-        tlog(
-            "wecom_kf表格图片",
-            "send_message 入口：text_len={text_len}, text_head={text_head}, has_files={has_files}",
-            text_len=len(text) if text else 0,
-            text_head=(text or "")[:500].replace("\n", "\\n"),
-            has_files=bool(message.downloadable_files),
-        )
-
         if text:
             # 如果渲染功能关闭，走原有的纯文本全流程
             if not self._render_enabled:
-                tlog("wecom_kf表格图片", "send_message 渲染已关闭，走纯文本路径 _send_as_plain_text")
                 all_success = await self._send_as_plain_text(text, message.reply_to)
             else:
                 blocks = segment_markdown(text)
-                tlog(
-                    "wecom_kf表格图片",
-                    "send_message segment_markdown 返回 blocks_count={count}, types={types}",
-                    count=len(blocks),
-                    types=",".join(b.type for b in blocks),
-                )
-                for idx, block in enumerate(blocks):
-                    tlog(
-                        "wecom_kf表格图片",
-                        "send_message 处理块 idx={idx}, type={t}, content_head={head}",
-                        idx=idx,
-                        t=block.type,
-                        head=block.content[:200].replace("\n", "\\n"),
-                    )
+                for block in blocks:
                     if block.type == "text":
                         success = await self._send_text_block(block.content, message.reply_to)
                     elif block.type == "table":
@@ -254,12 +231,6 @@ class WeComKfAdapter(ChannelAdapter):
                         success = await self._send_link_message(block, message.reply_to)
                     else:
                         success = True
-                    tlog(
-                        "wecom_kf表格图片",
-                        "send_message 块 idx={idx} 处理结果 success={success}",
-                        idx=idx,
-                        success=success,
-                    )
                     if not success:
                         all_success = False
 
@@ -329,32 +300,11 @@ class WeComKfAdapter(ChannelAdapter):
 
     async def _send_table_as_image(self, markdown_table: str, user_id: str) -> bool:
         """将表格渲染为图片并发送，失败时降级为纯文本。"""
-        tlog(
-            "wecom_kf表格图片",
-            "_send_table_as_image 入口：user_id={uid}, md_len={md_len}, md_head={md_head}",
-            uid=user_id,
-            md_len=len(markdown_table) if markdown_table else 0,
-            md_head=(markdown_table or "")[:300].replace("\n", "\\n"),
-        )
         try:
             image_path = await self.renderer.render_table(markdown_table)
-            tlog(
-                "wecom_kf表格图片",
-                "_send_table_as_image render_table 返回 path={path}, exists={exists}",
-                path=image_path,
-                exists=bool(image_path and os.path.exists(image_path)),
-            )
             if image_path and os.path.exists(image_path):
                 upload_result = await self.api_client.upload_media(image_path, "image")
                 media_id = upload_result.get("media_id")
-                tlog(
-                    "wecom_kf表格图片",
-                    "_send_table_as_image upload_media 结果 media_id={mid}, errcode={errcode}, errmsg={errmsg}, raw_keys={keys}",
-                    mid=(media_id or "")[:30],
-                    errcode=upload_result.get("errcode"),
-                    errmsg=upload_result.get("errmsg"),
-                    keys=",".join(list(upload_result.keys())),
-                )
                 if media_id:
                     send_result = await self.api_client.send_msg(
                         touser=user_id,
@@ -362,51 +312,14 @@ class WeComKfAdapter(ChannelAdapter):
                         msgtype="image",
                         content={"media_id": media_id},
                     )
-                    errcode = send_result.get("errcode", 0)
-                    tlog(
-                        "wecom_kf表格图片",
-                        "_send_table_as_image send_msg(image) 结果 errcode={errcode}, errmsg={errmsg}",
-                        errcode=errcode,
-                        errmsg=send_result.get("errmsg"),
-                    )
-                    if errcode == 0:
-                        tlog("wecom_kf表格图片", "_send_table_as_image 图片发送成功，返回 True")
+                    if send_result.get("errcode", 0) == 0:
                         return True
                     logger.warning(f"表格图片发送失败: {send_result.get('errmsg')}")
-                    tlog(
-                        "wecom_kf表格图片",
-                        "_send_table_as_image 图片发送失败 errmsg={errmsg}，将走降级",
-                        errmsg=send_result.get("errmsg"),
-                        level="WARNING",
-                    )
-                else:
-                    tlog(
-                        "wecom_kf表格图片",
-                        "_send_table_as_image upload_media 未返回 media_id，将走降级",
-                        level="WARNING",
-                    )
-            else:
-                tlog(
-                    "wecom_kf表格图片",
-                    "_send_table_as_image render_table 未生成图片，将走降级",
-                    level="WARNING",
-                )
         except Exception as e:
-            tlog(
-                "wecom_kf表格图片",
-                "_send_table_as_image 异常：{err}，将走降级",
-                err=str(e),
-                level="ERROR",
-            )
             logger.warning(f"表格渲染/上传失败，降级为纯文本: {e}")
 
         # 降级：纯文本表格
         fallback_text = table_to_plain_text(markdown_table)
-        tlog(
-            "wecom_kf表格图片",
-            "_send_table_as_image 降级纯文本：fallback_head={head}",
-            head=fallback_text[:300].replace("\n", "\\n"),
-        )
         return await self._send_text_block(fallback_text, user_id)
 
     async def _send_link_message(self, block, user_id: str) -> bool:

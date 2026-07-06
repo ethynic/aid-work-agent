@@ -14,8 +14,6 @@ from typing import Optional
 
 from loguru import logger
 
-from src.core.temp_logger import tlog
-
 
 class WeComKfRenderer:
     """将 markdown 表格渲染为图片。"""
@@ -115,15 +113,7 @@ class WeComKfRenderer:
         Returns:
             生成的 PNG 文件路径，失败返回 None
         """
-        tlog(
-            "wecom_kf表格图片",
-            "render_table 入口：md_len={md_len}, md_head={md_head}",
-            md_len=len(markdown_table) if markdown_table else 0,
-            md_head=(markdown_table or "")[:300].replace("\n", "\\n"),
-        )
-
         if not await self.is_available():
-            tlog("wecom_kf表格图片", "render_table 不可用：Playwright 未安装，返回 None")
             return None
 
         async with self._lock:
@@ -134,22 +124,11 @@ class WeComKfRenderer:
 
                 html = markdown.markdown(markdown_table, extensions=["tables"])
                 full_html = self.HTML_TEMPLATE.format(html_content=html)
-                tlog(
-                    "wecom_kf表格图片",
-                    "render_table HTML 转换完成：html_len={html_len}, html_head={html_head}",
-                    html_len=len(html),
-                    html_head=html[:500].replace("\n", "\\n"),
-                )
 
                 await self._page.set_content(full_html, wait_until="networkidle")
 
                 table_element = await self._page.query_selector("table")
                 if not table_element:
-                    tlog(
-                        "wecom_kf表格图片",
-                        "render_table 失败：HTML 中未找到 table 元素，full_html_head={head}",
-                        head=full_html[:500].replace("\n", "\\n"),
-                    )
                     logger.warning("表格渲染失败：HTML 中未找到 table 元素")
                     return None
 
@@ -160,23 +139,10 @@ class WeComKfRenderer:
 
                 await table_element.screenshot(path=output_path)
                 file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-                tlog(
-                    "wecom_kf表格图片",
-                    "render_table 截图成功：path={path}, size={size}, hash={h}",
-                    path=output_path,
-                    size=file_size,
-                    h=content_hash,
-                )
                 logger.info(f"表格已渲染为图片: {output_path} ({file_size} bytes)")
                 return output_path
 
             except Exception as e:
-                tlog(
-                    "wecom_kf表格图片",
-                    "render_table 异常：{err}",
-                    err=str(e),
-                    level="ERROR",
-                )
                 logger.error(f"表格渲染失败: {e}", exc_info=True)
                 return None
 
