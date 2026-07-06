@@ -504,8 +504,9 @@ class SessionMessageQueue:
                 #     pm_len=len(current_merged_input),
                 #     has_new=_buffer_after_text != current_merged_input,
                 # )
-            # except Exception as _e:
+            except Exception as _e:
                 # tlog("语音合并", "[重处理] 缓冲区验证异常: {err}", err=str(_e), level="ERROR")
+                pass
             # 重处理后若被取消，检查是否有新合并输入；有则继续重处理，无则跳出
             if not self.is_cancelled(session_id):
                 break
