@@ -44,7 +44,7 @@ async def ensure_user_registered(
         user_id 或 None
     """
     # 1. 尝试通过渠道用户 ID 查找已有用户
-    existing_user_id = _find_user_by_channel_id(channel_type, channel_user_id)
+    existing_user_id = _find_user_by_channel_id(channel_type, channel_user_id, tenant_id)
     if existing_user_id:
         # 如果有 tenant_id 但用户没有，更新
         if tenant_id:
@@ -112,16 +112,34 @@ async def ensure_user_registered(
     return user_id
 
 
-def _find_user_by_channel_id(channel_type: str, channel_user_id: str) -> Optional[str]:
-    """通过渠道用户 ID 查找系统用户"""
+def _find_user_by_channel_id(
+    channel_type: str,
+    channel_user_id: str,
+    tenant_id: Optional[str] = None,
+) -> Optional[str]:
+    """通过渠道用户 ID 查找系统用户
+
+    Args:
+        channel_type: 渠道类型
+        channel_user_id: 渠道用户 ID
+        tenant_id: 租户 ID。SaaS 模式下必填，用于跨租户隔离；
+                   为 None 时（非 SaaS 模式）不加租户过滤，保持向后兼容。
+    """
     channel_name = CHANNEL_TYPE_NAME.get(channel_type, channel_type)
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT user_id FROM users
-            WHERE username LIKE %s
-            LIMIT 1
-        """, (f"{channel_name}用户{channel_user_id[-4:]}",))
+        if tenant_id:
+            cursor.execute("""
+                SELECT user_id FROM users
+                WHERE username LIKE %s AND tenant_id = %s
+                LIMIT 1
+            """, (f"{channel_name}用户{channel_user_id[-4:]}", tenant_id))
+        else:
+            cursor.execute("""
+                SELECT user_id FROM users
+                WHERE username LIKE %s
+                LIMIT 1
+            """, (f"{channel_name}用户{channel_user_id[-4:]}",))
         row = cursor.fetchone()
         if row:
             return row["user_id"]
