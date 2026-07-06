@@ -31,7 +31,7 @@ class AgentInstanceManager:
         self._instance_info: Dict[str, dict] = {}  # instance_id → DB 记录缓存
 
     def _redis_key(self, instance_id: str) -> str:
-        return f"instance_status:{instance_id}"
+        return redis_client.make_key("instance_status", instance_id)
 
     def start_instance(self, instance_id: str) -> bool:
         """

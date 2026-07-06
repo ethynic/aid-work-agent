@@ -35,7 +35,7 @@ class AgentRouter:
         self._standalone_cache: Dict[str, Agent] = {}
 
     def _redis_key(self, cache_key: str) -> str:
-        return f"standalone_agent:{cache_key}"
+        return redis_client.make_key("standalone_agent", cache_key)
 
     def get_agent(
         self,

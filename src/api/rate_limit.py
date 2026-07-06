@@ -31,7 +31,7 @@ class SlidingWindowRateLimiter:
         self._local_lock = Lock()
 
     def _redis_key(self, key: str) -> str:
-        return f"rate_limit:login:{key}"
+        return redis_client.make_key("rate_limit:login", key)
 
     def is_allowed(self, key: str) -> bool:
         """检查 key 是否在限制内允许请求"""

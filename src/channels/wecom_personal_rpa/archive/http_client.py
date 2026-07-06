@@ -84,7 +84,7 @@ class ChatDataBatch:
 
 
 def _token_cache_key(tenant_id: str, corpid: str) -> str:
-    return f"{_TOKEN_CACHE_KEY_PREFIX}:{tenant_id}:{corpid}"
+    return redis_client.make_key(_TOKEN_CACHE_KEY_PREFIX, f"{tenant_id}:{corpid}")
 
 
 async def get_access_token(tenant_id: str, corpid: str, secret: str) -> str:

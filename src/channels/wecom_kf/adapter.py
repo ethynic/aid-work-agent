@@ -137,7 +137,7 @@ class WeComKfAdapter(ChannelAdapter):
 
     async def _get_default_thumb_media_id(self) -> str:
         """获取默认缩略图的 media_id，带缓存（1小时内有效）。"""
-        cache_key = "wecom_kf:default_thumb_media_id"
+        cache_key = redis_client.make_key("wecom_kf", "default_thumb_media_id")
         cached = redis_client.get(cache_key)
         if cached:
             return cached

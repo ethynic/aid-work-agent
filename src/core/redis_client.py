@@ -539,6 +539,39 @@ class RedisClient:
         parts = [self._key_prefix, prefix, identifier] if self._key_prefix else [prefix, identifier]
         return ":".join(parts)
 
+    def clear_all(self) -> Dict[str, int]:
+        """清空所有本应用写入的 Redis 键
+
+        按 REDIS_KEY_PREFIX 隔离：
+        - 配置了 key_prefix：仅清空以 `{key_prefix}:` 开头的键
+        - 未配置 key_prefix：清空当前 db 中所有键（keys('*') 扫描后逐个删除）
+
+        同时清空内存降级存储，避免 Redis 重连后残留脏数据。
+        不使用 flushdb，避免误删其他系统共享同一 Redis 实例的键。
+
+        Returns:
+            {"keys_found": 扫描到的键数, "deleted": 实际删除的键数}
+        """
+        # 计算匹配模式：配了 prefix 只清本应用键；没配 prefix 才全量清
+        pattern = f"{self._key_prefix}:*" if self._key_prefix else "*"
+        keys_found = self.keys(pattern)
+
+        deleted = 0
+        for k in keys_found:
+            if self.delete(k):
+                deleted += 1
+
+        # 清空内存降级缓存（Redis 重连后可能残留历史数据）
+        with self._fallback._lock:
+            fallback_cleared = len(self._fallback._data)
+            self._fallback._data.clear()
+
+        logger.info(
+            f"[Redis] clear_all pattern={pattern} deleted={deleted} "
+            f"fallback_cleared={fallback_cleared}"
+        )
+        return {"keys_found": len(keys_found), "deleted": deleted, "fallback_cleared": fallback_cleared}
+
 
 # 全局 Redis 客户端实例
 redis_client = RedisClient()

@@ -757,13 +757,13 @@ async def health_check_db():
 
 
 @app.get("/api/clear_cache")
-async def clear_channel_session_cache(request: Request):
-    """清空渠道会话缓存（需要平台管理员登录）
+async def clear_all_cache(request: Request):
+    """清空所有 Redis 缓存（需要平台管理员登录）
 
-    用于解决缓存与数据库不一致问题
+    按 REDIS_KEY_PREFIX 隔离清理，用于解决缓存与数据库不一致问题。
+    不使用 flushdb，避免误删其他系统共享同一 Redis 实例的键。
     """
     from src.saas.api.tenant_auth import require_admin
-    from src.core.cache_utils import CacheKeys
     from src.core.redis_client import redis_client
 
     # 验证平台管理员登录
@@ -771,16 +771,19 @@ async def clear_channel_session_cache(request: Request):
     if admin.get("role") != "platform_admin":
         return {"success": False, "message": "仅限平台管理员访问"}
 
-    key_prefix = redis_client.make_key(CacheKeys.CHANNEL_SESSION, "")
-    pattern = f"{key_prefix}*"
-    keys_found = redis_client.keys(pattern)
-    deleted_count = 0
-    for k in keys_found:
-        if redis_client.delete(k):
-            deleted_count += 1
+    result = redis_client.clear_all()
 
-    logger.info(f"后端日志：清空渠道会话缓存，已删除 {deleted_count} 个 key")
-    return {"success": True, "deleted": deleted_count, "keys_found": len(keys_found)}
+    logger.info(
+        f"后端日志：清空所有 Redis 缓存，"
+        f"已删除 {result['deleted']} 个 key，"
+        f"内存降级清理 {result['fallback_cleared']} 个 key"
+    )
+    return {
+        "success": True,
+        "deleted": result["deleted"],
+        "keys_found": result["keys_found"],
+        "fallback_cleared": result["fallback_cleared"],
+    }
 
 
 @app.get("/")

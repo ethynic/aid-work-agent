@@ -80,7 +80,7 @@ class SessionMessageQueue:
 
     @staticmethod
     def _key(prefix: str, session_id: str) -> str:
-        return f"{prefix}:{session_id}"
+        return redis_client.make_key(prefix, session_id)
 
     # ==================== 锁管理 ====================
 
