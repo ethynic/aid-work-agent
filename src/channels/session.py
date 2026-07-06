@@ -150,6 +150,39 @@ class ChannelSessionManager:
         # 优先从缓存获取（缓存 key 包含 tenant_id 和 subagent_id）
         cached = get_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id)
         if cached is not None:
+            # 缓存命中：仍需校验 user_id/username 是否需要同步（user_id 可能因
+            # 跨租户复用修复等原因发生变化）。仅当传入新值且与缓存不同时才回写。
+            new_user_id = user_info.get("user_id") if user_info else None
+            new_username = user_info.get("name") if user_info else None
+            need_update = False
+            if new_user_id and new_user_id != cached.get("user_id"):
+                cached["user_id"] = new_user_id
+                need_update = True
+            if new_username and new_username != cached.get("username"):
+                cached["username"] = new_username
+                need_update = True
+            if need_update:
+                # 异步回写数据库，避免阻塞主流程；同时刷新缓存
+                update_fields = ["updated_at = %s"]
+                update_params: list = [now]
+                if new_user_id:
+                    update_fields.append("user_id = %s")
+                    update_params.append(new_user_id)
+                if new_username:
+                    update_fields.append("username = %s")
+                    update_params.append(new_username)
+                update_params.append(session_id)
+                try:
+                    with get_db_connection() as conn:
+                        cur = conn.cursor()
+                        cur.execute(
+                            f"UPDATE channel_sessions SET {', '.join(update_fields)} WHERE session_id = %s",
+                            update_params,
+                        )
+                        conn.commit()
+                except Exception:
+                    logger.warning(f"[channel_session] 缓存命中时回写 user_id 失败: session_id={session_id}")
+                set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=cached, ttl=600)
             return cached
 
         with get_db_connection() as conn:
@@ -164,15 +197,34 @@ class ChannelSessionManager:
             row = cursor.fetchone()
 
             if row:
-                # 更新最后消息时间
-                cursor.execute("""
-                    UPDATE channel_sessions
-                    SET last_message_at = %s, updated_at = %s
-                    WHERE session_id = %s
-                """, (now, now, session_id))
+                # 已有会话：更新最后消息时间，并同步 user_id/username（user_id 可能因
+                # 跨租户复用修复等原因发生变化，需以本次调用方传入的为准）
+                new_user_id = user_info.get("user_id") if user_info else None
+                new_username = user_info.get("name") if user_info else None
+                current_user_id = row.get("user_id")
+                current_username = row.get("username")
+
+                update_fields = ["last_message_at = %s", "updated_at = %s"]
+                update_params: list = [now, now]
+                if new_user_id and new_user_id != current_user_id:
+                    update_fields.append("user_id = %s")
+                    update_params.append(new_user_id)
+                if new_username and new_username != current_username:
+                    update_fields.append("username = %s")
+                    update_params.append(new_username)
+                update_params.append(session_id)
+
+                cursor.execute(
+                    f"UPDATE channel_sessions SET {', '.join(update_fields)} WHERE session_id = %s",
+                    update_params,
+                )
                 conn.commit()
 
                 result = dict(row)
+                if new_user_id and new_user_id != current_user_id:
+                    result["user_id"] = new_user_id
+                if new_username and new_username != current_username:
+                    result["username"] = new_username
                 result["context_data"] = self._parse_json_field(result.get("context_data"), {})
                 result["metadata"] = self._parse_json_field(result.get("metadata"))
                 set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
