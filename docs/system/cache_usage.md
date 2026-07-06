@@ -244,6 +244,16 @@ production 标签缓存 → 标签→版本映射缓存 → Prompt 内容缓存
 **失效时机**：实例停止时清除；TTL 自动过期兜底
 **源文件**：`src/saas/services/instance_manager.py`
 
+### 7.4 定时任务调度器启动锁
+
+多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
+
+**存储**：Redis + 内存降级
+**键模式**：`sched_task_lock:manager`（全局唯一，无 identifier 维度）
+**TTL**：300s（5 分钟）
+**失效时机**：调度器 `shutdown()` 时主动释放；TTL 自动过期兜底（worker 异常退出时）
+**源文件**：`src/scheduler/manager.py`
+
 ---
 
 ## 8. 去重缓存（PostgreSQL）
@@ -320,7 +330,8 @@ PostgreSQL（持久化，权威数据源）
 ├── session_merge:{sid}              # 会话合并
 ├── session_pending:{sid}            # 会话待处理
 ├── session_responding:{sid}         # 会话响应中
-└── instance_status:{instance_id}    # 实例状态
+├── instance_status:{instance_id}    # 实例状态
+└── sched_task_lock:manager          # 定时任务调度器启动锁
 
 内存缓存（无 Redis 键前缀）：
 ├── Dict[tenant_id → skills]         # 租户技能

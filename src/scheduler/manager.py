@@ -16,11 +16,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 from src.scheduler.db import ScheduledTaskDB
 from src.scheduler.executor import ScheduledTaskExecutor
 from src.core.redis_client import redis_client
+from src.core.cache_utils import CacheKeys
 
 # 全局单例
 _executor = ScheduledTaskExecutor()
-# 分布式锁 key
-_SCHEDULER_LOCK_KEY = "scheduled_task_manager:lock"
+# 分布式锁 key（走 make_key 自动拼接 REDIS_KEY_PREFIX，避免裸键）
+_SCHEDULER_LOCK_KEY = redis_client.make_key(CacheKeys.SCHEDULER_LOCK, "manager")
 
 
 class ScheduledTaskManager:
