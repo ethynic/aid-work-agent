@@ -77,17 +77,17 @@ POST，Body 为 `application/json`
 
 **返回响应结构**
 
+> 本文档面向第三方开放平台调用方（请求头 `Api-Authorize-Token` 注入的是 `open_token_*`，对应后端 `g.token['qb_token']==2`）。在此场景下，后端会对响应做精简过滤，仅返回纯业务数据所需字段。下列字段为 open_token 调用方实际可见的字段；其他字段（如 `approve`、`base`、`category`、`debug`、`permission`、`sql`、`sql2`、`sql_option`、`title` 等）即便后端生成也不会下发给第三方。
+
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['data'] | array | 匹配的记录列表 |
+| Response['data2'] | array | 子表数据（仅当列表视图中含子表字段时返回，否则为空数组） |
 | Response['fields'] | array | 字段元数据，可用于动态渲染前端 |
-| Response['page'] | int | 当前页码 |
-| Response['total'] | int | 总记录数 |
-| Response['total_sum'] | object | 汇总数据 |
-| Response['base'] | object | 模块基本信息 |
-| Response['permission'] | array | 权限列表 |
+| Response['total'] | int | 总记录数（用于分页） |
+| Response['total_sum'] | object | 汇总数据（按字段名聚合，无汇总时为空对象） |
 
-> **关于字段元数据**：`fields` 数组中每个元素包含该字段的完整定义（`attr_name`、`display_name`、`attr_type`、`component`、`hidden`、`mandatory`、`unique`、`options` 等），各接口的示例仅列核心字段，实际返回以接口为准。
+> **关于字段元数据**：`fields` 数组中每个元素仅包含字段的最小可用元信息：`attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。其他设计态字段（`hidden`、`mandatory`、`unique`、`build_in`、`list_hidden` 等）不下发给第三方。各接口的示例仅列部分字段，实际返回以接口为准。
 
 ---
 
@@ -128,7 +128,6 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
 {
   "Code": 0,
   "Response": {
-    "base": { "display_name": "客户信息", "path": "kehuxinxi" },
     "data": [
       {
         "id": 1, "sid": "KHXX2026-000001",
@@ -138,15 +137,17 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
         "status": 1, "status_approve": 0
       }
     ],
+    "data2": [],
     "fields": [
-      { "attr_name": "sid", "display_name": "业务编号", "attr_type": "varchar", "component": "input", "hidden": "0" },
-      { "attr_name": "kehubianhao", "display_name": "客户编号", "attr_type": "int", "component": "number", "hidden": "1" },
-      { "attr_name": "kehumingcheng", "display_name": "客户名称", "attr_type": "varchar", "component": "input", "hidden": "0" },
-      { "attr_name": "kehushouji", "display_name": "客户手机", "attr_type": "varchar", "component": "input", "hidden": "0" },
-      { "attr_name": "beizhu", "display_name": "备注", "attr_type": "text", "component": "textarea", "hidden": "0" },
+      { "attr_name": "sid", "display_name": "业务编号", "attr_type": "varchar", "component": "input" },
+      { "attr_name": "kehubianhao", "display_name": "客户编号", "attr_type": "int", "component": "number" },
+      { "attr_name": "kehumingcheng", "display_name": "客户名称", "attr_type": "varchar", "component": "input" },
+      { "attr_name": "kehushouji", "display_name": "客户手机", "attr_type": "varchar", "component": "input" },
+      { "attr_name": "beizhu", "display_name": "备注", "attr_type": "text", "component": "textarea" },
       { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime", "component": "datetime" }
     ],
-    "page": 1, "total": 1, "total_sum": {}
+    "total": 1,
+    "total_sum": {}
   }
 }
 ```
@@ -181,15 +182,19 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
 
 ### 返回响应
 
+> 第三方调用方（open_token）下，响应顶层仅保留 `tables`，其他字段（`module`、`permission`、`extra`、`approve`、`debug`、`reports` 等）不下发。`tables[X]` 仅保留 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 仅保留 `display_name`、`position`、`attrs`；`attrs[Z]` 仅保留 `attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。
+
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['tables'][0]['data'] | object | 客户主表信息（单条，字典） |
 | Response['tables'][1]['data'] | array | 客户收货地址（多条，数组） |
-| Response['tables'][i]['display_name'] | string | 子表名称 |
+| Response['tables'][i]['table_name'] | string | 表名 |
+| Response['tables'][i]['display_name'] | string | 表中文名 |
+| Response['tables'][i]['primary_key'] | string | 主键字段名 |
+| Response['tables'][i]['foreign_key'] | string\|null | 外键字段名（子表为 `fid`，主表为 null） |
+| Response['tables'][i]['parent_table'] | string\|null | 父表名（主表为 null） |
 | Response['tables'][i]['sections'] | array | 字段分区定义 |
-| Response['module'] | object | 模块元信息 |
-| Response['permission'] | array | 当前用户权限列表 |
-| Response['extra'] | object | 关联数据（如相关订单） |
+| Response['tables'][i]['sections'][j]['attrs'] | array | 分区下的字段元数据（白名单过滤后） |
 
 **响应示例（已精简）**
 
@@ -199,19 +204,13 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
   "Debug": "",
   "Error": "",
   "Response": {
-    "module": {
-      "display_name": "客户信息",
-      "id": 19,
-      "module_name": "kehuxinxi",
-      "style": "module",
-      "subsheet_style": "customize"
-    },
-    "permission": [ "insert", "update", "delete", "list_export", "list_import" ],
     "tables": [
       {
         "display_name": "客户信息",
         "table_name": "t_kehuxinxi",
         "primary_key": "id",
+        "foreign_key": null,
+        "parent_table": null,
         "data": {
           "id": 1,
           "sid": "KHXX2026-000001",
@@ -229,26 +228,24 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "table_name": "t_kehuxinxi",
             "position": 1,
             "attrs": [
-              { "attr_name": "kehubianhao", "display_name": "客户编号", "component": "number", "hidden": "1" },
-              { "attr_name": "kehumingcheng", "display_name": "客户名称", "component": "input", "hidden": "0" },
-              { "attr_name": "kehushouji", "display_name": "客户手机", "component": "input", "hidden": "0" },
-              { "attr_name": "beizhu", "display_name": "备注", "component": "textarea", "hidden": "0" }
+              { "attr_name": "kehubianhao", "display_name": "客户编号", "component": "number" },
+              { "attr_name": "kehumingcheng", "display_name": "客户名称", "component": "input" },
+              { "attr_name": "kehushouji", "display_name": "客户手机", "component": "input" },
+              { "attr_name": "beizhu", "display_name": "备注", "component": "textarea" }
             ]
           },
           {
             "display_name": "系统信息",
-            "table_name": "t_kehuxinxi",
             "position": 2,
             "attrs": [
-              { "attr_name": "sid", "display_name": "业务编号", "build_in": 1 },
-              { "attr_name": "create_user", "display_name": "创建人", "build_in": 1 },
-              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime", "build_in": 1 },
-              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime", "build_in": 1 },
-              { "attr_name": "status", "display_name": "系统状态", "hidden": "1", "build_in": 1 },
-              { "attr_name": "status_approve", "display_name": "审批状态", "hidden": "1", "build_in": 1 }
+              { "attr_name": "sid", "display_name": "业务编号" },
+              { "attr_name": "create_user", "display_name": "创建人" },
+              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime" },
+              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime" },
+              { "attr_name": "status", "display_name": "系统状态" },
+              { "attr_name": "status_approve", "display_name": "审批状态" }
             ]
           }
         ]
@@ -256,9 +253,9 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
       {
         "display_name": "收货地址",
         "table_name": "t_kehuxinxi_2",
-        "parent_table": "t_kehuxinxi",
-        "foreign_key": "fid",
         "primary_key": "id",
+        "foreign_key": "fid",
+        "parent_table": "t_kehuxinxi",
         "data": [
           {
             "id": 1,
@@ -282,7 +279,7 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "table_name": "t_kehuxinxi_2",
+            "position": 1,
             "attrs": [
               { "attr_name": "shouhuoren", "display_name": "收货人", "component": "input" },
               { "attr_name": "shouji", "display_name": "手机", "component": "input" },
@@ -301,19 +298,7 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
           }
         ]
       }
-    ],
-    "extra": {
-      "relevance": [
-        {
-          "module": "kehudingdan",
-          "label": "客户订单",
-          "total": 1,
-          "filters": [
-            { "attr": "kehu", "display_value": "孙小姐", "value": [1] }
-          ]
-        }
-      ]
-    }
+    ]
   }
 }
 ```
@@ -364,20 +349,6 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
   "Debug": "",
   "Error": "",
   "Response": {
-    "approve": null,
-    "base": {
-      "create_time": "2026-06-02 16:20:50",
-      "display_name": "客户订单",
-      "enable_mobile": 1,
-      "id": 25,
-      "path": "kehudingdan",
-      "position": 7,
-      "status": 1,
-      "temporary_save": 1,
-      "type": "module",
-      "update_time": "2026-06-02 16:20:50"
-    },
-    "category": null,
     "data": [
       {
         "sid": "KHDD2026-000001",
@@ -406,7 +377,7 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
         "status_approve": 0
       }
     ],
-    "debug": [],
+    "data2": [],
     "fields": [
       // --- 自定义字段 ---
       { "attr_name": "kehu", "display_name": "客户", "component": "input", "attr_type": "varchar", "dataflow": { "style": "sheetlink", "front_module": "kehuxinxi", "front_display": "kehumingcheng" } },
@@ -417,34 +388,24 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
       { "attr_name": "xiangxidizhi", "display_name": "详细地址", "component": "input", "attr_type": "varchar" },
       { "attr_name": "dingdanzhuangtai", "display_name": "订单状态", "component": "select", "attr_type": "varchar", "options": [{"label": "待支付", "value": "待支付"}, {"label": "已支付", "value": "已支付"}, {"label": "已发货", "value": "已发货"}, {"label": "已完成", "value": "已完成"}, {"label": "已取消", "value": "已取消"}] },
       { "attr_name": "fahuozhuangtai", "display_name": "发货状态", "component": "select", "attr_type": "varchar", "options": [{"label": "未发货", "value": "未发货"}, {"label": "部分发货", "value": "部分发货"}, {"label": "已发货", "value": "已发货"}] },
-      { "attr_name": "shangpinjine", "display_name": "商品金额", "component": "currency", "attr_type": "decimal", "source_type": "compute", "compute": "sum( t_kehudingdan_3.zongji )" },
-      { "attr_name": "youhuijine", "display_name": "优惠金额", "component": "currency", "attr_type": "decimal", "source_type": "compute", "compute": "sum( t_kehudingdan_2.youhuiquanjine )" },
+      { "attr_name": "shangpinjine", "display_name": "商品金额", "component": "currency", "attr_type": "decimal" },
+      { "attr_name": "youhuijine", "display_name": "优惠金额", "component": "currency", "attr_type": "decimal" },
       { "attr_name": "yunfei", "display_name": "运费", "component": "currency", "attr_type": "decimal" },
-      { "attr_name": "dingdanjine", "display_name": "订单金额", "component": "currency", "attr_type": "decimal", "source_type": "compute", "compute": "t_kehudingdan.shangpinjine - t_kehudingdan.youhuijine + t_kehudingdan.yunfei" },
+      { "attr_name": "dingdanjine", "display_name": "订单金额", "component": "currency", "attr_type": "decimal" },
       { "attr_name": "zhifufangshi", "display_name": "支付方式", "component": "select", "attr_type": "varchar", "options": [{"label": "微信", "value": "微信"}, {"label": "支付宝", "value": "支付宝"}, {"label": "银行卡", "value": "银行卡"}] },
       { "attr_name": "zhifujine", "display_name": "支付金额", "component": "currency", "attr_type": "decimal" },
       // --- 系统内置字段 ---
-      { "attr_name": "sid", "display_name": "业务编号", "component": "input", "attr_type": "varchar", "build_in": 1 },
-      { "attr_name": "id", "display_name": "系统编号", "component": "input", "attr_type": "int", "build_in": 1, "list_hidden": "0" },
-      { "attr_name": "create_user", "display_name": "创建人", "component": "input", "attr_type": "int", "build_in": 1 },
-      { "attr_name": "create_group", "display_name": "创建组", "component": "input", "attr_type": "int", "build_in": 1, "list_hidden": "1" },
-      { "attr_name": "update_user", "display_name": "修改人", "component": "input", "attr_type": "int", "build_in": 1, "list_hidden": "1" },
-      { "attr_name": "create_time", "display_name": "创建时间", "component": "datetime", "attr_type": "datetime", "build_in": 1 },
-      { "attr_name": "update_time", "display_name": "更新时间", "component": "datetime", "attr_type": "datetime", "build_in": 1, "list_hidden": "1" },
-      { "attr_name": "archive_time", "display_name": "归档时间", "component": "datetime", "attr_type": "datetime", "build_in": 1, "hidden": "1" },
-      { "attr_name": "status", "display_name": "系统状态", "component": "input", "attr_type": "int", "build_in": 1, "hidden": "1" },
-      { "attr_name": "status_approve", "display_name": "审批状态", "component": "input", "attr_type": "int", "build_in": 1, "hidden": "1" }
+      { "attr_name": "sid", "display_name": "业务编号", "component": "input", "attr_type": "varchar" },
+      { "attr_name": "id", "display_name": "系统编号", "component": "input", "attr_type": "int" },
+      { "attr_name": "create_user", "display_name": "创建人", "component": "input", "attr_type": "int" },
+      { "attr_name": "create_group", "display_name": "创建组", "component": "input", "attr_type": "int" },
+      { "attr_name": "update_user", "display_name": "修改人", "component": "input", "attr_type": "int" },
+      { "attr_name": "create_time", "display_name": "创建时间", "component": "datetime", "attr_type": "datetime" },
+      { "attr_name": "update_time", "display_name": "更新时间", "component": "datetime", "attr_type": "datetime" },
+      { "attr_name": "archive_time", "display_name": "归档时间", "component": "datetime", "attr_type": "datetime" },
+      { "attr_name": "status", "display_name": "系统状态", "component": "input", "attr_type": "int" },
+      { "attr_name": "status_approve", "display_name": "审批状态", "component": "input", "attr_type": "int" }
     ],
-    "page": 1,
-    "permission": [
-      "insert",
-      "update",
-      "delete",
-      "list_export",
-      "list_import"
-    ],
-    "sql": "SELECT t_kehudingdan.sid, t_kehudingdan.kehu, t_kehudingdan.shouhuoren, t_kehudingdan.shouji, t_kehudingdan.xiadanshijian, t_kehudingdan.shengshiqu, t_kehudingdan.xiangxidizhi, t_kehudingdan.dingdanzhuangtai, t_kehudingdan.fahuozhuangtai, t_kehudingdan.shangpinjine, t_kehudingdan.youhuijine, t_kehudingdan.yunfei, t_kehudingdan.dingdanjine, t_kehudingdan.zhifufangshi, t_kehudingdan.zhifujine, t_kehudingdan.id, t_kehudingdan.create_user, t_kehudingdan.create_group, t_kehudingdan.update_user, t_kehudingdan.create_time, t_kehudingdan.update_time, t_kehudingdan.archive_time, t_kehudingdan.status, t_kehudingdan.status_approve, (select kehumingcheng from t_kehuxinxi ft where ft.id=t_kehudingdan.kehu) AS `DISPLAY_kehu`, (SELECT `DISPLAY_sys_user`.name  FROM sys_user AS `DISPLAY_sys_user`  WHERE `DISPLAY_sys_user`.id = t_kehudingdan.create_user   LIMIT 1) AS `DISPLAY_create_user`, (SELECT `DISPLAY_sys_user`.name  FROM sys_user AS `DISPLAY_sys_user`  WHERE `DISPLAY_sys_user`.id = t_kehudingdan.update_user   LIMIT 1) AS `DISPLAY_update_user`, (SELECT `DISPLAY_sys_group`.group_name  FROM sys_group AS `DISPLAY_sys_group`  WHERE `DISPLAY_sys_group`.id = t_kehudingdan.create_group   LIMIT 1) AS `DISPLAY_create_group`  FROM t_kehudingdan ORDER BY id desc   LIMIT 0, 20",
-    "title": null,
     "total": 1,
     "total_sum": {
       "dingdanjine": "168.00",
@@ -485,16 +446,20 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
 
 ### 返回响应
 
+> 第三方调用方（open_token）下，响应顶层仅保留 `tables`，其他字段（`module`、`permission`、`extra`、`approve`、`debug`、`reports` 等）不下发。`tables[X]` 仅保留 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 仅保留 `display_name`、`position`、`attrs`；`attrs[Z]` 仅保留 `attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。
+
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['tables'][0]['data'] | object | 客户订单主表信息（单条，字典） |
 | Response['tables'][1]['data'] | array | 优惠明细（多条，数组） |
 | Response['tables'][2]['data'] | array | 订单产品明细（多条，数组） |
-| Response['tables'][i]['display_name'] | string | 子表名称 |
+| Response['tables'][i]['table_name'] | string | 表名 |
+| Response['tables'][i]['display_name'] | string | 表中文名 |
+| Response['tables'][i]['primary_key'] | string | 主键字段名 |
+| Response['tables'][i]['foreign_key'] | string\|null | 外键字段名（子表为 `fid`，主表为 null） |
+| Response['tables'][i]['parent_table'] | string\|null | 父表名（主表为 null） |
 | Response['tables'][i]['sections'] | array | 字段分区定义 |
-| Response['module'] | object | 模块元信息 |
-| Response['permission'] | array | 当前用户权限列表 |
-| Response['extra'] | object | 关联数据（如相关订单） |
+| Response['tables'][i]['sections'][j]['attrs'] | array | 分区下的字段元数据（白名单过滤后） |
 
 > 主表字段定义与 **第 4 节"客户订单列表接口"** 的 `fields` 一致，此处不再重复列出完整元数据。以下仅展示子表字段和示例数据。
 
@@ -506,31 +471,13 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
   "Debug": "",
   "Error": "",
   "Response": {
-    "approve": null,
-    "debug": [
-      "SELECT t_kehudingdan.id, t_kehudingdan.kehu, ... FROM t_kehudingdan WHERE t_kehudingdan.id = 1 ...",
-      "SELECT t_kehudingdan_2.id, t_kehudingdan_2.youhuiquanhuodong, ... FROM t_kehudingdan_2 WHERE t_kehudingdan_2.fid = 1 ...",
-      "SELECT t_kehudingdan_3.id, t_kehudingdan_3.chanpinbianhao, ... FROM t_kehudingdan_3 WHERE t_kehudingdan_3.fid = 1 ..."
-    ],
-    "extra": {
-      "relevance": []
-    },
-    "module": {
-      "display_name": "客户订单",
-      "module_name": "kehudingdan",
-      "style": "module",
-      "subsheet_style": "customize",
-      "temporary_save": 1
-    },
-    "permission": [
-      "insert", "update", "delete", "list_export", "list_import"
-    ],
-    "reports": [],
     "tables": [
       {
         "display_name": "客户订单",
         "table_name": "t_kehudingdan",
         "primary_key": "id",
+        "foreign_key": null,
+        "parent_table": null,
         "data": {
           "sid": "KHDD2026-000001",
           "kehu": { "label": "孙小姐", "value": "1" },
@@ -583,27 +530,26 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
             "display_name": "系统信息",
             "position": 2,
             "attrs": [
-              { "attr_name": "id", "display_name": "系统编号", "build_in": 1 },
-              { "attr_name": "sid", "display_name": "业务编号", "build_in": 1 },
-              { "attr_name": "create_user", "display_name": "创建人", "build_in": 1 },
-              { "attr_name": "create_group", "display_name": "创建组", "build_in": 1 },
-              { "attr_name": "update_user", "display_name": "修改人", "build_in": 1 },
-              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime", "build_in": 1 },
-              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime", "build_in": 1 },
-              { "attr_name": "archive_time", "display_name": "归档时间", "attr_type": "datetime", "build_in": 1, "hidden": "1" },
-              { "attr_name": "status", "display_name": "系统状态", "build_in": 1, "hidden": "1" },
-              { "attr_name": "status_approve", "display_name": "审批状态", "build_in": 1, "hidden": "1" }
+              { "attr_name": "id", "display_name": "系统编号" },
+              { "attr_name": "sid", "display_name": "业务编号" },
+              { "attr_name": "create_user", "display_name": "创建人" },
+              { "attr_name": "create_group", "display_name": "创建组" },
+              { "attr_name": "update_user", "display_name": "修改人" },
+              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime" },
+              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime" },
+              { "attr_name": "archive_time", "display_name": "归档时间", "attr_type": "datetime" },
+              { "attr_name": "status", "display_name": "系统状态" },
+              { "attr_name": "status_approve", "display_name": "审批状态" }
             ]
           }
-        ],
-        "status": 1
+        ]
       },
       {
         "display_name": "优惠明细",
         "table_name": "t_kehudingdan_2",
-        "parent_table": "t_kehudingdan",
-        "foreign_key": "fid",
         "primary_key": "id",
+        "foreign_key": "fid",
+        "parent_table": "t_kehudingdan",
         "data": [
           { "fid": 1, "id": 1, "youhuiquanhuodong": "消费券200-25", "youhuiquanjine": "25.00" },
           { "fid": 1, "id": 2, "youhuiquanhuodong": "平台加补券150-15", "youhuiquanjine": "15.00" }
@@ -611,10 +557,11 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
+            "position": 1,
             "attrs": [
               { "attr_name": "youhuiquanhuodong", "display_name": "优惠券活动", "component": "input" },
               { "attr_name": "youhuiquanjine", "display_name": "优惠券金额", "component": "currency" },
-              { "attr_name": "serial", "display_name": "序号", "component": "input", "build_in": 1 }
+              { "attr_name": "serial", "display_name": "序号", "component": "input" }
             ]
           }
         ]
@@ -622,9 +569,9 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
       {
         "display_name": "订单产品",
         "table_name": "t_kehudingdan_3",
-        "parent_table": "t_kehudingdan",
-        "foreign_key": "fid",
         "primary_key": "id",
+        "foreign_key": "fid",
+        "parent_table": "t_kehudingdan",
         "data": [
           {
             "chanpinbianhao": "248",
@@ -647,6 +594,7 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
+            "position": 1,
             "attrs": [
               { "attr_name": "chanpinbianhao", "display_name": "产品编号", "component": "input" },
               { "attr_name": "chanpinmingcheng", "display_name": "产品名称", "component": "input" },
@@ -654,7 +602,7 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
               { "attr_name": "jiliangdanwei", "display_name": "计量单位", "component": "input" },
               { "attr_name": "xiadanshuliang", "display_name": "下单数量", "component": "number" },
               { "attr_name": "danjia", "display_name": "单价", "component": "currency" },
-              { "attr_name": "zongji", "display_name": "总计", "component": "currency", "source_type": "compute" },
+              { "attr_name": "zongji", "display_name": "总计", "component": "currency" },
               { "attr_name": "youhuijine", "display_name": "优惠金额", "component": "currency" },
               { "attr_name": "yifahuoshuliang", "display_name": "已发货数量", "component": "number" },
               { "attr_name": "wuliugongsi", "display_name": "物流公司", "component": "input" },
@@ -662,7 +610,7 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
               { "attr_name": "tuidanshuliang", "display_name": "退单数量", "component": "number" },
               { "attr_name": "tuihuoyuanyin", "display_name": "退货原因", "component": "input" },
               { "attr_name": "tuihuozhuangtai", "display_name": "退货状态", "component": "select", "options": [{"label": "待处理", "value": "待处理"}, {"label": "已接收", "value": "已接收"}, {"label": "处理中", "value": "处理中"}, {"label": "已完成", "value": "已完成"}] },
-              { "attr_name": "serial", "display_name": "序号", "build_in": 1 }
+              { "attr_name": "serial", "display_name": "序号", "component": "input" }
             ]
           }
         ]
@@ -712,13 +660,10 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
 
 通用返回结构见第 1 节"列表接口通用约定"。本接口额外字段：
 
+> 第三方调用方（open_token）下，列表接口仅返回 `data`、`data2`、`fields`、`total`、`total_sum`。本接口的 `category` 分类树字段不下发给第三方；如需分类筛选能力，请通过 `filters` 传入 `suoshulanmu` 字段条件。
+
 | 路径 | 类型 | 说明 |
 |------|------|------|
-| Response['category'] | object | 所属栏目（`suoshulanmu`）的分类树，用于前端筛选级联展示 |
-| Response['category']['field'] | string | 分类关联字段名，固定为 `"suoshulanmu"` |
-| Response['category']['table'] | string | 分类关联表，固定为 `"t_shangpinguanli"` |
-| Response['category']['data'] | array | 多级分类树（label/value/parent/children） |
-| Response['category']['children'] | object | 父子关系映射，键为父 ID，值为子 ID 数组 |
 | Response['data2'] | array | 二级数据集（通常为空） |
 | Response['total_sum']['xiaoshoujiahanshui'] | string | 销售价（含税）合计 |
 
@@ -728,33 +673,6 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
 {
   "Code": 0,
   "Response": {
-    "base": {
-      "display_name": "商品管理", "path": "shangpinguanli",
-      "subsystem_name": "产品管理", "subsystem_path": "anjianguanli",
-      "status": 1, "temporary_save": 1, "enable_mobile": 1
-    },
-    "category": {
-      "field": "suoshulanmu",
-      "table": "t_shangpinguanli",
-      "data": [
-        {
-          "label": "全部类目", "value": 1, "parent": 0,
-          "children": [
-            { "label": "脸部护理", "value": 2, "parent": 1, "children": [/* ... */] },
-            { "label": "身体护理", "value": 3, "parent": 1, "children": [/* ... */] },
-            { "label": "口腔护理", "value": 4, "parent": 1, "children": [/* ... */] },
-            { "label": "家清用品", "value": 5, "parent": 1, "children": [/* ... */] },
-            { "label": "纸品类", "value": 6, "parent": 1, "children": [/* ... */] },
-            { "label": "运动类", "value": 25, "parent": 1, "children": [] }
-          ]
-        }
-      ],
-      "children": {
-        "1": [2, 3, 4, 5, 6, 25],
-        "2": [7, 8, 9, 10]
-        // ... 其余父子关系省略
-      }
-    },
     "data": [
       {
         "id": 320, "sid": "", "skubianhao": "YD0036",
@@ -795,21 +713,19 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
       { "attr_name": "fahuoshixiao", "display_name": "发货时效", "component": "input", "attr_type": "varchar" },
       { "attr_name": "chanpinjieshao", "display_name": "产品介绍", "component": "textarea", "attr_type": "text" },
       // --- 系统内置字段 ---
-      { "attr_name": "sid", "display_name": "业务编号", "component": "input", "attr_type": "varchar", "build_in": 1 },
-      { "attr_name": "id", "display_name": "系统编号", "component": "input", "attr_type": "int", "build_in": 1 },
-      { "attr_name": "create_user", "display_name": "创建人", "component": "input", "attr_type": "int", "build_in": 1 },
-      { "attr_name": "create_group", "display_name": "创建组", "component": "input", "attr_type": "int", "build_in": 1, "list_hidden": "1" },
-      { "attr_name": "update_user", "display_name": "修改人", "component": "input", "attr_type": "int", "build_in": 1, "list_hidden": "1" },
-      { "attr_name": "create_time", "display_name": "创建时间", "component": "datetime", "attr_type": "datetime", "build_in": 1 },
-      { "attr_name": "update_time", "display_name": "更新时间", "component": "datetime", "attr_type": "datetime", "build_in": 1, "list_hidden": "1" },
-      { "attr_name": "archive_time", "display_name": "归档时间", "component": "datetime", "attr_type": "datetime", "build_in": 1, "hidden": "1" },
-      { "attr_name": "status", "display_name": "系统状态", "component": "input", "attr_type": "int", "build_in": 1, "hidden": "1" },
-      { "attr_name": "status_approve", "display_name": "审批状态", "component": "input", "attr_type": "int", "build_in": 1, "hidden": "1" }
+      { "attr_name": "sid", "display_name": "业务编号", "component": "input", "attr_type": "varchar" },
+      { "attr_name": "id", "display_name": "系统编号", "component": "input", "attr_type": "int" },
+      { "attr_name": "create_user", "display_name": "创建人", "component": "input", "attr_type": "int" },
+      { "attr_name": "create_group", "display_name": "创建组", "component": "input", "attr_type": "int" },
+      { "attr_name": "update_user", "display_name": "修改人", "component": "input", "attr_type": "int" },
+      { "attr_name": "create_time", "display_name": "创建时间", "component": "datetime", "attr_type": "datetime" },
+      { "attr_name": "update_time", "display_name": "更新时间", "component": "datetime", "attr_type": "datetime" },
+      { "attr_name": "archive_time", "display_name": "归档时间", "component": "datetime", "attr_type": "datetime" },
+      { "attr_name": "status", "display_name": "系统状态", "component": "input", "attr_type": "int" },
+      { "attr_name": "status_approve", "display_name": "审批状态", "component": "input", "attr_type": "int" }
     ],
-    "page": 1,
     "total": 1,
-    "total_sum": { "xiaoshoujiahanshui": "59.90" },
-    "permission": ["insert", "update", "delete", "list_export", "list_import"]
+    "total_sum": { "xiaoshoujiahanshui": "59.90" }
   }
 }
 ```
@@ -818,9 +734,9 @@ ${BASE_URL}/api/v1/erp.module/module_listing_view
 
 | 字段 | 说明 |
 |------|------|
-| suoshulanmu | 所属栏目，文本展示（如 `"运动类"`），实际关联到 `shangpinleimu` 模块，前端可用 `category` 树进行级联筛选 |
+| suoshulanmu | 所属栏目，文本展示（如 `"运动类"`），实际关联到 `shangpinleimu` 模块，第三方可通过 `fields` 中的 `dataflow` 元信息识别关联关系 |
 | xiaoshoujiahanshui | 销售价（含税），货币类型，`total_sum` 中同名字段为当前查询结果的销售价合计 |
-| dataflow.style = sheetlink | `suoshulanmu` 为关联字段，前端可下钻到 `shangpinleimu` 模块查看栏目详情 |
+| dataflow.style = sheetlink | `suoshulanmu` 为关联字段，关联到 `shangpinleimu` 模块 |
 
 
 ## 7 产品详情接口
@@ -849,14 +765,15 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
 
 ### 返回响应
 
+> 第三方调用方（open_token）下，响应顶层仅保留 `tables`，其他字段（`module`、`permission`、`extra`、`approve`、`debug`、`reports` 等）不下发。`tables[X]` 仅保留 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 仅保留 `display_name`、`position`、`attrs`；`attrs[Z]` 仅保留 `attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。
+
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['tables'][0]['data'] | object | 产品主表信息（单条，字典） |
 | Response['tables'][0]['sections'] | array | 字段分区定义（基本信息 + 系统信息） |
-| Response['tables'][i]['display_name'] | string | 表显示名称 |
-| Response['module'] | object | 模块元信息 |
-| Response['permission'] | array | 当前用户权限列表 |
-| Response['extra'] | object | 关联数据（产品无子表，`relevance` 通常为空） |
+| Response['tables'][i]['table_name'] | string | 表名 |
+| Response['tables'][i]['display_name'] | string | 表中文名 |
+| Response['tables'][i]['primary_key'] | string | 主键字段名 |
 
 > 主表字段定义与 **第 6 节"产品列表接口"** 的 `fields` 一致，此处不再重复列出完整元数据。
 >
@@ -868,19 +785,13 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
 {
   "Code": 0,
   "Response": {
-    "module": {
-      "display_name": "商品管理",
-      "module_name": "shangpinguanli",
-      "style": "module",
-      "temporary_save": 1
-    },
-    "permission": ["insert", "update", "delete", "list_export", "list_import"],
-    "extra": { "relevance": [] },
     "tables": [
       {
         "display_name": "商品管理",
         "table_name": "t_shangpinguanli",
         "primary_key": "id",
+        "foreign_key": null,
+        "parent_table": null,
         "data": {
           "id": 320, "sid": "", "skubianhao": "YD0036",
           "chanpinmingcheng": "男女同款运动背包",
@@ -930,16 +841,16 @@ ${BASE_URL}/api/v1/erp.module/module_prepare_edit
             "display_name": "系统信息",
             "position": 2,
             "attrs": [
-              { "attr_name": "id", "display_name": "系统编号", "build_in": 1 },
-              { "attr_name": "sid", "display_name": "业务编号", "build_in": 1 },
-              { "attr_name": "create_user", "display_name": "创建人", "build_in": 1 },
-              { "attr_name": "create_group", "display_name": "创建组", "build_in": 1, "list_hidden": "1" },
-              { "attr_name": "update_user", "display_name": "修改人", "build_in": 1, "list_hidden": "1" },
-              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime", "build_in": 1 },
-              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime", "build_in": 1, "list_hidden": "1" },
-              { "attr_name": "archive_time", "display_name": "归档时间", "attr_type": "datetime", "build_in": 1, "hidden": "1" },
-              { "attr_name": "status", "display_name": "系统状态", "build_in": 1, "hidden": "1" },
-              { "attr_name": "status_approve", "display_name": "审批状态", "build_in": 1, "hidden": "1" }
+              { "attr_name": "id", "display_name": "系统编号" },
+              { "attr_name": "sid", "display_name": "业务编号" },
+              { "attr_name": "create_user", "display_name": "创建人" },
+              { "attr_name": "create_group", "display_name": "创建组" },
+              { "attr_name": "update_user", "display_name": "修改人" },
+              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime" },
+              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime" },
+              { "attr_name": "archive_time", "display_name": "归档时间", "attr_type": "datetime" },
+              { "attr_name": "status", "display_name": "系统状态" },
+              { "attr_name": "status_approve", "display_name": "审批状态" }
             ]
           }
         ]
@@ -1237,3 +1148,4 @@ POST，Body 为 `application/json`
 | v1.0 | 2026-06-03 | 初始版本，涵盖客户信息列表/详情、客户订单列表/详情 |
 | v1.1 | 2026-07-03 | 订单模块字段补全：修正订单列表 `fahuozhuangtai` 的 options 为「未发货/部分发货/已发货」；订单产品子表补充 `wuliugongsi`/`wuliudanhao`/`tuihuoyuanyin`/`tuihuozhuangtai` 字段定义及示例。 |
 | v1.2 | 2026-07-03 | 新增第 8 节「订单创建接口」、第 9 节「订单修改接口」，覆盖订单写入场景。 |
+| v1.3 | 2026-07-06 | 接口输出精简（针对第三方 open_token 调用方）：列表接口仅返回 `data`/`data2`/`fields`/`total`/`total_sum`；详情接口顶层仅返回 `tables`；`tables[X]` 仅保留 `table_name`/`display_name`/`primary_key`/`foreign_key`/`parent_table`/`sections`/`data`；`sections[Y]` 仅保留 `display_name`/`position`/`attrs`；`attrs[Z]` 仅保留 `attr_name`/`display_name`/`attr_type`/`component`/`table_name`/`options`/`dataflow`/`width`/`position`。文档示例同步更新。 |
