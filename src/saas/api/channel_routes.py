@@ -33,6 +33,15 @@ from src.channels.session import channel_session_manager
 from src.channels.idempotency import MessageDeduplicator
 from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
+from src.core.temp_logger import tlog as _tlog
+
+
+def _kf_tlog(message: str, **kwargs) -> None:
+    """微信客服回调链路统一主题日志，便于在 log/temp/微信客服回调.log 中排查"""
+    try:
+        _tlog("微信客服回调", message, **kwargs)
+    except Exception:
+        pass
 from src.core.session_queue import session_queue
 
 router = APIRouter(tags=["租户渠道回调"])
@@ -1252,10 +1261,25 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
             f"[Tenant WeCom KF] 收到POST回调: tenant={tenant_id}, config={config_id}, "
             f"body_len={len(body_str)}, query_params={dict(request.query_params)}"
         )
+        _kf_tlog(
+            "POST回调入口: tenant={tenant}, config={config}, body_len={body_len}, "
+            "query={query}, body={body}",
+            tenant=tenant_id,
+            config=config_id,
+            body_len=len(body_str),
+            query=dict(request.query_params),
+            body=body_str,
+        )
 
         adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "wecom_kf", config_id=config_id)
         if not adapter:
             logger.warning(f"[Tenant WeCom KF] 配置不存在: tenant={tenant_id}, config={config_id}")
+            _kf_tlog(
+                "配置不存在，返回404: tenant={tenant}, config={config}",
+                tenant=tenant_id,
+                config=config_id,
+                level="ERROR",
+            )
             return PlainTextResponse("Config not found", status_code=404)
 
         # 解析 XML 获取加密内容
@@ -1296,44 +1320,85 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
             f"[Tenant WeCom KF] 回调解析: event={event}, change_type={change_type}, "
             f"open_kfid={open_kfid}, tenant={tenant_id}"
         )
-        # 临时调试：记录完整回调 XML，用于排查"用户撤回"等事件是否被微信推送
-        # 调试主题：微信事件
-        from src.core.temp_logger import tlog
-        tlog(
-            "微信事件",
-            "回调 XML: tenant={tenant}, event={event}, change_type={change_type}, "
-            "open_kfid={open_kfid}, xml={xml}",
+        _kf_tlog(
+            "回调解析: tenant={tenant}, event={event}, change_type={change_type}, "
+            "open_kfid={open_kfid}, decrypted_xml={xml}",
             tenant=tenant_id,
             event=event,
             change_type=change_type,
             open_kfid=open_kfid,
             xml=decrypted_xml,
         )
+        # 临时调试：记录完整回调 XML，用于排查"用户撤回"等事件是否被微信推送
+        # 调试主题：微信事件
+        # from src.core.temp_logger import tlog
+        # tlog(
+        #     "微信事件",
+        #     "回调 XML: tenant={tenant}, event={event}, change_type={change_type}, "
+        #     "open_kfid={open_kfid}, xml={xml}",
+        #     tenant=tenant_id,
+        #     event=event,
+        #     change_type=change_type,
+        #     open_kfid=open_kfid,
+        #     xml=decrypted_xml,
+        # )
 
         # 消息事件 → 后台异步拉取并处理
         if event == "kf_msg_or_event":
             logger.info(f"[Tenant WeCom KF] 创建后台任务拉取消息: open_kfid={open_kfid}")
+            _kf_tlog(
+                "事件分发→创建后台任务: tenant={tenant}, event={event}, open_kfid={open_kfid}",
+                tenant=tenant_id,
+                event=event,
+                open_kfid=open_kfid,
+            )
             asyncio.create_task(
                 _process_tenant_wecom_kf_messages(tenant_id, config_id, open_kfid, adapter)
             )
         # 会话状态变更 → 更新本地状态
         elif event == "change_type" and change_type == "session_status_change":
             logger.info(f"[Tenant WeCom KF] 会话状态变更事件: open_kfid={open_kfid}")
+            _kf_tlog(
+                "事件分发→会话状态变更: tenant={tenant}, open_kfid={open_kfid}",
+                tenant=tenant_id,
+                open_kfid=open_kfid,
+            )
             await _handle_kf_session_status_change(callback_root, tenant_id)
         # 进入会话 → 发送欢迎语
         elif event == "enter_session":
             logger.info(f"[Tenant WeCom KF] 进入会话事件: open_kfid={open_kfid}")
+            _kf_tlog(
+                "事件分发→进入会话: tenant={tenant}, open_kfid={open_kfid}",
+                tenant=tenant_id,
+                open_kfid=open_kfid,
+            )
             await _handle_kf_enter_session(callback_root, adapter)
         else:
             logger.warning(
                 f"[Tenant WeCom KF] 未知事件类型: event={event}, change_type={change_type}, "
                 f"decrypted_xml前200字符={decrypted_xml[:200]}"
             )
+            _kf_tlog(
+                "事件分发→未知事件: tenant={tenant}, event={event}, change_type={change_type}, "
+                "xml_prefix={xml_prefix}",
+                tenant=tenant_id,
+                event=event,
+                change_type=change_type,
+                xml_prefix=decrypted_xml[:200],
+                level="WARNING",
+            )
 
         return PlainTextResponse("success")
 
     except Exception as e:
         logger.error(f"[Tenant WeCom KF] POST 处理异常: tenant={tenant_id}, config={config_id}, error={e}")
+        _kf_tlog(
+            "POST回调异常: tenant={tenant}, config={config}, error={error}",
+            tenant=tenant_id,
+            config=config_id,
+            error=str(e),
+            level="ERROR",
+        )
         return PlainTextResponse("error", status_code=500)
 
 
@@ -1399,21 +1464,41 @@ async def _process_tenant_wecom_kf_messages(
         from src.channels.wecom_kf.context import set_kf_context
         from src.channels.wecom_kf.prompts import WECOM_KF_CHANNEL_PROMPT
         from src.models.message import UnifiedResponse
-        from src.core.temp_logger import tlog
+        # from src.core.temp_logger import tlog
 
         logger.info(
             f"[wecom_kf] 后台处理开始: tenant={tenant_id}, config={config_id}, open_kfid={open_kfid}"
+        )
+        _kf_tlog(
+            "后台任务开始: tenant={tenant}, config={config}, open_kfid={open_kfid}",
+            tenant=tenant_id,
+            config=config_id,
+            open_kfid=open_kfid,
         )
 
         # 查找客服账号配置
         kf_config = adapter.get_kf_config(open_kfid)
         if not kf_config:
             logger.info(f"[wecom_kf] 新的 open_kfid: {open_kfid}，尝试自动填入配置")
+            _kf_tlog(
+                "kf_config未找到，尝试自动填入: tenant={tenant}, open_kfid={open_kfid}",
+                tenant=tenant_id,
+                open_kfid=open_kfid,
+                level="WARNING",
+            )
             await _auto_fill_open_kfid(tenant_id, open_kfid)
             return
 
         subagent_type = kf_config.get("subagent_type", "")
         logger.info(f"[wecom_kf] 客服配置: subagent_type={subagent_type}, open_kfid={open_kfid}")
+        _kf_tlog(
+            "kf_config命中: tenant={tenant}, open_kfid={open_kfid}, subagent_type={subagent_type}, "
+            "kf_config_keys={keys}",
+            tenant=tenant_id,
+            open_kfid=open_kfid,
+            subagent_type=subagent_type,
+            keys=list(kf_config.keys()),
+        )
 
         # 使用 cursor 分页拉取消息
         cursor = adapter.cursor_manager.get_cursor(open_kfid)
@@ -1434,8 +1519,27 @@ async def _process_tenant_wecom_kf_messages(
                 f"[wecom_kf] sync_msg返回: errcode={errcode}, errmsg={errmsg}, "
                 f"msg_count={msg_count}, has_more={has_more}"
             )
+            _kf_tlog(
+                "sync_msg返回: tenant={tenant}, open_kfid={open_kfid}, errcode={errcode}, "
+                "errmsg={errmsg}, msg_count={msg_count}, has_more={has_more}, "
+                "next_cursor={next_cursor}",
+                tenant=tenant_id,
+                open_kfid=open_kfid,
+                errcode=errcode,
+                errmsg=errmsg,
+                msg_count=msg_count,
+                has_more=has_more,
+                next_cursor=cursor[:30] if cursor else "",
+            )
             if result.get("errcode", 0) != 0:
                 logger.error(f"[wecom_kf] sync_msg 失败: errcode={result.get('errcode')}")
+                _kf_tlog(
+                    "sync_msg失败: tenant={tenant}, errcode={errcode}, errmsg={errmsg}",
+                    tenant=tenant_id,
+                    errcode=errcode,
+                    errmsg=errmsg,
+                    level="ERROR",
+                )
                 return
 
             # 预处理：过滤非客户消息 + 去重，得到有效消息列表
@@ -1458,43 +1562,43 @@ async def _process_tenant_wecom_kf_messages(
                     external_userid = event_data.get("external_userid", "")
 
                     # 记录原始事件结构，便于核对字段名
-                    try:
-                        import json as _json
-                        tlog(
-                            "微信事件",
-                            "撤回事件原始结构: event_msgid={event_msgid}, raw={raw}",
-                            event_msgid=msg_id,
-                            raw=_json.dumps(msg, ensure_ascii=False),
-                        )
-                    except Exception:
-                        pass
+                    # try:
+                    #     import json as _json
+                        # tlog(
+                        #     "微信事件",
+                        #     "撤回事件原始结构: event_msgid={event_msgid}, raw={raw}",
+                        #     event_msgid=msg_id,
+                        #     raw=_json.dumps(msg, ensure_ascii=False),
+                        # )
+                    # except Exception:
+                    #     pass
 
                     # 事件去重：按撤回事件自身的 msgid 去重，避免同一事件多次推送重复处理
                     dedup = _get_tenant_dedup(tenant_id)
                     if await dedup.is_duplicate(f"recall_event:{msg_id}"):
-                        tlog(
-                            "撤回消息",
-                            "撤回事件重复跳过: event_msgid={event_msgid}, recall_msgid={recall_msgid}, "
-                            "open_kfid={open_kfid}, user={user}",
-                            event_msgid=msg_id,
-                            recall_msgid=recall_msgid,
-                            open_kfid=open_kfid,
-                            user=external_userid,
-                        )
+                        # tlog(
+                        #     "撤回消息",
+                        #     "撤回事件重复跳过: event_msgid={event_msgid}, recall_msgid={recall_msgid}, "
+                        #     "open_kfid={open_kfid}, user={user}",
+                        #     event_msgid=msg_id,
+                        #     recall_msgid=recall_msgid,
+                        #     open_kfid=open_kfid,
+                        #     user=external_userid,
+                        # )
                         continue
 
                     # 记录本批次的撤回，供后续剔除用
                     recalled_msgids_in_batch.add(recall_msgid)
-                    tlog(
-                        "撤回消息",
-                        "识别到撤回事件: event_msgid={event_msgid}, recall_msgid={recall_msgid}, "
-                        "open_kfid={open_kfid}, user={user}, batch_size={batch_size}",
-                        event_msgid=msg_id,
-                        recall_msgid=recall_msgid,
-                        open_kfid=open_kfid,
-                        user=external_userid,
-                        batch_size=len(recalled_msgids_in_batch),
-                    )
+                    # tlog(
+                    #     "撤回消息",
+                    #     "识别到撤回事件: event_msgid={event_msgid}, recall_msgid={recall_msgid}, "
+                    #     "open_kfid={open_kfid}, user={user}, batch_size={batch_size}",
+                    #     event_msgid=msg_id,
+                    #     recall_msgid=recall_msgid,
+                    #     open_kfid=open_kfid,
+                    #     user=external_userid,
+                    #     batch_size=len(recalled_msgids_in_batch),
+                    # )
 
                     # 跨批次兜底：尝试标记已持久化的消息
                     try:
@@ -1511,27 +1615,24 @@ async def _process_tenant_wecom_kf_messages(
                                 recall_msgid=recall_msgid,
                                 tenant_id=tenant_id,
                             )
-                            tlog(
-                                "撤回消息",
-                                "跨批次标记已持久化消息: session_id={session_id}, recall_msgid={recall_msgid}, "
-                                "marked_count={marked_count}",
-                                session_id=session_id,
-                                recall_msgid=recall_msgid,
-                                marked_count=marked_count,
-                            )
-                        else:
-                            tlog(
-                                "撤回消息",
-                                "跨批次标记未找到会话: recall_msgid={recall_msgid}, user={user}",
-                                recall_msgid=recall_msgid,
-                                user=external_userid,
-                            )
-                    except Exception as e:
-                        tlog(
-                            "撤回消息",
-                            "跨批次标记异常: recall_msgid={recall_msgid}, error={error}",
-                            recall_msgid=recall_msgid,
-                            error=str(e),
+                            # tlog(
+                            #     "撤回消息",
+                            #     "跨批次标记已持久化消息: session_id={session_id}, recall_msgid={recall_msgid}, "
+                            #     "marked_count={marked_count}",
+                            #     session_id=session_id,
+                            #     recall_msgid=recall_msgid,
+                            #     marked_count=marked_count,
+                            # )
+                        # else:
+                        #     tlog(
+                        #         "撤回消息",
+                        #         "跨批次标记未找到会话: recall_msgid={recall_msgid}, user={user}",
+                        #         recall_msgid=recall_msgid,
+                        #         user=external_userid,
+                        #     )
+                    except Exception as _e:
+                        logger.warning(
+                            f"[wecom_kf] 跨批次标记已持久化消息异常: recall_msgid={recall_msgid}, error={_e}"
                         )
 
                     continue  # 撤回事件处理完毕，跳过后续 origin 过滤等逻辑
@@ -1539,20 +1640,20 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 临时调试：记录 msg_list 中每条原始条目（含被过滤的事件型条目，如撤回事件）
                 # 调试主题：微信事件
-                try:
-                    import json as _json
-                    tlog(
-                        "微信事件",
-                        "sync_msg 条目: open_kfid={open_kfid}, msgid={msgid}, "
-                        "origin={origin}, msgtype={msgtype}, raw={raw}",
-                        open_kfid=open_kfid,
-                        msgid=msg_id,
-                        origin=msg_origin,
-                        msgtype=msg_type,
-                        raw=_json.dumps(msg, ensure_ascii=False),
-                    )
-                except Exception:
-                    pass
+                # try:
+                #     import json as _json
+                    # tlog(
+                    #     "微信事件",
+                    #     "sync_msg 条目: open_kfid={open_kfid}, msgid={msgid}, "
+                    #     "origin={origin}, msgtype={msgtype}, raw={raw}",
+                    #     open_kfid=open_kfid,
+                    #     msgid=msg_id,
+                    #     origin=msg_origin,
+                    #     msgtype=msg_type,
+                    #     raw=_json.dumps(msg, ensure_ascii=False),
+                    # )
+                # except Exception:
+                #     pass
 
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
@@ -1572,16 +1673,16 @@ async def _process_tenant_wecom_kf_messages(
                 original_count = len(valid_msgs)
                 valid_msgs = [m for m in valid_msgs if m.get("msgid") not in recalled_msgids_in_batch]
                 filtered_count = original_count - len(valid_msgs)
-                if filtered_count > 0:
-                    tlog(
-                        "撤回消息",
-                        "同批次剔除: recall_count={recall_count}, filtered={filtered}, "
-                        "remaining={remaining}, recall_msgids={recall_msgids}",
-                        recall_count=len(recalled_msgids_in_batch),
-                        filtered=filtered_count,
-                        remaining=len(valid_msgs),
-                        recall_msgids=list(recalled_msgids_in_batch),
-                    )
+                # if filtered_count > 0:
+                #     tlog(
+                #         "撤回消息",
+                #         "同批次剔除: recall_count={recall_count}, filtered={filtered}, "
+                #         "remaining={remaining}, recall_msgids={recall_msgids}",
+                #         recall_count=len(recalled_msgids_in_batch),
+                #         filtered=filtered_count,
+                #         remaining=len(valid_msgs),
+                #         recall_msgids=list(recalled_msgids_in_batch),
+                #     )
             # ===== 同批次剔除结束 =====
 
             # 同一批次内合并同一用户的连续文本消息，避免逐条回复耗尽 WeCom 5条限额
@@ -1603,6 +1704,16 @@ async def _process_tenant_wecom_kf_messages(
                     f"[wecom_kf] 解析消息: msgid={msg_id}, user={unified_msg.user_id}, "
                     f"text_len={len(unified_msg.text or '')}, msgtype={msg.get('msgtype')}"
                 )
+                _kf_tlog(
+                    "消息处理开始: tenant={tenant}, msgid={msgid}, user={user}, "
+                    "msgtype={msgtype}, text={text}, msg_keys={keys}",
+                    tenant=tenant_id,
+                    msgid=msg_id,
+                    user=unified_msg.user_id,
+                    msgtype=msg.get("msgtype", ""),
+                    text=(unified_msg.text or "")[:200],
+                    keys=list(msg.keys()),
+                )
 
                 # 获取客户信息（昵称、头像）
                 user_info = await adapter.get_user_info(unified_msg.user_id)
@@ -1610,14 +1721,34 @@ async def _process_tenant_wecom_kf_messages(
                     f"[wecom_kf] 客户信息: user={unified_msg.user_id}, "
                     f"name={user_info.get('name')}, has_avatar={bool(user_info.get('avatar'))}"
                 )
+                _kf_tlog(
+                    "客户信息: tenant={tenant}, user={user}, name={name}, has_avatar={has_avatar}",
+                    tenant=tenant_id,
+                    user=unified_msg.user_id,
+                    name=user_info.get("name"),
+                    has_avatar=bool(user_info.get("avatar")),
+                )
 
                 # 自动注册用户并获取 user_id
                 try:
                     from src.saas.services.auto_register import ensure_user_registered
                     user_id = await ensure_user_registered("wecom_kf", unified_msg.user_id, tenant_id, user_info, source="wecom_kf")
                     user_info["user_id"] = user_id
+                    _kf_tlog(
+                        "用户注册成功: tenant={tenant}, external_userid={ext_user}, user_id={user_id}",
+                        tenant=tenant_id,
+                        ext_user=unified_msg.user_id,
+                        user_id=user_id,
+                    )
                 except Exception as e:
                     logger.warning(f"[wecom_kf] 自动注册失败: {e}")
+                    _kf_tlog(
+                        "用户注册失败: tenant={tenant}, external_userid={ext_user}, error={error}",
+                        tenant=tenant_id,
+                        ext_user=unified_msg.user_id,
+                        error=str(e),
+                        level="ERROR",
+                    )
 
                 # 构建会话元数据（存储头像等扩展信息）
                 session_metadata = {}
@@ -1637,6 +1768,15 @@ async def _process_tenant_wecom_kf_messages(
                     metadata=session_metadata if session_metadata else None,
                 )
                 session_id = session["session_id"]
+                _kf_tlog(
+                    "会话获取/创建: tenant={tenant}, session_id={session_id}, "
+                    "subagent_id={subagent_id}, user={user}, open_kfid={open_kfid}",
+                    tenant=tenant_id,
+                    session_id=session_id,
+                    subagent_id=subagent_type or "",
+                    user=unified_msg.user_id,
+                    open_kfid=open_kfid,
+                )
 
                 # 检查会话是否已在人工接待中，避免 AI 重复处理
                 session_metadata = session.get("metadata") or {}
@@ -1937,6 +2077,18 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 路由到智能体
                 agent = agent_router.get_agent(subagent_type, session_id, tenant_id=tenant_id)
+                _kf_tlog(
+                    "Agent路由: tenant={tenant}, session_id={session_id}, "
+                    "subagent_type={subagent_type}, agent_class={agent_class}, "
+                    "model={model}, user_input_len={user_input_len}, user_input={user_input}",
+                    tenant=tenant_id,
+                    session_id=session_id,
+                    subagent_type=subagent_type,
+                    agent_class=agent.__class__.__name__,
+                    model=agent.llm.get_model_name() if agent.llm else "unknown",
+                    user_input_len=len(user_input),
+                    user_input=user_input[:300],
+                )
 
                 # 开始记录 token 消耗
                 record_service = SessionRecordManager.start_record(
@@ -2006,8 +2158,24 @@ async def _process_tenant_wecom_kf_messages(
                         send_response=send_response,
                         agent_extra_system_prompt=WECOM_KF_CHANNEL_PROMPT,
                     )
+                    _kf_tlog(
+                        "process_and_persist完成: tenant={tenant}, session_id={session_id}, "
+                        "status={status}, response_text_len={resp_len}, response_text={response_text}",
+                        tenant=tenant_id,
+                        session_id=session_id,
+                        status=result.get("status"),
+                        resp_len=len(result.get("response_text") or ""),
+                        response_text=(result.get("response_text") or "")[:500],
+                    )
                 except Exception as e:
                     logger.error(f"[wecom_kf] Agent 处理异常: {e}", exc_info=True)
+                    _kf_tlog(
+                        "Agent处理异常: tenant={tenant}, session_id={session_id}, error={error}",
+                        tenant=tenant_id,
+                        session_id=session_id,
+                        error=str(e),
+                        level="ERROR",
+                    )
                     record_service.mark_error(str(e))
                     SessionRecordManager.end_record()
                     continue
@@ -2030,9 +2198,23 @@ async def _process_tenant_wecom_kf_messages(
             f"[wecom_kf] 后台处理完成: tenant={tenant_id}, open_kfid={open_kfid}, "
             f"total_messages={total_messages}, processed_messages={processed_messages}"
         )
+        _kf_tlog(
+            "后台任务完成: tenant={tenant}, open_kfid={open_kfid}, "
+            "total_messages={total}, processed_messages={processed}",
+            tenant=tenant_id,
+            open_kfid=open_kfid,
+            total=total_messages,
+            processed=processed_messages,
+        )
 
     except Exception as e:
         logger.error(f"[wecom_kf] 后台处理失败: tenant={tenant_id}, error={e}")
+        _kf_tlog(
+            "后台任务异常: tenant={tenant}, error={error}",
+            tenant=tenant_id,
+            error=str(e),
+            level="ERROR",
+        )
 
 
 async def _handle_kf_enter_session(callback_root, adapter) -> None:

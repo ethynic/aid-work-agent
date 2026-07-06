@@ -1307,23 +1307,23 @@ class Agent:
                     })
             # 诊断：记录加载到的历史消息概览，用于对比上下文是否缺消息
             try:
-                from src.core.temp_logger import tlog as _tlog
+                # from src.core.temp_logger import tlog as _tlog
                 _roles_preview = []
                 for m in history:
                     c = m.get("content", "")
                     if not isinstance(c, str):
                         c = str(c)
                     _roles_preview.append(f"{m.get('role')}:{c[:40]!r}")
-                _tlog(
-                    "语音合并",
-                    "[加载历史] session={sid}..., count={n}, msgs={preview}, "
-                    "current_user_input_len={cu_len}, current_user_input_preview={cu_prev!r}",
-                    sid=session_id[:20],
-                    n=len(history),
-                    preview=_roles_preview,
-                    cu_len=len(current_user_input),
-                    cu_prev=current_user_input[:80],
-                )
+                # _tlog(
+                #     "语音合并",
+                #     "[加载历史] session={sid}..., count={n}, msgs={preview}, "
+                #     "current_user_input_len={cu_len}, current_user_input_preview={cu_prev!r}",
+                #     sid=session_id[:20],
+                #     n=len(history),
+                #     preview=_roles_preview,
+                #     cu_len=len(current_user_input),
+                #     cu_prev=current_user_input[:80],
+                # )
             except Exception:
                 pass
             return history

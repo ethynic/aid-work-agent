@@ -463,13 +463,14 @@ class ChannelSessionManager:
                     if redis_client.sismember(pending_key, mid):
                         recall_pending_msgids.add(mid)
         except Exception as e:
-            tlog(
-                "撤回消息",
-                "落库前查询 recall_pending 异常: session_id={session_id}, error={error}",
-                session_id=session_id,
-                error=str(e),
-                level="ERROR",
-            )
+            # tlog(
+            #     "撤回消息",
+            #     "落库前查询 recall_pending 异常: session_id={session_id}, error={error}",
+            #     session_id=session_id,
+            #     error=str(e),
+            #     level="ERROR",
+            # )
+            pass
         has_recall_col = self._has_is_recalled_column()
 
         # 预扫描：批次内是否有 user 命中 recall_pending；最后一条 assistant 的索引。
@@ -537,19 +538,19 @@ class ChannelSessionManager:
                             json.dumps(attachments, ensure_ascii=False) if attachments else None,
                             json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
                         ))
-                        tlog(
-                            "撤回消息",
-                            "落库前命中 recall_pending，直接标记 is_recalled=TRUE: "
-                            "session_id={session_id}, message_id={message_id}, "
-                            "role={role}, hit_user={hit_user}, is_recalled_assistant={is_assistant}, "
-                            "content_preview={preview!r}",
-                            session_id=session_id,
-                            message_id=message_id,
-                            role=role,
-                            hit_user=hit_recall,
-                            is_assistant=is_recalled_assistant,
-                            preview=(content or "")[:80],
-                        )
+                        # tlog(
+                        #     "撤回消息",
+                        #     "落库前命中 recall_pending，直接标记 is_recalled=TRUE: "
+                        #     "session_id={session_id}, message_id={message_id}, "
+                        #     "role={role}, hit_user={hit_user}, is_recalled_assistant={is_assistant}, "
+                        #     "content_preview={preview!r}",
+                        #     session_id=session_id,
+                        #     message_id=message_id,
+                        #     role=role,
+                        #     hit_user=hit_recall,
+                        #     is_assistant=is_recalled_assistant,
+                        #     preview=(content or "")[:80],
+                        # )
                     else:
                         cursor.execute("""
                             INSERT INTO channel_messages
@@ -585,20 +586,21 @@ class ChannelSessionManager:
                         pending_key = redis_client.make_key(CacheKeys.RECALL_PENDING, session_id)
                         for mid in recall_pending_msgids:
                             redis_client.srem(pending_key, mid)
-                        tlog(
-                            "撤回消息",
-                            "落库后清理 recall_pending: session_id={session_id}, cleared={cleared}",
-                            session_id=session_id,
-                            cleared=list(recall_pending_msgids),
-                        )
+                        # tlog(
+                        #     "撤回消息",
+                        #     "落库后清理 recall_pending: session_id={session_id}, cleared={cleared}",
+                        #     session_id=session_id,
+                        #     cleared=list(recall_pending_msgids),
+                        # )
                     except Exception as clr_err:
-                        tlog(
-                            "撤回消息",
-                            "清理 recall_pending 失败: session_id={session_id}, error={error}",
-                            session_id=session_id,
-                            error=str(clr_err),
-                            level="ERROR",
-                        )
+                        # tlog(
+                        #     "撤回消息",
+                        #     "清理 recall_pending 失败: session_id={session_id}, error={error}",
+                        #     session_id=session_id,
+                        #     error=str(clr_err),
+                        #     level="ERROR",
+                        # )
+                        pass
 
                 return created_ids
             except Exception as e:
@@ -741,15 +743,15 @@ class ChannelSessionManager:
             # 语音合并 / pending 重处理场景下，session_queue 会通过 override
             # 传入合并后的完整输入，必须优先于闭包绑定的 agent_input_text
             effective_input = user_input_override if user_input_override is not None else agent_input_text
-            if user_input_override is not None and user_input_override != agent_input_text:
-                tlog(
-                    "语音合并",
-                    "processor 使用 override 输入 session={sid}..., "
-                    "original_len={o_len}, override_len={n_len}",
-                    sid=session_id[:20],
-                    o_len=len(agent_input_text),
-                    n_len=len(user_input_override),
-                )
+            # if user_input_override is not None and user_input_override != agent_input_text:
+                # tlog(
+                #     "语音合并",
+                #     "processor 使用 override 输入 session={sid}..., "
+                #     "original_len={o_len}, override_len={n_len}",
+                #     sid=session_id[:20],
+                #     o_len=len(agent_input_text),
+                #     n_len=len(user_input_override),
+                # )
             kwargs = {
                 "user_input": effective_input,
                 "session_id": session_id,
@@ -817,22 +819,22 @@ class ChannelSessionManager:
             attachments_to_write = result.merged_attachments_meta
         else:
             attachments_to_write = user_attachments_meta
-        if result.was_merged:
-            tlog(
-                "语音合并",
-                "持久化用户消息 session={sid}..., was_merged=True, "
-                "user_content_len={uc_len}, merged_input_len={mi_len}, "
-                "write_len={w_len}, write_preview={w_prev!r}, "
-                "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
-                sid=session_id[:20],
-                uc_len=len(user_content),
-                mi_len=len(result.merged_input),
-                w_len=len(user_to_write),
-                w_prev=user_to_write[:120],
-                um_n=len(user_attachments_meta) if user_attachments_meta else 0,
-                mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
-                wm_n=len(attachments_to_write) if attachments_to_write else 0,
-            )
+        # if result.was_merged:
+            # tlog(
+            #     "语音合并",
+            #     "持久化用户消息 session={sid}..., was_merged=True, "
+            #     "user_content_len={uc_len}, merged_input_len={mi_len}, "
+            #     "write_len={w_len}, write_preview={w_prev!r}, "
+            #     "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
+            #     sid=session_id[:20],
+            #     uc_len=len(user_content),
+            #     mi_len=len(result.merged_input),
+            #     w_len=len(user_to_write),
+            #     w_prev=user_to_write[:120],
+            #     um_n=len(user_attachments_meta) if user_attachments_meta else 0,
+            #     mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
+            #     wm_n=len(attachments_to_write) if attachments_to_write else 0,
+            # )
 
         # 构造批量写入的消息序列
         batch: List[Dict[str, Any]] = []
@@ -892,25 +894,25 @@ class ChannelSessionManager:
         })
 
         # 事务化批量写入
-        tlog(
-            "语音合并",
-            "[持久化] session={sid}..., was_merged={merged}, "
-            "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
-            "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
-            "user_to_write_len={uw_len}, user_to_write_full={uw_full!r}, "
-            "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
-            sid=session_id[:20],
-            merged=result.was_merged,
-            uc_len=len(user_content),
-            uc_prev=user_content[:120],
-            mi_len=len(result.merged_input),
-            mi_prev=result.merged_input[:120],
-            uw_len=len(user_to_write),
-            uw_full=user_to_write,
-            roles=[m.get("role") for m in batch],
-            r_len=len(response_text),
-            r_prev=response_text[:120],
-        )
+        # tlog(
+        #     "语音合并",
+        #     "[持久化] session={sid}..., was_merged={merged}, "
+        #     "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
+        #     "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
+        #     "user_to_write_len={uw_len}, user_to_write_full={uw_full!r}, "
+        #     "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
+        #     sid=session_id[:20],
+        #     merged=result.was_merged,
+        #     uc_len=len(user_content),
+        #     uc_prev=user_content[:120],
+        #     mi_len=len(result.merged_input),
+        #     mi_prev=result.merged_input[:120],
+        #     uw_len=len(user_to_write),
+        #     uw_full=user_to_write,
+        #     roles=[m.get("role") for m in batch],
+        #     r_len=len(response_text),
+        #     r_prev=response_text[:120],
+        # )
         write_ok = self.add_messages_batch_transactional(session_id, tenant_id, batch)
         if write_ok is None:
             logger.error(
@@ -1166,7 +1168,6 @@ class ChannelSessionManager:
         Returns:
             消息列表（按 created_at ASC 时间正序）
         """
-        from src.core.temp_logger import tlog
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -1214,14 +1215,14 @@ class ChannelSessionManager:
             # 记录撤回消息过滤情况（仅当列存在时统计）
             if not include_recalled and has_recall_column:
                 recalled_count = sum(1 for m in messages if m.get("is_recalled"))
-                if recalled_count > 0:
-                    tlog(
-                        "撤回消息",
-                        "get_messages 过滤已撤回消息: session_id={session_id}, filtered={filtered}, total={total}",
-                        session_id=session_id,
-                        filtered=recalled_count,
-                        total=len(messages),
-                    )
+                # if recalled_count > 0:
+                    # tlog(
+                    #     "撤回消息",
+                    #     "get_messages 过滤已撤回消息: session_id={session_id}, filtered={filtered}, total={total}",
+                    #     session_id=session_id,
+                    #     filtered=recalled_count,
+                    #     total=len(messages),
+                    # )
 
             return messages
 
@@ -1279,17 +1280,16 @@ class ChannelSessionManager:
         Returns:
             被标记的消息数量
         """
-        from src.core.temp_logger import tlog
         import json
 
         # 迁移兼容：is_recalled 列不存在时，直接返回 0
         if not self._has_is_recalled_column():
-            tlog(
-                "撤回消息",
-                "数据库尚未迁移，is_recalled 列不存在，跳过标记: session_id={session_id}, msgid={msgid}",
-                session_id=session_id,
-                msgid=recall_msgid,
-            )
+            # tlog(
+            #     "撤回消息",
+            #     "数据库尚未迁移，is_recalled 列不存在，跳过标记: session_id={session_id}, msgid={msgid}",
+            #     session_id=session_id,
+            #     msgid=recall_msgid,
+            # )
             return 0
 
         with get_db_connection() as conn:
@@ -1314,15 +1314,15 @@ class ChannelSessionManager:
                     cursor, session_id, single_row["id"]
                 )
                 conn.commit()
-                tlog(
-                    "撤回消息",
-                    "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, "
-                    "row_id={row_id}, assistant_row_id={assistant_row_id}",
-                    session_id=session_id,
-                    msgid=recall_msgid,
-                    row_id=single_row["id"],
-                    assistant_row_id=assistant_row_id,
-                )
+                # tlog(
+                #     "撤回消息",
+                #     "标记单条消息已撤回: session_id={session_id}, msgid={msgid}, "
+                #     "row_id={row_id}, assistant_row_id={assistant_row_id}",
+                #     session_id=session_id,
+                #     msgid=recall_msgid,
+                #     row_id=single_row["id"],
+                #     assistant_row_id=assistant_row_id,
+                # )
                 return 1
 
             # ===== 情况2：合并消息命中（metadata.merged_from_msgids 包含 recall_msgid）=====
@@ -1353,14 +1353,14 @@ class ChannelSessionManager:
                         WHERE id = %s
                     """, (merged_row["id"],))
                     conn.commit()
-                    tlog(
-                        "撤回消息",
-                        "合并消息部分撤回降级为整条撤回（未找到对应段）: "
-                        "session_id={session_id}, msgid={msgid}, row_id={row_id}",
-                        session_id=session_id,
-                        msgid=recall_msgid,
-                        row_id=merged_row["id"],
-                    )
+                    # tlog(
+                    #     "撤回消息",
+                    #     "合并消息部分撤回降级为整条撤回（未找到对应段）: "
+                    #     "session_id={session_id}, msgid={msgid}, row_id={row_id}",
+                    #     session_id=session_id,
+                    #     msgid=recall_msgid,
+                    #     row_id=merged_row["id"],
+                    # )
                     return 1
 
                 # 更新 metadata
@@ -1396,19 +1396,19 @@ class ChannelSessionManager:
                     """, (new_content, json.dumps(metadata, ensure_ascii=False), merged_row["id"]))
 
                 conn.commit()
-                tlog(
-                    "撤回消息",
-                    "合并消息部分撤回重建: session_id={session_id}, msgid={msgid}, "
-                    "row_id={row_id}, segments_before={before}, segments_after={after}, "
-                    "all_recalled={all_recalled}, assistant_row_id={assistant_row_id}",
-                    session_id=session_id,
-                    msgid=recall_msgid,
-                    row_id=merged_row["id"],
-                    before=len(merged_segments),
-                    after=len(remaining_segments),
-                    all_recalled=all_recalled,
-                    assistant_row_id=assistant_row_id,
-                )
+                # tlog(
+                #     "撤回消息",
+                #     "合并消息部分撤回重建: session_id={session_id}, msgid={msgid}, "
+                #     "row_id={row_id}, segments_before={before}, segments_after={after}, "
+                #     "all_recalled={all_recalled}, assistant_row_id={assistant_row_id}",
+                #     session_id=session_id,
+                #     msgid=recall_msgid,
+                #     row_id=merged_row["id"],
+                #     before=len(merged_segments),
+                #     after=len(remaining_segments),
+                #     all_recalled=all_recalled,
+                #     assistant_row_id=assistant_row_id,
+                # )
                 return 1
 
             # ===== 情况3：未命中持久化消息，兜底清理合并缓冲区 =====
@@ -1418,13 +1418,13 @@ class ChannelSessionManager:
                 from src.core.session_queue import session_queue
                 removed = session_queue.remove_merge_segment(session_id, recall_msgid)
             except Exception as buf_err:
-                tlog(
-                    "撤回消息",
-                    "清理合并缓冲区异常: session_id={session_id}, msgid={msgid}, error={error}",
-                    session_id=session_id,
-                    msgid=recall_msgid,
-                    error=str(buf_err),
-                )
+                # tlog(
+                #     "撤回消息",
+                #     "清理合并缓冲区异常: session_id={session_id}, msgid={msgid}, error={error}",
+                #     session_id=session_id,
+                #     msgid=recall_msgid,
+                #     error=str(buf_err),
+                # )
                 removed = False
 
             # 竞态兜底：processor 可能已经把 buffer 里的输入读走并在跑 agent，
@@ -1436,31 +1436,32 @@ class ChannelSessionManager:
                 pending_key = redis_client.make_key(CacheKeys.RECALL_PENDING, session_id)
                 redis_client.sadd(pending_key, recall_msgid)
                 redis_client.expire(pending_key, 300)  # 300s 覆盖 processor 最长运行时间
-                tlog(
-                    "撤回消息",
-                    "已登记 recall_pending: session_id={session_id}, msgid={msgid}, pending_key={key}",
-                    session_id=session_id,
-                    msgid=recall_msgid,
-                    key=pending_key,
-                )
+                # tlog(
+                #     "撤回消息",
+                #     "已登记 recall_pending: session_id={session_id}, msgid={msgid}, pending_key={key}",
+                #     session_id=session_id,
+                #     msgid=recall_msgid,
+                #     key=pending_key,
+                # )
             except Exception as pend_err:
-                tlog(
-                    "撤回消息",
-                    "登记 recall_pending 失败: session_id={session_id}, msgid={msgid}, error={error}",
-                    session_id=session_id,
-                    msgid=recall_msgid,
-                    error=str(pend_err),
-                    level="ERROR",
-                )
+                # tlog(
+                #     "撤回消息",
+                #     "登记 recall_pending 失败: session_id={session_id}, msgid={msgid}, error={error}",
+                #     session_id=session_id,
+                #     msgid=recall_msgid,
+                #     error=str(pend_err),
+                #     level="ERROR",
+                # )
+                pass
 
-            tlog(
-                "撤回消息",
-                "未命中持久化消息，兜底清理合并缓冲区: "
-                "session_id={session_id}, msgid={msgid}, buffer_removed={removed}",
-                session_id=session_id,
-                msgid=recall_msgid,
-                removed=removed,
-            )
+            # tlog(
+            #     "撤回消息",
+            #     "未命中持久化消息，兜底清理合并缓冲区: "
+            #     "session_id={session_id}, msgid={msgid}, buffer_removed={removed}",
+            #     session_id=session_id,
+            #     msgid=recall_msgid,
+            #     removed=removed,
+            # )
             return 0
 
     def count_messages_by_session(
