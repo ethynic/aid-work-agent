@@ -429,8 +429,10 @@ onMounted(async () => {
         agentSessionId.value = currentSessionId.value
       }
     } else if (currentSessionId.value) {
-      // currentSessionId 已有值（从历史页面跳转过来），需要同步到 agentSessionId
+      // currentSessionId 已有值（从业务页等场景跳转过来，watch 已错过 null→id 的变化）
+      // 同步 id 并显式加载该会话消息，避免挂载后无消息显示为空白"新会话"
       agentSessionId.value = currentSessionId.value
+      await switchSession(currentSessionId.value)
     }
   }
 })

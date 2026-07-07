@@ -568,6 +568,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
             "chanpinbianhao": "248",
             "chanpinmingcheng": "得宝（TEMPO）卷筒卫生纸 T4680 四层 160g/卷 10卷/提",
             "danjia": "52.00",
+            "guigeshuxing": "黑色&36码&皮的",
             "fid": 1, "id": 1,
             "jiliangdanwei": "支",
             "pinpai": "得宝（TEMPO）",
@@ -589,6 +590,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
               { "attr_name": "chanpinbianhao", "display_name": "产品编号" },
               { "attr_name": "chanpinmingcheng", "display_name": "产品名称" },
               { "attr_name": "pinpai", "display_name": "品牌" },
+              { "attr_name": "guigeshuxing", "display_name": "规格属性", "component": "input" },
               { "attr_name": "jiliangdanwei", "display_name": "计量单位" },
               { "attr_name": "xiadanshuliang", "display_name": "下单数量" },
               { "attr_name": "danjia", "display_name": "单价" },
@@ -906,6 +908,7 @@ POST，Body 为 `application/json`
 | chanpinbianhao | string/int | 是 | 产品编号，从产品列表/详情接口获取 |
 | chanpinmingcheng | string | 是 | 产品名称，从产品列表/详情接口获取 |
 | pinpai | string | 否 | 品牌，从产品详情接口获取 |
+| guigeshuxing | string | 否 | 规格属性，从产品详情接口获取 把规格尺寸&颜色&材质&材质拼接起来 |
 | jiliangdanwei | string | 否 | 计量单位，从产品详情接口获取 |
 | xiadanshuliang | string/int | 是 | 下单数量，必须 > 0 |
 | danjia | string | 是 | 单价，必须 > 0 |
