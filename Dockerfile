@@ -104,6 +104,7 @@ RUN echo 'deb https://mirrors.cloud.tencent.com/debian/ trixie main non-free-fir
     jq \
     lsof \
     tree \
+    ripgrep \
     fonts-noto-cjk \
     libreoffice-writer \
     pandoc \

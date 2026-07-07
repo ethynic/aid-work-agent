@@ -11,22 +11,24 @@
 1. **先删后改**：先把待删除工具清掉，减少干扰。
 2. **先立标准**：在动任何工具前，先落地统一规范（作为后续所有改造和新工具的依据）。
 3. **试点先行**：`http_api` + `pdf_process` 最早做，用 token 对比 + 人工抽检验证规范有效，再铺开。
-4. **按使用频率排优先级**（高频优先，低频末尾）：
-   - **高频梯队**：文件四件套（read/write/edit/cp）、knowledge_base_search、content_generate、email 三件套、word/excel_process
+4. **闭环优先**：Phase 2 试点只做了截断（信息黑洞），Phase 3 立即补齐「落盘 + read/grep 回读」闭环 + 新增 grep 工具 + 文件工具对齐 Claude Code（offset 1-based、replace_all）。这是基础设施级改造，优先于其他高频工具的纯 token 优化。
+5. **按使用频率排优先级**（高频优先，低频末尾）：
+   - **高频梯队**：文件四件套（read/write/edit/cp）+ grep、knowledge_base_search、content_generate、email 三件套、word/excel_process
    - **中频梯队**：attraction/hotel_search、web_search、analyze_data/upload_data_file
-   - **低频梯队（放最后）**：browser_automation、create/manage_scheduled_task、ai_call、transfer_to_human、paddleocr_doc_parsing、ppt_process
-5. **依赖就近**：`paddleocr_doc_parsing` 被 `pdf_process.ocr` 内部调用，返回结构会影响 pdf_process——详见 Phase 2 依赖说明，建议视情况提前。
+   - **低频梯队（放最后）**：browser_automation、create/manage_scheduled_task、ai_call、transfer_to_human、ppt_process（paddleocr 已在 Phase 2 提前完成）
+6. **依赖就近**：`paddleocr_doc_parsing` 被 `pdf_process.ocr` 内部调用，已在 Phase 2 提前完成。
 
 ## 全局里程碑
 
 | 里程碑 | 内容 | 验收 gate |
 |--------|------|-----------|
-| M0 清理 | Phase 0 | upload_to_remote 从代码库彻底移除 |
-| M1 规范 | Phase 1 | 工具开发规范文档落地 + BaseTool 公共能力可用 |
-| M2 试点 | Phase 2 | http_api + pdf_process 改造完成，**token 对比达标 + 人工抽检通过**，方可进入 M3 |
-| M3 高频 | Phase 3-7 | 高频梯队全部符合规范 |
+| M0 清理 | Phase 0 | upload_to_remote 从代码库彻底移除 ✅ |
+| M1 规范 | Phase 1 | 工具开发规范文档落地 + BaseTool 公共能力可用 ✅ |
+| M2 试点 | Phase 2 | http_api + pdf_process + paddleocr 改造完成，token 对比达标 ✅ |
+| M2.5 闭环 | Phase 3a-3b | **落盘闭环基建 + 回填 Phase 2 落盘 + 新增 grep**，agent 能 read/grep 回读被截断内容 |
+| M3 高频 | Phase 3c-7 | 文件工具对齐 Claude Code（offset 1-based、replace_all）+ 高频梯队全部符合规范 |
 | M4 中频 | Phase 8-10 | 中频梯队全部符合规范 |
-| M5 低频 | Phase 11-16 | 低频梯队全部符合规范，整体收尾 |
+| M5 低频 | Phase 11-15 | 低频梯队全部符合规范，整体收尾（原 Phase 15 paddleocr 已并入 Phase 2） |
 
 ---
 
@@ -99,16 +101,42 @@
 
 ---
 
-## Phase 3 — 高频：文件四件套 `read` / `write` / `edit` / `cp`
+## Phase 3 — 高频：文件四件套对齐 Claude Code + 新增 grep（含落盘闭环基建）
 
-**最核心工具，每次文件操作必用，放高频首位。**
+**最核心工具，每次文件操作必用，放高频首位。本 Phase 升级为「对齐 Claude Code 水准」，不只是 token 优化。**
 
-- **read**：description 从 ~19 行瘦身（3 种模式教程、SKILL_ROOT 注释迁移到 usage_guide）；Field description 与 description 去重
-- **write**：description（~20 行）与 usage_guide（~19 行）去重合并（当前约 40 行重复）；`generate_prompt` Field description 去教程化
-- **edit**：description 三种 mode 示例迁移到 usage_guide；9 个条件必填参数改用 `model_validator` + `Literal`，让 schema 自描述
-- **cp**：description 参数说明（与 Field description 逐条重复）删除；`visible` Field description 去业务背景；返回值 `resolved_source` 去 echo 冗余
+> 设计文档：[`file-tools-claude-code-parity-design.md`](./file-tools-claude-code-parity-design.md)（offset/replace_all）、[`large-content-retrieval-design.md`](./large-content-retrieval-design.md)（grep + 落盘闭环）
 
-**验收**：符合规范 + 现有文件工具测试全绿 + 抽检文件读写编辑流程正常。
+### 3a. 落盘闭环基建（新增 `_spill.py` + grep 工具）
+- 新增 `src/tools/_spill.py`：`spill_large_content()` 落盘管理器（>5000 字符才落盘到临时目录）
+- 新增 `src/tools/file/grep_tool.py`：grep 工具（调 ripgrep 二进制，正则+行号+上下文+glob+output_mode）
+- `src/core/agent.py` 注册 grep 工具
+- `Dockerfile` 补装 ripgrep
+- 单测：`tests/unit/tools/test_spill.py`、`test_grep_tool.py`
+- **此步先行**，因为 3b 的 http_api 落盘改造依赖 `_spill.py`
+
+### 3b. 回填 Phase 2 试点：补落盘闭环
+Phase 2 只截断没落盘，本步回填：
+- `http_api._parse_response`：大响应调 `spill_large_content` 落盘，返回 file_path + truncated
+- `paddleocr.full_text`、`pdf_process._merge_results` 截断字段：同上
+- **解决 Phase 2 的「信息黑洞」问题**——agent 现在能用 read/grep 回读被截断内容
+
+### 3c. read/edit 对齐 Claude Code（breaking change）
+- **offset 改 1-based**（read + edit replace_lines）：所见行号即所填 offset
+- read：description 瘦身（教程迁 usage_guide）、next_hint 文案改 1-based
+- edit：description 瘦身、`replace_string` 新增 `replace_all` 参数、replace_lines offset 改 1-based
+- **全局搜索 `src/skills/`、`.agents/skills/` 适配 SKILL.md 中的 0-based offset 示例**
+- edit 9 个条件必填参数改用 `model_validator` + `Literal`
+
+### 3d. write/cp token 优化
+- write：description（~20 行）与 usage_guide（~19 行）去重合并；`generate_prompt` Field description 去教程化
+- cp：description 参数说明（与 Field description 逐条重复）删除；`visible` Field description 去业务背景；返回值 `resolved_source` 去 echo 冗余
+
+**验收**：
+- 落盘闭环：大响应落盘 + agent 能 read/grep 回读（端到端跑通一次 http_api 大响应→grep→read 流程）
+- offset 1-based：read `offset=1` 读第 1 行，全局 skill 无 0-based 残留
+- replace_all：批量替换生效，默认行为不变（向后兼容）
+- 符合 token 规范 + 文件工具测试全绿 + 抽检文件读写编辑流程正常
 
 ---
 
@@ -226,20 +254,10 @@
 
 ---
 
-## Phase 15 — 低频：`paddleocr_doc_parsing`
+## Phase 15 — 低频：`ppt_process`
 
-> 若 Phase 2 依赖说明中决定提前，本 Phase 取消或转为回归确认。
-
-- 删除返回值三重复制：去掉冗余的 `result`（原始 API 响应）字段，保留 `full_text`（已截断）即可，`texts` 数组评估是否保留
-- 多处错误 `debug` 字段移除
-
-**验收**：符合规范 + OCR 解析抽检正常。
-
----
-
-## Phase 16 — 低频：`ppt_process`
-
-> 返回值已干净（正面标杆之一），本 Phase 主要是 description 瘦身。
+> `paddleocr_doc_parsing` 已在 Phase 2 提前完成，原 Phase 15 取消，本 Phase 顺延。
+> ppt_process 返回值已干净（正面标杆之一），本 Phase 主要是 description 瘦身。
 
 - description（~1050 字符，含嵌套 cp 调用示例代码）瘦身，cp 注册迁移到 usage_guide
 - 复用其 `_format_user_error` 脱敏机制作为规范参照（已在 Phase 1 提取为公共能力）

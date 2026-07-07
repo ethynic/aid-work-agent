@@ -4,10 +4,12 @@ from .read_tool import ReadTool
 from .write_tool import WriteTool
 from .edit_tool import EditTool
 from .cp_tool import CpTool
+from .grep_tool import GrepTool
 
 __all__ = [
     "ReadTool",
     "WriteTool",
     "EditTool",
     "CpTool",
+    "GrepTool",
 ]

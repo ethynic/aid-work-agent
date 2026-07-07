@@ -285,6 +285,16 @@ async def lifespan(app: FastAPI):
     logger.info(f"LLM Provider: {settings.llm.provider}, Model: {settings.llm.qwen.model}, Base URL: {settings.llm.qwen.base_url}")
     logger.info(f"Registered tools: {master_agent.tool_registry.list_tools()}")
 
+    # 清理过期落盘文件（大内容检索闭环的临时文件，启动时清旧，防无限增长）
+    # 非关键：失败不影响启动
+    try:
+        from src.tools._spill import cleanup_stale_spill_files
+        cleaned = cleanup_stale_spill_files(max_age_hours=24)
+        if cleaned > 0:
+            logger.info(f"Cleaned up {cleaned} stale spill files on startup")
+    except Exception as e:
+        logger.warning(f"清理过期落盘文件失败（不影响启动）: {e}")
+
     # Initialize PostgreSQL connection pool first (required by init_database)
     try:
         logger.info(f"[pid={_pid}] step1: init_postgres_pool ...")
