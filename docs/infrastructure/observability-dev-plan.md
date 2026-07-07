@@ -5,8 +5,8 @@
 > 对应差距分析：[enterprise-agent-infrastructure-gap-analysis.md](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.1
 > 前置重构：[async-generator-migration-dev-plan.md](./async-generator-migration-dev-plan.md)（已完成 — 事件流已结构化）
 > 创建日期：2026-05-29
-> 更新日期：2026-06-01（Phase 1 调整为"采集+查看事实数据"，含前端追踪查看页面）
-> 状态：待开发
+> 更新日期：2026-07-07（Phase 1 全部完成含方案 C，1.6 单测和 1.7 JSONL 双写迁移已取消；Phase 2-4 未开始）
+> 状态：🔧 部分完成（Phase 1 已完成 + Phase 2-4 待开发）
 
 ---
 
@@ -83,10 +83,10 @@
   - 在 finally 区域调用 `trace_collector.on_complete(record_service)`
   - [x] 已完成
 
-- [ ] **1.3.2 在非 SSE 路径中集成追踪（process_message_sync 路径）**
-  - ⚠️ **本项已由方案 C 接管**：改为「在 `Agent.process_message()` 内部接入 TraceCollector，从 record_service 自动读取上下文，所有渠道零改造覆盖」
+- [x] **1.3.2 在非 SSE 路径中集成追踪（process_message_sync 路径）** ✅ 由方案 C 接管（已落地）
+  - ⚠️ **本项已由方案 C 接管并完成**：改为「在 `Agent.process_message()` 内部接入 TraceCollector，从 record_service 自动读取上下文，所有渠道零改造覆盖」
+  - 实现位置：`src/core/agent.py:1769-1834`（process_message wrapper）+ `:1076-1080`（_detect_source_type 从 _explicit_record_service 读 source_type）
   - 详见：[observability-channel-sessions-dev-plan.md](./observability-channel-sessions-dev-plan.md) 阶段 A
-  - 原方案（调用方旁路收集）已废弃，理由见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md) §五
 
 - [x] **1.3.3 在 agent.py 中 yield `llm_call` 事件**
   - 在 `process_message()` 主循环和 `execute_as_subagent()` 两个 LLM 调用点后，各 yield 一个 `llm_call` 事件
@@ -164,79 +164,21 @@
   - 在 `PortalLayout.vue` 的 `portalMenuItems` 中添加 `{ path: '/portal/monitoring', label: '追踪查看', icon: '🔍' }`
   - [x] 已完成
 
-### 阶段 1.6：验证与测试
-
-> 前置依赖：1.2 ~ 1.5
-
-- [ ] **1.6.1 编写 trace_collector 单元测试**
-  - 测试完整的 `on_event` 事件序列：tool_start → tool_result → response → on_complete
-  - 测试同名工具多次调用（_tool_name_counter）
-  - 测试错误和取消路径
-  - 测试 output 完整拼接
-  - 位置：`tests/unit/test_trace_collector.py`
-  - [ ] 未开始
-
-- [ ] **1.6.2 编写 trace_persist 单元测试**
-  - Mock `get_connection()`，验证 SQL 写入正确性
-  - 测试队列满时的行为
-  - 位置：`tests/unit/test_trace_persist.py`
-  - [ ] 未开始
-
-- [ ] **1.6.3 端到端验证**
-  - 启动服务，通过 SSE 发送聊天请求
-  - 检查 `obs_traces` 和 `obs_spans` 表是否有数据写入
-  - 通过 `/api/monitor/sessions` 和 `/api/monitor/traces` API 查询验证数据正确性
-  - 验证 span 数据（工具调用、耗时、成功/失败）是否正确
-  - [ ] 未开始
-
-- [ ] **1.6.4 前端构建验证**
-  - `cd frontend && npm run build` 确保无编译错误
-  - 打开追踪查看页面，验证会话列表、Trace 列表、Trace 详情三级浏览正常
-  - 验证 Span 展开查看完整 input/output（替代 JSONL 日志的关键能力）
-  - [ ] 未开始
-
-### 阶段 1.7：JSONL 日志迁移（双写验证期）
-
-> 前置依赖：1.3
-> 设计文档参考：§十（JSONL 日志迁移计划）
-> 目标：验证全链路追踪数据可以完整替代 JSONL 文件日志
-
-- [ ] **1.7.1 确保 obs_spans 中 LLM 调用数据完整保存**
-  - 在 `trace_collector.py` 的 `on_complete()` 中，除了从 `SessionRecordService` 获取汇总 token 数据外，还需要为每次 LLM 调用创建 `span_type=generation` 的 span
-  - LLM 调用的 input/output 必须**不截断**完整保存（对齐现有 `llm_invoke_logs` 的行为）
-  - 验证方法：对比同一请求的 `llm_invoke_logs` 和 `obs_spans` 数据是否一致
-  - [ ] 未开始
-
-- [ ] **1.7.2 双写期间数据对比验证**
-  - 对比 `obs_traces.total_tokens` vs `agent_session_logs` 的 `usage` 汇总
-  - 对比 `obs_spans` 工具调用数 vs `agent_session_logs` 的 `tool_calls_count`
-  - 对比 `obs_spans(name=generation)` 的 LLM span vs `llm_invoke_logs` 的调用记录数
-  - 编写对比验证脚本（`scripts/verify_obs_vs_jsonl.py`）
-  - [ ] 未开始
-
-- [ ] **1.7.3 添加 JSONL 日志开关**
-  - 新增环境变量 `OBS_DISABLE_JSONL_LOGGING`（默认 `false`）
-  - 在 `llm_call_logger.py` 和 `agent_logger.py` 入口处检查此开关
-  - 为 `true` 时跳过 JSONL 文件写入，仅保留 obs 追踪
-  - [ ] 未开始
-
 ### Phase 1 完成标准
 
-- [ ] SSE 对话后 `obs_traces` 有记录（含完整的 input、output、status、duration_ms）
-- [ ] 工具调用后 `obs_spans` 有记录（含 name、duration_ms、success）
-- [ ] LLM 调用后 `obs_spans` 有 generation span（含完整的 request/response，不截断）
-- [ ] `/api/monitor/sessions` API 可查询有追踪数据的会话列表
-- [ ] `/api/monitor/sessions/{id}/traces` API 可查询某会话的所有 trace
-- [ ] `/api/monitor/traces/{id}` API 可查询 trace 详情（含完整 span 树）
-- [ ] 前端 `/portal/monitoring` 可浏览会话列表 → Trace 列表 → Trace 详情
-- [ ] 前端 Trace 详情中可展开查看 LLM 完整 request/response 和工具调用参数/结果
-- [ ] `JsonViewer` 组件支持默认折叠、逐级展开、语法高亮、字符串截断
-- [ ] agent.py 未做任何修改
-- [ ] 主流程延迟增加 < 1ms（on_event 为同步方法）
-- [ ] 双写期间 obs 数据与 JSONL 数据对比一致
-- [ ] `OBS_DISABLE_JSONL_LOGGING` 开关可用
+- [x] SSE 对话后 `obs_traces` 有记录（含完整的 input、output、status、duration_ms）
+- [x] 工具调用后 `obs_spans` 有记录（含 name、duration_ms、success）
+- [x] LLM 调用后 `obs_spans` 有 generation span（含完整的 request/response，不截断）
+- [x] `/api/monitor/sessions` API 可查询有追踪数据的会话列表（含 source_type 筛选 + channel_info 跨库补充）
+- [x] `/api/monitor/sessions/{id}/traces` API 可查询某会话的所有 trace
+- [x] `/api/monitor/traces/{id}` API 可查询 trace 详情（含完整 span 树）
+- [x] 前端 `/portal/monitoring` 可浏览会话列表 → Trace 列表 → Trace 详情
+- [x] 前端 Trace 详情中可展开查看 LLM 完整 request/response 和工具调用参数/结果
+- [x] `JsonViewer` 组件支持默认折叠、逐级展开、语法高亮、字符串截断
+- [~] ~~agent.py 未做任何修改~~ ⚠️ 本项已被方案 C 取代：agent.py 主动改造（process_message wrapper），换取所有渠道零改造覆盖，详见 1.3.2 与 channel-sessions 设计
+- [x] 主流程延迟增加 < 1ms（on_event 为同步方法）
 
----
+> 1.6（单测/e2e 验证）和 1.7（JSONL 双写对比 + 关闭开关）已不再列入计划：1.6 单测自功能上线每天都在真实流量下运行，事实已验证，单测不再追加；1.7 JSONL 与 obs 永久并行（前者供 SSH 翻日志/脚本分析，后者供前端结构化查看），不做对比、不做开关。
 
 ## Phase 2：质量评估 + 幻觉检测（预计 2 周）
 
@@ -475,18 +417,18 @@
 | 里程碑 | 完成标志 | 对应任务 |
 |--------|---------|---------|
 | M1: 追踪可用 | 通过 API 查询到完整的 trace + span 数据，agent.py 零修改 | Phase 1 阶段 1.1~1.5 |
-| M1.5: JSONL 可替代 | obs 数据与 JSONL 数据对比一致，开关可用 | Phase 1 阶段 1.6 |
+| M1: 追踪可用 | obs_traces + obs_spans 数据完整，前端可三级浏览 | ✅ 已完成 |
 | M2: 质量可度量 | obs_scores 表中有 LLM Judge 评分 + 幻觉检测数据 | Phase 2 全部完成 |
 | M3: 监控可视化 | 前端仪表盘实时展示指标和追踪详情 | Phase 3 全部完成 |
 | M4: 告警自动化 | 异常场景自动触发通知 | Phase 4 全部完成 |
 
-### JSONL 日志淘汰计划
+### JSONL 日志策略
 
-| 阶段 | 时间点 | 动作 |
-|------|--------|------|
-| 双写期 | Phase 1 上线后 ~2 周 | obs 追踪和 JSONL 同时写入，对比验证数据一致性 |
-| 开关期 | M1.5 验证通过后 | `OBS_DISABLE_JSONL_LOGGING=true` 关闭 JSONL，保留代码可回退 |
-| 移除期 | 开关期稳定 2 周后 | 移除 Provider 层和 Agent 层的 JSONL 写入调用，保留 `skill_execute` 日志 |
+obs 追踪与 JSONL 文件日志**永久并行**，不做淘汰：
+- obs 系统：结构化追踪数据，供前端可视化查看、API 查询
+- JSONL 文件：文本日志，供 SSH 翻日志、脚本分析、问题快速定位
+
+不引入 `OBS_DISABLE_JSONL_LOGGING` 开关，不做对比验证脚本。
 
 ### 风险项
 

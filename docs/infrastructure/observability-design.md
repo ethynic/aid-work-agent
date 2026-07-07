@@ -5,8 +5,8 @@
 > 开发计划：[可观测性与质量保障开发计划](./observability-dev-plan.md)
 > 前置重构：[AsyncGenerator 迁移](./async-generator-migration-design.md)（已完成，事件流已结构化）
 > 设计日期：2026-05-29
-> 更新日期：2026-06-01（新增 §十 JSONL 日志迁移计划）
-> 状态：草案
+> 更新日期：2026-07-07（§三 架构更新为方案 C：TraceCollector 下沉到 Agent.process_message）
+> 状态：🔧 Phase 1 已完成（含方案 C）；Phase 2-4 待开发
 
 ---
 
@@ -237,17 +237,13 @@ SELECT add_retention_policy('obs_scores', INTERVAL '180 days');
 
 ## 三、分布式链路追踪
 
-> **2026-06-01 更新**：AsyncGenerator 迁移（commit `51c41f4`）已完成，`process_message()` 返回 `AsyncGenerator[dict, None]`，每个事件已是结构化 dict。追踪数据直接在 SSE handler 的 `async for event` 循环中**无侵入收集**。
+> **架构演进（2026-07-07，方案 C 已落地）**：TraceCollector 接入点已从「SSE handler 调用方旁路」下沉到 `Agent.process_message()` 内部 wrapper，自动从 `SessionRecordService` 读取所有 trace 上下文（含 `source_type`）。Web / wecom / wecom_kf / dingtalk / feishu 等所有渠道**零改造**自动产生 trace。详见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。
 >
-> **2026-06-01 更新2**：为记录 LLM 调用的完整输入上下文，在 `agent.py` 的两个 LLM 调用点后新增 `llm_call` 事件 yield。TraceCollector 只保留**最后一次** LLM 调用的完整 messages（避免存储大量重复的累积上下文）。
+> 历史背景：AsyncGenerator 迁移（commit `51c41f4`）完成后，事件流已是结构化 dict。原方案在此基础上让每个调用方在 `async for event` 循环中各自接入 TraceCollector —— 由于调用方分散在 `main.py:event_generator`、`channel_routes.py`（4 个渠道）、`scheduler/executor.py` 等多处，该方案导致 4 个渠道全部遗漏 trace。方案 C 把接入点下沉到唯一入口 `Agent.process_message()`，从根上消除「漏接」可能性。
 
-### 3.1 架构：事件流旁路收集
+### 3.1 架构：Agent 内部自动收集
 
-> **更新（2026-06-15，方案 C）**：原方案在 SSE handler 调用方旁路收集，导致每个新调用方都要各接一遍（4 个渠道全部遗漏）。
-> 现已下沉到 `Agent.process_message()` 内部，自动从 `record_service` 读取所有 trace 上下文（含 source_type），
-> 实现渠道层零改造自动覆盖所有来源。详见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。
-
-利用已有的结构化事件流，在 `Agent.process_message()` 内部旁路收集追踪数据：
+TraceCollector 在 `Agent.process_message()` 内部 wrapper 中启动，自动从当前请求绑定的 `SessionRecordService` 解析上下文，无需调用方传任何 trace 相关参数：
 
 ```
 Agent.process_message() 内部 wrapper
@@ -291,7 +287,7 @@ LLM 调用信息从已有的 SessionRecordService 获取（token、model、durat
 
 ### 3.3 TraceCollector 实现
 
-在 SSE handler 的 `async for event` 循环中旁路收集追踪数据：
+TraceCollector 由 `Agent.process_message()` wrapper 实例化，每个事件 yield 前调用 `on_event`，请求结束/出错时由 wrapper 的 `finally` 块调用 `on_complete(_record)` 持久化：
 
 ```python
 # src/core/trace_collector.py
@@ -347,10 +343,11 @@ class TraceRecord:
 
 class TraceCollector:
     """
-    追踪数据收集器 — 在 SSE handler 的 async for 循环中旁路调用。
+    追踪数据收集器 — 由 Agent.process_message() wrapper 在请求开始时实例化，
+    在事件流（async for event）和 try/except/finally 中旁路调用。
 
-    不修改 agent.py，通过事件流的 type 字段识别并记录每个步骤。
-    所有 input/output 数据完整保存，不截断。
+    所有上下文（session/tenant/user/source_type/subagent）从 SessionRecordService
+    读取，调用方无需传任何 trace 相关参数。所有 input/output 数据完整保存，不截断。
     """
 
     def __init__(self, session_id: str, tenant_id: str, user_id: str,
@@ -462,66 +459,61 @@ class TraceCollector:
             del self._active_spans[key]
 ```
 
-### 3.4 在 SSE handler 中集成
+### 3.4 接入点：Agent.process_message wrapper
 
-> **更新（2026-06-15，方案 C）**：本节原描述的「在 `main.py:event_generator` 中旁路接入」已废弃。
-> TraceCollector 现已在 `Agent.process_message()` 内部接入，`main.py:event_generator` 中的旁路代码已全部移除。
-> 所有非 SSE 渠道路径（channel_routes、scheduler 等）自动产生 trace，无需各接一遍。详见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。
-
-在 `src/main.py` 的 `event_generator()` 中，只需在现有 `async for event` 循环前后各加一行：
+TraceCollector 的唯一接入点是 `Agent.process_message()` wrapper（`src/core/agent.py:1769-1834`）。原 `_process_message_impl` 的 yield 逻辑保持不变，外层 wrapper 仅做三件事：解析 record_service → 初始化 TraceCollector → 在事件循环和 try/except/finally 中旁路调用。
 
 ```python
-# main.py event_generator() 修改点（仅标注 ★ 处为新代码）
+# src/core/agent.py（精简示意，以实际代码为准）
+async def process_message(self, user_input, session_id, user=None, ...):
+    # 1. 从 record_service 解析 trace 上下文
+    _record = getattr(self, '_explicit_record_service', None) \
+              or SessionRecordManager.get_current_record()
 
-async def event_generator():
-    # ... 现有的初始化代码 ...
-
-    # ★ 创建 TraceCollector
-    from src.core.trace_collector import TraceCollector
-    trace_collector = TraceCollector(
-        session_id=session_id,
-        tenant_id=chat_tenant_id,
-        user_id=record_user_id,
-        input_msg=full_message,
-        source_type=source_type,
-    )
-
-    try:
-        # 发送初始连接成功消息（现有代码不变）
-        yield init_msg
-
+    trace_collector = None
+    if _record:
         try:
-            async for event in agent.process_message(...):
-                # 现有 SSE 转发代码不变
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                # ★ 旁路收集追踪数据（同步调用，< 1ms）
-                trace_collector.on_event(event)
-
-                # 现有的 response_parts / record_service 处理不变
-                event_type = event.get("type")
-                if event_type == "response":
-                    response_parts.append(event.get("data", ""))
-                # ...
-
-        except asyncio.CancelledError:
-            # ★ 记录取消
-            trace_collector.on_event({"type": "cancelled"})
-            # ... 现有错误处理不变 ...
-
+            trace_collector = TraceCollector(
+                session_id=_record.session_id or session_id,
+                tenant_id=_record.tenant_id or '',
+                user_id=_record.user_id or '',
+                input_msg=user_input or _record.user_message,
+                source_type=_record.source_type or 'chat',   # ★ 自动来源
+                subagent_id=getattr(self, '_subagent_id', None),
+            )
+            _record.trace_collector = trace_collector
         except Exception as e:
-            # ★ 记录错误
-            trace_collector.on_error(str(e))
-            # ... 现有错误处理不变 ...
+            logger.debug(f"Trace collector init skipped: {e}")
 
-        # ★ 完成追踪（从 record_service 获取 LLM 数据，异步持久化）
-        trace_collector.on_complete(record_service)
-
-        # ... 现有的完成处理不变 ...
-
+    # 2. 转发事件流，旁路收集
+    try:
+        async for event in self._process_message_impl(...):
+            if trace_collector:
+                try: trace_collector.on_event(event)
+                except Exception as e: logger.debug(f"Trace on_event failed: {e}")
+            yield event
+    except Exception as e:
+        if trace_collector:
+            try: trace_collector.on_error(str(e))
+            except Exception as ce: logger.debug(f"Trace on_error failed: {ce}")
+        raise
     finally:
-        # ... 现有清理代码不变 ...
+        if trace_collector:
+            try: trace_collector.on_complete(_record)
+            except Exception as e: logger.debug(f"Trace on_complete failed: {e}")
 ```
+
+**调用方零改造**：
+
+| 调用路径 | 入口 | 接入 trace 的方式 |
+|---------|------|------------------|
+| Web SSE 聊天 | `main.py:event_generator` → `agent.process_message()` | 自动（`SessionRecordManager.get_current_record()`） |
+| 企微会话 / 微信客服 / 钉钉 / 飞书 | `channel_routes.py` → `process_message_sync()` | 自动（`self._explicit_record_service` 由 sync 入口设置） |
+| Gradio / CLI / Scheduler | 不调用 `start_record` | `_record` 为空，静默跳过（预期行为） |
+
+`main.py:event_generator` 中**已无任何 TraceCollector 相关代码**（原旁路收集代码已全部删除，仅保留两处注释指向上面的 wrapper）。所有非 SSE 渠道路径（`channel_routes`、未来的新渠道等）自动产生 trace，无需各接一遍。
+
+> 详细方案 C 设计（含 `_explicit_record_service` 在 sync 路径的赋值、record_service 字段映射、子智能体场景的边界处理）见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。
 
 ### 3.5 异步持久化
 
@@ -967,24 +959,38 @@ class HallucinationGuard:
 
 ### 5.3 集成位置
 
-> **更新**：利用 AsyncGenerator 事件流，幻觉检测可以在 SSE handler 的事件循环旁路中执行，不需要修改 agent.py。
+> **更新（2026-07-07）**：方案 C 后，TraceCollector 接入点已下沉到 `Agent.process_message()` wrapper。幻觉检测的触发位置相应调整为：在 wrapper 的 `finally` 块（`on_complete` 之后）或 `trace_persist._do_persist()` 完成后异步执行，与 `main.py:event_generator` 无关。
 
-在 `main.py` 的 `event_generator()` 中，当收集到完整 response 后触发：
+推荐方案：在 `trace_persist.py` 的 `_do_persist()` 完成后异步触发幻觉检测，从 `obs_spans` 中提取 `tool_result` 的知识库检索结果作为 context。这样调用方完全不需要改动。
 
 ```python
-# main.py event_generator() 中，在 trace_collector.on_complete() 之后
+# src/core/trace_persist.py — _do_persist() 末尾（方案 C 后推荐触发点）
 
-# ★ 幻觉检测（异步执行，不阻塞 SSE 流）
-if trace_collector.trace.output and record_service:
+# ★ 幻觉检测（异步执行，不阻塞主流程）
+if trace.output and trace.source_type != 'scheduler':
     _schedule_hallucination_check(
-        trace_collector=trace_collector,
-        question=full_message,
-        answer=trace_collector.trace.output,
-        # context_chunks 从 record_service 或 tool_result 事件中提取
+        trace_id=trace.trace_id,
+        question=trace.input,
+        answer=trace.output,
+        # context_chunks 从 obs_spans 中 span_type='tool' 且 name 含 knowledge 的 tool_result 提取
     )
 ```
 
-或者更简单的方案：在 `trace_persist.py` 的 `_do_persist()` 完成后，异步触发幻觉检测，从 `obs_spans` 中提取 `tool_result` 的知识库检索结果作为 context。这样 SSE handler 完全不需要改动。
+或者在 `Agent.process_message()` wrapper 的 `finally` 块中触发（与 `on_complete` 同作用域）：
+
+```python
+# src/core/agent.py:1769-1834 wrapper 的 finally 块
+finally:
+    if trace_collector:
+        trace_collector.on_complete(_record)
+        # ★ 幻觉检测（trace_collector 仍在作用域内）
+        if trace_collector.trace.output:
+            _schedule_hallucination_check(
+                trace_collector=trace_collector,
+                question=user_input,
+                answer=trace_collector.trace.output,
+            )
+```
 
 **重要**：幻觉检测的结果仅用于记录和告警，不自动修改用户看到的回答。自动修复策略作为后续迭代功能。
 
@@ -1520,19 +1526,20 @@ async def run_alert_evaluation():
 
 > **2026-06-01 更新**：Phase 1 调整为"采集+查看事实数据"，包含后端追踪采集 + 前端追踪查看页面。前端追踪查看替代 SSH 翻 JSONL 日志，Phase 1 完成后即可通过浏览器查看每次对话的完整追踪。
 
-### Phase 1：追踪采集 + 事实数据查看（2 周）
+### Phase 1：追踪采集 + 事实数据查看（2 周）✅ 已完成
 
-**目标**：每次请求可追踪，可通过浏览器查看追踪数据（替代 SSH 翻 JSONL 日志）
+**目标**：每次请求可追踪，可通过浏览器查看追踪数据（与 SSH 翻 JSONL 日志并行）
 
-| 任务 | 交付物 |
-|------|--------|
-| 创建 `obs_traces`、`obs_spans`、`obs_scores` 表 | SQL 迁移脚本 |
-| 实现 `TraceCollector`（事件流旁路收集器） | `src/core/trace_collector.py` |
-| 实现 `trace_persist`（异步持久化） | `src/core/trace_persist.py` |
-| 在 `main.py` SSE handler 集成 TraceCollector | 仅修改 event_generator()，约 5 行代码 |
-| 后端追踪查看 API（会话列表/Trace 列表/Trace 详情） | `src/api/monitor.py` |
-| 前端追踪查看页面（会话→Trace→Span 详情三级浏览） | `TraceBrowser.vue` + `SessionTraces.vue` + `TraceDetail.vue` |
-| JSONL 日志双写验证 + 开关 | 环境变量 `OBS_DISABLE_JSONL_LOGGING` |
+> **2026-07-07 更新**：Phase 1 全部完成。原 SSE handler 集成方案已升级为方案 C（TraceCollector 下沉到 `Agent.process_message`，渠道零改造），详见 [observability-channel-sessions-design.md](./observability-channel-sessions-design.md)。1.6（单测/e2e）和 1.7（JSONL 双写迁移）已取消：obs 系统每日真实流量运行已事实验证；JSONL 与 obs 永久并行（前者供 SSH 翻日志，后者供前端查看），不做对比、不淘汰。
+
+| 任务 | 交付物 | 状态 |
+|------|--------|------|
+| 创建 `obs_traces`、`obs_spans`、`obs_scores` 表 | SQL 迁移脚本 | ✅ |
+| 实现 `TraceCollector`（事件流旁路收集器） | `src/core/trace_collector.py` | ✅ |
+| 实现 `trace_persist`（异步持久化） | `src/core/trace_persist.py` | ✅ |
+| ~~在 `main.py` SSE handler 集成 TraceCollector~~ → 升级为方案 C：`Agent.process_message` wrapper | `src/core/agent.py:1769-1834` | ✅ |
+| 后端追踪查看 API（会话列表/Trace 列表/Trace 详情） | `src/api/monitor.py` | ✅ |
+| 前端追踪查看页面（会话→Trace→Span 详情三级浏览） | `TraceBrowser.vue` + `SessionTraces.vue` + `TraceDetail.vue` | ✅ |
 
 ### Phase 2：质量评估 + 幻觉检测（2 周）
 
@@ -1633,7 +1640,7 @@ async def run_alert_evaluation():
 
 | 差距分析 §2.1 需求 | 本文档对应章节 | 覆盖状态 | 备注 |
 |-------------------|--------------|---------|------|
-| 分布式链路追踪 | §三 | ✅ 完整覆盖 | 事件流旁路收集，不侵入 agent.py |
+| 分布式链路追踪 | §三 | ✅ 完整覆盖 | 方案 C：TraceCollector 接入 Agent.process_message wrapper，渠道零改造 |
 | 回复质量自动评估 | §四 | ✅ 完整覆盖 | SSE handler 异步触发 |
 | 幻觉检测 | §五 | ✅ 完整覆盖 | 持久化旁路触发，不修改 agent.py |
 | 实时监控仪表盘 | §六 | ✅ 完整覆盖 | |
