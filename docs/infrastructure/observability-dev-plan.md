@@ -5,8 +5,8 @@
 > 对应差距分析：[enterprise-agent-infrastructure-gap-analysis.md](../research/enterprise-agent-infrastructure-gap-analysis.md) §2.1
 > 前置重构：[async-generator-migration-dev-plan.md](./async-generator-migration-dev-plan.md)（已完成 — 事件流已结构化）
 > 创建日期：2026-05-29
-> 更新日期：2026-07-07（Phase 1 全部完成含方案 C，1.6 单测和 1.7 JSONL 双写迁移已取消；Phase 2-4 未开始）
-> 状态：🔧 部分完成（Phase 1 已完成 + Phase 2-4 待开发）
+> 更新日期：2026-07-07（Phase 1 全部完成含方案 C，1.6 单测和 1.7 JSONL 双写迁移已取消；Phase 2-4 未开始，按推荐优先级排序：Phase 4 → Phase 2 → Phase 3）
+> 状态：🔧 部分完成（Phase 1 已完成；Phase 4/2/3 待开发）
 
 ---
 
@@ -180,6 +180,72 @@
 
 > 1.6（单测/e2e 验证）和 1.7（JSONL 双写对比 + 关闭开关）已不再列入计划：1.6 单测自功能上线每天都在真实流量下运行，事实已验证，单测不再追加；1.7 JSONL 与 obs 永久并行（前者供 SSH 翻日志/脚本分析，后者供前端结构化查看），不做对比、不做开关。
 
+## Phase 4：结构化告警（预计 1 周）
+
+> 设计文档参考：§七（结构化告警）
+> 目标：异常自动发现和通知
+
+### 阶段 4.1：告警引擎
+
+> 前置依赖：Phase 1 必需（obs_traces 数据）；Phase 2 可选（obs_scores 数据未就绪时，质量告警和幻觉告警两条规则跳过，其余 4 条规则仍可正常工作）
+
+- [ ] **4.1.1 实现 AlertRule 和 AlertManager**
+  - 新建 `src/core/alert_manager.py`
+  - `AlertRule` 数据类：name, metric, operator, threshold, window_minutes, severity, channels, message_template, cooldown_minutes
+  - `AlertManager` 类：evaluate(), _check_condition(), _send_alert(), _send_recovery()
+  - 冷却机制：同一规则在 cooldown 期内不重复发送
+  - 自动恢复：指标恢复正常后发送恢复通知
+  - [ ] 未开始
+
+- [ ] **4.1.2 实现默认告警规则集**
+  - 6 条默认规则：llm_error_rate_high, request_success_rate_low, llm_latency_high, quality_score_low, hallucination_rate_high, token_usage_spike
+  - 规则定义在代码中（`DEFAULT_RULES` 类变量）
+  - [ ] 未开始
+
+- [ ] **4.1.3 实现告警评估定时任务**
+  - 复用已有的定时任务调度机制
+  - 每分钟执行一次：遍历规则 → 查询指标值 → evaluate()
+  - 指标值从 `obs_traces` 和 `obs_scores` 聚合查询
+  - [ ] 未开始
+
+- [ ] **4.1.4 与已有通知服务集成**
+  - 告警发送通过 `src/services/notification_service.py`
+  - critical → 企业微信 + 邮件
+  - warning → 企业微信
+  - [ ] 未开始
+
+### 阶段 4.2：告警管理 API 和 UI
+
+> 前置依赖：4.1
+
+- [ ] **4.2.1 实现告警 REST API**
+  - `GET /api/monitor/alerts` — 告警历史列表（分页）
+  - `GET /api/monitor/alerts/config` — 获取当前告警规则配置
+  - `PUT /api/monitor/alerts/config` — 更新告警规则（阈值、启用/禁用）
+  - 在 `src/api/monitor.py` 中添加
+  - [ ] 未开始
+
+- [ ] **4.2.2 前端告警列表**
+  - 在 MonitoringDashboard 中增加告警标签页或区域
+  - 使用 BaseTable 展示告警历史
+  - 列：时间、规则名、级别、当前值、阈值、状态
+  - 使用 BaseBadge 标记级别（critical=danger, warning=warning）
+  - [ ] 未开始
+
+### 阶段 4.3：验证
+
+- [ ] **4.3.1 告警端到端验证**
+  - 模拟高错误率场景，验证告警触发和通知发送
+  - 验证冷却机制（同一规则在冷却期内不重复发送）
+  - 验证恢复通知（指标恢复后发送 [RESOLVED] 通知）
+  - [ ] 未开始
+
+- [ ] **4.3.2 前端构建验证**
+  - `cd frontend && npm run build` 确保无编译错误
+  - [ ] 未开始
+
+---
+
 ## Phase 2：质量评估 + 幻觉检测（预计 2 周）
 
 > 设计文档参考：§四（LLM 响应质量评估）、§五（幻觉检测）
@@ -327,72 +393,6 @@
 
 ---
 
-## Phase 4：结构化告警（预计 1 周）
-
-> 设计文档参考：§七（结构化告警）
-> 目标：异常自动发现和通知
-
-### 阶段 4.1：告警引擎
-
-> 前置依赖：Phase 1 + Phase 2（需要 obs_traces + obs_scores 数据）
-
-- [ ] **4.1.1 实现 AlertRule 和 AlertManager**
-  - 新建 `src/core/alert_manager.py`
-  - `AlertRule` 数据类：name, metric, operator, threshold, window_minutes, severity, channels, message_template, cooldown_minutes
-  - `AlertManager` 类：evaluate(), _check_condition(), _send_alert(), _send_recovery()
-  - 冷却机制：同一规则在 cooldown 期内不重复发送
-  - 自动恢复：指标恢复正常后发送恢复通知
-  - [ ] 未开始
-
-- [ ] **4.1.2 实现默认告警规则集**
-  - 6 条默认规则：llm_error_rate_high, request_success_rate_low, llm_latency_high, quality_score_low, hallucination_rate_high, token_usage_spike
-  - 规则定义在代码中（`DEFAULT_RULES` 类变量）
-  - [ ] 未开始
-
-- [ ] **4.1.3 实现告警评估定时任务**
-  - 复用已有的定时任务调度机制
-  - 每分钟执行一次：遍历规则 → 查询指标值 → evaluate()
-  - 指标值从 `obs_traces` 和 `obs_scores` 聚合查询
-  - [ ] 未开始
-
-- [ ] **4.1.4 与已有通知服务集成**
-  - 告警发送通过 `src/services/notification_service.py`
-  - critical → 企业微信 + 邮件
-  - warning → 企业微信
-  - [ ] 未开始
-
-### 阶段 4.2：告警管理 API 和 UI
-
-> 前置依赖：4.1
-
-- [ ] **4.2.1 实现告警 REST API**
-  - `GET /api/monitor/alerts` — 告警历史列表（分页）
-  - `GET /api/monitor/alerts/config` — 获取当前告警规则配置
-  - `PUT /api/monitor/alerts/config` — 更新告警规则（阈值、启用/禁用）
-  - 在 `src/api/monitor.py` 中添加
-  - [ ] 未开始
-
-- [ ] **4.2.2 前端告警列表**
-  - 在 MonitoringDashboard 中增加告警标签页或区域
-  - 使用 BaseTable 展示告警历史
-  - 列：时间、规则名、级别、当前值、阈值、状态
-  - 使用 BaseBadge 标记级别（critical=danger, warning=warning）
-  - [ ] 未开始
-
-### 阶段 4.3：验证
-
-- [ ] **4.3.1 告警端到端验证**
-  - 模拟高错误率场景，验证告警触发和通知发送
-  - 验证冷却机制（同一规则在冷却期内不重复发送）
-  - 验证恢复通知（指标恢复后发送 [RESOLVED] 通知）
-  - [ ] 未开始
-
-- [ ] **4.3.2 前端构建验证**
-  - `cd frontend && npm run build` 确保无编译错误
-  - [ ] 未开始
-
----
-
 ## 数据生命周期管理
 
 > TimescaleDB 自动管理，不需要额外的清理定时任务。
@@ -405,10 +405,10 @@
 
 | Phase | 内容 | 预计工期 | 状态 |
 |-------|------|---------|------|
-| Phase 1 | 追踪采集 + 事实数据查看 | 2 周 | 🟡 开发完成，待端到端验证 |
-| Phase 2 | 质量评估 + 幻觉检测 | 2 周 | ⬜ 未开始 |
-| Phase 3 | 实时监控仪表盘 | 2 周 | ⬜ 未开始 |
-| Phase 4 | 结构化告警 | 1 周 | ⬜ 未开始 |
+| Phase 1 | 追踪采集 + 事实数据查看 | 2 周 | ✅ 已完成 |
+| Phase 4 | 结构化告警 | 1 周 | ⬜ 未开始（推荐优先做：投入产出比最高，4/6 规则仅依赖 Phase 1） |
+| Phase 2 | 质量评估 + 幻觉检测 | 2 周 | ⬜ 未开始（依赖 Phase 1 的 obs_scores 表） |
+| Phase 3 | 实时监控仪表盘 | 2 周 | ⬜ 未开始（依赖 Phase 1+2，体验加分项，优先级最低） |
 
 **总工期：6 周**
 
