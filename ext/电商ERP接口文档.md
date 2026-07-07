@@ -77,8 +77,6 @@ POST，Body 为 `application/json`
 
 **返回响应结构**
 
-> 本文档面向第三方开放平台调用方（请求头 `Api-Authorize-Token` 注入的是 `open_token_*`，对应后端 `g.token['qb_token']==2`）。在此场景下，后端会对响应做精简过滤，仅返回纯业务数据所需字段。下列字段为 open_token 调用方实际可见的字段；其他字段（如 `approve`、`base`、`category`、`debug`、`permission`、`sql`、`sql2`、`sql_option`、`title` 等）即便后端生成也不会下发给第三方。
-
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['data'] | array | 匹配的记录列表 |
@@ -87,7 +85,7 @@ POST，Body 为 `application/json`
 | Response['total'] | int | 总记录数（用于分页） |
 | Response['total_sum'] | object | 汇总数据（按字段名聚合，无汇总时为空对象） |
 
-> **关于字段元数据**：`fields` 数组中每个元素仅包含字段的最小可用元信息：`attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。其他设计态字段（`hidden`、`mandatory`、`unique`、`build_in`、`list_hidden` 等）不下发给第三方。各接口的示例仅列部分字段，实际返回以接口为准。
+> **关于字段元数据**：`fields` 数组中每个元素包含 `attr_name`、`display_name`、`options`。`options` 数组内部仅包含 `label`、`value`；字段无选项时不返回 `options` 键。各接口的示例仅列部分字段，实际返回以接口为准。
 
 ---
 
@@ -139,12 +137,12 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
     ],
     "data2": [],
     "fields": [
-      { "attr_name": "sid", "display_name": "业务编号", "attr_type": "varchar", "component": "input" },
-      { "attr_name": "kehubianhao", "display_name": "客户编号", "attr_type": "int", "component": "number" },
-      { "attr_name": "kehumingcheng", "display_name": "客户名称", "attr_type": "varchar", "component": "input" },
-      { "attr_name": "kehushouji", "display_name": "客户手机", "attr_type": "varchar", "component": "input" },
-      { "attr_name": "beizhu", "display_name": "备注", "attr_type": "text", "component": "textarea" },
-      { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime", "component": "datetime" }
+      { "attr_name": "sid", "display_name": "业务编号" },
+      { "attr_name": "kehubianhao", "display_name": "客户编号" },
+      { "attr_name": "kehumingcheng", "display_name": "客户名称" },
+      { "attr_name": "kehushouji", "display_name": "客户手机" },
+      { "attr_name": "beizhu", "display_name": "备注" },
+      { "attr_name": "create_time", "display_name": "创建时间" }
     ],
     "total": 1,
     "total_sum": {}
@@ -182,7 +180,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 
 ### 返回响应
 
-> 第三方调用方（open_token）下，响应顶层仅保留 `tables`，其他字段（`module`、`permission`、`extra`、`approve`、`debug`、`reports` 等）不下发。`tables[X]` 仅保留 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 仅保留 `display_name`、`position`、`attrs`；`attrs[Z]` 仅保留 `attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。
+> 响应顶层仅返回 `tables`。`tables[X]` 包含 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 包含 `display_name`、`attrs`；`attrs[Z]` 包含 `attr_name`、`display_name`、`options`（无选项时不含 `options` 键）；`options` 内部仅包含 `label`、`value`。
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
@@ -228,22 +226,20 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "position": 1,
             "attrs": [
-              { "attr_name": "kehubianhao", "display_name": "客户编号", "component": "number" },
-              { "attr_name": "kehumingcheng", "display_name": "客户名称", "component": "input" },
-              { "attr_name": "kehushouji", "display_name": "客户手机", "component": "input" },
-              { "attr_name": "beizhu", "display_name": "备注", "component": "textarea" }
+              { "attr_name": "kehubianhao", "display_name": "客户编号" },
+              { "attr_name": "kehumingcheng", "display_name": "客户名称" },
+              { "attr_name": "kehushouji", "display_name": "客户手机" },
+              { "attr_name": "beizhu", "display_name": "备注" }
             ]
           },
           {
             "display_name": "系统信息",
-            "position": 2,
             "attrs": [
               { "attr_name": "sid", "display_name": "业务编号" },
               { "attr_name": "create_user", "display_name": "创建人" },
-              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime" },
-              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime" },
+              { "attr_name": "create_time", "display_name": "创建时间" },
+              { "attr_name": "update_time", "display_name": "更新时间" },
               { "attr_name": "status", "display_name": "系统状态" },
               { "attr_name": "status_approve", "display_name": "审批状态" }
             ]
@@ -279,16 +275,14 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "position": 1,
             "attrs": [
-              { "attr_name": "shouhuoren", "display_name": "收货人", "component": "input" },
-              { "attr_name": "shouji", "display_name": "手机", "component": "input" },
-              { "attr_name": "shengshiqu", "display_name": "省市区", "component": "input" },
-              { "attr_name": "xiangxidizhi", "display_name": "详细地址", "component": "input" },
+              { "attr_name": "shouhuoren", "display_name": "收货人" },
+              { "attr_name": "shouji", "display_name": "手机" },
+              { "attr_name": "shengshiqu", "display_name": "省市区" },
+              { "attr_name": "xiangxidizhi", "display_name": "详细地址" },
               {
                 "attr_name": "shifoumorendizhi",
                 "display_name": "是否默认地址",
-                "component": "select",
                 "options": [
                   { "label": "是", "value": "是" },
                   { "label": "否", "value": "否" }
@@ -380,31 +374,31 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
     "data2": [],
     "fields": [
       // --- 自定义字段 ---
-      { "attr_name": "kehu", "display_name": "客户", "component": "input", "attr_type": "varchar", "dataflow": { "style": "sheetlink", "front_module": "kehuxinxi", "front_display": "kehumingcheng" } },
-      { "attr_name": "shouhuoren", "display_name": "收货人", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "shouji", "display_name": "手机", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "xiadanshijian", "display_name": "下单时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "shengshiqu", "display_name": "省市区", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "xiangxidizhi", "display_name": "详细地址", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "dingdanzhuangtai", "display_name": "订单状态", "component": "select", "attr_type": "varchar", "options": [{"label": "待支付", "value": "待支付"}, {"label": "已支付", "value": "已支付"}, {"label": "已发货", "value": "已发货"}, {"label": "已完成", "value": "已完成"}, {"label": "已取消", "value": "已取消"}] },
-      { "attr_name": "fahuozhuangtai", "display_name": "发货状态", "component": "select", "attr_type": "varchar", "options": [{"label": "未发货", "value": "未发货"}, {"label": "部分发货", "value": "部分发货"}, {"label": "已发货", "value": "已发货"}] },
-      { "attr_name": "shangpinjine", "display_name": "商品金额", "component": "currency", "attr_type": "decimal" },
-      { "attr_name": "youhuijine", "display_name": "优惠金额", "component": "currency", "attr_type": "decimal" },
-      { "attr_name": "yunfei", "display_name": "运费", "component": "currency", "attr_type": "decimal" },
-      { "attr_name": "dingdanjine", "display_name": "订单金额", "component": "currency", "attr_type": "decimal" },
-      { "attr_name": "zhifufangshi", "display_name": "支付方式", "component": "select", "attr_type": "varchar", "options": [{"label": "微信", "value": "微信"}, {"label": "支付宝", "value": "支付宝"}, {"label": "银行卡", "value": "银行卡"}] },
-      { "attr_name": "zhifujine", "display_name": "支付金额", "component": "currency", "attr_type": "decimal" },
+      { "attr_name": "kehu", "display_name": "客户" },
+      { "attr_name": "shouhuoren", "display_name": "收货人" },
+      { "attr_name": "shouji", "display_name": "手机" },
+      { "attr_name": "xiadanshijian", "display_name": "下单时间" },
+      { "attr_name": "shengshiqu", "display_name": "省市区" },
+      { "attr_name": "xiangxidizhi", "display_name": "详细地址" },
+      { "attr_name": "dingdanzhuangtai", "display_name": "订单状态", "options": [{"label": "待支付", "value": "待支付"}, {"label": "已支付", "value": "已支付"}, {"label": "已发货", "value": "已发货"}, {"label": "已完成", "value": "已完成"}, {"label": "已取消", "value": "已取消"}] },
+      { "attr_name": "fahuozhuangtai", "display_name": "发货状态", "options": [{"label": "未发货", "value": "未发货"}, {"label": "部分发货", "value": "部分发货"}, {"label": "已发货", "value": "已发货"}] },
+      { "attr_name": "shangpinjine", "display_name": "商品金额" },
+      { "attr_name": "youhuijine", "display_name": "优惠金额" },
+      { "attr_name": "yunfei", "display_name": "运费" },
+      { "attr_name": "dingdanjine", "display_name": "订单金额" },
+      { "attr_name": "zhifufangshi", "display_name": "支付方式", "options": [{"label": "微信", "value": "微信"}, {"label": "支付宝", "value": "支付宝"}, {"label": "银行卡", "value": "银行卡"}] },
+      { "attr_name": "zhifujine", "display_name": "支付金额" },
       // --- 系统内置字段 ---
-      { "attr_name": "sid", "display_name": "业务编号", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "id", "display_name": "系统编号", "component": "input", "attr_type": "int" },
-      { "attr_name": "create_user", "display_name": "创建人", "component": "input", "attr_type": "int" },
-      { "attr_name": "create_group", "display_name": "创建组", "component": "input", "attr_type": "int" },
-      { "attr_name": "update_user", "display_name": "修改人", "component": "input", "attr_type": "int" },
-      { "attr_name": "create_time", "display_name": "创建时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "update_time", "display_name": "更新时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "archive_time", "display_name": "归档时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "status", "display_name": "系统状态", "component": "input", "attr_type": "int" },
-      { "attr_name": "status_approve", "display_name": "审批状态", "component": "input", "attr_type": "int" }
+      { "attr_name": "sid", "display_name": "业务编号" },
+      { "attr_name": "id", "display_name": "系统编号" },
+      { "attr_name": "create_user", "display_name": "创建人" },
+      { "attr_name": "create_group", "display_name": "创建组" },
+      { "attr_name": "update_user", "display_name": "修改人" },
+      { "attr_name": "create_time", "display_name": "创建时间" },
+      { "attr_name": "update_time", "display_name": "更新时间" },
+      { "attr_name": "archive_time", "display_name": "归档时间" },
+      { "attr_name": "status", "display_name": "系统状态" },
+      { "attr_name": "status_approve", "display_name": "审批状态" }
     ],
     "total": 1,
     "total_sum": {
@@ -446,7 +440,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 
 ### 返回响应
 
-> 第三方调用方（open_token）下，响应顶层仅保留 `tables`，其他字段（`module`、`permission`、`extra`、`approve`、`debug`、`reports` 等）不下发。`tables[X]` 仅保留 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 仅保留 `display_name`、`position`、`attrs`；`attrs[Z]` 仅保留 `attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。
+> 响应顶层仅返回 `tables`。`tables[X]` 包含 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 包含 `display_name`、`attrs`；`attrs[Z]` 包含 `attr_name`、`display_name`、`options`（无选项时不含 `options` 键）；`options` 内部仅包含 `label`、`value`。
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
@@ -507,37 +501,35 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "position": 1,
             "attrs": [
               // 字段定义同第 4 节的 fields，此处省略完整元数据
-              { "attr_name": "kehu", "display_name": "客户", "component": "input" },
-              { "attr_name": "shouhuoren", "display_name": "收货人", "component": "input" },
-              { "attr_name": "shouji", "display_name": "手机", "component": "input" },
-              { "attr_name": "xiadanshijian", "display_name": "下单时间", "component": "datetime" },
-              { "attr_name": "shengshiqu", "display_name": "省市区", "component": "input" },
-              { "attr_name": "xiangxidizhi", "display_name": "详细地址", "component": "input" },
-              { "attr_name": "dingdanzhuangtai", "display_name": "订单状态", "component": "select" },
-              { "attr_name": "fahuozhuangtai", "display_name": "发货状态", "component": "select" },
-              { "attr_name": "shangpinjine", "display_name": "商品金额", "component": "currency" },
-              { "attr_name": "youhuijine", "display_name": "优惠金额", "component": "currency" },
-              { "attr_name": "yunfei", "display_name": "运费", "component": "currency" },
-              { "attr_name": "dingdanjine", "display_name": "订单金额", "component": "currency" },
-              { "attr_name": "zhifufangshi", "display_name": "支付方式", "component": "select" },
-              { "attr_name": "zhifujine", "display_name": "支付金额", "component": "currency" }
+              { "attr_name": "kehu", "display_name": "客户" },
+              { "attr_name": "shouhuoren", "display_name": "收货人" },
+              { "attr_name": "shouji", "display_name": "手机" },
+              { "attr_name": "xiadanshijian", "display_name": "下单时间" },
+              { "attr_name": "shengshiqu", "display_name": "省市区" },
+              { "attr_name": "xiangxidizhi", "display_name": "详细地址" },
+              { "attr_name": "dingdanzhuangtai", "display_name": "订单状态" },
+              { "attr_name": "fahuozhuangtai", "display_name": "发货状态" },
+              { "attr_name": "shangpinjine", "display_name": "商品金额" },
+              { "attr_name": "youhuijine", "display_name": "优惠金额" },
+              { "attr_name": "yunfei", "display_name": "运费" },
+              { "attr_name": "dingdanjine", "display_name": "订单金额" },
+              { "attr_name": "zhifufangshi", "display_name": "支付方式" },
+              { "attr_name": "zhifujine", "display_name": "支付金额" }
             ]
           },
           {
             "display_name": "系统信息",
-            "position": 2,
             "attrs": [
               { "attr_name": "id", "display_name": "系统编号" },
               { "attr_name": "sid", "display_name": "业务编号" },
               { "attr_name": "create_user", "display_name": "创建人" },
               { "attr_name": "create_group", "display_name": "创建组" },
               { "attr_name": "update_user", "display_name": "修改人" },
-              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime" },
-              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime" },
-              { "attr_name": "archive_time", "display_name": "归档时间", "attr_type": "datetime" },
+              { "attr_name": "create_time", "display_name": "创建时间" },
+              { "attr_name": "update_time", "display_name": "更新时间" },
+              { "attr_name": "archive_time", "display_name": "归档时间" },
               { "attr_name": "status", "display_name": "系统状态" },
               { "attr_name": "status_approve", "display_name": "审批状态" }
             ]
@@ -557,11 +549,10 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "position": 1,
             "attrs": [
-              { "attr_name": "youhuiquanhuodong", "display_name": "优惠券活动", "component": "input" },
-              { "attr_name": "youhuiquanjine", "display_name": "优惠券金额", "component": "currency" },
-              { "attr_name": "serial", "display_name": "序号", "component": "input" }
+              { "attr_name": "youhuiquanhuodong", "display_name": "优惠券活动" },
+              { "attr_name": "youhuiquanjine", "display_name": "优惠券金额" },
+              { "attr_name": "serial", "display_name": "序号" }
             ]
           }
         ]
@@ -594,23 +585,22 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "position": 1,
             "attrs": [
-              { "attr_name": "chanpinbianhao", "display_name": "产品编号", "component": "input" },
-              { "attr_name": "chanpinmingcheng", "display_name": "产品名称", "component": "input" },
-              { "attr_name": "pinpai", "display_name": "品牌", "component": "input" },
-              { "attr_name": "jiliangdanwei", "display_name": "计量单位", "component": "input" },
-              { "attr_name": "xiadanshuliang", "display_name": "下单数量", "component": "number" },
-              { "attr_name": "danjia", "display_name": "单价", "component": "currency" },
-              { "attr_name": "zongji", "display_name": "总计", "component": "currency" },
-              { "attr_name": "youhuijine", "display_name": "优惠金额", "component": "currency" },
-              { "attr_name": "yifahuoshuliang", "display_name": "已发货数量", "component": "number" },
-              { "attr_name": "wuliugongsi", "display_name": "物流公司", "component": "input" },
-              { "attr_name": "wuliudanhao", "display_name": "物流单号", "component": "input" },
-              { "attr_name": "tuidanshuliang", "display_name": "退单数量", "component": "number" },
-              { "attr_name": "tuihuoyuanyin", "display_name": "退货原因", "component": "input" },
-              { "attr_name": "tuihuozhuangtai", "display_name": "退货状态", "component": "select", "options": [{"label": "待处理", "value": "待处理"}, {"label": "已接收", "value": "已接收"}, {"label": "处理中", "value": "处理中"}, {"label": "已完成", "value": "已完成"}] },
-              { "attr_name": "serial", "display_name": "序号", "component": "input" }
+              { "attr_name": "chanpinbianhao", "display_name": "产品编号" },
+              { "attr_name": "chanpinmingcheng", "display_name": "产品名称" },
+              { "attr_name": "pinpai", "display_name": "品牌" },
+              { "attr_name": "jiliangdanwei", "display_name": "计量单位" },
+              { "attr_name": "xiadanshuliang", "display_name": "下单数量" },
+              { "attr_name": "danjia", "display_name": "单价" },
+              { "attr_name": "zongji", "display_name": "总计" },
+              { "attr_name": "youhuijine", "display_name": "优惠金额" },
+              { "attr_name": "yifahuoshuliang", "display_name": "已发货数量" },
+              { "attr_name": "wuliugongsi", "display_name": "物流公司" },
+              { "attr_name": "wuliudanhao", "display_name": "物流单号" },
+              { "attr_name": "tuidanshuliang", "display_name": "退单数量" },
+              { "attr_name": "tuihuoyuanyin", "display_name": "退货原因" },
+              { "attr_name": "tuihuozhuangtai", "display_name": "退货状态", "options": [{"label": "待处理", "value": "待处理"}, {"label": "已接收", "value": "已接收"}, {"label": "处理中", "value": "处理中"}, {"label": "已完成", "value": "已完成"}] },
+              { "attr_name": "serial", "display_name": "序号" }
             ]
           }
         ]
@@ -660,7 +650,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 通用返回结构见第 1 节"列表接口通用约定"。本接口额外字段：
 
-> 第三方调用方（open_token）下，列表接口仅返回 `data`、`data2`、`fields`、`total`、`total_sum`。本接口的 `category` 分类树字段不下发给第三方；如需分类筛选能力，请通过 `filters` 传入 `suoshulanmu` 字段条件。
+> 列表接口返回 `data`、`data2`、`fields`、`total`、`total_sum`。如需分类筛选能力，请通过 `filters` 传入 `suoshulanmu` 字段条件。
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
@@ -695,34 +685,31 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
     "data2": [],
     "fields": [
       // --- 自定义字段 ---
-      { "attr_name": "skubianhao", "display_name": "SKU编号", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "chanpinmingcheng", "display_name": "产品名称", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "pinpai", "display_name": "品牌", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "jiliangdanwei", "display_name": "计量单位", "component": "input", "attr_type": "varchar" },
-      {
-        "attr_name": "suoshulanmu", "display_name": "所属栏目", "component": "input", "attr_type": "varchar",
-        "dataflow": { "style": "sheetlink", "front_module": "shangpinleimu", "front_display": "lanmumingcheng" }
-      },
-      { "attr_name": "xiaoshoujiahanshui", "display_name": "销售价(含税)", "component": "currency", "attr_type": "decimal" },
-      { "attr_name": "guigechicun", "display_name": "规格尺寸", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "chanpinxinghao", "display_name": "产品型号", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "yanse", "display_name": "颜色", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "caizhi", "display_name": "材质", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "banxing", "display_name": "版型", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "shichuanwendu", "display_name": "适穿温度", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "fahuoshixiao", "display_name": "发货时效", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "chanpinjieshao", "display_name": "产品介绍", "component": "textarea", "attr_type": "text" },
+      { "attr_name": "skubianhao", "display_name": "SKU编号" },
+      { "attr_name": "chanpinmingcheng", "display_name": "产品名称" },
+      { "attr_name": "pinpai", "display_name": "品牌" },
+      { "attr_name": "jiliangdanwei", "display_name": "计量单位" },
+      { "attr_name": "suoshulanmu", "display_name": "所属栏目" },
+      { "attr_name": "xiaoshoujiahanshui", "display_name": "销售价(含税)" },
+      { "attr_name": "guigechicun", "display_name": "规格尺寸" },
+      { "attr_name": "chanpinxinghao", "display_name": "产品型号" },
+      { "attr_name": "yanse", "display_name": "颜色" },
+      { "attr_name": "caizhi", "display_name": "材质" },
+      { "attr_name": "banxing", "display_name": "版型" },
+      { "attr_name": "shichuanwendu", "display_name": "适穿温度" },
+      { "attr_name": "fahuoshixiao", "display_name": "发货时效" },
+      { "attr_name": "chanpinjieshao", "display_name": "产品介绍" },
       // --- 系统内置字段 ---
-      { "attr_name": "sid", "display_name": "业务编号", "component": "input", "attr_type": "varchar" },
-      { "attr_name": "id", "display_name": "系统编号", "component": "input", "attr_type": "int" },
-      { "attr_name": "create_user", "display_name": "创建人", "component": "input", "attr_type": "int" },
-      { "attr_name": "create_group", "display_name": "创建组", "component": "input", "attr_type": "int" },
-      { "attr_name": "update_user", "display_name": "修改人", "component": "input", "attr_type": "int" },
-      { "attr_name": "create_time", "display_name": "创建时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "update_time", "display_name": "更新时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "archive_time", "display_name": "归档时间", "component": "datetime", "attr_type": "datetime" },
-      { "attr_name": "status", "display_name": "系统状态", "component": "input", "attr_type": "int" },
-      { "attr_name": "status_approve", "display_name": "审批状态", "component": "input", "attr_type": "int" }
+      { "attr_name": "sid", "display_name": "业务编号" },
+      { "attr_name": "id", "display_name": "系统编号" },
+      { "attr_name": "create_user", "display_name": "创建人" },
+      { "attr_name": "create_group", "display_name": "创建组" },
+      { "attr_name": "update_user", "display_name": "修改人" },
+      { "attr_name": "create_time", "display_name": "创建时间" },
+      { "attr_name": "update_time", "display_name": "更新时间" },
+      { "attr_name": "archive_time", "display_name": "归档时间" },
+      { "attr_name": "status", "display_name": "系统状态" },
+      { "attr_name": "status_approve", "display_name": "审批状态" }
     ],
     "total": 1,
     "total_sum": { "xiaoshoujiahanshui": "59.90" }
@@ -734,9 +721,8 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 | 字段 | 说明 |
 |------|------|
-| suoshulanmu | 所属栏目，文本展示（如 `"运动类"`），实际关联到 `shangpinleimu` 模块，第三方可通过 `fields` 中的 `dataflow` 元信息识别关联关系 |
+| suoshulanmu | 所属栏目，列表中为扁平字符串（如 `"运动类"`）；详情接口中为 `{label, value}` 对象，关联到 `shangpinleimu` 模块，可通过详情接口返回值的对象形态识别关联字段 |
 | xiaoshoujiahanshui | 销售价（含税），货币类型，`total_sum` 中同名字段为当前查询结果的销售价合计 |
-| dataflow.style = sheetlink | `suoshulanmu` 为关联字段，关联到 `shangpinleimu` 模块 |
 
 
 ## 7 产品详情接口
@@ -765,7 +751,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 
 ### 返回响应
 
-> 第三方调用方（open_token）下，响应顶层仅保留 `tables`，其他字段（`module`、`permission`、`extra`、`approve`、`debug`、`reports` 等）不下发。`tables[X]` 仅保留 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 仅保留 `display_name`、`position`、`attrs`；`attrs[Z]` 仅保留 `attr_name`、`display_name`、`attr_type`、`component`、`table_name`、`options`、`dataflow`、`width`、`position`。
+> 响应顶层仅返回 `tables`。`tables[X]` 包含 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 包含 `display_name`、`attrs`；`attrs[Z]` 包含 `attr_name`、`display_name`、`options`（无选项时不含 `options` 键）；`options` 内部仅包含 `label`、`value`。
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
@@ -815,40 +801,35 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "sections": [
           {
             "display_name": "基本信息",
-            "position": 1,
             "attrs": [
               // 字段定义同第 6 节的 fields，此处省略完整元数据
-              { "attr_name": "skubianhao", "display_name": "SKU编号", "component": "input" },
-              { "attr_name": "chanpinmingcheng", "display_name": "产品名称", "component": "input" },
-              { "attr_name": "pinpai", "display_name": "品牌", "component": "input" },
-              { "attr_name": "jiliangdanwei", "display_name": "计量单位", "component": "input" },
-              {
-                "attr_name": "suoshulanmu", "display_name": "所属栏目", "component": "input",
-                "dataflow": { "style": "sheetlink", "front_module": "shangpinleimu", "front_display": "lanmumingcheng" }
-              },
-              { "attr_name": "xiaoshoujiahanshui", "display_name": "销售价(含税)", "component": "currency" },
-              { "attr_name": "guigechicun", "display_name": "规格尺寸", "component": "input" },
-              { "attr_name": "chanpinxinghao", "display_name": "产品型号", "component": "input" },
-              { "attr_name": "yanse", "display_name": "颜色", "component": "input" },
-              { "attr_name": "caizhi", "display_name": "材质", "component": "input" },
-              { "attr_name": "banxing", "display_name": "版型", "component": "input" },
-              { "attr_name": "shichuanwendu", "display_name": "适穿温度", "component": "input" },
-              { "attr_name": "fahuoshixiao", "display_name": "发货时效", "component": "input" },
-              { "attr_name": "chanpinjieshao", "display_name": "产品介绍", "component": "textarea" }
+              { "attr_name": "skubianhao", "display_name": "SKU编号" },
+              { "attr_name": "chanpinmingcheng", "display_name": "产品名称" },
+              { "attr_name": "pinpai", "display_name": "品牌" },
+              { "attr_name": "jiliangdanwei", "display_name": "计量单位" },
+              { "attr_name": "suoshulanmu", "display_name": "所属栏目" },
+              { "attr_name": "xiaoshoujiahanshui", "display_name": "销售价(含税)" },
+              { "attr_name": "guigechicun", "display_name": "规格尺寸" },
+              { "attr_name": "chanpinxinghao", "display_name": "产品型号" },
+              { "attr_name": "yanse", "display_name": "颜色" },
+              { "attr_name": "caizhi", "display_name": "材质" },
+              { "attr_name": "banxing", "display_name": "版型" },
+              { "attr_name": "shichuanwendu", "display_name": "适穿温度" },
+              { "attr_name": "fahuoshixiao", "display_name": "发货时效" },
+              { "attr_name": "chanpinjieshao", "display_name": "产品介绍" }
             ]
           },
           {
             "display_name": "系统信息",
-            "position": 2,
             "attrs": [
               { "attr_name": "id", "display_name": "系统编号" },
               { "attr_name": "sid", "display_name": "业务编号" },
               { "attr_name": "create_user", "display_name": "创建人" },
               { "attr_name": "create_group", "display_name": "创建组" },
               { "attr_name": "update_user", "display_name": "修改人" },
-              { "attr_name": "create_time", "display_name": "创建时间", "attr_type": "datetime" },
-              { "attr_name": "update_time", "display_name": "更新时间", "attr_type": "datetime" },
-              { "attr_name": "archive_time", "display_name": "归档时间", "attr_type": "datetime" },
+              { "attr_name": "create_time", "display_name": "创建时间" },
+              { "attr_name": "update_time", "display_name": "更新时间" },
+              { "attr_name": "archive_time", "display_name": "归档时间" },
               { "attr_name": "status", "display_name": "系统状态" },
               { "attr_name": "status_approve", "display_name": "审批状态" }
             ]
@@ -1148,4 +1129,5 @@ POST，Body 为 `application/json`
 | v1.0 | 2026-06-03 | 初始版本，涵盖客户信息列表/详情、客户订单列表/详情 |
 | v1.1 | 2026-07-03 | 订单模块字段补全：修正订单列表 `fahuozhuangtai` 的 options 为「未发货/部分发货/已发货」；订单产品子表补充 `wuliugongsi`/`wuliudanhao`/`tuihuoyuanyin`/`tuihuozhuangtai` 字段定义及示例。 |
 | v1.2 | 2026-07-03 | 新增第 8 节「订单创建接口」、第 9 节「订单修改接口」，覆盖订单写入场景。 |
-| v1.3 | 2026-07-06 | 接口输出精简（针对第三方 open_token 调用方）：列表接口仅返回 `data`/`data2`/`fields`/`total`/`total_sum`；详情接口顶层仅返回 `tables`；`tables[X]` 仅保留 `table_name`/`display_name`/`primary_key`/`foreign_key`/`parent_table`/`sections`/`data`；`sections[Y]` 仅保留 `display_name`/`position`/`attrs`；`attrs[Z]` 仅保留 `attr_name`/`display_name`/`attr_type`/`component`/`table_name`/`options`/`dataflow`/`width`/`position`。文档示例同步更新。 |
+| v1.3 | 2026-07-06 | 接口输出精简：列表接口仅返回 `data`/`data2`/`fields`/`total`/`total_sum`；详情接口顶层仅返回 `tables`。 |
+| v1.4 | 2026-07-07 | 字段元数据进一步精简：`attrs` 仅包含 `attr_name`/`display_name`/`options`；`sections` 仅包含 `display_name`/`attrs`；`options` 内部仅包含 `label`/`value`，无选项时不返回 `options` 键。 |
