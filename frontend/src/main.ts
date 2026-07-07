@@ -54,6 +54,11 @@ const router = createRouter({
       component: () => import('./components/DigitalEmployeeManager.vue')
     },
     {
+      path: '/my-agents',
+      name: 'my-agents',
+      component: () => import('./components/MyDigitalEmployees.vue')
+    },
+    {
       path: '/portal/subagents',
       name: 'portal-subagents',
       component: () => import('./components/DigitalEmployeeManager.vue')
@@ -202,6 +207,7 @@ const router = createRouter({
         { path: 'channels', name: 'tenant-channels', component: () => import('./components/saas/ChannelConfig.vue') },
         { path: 'wecom-personal-rpa', name: 'tenant-wecom-personal-rpa', component: () => import('./components/saas/WecomPersonalRpaManager.vue') },
         { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
+        { path: 'my-agents', name: 'tenant-my-agents', component: () => import('./components/MyDigitalEmployees.vue') },
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
         { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },

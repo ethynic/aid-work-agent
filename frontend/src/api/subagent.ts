@@ -1,12 +1,9 @@
 /**
  * 数字员工 API（只读）
  */
-const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/subagents`
+import { getAuthHeader } from '@/api/auth'
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('portal_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/subagents`
 
 async function handleResponse<T>(response: Response): Promise<T> {
   const data = await response.json()
@@ -63,7 +60,7 @@ export interface SubagentDetail {
  */
 export async function listSubagents(): Promise<{ success: boolean; data: SubagentListItem[]; error?: string }> {
   const response = await fetch(`${API_BASE}`, {
-    headers: getAuthHeaders(),
+    headers: getAuthHeader(),
   })
   return handleResponse(response)
 }
@@ -73,7 +70,7 @@ export async function listSubagents(): Promise<{ success: boolean; data: Subagen
  */
 export async function getSubagentDetail(agentId: string): Promise<{ success: boolean; data: SubagentDetail; error?: string }> {
   const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}`, {
-    headers: getAuthHeaders(),
+    headers: getAuthHeader(),
   })
   return handleResponse(response)
 }
@@ -83,7 +80,7 @@ export async function getSubagentDetail(agentId: string): Promise<{ success: boo
  */
 export async function getSubagentContent(agentId: string): Promise<{ success: boolean; data: string; error?: string }> {
   const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/content`, {
-    headers: getAuthHeaders(),
+    headers: getAuthHeader(),
   })
   return handleResponse(response)
 }
@@ -93,7 +90,7 @@ export async function getSubagentContent(agentId: string): Promise<{ success: bo
  */
 export async function listAvailableSkills(): Promise<{ success: boolean; data: string[]; error?: string }> {
   const response = await fetch(`${API_BASE}/skills`, {
-    headers: getAuthHeaders(),
+    headers: getAuthHeader(),
   })
   return handleResponse(response)
 }
@@ -107,7 +104,7 @@ export async function listAvailableTools(): Promise<{
   error?: string
 }> {
   const response = await fetch(`${API_BASE}/tools`, {
-    headers: getAuthHeaders(),
+    headers: getAuthHeader(),
   })
   return handleResponse(response)
 }

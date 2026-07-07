@@ -39,7 +39,9 @@ async def list_subagents(request: Request):
             from src.api.auth import get_current_user
             user = get_current_user(request)
             if user:
-                allowed_ids = set(get_allowed_agent_ids_for_user(user))
+                # 传递 tenant_id 作为 target_tenant_id，确保平台管理员代管租户时
+                # 按目标租户的订阅过滤，而不是 fallback 到 user["tenant_id"]（平台管理员为 NULL）
+                allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
                 items = [item for item in items if item["agent_id"] in allowed_ids]
                 # 如果主智能体在允许列表中，添加到结果中
                 if "main" in allowed_ids:

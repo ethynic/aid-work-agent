@@ -55,6 +55,24 @@
         <span class="text-sm font-medium">新会话</span>
       </button>
 
+      <!-- 我的数字员工入口：与「新会话」相邻，相似功能放一起；显示条件复用 showNewSession -->
+      <button
+        v-if="showNewSession"
+        @click="goToMyAgents"
+        :class="[
+          'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+          isMyAgentsActive
+            ? 'bg-primary-50 text-primary-700 font-medium'
+            : 'text-gray-600 hover:bg-gray-50'
+        ]"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <!-- 四宫格图标，呼应页面内的卡片网格布局 -->
+          <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
+        </svg>
+        <span>我的数字员工</span>
+      </button>
+
       <!-- 租户模式菜单 -->
       <template v-if="isTenantMode">
 
@@ -826,6 +844,24 @@ function goToKnowledgeBase() {
 // 跳转到数字员工管理
 function goToDigitalEmployeeManager() {
   router.push('/portal/subagents')
+}
+
+// 是否处于「我的数字员工」页面（用于菜单高亮）
+const isMyAgentsActive = computed(() => {
+  return route.path.endsWith('/my-agents')
+})
+
+// 跳转到「我的数字员工」页面
+// demo 模式与租户模式均支持，路由路径按模式选择
+function goToMyAgents() {
+  const targetPath = isTenantMode.value && tenantId.value
+    ? `/t/${tenantId.value}/my-agents`
+    : '/my-agents'
+  router.push(targetPath)
+  // 手机端点击后自动收缩左侧菜单
+  if (props.isMobile) {
+    emit('collapse')
+  }
 }
 
 // 跳转到全部历史会话
