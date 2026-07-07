@@ -26,3 +26,32 @@ export async function getPlatformTokenUsage(month: string): Promise<any> {
 
   return response.json()
 }
+
+/**
+ * 获取管理后台仪表盘统计数据
+ * 返回三个核心指标：正常租户数量、本月Token用量、今日对话数量
+ */
+export interface DashboardStats {
+  success: boolean
+  tenant_count: number
+  monthly_token_usage: number
+  today_conversation_count: number
+  month: string
+  message?: string
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...getAuthHeader()
+  }
+  const response = await fetch(`${API_BASE}/api/admin/dashboard_stats`, {
+    headers
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  return response.json()
+}

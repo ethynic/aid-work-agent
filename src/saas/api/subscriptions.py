@@ -18,7 +18,6 @@ from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.subscription import AVAILABLE_PLANS
 from src.saas.services.billing import (
     create_subscription_for_tenant,
-    get_subscription_usage,
 )
 from src.saas.services.payment import PaymentService
 from src.config.settings import settings
@@ -59,17 +58,6 @@ async def list_plans():
             "max_users": plan.max_users,
         })
     return {"success": True, "plans": plans}
-
-
-@router.get("/subscriptions")
-async def list_subscriptions(request: Request):
-    """获取当前租户的订阅列表"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-    subs = SubscriptionDB.list_by_tenant(admin["tenant_id"])
-    return {"success": True, "subscriptions": subs}
 
 
 @router.post("/subscriptions")
@@ -189,24 +177,3 @@ async def payment_callback(body: PayCallbackRequest):
     if success:
         return {"success": True, "message": "支付处理成功"}
     return {"success": False, "message": "支付处理失败（订单不存在或已处理）"}
-
-
-@router.get("/get_usage")
-async def get_usage(request: Request):
-    """获取当前租户的 token 用量"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-
-    subs = SubscriptionDB.list_by_tenant(admin["tenant_id"], status="active")
-    if not subs:
-        return {"success": True, "usage": []}
-
-    usage_list = []
-    for sub in subs:
-        usage = get_subscription_usage(sub["subscription_id"])
-        if usage:
-            usage_list.append(usage)
-
-    return {"success": True, "usage": usage_list}

@@ -117,17 +117,6 @@ export async function updateTenantInfo(data: { company_name?: string; contact_na
   return res.json()
 }
 
-export async function getTenantStats(): Promise<{
-  success: boolean
-  stats: { total_instances: number; active_instances: number; total_users: number; total_tokens_used: number }
-}> {
-  const res = await fetch(`${API_BASE}/tenants/me/stats`, {
-    headers: getSaasAuthHeader()
-  })
-  if (!res.ok) throw new Error('获取统计数据失败')
-  return res.json()
-}
-
 export async function listTenants(params?: {
   page?: number
   page_size?: number
@@ -534,14 +523,6 @@ export async function getPlans(): Promise<{
   return res.json()
 }
 
-export async function listSubscriptions(): Promise<{ success: boolean; subscriptions: any[] }> {
-  const res = await fetch(`${API_BASE}/billing/subscriptions`, {
-    headers: getSaasAuthHeader()
-  })
-  if (!res.ok) throw new Error('获取订阅列表失败')
-  return res.json()
-}
-
 export async function createSubscription(data: { plan: string; billing_cycle: string; subagent_type?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/billing/subscriptions`, {
     method: 'POST',
@@ -561,16 +542,6 @@ export async function payOrder(orderId: string, paymentMethod: string = 'wechat'
     body: JSON.stringify({ payment_method: paymentMethod })
   })
   if (!res.ok) throw new Error('支付失败')
-  return res.json()
-}
-
-export async function getUsage(): Promise<{
-  success: boolean; usage: { subscription_id: string; plan_name: string; token_quota: number; tokens_used: number; tokens_remaining: number; usage_percentage: number }[]
-}> {
-  const res = await fetch(`${API_BASE}/billing/get_usage`, {
-    headers: getSaasAuthHeader()
-  })
-  if (!res.ok) throw new Error('获取用量信息失败')
   return res.json()
 }
 

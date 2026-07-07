@@ -151,17 +151,6 @@ async def update_tenant_info(request: Request, body: TenantUpdateRequest):
     return {"success": False, "message": "更新失败"}
 
 
-@router.get("/me/stats")
-async def get_tenant_stats(request: Request):
-    """获取企业概览统计"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-    stats = TenantDB.get_stats(admin["tenant_id"])
-    return {"success": True, "stats": stats}
-
-
 @router.get("/list_tenants")
 async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
     """获取租户列表（仅平台管理员，分页）"""

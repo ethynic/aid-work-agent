@@ -15,6 +15,7 @@ from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.saas.permissions.checker import is_platform_admin
 from src.db.models import ChatRecordDB
+from src.db.database import get_db_connection
 from src.saas.db.tenant_db import TenantDB
 
 router = APIRouter(prefix="/api/admin", tags=["平台报表"])
@@ -28,6 +29,16 @@ class PlatformTokenUsageResponse(BaseModel):
     month: str
     summary: Dict[str, Any]
     data: List[Dict[str, Any]]
+    message: Optional[str] = None
+
+
+class DashboardStatsResponse(BaseModel):
+    """管理后台仪表盘统计响应"""
+    success: bool
+    tenant_count: int = Field(0, description="正常租户数量（status=active）")
+    monthly_token_usage: int = Field(0, description="本月Token用量（全平台 prompt+completion 总和）")
+    today_conversation_count: int = Field(0, description="今日对话数量（全平台 chat_records 记录数）")
+    month: str = Field("", description="统计月份，格式 YYYY-MM")
     message: Optional[str] = None
 
 
@@ -111,4 +122,66 @@ async def get_platform_token_usage(
         summary=result["summary"],
         data=tenant_data,
         message=f"共 {len(tenant_data)} 个租户有数据"
+    )
+
+
+@router.get("/dashboard_stats", response_model=DashboardStatsResponse)
+async def get_dashboard_stats(request: Request):
+    """
+    获取管理后台仪表盘统计数据
+
+    仅平台管理员可访问，返回三个核心指标：
+    - 正常租户数量（status=active）
+    - 本月Token用量（全平台 prompt+completion 总和）
+    - 今日对话数量（全平台 chat_records 记录数）
+    """
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    if not is_platform_admin(user):
+        logger.warning(f"User is not platform admin: {user}")
+        raise HTTPException(status_code=403, detail="仅平台管理员可访问此报表")
+
+    now = datetime.now()
+    month_str = now.strftime("%Y-%m")
+
+    # 1. 正常租户数量：复用 TenantDB.list_tenants，按 status=active 过滤取 total
+    tenant_result = TenantDB.list_tenants(status="active", page=1, page_size=1)
+    tenant_count = tenant_result.get("total", 0)
+
+    # 2. 本月Token用量：复用 get_platform_token_usage 的 summary（含缓存）
+    monthly_token_usage = 0
+    try:
+        token_result = ChatRecordDB.get_platform_token_usage(month_str)
+        summary = token_result.get("summary", {})
+        monthly_token_usage = int(summary.get("total_input_tokens", 0)) + int(summary.get("total_output_tokens", 0))
+    except Exception as e:
+        logger.error(f"获取本月Token用量失败: {e}", exc_info=True)
+
+    # 3. 今日对话数量：查询 chat_records 表今日（按 created_at）的记录数
+    today_conversation_count = 0
+    try:
+        today_start = now.strftime("%Y-%m-%d 00:00:00")
+        today_end = now.strftime("%Y-%m-%d 23:59:59")
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt
+                FROM chat_records
+                WHERE created_at >= %s AND created_at <= %s
+                """,
+                (today_start, today_end),
+            )
+            today_conversation_count = cursor.fetchone()["cnt"]
+    except Exception as e:
+        logger.error(f"获取今日对话数量失败: {e}", exc_info=True)
+
+    return DashboardStatsResponse(
+        success=True,
+        tenant_count=tenant_count,
+        monthly_token_usage=monthly_token_usage,
+        today_conversation_count=today_conversation_count,
+        month=month_str,
     )
