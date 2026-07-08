@@ -1,11 +1,10 @@
 """archive.chat_crypto 单元测试
 
 覆盖：
-- RSA-OAEP-SHA1 解密闭环（自生成密钥对，模拟企微加密）
+- RSA-PKCS1v15 解密闭环（自生成密钥对，模拟企微加密）
 - AES-256-CBC + PKCS7 解密闭环
 - decrypt_message 组合 API
 - 错误路径：私钥格式错、密文损坏、random_key 不足 32 字节、密文短于 16 字节
-- 与 C# ArchiveCryptoService 算法一致性（构造 C# 同算法加密的数据，Python 能解密）
 """
 import base64
 import os
@@ -34,16 +33,14 @@ def _gen_rsa_keypair() -> tuple[str, rsa.RSAPrivateKey]:
     return pem, private_key
 
 
-def _rsa_encrypt_oaep_sha1(public_key, plaintext: bytes) -> str:
-    """模拟企微用公钥加密 random_key（RSA-OAEP-SHA1），返回 base64。"""
-    cipher = public_key.encrypt(
-        plaintext,
-        rsa_padding.OAEP(
-            mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
-            algorithm=hashes.SHA1(),
-            label=None,
-        ),
-    )
+def _rsa_encrypt_pkcs1v15(public_key, plaintext: bytes) -> str:
+    """模拟企微用公钥加密 random_key（RSA-PKCS1v15），返回 base64。
+
+    企微官方文档明确要求 PKCS1
+    （https://developer.work.weixin.qq.com/document/path/91774），
+    早期文档/SDK 误传为 OAEP-SHA1，真机密文验证为 PKCS1。
+    """
+    cipher = public_key.encrypt(plaintext, rsa_padding.PKCS1v15())
     return base64.b64encode(cipher).decode("ascii")
 
 
@@ -62,10 +59,10 @@ def _aes_cbc_encrypt(random_key: bytes, iv: bytes, plaintext: bytes) -> str:
 
 
 def test_decrypt_random_key_ok():
-    """RSA-OAEP-SHA1 解密闭环。"""
+    """RSA-PKCS1v15 解密闭环。"""
     pem, private_key = _gen_rsa_keypair()
     random_key_plain = secrets.token_bytes(32)
-    encrypted_b64 = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key_plain)
+    encrypted_b64 = _rsa_encrypt_pkcs1v15(private_key.public_key(), random_key_plain)
 
     decrypted = chat_crypto.decrypt_random_key(pem, encrypted_b64)
     assert decrypted == random_key_plain
@@ -154,23 +151,22 @@ def test_decrypt_message_full_roundtrip():
     random_key = secrets.token_bytes(32)
     iv = secrets.token_bytes(16)
     plain_json = '{"msgid":"msg_001","action":"upload","msgtype":"text","text":{"content":"hello","noise":"123"}}'
-    encrypted_random_key = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key)
+    encrypted_random_key = _rsa_encrypt_pkcs1v15(private_key.public_key(), random_key)
     encrypted_chat_msg = _aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8"))
 
     result = chat_crypto.decrypt_message(pem, encrypted_random_key, encrypted_chat_msg)
     assert result == plain_json
 
 
-# ----------------- 跨语言一致性（与 C# ArchiveCryptoService 算法对齐） -----------------
+# ----------------- 算法稳定性验证（固定输入可重现） -----------------
 
 
-def test_algorithm_consistency_with_csharp():
-    """验证 Python 实现的算法与 C# ArchiveCryptoService 描述完全一致。
+def test_algorithm_consistency_fixed_input():
+    """验证 Python 实现的算法行为可重现（固定输入固定输出）。
 
-    无法在此直接调用 C#，但通过对照 C# 源码的算法：
-      - RSA: OAEP-SHA1（MGF1-SHA1 + SHA1）
+    对照企微官方文档（https://developer.work.weixin.qq.com/document/path/91774）：
+      - RSA: PKCS1v15
       - AES: CBC + PKCS7，key=random_key[:32]，IV=ciphertext[:16]，cipher=ciphertext[16:]
-    构造相同输入，期望相同输出。
     """
     pem, private_key = _gen_rsa_keypair()
     # 固定的 random_key 和 iv，确保两次运行结果可重现
@@ -178,7 +174,7 @@ def test_algorithm_consistency_with_csharp():
     iv = b"B" * 16
     plain = b'{"test":"consistency"}'
 
-    encrypted_random_key = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key)
+    encrypted_random_key = _rsa_encrypt_pkcs1v15(private_key.public_key(), random_key)
     encrypted_chat_msg = _aes_cbc_encrypt(random_key, iv, plain)
 
     # Python 解密应得到原 plain

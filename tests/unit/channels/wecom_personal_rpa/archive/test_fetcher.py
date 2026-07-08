@@ -53,18 +53,14 @@ def _aes_cbc_encrypt(random_key: bytes, iv: bytes, plaintext: bytes) -> str:
     return base64.b64encode(iv + cipher_bytes).decode("ascii")
 
 
-def _rsa_encrypt_oaep_sha1(public_key, plaintext: bytes) -> str:
-    from cryptography.hazmat.primitives import hashes
+def _rsa_encrypt_pkcs1v15(public_key, plaintext: bytes) -> str:
+    """模拟企微用公钥加密 random_key（RSA-PKCS1v15），返回 base64。
+
+    企微官方明确要求 PKCS1（https://developer.work.weixin.qq.com/document/path/91774）。
+    """
     from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 
-    cipher = public_key.encrypt(
-        plaintext,
-        rsa_padding.OAEP(
-            mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
-            algorithm=hashes.SHA1(),
-            label=None,
-        ),
-    )
+    cipher = public_key.encrypt(plaintext, rsa_padding.PKCS1v15())
     return base64.b64encode(cipher).decode("ascii")
 
 
@@ -223,7 +219,7 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
     random_key = secrets.token_bytes(32)
     iv = secrets.token_bytes(16)
     plain_json = json.dumps({"text": {"content": "你好"}})
-    encrypted_random_key = _rsa_encrypt_oaep_sha1(private_key.public_key(), random_key)
+    encrypted_random_key = _rsa_encrypt_pkcs1v15(private_key.public_key(), random_key)
     encrypted_chat_msg = _aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8"))
 
     item = http_client.ChatDataItem(
@@ -297,7 +293,7 @@ async def test_fetch_room_message(patched_lock, patched_process_msg, monkeypatch
         seq=2001, msg_id="msg_room", action="upload",
         from_="user_a", tolist=[], roomid="room_xxx",
         msg_time=1700000100, msg_type="text",
-        encrypt_random_key=_rsa_encrypt_oaep_sha1(private_key.public_key(), random_key),
+        encrypt_random_key=_rsa_encrypt_pkcs1v15(private_key.public_key(), random_key),
         encrypt_chat_msg=_aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8")),
     )
 
@@ -331,7 +327,7 @@ async def test_fetch_message_type_mapping(patched_lock, patched_process_msg, mon
         seq=3001, msg_id="msg_x", action="upload",
         from_="user_a", tolist=["user_b"], roomid=None,
         msg_time=1700000200, msg_type="unknown_type",  # 未知类型
-        encrypt_random_key=_rsa_encrypt_oaep_sha1(private_key.public_key(), random_key),
+        encrypt_random_key=_rsa_encrypt_pkcs1v15(private_key.public_key(), random_key),
         encrypt_chat_msg=_aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8")),
     )
     monkeypatch.setattr(
@@ -365,7 +361,7 @@ async def test_fetch_decrypt_failure_break(patched_lock, patched_process_msg, mo
     good_item = http_client.ChatDataItem(
         seq=5001, msg_id="good", action="upload", from_="user_a", tolist=["user_b"],
         msg_time=1700000300, msg_type="text",
-        encrypt_random_key=_rsa_encrypt_oaep_sha1(private_key.public_key(), random_key),
+        encrypt_random_key=_rsa_encrypt_pkcs1v15(private_key.public_key(), random_key),
         encrypt_chat_msg=_aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8")),
     )
     # 第 2 条密文损坏

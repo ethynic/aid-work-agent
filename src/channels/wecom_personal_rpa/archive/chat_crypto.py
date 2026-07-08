@@ -1,15 +1,12 @@
 """企微会话存档拉取路径的解密工具
 
-与 C# 客户端 ``clients/wecom-personal-rpa/.../ArchiveCryptoService.cs`` 算法**完全一致**，
-确保同一密文在 C# 和 Python 两侧解密结果相同（跨语言一致性，已有单元测试对拍）。
-
-企微会话存档双层加密（官方文档 https://developer.work.weixin.qq.com/document/path/91360）：
-  1. RSA-OAEP-SHA1：用企业管理后台生成的会话存档私钥解密 ``encrypt_random_key``，得到
-     ``random_key``（典型 32 字节）。
+企微会话存档双层加密（官方文档 https://developer.work.weixin.qq.com/document/path/91774）：
+  1. RSA-PKCS1v15：用企业管理后台生成的会话存档私钥解密 ``encrypt_random_key``，得到
+     ``random_key``（典型 32 字节）。**注意不是 OAEP-SHA1**（早期文档/SDK 误传）。
   2. AES-256-CBC + PKCS7：以 ``random_key`` 前 32 字节为 key，base64 解码后的
      ``encrypt_chat_msg`` 前 16 字节为 IV，剩余字节为密文。
 
-注意：**不是 AES-GCM**（早期设计文档误写为 GCM，已修正对齐 C# 实现）。
+注意：**不是 AES-GCM**（早期设计文档误写为 GCM）。
 """
 
 import base64
@@ -21,7 +18,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 def decrypt_random_key(private_key_pem: str, encrypt_random_key_b64: str) -> bytes:
-    """RSA-OAEP-SHA1 解密 encrypt_random_key，返回 random_key 字节。
+    """RSA-PKCS1v15 解密 encrypt_random_key，返回 random_key 字节。
 
     Args:
         private_key_pem: PEM 格式 PKCS#1 或 PKCS#8 RSA 私钥（含 BEGIN/END 头）。
@@ -48,15 +45,9 @@ def decrypt_random_key(private_key_pem: str, encrypt_random_key_b64: str) -> byt
         raise ValueError(f"私钥 PEM 解析失败: {type(e).__name__}: {e}") from e
 
     try:
-        # OAEP-SHA1：企微官方规范（与 C# RSAEncryptionPadding.OaepSHA1、Java 默认一致）
-        plain_bytes = private_key.decrypt(
-            cipher_bytes,
-            rsa_padding.OAEP(
-                mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
-                algorithm=hashes.SHA1(),
-                label=None,
-            ),
-        )
+        # PKCS1v15：企微官方规范（https://developer.work.weixin.qq.com/document/path/91774）
+        # 早期文档/SDK 误传为 OAEP-SHA1，但企微实际用 PKCS1（已用真机密文验证）
+        plain_bytes = private_key.decrypt(cipher_bytes, rsa_padding.PKCS1v15())
     except Exception as e:
         raise ValueError(f"RSA 解密失败: {type(e).__name__}: {e}") from e
 
@@ -67,7 +58,7 @@ def decrypt_chat_msg(random_key: bytes, encrypt_chat_msg_b64: str) -> str:
     """AES-256-CBC + PKCS7 解密 encrypt_chat_msg，返回明文 UTF-8 字符串。
 
     key = random_key 前 32 字节；IV = base64 解码后 encrypt_chat_msg 的前 16 字节；
-    密文 = 剩余字节。与 C# ``ArchiveCryptoService.DecryptChatMsg`` 完全一致。
+    密文 = 剩余字节。
 
     Args:
         random_key: 由 decrypt_random_key 返回的字节串（≥32 字节）。

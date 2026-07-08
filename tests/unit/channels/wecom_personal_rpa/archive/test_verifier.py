@@ -156,14 +156,7 @@ async def test_verify_private_key_invalid():
 
     other_pem, other_pk = _gen_rsa_pem()  # 用另一对密钥的公钥加密
     encrypted_random_key = base64.b64encode(
-        other_pk.public_key().encrypt(
-            random_key,
-            rsa_padding.OAEP(
-                mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
-                algorithm=hashes.SHA1(),
-                label=None,
-            ),
-        )
+        other_pk.public_key().encrypt(random_key, rsa_padding.PKCS1v15())
     ).decode("ascii")
     encrypted_chat_msg = base64.b64encode(iv + b"fake_cipher").decode("ascii")
 
@@ -239,14 +232,7 @@ async def test_verify_success_full_chain():
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
     encrypted_random_key = base64.b64encode(
-        private_key_obj.public_key().encrypt(
-            random_key,
-            rsa_padding.OAEP(
-                mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
-                algorithm=hashes.SHA1(),
-                label=None,
-            ),
-        )
+        private_key_obj.public_key().encrypt(random_key, rsa_padding.PKCS1v15())
     ).decode("ascii")
 
     pad_len = 32 - (len(plain) % 32)

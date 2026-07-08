@@ -58,19 +58,15 @@ def _encrypt_chat_msg(random_key: bytes, plain: bytes) -> str:
     return base64.b64encode(iv + enc.update(padded) + enc.finalize()).decode("ascii")
 
 
-def _rsa_encrypt_oaep_sha1(public_key, plain: bytes) -> str:
-    from cryptography.hazmat.primitives import hashes
+def _rsa_encrypt_pkcs1v15(public_key, plain: bytes) -> str:
+    """模拟企微用公钥加密 random_key（RSA-PKCS1v15），返回 base64。
+
+    企微官方明确要求 PKCS1（https://developer.work.weixin.qq.com/document/path/91774）。
+    """
     from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 
     return base64.b64encode(
-        public_key.encrypt(
-            plain,
-            rsa_padding.OAEP(
-                mgf=rsa_padding.MGF1(algorithm=hashes.SHA1()),
-                algorithm=hashes.SHA1(),
-                label=None,
-            ),
-        )
+        public_key.encrypt(plain, rsa_padding.PKCS1v15())
     ).decode("ascii")
 
 
@@ -115,7 +111,7 @@ async def test_full_chain_callback_to_message_processing(
     pem, private_key_obj = _gen_rsa_pem()
     random_key = secrets.token_bytes(32)
     plain_msg = json.dumps({"text": {"content": "hello e2e"}})
-    encrypted_random_key = _rsa_encrypt_oaep_sha1(private_key_obj.public_key(), random_key)
+    encrypted_random_key = _rsa_encrypt_pkcs1v15(private_key_obj.public_key(), random_key)
     encrypted_chat_msg = _encrypt_chat_msg(random_key, plain_msg.encode("utf-8"))
 
     item = http_client.ChatDataItem(
