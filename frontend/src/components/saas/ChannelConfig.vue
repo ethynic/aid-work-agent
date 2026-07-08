@@ -149,6 +149,23 @@
             />
             <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
             <p v-if="field.type === 'file' && form.config[field.key]" class="mt-1 text-xs text-success-700">✓ 已上传</p>
+            <!-- wecom_personal_rpa 私钥字段：附加「生成密钥对」按钮 -->
+            <div
+              v-if="field.key === 'private_key' && form.channel_type === 'wecom_personal_rpa' && editingId"
+              class="mt-2"
+            >
+              <BaseButton
+                intent="secondary"
+                size="sm"
+                :disabled="generatingKeypair"
+                @click="handleGenerateKeypair"
+              >
+                {{ generatingKeypair ? '生成中...' : '🔑 生成密钥对' }}
+              </BaseButton>
+              <p class="mt-1 text-xs text-muted">
+                点击自动生成 RSA 2048 密钥对。私钥自动加密保存到本系统，公钥将弹出供您上传到企业微信后台。
+              </p>
+            </div>
           </div>
 
           <!-- 关联数字员工 -->
@@ -277,6 +294,43 @@
         <BaseButton intent="secondary" @click="showGuideModal = false">关闭</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- ==================== 公钥展示弹窗（生成密钥对后） ==================== -->
+    <BaseModal
+      v-model="showPublicKeyModal"
+      title="公钥已生成 - 请上传到企业微信后台"
+      size="lg"
+      :close-on-overlay="false"
+    >
+      <div class="space-y-4">
+        <div class="bg-warning-50 border border-warning-200 rounded-lg p-3 text-sm text-warning-800">
+          <p class="font-medium mb-1">操作指引</p>
+          <p class="text-warning-700">
+            请将下方公钥内容粘贴到企业微信管理后台 → 管理工具 → 会话内容存档 → 密钥管理 → 设置公钥，然后点保存。
+            私钥已自动保存到本系统，无需手动操作。
+          </p>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-sm text-muted">公钥 PEM 文本（只读）</label>
+            <BaseButton intent="ghost" size="sm" @click="copyPublicKey">
+              {{ publicKeyCopied ? '已复制' : '复制公钥' }}
+            </BaseButton>
+          </div>
+          <textarea
+            ref="publicKeyTextareaRef"
+            :value="publicKeyText"
+            readonly
+            rows="10"
+            class="block w-full text-xs text-default font-mono bg-canvas border border-default rounded-lg p-3 resize-none focus:outline-none"
+            @focus="($event.target as HTMLTextAreaElement).select()"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="primary" @click="showPublicKeyModal = false">我已上传，关闭</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -291,7 +345,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, generateChannelKeypair } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -759,6 +813,57 @@ async function handleVerify(configId: string) {
     await loadChannels()
   } catch (e: any) {
     toast.error(e.message || '验证失败')
+  }
+}
+
+// ==================== 生成 RSA 密钥对（wecom_personal_rpa 服务端拉取模式） ====================
+
+const generatingKeypair = ref(false)
+const showPublicKeyModal = ref(false)
+const publicKeyText = ref('')
+const publicKeyCopied = ref(false)
+const publicKeyTextareaRef = ref<HTMLTextAreaElement | null>(null)
+
+async function handleGenerateKeypair() {
+  if (!editingId.value) {
+    toast.error('请先保存配置后再生成密钥对')
+    return
+  }
+  if (!confirm('确定要生成新的密钥对吗？如果之前已生成过，将覆盖旧私钥。')) return
+
+  generatingKeypair.value = true
+  try {
+    const res = await generateChannelKeypair(editingId.value)
+    if (res.success && res.public_key_raw) {
+      // 用原始 PEM 文本（含真实换行）展示在 textarea 中
+      publicKeyText.value = res.public_key_raw
+      publicKeyCopied.value = false
+      showPublicKeyModal.value = true
+      // 同步更新表单中的 private_key 字段状态（实际入库的是加密后的密文，前端拿不到明文，
+      // 这里仅用占位提示用户「私钥已由系统保存」，避免空字段让用户以为没保存）
+      form.value.config.private_key = '***（已由系统生成并加密保存）'
+      toast.success('密钥对已生成，私钥已加密保存')
+    } else {
+      toast.error(res.message || '生成密钥对失败')
+    }
+  } catch (e: any) {
+    toast.error(e.message || '生成密钥对失败')
+  } finally {
+    generatingKeypair.value = false
+  }
+}
+
+async function copyPublicKey() {
+  if (!publicKeyText.value) return
+  try {
+    await navigator.clipboard.writeText(publicKeyText.value)
+    publicKeyCopied.value = true
+    setTimeout(() => { publicKeyCopied.value = false }, 2000)
+  } catch {
+    // 降级：选中文本供用户手动 Ctrl+C
+    publicKeyTextareaRef.value?.focus()
+    publicKeyTextareaRef.value?.select()
+    toast.info('请按 Ctrl+C 复制选中的公钥文本')
   }
 }
 

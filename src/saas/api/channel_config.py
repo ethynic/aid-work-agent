@@ -4,6 +4,7 @@ SaaS 渠道配置管理 API
 路由：/api/saas/channels/*
 """
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -198,6 +199,85 @@ async def delete_channel(config_id: str, request: Request):
         except Exception as e:
             logger.warning(f"失效 adapter 缓存失败: {e}")
     return {"success": success}
+
+
+@router.post("/{config_id}/generate-keypair")
+async def generate_keypair(config_id: str, request: Request):
+    """为 wecom_personal_rpa 渠道生成 RSA 2048bit 密钥对。
+
+    业务场景：企微会话存档要求企业自己生成 RSA 密钥对，私钥自留解密消息，公钥上传到企微后台。
+    本接口替用户在服务端生成密钥对，私钥 Fernet 加密后入库（不出 API 响应），公钥返回前端展示供用户复制上传企微。
+
+    鉴权：require_admin + 校验租户归属（参照 update_channel 模式）。
+    校验：config 必须存在 + 必须是 wecom_personal_rpa 渠道类型。
+    覆盖语义：若 config.private_key 已有值，覆盖（用户主动点生成就是想换）。
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+
+    existing = ChannelConfigDB.get_by_id(config_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="渠道配置不存在")
+    if existing["tenant_id"] != admin["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权操作此配置")
+    if existing["channel_type"] != "wecom_personal_rpa":
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅 wecom_personal_rpa 渠道支持生成密钥对，当前渠道类型: {existing['channel_type']}",
+        )
+
+    try:
+        # RSA 2048bit 生成约 50-200ms 阻塞，丢线程池避免阻塞事件循环（按 backend_dev.md 规范）
+        private_pem, public_pem = await asyncio.to_thread(rpa_credential_codec.generate_rsa_keypair)
+    except Exception as e:
+        logger.error(f"generate_keypair 生成密钥失败 config_id={config_id}: {type(e).__name__}: {e}")
+        return {
+            "success": False,
+            "message": "生成密钥对失败，请稍后重试",
+            "debug": str(type(e).__name__),
+        }
+
+    # 私钥加密入库（覆盖旧值，用户主动点生成就是想换）
+    try:
+        # store_private_key 内部走同步 DB 读写（psycopg2），包 to_thread 避免阻塞事件循环
+        ok = await asyncio.to_thread(rpa_credential_codec.store_private_key, config_id, private_pem)
+    except Exception as e:
+        logger.error(
+            f"generate_keypair 私钥入库失败 config_id={config_id}: {type(e).__name__}: {e}"
+        )
+        return {
+            "success": False,
+            "message": "私钥保存失败，请稍后重试",
+            "debug": str(type(e).__name__),
+        }
+
+    if not ok:
+        # store_private_key 返回 False 通常意味着配置已被删（前面 get_by_id 已校验存在，理论不会发生）
+        raise HTTPException(status_code=500, detail="私钥保存失败：配置可能已被删除")
+
+    # 失效缓存的 adapter（私钥变了，下次回调/拉取需重建）
+    try:
+        await ChannelFactory.invalidate_adapter(
+            existing["tenant_id"], existing["channel_type"], close=True
+        )
+    except Exception as e:
+        logger.warning(f"失效 adapter 缓存失败: {e}")
+
+    logger.info(
+        f"Keypair generated for config_id={config_id} tenant={admin['tenant_id']} "
+        f"(private_key 已加密入库，公钥返回前端)"
+    )
+
+    # public_key_raw：原始 PEM 文本（含真实换行）
+    # public_key：JSON 安全的转义版本（\n 替换真实换行，方便前端直接展示在 textarea 内 value 属性）
+    # 两者内容一致，只是换行表示方式不同；前端按需取用
+    return {
+        "success": True,
+        "public_key": public_pem.replace("\n", "\\n"),
+        "public_key_raw": public_pem,
+    }
 
 
 @router.post("/{config_id}/verify")

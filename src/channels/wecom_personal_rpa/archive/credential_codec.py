@@ -134,10 +134,12 @@ def validate_required_fields(config: Dict[str, Any]) -> Dict[str, str]:
     listen_mode = config.get("listen_mode", FORCED_LISTEN_MODE)
 
     if listen_mode == "server":
+        # 分阶段录入凭证：corp_id + token + encoding_aes_key 是回调 URL 验证必需的（先建配置拿 config_id，
+        # 再去企微后台配回调 URL）。archive_secret + private_key 可后补（企微后台 secret/private_key
+        # 通常在回调 URL 通了之后才拿）。运行时凭证完整性由 fetcher._extract_credentials 检查
+        # （缺凭证 mark_error 不拉取），保存时不强制校验这两个是安全的。
         required = {
             "corp_id": "企业ID（CorpID，在「我的企业」页面获取）",
-            "archive_secret": "会话存档 Secret（在「会话内容存档 → API 基本信息」获取）",
-            "private_key": "RSA 私钥（在「会话内容存档 → 生成密钥对」下载 .pem 文件）",
             "token": "回调 Token（在「会话内容存档 → 接收消息服务器」配置）",
             "encoding_aes_key": "EncodingAESKey（43 字符 Base64，企微后台生成）",
         }
@@ -149,3 +151,69 @@ def validate_required_fields(config: Dict[str, Any]) -> Dict[str, str]:
         }
 
     return {k: v for k, v in required.items() if not config.get(k)}
+
+
+# ----------------- RSA 密钥对自动生成（服务端拉取模式） -----------------
+
+
+def generate_rsa_keypair() -> "tuple[str, str]":
+    """生成 RSA 2048bit 密钥对，返回 (private_pem, public_pem) 文本。
+
+    用于 wecom_personal_rpa 服务端拉取模式：企微会话存档要求企业自己生成 RSA 密钥对，
+    私钥自留解密 encrypt_chat_msg，公钥上传到企微后台供企微加密消息。
+
+    详见：https://developer.work.weixin.qq.com/document/path/101349
+
+    Returns:
+        (private_pem, public_pem)，均为 PEM 格式文本（含 BEGIN/END 行，\\n 分隔）：
+          - private_pem：PKCS8 格式，NoEncryption（未加密，由本系统 Fernet 加密后入库）
+          - public_pem：SubjectPublicKeyInfo 格式（企微后台「密钥管理 → 设置公钥」粘贴用）
+    """
+    # 局部 import 避免模块加载期依赖 cryptography（虽然 archive 模块本身已依赖）
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    private_pem_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_pem_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return private_pem_bytes.decode("ascii"), public_pem_bytes.decode("ascii")
+
+
+def store_private_key(config_id: str, private_pem: str) -> bool:
+    """把私钥 PEM 文本 Fernet 加密后写入指定 config 的 private_key 字段。
+
+    用于 generate-keypair API：生成后只把私钥留在服务端（不出 API 响应），公钥返回前端展示。
+
+    实现要点：
+    - 读现有 config → 解密敏感字段 → 覆盖 private_key → 重新加密 → 写回
+    - 必须先解密：因为 DB 里其他敏感字段是密文，直接整体 encrypt_sensitive_fields 会跳过已加密字段（idempotent），
+      但 private_key 是新明文，需要与其他密文字段共存。读出明文后整体重加密保证一致性。
+    - 用 ChannelConfigDB.update 写库（走主路径，强制 listen_mode='server' + 加密 + 保留运行时字段）
+
+    Args:
+        config_id: 渠道配置 ID
+        private_pem: 私钥 PEM 明文文本
+
+    Returns:
+        True 表示写入成功，False 表示配置不存在或写入失败
+    """
+    # 局部 import 避免循环依赖（channel_config_db → credential_codec）
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    cfg = ChannelConfigDB.get_by_id_decrypted(config_id)
+    if not cfg:
+        return False
+
+    config_data = cfg.get("config") or {}
+    config_data["private_key"] = private_pem
+    return ChannelConfigDB.update(config_id, config_data, subagent_type=cfg.get("subagent_type"))

@@ -148,24 +148,53 @@ def test_validate_required_fields_server_mode_complete():
 
 
 def test_validate_required_fields_server_mode_missing():
-    """server 模式下，缺字段时返回缺失映射。"""
+    """server 模式下，缺必填字段时返回缺失映射。
+
+    业务变更（2026-07）：archive_secret 和 private_key 从必填改为可选（分阶段录入凭证），
+    保留 corp_id + token + encoding_aes_key 必填（回调 URL 验证必需）。
+    """
     cfg = {
         "corp_id": "ww1234",
-        # 缺 archive_secret / private_key / token / encoding_aes_key
+        # 缺 token / encoding_aes_key
     }
     missing = credential_codec.validate_required_fields(cfg)
-    assert "archive_secret" in missing
-    assert "private_key" in missing
     assert "token" in missing
     assert "encoding_aes_key" in missing
+    # archive_secret / private_key 不再强制
+    assert "archive_secret" not in missing
+    assert "private_key" not in missing
     assert "corp_id" not in missing  # corp_id 已提供
 
 
+def test_validate_required_fields_server_mode_allows_partial_credentials():
+    """server 模式下，仅提供回调 URL 三件套（corp_id + token + encoding_aes_key）即可通过校验。
+
+    验证分阶段录入场景：用户先建配置拿 config_id，去企微后台配回调 URL，
+    URL 通了之后再回来补 archive_secret 和 private_key。
+    """
+    cfg = {
+        "corp_id": "ww1234",
+        "token": "callback-token",
+        "encoding_aes_key": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+        # archive_secret / private_key 暂未拿到，先不填
+    }
+    missing = credential_codec.validate_required_fields(cfg)
+    assert missing == {}, "仅回调三件套齐备时应通过校验（archive_secret/private_key 可后补）"
+
+
 def test_validate_required_fields_uses_listen_mode_server_default():
-    """listen_mode 缺失时默认按 server 校验。"""
+    """listen_mode 缺失时默认按 server 校验。
+
+    业务变更（2026-07）：server 模式必填字段缩减为 corp_id + token + encoding_aes_key，
+    archive_secret 不再强制。这里验证 listen_mode 缺失时仍走 server 分支（要求回调三件套）。
+    """
     cfg = {"corp_id": "ww"}  # 无 listen_mode
     missing = credential_codec.validate_required_fields(cfg)
-    assert "archive_secret" in missing  # 走 server 分支
+    # 走 server 分支：要求 token / encoding_aes_key
+    assert "token" in missing
+    assert "encoding_aes_key" in missing
+    # archive_secret 已不再强制
+    assert "archive_secret" not in missing
 
 
 def test_validate_required_fields_client_mode_reserved():
@@ -178,3 +207,119 @@ def test_validate_required_fields_client_mode_reserved():
     missing = credential_codec.validate_required_fields(cfg)
     assert "client_secret" in missing
     assert "archive_secret" not in missing  # client 模式不需要 archive 字段
+
+
+# ----------------- RSA 密钥对自动生成 -----------------
+
+
+def test_generate_rsa_keypair_returns_pem_strings():
+    """generate_rsa_keypair 返回两个 PEM 格式文本。"""
+    private_pem, public_pem = credential_codec.generate_rsa_keypair()
+    assert isinstance(private_pem, str)
+    assert isinstance(public_pem, str)
+    # 私钥 PKCS8 PEM
+    assert "-----BEGIN PRIVATE KEY-----" in private_pem
+    assert "-----END PRIVATE KEY-----" in private_pem
+    # 公钥 SubjectPublicKeyInfo PEM
+    assert "-----BEGIN PUBLIC KEY-----" in public_pem
+    assert "-----END PUBLIC KEY-----" in public_pem
+
+
+def test_generate_rsa_keypair_each_call_unique():
+    """每次调用生成独立的密钥对（非固定种子）。"""
+    priv1, _ = credential_codec.generate_rsa_keypair()
+    priv2, _ = credential_codec.generate_rsa_keypair()
+    assert priv1 != priv2, "两次生成的私钥不应相同"
+
+
+def test_generate_rsa_keypair_can_roundtrip_encrypt_decrypt():
+    """生成的密钥对能正确加解密消息（验证密钥对有效，与企微加密链路一致）。
+
+    场景：服务端用私钥解密企微用公钥加密的 encrypt_random_key。这里自测加解密闭环。
+    """
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives import hashes, serialization
+
+    private_pem, public_pem = credential_codec.generate_rsa_keypair()
+
+    # 反序列化
+    private_key = serialization.load_pem_private_key(
+        private_pem.encode("ascii"), password=None
+    )
+    public_key = serialization.load_pem_public_key(public_pem.encode("ascii"))
+
+    # 公钥加密 → 私钥解密（模拟企微加密、本系统解密）
+    plaintext = b"hello wecom archive chat msg random key"
+    ciphertext = public_key.encrypt(
+        plaintext,
+        padding.PKCS1v15(),
+    )
+    decrypted = private_key.decrypt(ciphertext, padding.PKCS1v15())
+    assert decrypted == plaintext, "私钥解密公钥加密的内容应得到原文"
+
+
+def test_generate_rsa_keypair_private_key_is_pkcs8_unencrypted():
+    """私钥是 PKCS8 格式、未加密（可被 load_pem_private_key 无密码加载）。"""
+    from cryptography.hazmat.primitives import serialization
+
+    private_pem, _ = credential_codec.generate_rsa_keypair()
+    # 不传 password 能加载 → 未加密
+    key = serialization.load_pem_private_key(
+        private_pem.encode("ascii"), password=None
+    )
+    # 验证密钥长度 2048 bit
+    assert key.key_size == 2048
+
+
+# ----------------- store_private_key（mock DB 层） -----------------
+
+
+def test_store_private_key_returns_false_when_config_not_found(monkeypatch):
+    """config_id 不存在时返回 False。"""
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    monkeypatch.setattr(ChannelConfigDB, "get_by_id_decrypted", staticmethod(lambda cid: None))
+    monkeypatch.setattr(ChannelConfigDB, "update", staticmethod(lambda *a, **kw: True))  # 不应被调用
+
+    result = credential_codec.store_private_key("chan_nonexistent", "fake-pem")
+    assert result is False
+
+
+def test_store_private_key_calls_update_with_new_private_key(monkeypatch):
+    """store_private_key 把新私钥写入 config 并调用 ChannelConfigDB.update。"""
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    fake_cfg = {
+        "config_id": "chan_abc",
+        "tenant_id": "tenant_x",
+        "channel_type": "wecom_personal_rpa",
+        "subagent_type": None,
+        "config": {
+            "corp_id": "ww1234",
+            "archive_secret": "plain-secret",  # 已解密明文
+            "private_key": "",  # 原来为空
+            "token": "token-xxx",
+            "encoding_aes_key": "aes-xxx",
+            "listen_mode": "server",
+        },
+    }
+    captured = {}
+
+    def fake_update(config_id, config, subagent_type=None):
+        captured["config_id"] = config_id
+        captured["config"] = config
+        captured["subagent_type"] = subagent_type
+        return True
+
+    monkeypatch.setattr(ChannelConfigDB, "get_by_id_decrypted", staticmethod(lambda cid: fake_cfg))
+    monkeypatch.setattr(ChannelConfigDB, "update", staticmethod(fake_update))
+
+    new_private = "-----BEGIN PRIVATE KEY-----\nNEW\n-----END PRIVATE KEY-----\n"
+    result = credential_codec.store_private_key("chan_abc", new_private)
+
+    assert result is True
+    assert captured["config_id"] == "chan_abc"
+    assert captured["config"]["private_key"] == new_private
+    # 其他敏感字段保留（明文传入 update，由 encrypt_sensitive_fields 再加密）
+    assert captured["config"]["archive_secret"] == "plain-secret"
+    assert captured["subagent_type"] is None

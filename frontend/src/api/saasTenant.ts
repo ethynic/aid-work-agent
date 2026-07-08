@@ -335,6 +335,28 @@ export async function verifyChannel(configId: string): Promise<{ success: boolea
   return res.json()
 }
 
+/**
+ * 为 wecom_personal_rpa 渠道生成 RSA 密钥对。
+ *
+ * 后端会在服务端生成 2048bit RSA 密钥对，私钥 Fernet 加密入库（不出 API），公钥返回前端展示。
+ * 若已有私钥，会被覆盖（用户主动点生成就是想换）。
+ *
+ * @returns public_key 为 JSON 转义版本（\n 字面量），public_key_raw 为原始 PEM 文本
+ */
+export async function generateChannelKeypair(configId: string): Promise<{
+  success: boolean
+  public_key?: string
+  public_key_raw?: string
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/channels/${configId}/generate-keypair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+  })
+  if (!res.ok) throw new Error('生成密钥对失败')
+  return res.json()
+}
+
 // ==================== 用户管理 ====================
 
 export async function listTenantUsers(): Promise<{ success: boolean; users: any[] }> {
