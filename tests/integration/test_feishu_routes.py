@@ -12,6 +12,7 @@
 
 import hashlib
 import json
+import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -229,7 +230,8 @@ class TestSignatureVerification:
         body_str = json.dumps(event, ensure_ascii=False)
 
         # 计算签名: SHA256(timestamp + nonce + encrypt_key + body)
-        timestamp = "1700000000"
+        # 使用当前时间戳，避免触发 ±1 小时偏差校验
+        timestamp = str(int(time.time()))
         nonce = "test_nonce"
         encrypt_key = feishu_adapter_encrypted.encrypt_key
         content = timestamp + nonce + encrypt_key + body_str

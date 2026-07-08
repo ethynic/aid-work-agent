@@ -12,10 +12,11 @@
   SHA256(timestamp + nonce + encrypt_key + body)
   注意拼接的是 encrypt_key 原文，不是 SHA256 后的 aes_key。
 
-解密流程:
-  Base64 解码 → 取前 16 字节作 IV → AES-256-CBC 解密 →
-  PKCS7 去填充（块大小 32）→ 去除 16 字节随机前缀 →
-  读取 4 字节大端序消息长度 → 提取 JSON → 解析返回 dict
+解密流程（与企微不同，飞书 v2.0 解密后是裸 JSON，无随机前缀和 msg_len 头）:
+  Base64 解码 -> 取前 16 字节作 IV -> AES-256-CBC 解密 ->
+  PKCS7 去填充（块大小 16，AES.block_size）-> JSON 解析返回 dict
+
+对照飞书官方 SDK lark-oapi core/utils/decryptor.py 实现。
 """
 
 import base64
@@ -23,7 +24,6 @@ import hashlib
 import hmac
 import json
 import os
-import struct
 import time
 from typing import Optional
 
@@ -34,11 +34,15 @@ from loguru import logger
 # 飞书允许的时间戳偏差上限（秒），超过即视为重放攻击
 _TIMESTAMP_TOLERANCE_SECONDS = 3600
 
+# AES 块大小（16 字节，PKCS7 填充以此为单位）
+_AES_BLOCK_SIZE = 16
+
 
 class FeishuCrypto:
     """飞书消息加解密"""
 
-    BLOCK_SIZE = 32  # PKCS7 填充块大小（与企微相同）
+    # 兼容旧测试引用：块大小为 16（AES.block_size），非企微的 32
+    BLOCK_SIZE = _AES_BLOCK_SIZE
 
     def __init__(self, verification_token: str, encrypt_key: str):
         """
@@ -56,13 +60,11 @@ class FeishuCrypto:
         """
         解密 encrypt 字段。
 
-        流程:
-        1. Base64 解码 → enc_bytes
+        流程（与企微不同，飞书 v2.0 解密后直接是裸 JSON）:
+        1. Base64 解码 -> enc_bytes
         2. IV = enc_bytes[:16]，ciphertext = enc_bytes[16:]
-        3. AES-256-CBC 解密 → PKCS7 去填充 → content_bytes
-        4. content_bytes 结构：[16字节随机串] + [4字节大端序消息长度] + [JSON] + [app_id]
-        5. 跳过前 16 字节，读取 4 字节大端序得到 msg_len，截取 msg_len 字节的 JSON
-        6. JSON 解析返回 dict
+        3. AES-256-CBC 解密 -> PKCS7 去填充（块大小 16）-> 裸 JSON 字节串
+        4. JSON 解析返回 dict
 
         Args:
             encrypt_data: Base64 编码的加密消息
@@ -76,86 +78,75 @@ class FeishuCrypto:
         # 1. Base64 解码
         enc_bytes = base64.b64decode(encrypt_data)
 
-        if len(enc_bytes) < 16:
+        if len(enc_bytes) < _AES_BLOCK_SIZE * 2:
+            # 至少需要 1 个 IV 块 + 1 个密文块
             raise ValueError("密文太短，无法提取 IV")
+        if len(enc_bytes) % _AES_BLOCK_SIZE != 0:
+            raise ValueError("密文长度不是 AES 块大小的整数倍")
 
         # 2. IV 从密文前 16 字节取（关键差异：不是从 key 取）
-        iv = enc_bytes[:16]
-        ciphertext = enc_bytes[16:]
-
-        if len(ciphertext) == 0:
-            raise ValueError("密文为空")
+        iv = enc_bytes[:_AES_BLOCK_SIZE]
+        ciphertext = enc_bytes[_AES_BLOCK_SIZE:]
 
         # 3. AES-256-CBC 解密
         cipher = Cipher(algorithms.AES(self.aes_key), modes.CBC(iv))
         decryptor = cipher.decryptor()
         decrypted = decryptor.update(ciphertext) + decryptor.finalize()
+        if not decrypted:
+            raise ValueError("解密后数据为空")
 
-        # PKCS7 去填充
+        # PKCS7 去填充（块大小 16，AES.block_size）
         pad_len = decrypted[-1]
-        if pad_len < 1 or pad_len > self.BLOCK_SIZE:
+        if pad_len < 1 or pad_len > _AES_BLOCK_SIZE or pad_len > len(decrypted):
             raise ValueError(f"无效的 PKCS7 填充长度: {pad_len}")
         if decrypted[-pad_len:] != bytes([pad_len] * pad_len):
             raise ValueError("PKCS7 填充字节不一致")
-        decrypted = decrypted[:-pad_len]
+        plain_bytes = decrypted[:-pad_len]
 
-        # 4. 去除 16 字节随机前缀
-        if len(decrypted) < 20:
-            raise ValueError("解密后数据太短")
-        content = decrypted[16:]
+        if not plain_bytes:
+            raise ValueError("解密后明文为空")
 
-        # 5. 读取 4 字节大端序消息长度
-        msg_len = struct.unpack("!I", content[:4])[0]
-        if len(content) < 4 + msg_len:
-            raise ValueError(
-                f"消息长度不一致: 声明 {msg_len} 字节，实际 {len(content) - 4} 字节"
-            )
-
-        json_bytes = content[4:4 + msg_len]
-
-        # 6. JSON 解析
-        return json.loads(json_bytes.decode("utf-8"))
+        # 4. JSON 解析（飞书 v2.0 解密后直接是裸 JSON，无随机前缀和 msg_len 头）
+        try:
+            return json.loads(plain_bytes.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise ValueError(f"解密后明文不是合法 JSON: {e}")
 
     def encrypt(self, data: dict, app_id: str = "") -> str:
         """
         加密数据（主要用于测试和回复加密）。
 
-        流程:
-        1. JSON 序列化 → json_bytes
-        2. 构造明文: random(16) + msg_len(4) + json_bytes + app_id
-        3. PKCS7 填充到 32 字节块边界
-        4. 生成随机 16 字节 IV
-        5. AES-256-CBC 加密
-        6. IV + 密文 → Base64 编码
+        流程（与企微不同，飞书 v2.0 明文就是裸 JSON）:
+        1. JSON 序列化 -> json_bytes
+        2. PKCS7 填充到 16 字节块边界
+        3. 生成随机 16 字节 IV
+        4. AES-256-CBC 加密
+        5. IV + 密文 -> Base64 编码
 
         Args:
             data: 要加密的 dict
-            app_id: 附加在末尾的 app_id（可选）
+            app_id: 兼容旧接口签名，飞书 v2.0 不附加 app_id 到明文末尾，此参数被忽略
 
         Returns:
             Base64 编码的加密消息
         """
+        _ = app_id  # 兼容旧调用签名，飞书 v2.0 不使用
         json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        app_id_bytes = app_id.encode("utf-8")
 
-        # 构造明文: random(16) + msg_len(4) + json_bytes + app_id
-        random_bytes = os.urandom(16)
-        msg_len_bytes = struct.pack("!I", len(json_bytes))
-        plaintext = random_bytes + msg_len_bytes + json_bytes + app_id_bytes
-
-        # PKCS7 填充到 BLOCK_SIZE 边界
-        pad_len = self.BLOCK_SIZE - (len(plaintext) % self.BLOCK_SIZE)
-        plaintext += bytes([pad_len] * pad_len)
+        # PKCS7 填充到 AES 块边界（16 字节）
+        # len % 16 范围 0..15，16 - (0..15) 范围 1..16，刚好对齐时 pad_len=16（补完整块）
+        pad_len = _AES_BLOCK_SIZE - (len(json_bytes) % _AES_BLOCK_SIZE)
+        plaintext = json_bytes + bytes([pad_len] * pad_len)
 
         # 随机 IV（每次加密都不同，与企微不同）
-        iv = os.urandom(16)
+        iv = os.urandom(_AES_BLOCK_SIZE)
 
         # AES-256-CBC 加密
         cipher = Cipher(algorithms.AES(self.aes_key), modes.CBC(iv))
         encryptor = cipher.encryptor()
         encrypted = encryptor.update(plaintext) + encryptor.finalize()
 
-        # IV 前缀 + 密文 → Base64
+        # IV 前缀 + 密文 -> Base64
         return base64.b64encode(iv + encrypted).decode("utf-8")
 
     def verify_url_verification(self, body: dict) -> Optional[str]:
