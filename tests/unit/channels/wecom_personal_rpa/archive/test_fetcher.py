@@ -160,7 +160,7 @@ async def test_fetch_wrong_channel_type(patched_lock, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fetch_credentials_incomplete(patched_lock, monkeypatch):
-    """凭证不完整 → 写错误状态，不调 http_client。"""
+    """凭证不完整 → 写错误状态，不调 SDK。"""
     cfg = _make_cfg_record(_make_config_data(private_key=""))  # 缺私钥
     monkeypatch.setattr(
         fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
@@ -169,9 +169,9 @@ async def test_fetch_credentials_incomplete(patched_lock, monkeypatch):
     fetcher_obj = ServerArchiveFetcher()
     monkeypatch.setattr(fetcher_obj, "_mark_error", mark_error_called)
 
-    with patch.object(fetcher_module.http_client, "get_access_token") as mock_token:
+    with patch.object(fetcher_module.http_client, "get_chat_data") as mock_chat_data:
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
-        mock_token.assert_not_called()
+        mock_chat_data.assert_not_called()
 
     mark_error_called.assert_awaited()
 
@@ -199,14 +199,12 @@ async def test_fetch_empty_batch_clears_error(patched_lock, patched_process_msg,
         fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
     )
 
-    with patch.object(fetcher_module.http_client, "get_access_token", new=AsyncMock(return_value="tok")) as mock_tok, \
-         patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=http_client.ChatDataBatch(items=[]))) as mock_fetch:
+    with patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=http_client.ChatDataBatch(items=[]))) as mock_fetch:
         clear_error_called = AsyncMock()
         fetcher_obj = ServerArchiveFetcher()
         monkeypatch.setattr(fetcher_obj, "_clear_error", clear_error_called)
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
-    mock_tok.assert_awaited_once()
     mock_fetch.assert_awaited_once()
     assert len(patched_process_msg.calls) == 0
     clear_error_called.assert_awaited()
@@ -255,8 +253,7 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
         _fake_update,
     )
 
-    with patch.object(fetcher_module.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
-         patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
+    with patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
         fetcher_obj = ServerArchiveFetcher()
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
@@ -308,8 +305,7 @@ async def test_fetch_room_message(patched_lock, patched_process_msg, monkeypatch
         fetcher_module.ChannelConfigDB, "update_config_field", lambda *a, **kw: True
     )
 
-    with patch.object(fetcher_module.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
-         patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=http_client.ChatDataBatch(items=[item]))):
+    with patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=http_client.ChatDataBatch(items=[item]))):
         fetcher_obj = ServerArchiveFetcher()
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
@@ -342,8 +338,7 @@ async def test_fetch_message_type_mapping(patched_lock, patched_process_msg, mon
         fetcher_module.ChannelConfigDB, "update_config_field", lambda *a, **kw: True
     )
 
-    with patch.object(fetcher_module.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
-         patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=http_client.ChatDataBatch(items=[item]))):
+    with patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=http_client.ChatDataBatch(items=[item]))):
         fetcher_obj = ServerArchiveFetcher()
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
@@ -395,8 +390,7 @@ async def test_fetch_decrypt_failure_break(patched_lock, patched_process_msg, mo
         _fake_update,
     )
 
-    with patch.object(fetcher_module.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
-         patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
+    with patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
         fetcher_obj = ServerArchiveFetcher()
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
@@ -419,8 +413,7 @@ async def test_fetch_45029_marks_error(patched_lock, patched_process_msg, monkey
     fetcher_obj = ServerArchiveFetcher()
     monkeypatch.setattr(fetcher_obj, "_mark_error", mark_error_called)
 
-    with patch.object(fetcher_module.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
-         patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(side_effect=http_client.WeComRateLimitException(60))):
+    with patch.object(fetcher_module.http_client, "get_chat_data", new=AsyncMock(side_effect=http_client.WeComRateLimitException(60))):
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
     assert len(patched_process_msg.calls) == 0

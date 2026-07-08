@@ -2,7 +2,7 @@
 
 server 模式下，验证凭证有效性的完整链路：
 1. 用 corp_id + archive_secret 调 get_access_token（验证拉取凭证）
-2. 调 get_chat_data(seq=0, limit=1) 拉一条密文（验证 access_token 有效）
+2. 调 C SDK GetChatData(seq=0, limit=1) 拉一条密文（验证 corpid+secret+SDK 权限）
 3. 用 private_key RSA 解密 encrypt_random_key（验证私钥）
 4. 用 random_key AES 解密 encrypt_chat_msg（验证私钥与密文匹配）
 5. 构造一个假事件，用 token + encoding_aes_key 自测验签 + AES 解密
@@ -71,6 +71,7 @@ async def verify_archive_server_mode(config_data: Dict[str, Any], tenant_id: str
         return _err("fields", f"凭证字段缺失: {', '.join(missing)}")
 
     # Step 1：get_access_token（验证 corp_id + archive_secret）
+    # 注意：access_token 仅用于校验凭证；会话存档密文拉取走 C SDK，不需要 access_token
     try:
         access_token = await http_client.get_access_token(
             tenant_id=tenant_id, corpid=corp_id, secret=archive_secret
@@ -87,9 +88,12 @@ async def verify_archive_server_mode(config_data: Dict[str, Any], tenant_id: str
     except Exception as e:
         return _err("access_token", f"获取 access_token 网络异常: {type(e).__name__}: {e}")
 
-    # Step 2：get_chat_data(seq=0, limit=1)（验证 access_token 有效 + 拉取权限）
+    # Step 2：调 C SDK GetChatData(seq=0, limit=1)（验证 corpid+secret+SDK 权限）
+    # 企微官方明确：会话存档拉取必须用 C SDK，无 HTTP REST API
     try:
-        batch = await http_client.get_chat_data(access_token, seq=0, limit=1)
+        batch = await http_client.get_chat_data(
+            corpid=corp_id, secret=archive_secret, seq=0, limit=1
+        )
     except http_client.WeComRateLimitException:
         return _err(
             "chat_data",
@@ -105,7 +109,8 @@ async def verify_archive_server_mode(config_data: Dict[str, Any], tenant_id: str
             )
         return _err("chat_data", f"拉取会话存档失败: {e.errmsg}", detail=f"errcode={e.errcode}")
     except Exception as e:
-        return _err("chat_data", f"拉取会话存档网络异常: {type(e).__name__}: {e}")
+        # SDKLoadError / SDKCallError 等
+        return _err("chat_data", f"拉取会话存档异常: {type(e).__name__}: {e}")
 
     # Step 3+4：RSA 解密 encrypt_random_key + AES 解密 encrypt_chat_msg（验证 private_key）
     # 注意：seq=0 拉到的可能是空批次（新企业还没消息），此时无法验证私钥——

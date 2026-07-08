@@ -1,13 +1,16 @@
 """archive.http_client 单元测试
 
 覆盖：
-- get_access_token 成功路径（含 Redis 缓存命中/未命中）
+- get_access_token 成功路径（含 Redis 缓存命中/未命中）—— 仍走 HTTP
 - get_access_token errcode != 0 抛 WeComApiException
-- get_chat_data 成功路径（解析 chatdata 数组为 ChatDataItem）
+- get_chat_data 成功路径（解析 chatdata 数组为 ChatDataItem）—— 走 C SDK
 - get_chat_data errcode=45009 抛 WeComRateLimitException
 - get_chat_data errcode != 0 抛 WeComApiException
 - 参数校验
 - 缓存命中跳过 HTTP 调用
+
+注意：get_chat_data 已从 HTTP 改为 C SDK 调用（见 wecom_finance_sdk.py），
+本测试 mock wecom_finance_sdk.get_chat_data_raw 验证 http_client 层的 JSON 解析逻辑。
 """
 import base64
 import json
@@ -23,7 +26,7 @@ from src.channels.wecom_personal_rpa.archive.http_client import (
 )
 
 
-# ----------------- get_access_token -----------------
+# ----------------- get_access_token（仍走 HTTP） -----------------
 
 
 @pytest.fixture
@@ -107,7 +110,7 @@ async def test_get_access_token_empty_params_raises():
         await http_client.get_access_token("t", "corp", "")
 
 
-# ----------------- get_chat_data -----------------
+# ----------------- get_chat_data（走 C SDK） -----------------
 
 
 def _make_chat_data_response(items):
@@ -150,17 +153,13 @@ async def test_get_chat_data_success():
     ]
     response_data = _make_chat_data_response(items_raw)
 
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json = MagicMock(return_value=response_data)
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.post = AsyncMock(return_value=mock_resp)
+    with patch(
+        "src.channels.wecom_personal_rpa.archive.wecom_finance_sdk.get_chat_data_raw",
+        return_value=response_data,
+    ) as mock_raw:
+        batch = await http_client.get_chat_data("ww_corp", "secret", seq=1000, limit=100)
 
-    with patch.object(http_client.httpx, "AsyncClient", return_value=mock_client):
-        batch = await http_client.get_chat_data("tok", seq=1000, limit=100)
-
+    mock_raw.assert_called_once_with("ww_corp", "secret", 1000, 100)
     assert len(batch.items) == 2
     item1 = batch.items[0]
     assert item1.seq == 1001
@@ -185,16 +184,11 @@ async def test_get_chat_data_empty_chatdata():
     """chatdata 为空数组返回空 batch。"""
     response_data = {"errcode": 0, "errmsg": "ok", "chatdata": []}
 
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json = MagicMock(return_value=response_data)
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.post = AsyncMock(return_value=mock_resp)
-
-    with patch.object(http_client.httpx, "AsyncClient", return_value=mock_client):
-        batch = await http_client.get_chat_data("tok", seq=1000, limit=100)
+    with patch(
+        "src.channels.wecom_personal_rpa.archive.wecom_finance_sdk.get_chat_data_raw",
+        return_value=response_data,
+    ):
+        batch = await http_client.get_chat_data("ww_corp", "secret", seq=1000, limit=100)
 
     assert batch.items == []
 
@@ -204,17 +198,12 @@ async def test_get_chat_data_rate_limited():
     """errcode=45009 抛 WeComRateLimitException。"""
     response_data = {"errcode": 45009, "errmsg": "reach max api daily request limit"}
 
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json = MagicMock(return_value=response_data)
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.post = AsyncMock(return_value=mock_resp)
-
-    with patch.object(http_client.httpx, "AsyncClient", return_value=mock_client):
+    with patch(
+        "src.channels.wecom_personal_rpa.archive.wecom_finance_sdk.get_chat_data_raw",
+        return_value=response_data,
+    ):
         with pytest.raises(WeComRateLimitException) as exc:
-            await http_client.get_chat_data("tok", seq=1000, limit=100)
+            await http_client.get_chat_data("ww_corp", "secret", seq=1000, limit=100)
 
     assert exc.value.retry_after_seconds == 60
 
@@ -224,17 +213,12 @@ async def test_get_chat_data_other_errcode_raises():
     """其他 errcode 抛 WeComApiException。"""
     response_data = {"errcode": 40014, "errmsg": "invalid access_token"}
 
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json = MagicMock(return_value=response_data)
-    mock_client = MagicMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.post = AsyncMock(return_value=mock_resp)
-
-    with patch.object(http_client.httpx, "AsyncClient", return_value=mock_client):
+    with patch(
+        "src.channels.wecom_personal_rpa.archive.wecom_finance_sdk.get_chat_data_raw",
+        return_value=response_data,
+    ):
         with pytest.raises(WeComApiException) as exc:
-            await http_client.get_chat_data("tok", seq=1000, limit=100)
+            await http_client.get_chat_data("ww_corp", "secret", seq=1000, limit=100)
 
     assert exc.value.api == "get_chat_data"
     assert exc.value.errcode == 40014
@@ -242,9 +226,11 @@ async def test_get_chat_data_other_errcode_raises():
 
 @pytest.mark.asyncio
 async def test_get_chat_data_invalid_params():
-    with pytest.raises(ValueError, match="access_token"):
-        await http_client.get_chat_data("", seq=0, limit=100)
+    with pytest.raises(ValueError, match="corpid"):
+        await http_client.get_chat_data("", "secret", seq=0, limit=100)
+    with pytest.raises(ValueError, match="secret"):
+        await http_client.get_chat_data("ww", "", seq=0, limit=100)
     with pytest.raises(ValueError, match="limit"):
-        await http_client.get_chat_data("tok", seq=0, limit=0)
+        await http_client.get_chat_data("ww", "sec", seq=0, limit=0)
     with pytest.raises(ValueError, match="limit"):
-        await http_client.get_chat_data("tok", seq=0, limit=1001)
+        await http_client.get_chat_data("ww", "sec", seq=0, limit=1001)

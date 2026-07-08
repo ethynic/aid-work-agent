@@ -8,7 +8,7 @@
   1. Redis 分布式锁 wecom_rpa:archive:lock:{tenant_id}（TTL 60s，防 Gunicorn 多 worker 并发）
   2. 从 tenant_channel_configs 读配置 + 解密凭证
   3. 检查 listen_mode='server'（防御性，第一期永远为 True）
-  4. 调 http_client.get_access_token + get_chat_data 拉一批密文
+  4. 调 C SDK GetChatData 拉一批密文（通过 http_client.get_chat_data 包装）
   5. 逐条：chat_crypto.decrypt_message 解密 → 构造 RpaCallbackEnvelope →
      调 _process_inbound_message(source='server_fetcher') → 推进 last_seq
   6. 单条解密失败不推进 seq，break 跳出（下次重拉同一条）
@@ -138,11 +138,13 @@ class ServerArchiveFetcher:
         last_seq = int(config_data.get("last_seq", 0) or 0)
         batch_limit = int(config_data.get("batch_limit", 1000) or 1000)
 
-        # 拉取 access_token + 密文批次
-        token = await http_client.get_access_token(
-            tenant_id=tenant_id, corpid=creds["corp_id"], secret=creds["archive_secret"]
+        # 拉取密文批次（C SDK GetChatData，不需要 access_token）
+        # 注意：SDK 用 corpid+secret 直连，与 get_access_token 用同一套凭证；
+        # 凭证错误时 SDK 会返回非 0 errcode（如 48002 / 60011），由上层异常处理。
+        batch = await http_client.get_chat_data(
+            corpid=creds["corp_id"], secret=creds["archive_secret"],
+            seq=last_seq, limit=batch_limit,
         )
-        batch = await http_client.get_chat_data(access_token=token, seq=last_seq, limit=batch_limit)
 
         if not batch.items:
             logger.debug(f"[ServerArchiveFetcher] 无新消息 tenant={tenant_id} seq>{last_seq}")

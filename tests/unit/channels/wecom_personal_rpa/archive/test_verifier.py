@@ -128,6 +128,20 @@ async def test_verify_chat_data_no_sdk_permission():
     assert "SDK 权限" in result["message"] or "未获得" in result["message"]
 
 
+@pytest.mark.asyncio
+async def test_verify_chat_data_sdk_load_error():
+    """SDK 加载失败（SDKLoadError）→ chat_data 阶段失败诊断。"""
+    from src.channels.wecom_personal_rpa.archive.wecom_finance_sdk import SDKLoadError
+    cfg = _make_config()
+    with patch.object(verifier.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
+         patch.object(verifier.http_client, "get_chat_data",
+                      new=AsyncMock(side_effect=SDKLoadError(".so not found"))):
+        result = await verifier.verify_archive_server_mode(cfg, "t_test")
+    assert result["success"] is False
+    assert result["stage"] == "chat_data"
+    assert "异常" in result["message"]
+
+
 # ----------------- Step 3+4: private_key 失败 -----------------
 
 
