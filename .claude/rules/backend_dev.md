@@ -95,6 +95,96 @@ async def get_data():
     return result
 ```
 
+## 包初始化副作用规范（Python `__init__.py` 反模式）
+
+**核心规则**：包的 `__init__.py` 和模块顶层**禁止**执行重计算或创建单例对象。包初始化应该是惰性的——任何对包内任意子模块的 import 都不应触发副作用。
+
+### 反模式（禁止）
+
+```python
+# ❌ src/core/__init__.py
+from .agent import master_agent   # 顶层 import 立即触发 Agent 构造
+                                    # → 注册 27 个工具、加载 skills/subagents
+                                    # → 任何对 src.core.* 的间接 import 都被迫拉起整套环境
+
+# ❌ src/core/agent.py（模块底部）
+master_agent = Agent(is_master=True)   # 模块级实例化，import 该模块即执行
+
+# ❌ src/config/__init__.py
+from .logging import setup_logging     # logging 内部 import src.core.log_retention
+                                        # → 触发 src.core/__init__.py → 全套 Agent 启动
+```
+
+**真实事故**：曾经 `from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk`（一个纯 ctypes 封装）被迫拉起 100+ 个 src 模块、构造 Agent + 27 工具 + 8 子智能体，根因就是 `src.core/__init__.py` 在顶层 import `master_agent`。
+
+### 正确做法：模块级 `__getattr__` 懒加载
+
+Python 3.7+ 支持模块级 `__getattr__`，属性访问时才执行：
+
+```python
+# ✅ src/core/__init__.py
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
+    """按需导出，避免顶层 import 触发 Agent 构造"""
+    if name in ("Agent", "AgentMode"):
+        from src.core.agent import Agent, AgentMode
+        return {"Agent": Agent, "AgentMode": AgentMode}[name]
+    if name in ("master_agent", "agent"):
+        from src.core.agent import get_master_agent
+        return get_master_agent()
+    raise AttributeError(f"module 'src.core' has no attribute {name!r}")
+
+
+__all__ = ["Agent", "master_agent"]
+```
+
+```python
+# ✅ src/core/agent.py（单例改为延迟构造函数）
+_master_agent_instance: Optional["Agent"] = None
+
+
+def get_master_agent() -> "Agent":
+    """返回 master_agent 单例，第一次调用时构造"""
+    global _master_agent_instance
+    if _master_agent_instance is None:
+        _master_agent_instance = Agent(is_master=True)
+    return _master_agent_instance
+
+
+def __getattr__(name: str):
+    """让 `from src.core.agent import master_agent` 仍能工作，但延迟到首次访问"""
+    if name in ("master_agent", "agent"):
+        return get_master_agent()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+```
+
+### 判断标准
+
+| 代码 | 是否有副作用 |
+|------|------------|
+| 模块顶层 `class Foo: ...` | ✅ 安全（类定义不实例化） |
+| 模块顶层 `foo = Foo()` | ⚠️ **重计算/单例创建**则禁止 |
+| `__init__.py` 顶层 `from .xxx import yyy`（yyy 是类/函数） | ✅ 安全 |
+| `__init__.py` 顶层 `from .xxx import yyy`（yyy 是单例对象） | ❌ 禁止，改用 `__getattr__` |
+| 模块顶层 `db_engine = create_engine(...)` | ❌ 禁止（建立连接池） |
+| 模块顶层 `redis_client = RedisClient()` | ⚠️ 检查构造是否建立连接 |
+
+### 排查方法
+
+```python
+import sys
+before = set(sys.modules.keys())
+from src.xxx import yyy        # 被怀疑的 import
+after = set(sys.modules.keys())
+new = sorted([m for m in (after - before) if m.startswith('src.')])
+print(f'拉起 {len(new)} 个 src 模块')
+print('是否拉起 agent:', any('src.core.agent' in m for m in new))
+```
+
+如果一个看似轻量的 import 拉起几十个模块，必然存在包初始化副作用。逐层向上找 `__init__.py` 或模块顶层单例即可定位元凶。
+
 ## Gunicorn 多 Worker 进程内存隔离
 **核心问题**：Gunicorn 启动多个 worker 进程时，每个 worker 拥有独立的 Python 内存空间。
 

@@ -3514,6 +3514,27 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 os.environ.pop(var_name, None)
 
 
-# Global agent instance (默认为主智能体)
-master_agent = Agent(is_master=True)
-agent = master_agent  # 别名，向后兼容
+# master_agent 单例：延迟构造
+# Agent 构造时会注册全部工具、加载 skills 和 subagents，开销很大；放在模块顶层
+# 会让任何 import src.core.* 的代码被迫拉起整套环境。改为按需构造。
+_master_agent_instance: Optional["Agent"] = None
+
+
+def get_master_agent() -> "Agent":
+    """返回 master_agent 单例，第一次调用时构造"""
+    global _master_agent_instance
+    if _master_agent_instance is None:
+        _master_agent_instance = Agent(is_master=True)
+    return _master_agent_instance
+
+
+def __getattr__(name: str):
+    """模块级 __getattr__：让 `from src.core.agent import master_agent` 仍能工作，
+    但只有在真正访问时才构造单例。"""
+    if name in ("master_agent", "agent"):
+        return get_master_agent()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# 兼容直接属性访问（极少数场景：src.core.agent.master_agent）
+# 注意：不能写 `master_agent = get_master_agent()`，会立刻触发构造。
