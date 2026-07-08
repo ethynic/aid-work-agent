@@ -237,9 +237,10 @@ class DingTalkAdapter(ChannelAdapter):
 ```python
 # 删除旧的企微风格路由（lines 840-863）
 
-@router.post("/t/{tenant_id}/dingtalk/callback")
+@router.post("/t/{tenant_id}/dingtalk/callback/{config_id}")
 async def tenant_dingtalk_callback_post(
     tenant_id: str,
+    config_id: str,
     request: Request,
 ):
     """钉钉回调入口"""

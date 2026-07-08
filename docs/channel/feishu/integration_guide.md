@@ -41,15 +41,15 @@
 
 | 方法 | 路径 | 触发时机 | 说明 |
 |------|------|----------|------|
-| GET | `/t/{tenant_id}/feishu/callback` | 飞书后台「请求网址配置」阶段 | 返回 challenge 完成验证（兼容模式） |
-| POST | `/t/{tenant_id}/feishu/callback` | 用户发消息 / url_verification / 各类事件 | 签名校验 → 解密 → 去重 → 异步处理 |
+| GET | `/t/{tenant_id}/feishu/callback/{config_id}` | 飞书后台「请求网址配置」阶段 | 返回 challenge 完成验证（兼容模式） |
+| POST | `/t/{tenant_id}/feishu/callback/{config_id}` | 用户发消息 / url_verification / 各类事件 | 签名校验 → 解密 → 去重 → 异步处理 |
 
 ### 接入架构
 
 ```
 飞书用户 ←→ 飞书服务器 ←(HTTPS 回调)→ 你的服务器 (AID Work Agent)
                                     ↑                    ↓
-                         /t/{tenant_id}/feishu/callback   Agent 处理 + 主动消息 API
+                         /t/{tenant_id}/feishu/callback/{config_id}   Agent 处理 + 主动消息 API
 ```
 
 ---
@@ -83,10 +83,11 @@
 
 「事件订阅」页面：
 
-1. **请求网址 URL**：填入 `https://your-domain.com/t/{tenant_id}/feishu/callback`
+1. **订阅方式**：将事件发送至开发者服务器
 2. **Encrypt Key**：可选，见 [§4 加密模式选择](#4-加密模式选择)
 3. **Verification Token**：复制粘贴到系统侧配置
-4. **添加事件**：
+4. **请求网址 URL**：填入 `https://your-domain.com/t/{tenant_id}/feishu/callback/{config_id}`
+5. **添加事件**：
    - `im.message.receive_v1` — 接收消息（必需）
    - `im.message.recalled_v1` — 消息撤回（可选）
    - `im.chat.disbanded_v1` — 群解散通知（可选）
@@ -359,8 +360,8 @@ iv = base64_decode(ciphertext)[:16]  # 密文的前 16 字节
 
 | 接口 | 方法 | 路径 | 说明 |
 |------|------|------|------|
-| 飞书回调（兼容） | GET | `/t/{tenant_id}/feishu/callback` | 飞书后台「请求网址配置」阶段（部分版本用 GET） |
-| 飞书回调（主） | POST | `/t/{tenant_id}/feishu/callback` | 所有事件推送入口 |
+| 飞书回调（兼容） | GET | `/t/{tenant_id}/feishu/callback/{config_id}` | 飞书后台「请求网址配置」阶段（部分版本用 GET） |
+| 飞书回调（主） | POST | `/t/{tenant_id}/feishu/callback/{config_id}` | 所有事件推送入口 |
 
 **请求头**（加密模式）：
 

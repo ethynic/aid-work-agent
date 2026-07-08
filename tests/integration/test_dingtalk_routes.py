@@ -86,6 +86,16 @@ def reset_dingtalk_dedup_cache():
         yield
 
 
+@pytest.fixture(autouse=True)
+def reset_dingtalk_bg_tasks():
+    """每个测试前后清理钉钉后台任务强引用集合，避免跨测试残留"""
+    from src.saas.api import channel_routes
+
+    channel_routes._dingtalk_background_tasks.clear()
+    yield
+    channel_routes._dingtalk_background_tasks.clear()
+
+
 # ---------- Helpers ----------
 
 
@@ -171,7 +181,7 @@ class TestSignatureVerification:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -188,7 +198,7 @@ class TestSignatureVerification:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": "WRONG_SIGNATURE"},
             )
@@ -202,7 +212,7 @@ class TestSignatureVerification:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
             )
 
@@ -222,12 +232,12 @@ class TestMessageDeduplication:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp1 = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
             resp2 = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -246,12 +256,12 @@ class TestMessageDeduplication:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event1,
                 headers={"timestamp": timestamp, "sign": sign},
             )
             client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event2,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -271,7 +281,7 @@ class TestMessageTypes:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -293,7 +303,7 @@ class TestMessageTypes:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -312,7 +322,7 @@ class TestMessageTypes:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -332,7 +342,7 @@ class TestErrorHandling:
             return_value=(None, None, None),
         ):
             resp = client.post(
-                "/t/tenant_no_config/dingtalk/callback",
+                "/t/tenant_no_config/dingtalk/callback/chan_no_config",
                 json=_make_event(),
             )
 
@@ -345,7 +355,7 @@ class TestErrorHandling:
 
         with _patch_factory(dingtalk_adapter):
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 content="this-is-not-json",
                 headers={
                     "Content-Type": "application/json",
@@ -363,7 +373,7 @@ class TestErrorHandling:
 class TestGetCallback:
     def test_get_callback_returns_ok(self, client):
         """GET /dingtalk/callback 返回 200（兼容路径）"""
-        resp = client.get("/t/tenant_test/dingtalk/callback")
+        resp = client.get("/t/tenant_test/dingtalk/callback/chan_dingtalk_test")
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
@@ -382,7 +392,7 @@ class TestImmediateResponse:
 
         with _patch_factory(dingtalk_adapter), _patch_background() as bg:
             resp = client.post(
-                "/t/tenant_test/dingtalk/callback",
+                "/t/tenant_test/dingtalk/callback/chan_dingtalk_test",
                 json=event,
                 headers={"timestamp": timestamp, "sign": sign},
             )
@@ -397,4 +407,5 @@ class TestImmediateResponse:
         bg.assert_called_once()
         call_args = bg.call_args
         assert call_args[0][0] == "tenant_test"  # tenant_id
+        assert call_args[1].get("config_id") == "chan_dingtalk_test"
         assert call_args[1].get("subagent_type") == "test-subagent"

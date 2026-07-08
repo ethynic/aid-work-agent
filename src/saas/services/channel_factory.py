@@ -3,9 +3,10 @@
 
 从租户渠道配置（tenant_channel_configs 表）动态创建 ChannelAdapter 实例。
 
-适配器实例按 (tenant_id, channel_type, config_id) 缓存，避免每次回调都重新构造
-导致 token 缓存 / 速率限制 / HTTP 连接池失效。
-配置变更或删除时，调用 invalidate_adapter / invalidate_tenant 主动失效。
+适配器实例按 (tenant_id, channel_type, config_id) 三元组缓存，避免每次回调都重新构造
+导致 token 缓存 / 速率限制 / HTTP 连接池失效。同一租户同一渠道下不同 config_id 各自
+独立缓存，互不驱逐。配置变更或删除时，调用 invalidate_adapter / invalidate_tenant
+主动失效。
 """
 
 import asyncio
@@ -20,16 +21,20 @@ from src.saas.db.channel_config_db import ChannelConfigDB
 
 # 缓存项：(adapter, config_id, subagent_type, created_at, lock)
 # 用 asyncio.Lock 串行化同一 key 的并发创建，避免重复构造
-_ADAPTER_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
-_CACHE_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}
+# 键三元组 (tenant_id, channel_type, config_id) 中 config_id 可能为 None（表示未指定，
+# 命中后用解析出的实际 config_id 作为缓存键），调用方显式传入 config_id 时走精确匹配
+_ADAPTER_CACHE: Dict[Tuple[str, str, Optional[str]], Dict[str, Any]] = {}
+_CACHE_LOCKS: Dict[Tuple[str, str, Optional[str]], asyncio.Lock] = {}
 
 # 缓存 TTL：超过后下次获取时重建（兜底，防止配置变更未触发 invalidate）
 _CACHE_TTL_SECONDS = 3600
 
 
-def _get_cache_lock(tenant_id: str, channel_type: str) -> asyncio.Lock:
-    """获取某 (tenant_id, channel_type) 的创建锁"""
-    key = (tenant_id, channel_type)
+def _get_cache_lock(
+    tenant_id: str, channel_type: str, config_id: Optional[str]
+) -> asyncio.Lock:
+    """获取某 (tenant_id, channel_type, config_id) 的创建锁"""
+    key = (tenant_id, channel_type, config_id)
     if key not in _CACHE_LOCKS:
         _CACHE_LOCKS[key] = asyncio.Lock()
     return _CACHE_LOCKS[key]
@@ -59,7 +64,8 @@ class ChannelFactory:
     渠道适配器工厂
 
     根据渠道类型和配置字典创建对应的 ChannelAdapter 实例。
-    适配器实例在进程内按 (tenant_id, channel_type) 缓存，复用 token / 连接池 / 速率限制器。
+    适配器实例在进程内按 (tenant_id, channel_type, config_id) 三元组缓存，
+    复用 token / 连接池 / 速率限制器。同租户同渠道不同 config_id 各自独立缓存。
     """
 
     # 渠道类型 → 适配器类（延迟导入）
@@ -106,40 +112,54 @@ class ChannelFactory:
         """
         从租户 DB 配置创建适配器（带进程内缓存）
 
+        缓存键为 (tenant_id, channel_type, effective_config_id) 三元组，
+        同一租户同一渠道下不同 config_id 各自独立缓存，互不驱逐。
+
         Args:
             tenant_id: 租户 ID
             channel_type: 渠道类型
-            config_id: 渠道配置 ID（可选，传入时按 ID 精确查找）
+            config_id: 渠道配置 ID（可选）
+                - 显式传入：按 (t, c, config_id) 精确命中缓存
+                - 传 None：先从 DB 解析实际使用的 config_id（取 verified 优先），
+                  再以该实际 config_id 作为缓存键。这样 None 调用与显式调用命中同一缓存槽，
+                  不会产生孤儿缓存
 
         Returns:
             (adapter, config_id, subagent_type) 或 (None, None, None)
         """
-        cache_key = (tenant_id, channel_type)
+        # Step 1: 解析 effective_config_id
+        # config_id 为 None 时锁外先 _load_config 解析实际 config_id，
+        # 用解析结果作为缓存键（避免 None 调用产生孤儿缓存，与显式调用共享缓存槽）
+        cfg = None
+        used_config_id: Optional[str] = None
+        if config_id is None:
+            cfg, used_config_id = cls._load_config(tenant_id, channel_type, None)
+            if not cfg:
+                return None, None, None
+            effective_config_id = used_config_id
+        else:
+            effective_config_id = config_id
 
-        # 快速路径：命中未过期的缓存
+        cache_key = (tenant_id, channel_type, effective_config_id)
+
+        # Step 2: 快速路径（命中未过期的缓存）
         entry = _ADAPTER_CACHE.get(cache_key)
         if entry and not _is_expired(entry):
-            # 若调用方指定了 config_id 且与缓存不一致，则强制重建
-            if config_id and entry.get("config_id") != config_id:
-                # 缓存与请求的 config_id 不一致，走重建
-                pass
-            else:
-                return entry["adapter"], entry["config_id"], entry.get("subagent_type")
+            return entry["adapter"], entry["config_id"], entry.get("subagent_type")
 
-        # 串行化同一 key 的并发创建
-        async with _get_cache_lock(tenant_id, channel_type):
-            # 双重检查
+        # Step 3: 锁内双重检查 + build（锁粒度收窄到 (t, c, config_id)）
+        async with _get_cache_lock(tenant_id, channel_type, effective_config_id):
             entry = _ADAPTER_CACHE.get(cache_key)
             if entry and not _is_expired(entry):
-                if not (config_id and entry.get("config_id") != config_id):
-                    return entry["adapter"], entry["config_id"], entry.get("subagent_type")
+                return entry["adapter"], entry["config_id"], entry.get("subagent_type")
 
-            # 读取 DB 配置
-            cfg, used_config_id = cls._load_config(tenant_id, channel_type, config_id)
-            if not cfg:
-                # 配置不存在时清掉旧缓存，避免下次还返回旧实例
-                _ADAPTER_CACHE.pop(cache_key, None)
-                return None, None, None
+            # 显式调用此时才 _load_config（None 调用上面已加载过）
+            if cfg is None:
+                cfg, used_config_id = cls._load_config(tenant_id, channel_type, config_id)
+                if not cfg:
+                    # 配置不存在时清掉旧缓存，避免下次还返回旧实例
+                    _ADAPTER_CACHE.pop(cache_key, None)
+                    return None, None, None
 
             try:
                 adapter = await _build_adapter(tenant_id, channel_type, cfg["config"])
@@ -192,6 +212,7 @@ class ChannelFactory:
         cls,
         tenant_id: str,
         channel_type: str,
+        config_id: Optional[str] = None,
         close: bool = True,
     ) -> None:
         """
@@ -200,26 +221,65 @@ class ChannelFactory:
         Args:
             tenant_id: 租户 ID
             channel_type: 渠道类型
+            config_id: 渠道配置 ID
+                - 非空：精确失效 (t, c, config_id) 单条缓存
+                - 为空：通配失效该 (tenant_id, channel_type) 下所有 config_id 的缓存
+                        （配置变更场景下 config_id 通常已知，通配分支用于租户级清理）
             close: 是否调用 adapter.close() 释放 httpx 连接池
         """
-        cache_key = (tenant_id, channel_type)
-        entry = _ADAPTER_CACHE.pop(cache_key, None)
-        if entry and close:
-            adapter = entry.get("adapter")
-            if adapter and hasattr(adapter, "close"):
-                try:
-                    await adapter.close()
-                except Exception as e:
-                    logger.warning(
-                        f"adapter.close 失败: tenant={tenant_id}, type={channel_type}, error={e}"
-                    )
+        if config_id is not None:
+            # 精确失效单条
+            cache_key = (tenant_id, channel_type, config_id)
+            entry = _ADAPTER_CACHE.pop(cache_key, None)
+            if entry and close:
+                await cls._close_adapter_safe(
+                    entry.get("adapter"), tenant_id, channel_type, config_id
+                )
+            return
+
+        # 通配失效：遍历 pop 所有 (t, c, *) 的键
+        keys_to_remove = [
+            k
+            for k in list(_ADAPTER_CACHE.keys())
+            if k[0] == tenant_id and k[1] == channel_type
+        ]
+        for key in keys_to_remove:
+            entry = _ADAPTER_CACHE.pop(key, None)
+            if entry and close:
+                await cls._close_adapter_safe(
+                    entry.get("adapter"), tenant_id, channel_type, key[2]
+                )
+
+    @staticmethod
+    async def _close_adapter_safe(
+        adapter: Any,
+        tenant_id: str,
+        channel_type: str,
+        config_id: Optional[str],
+    ) -> None:
+        """安全关闭 adapter，吞异常仅记日志"""
+        if not adapter or not hasattr(adapter, "close"):
+            return
+        try:
+            await adapter.close()
+        except Exception as e:
+            logger.warning(
+                f"adapter.close 失败: tenant={tenant_id}, type={channel_type}, "
+                f"config={config_id}, error={e}"
+            )
 
     @classmethod
     async def invalidate_tenant(cls, tenant_id: str) -> None:
-        """使某租户所有渠道的 adapter 失效（租户删除时调用）"""
-        keys_to_remove = [k for k in list(_ADAPTER_CACHE.keys()) if k[0] == tenant_id]
-        for key in keys_to_remove:
-            await cls.invalidate_adapter(key[0], key[1], close=True)
+        """使某租户所有渠道所有 config 的 adapter 失效（租户删除时调用）"""
+        # 委托 invalidate_adapter 的通配分支，传入 close=True
+        # 收集该租户下所有 (channel_type, config_id) 唯一组合后逐个通配清理
+        channels_to_clear = {
+            (k[1], k[2]) for k in list(_ADAPTER_CACHE.keys()) if k[0] == tenant_id
+        }
+        for channel_type, _config_id in channels_to_clear:
+            # invalidate_adapter(config_id=None) 已能覆盖该 channel 下所有 config，
+            # 多次调用同一 channel 是幂等的（pop 已不存在的 key 返回 None）
+            await cls.invalidate_adapter(tenant_id, channel_type, config_id=None, close=True)
 
     @classmethod
     async def close_all(cls) -> None:
@@ -235,6 +295,7 @@ class ChannelFactory:
                     await adapter.close()
                 except Exception as e:
                     logger.warning(
-                        f"adapter.close 失败: tenant={key[0]}, type={key[1]}, error={e}"
+                        f"adapter.close 失败: tenant={key[0]}, type={key[1]}, "
+                        f"config={key[2]}, error={e}"
                     )
         logger.info(f"ChannelFactory 已关闭 {len(keys)} 个缓存 adapter")

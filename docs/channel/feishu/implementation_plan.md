@@ -11,7 +11,7 @@
 | `ChannelFactory._ADAPTER_CLASSES["feishu"]` | ✅ 已注册 | 工厂可按类型动态加载 `FeishuAdapter` |
 | `tenant_channel_configs` 表 + 租户配置 API | ✅ 已就绪 | 支持 feishu 类型的配置 CRUD |
 | `_REQUIRED_FIELDS["feishu"]` | ✅ 已定义 | `app_id, app_secret, verification_token, encrypt_key` |
-| 路由 `GET/POST /t/{tenant_id}/feishu/callback` | ⚠️ 存根 | GET 仅回 challenge，POST 已接入 `_process_tenant_channel_message` |
+| 路由 `GET/POST /t/{tenant_id}/feishu/callback/{config_id}` | ⚠️ 存根 | GET 仅回 challenge，POST 已接入 `_process_tenant_channel_message` |
 | `src/channels/feishu/adapter.py` | ⚠️ 半成品 | 基本骨架在，但存在多处错误实现（见下节） |
 
 ### 1.2 现有 `FeishuAdapter` 的问题（已核对官方文档）
@@ -309,8 +309,10 @@ async def _init_bot_open_id(self) -> None:
 **合并 GET 和 POST 为统一的入口**（飞书 URL 验证实际走 POST）：
 
 ```python
-@router.post("/t/{tenant_id}/feishu/callback")
-async def tenant_feishu_callback_post(tenant_id: str, request: Request):
+@router.post("/t/{tenant_id}/feishu/callback/{config_id}")
+async def tenant_feishu_callback_post(
+    tenant_id: str, config_id: str, request: Request
+):
     """飞书事件统一入口（url_verification 和事件回调都走这里）"""
     body = await request.body()
     body_str = body.decode()
@@ -361,8 +363,8 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
     return JSONResponse({"code": 0, "msg": "ok"})
 
 
-@router.get("/t/{tenant_id}/feishu/callback")
-async def tenant_feishu_callback_get(tenant_id: str, challenge: str = Query(None)):
+@router.get("/t/{tenant_id}/feishu/callback/{config_id}")
+async def tenant_feishu_callback_get(tenant_id: str, config_id: str, challenge: str = Query(None)):
     """兼容旧版 GET challenge（实际飞书用 POST，保留做兜底）"""
     if challenge:
         return {"challenge": challenge}
@@ -453,7 +455,7 @@ async def tenant_feishu_callback_get(tenant_id: str, challenge: str = Query(None
 |---------|---------|------|
 | 接收消息 | `im.message.receive_v1` | 接收用户发给机器人的消息 |
 
-回调 URL 格式：`https://your-domain.com/t/{tenant_id}/feishu/callback`
+回调 URL 格式：`https://your-domain.com/t/{tenant_id}/feishu/callback/{config_id}`
 
 ---
 

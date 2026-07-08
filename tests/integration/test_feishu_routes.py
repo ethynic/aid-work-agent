@@ -154,7 +154,7 @@ class TestUrlVerification:
 
         with _patch_factory(feishu_adapter):
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=body,
             )
 
@@ -172,7 +172,7 @@ class TestUrlVerification:
 
         with _patch_factory(feishu_adapter):
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=body,
             )
 
@@ -192,7 +192,7 @@ class TestUrlVerification:
 
         with _patch_factory(feishu_adapter_encrypted):
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=body,
             )
 
@@ -212,7 +212,7 @@ class TestUrlVerification:
 
         with _patch_factory(feishu_adapter_encrypted):
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=body,
             )
 
@@ -237,7 +237,7 @@ class TestSignatureVerification:
 
         with _patch_factory(feishu_adapter_encrypted), _patch_background():
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 content=body_str,
                 headers={
                     "Content-Type": "application/json",
@@ -256,7 +256,7 @@ class TestSignatureVerification:
 
         with _patch_factory(feishu_adapter_encrypted):
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 content=body_str,
                 headers={
                     "Content-Type": "application/json",
@@ -274,7 +274,7 @@ class TestSignatureVerification:
 
         with _patch_factory(feishu_adapter_encrypted), _patch_background():
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=event,
                 # 不带 X-Lark-Signature
             )
@@ -295,14 +295,14 @@ class TestEventDeduplication:
         with _patch_factory(feishu_adapter), _patch_background() as bg_mock:
             # 第一次：正常处理
             resp1 = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=event,
             )
             assert resp1.status_code == 200
 
             # 第二次：重复 event_id，应直接返回 200，不调用后台处理
             resp2 = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=event,
             )
             assert resp2.status_code == 200
@@ -317,8 +317,8 @@ class TestEventDeduplication:
         event2 = _v2_event(event_id="evt_unique_002")
 
         with _patch_factory(feishu_adapter), _patch_background() as bg_mock:
-            client.post("/t/tenant_test/feishu/callback", json=event1)
-            client.post("/t/tenant_test/feishu/callback", json=event2)
+            client.post("/t/tenant_test/feishu/callback/chan_feishu_test", json=event1)
+            client.post("/t/tenant_test/feishu/callback/chan_feishu_test", json=event2)
 
             # 两次都触发后台处理
             assert bg_mock.call_count == 2
@@ -334,7 +334,7 @@ class TestNonMessageEvent:
 
         with _patch_factory(feishu_adapter), _patch_background() as bg_mock:
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=event,
             )
 
@@ -348,7 +348,7 @@ class TestNonMessageEvent:
 
         with _patch_factory(feishu_adapter), _patch_background() as bg_mock:
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=event,
             )
 
@@ -367,7 +367,7 @@ class TestImmediateResponse:
 
         with _patch_factory(feishu_adapter), _patch_background() as bg_mock:
             resp = client.post(
-                "/t/tenant_test/feishu/callback",
+                "/t/tenant_test/feishu/callback/chan_feishu_test",
                 json=event,
             )
 
@@ -387,6 +387,7 @@ class TestImmediateResponse:
         # 调用参数正确
         call_args = bg_mock.call_args
         assert call_args[0][0] == "tenant_test"  # tenant_id
+        assert call_args[1].get("config_id") == "chan_feishu_test"
         assert call_args[1].get("subagent_type") == "test-subagent"
 
 
@@ -401,7 +402,7 @@ class TestConfigNotFound:
             return_value=(None, None, None),
         ):
             resp = client.post(
-                "/t/tenant_no_config/feishu/callback",
+                "/t/tenant_no_config/feishu/callback/chan_no_config",
                 json=_v2_event(),
             )
 
@@ -412,21 +413,9 @@ class TestConfigNotFound:
 
 
 class TestGetCallback:
-    def test_get_callback_with_challenge(self, client, feishu_adapter):
-        """GET 回调带 challenge → 返回 challenge（兼容）"""
-        with _patch_factory(feishu_adapter):
-            resp = client.get(
-                "/t/tenant_test/feishu/callback",
-                params={"challenge": "challenge_get_001"},
-            )
+    def test_get_callback_returns_ok(self, client):
+        """GET 回调返回 200 + {"status": "ok"}（健康检查兜底，不回显 challenge）"""
+        resp = client.get("/t/tenant_test/feishu/callback/chan_feishu_test")
 
         assert resp.status_code == 200
-        assert resp.json()["challenge"] == "challenge_get_001"
-
-    def test_get_callback_without_challenge(self, client, feishu_adapter):
-        """GET 回调无 challenge → 返回 ok"""
-        with _patch_factory(feishu_adapter):
-            resp = client.get("/t/tenant_test/feishu/callback")
-
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        assert resp.json() == {"status": "ok"}

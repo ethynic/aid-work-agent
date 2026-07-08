@@ -292,21 +292,23 @@ if not quota_ok:
 
 ## 五、渠道路由变更
 
-### 5.1 新增租户级回调路由（`src/saas/api/channel_routes.py`）
+### 5.1 租户级回调路由（`src/saas/api/channel_routes.py`）
 
 ```
-POST   /t/{tenant_id}/wecom/callback
-GET    /t/{tenant_id}/wecom/callback
-POST   /t/{tenant_id}/dingtalk/callback
-GET    /t/{tenant_id}/dingtalk/callback
-POST   /t/{tenant_id}/feishu/callback
-GET    /t/{tenant_id}/feishu/callback
+POST   /t/{tenant_id}/wecom/callback/{config_id}
+GET    /t/{tenant_id}/wecom/callback/{config_id}
+POST   /t/{tenant_id}/dingtalk/callback/{config_id}
+GET    /t/{tenant_id}/dingtalk/callback/{config_id}
+POST   /t/{tenant_id}/feishu/callback/{config_id}
+GET    /t/{tenant_id}/feishu/callback/{config_id}
 ```
 
-回调时：从 path 取 `tenant_id` → 查 `tenant_channel_configs` 构造 adapter → 查 `agent_instances`（bound_channel_type 匹配）→ 通过 `instance_manager.get_agent()` 获取对应实例的 Agent → 处理消息。
+回调时：从 path 取 `tenant_id` 和 `config_id` -> 按 (tenant_id, channel_type, config_id) 三元组从 `tenant_channel_configs` 精确查配置 -> 构造 adapter（按三元组缓存）-> 查 `agent_instances`（bound_channel_type 匹配）-> 通过 `instance_manager.get_agent()` 获取对应实例的 Agent -> 处理消息。
 
-### 5.2 现有回调保持不变
-`/wecom/callback`、`/dingtalk/callback`、`/feishu/callback` 保持原样，用于向后兼容。
+同租户同渠道支持多 config_id，各 config_id 路由到独立的 adapter / subagent_type。
+
+### 5.2 路由变更说明
+飞书、钉钉、企微的租户级回调已统一为 `/t/{tenant_id}/{channel}/callback/{config_id}` 形式，`config_id` 路径段用于在租户拥有多个同渠道应用时精确定位配置。前端 `ChannelConfig.vue` 为所有渠道生成带 `/{config_id}` 的回调 URL，与后端路由一致。
 
 ---
 

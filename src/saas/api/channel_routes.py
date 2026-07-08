@@ -390,119 +390,6 @@ async def _transcribe_voice_with_asr(
         return "[语音消息]"
 
 
-async def _process_tenant_channel_message(
-    tenant_id: str,
-    channel_type: str,
-    raw_body: bytes,
-    raw_body_str: str,
-):
-    """
-    处理租户级渠道消息（同步版本，用于钉钉/飞书）
-
-    流程：
-    1. 查租户渠道配置 → 构造 adapter
-    2. 解析消息 → 通过 agent_router 获取 agent 处理
-    """
-    # 1. 创建渠道适配器
-    adapter, config_id, subagent_type = await ChannelFactory.create_from_tenant_config(tenant_id, channel_type)
-    if not adapter:
-        logger.error(f"No channel config for tenant {tenant_id}/{channel_type}")
-        return "error: no channel config"
-
-    # 2. 解析消息
-    try:
-        message = await adapter.parse_message({"body": raw_body_str})
-    except Exception as e:
-        logger.error(f"Failed to parse {channel_type} message for tenant {tenant_id}: {e}")
-        return "error"
-
-    # 忽略事件消息
-    if hasattr(message, 'message_type') and message.message_type == "event":
-        return "success"
-
-    # 3. 自动注册用户
-    try:
-        from src.saas.services.auto_register import ensure_user_registered
-        user_id = await ensure_user_registered(channel_type, message.user_id, tenant_id)
-    except Exception as e:
-        logger.warning(f"Auto-register failed for {channel_type}:{message.user_id}: {e}")
-        user_id = None
-
-    # 4. 构建用户信息并获取或创建会话（带租户隔离）
-    user_info = {"user_id": user_id, "name": getattr(message, 'username', None) or getattr(message, 'user_name', None)}
-    session = channel_session_manager.get_or_create_session(
-        channel_type=channel_type,
-        channel_user_id=message.user_id,
-        tenant_id=tenant_id,
-        user_info=user_info,
-        subagent_id=subagent_type or "",
-    )
-    session_id = session["session_id"]
-
-    # 5. 保存用户消息到 channel_messages —— P0-2：推迟到 process_and_persist 内统一写入
-
-    # 6. 检查隐藏命令
-    from src.core.hidden_commands import is_hidden_command, execute_hidden_command
-    if message.text and is_hidden_command(message.text):
-        reply_text = await execute_hidden_command(message.text, session_id, tenant_id)
-        if reply_text:
-            from src.models.message import UnifiedResponse
-            response = UnifiedResponse.from_text(
-                text=reply_text,
-                reply_to=message.user_id,
-                message_id=f"resp_{message.message_id}",
-            )
-            await adapter.send_message(response)
-        return "success"
-
-    # 7. 获取 agent（根据渠道配置的 subagent_type 路由）
-    from src.core.agent_router import agent_router
-    agent = agent_router.get_agent(subagent_type, session_id)
-
-    # 8. 开始记录 token 消耗
-    record_service = SessionRecordManager.start_record(
-        session_id=session_id,
-        user_id=user_id or message.user_id,
-        user_message=message.text,
-        tenant_id=tenant_id,
-        source_type=channel_type,  # "wecom" / "dingtalk" / "feishu"
-    )
-    record_service.set_model(agent.llm.get_model_name())
-    record_service.set_provider(agent.llm.get_provider_name())
-
-    # 9. 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
-    send_response = channel_session_manager.make_send_response(
-        adapter=adapter,
-        message_id=message.message_id,
-        reply_to=message.user_id,
-        log_tag=f"[Channel tenant={tenant_id}]",
-    )
-
-    try:
-        result = await channel_session_manager.process_and_persist(
-            session_id=session_id,
-            tenant_id=tenant_id,
-            user_content=message.text,
-            user_metadata=getattr(message, 'raw_message', None),
-            message_type=message.message_type if hasattr(message, 'message_type') else "text",
-            agent=agent,
-            record_service=record_service,
-            send_response=send_response,
-        )
-    except Exception as e:
-        logger.error(f"Agent error for tenant {tenant_id}: {e}")
-        record_service.mark_error(str(e))
-        SessionRecordManager.end_record()
-        return "error"
-
-    SessionRecordManager.end_record()
-
-    if result["status"] == "merged":
-        return "merged"
-
-    return "success"
-
-
 async def _process_tenant_wecom_background(
     tenant_id: str,
     message,
@@ -746,6 +633,9 @@ async def tenant_wecom_callback_post(tenant_id: str, config_id: str, request: Re
 # 钉钉事件去重器（按 tenant_id 隔离，TTL 5 分钟）
 _dingtalk_event_dedup: dict[str, MessageDeduplicator] = {}
 
+# 后台任务引用集合：保留强引用避免被 GC 回收，任务完成后自动移除
+_dingtalk_background_tasks: set = set()
+
 
 def _get_dingtalk_event_dedup(tenant_id: str) -> MessageDeduplicator:
     """获取或创建钉钉事件去重器"""
@@ -754,24 +644,26 @@ def _get_dingtalk_event_dedup(tenant_id: str) -> MessageDeduplicator:
     return _dingtalk_event_dedup[tenant_id]
 
 
-@router.get("/t/{tenant_id}/dingtalk/callback")
-async def tenant_dingtalk_callback_get(tenant_id: str):
+@router.get("/t/{tenant_id}/dingtalk/callback/{config_id}")
+async def tenant_dingtalk_callback_get(tenant_id: str, config_id: str):
     """
     钉钉回调 GET 兜底
 
     钉钉机器人回调 URL 验证不依赖 GET（与企微不同）。
-    此路由仅作兼容保留，返回 200 即可。
+    此路由仅作兼容保留，返回 200 即可。config_id 路径段仅用于路由匹配，不影响返回内容。
     """
     return JSONResponse({"status": "ok"})
 
 
-@router.post("/t/{tenant_id}/dingtalk/callback")
-async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
+@router.post("/t/{tenant_id}/dingtalk/callback/{config_id}")
+async def tenant_dingtalk_callback_post(
+    tenant_id: str, config_id: str, request: Request
+):
     """
     钉钉机器人消息回调统一入口
 
     流程:
-    1. 查配置 → 构造 adapter
+    1. 按 config_id 查配置 → 构造 adapter
     2. 读取 timestamp/sign 请求头 → HmacSHA256 签名验证
     3. 解析 JSON body
     4. 按 msgId 去重（5 分钟 TTL）
@@ -781,9 +673,13 @@ async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
         body = await request.body()
         body_str = body.decode()
 
-        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
+        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(
+            tenant_id, "dingtalk", config_id=config_id
+        )
         if not adapter:
-            logger.warning(f"[Tenant DingTalk] 配置不存在: tenant={tenant_id}")
+            logger.warning(
+                f"[Tenant DingTalk] 配置不存在: tenant={tenant_id}, config={config_id}"
+            )
             return JSONResponse({"success": False, "msg": "config not found"}, status_code=404)
 
         # 1. 签名验证（timestamp + sign 请求头）
@@ -813,7 +709,7 @@ async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
         # 3. 空消息/忽略事件
         msg_type = data.get("msgtype", "text")
         if msg_type == "empty":
-            logger.debug(f"[Tenant DingTalk] 忽略空消息: tenant={tenant_id}")
+            logger.debug(f"[Tenant DingTalk] 忽略空消息: tenant={tenant_id}, config={config_id}")
             return JSONResponse({"success": True})
 
         # 4. 消息去重
@@ -823,23 +719,31 @@ async def tenant_dingtalk_callback_post(tenant_id: str, request: Request):
             dedup = _get_dingtalk_event_dedup(tenant_id)
             dedup_key = f"dingtalk:{tenant_id}:{msg_id}"
             if await dedup.is_duplicate(dedup_key):
-                logger.debug(f"[Tenant DingTalk] 重复消息: tenant={tenant_id}, msgId={msg_id}")
+                logger.debug(f"[Tenant DingTalk] 重复消息: tenant={tenant_id}, config={config_id}, msgId={msg_id}")
                 return JSONResponse({"success": True})
 
         # 5. 立即返回，后台异步处理
-        asyncio.create_task(
-            _process_tenant_dingtalk_background(tenant_id, data, subagent_type=subagent_type)
+        # 持有 task 强引用避免被 GC 回收，完成后通过回调移除
+        task = asyncio.create_task(
+            _process_tenant_dingtalk_background(
+                tenant_id, data, config_id=config_id, subagent_type=subagent_type
+            )
         )
+        _dingtalk_background_tasks.add(task)
+        task.add_done_callback(_dingtalk_background_tasks.discard)
         return JSONResponse({"success": True})
 
     except Exception as e:
-        logger.error(f"[Tenant DingTalk] POST 处理异常: tenant={tenant_id}, error={e}")
+        logger.error(
+            f"[Tenant DingTalk] POST 处理异常: tenant={tenant_id}, config={config_id}, error={e}"
+        )
         return JSONResponse({"success": False, "msg": "internal error"}, status_code=500)
 
 
 async def _process_tenant_dingtalk_background(
     tenant_id: str,
     event_data: dict,
+    config_id: Optional[str] = None,
     subagent_type: Optional[str] = None,
 ) -> None:
     """
@@ -850,11 +754,14 @@ async def _process_tenant_dingtalk_background(
     Args:
         tenant_id: 租户 ID
         event_data: 钉钉回调 JSON dict（含 msgtype/text/senderId/conversationType 等）
+        config_id: 渠道配置 ID（用于按 config_id 命中缓存）
         subagent_type: 关联的数字员工类型
     """
     adapter = None
     try:
-        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "dingtalk")
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(
+            tenant_id, "dingtalk", config_id=config_id
+        )
         if not adapter:
             logger.error(f"[Tenant DingTalk] adapter 不可用: tenant={tenant_id}")
             return
@@ -983,6 +890,7 @@ def _get_feishu_event_dedup(tenant_id: str) -> MessageDeduplicator:
 async def _process_tenant_feishu_background(
     tenant_id: str,
     event_data: dict,
+    config_id: Optional[str] = None,
     subagent_type: Optional[str] = None,
 ) -> None:
     """
@@ -995,11 +903,14 @@ async def _process_tenant_feishu_background(
     Args:
         tenant_id: 租户 ID
         event_data: 已解密的 v2.0 事件 dict
+        config_id: 渠道配置 ID（用于按 config_id 命中缓存）
         subagent_type: 关联的数字员工类型
     """
     adapter = None
     try:
-        adapter, _, _ = await ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
+        adapter, _, _ = await ChannelFactory.create_from_tenant_config(
+            tenant_id, "feishu", config_id=config_id
+        )
         if not adapter:
             logger.error(f"[Tenant Feishu] adapter 不可用: tenant={tenant_id}")
             return
@@ -1104,26 +1015,30 @@ async def _process_tenant_feishu_background(
             pass
 
 
-@router.get("/t/{tenant_id}/feishu/callback")
+@router.get("/t/{tenant_id}/feishu/callback/{config_id}")
 async def tenant_feishu_callback_get(
     tenant_id: str,
+    config_id: str,
 ):
     """
     飞书回调 GET 兜底
 
     飞书 URL 验证实际走 POST（url_verification），此 GET 路由仅作健康检查保留，
-    不回显任何外部输入，避免被无鉴权滥用为回声端点。
+    不回显任何外部输入，避免被无鉴权滥用为回声端点。config_id 路径段仅用于路由匹配，
+    不影响返回内容。
     """
     return {"status": "ok"}
 
 
-@router.post("/t/{tenant_id}/feishu/callback")
-async def tenant_feishu_callback_post(tenant_id: str, request: Request):
+@router.post("/t/{tenant_id}/feishu/callback/{config_id}")
+async def tenant_feishu_callback_post(
+    tenant_id: str, config_id: str, request: Request
+):
     """
     飞书事件统一入口（url_verification 和事件回调都走这里）
 
     流程:
-    1. 查配置 → 构造 adapter
+    1. 按 config_id 查配置 → 构造 adapter
     2. 加密事件先解密（url_verification 也可能被加密）
     3. v2.0 签名校验（X-Lark-Signature 请求头，在原始 body 上计算）
     4. url_verification: 校验 token，返回 challenge
@@ -1135,16 +1050,20 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
         body = await request.body()
         body_str = body.decode()
 
-        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(tenant_id, "feishu")
+        adapter, _, subagent_type = await ChannelFactory.create_from_tenant_config(
+            tenant_id, "feishu", config_id=config_id
+        )
         if not adapter:
-            logger.warning(f"[Tenant Feishu] 配置不存在: tenant={tenant_id}")
+            logger.warning(
+                f"[Tenant Feishu] 配置不存在: tenant={tenant_id}, config={config_id}"
+            )
             return JSONResponse({"code": 404, "msg": "config not found"}, status_code=404)
 
         # 解析 JSON body
         try:
             data = json.loads(body_str)
         except json.JSONDecodeError as e:
-            logger.warning(f"[Tenant Feishu] body JSON 解析失败: tenant={tenant_id}, error={e}")
+            logger.warning(f"[Tenant Feishu] body JSON 解析失败: tenant={tenant_id}, config={config_id}, error={e}")
             return JSONResponse({"code": 400, "msg": "invalid json"}, status_code=400)
 
         # 1. v2.0 签名校验（在原始 body 上计算，解密前）
@@ -1154,7 +1073,7 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
             nonce = request.headers.get("X-Lark-Request-Nonce", "")
             if signature:
                 if not adapter.crypto.verify_signature(timestamp, nonce, body_str, signature):
-                    logger.warning(f"[Tenant Feishu] 签名验证失败: tenant={tenant_id}")
+                    logger.warning(f"[Tenant Feishu] 签名验证失败: tenant={tenant_id}, config={config_id}")
                     return JSONResponse({"code": 403, "msg": "invalid signature"}, status_code=403)
 
         # 2. 加密事件先解密（url_verification 也可能被加密）
@@ -1162,7 +1081,7 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
             try:
                 data = adapter.crypto.decrypt(data["encrypt"])
             except Exception as e:
-                logger.error(f"[Tenant Feishu] 解密失败: tenant={tenant_id}, error={e}")
+                logger.error(f"[Tenant Feishu] 解密失败: tenant={tenant_id}, config={config_id}, error={e}")
                 return JSONResponse({"code": 400, "msg": "decrypt failed"}, status_code=400)
 
         # 3. url_verification 挑战
@@ -1185,26 +1104,28 @@ async def tenant_feishu_callback_post(tenant_id: str, request: Request):
         if event_id:
             dedup = _get_feishu_event_dedup(tenant_id)
             if await dedup.is_duplicate(event_id):
-                logger.debug(f"[Tenant Feishu] 重复事件: tenant={tenant_id}, event_id={event_id}")
+                logger.debug(f"[Tenant Feishu] 重复事件: tenant={tenant_id}, config={config_id}, event_id={event_id}")
                 return JSONResponse({"code": 0, "msg": "duplicate"})
 
         # 5. 只处理 im.message.receive_v1
         event_type = data.get("header", {}).get("event_type", "")
         if event_type != "im.message.receive_v1":
-            logger.debug(f"[Tenant Feishu] 忽略非消息事件: tenant={tenant_id}, event_type={event_type}")
+            logger.debug(f"[Tenant Feishu] 忽略非消息事件: tenant={tenant_id}, config={config_id}, event_type={event_type}")
             return JSONResponse({"code": 0, "msg": "event ignored"})
 
         # 6. 立即返回 200 → 后台异步处理
         # 持有 task 强引用避免被 GC 回收，完成后通过回调移除
         task = asyncio.create_task(
-            _process_tenant_feishu_background(tenant_id, data, subagent_type=subagent_type)
+            _process_tenant_feishu_background(
+                tenant_id, data, config_id=config_id, subagent_type=subagent_type
+            )
         )
         _feishu_background_tasks.add(task)
         task.add_done_callback(_feishu_background_tasks.discard)
         return JSONResponse({"code": 0, "msg": "ok"})
 
     except Exception as e:
-        logger.error(f"[Tenant Feishu] POST 处理异常: tenant={tenant_id}, error={e}")
+        logger.error(f"[Tenant Feishu] POST 处理异常: tenant={tenant_id}, config={config_id}, error={e}")
         return JSONResponse({"code": 500, "msg": "internal error"}, status_code=500)
 
 

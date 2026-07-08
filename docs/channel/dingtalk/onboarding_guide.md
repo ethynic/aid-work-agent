@@ -35,11 +35,11 @@
 
 - **协议**：HTTPS（自签证书不行，需要可公开验证的证书）
 - **端口**：必须是 `443`（钉钉不允许自定义端口）
-- **路径**：`/t/{tenant_id}/dingtalk/callback`
+- **路径**：`/t/{tenant_id}/dingtalk/callback/{config_id}/{config_id}`
 
 完整回调 URL 示例：
 ```
-https://your-domain.com/t/tenant_demo_001/dingtalk/callback
+https://your-domain.com/t/tenant_demo_001/dingtalk/callback/chan_xxx
 ```
 
 ### 1.3 内网穿透（仅用于本地联调）
@@ -54,7 +54,7 @@ ngrok http 8000
 # Forwarding  https://abc123.ngrok-free.app -> http://localhost:8000
 ```
 
-回调 URL 即：`https://abc123.ngrok-free.app/t/{tenant_id}/dingtalk/callback`
+回调 URL 即：`https://abc123.ngrok-free.app/t/{tenant_id}/dingtalk/callback/{config_id}`
 
 > 内网穿透仅用于联调，正式环境必须使用稳定域名。
 
@@ -150,7 +150,7 @@ https://your-domain.com/t/{tenant_id}/saas/channels
 1. 在 `tenant_channel_configs` 表中插入一条 `channel_type=dingtalk` 记录
 2. 在页面下方显示**回调 URL**，形如：
    ```
-   https://your-domain.com/t/{tenant_id}/dingtalk/callback
+   https://your-domain.com/t/{tenant_id}/dingtalk/callback/{config_id}
    ```
 3. 复制此 URL，下一步要用
 
@@ -164,7 +164,7 @@ https://your-domain.com/t/{tenant_id}/saas/channels
 
 1. **消息接收地址**：粘贴步骤 3.2 复制的回调 URL
 2. 点击「保存」
-3. 钉钉会**立即向该地址发起一次测试请求**，本系统的 GET `/t/{tenant_id}/dingtalk/callback` 会返回 `200 OK`
+3. 钉钉会**立即向该地址发起一次测试请求**，本系统的 GET `/t/{tenant_id}/dingtalk/callback/{config_id}/{config_id}` 会返回 `200 OK`
 
 如果保存失败，钉钉会提示错误码：
 - `URL 不可访问` → 检查 HTTPS 证书、域名解析、防火墙
@@ -225,7 +225,7 @@ https://your-domain.com/t/{tenant_id}/saas/channels
 可手动构造一个错误签名的请求测试：
 
 ```bash
-curl -X POST https://your-domain.com/t/{tenant_id}/dingtalk/callback \
+curl -X POST https://your-domain.com/t/{tenant_id}/dingtalk/callback/{config_id} \
   -H "Content-Type: application/json" \
   -H "timestamp: $(date +%s%3N)" \
   -H "sign: WRONG_SIGN" \
@@ -259,7 +259,7 @@ pytest tests/integration/test_dingtalk_routes.py -v
 
 | 现象 | 原因 | 解决 |
 |------|------|------|
-| `URL 不可访问` | 公网无法访问 / 防火墙拦截 | 用 `curl -I https://your-domain.com/t/xxx/dingtalk/callback` 自查 |
+| `URL 不可访问` | 公网无法访问 / 防火墙拦截 | 用 `curl -I https://your-domain.com/t/xxx/dingtalk/callback/chan_xxx` 自查 |
 | `证书校验失败` | 自签 / 已过期 | 使用 Let's Encrypt 等正规证书 |
 | `URL 验证失败` | 返回了非 2xx | 检查路由日志，确认请求到达后端 |
 

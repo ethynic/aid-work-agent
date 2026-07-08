@@ -40,7 +40,7 @@
 
 | 方法 | 路径 | 触发时机 | 说明 |
 |------|------|----------|------|
-| POST | `/t/{tenant_id}/dingtalk/callback` | 用户发消息 / 各类事件 | 签名校验 → 解析 → 去重 → 异步处理 |
+| POST | `/t/{tenant_id}/dingtalk/callback/{config_id}` | 用户发消息 / 各类事件 | 签名校验 → 解析 → 去重 → 异步处理 |
 
 > 钉钉不使用 url_verification challenge 机制，而是在开放平台配置回调 URL 时直接验证（返回 200 即可）。
 
@@ -49,7 +49,7 @@
 ```
 钉钉用户 ←→ 钉钉服务器 ←(HTTPS 回调)→ 你的服务器 (AID Work Agent)
                                     ↑                    ↓
-                         /t/{tenant_id}/dingtalk/callback   Agent 处理 + 主动消息 API
+                         /t/{tenant_id}/dingtalk/callback/{config_id}   Agent 处理 + 主动消息 API
 ```
 
 ---
@@ -81,7 +81,7 @@
 
 「事件订阅」页面：
 
-1. **请求网址 URL**：填入 `https://your-domain.com/t/{tenant_id}/dingtalk/callback`
+1. **请求网址 URL**：填入 `https://your-domain.com/t/{tenant_id}/dingtalk/callback/{config_id}`
 2. **加密方式**：钉钉不使用 Encrypt Key，签名验证通过 AppSecret 实现
 3. **添加事件**：
    - `chat_add_member` — 群成员加入（可选）
@@ -362,7 +362,7 @@ def verify_signature(timestamp: str, sign: str, app_secret: str) -> bool:
 
 | 接口 | 方法 | 路径 | 说明 |
 |------|------|------|------|
-| 钉钉回调 | POST | `/t/{tenant_id}/dingtalk/callback` | 所有事件推送入口 |
+| 钉钉回调 | POST | `/t/{tenant_id}/dingtalk/callback/{config_id}` | 所有事件推送入口 |
 
 **请求头**：
 

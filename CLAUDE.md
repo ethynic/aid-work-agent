@@ -47,5 +47,3 @@
 - **开始开发时**：在 `docs/ideas.md` 中更新状态为 🔧 部分完成
 - **新增开发内容时**：在 `docs/ideas.md` 对应分区添加新条目
 
-## OpenSpec规范
-本项目开始逐步采用 OpenSpec 进行规格驱动开发。详细指令见 `openspec/AGENTS.md`。

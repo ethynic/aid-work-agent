@@ -164,9 +164,13 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
     success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type)
     if success:
         # 配置变更后失效缓存的 adapter，下次回调重建
+        # 按 config_id 精确失效（避免清掉同租户同渠道其他 config 的缓存）
         try:
             await ChannelFactory.invalidate_adapter(
-                existing["tenant_id"], existing["channel_type"], close=True
+                existing["tenant_id"],
+                existing["channel_type"],
+                config_id=existing["config_id"],
+                close=True,
             )
         except Exception as e:
             logger.warning(f"失效 adapter 缓存失败: {e}")
@@ -192,9 +196,13 @@ async def delete_channel(config_id: str, request: Request):
     success = ChannelConfigDB.delete(config_id)
     if success:
         # 删除配置后关闭并失效缓存的 adapter
+        # 按 config_id 精确失效（避免清掉同租户同渠道其他 config 的缓存）
         try:
             await ChannelFactory.invalidate_adapter(
-                existing["tenant_id"], existing["channel_type"], close=True
+                existing["tenant_id"],
+                existing["channel_type"],
+                config_id=existing["config_id"],
+                close=True,
             )
         except Exception as e:
             logger.warning(f"失效 adapter 缓存失败: {e}")
@@ -258,9 +266,13 @@ async def generate_keypair(config_id: str, request: Request):
         raise HTTPException(status_code=500, detail="私钥保存失败：配置可能已被删除")
 
     # 失效缓存的 adapter（私钥变了，下次回调/拉取需重建）
+    # 按 config_id 精确失效（避免清掉同租户同渠道其他 config 的缓存）
     try:
         await ChannelFactory.invalidate_adapter(
-            existing["tenant_id"], existing["channel_type"], close=True
+            existing["tenant_id"],
+            existing["channel_type"],
+            config_id=existing["config_id"],
+            close=True,
         )
     except Exception as e:
         logger.warning(f"失效 adapter 缓存失败: {e}")
