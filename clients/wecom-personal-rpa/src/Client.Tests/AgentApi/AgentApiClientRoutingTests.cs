@@ -130,12 +130,13 @@ public class AgentApiClientRoutingTests
         Assert.Equal("cfg_acme_001", resp.ConfigId);
 
         // 再发 callback，路径应为 t/tenant_acme/wecom_personal_rpa/callback/cfg_acme_001
+        // EventType 用 Status：Message 路径已删除，Status 是客户端通用上报类型
         var env = new InboundEvent
         {
             EventId = "evt_test_001",
             ClientId = "client_test_001",
             AccountId = "acct_001",
-            EventType = EventType.Message,
+            EventType = EventType.Status,
             OccurredAt = DateTimeOffset.UtcNow,
             Payload = EmptyPayloadElement(),
         };

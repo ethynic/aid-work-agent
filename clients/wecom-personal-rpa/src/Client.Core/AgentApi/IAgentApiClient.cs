@@ -67,8 +67,8 @@ public interface IAgentApiClient : IDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// POST 媒体上传：客户端拿到会话存档的图片/文件后，上传到服务端换取短期签名 URL。
-    /// Phase 3 块 D（InboundEventBuilder）使用。
+    /// POST 媒体上传：客户端拿到媒体文件后，上传到服务端换取短期签名 URL。
+    /// 原使用方 InboundEventBuilder 已随入站消息路径一并删除，此接口保留以备未来出站附件场景使用。
     ///
     /// 协议约定（见 protocol.md §A.10）：multipart/form-data，HMAC 签名 body 用固定占位串 "media-upload"。
     /// </summary>
@@ -76,24 +76,4 @@ public interface IAgentApiClient : IDisposable
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>服务端返回的短期签名 URL（24h 有效）。</returns>
     Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default);
-
-    // ============================================================
-    // Phase 4 扩展方法（块 E：Inbound 入站解析 + 白名单）
-    // ============================================================
-
-    /// <summary>
-    /// 拉取绑定级监控白名单（启动时 + 每 60 分钟刷新 + 服务端 config_invalidate 推送时强制刷新）。
-    /// Phase 4 块 E（MonitorUsersCache）使用。
-    /// </summary>
-    /// <returns>binding_id -> MonitorUsersEntry 字典（仅含白名单非空的 binding）。</returns>
-    Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// POST callback：上报入站消息事件（event_type=message）。
-    /// Phase 4 块 E（InboundEventReporter）使用。复用 PostCallbackAsync 的 HMAC 鉴权 + 重试。
-    /// </summary>
-    /// <param name="evt">入站消息事件信封（event_type 必须 = Message）。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>成功返回 true；失败抛异常或返回 false。</returns>
-    Task<bool> ReportInboundAsync(InboundEvent evt, CancellationToken cancellationToken = default);
 }

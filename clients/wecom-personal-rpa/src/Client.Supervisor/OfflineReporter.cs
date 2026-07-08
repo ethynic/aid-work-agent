@@ -9,7 +9,8 @@ namespace WeCom.PersonalRpa.Supervisor;
 /// <summary>
 /// 客户端离线上报。
 /// 当 <see cref="SupervisorService"/> 连续拉起 Client.App 失败次数超过阈值后触发：
-/// 构造一条 <c>event_type=status, status=offline</c> 的 <see cref="InboundEvent"/>，
+/// 构造一条 <c>event_type=status, status=offline</c> 的 <see cref="InboundEvent"/>（这里 InboundEvent
+/// 仅作为客户端到服务端的通用 callback 信封复用，与已删除的入站消息路径无关），
 /// 经 <see cref="IAgentApiClient.PostCallbackAsync"/> 上报（内部复用 <see cref="WeCom.PersonalRpa.Core.Security.RequestSigner"/>，
 /// 按 protocol.md §A.1 签名），服务端据此将该客户端标记为不可达，停止下发 actions。
 /// </summary>

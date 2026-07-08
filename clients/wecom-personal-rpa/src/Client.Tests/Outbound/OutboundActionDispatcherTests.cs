@@ -199,10 +199,6 @@ public sealed class OutboundActionDispatcherTests : IDisposable
             => throw new NotImplementedException();
         public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
-        public Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
-        public Task<bool> ReportInboundAsync(InboundEvent evt, CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
         public void Dispose() { }
     }
 

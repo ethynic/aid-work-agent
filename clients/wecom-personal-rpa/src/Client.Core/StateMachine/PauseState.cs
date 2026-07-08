@@ -20,8 +20,8 @@ public enum PauseScope
 /// 客户端暂停状态协调器（设计文档 §9.3）。
 ///
 /// 设计：
-///   - 单例 DI 注册，所有 IHostedService（OutboundActionDispatcher / ChatArchiveListener /
-///     QrCodeWatcher / DesktopHealthSupervisor / InboundEventReporter）共享同一份状态。
+///   - 单例 DI 注册，所有 IHostedService（OutboundActionDispatcher /
+///     QrCodeWatcher / DesktopHealthSupervisor）共享同一份状态。
 ///   - 服务端通过 WebSocket 推 <c>paused</c> / <c>resumed</c> 事件（payload 含 scope），
 ///     ClientSession.PauseAsync / ResumeAsync 把状态写入此处。
 ///   - 各工作循环在关键操作前调 <see cref="IsPaused"/> / <see cref="IsConversationPaused"/> 自检。

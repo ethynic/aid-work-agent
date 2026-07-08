@@ -167,8 +167,8 @@ public partial class App : Application
 
         // ---- 状态机（Core 实现） ----
         // Phase 4 块 G：先注册 PauseState 单例，再注册 ClientSession，由 PauseState 注入到 ClientSession。
-        // PauseState 设计为单账号作用域共享（OutboundActionDispatcher / ChatArchiveListener /
-        // QrCodeWatcher / DesktopHealthSupervisor / InboundEventReporter 均注入此单例）。
+        // PauseState 设计为单账号作用域共享（OutboundActionDispatcher /
+        // QrCodeWatcher / DesktopHealthSupervisor 均注入此单例）。
         services.AddSingleton<WeCom.PersonalRpa.Core.StateMachine.PauseState>();
         services.AddSingleton<ClientSession>(sp =>
         {
@@ -243,74 +243,11 @@ public partial class App : Application
         // services.AddSingleton<IHealthSupervisor, WeCom.PersonalRpa.Automation.WeCom.HealthSupervisor>();
 
         // ---- App 编排组件 ----
-        // 保留：InboundReporter（独立，仅依赖 Core 的 IAgentApiClient/ClientOptions）。
-        services.AddSingleton<InboundReporter>();
         services.AddSingleton<AutostartRegistrar>();
 
-        // ---- Phase 3 块 D：会话存档（MessageArchive） ----
-        // ArchiveHttpClient：IHttpClientFactory 创建，base 域名由调用方拼装（企微 endpoint 在类内常量）。
-        services.AddHttpClient<WeCom.PersonalRpa.App.MessageArchive.ArchiveHttpClient>();
-        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveCryptoService>();
-        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveSeqStore>(sp =>
-        {
-            var opts = sp.GetRequiredService<ClientOptions>();
-            var dbPath = string.IsNullOrEmpty(opts.StoragePath)
-                ? Path.Combine(DataDirectory, "archive.db")
-                : Path.Combine(opts.StoragePath, "archive.db");
-            return new WeCom.PersonalRpa.App.MessageArchive.ArchiveSeqStore(dbPath);
-        });
-        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ArchiveMediaDownloader>();
-        // ChatArchiveListener：单账号实例（以 ClientId 作为 account_id 维度）。
-        // 真实多账号场景由后续装配阶段替换。
-        // P0-1：ChatArchiveListener 同时实现 IHostedService，由 AddHostedService 包装随 Host 启停。
-        // DI 启动顺序：Host 按 AddHostedService 注册顺序启动——ChatArchiveListener 注册在前，
-        // InboundEventReporter 注册在后（事件源先启动，订阅者再 subscribe，避免事件丢失）。
-        services.AddSingleton<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>(sp =>
-        {
-            var opts = sp.GetRequiredService<ClientOptions>();
-            return new WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener(
-                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveHttpClient>(),
-                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveCryptoService>(),
-                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveSeqStore>(),
-                opts.MessageSource,
-                accountId: opts.ClientId);
-        });
-        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>());
-
-        // ---- Phase 4 块 E：Inbound 入站解析 + 白名单 ----
-        // MonitorUsersCache：白名单本地缓存（绑定级）。InitializeAsync 由 MonitorUsersHostedService
-        // 在 Host 启动时触发（Phase 4 测试阶段补齐跨块协调缺口）。
-        services.AddSingleton<WeCom.PersonalRpa.App.Inbound.MonitorUsersCache>();
-        // MonitorUsersHostedService：启动钩子 → MonitorUsersCache.InitializeAsync
-        services.AddHostedService<WeCom.PersonalRpa.App.Inbound.MonitorUsersHostedService>();
-        // InboundEventBuilder：ArchiveMessage → InboundEvent 转换 + 媒体中转。
-        services.AddSingleton<WeCom.PersonalRpa.App.Inbound.InboundEventBuilder>(sp =>
-        {
-            var opts = sp.GetRequiredService<ClientOptions>();
-            return new WeCom.PersonalRpa.App.Inbound.InboundEventBuilder(
-                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveHttpClient>(),
-                sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ArchiveMediaDownloader>(),
-                sp.GetRequiredService<IAgentApiClient>(),
-                opts,
-                accountId: opts.ClientId);
-        });
-        // InboundEventReporter：构造时注入 ChatArchiveListener + PauseState。
-        // IHostedService.StartAsync 中调 Subscribe(chatArchiveListener) 串联事件链。
-        services.AddSingleton<WeCom.PersonalRpa.App.Inbound.InboundEventReporter>(sp =>
-        {
-            var opts = sp.GetRequiredService<ClientOptions>();
-            var optionsWrapper = Microsoft.Extensions.Options.Options.Create(opts);
-            var pauseState = sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>();
-            var listener = sp.GetRequiredService<WeCom.PersonalRpa.App.MessageArchive.ChatArchiveListener>();
-            return new WeCom.PersonalRpa.App.Inbound.InboundEventReporter(
-                sp.GetRequiredService<WeCom.PersonalRpa.App.Inbound.InboundEventBuilder>(),
-                sp.GetRequiredService<WeCom.PersonalRpa.App.Inbound.MonitorUsersCache>(),
-                sp.GetRequiredService<IAgentApiClient>(),
-                optionsWrapper,
-                watcher: listener,
-                pauseState: pauseState);
-        });
-        services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.Inbound.InboundEventReporter>());
+        // 入站消息路径（MessageArchive / Inbound 命名空间）已删除：会话存档拉取与解密全在服务端做，
+        // 客户端无法接收企微回调（无公网域名）。详见
+        // docs/system/wecom-personal-rpa-server-archive-listener-design.md §2.2。
 
         // ---- Phase 3 块 C：Outbound 出站执行 ----
         // OutboundQueue：本地 SQLite 持久化队列。DbPath 取 ClientOptions.Outbound.DbPath，

@@ -105,16 +105,31 @@ ChatArchiveListener (C# 客户端)
 7. 白名单（`monitor_user_names` / `monitor_user_ids`）在 server 模式下生效。
 8. **现有客户端上报路径不变**：已部署的 C# 客户端 + 现有 HMAC 路由继续工作。
 
-### 2.2 客户端模式的处置（保留代码，前端不开放）
+### 2.2 客户端模式的处置（入站代码已全删）
 
-| 维度 | 处置 |
-|------|------|
-| 后端代码（双验签兼容路由 + client_secret 加密） | ✅ **保留**，为未来开放做准备 |
-| `wecom_rpa_clients.listen_mode` 字段 | ✅ **保留**，但服务端永远下发 NULL 或 'server' |
-| 客户端 C# `ChatArchiveListener` 代码 | ✅ **保留**，但服务端永远下发 `listen_mode='server'`，客户端永远不会启动它 |
-| 前端 `listen_mode` 单选中的 client 选项 | ⛔ **禁用、灰显、标注「即将开放」**，用户不可选 |
-| 后端 `_REQUIRED_FIELDS` client 模式校验 | ✅ **保留**（防御性，理论上永远不会触发） |
-| 文档中 client 模式相关章节 | ✅ **保留**，标注「未来开放，本期不启用」 |
+**决策**：客户端入站消息路径（拉取 + 解密 + 上报）相关代码**已全部删除**，不再保留。
+
+**理由**：
+
+1. **企微会话存档回调要求公网域名**：企微后台配置「接收消息服务器」时，回调 URL 必须是公网可达的 HTTPS 端点。客户端机器（员工 PC）没有公网域名，无法接收企微回调，因此客户端拉取模式（`listen_mode='client'`）从架构上不可行。
+2. **客户端没法监听回调**：即使绕过企微回调，客户端也无法监听企微服务端的推送（无固定公网入口）。
+3. **拉取 + 解密全归服务端**：客户端只需要保留**出站路径**（接收服务端指令 → RPA 发送消息），入站完全由服务端负责。
+
+**已删除范围**（详见开发记录）：
+
+| 删除内容 | 状态 |
+|---------|------|
+| 客户端 C# `ChatArchiveListener` 类及其依赖（`ArchiveHttpClient` / `ArchiveCryptoService` / `ArchiveMediaDownloader` / `ArchiveSeqStore` / `WeComRateLimitException`） | ⛔ **已删** |
+| 客户端 C# `InboundEventReporter` / `InboundEventBuilder` / `MonitorUsersCache` / `MonitorUsersHostedService` 类 | ⛔ **已删** |
+| 客户端 C# `Services/InboundReporter`（孤儿门面，无消费者） | ⛔ **已删** |
+| 客户端 C# `Protocol/IMessageWatcher`（入站消息监听器接口） | ⛔ **已删** |
+| 客户端 `AgentApiClient.ReportInboundAsync` / `GetMonitorUsersAsync` 方法 | ⛔ **已删** |
+| 客户端 `RpaConfigResponse.ListenMode` / `MonitorUsers` 字段及对应枚举/类型 | ⛔ **已删** |
+| 入站相关测试（`MessageArchive/` / `Inbound/` 全部） | ⛔ **已删** |
+| 服务端 Python 代码（`src/channels/wecom_personal_rpa/`） | ✅ **保留**（服务端负责拉取/解密） |
+| 后端双验签兼容路由（HMAC 路径） | ✅ **保留**（status / action_result 等仍走客户端上报） |
+
+> **保留说明**：客户端到服务端的通用 callback 信封 `InboundEvent` / `EventType` 枚举 / `PostCallbackAsync` 方法**保留**——它们被 status 状态上报（如离线检测）和 action_result 出站回执复用，与入站消息路径无关。`OfflineReporter` 同样保留（Supervisor 拉起失败时上报客户端离线状态）。
 
 ### 2.3 非目标
 
@@ -200,9 +215,9 @@ ChatArchiveListener (C# 客户端)
                   ┌──────────────────────┐
                   │  客户端（员工机器上  │
                   │  的 C# 程序）         │
-                  │  - 执行发送消息动作  │
-                  │  - client 模式时本地 │
-                  │    拉存档上报        │
+                  │  - 仅执行发送消息动作 │
+                  │  - 不再做本地拉取     │
+                  │    （入站代码已删）   │
                   └──────────────────────┘
 ```
 
@@ -234,13 +249,13 @@ ChatArchiveListener (C# 客户端)
 
 **兜底轮询**：60s 一次扫描所有 `channel_type='wecom_personal_rpa' AND listen_mode='server' AND verified=true` 的配置，调 `fetch_once`。
 
-### 3.3 客户端拉取路径（client 模式，⏸ 第一期不开放，代码保留）
+### 3.3 客户端拉取路径（已删除）
 
-> ⏸ **本期状态**：前端禁用、不可切换。后端代码（双验签兼容 + client_secret 加密）保留，为未来开放做准备。
+> ⛔ **本期状态**：客户端入站拉取路径已全部删除。详见 §2.2。
 
-**未来适用场景**：企业有合规要求凭证不能出企业内网时。
+**历史设计**（仅供追溯，不再实现）：客户端 `ChatArchiveListener` 拉密文 → RSA 解密 → POST 上报。
 
-**未来切换方式**（本期不可用）：编辑现有 wecom_personal_rpa 配置，把 `listen_mode` 从 `server` 改为 `client`，保存即可。
+**删除原因**：企微会话存档回调要求公网域名，客户端机器没有公网域名收不到回调；客户端没法监听企微服务端推送；拉取 + 解密全归服务端做更合理。
 
 **消息流程**（保留设计）：
 

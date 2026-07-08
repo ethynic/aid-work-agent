@@ -44,10 +44,6 @@ internal sealed class HealthStubAgentApiClient : IAgentApiClient
         => throw new NotSupportedException();
     public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
-    public Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-    public Task<bool> ReportInboundAsync(InboundEvent env, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
     public void Dispose() { }
 }
 
@@ -323,10 +319,6 @@ internal sealed class ThrowingHealthApiClient : IAgentApiClient
         string? errorCode = null, string? errorMessage = null, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-    public Task<Dictionary<string, MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-    public Task<bool> ReportInboundAsync(InboundEvent env, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public void Dispose() { }
 }

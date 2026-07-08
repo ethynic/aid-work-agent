@@ -159,10 +159,6 @@ public sealed class ServerMessageDispatcherTests
             => throw new NotSupportedException();
         public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
-        public Task<Dictionary<string, WeCom.PersonalRpa.Core.Protocol.MonitorUsersEntry>> GetMonitorUsersAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-        public Task<bool> ReportInboundAsync(WeCom.PersonalRpa.Core.Protocol.InboundEvent evt, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
         public void Dispose() { }
     }
 

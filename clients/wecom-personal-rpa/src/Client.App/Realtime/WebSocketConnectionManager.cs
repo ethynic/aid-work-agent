@@ -44,7 +44,7 @@ public sealed class WebSocketConnectionManager : IHostedService, IDisposable
     /// <summary>重连成功事件（OutboundActionDispatcher 订阅以做增量 outbox 拉取）。</summary>
     public event EventHandler<EventArgs>? Reconnected;
 
-    /// <summary>收到服务端消息事件（块 E InboundEventReporter 订阅以解析 actions）。</summary>
+    /// <summary>收到服务端消息事件（ServerMessageDispatcher 订阅以解析 paused/resumed/actions）。</summary>
     public event EventHandler<ReadOnlyMemory<byte>>? MessageReceived;
 
     public WebSocketConnectionManager(

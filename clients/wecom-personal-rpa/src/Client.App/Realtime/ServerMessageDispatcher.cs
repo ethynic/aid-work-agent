@@ -147,9 +147,9 @@ internal sealed class ServerMessageDispatcher : IHostedService
                 await HandleActionsAsync(data).ConfigureAwait(false);
                 break;
             case "config_invalidate":
-                // 服务端通知配置失效（如监控白名单变更）。当前 MonitorUsersCache 走定时刷新，
-                // 此事件由 InboundEventReporter 或专门订阅者处理，此处先 log 留痕。
-                _logger?.LogInformation("[{Tag}] 收到 config_invalidate（待配置链路订阅）", Tag);
+                // 服务端通知配置失效。客户端目前没有需要响应此事件的本地缓存
+                // （入站白名单缓存随 InboundEventReporter 一并删除），此处仅 log 留痕。
+                _logger?.LogInformation("[{Tag}] 收到 config_invalidate（无订阅者）", Tag);
                 break;
             default:
                 // 未知 type 记 warning 后丢弃（不传染）
