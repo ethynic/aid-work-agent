@@ -30,20 +30,20 @@ find . -type f -name "*.pyc" -delete
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 判断前端是否需要编译
-#if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
-#    FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
-#else
-#    FRONTEND_CHANGED=0
-#fi
+if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+   FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
+else
+   FRONTEND_CHANGED=0
+fi
 
-#if [ "$FRONTEND_CHANGED" -gt 0 ]; then
+if [ "$FRONTEND_CHANGED" -gt 0 ]; then
     echo "[2] 前端编译..."
     rm -rf frontend/dist/*
     docker run --rm -v /var/www/agent3/frontend:/app -w /app node:22-alpine npm install
     docker run --rm -v /var/www/agent3/frontend:/app -w /app node:22-alpine npm run build
-#else
-#    echo "[2] 前端代码无变更，跳过编译。"
-#fi
+else
+   echo "[2] 前端代码无变更，跳过编译。"
+fi
 
 # 3. 停止旧容器（释放数据库连接）
 echo "[3] 停止旧容器..."

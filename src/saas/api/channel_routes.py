@@ -51,7 +51,12 @@ _tenant_dedup_cache: dict[str, MessageDeduplicator] = {}
 
 # 旧版附件保存目录（保留用于向后兼容，新文件统一存到 storage/tenants/）
 ATTACHMENTS_DIR = os.path.join("data", "attachments")
-os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
+try:
+    os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
+except PermissionError:
+    # 容器内 /app 目录由 root 拥有，appuser 无权新建顶层子目录。
+    # 旧版兜底路径仅在 tenant_id 缺失时使用，正常 SaaS 走 storage/tenants/，故忽略。
+    logger.warning(f"无权创建旧版附件目录 {ATTACHMENTS_DIR}，旧版兼容兜底不可用")
 
 
 def _get_tenant_dedup(tenant_id: str) -> MessageDeduplicator:
