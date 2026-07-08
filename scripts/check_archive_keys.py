@@ -101,16 +101,40 @@ def main():
     print("=" * 60)
     print("尝试用数据库私钥解密：")
     print("=" * 60)
+
+    # 导入额外依赖测试 PKCS1v15 padding
+    import base64
+    from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
+
+    priv_obj_for_decrypt = serialization.load_pem_private_key(
+        c["private_key"].encode("utf-8"), password=None
+    )
+
     for item in items:
         seq = item.get("seq")
         pk_ver = item.get("publickey_ver")
+        cipher_bytes = base64.b64decode(item["encrypt_random_key"])
+
+        # 测 OAEP-SHA1（当前代码用的）
         try:
-            rk = chat_crypto.decrypt_random_key(
-                c["private_key"], item["encrypt_random_key"]
+            priv_obj_for_decrypt.decrypt(
+                cipher_bytes,
+                rsa_padding.OAEP(
+                    mgf=rsa_padding.MGF1(algorithm=__import__("cryptography.hazmat.primitives.hashes", fromlist=["SHA1"]).SHA1()),
+                    algorithm=__import__("cryptography.hazmat.primitives.hashes", fromlist=["SHA1"]).SHA1(),
+                    label=None,
+                ),
             )
-            print(f"seq={seq} publickey_ver={pk_ver} → 解密成功，random_key 长度={len(rk)}")
+            print(f"seq={seq} publickey_ver={pk_ver} → OAEP-SHA1: 成功")
         except Exception as e:
-            print(f"seq={seq} publickey_ver={pk_ver} → 解密失败: {e}")
+            print(f"seq={seq} publickey_ver={pk_ver} → OAEP-SHA1: 失败")
+
+        # 测 PKCS1v15（企微官方文档要求）
+        try:
+            priv_obj_for_decrypt.decrypt(cipher_bytes, rsa_padding.PKCS1v15())
+            print(f"seq={seq} publickey_ver={pk_ver} → PKCS1v15: 成功 ✓")
+        except Exception as e:
+            print(f"seq={seq} publickey_ver={pk_ver} → PKCS1v15: 失败")
 
 
 if __name__ == "__main__":
