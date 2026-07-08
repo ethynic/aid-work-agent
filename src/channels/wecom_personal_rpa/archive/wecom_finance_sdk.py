@@ -1,70 +1,29 @@
-"""企微会话存档 C SDK (libWeWorkFinanceSdk_C.so) 的 Python ctypes 封装
+"""企微会话存档 C SDK 的子进程代理层（主进程入口）。
 
-企微官方文档 https://developer.work.weixin.qq.com/document/path/91774 明确说明：
-会话存档拉取消息必须用 C 语言 SDK 的 GetChatData 函数，**没有 HTTP REST API**。
-本模块用 ctypes 加载 .so 并封装 5 个核心函数：
-  - NewSdk / Init / GetChatData / DecryptData / GetMediaData
-  + 辅助函数 NewSlice / FreeSlice / GetContentFromSlice / GetSliceLen
-  + MediaData 系列（GetMediaData 配套）
+⚠️ 设计要点：
+主进程（gunicorn worker）已加载 cryptography / psycopg 等 C 扩展，
+若直接加载 libWeWorkFinanceSdk_C.so 会破坏 C 堆状态，导致 worker 静默退出。
 
-线程安全策略（来自 SDK 示例 tool_testSdk.cpp 注释）：
-  - 「每个线程要一个 sdk 实例，不能跨线程共享」
-  - 用 threading.local() 给每个线程绑定独立的 sdk 实例
-  - Init 后 sdk 可以一直使用（不需要每次拉取都 Init）
+解决方案：把 ctypes + .so 加载整体放到 spawn 子进程内，
+主进程通过 multiprocessing.Pool 调用，子进程结束 → C 堆污染销毁。
 
-主流程只用到 GetChatData；DecryptData 已封装但暂不使用（解密仍走 chat_crypto.py 的
-Python 实现，已验证可用）。GetMediaData 用于未来媒体下载，本期不调用。
+模块结构：
+- 本模块（主进程入口）：保留异常类 + 公开 API，内部走子进程池
+- `_sdk_inner`（子进程实现）：ctypes 加载 .so + 真正的 SDK 调用
 
-错误码（来自头文件注释）：
-  10000 参数错误；10001 网络错误；10002 数据解析失败；10003 系统失败
-  10004 密钥/会话存档失败；10005 fileid 错误；10006 解密失败
-  10007 找不到消息加密版本对应私钥；10008 错误 encrypt_key；10009 ip 非法
-  10010 数据过期；10011 证书错误
+对外 API 与改造前完全一致，上层（http_client / verifier / fetcher）零改动。
 """
 
-import ctypes
-import json
-import os
+from __future__ import annotations
+
+import multiprocessing as mp
 import threading
 from typing import Any, Dict, Optional
 
 from loguru import logger
 
 
-# ----------------- 路径常量 -----------------
-
-_SDK_DIR = os.path.dirname(os.path.abspath(__file__))
-_NATIVE_SDK_DIR = os.path.join(_SDK_DIR, "native_sdk")
-_SDK_LIB_PATH = os.path.join(_NATIVE_SDK_DIR, "libWeWorkFinanceSdk_C.so")
-
-
-# ----------------- ctypes 结构体 -----------------
-# 注意：WeWorkFinanceSdk_t 在头文件中是 forward-declared（typedef struct WeWorkFinanceSdk_t
-# WeWorkFinanceSdk_t;），实际定义在 .so 内部不透明。ctypes 端只需当作不透明指针使用。
-
-
-class Slice_t(ctypes.Structure):
-    """SDK Slice 结构体（用于 GetChatData / DecryptData 返回数据）。"""
-
-    _fields_ = [
-        ("buf", ctypes.c_char_p),
-        ("len", ctypes.c_int),
-    ]
-
-
-class MediaData_t(ctypes.Structure):
-    """SDK MediaData 结构体（用于 GetMediaData 分片返回媒体数据）。"""
-
-    _fields_ = [
-        ("outindexbuf", ctypes.c_char_p),
-        ("out_len", ctypes.c_int),
-        ("data", ctypes.c_char_p),
-        ("data_len", ctypes.c_int),
-        ("is_finish", ctypes.c_int),
-    ]
-
-
-# ----------------- 异常 -----------------
+# ----------------- 异常（与原 API 兼容） -----------------
 
 
 class SDKLoadError(RuntimeError):
@@ -88,202 +47,158 @@ class SDKCallError(RuntimeError):
         self.code = code
 
 
-# ----------------- .so 加载 -----------------
+# ----------------- 子进程池（懒初始化，进程级单例） -----------------
 
-# 全局 CDLL 句柄（进程级单例，所有线程共享 .so 但 sdk 实例独立）
-_lib: Optional[ctypes.CDLL] = None
-_lib_lock = threading.Lock()
+# 池配置：单进程串行足够（SDK 调用本身是阻塞的，多进程只增内存）
+_POOL_SIZE = 1
+_POOL_TIMEOUT = 60  # 单次调用超时秒数（SDK 内部网络调用可能慢）
+
+_pool: Optional[mp.pool.Pool] = None
+_pool_lock = threading.Lock()
 
 
-def _load_lib() -> ctypes.CDLL:
-    """加载 libWeWorkFinanceSdk_C.so（进程级单例）。
+def _get_pool() -> mp.pool.Pool:
+    """获取或创建 spawn 子进程池（线程安全）。"""
+    global _pool
+    if _pool is not None:
+        return _pool
 
-    Raises:
-        SDKLoadError: 文件不存在 / 平台不符 / 依赖缺失。
+    with _pool_lock:
+        if _pool is not None:
+            return _pool
+
+        # spawn：子进程不继承父进程已加载的 C 扩展状态
+        ctx = mp.get_context("spawn")
+        _pool = ctx.Pool(_POOL_SIZE)
+        logger.info(f"[WeWorkFinanceSdk] 子进程隔离池已启动 size={_POOL_SIZE}")
+        return _pool
+
+
+def _reset_pool() -> None:
+    """重建池（子进程死掉时调用）。"""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.terminate()
+                _pool.join()
+            except Exception:
+                pass
+        ctx = mp.get_context("spawn")
+        _pool = ctx.Pool(_POOL_SIZE)
+        logger.warning("[WeWorkFinanceSdk] 子进程隔离池已重建")
+
+
+# ----------------- 子进程入口函数（spawn 可 pickle，必须在模块顶层） -----------------
+
+
+def _child_is_available() -> bool:
+    """子进程入口：探测 SDK 是否可加载。"""
+    from src.channels.wecom_personal_rpa.archive import _sdk_inner
+    return _sdk_inner.is_sdk_available()
+
+
+def _child_get_chat_data(
+    corpid: str, secret: str, seq: int, limit: int,
+    proxy: str, passwd: str, timeout: int,
+) -> Dict[str, Any]:
+    """子进程入口：调用 GetChatData。
+
+    Returns:
+        成功：{"ok": True, "data": <sdk json dict>}
+        失败：{"ok": False, "error_type": "...", "error_msg": "..."}
+        （用 dict 而非 raise，避免 multiprocessing 序列化异常时的局限）
     """
-    global _lib
-    if _lib is not None:
-        return _lib
+    from src.channels.wecom_personal_rpa.archive import _sdk_inner
+    try:
+        data = _sdk_inner.get_chat_data_raw(
+            corpid, secret, seq, limit, proxy, passwd, timeout,
+        )
+        return {"ok": True, "data": data}
+    except Exception as e:
+        return {"ok": False, "error_type": type(e).__name__, "error_msg": str(e)}
 
-    with _lib_lock:
-        if _lib is not None:
-            return _lib
 
-        if not os.path.exists(_SDK_LIB_PATH):
-            raise SDKLoadError(
-                f"libWeWorkFinanceSdk_C.so 不存在: {_SDK_LIB_PATH}\n"
-                f"请按 docs/system/wecom-personal-rpa-sdk-deploy.md 部署 SDK 文件。"
-            )
+def _child_decrypt_data(encrypt_key: str, encrypt_msg: str) -> Dict[str, Any]:
+    """子进程入口：调用 DecryptData。"""
+    from src.channels.wecom_personal_rpa.archive import _sdk_inner
+    try:
+        data = _sdk_inner.decrypt_data_raw(encrypt_key, encrypt_msg)
+        return {"ok": True, "data": data}
+    except Exception as e:
+        return {"ok": False, "error_type": type(e).__name__, "error_msg": str(e)}
 
+
+def _child_get_media_data(
+    corpid: str, secret: str, sdk_file_id: str,
+    index_buf: str, proxy: str, passwd: str, timeout: int,
+) -> Dict[str, Any]:
+    """子进程入口：调用 GetMediaData。"""
+    from src.channels.wecom_personal_rpa.archive import _sdk_inner
+    try:
+        data = _sdk_inner.get_media_data_raw(
+            corpid, secret, sdk_file_id, index_buf, proxy, passwd, timeout,
+        )
+        return {"ok": True, "data": data}
+    except Exception as e:
+        return {"ok": False, "error_type": type(e).__name__, "error_msg": str(e)}
+
+
+def _unwrap(result: Dict[str, Any], default_func: str) -> Any:
+    """解子进程返回，失败时按错误类型重建异常。"""
+    if result.get("ok"):
+        return result["data"]
+
+    err_type = result.get("error_type", "")
+    err_msg = result.get("error_msg", "")
+
+    # 子进程内的 RuntimeError 分两类：
+    # - "加载失败 / .so 不存在" → SDKLoadError
+    # - "GetChatData code=xxx / Init 失败 / 空指针" → SDKCallError
+    msg_lower = err_msg.lower()
+    if (
+        "libweworkfinancesdk" in msg_lower
+        or "加载失败" in err_msg
+        or ".so 不存在" in err_msg
+        or "cannot open shared object" in msg_lower
+    ):
+        raise SDKLoadError(err_msg)
+
+    # 形如 "GetChatData code=10001 seq=0 limit=1"
+    if "code=" in err_msg:
         try:
-            lib = ctypes.CDLL(_SDK_LIB_PATH)
-        except OSError as e:
-            # 区分「文件不存在」和「依赖缺失」
-            msg = str(e)
-            hint = ""
-            # 依赖缺失常见提示：cannot open shared object file / undefined symbol
-            if "cannot open shared object file" in msg and "libWeWorkFinanceSdk" not in msg:
-                # 通常缺 libssl / libcurl
-                hint = (
-                    "\n疑似缺少系统依赖，请执行：\n"
-                    "  apt-get install -y libssl-dev libcurl4-openssl-dev\n"
-                    f"或用 ldd {_SDK_LIB_PATH} 查看缺失的依赖。"
-                )
-            raise SDKLoadError(
-                f"加载 libWeWorkFinanceSdk_C.so 失败: {msg}{hint}\n"
-                f"路径: {_SDK_LIB_PATH}"
-            ) from e
+            code_part = err_msg.split("code=")[1].split()[0]
+            code = int(code_part)
+        except (IndexError, ValueError):
+            code = -1
+        raise SDKCallError(default_func, code, err_msg)
 
-        # 配置函数签名（让 ctypes 正确处理参数类型 + 返回值）
-        _configure_signatures(lib)
-        _lib = lib
-        logger.info(f"[WeWorkFinanceSdk] .so 加载成功 path={_SDK_LIB_PATH}")
-        return _lib
+    # 子进程崩了 / 命中 BrokenPool → 触发池重建，下次重试有机会成功
+    raise SDKCallError(default_func, -1, f"子进程异常: {err_type}: {err_msg}")
 
 
-def _configure_signatures(lib: ctypes.CDLL) -> None:
-    """配置 SDK 函数签名（参数类型 + 返回类型）。"""
-
-    # NewSdk() -> WeWorkFinanceSdk_t*
-    lib.NewSdk.argtypes = []
-    lib.NewSdk.restype = ctypes.c_void_p
-
-    # Init(WeWorkFinanceSdk_t*, const char*, const char*) -> int
-    lib.Init.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
-    lib.Init.restype = ctypes.c_int
-
-    # GetChatData(sdk, seq, limit, proxy, passwd, timeout, Slice_t*) -> int
-    lib.GetChatData.argtypes = [
-        ctypes.c_void_p,            # sdk
-        ctypes.c_uint64,            # seq
-        ctypes.c_uint,              # limit
-        ctypes.c_char_p,            # proxy
-        ctypes.c_char_p,            # passwd
-        ctypes.c_int,               # timeout
-        ctypes.POINTER(Slice_t),    # chatDatas
-    ]
-    lib.GetChatData.restype = ctypes.c_int
-
-    # DecryptData(const char* encrypt_key, const char* encrypt_msg, Slice_t* msg) -> int
-    lib.DecryptData.argtypes = [
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.POINTER(Slice_t),
-    ]
-    lib.DecryptData.restype = ctypes.c_int
-
-    # GetMediaData(sdk, indexbuf, sdkFileid, proxy, passwd, timeout, MediaData_t*) -> int
-    lib.GetMediaData.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.POINTER(MediaData_t),
-    ]
-    lib.GetMediaData.restype = ctypes.c_int
-
-    # DestroySdk(WeWorkFinanceSdk_t*)
-    lib.DestroySdk.argtypes = [ctypes.c_void_p]
-    lib.DestroySdk.restype = None
-
-    # Slice 系列
-    lib.NewSlice.argtypes = []
-    lib.NewSlice.restype = ctypes.POINTER(Slice_t)
-    lib.FreeSlice.argtypes = [ctypes.POINTER(Slice_t)]
-    lib.FreeSlice.restype = None
-    lib.GetContentFromSlice.argtypes = [ctypes.POINTER(Slice_t)]
-    lib.GetContentFromSlice.restype = ctypes.c_char_p
-    lib.GetSliceLen.argtypes = [ctypes.POINTER(Slice_t)]
-    lib.GetSliceLen.restype = ctypes.c_int
-
-    # MediaData 系列
-    lib.NewMediaData.argtypes = []
-    lib.NewMediaData.restype = ctypes.POINTER(MediaData_t)
-    lib.FreeMediaData.argtypes = [ctypes.POINTER(MediaData_t)]
-    lib.FreeMediaData.restype = None
-    lib.GetOutIndexBuf.argtypes = [ctypes.POINTER(MediaData_t)]
-    lib.GetOutIndexBuf.restype = ctypes.c_char_p
-    lib.GetData.argtypes = [ctypes.POINTER(MediaData_t)]
-    lib.GetData.restype = ctypes.c_char_p
-    lib.GetIndexLen.argtypes = [ctypes.POINTER(MediaData_t)]
-    lib.GetIndexLen.restype = ctypes.c_int
-    lib.GetDataLen.argtypes = [ctypes.POINTER(MediaData_t)]
-    lib.GetDataLen.restype = ctypes.c_int
-    lib.IsMediaDataFinish.argtypes = [ctypes.POINTER(MediaData_t)]
-    lib.IsMediaDataFinish.restype = ctypes.c_int
+# ----------------- 公开 API（与原签名完全一致） -----------------
 
 
 def is_sdk_available() -> bool:
-    """探测 SDK 是否可加载（不抛异常）。
+    """探测 SDK 是否可加载（通过子进程，不污染主进程）。
 
-    用于运行环境检测（如开发机无 .so 时不让 import 失败）。
+    主进程首次调用此函数会触发子进程池启动，可能耗时 100~300ms。
     """
     try:
-        _load_lib()
-        return True
-    except SDKLoadError as e:
-        logger.debug(f"[WeWorkFinanceSdk] SDK 不可用: {e}")
-        return False
-
-
-# ----------------- 线程局部 sdk 实例 -----------------
-
-# 每个线程独立 sdk 实例（SDK 示例注释：每个线程要一个 sdk 实例，不能跨线程共享）
-_thread_local = threading.local()
-
-
-def _get_thread_sdk(corpid: str, secret: str) -> int:
-    """获取当前线程的 sdk 句柄（按 corpid+secret 缓存）。
-
-    SDK 示例注释：「Init 后 sdk 可以一直使用（不需要每次拉取都 Init）」。
-    所以同一线程内同一 corpid+secret 复用 sdk 实例，避免重复 Init。
-
-    Args:
-        corpid: 企业 ID。
-        secret: 会话存档 secret。
-
-    Returns:
-        sdk 指针（int，ctypes c_void_p 转 int）。
-
-    Raises:
-        SDKCallError: Init 失败。
-    """
-    lib = _load_lib()
-
-    cache_key = f"{corpid}:{secret}"
-    cached = getattr(_thread_local, "sdk", None)
-    if cached is not None and cached.get("key") == cache_key:
-        return cached["handle"]
-
-    # 缓存 miss：若同线程之前缓存了不同 corpid+secret 的 sdk，先 DestroySdk 释放旧句柄
-    # （asyncio.to_thread 默认 ThreadPoolExecutor 线程会被复用跨租户调用，不释放会泄漏）
-    if cached is not None:
+        pool = _get_pool()
+        result = pool.apply(_child_is_available)
+        return bool(result)
+    except Exception as e:
+        # 子进程崩了或池死了：尝试重建一次，再失败就返回 False
+        logger.warning(f"[WeWorkFinanceSdk] is_sdk_available 子进程调用失败: {e}，尝试重建池")
         try:
-            lib.DestroySdk(cached["handle"])
-        except Exception as e:
-            logger.warning(f"[WeWorkFinanceSdk] 释放旧 sdk 句柄失败: {e}")
-
-    # 新建 + Init
-    sdk_handle = lib.NewSdk()
-    if not sdk_handle:
-        raise SDKCallError("NewSdk", -1, "NewSdk 返回空指针")
-
-    ret = lib.Init(sdk_handle, corpid.encode("utf-8"), secret.encode("utf-8"))
-    if ret != 0:
-        # Init 失败要销毁 sdk（避免泄漏）
-        lib.DestroySdk(sdk_handle)
-        raise SDKCallError("Init", ret, f"corpid={corpid}")
-
-    _thread_local.sdk = {"key": cache_key, "handle": sdk_handle}
-    logger.debug(
-        f"[WeWorkFinanceSdk] 线程 sdk 初始化成功 thread={threading.current_thread().name} corpid={corpid}"
-    )
-    return sdk_handle
-
-
-# ----------------- 高层封装：GetChatData -----------------
+            _reset_pool()
+            pool = _get_pool()
+            return bool(pool.apply(_child_is_available))
+        except Exception as e2:
+            logger.error(f"[WeWorkFinanceSdk] is_sdk_available 重建后仍失败: {e2}")
+            return False
 
 
 def get_chat_data_raw(
@@ -295,7 +210,7 @@ def get_chat_data_raw(
     passwd: str = "",
     timeout: int = 30,
 ) -> Dict[str, Any]:
-    """调用 SDK GetChatData 拉取一批会话存档密文（同步阻塞）。
+    """调用 SDK GetChatData 拉取一批会话存档密文（通过子进程）。
 
     Args:
         corpid: 企业 ID。
@@ -323,51 +238,28 @@ def get_chat_data_raw(
     if limit < 1 or limit > 1000:
         raise ValueError(f"limit 应在 1~1000 之间，实际 {limit}")
 
-    lib = _load_lib()
-    sdk_handle = _get_thread_sdk(corpid, secret)
-
-    chat_datas = lib.NewSlice()
-    if not chat_datas:
-        raise SDKCallError("NewSlice", -1, "NewSlice 返回空指针")
-
     try:
-        ret = lib.GetChatData(
-            sdk_handle,
-            ctypes.c_uint64(seq),
-            ctypes.c_uint(limit),
-            proxy.encode("utf-8"),
-            passwd.encode("utf-8"),
-            ctypes.c_int(timeout),
-            chat_datas,
+        pool = _get_pool()
+        result = pool.apply(
+            _child_get_chat_data,
+            (corpid, secret, int(seq), int(limit), proxy, passwd, timeout),
         )
-        if ret != 0:
-            raise SDKCallError("GetChatData", ret, f"seq={seq} limit={limit}")
+    except Exception as e:
+        # pool.apply 抛异常 = 子进程崩了（BrokenPoolError / 子进程异常退出）
+        # SDK 业务错误（code != 0）走 _unwrap 路径，不会进这里
+        logger.warning(f"[WeWorkFinanceSdk] 子进程池崩了，重建: {e}")
+        _reset_pool()
+        pool = _get_pool()
+        result = pool.apply(
+            _child_get_chat_data,
+            (corpid, secret, int(seq), int(limit), proxy, passwd, timeout),
+        )
 
-        # 从 slice 读 JSON
-        content_ptr = lib.GetContentFromSlice(chat_datas)
-        content_len = lib.GetSliceLen(chat_datas)
-        if content_len <= 0 or not content_ptr:
-            # 空内容（理论不应发生，errcode=0 时应有 JSON）
-            return {"errcode": 0, "errmsg": "ok", "chatdata": []}
-
-        raw_bytes = ctypes.string_at(content_ptr, content_len)
-        try:
-            return json.loads(raw_bytes.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise SDKCallError(
-                "GetChatData",
-                -2,
-                f"JSON 解析失败: {type(e).__name__}: {e}",
-            ) from e
-    finally:
-        lib.FreeSlice(chat_datas)
-
-
-# ----------------- 高层封装：DecryptData（保留，主流程不用） -----------------
+    return _unwrap(result, "GetChatData")
 
 
 def decrypt_data_raw(encrypt_key: str, encrypt_msg: str) -> str:
-    """调用 SDK DecryptData 解密会话存档消息（同步阻塞）。
+    """调用 SDK DecryptData 解密会话存档消息（通过子进程）。
 
     注意：主流程仍用 chat_crypto.py 的 Python 实现，此函数保留供未来使用。
 
@@ -381,32 +273,16 @@ def decrypt_data_raw(encrypt_key: str, encrypt_msg: str) -> str:
     Raises:
         SDKCallError: DecryptData 返回非 0。
     """
-    lib = _load_lib()
-    msg_slice = lib.NewSlice()
-    if not msg_slice:
-        raise SDKCallError("NewSlice", -1, "NewSlice 返回空指针")
-
     try:
-        ret = lib.DecryptData(
-            encrypt_key.encode("utf-8"),
-            encrypt_msg.encode("utf-8"),
-            msg_slice,
-        )
-        if ret != 0:
-            raise SDKCallError("DecryptData", ret)
+        pool = _get_pool()
+        result = pool.apply(_child_decrypt_data, (encrypt_key, encrypt_msg))
+    except Exception as e:
+        logger.warning(f"[WeWorkFinanceSdk] 子进程池崩了，重建: {e}")
+        _reset_pool()
+        pool = _get_pool()
+        result = pool.apply(_child_decrypt_data, (encrypt_key, encrypt_msg))
 
-        content_ptr = lib.GetContentFromSlice(msg_slice)
-        content_len = lib.GetSliceLen(msg_slice)
-        if content_len <= 0 or not content_ptr:
-            return ""
-
-        raw_bytes = ctypes.string_at(content_ptr, content_len)
-        return raw_bytes.decode("utf-8")
-    finally:
-        lib.FreeSlice(msg_slice)
-
-
-# ----------------- 高层封装：GetMediaData（保留，主流程不用） -----------------
+    return _unwrap(result, "DecryptData")
 
 
 def get_media_data_raw(
@@ -418,7 +294,7 @@ def get_media_data_raw(
     passwd: str = "",
     timeout: int = 30,
 ) -> Dict[str, Any]:
-    """调用 SDK GetMediaData 分片拉取媒体文件（同步阻塞）。
+    """调用 SDK GetMediaData 分片拉取媒体文件（通过子进程）。
 
     注意：本期不实现媒体下载，此函数保留供未来使用。
 
@@ -434,50 +310,27 @@ def get_media_data_raw(
     Raises:
         SDKCallError: GetMediaData 返回非 0。
     """
-    lib = _load_lib()
-    sdk_handle = _get_thread_sdk(corpid, secret)
-
-    media_data = lib.NewMediaData()
-    if not media_data:
-        raise SDKCallError("NewMediaData", -1, "NewMediaData 返回空指针")
-
     try:
-        ret = lib.GetMediaData(
-            sdk_handle,
-            index_buf.encode("utf-8"),
-            sdk_file_id.encode("utf-8"),
-            proxy.encode("utf-8"),
-            passwd.encode("utf-8"),
-            ctypes.c_int(timeout),
-            media_data,
+        pool = _get_pool()
+        result = pool.apply(
+            _child_get_media_data,
+            (corpid, secret, sdk_file_id, index_buf, proxy, passwd, timeout),
         )
-        if ret != 0:
-            raise SDKCallError("GetMediaData", ret, f"fileid={sdk_file_id}")
-
-        data_ptr = lib.GetData(media_data)
-        data_len = lib.GetDataLen(media_data)
-        out_index_ptr = lib.GetOutIndexBuf(media_data)
-        is_finish = lib.IsMediaDataFinish(media_data)
-
-        data_bytes = ctypes.string_at(data_ptr, data_len) if data_len > 0 and data_ptr else b""
-        out_index = (
-            ctypes.string_at(out_index_ptr).decode("utf-8") if out_index_ptr else ""
+    except Exception as e:
+        logger.warning(f"[WeWorkFinanceSdk] 子进程池崩了，重建: {e}")
+        _reset_pool()
+        pool = _get_pool()
+        result = pool.apply(
+            _child_get_media_data,
+            (corpid, secret, sdk_file_id, index_buf, proxy, passwd, timeout),
         )
 
-        return {
-            "data": data_bytes,
-            "out_index_buf": out_index,
-            "is_finish": bool(is_finish),
-        }
-    finally:
-        lib.FreeMediaData(media_data)
+    return _unwrap(result, "GetMediaData")
 
 
 # ----------------- 测试辅助 -----------------
 
 
 def _force_reload_for_test() -> None:
-    """强制重新加载 .so（仅测试用：清掉单例缓存）。"""
-    global _lib
-    with _lib_lock:
-        _lib = None
+    """强制重建子进程池（仅测试用）。"""
+    _reset_pool()
