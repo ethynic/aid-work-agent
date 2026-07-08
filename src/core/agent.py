@@ -1480,18 +1480,37 @@ class Agent:
         cleaned: List[Dict[str, Any]] = []
         prev_role: Optional[str] = None
         dropped_user_count = 0
+        dropped_users: List[Dict[str, Any]] = []  # 诊断：记录被丢弃的 user 消息
         for msg in messages:
             role = msg.get("role")
             if role == "user" and prev_role == "user":
                 # 前一条 user 已 append，弹出它（丢弃较早的），保留当前最新一条
-                cleaned.pop()
+                dropped = cleaned.pop()
                 dropped_user_count += 1
+                dropped_users.append(dropped)
             cleaned.append(msg)
             prev_role = role
         if dropped_user_count > 0:
+            # 诊断：输出被丢弃的 user 内容 + 完整序列概览，定位"连续 user"来源
+            # 可能来源：① 上一轮 agent 返回空响应 -> assistant 空内容被跳过
+            #          ② 飞书事件去重失效（多 worker 下 _feishu_event_dedup 是进程内 dict）
+            #          ③ 批量写入部分失败
+            def _preview(m: Dict[str, Any], n: int = 120) -> str:
+                c = m.get("content", "")
+                if not isinstance(c, str):
+                    c = str(c)
+                return repr(c[:n])
+
+            dropped_preview = [_preview(m) for m in dropped_users]
+            seq_preview = [
+                f"{m.get('role')}:{_preview(m, 60)}"
+                for m in messages[:30]
+            ]
             logger.warning(
                 f"后端日志：_reorder_messages_for_llm 检测到连续 user，"
-                f"已丢弃较早的 {dropped_user_count} 条（保留最新）"
+                f"已丢弃较早的 {dropped_user_count} 条（保留最新）。"
+                f"被丢弃 user 内容: {dropped_preview}. "
+                f"完整序列前30条: {seq_preview}"
             )
 
         # 裁剪窗口起始边界：长会话取最近 N 条后，开头可能落在 assistant（甚至 tool 结果）上，
