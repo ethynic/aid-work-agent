@@ -33,7 +33,7 @@
 
     <!-- 错误提示 -->
     <div v-if="error" class="mb-4 p-4 bg-danger-50 border border-danger-200 rounded-lg text-danger-600 text-sm">
-      <p class="m-0">加载客户信息失败</p>
+      <p class="m-0">{{ error }}</p>
       <p v-if="debug" class="mt-2 text-xs text-danger-700">{{ debug }}</p>
     </div>
 
@@ -144,8 +144,12 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { useDemoAuth } from '@/composables/useDemoAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
+const { user: demoUser } = useDemoAuth()
+const { admin: tenantAdmin } = useTenantAuth()
 
 const loading = ref(false)
 const error = ref('')
@@ -158,7 +162,17 @@ const expandedEmailId = ref<string | null>(null)
 const showEmailModal = ref(false)
 const total = ref(0)
 
-const userId = computed(() => route.query.user_id as string)
+// 优先用 URL query 中的 user_id（保留可覆盖能力），否则按路由从登录态取
+const userId = computed(() => {
+  const queryUserId = route.query.user_id as string
+  if (queryUserId) return queryUserId
+  // 租户前台模式 /t/:tenant_id/*
+  if (route.path.startsWith('/t/')) {
+    return tenantAdmin.value?.user_id || ''
+  }
+  // 演示模式 / 其他
+  return demoUser.value?.user_id || ''
+})
 
 const columns = [
   { key: 'index', label: '序号', width: '60px' },

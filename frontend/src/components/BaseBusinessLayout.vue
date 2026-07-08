@@ -45,10 +45,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, inject, onMounted } from 'vue'
+import { computed, inject, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { type SubagentListItem } from '@/api/subagent'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
+import { useSubagentList } from '@/composables/useSubagentList'
 
 const route = useRoute()
 const router = useRouter()
@@ -76,8 +76,8 @@ const subagentId = computed(() => {
   return pathSegments.length > 0 ? pathSegments[0] : null
 })
 
-// 可用的数字员工列表
-const availableSubagents = ref<SubagentListItem[]>([])
+// 复用全局缓存的数字员工列表，避免与 PortalLayout 重复请求
+const { availableSubagents, loadAvailableSubagents } = useSubagentList()
 
 // 当前子智能体名称
 const currentSubagentName = computed(() => {
@@ -91,28 +91,6 @@ const pageTitle = computed(() => {
   const matched = route.matched[route.matched.length - 1]
   return matched?.name?.toString() || '业务数据'
 })
-
-// 加载数字员工列表
-async function loadAvailableSubagents() {
-  try {
-    // 租户模式下使用 allowed-agents 接口，非租户模式使用 listSubagents
-    let res
-    if (isTenantMode.value) {
-      res = await getMyAllowedAgents()
-    } else {
-      // 非租户模式仍使用 listSubagents
-      const { listSubagents } = await import('@/api/subagent')
-      res = await listSubagents()
-    }
-
-    if (res.success && res.data) {
-      // 后端已返回完整格式，直接使用
-      availableSubagents.value = res.data as SubagentListItem[]
-    }
-  } catch (e) {
-    console.error('加载数字员工列表失败:', e)
-  }
-}
 
 // 返回对话页面
 function goBack() {
@@ -143,6 +121,7 @@ function goBack() {
 }
 
 onMounted(() => {
-  loadAvailableSubagents()
+  // 复用缓存：若 PortalLayout 已加载或正在加载，这里会直接跳过请求
+  loadAvailableSubagents(isTenantMode.value)
 })
 </script>
