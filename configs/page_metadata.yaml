@@ -26,6 +26,22 @@ pages:
     domain: trade-specialist
     status: published
 
+  - page_id: trade-specialist-email-records
+    title: 邮件记录
+    description: 查看外贸智能体发送的客户邮件历史，包括主题、语言、发送状态和邮件正文
+    route: /trade-specialist/email-records
+    icon: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6"
+    domain: trade-specialist
+    status: published
+
+  - page_id: trade-specialist-match-stats
+    title: 匹配统计
+    description: 查看外贸获客的匹配客户数、邮件发送情况和国家分布统计
+    route: /trade-specialist/match-stats
+    icon: "M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7"
+    domain: trade-specialist
+    status: published
+
   - page_id: travel-consultant-vehicles
     title: 车辆价格
     description: 管理旅游用车信息，包括车型、座位数、租车价格等

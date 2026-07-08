@@ -10,6 +10,8 @@ import { useTenantAuth } from './composables/useTenantAuth'
 
 // 静态导入的页面（始终需要或被多处引用）
 import CustomerInfo from './components/CustomerInfo.vue'
+import EmailRecords from './components/EmailRecords.vue'
+import MatchStats from './components/MatchStats.vue'
 import ScheduledTasks from './components/ScheduledTasks.vue'
 import KnowledgeBase from './components/KnowledgeBase.vue'
 
@@ -88,6 +90,16 @@ const router = createRouter({
           path: 'customers',
           name: 'trade-specialist-customers',
           component: CustomerInfo
+        },
+        {
+          path: 'email-records',
+          name: 'trade-specialist-email-records',
+          component: EmailRecords
+        },
+        {
+          path: 'match-stats',
+          name: 'trade-specialist-match-stats',
+          component: MatchStats
         },
       ]
     },
@@ -226,6 +238,16 @@ const router = createRouter({
               path: 'customers',
               name: 'tenant-trade-specialist-customers',
               component: CustomerInfo
+            },
+            {
+              path: 'email-records',
+              name: 'tenant-trade-specialist-email-records',
+              component: EmailRecords
+            },
+            {
+              path: 'match-stats',
+              name: 'tenant-trade-specialist-match-stats',
+              component: MatchStats
             },
           ]
         },
