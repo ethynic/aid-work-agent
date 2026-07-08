@@ -282,9 +282,14 @@ class Agent:
 
         # 重建 _loaders 映射
         base_loader = self.skill_registry._loader
-        tenant_dir = SkillResolver.get_tenant_skills_dir(tenant_id)
+        try:
+            tenant_dir = SkillResolver.get_tenant_skills_dir(tenant_id)
+        except Exception as e:
+            # mkdir 失败（权限/磁盘满）不应抛垮 processor，跳过租户自定义 skills
+            logger.warning(f"获取租户 {tenant_id} skills 目录失败，跳过租户自定义 skills: {e}")
+            tenant_dir = None
         tenant_loader = None
-        if tenant_dir.exists():
+        if tenant_dir and tenant_dir.exists():
             from src.core.skill_loader import SkillLoader
             tenant_loader = SkillLoader(tenant_dir)
 

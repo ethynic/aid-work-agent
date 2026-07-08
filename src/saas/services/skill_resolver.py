@@ -43,8 +43,18 @@ class SkillResolver:
 
     @staticmethod
     def get_tenant_skills_dir(tenant_id: str) -> Path:
-        """获取租户自定义 skills 存储目录"""
-        base_dir = Path(settings.saas.tenant_skills_dir) / tenant_id / "skills"
+        """获取租户自定义 skills 存储目录
+
+        路径解析以项目根为基准（不依赖 cwd），避免容器内 cwd 不可写时
+        mkdir 报 PermissionError。配置项支持相对路径（相对项目根）和绝对路径。
+        """
+        configured = Path(settings.saas.tenant_skills_dir)
+        if configured.is_absolute():
+            base_dir = configured / tenant_id / "skills"
+        else:
+            # skill_resolver.py 位于 src/saas/services/，上四级为项目根
+            project_root = Path(__file__).parents[3]
+            base_dir = project_root / configured / tenant_id / "skills"
         base_dir.mkdir(parents=True, exist_ok=True)
         return base_dir
 

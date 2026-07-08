@@ -86,7 +86,7 @@
 1. **订阅方式**：将事件发送至开发者服务器
 2. **Encrypt Key**：可选，见 [§4 加密模式选择](#4-加密模式选择)
 3. **Verification Token**：复制粘贴到系统侧配置
-4. **请求网址 URL**：填入 `https://your-domain.com/t/{tenant_id}/feishu/callback/{config_id}`
+4. **请求网址 URL**：填入 `https://agent3.aidingyi.cn/t/tenant_b6459319f621/feishu/callback/chan_4911006592e6`
 5. **添加事件**：
    - `im.message.receive_v1` — 接收消息（必需）
    - `im.message.recalled_v1` — 消息撤回（可选）
