@@ -56,8 +56,8 @@ services:
           size: 200m
 
       # 上传附件目录（独立目录，避免与生产环境冲突）
-      - /var/www/qb3_upload/agent3_uploads:/app/uploads
-      - /var/www/qb3_upload/agent3_storage:/app/storage
+      - /var/www/qb3_upload/agent2_uploads:/app/uploads
+      - /var/www/qb3_upload/agent2_storage:/app/storage
       # 用于数据迁移
       - /var/www/qb3_upload/agent_storage:/app/source_storage
     
