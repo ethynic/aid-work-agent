@@ -4,15 +4,28 @@
     <header class="bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
       <div class="w-full px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between items-center py-4">
-          <div>
-            <h1 class="text-lg font-semibold text-gray-900">
-              {{ pageTitle }}
-            </h1>
-            <p v-if="currentSubagentName" class="text-sm text-gray-500 mt-1">
-              {{ currentSubagentName }}
-            </p>
+          <div class="flex items-center gap-3 min-w-0">
+            <!-- 汉堡按钮（仅租户模式下显示，用于展开/收起左侧菜单栏） -->
+            <button
+              v-if="isTenantMode"
+              @click="toggleSidebar"
+              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+              title="切换侧边栏"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
+              </svg>
+            </button>
+            <div class="min-w-0">
+              <h1 class="text-lg font-semibold text-gray-900 truncate">
+                {{ pageTitle }}
+              </h1>
+              <p v-if="currentSubagentName" class="text-sm text-gray-500 mt-1 truncate">
+                {{ currentSubagentName }}
+              </p>
+            </div>
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-3 flex-shrink-0">
             <button
               @click="goBack"
               class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
@@ -32,13 +45,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, inject, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 
 const route = useRoute()
 const router = useRouter()
+
+// 从 PortalLayout 注入侧边栏切换方法（仅租户模式下可用）
+const toggleSidebar = inject<() => void>('toggleSidebar', () => {})
 
 // 判断是否为租户模式（路由以 /t/ 开头）
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
