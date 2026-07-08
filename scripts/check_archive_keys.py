@@ -51,6 +51,17 @@ def main():
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("utf-8")
 
+    # 写到文件方便复制（避开 shell 粘贴问题）
+    pub_key_path = "/app/scripts/public_key_for_wecom.txt"
+    try:
+        with open(pub_key_path, "w", encoding="utf-8") as f:
+            f.write(pub_pem)
+        print(f"公钥已写入: {pub_key_path}（cat 复制）")
+        print()
+    except Exception as e:
+        print(f"写公钥文件失败: {e}")
+        print()
+
     print("=" * 60)
     print("数据库私钥推导公钥（应与企微后台配置一致）：")
     print("=" * 60)
