@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+# 例外：企微会话存档 C SDK（Linux x86 v3.0，运行时必需，不放 git 会导致部署缺失）
+!src/channels/wecom_personal_rpa/archive/native_sdk/libWeWorkFinanceSdk_C.so
 .Python
 build/
 develop-eggs/

@@ -1,30 +1,29 @@
-"""企微会话存档 HTTP API 客户端
+"""企微会话存档 API 客户端
 
 与 C# ``clients/wecom-personal-rpa/.../ArchiveHttpClient.cs`` 行为对齐：
-- GET /cgi-bin/gettoken：获取 access_token（Redis 缓存，提前 5 分钟刷新）
-- POST /cgi-bin/msg/get_chat_data：按 seq 拉取一批密文
+- GET /cgi-bin/gettoken：获取 access_token（Redis 缓存，提前 5 分钟刷新）—— 仅 access_token 走 HTTP
+- 拉取会话存档密文：调用 C SDK (libWeWorkFinanceSdk_C.so) 的 GetChatData 函数
+  （企微官方文档 https://developer.work.weixin.qq.com/document/path/91774 明确说明：
+   会话存档拉取必须用 C SDK，**没有 HTTP REST API**）
 - errcode=45009（频率限制）→ 抛 ``WeComRateLimitException``，由 fetcher 决定暂停多久
 - errcode!=0（其他错误）→ 抛 ``WeComApiException``
-
-文档：https://developer.work.weixin.qq.com/document/path/91360
 
 媒体下载（get_media_data）本期不实现，由客户端 C# ``ArchiveMediaDownloader`` 完成。
 """
 
 import asyncio
-import json
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 import httpx
 from loguru import logger
 
+from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk
 from src.core.redis_client import redis_client
 
 
-# 企微会话存档 API 端点
+# 企微会话存档 API 端点（仅 gettoken 走 HTTP；get_chat_data 走 C SDK）
 _GET_TOKEN_URL = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
-_GET_CHAT_DATA_URL = "https://qyapi.weixin.qq.com/cgi-bin/msg/get_chat_data"
 
 # access_token Redis 缓存键前缀（TTL 由调用方按 expires_in - 300 设置）
 _TOKEN_CACHE_KEY_PREFIX = "wecom_rpa:archive:token"
@@ -130,12 +129,16 @@ async def get_access_token(tenant_id: str, corpid: str, secret: str) -> str:
     return token
 
 
-async def get_chat_data(access_token: str, seq: int, limit: int) -> ChatDataBatch:
-    """按 seq 拉取一批会话存档密文。
+async def get_chat_data(corpid: str, secret: str, seq: int, limit: int) -> ChatDataBatch:
+    """按 seq 拉取一批会话存档密文（通过 C SDK GetChatData）。
+
+    企微官方明确：会话存档拉取**没有 HTTP REST API**，必须用 C SDK 的 GetChatData。
+    本函数用 asyncio.to_thread 包装同步 SDK 调用，避免阻塞事件循环。
 
     Args:
-        access_token: 由 get_access_token 获取。
-        seq: 起始 seq（拉取 seq > 此值的消息）。
+        corpid: 企业 ID。
+        secret: 会话存档 secret（注意：与会话存档 RSA 私钥配套，不是自建应用 secret）。
+        seq: 起始 seq（拉取 seq > 此值的消息，首次传 0）。
         limit: 单批次上限（企微限制 ≤1000）。
 
     Returns:
@@ -145,18 +148,22 @@ async def get_chat_data(access_token: str, seq: int, limit: int) -> ChatDataBatc
         ValueError: 参数非法。
         WeComRateLimitException: errcode=45009。
         WeComApiException: 其他 errcode != 0。
-        RuntimeError: 重试 3 次后仍失败。
+        wecom_finance_sdk.SDKLoadError: .so 加载失败。
+        wecom_finance_sdk.SDKCallError: SDK 调用失败（非 errcode 路径）。
     """
-    if not access_token:
-        raise ValueError("access_token 不能为空")
+    if not corpid:
+        raise ValueError("corpid 不能为空")
+    if not secret:
+        raise ValueError("secret 不能为空")
     if limit < 1 or limit > 1000:
         raise ValueError(f"limit 应在 1~1000 之间，实际 {limit}")
 
-    url = f"{_GET_CHAT_DATA_URL}?access_token={access_token}"
-    body = json.dumps({"seq": seq, "limit": limit, "proxy": "", "last_snap_shot": 0})
-    body_bytes = body.encode("utf-8")
+    # SDK 是同步阻塞的 C 调用，必须放到线程池里跑
+    json_resp = await asyncio.to_thread(
+        wecom_finance_sdk.get_chat_data_raw,
+        corpid, secret, int(seq), int(limit),
+    )
 
-    json_resp = await _post_json_with_retry(url, body_bytes)
     _ensure_success(json_resp, "get_chat_data")
 
     chatdata = json_resp.get("chatdata", []) or []
@@ -201,40 +208,14 @@ async def _get_json_with_retry(url: str) -> dict:
     raise RuntimeError(f"GET {url} 失败（重试 {_RETRY_MAX_ATTEMPTS} 次）") from last_exc
 
 
-async def _post_json_with_retry(url: str, body: bytes) -> dict:
-    """POST JSON，重试 3 次；45009 立即抛 WeComRateLimitException（不重试）。"""
-    last_exc: Optional[Exception] = None
-    for attempt in range(_RETRY_MAX_ATTEMPTS):
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    url,
-                    content=body,
-                    headers={"Content-Type": "application/json; charset=utf-8"},
-                )
-                resp.raise_for_status()
-                json_resp = resp.json()
-
-                # 45009 频率限制：立即抛，由调用方决定暂停多久
-                if int(json_resp.get("errcode", 0)) == 45009:
-                    logger.warning(f"[ArchiveHttpClient] 企微返回 45009（频率限制）")
-                    raise WeComRateLimitException(60)
-
-                return json_resp
-        except WeComRateLimitException:
-            raise  # 不重试，直接向上传播
-        except Exception as ex:
-            last_exc = ex
-            logger.warning(f"[ArchiveHttpClient] POST 失败 第 {attempt + 1} 次: {ex}")
-            if attempt < len(_RETRY_DELAYS):
-                await asyncio.sleep(_RETRY_DELAYS[attempt])
-
-    raise RuntimeError(f"POST {url} 失败（重试 {_RETRY_MAX_ATTEMPTS} 次）") from last_exc
-
-
 def _ensure_success(json_resp: dict, api: str) -> None:
-    """检查企微 errcode != 0 抛 WeComApiException。"""
+    """检查企微 errcode != 0 抛 WeComApiException；45009 抛 WeComRateLimitException。"""
     errcode = int(json_resp.get("errcode", 0) or 0)
-    if errcode != 0:
-        errmsg = json_resp.get("errmsg", "") or ""
-        raise WeComApiException(api, errcode, errmsg)
+    if errcode == 0:
+        return
+    errmsg = json_resp.get("errmsg", "") or ""
+    # 45009 频率限制：单独抛，调用方按 retry_after_seconds 暂停
+    if errcode == 45009:
+        logger.warning(f"[ArchiveHttpClient] 企微返回 45009（频率限制） api={api}")
+        raise WeComRateLimitException(60)
+    raise WeComApiException(api, errcode, errmsg)

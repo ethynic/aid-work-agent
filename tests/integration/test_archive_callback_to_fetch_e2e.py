@@ -155,9 +155,8 @@ async def test_full_chain_callback_to_message_processing(
         fetcher_module.ChannelConfigDB, "update_config_field", lambda *a, **kw: True
     )
 
-    # mock 企微 API
-    with patch.object(http_client, "get_access_token", new=AsyncMock(return_value="tok_e2e")), \
-         patch.object(http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
+    # mock 企微 API（get_chat_data 走 C SDK，此处 mock http_client 层）
+    with patch.object(http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
         # mock audit 写入（仅断言调用，不触达真实 DB）
         audit_calls = []
         orig_log_callback_received = archive_audit.log_callback_received
