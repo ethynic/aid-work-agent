@@ -209,7 +209,6 @@ UUID 为 12 位十六进制字符串，保证文件名唯一性，避免覆盖�
 部分模块实现了新旧路径的兼容桥接：
 
 - `upload_to_remote.py:_resolve_file_path()` — 优先使用新路径，降级到旧 `uploads/` 目录
-- `external_customers.py` — 优先新路径，降级到旧 `data/attachments/`
 - 知识服务 — 支持 `knowledge_upload_path` 配置项覆盖默认路径
 
 ---

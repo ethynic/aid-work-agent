@@ -183,11 +183,8 @@ async def download_attachment(
 ):
     """下载已保存的附件（用于外部接待页面回显）
 
-    路径解析：
-        1. 新版（按 `backend_dev.md` 租户附件存储规范）：
-           `storage/tenants/{tenant_id}/conversation/{filename}`
-        2. 旧版（兼容迁移期历史附件）：
-           `data/attachments/{session_id}/{filename}`
+    路径：`storage/tenants/{tenant_id}/conversation/{filename}`
+    （旧版 `data/attachments/{session_id}/` 已废弃，不再回退读取）
 
     租户归属校验通过 `channel_sessions.tenant_id` 完成，确保不会跨租户下载文件。
 
@@ -224,18 +221,12 @@ async def download_attachment(
     if not session_tenant_id:
         raise HTTPException(status_code=403, detail="会话未关联租户")
 
-    # 解析文件路径：优先新版 storage/tenants/{tenant_id}/conversation/，回退旧版 data/attachments/
+    # 仅读取新版路径 storage/tenants/{tenant_id}/conversation/{filename}
     from src.core.storage import get_tenant_storage_abs_path
-    from src.saas.api.channel_routes import ATTACHMENTS_DIR
 
-    new_path = get_tenant_storage_abs_path(session_tenant_id, "conversation", filename)
-    old_path = _os.path.abspath(_os.path.join(ATTACHMENTS_DIR, session_id, filename))
+    local_path = get_tenant_storage_abs_path(session_tenant_id, "conversation", filename)
 
-    if _os.path.exists(new_path):
-        local_path = new_path
-    elif _os.path.exists(old_path):
-        local_path = old_path
-    else:
+    if not _os.path.exists(local_path):
         raise HTTPException(status_code=404, detail="附件文件不存在")
 
     # 推断 MIME 类型

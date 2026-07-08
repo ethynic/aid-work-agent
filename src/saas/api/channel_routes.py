@@ -49,15 +49,6 @@ router = APIRouter(tags=["租户渠道回调"])
 # 每个租户有独立的消息去重器
 _tenant_dedup_cache: dict[str, MessageDeduplicator] = {}
 
-# 旧版附件保存目录（保留用于向后兼容，新文件统一存到 storage/tenants/）
-ATTACHMENTS_DIR = os.path.join("data", "attachments")
-try:
-    os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
-except PermissionError:
-    # 容器内 /app 目录由 root 拥有，appuser 无权新建顶层子目录。
-    # 旧版兜底路径仅在 tenant_id 缺失时使用，正常 SaaS 走 storage/tenants/，故忽略。
-    logger.warning(f"无权创建旧版附件目录 {ATTACHMENTS_DIR}，旧版兼容兜底不可用")
-
 
 def _get_tenant_dedup(tenant_id: str) -> MessageDeduplicator:
     """获取或创建租户级别的消息去重器"""
@@ -170,16 +161,15 @@ def _get_file_extension(msgtype: str, filename: str = "") -> str:
 
 
 async def _download_and_build_attachments(
-    api_client, msg: dict, session_id: str, tenant_id: str = ""
+    api_client, msg: dict, session_id: str, tenant_id: str
 ) -> list:
     """
     下载微信媒体文件并构建附件列表。
 
-    新版（按 `backend_dev.md` 租户附件存储规范）保存到：
+    按 `backend_dev.md` 租户附件存储规范保存到：
         `storage/tenants/{tenant_id}/conversation/{filename}`
 
-    旧版仍写入 `data/attachments/{session_id}/`，但仅作为向后兼容兜底，新调用
-    不再产生旧路径文件。
+    `tenant_id` 为必填，缺失说明上游路由有 bug，直接 raise 让问题暴露。
 
     Returns:
         [{
@@ -268,22 +258,18 @@ async def _download_and_build_attachments(
     mime_type = _guess_mime_type(file_name)
     file_size = len(content)
 
-    # 保存到磁盘
-    # 新版路径：storage/tenants/{tenant_id}/conversation/{filename}
-    # 若 tenant_id 缺失则回退到旧版 data/attachments/{session_id}/，避免丢文件
+    # 保存到磁盘：storage/tenants/{tenant_id}/conversation/{filename}
+    # tenant_id 由路由 path 参数保证必填，缺失说明上游有 bug，直接报错暴露
+    if not tenant_id:
+        raise RuntimeError(
+            f"[_download_and_build_attachments] tenant_id 缺失，session_id={session_id}；"
+            f"租户渠道回调必须携带 tenant_id，请检查路由配置"
+        )
+
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_filename = f"{timestamp}_{media_id}{file_ext}"
-
-    if tenant_id:
-        tenant_dir = ensure_tenant_storage_dir(tenant_id, "conversation")
-        local_path = os.path.join(tenant_dir, safe_filename)
-    else:
-        session_dir = os.path.join(ATTACHMENTS_DIR, session_id)
-        os.makedirs(session_dir, exist_ok=True)
-        local_path = os.path.join(session_dir, safe_filename)
-        logger.warning(
-            f"[_download_and_build_attachments] tenant_id 缺失，回退旧路径: {local_path}"
-        )
+    tenant_dir = ensure_tenant_storage_dir(tenant_id, "conversation")
+    local_path = os.path.join(tenant_dir, safe_filename)
 
     try:
         with open(local_path, "wb") as f:
