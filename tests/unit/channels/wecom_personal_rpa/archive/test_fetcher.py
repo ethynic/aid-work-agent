@@ -345,8 +345,8 @@ async def test_fetch_message_type_mapping(patched_lock, patched_process_msg, mon
 
 
 @pytest.mark.asyncio
-async def test_fetch_decrypt_failure_break(patched_lock, patched_process_msg, monkeypatch):
-    """单条解密失败 → break，已成功条目 seq 已推进，失败条目 seq 未推进。"""
+async def test_fetch_decrypt_failure_skips_and_advances(patched_lock, patched_process_msg, monkeypatch):
+    """单条解密失败 → 跳过该条并推进 seq（不卡死整个租户死循环重拉），已成功条目也已推进 seq。"""
     pem, private_key = _gen_rsa_pem()
     cfg = _make_cfg_record(_make_config_data(private_key=pem))
     monkeypatch.setattr(
@@ -390,10 +390,11 @@ async def test_fetch_decrypt_failure_break(patched_lock, patched_process_msg, mo
         fetcher_obj = ServerArchiveFetcher()
         await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
 
-    # 只处理了第 1 条
+    # 失败条目已跳过：_process_inbound_message 只被调用 1 次（成功的第 1 条）
     assert len(patched_process_msg.calls) == 1
+    # 失败条目的 seq 也推进了（避免坏消息卡死整个租户死循环重拉）
     assert ("last_seq", 5001) in seq_updates
-    assert ("last_seq", 5002) not in seq_updates  # 失败条目 seq 未推进
+    assert ("last_seq", 5002) in seq_updates  # 失败条目也推进 seq
 
 
 @pytest.mark.asyncio

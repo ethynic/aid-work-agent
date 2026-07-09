@@ -113,6 +113,51 @@ def test_decrypt_chat_msg_ok():
     assert decrypted == "你好，企微会话存档"
 
 
+def test_decrypt_chat_msg_missing_padding_tolerated():
+    """缺末尾 ``=`` padding 的 Base64 仍能解密（修复 agent2 seq=3 报错）。
+
+    背景：企微 SDK 偶尔返回的 encrypt_chat_msg 长度非 4 的倍数（缺末尾 ``=``），
+    Python ``base64.b64decode`` 严格模式直接拒绝。历史上 C# 端
+    ``Convert.FromBase64String`` 容忍度高，所以 C# 客户端能解而 Python 报
+    "Invalid base64-encoded string: number of data characters (N) cannot be 1 more
+    than a multiple of 4"。
+    """
+    random_key = secrets.token_bytes(32)
+    iv = secrets.token_bytes(16)
+    plain = "缺 padding 的 Base64 测试".encode("utf-8")
+    encrypted_b64 = _aes_cbc_encrypt(random_key, iv, plain)
+
+    # 制造长度非 4 倍数的字符串（剥掉所有 = padding）
+    stripped = encrypted_b64.rstrip("=")
+    # 剥掉后长度必然非 4 倍数（除非原本就齐整，此时跳过断言）
+    if len(stripped) % 4 == 0:
+        pytest.skip("随机生成的密文恰好 4 字节对齐，无法验证 padding 缺失路径")
+
+    decrypted = chat_crypto.decrypt_chat_msg(random_key, stripped)
+    assert decrypted == "缺 padding 的 Base64 测试"
+
+
+def test_decrypt_chat_msg_with_internal_whitespace_tolerated():
+    """带换行/空白的 Base64 仍能解密（SDK 输出可能含 CRLF）。"""
+    random_key = secrets.token_bytes(32)
+    iv = secrets.token_bytes(16)
+    plain = "带空白测试".encode("utf-8")
+    encrypted_b64 = _aes_cbc_encrypt(random_key, iv, plain)
+
+    # 在中间和首尾插入换行、空格
+    polluted = "\n " + encrypted_b64[:10] + "\r\n" + encrypted_b64[10:] + " \n"
+
+    decrypted = chat_crypto.decrypt_chat_msg(random_key, polluted)
+    assert decrypted == "带空白测试"
+
+
+def test_decrypt_chat_msg_illegal_chars_still_raises():
+    """含非法 Base64 字符（! @ 等）时仍抛 ValueError（密文真的损坏，不能静默吞）。"""
+    random_key = secrets.token_bytes(32)
+    with pytest.raises(ValueError, match="含非法 Base64 字符"):
+        chat_crypto.decrypt_chat_msg(random_key, "invalid!!!@#$")
+
+
 def test_decrypt_chat_msg_random_key_too_short_raises():
     with pytest.raises(ValueError, match="random_key 至少 32 字节"):
         chat_crypto.decrypt_chat_msg(b"short", base64.b64encode(b"xxxxxxxxxxxxxxx").decode())

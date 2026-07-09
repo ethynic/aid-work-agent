@@ -157,6 +157,7 @@ class ServerArchiveFetcher:
 
         # 逐条解密 + 处理 + 推进 seq
         processed_count = 0
+        failed_count = 0
         for item in batch.items:
             try:
                 plain_json = chat_crypto.decrypt_message(
@@ -175,8 +176,6 @@ class ServerArchiveFetcher:
                 )
 
                 # 成功一条立即推进 seq（避免重拉重复触发，与 C# 实现一致）
-                # 注意：update_config_field 签名是 (config_id, field_name, field_value)，
-                # 无 tenant_id 参数（config_id 已是全局唯一）
                 if item.seq > last_seq:
                     ChannelConfigDB.update_config_field(config_id, "last_seq", item.seq)
                     last_seq = item.seq
@@ -185,12 +184,23 @@ class ServerArchiveFetcher:
             except WeComRateLimitException:
                 raise  # 45009 由上层处理
             except Exception as ex:
-                # 单条解密/处理失败：不推进当前 seq，break（前序已成功条目已推进 seq）
+                # 单条解密/处理失败：推进 seq 跳过该条（避免坏消息卡死整个租户死循环重拉），
+                # 记录错误到 audit，继续处理后续条目。
+                # 历史行为是 break 不推进 seq，结果遇到一条坏消息（如 Base64 异常）就永远卡住。
+                failed_count += 1
                 logger.warning(
                     f"[ServerArchiveFetcher] 解密/处理失败 msgid={item.msg_id} seq={item.seq} "
-                    f"tenant={tenant_id}: {type(ex).__name__}: {ex}"
+                    f"tenant={tenant_id}: {type(ex).__name__}: {ex}（已跳过，继续下一条）"
                 )
-                break
+                archive_audit.log_fetch_error(
+                    tenant_id, config_id,
+                    type(ex).__name__,
+                    f"msgid={item.msg_id} seq={item.seq}: {ex}",
+                    stage="decrypt_message",
+                )
+                if item.seq > last_seq:
+                    ChannelConfigDB.update_config_field(config_id, "last_seq", item.seq)
+                    last_seq = item.seq
 
         # 更新最近拉取时间 + 清错误
         ChannelConfigDB.update_config_field(
@@ -199,7 +209,7 @@ class ServerArchiveFetcher:
         await self._clear_error(tenant_id, config_id)
         logger.info(
             f"[ServerArchiveFetcher] 拉取完成 tenant={tenant_id} batch={len(batch.items)} "
-            f"processed={processed_count} last_seq={last_seq}"
+            f"processed={processed_count} failed={failed_count} last_seq={last_seq}"
         )
         # audit：拉取成功（source 由调用栈推断：callback_handler 调用 vs poller 调用）
         # 简化做法：根据调用上下文不区分，统一记 fetch_success，统计意义已足够
