@@ -25,10 +25,13 @@
 """
 
 import asyncio
+import os
+import platform
 from typing import List, Optional
 
 from loguru import logger
 
+from src.channels.wecom_personal_rpa import secret_crypto
 from src.channels.wecom_personal_rpa.archive.fetcher import ServerArchiveFetcher, fetcher as _default_fetcher
 from src.saas.db.channel_config_db import ChannelConfigDB
 
@@ -42,6 +45,44 @@ _SHUTDOWN_TIMEOUT_SECONDS = 10
 _SCAN_TIMEOUT_SECONDS = 30
 
 _CHANNEL_TYPE = "wecom_personal_rpa"
+
+_DISABLE_POLLER_ENV = "WECOM_RPA_ARCHIVE_POLLER_DISABLED"
+_FORCE_POLLER_ENV = "WECOM_RPA_ARCHIVE_POLLER_FORCE"
+
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _has_rpa_master_key() -> bool:
+    try:
+        secret_crypto._load_master_key()
+        return True
+    except RuntimeError:
+        return False
+
+
+def should_start_archive_poller() -> tuple[bool, str]:
+    """判断当前进程是否应启动服务端存档 poller。
+
+    企微会话存档 C SDK 目前随项目携带的是 Linux .so。Windows 本地后端如果连到
+    生产/测试库，会每分钟轮询并把 SDKLoadError 写入租户配置，污染线上状态。
+    同时，缺少 RPA 主密钥的进程无法解密配置中的 archive 凭证，也不能启动 poller。
+    """
+    if _env_truthy(_DISABLE_POLLER_ENV):
+        return False, f"{_DISABLE_POLLER_ENV}=true"
+
+    if not _has_rpa_master_key():
+        return False, "RPA master key unavailable"
+
+    if _env_truthy(_FORCE_POLLER_ENV):
+        return True, f"{_FORCE_POLLER_ENV}=true"
+
+    system = platform.system()
+    if system != "Linux":
+        return False, f"platform={system or 'unknown'}"
+
+    return True, "platform=Linux"
 
 
 class ServerArchivePoller:
@@ -65,6 +106,11 @@ class ServerArchivePoller:
 
     async def start(self) -> None:
         """启动兜底轮询（不阻塞，后台 asyncio.Task）。"""
+        allowed, reason = should_start_archive_poller()
+        if not allowed:
+            logger.info(f"[ServerArchivePoller] 跳过启动：{reason}")
+            return
+
         if self._loop_task is not None and not self._loop_task.done():
             logger.warning("[ServerArchivePoller] 已在运行，忽略重复 start")
             return

@@ -18,7 +18,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.channels.wecom_personal_rpa.archive import poller as poller_module
-from src.channels.wecom_personal_rpa.archive.poller import ServerArchivePoller
+from src.channels.wecom_personal_rpa.archive.poller import (
+    ServerArchivePoller,
+    should_start_archive_poller,
+)
 
 
 def _make_cfg(tenant_id: str, config_id: str, listen_mode: str = "server") -> dict:
@@ -34,9 +37,36 @@ def _make_cfg(tenant_id: str, config_id: str, listen_mode: str = "server") -> di
 # ----------------- 启动 / 停止 -----------------
 
 
+def test_should_start_skips_when_master_key_missing(monkeypatch):
+    """缺少 RPA 主密钥时不启动 poller，避免把解密失败写成租户运行错误。"""
+    monkeypatch.delenv("WECOM_RPA_ARCHIVE_POLLER_DISABLED", raising=False)
+    monkeypatch.delenv("WECOM_RPA_ARCHIVE_POLLER_FORCE", raising=False)
+    monkeypatch.setattr(poller_module, "_has_rpa_master_key", lambda: False)
+    monkeypatch.setattr(poller_module.platform, "system", lambda: "Linux")
+
+    allowed, reason = should_start_archive_poller()
+
+    assert allowed is False
+    assert reason == "RPA master key unavailable"
+
+
+def test_should_start_force_bypasses_platform_when_key_exists(monkeypatch):
+    """FORCE 只绕过平台限制；主密钥可用时才允许本地强制启动。"""
+    monkeypatch.delenv("WECOM_RPA_ARCHIVE_POLLER_DISABLED", raising=False)
+    monkeypatch.setenv("WECOM_RPA_ARCHIVE_POLLER_FORCE", "1")
+    monkeypatch.setattr(poller_module, "_has_rpa_master_key", lambda: True)
+    monkeypatch.setattr(poller_module.platform, "system", lambda: "Windows")
+
+    allowed, reason = should_start_archive_poller()
+
+    assert allowed is True
+    assert reason == "WECOM_RPA_ARCHIVE_POLLER_FORCE=true"
+
+
 @pytest.mark.asyncio
 async def test_start_stop_basic(monkeypatch):
     """启动后 is_running=True，stop 后 is_running=False。"""
+    monkeypatch.setattr(poller_module, "should_start_archive_poller", lambda: (True, "test"))
     monkeypatch.setattr(poller_module.ChannelConfigDB, "list_by_channel_type", lambda *a, **kw: [])
     poller = ServerArchivePoller(poll_interval_seconds=5)
     assert not poller.is_running
@@ -51,6 +81,7 @@ async def test_start_stop_basic(monkeypatch):
 @pytest.mark.asyncio
 async def test_start_idempotent(monkeypatch):
     """重复 start 不重复启动。"""
+    monkeypatch.setattr(poller_module, "should_start_archive_poller", lambda: (True, "test"))
     monkeypatch.setattr(poller_module.ChannelConfigDB, "list_by_channel_type", lambda *a, **kw: [])
     poller = ServerArchivePoller(poll_interval_seconds=5)
 
@@ -63,6 +94,24 @@ async def test_start_idempotent(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_start_skips_when_platform_is_not_supported(monkeypatch):
+    """本地不支持 C SDK 的平台不启动 poller，避免污染共享 DB 的运行时状态。"""
+    monkeypatch.setattr(
+        poller_module,
+        "should_start_archive_poller",
+        lambda: (False, "platform=Windows"),
+    )
+    scan_mock = AsyncMock()
+    poller = ServerArchivePoller(poll_interval_seconds=5)
+    poller._scan_once = scan_mock
+
+    await poller.start()
+
+    assert not poller.is_running
+    scan_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_start_initial_scan_called(monkeypatch):
     """启动时立即触发一次扫描（initial）。"""
     scan_calls = []
@@ -70,6 +119,7 @@ async def test_start_initial_scan_called(monkeypatch):
     async def _mock_scan(reason="periodic"):
         scan_calls.append(reason)
 
+    monkeypatch.setattr(poller_module, "should_start_archive_poller", lambda: (True, "test"))
     monkeypatch.setattr(poller_module.ChannelConfigDB, "list_by_channel_type", lambda *a, **kw: [])
     poller = ServerArchivePoller(poll_interval_seconds=5)
     poller._scan_once = _mock_scan
@@ -204,6 +254,7 @@ async def test_periodic_scan_loop(monkeypatch):
         nonlocal scan_count
         scan_count += 1
 
+    monkeypatch.setattr(poller_module, "should_start_archive_poller", lambda: (True, "test"))
     monkeypatch.setattr(poller_module.ChannelConfigDB, "list_by_channel_type", lambda *a, **kw: [])
     poller = ServerArchivePoller(poll_interval_seconds=5)
     poller._scan_once = _mock_scan

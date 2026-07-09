@@ -92,6 +92,37 @@ agent2 部署 SDK 超时修复后，真实消息链路已能走到 `GetChatData 
 
 ---
 
+## 2026-07-09 三次真机问题收口：本地 poller 污染与 pending 绑定
+
+### 问题
+
+agent2 部署明文字段映射修复后，用户新发两条消息均成功拉取并处理：
+
+- seq=6：`GetChatData batch=1`，`processed=1 failed=0 last_seq=6`。
+- seq=7：`GetChatData batch=1`，`processed=1 failed=0 last_seq=7`。
+
+消息未进入 `channel_messages` 的原因不是解密失败，而是既有会话授权策略：首次发现的外部联系人绑定为 `pending`，`_process_inbound_message` 按 `reason=pending` 跳过 agent 和入库。生产库新绑定为 `rpa_bind_5dc6a957eedd4bbb`，`account_id=travel-consultant`，`status=pending`。
+
+同时发现本机 Windows 残留后端进程会污染运行时状态：该进程每分钟启动 archive poller，但 Windows 无法加载 Linux `.so`，持续写入 `SDKLoadError` 审计并污染 `last_error_*`。另外，缺少 `RPA_SECRET_KEY` 的错配进程即使在 Linux 上也无法解密 archive 凭证，也不能启动 poller。
+
+### 修复任务
+
+- [x] 停止本机旧后端进程，确认 8000/8601 不再监听。
+- [x] 清理 `chan_616337ad19f6` 的 `last_error_at/last_error_msg` 污染状态。
+- [x] `poller.py`：新增启动保护，默认仅 Linux 启动 archive poller。
+- [x] `poller.py`：缺少 RPA 主密钥时不启动 archive poller，避免错配进程污染租户运行状态。
+- [x] `poller.py`：增加 `WECOM_RPA_ARCHIVE_POLLER_FORCE=1` 强制启动开关（仅绕过平台限制，不绕过主密钥检查）。
+- [x] `poller.py`：增加 `WECOM_RPA_ARCHIVE_POLLER_DISABLED=1` 任意平台禁用开关。
+- [x] 删除临时 handoff 文档，并清理 `docs/ideas.md` 中的索引链接。
+- [ ] 将测试会话绑定确认为 `active` 后，重新发消息验证 agent 入库链路。
+
+### 验证
+
+- [x] `python -m pytest tests/unit/channels/wecom_personal_rpa/archive/test_poller.py -p no:cacheprovider -q`：`12 passed`
+- [x] `python -m pytest tests/unit/channels/wecom_personal_rpa/archive/test_fetcher.py -p no:cacheprovider -q`：`14 passed`
+
+---
+
 ## Phase 1：listen_mode 字段 + 凭证加密 codec + 单例约束
 
 ### 目标

@@ -580,6 +580,7 @@ class ServerArchivePoller:
 
 - 每个租户的 `fetch_once` 由 Redis 锁兜底，即使被多次触发也不会并发拉取。
 - 启动时立即扫一次（补偿服务停机期间的消息）。
+- archive poller 默认仅在 Linux 且 RPA 主密钥可用的进程启动；Windows/Mac 本地后端跳过，缺少 `RPA_SECRET_KEY` / `settings.app.secret_key` 的错配进程也跳过，避免连接共享数据库后写入错误状态。需要例外时可用 `WECOM_RPA_ARCHIVE_POLLER_FORCE=1` 强制绕过平台限制，或用 `WECOM_RPA_ARCHIVE_POLLER_DISABLED=1` 在任意平台禁用。
 
 ### 5.5 复用入口：`_process_inbound_message`
 
@@ -636,6 +637,8 @@ envelope = RpaCallbackEnvelope(
 archive_poller = ServerArchivePoller()
 await archive_poller.start()
 ```
+
+`ServerArchivePoller.start()` 内部会做平台与密钥保护：默认只在 Linux 容器/服务器且 RPA 主密钥可用时启动兜底轮询；本地 Windows 开发进程或缺少 `RPA_SECRET_KEY` 的错配进程不会启动 archive poller，也不会改写 `tenant_channel_configs.config.last_error_*`。
 
 回调路径是 FastAPI 路由，随应用启动自动生效。
 
