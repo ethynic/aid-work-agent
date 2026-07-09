@@ -318,8 +318,8 @@ class ServerArchiveFetcher:
 
         Args:
             account_id: 推断的企微账号 ID。
-            item: 企微密文条目（含 seq / msgid / action / from / msgtype / msgtime / roomid / tolist）。
-            plain_json: 解密后的明文 JSON（含 text.content / image.sdkfileid 等）。
+            item: 企微密文条目（稳定含 seq / msgid / encrypt_*；部分环境不含 msgtype/from 等明文字段）。
+            plain_json: 解密后的明文 JSON（含 msgtype/from/tolist/msgtime/text.content/image.sdkfileid 等）。
 
         Returns:
             (env: RpaCallbackEnvelope, env_raw: dict)
@@ -332,41 +332,67 @@ class ServerArchiveFetcher:
         except Exception:
             plain = {}
 
-        # 提取文本内容（text 类型的 content 字段；其他类型可能空）
-        text_content = ""
-        msg_type = item.msg_type
-        if msg_type == "text":
-            text_content = (plain.get("text") or {}).get("content") or plain.get("text") or ""
+        plain_msg_type = str(plain.get("msgtype") or "")
+        msg_type = item.msg_type or plain_msg_type
+        if not msg_type and plain.get("text") is not None:
+            msg_type = "text"
+
+        text_payload = plain.get("text")
+        if isinstance(text_payload, dict):
+            text_content = text_payload.get("content") or ""
+        elif isinstance(text_payload, str):
+            text_content = text_payload
+        elif text_payload is None:
+            text_content = ""
         else:
-            text_content = plain.get("text") or ""
+            text_content = str(text_payload)
+
+        from_user = item.from_ or str(plain.get("from") or "")
+        plain_tolist = plain.get("tolist") or []
+        if isinstance(plain_tolist, list):
+            tolist = [str(value) for value in plain_tolist if value]
+        elif plain_tolist:
+            tolist = [str(plain_tolist)]
+        else:
+            tolist = []
+        tolist = item.tolist or tolist
+        roomid = item.roomid or plain.get("roomid") or None
 
         # 提取媒体字段（image/file/voice/video）
         media_sdk_file_id = ""
         media_file_name: Optional[str] = None
         if msg_type in ("image", "file", "voice", "video"):
             payload_section = plain.get(msg_type) or {}
-            media_sdk_file_id = payload_section.get("sdkfileid") or ""
-            media_file_name = payload_section.get("filename")
+            if isinstance(payload_section, dict):
+                media_sdk_file_id = payload_section.get("sdkfileid") or ""
+                media_file_name = payload_section.get("filename")
 
         # 构造 conversation_id / conversation_type（与 C# InferConversation 一致）
-        if item.roomid:
-            conversation_id = item.roomid
+        if roomid:
+            conversation_id = str(roomid)
             conversation_type = "external_group"
         else:
-            peer = item.tolist[0] if item.tolist else item.from_ or "unknown"
-            conversation_id = f"{item.from_}_{peer}"
+            peer = tolist[0] if tolist else "unknown"
+            conversation_id = f"{from_user}_{peer}" if from_user else peer
             conversation_type = "external_user"
 
         # event_id 复用 archive msgid（与 C# BuildEventId 一致，前缀 msg_）
-        raw_msgid = item.msg_id or secrets.token_hex(16)
+        raw_msgid = item.msg_id or str(plain.get("msgid") or "") or secrets.token_hex(16)
         event_id = f"msg_{raw_msgid}"
 
         # message_type 映射（与 C# MapMessageType 一致：未知归一为 link）
         message_type = self._map_message_type(msg_type)
 
-        # occurred_at：用 msg_time（秒级 Unix 时间戳）
+        msg_time_raw = item.msg_time or plain.get("msgtime") or 0
         try:
-            occurred_at = datetime.fromtimestamp(item.msg_time or 0, tz=timezone.utc)
+            msg_time = int(msg_time_raw or 0)
+        except (TypeError, ValueError):
+            msg_time = 0
+
+        # occurred_at：企微明文 msgtime 通常是毫秒级；兼容历史测试里的秒级值
+        try:
+            timestamp_seconds = msg_time / 1000 if msg_time > 10_000_000_000 else msg_time
+            occurred_at = datetime.fromtimestamp(timestamp_seconds or 0, tz=timezone.utc)
         except (ValueError, OSError, OverflowError):
             occurred_at = datetime.now(timezone.utc)
 
@@ -391,8 +417,8 @@ class ServerArchiveFetcher:
             "payload": {
                 "conversation_id": conversation_id,
                 "conversation_type": conversation_type,
-                "sender_display_name": item.from_,  # 首版 display_name = stable_id
-                "sender_stable_id": item.from_,
+                "sender_display_name": from_user or conversation_id,  # 首版 display_name = stable_id
+                "sender_stable_id": from_user or conversation_id,
                 "message_type": message_type,
                 "text": text_content,
                 "attachments": attachments,

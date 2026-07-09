@@ -1,7 +1,7 @@
 # wecom_personal_rpa 服务端拉取会话存档 — 问题交接文档
 
 > **创建时间**：2026-07-09
-> **当前状态**：✅ 本地代码已修复 SDK 解密挂起拖死 fetcher；待 agent2 部署后验证消息入库与 6.2 漏抓率。
+> **当前状态**：✅ 本地代码已修复 SDK 解密挂起拖死 fetcher，以及 DecryptData 明文字段映射错误；待 agent2 重新部署后验证消息入库与 6.2 漏抓率。
 > **接手指引**：本文前半部分保留原问题交接背景；最新处理结论见下方「0.6 Codex 接手修复记录」。
 
 ---
@@ -117,6 +117,36 @@ for r in cur.fetchall(): print(r)
 - 观察 `ServerArchiveFetcher` 新增关键日志是否出现。
 - 验证 `tenant_9eb3e45cab83` 的 `channel_messages` 是否开始入库。
 - 完成 6.2 漏抓率测试。
+
+### 0.7 agent2 首次部署验证后的二次修复（2026-07-09）
+
+首次部署 commit `2037ab1` 后，真机日志确认 SDK 卡死问题已解除：
+
+- `ArchiveCallback` 能收到企微 POST 事件。
+- `GetChatData` 能正常返回，用户新发消息时出现 `batch=1`。
+- SDK 子进程池加载 `.so` 正常，没有再卡死在 `DecryptData`。
+
+但同一条真实消息在 `_build_envelope` 阶段失败：
+
+- 日志显示 `处理消息 ... seq=5 ... type=`，即 `GetChatData` 外层密文条目的 `msgtype/from/tolist/msgtime` 为空。
+- 失败异常为 `KeyError: "'content'"`。
+- 对照企微官方「获取会话内容」文档（`https://developer.work.weixin.qq.com/document/path/91774`），`DecryptData` 明文 JSON 才包含通用字段：`msgid/action/from/tolist/roomid/msgtime/msgtype`；文本消息正文位于 `text.content`，`msgtime` 是 UTC 毫秒。
+
+本地已修复：
+
+1. `fetcher._build_envelope` 改为从 `DecryptData` 明文 JSON 读取 `msgtype/from/tolist/roomid/msgtime/text.content`，`GetChatData` 外层字段仅作兼容 fallback。
+2. `msgtime` 兼容官方毫秒时间戳，同时保留历史秒级测试兼容。
+3. 新增单测覆盖“外层 metadata 为空、明文中有完整字段”的真实企微形态。
+
+本地验证：
+
+- `python -m pytest tests/unit/channels/wecom_personal_rpa/archive/test_fetcher.py -p no:cacheprovider -q`：`14 passed`
+- `python -m pytest tests/unit/channels/wecom_personal_rpa/archive -p no:cacheprovider -q`：`141 passed, 7 skipped`
+
+待重新部署验证：
+
+- 部署本次明文字段映射修复。
+- 新发一条文本消息，确认日志出现 `batch=1`、`processed=1 failed=0`，并确认 `channel_messages` 新增记录。
 
 ---
 

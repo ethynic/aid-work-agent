@@ -54,6 +54,8 @@
 > 2026-07-09 补充：企业微信个人账号 RPA 服务端会话存档的 SDK 解密挂起问题已在本地修复。
 > `wecom_finance_sdk` 改为子进程级 `apply_async().get(timeout)`，`DecryptData` 超时后会重建 SDK 进程池；
 > fetcher 使用 8s SDK 超时 + 10s 单条兜底，坏消息跳过并推进 seq。待 agent2 部署后验证消息入库与 6.2 漏抓率。
+> 2026-07-09 二次补充：agent2 首次部署已验证回调与 `GetChatData batch=1` 正常；新增修复 `DecryptData`
+> 明文 JSON 字段映射（`msgtype/from/tolist/roomid/msgtime/text.content`），待重新部署后验证入库。
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|

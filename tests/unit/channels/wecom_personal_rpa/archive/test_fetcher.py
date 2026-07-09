@@ -274,6 +274,76 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
 
 
 @pytest.mark.asyncio
+async def test_fetch_uses_decrypted_plain_fields_when_outer_item_lacks_metadata(
+    patched_lock, patched_process_msg, monkeypatch
+):
+    """真实企微 GetChatData 外层可能没有 msgtype/from/tolist/msgtime，必须从 DecryptData 明文取。"""
+    pem, private_key = _gen_rsa_pem()
+    cfg = _make_cfg_record(_make_config_data(private_key=pem))
+    monkeypatch.setattr(
+        fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
+    )
+    monkeypatch.setattr(
+        fetcher_module.chat_crypto,
+        "decrypt_random_key",
+        lambda priv_key, enc_key: b"fake_random_key_bytes_pad_to_32!!",
+    )
+    plain_json = json.dumps(
+        {
+            "msgid": "plain_msg_001",
+            "action": "send",
+            "from": "wm_sender",
+            "tolist": ["wm_peer"],
+            "roomid": "",
+            "msgtime": 1700000000123,
+            "msgtype": "text",
+            "text": {"content": "服务端明文消息"},
+        }
+    )
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk,
+        "decrypt_data_raw",
+        lambda encrypt_key, encrypt_msg, timeout_seconds=8: plain_json,
+    )
+
+    item = http_client.ChatDataItem(
+        seq=1002,
+        msg_id="outer_msg_001",
+        action="",
+        from_="",
+        tolist=[],
+        roomid=None,
+        msg_time=0,
+        msg_type="",
+        encrypt_random_key="placeholder",
+        encrypt_chat_msg="placeholder",
+    )
+    monkeypatch.setattr(
+        fetcher_module.ChannelConfigDB, "update_config_field", lambda *a, **kw: True
+    )
+
+    with patch.object(
+        fetcher_module.http_client,
+        "get_chat_data",
+        new=AsyncMock(return_value=http_client.ChatDataBatch(items=[item])),
+    ):
+        fetcher_obj = ServerArchiveFetcher()
+        await fetcher_obj.fetch_once("tenant_test", "chan_test_001")
+
+    assert len(patched_process_msg.calls) == 1
+    env = patched_process_msg.calls[0]["env"]
+    payload = env.payload
+    assert env.event_id == "msg_outer_msg_001"
+    assert payload["conversation_id"] == "wm_sender_wm_peer"
+    assert payload["conversation_type"] == "external_user"
+    assert payload["sender_display_name"] == "wm_sender"
+    assert payload["sender_stable_id"] == "wm_sender"
+    assert payload["message_type"] == "text"
+    assert payload["text"] == "服务端明文消息"
+    assert env.occurred_at.timestamp() == pytest.approx(1700000000.123)
+
+
+@pytest.mark.asyncio
 async def test_fetch_room_message(patched_lock, patched_process_msg, monkeypatch):
     """群消息：conversation_id=roomid，conversation_type=external_group。"""
     pem, private_key = _gen_rsa_pem()

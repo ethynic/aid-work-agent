@@ -71,6 +71,27 @@ agent2 部署 commit `f1b765c` 后，poller 每分钟触发，但 fetcher 没有
 
 ---
 
+## 2026-07-09 二次真机问题收口：DecryptData 明文字段映射
+
+### 问题
+
+agent2 部署 SDK 超时修复后，真实消息链路已能走到 `GetChatData batch=1`，但处理该条消息失败：`ChatDataItem.msg_type` 为空，随后 `_build_envelope` 读错字段导致 `KeyError: "'content'"`。对照企微官方「获取会话内容」文档，`GetChatData` 外层密文条目稳定提供 `seq/msgid/publickey_ver/encrypt_random_key/encrypt_chat_msg`；`from/tolist/roomid/msgtime/msgtype/text.content` 属于 `DecryptData` 后的明文 JSON。
+
+### 修复任务
+
+- [x] `fetcher.py`：`_build_envelope` 从 `DecryptData` 明文 JSON 读取 `msgtype/from/tolist/roomid/msgtime/text.content`，外层条目仅作为兼容 fallback。
+- [x] `fetcher.py`：`msgtime` 兼容官方 UTC 毫秒时间戳，同时保留秒级历史测试兼容。
+- [x] 单元测试：覆盖真实企微形态（外层 metadata 为空、明文里有完整消息字段）。
+- [ ] agent2 重新部署后验证文本消息成功入库。
+
+### 验证
+
+- [x] `python -m pytest tests/unit/channels/wecom_personal_rpa/archive/test_fetcher.py -p no:cacheprovider -q`：`14 passed`
+- [x] `python -m pytest tests/unit/channels/wecom_personal_rpa/archive -p no:cacheprovider -q`：`141 passed, 7 skipped`
+- [x] `python -m py_compile src/channels/wecom_personal_rpa/archive/fetcher.py tests/unit/channels/wecom_personal_rpa/archive/test_fetcher.py`
+
+---
+
 ## Phase 1：listen_mode 字段 + 凭证加密 codec + 单例约束
 
 ### 目标
