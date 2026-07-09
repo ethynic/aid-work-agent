@@ -516,8 +516,8 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   dingtalk: [
     { key: 'app_key', label: 'App Key', placeholder: '', location: '「基础信息」页面' },
     { key: 'app_secret', label: 'App Secret', placeholder: '', location: '「基础信息」页面' },
-    { key: 'token', label: '回调 Token', placeholder: '', hint: '设置回调时自行设定', location: '「事件与回调」' },
-    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」', location: '「事件与回调」' },
+    // 钉钉回调签名只用 AppSecret 做 HmacSHA256(timestamp, AppSecret)，无消息体加密，
+    // 不需要 Token / EncodingAESKey（与企微/飞书不同）。后端 adapter 也忽略这两个字段。
   ],
   feishu: [
     { key: 'app_id', label: 'App ID', placeholder: 'cli_...', location: '「凭证与基础信息」页面' },
@@ -574,7 +574,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '启用「机器人」能力',
       '在「事件与回调」中添加 im.message.receive_v1 事件',
       '将下方回调地址填入 HTTP 回调配置',
-      '记录 AppKey、AppSecret、Token、EncodingAESKey',
+      '记录 AppKey、AppSecret（钉钉回调签名只用 AppSecret，不需要 Token / EncodingAESKey）',
     ],
     docUrl: 'https://open.dingtalk.com/',
   },
@@ -633,7 +633,7 @@ const fullGuideMap: Record<string, { steps: { title: string; desc: string; locat
       { title: '创建钉钉应用', desc: '登录钉钉开放平台，进入「开发者后台」→ 创建「企业内部开发」应用。', location: '开发者后台 → 创建应用' },
       { title: '启用机器人能力', desc: '在应用详情页点击「添加应用能力」→ 启用「机器人」。', location: '应用详情 → 添加应用能力' },
       { title: '获取应用凭证', desc: '在「基础信息」页面记录 AppKey 和 AppSecret。', location: '基础信息页面' },
-      { title: '配置消息回调', desc: '在「事件与回调」中配置回调 URL，生成 Token 和 EncodingAESKey。添加 im.message.receive_v1 事件。', location: '事件与回调' },
+      { title: '配置消息回调', desc: '在「事件与回调」中配置回调 URL，添加 im.message.receive_v1 事件。钉钉回调签名只用 AppSecret 做 HmacSHA256，不需要 Token / EncodingAESKey。', location: '事件与回调' },
       { title: '保存并验证', desc: '先在本页面保存凭证配置，再到钉钉后台完成回调验证。' },
     ],
     faq: [

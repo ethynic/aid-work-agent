@@ -1,18 +1,6 @@
 # 钉钉接入实操手册
 
 > 本文档面向**实际接入钉钉渠道**的运维/开发同学，按步骤操作即可完成接入。
-> 技术原理、签名算法等参考 [integration_guide.md](./integration_guide.md)。
-> 设计与代码分工参考 [implementation_plan.md](./implementation_plan.md)。
-
-## 目录
-
-1. [前置准备](#1-前置准备)
-2. [钉钉开放平台：创建企业内部应用](#2-钉钉开放平台创建企业内部应用)
-3. [系统侧：在管理后台配置渠道](#3-系统侧在管理后台配置渠道)
-4. [回填回调地址并发布](#4-回填回调地址并发布)
-5. [联调验证](#5-联调验证)
-6. [常见问题排查](#6-常见问题排查)
-7. [附录：快速校验清单](#附录快速校验清单)
 
 ---
 
@@ -39,26 +27,8 @@
 
 完整回调 URL 示例：
 ```
-https://your-domain.com/t/tenant_demo_001/dingtalk/callback/chan_xxx
+https://agent2.aidingyi.cn/t/tenant_b6459319f621/dingtalk/callback/chan_719d16d6ac84
 ```
-
-### 1.3 内网穿透（仅用于本地联调）
-
-本地开发可使用 ngrok / frp / cpolar 等工具：
-
-```bash
-# 示例：ngrok
-ngrok http 8000
-
-# 输出形如：
-# Forwarding  https://abc123.ngrok-free.app -> http://localhost:8000
-```
-
-回调 URL 即：`https://abc123.ngrok-free.app/t/{tenant_id}/dingtalk/callback/{config_id}`
-
-> 内网穿透仅用于联调，正式环境必须使用稳定域名。
-
----
 
 ## 2. 钉钉开放平台：创建企业内部应用
 
@@ -74,10 +44,8 @@ ngrok http 8000
 
 1. 登录 [钉钉开放平台](https://open-dev.dingtalk.com/)
 2. 进入「应用开发」→「企业内部应用」→「创建应用」
-3. 记录 `AppKey` 和 `AppSecret`（对应飞书的 App ID / App Secret）
-3de9607d-a13c-456d-accd-396dbf6a76bd
-dinghapiilfe06jzv9qb
-VTeM4g1bNR1Qz6tjMwR9HbZ0jvziZ8CvQfel7QukM-ioRf2QkEEMmpoJkMHYbKW1
+3. 记录 `AppKey` 和 `AppSecret`
+
 
 ### 2.3 启用「机器人」能力
 
@@ -91,7 +59,6 @@ VTeM4g1bNR1Qz6tjMwR9HbZ0jvziZ8CvQfel7QukM-ioRf2QkEEMmpoJkMHYbKW1
 6. **消息接收地址**：先**留空**或填占位 URL（稍后回填）
 7. 保存
 
-完成后页面会显示一个 **RobotCode**，通常等于 AppKey。本系统会自动使用 AppKey 作为 RobotCode，**无需手动记录**。
 
 ### 2.4 配置应用权限
 
@@ -131,8 +98,6 @@ https://your-domain.com/t/{tenant_id}/saas/channels
 | 渠道名称 | 自定义（如 `公司钉钉`） | 仅作展示 |
 | App Key | 步骤 2.2 记录的 AppKey | |
 | App Secret | 步骤 2.2 记录的 AppSecret | |
-| 回调 Token | 留空 | 钉钉机器人回调用 HmacSHA256(timestamp, AppSecret)，**不需要 Token** |
-| EncodingAESKey | 留空 | 钉钉无消息体加密 |
 | 关联数字员工 | 业务选 | 可选 |
 | 欢迎消息 | 自定义 | 可选 |
 
