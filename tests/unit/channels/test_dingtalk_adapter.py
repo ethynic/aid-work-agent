@@ -27,6 +27,7 @@ from src.models.message import ChannelType, MessageType, UnifiedResponse
 def _text_message(
     text: str = "hello",
     sender_id: str = "user_001",
+    sender_staff_id: str = "staff_001",
     sender_nick: str = "测试用户",
     conversation_type: str = "1",
     conversation_id: str = "cid_test",
@@ -41,6 +42,7 @@ def _text_message(
         "conversationType": conversation_type,
         "conversationId": conversation_id,
         "senderId": sender_id,
+        "senderStaffId": sender_staff_id,
         "senderNick": sender_nick,
     }
 
@@ -48,6 +50,7 @@ def _text_message(
 def _picture_message(
     download_code: str = "dl_code_123",
     sender_id: str = "user_001",
+    sender_staff_id: str = "staff_001",
 ) -> dict:
     """构造钉钉图片消息"""
     return {
@@ -58,6 +61,7 @@ def _picture_message(
         "conversationType": "1",
         "conversationId": "cid_test",
         "senderId": sender_id,
+        "senderStaffId": sender_staff_id,
         "senderNick": "用户",
     }
 
@@ -75,6 +79,7 @@ def _file_message(
         "conversationType": "1",
         "conversationId": "cid_test",
         "senderId": "user_001",
+        "senderStaffId": "staff_001",
         "senderNick": "用户",
     }
 
@@ -135,7 +140,7 @@ class TestDingTalkAdapterParseMessage:
         assert msg is not None
         assert msg.message_id == "msg_test_001"
         assert msg.channel_type == ChannelType.DINGTALK
-        assert msg.user_id == "user_001"
+        assert msg.user_id == "staff_001"
         assert msg.user_name == "测试用户"
         assert msg.message_type == MessageType.TEXT
         assert msg.content["text"] == "你好"
@@ -148,6 +153,27 @@ class TestDingTalkAdapterParseMessage:
         raw = _text_message(text="  hello  ")
         msg = await adapter.parse_message(raw)
         assert msg.content["text"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_parse_text_message_prefers_sender_staff_id(self, adapter):
+        """user_id 优先取 senderStaffId（oToMessages 接口要求 staffId）"""
+        raw = _text_message(
+            text="你好",
+            sender_id="$:LWCP_v1:$lwcp_session_id",
+            sender_staff_id="manager81",
+        )
+        msg = await adapter.parse_message(raw)
+        assert msg.user_id == "manager81"
+        # 原始 senderId 仍保留在 raw_message 中以便排查
+        assert msg.raw_message["senderId"] == "$:LWCP_v1:$lwcp_session_id"
+
+    @pytest.mark.asyncio
+    async def test_parse_text_message_falls_back_to_sender_id(self, adapter):
+        """senderStaffId 缺失时回退 senderId（向后兼容）"""
+        raw = _text_message(sender_id="legacy_user_id", sender_staff_id="")
+        raw.pop("senderStaffId")
+        msg = await adapter.parse_message(raw)
+        assert msg.user_id == "legacy_user_id"
 
     @pytest.mark.asyncio
     async def test_parse_picture_message(self, adapter):

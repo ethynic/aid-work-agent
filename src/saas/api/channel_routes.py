@@ -706,13 +706,6 @@ async def tenant_dingtalk_callback_post(
             logger.warning(f"[Tenant DingTalk] body JSON 解析失败: tenant={tenant_id}, error={e}")
             return JSONResponse({"success": False, "msg": "invalid json"}, status_code=400)
 
-        # 临时调试：抓钉钉回调完整 JSON，定位单聊 reply_target 字段
-        try:
-            from src.core.temp_logger import tlog
-            tlog("钉钉回调JSON", "tenant={t} body={b}", t=tenant_id, b=body_str)
-        except Exception:
-            pass
-
         # 3. 空消息/忽略事件
         msg_type = data.get("msgtype", "text")
         if msg_type == "empty":

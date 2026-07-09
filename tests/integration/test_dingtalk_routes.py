@@ -106,6 +106,7 @@ def _make_event(
     conversation_type: str = "1",
     conversation_id: str = "cidXXX",
     sender_id: str = "ding_user_001",
+    sender_staff_id: str = "ding_staff_001",
 ) -> dict:
     """构造钉钉消息回调 JSON
 
@@ -115,7 +116,8 @@ def _make_event(
         msg_id: 消息 ID（默认随机生成）
         conversation_type: "1" 单聊 / "2" 群聊
         conversation_id: 会话 ID（群聊时为 openConversationId）
-        sender_id: 发送者 ID
+        sender_id: 发送者会话 ID（senderId，LWCP 格式）
+        sender_staff_id: 发送者员工 ID（senderStaffId，oToMessages 用）
     """
     if not msg_id:
         msg_id = f"msg_{uuid.uuid4().hex}"
@@ -127,6 +129,7 @@ def _make_event(
         "conversationType": conversation_type,
         "conversationId": conversation_id,
         "senderId": sender_id,
+        "senderStaffId": sender_staff_id,
         "senderNick": "测试用户",
         "senderCorpId": "ding_corp_test",
         "robotCode": "dingdtest",

@@ -233,12 +233,15 @@ class DingTalkAdapter(ChannelAdapter):
             "conversationType": "1" | "2",
             "conversationId": "xxx",
             "conversationTitle": "群名",  // 仅群聊
-            "senderId": "xxx",
+            "senderId": "$:LWCP_v1:$...",  // chatbot 会话用户 ID，不能直接用于发消息
+            "senderStaffId": "manager81",  // 企业内员工 ID，oToMessages 接口要求
             "senderNick": "xxx",
             "senderCorpId": "xxx",
             "sessionWebhook": "xxx",
             ...
         }
+
+        user_id 优先取 senderStaffId，缺失时回退 senderId（向后兼容）。
 
         Returns:
             UnifiedMessage 或 None（忽略的事件/空消息）
@@ -247,7 +250,11 @@ class DingTalkAdapter(ChannelAdapter):
         msg_id = raw_message.get("msgId", f"dingtalk_{int(time.time() * 1000)}")
         create_at = raw_message.get("createAt", int(time.time() * 1000))
 
-        sender_id = raw_message.get("senderId", "")
+        # 钉钉回调中存在两种 sender 标识：
+        # - senderStaffId: 企业内员工 ID（staffId），oToMessages/batchSend 接口要求的就是它
+        # - senderId: chatbot 会话用户 ID（LWCP 格式），不能直接用于发消息
+        # 因此 user_id 优先取 senderStaffId，缺失时回退 senderId（保持向后兼容）
+        sender_id = raw_message.get("senderStaffId") or raw_message.get("senderId", "")
         sender_nick = raw_message.get("senderNick", "")
 
         conversation_type = raw_message.get("conversationType", "1")
@@ -526,8 +533,8 @@ class DingTalkAdapter(ChannelAdapter):
 
         API: POST /topapi/v2/user/get（旧版 oapi 接口）
 
-        注意：企业内部机器人单聊场景下，senderId 可能是 unionId
-        而非 userId，此时该接口可能无法获取详情。
+        注意：user_id 应为 senderStaffId（员工 ID），与该接口的 userid 参数一致。
+        若误传 senderId（LWCP 格式会话用户 ID），接口会返回 user.notExist。
         """
         try:
             access_token = await self.get_access_token()
