@@ -177,12 +177,12 @@ class ChannelConfigDB:
             cursor = conn.cursor()
             if channel_type:
                 cursor.execute(
-                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = %s AND channel_type = %s",
+                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = %s AND channel_type = %s ORDER BY id DESC",
                     (tenant_id, channel_type),
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = %s",
+                    "SELECT * FROM tenant_channel_configs WHERE tenant_id = %s ORDER BY id DESC",
                     (tenant_id,),
                 )
             results = []
