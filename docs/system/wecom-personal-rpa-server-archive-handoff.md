@@ -1,12 +1,15 @@
 # wecom_personal_rpa 服务端拉取会话存档 — 问题交接文档
 
 > **创建时间**：2026-07-09
-> **当前状态**：❌ 解密链路未走通，需要新 AI 接手修复
-> **接手指引**：读完本节"当前未解决问题"即可直接干活，前面章节是背景。
+> **当前状态**：✅ 本地代码已修复 SDK 解密挂起拖死 fetcher；待 agent2 部署后验证消息入库与 6.2 漏抓率。
+> **接手指引**：本文前半部分保留原问题交接背景；最新处理结论见下方「0.6 Codex 接手修复记录」。
 
 ---
 
 ## 0. 当前未解决问题（接手必读）
+
+> 2026-07-09 更新：本节 0.1-0.5 是原始故障交接记录，描述的是 commit `f1b765c`
+> 部署后的现象。SDK 子进程级超时与 fetcher 可观测性已在本地修复，待部署验证。
 
 ### 0.1 现象
 
@@ -90,6 +93,30 @@ for r in cur.fetchall(): print(r)
 ```
 
 根据这三条命令的输出，**再决定怎么改**，不要盲改。
+
+### 0.6 Codex 接手修复记录（2026-07-09）
+
+已按当前代码重新审视并完成本地修复：
+
+1. `wecom_finance_sdk.py` 不再使用阻塞式 `pool.apply`，改为 `pool.apply_async(...).get(timeout=N)`。
+2. `DecryptData` 默认使用 8s 子进程级超时；超时后 terminate/join 当前 SDK 进程池并重建，避免坏密文或 C SDK 死循环继续占住池子。
+3. `fetcher.py` 外层单条消息超时调整为 10s 兜底，并显式把 8s SDK 超时传入 `decrypt_data_raw`；单条失败仍跳过并推进 seq，避免同一坏消息反复阻塞租户。
+4. fetcher 增加获锁、进入流程、GetChatData 调用/返回、batch 处理、单条进度采样日志，用于线上定位是否卡在拉取、解密还是 `_process_inbound_message`。
+5. 新增/更新单元测试，覆盖“子进程调用超时会重建池并抛 `SDKCallError(code=-2)`”和“fetcher 必须传递 SDK 子进程级超时”。
+
+本地验证：
+
+- `./scripts/dev_test.sh tests/unit/channels/wecom_personal_rpa/archive/test_sdk_proxy.py tests/unit/channels/wecom_personal_rpa/archive/test_fetcher.py -p no:cacheprovider -q`
+- `./scripts/dev_test.sh tests/unit/channels/wecom_personal_rpa/archive -p no:cacheprovider -q`
+- `./scripts/dev_test.sh tests/integration/test_archive_callback_to_fetch_e2e.py tests/integration/test_archive_sdk_fetch.py -p no:cacheprovider -q`
+- `python -c "from src.channels.wecom_personal_rpa.archive import fetcher, poller, callback_handler, wecom_finance_sdk; print('archive imports ok')"`
+
+待上线验证：
+
+- 部署本修复到 agent2。
+- 观察 `ServerArchiveFetcher` 新增关键日志是否出现。
+- 验证 `tenant_9eb3e45cab83` 的 `channel_messages` 是否开始入库。
+- 完成 6.2 漏抓率测试。
 
 ---
 

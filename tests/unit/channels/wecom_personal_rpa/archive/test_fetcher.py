@@ -202,10 +202,16 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
     )
     # mock SDK DecryptData：直接返回构造好的明文 JSON（不真的走 SDK）
     plain_json = json.dumps({"text": {"content": "你好"}})
+    decrypt_seen = {}
+
+    def _fake_decrypt_data(encrypt_key, encrypt_msg, timeout_seconds=8):
+        decrypt_seen["timeout_seconds"] = timeout_seconds
+        return plain_json
+
     monkeypatch.setattr(
         fetcher_module.wecom_finance_sdk,
         "decrypt_data_raw",
-        lambda encrypt_key, encrypt_msg: plain_json,
+        _fake_decrypt_data,
     )
 
     item = http_client.ChatDataItem(
@@ -259,6 +265,10 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
     assert payload["message_type"] == "text"
     assert payload["text"] == "你好"
 
+    # 关键意图：fetcher 必须把 SDK DecryptData 的超时放到子进程代理层，
+    # 不能只依赖外层 asyncio.wait_for。
+    assert decrypt_seen["timeout_seconds"] == fetcher_module._SDK_DECRYPT_TIMEOUT_SECONDS
+
     # 应推进 seq
     assert ("last_seq", 1001) in seq_updates
 
@@ -281,7 +291,7 @@ async def test_fetch_room_message(patched_lock, patched_process_msg, monkeypatch
     monkeypatch.setattr(
         fetcher_module.wecom_finance_sdk,
         "decrypt_data_raw",
-        lambda encrypt_key, encrypt_msg: plain_json,
+        lambda encrypt_key, encrypt_msg, timeout_seconds=8: plain_json,
     )
 
     item = http_client.ChatDataItem(
@@ -324,7 +334,7 @@ async def test_fetch_message_type_mapping(patched_lock, patched_process_msg, mon
     monkeypatch.setattr(
         fetcher_module.wecom_finance_sdk,
         "decrypt_data_raw",
-        lambda encrypt_key, encrypt_msg: plain_json,
+        lambda encrypt_key, encrypt_msg, timeout_seconds=8: plain_json,
     )
 
     item = http_client.ChatDataItem(
@@ -368,7 +378,7 @@ async def test_fetch_decrypt_failure_skips_and_advances(patched_lock, patched_pr
             raise ValueError("RSA 解密失败: 模拟损坏密文")
         return b"fake_random_key_bytes_pad_to_32!!"
 
-    def _fake_decrypt_data(encrypt_key, encrypt_msg):
+    def _fake_decrypt_data(encrypt_key, encrypt_msg, timeout_seconds=8):
         return plain_json_good
 
     monkeypatch.setattr(fetcher_module.chat_crypto, "decrypt_random_key", _fake_decrypt_random_key)

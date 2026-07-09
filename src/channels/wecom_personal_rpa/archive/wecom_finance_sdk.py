@@ -51,7 +51,8 @@ class SDKCallError(RuntimeError):
 
 # 池配置：单进程串行足够（SDK 调用本身是阻塞的，多进程只增内存）
 _POOL_SIZE = 1
-_POOL_TIMEOUT = 60  # 单次调用超时秒数（SDK 内部网络调用可能慢）
+_POOL_TIMEOUT = 60  # GetChatData / GetMediaData 单次调用兜底超时秒数
+_DECRYPT_TIMEOUT = 8  # DecryptData 单条消息超时，必须小于 fetcher 外层单条超时
 
 _pool: Optional[mp.pool.Pool] = None
 _pool_lock = threading.Lock()
@@ -87,6 +88,60 @@ def _reset_pool() -> None:
         ctx = mp.get_context("spawn")
         _pool = ctx.Pool(_POOL_SIZE)
         logger.warning("[WeWorkFinanceSdk] 子进程隔离池已重建")
+
+
+def _call_child_with_timeout(
+    child_func,
+    args: tuple,
+    default_func: str,
+    timeout_seconds: int,
+):
+    """在子进程池中调用 SDK 入口，并用进程级超时兜底。
+
+    asyncio.wait_for 只能取消等待中的协程，不能杀掉已经进入 C SDK 的同步调用。
+    这里用 multiprocessing.AsyncResult.get(timeout=...) 把超时放到子进程层；
+    一旦超时，terminate 整个池，确保卡死的 SDK 调用不会继续占住后续任务。
+    """
+    timeout = max(1, int(timeout_seconds))
+    try:
+        pool = _get_pool()
+        async_result = pool.apply_async(child_func, args)
+        return async_result.get(timeout=timeout)
+    except mp.TimeoutError as e:
+        logger.warning(
+            f"[WeWorkFinanceSdk] {default_func} 子进程调用超时 {timeout}s，重建池"
+        )
+        _reset_pool()
+        raise SDKCallError(
+            default_func,
+            -2,
+            f"子进程调用超时 {timeout}s，已重建子进程池",
+        ) from e
+    except Exception as e:
+        # pool.apply_async / get 抛异常 = 子进程崩了或池不可用；
+        # 重建后只重试一次，避免业务错误被无限重复。
+        logger.warning(f"[WeWorkFinanceSdk] {default_func} 子进程池异常，重建: {e}")
+        _reset_pool()
+        pool = _get_pool()
+        async_result = pool.apply_async(child_func, args)
+        try:
+            return async_result.get(timeout=timeout)
+        except mp.TimeoutError as e2:
+            logger.warning(
+                f"[WeWorkFinanceSdk] {default_func} 重试后仍超时 {timeout}s，重建池"
+            )
+            _reset_pool()
+            raise SDKCallError(
+                default_func,
+                -2,
+                f"子进程调用超时 {timeout}s，已重建子进程池",
+            ) from e2
+        except Exception as e2:
+            raise SDKCallError(
+                default_func,
+                -1,
+                f"子进程池重试失败: {type(e2).__name__}: {e2}",
+            ) from e2
 
 
 # ----------------- 子进程入口函数（spawn 可 pickle，必须在模块顶层） -----------------
@@ -189,16 +244,25 @@ def is_sdk_available() -> bool:
     主进程首次调用此函数会触发子进程池启动，可能耗时 100~300ms。
     """
     try:
-        pool = _get_pool()
-        result = pool.apply(_child_is_available)
+        result = _call_child_with_timeout(
+            _child_is_available,
+            (),
+            "is_sdk_available",
+            timeout_seconds=10,
+        )
         return bool(result)
     except Exception as e:
         # 子进程崩了或池死了：尝试重建一次，再失败就返回 False
         logger.warning(f"[WeWorkFinanceSdk] is_sdk_available 子进程调用失败: {e}，尝试重建池")
         try:
             _reset_pool()
-            pool = _get_pool()
-            return bool(pool.apply(_child_is_available))
+            result = _call_child_with_timeout(
+                _child_is_available,
+                (),
+                "is_sdk_available",
+                timeout_seconds=10,
+            )
+            return bool(result)
         except Exception as e2:
             logger.error(f"[WeWorkFinanceSdk] is_sdk_available 重建后仍失败: {e2}")
             return False
@@ -241,27 +305,21 @@ def get_chat_data_raw(
     if limit < 1 or limit > 1000:
         raise ValueError(f"limit 应在 1~1000 之间，实际 {limit}")
 
-    try:
-        pool = _get_pool()
-        result = pool.apply(
-            _child_get_chat_data,
-            (corpid, secret, int(seq), int(limit), proxy, passwd, timeout),
-        )
-    except Exception as e:
-        # pool.apply 抛异常 = 子进程崩了（BrokenPoolError / 子进程异常退出）
-        # SDK 业务错误（code != 0）走 _unwrap 路径，不会进这里
-        logger.warning(f"[WeWorkFinanceSdk] 子进程池崩了，重建: {e}")
-        _reset_pool()
-        pool = _get_pool()
-        result = pool.apply(
-            _child_get_chat_data,
-            (corpid, secret, int(seq), int(limit), proxy, passwd, timeout),
-        )
+    result = _call_child_with_timeout(
+        _child_get_chat_data,
+        (corpid, secret, int(seq), int(limit), proxy, passwd, timeout),
+        "GetChatData",
+        timeout_seconds=max(_POOL_TIMEOUT, int(timeout) + 5),
+    )
 
     return _unwrap(result, "GetChatData")
 
 
-def decrypt_data_raw(encrypt_key, encrypt_msg: str) -> str:
+def decrypt_data_raw(
+    encrypt_key,
+    encrypt_msg: str,
+    timeout_seconds: int = _DECRYPT_TIMEOUT,
+) -> str:
     """调用 SDK DecryptData 解密会话存档消息（通过子进程）。
 
     Args:
@@ -269,6 +327,8 @@ def decrypt_data_raw(encrypt_key, encrypt_msg: str) -> str:
             兼容 ``str``（UTF-8 合法）和 ``bytes``（任意 32 字节随机数据），
             SDK 内部按字节流处理。
         encrypt_msg: GetChatData 返回的 encrypt_chat_msg（base64 字符串）。
+        timeout_seconds: 子进程级超时。超时会重建 SDK 子进程池，避免坏密文
+            或 SDK 死循环拖死后续拉取。
 
     Returns:
         解密后的明文 JSON 字符串。
@@ -276,14 +336,12 @@ def decrypt_data_raw(encrypt_key, encrypt_msg: str) -> str:
     Raises:
         SDKCallError: DecryptData 返回非 0。
     """
-    try:
-        pool = _get_pool()
-        result = pool.apply(_child_decrypt_data, (encrypt_key, encrypt_msg))
-    except Exception as e:
-        logger.warning(f"[WeWorkFinanceSdk] 子进程池崩了，重建: {e}")
-        _reset_pool()
-        pool = _get_pool()
-        result = pool.apply(_child_decrypt_data, (encrypt_key, encrypt_msg))
+    result = _call_child_with_timeout(
+        _child_decrypt_data,
+        (encrypt_key, encrypt_msg),
+        "DecryptData",
+        timeout_seconds=timeout_seconds,
+    )
 
     return _unwrap(result, "DecryptData")
 
@@ -313,20 +371,12 @@ def get_media_data_raw(
     Raises:
         SDKCallError: GetMediaData 返回非 0。
     """
-    try:
-        pool = _get_pool()
-        result = pool.apply(
-            _child_get_media_data,
-            (corpid, secret, sdk_file_id, index_buf, proxy, passwd, timeout),
-        )
-    except Exception as e:
-        logger.warning(f"[WeWorkFinanceSdk] 子进程池崩了，重建: {e}")
-        _reset_pool()
-        pool = _get_pool()
-        result = pool.apply(
-            _child_get_media_data,
-            (corpid, secret, sdk_file_id, index_buf, proxy, passwd, timeout),
-        )
+    result = _call_child_with_timeout(
+        _child_get_media_data,
+        (corpid, secret, sdk_file_id, index_buf, proxy, passwd, timeout),
+        "GetMediaData",
+        timeout_seconds=max(_POOL_TIMEOUT, int(timeout) + 5),
+    )
 
     return _unwrap(result, "GetMediaData")
 

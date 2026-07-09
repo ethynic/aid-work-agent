@@ -898,7 +898,7 @@ POST /t/{tenant_id}/wecom_personal_rpa/callback/{config_id}
 | Gunicorn 多 worker 重复拉取 | Redis 分布式锁 `wecom_rpa:archive:lock:{tenant_id}` |
 | seq 长期未推进导致消息丢失 | 60s 兜底轮询 + 监控 seq_lag 指标 |
 | 凭证配置错误一直拉不到 | 管理后台「测试连通性」按钮 + audit_log 可见 |
-| 回调与拉取死锁（fetch_once 卡住） | Redis 锁 TTL 60s 自动释放 + 单次拉取超时 30s |
+| 回调与拉取死锁（fetch_once 卡住） | Redis 锁 TTL 60s 自动释放 + 单次拉取超时 30s；C SDK `DecryptData` 走子进程级 `apply_async().get(timeout)`，超时后 terminate/rebuild SDK 进程池，避免外层 `asyncio.wait_for` 取消不了同步 C 调用 |
 | 模式切换瞬间可能丢消息 | server↔client 切换时正在传输的消息可能丢；缓解：依赖 envelope `event_id` 去重 + 兜底轮询补拉 |
 | 双验签失败风险（路由误判） | 严格按 listen_mode 决定走哪种验签，先企微签名后 HMAC；不通过则 401，audit 记录 |
 | 客户端在线但 server 模式回复路由不到 | outbound 已有 account_id 路由 + outbox 兜底 |

@@ -47,10 +47,13 @@ _LOCK_TTL_SECONDS = 60
 # 单次拉取超时（防死锁，超过就放弃让下一周期重试）
 _FETCH_TIMEOUT_SECONDS = 30
 
-# 单条消息解密超时（SDK DecryptData 卡死时跳过该条，不让坏消息卡死整个租户）
-# 曾遇到 4n+1 密文让 SDK 子进程挂起，asyncio.wait_for 拦不住底层同步阻塞，
-# 所以这个超时本质是"给 to_thread 一个上限"，子进程仍然占用直到 SDK 自己释放。
-_SINGLE_ITEM_TIMEOUT_SECONDS = 10
+# SDK DecryptData 子进程级超时。必须小于外层单条超时，确保先由 SDK 代理层
+# terminate/rebuild 卡死的子进程池，再把异常返回给 fetcher 推进 seq。
+_SDK_DECRYPT_TIMEOUT_SECONDS = 8
+
+# 单条消息解密总超时（RSA + SDK DecryptData）。外层只做兜底；真正能杀掉
+# C SDK 卡死调用的是 wecom_finance_sdk.decrypt_data_raw 的进程级超时。
+_SINGLE_ITEM_TIMEOUT_SECONDS = _SDK_DECRYPT_TIMEOUT_SECONDS + 2
 
 # 客户端 ID 占位：server 模式拉取时没有具体客户端，出站靠 account_id 路由
 _SERVER_CLIENT_ID_PLACEHOLDER = "_server_"
@@ -79,6 +82,10 @@ class ServerArchiveFetcher:
         if not acquired:
             logger.debug(f"[ServerArchiveFetcher] 未获锁 tenant={tenant_id}（另一 fetcher 正在运行），跳过")
             return
+
+        logger.info(
+            f"[ServerArchiveFetcher] 获锁开始拉取 tenant={tenant_id} config={config_id}"
+        )
 
         try:
             await asyncio.wait_for(
@@ -115,6 +122,9 @@ class ServerArchiveFetcher:
 
     async def _fetch_once_internal(self, tenant_id: str, config_id: str) -> None:
         """实际拉取逻辑（已持锁）。"""
+        logger.info(
+            f"[ServerArchiveFetcher] 进入拉取流程 tenant={tenant_id} config={config_id}"
+        )
         cfg = ChannelConfigDB.get_by_tenant_and_id(tenant_id, config_id)
         if cfg is None:
             logger.warning(f"[ServerArchiveFetcher] 配置不存在 tenant={tenant_id} config_id={config_id}")
@@ -147,9 +157,17 @@ class ServerArchiveFetcher:
         # 拉取密文批次（C SDK GetChatData，不需要 access_token）
         # 注意：SDK 用 corpid+secret 直连，与 get_access_token 用同一套凭证；
         # 凭证错误时 SDK 会返回非 0 errcode（如 48002 / 60011），由上层异常处理。
+        logger.info(
+            f"[ServerArchiveFetcher] 调用 GetChatData tenant={tenant_id} "
+            f"config={config_id} seq>{last_seq} limit={batch_limit}"
+        )
         batch = await http_client.get_chat_data(
             corpid=creds["corp_id"], secret=creds["archive_secret"],
             seq=last_seq, limit=batch_limit,
+        )
+        logger.info(
+            f"[ServerArchiveFetcher] GetChatData 返回 tenant={tenant_id} "
+            f"config={config_id} batch={len(batch.items)}"
         )
 
         if not batch.items:
@@ -171,10 +189,17 @@ class ServerArchiveFetcher:
         #       长度的密文时无解，SDK 内部对此有容错）
         processed_count = 0
         failed_count = 0
-        for item in batch.items:
+        total_items = len(batch.items)
+        logger.info(
+            f"[ServerArchiveFetcher] 开始处理密文 tenant={tenant_id} "
+            f"config={config_id} total={total_items} account_id={account_id}"
+        )
+        for index, item in enumerate(batch.items, start=1):
             try:
+                self._log_item_progress(tenant_id, config_id, index, total_items, item)
                 # 单条超时：SDK DecryptData 卡死时（曾遇到 4n+1 密文子进程挂起）跳过该条，
-                # 不让坏消息卡死整个租户
+                # 不让坏消息卡死整个租户。SDK 代理层会先在子进程级超时并重建池，
+                # 外层 wait_for 只是防止 RSA 或未知 Python 逻辑异常阻塞过久。
                 random_key_bytes, plain_json = await asyncio.wait_for(
                     self._decrypt_one(
                         creds["private_key"], item.encrypt_random_key, item.encrypt_chat_msg,
@@ -259,9 +284,30 @@ class ServerArchiveFetcher:
         )
         plain_json = await asyncio.to_thread(
             wecom_finance_sdk.decrypt_data_raw,
-            random_key_bytes, encrypt_chat_msg,
+            random_key_bytes, encrypt_chat_msg, _SDK_DECRYPT_TIMEOUT_SECONDS,
         )
         return random_key_bytes, plain_json
+
+    @staticmethod
+    def _log_item_progress(
+        tenant_id: str,
+        config_id: str,
+        index: int,
+        total: int,
+        item: "http_client.ChatDataItem",
+    ) -> None:
+        """按采样记录单条处理进度，避免大批量时日志爆炸。"""
+        if index <= 5 or index == total or index % 100 == 0:
+            logger.info(
+                f"[ServerArchiveFetcher] 处理消息 tenant={tenant_id} config={config_id} "
+                f"idx={index}/{total} seq={item.seq} msgid={item.msg_id} "
+                f"action={item.action} type={item.msg_type}"
+            )
+        else:
+            logger.debug(
+                f"[ServerArchiveFetcher] 处理消息 tenant={tenant_id} config={config_id} "
+                f"idx={index}/{total} seq={item.seq} msgid={item.msg_id}"
+            )
 
     # ----------------- envelope 构造 -----------------
 

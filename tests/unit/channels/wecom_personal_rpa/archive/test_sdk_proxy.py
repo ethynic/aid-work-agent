@@ -11,6 +11,8 @@
 不实际启动子进程池（会真加载 .so，开发机 Windows 跑不动）。
 子进程端到端验证由容器内手测脚本承担。
 """
+import multiprocessing as mp
+
 import pytest
 
 from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk
@@ -139,6 +141,65 @@ def test_unwrap_init_failure_extracts_code():
     with pytest.raises(SDKCallError) as exc:
         _unwrap(result, "Init")
     assert exc.value.code == 10003
+
+
+# ----------------- 子进程级超时 -----------------
+
+
+def test_child_call_timeout_resets_pool(monkeypatch):
+    """子进程调用超时必须重建池并抛 SDKCallError(code=-2)。
+
+    这是防止 C SDK 卡死拖死整个 fetcher 的关键保护：不能只靠 asyncio.wait_for。
+    """
+    reset_calls = []
+
+    class _TimeoutResult:
+        def get(self, timeout):
+            assert timeout == 3
+            raise mp.TimeoutError()
+
+    class _FakePool:
+        def apply_async(self, child_func, args):
+            return _TimeoutResult()
+
+    monkeypatch.setattr(wecom_finance_sdk, "_get_pool", lambda: _FakePool())
+    monkeypatch.setattr(wecom_finance_sdk, "_reset_pool", lambda: reset_calls.append(True))
+
+    with pytest.raises(SDKCallError) as exc:
+        wecom_finance_sdk._call_child_with_timeout(
+            lambda: None, (), "DecryptData", timeout_seconds=3
+        )
+
+    assert exc.value.func == "DecryptData"
+    assert exc.value.code == -2
+    assert reset_calls == [True]
+
+
+def test_decrypt_data_raw_uses_process_timeout(monkeypatch):
+    """decrypt_data_raw 把 timeout_seconds 传给子进程池等待层。"""
+    seen = {}
+
+    class _SuccessResult:
+        def get(self, timeout):
+            seen["timeout"] = timeout
+            return {"ok": True, "data": '{"ok": true}'}
+
+    class _FakePool:
+        def apply_async(self, child_func, args):
+            seen["child_func"] = child_func.__name__
+            seen["args"] = args
+            return _SuccessResult()
+
+    monkeypatch.setattr(wecom_finance_sdk, "_get_pool", lambda: _FakePool())
+
+    result = wecom_finance_sdk.decrypt_data_raw(
+        b"random_key", "encrypted_msg", timeout_seconds=4
+    )
+
+    assert result == '{"ok": true}'
+    assert seen["timeout"] == 4
+    assert seen["child_func"] == "_child_decrypt_data"
+    assert seen["args"] == (b"random_key", "encrypted_msg")
 
 
 # ----------------- 模块顶层属性（向后兼容） -----------------

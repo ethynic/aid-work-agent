@@ -46,6 +46,31 @@
 
 ---
 
+## 2026-07-09 真机问题收口：SDK 解密挂起
+
+### 问题
+
+agent2 部署 commit `f1b765c` 后，poller 每分钟触发，但 fetcher 没有“拉取完成”或“解密失败”日志，`channel_messages` 无 `tenant_9eb3e45cab83` 的入库记录。重新审视代码后确认关键风险：`asyncio.wait_for(asyncio.to_thread(...), timeout=10)` 只能取消 Python await，不能杀掉已经进入 C SDK 的同步调用；一旦 `DecryptData` 在子进程池内挂起，池会被永久占住。
+
+### 修复任务
+
+- [x] `wecom_finance_sdk.py`：把 SDK 子进程调用从阻塞式 `pool.apply` 改为 `pool.apply_async(...).get(timeout=N)`。
+- [x] `wecom_finance_sdk.py`：`DecryptData` 默认 8s 子进程级超时；超时后 terminate/join 并重建 SDK 进程池，抛 `SDKCallError(code=-2)`。
+- [x] `fetcher.py`：显式把 8s SDK 超时传给 `decrypt_data_raw`，外层 10s 仅作为 RSA/未知阻塞兜底。
+- [x] `fetcher.py`：增加获锁、进入流程、GetChatData 调用/返回、batch 处理、单条进度采样日志。
+- [x] 单元测试：覆盖 SDK 子进程超时会重建池，覆盖 fetcher 必须传递 SDK 子进程级超时。
+- [ ] agent2 部署后验证消息入库与 6.2 漏抓率。
+
+### 验证
+
+- [x] `./scripts/dev_test.sh tests/unit/channels/wecom_personal_rpa/archive/test_sdk_proxy.py tests/unit/channels/wecom_personal_rpa/archive/test_fetcher.py -p no:cacheprovider -q`
+- [x] `./scripts/dev_test.sh tests/unit/channels/wecom_personal_rpa/archive -p no:cacheprovider -q`
+- [x] `./scripts/dev_test.sh tests/integration/test_archive_callback_to_fetch_e2e.py tests/integration/test_archive_sdk_fetch.py -p no:cacheprovider -q`
+- [x] AST 语法检查：`wecom_finance_sdk.py` / `fetcher.py` / 新改测试文件
+- [x] import 安全检查：`from src.channels.wecom_personal_rpa.archive import fetcher, poller, callback_handler, wecom_finance_sdk`
+
+---
+
 ## Phase 1：listen_mode 字段 + 凭证加密 codec + 单例约束
 
 ### 目标
@@ -165,7 +190,7 @@
     - 调 http_client 拉一批密文
     - 逐条：RSA 解密 → 构造 envelope → 调 `_process_inbound_message(source="server_fetcher")`
     - 逐条推进 `last_seq`（写入 config JSON）
-    - 单条解密失败不推进 seq
+    - 单条解密失败也推进 seq，并记录 audit 后继续下一条（避免坏消息永久卡住租户拉取）
   - 45009 → 写 `last_error_*` 到 config JSON，60s 自动恢复
   - 单次拉取超时 30s
 - [ ] 4.3 envelope 构造函数 `_build_envelope(cfg, item, plain_json)`：字段对齐客户端模式（设计文档 §5.6）
