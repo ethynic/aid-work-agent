@@ -6,17 +6,17 @@
 - 凭证不完整 → 写错误状态
 - listen_mode 非 server → 跳过（防御性）
 - 锁竞争 → 跳过（不报错）
-- 正常拉取：拉到密文 → 解密 → 构造 envelope → 调 _process_inbound_message → 推进 seq
-- 单条解密失败：break，不推进当前 seq
+- 正常拉取：拉到密文 → RSA 解 random_key → SDK DecryptData → 构造 envelope → 调 _process_inbound_message → 推进 seq
+- 单条解密失败：跳过该条并推进 seq（不卡死整个租户死循环重拉）
 - 45009 异常：写错误状态
 - 空批次：清错误状态
 - envelope 构造正确性（event_id / client_id 占位 / message_type 映射 / conversation 推断）
+
+注意：fetcher 内部调 ``chat_crypto.decrypt_random_key``（RSA）+ ``wecom_finance_sdk.decrypt_data_raw``
+（SDK 内部 base64+AES）。测试中 mock 这两个函数，避免依赖真实 RSA 密钥与真实 SDK。
 """
 import asyncio
-import base64
 import json
-import secrets
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,7 +26,7 @@ from src.channels.wecom_personal_rpa.archive import chat_crypto, http_client
 from src.channels.wecom_personal_rpa.archive.fetcher import ServerArchiveFetcher
 
 
-# ----------------- 测试用 RSA 密钥 + AES 加密工具 -----------------
+# ----------------- 测试用 RSA 密钥（仅用于构造合法私钥 PEM，加解密都 mock 掉） -----------------
 
 
 def _gen_rsa_pem() -> tuple[str, object]:
@@ -40,28 +40,6 @@ def _gen_rsa_pem() -> tuple[str, object]:
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("utf-8")
     return pem, private_key
-
-
-def _aes_cbc_encrypt(random_key: bytes, iv: bytes, plaintext: bytes) -> str:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-    pad_len = 32 - (len(plaintext) % 32)
-    padded = plaintext + bytes([pad_len] * pad_len)
-    cipher = Cipher(algorithms.AES(random_key[:32]), modes.CBC(iv))
-    encryptor = cipher.encryptor()
-    cipher_bytes = encryptor.update(padded) + encryptor.finalize()
-    return base64.b64encode(iv + cipher_bytes).decode("ascii")
-
-
-def _rsa_encrypt_pkcs1v15(public_key, plaintext: bytes) -> str:
-    """模拟企微用公钥加密 random_key（RSA-PKCS1v15），返回 base64。
-
-    企微官方明确要求 PKCS1（https://developer.work.weixin.qq.com/document/path/91774）。
-    """
-    from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
-
-    cipher = public_key.encrypt(plaintext, rsa_padding.PKCS1v15())
-    return base64.b64encode(cipher).decode("ascii")
 
 
 # ----------------- mock 工厂 -----------------
@@ -208,19 +186,27 @@ async def test_fetch_empty_batch_clears_error(patched_lock, patched_process_msg,
 
 @pytest.mark.asyncio
 async def test_fetch_success_text_message(patched_lock, patched_process_msg, monkeypatch):
-    """正常拉取一条 text 消息：解密 → 构造 envelope → 调 _process_inbound_message → 推进 seq。"""
+    """正常拉取一条 text 消息：RSA 解 random_key → SDK DecryptData → 构造 envelope → 调 _process_inbound_message → 推进 seq。"""
     pem, private_key = _gen_rsa_pem()
     cfg = _make_cfg_record(_make_config_data(private_key=pem))
     monkeypatch.setattr(
         fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
     )
 
-    # 构造密文：random_key + plain_json
-    random_key = secrets.token_bytes(32)
-    iv = secrets.token_bytes(16)
+    # mock RSA 解密：返回固定 random_key bytes（不需要真的可解码，只是占位）
+    fake_random_key = b"fake_random_key_bytes_pad_to_32!!"  # 32 字节占位
+    monkeypatch.setattr(
+        fetcher_module.chat_crypto,
+        "decrypt_random_key",
+        lambda priv_key, enc_key: fake_random_key,
+    )
+    # mock SDK DecryptData：直接返回构造好的明文 JSON（不真的走 SDK）
     plain_json = json.dumps({"text": {"content": "你好"}})
-    encrypted_random_key = _rsa_encrypt_pkcs1v15(private_key.public_key(), random_key)
-    encrypted_chat_msg = _aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8"))
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk,
+        "decrypt_data_raw",
+        lambda encrypt_key, encrypt_msg: plain_json,
+    )
 
     item = http_client.ChatDataItem(
         seq=1001,
@@ -231,8 +217,8 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
         roomid=None,
         msg_time=1700000000,
         msg_type="text",
-        encrypt_random_key=encrypted_random_key,
-        encrypt_chat_msg=encrypted_chat_msg,
+        encrypt_random_key="encrypted_random_key_placeholder",  # 内容无所谓，被 mock
+        encrypt_chat_msg="encrypted_chat_msg_placeholder",      # 内容无所谓，被 mock
     )
     batch = http_client.ChatDataBatch(items=[item])
 
@@ -286,15 +272,24 @@ async def test_fetch_room_message(patched_lock, patched_process_msg, monkeypatch
         fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
     )
 
-    random_key = secrets.token_bytes(32)
-    iv = secrets.token_bytes(16)
+    monkeypatch.setattr(
+        fetcher_module.chat_crypto,
+        "decrypt_random_key",
+        lambda priv_key, enc_key: b"fake_random_key_bytes_pad_to_32!!",
+    )
     plain_json = json.dumps({"text": {"content": "群消息"}})
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk,
+        "decrypt_data_raw",
+        lambda encrypt_key, encrypt_msg: plain_json,
+    )
+
     item = http_client.ChatDataItem(
         seq=2001, msg_id="msg_room", action="upload",
         from_="user_a", tolist=[], roomid="room_xxx",
         msg_time=1700000100, msg_type="text",
-        encrypt_random_key=_rsa_encrypt_pkcs1v15(private_key.public_key(), random_key),
-        encrypt_chat_msg=_aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8")),
+        encrypt_random_key="placeholder",
+        encrypt_chat_msg="placeholder",
     )
 
     monkeypatch.setattr(
@@ -320,15 +315,24 @@ async def test_fetch_message_type_mapping(patched_lock, patched_process_msg, mon
         fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
     )
 
-    random_key = secrets.token_bytes(32)
-    iv = secrets.token_bytes(16)
+    monkeypatch.setattr(
+        fetcher_module.chat_crypto,
+        "decrypt_random_key",
+        lambda priv_key, enc_key: b"fake_random_key_bytes_pad_to_32!!",
+    )
     plain_json = json.dumps({})
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk,
+        "decrypt_data_raw",
+        lambda encrypt_key, encrypt_msg: plain_json,
+    )
+
     item = http_client.ChatDataItem(
         seq=3001, msg_id="msg_x", action="upload",
         from_="user_a", tolist=["user_b"], roomid=None,
         msg_time=1700000200, msg_type="unknown_type",  # 未知类型
-        encrypt_random_key=_rsa_encrypt_pkcs1v15(private_key.public_key(), random_key),
-        encrypt_chat_msg=_aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8")),
+        encrypt_random_key="placeholder",
+        encrypt_chat_msg="placeholder",
     )
     monkeypatch.setattr(
         fetcher_module.ChannelConfigDB, "update_config_field", lambda *a, **kw: True
@@ -353,23 +357,36 @@ async def test_fetch_decrypt_failure_skips_and_advances(patched_lock, patched_pr
         fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
     )
 
-    random_key = secrets.token_bytes(32)
-    iv = secrets.token_bytes(16)
-    plain_json = json.dumps({"text": {"content": "ok"}})
+    # mock RSA 解密：第 2 条抛错（模拟 SDK DecryptData 失败或 RSA 失败）
+    plain_json_good = json.dumps({"text": {"content": "ok"}})
+    call_count = {"n": 0}
+
+    def _fake_decrypt_random_key(priv_key, enc_key):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            # 第 2 条模拟密文损坏
+            raise ValueError("RSA 解密失败: 模拟损坏密文")
+        return b"fake_random_key_bytes_pad_to_32!!"
+
+    def _fake_decrypt_data(encrypt_key, encrypt_msg):
+        return plain_json_good
+
+    monkeypatch.setattr(fetcher_module.chat_crypto, "decrypt_random_key", _fake_decrypt_random_key)
+    monkeypatch.setattr(fetcher_module.wecom_finance_sdk, "decrypt_data_raw", _fake_decrypt_data)
 
     # 第 1 条正常
     good_item = http_client.ChatDataItem(
         seq=5001, msg_id="good", action="upload", from_="user_a", tolist=["user_b"],
         msg_time=1700000300, msg_type="text",
-        encrypt_random_key=_rsa_encrypt_pkcs1v15(private_key.public_key(), random_key),
-        encrypt_chat_msg=_aes_cbc_encrypt(random_key, iv, plain_json.encode("utf-8")),
+        encrypt_random_key="placeholder1",
+        encrypt_chat_msg="placeholder1",
     )
-    # 第 2 条密文损坏
+    # 第 2 条会让 mock 的 decrypt_random_key 抛错
     bad_item = http_client.ChatDataItem(
         seq=5002, msg_id="bad", action="upload", from_="user_a", tolist=["user_b"],
         msg_time=1700000301, msg_type="text",
-        encrypt_random_key="invalid!!!",
-        encrypt_chat_msg="also_invalid!!!",
+        encrypt_random_key="placeholder2",
+        encrypt_chat_msg="placeholder2",
     )
 
     batch = http_client.ChatDataBatch(items=[good_item, bad_item])

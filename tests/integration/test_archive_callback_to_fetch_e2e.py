@@ -152,7 +152,10 @@ async def test_full_chain_callback_to_message_processing(
     )
 
     # mock 企微 API（get_chat_data 走 C SDK，此处 mock http_client 层）
-    with patch.object(http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
+    # mock SDK DecryptData（fetcher 内部走 SDK 解密，不用 Python AES）
+    with patch.object(http_client, "get_chat_data", new=AsyncMock(return_value=batch)), \
+         patch.object(fetcher_module.wecom_finance_sdk, "decrypt_data_raw",
+                      return_value=plain_msg):
         # mock audit 写入（仅断言调用，不触达真实 DB）
         audit_calls = []
         orig_log_callback_received = archive_audit.log_callback_received

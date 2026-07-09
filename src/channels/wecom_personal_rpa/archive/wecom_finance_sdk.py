@@ -119,8 +119,11 @@ def _child_get_chat_data(
         return {"ok": False, "error_type": type(e).__name__, "error_msg": str(e)}
 
 
-def _child_decrypt_data(encrypt_key: str, encrypt_msg: str) -> Dict[str, Any]:
-    """子进程入口：调用 DecryptData。"""
+def _child_decrypt_data(encrypt_key, encrypt_msg: str) -> Dict[str, Any]:
+    """子进程入口：调用 DecryptData。
+
+    encrypt_key 可以是 str（UTF-8 合法）或 bytes（任意 32 字节随机数据）。
+    """
     from src.channels.wecom_personal_rpa.archive import _sdk_inner
     try:
         data = _sdk_inner.decrypt_data_raw(encrypt_key, encrypt_msg)
@@ -258,14 +261,14 @@ def get_chat_data_raw(
     return _unwrap(result, "GetChatData")
 
 
-def decrypt_data_raw(encrypt_key: str, encrypt_msg: str) -> str:
+def decrypt_data_raw(encrypt_key, encrypt_msg: str) -> str:
     """调用 SDK DecryptData 解密会话存档消息（通过子进程）。
 
-    注意：主流程仍用 chat_crypto.py 的 Python 实现，此函数保留供未来使用。
-
     Args:
-        encrypt_key: 经 RSA 解密后的 random_key（base64 或原始字符串，按 SDK 要求传）。
-        encrypt_msg: GetChatData 返回的 encrypt_chat_msg。
+        encrypt_key: RSA 解密 encrypt_random_key 后得到的会话密钥。
+            兼容 ``str``（UTF-8 合法）和 ``bytes``（任意 32 字节随机数据），
+            SDK 内部按字节流处理。
+        encrypt_msg: GetChatData 返回的 encrypt_chat_msg（base64 字符串）。
 
     Returns:
         解密后的明文 JSON 字符串。

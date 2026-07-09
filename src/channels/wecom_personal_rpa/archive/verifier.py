@@ -20,6 +20,7 @@ from typing import Any, Dict
 from loguru import logger
 
 from src.channels.wecom_personal_rpa.archive import callback_crypto, chat_crypto, http_client
+from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk
 from src.channels.wecom_personal_rpa.archive.callback_crypto import SignatureError
 from src.channels.wecom_personal_rpa.archive.credential_codec import FORCED_LISTEN_MODE
 from src.channels.wecom.crypto import WeComCrypto
@@ -112,7 +113,7 @@ async def verify_archive_server_mode(config_data: Dict[str, Any], tenant_id: str
         # SDKLoadError / SDKCallError 等
         return _err("chat_data", f"拉取会话存档异常: {type(e).__name__}: {e}")
 
-    # Step 3+4：RSA 解密 encrypt_random_key + AES 解密 encrypt_chat_msg（验证 private_key）
+    # Step 3+4：RSA 解密 encrypt_random_key + 调 SDK DecryptData 解密 encrypt_chat_msg（验证 private_key）
     # 注意：seq=0 拉到的可能是空批次（新企业还没消息），此时无法验证私钥——
     # 给出"暂时无消息可验证，私钥未测试"的提示，但回调签名仍可自测
     if not batch.items:
@@ -121,8 +122,9 @@ async def verify_archive_server_mode(config_data: Dict[str, Any], tenant_id: str
     else:
         item = batch.items[0]
         try:
-            random_key = chat_crypto.decrypt_random_key(private_key, item.encrypt_random_key)
-            chat_crypto.decrypt_chat_msg(random_key, item.encrypt_chat_msg)
+            random_key_bytes = chat_crypto.decrypt_random_key(private_key, item.encrypt_random_key)
+            # random_key 直接以 bytes 传给 SDK DecryptData（SDK 内部按字节流处理）
+            wecom_finance_sdk.decrypt_data_raw(random_key_bytes, item.encrypt_chat_msg)
             private_key_tested = True
         except ValueError as e:
             return _err(

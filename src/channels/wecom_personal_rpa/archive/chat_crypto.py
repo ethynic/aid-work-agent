@@ -1,22 +1,25 @@
-"""企微会话存档拉取路径的解密工具
+"""企微会话存档拉取路径的解密工具（仅 RSA 解密 random_key）
 
 企微会话存档双层加密（官方文档 https://developer.work.weixin.qq.com/document/path/91774）：
   1. RSA-PKCS1v15：用企业管理后台生成的会话存档私钥解密 ``encrypt_random_key``，得到
-     ``random_key``（典型 32 字节）。**注意不是 OAEP-SHA1**（早期文档/SDK 误传）。
-  2. AES-256-CBC + PKCS7：以 ``random_key`` 前 32 字节为 key，base64 解码后的
-     ``encrypt_chat_msg`` 前 16 字节为 IV，剩余字节为密文。
+     ``random_key``（典型 32 字节，可 UTF-8 解码为字符串）。**注意不是 OAEP-SHA1**
+     （早期文档/SDK 误传）。
+  2. ``encrypt_chat_msg`` 的 AES 解密**交给 SDK 的 DecryptData 接口**完成（见
+     ``wecom_finance_sdk.decrypt_data_raw``），不要在本模块用 Python 自己解。
 
-注意：**不是 AES-GCM**（早期设计文档误写为 GCM）。
+为什么 AES 解密要走 SDK：
+  - SDK 内部对 base64 解码 + AES-CBC + PKCS7 全套处理，且对 SDK 自身返回的非标准
+    长度密文有容错（实测遇到 4n+1 长度的 encrypt_chat_msg，Python ``base64.b64decode``
+    直接拒绝，SDK DecryptData 内部能正常解）。
+  - 早期版本本模块曾经自己实现 AES-CBC 解密，遇到上述边界情况无法处理。
 """
 
 import base64
 import binascii
 import re
-from typing import Any
 
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 # Base64 字符校验（合法字符 + 末尾允许的 =）
@@ -27,8 +30,7 @@ def _b64decode_lenient(s: str, field_name: str) -> bytes:
     """容错的 Base64 解码。
 
     企微 SDK 偶尔返回的密文 Base64 字符串长度非 4 的倍数（缺末尾 padding `=`），
-    Python ``base64.b64decode`` 严格模式会拒绝。C# 的 ``Convert.FromBase64String``
-    对缺失 padding 的容忍度更高，所以历史上 C# 客户端能解而 Python 端报错。
+    Python ``base64.b64decode`` 严格模式会拒绝。
 
     本函数：
     1. 去除首尾空白（避免 SDK 返回带换行）
@@ -38,13 +40,13 @@ def _b64decode_lenient(s: str, field_name: str) -> bytes:
 
     Args:
         s: Base64 字符串。
-        field_name: 字段名（用于错误信息，如 "encrypt_random_key" / "encrypt_chat_msg"）。
+        field_name: 字段名（用于错误信息）。
 
     Returns:
         解码后的字节串。
 
     Raises:
-        ValueError: 字符串含非法 Base64 字符 / 补 padding 后仍非 4 倍数 / 字符串为空。
+        ValueError: 字符串含非法 Base64 字符 / 4n+1 物理不可能长度 / 字符串为空。
     """
     if not s:
         raise ValueError(f"{field_name} 不能为空")
@@ -77,8 +79,6 @@ def _b64decode_lenient(s: str, field_name: str) -> bytes:
     try:
         return base64.b64decode(cleaned)
     except binascii.Error as e:
-        # 标准库报错信息不够友好（如 "number of data characters (393) cannot be 1 more
-        # than a multiple of 4"），统一包装为带字段名的错误
         raise ValueError(f"{field_name} Base64 解码失败: {e}") from e
 
 
@@ -90,7 +90,7 @@ def decrypt_random_key(private_key_pem: str, encrypt_random_key_b64: str) -> byt
         encrypt_random_key_b64: 企微下发的 encrypt_random_key（base64）。
 
     Returns:
-        random_key 字节（典型 32 字节）。
+        random_key 字节（典型 32 字节，可 UTF-8 解码为字符串后传给 SDK DecryptData）。
 
     Raises:
         ValueError: 私钥格式错误 / 密文损坏 / 解密失败。
@@ -117,58 +117,3 @@ def decrypt_random_key(private_key_pem: str, encrypt_random_key_b64: str) -> byt
         raise ValueError(f"RSA 解密失败: {type(e).__name__}: {e}") from e
 
     return plain_bytes
-
-
-def decrypt_chat_msg(random_key: bytes, encrypt_chat_msg_b64: str) -> str:
-    """AES-256-CBC + PKCS7 解密 encrypt_chat_msg，返回明文 UTF-8 字符串。
-
-    key = random_key 前 32 字节；IV = base64 解码后 encrypt_chat_msg 的前 16 字节；
-    密文 = 剩余字节。
-
-    Args:
-        random_key: 由 decrypt_random_key 返回的字节串（≥32 字节）。
-        encrypt_chat_msg_b64: 企微下发的 encrypt_chat_msg（base64）。
-
-    Returns:
-        解密后的明文 JSON 字符串（msgtype=text 时含 content，image/file 时含 sdkfileid）。
-
-    Raises:
-        ValueError: random_key 不足 32 字节 / 密文短于 16 字节 / 解密失败。
-    """
-    if not random_key or len(random_key) < 32:
-        raise ValueError(f"random_key 至少 32 字节，实际 {len(random_key) if random_key else 0}")
-    if not encrypt_chat_msg_b64:
-        raise ValueError("encrypt_chat_msg_b64 不能为空")
-
-    all_bytes = _b64decode_lenient(encrypt_chat_msg_b64, "encrypt_chat_msg")
-    if len(all_bytes) < 16:
-        raise ValueError(f"encrypt_chat_msg 长度不足 16 字节（缺少 IV），实际 {len(all_bytes)}")
-
-    iv = all_bytes[:16]
-    cipher_bytes = all_bytes[16:]
-
-    # AES-256-CBC：key 必须 32 字节，从 random_key 取前 32 字节
-    aes_key = random_key[:32]
-
-    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
-    decryptor = cipher.decryptor()
-    padded_plain = decryptor.update(cipher_bytes) + decryptor.finalize()
-
-    # PKCS7 去填充
-    pad_len = padded_plain[-1]
-    if pad_len < 1 or pad_len > 32:
-        raise ValueError(f"无效的 PKCS7 填充长度: {pad_len}")
-    plain_bytes = padded_plain[:-pad_len]
-
-    return plain_bytes.decode("utf-8")
-
-
-def decrypt_message(
-    private_key_pem: str, encrypt_random_key_b64: str, encrypt_chat_msg_b64: str
-) -> str:
-    """组合 API：先 RSA 解密 random_key，再 AES 解密 chat_msg。
-
-    供 fetcher 一次性调用。失败抛 ValueError。
-    """
-    random_key = decrypt_random_key(private_key_pem, encrypt_random_key_b64)
-    return decrypt_chat_msg(random_key, encrypt_chat_msg_b64)

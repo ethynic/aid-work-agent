@@ -258,17 +258,35 @@ def get_chat_data_raw(
 # ----------------- 高层封装：DecryptData（保留，主流程不用） -----------------
 
 
-def decrypt_data_raw(encrypt_key: str, encrypt_msg: str) -> str:
-    """调用 SDK DecryptData 解密会话存档消息（同步阻塞）。"""
+def decrypt_data_raw(encrypt_key, encrypt_msg: str) -> str:
+    """调用 SDK DecryptData 解密会话存档消息（同步阻塞）。
+
+    Args:
+        encrypt_key: RSA 解密 encrypt_random_key 得到的会话密钥。
+            兼容 ``str``（UTF-8 合法的 random_key，如企微真实下发的）和 ``bytes``
+            （任意 32 字节随机数据，如测试模拟的）。SDK 内部按字节流处理。
+        encrypt_msg: GetChatData 返回的 encrypt_chat_msg（base64 字符串）。
+
+    Returns:
+        解密后的明文 JSON 字符串。
+    """
     lib = _load_lib()
 
     msg_slice = lib.NewSlice()
     if not msg_slice:
         raise RuntimeError("NewSlice 返回空指针")
 
+    # encrypt_key 统一转 bytes：str 用 UTF-8 编码，bytes 直接用
+    if isinstance(encrypt_key, str):
+        encrypt_key_bytes = encrypt_key.encode("utf-8")
+    elif isinstance(encrypt_key, (bytes, bytearray)):
+        encrypt_key_bytes = bytes(encrypt_key)
+    else:
+        raise TypeError(f"encrypt_key 类型非法: {type(encrypt_key).__name__}，期望 str/bytes")
+
     try:
         ret = lib.DecryptData(
-            encrypt_key.encode("utf-8"),
+            encrypt_key_bytes,
             encrypt_msg.encode("utf-8"),
             msg_slice,
         )

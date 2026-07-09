@@ -9,13 +9,13 @@
   2. 从 tenant_channel_configs 读配置 + 解密凭证
   3. 检查 listen_mode='server'（防御性，第一期永远为 True）
   4. 调 C SDK GetChatData 拉一批密文（通过 http_client.get_chat_data 包装）
-  5. 逐条：chat_crypto.decrypt_message 解密 → 构造 RpaCallbackEnvelope →
-     调 _process_inbound_message(source='server_fetcher') → 推进 last_seq
-  6. 单条解密失败不推进 seq，break 跳出（下次重拉同一条）
+  5. 逐条：chat_crypto.decrypt_random_key 解 random_key →
+     wecom_finance_sdk.decrypt_data_raw 调 SDK DecryptData 拿明文 →
+     构造 RpaCallbackEnvelope → 调 _process_inbound_message(source='server_fetcher') →
+     推进 last_seq
+  6. 单条解密失败也推进 seq + continue（避免坏消息卡死整个租户死循环重拉）
 
 不抛异常给上游（除非致命错误）：拉取/解密/处理异常都记录到 config.last_error_*。
-
-与 C# ChatArchiveListener.PollOnceAsync 行为对齐（但不重写媒体下载，本期不实现）。
 """
 
 import asyncio
@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
 from src.channels.wecom_personal_rpa.archive import callback_crypto, chat_crypto, http_client
+from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk
 from src.channels.wecom_personal_rpa.archive import audit as archive_audit
 from src.channels.wecom_personal_rpa.archive.credential_codec import (
     FORCED_LISTEN_MODE,
@@ -156,12 +157,24 @@ class ServerArchiveFetcher:
         account_id = self._infer_account_id(cfg)
 
         # 逐条解密 + 处理 + 推进 seq
+        # 解密路径（企微官方规范）：
+        #   1. RSA-PKCS1v15 解密 encrypt_random_key → random_key bytes
+        #   2. random_key 转 UTF-8 字符串（企微 random_key 是可打印字符串，非任意字节）
+        #   3. 调 SDK DecryptData(encrypt_key, encrypt_chat_msg) → 明文 JSON
+        # 注意：encrypt_chat_msg 的 base64 解码 + AES 解密由 SDK 内部完成，
+        #       不要用 Python 自己 AES 解密（曾经尝试过，遇到 SDK 返回非 4 倍数
+        #       长度的密文时无解，SDK 内部对此有容错）
         processed_count = 0
         failed_count = 0
         for item in batch.items:
             try:
-                plain_json = chat_crypto.decrypt_message(
-                    creds["private_key"], item.encrypt_random_key, item.encrypt_chat_msg
+                random_key_bytes = chat_crypto.decrypt_random_key(
+                    creds["private_key"], item.encrypt_random_key
+                )
+                # random_key 直接以 bytes 传给 SDK DecryptData（SDK 内部按字节流处理）
+                plain_json = await asyncio.to_thread(
+                    wecom_finance_sdk.decrypt_data_raw,
+                    random_key_bytes, item.encrypt_chat_msg,
                 )
                 env, env_raw = self._build_envelope(account_id, item, plain_json)
 

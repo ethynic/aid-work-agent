@@ -219,38 +219,35 @@ async def test_verify_success_empty_batch():
 
 @pytest.mark.asyncio
 async def test_verify_success_full_chain():
-    """完整链路：有密文 + 私钥解密成功 + callback 自测通过。"""
+    """完整链路：有密文 + RSA 解密成功 + SDK DecryptData 成功 + callback 自测通过。
+
+    注意：``encrypt_chat_msg`` 的 AES 解密在 verifier 内部走 SDK DecryptData（不再
+    用 Python 手工 AES），所以这里 mock 掉 SDK 调用。RSA 那一步用真实密钥对验证。
+    """
     pem, private_key_obj = _gen_rsa_pem()
     cfg = _make_config(private_key=pem)
 
-    # 构造密文：用同一私钥加密
-    random_key = secrets.token_bytes(32)
-    iv = secrets.token_bytes(16)
-    plain = b'{"msgid":"msg1"}'
-    from cryptography.hazmat.primitives import hashes
+    # 构造密文：用同一私钥的公钥加密 random_key（让 RSA 解密成功）
+    # 注意：random_key 经 RSA 解密后会 .decode("utf-8")，所以用 UTF-8 合法字节
+    random_key_plain = b"0123456789abcdef0123456789abcdef"  # 32 字节 ASCII
     from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
     encrypted_random_key = base64.b64encode(
-        private_key_obj.public_key().encrypt(random_key, rsa_padding.PKCS1v15())
+        private_key_obj.public_key().encrypt(random_key_plain, rsa_padding.PKCS1v15())
     ).decode("ascii")
-
-    pad_len = 32 - (len(plain) % 32)
-    padded = plain + bytes([pad_len] * pad_len)
-    cipher = Cipher(algorithms.AES(random_key[:32]), modes.CBC(iv))
-    enc = cipher.encryptor()
-    encrypted_chat_msg = base64.b64encode(iv + enc.update(padded) + enc.finalize()).decode("ascii")
 
     item = http_client.ChatDataItem(
         seq=1, msg_id="msg1", action="upload", from_="u", tolist=[],
         msg_time=1700000000, msg_type="text",
         encrypt_random_key=encrypted_random_key,
-        encrypt_chat_msg=encrypted_chat_msg,
+        encrypt_chat_msg="placeholder_chat_msg",  # 内容无所谓，SDK 调用被 mock
     )
     batch = http_client.ChatDataBatch(items=[item])
 
+    # mock SDK DecryptData：直接返回明文（不真的走 SDK）
     with patch.object(verifier.http_client, "get_access_token", new=AsyncMock(return_value="tok")), \
-         patch.object(verifier.http_client, "get_chat_data", new=AsyncMock(return_value=batch)):
+         patch.object(verifier.http_client, "get_chat_data", new=AsyncMock(return_value=batch)), \
+         patch.object(verifier.wecom_finance_sdk, "decrypt_data_raw", return_value='{"msgid":"msg1"}'):
         result = await verifier.verify_archive_server_mode(cfg, "t_test")
 
     assert result["success"] is True
