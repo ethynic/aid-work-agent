@@ -10,6 +10,7 @@
 """
 
 import base64
+import binascii
 import re
 from typing import Any
 
@@ -63,7 +64,22 @@ def _b64decode_lenient(s: str, field_name: str) -> bytes:
     if missing:
         cleaned = cleaned + ("=" * missing)
 
-    return base64.b64decode(cleaned)
+    # 校验数据字符长度（去掉 = padding 后）的物理可行性：
+    # Base64 编码 3 字节 = 4 字符，因此数据字符长度只能是 4n / 4n+2 / 4n+3。
+    # 4n+1 是物理不可能（没有任何字节序列能编出这种长度），说明密文被截断。
+    data_chars = len(cleaned.rstrip("="))
+    if data_chars % 4 == 1:
+        raise ValueError(
+            f"{field_name} 数据字符长度 {data_chars} = 4n+1，物理不可能（密文被截断），"
+            f"原始长度={len(s)}，末尾 20 字符={s[-20:]!r}"
+        )
+
+    try:
+        return base64.b64decode(cleaned)
+    except binascii.Error as e:
+        # 标准库报错信息不够友好（如 "number of data characters (393) cannot be 1 more
+        # than a multiple of 4"），统一包装为带字段名的错误
+        raise ValueError(f"{field_name} Base64 解码失败: {e}") from e
 
 
 def decrypt_random_key(private_key_pem: str, encrypt_random_key_b64: str) -> bytes:

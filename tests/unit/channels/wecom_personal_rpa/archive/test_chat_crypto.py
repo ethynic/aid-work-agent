@@ -114,27 +114,40 @@ def test_decrypt_chat_msg_ok():
 
 
 def test_decrypt_chat_msg_missing_padding_tolerated():
-    """缺末尾 ``=`` padding 的 Base64 仍能解密（修复 agent2 seq=3 报错）。
+    """缺末尾 ``=`` padding 但数据字符长度合法（4n/4n+2/4n+3）的 Base64 仍能解密。
 
-    背景：企微 SDK 偶尔返回的 encrypt_chat_msg 长度非 4 的倍数（缺末尾 ``=``），
-    Python ``base64.b64decode`` 严格模式直接拒绝。历史上 C# 端
-    ``Convert.FromBase64String`` 容忍度高，所以 C# 客户端能解而 Python 报
-    "Invalid base64-encoded string: number of data characters (N) cannot be 1 more
-    than a multiple of 4"。
+    背景：企微 SDK 偶尔返回的 encrypt_chat_msg 缺末尾 ``=`` padding，
+    Python ``base64.b64decode`` 严格模式直接拒绝。``_b64decode_lenient``
+    会自动补 ``=``，对 4n/4n+2/4n+3 三种合法长度都能恢复。
     """
     random_key = secrets.token_bytes(32)
     iv = secrets.token_bytes(16)
     plain = "缺 padding 的 Base64 测试".encode("utf-8")
     encrypted_b64 = _aes_cbc_encrypt(random_key, iv, plain)
 
-    # 制造长度非 4 倍数的字符串（剥掉所有 = padding）
+    # 剥掉末尾所有 = padding
     stripped = encrypted_b64.rstrip("=")
-    # 剥掉后长度必然非 4 倍数（除非原本就齐整，此时跳过断言）
-    if len(stripped) % 4 == 0:
-        pytest.skip("随机生成的密文恰好 4 字节对齐，无法验证 padding 缺失路径")
+    data_chars = len(stripped)
+
+    # 4n+1 是物理不可能（密文被截断），跳过此场景，由下一个测试覆盖
+    if data_chars % 4 == 1:
+        pytest.skip("密文恰好 4n+1，由 test_..._truncated_*_raises 覆盖")
 
     decrypted = chat_crypto.decrypt_chat_msg(random_key, stripped)
     assert decrypted == "缺 padding 的 Base64 测试"
+
+
+def test_b64decode_lenient_truncated_4n_plus_1_raises():
+    """数据字符长度 4n+1（如 agent2 seq=3 的 393 字符）= 密文被截断，物理不可能解码。
+
+    Base64 编码 3 字节 = 4 字符，所以数据字符长度（去掉 = padding）只能是 4n / 4n+2 / 4n+3。
+    4n+1 说明原始字节序列不存在任何能编码出这种长度的输入 → 字符串必然被截断。
+    补 padding 无济于事，应抛清晰错误而非标准库的晦涩报错。
+    """
+    # 模拟 agent2 seq=3：393 个 'A'，无 padding
+    truncated = "A" * 393
+    with pytest.raises(ValueError, match="数据字符长度 393 = 4n\\+1.*密文被截断"):
+        chat_crypto._b64decode_lenient(truncated, "encrypt_chat_msg")
 
 
 def test_decrypt_chat_msg_with_internal_whitespace_tolerated():
