@@ -47,6 +47,11 @@ _LOCK_TTL_SECONDS = 60
 # 单次拉取超时（防死锁，超过就放弃让下一周期重试）
 _FETCH_TIMEOUT_SECONDS = 30
 
+# 单条消息解密超时（SDK DecryptData 卡死时跳过该条，不让坏消息卡死整个租户）
+# 曾遇到 4n+1 密文让 SDK 子进程挂起，asyncio.wait_for 拦不住底层同步阻塞，
+# 所以这个超时本质是"给 to_thread 一个上限"，子进程仍然占用直到 SDK 自己释放。
+_SINGLE_ITEM_TIMEOUT_SECONDS = 10
+
 # 客户端 ID 占位：server 模式拉取时没有具体客户端，出站靠 account_id 路由
 _SERVER_CLIENT_ID_PLACEHOLDER = "_server_"
 
@@ -168,13 +173,13 @@ class ServerArchiveFetcher:
         failed_count = 0
         for item in batch.items:
             try:
-                random_key_bytes = chat_crypto.decrypt_random_key(
-                    creds["private_key"], item.encrypt_random_key
-                )
-                # random_key 直接以 bytes 传给 SDK DecryptData（SDK 内部按字节流处理）
-                plain_json = await asyncio.to_thread(
-                    wecom_finance_sdk.decrypt_data_raw,
-                    random_key_bytes, item.encrypt_chat_msg,
+                # 单条超时：SDK DecryptData 卡死时（曾遇到 4n+1 密文子进程挂起）跳过该条，
+                # 不让坏消息卡死整个租户
+                random_key_bytes, plain_json = await asyncio.wait_for(
+                    self._decrypt_one(
+                        creds["private_key"], item.encrypt_random_key, item.encrypt_chat_msg,
+                    ),
+                    timeout=_SINGLE_ITEM_TIMEOUT_SECONDS,
                 )
                 env, env_raw = self._build_envelope(account_id, item, plain_json)
 
@@ -235,6 +240,28 @@ class ServerArchiveFetcher:
             last_seq=last_seq,
             account_id=account_id or None,
         )
+
+    # ----------------- 解密 -----------------
+
+    async def _decrypt_one(
+        self, private_key_pem: str, encrypt_random_key: str, encrypt_chat_msg: str
+    ) -> Tuple[bytes, str]:
+        """解密单条消息：RSA 解 random_key + SDK DecryptData 拿明文。
+
+        两步都放到线程池，避免阻塞事件循环。SDK 调用本身是同步阻塞的 ctypes 调用
+        （内部还会跨子进程），可能因密文异常而长时间挂起。
+
+        Returns:
+            (random_key_bytes, plain_json)，random_key 主要用于调试，业务上只用 plain_json。
+        """
+        random_key_bytes = await asyncio.to_thread(
+            chat_crypto.decrypt_random_key, private_key_pem, encrypt_random_key
+        )
+        plain_json = await asyncio.to_thread(
+            wecom_finance_sdk.decrypt_data_raw,
+            random_key_bytes, encrypt_chat_msg,
+        )
+        return random_key_bytes, plain_json
 
     # ----------------- envelope 构造 -----------------
 
