@@ -61,6 +61,9 @@
 1. 登录 [钉钉开放平台](https://open-dev.dingtalk.com/)
 2. 进入「应用开发」→「企业内部应用」→「创建应用」
 3. 记录 `AppKey` 和 `AppSecret`（对应飞书的 App ID / App Secret）
+3de9607d-a13c-456d-accd-396dbf6a76bd
+dinghapiilfe06jzv9qb
+VTeM4g1bNR1Qz6tjMwR9HbZ0jvziZ8CvQfel7QukM-ioRf2QkEEMmpoJkMHYbKW1
 
 ### 2.2 配置权限
 

@@ -122,6 +122,7 @@ def init_saas_tables(conn):
             config_id TEXT UNIQUE NOT NULL,
             tenant_id TEXT NOT NULL,
             channel_type TEXT NOT NULL,
+            name TEXT,
             config TEXT NOT NULL,
             verified INTEGER DEFAULT 0,
             subagent_type TEXT,

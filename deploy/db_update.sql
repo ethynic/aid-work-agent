@@ -965,3 +965,9 @@ ALTER TABLE wecom_rpa_clients ADD COLUMN IF NOT EXISTS listen_mode TEXT;
 -- ============================================================================
 -- ALTER TABLE obs_traces ADD COLUMN IF NOT EXISTS user_message_id TEXT;
 -- CREATE INDEX IF NOT EXISTS idx_obs_traces_user_msg_id ON obs_traces(user_message_id);
+
+-- ============================================================================
+-- 2026-07-09 tenant_channel_configs 增加 name 字段，用于用户手动为同一租户的
+-- 多个同类渠道（如两个飞书）标注区分名称
+-- ============================================================================
+ALTER TABLE tenant_channel_configs ADD COLUMN IF NOT EXISTS name TEXT;

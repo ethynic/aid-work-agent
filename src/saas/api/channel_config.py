@@ -29,11 +29,13 @@ router = APIRouter(prefix="/api/saas/channels", tags=["SaaS 渠道配置"])
 
 class ChannelConfigCreateRequest(BaseModel):
     channel_type: str = Field(..., description="渠道类型：wecom/wecom_kf/dingtalk/feishu")
+    name: Optional[str] = Field(None, description="渠道名称（用户自定义，用于区分同一租户的多个同类渠道）")
     config: dict = Field(..., description="渠道凭证配置")
     subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant），不填则不绑定")
 
 
 class ChannelConfigUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, description="渠道名称（用户自定义，用于区分同一租户的多个同类渠道）")
     config: dict = Field(..., description="渠道凭证配置")
     subagent_type: Optional[str] = Field(None, description="关联的数字员工类型（如 travel-consultant）")
 
@@ -119,6 +121,7 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
         config = ChannelConfigDB.create(
             tenant_id=admin["tenant_id"],
             channel_type=body.channel_type,
+            name=body.name,
             config=body.config,
             subagent_type=body.subagent_type,
         )
@@ -161,7 +164,7 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
     if existing["channel_type"] == "wecom_personal_rpa":
         _validate_rpa_required_fields(body.config)
 
-    success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type)
+    success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type, name=body.name)
     if success:
         # 配置变更后失效缓存的 adapter，下次回调重建
         # 按 config_id 精确失效（避免清掉同租户同渠道其他 config 的缓存）

@@ -26,7 +26,8 @@
       <div v-for="ch in channels" :key="ch.config_id" class="bg-surface rounded-lg border border-default p-5">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
-            <span class="text-sm text-default font-mono">{{ ch.id }}</span>
+            <span v-if="ch.name" class="text-sm font-medium text-default">{{ ch.name }}</span>
+            <span class="text-sm text-muted font-mono">{{ ch.id }}</span>
             <span class="text-sm text-default">{{ channelTypeLabel(ch.channel_type) }}</span>
             <BaseBadge :intent="ch.verified ? 'success' : 'warning'">
               {{ ch.verified ? '已验证' : '未验证' }}
@@ -88,7 +89,7 @@
         <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
 
         <!-- 渠道类型选择 -->
-        <div v-if="!editingId" class="grid grid-cols-4 gap-2 mb-3">
+        <div v-if="!editingId" class="grid grid-cols-8 gap-2 mb-3">
           <button
             v-for="ct in channelTypes" :key="ct.value"
             @click="form.channel_type = ct.value"
@@ -98,6 +99,19 @@
             <span class="text-lg">{{ ct.icon }}</span>
             <span class="text-xs font-medium" :class="form.channel_type === ct.value ? 'text-primary-700' : 'text-default'">{{ ct.label }}</span>
           </button>
+        </div>
+
+        <!-- 渠道名称（用户自定义，用于区分同租户多个同类渠道） -->
+        <div class="mb-3">
+          <label class="text-sm text-muted mb-1 block">
+            渠道名称<span class="text-danger-500">*</span>
+          </label>
+          <BaseInput
+            v-model="form.name"
+            placeholder="如：售前客服飞书、华东区企业微信"
+            maxlength="50"
+          />
+          <p class="mt-1 text-xs text-muted">同一租户可能有多个同类渠道，建议填写有辨识度的名称便于区分</p>
         </div>
 
         <!-- 配置指引摘要 -->
@@ -234,8 +248,8 @@
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
           <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
           <div class="flex items-center gap-2">
-            <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type) }}</code>
-            <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(form.channel_type), 'form')">{{ copied['form'] ? '已复制' : '复制' }}</BaseButton>
+            <code class="flex-1 bg-surface px-3 py-2 rounded text-sm text-primary-700 font-mono select-all break-all">{{ getCallbackUrl(form.channel_type, editingId || undefined) }}</code>
+            <BaseButton intent="ghost" size="sm" @click="copyUrl(getCallbackUrl(form.channel_type, editingId || undefined), 'form')">{{ copied['form'] ? '已复制' : '复制' }}</BaseButton>
           </div>
         </div>
 
@@ -432,8 +446,9 @@ function removeKfAccount(idx: number) {
   kfAccounts.value.splice(idx, 1)
 }
 
-const form = ref<{ channel_type: string; config: Record<string, string>; subagent_type: string }>({
+const form = ref<{ channel_type: string; name: string; config: Record<string, string>; subagent_type: string }>({
   channel_type: 'wecom',
+  name: '',
   config: {},
   subagent_type: ''
 })
@@ -684,7 +699,7 @@ function copyUrl(url: string, id?: string) {
 
 function openAddChannel() {
   editingId.value = null
-  form.value = { channel_type: 'wecom', config: {}, subagent_type: '' }
+  form.value = { channel_type: 'wecom', name: '', config: {}, subagent_type: '' }
   kfAccounts.value = []
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
@@ -694,7 +709,7 @@ function openAddChannel() {
 
 function editChannel(ch: any) {
   editingId.value = ch.config_id
-  form.value = { channel_type: ch.channel_type, config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
+  form.value = { channel_type: ch.channel_type, name: ch.name || '', config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
   formError.value = ''
   // 解析已有的客服账号配置（仅企业微信客服渠道）
   if (ch.channel_type === 'wecom_kf' && ch.config.kf_account && Array.isArray(ch.config.kf_account)) {
@@ -759,7 +774,15 @@ async function handleSubmit() {
   submitting.value = true
   formError.value = ''
   try {
+    // 渠道名称必填校验
+    const trimmedName = (form.value.name || '').trim()
+    if (!trimmedName) {
+      formError.value = '请填写渠道名称'
+      submitting.value = false
+      return
+    }
     const payload: Record<string, any> = {
+      name: trimmedName,
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
@@ -787,7 +810,7 @@ async function handleSubmit() {
     if (editingId.value) {
       await updateChannel(editingId.value, payload as any)
     } else {
-      await createChannel({ channel_type: form.value.channel_type, config: payload.config, subagent_type: payload.subagent_type } as any)
+      await createChannel({ channel_type: form.value.channel_type, name: trimmedName, config: payload.config, subagent_type: payload.subagent_type } as any)
     }
     closeModal()
     await loadChannels()

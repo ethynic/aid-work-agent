@@ -72,20 +72,12 @@ ngrok http 8000
 
 在「应用开发」→「企业内部开发」点击「创建应用」：
 
-| 字段 | 推荐值 | 备注 |
-|------|--------|------|
-| 应用类型 | 钉钉应用 | 不要选「H5 微应用/小程序」 |
-| 应用名称 | `AID 智能助手` 等 | 用户在群里 @ 时会显示此名 |
-| 应用描述 | 自定义 | |
-| 应用图标 | 64×64 PNG | 建议上传，影响群内观感 |
-| 开发管理员 | 自己 | |
-
-创建后跳转到「凭证与基础信息」页，**记录两个关键值**：
-
-- **AppKey**：形如 `dingxxxxxxxxxx`
-- **AppSecret**：形如 `xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`（点「显示」可见）
-
-> ⚠️ AppSecret 是敏感信息，泄露会导致冒名调用风险。请妥善保管，不要写入 Git。
+1. 登录 [钉钉开放平台](https://open-dev.dingtalk.com/)
+2. 进入「应用开发」→「企业内部应用」→「创建应用」
+3. 记录 `AppKey` 和 `AppSecret`（对应飞书的 App ID / App Secret）
+3de9607d-a13c-456d-accd-396dbf6a76bd
+dinghapiilfe06jzv9qb
+VTeM4g1bNR1Qz6tjMwR9HbZ0jvziZ8CvQfel7QukM-ioRf2QkEEMmpoJkMHYbKW1
 
 ### 2.3 启用「机器人」能力
 
@@ -109,7 +101,7 @@ ngrok http 8000
 |--------|------|
 | `Contact.User.Read` | 查询用户信息（可选） |
 | `qyapi_chat_robot_send` | 机器人发消息 |
-| `Message.send_Robot` | 发送机器人消息 |
+| `qyapi_robot_sendmsg` | 发送机器人消息 |
 
 不同钉钉版本权限名可能略有差异，凡涉及 **机器人发消息 / 文件上传** 的都开启。
 

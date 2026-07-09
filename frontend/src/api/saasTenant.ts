@@ -279,7 +279,7 @@ export async function listChannels(): Promise<{ success: boolean; channels: any[
   return res.json()
 }
 
-export async function createChannel(data: { channel_type: string; config: Record<string, string>; subagent_type?: string }): Promise<any> {
+export async function createChannel(data: { channel_type: string; name?: string; config: Record<string, string>; subagent_type?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/channels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
@@ -289,7 +289,7 @@ export async function createChannel(data: { channel_type: string; config: Record
   return res.json()
 }
 
-export async function updateChannel(configId: string, data: { config: Record<string, string>; subagent_type?: string }): Promise<any> {
+export async function updateChannel(configId: string, data: { name?: string; config: Record<string, string>; subagent_type?: string }): Promise<any> {
   const res = await fetch(`${API_BASE}/channels/${configId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },

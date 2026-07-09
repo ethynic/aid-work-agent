@@ -40,6 +40,7 @@ class ChannelConfigDB:
         channel_type: str,
         config: dict,
         subagent_type: Optional[str] = None,
+        name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """创建渠道配置。
 
@@ -50,6 +51,8 @@ class ChannelConfigDB:
         **client 模式注册例外**：admin.register_client 用 config={"client_id":...}
         走 client 模式注册路径（不含 server 凭证，不强制 server，不加密）。
         第一期 client 模式前端禁用，但 register_client 仍保留兼容已有客户端。
+
+        name 字段：用户自定义渠道名称，用于区分同租户多个同类渠道；可为空（兼容 register_client）。
         """
         config_id = f"chan_{uuid.uuid4().hex[:12]}"
         config_to_write = dict(config or {})
@@ -75,19 +78,20 @@ class ChannelConfigDB:
             try:
                 cursor.execute(
                     """
-                    INSERT INTO tenant_channel_configs (config_id, tenant_id, channel_type, config, subagent_type)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO tenant_channel_configs (config_id, tenant_id, channel_type, name, config, subagent_type)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                     (
                         config_id,
                         tenant_id,
                         channel_type,
+                        name,
                         json.dumps(config_to_write, ensure_ascii=False),
                         subagent_type,
                     ),
                 )
                 conn.commit()
-                logger.info(f"Channel config created: {config_id} ({channel_type})")
+                logger.info(f"Channel config created: {config_id} ({channel_type}, name={name})")
                 return ChannelConfigDB.get_by_id(config_id)
             except Exception as e:
                 # IntegrityError 为部分唯一索引拦截（如 wecom_personal_rpa 同租户单例
@@ -219,7 +223,7 @@ class ChannelConfigDB:
 
     @staticmethod
     def update(
-        config_id: str, config: dict, subagent_type: Optional[str] = None
+        config_id: str, config: dict, subagent_type: Optional[str] = None, name: Optional[str] = None
     ) -> bool:
         """更新渠道配置。
 
@@ -228,6 +232,8 @@ class ChannelConfigDB:
         - 强制 listen_mode='server'
         - last_seq / last_callback_at / last_fetch_at / last_error_* 等运行时字段
           若调用方未提供，从 DB 读原值保留（防止前端更新凭证时把这些状态字段重置）
+
+        name 字段：传 None 时不动；传空串则清空；传非空串则更新。
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -279,14 +285,25 @@ class ChannelConfigDB:
                 # 加密 + 强制 server
                 new_config = credential_codec.encrypt_sensitive_fields(new_config)
 
-            cursor.execute(
-                """
-                UPDATE tenant_channel_configs
-                SET config = %s, subagent_type = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE config_id = %s
-            """,
-                (json.dumps(new_config, ensure_ascii=False), subagent_type, config_id),
-            )
+            # name 处理：None 表示不改；其他值（含空串）按传入值更新
+            if name is None:
+                cursor.execute(
+                    """
+                    UPDATE tenant_channel_configs
+                    SET config = %s, subagent_type = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE config_id = %s
+                """,
+                    (json.dumps(new_config, ensure_ascii=False), subagent_type, config_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE tenant_channel_configs
+                    SET config = %s, subagent_type = %s, name = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE config_id = %s
+                """,
+                    (json.dumps(new_config, ensure_ascii=False), subagent_type, name, config_id),
+                )
             conn.commit()
             return cursor.rowcount > 0
 
