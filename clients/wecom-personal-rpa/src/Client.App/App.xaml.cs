@@ -28,15 +28,15 @@ public partial class App : Application
 {
     private const string AppTag = "Client.App";
 
-    private static readonly string AppDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "WeComPersonalRpa", "Client.App");
+    // 路径常量统一来自 Client.Core/Config/ClientAppPaths.cs，与 ConfigTool 共用，
+    // 避免再次发生"ConfigTool 写入路径 ≠ Client.App 读取路径"的事故（2026-06-25 联调踩过）。
+    private static readonly string AppDir = ClientAppPaths.AppDirectory;
 
     /// <summary>日志目录（用户可见，托盘"打开日志目录"指向此处）。</summary>
-    public static readonly string LogDirectory = Path.Combine(AppDir, "logs");
+    public static readonly string LogDirectory = ClientAppPaths.LogDirectory;
 
-    /// <summary>本地诊断/运行期数据目录。</summary>
-    public static readonly string DataDirectory = Path.Combine(AppDir, "data");
+    /// <summary>本地诊断/运行期数据目录（client_config.enc / send_queue.db 等落地处）。</summary>
+    public static readonly string DataDirectory = ClientAppPaths.DataDirectory;
 
     private IHost? _host;
     private TrayApp? _tray;

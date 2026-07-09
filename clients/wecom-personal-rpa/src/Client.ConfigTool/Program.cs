@@ -60,9 +60,12 @@ internal static class Program
             return 4;
         }
 
-        // 默认输出路径：%LOCALAPPDATA%\WeComRpa\client_config.enc
+        // 默认输出路径必须等于 Client.App 实际读取路径（见 ClientAppPaths.ConfigFilePath）。
+        // 2026-06-25 事故：曾经默认写到 %LOCALAPPDATA%\WeComRpa\client_config.enc，
+        // 与客户端读取路径 %LOCALAPPDATA%\WeComPersonalRpa\Client.App\data\client_config.enc 不一致，
+        // 导致客户端加载到旧配置（错的 BaseUrl），WebSocket 连不上。
         var outputPath = string.IsNullOrWhiteSpace(parsed.Output)
-            ? DefaultOutputPath()
+            ? ClientAppPaths.ConfigFilePath
             : Path.GetFullPath(parsed.Output);
 
         stdout.WriteLine("=== 企业微信个人账号 RPA 客户端 - 配置写入工具 ===");
@@ -260,12 +263,6 @@ internal static class Program
         }
     }
 
-    private static string DefaultOutputPath()
-    {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(localAppData, "WeComRpa", EncryptedClientConfig.FileName);
-    }
-
     private static void PrintHelp(TextWriter w)
     {
         w.WriteLine("Client.ConfigTool - 企业微信个人账号 RPA 客户端配置写入工具");
@@ -282,7 +279,7 @@ internal static class Program
         w.WriteLine("  --agent-base-url <URL>        Agent 服务端基础 URL（默认 http://localhost:8000）");
         w.WriteLine("  --tenant-id <ID>              租户 ID（必填）");
         w.WriteLine("  --poll-interval-seconds <N>   轮询间隔秒（默认 30）");
-        w.WriteLine("  --output <PATH>               输出路径（默认 %LOCALAPPDATA%\\WeComRpa\\client_config.enc）");
+        w.WriteLine("  --output <PATH>               输出路径（默认 %LOCALAPPDATA%\\WeComPersonalRpa\\Client.App\\data\\client_config.enc，即 Client.App 实际读取路径）");
         w.WriteLine("  --from-env                    从 CLIENT_ID/CLIENT_SECRET/AGENT_BASE_URL/TENANT_ID/POLL_INTERVAL_SECONDS 读取");
         w.WriteLine("  --yes, -y                     覆盖现有文件时不询问确认");
         w.WriteLine("  --help, -h                    显示帮助");

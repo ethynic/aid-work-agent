@@ -47,7 +47,7 @@
 |---|------|------|
 | A | ~~`DesktopState.IsLocked` P/Invoke 入口点找不到~~ | ✅ 已修，见上表 #13 |
 | B | `TrayApp.OnRelogin` DI 注入报错 `No service for type 'RpaHost'` | 用户点「重新登录」会失败。修法：在 `App.xaml.cs.ConfigureServices` 把 `RpaHost` 注册成 `AddSingleton<RpaHost>` 或修复 `OnRelogin` 的服务定位方式 |
-| C | ConfigTool 默认输出 `%LOCALAPPDATA%\WeComRpa\client_config.enc`，但客户端读 `%LOCALAPPDATA%\WeComPersonalRpa\Client.App\data\client_config.enc` | 用户必须手动 cp 配置文件，否则客户端读不到。修法：ConfigTool 默认输出路径改成跟客户端读取路径一致 |
+| C | ~~ConfigTool 默认输出 `%LOCALAPPDATA%\WeComRpa\client_config.enc`，但客户端读 `%LOCALAPPDATA%\WeComPersonalRpa\Client.App\data\client_config.enc`~~ | ✅ 已修：路径常量提取到 `src/Client.Core/Config/ClientAppPaths.cs`，ConfigTool 默认输出路径与 Client.App 的 `DataDirectory` 共用同一来源（`ClientAppPaths.ConfigFilePath`），不会再漂移。详见下方 §5「配置客户端」 |
 | D | `.env` 必须设 `RPA_SECRET_KEY`，否则 `register_client` / `rotate_client_secret` 都会 RuntimeError | 文档没说明。修法：在 `.env.example` 加注释 + 在 `docs/system/wecom-personal-rpa-design.md` 补部署前置条件 |
 | E | `build-and-install.ps1` 之前的 msiexec 异步 bug 已修（改用 `Start-Process -Wait`） | 已修，无需再动 |
 
@@ -252,6 +252,73 @@ msiexec /i "C:\path\to\WeComRpa-1.0.0.msi" /qn /norestart
 ```powershell
 msiexec /i "WeComRpa-1.0.0.msi" /qn INSTALLDIR="D:\WeComRpa" /norestart
 ```
+
+### 4.2.1 配置客户端（ConfigTool 写入加密配置）
+
+MSI 安装完客户端代码后，**还差一步**：用 `Client.ConfigTool.exe` 把从平台后台拿到的 `client_id` / `client_secret` / `agent_base_url` / `tenant_id` 加密写入本机。否则 Client.App 启动后会加载空配置，无法连服务端。
+
+#### 路径约定（重要）
+
+ConfigTool 默认输出路径 = Client.App 启动时实际读取的路径，二者共用 `src/Client.Core/Config/ClientAppPaths.cs` 的同一常量来源：
+
+```
+%LOCALAPPDATA%\WeComPersonalRpa\Client.App\data\client_config.enc
+```
+
+不要再写 `%LOCALAPPDATA%\WeComRpa\...`（2026-06-25 之前的老路径），那条路径下的文件**已废弃**——新 ConfigTool 不写、Client.App 不读。
+
+#### 推荐用法：交互模式
+
+```powershell
+# 在客户端安装目录或 publish\config-tool\ 下执行
+.\Client.ConfigTool.exe
+# → 逐项提示输入 client_id / client_secret（不回显）/ agent_base_url / tenant_id / poll_interval_seconds
+# → 默认写入 %LOCALAPPDATA%\WeComPersonalRpa\Client.App\data\client_config.enc
+```
+
+参数从平台后台「RPA 绑定管理」→「新增绑定」或「轮换密钥」获取。
+
+#### 自动化场景：参数模式
+
+```powershell
+.\Client.ConfigTool.exe `
+    --client-id rpa_client_xxxxxxxxxxxxxxxx `
+    --client-secret xxxxxxxxxxxxxxxxxxxxxxxxxx `
+    --agent-base-url https://your-agent-host `
+    --tenant-id tenant_xxxxxxxxxxxx `
+    --yes
+```
+
+#### 何时需要 `--output`
+
+- 自定义了 Client.App 的 `DataDirectory`（目前 Client.App 不支持，预留场景）
+- 测试 / CI 场景：写到临时目录验证后再拷贝部署
+
+```powershell
+.\Client.ConfigTool.exe --output D:\tmp\client_config.enc ...
+```
+
+#### ⚠️ 老路径残留警告
+
+**如果这台机器装过 2026-06-25 之前的客户端**，可能在老路径 `%LOCALAPPDATA%\WeComRpa\client_config.enc` 留过文件。这个老文件**已废弃**，新 ConfigTool 不写这里，Client.App 也不读这里。但如果遇到客户端行为异常（比如连到错的 BaseUrl），先检查并清理：
+
+```powershell
+# 检查老路径是否有残留
+Test-Path "$env:LOCALAPPDATA\WeComRpa\client_config.enc"
+# 若为 True，删掉避免迷惑
+Remove-Item "$env:LOCALAPPDATA\WeComRpa\client_config.enc" -Force
+```
+
+#### 验证配置写入成功
+
+```powershell
+Get-Item "$env:LOCALAPPDATA\WeComPersonalRpa\Client.App\data\client_config.enc" |
+    Select-Object FullName, LastWriteTime, Length
+```
+
+期望：`FullName` 在 `WeComPersonalRpa\Client.App\data\` 下，`LastWriteTime` 是当前时间。
+
+更详细的 ConfigTool 用法（环境变量模式、退出码、安全说明）见 [`src/Client.ConfigTool/README.md`](../src/Client.ConfigTool/README.md)。
 
 ### 4.3 安装时发生什么
 

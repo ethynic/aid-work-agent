@@ -19,7 +19,11 @@ public sealed class EncryptedClientConfig
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>配置文件相对名。</summary>
+    /// <summary>
+    /// 配置文件相对名。
+    /// 注意：路径聚合请使用 <see cref="ClientAppPaths.ConfigFilePath"/>，
+    /// 那里独立定义了一份同名常量以避免平台限定警告。若改文件名需同步修改两处。
+    /// </summary>
     public const string FileName = "client_config.enc";
 
     /// <summary>将 <see cref="ClientOptions"/> 加密保存到指定路径。</summary>
