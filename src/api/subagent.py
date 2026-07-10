@@ -70,6 +70,26 @@ async def list_subagents(request: Request):
         return {"success": False, "error": "列出数字员工失败", "debug": str(e)}
 
 
+@router.get("/skills")
+async def list_available_skills(request: Request):
+    """获取可选 skill 列表
+
+    展示全部基础目录已加载 skill（未经主智能体白名单过滤），
+    供前端技能选择器使用。
+    """
+    try:
+        skill_registry = master_agent.skill_registry
+        if not skill_registry:
+            return {"success": True, "data": []}
+
+        skills = skill_registry.list_all_loaded_skills()
+        return {"success": True, "data": skills}
+
+    except Exception as e:
+        logger.error(f"获取技能列表失败: {e}", exc_info=True)
+        return {"success": False, "error": "获取技能列表失败", "debug": str(e)}
+
+
 @router.get("/{agent_id}")
 async def get_subagent_detail(request: Request, agent_id: str):
     """获取单个数字员工详情"""
@@ -149,22 +169,6 @@ async def get_subagent_content(request: Request, agent_id: str):
     except Exception as e:
         logger.error(f"获取数字员工内容失败: {e}", exc_info=True)
         return {"success": False, "error": "获取数字员工内容失败", "debug": str(e)}
-
-
-@router.get("/skills")
-async def list_available_skills(request: Request):
-    """获取可选 skill 列表"""
-    try:
-        skill_registry = master_agent.skill_registry
-        if not skill_registry:
-            return {"success": True, "data": []}
-
-        skills = skill_registry.list_skills()
-        return {"success": True, "data": skills}
-
-    except Exception as e:
-        logger.error(f"获取技能列表失败: {e}", exc_info=True)
-        return {"success": False, "error": "获取技能列表失败", "debug": str(e)}
 
 
 @router.get("/tools")

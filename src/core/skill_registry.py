@@ -47,6 +47,7 @@ class SkillRegistry:
             skills_dir: Skill目录路径，如果提供则自动加载
         """
         self._skills: Dict[str, Skill] = {}
+        self._all_skills: Dict[str, Skill] = {}  # 未过滤的全集（供管理后台技能选择器使用）
         self._loader: Optional[SkillLoader] = None
         self._loaders: Dict[str, SkillLoader] = {}  # skill_name -> source loader（多目录支持）
         self._allowed: Optional[Set[str]] = None  # allow 名单
@@ -72,8 +73,11 @@ class SkillRegistry:
         self._loader = SkillLoader(skills_dir)
         self._allowed = set(allowed) if allowed else None
 
-        # 只加载允许的 skills
+        # 保留未过滤的全集（供管理后台技能选择器展示全部可选 skill）
         all_skills = self._loader.skills
+        self._all_skills = dict(all_skills)
+
+        # 只加载允许的 skills
         if self._allowed is not None:
             self._skills = {
                 name: skill
@@ -120,6 +124,9 @@ class SkillRegistry:
             for name, skill in loader.skills.items():
                 combined_skills[name] = skill
                 combined_loaders[name] = loader
+
+        # 保留未过滤的全集（供管理后台技能选择器展示全部可选 skill）
+        self._all_skills = dict(combined_skills)
 
         # 过滤
         if self._allowed is not None:
@@ -234,11 +241,27 @@ class SkillRegistry:
     def list_skills(self) -> List[str]:
         """
         列出所有Skill名称
-        
+
         Returns:
             Skill名称列表
         """
         return list(self._skills.keys())
+
+    def list_all_loaded_skills(self) -> List[str]:
+        """返回所有已加载 skill 名称（未经 allowed 过滤）。
+
+        供管理后台技能选择器使用，需展示全部可选 skill，
+        而不是仅主智能体白名单内的 skill。
+        """
+        return list(self._all_skills.keys())
+
+    def get_all_skill(self, name: str) -> Optional[Skill]:
+        """按名称获取未过滤全集中的 skill（供 API 取 description）。
+
+        与 get() 的区别：get() 只在 allowed 过滤后的 _skills 中查找，
+        本方法在未过滤的全集 _all_skills 中查找，能取到被白名单排除的 skill。
+        """
+        return self._all_skills.get(name)
     
     def match_by_file(self, filename: str) -> Optional[str]:
         """

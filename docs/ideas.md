@@ -28,6 +28,7 @@
 |---|------|------|------|---------|---------|
 | 5 | 知识库能力增强 | 🔧 部分完成 | Phase 0 知识库分类管理已完成。Phase 1-2 已重排（2026-07-06）：**Phase 1（合规阻塞，2 周）= 文档级权限 + 检索日志**；**Phase 2（销售精度 + 体验，3-4 周）= LLM Rerank + 查询改写 + 质量评估（与 Rerank 配套）+ Pipeline 协调器**。重排理由：原 Phase 1 按实现依赖排序无商业化优先级，现按销售推动力重排——权限是中大型企业上线卡点，质量评估需与 Rerank 配套（否则评估的是基线无意义）。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) |
 | 35 | 短信验证码 skill | 🔧 部分完成 | 新增 `src/skills/sms-verification-1.0.0/` 供智能体调用，复用 `src/sms/` 通道和 `send_sms_code`/`verify_sms_code` 底层逻辑。`send` + `verify` 两个 CLI 子命令，频控 60s 同号锁 + 24h 上限 10（Redis 降级内存），输出 JSON 不含 code、日志脱敏 `***`。三智能体流程通过（27/27 单测 + 相邻 skill 回归 22/22 + 启动安全 + CR 无 P0/P1），待提交。2026-07-10 | - | - |
+| 36 | 技能白名单简化（三层->两层） | 🔧 部分完成 | 管理后台 3 个技能列表 API（`/api/admin/agent-definitions/meta/skills`、`/api/admin/subagents/skills`、`/api/subagents/skills`）改读 `SkillRegistry.list_all_loaded_skills()`（未过滤全集），不再被 `master_agent.allowed` 卡。新增 `_all_skills` 字段 + 两个公开方法。顺手修复 `/api/subagents/skills` 路由被 `/{agent_id}` 抢占的预先存在问题。每加一个 skill 只需改 1 处（子智能体用->DB / 主智能体用->config.yaml）。三智能体流程通过（11/11 单测 + 启动安全 + CR 修复 1 个 P1 路由抢占），待提交。2026-07-10 | - | - |
 
 ## 数字员工 / 子智能体
 

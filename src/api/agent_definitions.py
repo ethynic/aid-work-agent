@@ -201,15 +201,19 @@ async def list_tools_meta(request: Request):
 
 @router.get("/meta/skills")
 async def list_skills_meta(request: Request):
-    """获取技能元数据列表（供前端选择器使用）"""
+    """获取技能元数据列表（供前端选择器使用）
+
+    展示全部基础目录已加载 skill（未经主智能体白名单过滤），
+    这样管理员在配置子智能体 skills.allowed 时能看到全部可选 skill。
+    """
     _require_admin(request)
     from src.core.agent import master_agent
     skill_registry = master_agent.skill_registry
     if not skill_registry:
         return _success([])
     skills = []
-    for name in skill_registry.list_skills():
-        skill = skill_registry.get(name)
+    for name in skill_registry.list_all_loaded_skills():
+        skill = skill_registry.get_all_skill(name)
         skills.append({
             "id": name,
             "name": name,

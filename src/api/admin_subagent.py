@@ -139,7 +139,11 @@ async def list_subagents(request: Request):
 
 @router.get("/subagents/skills")
 async def list_available_skills(request: Request):
-    """获取可选 skill 列表"""
+    """获取可选 skill 列表
+
+    展示全部基础目录已加载 skill（未经主智能体白名单过滤），
+    供管理员配置子智能体 skills.allowed 时选择。
+    """
     try:
         admin = _require_admin(request)
         if admin is None:
@@ -149,7 +153,7 @@ async def list_available_skills(request: Request):
         if not skill_registry:
             return {"success": True, "data": []}
 
-        skills = skill_registry.list_skills()
+        skills = skill_registry.list_all_loaded_skills()
         return {"success": True, "data": skills}
 
     except Exception as e:

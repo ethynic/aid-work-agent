@@ -59,6 +59,17 @@
 ### 添加技能
 创建目录 `src/skills/<name>-<version>/`，包含 `SKILL.md` 文件（参考现有技能格式）。重启后自动加载。
 
+**Skill 白名单层级（2 层模型）**：
+
+| 层级 | 配置位置 | 作用范围 | 说明 |
+|------|---------|---------|------|
+| 1. 主智能体白名单 | `configs/config.yaml` `skills.master_agent.allowed` | 仅主智能体运行时 | 控制主智能体可调用哪些 skill。子智能体运行时**不读这一层** |
+| 2. 子智能体白名单 | 管理后台 / DB `subagent_definitions.skills.allowed` | 子智能体运行时 | 控制子智能体可调用哪些 skill。由 `SubagentConfig.get_allowed_skills()` 在 `agent.py` 中读取 |
+
+每新增一个 skill 给子智能体用，**只需改 1 处**：管理后台 / DB 的 `subagent_definitions.skills.allowed`。
+
+**关键**：管理后台技能选择器（3 个 API：`/api/admin/agent-definitions/meta/skills`、`/api/admin/subagents/skills`、`/api/subagents/skills`）读取的是 `SkillRegistry.list_all_loaded_skills()`——全部基础目录已加载 skill（未经主智能体白名单过滤），这样管理员能看到全部可选 skill。`_all_skills` 只含基础目录 skill，不含租户私有 skill（符合 `subagent_definitions` 表无 `tenant_id` 的语义）。
+
 ### 添加子智能体
 创建 `subagents/<name>/SUBAGENT.md`，包含 YAML 头部（name、description、capabilities、triggers、tools、skills.allowed）+ Markdown 正文。重启后自动加载。
 
