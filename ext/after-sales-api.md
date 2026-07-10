@@ -120,7 +120,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 ### 返回响应
 
-**响应示例（精简）**
+**响应示例**
 
 ```json
 {
@@ -194,7 +194,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 | Response['tables'][i]['sections'] | array | 字段分区定义 |
 | Response['tables'][i]['sections'][j]['attrs'] | array | 分区下的字段元数据（白名单过滤后） |
 
-**响应示例（已精简）**
+**响应示例**
 
 ```json
 {
@@ -320,7 +320,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
   "module": "kehudingdan",
   "filters": [
     { "attr": "shouji", "display_name": "手机", "value": "13916323347", "component": "input" },
-    { "attr": "xiadanshijian", "display_name": "下单时间", "value": ["2026-06-02", "2026-06-04"], "component": "datetime" }
+    { "attr": "xiadanshijian", "display_name": "下单时间", "value": ["2026-06-02 00:00:00", "2026-06-04 23:59:59"], "component": "datetime" }
   ],
   "page": 1,
   "limit": 20
@@ -329,7 +329,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 **关于 datetime 截止时间的注意事项**
 
-上例中，value[1]: "2026-06-04" 其实表示的是 "2026-06-04 00:00:00" 而非 "2026-06-04 23:59:59" ，这一点和很多用户口头表述不同。即，用户说“我的订单下单时间应该是在2026年6月2日到2026年6月4日之间”，那么应该翻译为 { "attr": "xiadanshijian", "display_name": "下单时间", "value": ["2026-06-02", "2026-06-05"], "component": "datetime" } 。
+上例中，value[1] 必须带时分秒，如果写 "2026-06-04" 其实表示的是 "2026-06-04 00:00:00" 而非 "2026-06-04 23:59:59" ，这一点和很多用户口头表述不同。即，用户说“我的订单下单时间应该是在2026年6月2日到2026年6月4日之间”，那么应该翻译为 { "attr": "xiadanshijian", "display_name": "下单时间", "value": ["2026-06-02 00:00:00", "2026-06-04 23:59:59"], "component": "datetime" } 。
 
 ### 返回响应
 
@@ -1072,7 +1072,7 @@ POST，Body 为 `application/json`
 
 **约束**：
 - `tuidanshuliang`（退单数量）必须等于该行的 `yifahuoshuliang`（已发货数量），不允许部分退货
-- `tuihuozhuangtai`（退货状态）必须为 `"待处理"`
+- `tuihuozhuangtai`（退货状态）必须为 `"待商家处理"`
 
 ```json
 {
@@ -1086,7 +1086,7 @@ POST，Body 为 `application/json`
         {
           "tuidanshuliang": 4,
           "tuihuoyuanyin": "商品质量问题",
-          "tuihuozhuangtai": "待处理",
+          "tuihuozhuangtai": "待商家处理",
           "id": 1
         }
       ]

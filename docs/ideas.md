@@ -27,6 +27,7 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 5 | 知识库能力增强 | 🔧 部分完成 | Phase 0 知识库分类管理已完成。Phase 1-2 已重排（2026-07-06）：**Phase 1（合规阻塞，2 周）= 文档级权限 + 检索日志**；**Phase 2（销售精度 + 体验，3-4 周）= LLM Rerank + 查询改写 + 质量评估（与 Rerank 配套）+ Pipeline 协调器**。重排理由：原 Phase 1 按实现依赖排序无商业化优先级，现按销售推动力重排——权限是中大型企业上线卡点，质量评估需与 Rerank 配套（否则评估的是基线无意义）。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) |
+| 35 | 短信验证码 skill | 🔧 部分完成 | 新增 `src/skills/sms-verification-1.0.0/` 供智能体调用，复用 `src/sms/` 通道和 `send_sms_code`/`verify_sms_code` 底层逻辑。`send` + `verify` 两个 CLI 子命令，频控 60s 同号锁 + 24h 上限 10（Redis 降级内存），输出 JSON 不含 code、日志脱敏 `***`。三智能体流程通过（27/27 单测 + 相邻 skill 回归 22/22 + 启动安全 + CR 无 P0/P1），待提交。2026-07-10 | - | - |
 
 ## 数字员工 / 子智能体
 

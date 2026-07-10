@@ -1,0 +1,93 @@
+{
+  "name": "sms-verification",
+  "version": "1.0.0",
+  "description": "发送/验证手机短信验证码，用于身份核实、二次确认、敏感操作授权等场景",
+  "author": "AID Work Agent Team",
+  "license": "MIT",
+  "homepage": "",
+  "repository": "",
+  "keywords": [
+    "sms",
+    "verification",
+    "otp",
+    "authentication",
+    "phone"
+  ],
+  "engines": {
+    "python": ">=3.8"
+  },
+  "dependencies": {},
+  "scripts": {
+    "main": "scripts/sms_cli.py"
+  },
+  "configuration": {
+    "env": [
+      {
+        "name": "SMS_CHANNEL",
+        "required": false,
+        "description": "短信通道，如 ZhuTong"
+      },
+      {
+        "name": "SMS_USERNAME",
+        "required": false,
+        "description": "短信通道账号"
+      },
+      {
+        "name": "SMS_PASSWORD",
+        "required": false,
+        "description": "短信通道密码"
+      },
+      {
+        "name": "SMS_SIGNATURE",
+        "required": false,
+        "description": "短信签名（不带【】）"
+      },
+      {
+        "name": "SMS_TEMPLATE_YZM",
+        "required": false,
+        "description": "验证码模板 ID"
+      },
+      {
+        "name": "QBSMSCODE",
+        "required": false,
+        "description": "验证码 bypass 码（测试/演示用，生产留空）"
+      }
+    ]
+  },
+  "capabilities": [
+    "send-sms-code",
+    "verify-sms-code"
+  ],
+  "triggers": [
+    {
+      "type": "keyword",
+      "pattern": "发验证码"
+    },
+    {
+      "type": "keyword",
+      "pattern": "短信验证"
+    },
+    {
+      "type": "keyword",
+      "pattern": "手机验证"
+    },
+    {
+      "type": "keyword",
+      "pattern": "身份核实"
+    },
+    {
+      "type": "keyword",
+      "pattern": "验证码校验"
+    }
+  ],
+  "examples": [
+    {
+      "description": "发送验证码",
+      "command": "python scripts/sms_cli.py send --mobile 13800138000"
+    },
+    {
+      "description": "校验验证码",
+      "command": "python scripts/sms_cli.py verify --mobile 13800138000 --code 123456"
+    }
+  ]
+}
