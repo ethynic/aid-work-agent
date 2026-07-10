@@ -13,7 +13,7 @@ namespace WeCom.PersonalRpa.App.Realtime;
 ///
 /// 设计：
 ///   - 包装 <see cref="ClientWebSocket"/>，由 <see cref="IAgentApiClient.ConnectWebSocketAsync"/> 拿到底层连接后接管。
-///   - 心跳：周期发空 byte 数组作为 ping（30s 一次，仅作 TCP keepalive，不期望 pong）。
+///   - 心跳：周期发送文本 <c>ping</c>（30s 一次，仅作连接保活，不期望 pong）。
 ///   - 离线检测（P0-7 改动）：仅以 <c>ws.State != Open</c> 为判离线索索，不再用"60s 未收到消息"。
 ///     服务端可长期不主动推消息，应用层 ping 也无 pong，旧策略会频繁误判重连。
 ///   - 重连策略：指数退避 1s/2s/4s/8s/16s/30s（封顶 30s）。
@@ -207,12 +207,12 @@ public sealed class WebSocketConnectionManager : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// 心跳 Tick：发送空 ping（keepalive）+ 通过 ClientWebSocket.State 检测离线。
+    /// 心跳 Tick：发送文本 ping（keepalive）+ 通过 ClientWebSocket.State 检测离线。
     ///
     /// P0-7 改动：旧版用"60s 未收到消息 → 触发重连"判离线，但服务端可能长期不主动推消息，
     /// 应用层 ping 也无 pong 响应，导致频繁误判重连。改为：
     ///   - 离线检测：定时检查 ws.State != Open → 触发重连（不再用消息时间阈值）
-    ///   - 心跳：周期发空 byte ping 作为 TCP keepalive（防止代理对静默长连接超时断开），
+    ///   - 心跳：周期发文本 ping 作为连接保活（防止代理对静默长连接超时断开），
     ///     不期望 pong（应用层不依赖 pong）
     /// </summary>
     private void HeartbeatTick()
@@ -233,12 +233,12 @@ public sealed class WebSocketConnectionManager : IHostedService, IDisposable
                 return;
             }
 
-            // Ping：发空 byte 数组作为 keepalive（不期望 pong；失败 → 触发重连）
+            // Ping：发送明确的文本帧，兼容服务端应用层心跳处理（不期望 pong；失败 → 触发重连）
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await ws.SendAsync(Array.Empty<byte>(), WebSocketMessageType.Binary,
+                    await ws.SendAsync("ping"u8.ToArray(), WebSocketMessageType.Text,
                         endOfMessage: true, CancellationToken.None);
                 }
                 catch (Exception ex)

@@ -1199,16 +1199,21 @@ async def wecom_personal_rpa_ws(
 
     try:
         while True:
-            # 心跳：客户端周期性发送，收到即更新 last_seen
-            await websocket.receive_text()
+            # 心跳兼容文本和二进制帧；receive_text() 遇二进制帧会触发 KeyError。
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                logger.info(f"RPA ws 断开 client={vr.client_id}")
+                break
+            if message["type"] != "websocket.receive":
+                continue
             try:
                 db.update_last_seen(tenant_id, vr.client_id or client_id)
             except Exception as e:
                 logger.debug(f"RPA ws update_last_seen 失败: {e}")
     except WebSocketDisconnect:
         logger.info(f"RPA ws 断开 client={vr.client_id}")
-    except Exception as e:
-        logger.info(f"RPA ws 异常断开 client={vr.client_id}: {type(e).__name__}")
+    except Exception:
+        logger.exception(f"RPA ws 异常断开 client={vr.client_id}")
     finally:
         await client_connection_registry.unregister(vr.client_id or client_id)
 

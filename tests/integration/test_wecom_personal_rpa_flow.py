@@ -157,6 +157,19 @@ def _signed_headers(body_bytes: bytes, secret: bytes = _TEST_SECRET_BYTES) -> di
     }
 
 
+def _signed_ws_query(secret: bytes = _TEST_SECRET_BYTES) -> str:
+    """构造 WebSocket 握手使用的 HMAC query string。"""
+    from src.channels.wecom_personal_rpa import auth
+
+    timestamp = str(int(time.time()))
+    nonce = uuid.uuid4().hex
+    signature = auth.compute_signature(_CLIENT_ID, timestamp, nonce, b"", secret)
+    return (
+        f"client_id={_CLIENT_ID}&timestamp={timestamp}&nonce={nonce}"
+        f"&signature={signature}"
+    )
+
+
 def _patched_db(client_row: dict | None = None):
     """返回一个 MagicMock 替代 routes 模块里的 db，提供路由用到的全部函数。"""
     fake = MagicMock()
@@ -356,6 +369,46 @@ class TestWeComPersonalRpaCallbackFlow:
         assert "message" in body_json
         # debug 字段不得包含 secret / 签名串
         assert _TEST_SECRET_PLAINTEXT not in (body_json.get("debug") or "")
+
+
+@pytest.mark.integration
+class TestWeComPersonalRpaWebSocketHeartbeat:
+    """WebSocket 心跳兼容文本、二进制帧及正常断开。"""
+
+    def test_binary_and_text_heartbeats_keep_connection_alive(self, client, fake_dedup):
+        """旧版二进制心跳不会断线，后续文本心跳仍可被处理。"""
+        fake_db = _patched_db()
+        ctxs, _mocks = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            path = (
+                f"/t/{_TENANT_ID}/wecom_personal_rpa/ws/{_CONFIG_ID}"
+                f"?{_signed_ws_query()}"
+            )
+            with client.websocket_connect(path) as websocket:
+                websocket.send_bytes(b"")
+                websocket.send_text("ping")
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        assert fake_db.update_last_seen.call_count == 2
+
+    def test_disconnect_does_not_update_last_seen(self, client, fake_dedup):
+        """连接关闭事件仅退出接收循环，不误记为一次心跳。"""
+        fake_db = _patched_db()
+        ctxs, _mocks = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            path = (
+                f"/t/{_TENANT_ID}/wecom_personal_rpa/ws/{_CONFIG_ID}"
+                f"?{_signed_ws_query()}"
+            )
+            with client.websocket_connect(path):
+                pass
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        fake_db.update_last_seen.assert_not_called()
 
 
 @pytest.mark.integration
