@@ -8,7 +8,7 @@
 - verify: 校验用户输入的验证码
 
 复用 src.db.models.send_sms_code / verify_sms_code 底层能力，复用 sms_codes 表
-（TTL 5 分钟，演示模式固定 888888，qb_sms_code bypass）。
+（TTL 15 分钟，演示模式固定 888888，qb_sms_code bypass）。
 
 频控（脚本层）：
 - 60s 内同一手机号只能发送 1 次（防秒刷）
@@ -41,6 +41,7 @@ from loguru import logger
 
 from src.config.settings import settings
 from src.core.redis_client import redis_client
+from src.core.temp_logger import tlog
 from src.db.models import send_sms_code, verify_sms_code
 from src.sms.manager import sms_manager
 
@@ -62,8 +63,8 @@ def _ensure_db_pool() -> None:
 
 # ============== 常量 ==============
 
-# 验证码有效期（秒），与 send_sms_code 中 timedelta(minutes=5) 对齐
-CODE_TTL_SECONDS = 300
+# 验证码有效期（秒），与 send_sms_code 中 timedelta(minutes=15) 对齐
+CODE_TTL_SECONDS = 900
 
 # 60 秒内同一手机号只能发送 1 次
 SEND_INTERVAL_SECONDS = 60
@@ -217,7 +218,7 @@ def send_sms(
     1. 校验手机号
     2. 检查短信通道可用性（非演示模式）
     3. 频控检查（60s + 24h 上限）
-    4. 调用底层 send_sms_code（含演示模式 888888、qb_sms_code bypass、5 分钟 TTL）
+    4. 调用底层 send_sms_code（含演示模式 888888、qb_sms_code bypass、15 分钟 TTL）
     5. 成功后记录频控计数
     6. 返回 JSON（不含 code）
 
@@ -228,7 +229,7 @@ def send_sms(
         session_id: 会话 ID（仅用于日志追踪）
 
     Returns:
-        {"success": True, "expires_in_seconds": 300} 或
+        {"success": True, "expires_in_seconds": 900} 或
         {"success": False, "error": ..., "debug": ...}
     """
     # 1. 校验手机号

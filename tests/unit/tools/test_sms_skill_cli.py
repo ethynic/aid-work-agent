@@ -99,7 +99,7 @@ class TestSendSms:
         result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is True
-        assert result["expires_in_seconds"] == 300
+        assert result["expires_in_seconds"] == 900
         # 不含 code 字段
         assert "code" not in result
         # 频控计数被记录
@@ -118,7 +118,7 @@ class TestSendSms:
             result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is True
-        assert result["expires_in_seconds"] == 300
+        assert result["expires_in_seconds"] == 900
         assert "code" not in result
 
     def test_send_invalid_mobile(self, demo_on, qb_code_empty):

@@ -59,7 +59,7 @@ python scripts/sms_cli.py send --mobile 13800138000
 
 成功响应（**不含验证码**）：
 ```json
-{"success": true, "expires_in_seconds": 300}
+{"success": true, "expires_in_seconds": 900}
 ```
 
 失败响应：
@@ -101,7 +101,7 @@ python scripts/sms_cli.py verify --mobile 13800138000 --code 123456
 
 本技能复用 `src/db/models.py` 中的：
 
-- `send_sms_code(phone)`：生成验证码 → 调用短信通道 → 写入 `sms_codes` 表（5 分钟 TTL，演示模式固定 `888888`）
+- `send_sms_code(phone)`：生成验证码 → 调用短信通道 → 写入 `sms_codes` 表（15 分钟 TTL，演示模式固定 `888888`）
 - `verify_sms_code(phone, code)`：校验 `sms_codes` 表，命中后标记 `used=1`
 
 因此本技能：

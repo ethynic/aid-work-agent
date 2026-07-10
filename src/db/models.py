@@ -1485,7 +1485,7 @@ def send_sms_code(phone: str) -> bool:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE sms_codes SET used = 1 WHERE phone = {placeholder}", (phone,))
 
-        expires_at = (datetime.now() + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+        expires_at = (datetime.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(f"""
             INSERT INTO sms_codes (phone, code, expires_at)
             VALUES ({placeholder}, {placeholder}, {placeholder})
