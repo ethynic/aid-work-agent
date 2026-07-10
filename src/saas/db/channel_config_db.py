@@ -169,6 +169,89 @@ class ChannelConfigDB:
             return None
 
     @staticmethod
+    def resolve_by_tenant_reference(
+        tenant_id: str, channel_type: str, config_reference: str
+    ) -> Optional[Dict[str, Any]]:
+        """按业务 config_id 或历史数字主键解析同租户渠道配置。
+
+        ``config_reference`` 来自公开路由，必须同时约束 tenant 和 channel_type，
+        避免兼容历史数字 ID 时跨租户或跨渠道命中。返回结构与
+        :meth:`get_by_tenant_and_id` 一致，RPA 敏感字段仅供服务端内部解密。
+        """
+        reference = str(config_reference or "").strip()
+        if not reference:
+            return None
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM tenant_channel_configs
+                WHERE tenant_id = %s
+                  AND channel_type = %s
+                  AND (config_id = %s OR CAST(id AS TEXT) = %s)
+                """,
+                (tenant_id, channel_type, reference, reference),
+            )
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["config"] = json.loads(d["config"]) if d.get("config") else {}
+                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
+                    d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
+                return d
+            return None
+
+    @staticmethod
+    def claim_client_if_unowned(
+        tenant_id: str, channel_type: str, config_id: str, client_id: str
+    ) -> bool:
+        """原子认领未归属的渠道配置，已有归属绝不覆盖。
+
+        WebSocket 握手可能由多个 worker/客户端并发执行，必须在同一事务中锁定记录并
+        检查 ``config.client_id``，避免普通的读后写造成后写者劫持归属。
+        """
+        if not tenant_id or not channel_type or not config_id or not client_id:
+            return False
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT config FROM tenant_channel_configs
+                WHERE tenant_id = %s AND channel_type = %s AND config_id = %s
+                FOR UPDATE
+                """,
+                (tenant_id, channel_type, config_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            raw_config = row["config"] if isinstance(row, dict) else row[0]
+            config = json.loads(raw_config) if raw_config else {}
+            configured_client_id = config.get("client_id")
+            if configured_client_id:
+                return configured_client_id == client_id
+
+            config["client_id"] = client_id
+            cursor.execute(
+                """
+                UPDATE tenant_channel_configs
+                SET config = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = %s AND channel_type = %s AND config_id = %s
+                """,
+                (
+                    json.dumps(config, ensure_ascii=False),
+                    tenant_id,
+                    channel_type,
+                    config_id,
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
     def list_by_tenant(
         tenant_id: str, channel_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:

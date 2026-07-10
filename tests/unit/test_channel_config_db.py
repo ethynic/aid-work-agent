@@ -44,7 +44,7 @@ class TestChannelConfigDBCreateWithSubagentType:
             params = call_args[0][1]
 
             assert "subagent_type" in sql
-            assert params[4] == "travel-consultant"  # 第5个参数是 subagent_type
+            assert params[5] == "travel-consultant"  # 第6个参数是 subagent_type
             assert result["subagent_type"] == "travel-consultant"
 
     def test_create_without_subagent_type_saves_null(self):
@@ -76,7 +76,7 @@ class TestChannelConfigDBCreateWithSubagentType:
             call_args = mock_cursor.execute.call_args_list[0]
             params = call_args[0][1]
 
-            assert params[4] is None  # subagent_type 参数为 None
+            assert params[5] is None  # subagent_type 参数为 None
             assert result["subagent_type"] is None
 
 
@@ -130,6 +130,104 @@ class TestChannelConfigDBGetById:
 
             assert result is not None
             assert result["subagent_type"] is None
+
+
+class TestChannelConfigDBResolveByTenantReference:
+    """历史数字主键与业务 config_id 的安全兼容解析。"""
+
+    @pytest.mark.parametrize("reference", ["7", "chan_test123"])
+    def test_resolves_reference_with_tenant_and_channel_scope(self, reference):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {
+            "id": 7,
+            "config_id": "chan_test123",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom_personal_rpa",
+            "config": json.dumps({"client_id": "client_001"}),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            result = ChannelConfigDB.resolve_by_tenant_reference(
+                "tenant_001", "wecom_personal_rpa", reference
+            )
+
+        assert result is not None
+        assert result["config_id"] == "chan_test123"
+        sql, params = mock_cursor.execute.call_args.args
+        assert "tenant_id = %s" in sql
+        assert "channel_type = %s" in sql
+        assert "CAST(id AS TEXT) = %s" in sql
+        assert params == (
+            "tenant_001",
+            "wecom_personal_rpa",
+            reference,
+            reference,
+        )
+
+    def test_empty_reference_does_not_query_database(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            assert (
+                ChannelConfigDB.resolve_by_tenant_reference(
+                    "tenant_001", "wecom_personal_rpa", " "
+                )
+                is None
+            )
+        mock_get_db.assert_not_called()
+
+
+class TestChannelConfigDBClaimClientIfUnowned:
+    """未归属配置必须在行锁保护下原子认领。"""
+
+    def test_claims_unowned_config_under_row_lock(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {"config": json.dumps({"listen_mode": "server"})}
+        cursor.rowcount = 1
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as get_db:
+            get_db.return_value.__enter__.return_value = conn
+            result = ChannelConfigDB.claim_client_if_unowned(
+                "tenant_001", "wecom_personal_rpa", "chan_test123", "client_new"
+            )
+
+        assert result is True
+        assert "FOR UPDATE" in cursor.execute.call_args_list[0].args[0]
+        update_params = cursor.execute.call_args_list[1].args[1]
+        assert json.loads(update_params[0])["client_id"] == "client_new"
+        assert update_params[1:] == (
+            "tenant_001", "wecom_personal_rpa", "chan_test123"
+        )
+        conn.commit.assert_called_once()
+
+    def test_does_not_overwrite_other_client(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {
+            "config": json.dumps({"client_id": "client_existing"})
+        }
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as get_db:
+            get_db.return_value.__enter__.return_value = conn
+            result = ChannelConfigDB.claim_client_if_unowned(
+                "tenant_001", "wecom_personal_rpa", "chan_test123", "client_new"
+            )
+
+        assert result is False
+        assert cursor.execute.call_count == 1
+        conn.commit.assert_not_called()
 
 
 class TestChannelConfigDBListByTenant:

@@ -868,8 +868,8 @@ async def wecom_personal_rpa_config(request: Request):
     except Exception as e:
         logger.warning(f"RPA config list_accounts 失败: {e}")
 
-    # 查 tenant_channel_configs 拿 config_id + listen_mode（客户端据此决定是否拉存档）
-    # config_id 就是 tenant_channel_configs 记录的主键 id（register_client 时写入）
+    # 只下发明确归属于当前已鉴权客户端的渠道配置，禁止把同租户其他客户端的
+    # config_id 泄漏给当前客户端。新协议统一下发稳定的业务 config_id（chan_*）。
     # listen_mode 第一期强制 'server'（codec 已写入），客户端据此跳过本地 ChatArchiveListener
     config_id = None
     listen_mode = "server"  # 默认 server（无 tenant_channel_configs 配置时也走 server）
@@ -877,11 +877,19 @@ async def wecom_personal_rpa_config(request: Request):
         from src.saas.db.channel_config_db import ChannelConfigDB
 
         configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type=_CHANNEL_TYPE)
-        if configs:
-            config_id = str(configs[0].get("id"))
+        owned_config = next(
+            (
+                item
+                for item in configs
+                if (item.get("config") or {}).get("client_id") == vr.client_id
+            ),
+            None,
+        )
+        if owned_config:
+            config_id = owned_config.get("config_id")
             # 注意：list_by_tenant 返回的 config 字段是 mask 后的（敏感字段掩码），
             # 但 listen_mode 是明文字段，可直接读取
-            config_data = configs[0].get("config") or {}
+            config_data = owned_config.get("config") or {}
             lm = config_data.get("listen_mode")
             if lm in ("server", "client"):
                 listen_mode = lm
@@ -1211,8 +1219,10 @@ async def wecom_personal_rpa_ws(
     # 任意持有合法密钥的客户端通过连接 URL 劫持另一个渠道配置。
     from src.saas.db.channel_config_db import ChannelConfigDB
 
-    channel_config = ChannelConfigDB.get_by_tenant_and_id(tenant_id, config_id)
-    if not channel_config or channel_config.get("channel_type") != _CHANNEL_TYPE:
+    channel_config = ChannelConfigDB.resolve_by_tenant_reference(
+        tenant_id, _CHANNEL_TYPE, config_id
+    )
+    if not channel_config:
         logger.info(
             f"RPA ws 配置不匹配 tenant={tenant_id} client={client_id} config={config_id}"
         )
@@ -1227,8 +1237,15 @@ async def wecom_personal_rpa_ws(
         )
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-    if not configured_client_id and not ChannelConfigDB.update_config_field(
-        config_id, "client_id", authenticated_client_id
+    resolved_config_id = channel_config.get("config_id")
+    if not resolved_config_id:
+        logger.error(
+            f"RPA ws 配置缺少业务 ID tenant={tenant_id} config={config_id}"
+        )
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return
+    if not configured_client_id and not ChannelConfigDB.claim_client_if_unowned(
+        tenant_id, _CHANNEL_TYPE, resolved_config_id, authenticated_client_id
     ):
         logger.warning(
             f"RPA ws 更新配置 client_id 失败 tenant={tenant_id} config={config_id}"
@@ -1241,7 +1258,7 @@ async def wecom_personal_rpa_ws(
     from src.channels.wecom_personal_rpa.archive.fetcher import ServerArchiveFetcher
 
     account_config = dict(channel_config)
-    account_config["config_id"] = channel_config.get("config_id") or config_id
+    account_config["config_id"] = resolved_config_id
     account_id = ServerArchiveFetcher._infer_account_id(tenant_id, account_config)
     config_data = channel_config.get("config") or {}
     if not account_id or not db.upsert_account(

@@ -12,6 +12,20 @@
 
 ## A. 线协议逐字段说明
 
+### A.0 配置标识与归属
+
+`GET /api/v1/channels/wecom-personal-rpa/config` 仅向已鉴权客户端下发
+`config.client_id` 与当前 `X-Client-Id` 完全一致的渠道配置。响应中的 `config_id`
+统一使用稳定业务标识（`chan_*`），不得返回数据库数字主键，也不得回退到租户内第一条
+配置。没有明确归属时返回 `config_id: null`，由管理员在后台完成分配；服务端不会把其他
+客户端或未分配配置暴露给调用方。
+
+WebSocket 路径以业务标识为准：
+`/t/{tenant_id}/wecom_personal_rpa/ws/{config_id}`。为兼容已安装旧客户端，服务端暂时也
+接受同一记录的历史数字主键，但解析时必须同时匹配 `tenant_id` 和
+`channel_type=wecom_personal_rpa`。已有归属不能通过 WebSocket 覆盖；未归属配置只有在
+管理员通过可信配置流程明确提供其标识后，才允许合法客户端首次认领。
+
 ### A.1 鉴权头（所有客户端 → 服务端请求必带）
 
 | 头名 | schemas 常量 | 说明 |

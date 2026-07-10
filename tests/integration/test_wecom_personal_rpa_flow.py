@@ -232,10 +232,14 @@ def _apply_common_patches(fake_db, fake_dedup_obj, *, decrypt_bytes=_TEST_SECRET
         patch.object(routes_mod, "_process_inbound_message", new=process_mock),
         patch.object(
             ChannelConfigDB,
-            "get_by_tenant_and_id",
-            return_value={"channel_type": "wecom_personal_rpa", "tenant_id": _TENANT_ID},
+            "resolve_by_tenant_reference",
+            return_value={
+                "config_id": _CONFIG_ID,
+                "channel_type": "wecom_personal_rpa",
+                "tenant_id": _TENANT_ID,
+            },
         ),
-        patch.object(ChannelConfigDB, "update_config_field", return_value=True),
+        patch.object(ChannelConfigDB, "claim_client_if_unowned", return_value=True),
     ]
     for c in ctxs:
         c.__enter__()
@@ -422,15 +426,39 @@ class TestWeComPersonalRpaWebSocketHeartbeat:
 
         fake_db.update_last_seen.assert_not_called()
 
+    @pytest.mark.parametrize("config_reference", ["7", _CONFIG_ID])
+    def test_legacy_numeric_and_business_config_ids_resolve(
+        self, client, fake_dedup, config_reference
+    ):
+        """旧版数字 ID 和新版业务 ID 均通过同一租户/渠道解析器握手。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        fake_db = _patched_db()
+        ctxs, _mocks = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            path = (
+                f"/t/{_TENANT_ID}/wecom_personal_rpa/ws/{config_reference}"
+                f"?{_signed_ws_query()}"
+            )
+            with client.websocket_connect(path):
+                pass
+            ChannelConfigDB.resolve_by_tenant_reference.assert_called_once_with(
+                _TENANT_ID, "wecom_personal_rpa", config_reference
+            )
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
     def test_authenticated_client_cannot_hijack_owned_config(self, client, fake_dedup):
         """同租户合法客户端也不能覆盖已归属其他客户端的渠道配置。"""
         from src.saas.db.channel_config_db import ChannelConfigDB
 
         fake_db = _patched_db()
         ctxs, _mocks = _apply_common_patches(fake_db, fake_dedup)
-        update_config_mock = ChannelConfigDB.update_config_field
+        update_config_mock = ChannelConfigDB.claim_client_if_unowned
         try:
-            ChannelConfigDB.get_by_tenant_and_id.return_value = {
+            ChannelConfigDB.resolve_by_tenant_reference.return_value = {
+                "config_id": _CONFIG_ID,
                 "channel_type": "wecom_personal_rpa",
                 "tenant_id": _TENANT_ID,
                 "config": {"client_id": "another_client"},
@@ -552,9 +580,13 @@ class TestConfigResponseFields:
             def _fake_list_by_tenant(tenant_id, channel_type=None):
                 captured["tenant_id"] = tenant_id
                 captured["channel_type"] = channel_type
-                # 真实 tenant_channel_configs 行：id 是主键，register_client 时写入。
-                # 后端用 str(id) 作为 config_id 返回给客户端构造 callback 路径。
-                return [{"id": "cfg_from_db_001"}]
+                return [
+                    {
+                        "id": 7,
+                        "config_id": "chan_owned_001",
+                        "config": {"client_id": _CLIENT_ID, "listen_mode": "server"},
+                    }
+                ]
 
             with patch.object(
                 cfg_mod.ChannelConfigDB, "list_by_tenant", _fake_list_by_tenant
@@ -573,10 +605,50 @@ class TestConfigResponseFields:
         body = resp.json()
         assert body["client_id"] == _CLIENT_ID
         assert body["tenant_id"] == _TENANT_ID
-        assert body["config_id"] == "cfg_from_db_001"
+        assert body["config_id"] == "chan_owned_001"
         # list_by_tenant 收到的过滤参数正确
         assert captured["tenant_id"] == _TENANT_ID
         assert captured["channel_type"] == "wecom_personal_rpa"
+
+    @pytest.mark.parametrize(
+        "foreign_config",
+        [
+            {"client_id": "another_client", "listen_mode": "client"},
+            {"listen_mode": "server"},
+        ],
+    )
+    def test_config_does_not_expose_foreign_or_unowned_config(
+        self, client, fake_dedup, foreign_config
+    ):
+        """没有明确归属时返回空配置，不泄漏租户内其他或未分配配置。"""
+        fake_db = _patched_db()
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            from src.saas.db import channel_config_db as cfg_mod
+
+            with patch.object(
+                cfg_mod.ChannelConfigDB,
+                "list_by_tenant",
+                return_value=[
+                    {
+                        "id": 7,
+                        "config_id": "chan_not_owned",
+                        "config": foreign_config,
+                    }
+                ],
+            ):
+                headers = {**_signed_headers(b""), "X-Tenant-Id": _TENANT_ID}
+                resp = client.get(
+                    "/api/v1/channels/wecom-personal-rpa/config", headers=headers
+                )
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["config_id"] is None
+        assert body["listen_mode"] == "server"
 
     def test_config_response_config_id_none_when_no_channel_config(self, client, fake_dedup):
         """WHY: register_client 时 ChannelConfigDB.create 失败的边缘情况下，
