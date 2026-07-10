@@ -5,7 +5,34 @@
 > 技术调研：[企业知识库 RAG 系统前沿技术调研](../../research/enterprise-knowledge-base-rag-research.md)
 > 文档索引：[ideas.md §系统功能 #5](../../ideas.md)
 > 创建日期：2026-05-28
-> 状态：设计中（Phase 0 开发中）
+> 状态：Phase 0 已完成并上线（2026-06，详见 §5.0）；Phase 1-2 待开发
+
+---
+
+## Phase 划分与商业化判断
+
+### Phase 划分
+
+| Phase | 内容 | 优先级 |
+|-------|------|--------|
+| Phase 1 | 文档级权限 + 检索日志 | **P0**（合规阻塞） |
+| Phase 2 | LLM Rerank + 查询改写 + 质量评估 + Pipeline 协调器 | P1（销售精度 + 体验） |
+
+### 商业化判断（决策依据）
+
+| 诉求 | 客户场景 | 对应能力 |
+|------|---------|---------|
+| 合规可用 | 中大型企业（100 人+）没有文档级权限控制就无法上线；销售 POC 时 IT/法务部门会直接否决 | 文档级权限（Phase 1） |
+| 准确度可信（销售 demo） | 销售 demo 答非所问就死单；客户决策者只看一条结果对不对 | LLM Rerank + 质量评估（Phase 2 配套） |
+| 多轮对话连贯 | 用户追问"高铁呢？"时检索不到前文关联内容 | 查询改写（Phase 2） |
+
+### 关键决策：质量评估与 Rerank 配套
+
+质量评估与 Rerank 同期上线（Phase 2），不单独做：
+
+- 没上 Rerank 时，评估的是基线（Hybrid Retrieval + RRF）的精度。一旦 Rerank 上线（精度通常 +0.1~0.15 NDCG），所有基线评估结果**立刻失效**，需要重新跑。
+- 评估指标（Precision@5、nDCG@10）的核心价值是**量化 Rerank 的提升幅度**，给客户/销售提供"上了 Rerank 后准确度从 X 提升到 Y"的数据支撑。
+- 因此评估系统的标注数据集、计算逻辑要与 Rerank 同期上线，**先建评估集→上 Rerank→对比评估**。
 
 ---
 
@@ -99,7 +126,15 @@
 
 ## 三、详细设计
 
-### 3.1 Rerank 重排序（P0）
+### 3.1 Rerank 重排序（**Phase 2-A**）
+
+#### 3.1.0 关键设计决策
+
+1. **Provider 选型**：首期采用 LLM-based Rerank（复用 qwen/zhipu Gateway，零外部依赖）。**不**首期接入 BGE/Cohere（增加部署/外部 API 依赖）。
+2. **候选数阈值**：`max_candidates=20`，`top_k=5`。候选超过 20 条时按 RRF 顺序截断（避免 LLM 输入过长）。
+3. **同步阻塞 vs 异步**：**同步阻塞**（在检索 Pipeline 主流程内调用），但带 `timeout_ms=3000` 超时降级。理由：Rerank 是为了影响最终送入 LLM 的上下文，异步无意义；超时降级保证兜底。
+4. **降级策略**：超时/JSON 解析失败/LLM 异常 → 回退到原始 RRF 排序前 top_k（不影响主流程）。
+5. **Selective Rerank（可选优化）**：当 top-1 RRF 分数 > 0.85 时跳过 Rerank（高置信场景省一次 LLM 调用）。首期不开，等评估数据验证后再开。
 
 #### 3.1.1 方案选型
 
@@ -243,7 +278,20 @@ class CrossEncoderReranker(BaseReranker):
 
 ---
 
-### 3.2 文档级权限控制（P0）
+### 3.2 文档级权限控制（**Phase 1-A**，最高优先级）
+
+#### 3.2.0 关键设计决策
+
+1. **权限粒度**：采用**知识库（KB）级 ACL**而非单文档级。理由：
+   - 单文档级 ACL 表会爆炸（10 万文档 × 100 用户 = 千万级 ACL 记录）
+   - 客户心智模型也是按"知识库"授权（如"研发文档库"、"财务文档库"）
+   - 文档上传到知识库时自动继承 KB 权限，无需为每份文档单独配置
+2. **过滤时机**：**Pre-retrieval Filtering**（检索前用 `doc_id IN (...)` 过滤），**不**采用 Post-retrieval（先检索后过滤会丢失结果）。
+   - 实现细节：现有 `chunks_vec` 已通过 JOIN `chunks`/`documents` 关联，**只需在 WHERE 子句追加 `d.id = ANY(%s)` 即可**，索引改动成本极低。
+3. **ACL 主体类型**：`tenant`（全租户可见）/ `department`（部门可见）/ `user`（指定用户）。**首期不实现角色（role）和群组（group）**，保持模型简单。
+4. **权限缓存**：**首期不缓存**（直接查库，避免多 Worker 不一致）。`get_accessible_kb_ids()` 单次查询走索引，延迟可控（< 5ms）。后续按需迁移到 Redis。
+5. **默认知识库**：每个租户自动创建"默认知识库"（`is_default=true`），现有文档归入默认库（subject_type='tenant'，全租户可见），**保证向后兼容**——不配置权限时所有用户可见全部文档。
+6. **权限继承**：用户可访问的 KB = `tenant` 级 + 用户所属 `department` 级 + 显式 `user` 级。
 
 #### 3.2.1 权限模型
 
@@ -428,7 +476,18 @@ POST   /api/knowledge/upload/batch?kb_id={kb_id} # 批量上传
 
 ---
 
-### 3.3 检索质量评估（P1）
+### 3.3 检索质量评估（**Phase 2-C**，与 Rerank 配套）
+
+#### 3.3.0 关键设计决策
+
+1. **评估形态**：首期做**离线评测脚本 + 在线检索日志**两件事，**不**做客户可见的"质量报表"页面（投入产出比低）。
+   - 离线评测：运营/技术内部使用，验证 Rerank 提升幅度
+   - 在线检索日志：写入 `retrieval_logs`，记录 query/rewritten_query/top_score/latency/reranked，**Phase 1-B 已建立**
+2. **评估指标**：核心 4 项——Precision@5、Recall@10、nDCG@10、Hit Rate。**不**首期做 LLM-as-Judge（Faithfulness/Answer Relevancy），因为：
+   - LLM-as-Judge 成本高（每个 query 多一次 LLM 调用）
+   - 客户不关心生成质量指标，只关心检索准不准
+3. **评估数据集**：标注数据存 `evaluation_sets.test_cases` JSONB，每条 `{"query": "...", "relevant_doc_ids": [...]}`。**首期由内部运营手工标注 50~100 条**作为基线集，不要求租户自助标注。
+4. **执行时机**：**手动触发**（运维人员调用 API 或脚本），**不**首期接入定时调度（评估频次低，手动够用）。
 
 #### 3.3.1 评估指标体系
 
@@ -551,7 +610,17 @@ class KnowledgeBaseEvaluator:
 
 ---
 
-### 3.4 多轮对话检索增强（P1）
+### 3.4 多轮对话检索增强（**Phase 2-B**）
+
+#### 3.4.0 关键设计决策
+
+1. **改写策略**：首期实现**共指消解**（Coreference Resolution）一层，**不**首期做子查询分解（Sub-query Decomposition）或多查询并行（Multi-Query）。
+   - 共指消解覆盖 80% 多轮失败场景（"高铁呢？" → "公司差旅报销 高铁标准"）
+   - 子查询分解/多查询并行复杂度高、对单轮场景无收益，留到第二阶段
+2. **改写时机**：**检索前**改写（不是检索失败后兜底）。失败兜底模式意味着双倍 LLM 调用，成本不可控。
+3. **触发条件**：仅当 `chat_history >= 2 条消息`（即至少 1 个 user/assistant 来回）时触发；首轮对话直接跳过。
+4. **降级策略**：超时（`max_latency_ms=1000`）/LLM 异常 → 使用原始 query（不改写），不阻塞主流程。
+5. **温度参数**：`temperature=0.1`，低温度保证改写稳定性（同一输入应产出同一改写）。
 
 #### 3.4.1 问题分析
 
@@ -672,7 +741,7 @@ knowledge:
 
 ---
 
-### 3.5 检索 Pipeline 协调器（整合）
+### 3.5 检索 Pipeline 协调器（**Phase 2-D**，整合）
 
 新增 Pipeline 协调器，统一编排各增强模块的调用顺序：
 
@@ -930,7 +999,7 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS valid_until TIMESTAMP;
 
 ## 五、前端变更
 
-### 5.0 知识库分类管理页面（Phase 0 — 最高优先级）
+### 5.0 知识库分类管理页面（Phase 0 — ✅ 已完成并上线 2026-06）
 
 #### 5.0.1 需求概述
 
@@ -1276,7 +1345,7 @@ export const listDocuments = (limit: number, offset: number, sourceType?: string
 - 已有 `source_type`（如 `file`、`hotel_resource`）通过迁移脚本自动注册到 `knowledge_categories`
 - 其他模块（如 `data_analysis.py`）向 `documents` 写入数据时不受影响，其 `source_type` 如需显示在分类导航，可后续手动添加
 
-### 5.1 知识库管理页面（原计划，Phase 1）
+### 5.1 知识库管理页面（Phase 1）
 
 新增知识库管理界面（可复用现有 BaseCard/BaseTable 组件）：
 
@@ -1340,38 +1409,53 @@ knowledge:
 
 ## 七、实施计划
 
-### Phase 0：知识库分类管理（最高优先级，1 周）
+### Phase 0：知识库分类管理（✅ 已完成并上线 2026-06）
 
-| 天数 | 任务 | 交付物 |
-|------|------|--------|
-| D1 | 数据库变更（新建 `knowledge_categories` 表 + 已有数据迁移） | `init-postgres.sql` + `db_update.sql` |
-| D1 | 后端 API（分类 CRUD + 文档列表 `source_type` 过滤） | `src/knowledge/api.py` + `service.py` |
-| D2 | 前端 API 层（`knowledge.ts` 新增分类接口） | `frontend/src/api/knowledge.ts` |
-| D2-3 | 前端页面改造（左侧分类导航 + 右侧文档列表双栏布局） | `KnowledgeBase.vue` |
-| D3 | 添加分类弹窗 + 重命名弹窗 + 删除确认 + 验证逻辑 | 弹窗组件 |
-| D4 | 上传文档时关联当前分类（`source_type` 传参） | 上传逻辑改造 |
-| D4 | 联调测试 | 全流程验证 |
+详细设计与实现见 [§5.0](#50-知识库分类管理页面phase-0--已完成并上线-2026-06)。本节仅保留交付物索引：
 
-### 第一阶段：核心检索增强（4-5 周）
+| 交付物 | 位置 |
+|--------|------|
+| DB 表 `knowledge_categories` | `deploy/init-postgres.sql:354`、`deploy/db_update.sql:226` |
+| 后端分类 CRUD API | `src/knowledge/api.py:101/109/124/134` |
+| 后端分类 Service | `src/knowledge/service.py:126/156/189/206` |
+| 前端 API | `frontend/src/api/knowledge.ts:207` 起 |
+| 前端页面（左侧分类导航 + 弹窗） | `frontend/src/components/KnowledgeBase.vue` |
+
+### Phase 1：文档级权限 + 检索日志（合规阻塞，2 周）
+
+> **目标**：解锁中大型企业客户上线卡点；为权限审计提供检索日志。
+> **依赖**：Phase 0 已完成（分类管理）
 
 | 周次 | 任务 | 交付物 |
 |------|------|--------|
-| W1 | Rerank 引擎实现 + Pipeline 协调器 | `src/knowledge/reranker/` + `pipeline.py` |
-| W1 | 数据库变更（新表 + 字段） | `init-postgres.sql` + `db_update.sql` |
-| W2 | 文档级权限实现 | `src/knowledge/permissions.py` + API |
-| W2 | 检索日志记录 | `retrieval_logs` 表写入逻辑 |
-| W3 | Query Rewriting 实现 | `query_rewriter.py` + KnowledgeBaseTool 集成 |
-| W3 | Pipeline 整合测试 | 集成测试用例 |
-| W4 | 前端：知识库管理页面 | 知识库 CRUD + 权限设置 UI |
-| W4 | 前端：检索调试工具 | 调试页面 |
-| W5 | 质量评估服务 + 仪表盘 | `evaluation/` + 前端图表 |
-| W5 | 全量回归测试 + 性能测试 | 测试报告 |
+| W1 | 数据库变更：`knowledge_bases`、`kb_permissions` 表；`documents.kb_id` 字段；现有文档归入默认库 | `init-postgres.sql` + `db_update.sql` |
+| W1 | 权限服务：`KnowledgeBasePermission` 类 + 三级 ACL（tenant/department/user） | `src/knowledge/permissions.py` |
+| W1 | 检索层改造：`HybridRetriever.retrieve()` 增加 `user_id`/`departments` 参数，向量/FTS 检索追加 `d.id = ANY(%s)` 过滤 | `retriever/hybrid_retriever.py` + `vector_db.py` |
+| W2 | API：知识库 CRUD + 权限管理端点 + 文档上传指定 kb_id | `src/knowledge/api.py` |
+| W2 | 检索日志：`retrieval_logs` 表写入 + 用户反馈端点 | `service.py` + `api.py` |
+| W2 | 前端：知识库切换 + 权限设置弹窗 | `KnowledgeBase.vue` 扩展 |
 
-### 第二阶段：高级能力（按需启动）
+### Phase 2：Rerank + 查询改写 + 质量评估 + Pipeline（销售精度 + 体验，3-4 周）
+
+> **目标**：销售 demo 精度可信；多轮对话连贯；量化指标对比 Rerank 提升。
+> **依赖**：Phase 1 完成（Pipeline 在权限基础上编排）
+
+| 周次 | 任务 | 交付物 |
+|------|------|--------|
+| W1 | 评估集建立：内部运营标注 50~100 条 (query, relevant_doc_ids) | `evaluation_sets` 数据 |
+| W1 | 基线评估：跑评估集得到 Rerank 前的 Precision@5/Recall@10/nDCG@10/Hit Rate | `evaluation/evaluator.py` |
+| W1-2 | Rerank 引擎：LLM-based Reranker + `BaseReranker` 抽象 | `src/knowledge/reranker/` |
+| W2 | 查询改写：`QueryRewriter`（共指消解）+ KnowledgeBaseTool 集成 | `retriever/query_rewriter.py` |
+| W2 | Pipeline 协调器：串联 Rewrite→Permission→Retrieval→Rerank | `retriever/pipeline.py` |
+| W3 | Rerank 后评估：跑同一评估集对比提升幅度 | 评估报告 |
+| W3 | 检索调试工具（前端）：输入 query → 查看改写/检索/Rerank 各步输出 | 调试页面 |
+| W3 | 集成测试 + 性能测试（p95 < 400ms） | 测试报告 |
+
+### 第三阶段：高级能力（按需启动）
 
 | 任务 | 依赖 | 预估周期 |
 |------|------|---------|
-| Cross-Encoder Reranker 集成 | 第一阶段完成 | 2 周 |
+| Cross-Encoder Reranker 集成（BGE/bce-reranker） | Phase 2 完成 | 2 周 |
 | Text-to-SQL 基础版 | 意图分类器 | 4-6 周 |
 | 文档自动同步 | 同步框架 | 3-4 周 |
 | 知识库健康监控 | 检索日志积累 | 2 周 |
@@ -1400,9 +1484,9 @@ knowledge:
 
 | 差距分析需求 | 本文档章节 | 实施阶段 |
 |-------------|-----------|---------|
-| **知识库分类管理**（新增需求） | **§5.0** | **Phase 0（最高优先级）** |
-| Rerank 重排序 | §3.1 | 第一阶段 W1 |
-| 文档级权限控制 | §3.2 | 第一阶段 W2 |
-| 知识库健康度检测 | §3.8 | 第二阶段 |
-| 结构化数据问答（Text-to-SQL） | §3.6 | 第二阶段 |
-| 文档自动同步 | §3.7 | 第二阶段 |
+| **知识库分类管理**（新增需求） | **§5.0** | **Phase 0（✅ 已完成并上线 2026-06）** |
+| Rerank 重排序 | §3.1 | Phase 2-A |
+| 文档级权限控制 | §3.2 | Phase 1-A |
+| 知识库健康度检测 | §3.8 | 第三阶段（按需） |
+| 结构化数据问答（Text-to-SQL） | §3.6 | 第三阶段（按需） |
+| 文档自动同步 | §3.7 | 第三阶段（按需） |
