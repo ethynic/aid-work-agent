@@ -220,6 +220,18 @@ RpaAction = Union[
 ]
 
 
+class RpaReplyContext(BaseModel):
+    """Agent 回复对应的入站上下文（兼容字段，旧信封可缺失）。"""
+
+    sender_display_name: Optional[str] = Field(default=None, description="发送人显示名，仅展示")
+    sender_stable_id: Optional[str] = Field(default=None, description="发送人稳定 ID")
+    conversation_search_name: Optional[str] = Field(
+        default=None, description="客户端企微搜索框使用的权威会话名称"
+    )
+    inbound_text: Optional[str] = Field(default=None, description="触发本次回复的用户文本")
+    agent_reply_text: Optional[str] = Field(default=None, description="Agent 完整回复文本")
+
+
 class ActionEnvelope(BaseModel):
     """服务端下发给客户端的动作信封。
 
@@ -231,6 +243,10 @@ class ActionEnvelope(BaseModel):
     session_id: str = Field(..., description="服务端会话 ID（wecom_personal_rpa:{account_id}:{route_key}）")
     account_id: str = Field(..., description="目标账号 ID")
     conversation_id: str = Field(..., description="客户端侧会话标识，用于定位企微会话窗口")
+    reply_context: Optional[RpaReplyContext] = Field(
+        default=None,
+        description="回复上下文，仅用于校验和诊断；actions 才是客户端执行权威",
+    )
     actions: List[RpaAction] = Field(..., description="顺序执行的动作列表")
 
 
@@ -347,4 +363,4 @@ class RpaErrorResponse(BaseModel):
 # ===========================================================================
 
 # 当前线协议版本。任何 breaking change 必须递进。
-PROTOCOL_VERSION = "1.0.0"
+PROTOCOL_VERSION = "1.1.0"

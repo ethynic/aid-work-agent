@@ -30,6 +30,7 @@ def patched_deliver():
         "src.channels.wecom_personal_rpa.adapter.deliver_actions",
         new_callable=AsyncMock,
     ) as mock_deliver:
+        mock_deliver.return_value = True
         yield mock_deliver
 
 
@@ -80,6 +81,9 @@ async def test_send_message_converts_text_and_files_to_actions(patched_deliver):
         conversation_id="conv_1",
         session_id="wecom_personal_rpa:acct_001:conv_1",
         request_id="req_1",
+        sender_display_name="张三",
+        sender_stable_id="wm_1",
+        inbound_text="用户问题",
     )
 
     resp = UnifiedResponse(
@@ -118,6 +122,13 @@ async def test_send_message_converts_text_and_files_to_actions(patched_deliver):
     assert kwargs["conversation_id"] == "conv_1"
     assert kwargs["request_id"] == "req_1"
     assert kwargs["session_id"] == "wecom_personal_rpa:acct_001:conv_1"
+    assert kwargs["reply_context"] == {
+        "sender_display_name": "张三",
+        "sender_stable_id": "wm_1",
+        "conversation_search_name": None,
+        "inbound_text": "用户问题",
+        "agent_reply_text": "你好",
+    }
 
     # 校验 action 序列：send_text + send_image + send_file
     actions = kwargs["actions"]

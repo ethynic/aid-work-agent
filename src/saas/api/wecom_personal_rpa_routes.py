@@ -80,6 +80,14 @@ _DEDUP_PREFIX = "wecom_personal_rpa"
 # 出站动作入队去重前缀（与 action_client.deliver_actions 内部一致）
 _OUTBOX_DEDUP_PREFIX = "wecom_personal_rpa"
 
+
+def _normalize_conversation_search_name(display_name: Optional[str]) -> Optional[str]:
+    """生成企微搜索名：仅移除末尾精确 ``@微信``，不做模糊替换。"""
+    value = (display_name or "").strip()
+    if value.endswith("@微信"):
+        value = value[:-3].strip()
+    return value or None
+
 # 文件下载短期签名 token TTL（秒），与 nonce 防重放窗口一致
 _FILE_TOKEN_TTL_SECONDS = 600
 # 媒体上传文件下载 token TTL（秒），24 小时
@@ -504,6 +512,13 @@ async def _process_inbound_message(
             )
             return
 
+        authoritative_display_name = (
+            (authoritative_binding or {}).get("display_name") or sender_display_name
+        )
+        conversation_search_name = _normalize_conversation_search_name(
+            authoritative_display_name
+        )
+
         # 3. 自动注册用户
         user_info = {
             "name": um.user_name or sender_display_name,
@@ -573,6 +588,10 @@ async def _process_inbound_message(
                 session_id=session_id,
                 request_id=env.event_id,
                 tenant_id=tenant_id,
+                sender_display_name=authoritative_display_name,
+                sender_stable_id=sender_stable_id,
+                conversation_search_name=conversation_search_name,
+                inbound_text=user_text,
             ),
         )
 
@@ -615,7 +634,7 @@ async def _process_inbound_message(
                     {
                         "event_id": env.event_id,
                         "session_id": session_id,
-                        "send_ok": result.get("status") == "success",
+                        "send_ok": bool(result.get("send_ok")),
                         "text_len": len(response_text),
                         "files": len(downloadable_files),
                     },
@@ -1188,6 +1207,61 @@ async def wecom_personal_rpa_ws(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    # config_id 与租户必须匹配。已有归属只能由后台管理员修改，不能允许同租户内
+    # 任意持有合法密钥的客户端通过连接 URL 劫持另一个渠道配置。
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    channel_config = ChannelConfigDB.get_by_tenant_and_id(tenant_id, config_id)
+    if not channel_config or channel_config.get("channel_type") != _CHANNEL_TYPE:
+        logger.info(
+            f"RPA ws 配置不匹配 tenant={tenant_id} client={client_id} config={config_id}"
+        )
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    authenticated_client_id = vr.client_id or client_id
+    configured_client_id = (channel_config.get("config") or {}).get("client_id")
+    if configured_client_id and configured_client_id != authenticated_client_id:
+        logger.warning(
+            f"RPA ws 客户端与配置归属不匹配 tenant={tenant_id} "
+            f"client={authenticated_client_id} config={config_id}"
+        )
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    if not configured_client_id and not ChannelConfigDB.update_config_field(
+        config_id, "client_id", authenticated_client_id
+    ):
+        logger.warning(
+            f"RPA ws 更新配置 client_id 失败 tenant={tenant_id} config={config_id}"
+        )
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return
+
+    # 建连时即建立稳定的 tenant-namespaced account → client 映射，避免必须等到
+    # archive poller 首次拉取后才能投递。subagent_type 不参与账号 ID。
+    from src.channels.wecom_personal_rpa.archive.fetcher import ServerArchiveFetcher
+
+    account_config = dict(channel_config)
+    account_config["config_id"] = channel_config.get("config_id") or config_id
+    account_id = ServerArchiveFetcher._infer_account_id(tenant_id, account_config)
+    config_data = channel_config.get("config") or {}
+    if not account_id or not db.upsert_account(
+        tenant_id=tenant_id,
+        client_id=authenticated_client_id,
+        account_id=account_id,
+        display_name=(
+            config_data.get("account_display_name")
+            or config_data.get("account_id")
+            or channel_config.get("name")
+            or account_id
+        ),
+    ):
+        logger.warning(
+            f"RPA ws 建立账号映射失败 tenant={tenant_id} client={authenticated_client_id} "
+            f"config={config_id}"
+        )
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return
+
     await websocket.accept()
     await client_connection_registry.register(vr.client_id or client_id, websocket)
     logger.info(
@@ -1248,12 +1322,15 @@ async def _push_pending_outbox(
             continue
         for row in pending_rows or []:
             envelope = {
+                "type": "actions",
                 "request_id": row.get("request_id"),
                 "session_id": row.get("session_id"),
                 "account_id": row.get("account_id"),
                 "conversation_id": row.get("conversation_id"),
                 "actions": row.get("actions") or [],
             }
+            if row.get("reply_context"):
+                envelope["reply_context"] = row["reply_context"]
             try:
                 payload = json.dumps(envelope, ensure_ascii=False)
                 await websocket.send_text(payload)

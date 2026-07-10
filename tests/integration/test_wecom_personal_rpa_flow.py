@@ -219,6 +219,7 @@ def _apply_common_patches(fake_db, fake_dedup_obj, *, decrypt_bytes=_TEST_SECRET
       ``mocks['process_inbound']`` 是替换 ``_process_inbound_message`` 的 AsyncMock。
     """
     from src.saas.api import wecom_personal_rpa_routes as routes_mod
+    from src.saas.db.channel_config_db import ChannelConfigDB
 
     process_mock = AsyncMock()
     ctxs = [
@@ -229,6 +230,12 @@ def _apply_common_patches(fake_db, fake_dedup_obj, *, decrypt_bytes=_TEST_SECRET
         ),
         # 后台任务：避免导入 agent_router/session_queue 的重链
         patch.object(routes_mod, "_process_inbound_message", new=process_mock),
+        patch.object(
+            ChannelConfigDB,
+            "get_by_tenant_and_id",
+            return_value={"channel_type": "wecom_personal_rpa", "tenant_id": _TENANT_ID},
+        ),
+        patch.object(ChannelConfigDB, "update_config_field", return_value=True),
     ]
     for c in ctxs:
         c.__enter__()
@@ -392,6 +399,11 @@ class TestWeComPersonalRpaWebSocketHeartbeat:
                 c.__exit__(None, None, None)
 
         assert fake_db.update_last_seen.call_count == 2
+        fake_db.upsert_account.assert_called_once()
+        mapping = fake_db.upsert_account.call_args.kwargs
+        assert mapping["tenant_id"] == _TENANT_ID
+        assert mapping["client_id"] == _CLIENT_ID
+        assert mapping["account_id"].startswith("rpa_acct_")
 
     def test_disconnect_does_not_update_last_seen(self, client, fake_dedup):
         """连接关闭事件仅退出接收循环，不误记为一次心跳。"""
@@ -409,6 +421,32 @@ class TestWeComPersonalRpaWebSocketHeartbeat:
                 c.__exit__(None, None, None)
 
         fake_db.update_last_seen.assert_not_called()
+
+    def test_authenticated_client_cannot_hijack_owned_config(self, client, fake_dedup):
+        """同租户合法客户端也不能覆盖已归属其他客户端的渠道配置。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        fake_db = _patched_db()
+        ctxs, _mocks = _apply_common_patches(fake_db, fake_dedup)
+        update_config_mock = ChannelConfigDB.update_config_field
+        try:
+            ChannelConfigDB.get_by_tenant_and_id.return_value = {
+                "channel_type": "wecom_personal_rpa",
+                "tenant_id": _TENANT_ID,
+                "config": {"client_id": "another_client"},
+            }
+            path = (
+                f"/t/{_TENANT_ID}/wecom_personal_rpa/ws/{_CONFIG_ID}"
+                f"?{_signed_ws_query()}"
+            )
+            with pytest.raises(Exception):
+                with client.websocket_connect(path):
+                    pass
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+        update_config_mock.assert_not_called()
 
 
 @pytest.mark.integration
@@ -433,6 +471,7 @@ class TestActionDeliverOfflineOutbox:
             # 账号存在但客户端离线
             m_get_acct.return_value = {
                 "id": _ACCOUNT_ID,
+                "tenant_id": _TENANT_ID,
                 "client_id": _CLIENT_ID,
                 "status": "offline",
             }
@@ -469,6 +508,7 @@ class TestActionDeliverOfflineOutbox:
         ) as m_send:
             m_get_acct.return_value = {
                 "id": _ACCOUNT_ID,
+                "tenant_id": _TENANT_ID,
                 "client_id": _CLIENT_ID,
                 "status": "online",
             }

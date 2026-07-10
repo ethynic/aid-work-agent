@@ -65,6 +65,10 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
         session_id: str,
         request_id: str,
         tenant_id: str = "",
+        sender_display_name: Optional[str] = None,
+        sender_stable_id: Optional[str] = None,
+        conversation_search_name: Optional[str] = None,
+        inbound_text: Optional[str] = None,
     ) -> None:
         """注入当前回调上下文，供 send_message 决定投递目标。
 
@@ -82,6 +86,10 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
             "conversation_id": conversation_id,
             "session_id": session_id,
             "request_id": request_id,
+            "sender_display_name": sender_display_name,
+            "sender_stable_id": sender_stable_id,
+            "conversation_search_name": conversation_search_name,
+            "inbound_text": inbound_text,
         }
         if tenant_id:
             self.tenant_id = tenant_id
@@ -151,13 +159,20 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
         request_id = self._reply["request_id"] or f"req_{uuid.uuid4().hex[:16]}"
 
         try:
-            await deliver_actions(
+            delivered = await deliver_actions(
                 tenant_id=self.tenant_id,
                 account_id=self._reply["account_id"],
                 conversation_id=self._reply["conversation_id"],
                 request_id=request_id,
                 session_id=self._reply["session_id"],
                 actions=actions,
+                reply_context={
+                    "sender_display_name": self._reply.get("sender_display_name"),
+                    "sender_stable_id": self._reply.get("sender_stable_id"),
+                    "conversation_search_name": self._reply.get("conversation_search_name"),
+                    "inbound_text": self._reply.get("inbound_text"),
+                    "agent_reply_text": message.text or "",
+                },
             )
         except Exception as e:
             # deliver_actions 内部已吞异常，此处兜底防御性记录
@@ -166,7 +181,7 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
             )
             return False
 
-        return True
+        return bool(delivered)
 
     # ==================== 用户信息 ====================
 

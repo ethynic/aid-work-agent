@@ -19,6 +19,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import secrets
 from datetime import datetime, timezone
@@ -175,9 +176,13 @@ class ServerArchiveFetcher:
             await self._clear_error(tenant_id, config_id)
             return
 
-        # 推断 account_id（用于 envelope + 后续 outbound 路由）
-        # wecom_personal_rpa 渠道约定：account_id 来自 subagent_type 字段（绑定关系）或配置中显式 account_id
-        account_id = self._infer_account_id(cfg)
+        # 内部 account_id 必须全局唯一（表主键为 id），不能使用多租户间会重复的
+        # subagent_type。由 tenant + 显式账号键（或 config_id）稳定派生。
+        account_id = self._infer_account_id(tenant_id, cfg)
+        client_id = self._ensure_account_mapping(tenant_id, cfg, account_id)
+        if not client_id:
+            await self._mark_error(tenant_id, config_id, "账号未绑定合法 RPA 客户端")
+            return
 
         # 逐条解密 + 处理 + 推进 seq
         # 解密路径（企微官方规范）：
@@ -206,7 +211,7 @@ class ServerArchiveFetcher:
                     ),
                     timeout=_SINGLE_ITEM_TIMEOUT_SECONDS,
                 )
-                env, env_raw = self._build_envelope(account_id, item, plain_json)
+                env, env_raw = self._build_envelope(account_id, client_id, item, plain_json)
 
                 # 延迟 import 避免顶层循环
                 from src.saas.api.wecom_personal_rpa_routes import _process_inbound_message
@@ -312,7 +317,7 @@ class ServerArchiveFetcher:
     # ----------------- envelope 构造 -----------------
 
     def _build_envelope(
-        self, account_id: str, item: "http_client.ChatDataItem", plain_json: str
+        self, account_id: str, client_id: str, item: "http_client.ChatDataItem", plain_json: str
     ) -> Tuple[Any, Dict[str, Any]]:
         """构造 RpaCallbackEnvelope + env_raw（与 C# InboundEventBuilder.BuildAsync 字段对齐）。
 
@@ -410,7 +415,7 @@ class ServerArchiveFetcher:
 
         env_raw = {
             "event_id": event_id,
-            "client_id": _SERVER_CLIENT_ID_PLACEHOLDER,
+            "client_id": client_id,
             "account_id": account_id,
             "event_type": "message",
             "occurred_at": occurred_at.isoformat(),
@@ -445,20 +450,50 @@ class ServerArchiveFetcher:
         return mapping.get(archive_msg_type, "link")
 
     @staticmethod
-    def _infer_account_id(cfg: Dict[str, Any]) -> str:
-        """从配置中推断 account_id。
+    def _infer_account_id(tenant_id: str, cfg: Dict[str, Any]) -> str:
+        """生成全局唯一且稳定的内部 account_id。
 
-        优先级：
-        1. config.account_id（用户显式填写）
-        2. subagent_type（绑定关系，本期 server 模式默认）
-        3. 空字符串（占位，下游按需处理）
+        ``config.account_id`` 是租户内逻辑账号键；未配置时使用稳定的 config_id。
+        ``subagent_type`` 只决定 Agent 路由，绝不参与账号主键生成。
         """
         config_data = cfg.get("config") or {}
-        return (
-            config_data.get("account_id")
-            or cfg.get("subagent_type")
-            or ""
+        logical_key = str(config_data.get("account_id") or cfg.get("config_id") or "").strip()
+        if not tenant_id or not logical_key:
+            return ""
+        digest = hashlib.sha256(f"{tenant_id}\0{logical_key}".encode("utf-8")).hexdigest()[:24]
+        return f"rpa_acct_{digest}"
+
+    @staticmethod
+    def _ensure_account_mapping(
+        tenant_id: str, cfg: Dict[str, Any], account_id: str
+    ) -> Optional[str]:
+        """按租户渠道配置建立 account → client 映射，禁止跨租户或任意在线路由。"""
+        from src.channels.wecom_personal_rpa import db as rpa_db
+
+        if not account_id:
+            return None
+        config_data = cfg.get("config") or {}
+        existing = rpa_db.get_account(account_id)
+        client_id = config_data.get("client_id") or (existing or {}).get("client_id")
+        if not client_id:
+            return None
+        client = rpa_db.get_client(client_id)
+        if not client or client.get("tenant_id") != tenant_id or client.get("status") != "active":
+            return None
+        if existing and existing.get("tenant_id") != tenant_id:
+            return None
+        mapped = rpa_db.upsert_account(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            account_id=account_id,
+            display_name=(
+                config_data.get("account_display_name")
+                or config_data.get("account_id")
+                or cfg.get("name")
+                or account_id
+            ),
         )
+        return client_id if mapped else None
 
     # ----------------- 错误状态写入 -----------------
 

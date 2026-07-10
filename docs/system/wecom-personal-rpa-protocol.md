@@ -149,12 +149,43 @@ WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbo
   "session_id": "wecom_personal_rpa:wecom_account_001:binding_abc",
   "account_id": "wecom_account_001",
   "conversation_id": "binding_abc",
+  "reply_context": {
+    "sender_display_name": "张三",
+    "sender_stable_id": "wm_xxx",
+    "conversation_search_name": "张三",
+    "inbound_text": "请发一份报价单",
+    "agent_reply_text": "您好，报价单已发送。"
+  },
   "actions": [
     {"type": "send_text", "text": "您好，已收到。"},
     {"type": "send_file", "file_url": "https://agent.example.com/files/xxx?sig=...", "filename": "报价单.xlsx"}
   ]
 }
 ```
+
+`reply_context` 是 v1.1.0 新增的可选兼容字段，用于让客户端校验本次回复对应的发送人、
+入站文本和 Agent 回复。旧服务端/历史 outbox 可不含该字段，旧客户端也必须忽略未知字段。
+`conversation_id` 是服务端幂等/会话路由稳定标识，不能假定企微桌面端可搜索；
+`conversation_search_name` 是管理员确认的客户端搜索名称。服务端生成该字段时仅移除
+`sender_display_name` 末尾精确后缀 `@微信` 并 trim（例如 `陆伟@微信` → `陆伟`），
+不替换中间文本或其他后缀。客户端以 `conversation_search_name` 定位企微窗口，以
+`actions` 顺序执行；旧信封缺字段时可对 `sender_display_name` 做同样归一化。若两者均
+缺失，客户端必须拒绝执行，禁止用不可搜索的 `conversation_id` / `session_id` 盲搜。
+不得把 `agent_reply_text` 再执行一次。
+日志只能记录 request_id、conversation_id 和 sender_stable_id 等定位信息，禁止输出
+`inbound_text`、`agent_reply_text` 完整正文。
+
+服务端 archive 模式的内部 `account_id` 使用
+`rpa_acct_<sha256(tenant_id + NUL + logical_account_key)[:24]>`。其中
+`logical_account_key` 优先取渠道 `config.account_id`，未配置时取稳定的 `config_id`；
+`subagent_type` 仅用于 Agent 路由，禁止作为账号主键。这样同一配置重启后 ID 不变，
+不同租户即使都使用 `travel-consultant` 也不会冲突。
+
+历史版本若已用 `subagent_type` 生成账号 ID，升级前应在事务中将
+`wecom_rpa_accounts.id`、`wecom_rpa_conversation_bindings.account_id` 和
+`wecom_rpa_action_outbox.account_id` 同步迁移到上述新 ID；迁移前应暂停对应渠道，
+确认旧 ID 只属于当前租户且不存在 pending/running outbox，完成后再恢复。不要只改账号表，
+否则历史 active binding 会丢失关联。
 
 五类 action（`Union` 判别字段 `type`）：
 
@@ -175,7 +206,7 @@ WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbo
 
 ```json
 {
-  "protocol_version": "1.0.0",
+  "protocol_version": "1.1.0",
   "min_client_version": "1.0.0",
   "paused": false,
   "paused_scope": null,

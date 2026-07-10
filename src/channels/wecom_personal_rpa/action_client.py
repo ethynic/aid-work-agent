@@ -10,7 +10,7 @@
 签名契约：docs/system/wecom-personal-rpa-protocol.md §B.4。
 """
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -41,7 +41,8 @@ async def deliver_actions(
     request_id: str,
     session_id: str,
     actions: List[Any],
-) -> None:
+    reply_context: Optional[Dict[str, Any]] = None,
+) -> bool:
     """投递出站动作信封。
 
     Args:
@@ -58,7 +59,7 @@ async def deliver_actions(
     """
     # 1. 解析 account → client_id（决定在线/离线路径）
     account = db.get_account(account_id)
-    if not account:
+    if not account or account.get("tenant_id") != tenant_id:
         logger.error(
             f"RPA deliver 失败：账号不存在 account_id={account_id} "
             f"request_id={request_id}"
@@ -78,7 +79,7 @@ async def deliver_actions(
                 ensure_ascii=False,
             ),
         )
-        return
+        return False
 
     client_id = account.get("client_id")
 
@@ -89,15 +90,17 @@ async def deliver_actions(
         session_id=session_id,
         account_id=account_id,
         conversation_id=conversation_id,
+        reply_context=reply_context,
         actions=actions_serialized,
     )
     envelope_dict = envelope.model_dump()
+    envelope_dict["type"] = "actions"
 
     # 3. 在线 → 直接推送
     if client_id and client_connection_registry.is_online(client_id):
         try:
-            await client_connection_registry.send(client_id, envelope_dict)
-            return
+            if await client_connection_registry.send(client_id, envelope_dict):
+                return True
         except Exception as e:
             # 推送失败：降级走离线入队，保证不丢
             logger.error(
@@ -109,18 +112,21 @@ async def deliver_actions(
     # 4. 离线 → 写 outbox
     dedup_key = f"wecom_personal_rpa:{tenant_id}:{request_id}"
     try:
-        db.enqueue_action(
+        queued = db.enqueue_action(
             tenant_id=tenant_id,
             account_id=account_id,
             conversation_id=conversation_id,
             request_id=request_id,
             session_id=session_id,
             actions_json=json.dumps(actions_serialized, ensure_ascii=False),
+            reply_context_json=json.dumps(reply_context, ensure_ascii=False) if reply_context else None,
             dedup_key=dedup_key,
         )
+        return queued is not None
     except Exception as e:
         # 入队失败不抛：send_message 已判定逻辑成功，投递失败仅记录
         logger.error(
             f"RPA outbox 入队失败 account_id={account_id} "
             f"request_id={request_id}: {e}"
         )
+        return False

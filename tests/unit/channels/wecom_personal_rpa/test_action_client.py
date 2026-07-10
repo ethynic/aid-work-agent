@@ -20,6 +20,7 @@ def _account_row(client_id):
         "id": "acct_001",
         "client_id": client_id,
         "status": "online",
+        "tenant_id": "t1",
     }
 
 
@@ -55,14 +56,21 @@ async def test_deliver_online_uses_registry_send_and_skips_outbox(patched_db, pa
 
     actions = [{"type": "send_text", "text": "你好"}]
 
-    await deliver_actions(
+    delivered = await deliver_actions(
         tenant_id="t1",
         account_id="acct_001",
         conversation_id="conv_1",
         request_id="req_1",
         session_id="wecom_personal_rpa:acct_001:conv_1",
         actions=actions,
+        reply_context={
+            "sender_display_name": "张三",
+            "sender_stable_id": "wm_1",
+            "inbound_text": "你好",
+            "agent_reply_text": "您好",
+        },
     )
+    assert delivered is True
 
     # 在线推送：send 收到完整 envelope dict
     patched_registry.send.assert_awaited_once()
@@ -70,10 +78,13 @@ async def test_deliver_online_uses_registry_send_and_skips_outbox(patched_db, pa
     # send 接受位置参数 (client_id, payload)；兼容 args/kwargs 两种写法
     payload = patched_registry.send.call_args.args[1] if patched_registry.send.call_args.args else kwargs["payload"]
     assert payload["request_id"] == "req_1"
+    assert payload["type"] == "actions"
     assert payload["account_id"] == "acct_001"
     assert payload["conversation_id"] == "conv_1"
     assert payload["session_id"] == "wecom_personal_rpa:acct_001:conv_1"
     assert payload["actions"] == actions
+    assert payload["reply_context"]["inbound_text"] == "你好"
+    assert payload["reply_context"]["agent_reply_text"] == "您好"
 
     # 在线时不应写 outbox
     patched_db.enqueue_action.assert_not_called()
@@ -85,7 +96,7 @@ async def test_deliver_online_send_failure_falls_back_to_outbox(patched_db, patc
     patched_registry.is_online.return_value = True
     patched_registry.send.side_effect = RuntimeError("ws broken")
 
-    await deliver_actions(
+    delivered = await deliver_actions(
         tenant_id="t1",
         account_id="acct_001",
         conversation_id="conv_1",
@@ -95,6 +106,7 @@ async def test_deliver_online_send_failure_falls_back_to_outbox(patched_db, patc
     )
 
     patched_db.enqueue_action.assert_called_once()
+    assert delivered is True
 
 
 # ============================ 离线分支 ============================
@@ -106,7 +118,7 @@ async def test_deliver_offline_enqueues_action(patched_db, patched_registry):
 
     actions = [{"type": "send_file", "file_url": "https://x/y", "filename": "a.xlsx"}]
 
-    await deliver_actions(
+    delivered = await deliver_actions(
         tenant_id="t1",
         account_id="acct_001",
         conversation_id="conv_1",
@@ -139,7 +151,7 @@ async def test_deliver_offline_serializes_pydantic_actions(patched_db, patched_r
 
     patched_registry.is_online.return_value = False
 
-    await deliver_actions(
+    delivered = await deliver_actions(
         tenant_id="t1",
         account_id="acct_001",
         conversation_id="conv_1",
@@ -161,7 +173,7 @@ async def test_deliver_account_not_found_writes_audit_and_returns(patched_db, pa
     patched_db.get_account.return_value = None
 
     # 不应抛出
-    await deliver_actions(
+    delivered = await deliver_actions(
         tenant_id="t1",
         account_id="missing",
         conversation_id="conv_1",
@@ -173,6 +185,7 @@ async def test_deliver_account_not_found_writes_audit_and_returns(patched_db, pa
     patched_registry.send.assert_not_called()
     patched_db.enqueue_action.assert_not_called()
     patched_db.write_audit.assert_called_once()
+    assert delivered is False
     audit = patched_db.write_audit.call_args
     assert audit.kwargs["category"] == "action_deliver"
     assert audit.kwargs["account_id"] == "missing"

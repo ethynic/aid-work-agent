@@ -108,6 +108,10 @@
             <template #last_verified_at="{ row }">{{ formatTime(row.last_verified_at) }}</template>
             <template #actions="{ row }">
               <BaseButton
+                intent="ghost" size="sm" class="whitespace-nowrap"
+                @click="handleEditBindingName(row)"
+              >搜索名</BaseButton>
+              <BaseButton
                 v-if="row.status === 'needs_review' || row.status === 'pending'"
                 intent="ghost" size="sm" class="whitespace-nowrap"
                 @click="handleConfirmBinding(row)"
@@ -357,7 +361,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import {
   listClients, registerClient, listClientAccounts, rotateClientSecret,
-  listBindings, confirmBinding, pause, resume, listAudit,
+  listBindings, confirmBinding, updateBinding, pause, resume, listAudit,
   getMetrics, getAlerts,
   type RpaClientSummary, type RpaAccount, type RpaBinding, type RpaAudit,
   type RpaMetrics, type RpaAlert,
@@ -655,6 +659,22 @@ async function handleConfirmBinding(b: any) {
     await loadBindings()
   } catch (e: any) {
     toast.error(e.message || '确认失败')
+  }
+}
+
+async function handleEditBindingName(b: any) {
+  const value = window.prompt('请输入企微会话显示名（例如：陆伟@微信；客户端将搜索“陆伟”）', b.display_name || '')
+  if (value === null) return
+  if (!value.trim()) {
+    toast.error('会话显示名不能为空')
+    return
+  }
+  try {
+    await updateBinding(b.binding_id, { display_name: value.trim() })
+    toast.success('会话搜索名已更新')
+    await loadBindings()
+  } catch (e: any) {
+    toast.error(e.message || '更新失败')
   }
 }
 

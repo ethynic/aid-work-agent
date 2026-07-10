@@ -356,6 +356,19 @@ export async function confirmBinding(bindingId: string): Promise<{ binding_id: s
   return body.data
 }
 
+export async function updateBinding(
+  bindingId: string,
+  payload: { display_name?: string },
+): Promise<RpaBinding> {
+  const res = await fetch(`${API_BASE}/bindings/${encodeURIComponent(bindingId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(payload),
+  })
+  const body = await parseJson(res, '更新会话绑定失败')
+  return body.data
+}
+
 // ==================== 3. 暂停 / 恢复（tenant / account / conversation 三级，幂等） ====================
 
 export async function pause(req: PauseResumeReq): Promise<PauseResumeResult> {

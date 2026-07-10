@@ -24,7 +24,29 @@ public sealed class ActionEnvelope
     [JsonPropertyName("conversation_id")]
     public string ConversationId { get; set; } = string.Empty;
 
+    /// <summary>回复上下文，仅用于校验和诊断；不得替代 conversation_id/actions 执行。</summary>
+    [JsonPropertyName("reply_context")]
+    public RpaReplyContext? ReplyContext { get; set; }
+
     /// <summary>顺序执行的动作列表。</summary>
     [JsonPropertyName("actions")]
     public List<RpaAction> Actions { get; set; } = new();
+}
+
+public sealed class RpaReplyContext
+{
+    [JsonPropertyName("sender_display_name")]
+    public string? SenderDisplayName { get; set; }
+
+    [JsonPropertyName("sender_stable_id")]
+    public string? SenderStableId { get; set; }
+
+    [JsonPropertyName("conversation_search_name")]
+    public string? ConversationSearchName { get; set; }
+
+    [JsonPropertyName("inbound_text")]
+    public string? InboundText { get; set; }
+
+    [JsonPropertyName("agent_reply_text")]
+    public string? AgentReplyText { get; set; }
 }

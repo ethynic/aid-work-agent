@@ -65,6 +65,9 @@ class UpdateBindingRequest(BaseModel):
     None 表示"不修改"；显式传空 list 表示"清除该字段"。
     """
 
+    display_name: Optional[str] = Field(
+        None, description="企微会话原始显示名，例如「陆伟@微信」；用于生成客户端搜索名"
+    )
     monitor_user_names: Optional[List[str]] = Field(
         None, description="监控的发送人显示名数组（任一匹配即上报）；空数组 = 不按名字过滤"
     )
@@ -685,12 +688,15 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
     if binding.get("tenant_id") != tenant_id:
         raise _fail("无权操作此绑定", status_code=403)
 
-    ok = rpa_db.update_binding(
+    update_kwargs = dict(
         tenant_id=tenant_id,
         binding_id=binding_id,
         monitor_user_names=body.monitor_user_names,
         monitor_user_ids=body.monitor_user_ids,
     )
+    if body.display_name is not None:
+        update_kwargs["display_name"] = body.display_name
+    ok = rpa_db.update_binding(**update_kwargs)
     if not ok:
         raise _fail("绑定更新失败", status_code=500)
 
@@ -703,6 +709,7 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
             payload_json=json.dumps(
                 {
                     "binding_id": binding_id,
+                    "display_name": body.display_name,
                     "monitor_user_names": body.monitor_user_names,
                     "monitor_user_ids": body.monitor_user_ids,
                 },

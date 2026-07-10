@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using WeCom.PersonalRpa.App.Realtime;
+using WeCom.PersonalRpa.App.Outbound;
 using WeCom.PersonalRpa.Core.StateMachine;
 using Xunit;
 
@@ -19,6 +20,16 @@ namespace WeCom.PersonalRpa.Tests.Realtime;
 
 public sealed class ServerMessageDispatcherTests
 {
+    [Theory]
+    [InlineData("陆伟@微信", "陆伟")]
+    [InlineData(" Alice ", "Alice")]
+    [InlineData("名称@微信中间", "名称@微信中间")]
+    [InlineData("   ", null)]
+    public void NormalizeConversationSearchName_IsConservative(string input, string? expected)
+    {
+        Assert.Equal(expected, OutboundActionDispatcher.NormalizeConversationSearchName(input));
+    }
+
     private static byte[] Json(object payload)
         => Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(payload));
 
@@ -203,6 +214,14 @@ public sealed class ServerMessageDispatcherTests
                 request_id = "req_p06",
                 session_id = "sess1",
                 conversation_id = "conv_p06",
+                reply_context = new
+                {
+                    sender_display_name = "张三",
+                    sender_stable_id = "wm_1",
+                    conversation_search_name = "陆伟",
+                    inbound_text = "用户问题",
+                    agent_reply_text = "hello",
+                },
                 actions = new object[]
                 {
                     new { type = "send_text", text = "hello" },
@@ -219,6 +238,8 @@ public sealed class ServerMessageDispatcherTests
             var item = Assert.Single(pending);
             Assert.Equal("req_p06", item.ActionId);
             Assert.Equal("send_text", item.ActionType);
+            Assert.Equal("陆伟", item.ConversationKey);
+            Assert.Equal("hello", item.Text);
         }
         finally
         {

@@ -307,7 +307,8 @@ def get_or_create_binding(
                      display_name, search_key, stable_id, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
                 ON CONFLICT (account_id, search_key) DO UPDATE
-                    SET display_name = EXCLUDED.display_name,
+                    SET display_name = COALESCE(wecom_rpa_conversation_bindings.display_name,
+                                                EXCLUDED.display_name),
                         stable_id    = COALESCE(EXCLUDED.stable_id, wecom_rpa_conversation_bindings.stable_id),
                         updated_at   = CURRENT_TIMESTAMP
                 RETURNING id
@@ -472,6 +473,7 @@ def find_binding_by_search_key(
 def update_binding(
     tenant_id: str,
     binding_id: str,
+    display_name: Optional[str] = None,
     monitor_user_names: Optional[List[str]] = None,
     monitor_user_ids: Optional[List[str]] = None,
 ) -> bool:
@@ -482,6 +484,12 @@ def update_binding(
     """
     sets: List[str] = []
     params: List[Any] = []
+    if display_name is not None:
+        normalized_display_name = display_name.strip()
+        if not normalized_display_name:
+            return False
+        sets.append("display_name = %s")
+        params.append(normalized_display_name)
     if monitor_user_names is not None:
         sets.append("monitor_user_names = %s")
         params.append(monitor_user_names)
@@ -540,6 +548,7 @@ def enqueue_action(
     session_id: str,
     actions_json: str,
     dedup_key: str,
+    reply_context_json: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """入队一条出站动作信封。
@@ -556,19 +565,25 @@ def enqueue_action(
                 """
                 INSERT INTO wecom_rpa_action_outbox
                     (id, tenant_id, user_id, account_id, conversation_id,
-                     request_id, session_id, actions, status, attempts, dedup_key)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', 0, %s)
+                     request_id, session_id, actions, reply_context, status, attempts, dedup_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 0, %s)
                 ON CONFLICT (dedup_key) DO NOTHING
                 RETURNING id
                 """,
                 (action_id, tenant_id, user_id, account_id, conversation_id,
-                 request_id, session_id, actions_json, dedup_key),
+                 request_id, session_id, actions_json, reply_context_json, dedup_key),
             )
             row = cursor.fetchone()
             conn.commit()
             if row is None:
                 logger.info(f"RPA outbox dedup hit, skipped: {dedup_key}")
-                return None
+                return {
+                    "id": None,
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                    "request_id": request_id,
+                    "status": "deduplicated",
+                }
             return {
                 "id": row["id"],
                 "tenant_id": tenant_id,
@@ -611,6 +626,7 @@ def claim_pending(limit: int = 20) -> List[Dict[str, Any]]:
         conn.commit()
         for r in rows:
             r["actions"] = _parse_json_field(r.get("actions"), [])
+            r["reply_context"] = _parse_json_field(r.get("reply_context"), None)
         return rows
 
 
@@ -676,6 +692,7 @@ def list_outbox(
         rows = [dict(r) for r in cursor.fetchall()]
         for r in rows:
             r["actions"] = _parse_json_field(r.get("actions"), [])
+            r["reply_context"] = _parse_json_field(r.get("reply_context"), None)
         return rows
 
 

@@ -25,6 +25,8 @@ from src.channels.wecom_personal_rpa.archive import fetcher as fetcher_module
 from src.channels.wecom_personal_rpa.archive import chat_crypto, http_client
 from src.channels.wecom_personal_rpa.archive.fetcher import ServerArchiveFetcher
 
+_ORIGINAL_ENSURE_ACCOUNT_MAPPING = ServerArchiveFetcher._ensure_account_mapping
+
 
 # ----------------- 测试用 RSA 密钥（仅用于构造合法私钥 PEM，加解密都 mock 掉） -----------------
 
@@ -85,6 +87,11 @@ def patched_lock(monkeypatch):
     """让 redis_client.acquire_lock 总是返回 True（获锁成功），release_lock 静默成功。"""
     monkeypatch.setattr(fetcher_module.redis_client, "acquire_lock", lambda *a, **kw: True)
     monkeypatch.setattr(fetcher_module.redis_client, "release_lock", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        ServerArchiveFetcher,
+        "_ensure_account_mapping",
+        staticmethod(lambda tenant_id, cfg, account_id: "client_001"),
+    )
 
 
 @pytest.fixture
@@ -253,8 +260,8 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
 
     env = call["env"]
     assert env.event_id == "msg_msg_abc"  # 前缀 msg_ + archive msgid
-    assert env.client_id == "_server_"     # 占位
-    assert env.account_id == "acct_001"
+    assert env.client_id == "client_001"
+    assert env.account_id == ServerArchiveFetcher._infer_account_id("tenant_test", cfg)
     assert env.event_type == "message"
 
     payload = env.payload
@@ -528,10 +535,10 @@ def test_build_envelope_text_message():
     )
     plain = json.dumps({"text": {"content": "hello world"}})
 
-    env, env_raw = fetcher_obj._build_envelope("acct_001", item, plain)
+    env, env_raw = fetcher_obj._build_envelope("acct_001", "client_001", item, plain)
 
     assert env.event_id == "msg_msg_test"
-    assert env.client_id == "_server_"
+    assert env.client_id == "client_001"
     assert env.account_id == "acct_001"
     assert env.event_type == "message"
     assert env.payload["text"] == "hello world"
@@ -551,7 +558,7 @@ def test_build_envelope_media_message():
     )
     plain = json.dumps({"image": {"sdkfileid": "sdk_file_id_xxx", "filename": "test.jpg"}})
 
-    env, env_raw = fetcher_obj._build_envelope("acct_001", item, plain)
+    env, env_raw = fetcher_obj._build_envelope("acct_001", "client_001", item, plain)
 
     assert env.payload["message_type"] == "image"
     assert env.payload["text"] == ""  # 非文本消息 text 为空
@@ -571,5 +578,60 @@ def test_build_envelope_invalid_json():
         from_="u", tolist=["v"], msg_time=1700000000, msg_type="text",
         encrypt_random_key="", encrypt_chat_msg="",
     )
-    env, env_raw = fetcher_obj._build_envelope("acct", item, "not valid json")
+    env, env_raw = fetcher_obj._build_envelope("acct", "client_001", item, "not valid json")
     assert env.payload["text"] == ""
+
+
+def test_internal_account_id_is_stable_and_tenant_namespaced():
+    cfg = _make_cfg_record(_make_config_data(account_id="travel-consultant"))
+
+    first = ServerArchiveFetcher._infer_account_id("tenant_a", cfg)
+    assert first == ServerArchiveFetcher._infer_account_id("tenant_a", cfg)
+    assert first.startswith("rpa_acct_")
+    assert first != ServerArchiveFetcher._infer_account_id("tenant_b", cfg)
+
+
+def test_internal_account_id_falls_back_to_config_not_subagent():
+    cfg = _make_cfg_record(_make_config_data(account_id=""))
+    cfg["subagent_type"] = "travel-consultant"
+
+    derived = ServerArchiveFetcher._infer_account_id("tenant_a", cfg)
+    cfg["subagent_type"] = "another-agent"
+    assert derived == ServerArchiveFetcher._infer_account_id("tenant_a", cfg)
+
+    cfg["config_id"] = "another_config"
+    assert derived != ServerArchiveFetcher._infer_account_id("tenant_a", cfg)
+
+
+def test_account_mapping_uses_only_active_same_tenant_configured_client(monkeypatch):
+    from src.channels.wecom_personal_rpa import db as rpa_db
+
+    monkeypatch.setattr(rpa_db, "get_account", lambda account_id: None)
+    monkeypatch.setattr(
+        rpa_db, "get_client",
+        lambda client_id: {"id": client_id, "tenant_id": "tenant_test", "status": "active"},
+    )
+    upsert = MagicMock(return_value={"id": "acct_001"})
+    monkeypatch.setattr(rpa_db, "upsert_account", upsert)
+
+    assert _ORIGINAL_ENSURE_ACCOUNT_MAPPING(
+        "tenant_test", {"config": {"client_id": "client_configured"}}, "acct_001"
+    ) == "client_configured"
+    assert upsert.call_args.kwargs["client_id"] == "client_configured"
+
+
+def test_account_mapping_rejects_cross_tenant_client(monkeypatch):
+    from src.channels.wecom_personal_rpa import db as rpa_db
+
+    monkeypatch.setattr(rpa_db, "get_account", lambda account_id: None)
+    monkeypatch.setattr(
+        rpa_db, "get_client",
+        lambda client_id: {"id": client_id, "tenant_id": "other", "status": "active"},
+    )
+    upsert = MagicMock()
+    monkeypatch.setattr(rpa_db, "upsert_account", upsert)
+
+    assert _ORIGINAL_ENSURE_ACCOUNT_MAPPING(
+        "tenant_test", {"config": {"client_id": "client_other"}}, "acct_001"
+    ) is None
+    upsert.assert_not_called()

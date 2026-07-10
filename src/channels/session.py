@@ -1066,6 +1066,7 @@ class ChannelSessionManager:
 
         return {
             "status": "success",
+            "send_ok": send_ok,
             "response_text": response_text,
             "downloadable_files": downloadable_files,
             "was_merged": result.was_merged,

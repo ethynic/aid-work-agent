@@ -114,7 +114,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     public async Task EnvelopeEnqueueAsync(ActionEnvelope env, CancellationToken ct = default)
     {
         if (env is null) throw new ArgumentNullException(nameof(env));
-        var convKey = string.IsNullOrEmpty(env.ConversationId) ? env.SessionId : env.ConversationId;
+        var convKey = ResolveConversationSearchName(env);
         for (var i = 0; i < env.Actions.Count; i++)
         {
             var act = env.Actions[i];
@@ -125,6 +125,28 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                 await _workCh.Writer.WriteAsync(item, ct).ConfigureAwait(false);
             }
         }
+    }
+
+    private string ResolveConversationSearchName(ActionEnvelope env)
+    {
+        var explicitName = env.ReplyContext?.ConversationSearchName?.Trim();
+        if (!string.IsNullOrEmpty(explicitName)) return explicitName;
+
+        var displayName = NormalizeConversationSearchName(env.ReplyContext?.SenderDisplayName);
+        if (!string.IsNullOrEmpty(displayName)) return displayName;
+
+        throw new InvalidOperationException(
+            $"ActionEnvelope 缺少可用的会话搜索名 request_id={env.RequestId}");
+    }
+
+    internal static string? NormalizeConversationSearchName(string? displayName)
+    {
+        var value = displayName?.Trim();
+        if (string.IsNullOrEmpty(value)) return null;
+        const string suffix = "@微信";
+        if (value.EndsWith(suffix, StringComparison.Ordinal))
+            value = value[..^suffix.Length].Trim();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     private static OutboxItem ToOutboxItem(ActionEnvelope env, int idx, RpaAction act,
