@@ -3,7 +3,7 @@
 
 # Web Framework
 fastapi>=0.104.0
-uvicorn>=0.24.0
+uvicorn[standard]>=0.24.0
 gunicorn>=21.2.0  # Production WSGI server (used with uvicorn workers)
 
 # HTTP Client
@@ -90,4 +90,3 @@ bcrypt>=4.1.0  # Password hashing
 
 # Audio
 pysilk-mod>=1.6.0  # SILK v3/v2 audio decoding (WeChat mobile voice format)
-
