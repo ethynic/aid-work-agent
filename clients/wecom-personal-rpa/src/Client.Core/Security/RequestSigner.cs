@@ -67,14 +67,20 @@ public sealed class RequestSigner
     /// 构造 WebSocket 鉴权用的查询串参数（client_id / timestamp / nonce / signature）。
     /// 用于 WS 握手时携带签名（部分服务端实现通过查询串鉴权 WS）。
     /// </summary>
+    /// <remarks>
+    /// query 参数键名用小写裸名（client_id/timestamp/nonce/signature），对齐服务端
+    /// WS 握手解析（wecom_personal_rpa_routes.py 的 query.get("client_id") 等，复刻
+    /// wecom_kf 范式）。<b>不要</b>复用 <see cref="RequestHeaders"/> 里的 X- 头名常量
+    /// （X-Client-Id 等）——那是 HTTP 头名，服务端 WS handler 不按这个名取 query。
+    /// </remarks>
     public string BuildWebSocketQuery()
     {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
         var nonce = NewNonce();
         var signature = HmacSigner.ComputeSignature(_clientId, timestamp, nonce, string.Empty, _secretBytes);
-        return $"{RequestHeaders.ClientId}={Uri.EscapeDataString(_clientId)}"
-               + $"&{RequestHeaders.Timestamp}={Uri.EscapeDataString(timestamp)}"
-               + $"&{RequestHeaders.Nonce}={Uri.EscapeDataString(nonce)}"
-               + $"&{RequestHeaders.Signature}={Uri.EscapeDataString(signature)}";
+        return $"client_id={Uri.EscapeDataString(_clientId)}"
+               + $"&timestamp={Uri.EscapeDataString(timestamp)}"
+               + $"&nonce={Uri.EscapeDataString(nonce)}"
+               + $"&signature={Uri.EscapeDataString(signature)}";
     }
 }
