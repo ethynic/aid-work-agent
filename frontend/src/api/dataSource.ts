@@ -53,6 +53,8 @@ export interface SchemaDocument {
   metadata: Record<string, any> | null
   created_at: string
   summary?: string
+  /** 源数据是否仍可用：available=可用 / missing=源已失效（孤儿元数据）/ unknown=未知 */
+  source_status?: 'available' | 'missing' | 'unknown'
 }
 
 // ===== Connector APIs =====

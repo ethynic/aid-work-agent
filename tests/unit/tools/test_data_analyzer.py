@@ -113,12 +113,13 @@ class TestLoadTable:
         assert tid == "fallback_id"
 
     @pytest.mark.asyncio
-    async def test_load_file_not_found(self, analyzer):
-        tid = await analyzer.load_table({
-            "table_id": "missing",
-            "source": {"type": "excel", "file_path": "/nonexistent/path.csv"},
-        })
-        assert tid == "missing"
+    async def test_load_file_not_found_raises(self, analyzer):
+        """源文件不存在时必须显式抛异常，避免静默成功让错误延迟到 aggregate 才暴露"""
+        with pytest.raises(ValueError, match="源数据不存在或无法读取"):
+            await analyzer.load_table({
+                "table_id": "missing",
+                "source": {"type": "excel", "file_path": "/nonexistent/path.csv"},
+            })
         assert "missing" not in analyzer._tables
 
     @pytest.mark.asyncio
@@ -127,13 +128,13 @@ class TestLoadTable:
             await analyzer.load_table({"source": {"type": "excel"}})
 
     @pytest.mark.asyncio
-    async def test_load_database_missing_params(self, analyzer):
-        """数据库加载缺少 connector_id 应返回 None"""
-        tid = await analyzer.load_table({
-            "table_id": "db1",
-            "source": {"type": "database"},
-        })
-        assert tid == "db1"
+    async def test_load_database_missing_params_raises(self, analyzer):
+        """数据库加载缺少 connector_id 必须显式抛异常"""
+        with pytest.raises(ValueError, match="源数据不存在或无法读取"):
+            await analyzer.load_table({
+                "table_id": "db1",
+                "source": {"type": "database"},
+            })
         assert "db1" not in analyzer._tables
 
 

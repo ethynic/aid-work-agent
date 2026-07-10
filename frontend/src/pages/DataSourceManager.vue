@@ -46,6 +46,11 @@
         <template #index="{ index }">{{ index + 1 }}</template>
         <template #title="{ row }"><span class="font-medium">{{ row.title }}</span></template>
         <template #source="{ row }">{{ row.metadata?.source_info || '-' }}</template>
+        <template #source_status="{ row }">
+          <BaseBadge :intent="sourceStatusIntent(row.source_status)">
+            {{ sourceStatusLabel(row.source_status) }}
+          </BaseBadge>
+        </template>
         <template #columns_count="{ row }">{{ row.metadata?.columns?.length || 0 }}</template>
         <template #relations="{ row }">{{ countRelations(row) }}</template>
         <template #created_at="{ row }">{{ formatDate(row.created_at) }}</template>
@@ -351,6 +356,7 @@ const schemaColumns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'title', label: '表名' },
   { key: 'source', label: '来源' },
+  { key: 'source_status', label: '状态', width: '100px' },
   { key: 'columns_count', label: '字段数', width: '80px' },
   { key: 'relations', label: '关联数', width: '80px' },
   { key: 'created_at', label: '创建时间', width: '160px' },
@@ -399,6 +405,18 @@ function formatDate(dateStr: string): string {
   } catch {
     return dateStr
   }
+}
+
+function sourceStatusIntent(s?: string): 'success' | 'danger' | 'neutral' {
+  if (s === 'available') return 'success'
+  if (s === 'missing') return 'danger'
+  return 'neutral'
+}
+
+function sourceStatusLabel(s?: string): string {
+  if (s === 'available') return '可用'
+  if (s === 'missing') return '源已失效'
+  return '未知'
 }
 
 // ===== Schema review modal =====

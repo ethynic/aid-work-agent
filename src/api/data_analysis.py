@@ -652,14 +652,50 @@ async def save_schema(req: SchemaSave, request: Request):
     return result
 
 
+def _resolve_schema_source_status(meta: dict, valid_connector_ids: set) -> str:
+    """判断 schema 的源数据是否仍然可用，返回 available / missing / unknown。
+
+    用于在数据源列表中暴露孤儿元数据（源文件丢失或连接器已删），
+    避免用户和分析智能体误用已失效的数据表。
+    """
+    source = meta.get("source")
+
+    # 1. 结构化 source（API 上传 / 连接器导入）
+    if isinstance(source, dict):
+        file_path = source.get("file_path")
+        if file_path:
+            return "available" if os.path.exists(file_path) else "missing"
+        connector_id = source.get("connector_id")
+        if connector_id is not None:
+            return "available" if str(connector_id) in valid_connector_ids else "missing"
+
+    # 2. 兜底：metadata 顶层的 connector_id
+    connector_id = meta.get("connector_id")
+    if connector_id is not None:
+        return "available" if str(connector_id) in valid_connector_ids else "missing"
+
+    # 3. 兜底：source_info 文件路径（兼容 "file:" 前缀），数据库连接串跳过
+    source_info = meta.get("source_info")
+    if isinstance(source_info, str) and source_info:
+        if not source_info.startswith(("postgresql", "mysql", "gauss", "opengauss")):
+            path = source_info[5:] if source_info.startswith("file:") else source_info
+            return "available" if os.path.exists(path) else "missing"
+
+    return "unknown"
+
+
 @router.get("/schemas")
 async def list_schemas(request: Request):
-    """列出知识库中所有数据分析 schema"""
+    """列出知识库中所有数据分析 schema，并标注每条 schema 的源数据是否仍可用"""
     tenant_id = get_current_tenant_id()
 
     def _list():
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            # 批量预查该租户的有效连接器 id，用于判断数据库型 schema 源是否仍存在
+            cursor.execute("SELECT id FROM data_connectors WHERE tenant_id = %s", (tenant_id,))
+            valid_connector_ids = {str(dict(row)["id"]) for row in cursor.fetchall()}
+
             cursor.execute(
                 """
                 SELECT id, title, source_type, metadata, summary, created_at
@@ -682,6 +718,8 @@ async def list_schemas(request: Request):
                     except json.JSONDecodeError:
                         meta = {}
                 r["metadata"] = meta
+                # 标注源数据是否仍可用（防止孤儿元数据误导用户和分析智能体）
+                r["source_status"] = _resolve_schema_source_status(meta, valid_connector_ids)
                 results.append(r)
             return results
 

@@ -82,13 +82,17 @@ class DataAnalyzer:
             if file_path and os.path.exists(file_path):
                 df = self._load_from_path(file_path, source)
 
-        if df is not None:
-            self._tables[table_id] = df
-            self._table_meta[table_id] = metadata
-            logger.info(f"[DataAnalyzer] 加载表 {table_id}: {len(df)} 行, {len(df.columns)} 列")
-        else:
-            logger.warning(f"[DataAnalyzer] 加载表 {table_id} 失败，未获取到数据")
+        if df is None:
+            # 必须显式失败：否则调用方误以为加载成功，错误会延迟到 aggregate/query
+            # 才以"数据源不存在"暴露，源头难以定位（见孤儿元数据事故）
+            raise ValueError(
+                f"加载数据表 {table_id} 失败：源数据不存在或无法读取，"
+                f"请检查源文件/数据库连接器是否仍存在"
+            )
 
+        self._tables[table_id] = df
+        self._table_meta[table_id] = metadata
+        logger.info(f"[DataAnalyzer] 加载表 {table_id}: {len(df)} 行, {len(df.columns)} 列")
         return table_id
 
     def _load_excel(self, source: dict) -> Optional[pd.DataFrame]:
