@@ -29,6 +29,7 @@ skills:
   allowed:
     - after-sales-core
     - after-sales-api
+    - sms-verification # 短信验证
 context:
   max_input_tokens: 10000
   max_output_tokens: 4000
