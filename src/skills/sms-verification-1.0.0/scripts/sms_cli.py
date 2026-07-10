@@ -45,6 +45,21 @@ from src.db.models import send_sms_code, verify_sms_code
 from src.sms.manager import sms_manager
 
 
+def _ensure_db_pool() -> None:
+    """子进程中 PostgreSQL 连接池未继承父进程，需自动初始化
+
+    skill_execute 通过 asyncio.create_subprocess_shell 启动全新 Python 进程，
+    父进程已初始化的 _pg_connection_pool 不会继承，因此底层 get_db_connection
+    会抛出 "PostgreSQL 连接池未初始化" 错误。其他 skill 脚本（after_sales_tool.py、
+    order_tool.py 等）均采用相同的懒初始化模式。
+    """
+    from src.db.database import get_postgres_pool, init_postgres_pool
+
+    if get_postgres_pool() is None:
+        logger.info("[sms-verification] 子进程中 PostgreSQL 连接池未初始化，正在自动初始化")
+        init_postgres_pool()
+
+
 # ============== 常量 ==============
 
 # 验证码有效期（秒），与 send_sms_code 中 timedelta(minutes=5) 对齐
@@ -250,6 +265,7 @@ def send_sms(
         return blocked
 
     # 4. 调用底层发送
+    _ensure_db_pool()
     try:
         ok = send_sms_code(mobile)
     except Exception as e:
@@ -336,6 +352,7 @@ def verify_sms(
         }
 
     # 4. 调用底层验证
+    _ensure_db_pool()
     try:
         ok = verify_sms_code(mobile, code_str)
     except Exception as e:
