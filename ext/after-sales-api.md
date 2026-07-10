@@ -1,25 +1,31 @@
 # 电商ERP接口文档
 
-QB3.1 是一套基于自研低代码平台的 ERP 系统，支持多租户。本文档涵盖数据读取类接口（列表、详情）和订单写入类接口（创建、修改）。后端数据库为 MySQL 5.7。
+本文档涵盖电商ERP系统的委托登录、数据读取类接口（列表、详情）和订单写入类接口（创建、修改）。后端数据库为 MySQL 5.7。
+
+本系统采用**委托登录**鉴权：AI 智能体（代理人）持 `agent_token` 代表终端用户（委托人）访问，业务接口须同时携带 `agent_token + client_token`。
 
 ---
 
 ## 1. 通用调用规范
 
 ### 请求地址
-请求地址的 BASE_URL 为： https://erp11022.aidingyi.cn
+
+BASE_URL：`https://erp11022.aidingyi.cn`
 
 ### 请求方式
 
 POST，Body 为 `application/json`
 
-### 请求参数
+### 鉴权方式（双 Token）
 
-**Header**
+| Header | 来源 | 说明 |
+|--------|------|------|
+| `Api-Authorize-Token` | `.env` 环境变量 `${AGENT_TOKEN}` | 代理人 token，固定不变，标识 AI 智能体身份 |
+| `Client-Authorize-Token` | 委托登录接口返回 | 委托人 token，标识终端用户（客户）身份，运行时获取 |
 
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| Api-Authorize-Token | string | 是 | 从 `.env` 环境变量 `${OPEN_TOKEN}` 注入 |
+- **委托登录接口**（第 2 节）：仅需 `Api-Authorize-Token`
+- **业务接口**（第 3 节起）：双 Token 缺一不可，缺失返回 `Code: -99`
+- `client_token` 与 `agent_token` 绑定，跨 agent_token 不可用
 
 ### 返回响应
 
@@ -28,7 +34,7 @@ POST，Body 为 `application/json`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| Code | int | `0` 表示无异常，非 `0` 表示异常 |
+| Code | int | `0` 正常；`-1` 业务异常；`-99` 认证失败（client_token 失效或缺失，需重新委托登录） |
 | Error | string | 异常信息 |
 | Debug | string | 调试信息（异常时详细输出） |
 | Response | object | 业务数据主体 |
@@ -37,7 +43,7 @@ POST，Body 为 `application/json`
 
 ### 列表接口通用约定
 
-以下规则对 **所有 `module_listing_view` 接口**（客户信息列表、客户订单列表等）通用：
+适用于所有 `module_listing_view` 接口。
 
 **分页与排序参数**（Body）
 
@@ -64,37 +70,149 @@ POST，Body 为 `application/json`
 | `datetime` | 数组 `[开始, 结束]` | 时间范围查询 |
 | `integer` / `number` / `currency` | 数组 `[最小值, 最大值]` | 数值范围查询 |
 
-多个 filter 之间为 **AND** 关系。不指定 `component` ，默认为 `component`: `input`。
+多个 filter 之间为 **AND** 关系。不指定 `component`，默认为 `input`。
 
 **input 组件 value 为数组的注意事项**
 
-`component: input` 的 `value` 默认为字符串。但实际请求中也可传 **单元素数组**（如 `["运动背包"]`），后端按 `LIKE %%值%%` 拼接。两个可选字段：
+`component: input` 的 `value` 默认为字符串，也可传单元素数组（如 `["运动背包"]`），后端按 `LIKE %%值%%` 拼接。可选字段：
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| empty | bool | false | 为 `true` 时表示"为空"匹配（`value` 被忽略） |
-| exact | bool | false | 为 `true` 时改为精确匹配（`=`） |
+| empty | bool | false | `true` 表示"为空"匹配（`value` 被忽略） |
+| exact | bool | false | `true` 改为精确匹配（`=`） |
 
 **返回响应结构**
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['data'] | array | 匹配的记录列表 |
-| Response['data2'] | array | 子表数据（仅当列表视图中含子表字段时返回，否则为空数组） |
-| Response['fields'] | array | 字段元数据，可用于动态渲染前端 |
+| Response['data2'] | array | 子表数据（无子表字段时为空数组） |
+| Response['fields'] | array | 字段元数据，可用于动态渲染 |
 | Response['total'] | int | 总记录数（用于分页） |
-| Response['total_sum'] | object | 汇总数据（按字段名聚合，无汇总时为空对象） |
+| Response['total_sum'] | object | 汇总数据（无汇总时为空对象） |
 
-> **关于字段元数据**：`fields` 数组中每个元素包含 `attr_name`、`display_name`、`options`。`options` 数组内部仅包含 `label`、`value`；字段无选项时不返回 `options` 键。各接口的示例仅列部分字段，实际返回以接口为准。
+> `fields` 元素包含 `attr_name`、`display_name`、`options`；`options` 内部仅含 `label`、`value`，无选项时不返回 `options` 键。各接口示例仅列部分字段，实际以接口返回为准。
+
+### 数据权限说明
+
+委托登录下，业务接口返回的数据受委托人身份自动过滤，无需在 filters 中手动指定：
+
+| 模块 | 数据范围 |
+|------|---------|
+| 客户信息（kehuxinxi） | 仅自己（1 条） |
+| 客户订单（kehudingdan） | 仅自己名下的订单 |
+| 商品管理（shangpinguanli） | 所有商品（无身份过滤） |
 
 ---
 
-## 2. 客户信息列表接口
+## 2. 委托登录接口
+
+委托登录流程：终端用户提供手机号 -> AI 智能体调 `login` 获取 `client_token` -> 业务接口携带双 token -> 会话结束调 `logout`。
+
+> 本系统只校验手机号在客户信息表中**存在**，不校验手机号属于提问者本人。手机号真实性验证（短信验证码等）由 AI 智能体自行完成。
+
+### 2.1 委托登录（获取 client_token）
+
+**接口地址**
+
+```
+POST https://erp11022.aidingyi.cn/api/v1/erp.delegate/login
+```
+
+**请求参数**
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| mobile | string | 是 | 委托人手机号 |
+
+Header：`Api-Authorize-Token: ${AGENT_TOKEN}`
+
+**请求示例**
+
+```json
+{ "mobile": "13916323348" }
+```
+
+**返回响应**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| client_token | string | 委托人 token，后续业务接口放在 `Client-Authorize-Token` Header |
+| record_id | int | 委托人在客户信息表中的 id，订单创建时 `kehu` 字段必须填此值 |
+| role_id | int | 委托人角色 id |
+| display_name | string | 委托人显示名（如"覃女士"） |
+| agent_name | string | 代理人名称 |
+
+**响应示例**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "client_token": "e68dbb166da30b1456f69504ecd0d7c09c489ade2def8ba60f97d3bb35f5c712",
+    "record_id": 2,
+    "role_id": 2,
+    "display_name": "覃女士",
+    "agent_name": "电商客服智能体"
+  }
+}
+```
+
+> 手机号不存在时统一返回 `Code: -1, Error: "委托登录失败"`，不暴露"手机号不存在"细节。
+
+### 2.2 委托人信息查询（校验 client_token）
+
+**接口地址**
+
+```
+POST https://erp11022.aidingyi.cn/api/v1/erp.delegate/info
+```
+
+Header：`Api-Authorize-Token` + `Client-Authorize-Token`
+
+**返回响应**
+
+```json
+{
+  "Code": 0,
+  "Response": {
+    "record_id": 2,
+    "role_id": 2,
+    "display_name": "覃女士",
+    "agent_name": "电商客服智能体",
+    "identity_table": "t_kehuxinxi"
+  }
+}
+```
+
+用于校验 `client_token` 是否有效。返回 `Code: -99` 表示已失效，需重新调 `login`。
+
+### 2.3 委托登出
+
+**接口地址**
+
+```
+POST https://erp11022.aidingyi.cn/api/v1/erp.delegate/logout
+```
+
+Header：`Api-Authorize-Token` + `Client-Authorize-Token`
+
+**返回响应**
+
+```json
+{ "Code": 0, "Response": { "msg": "已登出" } }
+```
+
+登出后 `client_token` 立即失效，后续业务接口返回 `Code: -99`。
+
+---
+
+## 3. 客户信息列表接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 ```
 
 ### 请求参数
@@ -102,7 +220,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | module | string | 是 | 固定为 `"kehuxinxi"` |
-| filters | array | 是 | 过滤条件，参见第 1 节 filters 约定 |
+| filters | array | 否 | 过滤条件，参见第 1 节 filters 约定 |
 | page, limit | - | - | 参见第 1 节分页参数 |
 
 **请求示例**
@@ -152,30 +270,25 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 ---
 
-## 3. 客户信息详情接口
+## 4. 客户信息详情接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 ```
 
 ### 请求参数
 
-**Body**
-
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| module | string | 是 | 模块名称，固定为 `"kehuxinxi"` |
+| module | string | 是 | 固定为 `"kehuxinxi"` |
 | did | int | 是 | 客户记录 ID |
 
 **请求示例**
 
 ```json
-{
-  "module": "kehuxinxi",
-  "did": 1
-}
+{ "module": "kehuxinxi", "did": 1 }
 ```
 
 ### 返回响应
@@ -199,8 +312,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 ```json
 {
   "Code": 0,
-  "Debug": "",
-  "Error": "",
   "Response": {
     "tables": [
       {
@@ -210,12 +321,9 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "foreign_key": null,
         "parent_table": null,
         "data": {
-          "id": 1,
-          "sid": "KHXX2026-000001",
-          "kehumingcheng": "孙小姐",
-          "kehushouji": "13916323347",
-          "kehubianhao": null,
-          "beizhu": null,
+          "id": 1, "sid": "KHXX2026-000001",
+          "kehumingcheng": "孙小姐", "kehushouji": "13916323347",
+          "kehubianhao": null, "beizhu": null,
           "create_user": { "label": "孙晨", "value": 1 },
           "create_group": { "label": "默认组", "value": 1 },
           "create_time": "2026-06-02 16:16:42",
@@ -254,21 +362,15 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         "parent_table": "t_kehuxinxi",
         "data": [
           {
-            "id": 1,
-            "fid": 1,
-            "shouhuoren": "孙晨",
-            "shouji": "13916323347",
-            "shengshiqu": "上海徐汇区",
-            "xiangxidizhi": "南宁路1000号",
+            "id": 1, "fid": 1,
+            "shouhuoren": "孙晨", "shouji": "13916323347",
+            "shengshiqu": "上海徐汇区", "xiangxidizhi": "南宁路1000号",
             "shifoumorendizhi": "是"
           },
           {
-            "id": 2,
-            "fid": 1,
-            "shouhuoren": "孙晨",
-            "shouji": "13916323347",
-            "shengshiqu": "上海嘉定区",
-            "xiangxidizhi": "芳林路958号",
+            "id": 2, "fid": 1,
+            "shouhuoren": "孙晨", "shouji": "13916323347",
+            "shengshiqu": "上海嘉定区", "xiangxidizhi": "芳林路958号",
             "shifoumorendizhi": "否"
           }
         ],
@@ -281,8 +383,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
               { "attr_name": "shengshiqu", "display_name": "省市区" },
               { "attr_name": "xiangxidizhi", "display_name": "详细地址" },
               {
-                "attr_name": "shifoumorendizhi",
-                "display_name": "是否默认地址",
+                "attr_name": "shifoumorendizhi", "display_name": "是否默认地址",
                 "options": [
                   { "label": "是", "value": "是" },
                   { "label": "否", "value": "否" }
@@ -297,12 +398,14 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 }
 ```
 
-## 4. 客户订单列表接口
+---
+
+## 5. 客户订单列表接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 ```
 
 ### 请求参数
@@ -310,7 +413,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | module | string | 是 | 固定为 `"kehudingdan"` |
-| filters | array | 是 | 过滤条件，参见第 1 节 filters 约定 |
+| filters | array | 否 | 过滤条件，参见第 1 节 filters 约定 |
 | page, limit | - | - | 参见第 1 节分页参数 |
 
 **请求示例**
@@ -329,19 +432,17 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 **关于 datetime 截止时间的注意事项**
 
-上例中，value[1] 必须带时分秒，如果写 "2026-06-04" 其实表示的是 "2026-06-04 00:00:00" 而非 "2026-06-04 23:59:59" ，这一点和很多用户口头表述不同。即，用户说“我的订单下单时间应该是在2026年6月2日到2026年6月4日之间”，那么应该翻译为 { "attr": "xiadanshijian", "display_name": "下单时间", "value": ["2026-06-02 00:00:00", "2026-06-04 23:59:59"], "component": "datetime" } 。
+`value[1]` 必须带时分秒。写 `"2026-06-04"` 实际表示 `"2026-06-04 00:00:00"` 而非 `2026-06-04 23:59:59`，与口头表述不同。用户说"6月2日到6月4日之间"应翻译为 `["2026-06-02 00:00:00", "2026-06-04 23:59:59"]`。
 
 ### 返回响应
 
-通用返回结构见第 1 节"列表接口通用约定"。以下为业务字段示例（实际 `fields` 以接口返回为准）：
+通用返回结构见第 1 节。以下为业务字段示例（实际 `fields` 以接口返回为准）：
 
-**data 记录示例**
+**响应示例**
 
 ```json
 {
   "Code": 0,
-  "Debug": "",
-  "Error": "",
   "Response": {
     "data": [
       {
@@ -373,7 +474,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
     ],
     "data2": [],
     "fields": [
-      // --- 自定义字段 ---
       { "attr_name": "kehu", "display_name": "客户" },
       { "attr_name": "shouhuoren", "display_name": "收货人" },
       { "attr_name": "shouji", "display_name": "手机" },
@@ -388,7 +488,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
       { "attr_name": "dingdanjine", "display_name": "订单金额" },
       { "attr_name": "zhifufangshi", "display_name": "支付方式", "options": [{"label": "微信", "value": "微信"}, {"label": "支付宝", "value": "支付宝"}, {"label": "银行卡", "value": "银行卡"}] },
       { "attr_name": "zhifujine", "display_name": "支付金额" },
-      // --- 系统内置字段 ---
       { "attr_name": "sid", "display_name": "业务编号" },
       { "attr_name": "id", "display_name": "系统编号" },
       { "attr_name": "create_user", "display_name": "创建人" },
@@ -408,62 +507,50 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
       "yunfei": null,
       "zhifujine": null
     }
-  },
-  "Slow": [],
-  "Trace": ""
+  }
 }
 ```
 
-## 5. 客户订单详情接口
+---
+
+## 6. 客户订单详情接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 ```
 
 ### 请求参数
 
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| module | string | 是 | 模块名称，固定为 `"kehudingdan"` |
+| module | string | 是 | 固定为 `"kehudingdan"` |
 | did | integer | 是 | 客户订单 id |
 
 **请求示例**
 
 ```json
-{
-  "module": "kehudingdan",
-  "did": 1
-}
+{ "module": "kehudingdan", "did": 1 }
 ```
 
 ### 返回响应
 
-> 响应顶层仅返回 `tables`。`tables[X]` 包含 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 包含 `display_name`、`attrs`；`attrs[Z]` 包含 `attr_name`、`display_name`、`options`（无选项时不含 `options` 键）；`options` 内部仅包含 `label`、`value`。
+> 响应顶层仅返回 `tables`。`tables[X]` 结构同第 4 节。
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['tables'][0]['data'] | object | 客户订单主表信息（单条，字典） |
 | Response['tables'][1]['data'] | array | 优惠明细（多条，数组） |
 | Response['tables'][2]['data'] | array | 订单产品明细（多条，数组） |
-| Response['tables'][i]['table_name'] | string | 表名 |
-| Response['tables'][i]['display_name'] | string | 表中文名 |
-| Response['tables'][i]['primary_key'] | string | 主键字段名 |
-| Response['tables'][i]['foreign_key'] | string\|null | 外键字段名（子表为 `fid`，主表为 null） |
-| Response['tables'][i]['parent_table'] | string\|null | 父表名（主表为 null） |
-| Response['tables'][i]['sections'] | array | 字段分区定义 |
-| Response['tables'][i]['sections'][j]['attrs'] | array | 分区下的字段元数据（白名单过滤后） |
 
-> 主表字段定义与 **第 4 节"客户订单列表接口"** 的 `fields` 一致，此处不再重复列出完整元数据。以下仅展示子表字段和示例数据。
+> 主表字段定义与第 5 节的 `fields` 一致，此处不再重复列出完整元数据。以下仅展示子表字段和示例数据。
 
 **响应示例（已精简）**
 
 ```json
 {
   "Code": 0,
-  "Debug": "",
-  "Error": "",
   "Response": {
     "tables": [
       {
@@ -502,7 +589,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
           {
             "display_name": "基本信息",
             "attrs": [
-              // 字段定义同第 4 节的 fields，此处省略完整元数据
               { "attr_name": "kehu", "display_name": "客户" },
               { "attr_name": "shouhuoren", "display_name": "收货人" },
               { "attr_name": "shouji", "display_name": "手机" },
@@ -608,18 +694,18 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
         ]
       }
     ]
-  },
-  "Slow": [],
-  "Trace": ""
+  }
 }
 ```
 
-## 6 产品列表接口
+---
+
+## 7. 产品列表接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 ```
 
 ### 请求参数
@@ -627,7 +713,7 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | module | string | 是 | 固定为 `"shangpinguanli"` |
-| filters | array | 是 | 过滤条件，参见第 1 节 filters 约定 |
+| filters | array | 否 | 过滤条件，参见第 1 节 filters 约定 |
 | page, limit, order | - | - | 参见第 1 节分页与排序参数 |
 
 **请求示例**
@@ -650,16 +736,14 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 ### 返回响应
 
-通用返回结构见第 1 节"列表接口通用约定"。本接口额外字段：
-
-> 列表接口返回 `data`、`data2`、`fields`、`total`、`total_sum`。如需分类筛选能力，请通过 `filters` 传入 `suoshulanmu` 字段条件。
+通用返回结构见第 1 节。本接口额外字段：
 
 | 路径 | 类型 | 说明 |
 |------|------|------|
 | Response['data2'] | array | 二级数据集（通常为空） |
 | Response['total_sum']['xiaoshoujiahanshui'] | string | 销售价（含税）合计 |
 
-**响应示例（精简，分类树仅展示首层结构）**
+**响应示例（精简）**
 
 ```json
 {
@@ -686,7 +770,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
     ],
     "data2": [],
     "fields": [
-      // --- 自定义字段 ---
       { "attr_name": "skubianhao", "display_name": "SKU编号" },
       { "attr_name": "chanpinmingcheng", "display_name": "产品名称" },
       { "attr_name": "pinpai", "display_name": "品牌" },
@@ -701,7 +784,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
       { "attr_name": "shichuanwendu", "display_name": "适穿温度" },
       { "attr_name": "fahuoshixiao", "display_name": "发货时效" },
       { "attr_name": "chanpinjieshao", "display_name": "产品介绍" },
-      // --- 系统内置字段 ---
       { "attr_name": "sid", "display_name": "业务编号" },
       { "attr_name": "id", "display_name": "系统编号" },
       { "attr_name": "create_user", "display_name": "创建人" },
@@ -723,47 +805,35 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_listing_view
 
 | 字段 | 说明 |
 |------|------|
-| suoshulanmu | 所属栏目，列表中为扁平字符串（如 `"运动类"`）；详情接口中为 `{label, value}` 对象，关联到 `shangpinleimu` 模块，可通过详情接口返回值的对象形态识别关联字段 |
-| xiaoshoujiahanshui | 销售价（含税），货币类型，`total_sum` 中同名字段为当前查询结果的销售价合计 |
+| suoshulanmu | 所属栏目，列表中为扁平字符串（如 `"运动类"`）；详情接口中为 `{label, value}` 对象，关联到 `shangpinleimu` 模块 |
+| xiaoshoujiahanshui | 销售价（含税），货币类型，`total_sum` 中同名字段为当前查询结果的合计 |
 
+---
 
-## 7 产品详情接口
+## 8. 产品详情接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 ```
 
 ### 请求参数
 
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| module | string | 是 | 模块名称，固定为 `"shangpinguanli"` |
+| module | string | 是 | 固定为 `"shangpinguanli"` |
 | did | integer | 是 | 产品 id |
 
 **请求示例**
 
 ```json
-{
-  "module": "shangpinguanli",
-  "did": 320
-}
+{ "module": "shangpinguanli", "did": 320 }
 ```
 
 ### 返回响应
 
-> 响应顶层仅返回 `tables`。`tables[X]` 包含 `table_name`、`display_name`、`primary_key`、`foreign_key`、`parent_table`、`sections`、`data`；`sections[Y]` 包含 `display_name`、`attrs`；`attrs[Z]` 包含 `attr_name`、`display_name`、`options`（无选项时不含 `options` 键）；`options` 内部仅包含 `label`、`value`。
-
-| 路径 | 类型 | 说明 |
-|------|------|------|
-| Response['tables'][0]['data'] | object | 产品主表信息（单条，字典） |
-| Response['tables'][0]['sections'] | array | 字段分区定义（基本信息 + 系统信息） |
-| Response['tables'][i]['table_name'] | string | 表名 |
-| Response['tables'][i]['display_name'] | string | 表中文名 |
-| Response['tables'][i]['primary_key'] | string | 主键字段名 |
-
-> 主表字段定义与 **第 6 节"产品列表接口"** 的 `fields` 一致，此处不再重复列出完整元数据。
+> 响应顶层仅返回 `tables`。主表字段定义与第 7 节的 `fields` 一致，此处不再重复列出完整元数据。
 >
 > **与列表接口的差异**：详情接口中关联字段（`suoshulanmu`、`create_user`、`status_approve` 等）的值由扁平字符串变为 `{label, value}` 对象，便于前端展示标签；`null` 值字段保持 `null`。
 
@@ -804,7 +874,6 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
           {
             "display_name": "基本信息",
             "attrs": [
-              // 字段定义同第 6 节的 fields，此处省略完整元数据
               { "attr_name": "skubianhao", "display_name": "SKU编号" },
               { "attr_name": "chanpinmingcheng", "display_name": "产品名称" },
               { "attr_name": "pinpai", "display_name": "品牌" },
@@ -843,13 +912,14 @@ https://erp11022.aidingyi.cn/api/v1/erp.module/module_prepare_edit
 }
 ```
 
+---
 
-## 8. 订单创建接口
+## 9. 订单创建接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_data_update
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_data_update
 ```
 
 ### 请求方式
@@ -877,8 +947,8 @@ POST，Body 为 `application/json`
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| kehu | string | 是 | 客户ID，从客户信息详情接口获取 |
-| shouhuoren | string | 是 | 收货人，默认从客户详情取出，可改为客户要求内容 |
+| kehu | string | 是 | **客户ID，必须等于委托登录返回的 `record_id`**（后端强制校验，不一致报错） |
+| shouhuoren | string | 是 | 收货人，默认从客户详情取出，可改 |
 | shouji | string | 是 | 手机，默认从客户详情取出，可改 |
 | shengshiqu | string | 是 | 省市区，默认从客户详情取出，可改 |
 | xiangxidizhi | string | 是 | 详细地址，默认从客户详情取出，可改 |
@@ -892,9 +962,11 @@ POST，Body 为 `application/json`
 | update_time | string | 是 | 固定为空字符串 `""` |
 | id | string | 是 | 固定为空字符串 `""`，表示新建 |
 
+> **`kehu` 字段约束**：委托登录下，后端校验 `kehu` 必须等于当前 `client_token` 对应的 `record_id`。AI 智能体应从委托登录响应（第 2.1 节）取 `record_id`，不要从用户输入取。传错值会返回 `Code: -1, Error: "委托登录写入失败：表 t_kehudingdan 字段 kehu 应为 X，实际传入 Y"`。
+
 ### 优惠明细子表 t_kehudingdan_2
 
-可选子表，无优惠时可省略。有优惠时：
+可选子表，无优惠时省略。有优惠时：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -908,7 +980,7 @@ POST，Body 为 `application/json`
 | chanpinbianhao | string/int | 是 | 产品编号，从产品列表/详情接口获取 |
 | chanpinmingcheng | string | 是 | 产品名称，从产品列表/详情接口获取 |
 | pinpai | string | 否 | 品牌，从产品详情接口获取 |
-| guigeshuxing | string | 否 | 规格属性，从产品详情接口获取 把规格尺寸&颜色&材质&材质拼接起来 |
+| guigeshuxing | string | 否 | 规格属性，从产品详情接口获取，把规格尺寸&颜色&材质拼接起来 |
 | jiliangdanwei | string | 否 | 计量单位，从产品详情接口获取 |
 | xiadanshuliang | string/int | 是 | 下单数量，必须 > 0 |
 | danjia | string | 是 | 单价，必须 > 0 |
@@ -978,22 +1050,18 @@ POST，Body 为 `application/json`
 ```json
 {
   "Code": 0,
-  "Debug": "",
-  "Error": "",
-  "Response": 5,
-  "Slow": [],
-  "Trace": ""
+  "Response": 5
 }
 ```
 
 ---
 
-## 9. 订单修改接口
+## 10. 订单修改接口
 
 ### 接口地址
 
 ```
-https://erp11022.aidingyi.cn/api/v1/erp.module/module_data_update
+POST https://erp11022.aidingyi.cn/api/v1/erp.module/module_data_update
 ```
 
 ### 请求方式
@@ -1008,6 +1076,8 @@ POST，Body 为 `application/json`
 | did | int | 是 | 订单 id（修改时必填） |
 | tables | array | 是 | 仅包含需要修改的字段，见下文 |
 | temp | bool | 是 | 是否临时保存，固定为 `false` |
+
+> **身份过滤**：委托登录下，后端在 update 的 where 条件自动追加 `kehu = {record_id}`，AI 智能体无法修改他人订单。若 `did` 不属于当前委托人，接口表面返回成功但实际影响 0 行（数据未变），不会报错。
 
 ### 不同场景允许修改的字段
 
@@ -1108,11 +1178,7 @@ POST，Body 为 `application/json`
 ```json
 {
   "Code": 0,
-  "Debug": "",
-  "Error": "",
-  "Response": [],
-  "Slow": [],
-  "Trace": ""
+  "Response": []
 }
 ```
 
@@ -1125,12 +1191,48 @@ POST，Body 为 `application/json`
 
 ---
 
+## 11. 权限与写入约束
+
+委托登录下，后端强制执行以下约束，AI 智能体无需也无法绕过，但应了解以避免调用失败。
+
+### 11.1 操作权限矩阵
+
+| 模块 | 列表/详情 | 新增 | 修改 | 删除 |
+|------|----------|------|------|------|
+| 客户信息（kehuxinxi） | ✓ | ✗ | ✓ | ✗ |
+| 客户订单（kehudingdan） | ✓ | ✓ | ✓ | ✗ |
+| 商品管理（shangpinguanli） | ✓ | ✗ | ✗ | ✗ |
+
+调用无权限的写入接口会返回 `Code: -1, Error: "委托登录无 insert/update 权限：模块 xxx"`。
+
+### 11.2 数据权限
+
+- 客户信息、订单：仅返回/操作委托人自己的数据（后端自动过滤，无需在 filters 中指定）
+- 商品：返回所有商品
+
+### 11.3 删除约定
+
+**委托登录禁止物理删除业务数据**。所有"删除"语义统一走修改状态字段：
+
+| 场景 | 实现方式 |
+|------|---------|
+| 取消订单 | 修改 `dingdanzhuangtai` 为 `"已取消"`（见第 10 节场景一） |
+| 商品下架 | 委托人无操作权限，需联系后台管理员 |
+| 客户停用 | 委托人无操作权限，需联系后台管理员 |
+
+### 11.4 身份字段强制一致
+
+订单创建时，主表 `t_kehudingdan.kehu` 必须等于委托登录返回的 `record_id`。后端校验，不一致直接报错。AI 智能体应从 `client_token` 对应的委托登录响应中取 `record_id`，不要从用户输入取。
+
+---
+
 ## 变更记录
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | v1.0 | 2026-06-03 | 初始版本，涵盖客户信息列表/详情、客户订单列表/详情 |
-| v1.1 | 2026-07-03 | 订单模块字段补全：修正订单列表 `fahuozhuangtai` 的 options 为「未发货/部分发货/已发货」；订单产品子表补充 `wuliugongsi`/`wuliudanhao`/`tuihuoyuanyin`/`tuihuozhuangtai` 字段定义及示例。 |
-| v1.2 | 2026-07-03 | 新增第 8 节「订单创建接口」、第 9 节「订单修改接口」，覆盖订单写入场景。 |
+| v1.1 | 2026-07-03 | 订单模块字段补全：修正订单列表 `fahuozhuangtai` 的 options；订单产品子表补充 `wuliugongsi`/`wuliudanhao`/`tuihuoyuanyin`/`tuihuozhuangtai` 字段定义及示例。 |
+| v1.2 | 2026-07-03 | 新增第 8 节「订单创建接口」、第 9 节「订单修改接口」。 |
 | v1.3 | 2026-07-06 | 接口输出精简：列表接口仅返回 `data`/`data2`/`fields`/`total`/`total_sum`；详情接口顶层仅返回 `tables`。 |
-| v1.4 | 2026-07-07 | 字段元数据进一步精简：`attrs` 仅包含 `attr_name`/`display_name`/`options`；`sections` 仅包含 `display_name`/`attrs`；`options` 内部仅包含 `label`/`value`，无选项时不返回 `options` 键。 |
+| v1.4 | 2026-07-07 | 字段元数据进一步精简：`attrs` 仅含 `attr_name`/`display_name`/`options`；`sections` 仅含 `display_name`/`attrs`；`options` 内部仅含 `label`/`value`。 |
+| v2.0 | 2026-07-10 | 改为委托登录鉴权：双 Token（`agent_token` + `client_token`）；新增第 2 节委托登录接口（login/info/logout）；订单创建补充 `kehu` 必须等于 `record_id` 约束；新增第 11 节权限与写入约束（操作权限矩阵、删除约定、身份字段强制一致）。 |
