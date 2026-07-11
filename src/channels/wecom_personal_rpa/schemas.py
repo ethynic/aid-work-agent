@@ -235,8 +235,9 @@ class RpaReplyContext(BaseModel):
 class ActionEnvelope(BaseModel):
     """服务端下发给客户端的动作信封。
 
-    - 在线客户端：通过 WebSocket 直接推送本信封。
-    - 离线客户端：作为一行写入 wecom_rpa_action_outbox，由客户端拉取执行。
+    协议 v1.2 中先作为一行写入 ``wecom_rpa_action_outbox``，由客户端通过
+    ``GET /outbox`` 可靠拉取；滚动升级期间在线新动作可在入库后经 WebSocket
+    兼容直推，连接建立时只发送轻量可用通知。
     """
 
     request_id: str = Field(..., description="本次下发的请求 ID（与回执 RpaActionResultPayload.request_id 对应）")
@@ -248,6 +249,30 @@ class ActionEnvelope(BaseModel):
         description="回复上下文，仅用于校验和诊断；actions 才是客户端执行权威",
     )
     actions: List[RpaAction] = Field(..., description="顺序执行的动作列表")
+
+
+class OutboxAvailableNotification(BaseModel):
+    """WebSocket 轻量提醒；不携带消息正文，客户端收到后拉取 outbox。"""
+
+    type: Literal["outbox_available"] = "outbox_available"
+    protocol_version: str
+    latest_request_id: Optional[str] = None
+    pending_count: int = 0
+
+
+class OutboxItem(ActionEnvelope):
+    """GET /outbox 返回的权威动作信封。"""
+
+    type: Literal["actions"] = "actions"
+
+
+class OutboxResponse(BaseModel):
+    """客户端可靠拉取响应；读取不 claim、不删除，保持 at-least-once。"""
+
+    protocol_version: str
+    server_time: datetime
+    poll_interval_seconds: int = 5
+    items: List[OutboxItem] = Field(default_factory=list)
 
 
 # ===========================================================================
@@ -363,4 +388,4 @@ class RpaErrorResponse(BaseModel):
 # ===========================================================================
 
 # 当前线协议版本。任何 breaking change 必须递进。
-PROTOCOL_VERSION = "1.1.0"
+PROTOCOL_VERSION = "1.2.0"

@@ -297,20 +297,33 @@ public partial class App : Application
         services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.Health.DesktopHealthSupervisor>());
         // WebSocketConnectionManager：自动重连（指数退避 1/2/4/8/16/30s 封顶）+ 30s 心跳 +
         // 60s 离线检测 + NetworkChange 立即重连 + Reconnected 事件。
-        // 重连成功后触发 Reconnected 事件（OutboundActionDispatcher 订阅做增量 outbox 拉取）。
+        // 重连成功后触发 Reconnected 事件（OutboxPoller 订阅以触发立即 outbox 拉取）。
         services.AddSingleton<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>();
         services.AddHostedService(sp => sp.GetRequiredService<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>());
 
+        // OutboxPoller：服务端 DB outbox 可靠轮询（权威消息源）。启动即拉 + 周期拉 + WS 重连/outbox_available 即拉。
+        // 拉到的信封交 OutboundActionDispatcher.EnvelopeEnqueueAsync（按 request_id+action_index 幂等 + 终态重报）。
+        services.AddSingleton<OutboxPoller>(sp => new OutboxPoller(
+            sp.GetRequiredService<IAgentApiClient>(),
+            sp.GetRequiredService<OutboundActionDispatcher>(),
+            sp.GetRequiredService<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>(),
+            sp.GetRequiredService<OutboundQueue>(),
+            sp.GetRequiredService<ClientOptions>(),
+            logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<OutboxPoller>>()));
+        services.AddHostedService(sp => sp.GetRequiredService<OutboxPoller>());
+
         // ServerMessageDispatcher：Phase 4 测试阶段补齐跨块协调缺口。
-        // 订阅 WebSocketConnectionManager.MessageReceived，解析 paused/resumed/actions JSON：
+        // 订阅 WebSocketConnectionManager.MessageReceived，解析 paused/resumed/actions/outbox_available JSON：
         //   - paused/resumed → 调 ClientSession.PauseAsync/ResumeAsync
         //   - actions（ActionEnvelope）→ 调 OutboundActionDispatcher.EnvelopeEnqueueAsync 入队
+        //   - outbox_available → 调 OutboxPoller.TriggerNowAsync 立即拉取
         // 协议字段对齐 protocol.md §A.11（type/scope/conversation_id）。
         services.AddHostedService(sp => new WeCom.PersonalRpa.App.Realtime.ServerMessageDispatcher(
             sp.GetRequiredService<WeCom.PersonalRpa.App.Realtime.WebSocketConnectionManager>(),
             sp.GetRequiredService<ClientSession>(),
             logger: null,
-            dispatcher: sp.GetRequiredService<OutboundActionDispatcher>()));
+            dispatcher: sp.GetRequiredService<OutboundActionDispatcher>(),
+            outboxPoller: sp.GetRequiredService<OutboxPoller>()));
 
         // Phase 1 删除：以下 5 个编排组件依赖已退役的视觉/UIA 链路，
         //             Phase 2 will rework with PowershellAutomationBackend

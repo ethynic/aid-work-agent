@@ -185,6 +185,8 @@ def _patched_db(client_row: dict | None = None):
     fake.write_audit.return_value = "audit_id"
     fake.set_account_status.return_value = True
     fake.list_outbox.return_value = []
+    fake.list_pending_outbox_for_client.return_value = []
+    fake.mark_outbox_result_for_client.return_value = True
     fake.mark_outbox_status.return_value = True
     fake.list_accounts.return_value = []
     return fake
@@ -322,15 +324,11 @@ class TestWeComPersonalRpaCallbackFlow:
             "evt_ar_001", "action_result", _action_result_payload(ar_id, success=True)
         )
         body1 = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
-        # 第二次回执（不同 event_id，相同 action_result_id → 去重）
-        envelope2 = {**envelope, "event_id": "evt_ar_002"}
+        # 第二次回执保持相同 event_id；action_result 不在 DB 更新前占 event_id 去重键。
+        envelope2 = dict(envelope)
         body2 = json.dumps(envelope2, ensure_ascii=False).encode("utf-8")
 
         fake_db = _patched_db()
-        # 提供 pending outbox 行供 _handle_action_result 匹配并 mark
-        fake_db.list_outbox.return_value = [
-            {"id": "act_row_1", "request_id": "req_test_001", "status": "running"}
-        ]
         ctxs, _mocks = _apply_common_patches(fake_db, fake_dedup)
         try:
             r1 = client.post(
@@ -349,8 +347,38 @@ class TestWeComPersonalRpaCallbackFlow:
 
         assert r1.status_code == 200 and r1.json() == {"result": "accepted"}
         assert r2.status_code == 200 and r2.json() == {"result": "accepted"}
-        # mark_outbox_status 仅被调用一次（第二次回执被 action_result_id 去重）
-        assert fake_db.mark_outbox_status.call_count == 1
+        # DB 更新是带终态条件的幂等操作；先尝试更新再记去重，避免瞬时 DB 失败吞重报。
+        assert fake_db.mark_outbox_result_for_client.call_count == 2
+        mark = fake_db.mark_outbox_result_for_client.call_args.kwargs
+        assert mark["tenant_id"] == _TENANT_ID
+        assert mark["client_id"] == _CLIENT_ID
+
+    def test_action_result_db_failure_can_retry_same_event(self, client, fake_dedup):
+        """DB 瞬时失败不占 event/action 去重键，同一事件可再次上报。"""
+        envelope = _build_envelope(
+            "evt_ar_retry", "action_result", _action_result_payload("res_retry")
+        )
+        body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+        fake_db = _patched_db()
+        fake_db.mark_outbox_result_for_client.side_effect = RuntimeError("db unavailable")
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            first = client.post(
+                f"/t/{_TENANT_ID}/wecom_personal_rpa/callback/{_CONFIG_ID}",
+                content=body,
+                headers=_signed_headers(body),
+            )
+            second = client.post(
+                f"/t/{_TENANT_ID}/wecom_personal_rpa/callback/{_CONFIG_ID}",
+                content=body,
+                headers=_signed_headers(body),
+            )
+        finally:
+            for context in ctxs:
+                context.__exit__(None, None, None)
+        assert first.status_code == 200 and second.status_code == 200
+        assert fake_db.mark_outbox_result_for_client.call_count == 2
+        assert fake_dedup.calls == []
 
     def test_invalid_signature_returns_401_error_envelope(self, client, fake_dedup):
         """场景5：签名错误 → 401 + RpaErrorResponse（error=auth_failed）。"""
@@ -520,8 +548,8 @@ class TestActionDeliverOfflineOutbox:
             assert kwargs["account_id"] == _ACCOUNT_ID
 
     @pytest.mark.asyncio
-    async def test_online_client_skips_outbox(self):
-        """客户端在线 → 直接推送，不写 outbox（enqueue_action 不被调用）。"""
+    async def test_online_client_enqueues_before_compat_push(self):
+        """客户端在线 → 先写权威 outbox，再兼容直推完整信封。"""
         from src.channels.wecom_personal_rpa import action_client
         from src.channels.wecom_personal_rpa import db as rpa_db
 
@@ -540,6 +568,7 @@ class TestActionDeliverOfflineOutbox:
                 "client_id": _CLIENT_ID,
                 "status": "online",
             }
+            m_enqueue.return_value = {"id": "act_row_1", "status": "pending"}
 
             await action_client.deliver_actions(
                 tenant_id=_TENANT_ID,
@@ -552,7 +581,115 @@ class TestActionDeliverOfflineOutbox:
 
             m_online.assert_called_once_with(_CLIENT_ID)
             m_send.assert_awaited_once()
-            m_enqueue.assert_not_called()
+            m_enqueue.assert_called_once()
+            payload = m_send.call_args.args[1]
+            assert payload["type"] == "actions"
+            assert payload["request_id"] == "req_test_003"
+            assert payload["actions"] == [
+                {"type": "send_text", "text": "在线直推"}
+            ]
+
+
+@pytest.mark.integration
+class TestReliableOutboxPull:
+    """协议 v1.2 权威 outbox 拉取契约。"""
+
+    def test_returns_sorted_authorized_items_with_full_context(self, client, fake_dedup):
+        fake_db = _patched_db()
+        fake_db.list_pending_outbox_for_client.return_value = [
+            {
+                "request_id": "req_1",
+                "session_id": "sid_1",
+                "account_id": _ACCOUNT_ID,
+                "conversation_id": "conv_1",
+                "reply_context": {
+                    "sender_display_name": "陆伟@微信",
+                    "conversation_search_name": "陆伟",
+                    "inbound_text": "晚上好",
+                    "agent_reply_text": "晚上好～",
+                },
+                "actions": [{"type": "send_text", "text": "晚上好～"}],
+            }
+        ]
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            response = client.get(
+                "/api/v1/channels/wecom-personal-rpa/outbox?limit=25",
+                headers=_signed_headers(b""),
+            )
+        finally:
+            for context in ctxs:
+                context.__exit__(None, None, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["protocol_version"] == "1.2.0"
+        assert body["poll_interval_seconds"] == 5
+        assert body["items"][0]["type"] == "actions"
+        assert body["items"][0]["reply_context"]["conversation_search_name"] == "陆伟"
+        assert body["items"][0]["actions"][0]["text"] == "晚上好～"
+        fake_db.list_pending_outbox_for_client.assert_called_once_with(
+            tenant_id=_TENANT_ID, client_id=_CLIENT_ID, limit=25
+        )
+
+    def test_empty_and_limit_validation(self, client, fake_dedup):
+        fake_db = _patched_db()
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            empty = client.get(
+                "/api/v1/channels/wecom-personal-rpa/outbox",
+                headers=_signed_headers(b""),
+            )
+            invalid = client.get(
+                "/api/v1/channels/wecom-personal-rpa/outbox?limit=101",
+                headers=_signed_headers(b""),
+            )
+        finally:
+            for context in ctxs:
+                context.__exit__(None, None, None)
+        assert empty.status_code == 200 and empty.json()["items"] == []
+        assert invalid.status_code == 400
+
+    def test_invalid_signature_is_rejected(self, client, fake_dedup):
+        fake_db = _patched_db()
+        headers = _signed_headers(b"")
+        headers["X-Signature"] = "0" * 64
+        ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+        try:
+            response = client.get(
+                "/api/v1/channels/wecom-personal-rpa/outbox", headers=headers
+            )
+        finally:
+            for context in ctxs:
+                context.__exit__(None, None, None)
+        assert response.status_code == 401
+        fake_db.list_pending_outbox_for_client.assert_not_called()
+
+
+@pytest.mark.integration
+def test_ws_reconnect_sends_notification_without_action_body(client, fake_dedup):
+    """历史完整 actions 仍可被客户端解析，但新握手路径只发轻量提醒。"""
+    fake_db = _patched_db()
+    fake_db.list_pending_outbox_for_client.return_value = [
+        {"request_id": "req_latest"}
+    ]
+    ctxs, _ = _apply_common_patches(fake_db, fake_dedup)
+    try:
+        path = (
+            f"/t/{_TENANT_ID}/wecom_personal_rpa/ws/{_CONFIG_ID}"
+            f"?{_signed_ws_query()}"
+        )
+        with client.websocket_connect(path) as websocket:
+            payload = websocket.receive_json()
+    finally:
+        for context in ctxs:
+            context.__exit__(None, None, None)
+    assert payload == {
+        "type": "outbox_available",
+        "protocol_version": "1.2.0",
+        "latest_request_id": "req_latest",
+        "pending_count": 1,
+    }
 
 
 # ===========================================================================

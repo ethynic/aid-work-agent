@@ -615,6 +615,7 @@ CREATE TABLE IF NOT EXISTS wecom_rpa_action_outbox (
     session_id TEXT,
     actions TEXT,
     reply_context JSONB,
+    action_results JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     next_retry_at TIMESTAMP,
@@ -630,6 +631,8 @@ CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_tenant_account
     ON wecom_rpa_action_outbox(tenant_id, account_id);
 ALTER TABLE wecom_rpa_action_outbox
     ADD COLUMN IF NOT EXISTS reply_context JSONB;
+ALTER TABLE wecom_rpa_action_outbox
+    ADD COLUMN IF NOT EXISTS action_results JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- 5. 审计日志表
 CREATE TABLE IF NOT EXISTS wecom_rpa_audit_logs (

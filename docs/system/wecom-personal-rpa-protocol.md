@@ -155,27 +155,59 @@ sig = hmac_sha256(
 
 ### A.6 出站 actions（服务端 → 客户端，`ActionEnvelope`）
 
-WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbox`）共用此结构：
+协议 v1.2 起，数据库 outbox 是唯一权威消息源。客户端通过
+`GET /api/v1/channels/wecom-personal-rpa/outbox?limit=100` 拉取此结构：
 
 ```json
 {
-  "request_id": "req_xxx",
-  "session_id": "wecom_personal_rpa:wecom_account_001:binding_abc",
-  "account_id": "wecom_account_001",
-  "conversation_id": "binding_abc",
-  "reply_context": {
-    "sender_display_name": "张三",
-    "sender_stable_id": "wm_xxx",
-    "conversation_search_name": "张三",
-    "inbound_text": "请发一份报价单",
-    "agent_reply_text": "您好，报价单已发送。"
-  },
-  "actions": [
-    {"type": "send_text", "text": "您好，已收到。"},
-    {"type": "send_file", "file_url": "https://agent.example.com/files/xxx?sig=...", "filename": "报价单.xlsx"}
+  "protocol_version": "1.2.0",
+  "server_time": "2026-07-10T20:00:00+08:00",
+  "poll_interval_seconds": 5,
+  "items": [
+    {
+      "type": "actions",
+      "request_id": "req_xxx",
+      "session_id": "wecom_personal_rpa:wecom_account_001:binding_abc",
+      "account_id": "wecom_account_001",
+      "conversation_id": "binding_abc",
+      "reply_context": {
+        "sender_display_name": "张三",
+        "sender_stable_id": "wm_xxx",
+        "conversation_search_name": "张三",
+        "inbound_text": "请发一份报价单",
+        "agent_reply_text": "您好，报价单已发送。"
+      },
+      "actions": [
+        {"type": "send_text", "text": "您好，已收到。"},
+        {"type": "send_file", "file_url": "https://agent.example.com/files/xxx?sig=...", "filename": "报价单.xlsx"}
+      ]
+    }
   ]
 }
 ```
+
+GET 请求沿用 `X-Client-Id`、`X-Timestamp`、`X-Nonce`、`X-Signature`，签名 raw body
+为空字节串。`limit` 范围 1..100，默认 100。服务端只按 HMAC 已鉴权 client 反查同租户、
+同 client 账号的 pending 及到期 retryable 数据，按 `created_at ASC` 返回；客户端不得传
+`account_id`。GET 不删除、不 claim，客户端必须按 `request_id + action_index` 本地幂等，
+执行后通过 action_result 回执，成功/失败终态将停止返回。
+服务端在 `wecom_rpa_action_outbox.action_results` 持久化逐 action 结果并在行锁事务内合并：
+回执可乱序，同一索引首次结果幂等；任一合法 action 失败则信封立即 `failed`，只有全部合法
+索引均回执成功才置 `succeeded`。非法索引拒绝且不改变状态。
+
+WebSocket v1.2 在连接建立时只发送轻量通知，不批量重放正文：
+
+```json
+{"type":"outbox_available","protocol_version":"1.2.0","latest_request_id":"req_xxx","pending_count":1}
+```
+
+收到通知、WS 建连成功、客户端启动时立即拉取；正常在线按响应建议每 5 秒兜底拉取。
+通知可能因 Gunicorn 多 worker 或断线丢失，不能作为可靠消息源。升级期客户端仍应兼容
+旧服务端通过 WS 直接发送的 `type=actions` 信封。为保证滚动发布期间旧客户端可用，
+v1.2 服务端对新动作始终先幂等入库；若当前 worker 正好持有该客户端连接，再 best-effort
+直推完整 `type=actions` 信封作为低延迟兼容快速路径。新客户端必须按
+`request_id + action_index` 本地幂等，跨 worker 或直推失败由 5 秒 GET 轮询兜底；任何直推
+都不能绕过数据库权威 outbox。
 
 `reply_context` 是 v1.1.0 新增的可选兼容字段，用于让客户端校验本次回复对应的发送人、
 入站文本和 Agent 回复。旧服务端/历史 outbox 可不含该字段，旧客户端也必须忽略未知字段。
@@ -220,7 +252,7 @@ WebSocket 推送或离线拉取（`GET /api/v1/channels/wecom-personal-rpa/outbo
 
 ```json
 {
-  "protocol_version": "1.1.0",
+  "protocol_version": "1.2.0",
   "min_client_version": "1.0.0",
   "paused": false,
   "paused_scope": null,

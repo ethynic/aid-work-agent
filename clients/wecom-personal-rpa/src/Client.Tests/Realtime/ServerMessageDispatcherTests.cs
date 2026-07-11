@@ -162,6 +162,8 @@ public sealed class ServerMessageDispatcherTests
             => throw new NotSupportedException();
         public Task<WeCom.PersonalRpa.Core.Protocol.RpaConfigResponse> GetConfigAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+        public Task<WeCom.PersonalRpa.Core.Protocol.OutboxResponse> GetOutboxAsync(int limit = 100, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
         public Task<Stream> DownloadFileAsync(string fileId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
         public Task<System.Net.WebSockets.ClientWebSocket> ConnectWebSocketAsync(CancellationToken cancellationToken = default)
@@ -253,6 +255,16 @@ public sealed class ServerMessageDispatcherTests
         // 测试场景：未注入 OutboundActionDispatcher（构造函数传 null），actions 事件应被丢弃不抛异常
         var (dispatcher, _, _) = Create();
         var data = Json(new { type = "actions", request_id = "req_x", actions = Array.Empty<object>() });
+
+        await dispatcher.DispatchAsync(data); // 不抛
+    }
+
+    [Fact]
+    public async Task DispatchAsync_OutboxAvailable_NoPoller_DoesNotThrow()
+    {
+        // 未注入 OutboxPoller 时，outbox_available 应被忽略不抛异常
+        var (dispatcher, _, _) = Create();
+        var data = Json(new { type = "outbox_available", latest_request_id = "req1", pending_count = 1 });
 
         await dispatcher.DispatchAsync(data); // 不抛
     }

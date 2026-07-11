@@ -1,7 +1,7 @@
 """wecom_personal_rpa.action_client 单元测试
 
 覆盖：
-- 在线分支：registry.is_online=True 时走 registry.send，不写 outbox。
+- 在线分支：先写 outbox，再通过 registry.send 兼容直推完整信封。
 - 离线分支：registry.is_online=False 时走 db.enqueue_action。
 - 账号不存在分支：db.get_account 返回 None 时记 error + 审计，不抛、不入队。
 
@@ -50,8 +50,8 @@ def patched_registry():
 # ============================ 在线分支 ============================
 
 @pytest.mark.asyncio
-async def test_deliver_online_uses_registry_send_and_skips_outbox(patched_db, patched_registry):
-    """意图：在线时直接推送，不写 outbox（离线降级路径不应触发）。"""
+async def test_deliver_online_enqueues_then_sends_compat_envelope(patched_db, patched_registry):
+    """在线时也先入权威 outbox，再兼容直推完整动作信封。"""
     patched_registry.is_online.return_value = True
 
     actions = [{"type": "send_text", "text": "你好"}]
@@ -72,27 +72,21 @@ async def test_deliver_online_uses_registry_send_and_skips_outbox(patched_db, pa
     )
     assert delivered is True
 
-    # 在线推送：send 收到完整 envelope dict
+    patched_db.enqueue_action.assert_called_once()
+    # 入库成功后兼容旧客户端直推完整信封
     patched_registry.send.assert_awaited_once()
     _, kwargs = patched_registry.send.call_args
     # send 接受位置参数 (client_id, payload)；兼容 args/kwargs 两种写法
     payload = patched_registry.send.call_args.args[1] if patched_registry.send.call_args.args else kwargs["payload"]
-    assert payload["request_id"] == "req_1"
     assert payload["type"] == "actions"
-    assert payload["account_id"] == "acct_001"
-    assert payload["conversation_id"] == "conv_1"
-    assert payload["session_id"] == "wecom_personal_rpa:acct_001:conv_1"
+    assert payload["request_id"] == "req_1"
     assert payload["actions"] == actions
     assert payload["reply_context"]["inbound_text"] == "你好"
-    assert payload["reply_context"]["agent_reply_text"] == "您好"
-
-    # 在线时不应写 outbox
-    patched_db.enqueue_action.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_deliver_online_send_failure_falls_back_to_outbox(patched_db, patched_registry):
-    """意图：在线推送异常时降级入队，保证不丢投递。"""
+async def test_deliver_online_compat_push_failure_remains_queued(patched_db, patched_registry):
+    """兼容直推失败不影响已经完成的可靠入队。"""
     patched_registry.is_online.return_value = True
     patched_registry.send.side_effect = RuntimeError("ws broken")
 

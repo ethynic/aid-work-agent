@@ -1,8 +1,7 @@
 """企业微信个人账号 RPA 出站动作投递
 
-在线客户端：通过 ``connection.ClientConnectionRegistry`` 直接推送 ``ActionEnvelope``。
-离线客户端：序列化 actions 后调用 ``db.enqueue_action`` 写入 ``wecom_rpa_action_outbox``，
-            由客户端后续拉取执行。
+所有动作先幂等写入数据库 outbox；在线连接可在入库后收到完整信封兼容直推，
+可靠性仍由客户端轮询权威 outbox 保证。
 
 任何一步失败只记录 ``logger.error`` 与审计，不向上抛出（投递是尽力而为，
 调用方在 send_message 已成功返回 True 后不再处理投递异常）。
@@ -53,8 +52,7 @@ async def deliver_actions(
         session_id: 服务端会话 ID（``wecom_personal_rpa:{account_id}:{route_key}``）。
         actions: ``RpaAction`` 列表（dict 或 pydantic 实例）。
 
-    在线：通过 ``client_connection_registry.send`` 推送 ``ActionEnvelope``。
-    离线：``db.enqueue_action`` 写 outbox，``dedup_key=wecom_personal_rpa:{tenant_id}:{request_id}``。
+    始终先写 outbox；在线时再尽力兼容直推完整 ``ActionEnvelope``。
     账号不存在：记 ``logger.error`` 并写审计后返回（不抛）。
     """
     # 1. 解析 account → client_id（决定在线/离线路径）
@@ -85,31 +83,7 @@ async def deliver_actions(
 
     # 2. 序列化 actions 与构造信封
     actions_serialized = [_serialize_action(a) for a in (actions or [])]
-    envelope = ActionEnvelope(
-        request_id=request_id,
-        session_id=session_id,
-        account_id=account_id,
-        conversation_id=conversation_id,
-        reply_context=reply_context,
-        actions=actions_serialized,
-    )
-    envelope_dict = envelope.model_dump()
-    envelope_dict["type"] = "actions"
-
-    # 3. 在线 → 直接推送
-    if client_id and client_connection_registry.is_online(client_id):
-        try:
-            if await client_connection_registry.send(client_id, envelope_dict):
-                return True
-        except Exception as e:
-            # 推送失败：降级走离线入队，保证不丢
-            logger.error(
-                f"RPA 在线推送失败，降级入队 client_id={client_id} "
-                f"request_id={request_id}: {e}"
-            )
-            # 继续走离线分支
-
-    # 4. 离线 → 写 outbox
+    # 3. outbox 是唯一权威源：无论本 worker 是否持有连接都先入队
     dedup_key = f"wecom_personal_rpa:{tenant_id}:{request_id}"
     try:
         queued = db.enqueue_action(
@@ -122,7 +96,8 @@ async def deliver_actions(
             reply_context_json=json.dumps(reply_context, ensure_ascii=False) if reply_context else None,
             dedup_key=dedup_key,
         )
-        return queued is not None
+        if queued is None:
+            return False
     except Exception as e:
         # 入队失败不抛：send_message 已判定逻辑成功，投递失败仅记录
         logger.error(
@@ -130,3 +105,25 @@ async def deliver_actions(
             f"request_id={request_id}: {e}"
         )
         return False
+
+    # 4. 滚动升级兼容：当前 worker 持有连接时直推完整信封，让尚未实现 GET
+    # /outbox 的旧客户端继续工作。新客户端按 request_id + action_index 本地幂等；
+    # 跨 worker 看不到连接或发送失败时，由权威 outbox 的 5 秒轮询兜底。
+    if client_id and client_connection_registry.is_online(client_id):
+        envelope = ActionEnvelope(
+            request_id=request_id,
+            session_id=session_id,
+            account_id=account_id,
+            conversation_id=conversation_id,
+            reply_context=reply_context,
+            actions=actions_serialized,
+        ).model_dump()
+        envelope["type"] = "actions"
+        try:
+            await client_connection_registry.send(client_id, envelope)
+        except Exception as e:
+            logger.info(
+                f"RPA outbox 兼容直推失败 client_id={client_id} "
+                f"request_id={request_id}: {type(e).__name__}"
+            )
+    return True

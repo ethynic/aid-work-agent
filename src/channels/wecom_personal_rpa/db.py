@@ -4,7 +4,7 @@
 - wecom_rpa_clients               客户端注册表
 - wecom_rpa_accounts              个人企微账号表
 - wecom_rpa_conversation_bindings 会话绑定表
-- wecom_rpa_action_outbox         出站动作队列（action_client 离线投递用）
+- wecom_rpa_action_outbox         出站动作权威队列（在线/离线均先入库）
 - wecom_rpa_audit_logs            审计日志
 
 书写规范对齐 src/saas/db/channel_config_db.py：
@@ -536,7 +536,7 @@ def list_bindings_by_client(
 
 
 # ===========================================================================
-# outbox —— 出站动作队列（action_client 离线投递用）
+# outbox —— 出站动作权威队列（在线/离线均先入库）
 # ===========================================================================
 
 
@@ -694,6 +694,122 @@ def list_outbox(
             r["actions"] = _parse_json_field(r.get("actions"), [])
             r["reply_context"] = _parse_json_field(r.get("reply_context"), None)
         return rows
+
+
+def list_pending_outbox_for_client(
+    tenant_id: str,
+    client_id: str,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """安全列出某 active client 可见的待执行动作，按创建时间正序。
+
+    账号归属在 SQL 内通过 accounts join 决定，不接受调用方传 account_id。
+    retryable 仅在到达 next_retry_at 后重新可见；读取不改变状态。
+    """
+    safe_limit = max(1, min(int(limit), 100))
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT o.*
+            FROM wecom_rpa_action_outbox o
+            INNER JOIN wecom_rpa_accounts a
+                ON a.id = o.account_id
+               AND a.tenant_id = o.tenant_id
+            INNER JOIN wecom_rpa_clients c
+                ON c.id = a.client_id
+               AND c.tenant_id = o.tenant_id
+            WHERE o.tenant_id = %s
+              AND a.client_id = %s
+              AND c.status = 'active'
+              AND (
+                    o.status = 'pending'
+                    OR (o.status = 'retryable' AND o.next_retry_at <= CURRENT_TIMESTAMP)
+                  )
+            ORDER BY o.created_at ASC, o.id ASC
+            LIMIT %s
+            """,
+            (tenant_id, client_id, safe_limit),
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        for row in rows:
+            row["actions"] = _parse_json_field(row.get("actions"), [])
+            row["reply_context"] = _parse_json_field(row.get("reply_context"), None)
+        return rows
+
+
+def mark_outbox_result_for_client(
+    tenant_id: str,
+    client_id: str,
+    request_id: str,
+    action_index: int,
+    success: bool,
+    error_message: Optional[str] = None,
+) -> bool:
+    """按已鉴权 client 归属安全应用回执。
+
+    多 action 信封只有最后一个 action 成功后才整体 succeeded；任一失败立即终态 failed。
+    已终态或重复回执不再改写，确保幂等且不跨租户/客户端更新。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT o.id, o.actions, o.action_results
+            FROM wecom_rpa_action_outbox o
+            INNER JOIN wecom_rpa_accounts a
+                ON a.id = o.account_id
+               AND a.tenant_id = o.tenant_id
+            WHERE o.tenant_id = %s
+              AND a.client_id = %s
+              AND o.request_id = %s
+              AND o.status IN ('pending', 'running', 'retryable')
+            FOR UPDATE OF o
+            """,
+            (tenant_id, client_id, request_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        actions = _parse_json_field(row.get("actions"), [])
+        if action_index < 0 or action_index >= len(actions):
+            return False
+        action_results = _parse_json_field(row.get("action_results"), {})
+        if not isinstance(action_results, dict):
+            action_results = {}
+        result_key = str(action_index)
+        # 同一索引以首次合法回执为准，重复或冲突重报均不覆盖持久化结果。
+        if result_key in action_results:
+            return True
+        action_results[result_key] = "succeeded" if success else "failed"
+        all_succeeded = (
+            len(action_results) == len(actions)
+            and all(action_results.get(str(i)) == "succeeded" for i in range(len(actions)))
+        )
+        next_status = "failed" if not success else ("succeeded" if all_succeeded else None)
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_action_outbox
+            SET action_results = %s::jsonb,
+                status = COALESCE(%s, status),
+                error_message = CASE WHEN %s = 'failed' THEN %s ELSE error_message END,
+                completed_at = CASE WHEN %s IN ('succeeded', 'failed')
+                                    THEN CURRENT_TIMESTAMP ELSE completed_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+              AND status IN ('pending', 'running', 'retryable')
+            """,
+            (
+                json.dumps(action_results, ensure_ascii=False),
+                next_status,
+                next_status,
+                error_message if not success else None,
+                next_status,
+                row["id"],
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 # ===========================================================================

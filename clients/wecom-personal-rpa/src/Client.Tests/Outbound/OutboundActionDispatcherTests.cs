@@ -191,6 +191,8 @@ public sealed class OutboundActionDispatcherTests : IDisposable
             => throw new NotImplementedException();
         public Task<RpaConfigResponse> GetConfigAsync(CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
+        public Task<OutboxResponse> GetOutboxAsync(int limit = 100, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
         public Task<Stream> DownloadFileAsync(string fileId, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
         public Task<ClientWebSocket> ConnectWebSocketAsync(CancellationToken cancellationToken = default)
@@ -539,5 +541,254 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         var recovered = Assert.Single(pending);
         Assert.Equal("req_rq", recovered.ActionId);
         Assert.Equal("pending", recovered.Status);
+    }
+
+    // ===== outbox 轮询相关：OutboundQueue 终态留存 + GetByActionId + PruneTerminal =====
+
+    [Fact]
+    public async Task OutboundQueue_GetByActionId_Pending_ReturnsItem()
+    {
+        var q = new OutboundQueue(_options, logger: null);
+        await q.EnqueueAsync(new OutboxItem
+        {
+            ActionId = "req_g",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "c",
+            Text = "t",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+
+        var got = await q.GetByActionIdAsync("req_g");
+        Assert.NotNull(got);
+        Assert.Equal("pending", got!.Status);
+
+        Assert.Null(await q.GetByActionIdAsync("不存在的id"));
+    }
+
+    [Fact]
+    public async Task OutboundQueue_MarkDone_RetainsRowAsDone_NotDeleted()
+    {
+        // at-least-once 轮询要求成功项保留为 done（占主键去重 + 供重报），不能删
+        var q = new OutboundQueue(_options, logger: null);
+        await q.EnqueueAsync(new OutboxItem
+        {
+            ActionId = "req_done",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "c",
+            Text = "t",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await q.DequeueNextAsync(); // → running
+        await q.MarkDoneAsync("req_done");
+
+        var got = await q.GetByActionIdAsync("req_done");
+        Assert.NotNull(got);
+        Assert.Equal("done", got!.Status);
+        Assert.NotNull(got.CompletedAt);
+
+        // done 行不应再被 Dequeue / ListPending 取到
+        Assert.Null(await q.DequeueNextAsync());
+        Assert.Empty(await q.ListPendingAsync());
+    }
+
+    [Fact]
+    public async Task OutboundQueue_MarkFailed_SetsCompletedAt()
+    {
+        var q = new OutboundQueue(_options, logger: null);
+        await q.EnqueueAsync(new OutboxItem
+        {
+            ActionId = "req_f",
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = "c",
+            Text = "t",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await q.DequeueNextAsync();
+        await q.MarkFailedAsync("req_f", "some_code", "msg");
+
+        var got = await q.GetByActionIdAsync("req_f");
+        Assert.NotNull(got);
+        Assert.Equal("failed", got!.Status);
+        Assert.NotNull(got.CompletedAt);
+        Assert.Equal("some_code", got.ErrorCode);
+    }
+
+    [Fact]
+    public async Task OutboundQueue_PruneTerminal_DeletesOnlyOldTerminal()
+    {
+        var q = new OutboundQueue(_options, logger: null);
+        // 一条 done+旧、一条 done+新、一条 pending
+        await q.EnqueueAsync(new OutboxItem { ActionId = "old_done", ActionType = ActionTypeNames.SendText, ConversationKey = "c", CreatedAt = DateTimeOffset.UtcNow });
+        await q.EnqueueAsync(new OutboxItem { ActionId = "new_done", ActionType = ActionTypeNames.SendText, ConversationKey = "c", CreatedAt = DateTimeOffset.UtcNow });
+        await q.EnqueueAsync(new OutboxItem { ActionId = "pending1", ActionType = ActionTypeNames.SendText, ConversationKey = "c", CreatedAt = DateTimeOffset.UtcNow });
+
+        await q.DequeueNextAsync(); // old_done → running
+        await q.MarkDoneAsync("old_done");
+        await q.DequeueNextAsync(); // new_done → running
+        await q.MarkDoneAsync("new_done");
+
+        // 手动把 old_done 的 completed_at 改成 8 天前（白盒），模拟超期
+        using (var conn = new SqliteConnection($"Data Source={_dbPath}"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE outbox_local SET completed_at=@P WHERE action_id='old_done';";
+            var old = (DateTimeOffset.UtcNow - TimeSpan.FromDays(8)).UtcDateTime
+                .ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture);
+            cmd.Parameters.AddWithValue("@P", old);
+            cmd.ExecuteNonQuery();
+        }
+
+        var removed = await q.PruneTerminalAsync(TimeSpan.FromDays(7));
+        Assert.Equal(1, removed);
+        Assert.Null(await q.GetByActionIdAsync("old_done"));     // 超期被删
+        Assert.NotNull(await q.GetByActionIdAsync("new_done"));  // 未超期保留
+        Assert.NotNull(await q.GetByActionIdAsync("pending1"));  // 非终态不动
+    }
+
+    [Fact]
+    public async Task OutboundQueue_Migration_AddsCompletedAt_Idempotent_OnOldDb()
+    {
+        // 模拟旧库：手动建一张没有 completed_at 列的表
+        var dir = Path.Combine(Path.GetTempPath(), "outbox_old_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var oldDb = Path.Combine(dir, "outbox.db");
+            await using (var conn = new SqliteConnection($"Data Source={oldDb}"))
+            {
+                await conn.OpenAsync();
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE outbox_local (
+                        action_id TEXT PRIMARY KEY, action_type TEXT NOT NULL, conversation_key TEXT NOT NULL,
+                        text TEXT, file_url TEXT, local_path TEXT, status TEXT NOT NULL DEFAULT 'pending',
+                        retry_count INTEGER NOT NULL DEFAULT 0, error_code TEXT, error_message TEXT,
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                    );
+                    """;
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // 新 OutboundQueue 构造应幂等补列
+            var opts = new ClientOptions
+            {
+                ClientId = "c",
+                Outbound = new OutboundOptions { DbPath = oldDb, MaxRetries = 3 },
+            };
+            _ = new OutboundQueue(opts, logger: null);
+            _ = new OutboundQueue(opts, logger: null); // 第二次构造不应抛（幂等）
+
+            // 验证列已加
+            await using (var conn = new SqliteConnection($"Data Source={oldDb}"))
+            {
+                await conn.OpenAsync();
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA table_info(outbox_local);";
+                var names = new List<string>();
+                var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync()) names.Add(reader.GetString(1));
+                Assert.Contains("completed_at", names);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // ===== OutboundActionDispatcher 终态重报（at-least-once）=====
+
+    private static ActionEnvelope MakeEnv(string requestId, string searchName = "Alice", string text = "hi")
+        => new()
+        {
+            RequestId = requestId,
+            Actions = new List<RpaAction> { new SendTextAction { Text = text } },
+            ReplyContext = new RpaReplyContext { ConversationSearchName = searchName },
+        };
+
+    [Fact]
+    public async Task EnvelopeEnqueue_DupPending_DoesNotReReport()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var queue = new OutboundQueue(_options, logger: null);
+        var dispatcher = CreateDispatcher(api, downloader,
+            (action, p, ct) => Task.FromResult(new PowershellResult { Success = true, Action = action }),
+            queueOverride: queue);
+
+        var env = MakeEnv("req_dup_p");
+        await dispatcher.EnvelopeEnqueueAsync(env);   // 入队 pending
+        await dispatcher.EnvelopeEnqueueAsync(env);   // 重复 pending → 跳过，不重报
+
+        Assert.Empty(api.Reports);
+    }
+
+    [Fact]
+    public async Task EnvelopeEnqueue_DupDone_ReReportsSuccess()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var queue = new OutboundQueue(_options, logger: null);
+        var dispatcher = CreateDispatcher(api, downloader,
+            (action, p, ct) => Task.FromResult(new PowershellResult { Success = true, Action = action }),
+            queueOverride: queue);
+
+        var env = MakeEnv("req_dup_done");
+        await dispatcher.EnvelopeEnqueueAsync(env);
+        var item = await queue.DequeueNextAsync();
+        Assert.NotNull(item);
+        await dispatcher.DispatchOneAsync(item!, CancellationToken.None); // → done，上报 1 次 success
+        Assert.Single(api.Reports);
+
+        await dispatcher.EnvelopeEnqueueAsync(env); // 重复 done → 重报 success
+        Assert.Equal(2, api.Reports.Count);
+        Assert.All(api.Reports, r => Assert.True(r.Success));
+        Assert.Equal("req_dup_done", api.Reports[1].Id);
+    }
+
+    [Fact]
+    public async Task EnvelopeEnqueue_DupFailed_ReReportsFailureWithStoredCode()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var queue = new OutboundQueue(_options, logger: null);
+        var dispatcher = CreateDispatcher(api, downloader,
+            (action, p, ct) => Task.FromResult(new PowershellResult
+            {
+                Success = false, Action = action,
+                ErrorCode = "wecom_navigation_failed", ErrorMessage = "导航失败",
+            }),
+            queueOverride: queue);
+
+        var env = MakeEnv("req_dup_fail");
+        await dispatcher.EnvelopeEnqueueAsync(env);
+        var item = await queue.DequeueNextAsync();
+        Assert.NotNull(item);
+        await dispatcher.DispatchOneAsync(item!, CancellationToken.None); // → failed（映射 unsupported_action），上报 1 次
+        Assert.Single(api.Reports);
+
+        await dispatcher.EnvelopeEnqueueAsync(env); // 重复 failed → 重报失败
+        Assert.Equal(2, api.Reports.Count);
+        Assert.False(api.Reports[1].Success);
+        Assert.Equal("unsupported_action", api.Reports[1].Code);
+    }
+
+    [Fact]
+    public async Task EnvelopeEnqueue_DupRunning_SkipsReReport()
+    {
+        var api = new StubApi();
+        var downloader = new AttachmentDownloader(new HttpClient(), _options, logger: null);
+        var queue = new OutboundQueue(_options, logger: null);
+        var dispatcher = CreateDispatcher(api, downloader,
+            (action, p, ct) => Task.FromResult(new PowershellResult { Success = true, Action = action }),
+            queueOverride: queue);
+
+        var env = MakeEnv("req_dup_run");
+        await dispatcher.EnvelopeEnqueueAsync(env);
+        await queue.DequeueNextAsync(); // → running（未派发完成）
+
+        await dispatcher.EnvelopeEnqueueAsync(env); // 重复 running → 跳过
+        Assert.Empty(api.Reports);
     }
 }

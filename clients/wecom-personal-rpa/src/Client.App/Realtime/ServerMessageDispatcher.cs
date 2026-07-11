@@ -38,6 +38,7 @@ internal sealed class ServerMessageDispatcher : IHostedService
     private readonly WebSocketConnectionManager? _ws;
     private readonly ClientSession _session;
     private readonly OutboundActionDispatcher? _dispatcher;
+    private readonly OutboxPoller? _outboxPoller;
     private readonly ILogger<ServerMessageDispatcher>? _logger;
 
     public ServerMessageDispatcher(
@@ -46,7 +47,9 @@ internal sealed class ServerMessageDispatcher : IHostedService
         ILogger<ServerMessageDispatcher>? logger = null,
         // P0-6：可选 OutboundActionDispatcher，用于解析 type=actions 的服务端推送。
         // DI 容器注入时由容器解析；测试场景传 null 跳过 actions 分支（验证 paused/resumed 不需要）。
-        OutboundActionDispatcher? dispatcher = null)
+        OutboundActionDispatcher? dispatcher = null,
+        // 可选 OutboxPoller，用于 type=outbox_available 时触发立即拉取。
+        OutboxPoller? outboxPoller = null)
     {
         // ws 允许为 null：仅在 IHostedService.StartAsync/StopAsync 路径需要，DispatchAsync 测试入口不需要。
         // DI 容器注入时永远非 null；测试通过 internal DispatchAsync 验证协议解析时传 null 跳过事件订阅。
@@ -54,6 +57,7 @@ internal sealed class ServerMessageDispatcher : IHostedService
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _logger = logger;
         _dispatcher = dispatcher;
+        _outboxPoller = outboxPoller;
     }
 
     /// <inheritdoc />
@@ -145,6 +149,21 @@ internal sealed class ServerMessageDispatcher : IHostedService
                     return;
                 }
                 await HandleActionsAsync(data).ConfigureAwait(false);
+                break;
+            case "outbox_available":
+                // 服务端通知有新 pending 动作。仅触发一次立即拉取，不直接执行（服务端 outbox 是权威源）。
+                // poller 为 null 时（测试场景）跳过。
+                if (_outboxPoller is null)
+                {
+                    _logger?.LogDebug("[{Tag}] 收到 outbox_available 但 OutboxPoller 未注入，忽略", Tag);
+                    return;
+                }
+                _ = _outboxPoller.TriggerNowAsync().ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                        _logger?.LogWarning(t.Exception, "[{Tag}] outbox_available 触发拉取失败", Tag);
+                }, TaskContinuationOptions.OnlyOnFaulted);
+                _logger?.LogDebug("[{Tag}] 收到 outbox_available，触发立即拉取", Tag);
                 break;
             case "config_invalidate":
                 // 服务端通知配置失效。客户端目前没有需要响应此事件的本地缓存

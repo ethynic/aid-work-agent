@@ -124,7 +124,47 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
             {
                 await _workCh.Writer.WriteAsync(item, ct).ConfigureAwait(false);
             }
+            else
+            {
+                // 重复项（action_id 已存在）：at-least-once 轮询下回执可能丢失，
+                // 据本地终态重报回执（服务端幂等，收到后停止返回该信封）。
+                await RereportIfTerminalAsync(item, ct).ConfigureAwait(false);
+            }
         }
+    }
+
+    /// <summary>
+    /// 重复信封处理：查本地终态并重报回执（at-least-once：服务端在回执丢失时会重复返回该信封）。
+    /// done → 重报 success；failed → 重报失败带 stored error_code/error_message；pending/running → 跳过（在途）。
+    /// 行已被 PruneTerminalAsync 清理（null）不处理，下次按新项插入。
+    /// 日志只出 ActionId + 状态，**不含** text/file_url/reply_context（规约#7：不打印消息内容）。
+    /// </summary>
+    private async Task RereportIfTerminalAsync(OutboxItem item, CancellationToken ct)
+    {
+        OutboxItem? existing;
+        try
+        {
+            existing = await _queue.GetByActionIdAsync(item.ActionId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "重复项 GetByActionId 失败 ActionId={Id}", item.ActionId);
+            return;
+        }
+        if (existing is null) return;
+        if (existing.Status == "done")
+        {
+            _logger?.LogInformation("重复 outbox 项已 done，重报 success ActionId={Id}", item.ActionId);
+            await ReportActionResultAsync(item, success: true, null, null, ct).ConfigureAwait(false);
+        }
+        else if (existing.Status == "failed")
+        {
+            _logger?.LogInformation("重复 outbox 项 failed，重报失败 ActionId={Id} code={Code}",
+                item.ActionId, existing.ErrorCode);
+            await ReportActionResultAsync(item, success: false, existing.ErrorCode, existing.ErrorMessage, ct)
+                .ConfigureAwait(false);
+        }
+        // pending / running：worker 在途，跳过（避免重复派发）
     }
 
     private string ResolveConversationSearchName(ActionEnvelope env)

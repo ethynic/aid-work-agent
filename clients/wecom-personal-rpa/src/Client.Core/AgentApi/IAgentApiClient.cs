@@ -24,6 +24,15 @@ public interface IAgentApiClient : IDisposable
     Task<RpaConfigResponse> GetConfigAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// GET outbox：拉取本 client 的待发送动作（服务端 DB outbox 是唯一权威消息源）。
+    /// 走静态渠道路径（同 /config），HMAC 头鉴权，GET body 空。只读不删，at-least-once，
+    /// 调用方需按 request_id + action_index 幂等。
+    /// </summary>
+    /// <param name="limit">最多拉取条数，会被 clamp 到 [1,100]。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task<OutboxResponse> GetOutboxAsync(int limit = 100, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// GET 文件：下载文件附件到流（短期签名 URL）。
     /// </summary>
     /// <param name="fileId">文件引用（URL 或 id）。</param>

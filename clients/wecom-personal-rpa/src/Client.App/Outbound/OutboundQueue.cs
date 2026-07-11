@@ -72,6 +72,36 @@ public sealed class OutboundQueue
             """;
         using var conn = OpenConnection();
         conn.Execute(sql);
+        MigrateSchema(conn);
+    }
+
+    /// <summary>
+    /// 幂等迁移：为旧库补列。ALTER TABLE ADD COLUMN（不带 NOT NULL）对既有行非破坏（新列默认 NULL）。
+    /// 用 PRAGMA table_info 检查避免重复 ADD（每次启动构造都会跑）。
+    /// </summary>
+    private void MigrateSchema(SqliteConnection conn)
+    {
+        var cols = conn.Query<dynamic>("PRAGMA table_info(outbox_local);")
+            .Select(r => (string)r.name).ToHashSet();
+        // completed_at：终态（done/failed）完成时间，供 OutboxPoller 清理超期终态行。
+        // 历史背景：旧版 MarkDone 直接 DELETE，无终态留存；at-least-once 轮询要求保留终态行
+        // 以幂等去重 + 重报回执，故改为 done/failed 留行 + completed_at 标记清理时间。
+        if (!cols.Contains("completed_at"))
+        {
+            // 并发的另一构造（双开/新旧进程交接）可能同时走到 ALTER，吞掉 duplicate column 使迁移幂等，避免构造抛出导致启动失败。
+            try
+            {
+                conn.Execute("ALTER TABLE outbox_local ADD COLUMN completed_at TEXT;");
+            }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column"))
+            {
+                // 另一进程/实例已加列，忽略
+            }
+        }
+
+        // 回填升级前已存在的终态行（completed_at 为 NULL）：用 created_at 兜底，
+        // 使其能被 PruneTerminalAsync（过滤 completed_at IS NOT NULL）清理，避免老 failed 行永久泄漏。
+        conn.Execute("UPDATE outbox_local SET completed_at=created_at WHERE status IN ('done','failed') AND completed_at IS NULL;");
     }
 
     private SqliteConnection OpenConnection()
@@ -162,17 +192,29 @@ public sealed class OutboundQueue
         }
     }
 
-    /// <summary>标记完成：删除该行（避免长期累积；服务端已记录终态）。</summary>
+    /// <summary>
+    /// 标记完成：置 status='done' + completed_at（**保留行**，不删除）。
+    /// 服务端 outbox 是 at-least-once：回执丢失时服务端会重复返回该信封，客户端靠 done 行占住
+    /// action_id 主键使 EnqueueAsync 返回 false（去重，不重复发送），并能据 done 行重报成功回执。
+    /// 终态行由 <see cref="PruneTerminalAsync"/> 按保留期清理，避免无限累积。
+    /// </summary>
     public async Task MarkDoneAsync(string actionId, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(actionId)) throw new ArgumentNullException(nameof(actionId));
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            const string sql = """
+                UPDATE outbox_local
+                   SET status='done', completed_at=@Now, updated_at=@Now
+                 WHERE action_id=@Id;
+                """;
             using var conn = OpenConnection();
-            await conn.ExecuteAsync(
-                "DELETE FROM outbox_local WHERE action_id=@Id;", new { Id = actionId })
-                .ConfigureAwait(false);
+            await conn.ExecuteAsync(sql, new
+            {
+                Id = actionId,
+                Now = FormatIso(DateTimeOffset.Now),
+            }).ConfigureAwait(false);
         }
         finally
         {
@@ -223,6 +265,7 @@ public sealed class OutboundQueue
                        retry_count = retry_count + 1,
                        error_code = @Code,
                        error_message = @Msg,
+                       completed_at=@Now,
                        updated_at = @Now
                  WHERE action_id=@Id;
                 """;
@@ -266,6 +309,58 @@ public sealed class OutboundQueue
         }
     }
 
+    /// <summary>
+    /// 按 action_id 查询单行（任意状态）。供 OutboxPoller/Dispatcher 判断重复信封的本地终态，
+    /// 以决定重报回执（done→success、failed→failure）还是跳过（pending/running 在途）。
+    /// 不存在返回 null（可能已被 PruneTerminalAsync 清理）。
+    /// </summary>
+    public async Task<OutboxItem?> GetByActionIdAsync(string actionId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(actionId)) throw new ArgumentNullException(nameof(actionId));
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            var row = await conn.QueryFirstOrDefaultAsync<dynamic>(
+                "SELECT * FROM outbox_local WHERE action_id=@Id;", new { Id = actionId })
+                .ConfigureAwait(false);
+            return row is null ? null : MapRow(row);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 清理超期的终态行（status='done'/'failed' 且 completed_at 早于 cutoff）。
+    /// 服务端收到回执后不再返回该信封，故本地终态行只需活到覆盖"回执丢失重报"窗口即可；
+    /// 超期清理避免 outbox_local 无限累积。返回删除行数。
+    /// </summary>
+    public async Task<int> PruneTerminalAsync(TimeSpan retention, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var cutoff = FormatIso(DateTimeOffset.Now - retention);
+            const string sql = """
+                DELETE FROM outbox_local
+                 WHERE status IN ('done', 'failed')
+                   AND completed_at IS NOT NULL
+                   AND completed_at < @Cutoff;
+                SELECT changes();
+                """;
+            using var conn = OpenConnection();
+            var removed = await conn.ExecuteScalarAsync<long>(sql, new { Cutoff = cutoff })
+                .ConfigureAwait(false);
+            return (int)removed;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     private static OutboxItem MapRow(dynamic r) => new()
     {
         ActionId = (string)r.action_id,
@@ -279,6 +374,7 @@ public sealed class OutboundQueue
         ErrorCode = r.error_code is null ? null : (string?)r.error_code,
         ErrorMessage = r.error_message is null ? null : (string?)r.error_message,
         CreatedAt = ParseIso((string)r.created_at) ?? DateTimeOffset.Now,
+        CompletedAt = r.completed_at is null ? null : ParseIso((string)r.completed_at),
     };
 
     private static string FormatIso(DateTimeOffset dto)
@@ -313,7 +409,7 @@ public sealed class OutboxItem
     /// <summary>下载到本地的路径（运行时填）。</summary>
     public string? LocalPath { get; set; }
 
-    /// <summary>当前状态（pending / running / done / failed）。done 状态已被删除。</summary>
+    /// <summary>当前状态（pending / running / done / failed）。done/failed 为终态（保留行，由 PruneTerminalAsync 清理）。</summary>
     public string Status { get; set; } = "pending";
 
     /// <summary>已重试次数（失败时自增）。</summary>
@@ -327,4 +423,7 @@ public sealed class OutboxItem
 
     /// <summary>入队时间（UTC ISO 8601）。</summary>
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
+
+    /// <summary>终态完成时间（done/failed 时写入，供 PruneTerminalAsync 清理与重报判断）。非终态为 null。</summary>
+    public DateTimeOffset? CompletedAt { get; set; }
 }

@@ -23,7 +23,7 @@ namespace WeCom.PersonalRpa.App.Realtime;
 ///   - 收到服务端推送（paused/resumed/actions/config_invalidate）→ 触发 <see cref="MessageReceived"/>，
 ///     由 <see cref="ServerMessageDispatcher"/> 解析 + 路由。
 /// </summary>
-public sealed class WebSocketConnectionManager : IHostedService, IDisposable
+public sealed class WebSocketConnectionManager : IHostedService, IDisposable, IReconnectSource
 {
     private readonly IAgentApiClient _apiClient;
     private readonly ClientSession _session;
@@ -41,7 +41,7 @@ public sealed class WebSocketConnectionManager : IHostedService, IDisposable
     private DateTime _lastReceivedAt = DateTime.UtcNow;
     private bool _networkAvailable = true;
 
-    /// <summary>重连成功事件（OutboundActionDispatcher 订阅以做增量 outbox 拉取）。</summary>
+    /// <summary>重连成功事件（OutboxPoller 订阅以触发立即 outbox 拉取）。</summary>
     public event EventHandler<EventArgs>? Reconnected;
 
     /// <summary>收到服务端消息事件（ServerMessageDispatcher 订阅以解析 paused/resumed/actions）。</summary>

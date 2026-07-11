@@ -67,6 +67,7 @@ public sealed class AgentApiClient : IAgentApiClient
 
     private static readonly string ConfigPath = "api/v1/channels/wecom-personal-rpa/config";
     private static readonly string FilesPath = "api/v1/channels/wecom-personal-rpa/files";
+    private static readonly string OutboxPath = "api/v1/channels/wecom-personal-rpa/outbox";
 
     /// <summary>
     /// 回调路径所需 tenant_id（拉 /config 后缓存，ClientOptions.TenantId 兜底）。
@@ -153,6 +154,27 @@ public sealed class AgentApiClient : IAgentApiClient
         ApplyConfigRouting(resp);
 
         return resp;
+    }
+
+    /// <inheritdoc />
+    public async Task<OutboxResponse> GetOutboxAsync(int limit = 100, CancellationToken cancellationToken = default)
+    {
+        // outbox 走静态渠道路径（同 /config），HMAC 头鉴权，GET body 空。
+        // 不需要 EnsureCallbackRoutingAsync（不依赖 tenant_id / config_id 路径）。
+        // limit 服务端要求 1..100，否则 400；这里 clamp 避免越界 limit 触发 400
+        // （EnsureSuccessStatusCode 抛 HttpRequestException，Polly 会重试 3 次，浪费 3 次签名请求）。
+        var safeLimit = Math.Clamp(limit, 1, 100);
+        return await _httpPipeline.ExecuteAsync(async token =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{OutboxPath}?limit={safeLimit}");
+            _signer.SignNoBody(request);
+            using var resp = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            await using var stream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            return (await JsonSerializer.DeserializeAsync<OutboxResponse>(stream, _jsonOptions, token)
+                    .ConfigureAwait(false))
+                   ?? throw new InvalidDataException("GetOutbox 反序列化结果为 null");
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

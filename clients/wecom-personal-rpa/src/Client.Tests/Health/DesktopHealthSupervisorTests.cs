@@ -35,6 +35,8 @@ internal sealed class HealthStubAgentApiClient : IAgentApiClient
         => throw new NotSupportedException();
     public Task<RpaConfigResponse> GetConfigAsync(CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
+    public Task<OutboxResponse> GetOutboxAsync(int limit = 100, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
     public Task<Stream> DownloadFileAsync(string fileId, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public Task<System.Net.WebSockets.ClientWebSocket> ConnectWebSocketAsync(CancellationToken cancellationToken = default)
@@ -310,6 +312,8 @@ internal sealed class ThrowingHealthApiClient : IAgentApiClient
     public Task<bool> PostCallbackAsync(InboundEvent env, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public Task<RpaConfigResponse> GetConfigAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+    public Task<OutboxResponse> GetOutboxAsync(int limit = 100, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
     public Task<Stream> DownloadFileAsync(string fileId, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();

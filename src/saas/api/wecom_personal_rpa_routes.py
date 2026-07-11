@@ -58,6 +58,9 @@ from src.channels.wecom_personal_rpa.router import (
     is_allowed_by_monitor_whitelist,
 )
 from src.channels.wecom_personal_rpa.schemas import (
+    OutboxAvailableNotification,
+    OutboxItem,
+    OutboxResponse,
     PROTOCOL_VERSION,
     MonitorUsersEntry,
     RpaCallbackEnvelope,
@@ -333,12 +336,14 @@ async def wecom_personal_rpa_callback(
             status_code=400,
         )
 
-    # 4. 去重：event_id 维度
-    dedup = MessageDeduplicator()
-    dedup_key = f"{_DEDUP_PREFIX}:{tenant_id}:{env.event_id}"
-    if await dedup.is_duplicate(dedup_key):
-        logger.info(f"RPA callback 重复事件已跳过: event_id={env.event_id}")
-        return {"result": "accepted"}
+    # 4. 去重：message/status 按 event_id；action_result 由 DB 终态条件和
+    # action_result_id 去重。后者不能提前占 event_id，否则 DB 瞬时失败后同事件无法重报。
+    if env.event_type != "action_result":
+        dedup = MessageDeduplicator()
+        dedup_key = f"{_DEDUP_PREFIX}:{tenant_id}:{env.event_id}"
+        if await dedup.is_duplicate(dedup_key):
+            logger.info(f"RPA callback 重复事件已跳过: event_id={env.event_id}")
+            return {"result": "accepted"}
 
     # 5. 记录最近心跳
     try:
@@ -359,7 +364,9 @@ async def wecom_personal_rpa_callback(
         return {"result": "accepted"}
 
     if env.event_type == "action_result":
-        await _handle_action_result(tenant_id, env, env_raw)
+        await _handle_action_result(
+            tenant_id, env, env_raw, authenticated_client_id=vr.client_id or env.client_id
+        )
         return {"result": "accepted"}
 
     # 未知 event_type：记审计后接受（兼容未来新增类型，不阻断客户端）
@@ -736,7 +743,10 @@ async def _handle_status_event(
 
 
 async def _handle_action_result(
-    tenant_id: str, env: RpaCallbackEnvelope, env_raw: dict
+    tenant_id: str,
+    env: RpaCallbackEnvelope,
+    env_raw: dict,
+    authenticated_client_id: Optional[str] = None,
 ) -> None:
     """处理客户端 action 执行回执：幂等去重 → 更新 outbox 状态 → 审计。"""
     try:
@@ -745,40 +755,22 @@ async def _handle_action_result(
         logger.warning(f"RPA action_result 解析失败 event_id={env.event_id}: {e}")
         return
 
-    # action_result_id 维度去重
-    dedup = MessageDeduplicator()
-    dedup_key = f"{_DEDUP_PREFIX}:{tenant_id}:{ar.action_result_id}"
-    if await dedup.is_duplicate(dedup_key):
-        logger.info(
-            f"RPA action_result 重复已跳过: ar_id={ar.action_result_id}"
-        )
-        return
-
-    # 按 request_id 找到 outbox 行（db.mark_outbox_status 接收主键 id）
-    outbox_status = "succeeded" if ar.success else "failed"
-    error_message = ar.error_message if not ar.success else None
+    # 按 HMAC 已鉴权 client 的账号归属更新，禁止信封伪造 account_id 跨账号改状态。
+    effective_client_id = authenticated_client_id or env.client_id
     marked = False
     try:
-        # list_outbox 不支持按 request_id 直接过滤，拉取该租户近窗 pending/running 行匹配
-        # 优先匹配 pending / running，命中后用主键 id 更新
-        for candidate_status in ("running", "pending"):
-            rows = db.list_outbox(
-                tenant_id=tenant_id,
-                account_id=env.account_id,
-                status=candidate_status,
-                limit=200,
-            )
-            target = next(
-                (r for r in rows if r.get("request_id") == ar.request_id), None
-            )
-            if target:
-                db.mark_outbox_status(
-                    action_id=target["id"],
-                    status=outbox_status,
-                    error_message=error_message,
-                )
-                marked = True
-                break
+        marked = db.mark_outbox_result_for_client(
+            tenant_id=tenant_id,
+            client_id=effective_client_id,
+            request_id=ar.request_id,
+            action_index=ar.action_index,
+            success=ar.success,
+            error_message=(
+                _sanitize_debug(ar.error_message)[:1000]
+                if not ar.success and ar.error_message
+                else None
+            ),
+        )
         if not marked:
             # 回执先于 outbox 入队或已终态：记 info，不阻断
             logger.info(
@@ -787,6 +779,16 @@ async def _handle_action_result(
             )
     except Exception as e:
         logger.error(f"RPA mark_outbox_status 失败 request_id={ar.request_id}: {e}")
+        # 不提前占用 action_result_id 去重键，允许客户端换 event_id 重报后恢复。
+        return
+
+    # DB 更新自身带终态条件、可幂等重入；成功后再占 action_result_id 去重键，
+    # 避免数据库瞬时失败却永久吞掉后续重报。
+    dedup = MessageDeduplicator()
+    dedup_key = f"{_DEDUP_PREFIX}:{tenant_id}:{ar.action_result_id}"
+    if await dedup.is_duplicate(dedup_key):
+        logger.info(f"RPA action_result 重复已跳过: ar_id={ar.action_result_id}")
+        return
 
     try:
         db.write_audit(
@@ -813,8 +815,51 @@ async def _handle_action_result(
 
 
 # ===========================================================================
-# 2. 配置下发
+# 2. 配置与可靠 outbox 下发
 # ===========================================================================
+
+
+@router.get("/api/v1/channels/wecom-personal-rpa/outbox")
+async def wecom_personal_rpa_outbox(request: Request, limit: int = 100):
+    """按已鉴权 active client 拉取权威 outbox；读取不 claim、不删除。"""
+    raw_body = await request.body()
+    vr = auth.verify_request(
+        dict(request.headers), raw_body, _make_get_secret_by_client_id()
+    )
+    if not vr.ok:
+        return _error_response(
+            error=vr.error or "auth_failed", message="鉴权失败", status_code=401
+        )
+    if limit < 1 or limit > 100:
+        return _error_response(
+            error="bad_request", message="limit 必须在 1 到 100 之间", status_code=400
+        )
+    client = db.get_client(vr.client_id)
+    if not client or client.get("status") != "active":
+        return _error_response(
+            error="auth_failed", message="鉴权失败", status_code=401
+        )
+    tenant_id = client.get("tenant_id")
+    rows = db.list_pending_outbox_for_client(
+        tenant_id=tenant_id, client_id=vr.client_id, limit=limit
+    )
+    items = [
+        OutboxItem(
+            request_id=row["request_id"],
+            session_id=row["session_id"],
+            account_id=row["account_id"],
+            conversation_id=row["conversation_id"],
+            reply_context=row.get("reply_context"),
+            actions=row.get("actions") or [],
+        )
+        for row in rows
+    ]
+    return OutboxResponse(
+        protocol_version=PROTOCOL_VERSION,
+        server_time=datetime.now().astimezone(),
+        poll_interval_seconds=5,
+        items=items,
+    )
 
 
 @router.get("/api/v1/channels/wecom-personal-rpa/config")
@@ -1285,7 +1330,7 @@ async def wecom_personal_rpa_ws(
         f"RPA ws 已连接 tenant={tenant_id} client={vr.client_id} config={config_id}"
     )
 
-    # 推送 pending outbox（首版只推当前 worker 可见的在线连接）
+    # 仅提醒客户端拉取权威 outbox，不在握手路径直接下发完整动作。
     await _push_pending_outbox(tenant_id, vr.client_id or client_id, websocket)
 
     try:
@@ -1312,49 +1357,22 @@ async def wecom_personal_rpa_ws(
 async def _push_pending_outbox(
     tenant_id: str, client_id: str, websocket: WebSocket
 ) -> None:
-    """连接建立后把该 client 名下 pending outbox 推送一遍。
-
-    只推该 client 关联账号的 pending 行；投递后状态由 action_result 回执更新，
-    此处不抢占标记（保持 pending，由客户端回执驱动状态流转）。
-    """
+    """连接建立后发送无正文的 outbox_available 提醒。"""
     try:
-        accounts = db.list_accounts(tenant_id, client_id=client_id)
+        pending_rows = db.list_pending_outbox_for_client(
+            tenant_id=tenant_id, client_id=client_id, limit=100
+        )
     except Exception as e:
-        logger.warning(f"RPA ws 推送 outbox list_accounts 失败: {e}")
+        logger.warning(f"RPA ws 查询 pending outbox 失败: {type(e).__name__}")
         return
-
-    for acct in accounts or []:
-        account_id = acct.get("id")
-        if not account_id:
-            continue
-        try:
-            pending_rows = db.list_outbox(
-                tenant_id=tenant_id,
-                account_id=account_id,
-                status="pending",
-                limit=100,
-            )
-        except Exception as e:
-            logger.warning(f"RPA ws list_outbox 失败 account={account_id}: {e}")
-            continue
-        for row in pending_rows or []:
-            envelope = {
-                "type": "actions",
-                "request_id": row.get("request_id"),
-                "session_id": row.get("session_id"),
-                "account_id": row.get("account_id"),
-                "conversation_id": row.get("conversation_id"),
-                "actions": row.get("actions") or [],
-            }
-            if row.get("reply_context"):
-                envelope["reply_context"] = row["reply_context"]
-            try:
-                payload = json.dumps(envelope, ensure_ascii=False)
-                await websocket.send_text(payload)
-            except Exception as e:
-                logger.info(
-                    f"RPA ws 推送 outbox 失败 request_id={row.get('request_id')}: "
-                    f"{type(e).__name__}"
-                )
-                # 连接已失效，停止后续推送
-                return
+    if not pending_rows:
+        return
+    notification = OutboxAvailableNotification(
+        protocol_version=PROTOCOL_VERSION,
+        latest_request_id=pending_rows[-1].get("request_id"),
+        pending_count=len(pending_rows),
+    )
+    try:
+        await websocket.send_text(notification.model_dump_json())
+    except Exception as e:
+        logger.info(f"RPA ws 推送 outbox 通知失败: {type(e).__name__}")
