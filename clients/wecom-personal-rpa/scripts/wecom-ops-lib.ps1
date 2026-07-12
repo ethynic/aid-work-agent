@@ -24,6 +24,11 @@ public static class WeOpsWin32 {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr SetActiveWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     public const uint MOUSEEVENTF_LEFTDOWN = 0x02;
@@ -109,7 +114,38 @@ function Focus-WeComSearchBox {
     [WeOpsWin32]::ShowWindow($Hwnd, 9) | Out-Null  # SW_RESTORE
     $activated = $false
     for ($attempt = 1; $attempt -le 3; $attempt++) {
-        [WeOpsWin32]::SetForegroundWindow($Hwnd) | Out-Null
+        $attachedThreadIds = New-Object System.Collections.ArrayList
+        $currentThreadId = [WeOpsWin32]::GetCurrentThreadId()
+        $targetProcessId = [uint32]0
+        $targetThreadId = [WeOpsWin32]::GetWindowThreadProcessId($Hwnd, [ref]$targetProcessId)
+        $foregroundHwnd = [WeOpsWin32]::GetForegroundWindow()
+        $foregroundProcessId = [uint32]0
+        $foregroundThreadId = if ($foregroundHwnd -ne [IntPtr]::Zero) {
+            [WeOpsWin32]::GetWindowThreadProcessId($foregroundHwnd, [ref]$foregroundProcessId)
+        } else { [uint32]0 }
+
+        try {
+            # 后台 Client.App 启动的 PowerShell 通常没有前台权限。把当前调用线程临时
+            # 关联到前台线程和企微目标线程后，再执行完整激活序列。
+            foreach ($threadId in @($foregroundThreadId, $targetThreadId)) {
+                if ($threadId -ne 0 -and $threadId -ne $currentThreadId -and
+                    -not $attachedThreadIds.Contains($threadId)) {
+                    if ([WeOpsWin32]::AttachThreadInput($currentThreadId, $threadId, $true)) {
+                        [void]$attachedThreadIds.Add($threadId)
+                    }
+                }
+            }
+            [WeOpsWin32]::BringWindowToTop($Hwnd) | Out-Null
+            [WeOpsWin32]::SetActiveWindow($Hwnd) | Out-Null
+            [WeOpsWin32]::SetForegroundWindow($Hwnd) | Out-Null
+        } finally {
+            # 只解绑本轮成功建立的关联，并按建立顺序反向释放。
+            for ($index = $attachedThreadIds.Count - 1; $index -ge 0; $index--) {
+                [WeOpsWin32]::AttachThreadInput(
+                    $currentThreadId, [uint32]$attachedThreadIds[$index], $false
+                ) | Out-Null
+            }
+        }
         Start-Sleep -Milliseconds 150
         if ([WeOpsWin32]::GetForegroundWindow() -eq $Hwnd) { $activated = $true; break }
     }

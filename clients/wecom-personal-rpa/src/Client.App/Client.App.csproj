@@ -37,4 +37,13 @@
     <ProjectReference Include="..\Client.Automation\Client.Automation.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 自动化后端是客户端运行时依赖；Debug/Release build 与 publish 均需携带完整 scripts 目录。 -->
+    <Content Include="..\..\scripts\**\*">
+      <Link>scripts\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

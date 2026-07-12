@@ -21,6 +21,24 @@ namespace WeCom.PersonalRpa.Tests.Powershell;
 /// </summary>
 public sealed class PowershellOpsInvokerTests
 {
+    [Fact]
+    public void ResolveOpsScriptPath_RelativePath_UsesAppBaseDirectory()
+    {
+        var resolved = PowershellOpsInvoker.ResolveOpsScriptPath(Path.Combine("scripts", "wecom-ops.ps1"));
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "scripts", "wecom-ops.ps1")),
+            resolved);
+    }
+
+    [Fact]
+    public void ResolveOpsScriptPath_AbsolutePath_RemainsAbsolute()
+    {
+        var absolute = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "wecom-ops.ps1"));
+
+        Assert.Equal(absolute, PowershellOpsInvoker.ResolveOpsScriptPath(absolute));
+    }
+
     /// <summary>
     /// 定位 wecom-ops.ps1 脚本绝对路径。从测试运行目录向上查找，直到找到
     /// clients/wecom-personal-rpa/scripts/wecom-ops.ps1。
@@ -28,6 +46,12 @@ public sealed class PowershellOpsInvokerTests
     private static string ResolveOpsScript()
     {
         var dir = AppContext.BaseDirectory;
+        var outputScript = Path.Combine(dir, "scripts", "wecom-ops.ps1");
+        if (File.Exists(outputScript))
+        {
+            return outputScript;
+        }
+
         for (var i = 0; i < 8; i++)
         {
             var candidate = Path.Combine(dir, "clients", "wecom-personal-rpa", "scripts", "wecom-ops.ps1");

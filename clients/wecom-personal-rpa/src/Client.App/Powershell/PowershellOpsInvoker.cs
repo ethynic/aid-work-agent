@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -40,11 +41,13 @@ public sealed class PowershellOpsInvoker
     /// <returns>永远返回非 null 的 PowershellResult（失败信息在 ErrorCode/ErrorMessage 里）。</returns>
     public async Task<PowershellResult> InvokeAsync(string action, object? parameters, CancellationToken ct = default)
     {
+        var opsScriptPath = ResolveOpsScriptPath(_options.OpsScript);
+
         // 1. 构造 ProcessStartInfo
         var psi = new ProcessStartInfo
         {
             FileName = _options.Executable,
-            Arguments = $"-ExecutionPolicy Bypass -NoProfile -File \"{_options.OpsScript}\" -Action {action}",
+            Arguments = $"-ExecutionPolicy Bypass -NoProfile -File \"{opsScriptPath}\" -Action {action}",
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -189,6 +192,15 @@ public sealed class PowershellOpsInvoker
                 action, result.ErrorCode, result.ErrorMessage);
         }
         return result;
+    }
+
+    /// <summary>相对脚本路径固定以应用程序目录为基准，避免启动器工作目录变化导致找不到脚本。</summary>
+    internal static string ResolveOpsScriptPath(string opsScript)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(opsScript);
+        return Path.IsPathRooted(opsScript)
+            ? Path.GetFullPath(opsScript)
+            : Path.GetFullPath(opsScript, AppContext.BaseDirectory);
     }
 
     /// <summary>
