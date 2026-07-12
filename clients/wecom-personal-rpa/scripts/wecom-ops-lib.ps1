@@ -22,6 +22,8 @@ public static class WeOpsWin32 {
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     public const uint MOUSEEVENTF_LEFTDOWN = 0x02;
@@ -97,6 +99,32 @@ function Press-CtrlV {
     Start-Sleep -Milliseconds 50
     [WeOpsWin32]::keybd_event(0x56, 0, 2, [IntPtr]::Zero)   # V up
     [WeOpsWin32]::keybd_event(0x11, 0, 2, [IntPtr]::Zero)   # Ctrl up
+}
+
+# ---------- 激活企微主窗口并用双 Alt 聚焦搜索框 ----------
+function Focus-WeComSearchBox {
+    param([Parameter(Mandatory = $true)][IntPtr]$Hwnd)
+
+    if ($Hwnd -eq [IntPtr]::Zero) { return $false }
+    [WeOpsWin32]::ShowWindow($Hwnd, 9) | Out-Null  # SW_RESTORE
+    $activated = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        [WeOpsWin32]::SetForegroundWindow($Hwnd) | Out-Null
+        Start-Sleep -Milliseconds 150
+        if ([WeOpsWin32]::GetForegroundWindow() -eq $Hwnd) { $activated = $true; break }
+    }
+    if (-not $activated) { return $false }
+
+    for ($i = 0; $i -lt 2; $i++) {
+        # 双 Alt 期间也可能被其他应用抢走前台；一旦发生就停止注入按键。
+        if ([WeOpsWin32]::GetForegroundWindow() -ne $Hwnd) { return $false }
+        [WeOpsWin32]::keybd_event(0x12, 0, [WeOpsWin32]::KEYEVENTF_KEYDOWN, [IntPtr]::Zero)
+        Start-Sleep -Milliseconds 50
+        [WeOpsWin32]::keybd_event(0x12, 0, [WeOpsWin32]::KEYEVENTF_KEYUP, [IntPtr]::Zero)
+        Start-Sleep -Milliseconds 120
+    }
+    # 只有企微在双 Alt 完成后仍为前台，调用方才可继续 Ctrl+A/Delete 和输入。
+    return ([WeOpsWin32]::GetForegroundWindow() -eq $Hwnd)
 }
 
 # ---------- 取企微主窗口左上角物理屏幕坐标（EnumWindows 找 WeWorkWindow） ----------

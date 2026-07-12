@@ -38,7 +38,7 @@ $stdinText = [Console]::In.ReadToEnd()
 $params = if ($stdinText) { $stdinText | ConvertFrom-Json } else { [PSCustomObject]@{} }
 
 # ---------- 内部：搜索用户并进入会话 ----------
-# 算法：取 WeWorkWindow origin → 计算搜索框 bbox（按窗口宽度 scale）→ 点击搜索框
+# 算法：取 WeWorkWindow → 激活主窗口 → 连续按两次 Alt 聚焦搜索框
 #       → Ctrl+A Delete 清空 → Type-Text 输入 keyword → 等 1500ms → 按 Enter → 等 2500ms
 # 返回 hashtable，调用方包装成最终结果。
 function Search-WeComUserInternal {
@@ -61,21 +61,15 @@ function Search-WeComUserInternal {
         }
     }
 
-    # 搜索框固定坐标方案：企微 5.0.8 在 1936x2088 (DPI=1.5) 下搜索框 bbox=[330,34,430,66]
-    # 不同 DPI 下窗口尺寸不同但 UI 相对位置不变，按窗口宽度自动换算
-    $scale = [double]$origin.Width / 1936.0
-    $searchBbox = @(
-        [int][Math]::Round(330 * $scale),
-        [int][Math]::Round(34 * $scale),
-        [int][Math]::Round(430 * $scale),
-        [int][Math]::Round(66 * $scale)
-    )
-    $cx = [int][Math]::Round(($searchBbox[0] + $searchBbox[2]) / 2.0) + $origin.Left
-    $cy = [int][Math]::Round(($searchBbox[1] + $searchBbox[3]) / 2.0) + $origin.Top
+    if (-not (Focus-WeComSearchBox -Hwnd $origin.Hwnd)) {
+        return @{
+            success = $false
+            error_code = 'wecom_window_activation_failed'
+            error_message = '无法将企微主窗口切换到前台，已中止键盘操作'
+        }
+    }
 
-    # 点击搜索框 → 清空 → 输入 → 等渲染 → Enter 进入第一个搜索结果 → 等会话切换
-    Click-At -x $cx -y $cy
-    Start-Sleep -Milliseconds 500
+    # 双 Alt 聚焦搜索框 → 清空 → 输入 → Enter 进入第一个搜索结果
     Press-CtrlA-Delete
     Start-Sleep -Milliseconds 200
     Type-Text -text $Keyword
@@ -90,8 +84,7 @@ function Search-WeComUserInternal {
         success = $true
         keyword = $Keyword
         window_origin = @{ left = $origin.Left; top = $origin.Top; width = $origin.Width; height = $origin.Height }
-        clicked_x = $cx
-        clicked_y = $cy
+        search_focus = 'double_alt'
     }
 }
 
