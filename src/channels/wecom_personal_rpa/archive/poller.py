@@ -158,6 +158,8 @@ class ServerArchivePoller:
                     f"已超过 {_SHUTDOWN_TIMEOUT_SECONDS}s，放弃等待"
                 )
         self._running_fetcher_tasks.clear()
+        # inbox worker 独立于 fetch_once，必须显式取消并等待其把状态写回 retryable。
+        await self._fetcher.shutdown()
         self._stop_event = None
         logger.info("[ServerArchivePoller] 已停止")
 

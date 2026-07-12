@@ -40,6 +40,7 @@ from src.channels.wecom_personal_rpa.archive.http_client import (
 )
 from src.core.redis_client import redis_client
 from src.saas.db.channel_config_db import ChannelConfigDB
+from src.channels.wecom_personal_rpa import db as rpa_db
 
 # Redis 分布式锁键前缀 + TTL
 _LOCK_KEY_PREFIX = "wecom_rpa:archive:lock"
@@ -58,10 +59,27 @@ _SINGLE_ITEM_TIMEOUT_SECONDS = _SDK_DECRYPT_TIMEOUT_SECONDS + 2
 
 # 客户端 ID 占位：server 模式拉取时没有具体客户端，出站靠 account_id 路由
 _SERVER_CLIENT_ID_PLACEHOLDER = "_server_"
+_INBOX_HEARTBEAT_SECONDS = 60
+
+
+class ArchiveInboxDeliveryError(RuntimeError):
+    """明文消息未能可靠写入 inbox；此时禁止推进 seq。"""
 
 
 class ServerArchiveFetcher:
     """服务端会话存档拉取执行器（每个租户一份配置独立调用 fetch_once）。"""
+
+    def __init__(self) -> None:
+        self._worker_tasks: set[asyncio.Task] = set()
+
+    async def shutdown(self) -> None:
+        """取消并等待所有 inbox worker，使取消状态可靠写回 PG。"""
+        tasks = [task for task in self._worker_tasks if not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._worker_tasks.clear()
 
     async def fetch_once(self, tenant_id: str, config_id: str) -> None:
         """拉取一次该租户的所有新消息。
@@ -134,6 +152,10 @@ class ServerArchiveFetcher:
         if cfg.get("channel_type") != "wecom_personal_rpa":
             logger.warning(f"[ServerArchiveFetcher] 非 wecom_personal_rpa 类型，跳过")
             return
+
+        # 每次 poller/callback 进入都先恢复历史 pending/retryable inbox；即使企微本轮
+        # 没有新密文，服务重启前已可靠入库的消息也能继续处理。
+        await self._drain_inbox(tenant_id)
 
         config_data: Dict[str, Any] = cfg.get("config") or {}
 
@@ -213,24 +235,37 @@ class ServerArchiveFetcher:
                 )
                 env, env_raw = self._build_envelope(account_id, client_id, item, plain_json)
 
-                # 延迟 import 避免顶层循环
-                from src.saas.api.wecom_personal_rpa_routes import _process_inbound_message
-
-                await _process_inbound_message(
-                    tenant_id=tenant_id,
-                    env=env,
-                    env_raw=env_raw,
-                    source="server_fetcher",
-                )
+                # Agent 处理可能耗时数分钟，不能放在存档游标事务内。先可靠写入 PG inbox，
+                # INSERT 成功（含唯一键去重命中）后才推进 seq。
+                try:
+                    await asyncio.to_thread(
+                        rpa_db.enqueue_inbound_archive_message,
+                        tenant_id, config_id, env.event_id,
+                        json.dumps(env_raw, ensure_ascii=False),
+                    )
+                except Exception as exc:
+                    raise ArchiveInboxDeliveryError(str(exc)) from exc
 
                 # 成功一条立即推进 seq（避免重拉重复触发，与 C# 实现一致）
                 if item.seq > last_seq:
-                    ChannelConfigDB.update_config_field(config_id, "last_seq", item.seq)
+                    if not ChannelConfigDB.update_config_field(config_id, "last_seq", item.seq):
+                        raise ArchiveInboxDeliveryError("inbox 已入库但 last_seq 更新失败")
                     last_seq = item.seq
                 processed_count += 1
 
             except WeComRateLimitException:
                 raise  # 45009 由上层处理
+            except ArchiveInboxDeliveryError as ex:
+                # 未可靠入队绝不能推进 seq；停止本批，下一轮从该条重试。
+                logger.error(
+                    f"[ServerArchiveFetcher] inbox 投递失败 msgid={item.msg_id} "
+                    f"seq={item.seq} tenant={tenant_id}: {ex}"
+                )
+                archive_audit.log_fetch_error(
+                    tenant_id, config_id, type(ex).__name__,
+                    f"msgid={item.msg_id} seq={item.seq}: {ex}", stage="enqueue_inbox",
+                )
+                break
             except Exception as ex:
                 # 单条解密/处理失败：推进 seq 跳过该条（避免坏消息卡死整个租户死循环重拉），
                 # 记录错误到 audit，继续处理后续条目。
@@ -270,6 +305,62 @@ class ServerArchiveFetcher:
             last_seq=last_seq,
             account_id=account_id or None,
         )
+        await self._drain_inbox(tenant_id)
+
+    async def _drain_inbox(self, tenant_id: str) -> None:
+        """短暂领取 inbox 并把 Agent 工作交给独立任务；PG 状态支持重启恢复。"""
+        rows = await asyncio.to_thread(rpa_db.claim_archive_inbox, tenant_id)
+        for row in rows:
+            task = asyncio.create_task(
+                self._process_inbox_row(row), name=f"archive_inbox_{row['id']}"
+            )
+            self._worker_tasks.add(task)
+            task.add_done_callback(self._worker_tasks.discard)
+        # 只让 worker 获得一次调度机会，不等待慢 Agent 完成。
+        if rows:
+            await asyncio.sleep(0)
+
+    async def _process_inbox_row(self, row: Dict[str, Any]) -> None:
+        heartbeat = asyncio.create_task(self._heartbeat_inbox_row(row))
+        try:
+            from src.channels.wecom_personal_rpa.schemas import RpaCallbackEnvelope
+            from src.saas.api.wecom_personal_rpa_routes import _process_inbound_message
+            raw = row.get("envelope")
+            if isinstance(raw, str):
+                raw = json.loads(raw)
+            env = RpaCallbackEnvelope.model_validate(raw)
+            await _process_inbound_message(row["tenant_id"], env, raw, source="server_fetcher")
+            await asyncio.to_thread(
+                rpa_db.mark_archive_inbox, row["id"], row["claim_token"], "succeeded"
+            )
+        except asyncio.CancelledError:
+            await asyncio.to_thread(
+                rpa_db.mark_archive_inbox, row["id"], row["claim_token"],
+                "retryable", "worker_cancelled",
+            )
+            raise
+        except Exception as ex:
+            logger.exception(f"[ServerArchiveFetcher] inbox 处理失败 event={row.get('event_id')}: {ex}")
+            await asyncio.to_thread(
+                rpa_db.mark_archive_inbox, row["id"], row["claim_token"],
+                "retryable", str(ex)[:1000],
+            )
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _heartbeat_inbox_row(self, row: Dict[str, Any]) -> None:
+        """处理期间续租；租约已丢失时停止续租，由当前 Agent 自然收尾但不能改状态。"""
+        while True:
+            await asyncio.sleep(_INBOX_HEARTBEAT_SECONDS)
+            renewed = await asyncio.to_thread(
+                rpa_db.heartbeat_archive_inbox, row["id"], row["claim_token"]
+            )
+            if not renewed:
+                logger.warning(
+                    f"[ServerArchiveFetcher] inbox 租约已失效 event={row.get('event_id')}"
+                )
+                return
 
     # ----------------- 解密 -----------------
 

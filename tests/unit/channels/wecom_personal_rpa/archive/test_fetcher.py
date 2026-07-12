@@ -92,6 +92,18 @@ def patched_lock(monkeypatch):
         "_ensure_account_mapping",
         staticmethod(lambda tenant_id, cfg, account_id: "client_001"),
     )
+    inbox = []
+    def _enqueue(tenant_id, config_id, event_id, envelope_json):
+        inbox.append({"id": len(inbox) + 1, "tenant_id": tenant_id, "claim_token": "claim_test",
+                      "event_id": event_id, "envelope": json.loads(envelope_json)})
+        return True
+    def _claim(tenant_id, limit=20):
+        rows, inbox[:] = list(inbox), []
+        return rows
+    monkeypatch.setattr(fetcher_module.rpa_db, "enqueue_inbound_archive_message", _enqueue)
+    monkeypatch.setattr(fetcher_module.rpa_db, "claim_archive_inbox", _claim)
+    monkeypatch.setattr(fetcher_module.rpa_db, "mark_archive_inbox", lambda *a, **kw: None)
+    monkeypatch.setattr(fetcher_module.rpa_db, "heartbeat_archive_inbox", lambda *a: True)
 
 
 @pytest.fixture
@@ -635,3 +647,131 @@ def test_account_mapping_rejects_cross_tenant_client(monkeypatch):
         "tenant_test", {"config": {"client_id": "client_other"}}, "acct_001"
     ) is None
     upsert.assert_not_called()
+
+
+# ----------------- inbox 解耦与恢复专项 -----------------
+
+
+@pytest.mark.asyncio
+async def test_drain_does_not_wait_for_slow_agent_over_30_seconds(monkeypatch):
+    """领取后只调度 worker；Agent 即使远超 fetch 超时也不能阻塞 fetcher。"""
+    gate = asyncio.Event()
+    row = {"id": 1, "tenant_id": "tenant_test", "event_id": "msg_slow",
+           "envelope": {}, "claim_token": "lease_1"}
+    monkeypatch.setattr(fetcher_module.rpa_db, "claim_archive_inbox", lambda *_: [row])
+    fetcher_obj = ServerArchiveFetcher()
+    async def _slow_worker(_row):
+        await gate.wait()
+    worker = AsyncMock(side_effect=_slow_worker)
+    monkeypatch.setattr(fetcher_obj, "_process_inbox_row", worker)
+
+    await asyncio.wait_for(fetcher_obj._drain_inbox("tenant_test"), timeout=0.2)
+    worker.assert_called_once_with(row)
+    # 清理测试创建的后台任务，避免形成孤儿。
+    for task in asyncio.all_tasks():
+        if task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_inbox_worker_is_marked_retryable(monkeypatch):
+    """进程关闭取消 worker 时持久化 retryable，重启后可恢复。"""
+    gate = asyncio.Event()
+    async def _slow(*args, **kwargs):
+        await gate.wait()
+    monkeypatch.setattr(
+        "src.saas.api.wecom_personal_rpa_routes._process_inbound_message", _slow,
+    )
+    marks = []
+    monkeypatch.setattr(fetcher_module.rpa_db, "mark_archive_inbox",
+                        lambda *args: marks.append(args) or True)
+    row = {"id": 7, "tenant_id": "tenant_test", "event_id": "msg_cancel",
+           "envelope": {"event_id": "msg_cancel", "event_type": "message",
+                        "client_id": "client_001", "account_id": "acct_001",
+                        "occurred_at": "2026-07-12T00:00:00Z", "payload": {}},
+           "claim_token": "lease_cancel"}
+    task = asyncio.create_task(ServerArchiveFetcher()._process_inbox_row(row))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert marks == [(7, "lease_cancel", "retryable", "worker_cancelled")]
+
+
+def test_duplicate_event_id_enqueue_uses_database_unique_constraint():
+    """重复 msgid 的写入必须依赖租户+event 唯一键幂等。"""
+    sql = (fetcher_module.rpa_db.enqueue_inbound_archive_message.__doc__ or "")
+    assert "重复 event_id" in sql
+    migration = open("deploy/db_update.sql", encoding="utf-8").read()
+    assert "UNIQUE (tenant_id, event_id)" in migration
+    assert "ON CONFLICT (tenant_id, event_id) DO NOTHING" in __import__(
+        "inspect"
+    ).getsource(fetcher_module.rpa_db.enqueue_inbound_archive_message)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_failure_does_not_advance_seq(patched_lock, monkeypatch):
+    """PG inbox 不可写时必须保留原游标，下一轮重拉同一消息。"""
+    cfg = _make_cfg_record(_make_config_data())
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *_: cfg)
+    monkeypatch.setattr(fetcher_module.chat_crypto, "decrypt_random_key", lambda *_: b"key")
+    monkeypatch.setattr(fetcher_module.wecom_finance_sdk, "decrypt_data_raw",
+                        lambda *a, **kw: json.dumps({"text": {"content": "retry"}}))
+    monkeypatch.setattr(fetcher_module.rpa_db, "enqueue_inbound_archive_message",
+                        MagicMock(side_effect=RuntimeError("postgres unavailable")))
+    updates = []
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "update_config_field",
+                        lambda *args: updates.append(args) or True)
+    item = http_client.ChatDataItem(
+        seq=88, msg_id="enqueue_fail", action="send", from_="a", tolist=["b"],
+        msg_time=1700000000, msg_type="text", encrypt_random_key="x",
+        encrypt_chat_msg="y",
+    )
+    monkeypatch.setattr(fetcher_module.http_client, "get_chat_data", AsyncMock(
+        return_value=http_client.ChatDataBatch(items=[item])))
+
+    await ServerArchiveFetcher().fetch_once("tenant_test", "chan_test_001")
+
+    assert not any(field == "last_seq" for _, field, _ in updates)
+
+
+@pytest.mark.asyncio
+async def test_slow_worker_renews_lease_until_completion(monkeypatch):
+    """慢 Agent 运行期间周期续租，避免五分钟回收产生并行重复处理。"""
+    monkeypatch.setattr(fetcher_module, "_INBOX_HEARTBEAT_SECONDS", 0.001)
+    renewals = []
+    monkeypatch.setattr(fetcher_module.rpa_db, "heartbeat_archive_inbox",
+                        lambda *args: renewals.append(args) or True)
+    heartbeat = asyncio.create_task(ServerArchiveFetcher()._heartbeat_inbox_row(
+        {"id": 9, "claim_token": "lease_slow", "event_id": "msg_slow"}))
+    for _ in range(100):
+        if len(renewals) >= 2:
+            break
+        await asyncio.sleep(0.005)
+    heartbeat.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await heartbeat
+    assert len(renewals) >= 2
+    assert set(renewals) == {(9, "lease_slow")}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_awaits_registered_workers(monkeypatch):
+    """shutdown 必须等待 worker 的 CancelledError 清理完成，而非遗留孤儿任务。"""
+    cancelled = asyncio.Event()
+    async def _worker(_row):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    fetcher_obj = ServerArchiveFetcher()
+    monkeypatch.setattr(fetcher_obj, "_process_inbox_row", _worker)
+    monkeypatch.setattr(fetcher_module.rpa_db, "claim_archive_inbox", lambda *_: [
+        {"id": 10, "tenant_id": "tenant_test", "claim_token": "lease_shutdown"}
+    ])
+    await fetcher_obj._drain_inbox("tenant_test")
+
+    await fetcher_obj.shutdown()
+
+    assert cancelled.is_set()
+    assert not fetcher_obj._worker_tasks

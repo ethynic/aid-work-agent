@@ -19,6 +19,7 @@
 """
 
 import json
+import secrets
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -593,7 +594,89 @@ def enqueue_action(
             }
         except Exception as e:
             logger.error(f"Failed to enqueue RPA action (request={request_id}): {e}")
-            return None
+    return None
+
+
+def enqueue_inbound_archive_message(
+    tenant_id: str, config_id: str, event_id: str, envelope_json: str
+) -> bool:
+    """可靠写入会话存档 inbox；重复 event_id 视为已投递。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO wecom_rpa_archive_inbox
+                (tenant_id, config_id, event_id, envelope, status, attempts)
+            VALUES (%s, %s, %s, %s::jsonb, 'pending', 0)
+            ON CONFLICT (tenant_id, event_id) DO NOTHING
+            """,
+            (tenant_id, config_id, event_id, envelope_json),
+        )
+        conn.commit()
+        return True
+
+
+def claim_archive_inbox(tenant_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """领取待处理 inbox；回收进程崩溃后超过五分钟的 running 任务。"""
+    claim_token = secrets.token_hex(16)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_archive_inbox
+            SET status='running', attempts=attempts+1, claim_token=%s,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id IN (
+                SELECT id FROM wecom_rpa_archive_inbox
+                WHERE tenant_id=%s AND (
+                    status='pending' OR
+                    (status='running' AND updated_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes') OR
+                    (status='retryable' AND next_retry_at <= CURRENT_TIMESTAMP)
+                )
+                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT %s
+            ) RETURNING *
+            """,
+            (claim_token, tenant_id, max(1, min(limit, 100))),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.commit()
+        return rows
+
+
+def mark_archive_inbox(
+    id_: int, claim_token: str, status: str, error: Optional[str] = None
+) -> bool:
+    """仅由当前租约持有者完成或延迟重试 inbox，防止过期 worker 覆盖状态。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_archive_inbox
+            SET status=%s, error_message=%s,
+                next_retry_at=CASE WHEN %s='retryable' THEN CURRENT_TIMESTAMP + INTERVAL '30 seconds' ELSE NULL END,
+                updated_at=CURRENT_TIMESTAMP,
+                completed_at=CASE WHEN %s='succeeded' THEN CURRENT_TIMESTAMP ELSE completed_at END
+            WHERE id=%s AND status='running' AND claim_token=%s
+            """,
+            (status, error, status, status, id_, claim_token),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def heartbeat_archive_inbox(id_: int, claim_token: str) -> bool:
+    """刷新当前 worker 租约，避免合法慢任务被超时回收并发执行。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_archive_inbox SET updated_at=CURRENT_TIMESTAMP
+            WHERE id=%s AND status='running' AND claim_token=%s
+            """,
+            (id_, claim_token),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def claim_pending(limit: int = 20) -> List[Dict[str, Any]]:

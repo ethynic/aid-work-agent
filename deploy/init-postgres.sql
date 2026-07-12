@@ -1555,6 +1555,25 @@ CREATE INDEX IF NOT EXISTS idx_wecom_rpa_bindings_tenant_account
     ON wecom_rpa_conversation_bindings(tenant_id, account_id);
 
 -- 4. 出站动作队列（离线客户端拉取执行）
+CREATE TABLE IF NOT EXISTS wecom_rpa_archive_inbox (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    envelope JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claim_token TEXT,
+    error_message TEXT,
+    next_retry_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    UNIQUE (tenant_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_archive_inbox_claim
+    ON wecom_rpa_archive_inbox(tenant_id, status, next_retry_at, created_at);
+
 CREATE TABLE IF NOT EXISTS wecom_rpa_action_outbox (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
