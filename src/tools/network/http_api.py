@@ -12,6 +12,7 @@ from src.tools._helpers import truncate_text
 from src.tools._spill import spill_large_content
 from src.tools.base import BaseTool
 from src.utils import sanitize_error_info
+from src.core.temp_logger import tlog
 
 # 单个文件最大 20MB
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -261,7 +262,12 @@ def _substitute_env_vars(text: str) -> str:
         var_name = match.group(1)
         value = os.environ.get(var_name)
         if value is None:
-            logger.warning(f"环境变量 {var_name} 未设置")
+            logger.warning(f"环境变量 {var_name} 未设置。")
+            tlog(
+                "环境变量",
+                "环境变量 {var_name} 未设置",
+                environ=os.environ,
+            )
             return match.group(0)
         return value
 
