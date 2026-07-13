@@ -12,6 +12,19 @@ from loguru import logger
 
 _persist_queue: queue.Queue = queue.Queue()
 _worker_started = False
+_pending_metadata_updates = {}
+_pending_metadata_lock = threading.Lock()
+_PENDING_METADATA_MAX = 10000
+
+
+def _remember_pending_metadata(trace_id: str, metadata: dict) -> None:
+    """登记 INSERT 前补丁并限制故障期间的进程内缓存上限。"""
+    with _pending_metadata_lock:
+        current = _pending_metadata_updates.setdefault(trace_id, {})
+        current.update(metadata)
+        while len(_pending_metadata_updates) > _PENDING_METADATA_MAX:
+            oldest_trace_id = next(iter(_pending_metadata_updates))
+            _pending_metadata_updates.pop(oldest_trace_id, None)
 
 
 def schedule_persist(trace: 'TraceRecord'):
@@ -66,19 +79,35 @@ def _do_persist(trace):
                     agent_iterations = EXCLUDED.agent_iterations,
                     tool_calls_count = EXCLUDED.tool_calls_count,
                     tags = EXCLUDED.tags,
+                    metadata = COALESCE(obs_traces.metadata, '{}'::jsonb) || EXCLUDED.metadata,
                     user_message_id = COALESCE(EXCLUDED.user_message_id, obs_traces.user_message_id),
                     updated_at = NOW()
             """, (
                 trace.trace_id, trace.session_id, trace.tenant_id,
                 trace.user_id, trace.subagent_id,
                 trace.input, trace.output,
-                json.dumps({"model": trace.model, "provider": trace.provider},
-                           ensure_ascii=False),
+                json.dumps({
+                    "model": trace.model,
+                    "provider": trace.provider,
+                    **(getattr(trace, "metadata", None) or {}),
+                }, ensure_ascii=False),
                 trace.tags, trace.total_tokens, trace.duration_ms,
                 trace.agent_iterations, len(trace.spans),
                 trace.status, trace.error_message, trace.source_type,
                 getattr(trace, 'user_message_id', None),
             ))
+
+            # update_trace_metadata 可能早于本次 INSERT 执行而 UPDATE 0 行。
+            # 将该极窄窗口内登记的补丁在同一事务提交前再次合并，避免语义丢失。
+            with _pending_metadata_lock:
+                pending_metadata = _pending_metadata_updates.pop(trace.trace_id, None)
+            if pending_metadata:
+                cur.execute(
+                    "UPDATE obs_traces "
+                    "SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb, "
+                    "updated_at = NOW() WHERE trace_id = %s",
+                    (json.dumps(pending_metadata, ensure_ascii=False), trace.trace_id),
+                )
 
             # INSERT spans
             for span in trace.spans:
@@ -154,3 +183,25 @@ def update_user_message_id(trace_id: str, user_message_id: str):
             f"update_user_message_id failed (trace_id={trace_id}, "
             f"user_message_id={user_message_id}): {e}"
         )
+
+
+def update_trace_metadata(trace_id: str, metadata: dict) -> None:
+    """合并更新 Trace JSON metadata，覆盖异步持久化先后竞态。"""
+    if not trace_id or not metadata:
+        return
+    try:
+        from src.db.database import get_logs_connection
+        with get_logs_connection() as cur:
+            cur.execute(
+                "UPDATE obs_traces SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb, "
+                "updated_at = NOW() WHERE trace_id = %s",
+                (json.dumps(metadata, ensure_ascii=False), trace_id),
+            )
+            if cur.rowcount == 0:
+                _remember_pending_metadata(trace_id, metadata)
+            cur.commit()
+    except Exception as e:
+        # 数据库暂不可用时也保留进程内补丁；异步 worker 随后的 UPSERT
+        # 若成功，仍可在提交前把 metadata 合并进去。
+        _remember_pending_metadata(trace_id, metadata)
+        logger.debug(f"update_trace_metadata failed (trace_id={trace_id}): {e}")

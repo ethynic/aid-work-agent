@@ -60,6 +60,7 @@ class TraceRecord:
     # process_and_persist 在写入 channel_messages 后回填（覆盖 worker 未处理 + 已处理两种时序）。
     # 历史该字段为 NULL，monitor.py 不显示撤回标记（用户已确认接受降级）。
     user_message_id: Optional[str] = None
+    metadata: Dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.start_time:
@@ -109,6 +110,16 @@ class TraceCollector:
             self.trace.user_message_id = mid
         except Exception as e:
             logger.debug(f"set_user_message_id failed (trace_id={self.trace.trace_id}): {e}")
+
+    def set_merge_semantics(self, *, termination_reason=None, merge_role=None):
+        """记录可选消息合并语义；失败不得影响业务。"""
+        try:
+            if termination_reason:
+                self.trace.metadata["termination_reason"] = termination_reason
+            if merge_role:
+                self.trace.metadata["merge_role"] = merge_role
+        except Exception as e:
+            logger.debug(f"set_merge_semantics failed (trace_id={self.trace.trace_id}): {e}")
 
     def on_event(self, event: dict):
         """处理从 agent.process_message() yield 出来的每个事件"""

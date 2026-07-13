@@ -11,19 +11,26 @@
     <div class="flex-1 overflow-auto p-6 space-y-3">
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
       <template v-else>
-        <div class="text-sm text-muted px-1">
-          共 <span class="font-semibold text-default">{{ traces.length }}</span> 条消息
+        <div class="flex items-center justify-between gap-4 text-sm text-muted px-1">
+          <div>共 <span class="font-semibold text-default">{{ effectiveTraceCount }}</span> 条消息</div>
+          <button v-if="intermediateCount > 0" type="button" @click="showIntermediate = !showIntermediate"
+            class="px-2.5 py-1 rounded border border-default bg-white text-xs text-default hover:bg-surface-hover transition-colors">
+            {{ showIntermediate ? '隐藏处理过程' : `显示处理过程（${intermediateCount}）` }}
+          </button>
         </div>
-        <div v-if="traces.length === 0" class="text-center py-12 text-muted">该会话暂无追踪数据</div>
-        <div v-for="(trace, idx) in traces" :key="trace.trace_id"
+        <div v-if="visibleTraces.length === 0" class="text-center py-12 text-muted">该会话暂无追踪数据</div>
+        <div v-for="(trace, idx) in visibleTraces" :key="trace.trace_id"
           :class="['rounded-xl shadow-sm border border-default p-4 hover:shadow-md transition-shadow',
-                   idx % 2 === 0 ? 'bg-white' : 'bg-primary-50']">
+                   trace.is_intermediate ? 'bg-gray-50 border-dashed' : (idx % 2 === 0 ? 'bg-white' : 'bg-primary-50')]">
           <div class="flex items-start justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-2">
                 <span class="text-xs text-muted font-medium">Trace {{ idx + 1 }}</span>
                 <span :class="statusClass(trace.status)" class="px-2 py-0.5 rounded text-xs font-medium">
                   {{ statusLabel(trace.status) }}
+                </span>
+                <span v-if="trace.is_intermediate" class="px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-default">
+                  {{ trace.termination_reason === 'message_merged' ? '已被后续消息合并' : '中间处理过程' }}
                 </span>
                 <span v-if="trace.recall_type"
                   class="px-2 py-0.5 rounded text-xs font-medium bg-danger-100 text-danger-700">
@@ -62,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getSessionTraces, type TraceSummary } from '@/api/monitor'
 
@@ -72,6 +79,14 @@ const sessionId = route.params.session_id as string
 
 const traces = ref<TraceSummary[]>([])
 const loading = ref(false)
+const showIntermediate = ref(false)
+const intermediateCount = computed(() => traces.value.filter(trace => trace.is_intermediate).length)
+const visibleTraces = computed(() => showIntermediate.value
+  ? traces.value
+  : traces.value.filter(trace => !trace.is_intermediate))
+const effectiveTraceCount = computed(() => traces.value.filter(trace =>
+  trace.display_state === 'message' || trace.is_persisted_message,
+).length)
 
 function goBack() {
   router.push('/portal/monitoring')
@@ -114,7 +129,7 @@ function formatDateTime(ts: string | null): string {
 async function loadData() {
   loading.value = true
   try {
-    const res = await getSessionTraces(sessionId)
+    const res = await getSessionTraces(sessionId, true)
     if (res.success) {
       traces.value = res.traces
     }

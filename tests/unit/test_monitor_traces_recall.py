@@ -109,6 +109,31 @@ async def test_recall_full_match_by_message_id():
 
 
 @pytest.mark.asyncio
+async def test_include_intermediate_false_filters_only_interrupted_traces():
+    from src.api.monitor import list_session_traces
+
+    normal = _make_trace_row("tr_message", "sid1", "正常", "msg_1")
+    interrupted = _make_trace_row("tr_interrupted", "sid1", "追加", None)
+    interrupted.update({
+        "output": None,
+        "status": "cancelled",
+        "metadata": {
+            "termination_reason": "message_merged",
+            "merge_role": "merged_follower",
+        },
+    })
+    p1, p2 = _patch_admin()
+    with p1, p2, \
+            patch("src.db.database.get_logs_connection", return_value=_mock_logs_conn([normal, interrupted])), \
+            patch("src.db.database.get_db_connection", return_value=_mock_db_conn([])):
+        result = await list_session_traces(
+            session_id="sid1", request=MagicMock(), include_intermediate=False
+        )
+
+    assert [trace.trace_id for trace in result["traces"]] == ["tr_message"]
+
+
+@pytest.mark.asyncio
 async def test_recall_partial_match_by_message_id():
     """用例2：user_message_id 命中 recall_map（partial）→ recall_type='partial'"""
     from src.api.monitor import list_session_traces

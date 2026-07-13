@@ -32,46 +32,55 @@ from src.channels.wecom_personal_rpa.router import (
 
 
 class TestRoute:
+    def test_route_isolates_tenant_and_account(self):
+        r = WeComPersonalRpaRouter()
+        base = r.route("tenant_a", "account_a", "local", "stable")
+        assert base != r.route("tenant_b", "account_a", "local", "stable")
+        assert base != r.route("tenant_a", "account_b", "local", "stable")
+
     def test_route_basic_format(self):
         """基础格式：wecom_personal_rpa:{account_id}:{conversation_id}。"""
         r = WeComPersonalRpaRouter()
-        sid = r.route("wecom_account_001", "binding_abc")
-        assert sid == "wecom_personal_rpa:wecom_account_001:binding_abc"
+        sid = r.route("tenant_001", "wecom_account_001", "binding_abc")
+        assert sid == "wecom_personal_rpa:tenant_001:wecom_account_001:binding_abc"
 
     def test_route_stable_id_preferred_over_conversation_id(self):
         """stable_id 非空时优先，保证同一对方跨重启路由稳定。"""
         r = WeComPersonalRpaRouter()
         sid = r.route(
             account_id="wecom_account_001",
+            tenant_id="tenant_001",
             conversation_id="binding_abc",
             stable_id="external_userid_zhangsan",
         )
-        assert sid == "wecom_personal_rpa:wecom_account_001:external_userid_zhangsan"
+        assert sid == "wecom_personal_rpa:tenant_001:wecom_account_001:external_userid_zhangsan"
 
     def test_route_stable_id_empty_falls_back_to_conversation_id(self):
         """stable_id=None 时回退到 conversation_id。"""
         r = WeComPersonalRpaRouter()
         sid = r.route(
             account_id="acc1",
+            tenant_id="t1",
             conversation_id="conv_local_1",
             stable_id=None,
         )
-        assert sid == "wecom_personal_rpa:acc1:conv_local_1"
+        assert sid == "wecom_personal_rpa:t1:acc1:conv_local_1"
 
     def test_route_stable_id_empty_string_falls_back(self):
         """stable_id 为空字符串时也回退（falsy 判定，对齐 stable_id or conversation_id）。"""
         r = WeComPersonalRpaRouter()
         sid = r.route(
             account_id="acc1",
+            tenant_id="t1",
             conversation_id="conv_local_1",
             stable_id="",
         )
-        assert sid == "wecom_personal_rpa:acc1:conv_local_1"
+        assert sid == "wecom_personal_rpa:t1:acc1:conv_local_1"
 
     def test_route_module_singleton_matches_class(self):
         """模块级单例 router 行为与新建实例一致。"""
-        sid = router.route("acc1", "conv1")
-        assert sid == "wecom_personal_rpa:acc1:conv1"
+        sid = router.route("t1", "acc1", "conv1")
+        assert sid == "wecom_personal_rpa:t1:acc1:conv1"
 
 
 # ============================================================
@@ -121,7 +130,7 @@ async def test_authorization_active_binding_passes(mock_db):
     )
 
     assert isinstance(result, AuthorizationResult)
-    assert result.session_id == "wecom_personal_rpa:wecom_account_001:external_userid_zhangsan"
+    assert result.session_id == "wecom_personal_rpa:tenant_001:wecom_account_001:external_userid_zhangsan"
     assert result.needs_review is False
     assert result.paused is False
     assert result.reason is None
@@ -149,7 +158,7 @@ async def test_authorization_pending_triggers_needs_review(mock_db):
     assert result.paused is False
     assert result.reason == "pending"
     # stable_id=None 时回退到 conversation_id 作为 route_key
-    assert result.session_id == "wecom_personal_rpa:wecom_account_001:binding_abc"
+    assert result.session_id == "wecom_personal_rpa:tenant_001:wecom_account_001:external_userid_zhangsan"
 
 
 @patch("src.channels.wecom_personal_rpa.router.db")
@@ -270,6 +279,29 @@ async def test_authorization_falls_back_to_get_or_create_binding_when_find_misse
 
     assert result.needs_review is True
     assert result.reason == "pending"
+
+
+@patch("src.channels.wecom_personal_rpa.router.db")
+@pytest.mark.asyncio
+async def test_authorization_reuses_historical_binding_stable_id(mock_db):
+    """客户端本次缺 stable_id 时，历史 binding 仍保持同一 session。"""
+    active = _binding("active")
+    mock_db.get_or_create_binding.return_value = active
+    mock_db.find_binding_by_search_key.return_value = active
+    mock_db.list_bindings.return_value = [active]
+
+    first = await check_conversation_authorization(
+        tenant_id=_TENANT, account_id=_ACCOUNT, conversation_id="local_old",
+        conversation_type=_CONV_TYPE, search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME, stable_id=None,
+    )
+    second = await check_conversation_authorization(
+        tenant_id=_TENANT, account_id=_ACCOUNT, conversation_id="local_new",
+        conversation_type=_CONV_TYPE, search_key=_SEARCH_KEY,
+        display_name=_DISPLAY_NAME, stable_id=None,
+    )
+    assert first.session_id == second.session_id
+    assert first.session_id.endswith(":" + _STABLE_ID)
 
 
 # ============================================================

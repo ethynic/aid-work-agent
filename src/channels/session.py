@@ -229,6 +229,7 @@ class ChannelSessionManager:
                 result["metadata"] = self._parse_json_field(result.get("metadata"))
                 set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
                 return result
+
             else:
                 # 创建新会话
                 title = f"{channel_type}会话"
@@ -275,6 +276,69 @@ class ChannelSessionManager:
                 }
                 set_cached(CacheKeys.CHANNEL_SESSION, tenant_id, channel_type, channel_user_id, subagent_id, value=result, ttl=600)
                 return result
+
+    def rebind_existing_session_channel_user(
+        self,
+        *,
+        tenant_id: str,
+        channel_type: str,
+        old_channel_user_id: str,
+        new_channel_user_id: str,
+        subagent_id: str = "",
+        metadata_patch: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """把旧路由键原地迁移到稳定键，保留历史 session_id 和消息关联。"""
+        if not old_channel_user_id or old_channel_user_id == new_channel_user_id:
+            return False
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT session_id FROM channel_sessions
+                    WHERE tenant_id = %s AND channel_type = %s
+                      AND channel_user_id = %s AND subagent_id = %s
+                    """,
+                    (tenant_id, channel_type, new_channel_user_id, subagent_id),
+                )
+                if cursor.fetchone():
+                    return False
+                cursor.execute(
+                    """
+                    UPDATE channel_sessions
+                    SET channel_user_id = %s,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                        updated_at = NOW()
+                    WHERE tenant_id = %s AND channel_type = %s
+                      AND channel_user_id = %s AND subagent_id = %s
+                    """,
+                    (
+                        new_channel_user_id,
+                        json.dumps(metadata_patch or {}, ensure_ascii=False),
+                        tenant_id,
+                        channel_type,
+                        old_channel_user_id,
+                        subagent_id,
+                    ),
+                )
+                migrated = cursor.rowcount > 0
+                conn.commit()
+            if migrated:
+                delete_cached(
+                    CacheKeys.CHANNEL_SESSION, tenant_id, channel_type,
+                    old_channel_user_id, subagent_id,
+                )
+                delete_cached(
+                    CacheKeys.CHANNEL_SESSION, tenant_id, channel_type,
+                    new_channel_user_id, subagent_id,
+                )
+            return migrated
+        except Exception as e:
+            logger.warning(
+                f"[channel_session] legacy route rebind failed "
+                f"tenant={tenant_id}, channel={channel_type}: {e}"
+            )
+            return False
 
     def get_session(
         self,
@@ -787,7 +851,9 @@ class ChannelSessionManager:
 
         agent_input_text = agent_user_input if agent_user_input is not None else user_content
 
-        async def _processor(cancel_check, user_input_override=None):
+        async def _processor(
+            cancel_check, user_input_override=None, agent_attachments_override=None
+        ):
             # 每次调用（含 cancel 重跑、pending 重跑）都重置收集列表，
             # 避免被取消的前一轮已生成的文件 / tool 消息泄漏到重跑轮的 send_response
             downloadable_files.clear()
@@ -815,20 +881,34 @@ class ChannelSessionManager:
                 kwargs["extra_system_prompt"] = agent_extra_system_prompt
             if agent_user is not None:
                 kwargs["user"] = agent_user
-            if agent_attachments is not None:
-                kwargs["attachments"] = agent_attachments
+            effective_attachments = (
+                agent_attachments_override
+                if agent_attachments_override is not None
+                else agent_attachments
+            )
+            if effective_attachments is not None:
+                kwargs["attachments"] = effective_attachments
             return await agent.process_message_sync(**kwargs)
 
         # ===== 调用 session_queue =====
         # 从 user_metadata 提取 msgid 透传给 session_queue，供合并缓冲区记录每段 msgid
         user_msgid = (user_metadata or {}).get("msgid", "") if isinstance(user_metadata, dict) else ""
         try:
+            def _mark_merged_follower_trace():
+                if record_service is not None:
+                    record_service.set_trace_merge_semantics(
+                        termination_reason="message_merged",
+                        merge_role="merged_follower",
+                    )
+
             result = await session_queue.enqueue_and_process(
                 session_id=session_id,
                 user_input=agent_input_text,
                 processor=_processor,
                 attachments_meta=user_attachments_meta,
                 msgid=user_msgid,
+                on_before_reprocess=_mark_merged_follower_trace,
+                agent_attachments=agent_attachments or [],
             )
         except Exception as e:
             logger.error(
@@ -853,6 +933,11 @@ class ChannelSessionManager:
 
         # ===== 合并/排队：不写任何消息，直接返回 =====
         if result.status == "merged":
+            if record_service is not None:
+                record_service.set_trace_merge_semantics(
+                    termination_reason="message_merged",
+                    merge_role="merged_follower",
+                )
             return {
                 "status": "merged",
                 "response_text": "",
@@ -863,6 +948,9 @@ class ChannelSessionManager:
 
         # ===== status == "success" =====
         response_text = result.response_text or ""
+        lease_token = result.lease_token
+        if result.was_merged and record_service is not None:
+            record_service.set_trace_merge_semantics(merge_role="merged_owner")
         # 合并方应持久化「合并后的输入」，否则用原始 user_content
         user_to_write = result.merged_input if result.was_merged else user_content
         # 合并方持久化附件元数据：优先用 session_queue 透传的 merged_attachments_meta
@@ -994,6 +1082,7 @@ class ChannelSessionManager:
                 )
             finally:
                 session_queue.mark_idle(session_id)
+                session_queue.finish_processing(session_id, lease_token)
             return {
                 "status": "error",
                 "response_text": "",
@@ -1058,6 +1147,7 @@ class ChannelSessionManager:
             )
         finally:
             session_queue.mark_idle(session_id)
+            session_queue.finish_processing(session_id, lease_token)
 
         # send_response 失败的兜底：保留 _ensure_last_not_orphan_user 作为防御性兜底
         # （新流程下 user+assistant 同事务，理论上末尾不会是孤立 user；保留是防御性）

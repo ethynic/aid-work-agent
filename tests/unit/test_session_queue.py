@@ -13,10 +13,12 @@ SessionMessageQueue.enqueue_and_process 状态机单元测试
 """
 
 import asyncio
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.session_queue import SessionMessageQueue, EnqueueResult
+from src.core.redis_client import RedisClient
 
 
 pytestmark = pytest.mark.agent
@@ -41,6 +43,7 @@ def fake_redis():
 
     fr = MagicMock()
     fr._store = store
+    fr.make_key = MagicMock(side_effect=lambda prefix, session_id: f"{prefix}:{session_id}")
 
     def acquire_lock(key, value, ex=None):
         if key in store:
@@ -73,6 +76,36 @@ def fake_redis():
     fr.set = MagicMock(side_effect=set_)
     fr.delete = MagicMock(side_effect=delete)
 
+    def session_finalize_if_quiet(
+        lock_key, lock_value, cancel_key, merge_key, pending_key,
+        finalizing_key, state_guard_key, expected_input, ttl,
+    ):
+        if store.get(lock_key) != lock_value or state_guard_key in store:
+            return False
+        if pending_key in store:
+            return False
+        raw = store.get(merge_key) or {}
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if cancel_key in store and data.get("text", "") != expected_input:
+            return False
+        store[finalizing_key] = "1"
+        return True
+
+    fr.session_finalize_if_quiet = MagicMock(side_effect=session_finalize_if_quiet)
+
+    def session_release_finalized(
+        lock_key, lock_value, cancel_key, merge_key, responding_key, finalizing_key
+    ):
+        if store.get(lock_key) != lock_value:
+            return False
+        for key in (
+            cancel_key, merge_key, responding_key, finalizing_key, lock_key
+        ):
+            store.pop(key, None)
+        return True
+
+    fr.session_release_finalized = MagicMock(side_effect=session_release_finalized)
+
     with patch("src.core.session_queue.redis_client", fr):
         yield fr
 
@@ -82,7 +115,103 @@ def fake_redis():
 # ============================================================
 
 
+class TestCrossWorkerStateBoundary:
+    """两个 queue 实例模拟不同 Gunicorn/archive worker。"""
+
+    def test_redis_backed_state_is_shared_but_cancel_callbacks_are_process_local(
+        self, fake_redis
+    ):
+        """锁、cancel、merge、pending、responding 跨实例共享；回调注册表不共享。"""
+        worker_a = SessionMessageQueue()
+        worker_b = SessionMessageQueue()
+        sid = "sid_cross_worker"
+
+        lock_value = worker_a.acquire_lock(sid)
+        assert lock_value is not None
+        assert worker_b.is_locked(sid) is True
+
+        worker_a.set_cancel(sid)
+        worker_a.set_merge(sid, "第一条", [{"type": "image"}], msgid="evt_1")
+        worker_a.set_pending(sid, "第三条")
+        worker_a.mark_responding(sid)
+
+        assert worker_b.is_cancelled(sid) is True
+        assert worker_b.get_merged_input(sid, "") == "第一条"
+        assert worker_b.get_merged_attachments_meta(sid) == [{"type": "image"}]
+        assert worker_b.has_pending(sid) is True
+        assert worker_b.is_responding(sid) is True
+
+        worker_a.register_cancel_check(sid, lambda: True)
+        worker_a._clear_cancel(sid)
+        assert worker_a.check_cancel(sid) is True
+        assert worker_b.check_cancel(sid) is False
+
+    def test_pending_preserves_attachment_and_msgid_and_reads_legacy_format(
+        self, q, fake_redis
+    ):
+        q.set_pending("sid_pending_meta", "附件", [{"type": "file"}], msgid="evt_2")
+        assert q.get_pending_payload("sid_pending_meta") == {
+            "text": "附件",
+            "attachments_meta": [{"type": "file"}],
+            "msgid": "evt_2",
+            "segments": [{"msgid": "evt_2", "text": "附件"}],
+        }
+
+        legacy_key = q._key("session_pending", "sid_pending_legacy")
+        fake_redis.set(legacy_key, '{"text":"旧消息","timestamp":1}', ex=30)
+        assert q.get_pending_payload("sid_pending_legacy") == {
+            "text": "旧消息",
+            "attachments_meta": None,
+            "msgid": "",
+            "segments": None,
+        }
+
+    def test_pending_accumulates_text_metadata_and_both_attachment_channels(
+        self, q
+    ):
+        q.set_pending(
+            "sid_pending_many", "B", [{"event_id": "evt_2"}], msgid="evt_2",
+            agent_attachments=[{"name": "b.pdf"}],
+        )
+        q.set_pending(
+            "sid_pending_many", "C", [{"event_id": "evt_3"}], msgid="evt_3",
+            agent_attachments=[{"name": "c.png"}],
+        )
+        assert q.get_pending_payload("sid_pending_many") == {
+            "text": "B\n\n[用户追加消息] C",
+            "attachments_meta": [{"event_id": "evt_2"}, {"event_id": "evt_3"}],
+            "msgid": "evt_3",
+            "segments": [
+                {"msgid": "evt_2", "text": "B"},
+                {"msgid": "evt_3", "text": "C"},
+            ],
+            "agent_attachments": [{"name": "b.pdf"}, {"name": "c.png"}],
+        }
+
+
 class TestIdleFirstMessage:
+    @pytest.mark.asyncio
+    async def test_real_redis_client_fallback_holds_and_releases_lease(self):
+        client = RedisClient()
+        client._connected = False
+        client._client = None
+        queue = SessionMessageQueue()
+        queue.MERGE_WINDOW = 0
+
+        async def processor(_cancel, user_input_override=None):
+            return user_input_override
+
+        with patch("src.core.session_queue.redis_client", client):
+            result = await queue.enqueue_and_process(
+                session_id="sid_real_fallback", user_input="A", processor=processor
+            )
+            assert result.lease_token
+            assert queue.is_locked("sid_real_fallback")
+            assert queue.is_finalizing("sid_real_fallback")
+            queue.finish_processing("sid_real_fallback", result.lease_token)
+            assert not queue.is_locked("sid_real_fallback")
+            assert not queue.is_finalizing("sid_real_fallback")
+
     @pytest.mark.asyncio
     async def test_idle_first_message_returns_success_not_merged(self, q, fake_redis):
         """空闲态：首条消息拿到锁 → 跑 processor → 返回 success，was_merged=False。
@@ -150,6 +279,40 @@ class TestIdleFirstMessage:
 
 class TestMergingSecondMessage:
     @pytest.mark.asyncio
+    async def test_follower_injected_at_final_check_is_reprocessed_not_lost(
+        self, q, fake_redis
+    ):
+        calls = []
+
+        async def processor(cancel_check, user_input_override=None):
+            calls.append(user_input_override)
+            return user_input_override
+
+        original_finalize = q._try_mark_finalizing
+        injected = False
+
+        def inject_then_finalize(session_id, lock_value, expected_input):
+            nonlocal injected
+            if not injected:
+                injected = True
+                q.set_cancel(session_id)
+                q.append_merge(session_id, "B", new_msgid="evt_b")
+                return False
+            return original_finalize(session_id, lock_value, expected_input)
+
+        with patch.object(q, "_try_mark_finalizing", side_effect=inject_then_finalize):
+            result = await q.enqueue_and_process(
+                session_id="sid_final_race", user_input="A", processor=processor,
+                msgid="evt_a",
+            )
+
+        assert result.status == "success"
+        assert result.merged_input == "A\n\n[用户追加消息] B"
+        assert calls[-1] == result.merged_input
+        assert result.merged_from_msgids == ["evt_a", "evt_b"]
+        q.finish_processing("sid_final_race", result.lease_token)
+
+    @pytest.mark.asyncio
     async def test_second_message_during_processing_returns_merged(self, q, fake_redis):
         """处理中态：首条 A 持有锁（未 mark_responding），B 到达 → B 立即返回 status="merged"。
 
@@ -158,15 +321,23 @@ class TestMergingSecondMessage:
         """
         processor_A = AsyncMock(return_value="reply-A")
 
-        async def slow_processor_A(cancel_check, user_input_override=None):
+        processor_attachments = []
+
+        async def slow_processor_A(
+            cancel_check, user_input_override=None, agent_attachments_override=None
+        ):
             # 让 A 长时间持有锁，给 B 到达的机会
             await asyncio.sleep(0.6)
+            processor_attachments.append(agent_attachments_override)
             return user_input_override or "reply-A"
 
         async def run_A():
-            return await q.enqueue_and_process(
-                session_id="sid_merge2", user_input="A", processor=slow_processor_A
+            result = await q.enqueue_and_process(
+                session_id="sid_merge2", user_input="A", processor=slow_processor_A,
+                agent_attachments=[{"name": "a.png"}],
             )
+            q.finish_processing("sid_merge2", result.lease_token)
+            return result
 
         task_A = asyncio.create_task(run_A())
 
@@ -181,7 +352,8 @@ class TestMergingSecondMessage:
         # B 到达
         processor_B = AsyncMock(return_value="should-not-run")
         result_B = await q.enqueue_and_process(
-            session_id="sid_merge2", user_input="B", processor=processor_B
+            session_id="sid_merge2", user_input="B", processor=processor_B,
+            agent_attachments=[{"name": "b.pdf"}],
         )
 
         # B 的契约
@@ -199,6 +371,9 @@ class TestMergingSecondMessage:
             "process_and_persist 才会把 merged_input 写入 channel_messages"
         )
         assert "A" in result_A.merged_input and "B" in result_A.merged_input
+        assert processor_attachments[-1] == [
+            {"name": "a.png"}, {"name": "b.pdf"}
+        ]
 
 
 # ============================================================
@@ -221,19 +396,27 @@ class TestPendingAfterResponding:
         # 用 event 让 processor_A 在 mark_responding 后发信号，确保 B 到达时 responding 已置位
         responding_ready = asyncio.Event()
 
-        async def processor_A(cancel_check, user_input_override=None):
+        processor_attachment_calls = []
+
+        async def processor_A(
+            cancel_check, user_input_override=None, agent_attachments_override=None
+        ):
             # A 标记 responding，模拟「已经开始 send_message 推送」
             q.mark_responding("sid_pending")
             responding_ready.set()
             # 在 responding 状态下，B 到达
             await asyncio.sleep(0.5)
             processor_calls.append("A")
+            processor_attachment_calls.append(agent_attachments_override)
             return user_input_override or "reply-A"
 
         async def run_A():
-            return await q.enqueue_and_process(
-                session_id="sid_pending", user_input="A", processor=processor_A
+            result = await q.enqueue_and_process(
+                session_id="sid_pending", user_input="A", processor=processor_A,
+                agent_attachments=[{"name": "owner.png"}],
             )
+            q.finish_processing("sid_pending", result.lease_token)
+            return result
 
         task_A = asyncio.create_task(run_A())
         # 等 A 进入 processor 并 mark_responding；A 要先过 _wait_merge_window（2s）才会进 processor
@@ -250,6 +433,7 @@ class TestPendingAfterResponding:
             session_id="sid_pending",
             user_input="B",
             processor=AsyncMock(return_value="never"),
+            agent_attachments=[{"name": "pending.pdf"}],
         )
         assert result_B.status == "merged", (
             "已 mark_responding 后到达的 B 也返回 merged（走 pending 分支，由 A 完成后处理）"
@@ -260,6 +444,7 @@ class TestPendingAfterResponding:
         # A 完成后会处理 pending（B），所以 A 最终返回 success
         assert result_A.status == "success"
         assert "A" in processor_calls
+        assert processor_attachment_calls[-1] == [{"name": "pending.pdf"}]
 
 
 # ============================================================

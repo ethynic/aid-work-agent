@@ -309,7 +309,6 @@ class _InMemoryFallback:
                 return True
             return False
 
-
 class RedisClient:
     """
     统一的 Redis 客户端封装
@@ -780,6 +779,108 @@ class RedisClient:
         except Exception as e:
             logger.warning(f"[Redis] release_lock 失败 [{key}]: {e}")
             return False
+
+    def session_finalize_if_quiet(
+        self, lock_key: str, lock_value: str, cancel_key: str,
+        merge_key: str, pending_key: str, finalizing_key: str,
+        state_guard_key: str, expected_input: str, ttl: int,
+    ) -> bool:
+        """原子确认本轮输入已消费完毕，并切换到持久化/出站交接态。"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                script = r'''
+                local function decode_payload(raw)
+                    if not raw then return {} end
+                    local ok, value = pcall(cjson.decode, raw)
+                    if not ok then return {} end
+                    if type(value) == 'string' then
+                        ok, value = pcall(cjson.decode, value)
+                        if not ok then return {} end
+                    end
+                    return value
+                end
+                if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+                if redis.call('exists', KEYS[6]) == 1 then return 0 end
+                if redis.call('exists', KEYS[5]) == 1 then return 1 end
+                if redis.call('exists', KEYS[4]) == 1 then return 0 end
+                local merge = decode_payload(redis.call('get', KEYS[3]))
+                if redis.call('exists', KEYS[2]) == 1 and
+                   tostring(merge['text'] or '') ~= ARGV[2] then return 0 end
+                redis.call('set', KEYS[5], '1', 'EX', tonumber(ARGV[3]))
+                redis.call('expire', KEYS[1], tonumber(ARGV[3]))
+                return 1
+                '''
+                return bool(backend.eval(
+                    script, 6, lock_key, cancel_key, merge_key, pending_key,
+                    finalizing_key, state_guard_key, lock_value, expected_input, ttl,
+                ))
+            with self._fallback._lock:
+                if self._fallback._data.get(lock_key) != lock_value:
+                    return False
+                if state_guard_key in self._fallback._data:
+                    return False
+                if finalizing_key in self._fallback._data:
+                    return True
+                if pending_key in self._fallback._data:
+                    return False
+                merge = self._decode_session_payload(
+                    self._fallback._data.get(merge_key)
+                )
+                if cancel_key in self._fallback._data and merge.get("text", "") != expected_input:
+                    return False
+                self._fallback._data[finalizing_key] = "1"
+                self._fallback._types[finalizing_key] = "string"
+                import time
+                self._fallback._ttls[finalizing_key] = time.time() + ttl
+                self._fallback._ttls[lock_key] = time.time() + ttl
+                return True
+        except Exception as e:
+            logger.warning(f"[Redis] session finalize 失败 [{lock_key}]: {e}")
+            return False
+
+    def session_release_finalized(
+        self, lock_key: str, lock_value: str, cancel_key: str,
+        merge_key: str, responding_key: str, finalizing_key: str,
+    ) -> bool:
+        """原子释放 finalizing ownership，避免先清标记后清锁的交接窗口。"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                script = r'''
+                if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+                redis.call('del', KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[1])
+                return 1
+                '''
+                return bool(backend.eval(
+                    script, 5, lock_key, cancel_key, merge_key,
+                    responding_key, finalizing_key, lock_value,
+                ))
+            with self._fallback._lock:
+                if self._fallback._data.get(lock_key) != lock_value:
+                    return False
+                for item_key in (
+                    cancel_key, merge_key, responding_key, finalizing_key, lock_key
+                ):
+                    self._fallback._data.pop(item_key, None)
+                    self._fallback._types.pop(item_key, None)
+                    self._fallback._ttls.pop(item_key, None)
+                return True
+        except Exception as e:
+            logger.warning(f"[Redis] session finalized release 失败 [{lock_key}]: {e}")
+            return False
+
+    @staticmethod
+    def _decode_session_payload(raw: Any) -> Dict[str, Any]:
+        value = raw
+        for _ in range(2):
+            if not isinstance(value, str):
+                break
+            try:
+                value = json.loads(value)
+            except Exception:
+                return {}
+        return value if isinstance(value, dict) else {}
 
     # ============== Pub/Sub ==============
 

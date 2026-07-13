@@ -66,6 +66,24 @@
             <span v-for="tag in trace.tags" :key="tag"
               class="px-1.5 py-0.5 bg-warning-100 text-warning-700 rounded text-xs">{{ tag }}</span>
           </div>
+          <div v-if="trace.termination_reason || trace.merge_role || trace.user_message_id" class="mt-3 pt-3 border-t border-default flex flex-wrap gap-x-6 gap-y-2 text-xs">
+            <div v-if="trace.termination_reason">
+              <span class="text-muted">终止原因：</span>
+              <span class="text-default font-mono">{{ trace.termination_reason }}</span>
+            </div>
+            <div v-if="trace.merge_role">
+              <span class="text-muted">合并角色：</span>
+              <span class="text-default font-mono">{{ trace.merge_role }}</span>
+            </div>
+            <div v-if="trace.user_message_id">
+              <span class="text-muted">关联消息 ID：</span>
+              <span class="text-default font-mono">{{ trace.user_message_id }}</span>
+            </div>
+            <div>
+              <span class="text-muted">展示状态：</span>
+              <span class="text-default">{{ displayStateLabel(trace.display_state) }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- 用户输入 / AI 输出 -->
@@ -346,6 +364,11 @@ function statusClass(status: string): string {
 function statusLabel(status: string): string {
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中' }
   return map[status] || status
+}
+
+function displayStateLabel(state: TraceDetailType['display_state']): string {
+  const labels = { message: '有效消息', interrupted: '已中断', failed: '失败', internal: '内部过程' }
+  return labels[state] || state
 }
 
 function formatTokens(n: number): string {

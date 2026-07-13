@@ -41,6 +41,11 @@ export interface TraceSummary {
   source_type: string
   created_at: string | null
   recall_type?: 'full' | 'partial' | null
+  termination_reason: string | null
+  merge_role: string | null
+  is_persisted_message: boolean
+  is_intermediate: boolean
+  display_state: 'message' | 'interrupted' | 'failed' | 'internal'
 }
 
 export interface TraceDetail {
@@ -62,6 +67,12 @@ export interface TraceDetail {
   source_type: string
   error_message: string | null
   created_at: string | null
+  user_message_id: string | null
+  termination_reason: string | null
+  merge_role: string | null
+  is_persisted_message: boolean
+  is_intermediate: boolean
+  display_state: 'message' | 'interrupted' | 'failed' | 'internal'
   channel_info?: {
     title: string | null
     username: string | null
@@ -112,8 +123,9 @@ export async function getTracedSessions(params: {
   return res.json()
 }
 
-export async function getSessionTraces(sessionId: string): Promise<{ success: boolean; traces: TraceSummary[] }> {
-  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/traces`, {
+export async function getSessionTraces(sessionId: string, includeIntermediate = true): Promise<{ success: boolean; traces: TraceSummary[] }> {
+  const query = new URLSearchParams({ include_intermediate: String(includeIntermediate) })
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/traces?${query.toString()}`, {
     headers: { ...getAuthHeader() },
   })
   return res.json()

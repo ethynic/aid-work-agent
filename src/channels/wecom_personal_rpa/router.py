@@ -1,8 +1,8 @@
 """企业微信个人账号 RPA 会话路由与会话绑定授权
 
 职责：
-1. ``WeComPersonalRpaRouter.route``：``account_id + conversation_id`` → 稳定
-   ``session_id``，格式 ``wecom_personal_rpa:{account_id}:{stable_id or conversation_id}``。
+1. ``WeComPersonalRpaRouter.route``：``tenant_id + account_id + conversation_id`` → 稳定
+   ``session_id``，格式 ``wecom_personal_rpa:{tenant_id}:{account_id}:{stable_id or conversation_id}``。
    ``stable_id`` 优先于客户端本地 ``conversation_id``，避免客户端重启后本地会话 ID
    变化导致路由漂移。
 2. ``check_conversation_authorization``：基于 ``db.get_or_create_binding`` /
@@ -33,7 +33,7 @@ _SESSION_ID_PREFIX = "wecom_personal_rpa"
 
 
 class WeComPersonalRpaRouter:
-    """account_id + conversation_id → session_id 路由器。
+    """tenant_id + account_id + conversation_id → session_id 路由器。
 
     route_key 选择策略：``stable_id`` 优先，回退到客户端本地 ``conversation_id``。
     ``stable_id`` 来自企微稳定 ID（external_userid / userid / room_id），跨客户端
@@ -43,18 +43,19 @@ class WeComPersonalRpaRouter:
 
     def route(
         self,
+        tenant_id: str,
         account_id: str,
         conversation_id: str,
         stable_id: Optional[str] = None,
     ) -> str:
-        """返回 ``wecom_personal_rpa:{account_id}:{stable_id or conversation_id}``。
+        """返回租户、账号与稳定会话标识共同隔离的 session ID。
 
         - ``stable_id`` 非空时优先使用，保证跨重启路由稳定。
         - ``stable_id`` 为空时回退到 ``conversation_id``。
         - ``account_id`` 与 ``conversation_id`` 均视为必需的非空字符串（由调用方保证）。
         """
         route_key = stable_id or conversation_id
-        return f"{_SESSION_ID_PREFIX}:{account_id}:{route_key}"
+        return f"{_SESSION_ID_PREFIX}:{tenant_id}:{account_id}:{route_key}"
 
 
 # 模块级单例，供下游直接 import 使用
@@ -144,8 +145,6 @@ async def check_conversation_authorization(
     Returns:
         AuthorizationResult，session_id 始终非空；其余字段按授权语义填充。
     """
-    session_id = router.route(account_id, conversation_id, stable_id)
-
     # 1. 获取或首次创建绑定（首次见到 → 插入 pending，等待人工确认）
     binding = db.get_or_create_binding(
         tenant_id=tenant_id,
@@ -164,7 +163,7 @@ async def check_conversation_authorization(
             f"(tenant={tenant_id}, account={account_id}, key={search_key})"
         )
         return AuthorizationResult(
-            session_id=session_id,
+            session_id=router.route(tenant_id, account_id, conversation_id, stable_id),
             needs_review=True,
             paused=False,
             reason="binding_unavailable",
@@ -178,6 +177,9 @@ async def check_conversation_authorization(
     )
     current = authoritative if authoritative is not None else binding
     status = current.get("status")
+    # 客户端可能暂时拿不到 stable_id；优先复用历史 binding 中已经确认的稳定 ID。
+    route_stable_id = current.get("stable_id") or stable_id
+    session_id = router.route(tenant_id, account_id, conversation_id, route_stable_id)
 
     # 3. 重名歧义检测：同 search_key 在租户内存在多条绑定 → 需人工区分。
     #    account 维度有 UNIQUE(account_id, search_key) 约束，故按租户维度统计。

@@ -224,6 +224,25 @@ class SessionRecordService:
         self.status = "failed"
         self.error_message = error_message
 
+    def set_trace_merge_semantics(self, *, termination_reason=None, merge_role=None):
+        """同步更新内存和已落库 Trace metadata，不伪造 message_id。"""
+        collector = self.trace_collector
+        if collector is None:
+            return
+        collector.set_merge_semantics(
+            termination_reason=termination_reason, merge_role=merge_role
+        )
+        try:
+            from src.core.trace_persist import update_trace_metadata
+            metadata = {}
+            if termination_reason:
+                metadata["termination_reason"] = termination_reason
+            if merge_role:
+                metadata["merge_role"] = merge_role
+            update_trace_metadata(collector.trace_id, metadata)
+        except Exception as e:
+            logger.debug(f"set_trace_merge_semantics persist failed: {e}")
+
     def complete(self, assistant_message: str = None):
         """完成记录"""
         self.end_time = time.time()

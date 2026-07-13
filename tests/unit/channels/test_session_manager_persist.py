@@ -257,6 +257,104 @@ def stub_agent():
 
 
 class TestProcessAndPersist:
+    def test_rebind_legacy_channel_user_preserves_existing_session_id(self, manager):
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        cursor.fetchone.return_value = None
+        cursor.rowcount = 1
+        ctx = MagicMock()
+        ctx.__enter__.return_value = conn
+        ctx.__exit__.return_value = False
+
+        with patch("src.channels.session.get_db_connection", return_value=ctx), \
+                patch("src.channels.session.delete_cached") as delete_cache:
+            migrated = manager.rebind_existing_session_channel_user(
+                tenant_id="t1",
+                channel_type="wecom_personal_rpa",
+                old_channel_user_id="acc:local_conversation",
+                new_channel_user_id="acc:stable_user",
+                metadata_patch={"stable_id": "stable_user"},
+            )
+
+        assert migrated is True
+        update_sql, update_params = cursor.execute.call_args_list[1][0]
+        assert "UPDATE channel_sessions" in update_sql
+        assert update_params[0] == "acc:stable_user"
+        assert update_params[4] == "acc:local_conversation"
+        conn.commit.assert_called_once()
+        assert delete_cache.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_merge_reprocess_passes_merged_attachments_to_agent(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """取消重跑时 Agent 必须收到合并后的附件，而不是 owner 首条附件。"""
+        merged_attachments = [
+            {"type": "image", "url": "https://files/owner.png"},
+            {"type": "file", "url": "https://files/follower.pdf"},
+        ]
+
+        async def enqueue_side_effect(**kwargs):
+            response = await kwargs["processor"](
+                lambda: False,
+                user_input_override="A\n\n[用户追加消息] B",
+                agent_attachments_override=merged_attachments,
+            )
+            return EnqueueResult(
+                status="success",
+                response_text=response,
+                merged_input="A\n\n[用户追加消息] B",
+                was_merged=True,
+            )
+
+        patched_session_queue.enqueue_and_process.side_effect = enqueue_side_effect
+
+        await manager.process_and_persist(
+            session_id="sid_merge_attachments",
+            tenant_id="t1",
+            user_content="A",
+            agent=stub_agent,
+            agent_attachments=[merged_attachments[0]],
+            send_response=AsyncMock(return_value=True),
+        )
+
+        assert stub_agent.process_message_sync.await_args.kwargs["attachments"] == merged_attachments
+
+    @pytest.mark.asyncio
+    async def test_pending_reprocess_replaces_owner_attachments_for_agent(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """pending 下一轮必须使用 pending 附件，不能复用 owner 附件。"""
+        owner_attachments = [{"type": "image", "url": "https://files/owner.png"}]
+        pending_attachments = [{"type": "file", "url": "https://files/pending.pdf"}]
+
+        async def enqueue_side_effect(**kwargs):
+            response = await kwargs["processor"](
+                lambda: False,
+                user_input_override="B",
+                agent_attachments_override=pending_attachments,
+            )
+            return EnqueueResult(
+                status="success",
+                response_text=response,
+                merged_input="B",
+                was_merged=True,
+            )
+
+        patched_session_queue.enqueue_and_process.side_effect = enqueue_side_effect
+
+        await manager.process_and_persist(
+            session_id="sid_pending_attachments",
+            tenant_id="t1",
+            user_content="A",
+            agent=stub_agent,
+            agent_attachments=owner_attachments,
+            send_response=AsyncMock(return_value=True),
+        )
+
+        assert stub_agent.process_message_sync.await_args.kwargs["attachments"] == pending_attachments
+
     @pytest.mark.asyncio
     async def test_independent_path_writes_user_and_assistant(
         self, manager, mock_db_ctx, patched_session_queue, stub_agent
@@ -272,9 +370,15 @@ class TestProcessAndPersist:
             response_text="hello back",
             merged_input="你好",
             was_merged=False,
+            lease_token="lease-1",
         )
 
-        send_response = AsyncMock(return_value=True)
+        async def send_response_impl(*_args):
+            patched_session_queue.mark_responding.assert_called_once_with("sid_test")
+            patched_session_queue.finish_processing.assert_not_called()
+            return True
+
+        send_response = AsyncMock(side_effect=send_response_impl)
 
         result = await manager.process_and_persist(
             session_id="sid_test",
@@ -297,6 +401,9 @@ class TestProcessAndPersist:
         send_response.assert_awaited_once_with("hello back", [])
         patched_session_queue.mark_responding.assert_called_once_with("sid_test")
         patched_session_queue.mark_idle.assert_called_once_with("sid_test")
+        patched_session_queue.finish_processing.assert_called_once_with(
+            "sid_test", "lease-1"
+        )
 
     @pytest.mark.asyncio
     async def test_merged_path_does_not_write_any_message(
@@ -317,12 +424,14 @@ class TestProcessAndPersist:
 
         send_response = AsyncMock(return_value=True)
 
+        record_service = MagicMock()
         result = await manager.process_and_persist(
             session_id="sid_test",
             tenant_id="t1",
             user_content="B",
             agent=stub_agent,
             send_response=send_response,
+            record_service=record_service,
         )
 
         assert result["status"] == "merged"
@@ -336,6 +445,9 @@ class TestProcessAndPersist:
         send_response.assert_not_awaited()
         # mark_responding / mark_idle 也不应被调用（不需要推送）
         patched_session_queue.mark_responding.assert_not_called()
+        record_service.set_trace_merge_semantics.assert_called_once_with(
+            termination_reason="message_merged", merge_role="merged_follower"
+        )
 
     @pytest.mark.asyncio
     async def test_merger_path_writes_single_user_with_merged_input(
@@ -357,12 +469,14 @@ class TestProcessAndPersist:
 
         send_response = AsyncMock(return_value=True)
 
+        record_service = MagicMock()
         result = await manager.process_and_persist(
             session_id="sid_test",
             tenant_id="t1",
             user_content="A",  # 合并方的原始 user_content 只是 A
             agent=stub_agent,
             send_response=send_response,
+            record_service=record_service,
         )
 
         assert result["status"] == "success"
@@ -376,6 +490,9 @@ class TestProcessAndPersist:
             f"实际: {user_msg['content']!r}"
         )
         assert memory_store["messages"][1]["content"] == "回复AB"
+        record_service.set_trace_merge_semantics.assert_called_once_with(
+            merge_role="merged_owner"
+        )
 
     @pytest.mark.asyncio
     async def test_enqueue_exception_returns_error_status_no_write(

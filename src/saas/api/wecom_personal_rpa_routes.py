@@ -78,6 +78,32 @@ router = APIRouter(tags=["企业微信个人RPA渠道"])
 
 _CHANNEL_TYPE = "wecom_personal_rpa"
 
+
+def _resolve_stable_conversation_id(
+    conversation_id: str,
+    sender_stable_id: Optional[str],
+    binding: Optional[dict],
+) -> str:
+    """优先复用历史 binding 稳定 ID，最后才回退客户端本地会话 ID。"""
+    return (binding or {}).get("stable_id") or sender_stable_id or conversation_id
+
+
+def _build_rpa_attachment_inputs(attachments, event_id: str) -> tuple[list, list]:
+    """构造无敏感明文的持久化附件元数据与 Agent 附件输入。"""
+    metadata = [
+        {
+            "type": att.type,
+            "url": att.url,
+            "name": att.name,
+            "size": att.size,
+            "mime_type": att.mime_type,
+            "event_id": event_id,
+        }
+        for att in attachments
+    ]
+    agent_inputs = [att.model_dump(exclude_none=True) for att in attachments]
+    return metadata, agent_inputs
+
 # 幂等键前缀（与 protocol.md §A.9 对齐）
 _DEDUP_PREFIX = "wecom_personal_rpa"
 # 出站动作入队去重前缀（与 action_client.deliver_actions 内部一致）
@@ -544,10 +570,28 @@ async def _process_inbound_message(
         except Exception as e:
             logger.warning(f"RPA ensure_user_registered 失败: {e}")
 
-        # 4. 会话（channel_user_id 用 account_id:conversation_id 保证唯一）
-        channel_user_id = f"{env.account_id}:{conversation_id}"
+        # 4. 会话：优先使用 binding 中的历史稳定 ID，避免客户端重启后 conversation_id
+        # 变化造成上下文与 session queue 分叉。tenant_id 由 ChannelSessionManager 单独参与哈希。
+        stable_conversation_id = _resolve_stable_conversation_id(
+            conversation_id, sender_stable_id, authoritative_binding
+        )
+        channel_user_id = f"{env.account_id}:{stable_conversation_id}"
         # subagent_id 由 channel_config 的 subagent_type 决定，首版留空走 master
         subagent_id = ""
+        legacy_channel_user_id = f"{env.account_id}:{conversation_id}"
+        if legacy_channel_user_id != channel_user_id:
+            channel_session_manager.rebind_existing_session_channel_user(
+                tenant_id=tenant_id,
+                channel_type=_CHANNEL_TYPE,
+                old_channel_user_id=legacy_channel_user_id,
+                new_channel_user_id=channel_user_id,
+                subagent_id=subagent_id,
+                metadata_patch={
+                    "account_id": env.account_id,
+                    "conversation_id": conversation_id,
+                    "stable_id": stable_conversation_id,
+                },
+            )
         session = channel_session_manager.get_or_create_session(
             channel_type=_CHANNEL_TYPE,
             channel_user_id=channel_user_id,
@@ -558,12 +602,16 @@ async def _process_inbound_message(
             metadata={
                 "account_id": env.account_id,
                 "conversation_id": conversation_id,
+                "stable_id": stable_conversation_id,
             },
         )
         channel_session_id = session["session_id"]
 
         # 5. 落库用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
         user_text = um.text or ""
+        user_attachments_meta, agent_attachments = _build_rpa_attachment_inputs(
+            um.attachments, env.event_id
+        )
 
         # 6. agent 处理（经 session_queue 串行调度）
         agent = agent_router.get_agent(
@@ -607,8 +655,14 @@ async def _process_inbound_message(
                 session_id=channel_session_id,
                 tenant_id=tenant_id,
                 user_content=user_text,
-                user_metadata={"event_id": env.event_id, "client_id": env.client_id},
-                message_type="text",
+                user_metadata={
+                    "event_id": env.event_id,
+                    "msgid": env.event_id,
+                    "client_id": env.client_id,
+                },
+                user_attachments_meta=user_attachments_meta or None,
+                agent_attachments=agent_attachments or None,
+                message_type=um.message_type,
                 agent=agent,
                 record_service=record,
                 send_response=send_response,

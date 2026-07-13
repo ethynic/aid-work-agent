@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from src.api.auth import get_current_user
 from src.saas.permissions.checker import is_platform_admin
+from src.core.trace_semantics import is_interrupted_trace
 
 
 router = APIRouter(prefix="/api/monitor", tags=["可观测性追踪"])
@@ -53,6 +54,11 @@ class TraceSummary(BaseModel):
     created_at: Optional[str] = None
     # 撤回状态：full=整条撤回，partial=部分撤回（合并消息中部分段被撤回），None=未撤回
     recall_type: Optional[str] = None
+    termination_reason: Optional[str] = None
+    merge_role: Optional[str] = None
+    is_persisted_message: bool = False
+    is_intermediate: bool = False
+    display_state: str = "internal"
 
 
 class SpanDetail(BaseModel):
@@ -89,7 +95,13 @@ class TraceDetail(BaseModel):
     source_type: str = "chat"
     error_message: Optional[str] = None
     created_at: Optional[str] = None
+    user_message_id: Optional[str] = None
     channel_info: Optional[Dict[str, Any]] = None
+    termination_reason: Optional[str] = None
+    merge_role: Optional[str] = None
+    is_persisted_message: bool = False
+    is_intermediate: bool = False
+    display_state: str = "internal"
 
 
 class SessionListResponse(BaseModel):
@@ -140,6 +152,37 @@ def _format_ts(val) -> Optional[str]:
     if isinstance(val, datetime):
         return val.isoformat()
     return str(val)
+
+
+def _trace_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    """统一计算 Trace 展示语义，失败优先于消息和中断。"""
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            import json
+            metadata = json.loads(metadata)
+        except Exception:
+            metadata = {}
+    normalized = {**row, "metadata": metadata}
+    is_persisted = bool(row.get("user_message_id"))
+    is_intermediate = is_interrupted_trace(normalized)
+    status = row.get("status") or "running"
+    if status in {"failed", "error"} or row.get("error_message"):
+        display_state = "failed"
+        is_intermediate = False
+    elif is_persisted or (row.get("output") and not is_intermediate):
+        display_state = "message"
+    elif is_intermediate:
+        display_state = "interrupted"
+    else:
+        display_state = "internal"
+    return {
+        "termination_reason": metadata.get("termination_reason"),
+        "merge_role": metadata.get("merge_role"),
+        "is_persisted_message": is_persisted,
+        "is_intermediate": is_intermediate,
+        "display_state": display_state,
+    }
 
 
 # ============== API 端点 ==============
@@ -283,6 +326,9 @@ async def list_traced_sessions(
 async def list_session_traces(
     session_id: str,
     request: Request,
+    include_intermediate: bool = Query(
+        True, description="是否包含已取消/被合并的中间处理 Trace"
+    ),
 ):
     """获取某会话下的所有 trace"""
     user = get_current_user(request)
@@ -295,7 +341,7 @@ async def list_session_traces(
                     trace_id, session_id, input, output, status,
                     duration_ms, total_tokens, tool_calls_count,
                     agent_iterations, tags, source_type, created_at,
-                    user_message_id
+                    user_message_id, metadata, error_message, subagent_id
                 FROM obs_traces
                 WHERE session_id = %s
                 ORDER BY created_at DESC
@@ -368,8 +414,10 @@ async def list_session_traces(
                 source_type=r.get("source_type", "chat"),
                 created_at=_format_ts(r.get("created_at")),
                 recall_type=_match_recall(r.get("user_message_id")),
+                **_trace_display_fields(r),
             )
             for r in rows
+            if include_intermediate or not _trace_display_fields(r)["is_intermediate"]
         ]
 
         return {"success": True, "traces": traces}
@@ -425,7 +473,8 @@ async def list_traces(
                 SELECT
                     trace_id, session_id, input, output, status,
                     duration_ms, total_tokens, tool_calls_count,
-                    agent_iterations, tags, source_type, created_at
+                    agent_iterations, tags, source_type, created_at,
+                    user_message_id, metadata, error_message, subagent_id
                 FROM obs_traces
                 {where_sql}
                 ORDER BY created_at DESC
@@ -447,6 +496,7 @@ async def list_traces(
                     tags=r.get("tags") or [],
                     source_type=r.get("source_type", "chat"),
                     created_at=_format_ts(r.get("created_at")),
+                    **_trace_display_fields(r),
                 )
                 for r in rows
             ]
@@ -488,7 +538,7 @@ async def get_trace_detail(
                     trace_id, session_id, tenant_id, user_id, subagent_id,
                     input, output, status, duration_ms, total_tokens,
                     metadata, agent_iterations, tool_calls_count, tags,
-                    source_type, error_message, created_at
+                    source_type, error_message, user_message_id, created_at
                 FROM obs_traces
                 WHERE trace_id = %s
             """, (trace_id,))
@@ -521,10 +571,12 @@ async def get_trace_detail(
                 source_type=trace_row.get("source_type", "chat"),
                 error_message=trace_row.get("error_message"),
                 created_at=_format_ts(trace_row.get("created_at")),
+                user_message_id=trace_row.get("user_message_id"),
+                **_trace_display_fields(trace_row),
             )
 
             # 渠道来源时，跨库补充 channel_sessions 业务信息（失败不影响 trace 返回）
-            if trace.source_type in ('wecom', 'wecom_kf', 'dingtalk', 'feishu'):
+            if trace.source_type in ('wecom', 'wecom_kf', 'dingtalk', 'feishu', 'wecom_personal_rpa'):
                 try:
                     from src.db.database import get_db_connection
                     with get_db_connection() as biz_cur:
