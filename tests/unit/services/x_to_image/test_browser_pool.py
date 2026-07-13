@@ -124,3 +124,36 @@ class TestShootRequiresChromium:
 
     async def test_shoot_produces_png(self, tmp_path):
         pytest.skip(reason="需要真实 Chromium，CI 中可能不可用")
+
+
+# ---------- acquire_page（async context manager） ----------
+
+
+def test_acquire_page_exists():
+    """acquire_page 方法存在且可调用。"""
+    assert hasattr(browser_pool, "acquire_page")
+    assert callable(browser_pool.acquire_page)
+
+
+def test_acquire_page_signature_no_headless():
+    """acquire_page 不应暴露 headless 参数（遵循 N2 硬编码约定）。"""
+    import inspect
+
+    sig = inspect.signature(BrowserPool.acquire_page)
+    params = set(sig.parameters) - {"self"}
+    assert "width" in params, "acquire_page 应接受 width 参数"
+    assert not any("headless" in p.lower() for p in params), (
+        f"BrowserPool.acquire_page 不应暴露 headless 参数: {params}"
+    )
+
+
+def test_acquire_page_is_async_context_manager():
+    """acquire_page 返回的对象应实现 __aenter__/__aexit__（async context manager）。
+
+    用一个全新的 BrowserPool 实例验证（不真正启动浏览器，只验证协议）。
+    """
+    pool = BrowserPool()
+    # 调用 acquire_page 拿到 context manager 对象（不进入 __aenter__）
+    cm = pool.acquire_page(width=440)
+    assert hasattr(cm, "__aenter__"), "acquire_page 返回对象必须实现 __aenter__"
+    assert hasattr(cm, "__aexit__"), "acquire_page 返回对象必须实现 __aexit__"

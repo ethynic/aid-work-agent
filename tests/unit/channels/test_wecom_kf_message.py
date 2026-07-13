@@ -204,3 +204,82 @@ class TestMarkdownToPlainText:
     def test_html_tag_removal(self):
         from src.channels.wecom_kf.message import markdown_to_plain_text
         assert markdown_to_plain_text("<b>文本</b>") == "文本"
+
+
+class TestContainsTableOrImage:
+    """检测 markdown 中是否包含 md 表格 或 图片引用。"""
+
+    def test_empty(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        assert contains_table_or_image("") is False
+        assert contains_table_or_image(None) is False
+
+    def test_plain_text_no_table_no_image(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        assert contains_table_or_image("你好，这是一段纯文本。") is False
+
+    def test_text_with_heading_and_list(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = """## 标题
+
+- 项目1
+- 项目2
+
+正文内容。"""
+        assert contains_table_or_image(md) is False
+
+    def test_contains_table(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = """| 姓名 | 年龄 |
+|------|------|
+| 张三 | 28 |"""
+        assert contains_table_or_image(md) is True
+
+    def test_contains_table_with_surrounding_text(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = """以下是结果：
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+以上是全部。"""
+        assert contains_table_or_image(md) is True
+
+    def test_contains_file_id_image(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = "这是景点图：![黄果树](file_id:file_abc12345)"
+        assert contains_table_or_image(md) is True
+
+    def test_contains_remote_url_image(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = "看这张图：![cat](https://example.com/cat.png)"
+        assert contains_table_or_image(md) is True
+
+    def test_image_in_table_context(self):
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = """## 行程
+
+| 日期 | 景点 |
+|------|------|
+| D1 | 黄果树 |
+
+![黄果树](file_id:file_aaaa1)
+"""
+        assert contains_table_or_image(md) is True
+
+    def test_pure_link_not_treated_as_image(self):
+        """普通文本链接 [text](url) 不是图片，不应触发。"""
+        from src.channels.wecom_kf.message import contains_table_or_image
+        md = "请 [点击查看](https://example.com/doc) 详情。"
+        assert contains_table_or_image(md) is False
+
+    def test_table_separator_only_not_treated_as_table(self):
+        """单独的表格分隔行（|---|---|）不应被视为完整表格。"""
+        from src.channels.wecom_kf.message import contains_table_or_image
+        # 没有数据行，只有分隔行 -> 不算表格
+        md = "这是普通文本\n|---|---|\n更多文本"
+        # 注意：第一行不以 | 开头，第二行虽然是 | 开头但是分隔行
+        # 第三行不以 | 开头
+        # 所以应该返回 False
+        assert contains_table_or_image(md) is False

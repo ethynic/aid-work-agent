@@ -335,3 +335,192 @@ class TestMixedFiles:
         assert adapter.api_client.send_msg.await_count == 2
         types = [c.kwargs["msgtype"] for c in adapter.api_client.send_msg.call_args_list]
         assert types == ["image", "link"]
+
+
+# ---------- 整段长图优先逻辑 ----------
+
+
+class TestSendMessageFullImageFallback:
+    """send_message 在 text 含表格/图片时应优先整段渲染长图，失败时降级分段。"""
+
+    @pytest.mark.asyncio
+    async def test_table_text_triggers_full_image(self, adapter):
+        """text 含 md 表格 -> 调用 _send_full_text_as_image，不再走分段。"""
+        from src.models.message import UnifiedResponse
+
+        resp = UnifiedResponse(
+            message_id="msg_1",
+            reply_to="external_user_001",
+            content={"text": "| A | B |\n|---|---|\n| 1 | 2 |"},
+        )
+
+        # mock _send_full_text_as_image 返回 True，验证被调用
+        adapter._send_full_text_as_image = AsyncMock(return_value=True)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_awaited_once()
+        # 长图成功时不应走分段
+        adapter._send_segmented.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_text_triggers_full_image(self, adapter):
+        """text 含 file_id: 图片 -> 调用 _send_full_text_as_image。"""
+        from src.models.message import UnifiedResponse
+
+        resp = UnifiedResponse(
+            message_id="msg_2",
+            reply_to="external_user_001",
+            content={"text": "看这张图：![cat](file_id:file_abc12345)"},
+        )
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=True)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_awaited_once()
+        adapter._send_segmented.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_full_image_failure_falls_back_to_segmented(self, adapter):
+        """长图渲染/发送失败 -> 降级走分段逻辑。"""
+        from src.models.message import UnifiedResponse
+
+        resp = UnifiedResponse(
+            message_id="msg_3",
+            reply_to="external_user_001",
+            content={"text": "| A | B |\n|---|---|\n| 1 | 2 |"},
+        )
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=False)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_awaited_once()
+        adapter._send_segmented.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_plain_text_skips_full_image(self, adapter):
+        """纯文本（无表格无图片）-> 不走长图，直接走分段。"""
+        from src.models.message import UnifiedResponse
+
+        resp = UnifiedResponse(
+            message_id="msg_4",
+            reply_to="external_user_001",
+            content={"text": "你好，这是一段普通回复。"},
+        )
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=True)
+        adapter._send_segmented = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_not_awaited()
+        adapter._send_segmented.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_render_disabled_skips_full_image(self, adapter):
+        """render_tables=False -> 即使含表格也走纯文本全流程。"""
+        from src.models.message import UnifiedResponse
+
+        adapter._render_enabled = False
+        resp = UnifiedResponse(
+            message_id="msg_5",
+            reply_to="external_user_001",
+            content={"text": "| A | B |\n|---|---|\n| 1 | 2 |"},
+        )
+
+        adapter._send_full_text_as_image = AsyncMock(return_value=True)
+        adapter._send_segmented = AsyncMock(return_value=True)
+        adapter._send_as_plain_text = AsyncMock(return_value=True)
+
+        ok = await adapter.send_message(resp)
+
+        assert ok is True
+        adapter._send_full_text_as_image.assert_not_awaited()
+        adapter._send_segmented.assert_not_awaited()
+        adapter._send_as_plain_text.assert_awaited_once()
+
+
+class TestSendFullTextAsImage:
+    """_send_full_text_as_image：render_markdown -> upload_media -> send_msg(image)。"""
+
+    @pytest.mark.asyncio
+    async def test_success_path(self, adapter, tmp_path):
+        """长图渲染成功 + 上传成功 + 发送成功 -> 返回 True。"""
+        img_path = tmp_path / "md_xxx.png"
+        img_path.write_bytes(b"fake-png")
+
+        # mock renderer.render_markdown 返回路径
+        adapter._renderer = MagicMock()
+        adapter._renderer.render_markdown = AsyncMock(return_value=str(img_path))
+
+        ok = await adapter._send_full_text_as_image("| A | B |\n|---|---|\n| 1 | 2 |", "user_1")
+
+        assert ok is True
+        adapter._renderer.render_markdown.assert_awaited_once()
+        adapter.api_client.upload_media.assert_awaited_once()
+        args, kwargs = adapter.api_client.upload_media.call_args
+        assert kwargs.get("media_type") == "image" or args[1] == "image"
+        adapter.api_client.send_msg.assert_awaited_once()
+        _, kwargs = adapter.api_client.send_msg.call_args
+        assert kwargs.get("msgtype") == "image"
+        assert kwargs.get("content") == {"media_id": "MEDIA_FAKE"}
+
+    @pytest.mark.asyncio
+    async def test_render_returns_none(self, adapter):
+        """renderer.render_markdown 返回 None -> 返回 False。"""
+        adapter._renderer = MagicMock()
+        adapter._renderer.render_markdown = AsyncMock(return_value=None)
+
+        ok = await adapter._send_full_text_as_image("| A | B |\n|---|---|\n| 1 | 2 |", "user_1")
+
+        assert ok is False
+        adapter.api_client.upload_media.assert_not_awaited()
+        adapter.api_client.send_msg.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_upload_no_media_id(self, adapter, tmp_path):
+        """upload_media 未返回 media_id -> 返回 False。"""
+        img_path = tmp_path / "md_xxx.png"
+        img_path.write_bytes(b"fake-png")
+
+        adapter._renderer = MagicMock()
+        adapter._renderer.render_markdown = AsyncMock(return_value=str(img_path))
+        adapter.api_client.upload_media = AsyncMock(return_value={"errcode": 0, "errmsg": "no media"})
+
+        ok = await adapter._send_full_text_as_image("| A | B |\n|---|---|\n| 1 | 2 |", "user_1")
+
+        assert ok is False
+        adapter.api_client.send_msg.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_msg_failure(self, adapter, tmp_path):
+        """send_msg 返回非 0 errcode -> 返回 False。"""
+        img_path = tmp_path / "md_xxx.png"
+        img_path.write_bytes(b"fake-png")
+
+        adapter._renderer = MagicMock()
+        adapter._renderer.render_markdown = AsyncMock(return_value=str(img_path))
+        adapter.api_client.send_msg = AsyncMock(return_value={"errcode": 40001, "errmsg": "invalid"})
+
+        ok = await adapter._send_full_text_as_image("| A | B |\n|---|---|\n| 1 | 2 |", "user_1")
+
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_false(self, adapter):
+        """render_markdown 抛异常 -> 捕获并返回 False。"""
+        adapter._renderer = MagicMock()
+        adapter._renderer.render_markdown = AsyncMock(side_effect=RuntimeError("boom"))
+
+        ok = await adapter._send_full_text_as_image("| A | B |\n|---|---|\n| 1 | 2 |", "user_1")
+
+        assert ok is False

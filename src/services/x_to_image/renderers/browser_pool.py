@@ -7,10 +7,16 @@ Playwright 异步单例浏览器池。
 
 关键约束：headless 硬编码为 True（内容均为本系统自生成，无反爬/登录需求），
 绝不作为参数暴露给外部。
+
+提供两种使用方式：
+- ``shoot(html, width, out_dir)``：高级接口，set_content + 全页截图一步完成
+- ``acquire_page(width)``：低级 async context manager，返回 Page 供调用方做
+  元素级截图、query_selector 等自定义操作（在 lock 保护下）
 """
 import asyncio
 import uuid
-from typing import Optional
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional
 from pathlib import Path
 
 from loguru import logger
@@ -92,6 +98,30 @@ class BrowserPool:
             await self._page.screenshot(path=str(path), full_page=True, type="png")
             logger.info(f"BrowserPool 已生成全页截图: {path}")
             return str(path)
+
+    @asynccontextmanager
+    async def acquire_page(self, width: int = 800) -> AsyncIterator[object]:
+        """获取浏览器页面上下文（async context manager）。
+
+        在 lock 保护下确保浏览器就绪并设置视窗宽度，yield 出 Page 对象供调用方
+        做 set_content / query_selector / 元素级截图等自定义操作。
+
+        适用场景：需要元素级截图（如只截 table 元素）、多步页面交互等
+        ``shoot()`` 无法覆盖的场景。
+
+        Args:
+            width: 视窗宽度（px），默认 800
+
+        Yields:
+            Playwright Page 对象
+
+        Raises:
+            异常向上抛出（如 Playwright 未安装、页面操作失败）。
+        """
+        async with self._lock:
+            await self._ensure_browser()
+            await self._page.set_viewport_size({"width": width, "height": 800})
+            yield self._page
 
     async def _cleanup_browser(self):
         """清理浏览器资源（内部使用，不改变 _available 缓存）。"""

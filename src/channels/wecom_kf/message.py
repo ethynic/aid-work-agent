@@ -151,6 +151,42 @@ def markdown_to_plain_text(md: str) -> str:
 _TABLE_SEPARATOR_RE = re.compile(r'^[\|\s\-:—–―]+$')
 
 
+# Markdown 图片引用正则
+# 1. file_id: scheme - 内部图片资产引用
+_FILE_ID_IMAGE_RE = re.compile(r'!\[[^\]]*\]\(file_id:[a-z0-9_]+\)')
+# 2. 远程 URL - http/https 图片
+_REMOTE_URL_IMAGE_RE = re.compile(r'!\[[^\]]*\]\(https?://[^\s)]+\)')
+
+
+def contains_table_or_image(md: str) -> bool:
+    """检测 markdown 文本是否包含 md 表格 或 图片引用。
+
+    用于 wecom_kf 渠道决定是否将整段 md 渲染为长图一次性发送：
+    - md 表格：以 | 开头且非分隔行的行
+    - 图片：![alt](file_id:xxx) 或 ![alt](http(s)://...)
+
+    Args:
+        md: 原始 markdown 文本
+
+    Returns:
+        True 如果包含表格或图片，False 否则
+    """
+    if not md:
+        return False
+
+    # 1. 检测图片引用（file_id: scheme 或 远程 URL）
+    if _FILE_ID_IMAGE_RE.search(md) or _REMOTE_URL_IMAGE_RE.search(md):
+        return True
+
+    # 2. 检测 md 表格：任一行以 | 开头且不是分隔行
+    for line in md.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('|') and not _TABLE_SEPARATOR_RE.match(stripped):
+            return True
+
+    return False
+
+
 @dataclass
 class ContentBlock:
     """Markdown 内容分段块"""

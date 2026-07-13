@@ -24,6 +24,7 @@ from src.channels.wecom.message_builder import WeComMessageBuilder
 from src.channels.wecom_kf.api_client import WeComKfApiClient
 from src.channels.wecom_kf.cursor import CursorManager
 from src.channels.wecom_kf.message import (
+    contains_table_or_image,
     markdown_to_plain_text,
     parse_kf_message,
     segment_markdown,
@@ -207,10 +208,13 @@ class WeComKfAdapter(ChannelAdapter):
         """
         发送统一响应消息。
 
-        流程：markdown → 分段 → 逐块选择最优方式发送
-          - text 块 → 增强纯文本 → 拆分 → text 消息
-          - table 块 → 渲染图片 → 上传 → image 消息（降级为纯文本）
-          - link 块 → link 消息（降级为纯文本 URL）
+        流程：markdown -> 优先整段长图 -> 逐块选择最优方式发送
+          - 若 text 含 md 表格 或 图片引用：整段 md 渲染为单张长图，以 image 消息发送
+            （规避 wecom_kf 单次咨询 5 次回复限制；失败降级为分段逻辑）
+          - 否则：segment_markdown 分段
+            - text 块 -> 增强纯文本 -> 拆分 -> text 消息
+            - table 块 -> 渲染图片 -> 上传 -> image 消息（降级为纯文本）
+            - link 块 -> link 消息（降级为纯文本 URL）
         随后逐个发送 downloadable_files 为 link 消息。
         """
         all_success = True
@@ -220,19 +224,16 @@ class WeComKfAdapter(ChannelAdapter):
             # 如果渲染功能关闭，走原有的纯文本全流程
             if not self._render_enabled:
                 all_success = await self._send_as_plain_text(text, message.reply_to)
+            elif contains_table_or_image(text):
+                # 含表格或图片：优先整段渲染为长图，一次性发送
+                sent = await self._send_full_text_as_image(text, message.reply_to)
+                if not sent:
+                    # 长图渲染/发送失败，降级走分段逻辑
+                    all_success = await self._send_segmented(text, message.reply_to)
+                else:
+                    all_success = True
             else:
-                blocks = segment_markdown(text)
-                for block in blocks:
-                    if block.type == "text":
-                        success = await self._send_text_block(block.content, message.reply_to)
-                    elif block.type == "table":
-                        success = await self._send_table_as_image(block.content, message.reply_to)
-                    elif block.type == "link":
-                        success = await self._send_link_message(block, message.reply_to)
-                    else:
-                        success = True
-                    if not success:
-                        all_success = False
+                all_success = await self._send_segmented(text, message.reply_to)
 
         # 发送可下载文件链接
         thumb_media_id = ""
@@ -273,6 +274,71 @@ class WeComKfAdapter(ChannelAdapter):
                 all_success = False
 
         return all_success
+
+    async def _send_segmented(self, text: str, user_id: str) -> bool:
+        """按 segment_markdown 分段逐块发送（text/table/link 三种块类型）。"""
+        all_success = True
+        blocks = segment_markdown(text)
+        for block in blocks:
+            if block.type == "text":
+                success = await self._send_text_block(block.content, user_id)
+            elif block.type == "table":
+                success = await self._send_table_as_image(block.content, user_id)
+            elif block.type == "link":
+                success = await self._send_link_message(block, user_id)
+            else:
+                success = True
+            if not success:
+                all_success = False
+        return all_success
+
+    async def _send_full_text_as_image(self, markdown_text: str, user_id: str) -> bool:
+        """将整段 markdown 渲染为长图并以单个 image 消息发送。
+
+        用于含表格或图片的回复，规避 wecom_kf 单次咨询 5 次回复限制。
+        任何环节失败返回 False，由调用方降级走分段逻辑。
+
+        Args:
+            markdown_text: 原始 markdown 文本
+            user_id: 接收用户 ID
+
+        Returns:
+            True 如果长图渲染并发送成功，False 否则
+        """
+        try:
+            image_path = await self.renderer.render_markdown(markdown_text)
+            if not image_path or not os.path.exists(image_path):
+                logger.warning("整段 markdown 长图渲染失败，降级走分段逻辑")
+                return False
+
+            upload_result = await self.api_client.upload_media(image_path, "image")
+            media_id = upload_result.get("media_id")
+            if not media_id:
+                logger.warning(
+                    f"长图上传素材未返回 media_id，降级走分段逻辑: {upload_result.get('errmsg')}"
+                )
+                return False
+
+            send_result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="image",
+                content={"media_id": media_id},
+            )
+            if send_result.get("errcode", 0) == 0:
+                logger.info("整段 markdown 长图已发送")
+                return True
+            logger.warning(
+                f"长图 image 消息发送失败 errcode={send_result.get('errcode')} "
+                f"errmsg={send_result.get('errmsg')}，降级走分段逻辑"
+            )
+            return False
+        except Exception as e:
+            logger.warning(
+                f"整段 markdown 长图渲染/发送异常，降级走分段逻辑: {e}",
+                exc_info=True,
+            )
+            return False
 
     async def _send_as_plain_text(self, text: str, user_id: str) -> bool:
         """纯文本全流程（禁用渲染时的降级路径）。"""
