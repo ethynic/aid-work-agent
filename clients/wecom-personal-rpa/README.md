@@ -32,8 +32,8 @@ clients/wecom-personal-rpa/
 │   └── templates/                      # OpenCvSharp 模板图片（准入验证截取）
 ├── configs/
 │   └── client.example.yaml             # 客户端运行配置示例
-└── installer/
-    └── wix/                            # WiX 打包/签名（第5节，本会话 OUT）
+└── scripts/
+    └── publish.ps1                     # 生成可直接运行/复制部署的 EXE 发布目录
 ```
 
 ## 解决方案工程
@@ -59,7 +59,14 @@ dotnet build clients/wecom-personal-rpa/src/Client.Tests/Client.Tests.csproj
 
 # 运行测试（Core/Tests 不依赖 Windows 桌面特性，可在 CI 无 Windows 环境跑单测）
 dotnet test clients/wecom-personal-rpa/src/Client.Tests/Client.Tests.csproj
+
+# 生成自包含 EXE 发布目录（唯一交付方式）
+powershell clients/wecom-personal-rpa/scripts/publish.ps1 -Configuration Release -Runtime win-x64
 ```
+
+构建后的调试 EXE 位于 `src/Client.App/bin/Release/.../Client.App.exe`；正式部署使用
+`publish/app/Client.App.exe` 及同目录配置、资产和脚本。客户端不再提供安装包，禁止恢复或使用
+旧的安装包构建、安装流程。
 
 > `Client.Automation` / `Client.App` / `Client.Supervisor` 目标 `net8.0-windows`，
 > 需在 Windows 上构建；`Client.Tests` 引用 `Client.Automation` 时启用了 `EnableWindowsTargeting`。

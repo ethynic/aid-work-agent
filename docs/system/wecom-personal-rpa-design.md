@@ -186,7 +186,7 @@ clients/
 | 本地存储 | SQLite + EF Core / Dapper | 入站事件、出站 actions、绑定缓存、审计缓存 |
 | 通信 | `HttpClientFactory` + Polly + WebSocket/SignalR 客户端 | 发起渠道 callback、接收服务端下发 actions |
 | 可观测性 | Serilog + Windows Event Log + OpenTelemetry exporter | 本地日志、服务端指标、链路追踪 |
-| 安装部署 | MSIX / WiX Toolset + 代码签名 | 可重复安装、升级、回滚 |
+| 构建部署 | .NET 8 Release build / 自包含 EXE publish | 本机直接运行 EXE；正式部署复制完整 publish 目录 |
 | 进程托管 | 交互式 RPA App + Windows Supervisor Service + 计划任务 | 避免 Session 0 问题，同时支持监督和重启 |
 
 **Session 0 约束**：RPA 自动化不能放在纯 Windows Service 中执行。Windows Service 运行在 Session 0，不能可靠操作用户桌面。生产设计采用双进程：

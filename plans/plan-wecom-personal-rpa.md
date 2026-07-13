@@ -5,7 +5,7 @@
 > 登记：[docs/ideas.md](../docs/ideas.md) 渠道集成分区
 > 创建日期：2026-06-16
 > 更新日期：2026-06-23
-> 状态：🔧 部分完成（服务端渠道完整、83 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册+9 个 PowerShell 脚本、准入验证探测工具、WiX v5 MSI 骨架已交付；P1.1 管理前端已交付——`WecomPersonalRpaManager.vue` 三 Tab 接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调；P1.4 指标+告警已交付——`GET /metrics` + `GET /alerts` + 纯逻辑 `observability.py`（9 单测）+ 前端「监控」Tab，未真实联调。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、WiX 实编译+签名、14 天验收）
+> 状态：🔧 部分完成（服务端渠道完整、83 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册、PowerShell 脚本及准入验证探测工具已交付；P1.1 管理前端已交付——`WecomPersonalRpaManager.vue` 三 Tab 接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调；P1.4 指标+告警已交付——`GET /metrics` + `GET /alerts` + 纯逻辑 `observability.py`（9 单测）+ 前端「监控」Tab，未真实联调。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、14 天验收。2026-07-13 起安装包方案永久废弃，客户端仅使用 Release build 或 `scripts/publish.ps1` 生成 EXE 目录）
 
 ---
 
@@ -114,14 +114,14 @@
 
 | # | 任务 | 状态 | 产出 |
 |---|------|------|------|
-| 42 | WiX/MSIX 安装包和代码签名 | 🔧 | installer/wix/WeComRpa.wxs + .wixproj（WiX v5，ServiceInstall/ServiceControl + MajorUpgrade）+ scripts/build-msi.ps1 已落；实编译需装 WiX v5 + 签名证书 |
+| 42 | EXE 单一交付 | ✅ | 安装包方案已永久废弃并删除；本机使用 Release build，正式部署使用 `scripts/publish.ps1` 生成自包含 EXE 目录 |
 | 43 | 标准 Windows 镜像：企微版本、DPI、分辨率、窗口基线、远控方式 | ⬜ | 镜像文档 |
 | 44 | 开机自启：计划任务拉起交互式 App，Supervisor 监督 | 🔧 | AutostartRegistrar（注册表 Run）+ ScheduledTaskHelper（schtasks 占位）+ install-service.ps1（Supervisor 服务自启）已落，真机验证待 |
 | 45 | 灰度升级：版本检查、下载、安装、回滚 | ⬜ | 升级器 |
 | 46 | 远程诊断包：日志、健康事件、模板版本、配置摘要脱敏导出 | ✅ | scripts/diagnostics.ps1 导出脱敏诊断包（日志+配置摘要剔除 secret/路径+服务/进程状态） |
 | 47 | 模板和节点配置版本绑定：企微版本 → `wecom_nodes.yaml` | ⬜ | 配置管理 |
 
-> **§5 状态说明**：工程化交付已大幅推进——WiX v5 MSI 骨架（#42 🔧）、开机自启三套骨架（#44 🔧）、远程诊断包 `diagnostics.ps1`（#46 ✅）、操作手册 `docs/操作手册.md` + 9 个 PowerShell 脚本（编译/测试/发布/装服务/诊断/服务端冒烟/准入探测/打 MSI）。剩余 ⬜（#43 标准镜像、#45 灰度升级、#47 节点版本绑定）依赖真实部署/灰度/签名环境。
+> **§5 状态说明**：工程化交付已大幅推进——EXE 单一交付（#42 ✅）、开机自启三套骨架（#44 🔧）、远程诊断包 `diagnostics.ps1`（#46 ✅）、操作手册与 PowerShell 编译/测试/发布/服务管理/诊断/服务端冒烟/准入探测脚本。剩余 ⬜（#43 标准镜像、#45 灰度升级、#47 节点版本绑定）依赖真实部署/灰度环境。
 
 ---
 

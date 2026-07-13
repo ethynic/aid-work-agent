@@ -1,5 +1,7 @@
 # 企业微信个人账号 RPA 独立客户端生产级技术方案调研
 
+> **历史调研（交付结论已废弃）**：其中 WiX/MSIX 安装包建议已于 2026-07-13 废弃。当前唯一交付方式为 Release build 或 `clients/wecom-personal-rpa/scripts/publish.ps1` 生成 EXE 目录；不得按本文恢复安装包流程。
+
 > 关联设计：[wecom-personal-rpa-design.md](../system/wecom-personal-rpa-design.md)
 > 关联计划：[plan-wecom-personal-rpa.md](../../plans/plan-wecom-personal-rpa.md)
 > 调研日期：2026-06-22
@@ -22,7 +24,7 @@
 | 本地可靠队列 | SQLite + Dapper/EF Core | 单账号本地持久化、断网恢复、幂等去重 |
 | 通信 | HttpClientFactory + Polly + WebSocket/SignalR | 异步 actions、重试、熔断、心跳 |
 | 日志与指标 | Serilog + Windows Event Log + OpenTelemetry | 本地诊断和服务端统一观测 |
-| 安装升级 | WiX/MSIX + 代码签名 | 可控安装、升级、回滚、企业分发 |
+| 构建部署 | .NET 8 Release build / 自包含 EXE publish | 当前实施结论；复制完整发布目录部署 |
 
 生产 RPA 的难点不只是“能点击”，还包括 Windows 会话、升级回滚、崩溃恢复、事件日志、安装包、长期守护、强约束状态机和可观测性，这些是 .NET Windows 客户端的优势区。
 

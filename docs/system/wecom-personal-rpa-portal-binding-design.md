@@ -59,7 +59,7 @@
 - 视觉定位设计：[wecom-personal-rpa-vision-design.md](wecom-personal-rpa-vision-design.md)
 - 视觉定位突破总结：[wecom-personal-rpa-vision-breakthrough.md](wecom-personal-rpa-vision-breakthrough.md)
 - 客户端操作手册：[clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md)
-- 客户端构建安装指南：[clients/wecom-personal-rpa/docs/build-install-guide.md](../../clients/wecom-personal-rpa/docs/build-install-guide.md)
+- 客户端 EXE 构建与部署：[clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md)
 
 ---
 
@@ -241,7 +241,7 @@ POST /api/saas/wecom-personal-rpa/resume
 | 视觉定位 | [wecom-personal-rpa-vision-design.md](wecom-personal-rpa-vision-design.md) |
 | 视觉突破总结 | [wecom-personal-rpa-vision-breakthrough.md](wecom-personal-rpa-vision-breakthrough.md) |
 | 客户端操作手册 | [clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md) |
-| 客户端构建指南 | [clients/wecom-personal-rpa/docs/build-install-guide.md](../../clients/wecom-personal-rpa/docs/build-install-guide.md) |
+| 客户端 EXE 构建与部署 | [clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md) |
 | 开发计划 | [plans/plan-wecom-personal-rpa-portal-binding.md](../../plans/plan-wecom-personal-rpa-portal-binding.md) |
 
 ### 7.1 与服务端拉取会话存档模式的关系（2026-07-03）

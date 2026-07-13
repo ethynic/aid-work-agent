@@ -8,11 +8,11 @@ namespace WeCom.PersonalRpa.Supervisor;
 /// 在用户登录后自动拉起 Supervisor（或 Client.App）。
 /// </summary>
 /// <remarks>
-/// <b>状态：占位实现 + TODO</b>。本版仅封装 schtasks 调用骨架，真实安装器（WiX/MSIX）未就绪前
-/// 不在生产路径调用。调用方需具备 Administrator 权限。
+/// <b>状态：占位实现 + TODO</b>。本版仅封装 schtasks 调用骨架，不在生产路径调用。
+/// 调用方需具备 Administrator 权限。
 ///
 /// 不使用 Windows Task Scheduler COM API（Microsoft.Win32.TaskScheduler 包）以避免引入额外依赖；
-/// 待 installer 阶段评估是否切换到 COM API 以支持触发器/条件等高级语义。
+/// 后续可评估是否切换到 COM API 以支持触发器/条件等高级语义。
 /// </remarks>
 internal static class ScheduledTaskHelper
 {
@@ -29,7 +29,7 @@ internal static class ScheduledTaskHelper
     /// <returns>schtasks 退出是否为 0。</returns>
     public static bool RegisterLogonTask(string exePath, string? workingDirectory = null, string? arguments = null)
     {
-        // TODO(installer)：切换到 WiX/MSIX 集成的 Task Scheduler 注册，避免裸 schtasks 字符串拼接的转义陷阱。
+        // TODO：评估切换到 Task Scheduler COM API，避免裸 schtasks 字符串拼接的转义陷阱。
         // TODO：当前触发器固定为 ONLOGON；未来需支持 ONSTART（机器启动）和延迟启动，需补充参数。
         if (string.IsNullOrWhiteSpace(exePath))
         {

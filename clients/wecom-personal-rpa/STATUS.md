@@ -90,7 +90,7 @@ Windows.Media.Ocr 中文识别率 < 10%。
 | **Windows.Graphics.Capture 离屏渲染** | spike 已验证 API 可用（Win11 Build 26200），但 COM 互操作代码量 ~500 行未完成 | 当前用 PowerShell + CopyFromScreen 方案；生产环境（专机专用 GUI 进程）够用；下个迭代作为「窗口被遮挡时的鲁棒性增强」 |
 | **ConversationNavigator 真正的多候选检测** | 模型当前只返回单 bbox，Ambiguous 分支退化 | 等 Qwen3-VL 升级支持 multiple bbox 返回后改一行即可 |
 | **MessageWatcher conversationId** | 首版以"截图尺寸指纹"作临时 ID | 真实生产需要 ConversationNavigator 把当前会话信息回填 |
-| **`installer/wix/`** | 仅占位 README | WiX/MSIX 实际打包与代码签名未实现（属原计划 §5，独立任务） |
+| **客户端交付** | 仅保留 EXE build/publish | `dotnet build -c Release` 用于本机编译运行，`scripts/publish.ps1` 生成可复制部署的自包含 EXE 目录；安装包方案已永久废弃并删除 |
 | **`assets/wecom_nodes.yaml`** | 设计文档完整模式（运行期不直接加载，仅参考） | FlaUI 路线已被视觉定位替代，节点常量不再需要 |
 
 ---
