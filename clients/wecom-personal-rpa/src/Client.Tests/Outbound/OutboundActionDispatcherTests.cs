@@ -180,11 +180,22 @@ public sealed class OutboundActionDispatcherTests : IDisposable
     private sealed class StubApi : IAgentApiClient
     {
         public List<(string Id, bool Success, string? Code, string? Msg)> Reports { get; } = new();
+        public List<DateTimeOffset?> StartedTimes { get; } = new();
+        public List<StatusPayload> StatusReports { get; } = new();
         public Task<bool> ReportActionResultAsync(string requestId, bool success,
             string? errorCode = null, string? errorMessage = null, CancellationToken cancellationToken = default)
         {
             Reports.Add((requestId, success, errorCode, errorMessage));
             return Task.FromResult(true);
+        }
+        public Task<bool> ReportActionResultWithTimingAsync(
+            string requestId, bool success, string? errorCode = null,
+            string? errorMessage = null, DateTimeOffset? startedAt = null,
+            CancellationToken cancellationToken = default)
+        {
+            StartedTimes.Add(startedAt);
+            return ReportActionResultAsync(
+                requestId, success, errorCode, errorMessage, cancellationToken);
         }
         // 以下方法本测试不关心，留 NotUsed 抛异常确保不被调用
         public Task<bool> PostCallbackAsync(InboundEvent env, CancellationToken cancellationToken = default)
@@ -198,7 +209,10 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         public Task<ClientWebSocket> ConnectWebSocketAsync(CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
         public Task<bool> ReportStatusAsync(StatusPayload payload, CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
+        {
+            StatusReports.Add(payload);
+            return Task.FromResult(true);
+        }
         public Task<string> UploadMediaAsync(string localPath, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
         public void Dispose() { }
@@ -209,7 +223,8 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         AttachmentDownloader downloader,
         Func<string, object?, CancellationToken, Task<PowershellResult>> psHook,
         WeCom.PersonalRpa.Core.StateMachine.PauseState? pauseState = null,
-        OutboundQueue? queueOverride = null)
+        OutboundQueue? queueOverride = null,
+        DesktopAutomationMutex? desktopMutex = null)
     {
         // PowershellOpsInvoker sealed 类无法 mock，构造一个真实实例用于编译时占位（dispatcher 测试用 hook 覆盖）。
         var psOptions = new PowershellOptions
@@ -227,7 +242,8 @@ public sealed class OutboundActionDispatcherTests : IDisposable
             _options,
             new ChannelActionSource(),
             logger: null,
-            pauseState: pauseState)
+            pauseState: pauseState,
+            desktopMutex: desktopMutex)
         {
             PsInvokerHook = psHook,
         };
@@ -327,6 +343,7 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         Assert.Equal("req_t", report.Id);
         Assert.True(report.Success);
         Assert.Null(report.Code);
+        Assert.NotNull(Assert.Single(api.StartedTimes));
     }
 
     [Fact]
@@ -708,6 +725,10 @@ public sealed class OutboundActionDispatcherTests : IDisposable
                         retry_count INTEGER NOT NULL DEFAULT 0, error_code TEXT, error_message TEXT,
                         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                     );
+                    INSERT INTO outbox_local(action_id,action_type,conversation_key,status,retry_count,created_at,updated_at)
+                    VALUES
+                      ('legacy_req#0','send_text','A','pending',0,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z'),
+                      ('legacy_req#1','send_text','A','pending',0,'2026-01-01T00:00:00.001Z','2026-01-01T00:00:00.001Z');
                     """;
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -732,6 +753,11 @@ public sealed class OutboundActionDispatcherTests : IDisposable
                 while (await reader.ReadAsync()) names.Add(reader.GetString(1));
                 Assert.Contains("completed_at", names);
             }
+            var migrated = new OutboundQueue(opts, logger: null);
+            var legacy = await migrated.ClaimNextEnvelopeAsync();
+            Assert.Equal(2, legacy.Count);
+            Assert.All(legacy, item => Assert.Equal("legacy_req", item.RequestId));
+            Assert.Equal(new[] { 0, 1 }, legacy.Select(item => item.ActionIndex));
         }
         finally
         {
@@ -832,5 +858,277 @@ public sealed class OutboundActionDispatcherTests : IDisposable
 
         await dispatcher.EnvelopeEnqueueAsync(env); // 重复 running → 跳过
         Assert.Empty(api.Reports);
+    }
+
+    [Fact]
+    public async Task EnvelopeEnqueue_IsAtomic_AndClaimPreservesActionOrder()
+    {
+        var queue = new OutboundQueue(_options, logger: null);
+        var items = new[]
+        {
+            new OutboxItem { ActionId = "req_atomic#0", RequestId = "req_atomic", ActionIndex = 0, ActionType = ActionTypeNames.SendText, ConversationKey = "A" },
+            new OutboxItem { ActionId = "req_atomic#1", RequestId = "req_atomic", ActionIndex = 1, ActionType = ActionTypeNames.SendText, ConversationKey = "A" },
+        };
+
+        Assert.True(await queue.EnqueueEnvelopeAsync("req_atomic", items));
+        Assert.False(await queue.EnqueueEnvelopeAsync("req_atomic", items));
+        var claimed = await queue.ClaimNextEnvelopeAsync();
+
+        Assert.Equal(new[] { 0, 1 }, claimed.Select(x => x.ActionIndex));
+        Assert.All(claimed, x => Assert.Equal("req_atomic", x.RequestId));
+    }
+
+    [Fact]
+    public async Task EnqueueEnvelope_ConcurrentCallsRemainWhole()
+    {
+        var queue = new OutboundQueue(_options, logger: null);
+        static OutboxItem[] Items(string requestId) =>
+        [
+            new() { ActionId = $"{requestId}#0", ActionIndex = 0, ActionType = ActionTypeNames.SendText, ConversationKey = requestId },
+            new() { ActionId = $"{requestId}#1", ActionIndex = 1, ActionType = ActionTypeNames.SendText, ConversationKey = requestId },
+        ];
+
+        var results = await Task.WhenAll(
+            queue.EnqueueEnvelopeAsync("req_concurrent_a", Items("req_concurrent_a")),
+            queue.EnqueueEnvelopeAsync("req_concurrent_b", Items("req_concurrent_b")));
+
+        Assert.All(results, Assert.True);
+        var first = await queue.ClaimNextEnvelopeAsync();
+        foreach (var item in first) await queue.MarkDoneAsync(item.ActionId);
+        await queue.CompleteEnvelopeAsync(first[0].RequestId, success: true);
+        var second = await queue.ClaimNextEnvelopeAsync();
+        Assert.Equal(2, first.Count);
+        Assert.Equal(2, second.Count);
+        Assert.Single(first.Select(x => x.RequestId).Distinct());
+        Assert.Single(second.Select(x => x.RequestId).Distinct());
+        Assert.NotEqual(first[0].RequestId, second[0].RequestId);
+        Assert.Equal(new[] { 0, 1 }, first.Select(x => x.ActionIndex));
+        Assert.Equal(new[] { 0, 1 }, second.Select(x => x.ActionIndex));
+    }
+
+    [Fact]
+    public async Task RecoverRunningEnvelopes_RestoresOldestEnvelopeFirst()
+    {
+        var queue = new OutboundQueue(_options, logger: null);
+        static OutboxItem Item(string requestId) => new()
+        {
+            ActionId = requestId,
+            ActionIndex = 0,
+            ActionType = ActionTypeNames.SendText,
+            ConversationKey = requestId,
+        };
+        await queue.EnqueueEnvelopeAsync("req_recover_a", [Item("req_recover_a")]);
+        await Task.Delay(5);
+        await queue.EnqueueEnvelopeAsync("req_recover_b", [Item("req_recover_b")]);
+        var running = await queue.ClaimNextEnvelopeAsync();
+        Assert.Equal("req_recover_a", Assert.Single(running).RequestId);
+
+        var recovered = await queue.RecoverRunningEnvelopesAsync();
+        Assert.Equal(new[] { "req_recover_a", "req_recover_b" }, recovered);
+        var claimedAgain = await queue.ClaimNextEnvelopeAsync();
+        Assert.Equal("req_recover_a", Assert.Single(claimedAgain).RequestId);
+    }
+
+    [Fact]
+    public async Task RecoverRunningEnvelopes_DifferentSessionCannotStealLiveLease()
+    {
+        var ownerA = new OutboundQueue(
+            _options, logger: null, "windows-session:A", TimeSpan.FromMinutes(5));
+        var ownerB = new OutboundQueue(
+            _options, logger: null, "windows-session:B", TimeSpan.FromMinutes(5));
+        var item = new OutboxItem
+        {
+            ActionId = "req_owned", ActionIndex = 0,
+            ActionType = ActionTypeNames.SendText, ConversationKey = "A",
+        };
+        Assert.True(await ownerA.EnqueueEnvelopeAsync("req_owned", [item]));
+        Assert.Single(await ownerA.ClaimNextEnvelopeAsync());
+
+        Assert.Empty(await ownerB.RecoverRunningEnvelopesAsync());
+        Assert.Empty(await ownerB.ClaimNextEnvelopeAsync());
+        Assert.True(await ownerA.RenewEnvelopeLeaseAsync("req_owned"));
+        Assert.False(await ownerB.RenewEnvelopeLeaseAsync("req_owned"));
+        Assert.True(await ownerA.VerifyActionWriteOwnershipAsync("req_owned"));
+        Assert.False(await ownerB.VerifyActionWriteOwnershipAsync("req_owned"));
+    }
+
+    [Fact]
+    public async Task RecoverRunningEnvelopes_DifferentSessionCanRecoverExpiredLease()
+    {
+        var ownerA = new OutboundQueue(
+            _options, logger: null, "windows-session:A", TimeSpan.FromMilliseconds(20));
+        var ownerB = new OutboundQueue(
+            _options, logger: null, "windows-session:B", TimeSpan.FromMinutes(5));
+        var item = new OutboxItem
+        {
+            ActionId = "req_expired", ActionIndex = 0,
+            ActionType = ActionTypeNames.SendText, ConversationKey = "A",
+        };
+        Assert.True(await ownerA.EnqueueEnvelopeAsync("req_expired", [item]));
+        Assert.Single(await ownerA.ClaimNextEnvelopeAsync());
+        await Task.Delay(40);
+
+        Assert.Contains("req_expired", await ownerB.RecoverRunningEnvelopesAsync());
+        Assert.Single(await ownerB.ClaimNextEnvelopeAsync());
+        Assert.False(await ownerA.VerifyActionWriteOwnershipAsync("req_expired"));
+        Assert.True(await ownerB.VerifyActionWriteOwnershipAsync("req_expired"));
+    }
+
+    [Fact]
+    public async Task MarkExecutionStarted_IsFirstWriteWinsAndPersistsAcrossRecovery()
+    {
+        var queue = new OutboundQueue(_options, logger: null);
+        var item = new OutboxItem
+        {
+            ActionId = "req_started", ActionIndex = 0,
+            ActionType = ActionTypeNames.SendText, ConversationKey = "A",
+        };
+        await queue.EnqueueEnvelopeAsync("req_started", [item]);
+        Assert.Single(await queue.ClaimNextEnvelopeAsync());
+        var first = await queue.MarkExecutionStartedAsync("req_started");
+        await Task.Delay(5);
+        var second = await queue.MarkExecutionStartedAsync("req_started");
+        Assert.Equal(first, second);
+
+        await queue.RecoverRunningEnvelopesAsync();
+        var recovered = Assert.Single(await queue.ClaimNextEnvelopeAsync());
+        Assert.Equal(first, recovered.ExecutionStartedAt);
+    }
+
+    [Fact]
+    public async Task RecoverPartiallyCompletedEnvelope_DoesNotExecuteDoneActionAgain()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, _, _) => throw new InvalidOperationException("已完成动作不应再次执行"),
+            queueOverride: queue);
+        var items = new[]
+        {
+            new OutboxItem { ActionId = "req_partial#0", ActionIndex = 0, ActionType = ActionTypeNames.SendText, ConversationKey = "A" },
+            new OutboxItem { ActionId = "req_partial#1", ActionIndex = 1, ActionType = ActionTypeNames.SendText, ConversationKey = "A" },
+        };
+        await queue.EnqueueEnvelopeAsync("req_partial", items);
+        _ = await queue.ClaimNextEnvelopeAsync();
+        await queue.MarkDoneAsync("req_partial#0");
+        await queue.RecoverRunningEnvelopesAsync();
+
+        var calls = 0;
+        dispatcher.PsInvokerHook = (_, _, _) =>
+        {
+            calls++;
+            return Task.FromResult(new PowershellResult { Success = true });
+        };
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(2, api.Reports.Count);
+    }
+
+    [Fact]
+    public async Task PrunedTerminalEnvelope_CanBeEnqueuedAgainForReceiptRecovery()
+    {
+        var queue = new OutboundQueue(_options, logger: null);
+        var items = new[]
+        {
+            new OutboxItem { ActionId = "req_pruned", ActionIndex = 0, ActionType = ActionTypeNames.SendText, ConversationKey = "A" },
+        };
+        Assert.True(await queue.EnqueueEnvelopeAsync("req_pruned", items));
+        _ = await queue.ClaimNextEnvelopeAsync();
+        await queue.MarkDoneAsync("req_pruned");
+        await queue.CompleteEnvelopeAsync("req_pruned", success: true);
+        using (var conn = new SqliteConnection($"Data Source={_dbPath}"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE outbox_local SET completed_at='2000-01-01T00:00:00.000Z';
+                UPDATE outbox_envelopes SET completed_at='2000-01-01T00:00:00.000Z';
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        Assert.Equal(1, await queue.PruneTerminalAsync(TimeSpan.FromDays(7)));
+        Assert.True(await queue.EnqueueEnvelopeAsync("req_pruned", items));
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_FailureAbortsRemainingActions()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var calls = 0;
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(new PowershellResult
+                {
+                    Success = false, ErrorCode = "wecom_navigation_failed", ErrorMessage = "失败",
+                });
+            }, queueOverride: queue);
+        var env = new ActionEnvelope
+        {
+            RequestId = "req_abort",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions = new List<RpaAction>
+            {
+                new SendTextAction { Text = "first" },
+                new SendTextAction { Text = "second" },
+            },
+        };
+        await dispatcher.EnvelopeEnqueueAsync(env);
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(2, api.Reports.Count);
+        Assert.Equal("aborted_by_previous_action", api.Reports[1].Code);
+    }
+
+    [Fact]
+    public void DesktopAutomationMutex_AllowsOnlyOneOwner_AndCanBeReacquiredAfterDispose()
+    {
+        var name = $@"Local\AidWeComPersonalRpaDesktopAutomation_Test_{Guid.NewGuid():N}";
+        using (var first = new DesktopAutomationMutex(name))
+        using (var second = new DesktopAutomationMutex(name))
+        {
+            Assert.True(first.TryAcquire());
+            Assert.False(second.TryAcquire());
+        }
+
+        using var replacement = new DesktopAutomationMutex(name);
+        Assert.True(replacement.TryAcquire());
+        replacement.Dispose();
+        replacement.Dispose();
+    }
+
+    [Fact]
+    public async Task DispatcherWithoutDesktopMutexOwnership_RemainsNonExecuting()
+    {
+        var name = $@"Local\AidWeComPersonalRpaDesktopAutomation_Test_{Guid.NewGuid():N}";
+        using var owner = new DesktopAutomationMutex(name);
+        Assert.True(owner.TryAcquire());
+        var contender = new DesktopAutomationMutex(name);
+        var api = new StubApi();
+        var calls = 0;
+        using var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, desktopMutex: contender);
+
+        await dispatcher.StartAsync(CancellationToken.None);
+        await dispatcher.EnvelopeEnqueueAsync(MakeEnv("req_no_mutex"));
+        await Task.Delay(100);
+
+        Assert.Equal(0, calls);
+        var status = Assert.Single(api.StatusReports);
+        Assert.Equal(AccountStatus.Paused, status.Status);
+        Assert.Equal("desktop_automation_already_running", status.Detail);
     }
 }

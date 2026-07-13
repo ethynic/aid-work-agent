@@ -197,6 +197,98 @@ def _admin_request_headers() -> dict:
     }
 
 
+class TestAccountIdentityAdmin:
+    def test_short_userid_is_fully_masked(self):
+        from src.saas.api.wecom_personal_rpa_admin import _account_public
+
+        public = _account_public({"wecom_user_id": "abc", "status": "offline"})
+        assert public["wecom_user_id_masked"] == "***"
+        assert "abc" not in str(public)
+
+    def test_update_identity_is_tenant_scoped_and_masked(self, admin_client):
+        from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+        fake_db = MagicMock()
+        fake_db.get_account_for_tenant.side_effect = [
+            {"id": "acc1", "tenant_id": _TENANT_ID, "client_id": "client1"},
+            {
+                "id": "acc1", "tenant_id": _TENANT_ID, "client_id": "client1",
+                "wecom_user_id": "zhangsan001", "identity_verified_at": "2026-07-13",
+                "status": "offline",
+            },
+        ]
+        fake_db.update_account_identity.return_value = True
+        fake_db.write_audit.return_value = "audit_1"
+        admin_payload = {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"}
+        with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
+            admin_mod, "require_admin", lambda req: admin_payload
+        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+            resp = admin_client.patch(
+                "/api/saas/wecom-personal-rpa/accounts/acc1/identity",
+                headers=_admin_request_headers(),
+                json={"wecom_user_id": "zhangsan001", "wecom_user_aliases": [" alias1 "]},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["wecom_user_id_configured"] is True
+        assert data["wecom_user_id_masked"] == "***001"
+        assert "wecom_user_id" not in data
+        fake_db.update_account_identity.assert_called_once_with(
+            _TENANT_ID, "acc1", "zhangsan001", ["alias1"], "u1"
+        )
+
+    def test_update_identity_conflict_does_not_leak_userid(self, admin_client):
+        from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+        fake_db = MagicMock()
+        fake_db.get_account_for_tenant.return_value = {
+            "id": "acc1", "tenant_id": _TENANT_ID, "client_id": "client1"
+        }
+        fake_db.update_account_identity.side_effect = ValueError("account_identity_conflict")
+        with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
+            admin_mod, "require_admin",
+            lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
+        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+            resp = admin_client.patch(
+                "/api/saas/wecom-personal-rpa/accounts/acc1/identity",
+                headers=_admin_request_headers(),
+                json={"wecom_user_id": "sensitive_userid", "wecom_user_aliases": ["alias1"]},
+            )
+
+        assert resp.status_code == 409
+        assert "sensitive_userid" not in resp.text
+
+    def test_update_identity_rejects_whitespace_only_userid(self, admin_client):
+        from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+        with patch.object(admin_mod, "require_admin", lambda req: {
+            "tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"
+        }), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+            resp = admin_client.patch(
+                "/api/saas/wecom-personal-rpa/accounts/acc1/identity",
+                headers=_admin_request_headers(),
+                json={"wecom_user_id": "   ", "wecom_user_aliases": []},
+            )
+
+        assert resp.status_code == 422
+
+
+def test_resume_account_keeps_paused_when_echo_window_cannot_be_cleared():
+    from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+    fake_db = MagicMock()
+    fake_db.get_account_status.return_value = "paused"
+    with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
+        admin_mod.redis_client, "is_available", return_value=True
+    ), patch.object(admin_mod.redis_client, "delete", side_effect=RuntimeError("redis down")):
+        with pytest.raises(RuntimeError, match="redis down"):
+            admin_mod._do_resume_account(_TENANT_ID, "acc1")
+
+    fake_db.get_account_status.assert_called_once_with(_TENANT_ID, "acc1")
+    fake_db.set_account_status.assert_not_called()
+
+
 class TestUpdateBindingAdmin:
     """admin PATCH /bindings/{binding_id} 接受 monitor_user_names / monitor_user_ids。"""
 

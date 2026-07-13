@@ -30,6 +30,11 @@ from loguru import logger
 from src.channels.wecom_personal_rpa.archive import callback_crypto, chat_crypto, http_client
 from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk
 from src.channels.wecom_personal_rpa.archive import audit as archive_audit
+from src.channels.wecom_personal_rpa.archive.direction import (
+    DirectionDecision,
+    MessageDirection,
+    classify_archive_message,
+)
 from src.channels.wecom_personal_rpa.archive.credential_codec import (
     FORCED_LISTEN_MODE,
     decrypt_sensitive_fields,
@@ -205,6 +210,12 @@ class ServerArchiveFetcher:
         if not client_id:
             await self._mark_error(tenant_id, config_id, "账号未绑定合法 RPA 客户端")
             return
+        account = rpa_db.get_account_for_tenant(tenant_id, account_id) or {}
+        self_ids = {
+            str(value).strip()
+            for value in [account.get("wecom_user_id"), *(account.get("wecom_user_aliases") or [])]
+            if value and str(value).strip()
+        }
 
         # 逐条解密 + 处理 + 推进 seq
         # 解密路径（企微官方规范）：
@@ -215,6 +226,8 @@ class ServerArchiveFetcher:
         #       不要用 Python 自己 AES 解密（曾经尝试过，遇到 SDK 返回非 4 倍数
         #       长度的密文时无解，SDK 内部对此有容错）
         processed_count = 0
+        self_filtered = 0
+        unknown_filtered = 0
         failed_count = 0
         total_items = len(batch.items)
         logger.info(
@@ -233,7 +246,66 @@ class ServerArchiveFetcher:
                     ),
                     timeout=_SINGLE_ITEM_TIMEOUT_SECONDS,
                 )
-                env, env_raw = self._build_envelope(account_id, client_id, item, plain_json)
+                plain = self._parse_plain(plain_json)
+                from_user = item.from_ or plain.get("from")
+                tolist = item.tolist or plain.get("tolist") or []
+                roomid = item.roomid or plain.get("roomid")
+                decision = classify_archive_message(
+                    self_ids=self_ids, from_user=from_user, tolist=tolist, roomid=roomid
+                )
+                if decision.direction in (
+                    MessageDirection.OUTBOUND_SELF, MessageDirection.DIRECTION_UNKNOWN
+                ):
+                    echo_target = decision.peer_id or decision.conversation_id
+                    if decision.direction == MessageDirection.OUTBOUND_SELF and echo_target:
+                        msg_type = str(item.msg_type or plain.get("msgtype") or "").lower()
+                        section = plain.get(msg_type)
+                        component_type = {
+                            "text": "send_text", "image": "send_image", "file": "send_file"
+                        }.get(msg_type)
+                        component_value = ""
+                        if msg_type == "text":
+                            component_value = (
+                                section.get("content", "") if isinstance(section, dict)
+                                else section if isinstance(section, str) else ""
+                            )
+                        elif msg_type in ("image", "file") and isinstance(section, dict):
+                            # sdkfileid 是存档侧新 ID，无法从发送前 URL 稳定推导；文件名是
+                            # 两端共有且不会额外泄露正文的关联输入，数据库仅保存其 HMAC。
+                            component_value = str(section.get("filename") or "")
+                        if component_type and component_value:
+                            try:
+                                matched = await asyncio.to_thread(
+                                    rpa_db.has_recent_completed_outbox_reply,
+                                    tenant_id, account_id, echo_target,
+                                    archive_audit.digest_reply_component(
+                                        component_type, component_value
+                                    ), 120,
+                                )
+                                if matched:
+                                    archive_audit.log_self_echo_detected(
+                                        tenant_id, config_id, account_id, f"msg_{item.msg_id}"
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    f"[ServerArchiveFetcher] self echo 关联查询降级 account={account_id}: {type(exc).__name__}"
+                                )
+                    archive_audit.log_direction_filtered(
+                        tenant_id, config_id, account_id, decision.direction.value,
+                        decision.reason, from_user if isinstance(from_user, str) else None,
+                        decision.peer_id, f"msg_{item.msg_id}",
+                    )
+                    if decision.direction == MessageDirection.OUTBOUND_SELF:
+                        self_filtered += 1
+                    else:
+                        unknown_filtered += 1
+                    if item.seq > last_seq:
+                        ChannelConfigDB.update_config_field(config_id, "last_seq", item.seq)
+                        last_seq = item.seq
+                    continue
+                env, env_raw = self._build_envelope(
+                    account_id, client_id, item, plain_json, decision=decision
+                )
 
                 # Agent 处理可能耗时数分钟，不能放在存档游标事务内。先可靠写入 PG inbox，
                 # INSERT 成功（含唯一键去重命中）后才推进 seq。
@@ -292,7 +364,8 @@ class ServerArchiveFetcher:
         await self._clear_error(tenant_id, config_id)
         logger.info(
             f"[ServerArchiveFetcher] 拉取完成 tenant={tenant_id} batch={len(batch.items)} "
-            f"processed={processed_count} failed={failed_count} last_seq={last_seq}"
+            f"processed={processed_count} self_filtered={self_filtered} "
+            f"unknown_filtered={unknown_filtered} failed={failed_count} last_seq={last_seq}"
         )
         # audit：拉取成功（source 由调用栈推断：callback_handler 调用 vs poller 调用）
         # 简化做法：根据调用上下文不区分，统一记 fetch_success，统计意义已足够
@@ -407,8 +480,17 @@ class ServerArchiveFetcher:
 
     # ----------------- envelope 构造 -----------------
 
+    @staticmethod
+    def _parse_plain(plain_json: str) -> Dict[str, Any]:
+        try:
+            value = json.loads(plain_json)
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
     def _build_envelope(
-        self, account_id: str, client_id: str, item: "http_client.ChatDataItem", plain_json: str
+        self, account_id: str, client_id: str, item: "http_client.ChatDataItem", plain_json: str,
+        decision: Optional[Any] = None,
     ) -> Tuple[Any, Dict[str, Any]]:
         """构造 RpaCallbackEnvelope + env_raw（与 C# InboundEventBuilder.BuildAsync 字段对齐）。
 
@@ -423,10 +505,7 @@ class ServerArchiveFetcher:
             env_raw 用于 parse_message（adapter 解析需要原始 dict 结构）。
         """
         # 解析明文 JSON 拿到 text / media 字段
-        try:
-            plain = json.loads(plain_json)
-        except Exception:
-            plain = {}
+        plain = self._parse_plain(plain_json)
 
         plain_msg_type = str(plain.get("msgtype") or "")
         msg_type = item.msg_type or plain_msg_type
@@ -463,14 +542,17 @@ class ServerArchiveFetcher:
                 media_sdk_file_id = payload_section.get("sdkfileid") or ""
                 media_file_name = payload_section.get("filename")
 
-        # 构造 conversation_id / conversation_type（与 C# InferConversation 一致）
-        if roomid:
-            conversation_id = str(roomid)
-            conversation_type = "external_group"
-        else:
-            peer = tolist[0] if tolist else "unknown"
-            conversation_id = f"{from_user}_{peer}" if from_user else peer
-            conversation_type = "external_user"
+        if decision is None:
+            # 仅供纯 envelope 单测使用；生产 fetch 路径始终显式传入安全判定结果。
+            peer = from_user or "unknown"
+            decision = DirectionDecision(
+                MessageDirection.INBOUND_GROUP if roomid else MessageDirection.INBOUND_EXTERNAL,
+                peer,
+                str(roomid) if roomid else f"dm:{peer}",
+                "test_legacy_builder",
+            )
+        conversation_id = decision.conversation_id or "unknown"
+        conversation_type = "external_group" if decision.direction == MessageDirection.INBOUND_GROUP else "external_user"
 
         # event_id 复用 archive msgid（与 C# BuildEventId 一致，前缀 msg_）
         raw_msgid = item.msg_id or str(plain.get("msgid") or "") or secrets.token_hex(16)
@@ -513,8 +595,12 @@ class ServerArchiveFetcher:
             "payload": {
                 "conversation_id": conversation_id,
                 "conversation_type": conversation_type,
-                "sender_display_name": from_user or conversation_id,  # 首版 display_name = stable_id
-                "sender_stable_id": from_user or conversation_id,
+                "sender_display_name": from_user or conversation_id,
+                "sender_stable_id": decision.peer_id,
+                "message_direction": decision.direction.value,
+                "direction_reason": decision.reason,
+                "archive_peer_id": decision.peer_id,
+                "archive_sender_id_hash": archive_audit.hash_identifier(from_user),
                 "message_type": message_type,
                 "text": text_content,
                 "attachments": attachments,
@@ -564,14 +650,12 @@ class ServerArchiveFetcher:
         if not account_id:
             return None
         config_data = cfg.get("config") or {}
-        existing = rpa_db.get_account(account_id)
+        existing = rpa_db.get_account_for_tenant(tenant_id, account_id)
         client_id = config_data.get("client_id") or (existing or {}).get("client_id")
         if not client_id:
             return None
         client = rpa_db.get_client(client_id)
         if not client or client.get("tenant_id") != tenant_id or client.get("status") != "active":
-            return None
-        if existing and existing.get("tenant_id") != tenant_id:
             return None
         mapped = rpa_db.upsert_account(
             tenant_id=tenant_id,

@@ -49,6 +49,7 @@ class CacheKeys:
     RECALL_PENDING = "recall_pending"     # recall_pending:{session_id}（SET，缓存"处理中被撤回的 msgid"，落库时补打 is_recalled）
     COMPRESSION_METRICS = "comp_metrics"  # comp_metrics:{kind} 上下文压缩指标（Phase 7 §7.2）
     SCHEDULER_LOCK = "sched_task_lock"    # sched_task_lock:manager（全局分布式锁，多 worker 唯一启动调度器）
+    WECOM_RPA_SELF_ECHO_ESCAPE = "wecom_rpa:self_echo_escape"  # :{tenant_id}:{account_id}（ZSET，危险 echo 五分钟窗口）
 
 
 # ============== 通用缓存函数 ==============

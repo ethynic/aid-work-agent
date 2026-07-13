@@ -93,11 +93,19 @@
 
 基于 Redis Sorted Set 实现滑动窗口限流，用于登录等敏感操作的频率控制。
 
-**存储**：Redis Sorted Set + 内存降级
+**存储**：Redis Sorted Set（不可用时仅告警，当前消息仍安全过滤）
 **键模式**：`rate_limit:{category}:{key}`（如 `rate_limit:login:192.168.1.1`）
 **TTL**：等于窗口大小（登录限流为 60s）
 **清理策略**：通过 `zremrangebyscore` 自动清理过期分数
 **源文件**：`src/api/rate_limit.py`
+
+### 3.4 企业微信个人 RPA 危险 echo 窗口
+
+**存储**：Redis Sorted Set + 内存降级
+**键模式**：`wecom_rpa:self_echo_escape:{tenant_id}:{account_id}`
+**TTL**：600s；判定窗口 300s
+**失效时机**：窗口自动过期；管理员恢复账号时主动清除
+**源文件**：`src/saas/api/wecom_personal_rpa_routes.py`
 
 ---
 

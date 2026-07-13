@@ -16,9 +16,27 @@ from loguru import logger
 from src.channels.wecom_personal_rpa import db
 from src.channels.wecom_personal_rpa.connection import client_connection_registry
 from src.channels.wecom_personal_rpa.schemas import ActionEnvelope
+from src.channels.wecom_personal_rpa.archive import audit as archive_audit
 
 # 文本消息单段最大字符数（与 adapter 拆分阈值保持一致）
 _TEXT_SEGMENT_MAX = 2000
+
+
+def _build_reply_digests(actions: List[Dict[str, Any]]) -> List[str]:
+    """按实际发送 action 生成可与单条存档消息关联的 HMAC 摘要。"""
+    digests: List[str] = []
+    for action in actions:
+        action_type = str(action.get("type") or "")
+        value: Optional[str] = None
+        if action_type == "send_text":
+            value = str(action.get("text") or "")
+        elif action_type in ("send_image", "send_file"):
+            value = str(action.get("filename") or "")
+        if value:
+            digest = archive_audit.digest_reply_component(action_type, value)
+            if digest not in digests:
+                digests.append(digest)
+    return digests
 
 
 def _serialize_action(action: Any) -> Dict[str, Any]:
@@ -56,33 +74,84 @@ async def deliver_actions(
     账号不存在：记 ``logger.error`` 并写审计后返回（不抛）。
     """
     # 1. 解析 account → client_id（决定在线/离线路径）
-    account = db.get_account(account_id)
-    if not account or account.get("tenant_id") != tenant_id:
+    account = db.get_account_for_tenant(tenant_id, account_id)
+    if not account:
         logger.error(
             f"RPA deliver 失败：账号不存在 account_id={account_id} "
             f"request_id={request_id}"
         )
-        db.write_audit(
-            tenant_id=tenant_id,
-            client_id=None,
-            account_id=account_id,
-            category="action_deliver",
-            payload_json=json.dumps(
-                {
-                    "request_id": request_id,
-                    "conversation_id": conversation_id,
-                    "session_id": session_id,
-                    "error": "account_not_found",
-                },
-                ensure_ascii=False,
-            ),
-        )
+        try:
+            db.write_audit(
+                tenant_id=tenant_id,
+                client_id=None,
+                account_id=account_id,
+                category="action_deliver",
+                # conversation/session 可能包含企微 userid，账号缺失时不写明文审计。
+                payload_json=json.dumps(
+                    {"request_id": request_id, "error": "account_not_found"},
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                f"RPA deliver 账号缺失审计降级 account_id={account_id}: {type(exc).__name__}"
+            )
         return False
 
     client_id = account.get("client_id")
 
     # 2. 序列化 actions 与构造信封
     actions_serialized = [_serialize_action(a) for a in (actions or [])]
+    self_ids = {
+        str(value).strip()
+        for value in [account.get("wecom_user_id"), *(account.get("wecom_user_aliases") or [])]
+        if value and str(value).strip()
+    }
+    if str(conversation_id).startswith("dm:"):
+        target_value = (reply_context or {}).get("sender_stable_id") or str(conversation_id)[3:]
+    else:
+        target_value = conversation_id
+    target_peer_id = str(target_value or "").strip()
+    sender_target = str((reply_context or {}).get("sender_stable_id") or "").strip()
+    if not self_ids or not target_peer_id or target_peer_id in self_ids or sender_target in self_ids:
+        reason = (
+            "self_identity_missing" if not self_ids
+            else "target_missing" if not target_peer_id
+            else "target_is_self"
+        )
+        if reason == "target_is_self":
+            try:
+                from src.saas.api.wecom_personal_rpa_routes import _record_self_echo_escape
+
+                _record_self_echo_escape(tenant_id, account_id, request_id)
+            except Exception as exc:
+                logger.warning(
+                    f"RPA dangerous target 熔断计数降级 account_id={account_id}: {type(exc).__name__}"
+                )
+        try:
+            db.write_audit(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                account_id=account_id,
+                category="self_echo_escaped" if reason == "target_is_self" else "action_target_rejected",
+                payload_json=json.dumps(
+                    {"request_id": request_id, "reason": reason}, ensure_ascii=False
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                f"RPA deliver 安全拒绝审计降级 account_id={account_id}: {type(exc).__name__}"
+            )
+        logger.error(
+            f"RPA deliver 安全拒绝 account_id={account_id} request_id={request_id} reason={reason}"
+        )
+        return False
+    # actions 是客户端真实执行权威源。逐 action 摘要可匹配企微存档拆分后的单条
+    # 文本/附件；不依赖可缺失的 agent_reply_text，也不额外保存正文。
+    reply_digests = _build_reply_digests(actions_serialized)
+    reply_digest = archive_audit.digest_reply_text(
+        json.dumps(actions_serialized, ensure_ascii=False, sort_keys=True)
+    )
     # 3. outbox 是唯一权威源：无论本 worker 是否持有连接都先入队
     dedup_key = f"wecom_personal_rpa:{tenant_id}:{request_id}"
     try:
@@ -95,6 +164,9 @@ async def deliver_actions(
             actions_json=json.dumps(actions_serialized, ensure_ascii=False),
             reply_context_json=json.dumps(reply_context, ensure_ascii=False) if reply_context else None,
             dedup_key=dedup_key,
+            target_peer_id=target_peer_id,
+            reply_digest=reply_digest,
+            reply_digests=reply_digests,
         )
         if queued is None:
             return False

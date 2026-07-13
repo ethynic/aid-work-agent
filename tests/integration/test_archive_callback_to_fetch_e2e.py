@@ -79,6 +79,41 @@ def patched_lock(monkeypatch):
     monkeypatch.setattr(
         fetcher_module.redis_client, "release_lock", lambda *a, **kw: True
     )
+    monkeypatch.setattr(
+        ServerArchiveFetcher,
+        "_ensure_account_mapping",
+        staticmethod(lambda tenant_id, cfg, account_id: "client_e2e"),
+    )
+    monkeypatch.setattr(
+        fetcher_module.rpa_db,
+        "get_account_for_tenant",
+        lambda tenant_id, account_id: {
+            "id": account_id,
+            "tenant_id": tenant_id,
+            "wecom_user_id": "user_e2e_b",
+            "wecom_user_aliases": [],
+        },
+    )
+    inbox = []
+
+    def _enqueue(tenant_id, config_id, event_id, envelope_json):
+        inbox.append({
+            "id": len(inbox) + 1,
+            "tenant_id": tenant_id,
+            "claim_token": "claim_e2e",
+            "event_id": event_id,
+            "envelope": json.loads(envelope_json),
+        })
+        return True
+
+    def _claim(tenant_id, limit=20):
+        rows, inbox[:] = list(inbox), []
+        return rows
+
+    monkeypatch.setattr(fetcher_module.rpa_db, "enqueue_inbound_archive_message", _enqueue)
+    monkeypatch.setattr(fetcher_module.rpa_db, "claim_archive_inbox", _claim)
+    monkeypatch.setattr(fetcher_module.rpa_db, "mark_archive_inbox", lambda *a, **kw: True)
+    monkeypatch.setattr(fetcher_module.rpa_db, "heartbeat_archive_inbox", lambda *a: True)
 
 
 @pytest.fixture

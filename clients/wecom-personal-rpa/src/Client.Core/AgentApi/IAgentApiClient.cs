@@ -75,6 +75,16 @@ public interface IAgentApiClient : IDisposable
         string? errorMessage = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>带真实执行开始时间的 action_result；旧测试实现自动降级到原接口。</summary>
+    Task<bool> ReportActionResultWithTimingAsync(
+        string requestId,
+        bool success,
+        string? errorCode = null,
+        string? errorMessage = null,
+        DateTimeOffset? startedAt = null,
+        CancellationToken cancellationToken = default)
+        => ReportActionResultAsync(requestId, success, errorCode, errorMessage, cancellationToken);
+
     /// <summary>
     /// POST 媒体上传：客户端拿到媒体文件后，上传到服务端换取短期签名 URL。
     /// 原使用方 InboundEventBuilder 已随入站消息路径一并删除，此接口保留以备未来出站附件场景使用。

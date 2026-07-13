@@ -21,7 +21,7 @@
 import json
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -205,11 +205,12 @@ def upsert_account(
                     SET display_name = COALESCE(EXCLUDED.display_name, wecom_rpa_accounts.display_name),
                         client_id   = EXCLUDED.client_id,
                         updated_at  = CURRENT_TIMESTAMP
+                    WHERE wecom_rpa_accounts.tenant_id = EXCLUDED.tenant_id
                 """,
                 (account_id, tenant_id, user_id, client_id, display_name),
             )
             conn.commit()
-            return get_account(account_id)
+            return get_account_for_tenant(tenant_id, account_id)
         except Exception as e:
             logger.error(f"Failed to upsert RPA account {account_id}: {e}")
             return None
@@ -222,6 +223,59 @@ def get_account(account_id: str) -> Optional[Dict[str, Any]]:
         cursor.execute("SELECT * FROM wecom_rpa_accounts WHERE id = %s", (account_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def get_account_for_tenant(tenant_id: str, account_id: str) -> Optional[Dict[str, Any]]:
+    """按租户读取账号，供安全边界使用。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM wecom_rpa_accounts WHERE tenant_id = %s AND id = %s",
+            (tenant_id, account_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_account_identity(
+    tenant_id: str,
+    account_id: str,
+    wecom_user_id: str,
+    aliases: List[str],
+    verified_by: Optional[str],
+) -> bool:
+    """更新账号权威身份；主身份与 aliases 在租户内均不得冲突。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        candidates = [wecom_user_id, *aliases]
+        # 数组 aliases 无法用普通唯一索引表达；按租户串行化身份更新，避免并发穿透预检。
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (tenant_id,))
+        cursor.execute(
+            """
+            SELECT 1 FROM wecom_rpa_accounts
+            WHERE tenant_id=%s AND id<>%s
+              AND (
+                  wecom_user_id = ANY(%s)
+                  OR COALESCE(wecom_user_aliases, '{}'::text[]) && %s::text[]
+              )
+            LIMIT 1
+            """,
+            (tenant_id, account_id, candidates, candidates),
+        )
+        if cursor.fetchone():
+            raise ValueError("account_identity_conflict")
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_accounts
+            SET wecom_user_id=%s, wecom_user_aliases=%s,
+                identity_verified_at=CURRENT_TIMESTAMP, identity_verified_by=%s,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE tenant_id=%s AND id=%s
+            """,
+            (wecom_user_id, aliases, verified_by, tenant_id, account_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def list_accounts(tenant_id: str, client_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -269,11 +323,31 @@ def set_account_status(
         return cursor.rowcount > 0
 
 
-def get_account_status(account_id: str) -> Optional[str]:
-    """读取账号当前状态字符串。"""
+def open_self_echo_circuit(tenant_id: str, account_id: str) -> bool:
+    """仅首次原子打开危险 echo 熔断；不覆盖已有人工暂停原因。"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT status FROM wecom_rpa_accounts WHERE id = %s", (account_id,))
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_accounts
+            SET status='paused', paused_reason='self_echo_circuit_breaker',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE tenant_id=%s AND id=%s AND status<>'paused'
+            """,
+            (tenant_id, account_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_account_status(tenant_id: str, account_id: str) -> Optional[str]:
+    """按租户读取账号当前状态字符串。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status FROM wecom_rpa_accounts WHERE tenant_id = %s AND id = %s",
+            (tenant_id, account_id),
+        )
         row = cursor.fetchone()
         return row["status"] if row else None
 
@@ -551,6 +625,9 @@ def enqueue_action(
     dedup_key: str,
     reply_context_json: Optional[str] = None,
     user_id: Optional[str] = None,
+    target_peer_id: Optional[str] = None,
+    reply_digest: Optional[str] = None,
+    reply_digests: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """入队一条出站动作信封。
 
@@ -566,13 +643,15 @@ def enqueue_action(
                 """
                 INSERT INTO wecom_rpa_action_outbox
                     (id, tenant_id, user_id, account_id, conversation_id,
-                     request_id, session_id, actions, reply_context, status, attempts, dedup_key)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 0, %s)
+                     request_id, session_id, actions, reply_context, target_peer_id, reply_digest, reply_digests,
+                     status, attempts, dedup_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'pending', 0, %s)
                 ON CONFLICT (dedup_key) DO NOTHING
                 RETURNING id
                 """,
                 (action_id, tenant_id, user_id, account_id, conversation_id,
-                 request_id, session_id, actions_json, reply_context_json, dedup_key),
+                 request_id, session_id, actions_json, reply_context_json, target_peer_id,
+                 reply_digest, json.dumps(reply_digests or [], ensure_ascii=False), dedup_key),
             )
             row = cursor.fetchone()
             conn.commit()
@@ -614,6 +693,33 @@ def enqueue_inbound_archive_message(
         )
         conn.commit()
         return True
+
+
+def has_recent_completed_outbox_reply(
+    tenant_id: str,
+    account_id: str,
+    target_peer_id: str,
+    reply_digest: str,
+    window_seconds: int = 120,
+) -> bool:
+    """判断 self 存档是否命中最近已完成 outbox。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1 FROM wecom_rpa_action_outbox
+            WHERE tenant_id=%s AND account_id=%s AND target_peer_id=%s
+              AND (reply_digests @> %s::jsonb OR reply_digest=%s)
+              AND status='succeeded'
+              AND completed_at >= CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')
+            LIMIT 1
+            """,
+            (
+                tenant_id, account_id, target_peer_id,
+                json.dumps([reply_digest]), reply_digest, window_seconds,
+            ),
+        )
+        return cursor.fetchone() is not None
 
 
 def claim_archive_inbox(tenant_id: str, limit: int = 20) -> List[Dict[str, Any]]:
@@ -828,17 +934,20 @@ def mark_outbox_result_for_client(
     action_index: int,
     success: bool,
     error_message: Optional[str] = None,
+    started_at: Optional[datetime] = None,
+    executed_at: Optional[datetime] = None,
 ) -> bool:
     """按已鉴权 client 归属安全应用回执。
 
     多 action 信封只有最后一个 action 成功后才整体 succeeded；任一失败立即终态 failed。
-    已终态或重复回执不再改写，确保幂等且不跨租户/客户端更新。
+    failed 后仍接收其余 action 的 aborted 终态，但重复索引不覆盖首次结果。
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT o.id, o.actions, o.action_results
+            SELECT o.id, o.actions, o.action_results,
+                   o.created_at AT TIME ZONE current_setting('TIMEZONE') AS created_at
             FROM wecom_rpa_action_outbox o
             INNER JOIN wecom_rpa_accounts a
                 ON a.id = o.account_id
@@ -846,7 +955,7 @@ def mark_outbox_result_for_client(
             WHERE o.tenant_id = %s
               AND a.client_id = %s
               AND o.request_id = %s
-              AND o.status IN ('pending', 'running', 'retryable')
+              AND o.status IN ('pending', 'running', 'retryable', 'failed')
             FOR UPDATE OF o
             """,
             (tenant_id, client_id, request_id),
@@ -864,6 +973,9 @@ def mark_outbox_result_for_client(
         # 同一索引以首次合法回执为准，重复或冲突重报均不覆盖持久化结果。
         if result_key in action_results:
             return True
+        started_at = _validate_action_started_at(
+            started_at, executed_at=executed_at, outbox_created_at=row.get("created_at")
+        )
         action_results[result_key] = "succeeded" if success else "failed"
         all_succeeded = (
             len(action_results) == len(actions)
@@ -874,16 +986,25 @@ def mark_outbox_result_for_client(
             """
             UPDATE wecom_rpa_action_outbox
             SET action_results = %s::jsonb,
+                send_started_at = CASE
+                    WHEN %s IS NULL THEN send_started_at
+                    WHEN send_started_at IS NULL THEN %s
+                    ELSE LEAST(send_started_at, %s)
+                END,
                 status = COALESCE(%s, status),
-                error_message = CASE WHEN %s = 'failed' THEN %s ELSE error_message END,
+                error_message = CASE WHEN %s = 'failed'
+                                     THEN COALESCE(error_message, %s) ELSE error_message END,
                 completed_at = CASE WHEN %s IN ('succeeded', 'failed')
                                     THEN CURRENT_TIMESTAMP ELSE completed_at END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-              AND status IN ('pending', 'running', 'retryable')
+              AND status IN ('pending', 'running', 'retryable', 'failed')
             """,
             (
                 json.dumps(action_results, ensure_ascii=False),
+                started_at,
+                started_at,
+                started_at,
                 next_status,
                 next_status,
                 error_message if not success else None,
@@ -893,6 +1014,41 @@ def mark_outbox_result_for_client(
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+def _validate_action_started_at(
+    started_at: Optional[datetime],
+    *,
+    executed_at: Optional[datetime],
+    outbox_created_at: Optional[datetime],
+) -> Optional[datetime]:
+    """校验客户端执行开始时间；异常值仅丢弃，不影响 action 终态回执。"""
+    if started_at is None:
+        return None
+    if started_at.tzinfo is None or started_at.utcoffset() is None:
+        logger.warning("RPA action_result started_at 缺少时区，已忽略")
+        return None
+
+    started_utc = started_at.astimezone(timezone.utc)
+    tolerance = timedelta(minutes=5)
+    if started_utc > datetime.now(timezone.utc) + tolerance:
+        logger.warning("RPA action_result started_at 晚于服务端接收时间，已忽略")
+        return None
+
+    if executed_at is not None and executed_at.tzinfo is not None and executed_at.utcoffset() is not None:
+        if started_utc > executed_at.astimezone(timezone.utc) + tolerance:
+            logger.warning("RPA action_result started_at 晚于 executed_at，已忽略")
+            return None
+
+    if outbox_created_at is not None:
+        created_at = outbox_created_at
+        if created_at.tzinfo is None or created_at.utcoffset() is None:
+            # PostgreSQL 字段当前为 TIMESTAMP；按服务进程本地时区解释其墙上时间。
+            created_at = created_at.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        if started_utc < created_at.astimezone(timezone.utc) - tolerance:
+            logger.warning("RPA action_result started_at 早于 outbox 创建时间，已忽略")
+            return None
+    return started_at
 
 
 # ===========================================================================

@@ -167,6 +167,9 @@ class RpaActionResultPayload(BaseModel):
         description="失败时的可读说明，需脱敏（不含密钥/绝对路径）"
     )
     executed_at: datetime = Field(..., description="客户端实际执行完成时间")
+    started_at: Optional[datetime] = Field(
+        default=None, description="客户端首次真正开始执行该 action 的时间；中止动作可空"
+    )
 
 
 # ===========================================================================

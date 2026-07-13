@@ -17,9 +17,12 @@
 """
 import asyncio
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+os.environ.setdefault("RPA_SECRET_KEY", "test-rpa-audit-key-32-bytes-minimum")
 
 from src.channels.wecom_personal_rpa.archive import fetcher as fetcher_module
 from src.channels.wecom_personal_rpa.archive import chat_crypto, http_client
@@ -101,6 +104,16 @@ def patched_lock(monkeypatch):
         rows, inbox[:] = list(inbox), []
         return rows
     monkeypatch.setattr(fetcher_module.rpa_db, "enqueue_inbound_archive_message", _enqueue)
+    monkeypatch.setattr(
+        fetcher_module.rpa_db,
+        "get_account_for_tenant",
+        lambda tenant_id, account_id: {
+            "id": account_id,
+            "tenant_id": tenant_id,
+            "wecom_user_id": "user_b",
+            "wecom_user_aliases": ["wm_peer", "b"],
+        },
+    )
     monkeypatch.setattr(fetcher_module.rpa_db, "claim_archive_inbox", _claim)
     monkeypatch.setattr(fetcher_module.rpa_db, "mark_archive_inbox", lambda *a, **kw: None)
     monkeypatch.setattr(fetcher_module.rpa_db, "heartbeat_archive_inbox", lambda *a: True)
@@ -277,7 +290,7 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
     assert env.event_type == "message"
 
     payload = env.payload
-    assert payload["conversation_id"] == "user_a_user_b"
+    assert payload["conversation_id"] == "dm:user_a"
     assert payload["conversation_type"] == "external_user"
     assert payload["sender_display_name"] == "user_a"
     assert payload["sender_stable_id"] == "user_a"
@@ -353,7 +366,7 @@ async def test_fetch_uses_decrypted_plain_fields_when_outer_item_lacks_metadata(
     env = patched_process_msg.calls[0]["env"]
     payload = env.payload
     assert env.event_id == "msg_outer_msg_001"
-    assert payload["conversation_id"] == "wm_sender_wm_peer"
+    assert payload["conversation_id"] == "dm:wm_sender"
     assert payload["conversation_type"] == "external_user"
     assert payload["sender_display_name"] == "wm_sender"
     assert payload["sender_stable_id"] == "wm_sender"
@@ -555,7 +568,7 @@ def test_build_envelope_text_message():
     assert env.event_type == "message"
     assert env.payload["text"] == "hello world"
     assert env.payload["message_type"] == "text"
-    assert env.payload["conversation_id"] == "external_userid_123_user_internal"
+    assert env.payload["conversation_id"] == "dm:external_userid_123"
     assert env.payload["conversation_type"] == "external_user"
 
 
@@ -618,7 +631,7 @@ def test_internal_account_id_falls_back_to_config_not_subagent():
 def test_account_mapping_uses_only_active_same_tenant_configured_client(monkeypatch):
     from src.channels.wecom_personal_rpa import db as rpa_db
 
-    monkeypatch.setattr(rpa_db, "get_account", lambda account_id: None)
+    monkeypatch.setattr(rpa_db, "get_account_for_tenant", lambda tenant_id, account_id: None)
     monkeypatch.setattr(
         rpa_db, "get_client",
         lambda client_id: {"id": client_id, "tenant_id": "tenant_test", "status": "active"},
@@ -635,7 +648,7 @@ def test_account_mapping_uses_only_active_same_tenant_configured_client(monkeypa
 def test_account_mapping_rejects_cross_tenant_client(monkeypatch):
     from src.channels.wecom_personal_rpa import db as rpa_db
 
-    monkeypatch.setattr(rpa_db, "get_account", lambda account_id: None)
+    monkeypatch.setattr(rpa_db, "get_account_for_tenant", lambda tenant_id, account_id: None)
     monkeypatch.setattr(
         rpa_db, "get_client",
         lambda client_id: {"id": client_id, "tenant_id": "other", "status": "active"},
@@ -733,6 +746,111 @@ async def test_enqueue_failure_does_not_advance_seq(patched_lock, monkeypatch):
     await ServerArchiveFetcher().fetch_once("tenant_test", "chan_test_001")
 
     assert not any(field == "last_seq" for _, field, _ in updates)
+
+
+@pytest.mark.asyncio
+async def test_self_message_is_filtered_before_inbox_and_advances_seq(
+    patched_lock, patched_process_msg, monkeypatch
+):
+    cfg = _make_cfg_record(_make_config_data())
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *_: cfg)
+    monkeypatch.setattr(fetcher_module.chat_crypto, "decrypt_random_key", lambda *_: b"key")
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk, "decrypt_data_raw",
+        lambda *a, **kw: json.dumps({"text": {"content": "self reply"}}),
+    )
+    enqueue = MagicMock()
+    monkeypatch.setattr(fetcher_module.rpa_db, "enqueue_inbound_archive_message", enqueue)
+    recent = MagicMock(return_value=True)
+    detected = MagicMock()
+    monkeypatch.setattr(fetcher_module.rpa_db, "has_recent_completed_outbox_reply", recent)
+    monkeypatch.setattr(fetcher_module.archive_audit, "log_self_echo_detected", detected)
+    updates = []
+    monkeypatch.setattr(
+        fetcher_module.ChannelConfigDB, "update_config_field",
+        lambda *args: updates.append(args) or True,
+    )
+    item = http_client.ChatDataItem(
+        seq=99, msg_id="self_echo", action="send", from_="user_b", tolist=["peer_1"],
+        msg_time=1700000000, msg_type="text", encrypt_random_key="x", encrypt_chat_msg="y",
+    )
+    monkeypatch.setattr(
+        fetcher_module.http_client, "get_chat_data",
+        AsyncMock(return_value=http_client.ChatDataBatch(items=[item])),
+    )
+
+    await ServerArchiveFetcher().fetch_once("tenant_test", "chan_test_001")
+
+    enqueue.assert_not_called()
+    assert not patched_process_msg.calls
+    assert ("chan_test_001", "last_seq", 99) in updates
+    recent.assert_called_once()
+    detected.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_self_attachment_echo_uses_type_and_filename_digest(
+    patched_lock, patched_process_msg, monkeypatch
+):
+    """附件存档按动作类型+文件名 HMAC 关联，且仍在 inbox 前过滤。"""
+    cfg = _make_cfg_record(_make_config_data())
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *_: cfg)
+    monkeypatch.setattr(fetcher_module.chat_crypto, "decrypt_random_key", lambda *_: b"key")
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk, "decrypt_data_raw",
+        lambda *a, **kw: json.dumps({"image": {"sdkfileid": "new-id", "filename": "a.png"}}),
+    )
+    enqueue = MagicMock()
+    recent = MagicMock(return_value=True)
+    monkeypatch.setattr(fetcher_module.rpa_db, "enqueue_inbound_archive_message", enqueue)
+    monkeypatch.setattr(fetcher_module.rpa_db, "has_recent_completed_outbox_reply", recent)
+    detected = MagicMock()
+    monkeypatch.setattr(fetcher_module.archive_audit, "log_self_echo_detected", detected)
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "update_config_field", lambda *_: True)
+    item = http_client.ChatDataItem(
+        seq=100, msg_id="self_image", action="send", from_="user_b", tolist=["peer_1"],
+        msg_time=1700000000, msg_type="image", encrypt_random_key="x", encrypt_chat_msg="y",
+    )
+    monkeypatch.setattr(
+        fetcher_module.http_client, "get_chat_data",
+        AsyncMock(return_value=http_client.ChatDataBatch(items=[item])),
+    )
+    await ServerArchiveFetcher().fetch_once("tenant_test", "chan_test_001")
+    enqueue.assert_not_called()
+    expected = fetcher_module.archive_audit.digest_reply_component("send_image", "a.png")
+    assert recent.call_args.args[3] == expected
+    detected.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_group_self_echo_uses_room_as_outbox_target(
+    patched_lock, patched_process_msg, monkeypatch
+):
+    """群内 self 回流没有单聊 peer，关联键必须使用实际 outbox room target。"""
+    cfg = _make_cfg_record(_make_config_data())
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *_: cfg)
+    monkeypatch.setattr(fetcher_module.chat_crypto, "decrypt_random_key", lambda *_: b"key")
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk, "decrypt_data_raw",
+        lambda *a, **kw: json.dumps({"text": {"content": "group reply"}}),
+    )
+    recent = MagicMock(return_value=True)
+    monkeypatch.setattr(fetcher_module.rpa_db, "has_recent_completed_outbox_reply", recent)
+    monkeypatch.setattr(fetcher_module.archive_audit, "log_self_echo_detected", MagicMock())
+    monkeypatch.setattr(fetcher_module.ChannelConfigDB, "update_config_field", lambda *_: True)
+    item = http_client.ChatDataItem(
+        seq=101, msg_id="self_group", action="send", from_="user_b", tolist=["peer_1"],
+        roomid="room_1", msg_time=1700000000, msg_type="text",
+        encrypt_random_key="x", encrypt_chat_msg="y",
+    )
+    monkeypatch.setattr(
+        fetcher_module.http_client, "get_chat_data",
+        AsyncMock(return_value=http_client.ChatDataBatch(items=[item])),
+    )
+
+    await ServerArchiveFetcher().fetch_once("tenant_test", "chan_test_001")
+
+    assert recent.call_args.args[2] == "room_1"
 
 
 @pytest.mark.asyncio

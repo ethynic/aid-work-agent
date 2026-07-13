@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Diagnostics;
 using Dapper;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -23,14 +24,31 @@ public sealed class OutboundQueue
     private readonly string _connectionString;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ILogger<OutboundQueue>? _logger;
+    private readonly string _executionOwnerId;
+    private readonly TimeSpan _leaseDuration;
 
     /// <summary>构造队列。会在构造时确保目录与表存在。</summary>
     /// <param name="options">客户端配置（取 Outbound.DbPath）。</param>
     /// <param name="logger">日志（可空）。</param>
     public OutboundQueue(ClientOptions options, ILogger<OutboundQueue>? logger = null)
+        : this(options, logger,
+            $"windows-session:{Process.GetCurrentProcess().SessionId}", TimeSpan.FromMinutes(2))
+    {
+    }
+
+    internal OutboundQueue(
+        ClientOptions options,
+        ILogger<OutboundQueue>? logger,
+        string executionOwnerId,
+        TimeSpan leaseDuration)
     {
         if (options is null) throw new ArgumentNullException(nameof(options));
         _logger = logger;
+        _executionOwnerId = string.IsNullOrWhiteSpace(executionOwnerId)
+            ? throw new ArgumentException("执行 Session 所有者不能为空", nameof(executionOwnerId))
+            : executionOwnerId;
+        _leaseDuration = leaseDuration > TimeSpan.Zero
+            ? leaseDuration : throw new ArgumentOutOfRangeException(nameof(leaseDuration));
 
         var dbPath = string.IsNullOrWhiteSpace(options.Outbound.DbPath)
             ? "data/outbox.db"
@@ -56,6 +74,8 @@ public sealed class OutboundQueue
         const string sql = """
             CREATE TABLE IF NOT EXISTS outbox_local (
                 action_id TEXT PRIMARY KEY,
+                request_id TEXT,
+                action_index INTEGER,
                 action_type TEXT NOT NULL,
                 conversation_key TEXT NOT NULL,
                 text TEXT,
@@ -66,10 +86,23 @@ public sealed class OutboundQueue
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 error_code TEXT,
                 error_message TEXT,
+                execution_started_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON outbox_local(status, created_at);
+            CREATE TABLE IF NOT EXISTS outbox_envelopes (
+                request_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                action_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+                ,execution_owner_id TEXT
+                ,lease_expires_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_outbox_envelopes_claim
+                ON outbox_envelopes(status, created_at);
             """;
         using var conn = OpenConnection();
         conn.Execute(sql);
@@ -104,6 +137,58 @@ public sealed class OutboundQueue
             try { conn.Execute("ALTER TABLE outbox_local ADD COLUMN file_name TEXT;"); }
             catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
         }
+        if (!cols.Contains("request_id"))
+        {
+            try { conn.Execute("ALTER TABLE outbox_local ADD COLUMN request_id TEXT;"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
+        }
+        if (!cols.Contains("action_index"))
+        {
+            try { conn.Execute("ALTER TABLE outbox_local ADD COLUMN action_index INTEGER;"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
+        }
+        if (!cols.Contains("execution_started_at"))
+        {
+            try { conn.Execute("ALTER TABLE outbox_local ADD COLUMN execution_started_at TEXT;"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
+        }
+        var envelopeCols = conn.Query<dynamic>("PRAGMA table_info(outbox_envelopes);")
+            .Select(r => (string)r.name).ToHashSet();
+        if (!envelopeCols.Contains("execution_owner_id"))
+        {
+            try { conn.Execute("ALTER TABLE outbox_envelopes ADD COLUMN execution_owner_id TEXT;"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
+        }
+        if (!envelopeCols.Contains("lease_expires_at"))
+        {
+            try { conn.Execute("ALTER TABLE outbox_envelopes ADD COLUMN lease_expires_at TEXT;"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
+        }
+        // 旧版多动作主键为 request_id#action_index；升级时恢复原 envelope 边界。
+        conn.Execute("""
+            UPDATE outbox_local
+            SET request_id=CASE WHEN instr(action_id, '#') > 0
+                                THEN substr(action_id, 1, instr(action_id, '#') - 1)
+                                ELSE action_id END
+            WHERE request_id IS NULL;
+            """);
+        conn.Execute("""
+            UPDATE outbox_local
+            SET action_index=CASE WHEN instr(action_id, '#') > 0
+                                  THEN CAST(substr(action_id, instr(action_id, '#') + 1) AS INTEGER)
+                                  ELSE 0 END
+            WHERE action_index IS NULL;
+            """);
+        conn.Execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_request_action ON outbox_local(request_id, action_index);");
+        conn.Execute("""
+            INSERT OR IGNORE INTO outbox_envelopes(request_id,status,action_count,created_at,updated_at,completed_at)
+            SELECT request_id,
+                   CASE WHEN SUM(CASE WHEN status IN ('done','failed') THEN 0 ELSE 1 END)=0
+                        THEN CASE WHEN SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END)>0 THEN 'failed' ELSE 'done' END
+                        ELSE 'pending' END,
+                   COUNT(*), MIN(created_at), MAX(updated_at), MAX(completed_at)
+            FROM outbox_local GROUP BY request_id;
+            """);
 
         // 回填升级前已存在的终态行（completed_at 为 NULL）：用 created_at 兜底，
         // 使其能被 PruneTerminalAsync（过滤 completed_at IS NOT NULL）清理，避免老 failed 行永久泄漏。
@@ -159,6 +244,197 @@ public sealed class OutboundQueue
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>在一个 SQLite 事务内原子写入完整 envelope。</summary>
+    public async Task<bool> EnqueueEnvelopeAsync(
+        string requestId, IReadOnlyList<OutboxItem> items, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestId)) throw new ArgumentNullException(nameof(requestId));
+        if (items.Count == 0) throw new ArgumentException("envelope actions 不能为空", nameof(items));
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+            var now = FormatIso(DateTimeOffset.Now);
+            var changed = await conn.ExecuteScalarAsync<long>("""
+                INSERT OR IGNORE INTO outbox_envelopes(request_id,status,action_count,created_at,updated_at)
+                VALUES(@RequestId,'pending',@Count,@Now,@Now); SELECT changes();
+                """, new { RequestId = requestId, Count = items.Count, Now = now }, tx).ConfigureAwait(false);
+            if (changed == 0) { tx.Rollback(); return false; }
+            const string insert = """
+                INSERT INTO outbox_local
+                (action_id,request_id,action_index,action_type,conversation_key,text,file_url,file_name,local_path,
+                 status,retry_count,error_code,error_message,created_at,updated_at)
+                VALUES(@ActionId,@RequestId,@ActionIndex,@ActionType,@ConversationKey,@Text,@FileUrl,@FileName,@LocalPath,
+                       'pending',0,NULL,NULL,@CreatedAt,@UpdatedAt);
+                """;
+            foreach (var item in items)
+            {
+                item.RequestId = requestId;
+                await conn.ExecuteAsync(insert, new {
+                    item.ActionId, item.RequestId, item.ActionIndex, item.ActionType, item.ConversationKey,
+                    item.Text, item.FileUrl, item.FileName, item.LocalPath,
+                    CreatedAt = FormatIso(item.CreatedAt), UpdatedAt = now,
+                }, tx).ConfigureAwait(false);
+            }
+            tx.Commit();
+            return true;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>领取最早 pending envelope，并按 action_index 返回其全部动作。</summary>
+    public async Task<IReadOnlyList<OutboxItem>> ClaimNextEnvelopeAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+            var now = FormatIso(DateTimeOffset.Now);
+            var leaseExpiresAt = FormatIso(DateTimeOffset.Now + _leaseDuration);
+            var requestId = await conn.ExecuteScalarAsync<string?>("""
+                UPDATE outbox_envelopes
+                SET status='running',updated_at=@Now,execution_owner_id=@Owner,
+                    lease_expires_at=@LeaseExpiresAt
+                WHERE request_id=(
+                    SELECT request_id FROM outbox_envelopes
+                    WHERE status='pending' ORDER BY created_at,request_id LIMIT 1
+                ) AND status='pending'
+                RETURNING request_id;
+                """, new { Now = now, Owner = _executionOwnerId, LeaseExpiresAt = leaseExpiresAt }, tx)
+                .ConfigureAwait(false);
+            if (string.IsNullOrEmpty(requestId)) { tx.Rollback(); return Array.Empty<OutboxItem>(); }
+            await conn.ExecuteAsync(
+                "UPDATE outbox_local SET status='running',updated_at=@Now WHERE request_id=@Id AND status='pending';",
+                new { Id = requestId, Now = now }, tx).ConfigureAwait(false);
+            var rows = await conn.QueryAsync<dynamic>(
+                "SELECT * FROM outbox_local WHERE request_id=@Id ORDER BY action_index;",
+                new { Id = requestId }, tx).ConfigureAwait(false);
+            tx.Commit();
+            return rows.Select(MapRow).ToList();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<IReadOnlyList<string>> RecoverRunningEnvelopesAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+            var now = FormatIso(DateTimeOffset.Now);
+            await conn.ExecuteAsync("""
+                UPDATE outbox_local SET status='pending'
+                WHERE status='running' AND (
+                    request_id IS NULL
+                    OR NOT EXISTS(
+                        SELECT 1 FROM outbox_envelopes e WHERE e.request_id=outbox_local.request_id)
+                    OR request_id IN (
+                        SELECT request_id FROM outbox_envelopes
+                        WHERE status='running' AND (
+                            execution_owner_id=@Owner OR lease_expires_at IS NULL OR lease_expires_at<=@Now)));
+                """, new { Owner = _executionOwnerId, Now = now }, tx).ConfigureAwait(false);
+            await conn.ExecuteAsync("""
+                UPDATE outbox_envelopes
+                SET status='pending',execution_owner_id=NULL,lease_expires_at=NULL,updated_at=@Now
+                WHERE status='running' AND (
+                    execution_owner_id=@Owner OR lease_expires_at IS NULL OR lease_expires_at<=@Now);
+                """, new { Owner = _executionOwnerId, Now = now }, tx).ConfigureAwait(false);
+            var ids = (await conn.QueryAsync<string>(
+                "SELECT request_id FROM outbox_envelopes WHERE status='pending' ORDER BY created_at,request_id;",
+                transaction: tx).ConfigureAwait(false)).ToList();
+            tx.Commit();
+            return ids;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>仅当前 Windows Session 所有者可续租；返回 false 表示租约已丢失。</summary>
+    public async Task<bool> RenewEnvelopeLeaseAsync(string requestId, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            var changed = await conn.ExecuteAsync("""
+                UPDATE outbox_envelopes
+                SET lease_expires_at=@LeaseExpiresAt,updated_at=@Now
+                WHERE request_id=@Id AND status='running' AND execution_owner_id=@Owner;
+                """, new
+            {
+                Id = requestId,
+                Owner = _executionOwnerId,
+                Now = FormatIso(DateTimeOffset.Now),
+                LeaseExpiresAt = FormatIso(DateTimeOffset.Now + _leaseDuration),
+            }).ConfigureAwait(false);
+            return changed == 1;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// dispatcher envelope 路径要求当前 owner；兼容直接调用 DispatchOneAsync 的旧单 action
+    /// 测试/调用方时，尚未进入 running envelope 的动作不强制租约。
+    /// </summary>
+    public async Task<bool> VerifyActionWriteOwnershipAsync(
+        string requestId, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+            var now = FormatIso(DateTimeOffset.Now);
+            var changed = await conn.ExecuteAsync("""
+                UPDATE outbox_envelopes
+                SET lease_expires_at=@LeaseExpiresAt,updated_at=@Now
+                WHERE request_id=@Id AND status='running' AND execution_owner_id=@Owner;
+                """, new
+            {
+                Id = requestId,
+                Owner = _executionOwnerId,
+                Now = now,
+                LeaseExpiresAt = FormatIso(DateTimeOffset.Now + _leaseDuration),
+            }, tx).ConfigureAwait(false);
+            if (changed == 1)
+            {
+                tx.Commit();
+                return true;
+            }
+            var status = await conn.ExecuteScalarAsync<string?>(
+                "SELECT status FROM outbox_envelopes WHERE request_id=@Id;",
+                new { Id = requestId }, tx).ConfigureAwait(false);
+            tx.Commit();
+            return status is null or not "running";
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task CompleteEnvelopeAsync(string requestId, bool success, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            await conn.ExecuteAsync("""
+                UPDATE outbox_envelopes SET status=@Status,completed_at=@Now,updated_at=@Now,
+                    execution_owner_id=NULL,lease_expires_at=NULL
+                WHERE request_id=@Id AND status='running' AND execution_owner_id=@Owner
+                  AND NOT EXISTS(
+                    SELECT 1 FROM outbox_local WHERE request_id=@Id AND status NOT IN ('done','failed'));
+                """, new
+            {
+                Id = requestId,
+                Owner = _executionOwnerId,
+                Status = success ? "done" : "failed",
+                Now = FormatIso(DateTimeOffset.Now),
+            }).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
     }
 
     /// <summary>
@@ -227,6 +503,28 @@ public sealed class OutboundQueue
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>幂等记录首次真正进入 action 执行边界的本地时间。</summary>
+    public async Task<DateTimeOffset> MarkExecutionStartedAsync(
+        string actionId, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            using var conn = OpenConnection();
+            var now = FormatIso(DateTimeOffset.Now);
+            await conn.ExecuteAsync("""
+                UPDATE outbox_local
+                SET execution_started_at=COALESCE(execution_started_at,@Now),updated_at=@Now
+                WHERE action_id=@Id AND status='running';
+                """, new { Id = actionId, Now = now }).ConfigureAwait(false);
+            var value = await conn.ExecuteScalarAsync<string?>(
+                "SELECT execution_started_at FROM outbox_local WHERE action_id=@Id;",
+                new { Id = actionId }).ConfigureAwait(false);
+            return ParseIso(value) ?? DateTimeOffset.Now;
+        }
+        finally { _gate.Release(); }
     }
 
     /// <summary>
@@ -301,13 +599,31 @@ public sealed class OutboundQueue
         try
         {
             using var conn = OpenConnection();
-            // 把悬挂的 running 重置为 pending（同事务内顺序操作）
-            await conn.ExecuteAsync(
-                "UPDATE outbox_local SET status='pending' WHERE status='running';")
-                .ConfigureAwait(false);
+            // 兼容旧调用方，但恢复边界同 envelope API：只能恢复本 Session 或已过期租约。
+            var now = FormatIso(DateTimeOffset.Now);
+            using var tx = conn.BeginTransaction();
+            await conn.ExecuteAsync("""
+                UPDATE outbox_local SET status='pending'
+                WHERE status='running' AND (
+                    request_id IS NULL
+                    OR NOT EXISTS(
+                        SELECT 1 FROM outbox_envelopes e WHERE e.request_id=outbox_local.request_id)
+                    OR request_id IN (
+                        SELECT request_id FROM outbox_envelopes
+                        WHERE status='running' AND (
+                            execution_owner_id=@Owner OR lease_expires_at IS NULL OR lease_expires_at<=@Now)));
+                """, new { Owner = _executionOwnerId, Now = now }, tx).ConfigureAwait(false);
+            await conn.ExecuteAsync("""
+                UPDATE outbox_envelopes
+                SET status='pending',execution_owner_id=NULL,lease_expires_at=NULL,updated_at=@Now
+                WHERE status='running' AND (
+                    execution_owner_id=@Owner OR lease_expires_at IS NULL OR lease_expires_at<=@Now);
+                """, new { Owner = _executionOwnerId, Now = now }, tx).ConfigureAwait(false);
             var rows = await conn.QueryAsync<dynamic>(
-                "SELECT * FROM outbox_local WHERE status='pending' ORDER BY created_at ASC;")
+                "SELECT * FROM outbox_local WHERE status='pending' ORDER BY created_at ASC;",
+                transaction: tx)
                 .ConfigureAwait(false);
+            tx.Commit();
             return rows.Select(MapRow).ToList();
         }
         finally
@@ -355,12 +671,21 @@ public sealed class OutboundQueue
                  WHERE status IN ('done', 'failed')
                    AND completed_at IS NOT NULL
                    AND completed_at < @Cutoff;
-                SELECT changes();
                 """;
             using var conn = OpenConnection();
-            var removed = await conn.ExecuteScalarAsync<long>(sql, new { Cutoff = cutoff })
+            using var tx = conn.BeginTransaction();
+            var removed = await conn.ExecuteAsync(sql, new { Cutoff = cutoff }, tx)
                 .ConfigureAwait(false);
-            return (int)removed;
+            await conn.ExecuteAsync("""
+                DELETE FROM outbox_envelopes
+                WHERE status IN ('done', 'failed')
+                  AND completed_at IS NOT NULL
+                  AND completed_at < @Cutoff
+                  AND NOT EXISTS(
+                      SELECT 1 FROM outbox_local WHERE request_id=outbox_envelopes.request_id);
+                """, new { Cutoff = cutoff }, tx).ConfigureAwait(false);
+            tx.Commit();
+            return removed;
         }
         finally
         {
@@ -371,6 +696,8 @@ public sealed class OutboundQueue
     private static OutboxItem MapRow(dynamic r) => new()
     {
         ActionId = (string)r.action_id,
+        RequestId = r.request_id is null ? (string)r.action_id : (string)r.request_id,
+        ActionIndex = r.action_index is null ? 0 : (int)r.action_index,
         ActionType = (string)r.action_type,
         ConversationKey = (string)r.conversation_key,
         Text = r.text is null ? null : (string?)r.text,
@@ -383,6 +710,8 @@ public sealed class OutboundQueue
         ErrorMessage = r.error_message is null ? null : (string?)r.error_message,
         CreatedAt = ParseIso((string)r.created_at) ?? DateTimeOffset.Now,
         CompletedAt = r.completed_at is null ? null : ParseIso((string)r.completed_at),
+        ExecutionStartedAt = r.execution_started_at is null
+            ? null : ParseIso((string)r.execution_started_at),
     };
 
     private static string FormatIso(DateTimeOffset dto)
@@ -401,6 +730,8 @@ public sealed class OutboxItem
 {
     /// <summary>对应服务端 ActionEnvelope.request_id（主键）。</summary>
     public string ActionId { get; set; } = string.Empty;
+    public string RequestId { get; set; } = string.Empty;
+    public int ActionIndex { get; set; }
 
     /// <summary>动作类型（send_text / send_image / send_file / noop / handoff）。</summary>
     public string ActionType { get; set; } = string.Empty;
@@ -437,4 +768,5 @@ public sealed class OutboxItem
 
     /// <summary>终态完成时间（done/failed 时写入，供 PruneTerminalAsync 清理与重报判断）。非终态为 null。</summary>
     public DateTimeOffset? CompletedAt { get; set; }
+    public DateTimeOffset? ExecutionStartedAt { get; set; }
 }

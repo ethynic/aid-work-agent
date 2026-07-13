@@ -402,6 +402,16 @@ public sealed class AgentApiClient : IAgentApiClient
         string? errorCode = null,
         string? errorMessage = null,
         CancellationToken cancellationToken = default)
+        => await ReportActionResultWithTimingAsync(
+            requestId, success, errorCode, errorMessage, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<bool> ReportActionResultWithTimingAsync(
+        string requestId,
+        bool success,
+        string? errorCode = null,
+        string? errorMessage = null,
+        DateTimeOffset? startedAt = null,
+        CancellationToken cancellationToken = default)
     {
         await EnsureCallbackRoutingAsync(cancellationToken).ConfigureAwait(false);
 
@@ -425,6 +435,7 @@ public sealed class AgentApiClient : IAgentApiClient
             error_code = errorCode,
             error_message = errorMessage,
             executed_at = DateTimeOffset.Now,
+            started_at = startedAt,
         };
 
         var env = new InboundEvent

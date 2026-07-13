@@ -305,6 +305,7 @@ class TestParseActionResult:
                 "error_code": None,
                 "error_message": None,
                 "executed_at": "2026-06-22T10:00:05+08:00",
+                "started_at": "2026-06-22T10:00:01+08:00",
             },
         }
 
@@ -317,6 +318,8 @@ class TestParseActionResult:
         assert result.success is True
         assert result.error_code is None
         assert result.error_message is None
+        assert result.started_at is not None
+        assert result.started_at < result.executed_at
 
     def test_failed_action_result_with_error(self):
         """失败的回执应保留 error_code 与脱敏后的 error_message。"""

@@ -383,6 +383,10 @@ class RedisClient:
 
         return self._connected
 
+    def is_available(self) -> bool:
+        """返回真实 Redis 是否可用；安全关键分布式状态不得把内存降级视为可用。"""
+        return self._ensure_connection()
+
     def _get_backend(self):
         """获取实际后端（Redis 或降级内存）"""
         if self._ensure_connection():

@@ -34,6 +34,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     private readonly IActionSource _source;
     private readonly PauseState? _pauseState;
     private readonly ILogger<OutboundActionDispatcher>? _logger;
+    private readonly DesktopAutomationMutex? _desktopMutex;
 
     /// <summary>
     /// PS 调用钩子（测试注入）。null 时走真实 PowershellOpsInvoker.InvokeAsync。
@@ -42,7 +43,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     /// </summary>
     internal Func<string, object?, CancellationToken, Task<PowershellResult>>? PsInvokerHook { get; set; }
 
-    private readonly Channel<OutboxItem> _workCh = Channel.CreateUnbounded<OutboxItem>(
+    private readonly Channel<string> _workCh = Channel.CreateUnbounded<string>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
     private Task? _sourceLoopTask;
@@ -58,7 +59,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         IActionSource source,
         ILogger<OutboundActionDispatcher>? logger = null,
         // P0-5：可选 PauseState（DI 注入时由容器解析；测试场景传 null 跳过暂停检查）
-        PauseState? pauseState = null)
+        PauseState? pauseState = null,
+        DesktopAutomationMutex? desktopMutex = null)
     {
         _queue = queue ?? throw new ArgumentNullException(nameof(queue));
         _downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
@@ -68,18 +70,36 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _logger = logger;
         _pauseState = pauseState;
+        _desktopMutex = desktopMutex;
     }
 
     /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        if (_desktopMutex is not null && !_desktopMutex.TryAcquire())
+        {
+            _logger?.LogError("desktop_automation_already_running：当前登录会话已有 RPA 执行器");
+            try
+            {
+                await _api.ReportStatusAsync(new StatusPayload
+                {
+                    Status = AccountStatus.Paused,
+                    Detail = "desktop_automation_already_running",
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "上报 desktop_automation_already_running 失败");
+            }
+            return;
+        }
         _cts = new CancellationTokenSource();
 
         // 1. 启动恢复：把所有未完成的 action 拉出来重新塞入工作通道
-        var pending = await _queue.ListPendingAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var item in pending)
+        var pending = await _queue.RecoverRunningEnvelopesAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var requestId in pending)
         {
-            await _workCh.Writer.WriteAsync(item, cancellationToken).ConfigureAwait(false);
+            await _workCh.Writer.WriteAsync(requestId, cancellationToken).ConfigureAwait(false);
         }
         _logger?.LogInformation("OutboundDispatcher 启动完成，恢复 {Count} 个未完成 action", pending.Count);
 
@@ -115,21 +135,21 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     {
         if (env is null) throw new ArgumentNullException(nameof(env));
         var convKey = ResolveConversationSearchName(env);
+        var items = new List<OutboxItem>(env.Actions.Count);
         for (var i = 0; i < env.Actions.Count; i++)
         {
             var act = env.Actions[i];
-            var item = ToOutboxItem(env, i, act, convKey);
-            var inserted = await _queue.EnqueueAsync(item, ct).ConfigureAwait(false);
-            if (inserted)
-            {
-                await _workCh.Writer.WriteAsync(item, ct).ConfigureAwait(false);
-            }
-            else
-            {
-                // 重复项（action_id 已存在）：at-least-once 轮询下回执可能丢失，
-                // 据本地终态重报回执（服务端幂等，收到后停止返回该信封）。
+            items.Add(ToOutboxItem(env, i, act, convKey));
+        }
+        var inserted = await _queue.EnqueueEnvelopeAsync(env.RequestId, items, ct).ConfigureAwait(false);
+        if (inserted)
+        {
+            await _workCh.Writer.WriteAsync(env.RequestId, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            foreach (var item in items)
                 await RereportIfTerminalAsync(item, ct).ConfigureAwait(false);
-            }
         }
     }
 
@@ -155,13 +175,13 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         if (existing.Status == "done")
         {
             _logger?.LogInformation("重复 outbox 项已 done，重报 success ActionId={Id}", item.ActionId);
-            await ReportActionResultAsync(item, success: true, null, null, ct).ConfigureAwait(false);
+            await ReportActionResultAsync(existing, success: true, null, null, ct).ConfigureAwait(false);
         }
         else if (existing.Status == "failed")
         {
             _logger?.LogInformation("重复 outbox 项 failed，重报失败 ActionId={Id} code={Code}",
                 item.ActionId, existing.ErrorCode);
-            await ReportActionResultAsync(item, success: false, existing.ErrorCode, existing.ErrorMessage, ct)
+            await ReportActionResultAsync(existing, success: false, existing.ErrorCode, existing.ErrorMessage, ct)
                 .ConfigureAwait(false);
         }
         // pending / running：worker 在途，跳过（避免重复派发）
@@ -195,6 +215,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         var item = new OutboxItem
         {
             ActionId = env.Actions.Count > 1 ? $"{env.RequestId}#{idx}" : env.RequestId,
+            RequestId = env.RequestId,
+            ActionIndex = idx,
             ActionType = act.Type,
             ConversationKey = convKey,
             CreatedAt = DateTimeOffset.Now,
@@ -246,8 +268,65 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     /// <summary>单 Worker：从工作通道出队 → 调 PS → 回执上报。</summary>
     private async Task WorkerLoopAsync(CancellationToken ct)
     {
-        await foreach (var item in _workCh.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+        await foreach (var _ in _workCh.Reader.ReadAllAsync(ct).ConfigureAwait(false))
         {
+            try
+            {
+                await DispatchEnvelopeAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "WorkerLoop 处理 envelope 异常");
+            }
+        }
+    }
+
+    /// <summary>连续执行最早 envelope；失败动作之后的动作全部明确中止并逐项回执。</summary>
+    internal async Task DispatchEnvelopeAsync(CancellationToken ct)
+    {
+        var items = await _queue.ClaimNextEnvelopeAsync(ct).ConfigureAwait(false);
+        if (items.Count == 0) return;
+        var requestId = items[0].RequestId;
+        using var leaseCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var leaseTask = RenewLeaseUntilCancelledAsync(requestId, leaseCts);
+        ct = leaseCts.Token;
+        var failed = false;
+        try
+        {
+            for (var i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                if (!await _queue.RenewEnvelopeLeaseAsync(requestId, ct).ConfigureAwait(false))
+                {
+                    _logger?.LogError("action 执行前发现 envelope 租约已丢失 RequestId={Id}", requestId);
+                    leaseCts.Cancel();
+                    throw new OperationCanceledException("envelope lease lost", ct);
+                }
+            // 崩溃恢复可能同时取回已终态和未终态动作；终态只重报，绝不能再次操作桌面。
+            if (item.Status == "done")
+            {
+                await ReportActionResultAsync(item, true, null, null, ct).ConfigureAwait(false);
+                continue;
+            }
+            if (item.Status == "failed")
+            {
+                await ReportActionResultAsync(
+                    item, false, item.ErrorCode, item.ErrorMessage, ct).ConfigureAwait(false);
+                failed = true;
+                continue;
+            }
+            if (failed)
+            {
+                await EnsureEnvelopeLeaseOwnedAsync(requestId, leaseCts, ct).ConfigureAwait(false);
+                await _queue.MarkFailedAsync(
+                    item.ActionId, "aborted_by_previous_action", "前序动作失败，当前动作未执行", ct)
+                    .ConfigureAwait(false);
+                await ReportActionResultAsync(
+                    item, false, "aborted_by_previous_action", "前序动作失败，当前动作未执行", ct)
+                    .ConfigureAwait(false);
+                continue;
+            }
             try
             {
                 await DispatchOneAsync(item, ct).ConfigureAwait(false);
@@ -255,9 +334,73 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "WorkerLoop 处理异常 ActionId={Id}", item.ActionId);
+                _logger?.LogError(ex, "action 未处理异常，转失败终态 ActionId={Id}", item.ActionId);
+                await EnsureEnvelopeLeaseOwnedAsync(requestId, leaseCts, ct).ConfigureAwait(false);
+                await _queue.MarkFailedAsync(item.ActionId, "execution_failed", "动作执行异常", ct)
+                    .ConfigureAwait(false);
+                await ReportActionResultAsync(item, false, "execution_failed", "动作执行异常", ct)
+                    .ConfigureAwait(false);
+            }
+            var terminal = await _queue.GetByActionIdAsync(item.ActionId, ct).ConfigureAwait(false);
+            if (terminal?.Status == "failed") failed = true;
+            if (terminal?.Status == "pending")
+            {
+                // 暂停期间不越过当前消息；恢复后重新领取完整 envelope。
+                await _queue.RecoverRunningEnvelopesAsync(ct).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
+                await _workCh.Writer.WriteAsync(requestId, ct).ConfigureAwait(false);
+                return;
+            }
+            }
+            await _queue.CompleteEnvelopeAsync(requestId, !failed, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            leaseCts.Cancel();
+            try { await leaseTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private async Task RenewLeaseUntilCancelledAsync(
+        string requestId, CancellationTokenSource leaseCts)
+    {
+        while (!leaseCts.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), leaseCts.Token).ConfigureAwait(false);
+                if (await _queue.RenewEnvelopeLeaseAsync(requestId, leaseCts.Token).ConfigureAwait(false))
+                    continue;
+                _logger?.LogError("envelope 执行租约已丢失 RequestId={Id}", requestId);
+                leaseCts.Cancel();
+                return;
+            }
+            catch (OperationCanceledException) when (leaseCts.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // 无法证明仍持有租约时失败关闭，取消下载/重试/PowerShell 链路。
+                _logger?.LogError(ex, "envelope 租约续期异常 RequestId={Id}", requestId);
+                leaseCts.Cancel();
+                return;
             }
         }
+    }
+
+    /// <summary>
+    /// 外部下载/PowerShell 调用可能跨越一次租约周期；写终态或回执前必须再次确认所有权，
+    /// 避免另一 Windows Session 已恢复同一 envelope 后，旧执行器继续覆盖状态。
+    /// </summary>
+    private async Task EnsureEnvelopeLeaseOwnedAsync(
+        string requestId, CancellationTokenSource leaseCts, CancellationToken ct)
+    {
+        if (await _queue.RenewEnvelopeLeaseAsync(requestId, ct).ConfigureAwait(false)) return;
+        _logger?.LogError("写 action 终态前发现 envelope 租约已丢失 RequestId={Id}", requestId);
+        leaseCts.Cancel();
+        throw new OperationCanceledException("envelope lease lost", ct);
     }
 
     /// <summary>分发一个 outbox 项；包含重试逻辑。public 仅供测试直接驱动单条 action（不经 timer/Channel）。</summary>
@@ -286,18 +429,24 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
             }
         }
 
+        // 暂停检查通过后才算真正开始执行；该时间持久化，崩溃恢复/回执重报仍保持首次值。
+        item.ExecutionStartedAt = await _queue.MarkExecutionStartedAsync(item.ActionId, ct)
+            .ConfigureAwait(false);
+
         // noop / handoff 不经 PS，直接回执 success
         if (item.ActionType == ActionTypeNames.Noop)
         {
+            await EnsureItemLeaseOwnedAsync(item, ct).ConfigureAwait(false);
             _logger?.LogInformation("noop 跳过执行 ActionId={Id}", item.ActionId);
-            await ReportAndCleanupAsync(item, success: true).ConfigureAwait(false);
+            await ReportAndCleanupAsync(item, success: true, ct: ct).ConfigureAwait(false);
             return;
         }
         if (item.ActionType == ActionTypeNames.Handoff)
         {
+            await EnsureItemLeaseOwnedAsync(item, ct).ConfigureAwait(false);
             // Phase 3 简化：只 log，不真暂停。Phase 4 接会话暂停基础设施。
             _logger?.LogWarning("handoff 简化处理：ActionId={Id}（Phase 4 接入真暂停）", item.ActionId);
-            await ReportAndCleanupAsync(item, success: true).ConfigureAwait(false);
+            await ReportAndCleanupAsync(item, success: true, ct: ct).ConfigureAwait(false);
             return;
         }
 
@@ -308,7 +457,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
 
             if (ok)
             {
-                await ReportAndCleanupAsync(item, success: true).ConfigureAwait(false);
+                await EnsureItemLeaseOwnedAsync(item, ct).ConfigureAwait(false);
+                await ReportAndCleanupAsync(item, success: true, ct: ct).ConfigureAwait(false);
                 return;
             }
 
@@ -318,6 +468,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
             // 仅 wecom_window_not_found 允许重试
             if (errCode != "wecom_window_not_found" || attempt >= maxRetries)
             {
+                await EnsureItemLeaseOwnedAsync(item, ct).ConfigureAwait(false);
                 _logger?.LogWarning("action 失败终态 ActionId={Id} Code={Code}", item.ActionId, reportCode);
                 await _queue.MarkFailedAsync(item.ActionId, reportCode, errMsg, ct).ConfigureAwait(false);
                 await ReportActionResultAsync(item, success: false, reportCode, errMsg, ct).ConfigureAwait(false);
@@ -360,6 +511,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                     {
                         return (false, "attachment_rejected", ex.Message);
                     }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
                         return (false, "attachment_download_failed", ex.Message);
@@ -401,10 +553,18 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         _ => psCode,
     };
 
-    private async Task ReportAndCleanupAsync(OutboxItem item, bool success)
+    private async Task EnsureItemLeaseOwnedAsync(OutboxItem item, CancellationToken ct)
     {
-        await _queue.MarkDoneAsync(item.ActionId).ConfigureAwait(false);
-        await ReportActionResultAsync(item, success, null, null).ConfigureAwait(false);
+        // 旧单 action 测试/API 没有 request_id；生产 envelope 路径始终有值并强制校验。
+        if (string.IsNullOrWhiteSpace(item.RequestId)) return;
+        if (await _queue.VerifyActionWriteOwnershipAsync(item.RequestId, ct).ConfigureAwait(false)) return;
+        throw new OperationCanceledException("envelope lease lost", ct);
+    }
+
+    private async Task ReportAndCleanupAsync(OutboxItem item, bool success, CancellationToken ct = default)
+    {
+        await _queue.MarkDoneAsync(item.ActionId, ct).ConfigureAwait(false);
+        await ReportActionResultAsync(item, success, null, null, ct).ConfigureAwait(false);
     }
 
     private async Task ReportActionResultAsync(OutboxItem item, bool success,
@@ -412,7 +572,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     {
         try
         {
-            await _api.ReportActionResultAsync(item.ActionId, success, code, msg, ct)
+            await _api.ReportActionResultWithTimingAsync(
+                    item.ActionId, success, code, msg, item.ExecutionStartedAt, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -430,5 +591,6 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     public void Dispose()
     {
         _cts?.Dispose();
+        _desktopMutex?.Dispose();
     }
 }

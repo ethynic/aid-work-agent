@@ -138,7 +138,8 @@ sig = hmac_sha256(
   "success": true,
   "error_code": null,
   "error_message": null,
-  "executed_at": "2026-06-22T10:00:05+08:00"
+  "executed_at": "2026-06-22T10:00:05+08:00",
+  "started_at": "2026-06-22T10:00:01+08:00"
 }
 ```
 
@@ -152,6 +153,7 @@ sig = hmac_sha256(
 | `error_code` | str \| null | 失败时的错误码（见 A.8） |
 | `error_message` | str \| null | 脱敏失败说明 |
 | `executed_at` | datetime | 实际执行完成时间 |
+| `started_at` | datetime \| null | 客户端首次真正开始执行该 action 的时间；未执行的中止动作可空 |
 
 ### A.6 出站 actions（服务端 → 客户端，`ActionEnvelope`）
 
@@ -194,6 +196,8 @@ GET 请求沿用 `X-Client-Id`、`X-Timestamp`、`X-Nonce`、`X-Signature`，签
 服务端在 `wecom_rpa_action_outbox.action_results` 持久化逐 action 结果并在行锁事务内合并：
 回执可乱序，同一索引首次结果幂等；任一合法 action 失败则信封立即 `failed`，只有全部合法
 索引均回执成功才置 `succeeded`。非法索引拒绝且不改变状态。
+服务端从合法回执的 `started_at` 取最早值幂等写入 outbox `send_started_at`；该字段只表示
+真实执行已开始，不改变成功/失败终态判定。旧客户端缺少 `started_at` 时保持为空。
 
 WebSocket v1.2 在连接建立时只发送轻量通知，不批量重放正文：
 

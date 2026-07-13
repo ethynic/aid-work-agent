@@ -28,6 +28,8 @@ from src.channels.wecom_personal_rpa import db as rpa_db
 from src.channels.wecom_personal_rpa import observability
 from src.channels.wecom_personal_rpa.secret_crypto import encrypt_secret
 from src.config.settings import settings
+from src.core.cache_utils import CacheKeys
+from src.core.redis_client import redis_client
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.channel_config_db import ChannelConfigDB
 
@@ -79,6 +81,11 @@ class UpdateBindingRequest(BaseModel):
             "两个字段任一非空即按白名单过滤；都为空 = 监控所有（首版默认）。"
         ),
     )
+
+
+class UpdateAccountIdentityRequest(BaseModel):
+    wecom_user_id: str = Field(..., min_length=1, max_length=128)
+    wecom_user_aliases: List[str] = Field(default_factory=list, max_length=20)
 
 
 # ===========================================================================
@@ -145,6 +152,11 @@ def _client_summary(client: Dict[str, Any]) -> Dict[str, Any]:
 
 def _account_public(acc: Dict[str, Any]) -> Dict[str, Any]:
     """账号对外字段。"""
+    wecom_user_id = (acc.get("wecom_user_id") or "").strip()
+    masked_user_id = (
+        f"***{wecom_user_id[-3:]}" if len(wecom_user_id) > 3
+        else "***" if wecom_user_id else None
+    )
     return {
         "account_id": acc.get("id"),
         "client_id": acc.get("client_id"),
@@ -154,6 +166,10 @@ def _account_public(acc: Dict[str, Any]) -> Dict[str, Any]:
         "last_login_at": acc.get("last_login_at"),
         "created_at": acc.get("created_at"),
         "updated_at": acc.get("updated_at"),
+        "wecom_user_id_configured": bool(wecom_user_id),
+        "wecom_user_id_masked": masked_user_id,
+        "identity_verified_at": acc.get("identity_verified_at"),
+        "auto_reply_ready": bool(wecom_user_id) and acc.get("status") == "online",
     }
 
 
@@ -344,6 +360,54 @@ async def list_client_accounts(client_id: str, request: Request):
 
     accounts = rpa_db.list_accounts(tenant_id, client_id=client_id)
     return _ok([_account_public(a) for a in accounts])
+
+
+@router.patch("/accounts/{account_id}/identity")
+async def update_account_identity(
+    account_id: str, body: UpdateAccountIdentityRequest, request: Request
+):
+    """配置账号权威企微成员身份；响应不返回 userid 明文。"""
+    if err := _ensure_saas_enabled():
+        return err
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+    user_id = body.wecom_user_id.strip()
+    aliases = sorted({value.strip() for value in body.wecom_user_aliases if value.strip()})
+    if not user_id:
+        raise _fail("企微成员身份不能为空", status_code=422)
+    if any(len(value) > 128 for value in aliases):
+        raise _fail("企微成员历史身份长度不能超过 128", status_code=422)
+    if user_id in aliases:
+        aliases.remove(user_id)
+    account = rpa_db.get_account_for_tenant(tenant_id, account_id)
+    if not account:
+        raise _fail("账号不存在", status_code=404)
+    try:
+        updated = rpa_db.update_account_identity(
+            tenant_id, account_id, user_id, aliases, admin.get("user_id")
+        )
+    except Exception as exc:
+        if (
+            isinstance(exc, ValueError) and str(exc) == "account_identity_conflict"
+        ) or getattr(exc, "sqlstate", None) == "23505" or getattr(exc, "pgcode", None) == "23505":
+            raise _fail("该企微成员身份已绑定其他账号", status_code=409) from exc
+        # 数据库异常可能包含唯一键明文值，身份接口禁止把 debug 返回给调用方。
+        logger.warning(f"账号身份更新失败 account_id={account_id}: {type(exc).__name__}")
+        raise _fail("账号身份更新失败", status_code=500) from exc
+    if not updated:
+        raise _fail("账号身份更新失败", status_code=500)
+    rpa_db.write_audit(
+        tenant_id=tenant_id,
+        client_id=account.get("client_id"),
+        account_id=account_id,
+        category="account_identity_updated",
+        payload_json=json.dumps(
+            {"alias_count": len(aliases), "operator_id": admin.get("user_id")},
+            ensure_ascii=False,
+        ),
+        user_id=admin.get("user_id"),
+    )
+    return _ok(_account_public(rpa_db.get_account_for_tenant(tenant_id, account_id) or {}))
 
 
 @router.post("/clients/{client_id}/rotate-secret")
@@ -735,17 +799,21 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
 
 
 def _do_pause_account(tenant_id: str, account_id: str, reason: Optional[str]) -> bool:
-    cur = rpa_db.get_account_status(account_id)
+    cur = rpa_db.get_account_status(tenant_id, account_id)
     if cur == "paused":
         return True  # 幂等
     return rpa_db.set_account_status(tenant_id, account_id, "paused", paused_reason=reason)
 
 
 def _do_resume_account(tenant_id: str, account_id: str) -> bool:
-    cur = rpa_db.get_account_status(account_id)
+    cur = rpa_db.get_account_status(tenant_id, account_id)
     if cur in ("online", None):
         return True  # 幂等：已 online 视为成功
     # resume 不强制设为 online（实际是否在线由客户端心跳决定），这里解除 paused 标记
+    # 先清危险窗口再解除暂停；Redis 异常时保持 paused，避免恢复后被旧窗口立即重触发。
+    if not redis_client.is_available():
+        raise RuntimeError("self echo 熔断窗口不可用，拒绝恢复账号")
+    redis_client.delete(f"{CacheKeys.WECOM_RPA_SELF_ECHO_ESCAPE}:{tenant_id}:{account_id}")
     return rpa_db.set_account_status(tenant_id, account_id, "online", paused_reason=None)
 
 

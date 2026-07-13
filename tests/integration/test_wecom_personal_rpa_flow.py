@@ -28,6 +28,8 @@
 
 import os
 import sys
+
+os.environ.setdefault("RPA_SECRET_KEY", "test-rpa-audit-key-32-bytes-minimum")
 import types
 from unittest.mock import MagicMock
 
@@ -67,7 +69,7 @@ _install_db_stubs()
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -129,6 +131,7 @@ def _message_payload(text: str = "你好") -> dict:
 
 
 def _action_result_payload(action_result_id: str, success: bool = True) -> dict:
+    executed_at = datetime.now()
     return {
         "request_id": "req_test_001",
         "action_result_id": action_result_id,
@@ -137,7 +140,8 @@ def _action_result_payload(action_result_id: str, success: bool = True) -> dict:
         "success": success,
         "error_code": None,
         "error_message": None,
-        "executed_at": datetime.now().isoformat(),
+        "executed_at": executed_at.isoformat(),
+        "started_at": (executed_at - timedelta(seconds=1)).isoformat(),
     }
 
 
@@ -190,6 +194,23 @@ def _patched_db(client_row: dict | None = None):
     fake.mark_outbox_status.return_value = True
     fake.list_accounts.return_value = []
     return fake
+
+
+@pytest.mark.asyncio
+async def test_second_desktop_instance_status_does_not_pause_shared_account():
+    from src.channels.wecom_personal_rpa.schemas import RpaCallbackEnvelope
+    from src.saas.api import wecom_personal_rpa_routes as routes_mod
+
+    raw = _build_envelope("st_mutex", "status", {
+        "status": "paused", "detail": "desktop_automation_already_running"
+    })
+    env = RpaCallbackEnvelope.model_validate(raw)
+    fake_db = _patched_db()
+    with patch.object(routes_mod, "db", fake_db):
+        await routes_mod._handle_status_event(_TENANT_ID, env, raw)
+
+    fake_db.set_account_status.assert_not_called()
+    fake_db.write_audit.assert_called_once()
 
 
 class _FakeDedup:
@@ -352,6 +373,7 @@ class TestWeComPersonalRpaCallbackFlow:
         mark = fake_db.mark_outbox_result_for_client.call_args.kwargs
         assert mark["tenant_id"] == _TENANT_ID
         assert mark["client_id"] == _CLIENT_ID
+        assert mark["started_at"] is not None
 
     def test_action_result_db_failure_can_retry_same_event(self, client, fake_dedup):
         """DB 瞬时失败不占 event/action 去重键，同一事件可再次上报。"""
@@ -519,7 +541,7 @@ class TestActionDeliverOfflineOutbox:
         from src.channels.wecom_personal_rpa import action_client
         from src.channels.wecom_personal_rpa import db as rpa_db
 
-        with patch.object(rpa_db, "get_account") as m_get_acct, patch.object(
+        with patch.object(rpa_db, "get_account_for_tenant") as m_get_acct, patch.object(
             rpa_db, "enqueue_action"
         ) as m_enqueue, patch.object(
             action_client.client_connection_registry, "is_online", return_value=False
@@ -530,6 +552,7 @@ class TestActionDeliverOfflineOutbox:
                 "tenant_id": _TENANT_ID,
                 "client_id": _CLIENT_ID,
                 "status": "offline",
+                "wecom_user_id": "self_001",
             }
             m_enqueue.return_value = {"id": "act_row_1", "status": "pending"}
 
@@ -553,7 +576,7 @@ class TestActionDeliverOfflineOutbox:
         from src.channels.wecom_personal_rpa import action_client
         from src.channels.wecom_personal_rpa import db as rpa_db
 
-        with patch.object(rpa_db, "get_account") as m_get_acct, patch.object(
+        with patch.object(rpa_db, "get_account_for_tenant") as m_get_acct, patch.object(
             rpa_db, "enqueue_action"
         ) as m_enqueue, patch.object(
             action_client.client_connection_registry, "is_online", return_value=True
@@ -567,6 +590,7 @@ class TestActionDeliverOfflineOutbox:
                 "tenant_id": _TENANT_ID,
                 "client_id": _CLIENT_ID,
                 "status": "online",
+                "wecom_user_id": "self_001",
             }
             m_enqueue.return_value = {"id": "act_row_1", "status": "pending"}
 

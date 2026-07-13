@@ -264,6 +264,7 @@ public partial class App : Application
         // IActionSource stub：内存 Channel 实现，单测与早期接入使用。Phase 4 接入真实 WebSocket 后替换。
         services.AddSingleton<ChannelActionSource>();
         services.AddSingleton<IActionSource>(sp => sp.GetRequiredService<ChannelActionSource>());
+        services.AddSingleton<DesktopAutomationMutex>();
         // OutboundActionDispatcher：单 Worker 串行执行 PS 调用。同时实现 IHostedService。
         // P0-5：注入 PauseState 单例，Tenant/Account/Conversation 暂停时 Requeue action。
         services.AddSingleton<OutboundActionDispatcher>(sp =>
@@ -275,7 +276,8 @@ public partial class App : Application
                 sp.GetRequiredService<ClientOptions>(),
                 sp.GetRequiredService<IActionSource>(),
                 logger: null,
-                pauseState: sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>()));
+                pauseState: sp.GetRequiredService<WeCom.PersonalRpa.Core.StateMachine.PauseState>(),
+                desktopMutex: sp.GetRequiredService<DesktopAutomationMutex>()));
         services.AddHostedService(sp => sp.GetRequiredService<OutboundActionDispatcher>());
 
         // ---- Phase 3 块 F：QrCode 二维码监听 ----

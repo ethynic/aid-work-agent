@@ -1520,6 +1520,10 @@ CREATE TABLE IF NOT EXISTS wecom_rpa_accounts (
     user_id TEXT,
     client_id TEXT,
     display_name TEXT,
+    wecom_user_id TEXT,
+    wecom_user_aliases TEXT[] DEFAULT '{}',
+    identity_verified_at TIMESTAMP,
+    identity_verified_by TEXT,
     status TEXT NOT NULL DEFAULT 'offline',
     paused_reason TEXT,
     last_login_at TIMESTAMP,
@@ -1583,12 +1587,16 @@ CREATE TABLE IF NOT EXISTS wecom_rpa_action_outbox (
     request_id TEXT NOT NULL,
     session_id TEXT,
     actions TEXT,
+    target_peer_id TEXT,
+    reply_digest TEXT,
+    reply_digests JSONB NOT NULL DEFAULT '[]'::jsonb,
     reply_context JSONB,
     action_results JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     next_retry_at TIMESTAMP,
     completed_at TIMESTAMP,
+    send_started_at TIMESTAMP,
     error_message TEXT,
     dedup_key TEXT NOT NULL UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1598,10 +1606,27 @@ CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_status_retry
     ON wecom_rpa_action_outbox(status, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_tenant_account
     ON wecom_rpa_action_outbox(tenant_id, account_id);
+ALTER TABLE wecom_rpa_accounts ADD COLUMN IF NOT EXISTS wecom_user_id TEXT;
+ALTER TABLE wecom_rpa_accounts ADD COLUMN IF NOT EXISTS wecom_user_aliases TEXT[] DEFAULT '{}';
+ALTER TABLE wecom_rpa_accounts ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMP;
+ALTER TABLE wecom_rpa_accounts ADD COLUMN IF NOT EXISTS identity_verified_by TEXT;
+ALTER TABLE wecom_rpa_action_outbox
+    ADD COLUMN IF NOT EXISTS target_peer_id TEXT;
+ALTER TABLE wecom_rpa_action_outbox
+    ADD COLUMN IF NOT EXISTS reply_digest TEXT;
 ALTER TABLE wecom_rpa_action_outbox
     ADD COLUMN IF NOT EXISTS reply_context JSONB;
 ALTER TABLE wecom_rpa_action_outbox
     ADD COLUMN IF NOT EXISTS action_results JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE wecom_rpa_action_outbox
+    ADD COLUMN IF NOT EXISTS reply_digests JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE wecom_rpa_action_outbox
+    ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_recent_echo
+    ON wecom_rpa_action_outbox(tenant_id, account_id, target_peer_id, completed_at DESC)
+    WHERE status = 'succeeded';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wecom_rpa_accounts_tenant_wecom_user
+    ON wecom_rpa_accounts(tenant_id, wecom_user_id) WHERE wecom_user_id IS NOT NULL;
 
 -- 5. 审计日志表
 CREATE TABLE IF NOT EXISTS wecom_rpa_audit_logs (

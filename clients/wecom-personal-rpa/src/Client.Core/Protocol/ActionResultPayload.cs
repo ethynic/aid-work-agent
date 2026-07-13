@@ -39,4 +39,8 @@ public sealed class ActionResultPayload
     /// <summary>客户端实际执行完成时间。</summary>
     [JsonPropertyName("executed_at")]
     public DateTimeOffset ExecutedAt { get; set; }
+
+    /// <summary>客户端首次真正开始执行该 action 的时间；未执行的中止动作可空。</summary>
+    [JsonPropertyName("started_at")]
+    public DateTimeOffset? StartedAt { get; set; }
 }

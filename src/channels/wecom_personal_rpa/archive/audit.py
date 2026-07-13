@@ -19,7 +19,11 @@
 自动出现在管理后台审计列表 + /metrics 接口的 audit_counts 聚合中。
 """
 
+import hashlib
+import hmac
 import json
+import os
+import unicodedata
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -33,6 +37,82 @@ CATEGORY_FETCH_STARTED = "archive_fetch_started"
 CATEGORY_FETCH_SUCCESS = "archive_fetch_success"
 CATEGORY_FETCH_RATE_LIMITED = "archive_fetch_rate_limited"
 CATEGORY_FETCH_ERROR = "archive_fetch_error"
+CATEGORY_DIRECTION_FILTERED = "archive_direction_filtered"
+CATEGORY_DIRECTION_GUARD_FILTERED = "direction_guard_filtered"
+CATEGORY_SELF_ECHO_ESCAPED = "self_echo_escaped"
+
+
+def _hmac_key() -> bytes:
+    key = os.getenv("WECOM_RPA_AUDIT_HMAC_KEY") or os.getenv("RPA_SECRET_KEY")
+    if not key:
+        raise RuntimeError("未配置 WECOM_RPA_AUDIT_HMAC_KEY 或 RPA_SECRET_KEY")
+    return key.encode("utf-8")
+
+
+def hash_identifier(value: Optional[str]) -> Optional[str]:
+    """生成审计用不可逆短摘要，禁止记录企微 userid 明文。"""
+    if not value:
+        return None
+    try:
+        return hmac.new(_hmac_key(), value.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    except Exception as exc:
+        # 摘要缺失时宁可不写标识，也不能泄露明文或让 inbound 被当作坏消息推进 seq。
+        logger.warning(f"[ArchiveAudit] 标识摘要降级为空: {type(exc).__name__}")
+        return None
+
+
+def digest_reply_text(value: str) -> str:
+    """生成出站正文关联摘要，正文自身不落审计。"""
+    return hmac.new(_hmac_key(), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def digest_reply_component(action_type: str, value: str) -> str:
+    """生成单个出站动作与存档回流的稳定摘要。
+
+    文本只规范化 Unicode 与换行；附件只使用类型和文件名。摘要中加入动作类型，
+    避免同名图片/文件或正文与文件名互相碰撞。数据库只保存 HMAC，不保存正文副本。
+    """
+    normalized = unicodedata.normalize("NFC", str(value or "")).replace("\r\n", "\n").replace("\r", "\n")
+    canonical = f"wecom-rpa-echo-v1\0{action_type}\0{normalized}"
+    return hmac.new(_hmac_key(), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def log_direction_filtered(
+    tenant_id: str, config_id: str, account_id: str, direction: str,
+    reason: str, sender: Optional[str], peer_id: Optional[str], event_id: str,
+) -> None:
+    # 摘要密钥或审计设施异常不能阻止安全过滤消息推进 seq。
+    try:
+        sender_hash = hash_identifier(sender)
+        peer_hash = hash_identifier(peer_id)
+    except Exception as exc:
+        logger.warning(
+            f"[ArchiveAudit] 方向摘要生成失败，降级为空摘要: {type(exc).__name__}"
+        )
+        sender_hash = None
+        peer_hash = None
+    _safe_write(
+        tenant_id, CATEGORY_DIRECTION_FILTERED,
+        {
+            "config_id": config_id,
+            "event_id": event_id,
+            "direction": direction,
+            "reason": reason,
+            "sender_hash": sender_hash,
+            "peer_hash": peer_hash,
+        },
+        account_id=account_id,
+    )
+
+
+def log_self_echo_detected(
+    tenant_id: str, config_id: str, account_id: str, event_id: str
+) -> None:
+    _safe_write(
+        tenant_id, "self_echo_detected",
+        {"event_id": event_id, "matched": True},
+        config_id=config_id, account_id=account_id,
+    )
 
 
 def _safe_write(

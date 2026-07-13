@@ -69,6 +69,8 @@ from src.channels.wecom_personal_rpa.schemas import (
     RpaRateLimits,
 )
 from src.core.storage import get_tenant_storage_abs_path
+from src.core.redis_client import redis_client
+from src.core.cache_utils import CacheKeys
 
 router = APIRouter(tags=["企业微信个人RPA渠道"])
 
@@ -108,6 +110,40 @@ def _build_rpa_attachment_inputs(attachments, event_id: str) -> tuple[list, list
 _DEDUP_PREFIX = "wecom_personal_rpa"
 # 出站动作入队去重前缀（与 action_client.deliver_actions 内部一致）
 _OUTBOX_DEDUP_PREFIX = "wecom_personal_rpa"
+_SELF_ECHO_ESCAPE_PREFIX = CacheKeys.WECOM_RPA_SELF_ECHO_ESCAPE
+
+
+def _record_self_echo_escape(tenant_id: str, account_id: str, event_id: str) -> None:
+    """记录危险 self echo，五分钟三次时幂等暂停账号。"""
+    key = f"{_SELF_ECHO_ESCAPE_PREFIX}:{tenant_id}:{account_id}"
+    now = time.time()
+    try:
+        if not redis_client.is_available():
+            logger.warning(
+                f"RPA self echo 熔断计数降级 account_id={account_id}: redis_unavailable"
+            )
+            return
+        redis_client.zremrangebyscore(key, 0, now - 300)
+        # 同一危险事件重试只更新时间，不重复累计阈值。
+        member = hashlib.sha256(event_id.encode("utf-8")).hexdigest()[:24]
+        redis_client.zadd(key, {member: now})
+        redis_client.expire(key, 600)
+        if redis_client.zcard(key) < 3:
+            return
+        account = db.get_account_for_tenant(tenant_id, account_id)
+        if account and db.open_self_echo_circuit(tenant_id, account_id):
+            db.write_audit(
+                tenant_id=tenant_id,
+                client_id=account.get("client_id"),
+                account_id=account_id,
+                category="self_echo_circuit_opened",
+                payload_json=json.dumps({"reason": "threshold_reached", "window_seconds": 300}),
+            )
+    except Exception as exc:
+        # 当前消息仍已被过滤；Redis 故障绝不能绕过安全防线。
+        logger.warning(
+            f"RPA self echo 熔断计数降级 account_id={account_id}: {type(exc).__name__}"
+        )
 
 
 def _normalize_conversation_search_name(display_name: Optional[str]) -> Optional[str]:
@@ -438,13 +474,75 @@ async def _process_inbound_message(
     - "server_fetcher"：服务端 archive fetcher 拉取后调用（Phase 4 新增）
     两种来源行为完全等价，复用同一处理链路。
     """
-    # 延迟 import：避免顶层 import src.core.* 触发 master_agent 单例创建链副作用
-    from src.core.agent_router import agent_router
-    from src.core.session_queue import session_queue
-    from src.saas.services.auto_register import ensure_user_registered
-    from src.services.session_record import SessionRecordManager
-
     try:
+        # 安全防线必须先于 adapter、binding、用户、Trace 与 session 的任何副作用。
+        account = db.get_account_for_tenant(tenant_id, env.account_id)
+        payload = env.payload or {}
+        self_ids = {
+            str(value).strip()
+            for value in [
+                (account or {}).get("wecom_user_id"),
+                *((account or {}).get("wecom_user_aliases") or []),
+            ]
+            if value and str(value).strip()
+        }
+        sender_stable_id = payload.get("sender_stable_id")
+        guard_reason = None
+        dangerous_self = False
+        if not account or not self_ids:
+            guard_reason = "self_identity_missing"
+        elif sender_stable_id in self_ids:
+            guard_reason = "sender_is_self"
+            dangerous_self = True
+        elif source == "server_fetcher" and (
+            payload.get("message_direction") not in ("inbound_external", "inbound_group")
+            or not payload.get("direction_reason")
+            or not payload.get("archive_peer_id")
+        ):
+            guard_reason = "archive_direction_metadata_invalid"
+        if guard_reason:
+            from src.channels.wecom_personal_rpa.archive import audit as archive_audit
+            category = "self_echo_escaped" if dangerous_self else "direction_guard_filtered"
+            if dangerous_self:
+                _record_self_echo_escape(tenant_id, env.account_id, env.event_id)
+            try:
+                sender_hash = archive_audit.hash_identifier(sender_stable_id)
+            except Exception as exc:
+                sender_hash = None
+                logger.warning(
+                    f"RPA direction guard 摘要降级 event_id={env.event_id}: {type(exc).__name__}"
+                )
+            try:
+                db.write_audit(
+                    tenant_id=tenant_id,
+                    client_id=env.client_id,
+                    account_id=env.account_id,
+                    category=category,
+                    payload_json=json.dumps(
+                        {
+                            "event_id": env.event_id,
+                            "reason": guard_reason,
+                            "sender_hash": sender_hash,
+                            "source": source,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"RPA direction guard 审计降级 event_id={env.event_id}: {type(exc).__name__}"
+                )
+            logger.warning(
+                f"RPA direction guard filtered event_id={env.event_id} reason={guard_reason}"
+            )
+            return
+
+        # 延迟 import：通过安全防线后才允许加载并调用有副作用的 Agent 链路。
+        from src.core.agent_router import agent_router
+        from src.core.session_queue import session_queue
+        from src.saas.services.auto_register import ensure_user_registered
+        from src.services.session_record import SessionRecordManager
+
         # 1. 解析消息
         adapter = WeComPersonalRpaAdapter(
             client_id=env.client_id,
@@ -454,11 +552,9 @@ async def _process_inbound_message(
         um = await adapter.parse_message(env_raw)
 
         # 2. 授权判定（binding 是否 active）
-        payload = env.payload or {}
         conversation_id = payload.get("conversation_id", "")
         conversation_type = payload.get("conversation_type", "external_user")
         sender_display_name = payload.get("sender_display_name", "")
-        sender_stable_id = payload.get("sender_stable_id")
         # search_key 归一化：稳定 ID 优先，否则 account_id + display_name
         search_key = sender_stable_id or f"{env.account_id}:{sender_display_name}"
 
@@ -762,12 +858,14 @@ async def _handle_status_event(
         paused_reason = None
         if status_payload.status == "paused":
             paused_reason = status_payload.detail or "paused"
-        db.set_account_status(
-            tenant_id=tenant_id,
-            account_id=env.account_id,
-            status=status_payload.status,
-            paused_reason=paused_reason,
-        )
+        # 第二实例未取得桌面 Mutex 仅代表该进程不执行，不能暂停共享账号并影响 Mutex 持有者。
+        if status_payload.detail != "desktop_automation_already_running":
+            db.set_account_status(
+                tenant_id=tenant_id,
+                account_id=env.account_id,
+                status=status_payload.status,
+                paused_reason=paused_reason,
+            )
     except Exception as e:
         logger.warning(f"RPA set_account_status 失败: {e}")
 
@@ -824,6 +922,8 @@ async def _handle_action_result(
                 if not ar.success and ar.error_message
                 else None
             ),
+            started_at=ar.started_at,
+            executed_at=ar.executed_at,
         )
         if not marked:
             # 回执先于 outbox 入队或已终态：记 info，不阻断
