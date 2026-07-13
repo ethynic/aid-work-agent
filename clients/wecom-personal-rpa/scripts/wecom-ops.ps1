@@ -10,9 +10,10 @@
 #
 # 支持的 action：
 #   search_user     入参：{keyword}                搜索用户并进入会话
-#   send_text       入参：{keyword, text}          进入会话并发送文本
-#   send_image      入参：{keyword, image_path}    进入会话并发送图片
-#   send_file       入参：{keyword, file_path}     进入会话并发送文件（图片走 send_image）
+#   send_text       入参：{keyword, text, reuse_current_conversation?}
+#   send_image      入参：{keyword, image_path, reuse_current_conversation?}
+#   send_file       入参：{keyword, file_path, reuse_current_conversation?}
+#   reuse_current_conversation 默认 false；仅供客户端同一 envelope 内连续发送复用当前会话。
 #   get_login_state 入参：{} / {qr_region_bbox:[x1,y1,x2,y2]}
 #                                                   检测企微登录态，未登录时附带二维码 base64
 #
@@ -36,6 +37,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # 从 stdin 读 JSON 参数（C# 端通过 StandardInput 写入 JSON 后 Close）
 $stdinText = [Console]::In.ReadToEnd()
 $params = if ($stdinText) { $stdinText | ConvertFrom-Json } else { [PSCustomObject]@{} }
+$reuseCurrentConversation = $false
+if ($null -ne $params.PSObject.Properties['reuse_current_conversation']) {
+    $reuseCurrentConversation = [bool]$params.reuse_current_conversation
+}
 
 # ---------- 内部：搜索用户并进入会话 ----------
 # 算法：取 WeWorkWindow → 激活主窗口 → 连续按两次 Alt 聚焦搜索框
@@ -88,9 +93,47 @@ function Search-WeComUserInternal {
     }
 }
 
+# ---------- 内部：搜索会话或安全复用当前会话 ----------
+function Resolve-WeComSendNavigation {
+    param([string]$Keyword, [bool]$ReuseCurrentConversation = $false)
+
+    if (-not $ReuseCurrentConversation) {
+        return Search-WeComUserInternal -Keyword $Keyword
+    }
+
+    $origin = Get-WeWorkWindowOrigin
+    if (-not $origin) {
+        return @{
+            success = $false
+            error_code = 'wecom_window_not_found'
+            error_message = '找不到企微主窗口（WeWorkWindow），已中止会话复用发送'
+        }
+    }
+    if (-not (Test-WeComForegroundWindow -Hwnd $origin.Hwnd)) {
+        return @{
+            success = $false
+            error_code = 'wecom_window_activation_failed'
+            error_message = '企微不再是当前前台窗口，已中止会话复用发送'
+        }
+    }
+    return @{
+        success = $true
+        reused_current_conversation = $true
+        target_hwnd = $origin.Hwnd
+    }
+}
+
+function New-WeComForegroundLostResult {
+    return @{
+        success = $false
+        error_code = 'wecom_window_activation_failed'
+        error_message = '企微不再是当前前台窗口，已中止会话复用发送'
+    }
+}
+
 # ---------- 内部：进入会话 + 输入文本 + Enter 发送 ----------
 function Send-WeComTextInternal {
-    param([string]$Keyword, [string]$Text)
+    param([string]$Keyword, [string]$Text, [bool]$ReuseCurrentConversation = $false)
 
     if ([string]::IsNullOrEmpty($Text)) {
         return @{
@@ -100,12 +143,19 @@ function Send-WeComTextInternal {
         }
     }
 
-    $nav = Search-WeComUserInternal -Keyword $Keyword
+    $nav = Resolve-WeComSendNavigation -Keyword $Keyword -ReuseCurrentConversation $ReuseCurrentConversation
     if (-not $nav.success) { return $nav }
 
-    Type-Text -text $Text
+    $expectedHwnd = if ($ReuseCurrentConversation) { [IntPtr]$nav.target_hwnd } else { [IntPtr]::Zero }
+    $typeOk = Type-Text -text $Text -ExpectedForegroundHwnd $expectedHwnd
+    if ($ReuseCurrentConversation -and -not $typeOk) {
+        return New-WeComForegroundLostResult
+    }
     Start-Sleep -Milliseconds 300
-    Press-Enter
+    $enterOk = Press-Enter -ExpectedForegroundHwnd $expectedHwnd
+    if ($ReuseCurrentConversation -and -not $enterOk) {
+        return New-WeComForegroundLostResult
+    }
     Start-Sleep -Milliseconds 500
 
     return @{
@@ -117,7 +167,7 @@ function Send-WeComTextInternal {
 
 # ---------- 内部：进入会话 + 剪贴板粘贴图片 + Enter 发送 ----------
 function Send-WeComImageInternal {
-    param([string]$Keyword, [string]$ImagePath)
+    param([string]$Keyword, [string]$ImagePath, [bool]$ReuseCurrentConversation = $false)
 
     if ([string]::IsNullOrEmpty($ImagePath) -or -not (Test-Path $ImagePath)) {
         return @{
@@ -127,8 +177,9 @@ function Send-WeComImageInternal {
         }
     }
 
-    $nav = Search-WeComUserInternal -Keyword $Keyword
+    $nav = Resolve-WeComSendNavigation -Keyword $Keyword -ReuseCurrentConversation $ReuseCurrentConversation
     if (-not $nav.success) { return $nav }
+    $expectedHwnd = if ($ReuseCurrentConversation) { [IntPtr]$nav.target_hwnd } else { [IntPtr]::Zero }
 
     Add-Type -AssemblyName System.Drawing
     Add-Type -AssemblyName System.Windows.Forms
@@ -140,6 +191,10 @@ function Send-WeComImageInternal {
     $lastErr = ''
     for ($i = 1; $i -le 3; $i++) {
         try {
+            if ($expectedHwnd -ne [IntPtr]::Zero -and
+                -not (Test-WeComForegroundWindow -Hwnd $expectedHwnd)) {
+                return New-WeComForegroundLostResult
+            }
             $bmp = [System.Drawing.Bitmap]::FromFile($ImagePath)
             [System.Windows.Forms.Clipboard]::SetImage($bmp)
             $setOk = $true
@@ -160,9 +215,15 @@ function Send-WeComImageInternal {
     }
 
     Start-Sleep -Milliseconds 300
-    Press-CtrlV
+    $pasteOk = Press-CtrlV -ExpectedForegroundHwnd $expectedHwnd
+    if ($ReuseCurrentConversation -and -not $pasteOk) {
+        return New-WeComForegroundLostResult
+    }
     Start-Sleep -Milliseconds 1500  # 等企微图片预览对话框弹出
-    Press-Enter
+    $enterOk = Press-Enter -ExpectedForegroundHwnd $expectedHwnd
+    if ($ReuseCurrentConversation -and -not $enterOk) {
+        return New-WeComForegroundLostResult
+    }
     Start-Sleep -Milliseconds 800
 
     return @{
@@ -177,7 +238,7 @@ function Send-WeComImageInternal {
 # 企微对图片走 SetImage（剪贴板图像数据），对任意文件需要 SetFileDropList（文件 drop 列表），
 # 触发企微"发送文件给 X"对话框（再 Enter 确认）。
 function Send-WeComFileInternal {
-    param([string]$Keyword, [string]$FilePath)
+    param([string]$Keyword, [string]$FilePath, [bool]$ReuseCurrentConversation = $false)
 
     if ([string]::IsNullOrEmpty($FilePath) -or -not (Test-Path $FilePath)) {
         return @{
@@ -188,8 +249,9 @@ function Send-WeComFileInternal {
     }
 
     # 进入会话
-    $nav = Search-WeComUserInternal -Keyword $Keyword
+    $nav = Resolve-WeComSendNavigation -Keyword $Keyword -ReuseCurrentConversation $ReuseCurrentConversation
     if (-not $nav.success) { return $nav }
+    $expectedHwnd = if ($ReuseCurrentConversation) { [IntPtr]$nav.target_hwnd } else { [IntPtr]::Zero }
 
     Add-Type -AssemblyName System.Windows.Forms
 
@@ -199,6 +261,10 @@ function Send-WeComFileInternal {
     $lastErr = ''
     for ($i = 1; $i -le 3; $i++) {
         try {
+            if ($expectedHwnd -ne [IntPtr]::Zero -and
+                -not (Test-WeComForegroundWindow -Hwnd $expectedHwnd)) {
+                return New-WeComForegroundLostResult
+            }
             $dropList = New-Object System.Collections.Specialized.StringCollection
             $dropList.Add((Resolve-Path $FilePath).Path) | Out-Null
             [System.Windows.Forms.Clipboard]::SetFileDropList($dropList)
@@ -220,11 +286,17 @@ function Send-WeComFileInternal {
     Start-Sleep -Milliseconds 300
 
     # Ctrl+V（企微弹出"发送给 X"对话框，确认要发送给当前会话）
-    Press-CtrlV
+    $pasteOk = Press-CtrlV -ExpectedForegroundHwnd $expectedHwnd
+    if ($ReuseCurrentConversation -and -not $pasteOk) {
+        return New-WeComForegroundLostResult
+    }
     Start-Sleep -Milliseconds 1500
 
     # Enter 确认发送
-    Press-Enter
+    $enterOk = Press-Enter -ExpectedForegroundHwnd $expectedHwnd
+    if ($ReuseCurrentConversation -and -not $enterOk) {
+        return New-WeComForegroundLostResult
+    }
     Start-Sleep -Milliseconds 800
 
     # 清空剪贴板，避免后续操作误用
@@ -376,9 +448,9 @@ $sw = [System.Diagnostics.Stopwatch]::StartNew()
 try {
     switch ($Action) {
         'search_user'     { $result = Search-WeComUserInternal -Keyword $params.keyword }
-        'send_text'       { $result = Send-WeComTextInternal -Keyword $params.keyword -Text $params.text }
-        'send_image'      { $result = Send-WeComImageInternal -Keyword $params.keyword -ImagePath $params.image_path }
-        'send_file'       { $result = Send-WeComFileInternal -Keyword $params.keyword -FilePath $params.file_path }
+        'send_text'       { $result = Send-WeComTextInternal -Keyword $params.keyword -Text $params.text -ReuseCurrentConversation $reuseCurrentConversation }
+        'send_image'      { $result = Send-WeComImageInternal -Keyword $params.keyword -ImagePath $params.image_path -ReuseCurrentConversation $reuseCurrentConversation }
+        'send_file'       { $result = Send-WeComFileInternal -Keyword $params.keyword -FilePath $params.file_path -ReuseCurrentConversation $reuseCurrentConversation }
         'get_login_state' { $result = Get-WeComLoginStateInternal }
     }
     $sw.Stop()

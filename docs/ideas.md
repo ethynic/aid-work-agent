@@ -61,6 +61,7 @@
 > 2026-07-12 补充：修复客户端构建产物缺失 PowerShell 自动化脚本的问题，Debug/Release build 与 publish 均复制完整 `scripts` 目录；运行时相对脚本路径固定基于 `AppContext.BaseDirectory` 解析，不再受启动工作目录影响。状态仍为 🔧 部分完成。
 > 2026-07-12 补充：增强后台 RPA 的企微窗口激活：PowerShell 临时关联当前、前台及企微窗口输入线程，执行置顶/激活/前台切换，并在 `finally` 中可靠解绑；保留三次重试、前台句柄校验和双 Alt 期间的失败安全中止。状态仍为 🔧 部分完成，待真机端到端验证。
 > 2026-07-13 补充：增加 Agent 出站附件到 `send_image/send_file` 的映射，客户端综合协议文件名、Content-Disposition、URL 与 Content-Type 安全下载并限制大小，最终清理临时文件；图片使用 `SetImage`，普通文件使用 `SetFileDropList` 粘贴发送。入站会话存档的 `sdkfileid` 下载仍为独立链路，不与 Agent 出站 URL 混用。状态仍为 🔧 部分完成，待真机附件发送验证。
+> 2026-07-13 补充：客户端同一 `ActionEnvelope` 的多个发送动作复用当前企微会话，仅首个实际成功的 `send_text/send_image/send_file` 搜索联系人；后续动作通过默认关闭的内部 PowerShell 参数跳过搜索，但发送前仍校验企微主窗口处于前台。复用状态不持久化、不跨 envelope，崩溃恢复后的首个待执行动作仍重新搜索。状态仍为 🔧 部分完成，待真机文本+附件连续发送验证。
 > 2026-07-12 补充：修复服务端会话存档慢 Agent 阻塞游标。fetcher 解密后先写 PostgreSQL `wecom_rpa_archive_inbox`（租户+event 唯一去重），可靠入队后立即推进 seq；Agent 由独立 worker 处理，失败进入 retryable，进程重启后可回收超时 running；inbox 投递失败不推进游标，坏密文保持审计后推进。状态仍为 🔧 部分完成，待独立测试/CodeReview及服务器部署验证。
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |

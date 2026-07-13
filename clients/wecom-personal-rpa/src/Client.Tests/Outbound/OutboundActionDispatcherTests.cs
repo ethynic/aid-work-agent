@@ -250,6 +250,17 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         return dispatcher;
     }
 
+    private static bool ReadReuseCurrentConversation(object? parameters)
+    {
+        if (parameters is Dictionary<string, object?> dictionary)
+            return Assert.IsType<bool>(dictionary["reuse_current_conversation"]);
+
+        Assert.NotNull(parameters);
+        var property = parameters.GetType().GetProperty("reuse_current_conversation");
+        Assert.NotNull(property);
+        return Assert.IsType<bool>(property.GetValue(parameters));
+    }
+
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
         private readonly byte[] _body;
@@ -339,6 +350,7 @@ public sealed class OutboundActionDispatcherTests : IDisposable
 
         Assert.Equal("send_text", receivedAction);
         Assert.NotNull(receivedParams);
+        Assert.False(ReadReuseCurrentConversation(receivedParams));
         var report = Assert.Single(api.Reports);
         Assert.Equal("req_t", report.Id);
         Assert.True(report.Success);
@@ -357,12 +369,14 @@ public sealed class OutboundActionDispatcherTests : IDisposable
 
         string? receivedAction = null;
         string? receivedPath = null;
+        bool? reuseFlag = null;
         var dispatcher = CreateDispatcher(api, downloader, (action, p, ct) =>
         {
             receivedAction = action;
             if (p is Dictionary<string, object?> dict)
             {
                 receivedPath = dict.TryGetValue("image_path", out var v) ? v as string : null;
+                reuseFlag = ReadReuseCurrentConversation(dict);
             }
             return Task.FromResult(new PowershellResult { Success = true, Action = action });
         });
@@ -378,6 +392,7 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         await dispatcher.DispatchOneAsync(item, CancellationToken.None);
 
         Assert.Equal("send_image", receivedAction);
+        Assert.False(reuseFlag);
         Assert.NotNull(receivedPath);
         Assert.True(File.Exists(receivedPath!) == false,
             "下载副本应在调用后删除");
@@ -1015,15 +1030,283 @@ public sealed class OutboundActionDispatcherTests : IDisposable
         await queue.RecoverRunningEnvelopesAsync();
 
         var calls = 0;
-        dispatcher.PsInvokerHook = (_, _, _) =>
+        bool? reuseFlag = null;
+        dispatcher.PsInvokerHook = (_, parameters, _) =>
         {
             calls++;
+            reuseFlag = ReadReuseCurrentConversation(parameters);
             return Task.FromResult(new PowershellResult { Success = true });
         };
         await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
 
         Assert.Equal(1, calls);
+        Assert.False(reuseFlag);
         Assert.Equal(2, api.Reports.Count);
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_TextThenAttachment_ReusesConversationOnlyAfterFirstSend()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var http = new HttpClient(new FakeHttpHandler([1, 2, 3], "application/pdf"));
+        var calls = new List<(string Action, bool Reuse)>();
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(http, _options, logger: null),
+            (action, parameters, _) =>
+            {
+                calls.Add((action, ReadReuseCurrentConversation(parameters)));
+                return Task.FromResult(new PowershellResult { Success = true, Action = action });
+            }, queueOverride: queue);
+        var env = new ActionEnvelope
+        {
+            RequestId = "req_reuse_text_file",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions =
+            [
+                new SendTextAction { Text = "说明" },
+                new SendFileAction { FileUrl = "https://example.com/report.pdf", Filename = "report.pdf" },
+            ],
+        };
+        await dispatcher.EnvelopeEnqueueAsync(env);
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal([("send_text", false), ("send_file", true)], calls);
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_ThreeSendActions_SearchesOnlyForFirstAction()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var calls = new List<(string Text, string Keyword, bool Reuse)>();
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                Assert.NotNull(parameters);
+                calls.Add((
+                    Assert.IsType<string>(parameters.GetType().GetProperty("text")!.GetValue(parameters)),
+                    Assert.IsType<string>(parameters.GetType().GetProperty("keyword")!.GetValue(parameters)),
+                    ReadReuseCurrentConversation(parameters)));
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, queueOverride: queue);
+        var env = new ActionEnvelope
+        {
+            RequestId = "req_reuse_three",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions =
+            [
+                new SendTextAction { Text = "one" },
+                new SendTextAction { Text = "two" },
+                new SendTextAction { Text = "three" },
+            ],
+        };
+        await dispatcher.EnvelopeEnqueueAsync(env);
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal(
+            [("one", "Alice", false), ("two", "Alice", true), ("three", "Alice", true)],
+            calls);
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_NoopDoesNotEstablishConversationForFollowingSend()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        bool? sendFlag = null;
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                sendFlag = ReadReuseCurrentConversation(parameters);
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, queueOverride: queue);
+        await dispatcher.EnvelopeEnqueueAsync(new ActionEnvelope
+        {
+            RequestId = "req_reuse_after_noop",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions = [new NoopAction(), new SendTextAction { Text = "after noop" }],
+        });
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.False(sendFlag);
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_HandoffDoesNotEstablishConversationForFollowingSend()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        bool? sendFlag = null;
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                sendFlag = ReadReuseCurrentConversation(parameters);
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, queueOverride: queue);
+        await dispatcher.EnvelopeEnqueueAsync(new ActionEnvelope
+        {
+            RequestId = "req_reuse_after_handoff",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions = [new HandoffAction { Reason = "人工确认" }, new SendTextAction { Text = "after handoff" }],
+        });
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.False(sendFlag);
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_FirstSendFailure_AbortsFollowingActionWithoutReuseOrInput()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var flags = new List<bool>();
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                flags.Add(ReadReuseCurrentConversation(parameters));
+                return Task.FromResult(new PowershellResult
+                {
+                    Success = false,
+                    ErrorCode = "wecom_window_activation_failed",
+                    ErrorMessage = "前台窗口已改变",
+                });
+            }, queueOverride: queue);
+        await dispatcher.EnvelopeEnqueueAsync(new ActionEnvelope
+        {
+            RequestId = "req_reuse_first_failed",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions =
+            [
+                new SendTextAction { Text = "first" },
+                new SendTextAction { Text = "must not run" },
+            ],
+        });
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal([false], flags);
+        Assert.Collection(api.Reports,
+            first =>
+            {
+                Assert.False(first.Success);
+                Assert.Equal("wecom_window_activation_failed", first.Code);
+            },
+            second =>
+            {
+                Assert.False(second.Success);
+                Assert.Equal("aborted_by_previous_action", second.Code);
+            });
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_ReusedActionRetry_KeepsReuseButRevalidatesEachAttempt()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var flags = new List<bool>();
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                var reuse = ReadReuseCurrentConversation(parameters);
+                flags.Add(reuse);
+                if (reuse && flags.Count == 2)
+                {
+                    return Task.FromResult(new PowershellResult
+                    {
+                        Success = false,
+                        ErrorCode = "wecom_window_not_found",
+                        ErrorMessage = "窗口暂时不可用",
+                    });
+                }
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, queueOverride: queue);
+        await dispatcher.EnvelopeEnqueueAsync(new ActionEnvelope
+        {
+            RequestId = "req_reuse_retry",
+            ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+            Actions =
+            [
+                new SendTextAction { Text = "first" },
+                new SendTextAction { Text = "second" },
+            ],
+        });
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal([false, true, true], flags);
+        Assert.All(api.Reports, report => Assert.True(report.Success));
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_NewEnvelope_DoesNotReusePreviousConversation()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var flags = new List<bool>();
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                flags.Add(ReadReuseCurrentConversation(parameters));
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, queueOverride: queue);
+
+        foreach (var requestId in new[] { "req_reuse_first", "req_reuse_second" })
+        {
+            await dispatcher.EnvelopeEnqueueAsync(new ActionEnvelope
+            {
+                RequestId = requestId,
+                ReplyContext = new RpaReplyContext { ConversationSearchName = "Alice" },
+                Actions = [new SendTextAction { Text = requestId }],
+            });
+            await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+        }
+
+        Assert.Equal([false, false], flags);
+    }
+
+    [Fact]
+    public async Task DispatchEnvelope_DifferentConversationKeys_DisablesReuseForWholeEnvelope()
+    {
+        var api = new StubApi();
+        var queue = new OutboundQueue(_options, logger: null);
+        var flags = new List<bool>();
+        var dispatcher = CreateDispatcher(api,
+            new AttachmentDownloader(new HttpClient(), _options, logger: null),
+            (_, parameters, _) =>
+            {
+                flags.Add(ReadReuseCurrentConversation(parameters));
+                return Task.FromResult(new PowershellResult { Success = true });
+            }, queueOverride: queue);
+        var items = new[]
+        {
+            new OutboxItem
+            {
+                ActionId = "req_mixed_conversations#0", ActionIndex = 0,
+                ActionType = ActionTypeNames.SendText, ConversationKey = "Alice", Text = "one",
+            },
+            new OutboxItem
+            {
+                ActionId = "req_mixed_conversations#1", ActionIndex = 1,
+                ActionType = ActionTypeNames.SendText, ConversationKey = "Bob", Text = "two",
+            },
+        };
+        Assert.True(await queue.EnqueueEnvelopeAsync("req_mixed_conversations", items));
+
+        await dispatcher.DispatchEnvelopeAsync(CancellationToken.None);
+
+        Assert.Equal([false, false], flags);
+        Assert.All(api.Reports, report => Assert.True(report.Success));
     }
 
     [Fact]

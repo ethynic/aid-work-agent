@@ -292,6 +292,15 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         var leaseTask = RenewLeaseUntilCancelledAsync(requestId, leaseCts);
         ct = leaseCts.Token;
         var failed = false;
+        // 防御异常/兼容队列数据：只有所有发送动作目标完全一致时才允许跳过搜索。
+        var canReuseConversation = items
+            .Where(item => IsSendAction(item.ActionType))
+            .Select(item => item.ConversationKey)
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .Count() <= 1;
+        // 只在本次 envelope 连续执行期间有效；恢复/新 envelope 不继承桌面会话状态。
+        var conversationReady = false;
         try
         {
             for (var i = 0; i < items.Count; i++)
@@ -329,7 +338,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
             }
             try
             {
-                await DispatchOneAsync(item, ct).ConfigureAwait(false);
+                await DispatchOneAsync(item, ct, canReuseConversation && conversationReady)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -343,6 +353,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
             }
             var terminal = await _queue.GetByActionIdAsync(item.ActionId, ct).ConfigureAwait(false);
             if (terminal?.Status == "failed") failed = true;
+            if (terminal?.Status == "done" && IsSendAction(item.ActionType))
+                conversationReady = true;
             if (terminal?.Status == "pending")
             {
                 // 暂停期间不越过当前消息；恢复后重新领取完整 envelope。
@@ -404,7 +416,10 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
     }
 
     /// <summary>分发一个 outbox 项；包含重试逻辑。public 仅供测试直接驱动单条 action（不经 timer/Channel）。</summary>
-    public async Task DispatchOneAsync(OutboxItem item, CancellationToken ct)
+    public async Task DispatchOneAsync(
+        OutboxItem item,
+        CancellationToken ct,
+        bool reuseCurrentConversation = false)
     {
         var maxRetries = Math.Max(1, _options.Outbound.MaxRetries);
 
@@ -453,7 +468,8 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         // send_text / send_image / send_file 走 PS 调用链
         for (var attempt = 1; attempt <= maxRetries; attempt++)
         {
-            var (ok, errCode, errMsg) = await InvokePsOnceAsync(item, ct).ConfigureAwait(false);
+            var (ok, errCode, errMsg) = await InvokePsOnceAsync(
+                item, reuseCurrentConversation, ct).ConfigureAwait(false);
 
             if (ok)
             {
@@ -482,7 +498,10 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         }
     }
 
-    private async Task<(bool ok, string? code, string? msg)> InvokePsOnceAsync(OutboxItem item, CancellationToken ct)
+    private async Task<(bool ok, string? code, string? msg)> InvokePsOnceAsync(
+        OutboxItem item,
+        bool reuseCurrentConversation,
+        CancellationToken ct)
     {
         // 测试钩子：注入时调用 hook 替代真实 PS。生产路径走 _ps.InvokeAsync。
         var psInvoke = PsInvokerHook ?? ((action, p, token) => _ps.InvokeAsync(action, p, token));
@@ -491,7 +510,12 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
         {
             case ActionTypeNames.SendText:
             {
-                var psParams = new { keyword = item.ConversationKey, text = item.Text ?? string.Empty };
+                var psParams = new
+                {
+                    keyword = item.ConversationKey,
+                    text = item.Text ?? string.Empty,
+                    reuse_current_conversation = reuseCurrentConversation,
+                };
                 var r = await psInvoke("send_text", psParams, ct).ConfigureAwait(false);
                 return (r.Success, r.ErrorCode, r.ErrorMessage);
             }
@@ -529,6 +553,7 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                 {
                     ["keyword"] = item.ConversationKey,
                     [pathParam] = localPath,
+                    ["reuse_current_conversation"] = reuseCurrentConversation,
                 };
                 try
                 {
@@ -545,6 +570,9 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                 return (false, "unsupported_action", $"未支持的 action_type: {item.ActionType}");
         }
     }
+
+    private static bool IsSendAction(string actionType) => actionType is
+        ActionTypeNames.SendText or ActionTypeNames.SendImage or ActionTypeNames.SendFile;
 
     private static string MapErrorCode(string? psCode) => psCode switch
     {

@@ -79,31 +79,45 @@ function Press-CtrlA-Delete {
 }
 
 # ---------- 输入文本（剪贴板 + Ctrl+V，兼容中文） ----------
-function Type-Text([string]$text) {
+function Type-Text {
+    param([string]$text, [IntPtr]$ExpectedForegroundHwnd = [IntPtr]::Zero)
     Add-Type -AssemblyName System.Windows.Forms
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero -and
+        -not (Test-WeComForegroundWindow -Hwnd $ExpectedForegroundHwnd)) { return $false }
     [System.Windows.Forms.Clipboard]::SetText($text)
     Start-Sleep -Milliseconds 80
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero -and
+        -not (Test-WeComForegroundWindow -Hwnd $ExpectedForegroundHwnd)) { return $false }
     [WeOpsWin32]::keybd_event(0x11, 0, [WeOpsWin32]::KEYEVENTF_KEYDOWN, [IntPtr]::Zero)  # Ctrl down
     [WeOpsWin32]::keybd_event(0x56, 0, [WeOpsWin32]::KEYEVENTF_KEYDOWN, [IntPtr]::Zero)  # V down
     Start-Sleep -Milliseconds 40
     [WeOpsWin32]::keybd_event(0x56, 0, [WeOpsWin32]::KEYEVENTF_KEYUP, [IntPtr]::Zero)
     [WeOpsWin32]::keybd_event(0x11, 0, [WeOpsWin32]::KEYEVENTF_KEYUP, [IntPtr]::Zero)
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero) { return $true }
 }
 
 # ---------- 按 Enter 键 ----------
 function Press-Enter {
+    param([IntPtr]$ExpectedForegroundHwnd = [IntPtr]::Zero)
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero -and
+        -not (Test-WeComForegroundWindow -Hwnd $ExpectedForegroundHwnd)) { return $false }
     [WeOpsWin32]::keybd_event(0x0D, 0, 0, [IntPtr]::Zero)   # Enter down
     Start-Sleep -Milliseconds 50
     [WeOpsWin32]::keybd_event(0x0D, 0, 2, [IntPtr]::Zero)   # Enter up
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero) { return $true }
 }
 
 # ---------- Ctrl+V 粘贴 ----------
 function Press-CtrlV {
+    param([IntPtr]$ExpectedForegroundHwnd = [IntPtr]::Zero)
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero -and
+        -not (Test-WeComForegroundWindow -Hwnd $ExpectedForegroundHwnd)) { return $false }
     [WeOpsWin32]::keybd_event(0x11, 0, 0, [IntPtr]::Zero)   # Ctrl down
     [WeOpsWin32]::keybd_event(0x56, 0, 0, [IntPtr]::Zero)   # V down
     Start-Sleep -Milliseconds 50
     [WeOpsWin32]::keybd_event(0x56, 0, 2, [IntPtr]::Zero)   # V up
     [WeOpsWin32]::keybd_event(0x11, 0, 2, [IntPtr]::Zero)   # Ctrl up
+    if ($ExpectedForegroundHwnd -ne [IntPtr]::Zero) { return $true }
 }
 
 # ---------- 激活企微主窗口并用双 Alt 聚焦搜索框 ----------
@@ -161,6 +175,16 @@ function Focus-WeComSearchBox {
     }
     # 只有企微在双 Alt 完成后仍为前台，调用方才可继续 Ctrl+A/Delete 和输入。
     return ([WeOpsWin32]::GetForegroundWindow() -eq $Hwnd)
+}
+
+# ---------- 校验当前前台仍是本次自动化选中的企微主窗口 ----------
+# 会话复用时只做失败安全校验，不激活窗口、不发送 Alt，避免离开当前会话。
+function Test-WeComForegroundWindow {
+    param(
+        [Parameter(Mandatory = $true)][IntPtr]$Hwnd,
+        [IntPtr]$ForegroundHwnd = [WeOpsWin32]::GetForegroundWindow()
+    )
+    return $Hwnd -ne [IntPtr]::Zero -and $ForegroundHwnd -eq $Hwnd
 }
 
 # ---------- 取企微主窗口左上角物理屏幕坐标（EnumWindows 找 WeWorkWindow） ----------

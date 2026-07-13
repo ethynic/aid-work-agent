@@ -148,9 +148,9 @@
 | PS 函数 | action | 输入 | 输出 | 状态 |
 |---------|--------|------|------|------|
 | `Search-WeComUser` | `search_user` | `{keyword}` | `{conversation_title, window_hwnd}` | ✅ 已有（debug-navigate） |
-| `Send-WeComText` | `send_text` | `{keyword, text}` | `{sent_text}` | ✅ 已有 |
-| `Send-WeComImage` | `send_image` | `{keyword, image_path}` | `{sent_image_size}` | ✅ 已有 |
-| `Send-WeComFile` | `send_file` | `{keyword, file_path}` | `{sent_file_name}` | ❌ 待开发（`Clipboard.SetFileDropList`） |
+| `Send-WeComText` | `send_text` | `{keyword, text, reuse_current_conversation?}` | `{sent_text}` | ✅ 已有 |
+| `Send-WeComImage` | `send_image` | `{keyword, image_path, reuse_current_conversation?}` | `{sent_image_size}` | ✅ 已有 |
+| `Send-WeComFile` | `send_file` | `{keyword, file_path, reuse_current_conversation?}` | `{sent_file_name}` | ✅ 已有（`Clipboard.SetFileDropList`） |
 | `Watch-WeComNewMessages` | `watch_new_messages` | `{since, allowed_users}` | `{new_messages[]}` | ❌ 待开发（fallback 占位） |
 | `Get-WeComLoginState` | `get_login_state` | `{}` | `{state, qr_image_base64?}` | ❌ 待开发（F7 用） |
 
@@ -160,6 +160,11 @@
 ```json
 {"keyword": "陆伟", "text": "你好啊！"}
 ```
+
+`reuse_current_conversation` 是客户端内部参数，默认 `false`，不属于服务端
+`ActionEnvelope` 协议。同一 envelope 内首个实际发送成功后，后续发送可设为 `true`；
+此时 PowerShell 跳过联系人搜索，但在任何键盘/剪贴板输入前仍校验企微主窗口处于前台。
+该状态不持久化，也不跨 envelope 或进程重启复用。
 
 **PS → C#（stdout 最后一行）**：
 ```json
@@ -228,9 +233,9 @@
 
 | 服务端 action.type | PS action | 参数映射 |
 |-------------------|-----------|---------|
-| `send_text` | `send_text` | `{keyword: conversation_key, text}` |
-| `send_image` | `send_image` | `{keyword, image_path: <本地下载后路径>}` |
-| `send_file` | `send_file` | `{keyword, file_path: <本地下载后路径>}` |
+| `send_text` | `send_text` | `{keyword: conversation_key, text, reuse_current_conversation}` |
+| `send_image` | `send_image` | `{keyword, image_path: <本地下载后路径>, reuse_current_conversation}` |
+| `send_file` | `send_file` | `{keyword, file_path: <本地下载后路径>, reuse_current_conversation}` |
 | `noop` | （跳过，仅回执 success） | — |
 | `handoff` | （暂停该会话，回执 success） | — |
 
@@ -247,6 +252,7 @@
 ### 4.4 串行队列
 
 - 单账号全局串行：同一账号同时只跑一个 PS 进程，避免窗口抢占
+- 同一 envelope 内仅首个实际成功的发送动作搜索联系人，后续发送复用当前会话；新 envelope 和崩溃恢复后的首个待执行动作重新搜索
 - 跨账号并行：不同账号可并发（如果有多个客户端实例绑定多账号）
 - 失败重试：`wecom_window_not_found` 重试 3 次；其他错误不重试直接上报
 - 持久化：出站 actions 落 SQLite（`outbox_local` 表），客户端重启不丢
