@@ -195,7 +195,7 @@ def calculate_hotel_stays(items: list, tenant_id: str, hotel_stays: list,
         display_room_type = room_type or selected_room_type or "标准间"
         display_name = f"{hotel_name}（{display_room_type}）"
         remark_parts = [f"{city}{nights}晚", f"{rooms_per_n}间×{nights}晚", f"房型={display_room_type}"]
-        if breakfast:
+        if breakfast and breakfast != "未知":
             remark_parts.append(breakfast)
         if couples > 0:
             remark_parts.append(f"含{couples}对夫妻大床房")
@@ -271,7 +271,7 @@ def _calculate_hotel_cost_from_kb(items, tenant_id: str, doc_id: int,
     display_room_type = selected_room_type or "标准间"
     display_name = f"酒店住宿（{display_room_type}）"
     remark_parts = [f"两人一间，{rooms_per_n}间×{nights}晚", f"房型={display_room_type}"]
-    if breakfast:
+    if breakfast and breakfast != "未知":
         remark_parts.append(breakfast)
     if couples > 0:
         remark_parts.append(f"含{couples}对夫妻大床房")
