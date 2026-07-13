@@ -238,9 +238,10 @@ public sealed class OutboundActionDispatcherTests : IDisposable
     {
         private readonly byte[] _body;
         private readonly string _contentType;
-        public FakeHttpHandler(byte[] body, string contentType)
+        private readonly string? _contentDisposition;
+        public FakeHttpHandler(byte[] body, string contentType, string? contentDisposition = null)
         {
-            _body = body; _contentType = contentType;
+            _body = body; _contentType = contentType; _contentDisposition = contentDisposition;
         }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -250,8 +251,49 @@ public sealed class OutboundActionDispatcherTests : IDisposable
             };
             resp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(_contentType);
             resp.Content.Headers.ContentLength = _body.Length;
+            if (_contentDisposition is not null)
+                resp.Content.Headers.ContentDisposition =
+                    System.Net.Http.Headers.ContentDispositionHeaderValue.Parse(_contentDisposition);
             return Task.FromResult(resp);
         }
+    }
+
+    [Fact]
+    public async Task AttachmentDownloader_ContentDispositionFilenameWinsAndIsSanitized()
+    {
+        var http = new HttpClient(new FakeHttpHandler(
+            new byte[] { 1, 2, 3 }, "application/octet-stream",
+            "attachment; filename=\"../report.xlsx\""));
+        var downloader = new AttachmentDownloader(http, _options, logger: null);
+        var path = await downloader.DownloadAsync(
+            "https://example.com/download?id=1", "fallback.bin", false);
+        try
+        {
+            Assert.EndsWith("report.xlsx", path, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(Path.GetFullPath(_options.Outbound.DownloadTempDir),
+                Path.GetDirectoryName(Path.GetFullPath(path)));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task AttachmentDownloader_TextPlainMisreportPreservesSuggestedExtension()
+    {
+        var http = new HttpClient(new FakeHttpHandler(new byte[] { 1 }, "text/plain"));
+        var downloader = new AttachmentDownloader(http, _options, logger: null);
+        var path = await downloader.DownloadAsync(
+            "https://example.com/api/download", "报价单.pdf", false);
+        try { Assert.EndsWith("报价单.pdf", path, StringComparison.OrdinalIgnoreCase); }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task AttachmentDownloader_RejectsNonHttpUrlBeforeDownload()
+    {
+        var http = new HttpClient(new FakeHttpHandler(new byte[] { 1 }, "application/octet-stream"));
+        var downloader = new AttachmentDownloader(http, _options, logger: null);
+        await Assert.ThrowsAsync<AttachmentRejectedException>(() =>
+            downloader.DownloadAsync("file:///C:/secret.txt", "secret.txt", false));
     }
 
     [Fact]

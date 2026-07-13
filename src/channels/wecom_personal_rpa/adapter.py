@@ -122,7 +122,7 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
         """把 UnifiedResponse 的 text 与 downloadable_files 转换为 RpaAction 列表。
 
         - text：每段一个 SendTextAction（超 2000 字分段，产生多个 action）。
-        - downloadable_files：mime 含 image → SendImageAction，否则 SendFileAction。
+        - attachments / downloadable_files：图片 → SendImageAction，否则 SendFileAction。
         - 空 text 且无附件：返回 [NoopAction()]，保证信封非空。
         """
         actions: List[Any] = []
@@ -135,6 +135,20 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
             mime = (f.mime_type or "").lower()
             filename = f.file_name or "file"
             if "image" in mime:
+                actions.append(SendImageAction(file_url=public_url, filename=filename))
+            else:
+                actions.append(SendFileAction(file_url=public_url, filename=filename))
+
+        # 部分 Agent/工具直接返回 UnifiedResponse.attachments，而不是 downloadable_files。
+        # 这里只处理可下载 URL；入站会话存档的 sdkfileid 不会进入该出站模型，二者不可混用。
+        for attachment in message.attachments or []:
+            if not attachment.url:
+                logger.warning("RPA 忽略缺少 URL 的 Agent 出站附件 type={}", attachment.type)
+                continue
+            public_url = build_public_url(attachment.url)
+            mime = (attachment.mime_type or "").lower()
+            filename = attachment.name or "file"
+            if attachment.type.lower() == "image" or mime.startswith("image/"):
                 actions.append(SendImageAction(file_url=public_url, filename=filename))
             else:
                 actions.append(SendFileAction(file_url=public_url, filename=filename))

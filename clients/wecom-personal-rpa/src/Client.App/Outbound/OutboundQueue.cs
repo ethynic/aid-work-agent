@@ -60,6 +60,7 @@ public sealed class OutboundQueue
                 conversation_key TEXT NOT NULL,
                 text TEXT,
                 file_url TEXT,
+                file_name TEXT,
                 local_path TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 retry_count INTEGER NOT NULL DEFAULT 0,
@@ -98,6 +99,11 @@ public sealed class OutboundQueue
                 // 另一进程/实例已加列，忽略
             }
         }
+        if (!cols.Contains("file_name"))
+        {
+            try { conn.Execute("ALTER TABLE outbox_local ADD COLUMN file_name TEXT;"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column")) { }
+        }
 
         // 回填升级前已存在的终态行（completed_at 为 NULL）：用 created_at 兜底，
         // 使其能被 PruneTerminalAsync（过滤 completed_at IS NOT NULL）清理，避免老 failed 行永久泄漏。
@@ -123,10 +129,10 @@ public sealed class OutboundQueue
         {
             const string sql = """
                 INSERT OR IGNORE INTO outbox_local
-                (action_id, action_type, conversation_key, text, file_url, local_path,
+                (action_id, action_type, conversation_key, text, file_url, file_name, local_path,
                  status, retry_count, error_code, error_message, created_at, updated_at)
                 VALUES
-                (@ActionId, @ActionType, @ConversationKey, @Text, @FileUrl, @LocalPath,
+                (@ActionId, @ActionType, @ConversationKey, @Text, @FileUrl, @FileName, @LocalPath,
                  @Status, @RetryCount, @ErrorCode, @ErrorMessage, @CreatedAt, @UpdatedAt);
                 SELECT changes();
                 """;
@@ -138,6 +144,7 @@ public sealed class OutboundQueue
                 item.ConversationKey,
                 item.Text,
                 item.FileUrl,
+                item.FileName,
                 item.LocalPath,
                 Status = item.Status,
                 item.RetryCount,
@@ -368,6 +375,7 @@ public sealed class OutboundQueue
         ConversationKey = (string)r.conversation_key,
         Text = r.text is null ? null : (string?)r.text,
         FileUrl = r.file_url is null ? null : (string?)r.file_url,
+        FileName = r.file_name is null ? null : (string?)r.file_name,
         LocalPath = r.local_path is null ? null : (string?)r.local_path,
         Status = (string)r.status,
         RetryCount = (int)r.retry_count,
@@ -405,6 +413,9 @@ public sealed class OutboxItem
 
     /// <summary>远程文件 URL（send_image/send_file 用，下载后保留以便重试去重）。</summary>
     public string? FileUrl { get; set; }
+
+    /// <summary>服务端建议文件名；下载响应头可覆盖，始终在本地安全化。</summary>
+    public string? FileName { get; set; }
 
     /// <summary>下载到本地的路径（运行时填）。</summary>
     public string? LocalPath { get; set; }

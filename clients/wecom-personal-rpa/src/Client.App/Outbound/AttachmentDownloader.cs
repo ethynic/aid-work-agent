@@ -52,10 +52,16 @@ public sealed class AttachmentDownloader
     /// <param name="ct">取消令牌。</param>
     /// <returns>本地下载文件绝对路径。</returns>
     public async Task<string> DownloadAsync(string url, string expectedExt, CancellationToken ct = default)
+        => await DownloadAsync(url, $"file.{expectedExt.TrimStart('.')}", false, ct).ConfigureAwait(false);
+
+    /// <summary>按响应头、协议文件名和 URL 综合确定安全文件名并下载。</summary>
+    public async Task<string> DownloadAsync(string url, string? suggestedFilename, bool requireImage,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(url)) throw new ArgumentNullException(nameof(url));
-        if (string.IsNullOrEmpty(expectedExt))
-            throw new ArgumentException("expectedExt 不能为空", nameof(expectedExt));
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new AttachmentRejectedException("附件 URL 仅支持 http/https 协议");
 
         var tempDir = string.IsNullOrWhiteSpace(_options.Outbound.DownloadTempDir)
             ? "temp/outbound-downloads"
@@ -63,8 +69,6 @@ public sealed class AttachmentDownloader
         Directory.CreateDirectory(tempDir);
 
         var maxBytes = (long)_options.Outbound.MaxAttachmentSizeMb * 1024L * 1024L;
-        var expected = expectedExt.TrimStart('.').ToLowerInvariant();
-
         Exception? lastError = null;
         for (var attempt = 0; attempt <= RetryBackoffs.Length; attempt++)
         {
@@ -78,7 +82,8 @@ public sealed class AttachmentDownloader
 
             try
             {
-                return await DownloadOnceAsync(url, expected, tempDir, maxBytes, ct).ConfigureAwait(false);
+                return await DownloadOnceAsync(url, suggestedFilename, requireImage, tempDir, maxBytes, ct)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
             catch (AttachmentRejectedException ex)
@@ -97,7 +102,7 @@ public sealed class AttachmentDownloader
         throw new InvalidOperationException($"附件下载失败（已重试 {RetryBackoffs.Length} 次）：{url}", lastError);
     }
 
-    private async Task<string> DownloadOnceAsync(string url, string expectedExt,
+    private async Task<string> DownloadOnceAsync(string url, string? suggestedFilename, bool requireImage,
         string tempDir, long maxBytes, CancellationToken ct)
     {
         using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
@@ -111,42 +116,33 @@ public sealed class AttachmentDownloader
                 $"附件过大：{len} bytes > 上限 {maxBytes} bytes ({_options.Outbound.MaxAttachmentSizeMb} MB)");
         }
 
-        // 2. MIME 校验：从 Content-Type 推断扩展名，若与期望不符则拒绝
-        //    Content-Type 未知时（如 application/octet-stream），用 URL 路径里的扩展名兜底校验。
-        if (resp.Content.Headers.ContentType is { } ct2)
+        // 下载端点常把 Office/PDF 报成 octet-stream 或 text/plain，不能仅凭 MIME 拒绝。
+        // send_image 只在服务端明确返回非通用、非图片 MIME 时拒绝，避免把 HTML 错误页粘贴到企微。
+        var mediaType = resp.Content.Headers.ContentType?.MediaType?.ToLowerInvariant();
+        if (requireImage && !string.IsNullOrEmpty(mediaType) &&
+            mediaType != "application/octet-stream" && mediaType != "text/plain" &&
+            !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
         {
-            var inferredExt = InferExtensionFromContentType(ct2);
-            if (!string.IsNullOrEmpty(inferredExt))
-            {
-                if (!string.Equals(inferredExt, expectedExt, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new AttachmentRejectedException(
-                        $"附件 MIME 不匹配：Content-Type={ct2.MediaType} 推断 .{inferredExt}，期望 .{expectedExt}");
-                }
-            }
-            else
-            {
-                // P1-8：Content-Type 未知 → 用 URL 路径里的扩展名兜底。
-                // 例如：https://xxx.com/files/abc.png?sig=... → 推断 "png"
-                var urlExt = TryGetExtensionFromUrl(url);
-                if (!string.IsNullOrEmpty(urlExt) &&
-                    !string.Equals(urlExt, expectedExt, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new AttachmentRejectedException(
-                        $"附件扩展名兜底校验失败：Content-Type={ct2.MediaType}（未知），URL 路径扩展 .{urlExt}，期望 .{expectedExt}");
-                }
-                // URL 无扩展名或与期望一致 → 放行（下游 stream 校验 + 累计字节限制仍生效）
-            }
+            throw new AttachmentRejectedException($"图片 Content-Type 不受支持：{mediaType}");
         }
 
         // 3. 流式下载到磁盘（边读边检查累计大小，防 Content-Length 缺失时被灌爆）
-        var originalName = TryGetOriginalName(url);
+        var responseName = GetContentDispositionFilename(resp.Content.Headers.ContentDisposition);
+        var originalName = SanitizeFilename(responseName ?? suggestedFilename ?? TryGetUrlFilename(url));
+        var mimeExt = resp.Content.Headers.ContentType is { } header
+            ? InferExtensionFromContentType(header) : null;
+        var currentExt = Path.GetExtension(originalName).TrimStart('.');
+        if (string.IsNullOrEmpty(currentExt) && !string.IsNullOrEmpty(mimeExt))
+            originalName += "." + mimeExt;
+        if (string.IsNullOrEmpty(Path.GetExtension(originalName)))
+            originalName += requireImage ? ".png" : ".bin";
         var uuid = Guid.NewGuid().ToString("N")[..12];
-        var fileName = $"{uuid}_{originalName}.{expectedExt}";
+        var fileName = $"{uuid}_{originalName}";
         var localPath = Path.Combine(tempDir, fileName);
 
-        await using (var fs = File.Create(localPath))
+        try
         {
+            await using var fs = File.Create(localPath);
             await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             var buf = new byte[64 * 1024];
             long total = 0;
@@ -156,13 +152,17 @@ public sealed class AttachmentDownloader
                 total += n;
                 if (total > maxBytes)
                 {
-                    await fs.DisposeAsync();
-                    TryDelete(localPath);
                     throw new AttachmentRejectedException(
                         $"附件流式累计超限：{total} bytes > 上限 {maxBytes} bytes");
                 }
                 await fs.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
             }
+        }
+        catch
+        {
+            // 取消、网络中断、写盘失败和大小拒绝都不能遗留半截临时文件。
+            TryDelete(localPath);
+            throw;
         }
 
         return localPath;
@@ -192,7 +192,13 @@ public sealed class AttachmentDownloader
         };
     }
 
-    private static string TryGetOriginalName(string url)
+    private static string? GetContentDispositionFilename(ContentDispositionHeaderValue? disposition)
+    {
+        var value = disposition?.FileNameStar ?? disposition?.FileName;
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim().Trim('"');
+    }
+
+    private static string TryGetUrlFilename(string url)
     {
         try
         {
@@ -202,19 +208,22 @@ public sealed class AttachmentDownloader
             var last = Uri.UnescapeDataString(seg[^1].Trim('/'));
             if (string.IsNullOrEmpty(last)) return "file";
             var withoutQuery = last.Split('?')[0];
-            var dot = withoutQuery.LastIndexOf('.');
-            var name = dot > 0 ? withoutQuery[..dot] : withoutQuery;
-            // 文件名安全化：去非法字符
-            foreach (var c in Path.GetInvalidFileNameChars())
-            {
-                name = name.Replace(c, '_');
-            }
-            return string.IsNullOrEmpty(name) ? "file" : name;
+            return string.IsNullOrEmpty(withoutQuery) ? "file" : withoutQuery;
         }
         catch
         {
             return "file";
         }
+    }
+
+    private static string SanitizeFilename(string value)
+    {
+        // Path.GetFileName 同时去掉服务端传入的目录；再替换 Windows 非法字符和控制字符。
+        var name = Path.GetFileName(value.Replace('\\', '/'));
+        foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+        name = new string(name.Select(c => char.IsControl(c) ? '_' : c).ToArray()).Trim().Trim('.');
+        if (string.IsNullOrWhiteSpace(name) || name is "." or "..") return "file";
+        return name.Length <= 180 ? name : name[..180];
     }
 
     /// <summary>

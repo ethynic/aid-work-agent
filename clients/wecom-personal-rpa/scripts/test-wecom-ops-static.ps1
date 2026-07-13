@@ -13,7 +13,11 @@ $checks = @(
     @{ Name = 'activation uses full foreground sequence'; Ok = $lib -match 'BringWindowToTop\(\$Hwnd\)' -and $lib -match 'SetActiveWindow\(\$Hwnd\)' -and $lib -match 'SetForegroundWindow\(\$Hwnd\)' },
     @{ Name = 'Alt key is pressed exactly twice'; Ok = $lib -match 'for \(\$i = 0; \$i -lt 2; \$i\+\+\)' -and $lib -match 'keybd_event\(0x12' },
     @{ Name = 'foreground is guarded during double Alt'; Ok = $lib -match 'GetForegroundWindow\(\) -ne \$Hwnd' },
-    @{ Name = 'foreground is verified after double Alt'; Ok = $lib -match 'return \(\[WeOpsWin32\]::GetForegroundWindow\(\) -eq \$Hwnd\)' }
+    @{ Name = 'foreground is verified after double Alt'; Ok = $lib -match 'return \(\[WeOpsWin32\]::GetForegroundWindow\(\) -eq \$Hwnd\)' },
+    @{ Name = 'send_file uses file drop clipboard'; Ok = $main -match 'Clipboard\]::SetFileDropList\(\$dropList\)' },
+    @{ Name = 'send_file pastes and confirms'; Ok = $main -match '(?s)SetFileDropList.*Press-CtrlV.*Press-Enter' },
+    @{ Name = 'send_file clears clipboard'; Ok = $main -match 'Clipboard\]::Clear\(\)' },
+    @{ Name = 'send_image uses image clipboard'; Ok = $main -match 'Clipboard\]::SetImage\(\$bmp\)' }
 )
 $failed = @($checks | Where-Object { -not $_.Ok })
 $checks | ForEach-Object { if ($_.Ok) { Write-Host "PASS: $($_.Name)" } else { Write-Host "FAIL: $($_.Name)" } }

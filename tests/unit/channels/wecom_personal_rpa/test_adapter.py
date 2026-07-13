@@ -13,7 +13,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.models.message import DownloadableFileInfo, UnifiedResponse
+from src.models.message import Attachment, DownloadableFileInfo, UnifiedResponse
 
 from src.channels.wecom_personal_rpa.adapter import WeComPersonalRpaAdapter
 
@@ -139,6 +139,24 @@ async def test_send_message_converts_text_and_files_to_actions(patched_deliver):
     assert actions[1].filename == "pic.png"
     assert actions[2].file_url == "https://pub/files/p2"
     assert actions[2].filename == "doc.xlsx"
+
+
+@pytest.mark.asyncio
+async def test_send_message_converts_agent_attachments_to_actions(adapter, patched_deliver):
+    """Agent 直接返回 attachments 时也应下发图片/文件动作。"""
+    adapter.set_reply_context("acct", "conv", "sid", "req")
+    resp = UnifiedResponse(
+        message_id="m", reply_to="in", attachments=[
+            Attachment(type="image", url="/files/photo", name="photo.jpg", mime_type="image/jpeg"),
+            Attachment(type="file", url="/files/report", name="report.pdf", mime_type="application/pdf"),
+        ],
+    )
+    with patch("src.channels.wecom_personal_rpa.adapter.build_public_url", side_effect=lambda u: "https://api" + u):
+        assert await adapter.send_message(resp) is True
+    actions = patched_deliver.call_args.kwargs["actions"]
+    assert [a.type for a in actions] == ["send_image", "send_file"]
+    assert actions[0].filename == "photo.jpg"
+    assert actions[1].filename == "report.pdf"
 
 
 # ============================ send_message：长文本分段 ============================

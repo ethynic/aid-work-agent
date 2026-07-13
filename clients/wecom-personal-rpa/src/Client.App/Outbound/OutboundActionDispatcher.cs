@@ -206,9 +206,11 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                 break;
             case SendImageAction img:
                 item.FileUrl = img.FileUrl;
+                item.FileName = img.Filename;
                 break;
             case SendFileAction f:
                 item.FileUrl = f.FileUrl;
+                item.FileName = f.Filename;
                 break;
         }
         return item;
@@ -348,10 +350,11 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                 var localPath = item.LocalPath;
                 if (string.IsNullOrEmpty(localPath) && !string.IsNullOrEmpty(item.FileUrl))
                 {
-                    var ext = await ResolveExtFromUrlAsync(item.FileUrl, item.ActionType).ConfigureAwait(false);
                     try
                     {
-                        localPath = await _downloader.DownloadAsync(item.FileUrl, ext, ct).ConfigureAwait(false);
+                        localPath = await _downloader.DownloadAsync(
+                            item.FileUrl, item.FileName, item.ActionType == ActionTypeNames.SendImage, ct)
+                            .ConfigureAwait(false);
                     }
                     catch (AttachmentRejectedException ex)
                     {
@@ -375,35 +378,20 @@ public sealed class OutboundActionDispatcher : IHostedService, IDisposable
                     ["keyword"] = item.ConversationKey,
                     [pathParam] = localPath,
                 };
-                var r = await psInvoke(psAction, psParams, ct).ConfigureAwait(false);
-
-                // 下载副本用完即删（无论成功失败）
-                TryDeleteLocal(localPath);
-
-                return (r.Success, r.ErrorCode, r.ErrorMessage);
+                try
+                {
+                    var r = await psInvoke(psAction, psParams, ct).ConfigureAwait(false);
+                    return (r.Success, r.ErrorCode, r.ErrorMessage);
+                }
+                finally
+                {
+                    // PS 被取消或抛异常时也必须清理下载副本。
+                    TryDeleteLocal(localPath);
+                }
             }
             default:
                 return (false, "unsupported_action", $"未支持的 action_type: {item.ActionType}");
         }
-    }
-
-    private async Task<string> ResolveExtFromUrlAsync(string url, string actionType)
-    {
-        // 默认 send_image 给 png，send_file 给 bin
-        var ext = actionType == ActionTypeNames.SendImage ? "png" : "bin";
-        try
-        {
-            var uri = new Uri(url);
-            var last = Uri.UnescapeDataString(uri.Segments[^1].Trim('/'));
-            var dot = last.LastIndexOf('.');
-            if (dot >= 0 && dot < last.Length - 1)
-            {
-                var guess = last[(dot + 1)..].ToLowerInvariant();
-                if (!string.IsNullOrEmpty(guess) && guess.Length <= 8) return guess;
-            }
-        }
-        catch { /* 走默认 */ }
-        return await Task.FromResult(ext);
     }
 
     private static string MapErrorCode(string? psCode) => psCode switch
