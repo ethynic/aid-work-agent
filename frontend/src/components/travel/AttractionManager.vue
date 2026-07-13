@@ -11,11 +11,11 @@
         </BaseButton>
       </div>
       <div class="flex gap-2 items-center">
-        <input ref="fileInput" type="file" accept=".xlsx" style="display:none"
+        <input ref="fileInput" type="file" accept=".xlsx,.zip" style="display:none"
                @change="(e: any) => e.target.files[0] && handleImport(e.target.files[0])" />
         <BaseButton intent="secondary" size="sm" @click="handleDownloadTemplate">下载模板</BaseButton>
         <BaseButton size="sm" :disabled="importing" @click="triggerFileInput(fileInput)">
-          {{ importing ? '导入中...' : '导入 Excel' }}
+          {{ importing ? '导入中...' : '导入 Excel/Zip' }}
         </BaseButton>
         <BaseButton intent="secondary" size="sm" @click="handleExport">导出 Excel</BaseButton>
       </div>
@@ -41,6 +41,18 @@
         <input type="checkbox" :value="row.doc_id" v-model="selectedArr" />
       </template>
       <template #index="{ index }">{{ (currentPage - 1) * pageSize + index + 1 }}</template>
+      <template #cover="{ row }">
+        <div v-if="coverFileId(row)" class="w-[60px] h-[40px] overflow-hidden rounded border border-default">
+          <img
+            :src="`/api/files/${coverFileId(row)}/download`"
+            :alt="row.title"
+            loading="lazy"
+            class="w-full h-full object-cover"
+            @error="onCoverError($event, row)"
+          />
+        </div>
+        <div v-else class="w-[60px] h-[40px] flex items-center justify-center rounded border border-default text-muted text-[10px]">无图</div>
+      </template>
       <template #title="{ row }"><span class="font-medium">{{ row.title }}</span></template>
       <template #region="{ row }">{{ row.metadata?.region || '-' }}</template>
       <template #category_cn="{ row }">{{ row.metadata?.category_cn || '-' }}</template>
@@ -86,6 +98,38 @@
           <BaseInput v-model="form.category_cn" placeholder="如：自然景观、人文景观" />
         </div>
       </div>
+      <!-- 图片管理：封面 + 图集（即时生效，不走保存按钮） -->
+      <div class="mt-5 p-3 border border-default rounded bg-canvas">
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm text-muted m-0">景点图片</label>
+          <span class="text-[11px] text-muted">上传即时生效，不需点保存</span>
+        </div>
+        <!-- 封面 -->
+        <div class="flex items-center gap-3 mb-3">
+          <span class="text-xs text-muted w-12 flex-shrink-0">封面</span>
+          <div v-if="editingCover" class="relative w-[80px] h-[60px] flex-shrink-0">
+            <img :src="`/api/files/${editingCover}/download`" alt="封面" class="w-full h-full object-cover rounded border border-default" />
+            <button class="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-danger-600 text-white text-xs leading-none hover:bg-danger-700" @click="removeCover" title="删除封面">×</button>
+          </div>
+          <div v-else class="w-[80px] h-[60px] flex-shrink-0 border border-dashed border-default rounded flex items-center justify-center text-[10px] text-muted">无封面</div>
+          <input ref="coverInput" type="file" accept=".jpg,.jpeg,.png,.webp" class="hidden" @change="(e: any) => e.target.files[0] && uploadCover(e.target.files[0])" />
+          <BaseButton size="sm" intent="secondary" :disabled="imageBusy === 'cover'" @click="coverInput?.click()">{{ imageBusy === 'cover' ? '上传中...' : (editingCover ? '替换封面' : '上传封面') }}</BaseButton>
+        </div>
+        <!-- 图集 -->
+        <div class="flex items-start gap-3">
+          <span class="text-xs text-muted w-12 flex-shrink-0 pt-1">图集</span>
+          <div class="flex-1 flex flex-wrap gap-2 items-center">
+            <div v-for="fid in editingGallery" :key="fid" class="relative w-[60px] h-[60px]">
+              <img :src="`/api/files/${fid}/download`" :alt="fid" class="w-full h-full object-cover rounded border border-default" />
+              <button class="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-danger-600 text-white text-xs leading-none hover:bg-danger-700" @click="removeGallery(fid)" title="删除">×</button>
+            </div>
+            <div v-if="!editingGallery.length" class="text-[11px] text-muted py-3">无图集</div>
+            <input ref="galleryInput" type="file" accept=".jpg,.jpeg,.png,.webp" class="hidden" multiple @change="(e: any) => handleGalleryFiles(e.target.files)" />
+            <BaseButton size="sm" intent="secondary" :disabled="imageBusy === 'gallery'" @click="galleryInput?.click()">{{ imageBusy === 'gallery' ? '上传中...' : '追加图集' }}</BaseButton>
+          </div>
+        </div>
+        <div v-if="imageError" class="text-danger-600 text-xs mt-2">{{ imageError }}</div>
+      </div>
       <div class="mt-4">
         <label class="text-sm text-muted mb-1 block">景点信息</label>
         <MyTextarea
@@ -117,6 +161,20 @@
         <h4 class="m-0 mb-2 text-sm text-muted">景点信息</h4>
         <pre class="bg-surface p-3 rounded whitespace-pre-wrap break-words text-[13px] leading-relaxed m-0 font-inherit">{{ detailData.info }}</pre>
       </div>
+      <div v-if="galleryImageIds.length" class="mb-4">
+        <h4 class="m-0 mb-2 text-sm text-muted">图片（封面 + 图集）</h4>
+        <div class="grid grid-cols-3 gap-2">
+          <div v-for="fid in galleryImageIds" :key="fid" class="aspect-square overflow-hidden rounded border border-default">
+            <img
+              :src="`/api/files/${fid}/download`"
+              :alt="fid"
+              loading="lazy"
+              class="w-full h-full object-cover cursor-zoom-in"
+              @click="openImageLightbox(`/api/files/${fid}/download`, detailData.title)"
+            />
+          </div>
+        </div>
+      </div>
       <div v-if="detailData.ticket_table" class="mb-4">
         <h4 class="m-0 mb-2 text-sm text-muted">门票价格</h4>
         <pre class="bg-surface p-3 rounded whitespace-pre-wrap break-words text-[13px] leading-relaxed m-0 font-inherit">{{ detailData.ticket_table }}</pre>
@@ -144,6 +202,12 @@
         <BaseButton @click="showImportResult = false">确定</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- 图片预览 lightbox -->
+    <div v-if="lightboxUrl" class="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-6" @click="lightboxUrl = ''">
+      <img :src="lightboxUrl" :alt="lightboxTitle" class="max-w-full max-h-full object-contain" />
+      <button class="absolute top-4 right-4 text-white text-2xl bg-surface/20 hover:bg-surface/40 rounded-full w-10 h-10 flex items-center justify-center" @click.stop="lightboxUrl = ''">×</button>
+    </div>
     </div>
   </div>
 </template>
@@ -153,7 +217,7 @@ import { ref, computed, onMounted } from 'vue'
 import {
   searchAttractionsKB, listAttractionsKB, getAttractionKB,
   deleteAttractionKB, batchDeleteAttractionsKB, updateAttractionKB,
-  exportAttractions, downloadTemplate
+  exportAttractions, downloadTemplate, patchAttractionImage
 } from '@/api/travelQuote'
 import { useAttractionKBImport } from '@/composables/useImport'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -174,6 +238,7 @@ const pageSize = ref(20)
 const columns = [
   { key: 'checkbox', label: '', width: '40px' },
   { key: 'index', label: '序号', width: '60px' },
+  { key: 'cover', label: '封面', width: '80px' },
   { key: 'title', label: '景点名称' },
   { key: 'region', label: '区域', tooltip: (row: any) => row.metadata?.region || '-' },
   { key: 'category_cn', label: '类型', tooltip: (row: any) => row.metadata?.category_cn || '-' },
@@ -211,8 +276,60 @@ const isFormDirty = () => JSON.stringify(form.value) !== formSnapshot.value
 const detailVisible = ref(false)
 const detailData = ref<any>({})
 
+// 图片预览 lightbox
+const lightboxUrl = ref('')
+const lightboxTitle = ref('')
+
+// 编辑弹窗图片管理状态（独立于文本表单，即时生效）
+const coverInput = ref<HTMLInputElement | null>(null)
+const galleryInput = ref<HTMLInputElement | null>(null)
+const editingCover = ref<string | null>(null)
+const editingGallery = ref<string[]>([])
+const imageBusy = ref<null | 'cover' | 'gallery'>(null)
+const imageError = ref('')
+
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const currentList = computed(() => searched.value ? searchResults.value : items.value)
+
+// 封面图 file_id：从 row.metadata.images.cover 提取
+function coverFileId(row: any): string | null {
+  const images = row?.metadata?.images
+  if (images && typeof images === 'object' && typeof images.cover === 'string') {
+    return images.cover
+  }
+  return null
+}
+
+// 详情弹窗图集 file_id 列表（封面 + 图集，去重）
+const galleryImageIds = computed<string[]>(() => {
+  const images = detailData.value?.metadata?.images
+  if (!images || typeof images !== 'object') return []
+  const ids: string[] = []
+  if (typeof images.cover === 'string') ids.push(images.cover)
+  if (Array.isArray(images.gallery)) {
+    for (const fid of images.gallery) {
+      if (typeof fid === 'string' && !ids.includes(fid)) ids.push(fid)
+    }
+  }
+  return ids
+})
+
+function onCoverError(ev: Event, row: any) {
+  // 封面图加载失败：隐藏 img，显示占位（避免 broken icon）
+  const target = ev.target as HTMLImageElement
+  target.style.display = 'none'
+  const parent = target.parentElement
+  if (parent) {
+    parent.classList.add('flex', 'items-center', 'justify-center')
+    parent.innerHTML = '<span class="text-muted text-[10px]">失败</span>'
+  }
+  console.warn('[AttractionManager] 封面图加载失败', row?.doc_id)
+}
+
+function openImageLightbox(url: string, title: string = '') {
+  lightboxUrl.value = url
+  lightboxTitle.value = title
+}
 
 async function loadAll() {
   loading.value = true
@@ -268,17 +385,106 @@ async function openEdit(item: any) {
     ticket_table: '',
     project_table: ''
   }
+  // 同步加载图片状态（从 list row 的 metadata 直接拿，不需要再请详情接口）
+  const imgs = item.metadata?.images
+  editingCover.value = (imgs && typeof imgs.cover === 'string') ? imgs.cover : null
+  editingGallery.value = (imgs && Array.isArray(imgs.gallery)) ? [...imgs.gallery] : []
+  imageError.value = ''
   showModal.value = true
   try {
     const detail = await getAttractionKB(item.doc_id)
     if (detail) {
       form.value.ticket_table = detail.ticket_table || ''
       form.value.project_table = detail.project_table || ''
+      // 以详情接口的图片为准（更权威）
+      const dimgs = detail.metadata?.images
+      if (dimgs && typeof dimgs === 'object') {
+        if (typeof dimgs.cover === 'string') editingCover.value = dimgs.cover
+        else editingCover.value = null
+        if (Array.isArray(dimgs.gallery)) editingGallery.value = [...dimgs.gallery]
+        else editingGallery.value = []
+      }
     }
     formSnapshot.value = JSON.stringify(form.value)
   } catch (e) {
     console.error('加载景点详情失败', e)
     formSnapshot.value = JSON.stringify(form.value)
+  }
+}
+
+async function uploadCover(file: File) {
+  if (!editingItem.value) return
+  imageBusy.value = 'cover'
+  imageError.value = ''
+  try {
+    const res = await patchAttractionImage(editingItem.value.doc_id, 'replace_cover', { file })
+    editingCover.value = res.cover
+    // 同步回写 list row，避免下次打开编辑时显示旧值
+    if (editingItem.value.metadata?.images) {
+      editingItem.value.metadata.images.cover = res.cover
+    }
+  } catch (e: any) {
+    imageError.value = e?.message || '封面上传失败'
+  } finally {
+    imageBusy.value = null
+    if (coverInput.value) coverInput.value.value = ''
+  }
+}
+
+async function removeCover() {
+  if (!editingItem.value) return
+  if (!confirm('确定删除封面图？')) return
+  imageBusy.value = 'cover'
+  imageError.value = ''
+  try {
+    const res = await patchAttractionImage(editingItem.value.doc_id, 'remove_cover', {})
+    editingCover.value = res.cover
+    if (editingItem.value.metadata?.images) {
+      editingItem.value.metadata.images.cover = null
+    }
+  } catch (e: any) {
+    imageError.value = e?.message || '封面删除失败'
+  } finally {
+    imageBusy.value = null
+  }
+}
+
+async function handleGalleryFiles(files: FileList) {
+  if (!editingItem.value || !files.length) return
+  imageBusy.value = 'gallery'
+  imageError.value = ''
+  try {
+    for (const f of Array.from(files)) {
+      await patchAttractionImage(editingItem.value.doc_id, 'add_gallery', { file: f })
+    }
+    // 重新加载详情获取最新 gallery（多文件上传后避免前端拼错顺序）
+    const detail = await getAttractionKB(editingItem.value.doc_id)
+    if (detail?.metadata?.images?.gallery) {
+      editingGallery.value = [...detail.metadata.images.gallery]
+      if (editingItem.value.metadata?.images) {
+        editingItem.value.metadata.images.gallery = [...editingGallery.value]
+      }
+    }
+  } catch (e: any) {
+    imageError.value = e?.message || '图集上传失败'
+  } finally {
+    imageBusy.value = null
+    if (galleryInput.value) galleryInput.value.value = ''
+  }
+}
+
+async function removeGallery(fid: string) {
+  if (!editingItem.value) return
+  if (!confirm('确定从图集删除这张图？')) return
+  imageError.value = ''
+  try {
+    const res = await patchAttractionImage(editingItem.value.doc_id, 'remove_gallery_file_id', { file_id: fid })
+    editingGallery.value = res.gallery
+    if (editingItem.value.metadata?.images) {
+      editingItem.value.metadata.images.gallery = [...res.gallery]
+    }
+  } catch (e: any) {
+    imageError.value = e?.message || '图集删除失败'
   }
 }
 

@@ -119,6 +119,17 @@ class WordProcessTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._router = None
+        # tenant_id / user_id 注入（由 Agent 钩子调用，或通过 ContextVar 兜底）
+        self._tenant_id: Optional[str] = None
+        self._user_id: Optional[str] = None
+
+    def set_tenant_id(self, tenant_id: str):
+        """由 Agent 注入 tenant_id，用于 md_to_word 的 image_inliner。"""
+        self._tenant_id = tenant_id
+
+    def set_user_id(self, user_id: str):
+        """由 Agent 注入 user_id。"""
+        self._user_id = user_id
 
     def _get_router(self):
         if self._router is None:
@@ -501,7 +512,7 @@ class WordProcessTool(BaseTool):
         }
 
     async def _handle_md_to_word(self, ctx: PipelineContext, params: Dict) -> Dict:
-        from src.tools.word.md_to_word import convert as md_convert, save_as
+        from src.tools.word.md_to_word import convert_async, save_as
 
         md_text = ctx.content or ctx.context
         if not md_text and ctx.file_paths:
@@ -522,7 +533,32 @@ class WordProcessTool(BaseTool):
             or (f"{self._safe_file_stem(title)}.docx" if title else None)
         )
 
-        doc = md_convert(md_text, template=template, title=title, author=author)
+        # 双轨获取 tenant_id：注入优先，ContextVar 兜底（HTTP 请求场景）
+        tenant_id = self._tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                tenant_id = None
+
+        user_id = self._user_id
+        if not user_id:
+            try:
+                from src.saas.context import get_current_user_id
+                user_id = get_current_user_id()
+            except Exception:
+                user_id = None
+
+        # 直接 await convert_async，避免 nested event loop
+        doc = await convert_async(
+            md_text,
+            template=template,
+            title=title,
+            author=author,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         result = save_as(doc, file_name=output_name)
         result["success"] = True
         result["message"] = "已生成Word文档"

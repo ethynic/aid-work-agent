@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
 from src.db.database import get_db_connection
+from src.core.image_asset import get_image_registry
 
 
 class AttractionSearchInput(BaseModel):
@@ -137,6 +138,26 @@ class AttractionSearchTool(BaseTool):
                     except (json.JSONDecodeError, TypeError):
                         meta = {}
 
+                # 解析 cover_image：从 metadata.images.cover 取 file_id，
+                # 通过 ImageRegistry 反组装为 ImageRef（dict 形式）；失败仅 warning 不阻断
+                images_meta = meta.get("images")
+                cover_file_id = None
+                if isinstance(images_meta, dict):
+                    cover_file_id = images_meta.get("cover")
+
+                cover_image = None
+                if cover_file_id:
+                    try:
+                        registry = get_image_registry()
+                        cover_ref = await registry.get_ref_by_file_id(cover_file_id)
+                        if cover_ref:
+                            cover_image = cover_ref.model_dump()
+                    except Exception as e:
+                        logger.warning(
+                            f"[AttractionSearch] doc_id={row['doc_id']} "
+                            f"cover_file_id={cover_file_id} resolve failed: {e}"
+                        )
+
                 info = row["text"] or ""
                 formatted.append({
                     "doc_id": row["doc_id"],
@@ -147,6 +168,7 @@ class AttractionSearchTool(BaseTool):
                     "region": meta.get("region", ""),
                     "category": meta.get("category", ""),
                     "category_cn": meta.get("category_cn", ""),
+                    "cover_image": cover_image,
                 })
 
             logger.info(f"[AttractionSearch] query='{query}' → {len(formatted)} results (tenant={tenant_id})")

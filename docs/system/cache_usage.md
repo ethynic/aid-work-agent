@@ -244,7 +244,29 @@ production 标签缓存 → 标签→版本映射缓存 → Prompt 内容缓存
 **失效时机**：实例停止时清除；TTL 自动过期兜底
 **源文件**：`src/saas/services/instance_manager.py`
 
-### 7.4 定时任务调度器启动锁
+### 7.4 图片资产元信息与去重缓存
+
+ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{file_id}` 协议）+ Web 抓取 URL 去重缓存。
+
+**存储**：Redis + 内存降级
+
+| 缓存 | 键模式 | TTL | 失效时机 |
+|------|--------|-----|---------|
+| 图片资产元信息（通用） | `uploaded_file:file_{uuid12}`（Hash） | 86400s | `cleanup_temp` 定时清理 source∈(tool_generated/web_fetch)∧usage∈(inline/embedded) 的过期图 |
+| 图片资产元信息（知识库） | `uploaded_file:file_{uuid12}`（Hash） | -1（永久） | 知识库文档删除时级联清理（Phase 3） |
+| Web 图片抓取去重 | `image_fetch_url:{sha256(url)}` | 604800s（7 天） | 同 URL 复用 file_id，不重复下载 |
+
+**Hash 字段**：`file_id / name / path / size / mime_type / type="image" / source / usage / source_ref / linked_doc_id / linked_chunk_id / visible / width / height / registered_at`
+
+**关键约束**：
+- Redis key 与 `cp_tool._register_download` 完全同命名空间，因此现有 `/api/files/{file_id}/download` 路由可直接下载 ImageRegistry 注册的图片
+- `PERMANENT_TTL(-1)` 不调用 `expire`（Redis hash 默认无 TTL）；正数 TTL 才调 `expire`
+- URL 去重缓存：下载成功才写入，失败/超时不写入（下次同 URL 仍会重试）
+
+**源文件**：`src/core/image_asset.py`
+**关联模块**：[image-asset-pipeline-design.md](image-asset-pipeline-design.md) §3 + §7.2
+
+### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
 
@@ -331,6 +353,8 @@ PostgreSQL（持久化，权威数据源）
 ├── session_pending:{sid}            # 会话待处理
 ├── session_responding:{sid}         # 会话响应中
 ├── instance_status:{instance_id}    # 实例状态
+├── uploaded_file:file_{uuid12}      # 图片/文件资产元信息（Hash，与 cp 共用）
+├── image_fetch_url:{sha256(url)}    # Web 图片抓取去重
 └── sched_task_lock:manager          # 定时任务调度器启动锁
 
 内存缓存（无 Redis 键前缀）：

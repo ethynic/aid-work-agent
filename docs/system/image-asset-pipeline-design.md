@@ -6,6 +6,7 @@
 > **触发场景**：旅游顾问行程 Word 缺少景点图片 → 抽象为系统级「图片资产承载能力」
 > **关联规范**：[file_usage.md](file_usage.md) / [cache_usage.md](cache_usage.md) / [backend_dev.md](../../.claude/rules/backend_dev.md)
 > **关联想法登记**：[ideas.md](../ideas.md) 系统功能 #37
+> **关联开发计划**：[plan-image-asset-pipeline.md](../plans/plan-image-asset-pipeline.md)
 
 ---
 
@@ -130,6 +131,13 @@ class ImageRef(BaseModel):
         "embedded",         # 嵌入文档内部
         "thumbnail",        # 缩略图（用于列表预览）
     ] = "inline"
+
+    # 位置语义（决定 Web 端渲染位置 + 渠道端占位符策略，见 §4.4.2）
+    placement: Literal[
+        "after_text",       # 文本之后（默认，最简单）
+        "before_text",      # 文本之前
+        "inline",           # 文本流中行内（需配合 Markdown ![]() 占位）
+    ] = "after_text"
 
     # 业务关联（可选，用于知识库资产等场景）
     linked_doc_id: Optional[int] = None
@@ -283,12 +291,100 @@ export interface ChatMessage {
 
 ### 4.4 渠道适配
 
+#### 4.4.1 渠道能力差异（关键约束）
+
+**Web 端**支持图文混排（Markdown 中 `![](url)` 行内渲染、`images` 字段渲染画廊），但**所有第三方渠道（wecom_kf / wecom / dingtalk / feishu）的图片与文本必须拆成多条独立消息发送**，无法在一条消息中图文混排。
+
+| 渠道 | 单消息能力 | 图文混排支持 | 拆分发送支持 |
+|------|----------|------------|------------|
+| Web 端 | Markdown 渲染 + ImageGallery | ✅ 支持 | — |
+| feishu | 文本消息 / 图片消息 / 文件消息（互斥） | ❌ 不支持 | ✅ 顺序发送多条 |
+| dingtalk | 文本消息 / 图片消息（sampleImageMsg）/ 链接消息 | ❌ 不支持 | ✅ 顺序发送多条 |
+| wecom_kf | 客服消息（text/image/link 互斥） | ❌ 不支持 | ✅ 顺序发送多条 |
+| wecom | 文本卡片 / 图片消息 | ❌ 不支持 | ✅ 顺序发送多条 |
+
+**核心约束**：渠道适配器必须把 `UnifiedResponse`（含 text + images + downloadable_files）拆分为**多条独立消息**按顺序发送，每条消息只能是单一类型（text / image / file / link）。
+
+#### 4.4.2 拆分发送策略
+
+**默认拆分顺序**（所有渠道通用）：
+
+```
+1. [文本消息]  response.text（已 markdown_to_plain_text 处理）
+2. [图片消息]  response.images[0]   ← 逐张发送
+3. [图片消息]  response.images[1]
+   ...
+4. [文件消息]  response.downloadable_files[0]   ← 逐个发送
+   ...
+```
+
+**placement 字段的渠道降级语义**：
+
+ImageRef 的 `placement`（"before_text" / "inline" / "after_text"）在 Web 端决定渲染位置，在渠道端**降级为统一的"文本之后发送"**——不保留前后语义，但通过**文本占位提示**补偿位置信息：
+
+| placement | Web 端渲染 | 渠道端降级 |
+|-----------|----------|----------|
+| `before_text` | 图片在文本上方 | 文本前加「[图片]」占位符 + 图在文本后发送 |
+| `inline` | 文本流中行内渲染 | 文本中插入位置加「[图片：{display_name}]」占位符 + 图在文本后发送 |
+| `after_text` | 文本下方画廊 | 图在文本后发送（无占位符） |
+
+**占位符规则**（仅渠道端，Web 端不需要）：
+- `before_text`：在文本开头插入 `[图片：{display_name}]\n`，让用户知道后面有图
+- `inline`：在 LLM 标记的图片位置（通过 Markdown `![alt](file_id:xxx)` 解析定位）插入 `[图片：{alt}]\n`
+- `after_text`：不加占位符（图自然在文本之后）
+
+**关键决策**：渠道端不尝试还原 Web 端的图文混排视觉，而是通过「文本占位 + 图随后发送」让用户能理解图文关系。
+
+#### 4.4.3 渠道适配实现
+
 | 渠道 | 适配方式 |
 |------|---------|
 | **feishu** | 已有 `media.upload_image(local_path)` + `send_image`（`feishu/adapter.py:492`）——从 ImageRef 解析 local_path，直接发 |
 | **dingtalk** | 已有 `upload_from_url` + `sampleImageMsg`（`dingtalk/adapter.py:354`）——从 ImageRef.download_url 上传 |
 | **wecom** | 当前只发 textcard，需补 `media.upload` + image msg 路径（`wecom/adapter.py:294-320` 需扩展） |
-| **wecom_kf** | 客服消息支持图片 msg，需扩展适配器 |
+| **wecom_kf** | 客服消息支持图片 msg（`api_client.send_msg` msgtype="image"），需扩展适配器 |
+
+**所有渠道的 send_message 改造模式**（统一抽象）：
+
+```python
+async def send_message(self, message: UnifiedResponse) -> bool:
+    """
+    渠道发送：按「文本 → 图片 → 文件」顺序拆分发送。
+    单条失败不阻断后续，记 warning。
+    """
+    all_success = True
+
+    # 1. 文本（含 placement 占位符）
+    text = self._render_text_with_placeholders(message)
+    if text:
+        all_success = await self._send_text(text, message.reply_to)
+
+    # 2. 图片（逐张发送，渠道特定上传方式）
+    for ref in message.images:
+        try:
+            success = await self._send_image_ref(ref, message.reply_to)
+            if not success:
+                all_success = False
+        except Exception as e:
+            logger.warning(f"[{channel}] send image {ref.file_id} failed: {e}")
+            all_success = False
+
+    # 3. 可下载文件（现有逻辑保留）
+    for file_info in message.downloadable_files:
+        ...
+
+    return all_success
+
+def _render_text_with_placeholders(self, message: UnifiedResponse) -> str:
+    """根据图片 placement 在文本中插入占位符（仅渠道端用）。"""
+    text = message.text
+    if not text or not message.images:
+        return text
+    # before_text: 开头插入
+    # inline: 解析 Markdown ![]() 位置插入
+    # after_text: 不插入
+    ...
+```
 
 **UnifiedResponse 新增 images 字段**（对称于 downloadable_files）：
 
@@ -546,11 +642,12 @@ Redis 新增 `uploaded_file:file_xxx` 用途的图片子类型（与 cp 共用�
 ### Phase 2：Agent 回复图片承载
 **目标**：Agent 能在回复中直接显示图片（不仅是文档）
 - [ ] 新增 `images` SSE 事件 + `make_image_event()`
-- [ ] ChatMessage / UnifiedResponse 新增 images 字段
+- [ ] ChatMessage / UnifiedResponse 新增 images 字段（含 placement）
 - [ ] 前端 `useAgent.ts` 监听 images 事件
 - [ ] 前端 `ImageGallery.vue` + `MessageItem.vue` 渲染分支
 - [ ] 前端 markdown.ts 自定义 image renderer
 - [ ] 渠道适配器 send_message 支持 images（feishu/dingtalk 先打通，wecom 后跟）
+- [ ] **渠道图文拆分发送**：所有渠道按「文本→图片→文件」顺序拆分多条发送，placement 降级为文本占位符（见 §4.4.2）
 
 ### Phase 3：高级能力（按需）
 - [ ] 文档解析器提取内嵌图片（word_parser / pdf_parser 等）
@@ -609,6 +706,28 @@ Redis 新增 `uploaded_file:file_xxx` 用途的图片子类型（与 cp 共用�
 - 独立事件让前端有专门的图片处理逻辑（懒加载、画廊布局）
 - 持久化时 metadata.images 单独存储，结构清晰
 
+### 9.6 为什么渠道端要拆分发送 + 占位符降级？
+
+**问题**：Web 端支持图文混排（Markdown 行内图 + ImageGallery），但所有第三方渠道（feishu/dingtalk/wecom/wecom_kf）**单条消息只能是单一类型**（text 或 image 或 file），无法在一条消息中图文混排。
+
+**选项对比**：
+- 选项 A：渠道只发文本，图片丢弃——信息损失，用户体验差
+- 选项 B：渠道只发图片，文本丢弃——更差
+- 选项 C：拆分多条发送（文本 + 图片 + 文件）——顺序固定，但前后语境割裂
+- 选项 D：拆分多条 + 文本占位符补偿位置——C 的增强，通过 `[图片：xxx]` 占位符让用户理解图文关系 ✅
+
+**结论**：选项 D。拆分发送（统一顺序：文本→图片→文件）+ placement 降级为文本占位符。
+
+**为什么不尝试还原图文混排**：
+- 渠道 API 限制（无 markdown 渲染、无行内图）
+- 还原成本高（需要把文本按图片位置切成多段，每段夹一张图发送，消息条数爆炸）
+- 用户体验未必更好（消息太多反而混乱）
+
+**占位符的设计权衡**：
+- `before_text` / `inline` 才插占位符（用户需要知道"这里有图"）
+- `after_text` 不插（图自然在文本之后，语义清晰）
+- 占位符文本用 `[图片：{display_name}]` 而非 `[图]`——展示图片名帮助用户识别
+
 ---
 
 ## 10. 风险与待解问题
@@ -620,6 +739,8 @@ Redis 新增 `uploaded_file:file_xxx` 用途的图片子类型（与 cp 共用�
 | LLM 不稳定使用 `file_id:` scheme | 中 | SUBAGENT.md 给明确示例 + 模板；inliner 容错（找不到就跳过） |
 | wecom 图片消息需要 media.upload + access_token | 中 | Phase 2 后跟，先打通 feishu/dingtalk |
 | 历史消息（无 images 字段）回放 | 低 | metadata.images 可选字段，向后兼容 |
+| 渠道图文拆分发送消息条数过多 | 中 | 单次回复图片上限（默认 5 张），超过转 downloadable_files |
+| 渠道端 placement 占位符丢失语义 | 低 | 占位符包含 display_name 帮助识别，关键图（如景点封面）用户能关联 |
 
 ---
 

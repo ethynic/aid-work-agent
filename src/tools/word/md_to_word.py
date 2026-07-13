@@ -52,9 +52,11 @@ def _find_pandoc() -> str:
 _DEFAULT_REFERENCE_DOC = Path(__file__).parent / "assets" / "reference" / "default.docx"
 
 
-def convert(md_text: str, template: Optional[str] = None,
-            title: str = "", author: str = "") -> Document:
-    """将 Markdown 文本转换为 python-docx Document。
+def _convert_sync(md_text: str, template: Optional[str] = None,
+                  title: str = "", author: str = "") -> Document:
+    """将 Markdown 文本转换为 python-docx Document（纯同步核心逻辑）。
+
+    主体逻辑与改造前的 convert() 完全一致，零改动以保证向后兼容。
 
     Args:
         md_text: Markdown 文本内容
@@ -81,9 +83,79 @@ def convert(md_text: str, template: Optional[str] = None,
     return doc
 
 
+async def convert_async(md_text: str, template: Optional[str] = None,
+                        title: str = "", author: str = "",
+                        tenant_id: Optional[str] = None,
+                        user_id: Optional[str] = None) -> Document:
+    """异步版本：tenant_id 提供时先 inline 图片，再走 _convert_sync。
+
+    tenant_id 缺省时跳过 image_inliner，行为与同步 _convert_sync 一致。
+    inline_images 单张图失败时不抛异常（inliner 内部已 catch），整篇文档继续生成；
+    只有 inliner 入口本身抛异常时 fallback 到原始 md_text 并记 warning。
+
+    Args:
+        md_text: Markdown 文本内容
+        template: 可选 .docx 模板文件路径
+        title: 文档标题
+        author: 文档作者
+        tenant_id: 租户 ID，提供时启用 image_inliner（下载远程图、解析 file_id:）
+        user_id: 用户 ID，远程图片下载时附带
+    """
+    if tenant_id:
+        from src.tools._image_inliner import inline_images
+        try:
+            md_text, _refs = await inline_images(
+                md_text, tenant_id=tenant_id, user_id=user_id
+            )
+        except Exception as e:
+            logger.warning(
+                f"[md_to_word] inline_images 失败，回退使用原始 markdown: {e}"
+            )
+    return _convert_sync(md_text, template=template, title=title, author=author)
+
+
+def convert(md_text: str, template: Optional[str] = None,
+            title: str = "", author: str = "",
+            tenant_id: Optional[str] = None,
+            user_id: Optional[str] = None) -> Document:
+    """将 Markdown 文本转换为 python-docx Document（同步包装）。
+
+    tenant_id 提供时走异步路径（先 inline 图片再 Pandoc），否则走原同步路径。
+    向后兼容：不传 tenant_id 时行为与改造前完全一致。
+
+    在运行中的 event loop 内调用时，会用线程池跑独立 loop，避免 nested event loop；
+    无运行中的 loop 时直接 asyncio.run。
+
+    Args:
+        md_text: Markdown 文本内容
+        template: 可选 .docx 模板文件路径
+        title: 文档标题
+        author: 文档作者
+        tenant_id: 租户 ID，提供时启用 image_inliner
+        user_id: 用户 ID
+    """
+    if tenant_id:
+        import asyncio
+        try:
+            asyncio.get_running_loop()
+            # 在运行中的 event loop 内，无法 asyncio.run —— 用线程池跑独立 loop
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(
+                    asyncio.run,
+                    convert_async(md_text, template, title, author, tenant_id, user_id),
+                ).result()
+        except RuntimeError:
+            # 没有 running loop，直接 asyncio.run
+            return asyncio.run(
+                convert_async(md_text, template, title, author, tenant_id, user_id)
+            )
+    return _convert_sync(md_text, template=template, title=title, author=author)
+
+
 def convert_file(md_path: str, template: Optional[str] = None,
                  title: str = "", author: str = "") -> Document:
-    """从 Markdown 文件创建 Word Document"""
+    """从 Markdown 文件创建 Word Document（向后兼容，不传 tenant_id）"""
     md_text = Path(md_path).read_text(encoding="utf-8")
     return convert(md_text, template=template, title=title, author=author)
 

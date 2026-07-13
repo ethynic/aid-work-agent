@@ -210,12 +210,20 @@ class AttractionRetriever:
     # 导入
     # ----------------------------------------------------------
 
-    def import_attraction(self, tenant_id: str, attraction_name: str, region: str,
-                          info_text: str, ticket_table_text: str,
-                          project_table_text: str = "",
-                          metadata: Optional[Dict] = None,
-                          source_file: str = "",
-                          user_id: Optional[str] = None) -> int:
+    async def import_attraction(
+        self,
+        tenant_id: str,
+        attraction_name: str,
+        region: str,
+        info_text: str,
+        ticket_table_text: str,
+        project_table_text: str = "",
+        metadata: Optional[Dict] = None,
+        source_file: str = "",
+        user_id: Optional[str] = None,
+        cover_image_path: Optional[str] = None,
+        gallery_image_paths: Optional[List[str]] = None,
+    ) -> int:
         """
         导入一个景点到知识库。
 
@@ -229,23 +237,33 @@ class AttractionRetriever:
             metadata: 额外元信息
             source_file: 来源文件名（仅记入 metadata）
             user_id: 上传用户 ID
+            cover_image_path: 封面图本地路径；提供时注册到 ImageRegistry 并写入
+                metadata.images.cover（source="knowledge_base", usage="thumbnail"）
+            gallery_image_paths: 图集本地路径列表；提供时循环注册，写入
+                metadata.images.gallery（file_id 列表）
 
         Returns:
             doc_id
+
+        Notes:
+            - 单张图片注册失败仅记 warning 不阻断（设计文档 §5.1.1 metadata.images 契约）
+            - chunks / chunks_vec 部分逻辑与改造前完全一致
         """
         embedding = self._embed(info_text)
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
-        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        # 先用原始 metadata 创建 document 拿 doc_id（图片注册需要 linked_doc_id）
+        initial_meta_json = json.dumps(metadata or {}, ensure_ascii=False)
 
         with self._get_conn() as conn:
-            # 1. 创建 document
+            # 1. 创建 document（先用初始 metadata，后续可能 UPDATE 合入 images）
             conn.execute("""
                 INSERT INTO documents (user_id, tenant_id, title, source_type, file_type, file_path,
                                        total_chunks, embedding_model, metadata, summary)
                 VALUES (%s, %s, %s, %s, 'xlsx', %s, 3, 'text-embedding-v3', %s, %s)
                 RETURNING id
-            """, (user_id, tenant_id, f"景点：{attraction_name}", self.SOURCE_TYPE, source_file, meta_json, info_text))
+            """, (user_id, tenant_id, f"景点：{attraction_name}", self.SOURCE_TYPE,
+                  source_file, initial_meta_json, info_text))
             doc_id = conn.fetchone()["id"]
 
             # 2. 插入 chunk 0（景点信息摘要）
@@ -279,5 +297,90 @@ class AttractionRetriever:
 
             conn.commit()
 
-        logger.info(f"[AttractionRetriever] 导入景点 '{attraction_name}' 成功, doc_id={doc_id}")
+        # 6. 注册图片到 ImageRegistry（拿到 doc_id 之后）。
+        #    单张失败仅 warning 不阻断；正常情况下 metadata.images 不写或部分写。
+        images_meta: Dict[str, Any] = {}
+        if cover_image_path or gallery_image_paths:
+            from pathlib import Path
+
+            from src.core.image_asset import get_image_registry
+
+            registry = get_image_registry()
+
+            if cover_image_path:
+                try:
+                    cover_ref = await registry.register(
+                        source_path=cover_image_path,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        display_name=Path(cover_image_path).name,
+                        source="knowledge_base",
+                        usage="thumbnail",
+                        source_ref=source_file,
+                        linked_doc_id=doc_id,
+                    )
+                    images_meta["cover"] = cover_ref.file_id
+                except Exception as e:
+                    logger.warning(
+                        f"[AttractionRetriever] 注册封面图失败 attraction='{attraction_name}' "
+                        f"cover_image_path={cover_image_path}: {e}"
+                    )
+
+            if gallery_image_paths:
+                gallery_file_ids: List[str] = []
+                for img_path in gallery_image_paths:
+                    try:
+                        g_ref = await registry.register(
+                            source_path=img_path,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            display_name=Path(img_path).name,
+                            source="knowledge_base",
+                            usage="thumbnail",
+                            source_ref=source_file,
+                            linked_doc_id=doc_id,
+                        )
+                        gallery_file_ids.append(g_ref.file_id)
+                    except Exception as e:
+                        logger.warning(
+                            f"[AttractionRetriever] 注册图集图片失败 attraction='{attraction_name}' "
+                            f"path={img_path}: {e}"
+                        )
+                if gallery_file_ids:
+                    images_meta["gallery"] = gallery_file_ids
+
+        # 7. 如果有图片注册成功，合并到 metadata 并 UPDATE documents
+        if images_meta:
+            final_metadata = {**(metadata or {}), "images": images_meta}
+            final_meta_json = json.dumps(final_metadata, ensure_ascii=False)
+            with self._get_conn() as conn:
+                conn.execute(
+                    "UPDATE documents SET metadata = %s WHERE id = %s",
+                    (final_meta_json, doc_id),
+                )
+                conn.commit()
+
+        logger.info(
+            f"[AttractionRetriever] 导入景点 '{attraction_name}' 成功, doc_id={doc_id}, "
+            f"images={'/'.join(images_meta.keys()) if images_meta else 'none'}"
+        )
         return doc_id
+
+    def import_attraction_sync(self, **kwargs) -> int:
+        """同步兼容包装：覆盖旧的同步调用方。
+
+        已在 event loop 内时（不该走到这，但兜底）使用线程池跑独立 loop；
+        否则用 asyncio.run。
+        """
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(
+                        asyncio.run, self.import_attraction(**kwargs)
+                    ).result()
+        except RuntimeError:
+            pass
+        return asyncio.run(self.import_attraction(**kwargs))

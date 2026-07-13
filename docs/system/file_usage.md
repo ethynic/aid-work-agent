@@ -63,6 +63,8 @@ storage/
 | 技能环境文件 | `tenants/{tenant_id}/skills/{skill_name}/.env` | 磁盘 | 是 | 技能的环境变量配置 |
 | 长期记忆文件 | `memory/{tenant_id}/` | 磁盘 | 是 | 长期记忆存储文件 |
 | 子智能体配置 | `subagents/{dir}/extra_{tenant_id}.md` | 磁盘 | 是 | 子智能体租户级额外配置 |
+| 图片资产（通用） | `tenants/{id}/images/{yyyy-mm}/` | 磁盘+Redis | 是 | ImageRegistry 管理的非知识库图片（工具生成/上传/Web 抓取），TTL 24h |
+| 知识库图片资产 | `tenants/{id}/knowledge/images/` | 磁盘+Redis | 是 | 知识库关联图片（景点封面、文档内嵌图等），永久存储 |
 | 输出文件 | `output/` | 磁盘 | 待实现 | 生成的报表、演示文稿等 |
 
 ---
@@ -162,6 +164,27 @@ storage/
 
 **路径**：`storage/output/`
 **状态**：目录已创建但尚未使用
+
+### 3.10 图片资产（通用）
+
+ImageRegistry 统一管理的非知识库图片资产，所有「工具生成 / 用户上传 / Web 抓取 / 截图」来源的图片都落入此目录。
+
+**路径**：`storage/tenants/{tenant_id}/images/{yyyy-mm}/{file_id}{ext}`
+**文件命名**：`file_{uuid12}.{ext}`（与 cp 同前缀，复用 `uploaded_file:{file_id}` Redis 协议）
+**TTL**：默认 86400s（24h），由 ImageRegistry.cleanup_temp 定期清理
+**Redis 元信息**：`uploaded_file:{file_id}` Hash（含 source/usage/source_ref/linked_doc_id/width/height 等字段）
+**调用方**：`src/core/image_asset.py` 的 `ImageRegistry.register(source="tool_generated"|"web_fetch"|"user_upload"|"screenshot")`
+**关联模块**：[image-asset-pipeline-design.md](image-asset-pipeline-design.md)
+
+### 3.11 知识库图片资产
+
+知识库关联的图片（景点封面、文档内嵌图等），与文档/分块绑定的长期资产。
+
+**路径**：`storage/tenants/{tenant_id}/knowledge/images/`（与 `knowledge/` 文档目录并列）
+**TTL**：永久（Redis `uploaded_file:{file_id}` 不设 expire）
+**清理时机**：知识库文档删除时级联清理（Phase 3 实现）
+**调用方**：`src/core/image_asset.py` 的 `ImageRegistry.register(source="knowledge_base", usage="thumbnail"|"inline")`
+**关联模块**：[image-asset-pipeline-design.md](image-asset-pipeline-design.md) §5
 
 ---
 
@@ -310,6 +333,9 @@ storage/
 │   └── {tenant_id}/
 │       ├── conversation/                      # 对话附件（新）
 │       ├── knowledge/                         # 知识图文档（新）
+│       │   └── images/                        # 知识库图片资产（永久）
+│       ├── images/                            # 图片资产（通用）
+│       │   └── {yyyy-mm}/                     # 按月份分桶，file_{uuid12}.{ext}
 │       ├── export/                            # 业务导出文件
 │       ├── report/                            # 统计报表
 │       ├── avatar/                            # 头像/Logo

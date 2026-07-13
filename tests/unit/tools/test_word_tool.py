@@ -224,7 +224,7 @@ class TestWordProcessToolExecution:
             "| D1 | 上午 | 贵阳接站 |"
         )
 
-        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+        with patch("src.tools.word.md_to_word.convert_async", new_callable=AsyncMock) as mock_convert, \
              patch("src.tools.word.md_to_word.save_as") as mock_save:
             mock_convert.return_value = MagicMock()
             mock_save.return_value = {"file_path": "/tmp/custom.docx", "file_size": 123}
@@ -253,7 +253,7 @@ class TestWordProcessToolExecution:
         tool._router = mock_router
         content = "# 项目说明\n\n这是一个没有表格和列表的简单 Markdown 文档。"
 
-        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+        with patch("src.tools.word.md_to_word.convert_async", new_callable=AsyncMock) as mock_convert, \
              patch("src.tools.word.md_to_word.save_as") as mock_save:
             mock_convert.return_value = MagicMock()
             mock_save.return_value = {"file_path": "/tmp/project.docx", "file_size": 123}
@@ -276,7 +276,7 @@ class TestWordProcessToolExecution:
         tool = WordProcessTool()
         content = "# 项目说明\n\n这是一个简单 Markdown 文档。"
 
-        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+        with patch("src.tools.word.md_to_word.convert_async", new_callable=AsyncMock) as mock_convert, \
              patch("src.tools.word.md_to_word.save_as") as mock_save:
             mock_convert.return_value = MagicMock()
             mock_save.return_value = {"file_path": "/tmp/project.docx", "file_size": 123}
@@ -305,7 +305,7 @@ class TestWordProcessToolExecution:
             "| D1 | 上午 | 贵阳接站 |"
         )
 
-        with patch("src.tools.word.md_to_word.convert") as mock_convert, \
+        with patch("src.tools.word.md_to_word.convert_async", new_callable=AsyncMock) as mock_convert, \
              patch("src.tools.word.md_to_word.save_as") as mock_save:
             mock_convert.return_value = MagicMock()
             mock_save.return_value = {"file_path": "/tmp/安顺坝陵河大桥3天2晚行程.docx", "file_size": 123}

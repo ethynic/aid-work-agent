@@ -44,6 +44,14 @@ Sheet 名称：{sheet_name}
 
 请仔细分析数据的实际结构，从中提取出所有景点及其完整的价格信息。
 
+### 图片列处理（可选）
+
+如果 Sheet 中有「封面图」「图集」（或同义词如「封面」「图片」）列，提取每个景点的图片文件名：
+- 「封面图」列：单个文件名（如 "黄果树瀑布.jpg"）
+- 「图集」列：分号分隔的多个文件名（如 "图1.jpg;图2.jpg;图3.jpg"）
+- 没有这些列时省略对应字段
+- 文件名是相对于 zip 包内 images/ 目录的路径
+
 ## 输出要求
 
 对每个提取出的景点，输出三部分：
@@ -103,6 +111,8 @@ Sheet 名称：{sheet_name}
     "info_text": "景点信息摘要文本（多行，一行一字段，用\\n分隔）",
     "ticket_table_text": "门票价格表文本（一行一个价格）",
     "project_table_text": "项目/服务价格表文本（一行一个项目或者服务）",
+    "cover_image_filename": "黄果树瀑布.jpg（从「封面图」列提取的文件名，相对于 images/ 目录；无此列则省略）",
+    "gallery_image_filenames": ["图1.jpg", "图2.jpg"],
     "metadata": {{
       "region": "区域",
       "category_cn": "中文景点类型",
@@ -112,6 +122,10 @@ Sheet 名称：{sheet_name}
   }}
 ]
 ```
+
+说明：
+- `cover_image_filename` / `gallery_image_filenames` 是可选字段，仅在 Sheet 含图片列时输出
+- `gallery_image_filenames` 中 `图1.jpg;图2.jpg` 这种分号分隔的内容应输出为 JSON 数组 `["图1.jpg", "图2.jpg"]`
 
 注意：只输出 JSON 数组，不要输出其他内容。如果数据中没有有效的景点/项目信息，输出空数组 []。"""
 
@@ -255,12 +269,30 @@ class AttractionExcelParser:
             metadata = item.get("metadata", {}) or {}
             metadata["source_sheet"] = sheet_name
 
+            # 提取图片文件名字段（可选，zip 包导入时使用）
+            cover_filename = item.get("cover_image_filename", "")
+            if isinstance(cover_filename, str):
+                cover_filename = cover_filename.strip() or None
+            else:
+                cover_filename = None
+
+            gallery_raw = item.get("gallery_image_filenames")
+            if isinstance(gallery_raw, str):
+                # 兼容 LLM 可能输出字符串 "a.jpg;b.jpg"
+                gallery_filenames = [s.strip() for s in gallery_raw.split(";") if s.strip()] or None
+            elif isinstance(gallery_raw, list):
+                gallery_filenames = [str(s).strip() for s in gallery_raw if str(s).strip()] or None
+            else:
+                gallery_filenames = None
+
             results.append({
                 "attraction_name": attraction_name,
                 "region": region,
                 "info_text": info_text,
                 "ticket_table_text": ticket_table,
                 "project_table_text": project_table,
+                "cover_image_filename": cover_filename,
+                "gallery_image_filenames": gallery_filenames,
                 "metadata": metadata,
             })
 

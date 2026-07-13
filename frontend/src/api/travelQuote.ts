@@ -95,6 +95,29 @@ export async function updateAttractionKB(docId: number, data: { title?: string; 
   return json.data
 }
 
+/** 单景点图片管理（封面 / 图集） */
+export async function patchAttractionImage(
+  docId: number,
+  action: 'replace_cover' | 'add_gallery' | 'remove_cover' | 'remove_gallery_file_id',
+  payload: { file?: File; file_id?: string }
+): Promise<{ cover: string | null; gallery: string[] }> {
+  const form = new FormData()
+  form.append('action', action)
+  if (payload.file) form.append('file', payload.file)
+  if (payload.file_id) form.append('file_id', payload.file_id)
+  const res = await fetch(`${API_BASE}/kb/attractions/${docId}/images`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeader() },  // 注意：FormData 不要手动设 Content-Type
+    body: form,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '图片上传失败')
+  }
+  const json = await res.json()
+  return json.data
+}
+
 // ============================================================
 // 酒店知识库：删除和更新
 // ============================================================

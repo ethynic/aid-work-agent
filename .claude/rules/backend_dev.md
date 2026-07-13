@@ -485,3 +485,51 @@ file_path = f"storage/uploads/tenant_{tenant_id}/files/{filename}"
 ### 迁移说明
 
 现有 `uploads/` 中的文件暂不迁移，后续择机统一迁移到 `tenants/` 新目录结构。新代码无需考虑旧文件兼容，但读取时可参考 `file_usage.md` 第 5.2 节的兼容桥接模式。
+
+## 图片资产使用规范
+
+**核心规则**：所有图片资产的注册、寻址、传递必须通过 `src/core/image_asset.py` 的 `ImageRegistry` 与 `ImageRef`。
+
+**关联文档**：架构设计见 [image-asset-pipeline-design.md](../../docs/system/image-asset-pipeline-design.md)，开发计划见 [plan-image-asset-pipeline.md](../../docs/plans/plan-image-asset-pipeline.md)。
+
+### 强制要求
+
+任何在工具结果、SSE 事件、API 响应中传递图片的字段，**必须**使用 `ImageRef`（`List[ImageRef]` 或 `Optional[ImageRef]`），**禁止**：
+- 业务代码直接拼 `storage/` 路径写图片
+- 接口之间传 `file_path` / `url` / `base64` 裸字段
+- 知识库图片使用外部 URL（必须落地租户目录，防止链接腐烂 + 审计 + 租户隔离）
+
+### 注册入口
+
+```python
+from src.core.image_asset import get_image_registry, ImageRef
+
+registry = get_image_registry()
+ref: ImageRef = await registry.register(
+    source_path="/tmp/generated_image.png",
+    tenant_id=tenant_id,
+    user_id=user_id,
+    display_name="生成的图表.png",
+    source="tool_generated",  # knowledge_base / tool_generated / user_upload / web_fetch / screenshot
+    usage="inline",           # inline / attachment / embedded / thumbnail
+)
+# ref.file_id 与 cp 同命名空间，ref.download_url = /api/files/{file_id}/download
+```
+
+### TTL 与清理
+
+| source | 默认 TTL | 清理策略 |
+|--------|---------|---------|
+| `knowledge_base` | 永久（不调 expire） | 文档删除时级联清理 |
+| `tool_generated` / `web_fetch` / `user_upload` / `screenshot` | 86400s（24h） | `cleanup_temp` 仅清理 `usage ∈ (inline, embedded)` 的过期图 |
+
+### Web 图片抓取
+
+`ImageRegistry.fetch_to_local(url, tenant_id, ...)` 自动通过 `image_fetch_url:{sha256(url)}` 做 URL 去重缓存（TTL 7 天），同 URL 不重复下载；单文件超过 10MB 拒绝下载；超时 15s。
+
+### 注意事项
+
+- `PERMANENT_TTL(-1)` 不调用 `redis_client.expire`（内存降级版 seconds≤0 立即删键）；只有正数 TTL 才调 expire
+- Redis key 与 `cp_tool._register_download` 完全同命名空间（`uploaded_file:{file_id}`），现有 `/api/files/{file_id}/download` 路由可直接下载
+- ImageRegistry 是惰性单例（`get_image_registry()`），模块顶层**无**实例化副作用，import 该模块不会拉起 master_agent
+

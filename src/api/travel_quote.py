@@ -306,6 +306,178 @@ async def update_attraction_kb(doc_id: int, request: Request, body: Dict[str, An
 
 
 # ============================================================
+# 景点图片管理（单景点补图/换图/删图）
+# ============================================================
+
+_ALLOWED_IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+@router.patch("/kb/attractions/{doc_id}/images")
+async def patch_attraction_images(
+    request: Request,
+    doc_id: int,
+    action: str = File(...),                    # replace_cover | add_gallery | remove_cover | remove_gallery_file_id
+    file: Optional[UploadFile] = File(None),    # replace_cover / add_gallery 时必传
+    file_id: Optional[str] = File(None),        # remove_gallery_file_id 时必传（要删的 file_id）
+):
+    """管理景点知识库文档的图片资产（封面 / 图集）。
+
+    action 取值：
+      - ``replace_cover``：上传/替换封面图（file 必传）。旧封面 file_id 会被丢弃（不主动清理磁盘/Redis，由 24h TTL 兜底）
+      - ``add_gallery``：追加图集（file 必传，可多次调用逐张追加）
+      - ``remove_cover``：移除封面（无需 file/file_id）
+      - ``remove_gallery_file_id``：从图集中删除指定 file_id（file_id 必传）
+
+    Returns:
+        ``{success, data: {cover, gallery}}`` —— 返回更新后的 cover / gallery file_id 列表
+    """
+    tenant_id = _get_tenant_id(request)
+    user_id = None
+    current_user = get_current_user(request)
+    if current_user:
+        user_id = current_user.get("user_id")
+
+    # 1. 校验景点存在 + 取现有 metadata
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, metadata FROM documents WHERE id = %s AND source_type = %s AND tenant_id = %s",
+            (doc_id, "attraction_resource", tenant_id),
+        )
+        row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="景点文档不存在")
+
+    existing_meta = row["metadata"] or {}
+    if isinstance(existing_meta, str):
+        try:
+            existing_meta = json.loads(existing_meta)
+        except (json.JSONDecodeError, TypeError):
+            existing_meta = {}
+
+    images_meta = existing_meta.get("images") if isinstance(existing_meta, dict) else None
+    if not isinstance(images_meta, dict):
+        images_meta = {}
+    cover_now = images_meta.get("cover")
+    gallery_now = list(images_meta.get("gallery") or [])
+
+    from src.core.image_asset import get_image_registry
+    registry = get_image_registry()
+
+    # 2. 按动作处理
+    if action == "replace_cover":
+        if not file:
+            raise HTTPException(status_code=400, detail="replace_cover 需要上传 file")
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in _ALLOWED_IMG_EXTS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的图片格式（仅支持 {sorted(_ALLOWED_IMG_EXTS)}）",
+            )
+        # 落地到临时文件 → ImageRegistry.register（会 move 到租户目录）
+        suffix = ext
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            ref = await registry.register(
+                source_path=tmp_path,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                display_name=os.path.basename(file.filename or f"cover{suffix}"),
+                source="knowledge_base",
+                usage="thumbnail",
+                source_ref=f"attraction_doc:{doc_id}",
+                linked_doc_id=doc_id,
+                move=True,
+            )
+            cover_now = ref.file_id
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    elif action == "add_gallery":
+        if not file:
+            raise HTTPException(status_code=400, detail="add_gallery 需要上传 file")
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in _ALLOWED_IMG_EXTS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的图片格式（仅支持 {sorted(_ALLOWED_IMG_EXTS)}）",
+            )
+        suffix = ext
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            ref = await registry.register(
+                source_path=tmp_path,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                display_name=os.path.basename(file.filename or f"gallery{suffix}"),
+                source="knowledge_base",
+                usage="inline",
+                source_ref=f"attraction_doc:{doc_id}",
+                linked_doc_id=doc_id,
+                move=True,
+            )
+            if ref.file_id not in gallery_now:
+                gallery_now.append(ref.file_id)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    elif action == "remove_cover":
+        cover_now = None
+
+    elif action == "remove_gallery_file_id":
+        if not file_id:
+            raise HTTPException(status_code=400, detail="remove_gallery_file_id 需要 file_id 参数")
+        gallery_now = [fid for fid in gallery_now if fid != file_id]
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="action 必须是 replace_cover / add_gallery / remove_cover / remove_gallery_file_id",
+        )
+
+    # 3. 写回 documents.metadata（合并 images 字段，保留其他 metadata 不变）
+    new_images_meta = {}
+    if cover_now:
+        new_images_meta["cover"] = cover_now
+    if gallery_now:
+        new_images_meta["gallery"] = gallery_now
+    merged_meta = {**existing_meta, "images": new_images_meta} if new_images_meta else {k: v for k, v in existing_meta.items() if k != "images"}
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE documents SET metadata = %s WHERE id = %s",
+            (json.dumps(merged_meta, ensure_ascii=False), doc_id),
+        )
+        conn.commit()
+
+    logger.info(
+        f"[AttractionImages] doc_id={doc_id} action={action} "
+        f"cover={'set' if cover_now else 'none'} gallery_count={len(gallery_now)}"
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "cover": cover_now,
+            "gallery": gallery_now,
+        },
+    }
+
+
+# ============================================================
 # 酒店知识库：删除和更新
 # ============================================================
 
@@ -1314,9 +1486,198 @@ async def import_hotel_excel_to_kb(request: Request, file: UploadFile = File(...
 # 景点 Excel → 知识库导入
 # ============================================================
 
+# 允许的图片扩展名（zip 包导入图片时校验）
+ALLOWED_IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _resolve_image_path(images_dir: Optional[str], filename: Optional[str]) -> Optional[str]:
+    """校验并解析图片文件路径，返回绝对路径或 None（不合法/不存在时跳过）
+
+    安全力：filename 来自 LLM 解析结果，可能含路径遍历（../），
+    用 os.path.basename 取纯文件名后再拼路径，确保不会逃出 images_dir。
+    """
+    if not images_dir or not filename:
+        return None
+    # 防 LLM 输出路径遍历：只取 basename（"../xxx.jpg" → "xxx.jpg"；"a/b.jpg" → "b.jpg"）
+    safe_filename = os.path.basename(filename)
+    if not safe_filename:
+        return None
+    ext = os.path.splitext(safe_filename)[1].lower()
+    if ext not in ALLOWED_IMG_EXTS:
+        logger.warning(
+            f"[AttractionExcelImport] 不支持的图片格式 {safe_filename}"
+            f"（仅支持 {sorted(ALLOWED_IMG_EXTS)}）"
+        )
+        return None
+    full_path = os.path.join(images_dir, safe_filename)
+    if not os.path.isfile(full_path):
+        logger.warning(f"[AttractionExcelImport] 图片文件不存在: {safe_filename}")
+        return None
+    return full_path
+
+
+async def _process_parsed_attractions(
+    parser,
+    retriever,
+    xlsx_path: str,
+    tenant_id: str,
+    user_id: Optional[str],
+    file_rel_path: str,
+    images_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    逐 Sheet 解析 Excel 并写入知识库（xlsx 模式和 zip 模式共用）。
+
+    Args:
+        parser: AttractionExcelParser 实例
+        retriever: AttractionRetriever 实例
+        xlsx_path: Excel 文件路径（绝对路径）
+        tenant_id: 租户 ID
+        user_id: 用户 ID（可能为 None）
+        file_rel_path: 持久化文件相对路径（写入 documents.file_path）
+        images_dir: 图片目录绝对路径（zip 模式传入，xlsx 模式传 None）
+    """
+    imported = 0
+    skipped = 0
+    errors: List[str] = []
+    sheet_stats: Dict[str, Dict] = {}
+
+    # 先扫描有效 Sheet
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
+    valid_sheets = []
+    for sn in wb.sheetnames:
+        if sn.startswith("WpsReserved"):
+            continue
+        ws = wb[sn]
+        non_empty = sum(1 for row in ws.iter_rows(values_only=True) if any(v is not None for v in row))
+        if non_empty >= 2:
+            valid_sheets.append(sn)
+    wb.close()
+
+    total_sheets = len(valid_sheets)
+    logger.info(f"[AttractionExcelImport] 共 {total_sheets} 个有效 Sheet，开始逐个解析并导入")
+
+    for idx, sheet_name in enumerate(valid_sheets, 1):
+        logger.info(f"[AttractionExcelImport] 处理 Sheet {idx}/{total_sheets}: '{sheet_name}'")
+
+        try:
+            parsed = await parser.parse_sheet_by_name(xlsx_path, sheet_name)
+        except Exception as e:
+            error_msg = sanitize_error_info(str(e))
+            errors.append(f"Sheet '{sheet_name}' 解析失败: {error_msg}")
+            logger.warning(f"[AttractionExcelImport] Sheet '{sheet_name}' 解析失败: {error_msg}")
+            if sheet_name not in sheet_stats:
+                sheet_stats[sheet_name] = {"total": 0, "imported": 0, "skipped": 0}
+            continue
+
+        if not parsed:
+            continue
+
+        for attraction in parsed:
+            name = attraction.get("attraction_name", "").strip()
+            if not name:
+                skipped += 1
+                continue
+
+            region = attraction.get("region", "")
+            info_text = attraction.get("info_text", "")
+            ticket_table_text = attraction.get("ticket_table_text", "")
+            project_table_text = attraction.get("project_table_text", "")
+            metadata = attraction.get("metadata", {}) or {}
+
+            if not info_text and not ticket_table_text and not project_table_text:
+                skipped += 1
+                errors.append(f"{name}: 无有效数据")
+                continue
+
+            # 查重
+            try:
+                existing = retriever.search_by_name(tenant_id, name, top_k=1)
+                if existing and any(name in r.get("title", "") for r in existing):
+                    skipped += 1
+                    continue
+            except Exception:
+                pass
+
+            # 解析图片路径（zip 模式且 images_dir 存在时）
+            cover_path = _resolve_image_path(images_dir, attraction.get("cover_image_filename"))
+            gallery_paths: List[str] = []
+            for gf in attraction.get("gallery_image_filenames") or []:
+                gp = _resolve_image_path(images_dir, gf)
+                if gp:
+                    gallery_paths.append(gp)
+
+            try:
+                await retriever.import_attraction(
+                    tenant_id=tenant_id,
+                    attraction_name=name,
+                    region=region,
+                    info_text=info_text,
+                    ticket_table_text=ticket_table_text,
+                    project_table_text=project_table_text,
+                    metadata=metadata,
+                    source_file=file_rel_path,
+                    user_id=user_id,
+                    cover_image_path=cover_path,
+                    gallery_image_paths=gallery_paths or None,
+                )
+                imported += 1
+
+                stat_key = sheet_name
+                if stat_key not in sheet_stats:
+                    sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
+                sheet_stats[stat_key]["total"] += 1
+                sheet_stats[stat_key]["imported"] += 1
+
+            except Exception as e:
+                skipped += 1
+                error_msg = sanitize_error_info(str(e))
+                errors.append(f"{name}: {error_msg}")
+                logger.warning(f"[AttractionExcelImport] 导入失败 {name}: {error_msg}")
+
+                stat_key = sheet_name
+                if stat_key not in sheet_stats:
+                    sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
+                sheet_stats[stat_key]["total"] += 1
+                sheet_stats[stat_key]["skipped"] += 1
+
+    details = [{"sheet": k, **v} for k, v in sheet_stats.items()]
+
+    logger.info(
+        f"[AttractionExcelImport] tenant={tenant_id} "
+        f"imported={imported} skipped={skipped}"
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "total_attractions": imported + skipped,
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors[:20],
+            "details": details,
+        },
+    }
+
+
 @router.post("/import/attraction-excel-kb")
 async def import_attraction_excel_to_kb(request: Request, file: UploadFile = File(...)):
-    """上传景点报价 Excel，解析后导入到向量知识库"""
+    """上传景点报价 Excel（.xlsx）或包含图片的 zip 包，解析后导入到向量知识库
+
+    zip 包结构约定：
+        attraction_data.zip
+        ├── attractions.xlsx     # 必须在根目录
+        └── images/              # 可选，景点图片目录
+            ├── 黄果树瀑布.jpg
+            └── ...
+
+    xlsx 模式（仅 .xlsx 文件）保持向后兼容，不导入图片。
+    """
+    import io
+    import zipfile
+    import shutil
+
     tenant_id = _get_tenant_id(request)
 
     user_id = None
@@ -1324,159 +1685,108 @@ async def import_attraction_excel_to_kb(request: Request, file: UploadFile = Fil
     if current_user:
         user_id = current_user.get("user_id")
 
-    if not file.filename.endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+    filename = (file.filename or "unknown").lower()
+    is_zip = filename.endswith(".zip")
+    is_xlsx = filename.endswith(".xlsx")
+    if not (is_zip or is_xlsx):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .zip 文件")
 
-    # 1. 保存到持久目录（供 documents.file_path 引用）
     content = await file.read()
-    file_rel_path = _save_upload_to_storage(content, file.filename or "unknown.xlsx", tenant_id)
 
-    # 同时写临时文件供 openpyxl 读取
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
+    # 共享：准备 skill scripts 路径与 parser/retriever 实例
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
 
-    try:
-        # 2. 逐 Sheet 解析并立即写入知识库
-        import sys
-        from pathlib import Path
-        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
-        if str(skill_dir) not in sys.path:
-            sys.path.insert(0, str(skill_dir))
+    from attraction_excel_parser import AttractionExcelParser
+    from attraction_retriever import AttractionRetriever
 
-        from attraction_excel_parser import AttractionExcelParser
-        from attraction_retriever import AttractionRetriever
+    parser = AttractionExcelParser()
+    retriever = AttractionRetriever()
 
-        parser = AttractionExcelParser()
-        retriever = AttractionRetriever()
-        source_filename = file.filename or "unknown.xlsx"
+    # ==================== xlsx 模式（向后兼容） ====================
+    if is_xlsx:
+        file_rel_path = _save_upload_to_storage(content, file.filename or "unknown.xlsx", tenant_id)
 
-        imported = 0
-        skipped = 0
-        errors = []
-        sheet_stats: Dict[str, Dict] = {}
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
 
-        # 先扫描有效 Sheet
-        import openpyxl
-        wb = openpyxl.load_workbook(tmp_path, data_only=True, read_only=True)
-        valid_sheets = []
-        for sn in wb.sheetnames:
-            if sn.startswith("WpsReserved"):
-                continue
-            ws = wb[sn]
-            non_empty = sum(1 for row in ws.iter_rows(values_only=True) if any(v is not None for v in row))
-            if non_empty >= 2:
-                valid_sheets.append(sn)
-        wb.close()
-
-        total_sheets = len(valid_sheets)
-        logger.info(f"[AttractionExcelImport] 共 {total_sheets} 个有效 Sheet，开始逐个解析并导入")
-
-        for idx, sheet_name in enumerate(valid_sheets, 1):
-            logger.info(f"[AttractionExcelImport] 处理 Sheet {idx}/{total_sheets}: '{sheet_name}'")
-
-            try:
-                # 解析单个 Sheet
-                parsed = await parser.parse_sheet_by_name(tmp_path, sheet_name)
-            except Exception as e:
-                error_msg = sanitize_error_info(str(e))
-                errors.append(f"Sheet '{sheet_name}' 解析失败: {error_msg}")
-                logger.warning(f"[AttractionExcelImport] Sheet '{sheet_name}' 解析失败: {error_msg}")
-                if sheet_name not in sheet_stats:
-                    sheet_stats[sheet_name] = {"total": 0, "imported": 0, "skipped": 0}
-                continue
-
-            if not parsed:
-                continue
-
-            # 逐条写入知识库
-            for attraction in parsed:
-                name = attraction.get("attraction_name", "").strip()
-                if not name:
-                    skipped += 1
-                    continue
-
-                region = attraction.get("region", "")
-                info_text = attraction.get("info_text", "")
-                ticket_table_text = attraction.get("ticket_table_text", "")
-                project_table_text = attraction.get("project_table_text", "")
-                metadata = attraction.get("metadata", {}) or {}
-
-                if not info_text and not ticket_table_text and not project_table_text:
-                    skipped += 1
-                    errors.append(f"{name}: 无有效数据")
-                    continue
-
-                # 查重
-                try:
-                    existing = retriever.search_by_name(tenant_id, name, top_k=1)
-                    if existing and any(name in r.get("title", "") for r in existing):
-                        skipped += 1
-                        continue
-                except Exception:
-                    pass
-
-                try:
-                    retriever.import_attraction(
-                        tenant_id=tenant_id,
-                        attraction_name=name,
-                        region=region,
-                        info_text=info_text,
-                        ticket_table_text=ticket_table_text,
-                        project_table_text=project_table_text,
-                        metadata=metadata,
-                        source_file=file_rel_path,
-                        user_id=user_id,
-                    )
-                    imported += 1
-
-                    stat_key = sheet_name
-                    if stat_key not in sheet_stats:
-                        sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
-                    sheet_stats[stat_key]["total"] += 1
-                    sheet_stats[stat_key]["imported"] += 1
-
-                except Exception as e:
-                    skipped += 1
-                    error_msg = sanitize_error_info(str(e))
-                    errors.append(f"{name}: {error_msg}")
-                    logger.warning(f"[AttractionExcelImport] 导入失败 {name}: {error_msg}")
-
-                    stat_key = sheet_name
-                    if stat_key not in sheet_stats:
-                        sheet_stats[stat_key] = {"total": 0, "imported": 0, "skipped": 0}
-                    sheet_stats[stat_key]["total"] += 1
-                    sheet_stats[stat_key]["skipped"] += 1
-
-        details = [{"sheet": k, **v} for k, v in sheet_stats.items()]
-
-        logger.info(
-            f"[AttractionExcelImport] tenant={tenant_id} "
-            f"imported={imported} skipped={skipped}"
-        )
-
-        return {
-            "success": True,
-            "data": {
-                "total_attractions": imported + skipped,
-                "imported": imported,
-                "skipped": skipped,
-                "errors": errors[:20],
-                "details": details,
-            },
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[AttractionExcelImport] 导入失败: {e}", exc_info=True)
-        return {"success": False, "error": sanitize_error_info(str(e))}
-    finally:
-        import os
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+            return await _process_parsed_attractions(
+                parser=parser,
+                retriever=retriever,
+                xlsx_path=tmp_path,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                file_rel_path=file_rel_path,
+                images_dir=None,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"[AttractionExcelImport] 导入失败: {e}", exc_info=True)
+            return {"success": False, "error": sanitize_error_info(str(e))}
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    # ==================== zip 模式 ====================
+    tmpdir = tempfile.mkdtemp(prefix="attraction_zip_")
+    try:
+        # 解压（含 zip slip 防护：校验每个 member 解压后的绝对路径仍在 tmpdir 内）
+        try:
+            tmpdir_abs = os.path.abspath(tmpdir)
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                for member in zf.namelist():
+                    target = os.path.abspath(os.path.join(tmpdir, member))
+                    if not target.startswith(tmpdir_abs + os.sep) and target != tmpdir_abs:
+                        return {"success": False, "error": f"zip 包含非法路径（疑似 zip slip）: {member}"}
+                zf.extractall(tmpdir)
+        except zipfile.BadZipFile as e:
+            return {"success": False, "error": f"zip 文件损坏或格式错误: {sanitize_error_info(str(e))}"}
+
+        # 找根目录 xlsx（只看 tmpdir 直属文件，不递归子目录）
+        root_files = [f for f in os.listdir(tmpdir)
+                      if os.path.isfile(os.path.join(tmpdir, f)) and f.lower().endswith(".xlsx")]
+        if not root_files:
+            return {"success": False, "error": "zip 包根目录未找到 .xlsx 文件"}
+        xlsx_filename = root_files[0]
+        xlsx_path = os.path.join(tmpdir, xlsx_filename)
+
+        # 校验 images/ 目录
+        images_dir = os.path.join(tmpdir, "images")
+        has_images_dir = os.path.isdir(images_dir)
+        if not has_images_dir:
+            logger.warning("[AttractionExcelImport] zip 包内无 images/ 目录，仅导入 Excel（不导图）")
+            images_dir = None  # type: ignore
+
+        # 把 xlsx 持久化到 storage（供 documents.file_path 引用）
+        with open(xlsx_path, "rb") as f:
+            xlsx_bytes = f.read()
+        file_rel_path = _save_upload_to_storage(xlsx_bytes, xlsx_filename, tenant_id)
+
+        try:
+            return await _process_parsed_attractions(
+                parser=parser,
+                retriever=retriever,
+                xlsx_path=xlsx_path,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                file_rel_path=file_rel_path,
+                images_dir=images_dir,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"[AttractionExcelImport] 导入失败: {e}", exc_info=True)
+            return {"success": False, "error": sanitize_error_info(str(e))}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ============================================================
@@ -1750,7 +2060,7 @@ async def import_attractions_kb(request: Request, body: ImportAttractionKBReques
     try:
         from attraction_retriever import AttractionRetriever
         retriever = AttractionRetriever()
-        doc_id = retriever.import_attraction(
+        doc_id = await retriever.import_attraction(
             tenant_id=tenant_id,
             attraction_name=body.attraction_name,
             region=body.region,
