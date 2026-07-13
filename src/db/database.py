@@ -925,9 +925,10 @@ def _init_postgresql():
             )
         """)
 
-        # 租户内手机号唯一约束（不同租户允许相同手机号）
+        # 租户内手机号索引（非唯一，支持跨渠道用户绑定同一手机号）
+        # 同一员工在飞书/钉钉/企微都有账号时，多渠道写回 phone 不再触发唯一约束冲突
         cursor.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone
+            CREATE INDEX IF NOT EXISTS idx_users_tenant_phone
             ON users (tenant_id, phone)
             WHERE phone IS NOT NULL AND tenant_id IS NOT NULL
         """)

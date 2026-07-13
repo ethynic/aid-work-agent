@@ -193,7 +193,7 @@ class UserDB:
             user_id: 用户ID
             **kwargs: 可更新字段，支持 username, avatar_url, role, tenant_id
         """
-        allowed_fields = ["username", "avatar_url", "role", "tenant_id", "source", "nickname", "wx_openid", "wx_unionid"]
+        allowed_fields = ["username", "avatar_url", "role", "tenant_id", "source", "nickname", "wx_openid", "wx_unionid", "phone"]
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
         if not updates:

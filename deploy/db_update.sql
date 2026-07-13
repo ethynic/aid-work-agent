@@ -1017,3 +1017,11 @@ ALTER TABLE wecom_rpa_clients ADD COLUMN IF NOT EXISTS listen_mode TEXT;
 -- 多个同类渠道（如两个飞书）标注区分名称
 -- ============================================================================
 ALTER TABLE tenant_channel_configs ADD COLUMN IF NOT EXISTS name TEXT;
+
+-- ============================================================================
+-- 2026-07-13 users 表 idx_users_tenant_phone 索引改为非唯一，支持跨渠道
+-- 用户绑定同一手机号（同一员工在飞书/钉钉/企微都有账号时，多渠道写回 phone
+-- 不再触发唯一约束冲突）
+-- ============================================================================
+DROP INDEX IF EXISTS idx_users_tenant_phone;
+CREATE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;

@@ -472,6 +472,15 @@ async def _process_tenant_wecom_background(
             log_tag="[Tenant WeCom]",
         )
 
+        from src.channels.agent_user_builder import build_agent_user_for_channel
+        agent_user = await build_agent_user_for_channel(
+            channel_type="wecom",
+            channel_user_id=message.user_id,
+            tenant_id=tenant_id,
+            adapter=adapter,
+            user_id=user_id,
+        )
+
         result = await channel_session_manager.process_and_persist(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -479,6 +488,7 @@ async def _process_tenant_wecom_background(
             user_metadata=message.raw_message,
             message_type=message.message_type,
             agent=agent,
+            agent_user=agent_user,
             record_service=record_service,
             send_response=send_response,
         )
@@ -834,6 +844,15 @@ async def _process_tenant_dingtalk_background(
             log_tag="[Tenant DingTalk]",
         )
 
+        from src.channels.agent_user_builder import build_agent_user_for_channel
+        agent_user = await build_agent_user_for_channel(
+            channel_type="dingtalk",
+            channel_user_id=message.user_id,
+            tenant_id=tenant_id,
+            adapter=adapter,
+            user_id=user_id,
+        )
+
         result = await channel_session_manager.process_and_persist(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -841,6 +860,7 @@ async def _process_tenant_dingtalk_background(
             user_metadata=message.raw_message,
             message_type=message.message_type,
             agent=agent,
+            agent_user=agent_user,
             record_service=record_service,
             send_response=send_response,
         )
@@ -973,6 +993,15 @@ async def _process_tenant_feishu_background(
             log_tag="[Tenant Feishu]",
         )
 
+        from src.channels.agent_user_builder import build_agent_user_for_channel
+        agent_user = await build_agent_user_for_channel(
+            channel_type="feishu",
+            channel_user_id=message.user_id,
+            tenant_id=tenant_id,
+            adapter=adapter,
+            user_id=user_id,
+        )
+
         result = await channel_session_manager.process_and_persist(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -980,6 +1009,7 @@ async def _process_tenant_feishu_background(
             user_metadata=message.raw_message,
             message_type=message.message_type,
             agent=agent,
+            agent_user=agent_user,
             record_service=record_service,
             send_response=send_response,
         )

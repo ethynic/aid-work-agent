@@ -688,6 +688,7 @@ class FeishuAdapter(ChannelAdapter):
                 "department": user.get("department_ids", []),
                 "position": user.get("position", ""),
                 "email": user.get("email", ""),
+                "mobile": user.get("mobile", ""),
                 "avatar": user.get("avatar", {}).get("avatar_72", ""),
             }
 

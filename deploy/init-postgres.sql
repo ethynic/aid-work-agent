@@ -44,8 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
     source TEXT
 );
 
--- 租户内手机号唯一约束（不同租户允许相同手机号）
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
+-- 租户内手机号索引（非唯一，支持跨渠道用户绑定同一手机号）
+CREATE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
 
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -774,8 +774,8 @@ CREATE TABLE IF NOT EXISTS users (
     source TEXT
 );
 
--- 租户内手机号唯一约束（不同租户允许相同手机号）
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
+-- 租户内手机号索引（非唯一，支持跨渠道用户绑定同一手机号）
+CREATE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
 
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
