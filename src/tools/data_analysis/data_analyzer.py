@@ -23,7 +23,12 @@ from src.services.data_analysis.db_connector import DatabaseConnector
 
 
 # 中文字体配置
-plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+plt.rcParams["font.sans-serif"] = [
+    "Noto Sans CJK SC",    # 容器环境（fonts-noto-cjk）
+    "Microsoft YaHei",     # Windows
+    "SimHei",              # Windows
+    "DejaVu Sans",
+]
 plt.rcParams["axes.unicode_minus"] = False
 
 # 过滤操作符白名单
