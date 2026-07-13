@@ -239,6 +239,16 @@ class WeComKfAdapter(ChannelAdapter):
         if message.downloadable_files:
             thumb_media_id = await self._get_default_thumb_media_id()
         for file_info in message.downloadable_files:
+            # 图片文件优先作为 image 消息直接发送（用户在微信侧直接看到图片）
+            # 失败/不满足前置条件时降级为 link 卡片或纯文本链接
+            mime_type = (file_info.mime_type or "").lower()
+            if mime_type.startswith("image/"):
+                handled, success = await self._send_image_file_as_image(file_info, message.reply_to)
+                if handled:
+                    if not success:
+                        all_success = False
+                    continue
+
             url = build_public_url(file_info.download_url)
             # 无缩略图时降级为纯文本链接
             if not thumb_media_id:
@@ -321,6 +331,64 @@ class WeComKfAdapter(ChannelAdapter):
         # 降级：纯文本表格
         fallback_text = table_to_plain_text(markdown_table)
         return await self._send_text_block(fallback_text, user_id)
+
+    async def _send_image_file_as_image(self, file_info, user_id: str) -> tuple[bool, bool]:
+        """将图片文件作为企微 image 消息直接发送，失败时降级（返回 handled=False）。
+
+        企微客服 image 消息只接受 media_id（先上传临时素材换取），不接受 URL/base64。
+        本方法从 Redis 读取 file_id 对应的本地路径，上传后以 image 消息发送，让用户
+        在微信侧直接看到图片，而不是点击下载链接。
+
+        Returns:
+            (handled, success)
+            - (True, True): 已成功以 image 消息发送
+            - (True, False): 已尝试但发送失败（已记录日志）
+            - (False, False): 未处理（不满足前置条件），调用方应走原 link/纯文本逻辑
+        """
+        # 企微临时素材 image 限制 2MB
+        if file_info.file_size > 2 * 1024 * 1024:
+            return (False, False)
+
+        file_id = file_info.file_id
+        if not file_id:
+            return (False, False)
+
+        key = redis_client.make_key("uploaded_file", file_id)
+        file_meta = redis_client.hgetall(key)
+        if not file_meta:
+            return (False, False)
+
+        file_path = file_meta.get("path")
+        if not file_path or not os.path.exists(file_path):
+            return (False, False)
+
+        try:
+            upload_result = await self.api_client.upload_media(file_path, "image")
+            media_id = upload_result.get("media_id")
+            if not media_id:
+                logger.warning(
+                    f"图片文件上传素材未返回 media_id，降级为 link: file_id={file_id}"
+                )
+                return (False, False)
+
+            send_result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="image",
+                content={"media_id": media_id},
+            )
+            if send_result.get("errcode", 0) == 0:
+                return (True, True)
+            logger.warning(
+                f"图片文件 image 消息发送失败 errcode={send_result.get('errcode')}, "
+                f"降级为 link: file_id={file_id}"
+            )
+            return (False, False)
+        except Exception as e:
+            logger.warning(
+                f"图片文件 image 消息发送异常，降级为 link: file_id={file_id}, err={e}"
+            )
+            return (False, False)
 
     async def _send_link_message(self, block, user_id: str) -> bool:
         """发送 link 消息卡片，失败时降级为纯文本 URL。"""

@@ -5,7 +5,7 @@
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock
 
 from src.channels.wecom.adapter import WeComAdapter
 from src.models.message import MessageType, UnifiedResponse
@@ -65,28 +65,25 @@ VOICE_XML = """<xml>
 
 @pytest.fixture
 def adapter():
-    """创建 WeComAdapter 实例（不依赖真实配置）"""
-    with patch("src.channels.wecom.adapter.settings") as mock_settings:
-        mock_channels = MagicMock()
-        mock_channels.wecom.corp_id = "ww_test"
-        mock_channels.wecom.agent_id = "1000001"
-        mock_channels.wecom.secret = "test_secret"
-        mock_channels.wecom.token = ""
-        mock_channels.wecom.encoding_aes_key = ""
-        mock_channels.wecom.message.default_type = "markdown"
-        mock_channels.wecom.message.max_bytes = 2048
-        mock_channels.wecom.message.split_on_paragraph = True
-        mock_channels.wecom.media.upload_dir = "/tmp/wecom_test"
-        mock_channels.wecom.retry.max_attempts = 3
-        mock_channels.wecom.retry.backoff_base = 1.0
-        mock_channels.wecom.rate_limit.enabled = True
-        mock_channels.wecom.rate_limit.max_per_minute = 5
-        mock_settings.channels = mock_channels
-
-        adapter = WeComAdapter()
-        # Mock HTTP client
-        adapter._http_client = AsyncMock()
-        return adapter
+    """创建 WeComAdapter 实例（显式传参，不依赖全局 settings）"""
+    adapter = WeComAdapter(
+        corp_id="ww_test",
+        agent_id="1000001",
+        secret="test_secret",
+        token="",
+        encoding_aes_key="",
+        default_type="markdown",
+        max_bytes=2048,
+        split_on_paragraph=True,
+        media_upload_dir="/tmp/wecom_test",
+        max_attempts=3,
+        backoff_base=1.0,
+        rate_limit_enabled=True,
+        rate_limit_max=5,
+    )
+    # Mock HTTP client
+    adapter._http_client = AsyncMock()
+    return adapter
 
 
 class TestChannelType:
