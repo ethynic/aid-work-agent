@@ -42,7 +42,23 @@ const linkRenderer = ({ href, title, tokens }: any) => {
   const titleAttr = title ? ` title="${title}"` : ''
   return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
 }
-marked.use({ renderer: { link: linkRenderer } })
+
+// Markdown 内嵌图片渲染：
+// - `file_id:file_xxx` 是后端约定的图片资产引用 scheme，浏览器原生不识别
+//   需要转成 /api/files/file_xxx/download 才能加载
+// - 其他 URL（http/https/相对路径）保持原样
+// - 统一加 loading="lazy" + class，方便后续样式 / lightbox 扩展（Phase 2 P2.8）
+const imageRenderer = ({ href, title, text }: any) => {
+  let src = href
+  if (typeof href === 'string' && href.startsWith('file_id:')) {
+    src = `/api/files/${href.slice('file_id:'.length)}/download`
+  }
+  const altAttr = (text ?? '').replace(/"/g, '&quot;')
+  const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : ''
+  return `<img src="${src}" alt="${altAttr}"${titleAttr} class="md-inline-image" loading="lazy">`
+}
+
+marked.use({ renderer: { link: linkRenderer, image: imageRenderer } })
 
 /**
  * 将 markdown 文本渲染为 HTML
