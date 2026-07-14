@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
-from src.core.temp_logger import tlog
 from src.db.models import UserDB
 from src.models.user import User
 from src.saas.services.auto_register import CHANNEL_TYPE_NAME
@@ -87,28 +86,11 @@ async def build_agent_user_for_channel(
         or "unknown"
     )
     phone = user_record.get("phone")
-    if channel_type == "wecom":
-        tlog(
-            "企微用户信息",
-            "DB 读到 user_record: user_id={uid}, name={name}, db_phone={phone}",
-            uid=user_id,
-            name=name,
-            phone=phone or "(空)",
-        )
 
     # 2. 清洗 DB phone（老数据可能带 +86 前缀）
     if phone:
         normalized_phone = _normalize_phone(phone)
         if normalized_phone != phone:
-            if channel_type == "wecom":
-                tlog(
-                    "企微用户信息",
-                    "DB phone 未清洗，写回清洗后的值: user_id={uid}, "
-                    "raw={raw}, normalized={norm}",
-                    uid=user_id,
-                    raw=phone,
-                    norm=normalized_phone,
-                )
             try:
                 UserDB.update_info(user_id, phone=normalized_phone)
             except Exception as e:
@@ -120,28 +102,9 @@ async def build_agent_user_for_channel(
     # 3. 短路判断：DB 有 phone 且 name 非占位符，直接返回
     name_is_placeholder = _is_placeholder_name(name, channel_type)
     if phone and not name_is_placeholder:
-        if channel_type == "wecom":
-            tlog(
-                "企微用户信息",
-                "DB 命中 phone 且 name 非占位符，短路返回: "
-                "user_id={uid}, name={name}, phone={phone}",
-                uid=user_id,
-                name=name,
-                phone=phone,
-            )
         return _build_user(user_id, name, phone, channel_type, channel_user_id)
 
     # 4. 调渠道 API 获取（phone 缺失或 name 是占位符）
-    if channel_type == "wecom":
-        tlog(
-            "企微用户信息",
-            "调渠道 API 获取: user_id={uid}, db_phone={phone}, "
-            "name_is_placeholder={is_ph}, name={name}",
-            uid=user_id,
-            phone=phone or "(空)",
-            is_ph=name_is_placeholder,
-            name=name,
-        )
     info = await _fetch_user_info_from_channel(
         adapter, channel_user_id, channel_type, user_id
     )
@@ -151,16 +114,6 @@ async def build_agent_user_for_channel(
         mobile_raw = info.get("mobile", "") or ""
         mobile = _normalize_phone(mobile_raw)
         real_name = info.get("name", "") or ""
-        if channel_type == "wecom":
-            tlog(
-                "企微用户信息",
-                "info 解析: user_id={uid}, info_name={name}, "
-                "mobile_raw={mraw}, mobile_normalized={mnorm}",
-                uid=user_id,
-                name=real_name or "(空)",
-                mraw=mobile_raw or "(空)",
-                mnorm=mobile or "(空)",
-            )
 
         update_fields: Dict[str, Any] = {}
         if mobile:
@@ -173,31 +126,12 @@ async def build_agent_user_for_channel(
         if update_fields:
             try:
                 UserDB.update_info(user_id, **update_fields)
-                if channel_type == "wecom":
-                    tlog(
-                        "企微用户信息",
-                        "写回 DB: user_id={uid}, fields={fields}, "
-                        "final_name={name}, final_phone={phone}",
-                        uid=user_id,
-                        fields=list(update_fields.keys()),
-                        name=name,
-                        phone=phone or "(空)",
-                    )
             except Exception as e:
                 logger.warning(
                     f"写回用户信息失败: channel={channel_type}, "
                     f"user_id={user_id}, err={e}"
                 )
 
-    if channel_type == "wecom":
-        tlog(
-            "企微用户信息",
-            "build_agent_user_for_channel 返回 User: user_id={uid}, "
-            "final_name={name}, final_phone={phone}",
-            uid=user_id,
-            name=name,
-            phone=phone or "(空)",
-        )
     return _build_user(user_id, name, phone or None, channel_type, channel_user_id)
 
 

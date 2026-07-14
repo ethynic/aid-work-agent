@@ -41,7 +41,6 @@ from loguru import logger
 
 from src.config.settings import settings
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 from src.db.models import send_sms_code, verify_sms_code
 from src.sms.manager import sms_manager
 

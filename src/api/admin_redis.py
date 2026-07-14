@@ -15,7 +15,6 @@ from loguru import logger
 from src.api.auth import get_current_user
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 from src.saas.permissions.checker import is_platform_admin
 
 router = APIRouter(prefix="/api/admin/redis", tags=["平台Redis管理"])
@@ -362,16 +361,6 @@ async def delete_key(request: Request, key: str):
             raise HTTPException(status_code=404, detail="键不存在")
 
         redis_client.delete(key)
-
-        # 审计日志：写 log/temp/redis_admin.log
-        tlog(
-            "redis_admin",
-            "DELETE key={key} by user={uid} tenant={tid}",
-            key=key,
-            uid=user.get("user_id"),
-            tid=user.get("tenant_id"),
-            level="INFO",
-        )
 
         logger.info(f"[RedisAdmin] 删除键 {key} by {user.get('user_id')}")
 
