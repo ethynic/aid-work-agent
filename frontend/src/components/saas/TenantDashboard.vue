@@ -67,6 +67,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getDashboardStats, type DashboardStats } from '@/api/adminReports'
+import { formatTokensAuto as formatTokens } from '@/utils/formatTokens'
 
 const router = useRouter()
 const loading = ref(true)
@@ -79,12 +80,6 @@ const stats = ref<DashboardStats>({
   today_conversation_count: 0,
   month: ''
 })
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
-  return String(n)
-}
 
 function goTo(path: string) {
   router.push(path)

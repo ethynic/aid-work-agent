@@ -154,6 +154,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { AttachmentInfo } from '@/types'
 import { getFileUrl, getFileDownloadUrl } from '@/api/agent'
 import { renderMarkdown } from '@/utils/markdown'
+import { formatFileSize } from '@/utils/file'
 import PdfCanvasPreview from './PdfCanvasPreview.vue'
 
 interface Props {
@@ -398,12 +399,6 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
 })
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
 </script>
 
 <style scoped>

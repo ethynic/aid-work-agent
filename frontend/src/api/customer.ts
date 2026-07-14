@@ -144,14 +144,3 @@ export async function getStats(userId: string): Promise<StatsResponse> {
   if (!res.ok) throw new Error('Failed to fetch stats')
   return res.json()
 }
-
-/**
- * 获取会话的客户列表
- */
-export async function getSessionCustomers(sessionId: string): Promise<CustomerListResponse> {
-  const res = await fetch(`${API_BASE}/session/${sessionId}/customers`, {
-    headers: { ...getAuthHeader() }
-  })
-  if (!res.ok) throw new Error('Failed to fetch session customers')
-  return res.json()
-}

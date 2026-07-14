@@ -148,15 +148,6 @@ export interface TenantFormData {
   expire_at?: string
 }
 
-export async function getTenantById(tenantId: string): Promise<{ success: boolean; tenant?: any; error?: string; debug?: string }> {
-  const res = await fetch(`${API_BASE}/tenants/${encodeURIComponent(tenantId)}`, {
-    headers: getSaasAuthHeader()
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || '获取租户详情失败')
-  return data
-}
-
 export async function createTenant(data: TenantFormData): Promise<{
   success: boolean
   tenant?: any
@@ -465,16 +456,6 @@ export async function getUsageSummary(period: string = 'month'): Promise<any> {
   return res.json()
 }
 
-export async function getTokenTrend(days: number = 30): Promise<{
-  success: boolean; start_date: string; end_date: string; trend: { date: string; tokens: number }[]
-}> {
-  const res = await fetch(`${API_BASE}/reports/tokens?days=${days}`, {
-    headers: getSaasAuthHeader()
-  })
-  if (!res.ok) throw new Error('获取 Token 趋势失败')
-  return res.json()
-}
-
 export async function getTokenDetail(days: number = 30): Promise<{
   success: boolean; start_date: string; end_date: string;
   trend: { date: string; tokens: number; input_tokens: number; output_tokens: number; cached_tokens: number; sessions: number; conversations: number }[]
@@ -532,38 +513,6 @@ export async function getTenantTokenDetails(month: string, page: number = 1, pag
     headers: getSaasAuthHeader()
   })
   if (!res.ok) throw new Error('获取Token消耗明细失败')
-  return res.json()
-}
-
-// ==================== 计费 ====================
-
-export async function getPlans(): Promise<{
-  success: boolean; plans: { name: string; display_name: string; price: number; token_quota: number; max_instances: number; max_users: number }[]
-}> {
-  const res = await fetch(`${API_BASE}/billing/plans`)
-  if (!res.ok) throw new Error('获取套餐列表失败')
-  return res.json()
-}
-
-export async function createSubscription(data: { plan: string; billing_cycle: string; subagent_type?: string }): Promise<any> {
-  const res = await fetch(`${API_BASE}/billing/subscriptions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
-    body: JSON.stringify(data)
-  })
-  if (!res.ok) throw new Error('创建订阅失败')
-  return res.json()
-}
-
-export async function payOrder(orderId: string, paymentMethod: string = 'wechat'): Promise<{
-  success: boolean; order_id: string; amount: number; payment_method: string; payment_url?: string
-}> {
-  const res = await fetch(`${API_BASE}/billing/initiate_payment/${orderId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
-    body: JSON.stringify({ payment_method: paymentMethod })
-  })
-  if (!res.ok) throw new Error('支付失败')
   return res.json()
 }
 

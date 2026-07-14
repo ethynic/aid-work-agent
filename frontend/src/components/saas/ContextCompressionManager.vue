@@ -239,6 +239,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatDateTimeWithSeconds as formatDateTime } from '@/utils/date'
 import {
   listSummaries,
   getCompressionStats,
@@ -432,15 +433,7 @@ async function handleManualCompact() {
 }
 
 // ------- Helpers -------
-function formatDateTime(s: string | null | undefined): string {
-  if (!s) return '-'
-  try {
-    const d = new Date(s)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-  } catch {
-    return String(s)
-  }
-}
+
 function truncate(s: string, n: number): string {
   if (!s) return ''
   return s.length > n ? s.slice(0, n) + '...' : s

@@ -237,6 +237,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatShortDateTime as formatDate } from '@/utils/date'
 
 const stageLabels: Record<string, string> = {
   new: '新线索', contacting: '联系中', qualified: '有意向',
@@ -325,14 +326,6 @@ function outcomeClass(outcome: string) {
 function isOverdue(dateStr?: string) {
   if (!dateStr) return false
   return new Date(dateStr) < new Date()
-}
-
-function formatDate(dateStr?: string | null) {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return '-' }
 }
 
 async function loadLeads() {

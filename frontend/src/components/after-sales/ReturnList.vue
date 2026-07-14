@@ -80,6 +80,7 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatShortDateTime as formatDate } from '@/utils/date'
 
 const returnStatusLabels: Record<string, string> = {
   pending: '待处理', approved: '已批准', processing: '处理中',
@@ -119,14 +120,6 @@ function statusBadgeClass(status: string) {
     rejected: 'bg-danger-100 text-danger-700',
   }
   return map[status] || 'bg-surface-hover text-default'
-}
-
-function formatDate(dateStr?: string | null) {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return '-' }
 }
 
 async function loadReturns() {

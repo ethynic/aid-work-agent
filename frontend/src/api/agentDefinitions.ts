@@ -292,11 +292,6 @@ export interface PromptSection {
   updated_at?: string
 }
 
-export async function getSectionKeys(agentId: string): Promise<{ success: boolean; data: string[] }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections/keys`, { headers: getAuthHeaders() })
-  return handleResponse(response)
-}
-
 export async function getSections(agentId: string): Promise<{ success: boolean; data: PromptSection[] }> {
   const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/sections`, { headers: getAuthHeaders() })
   return handleResponse(response)

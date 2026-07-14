@@ -218,6 +218,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getTraceDetail, type TraceDetail as TraceDetailType, type SpanDetail } from '@/api/monitor'
+import { formatDateTimeWithSeconds as formatDateTime } from '@/utils/date'
+import { formatTokensAuto as formatTokens } from '@/utils/formatTokens'
 import JsonViewer from '@/components/ui/JsonViewer.vue'
 import FullscreenJsonViewer from '@/components/ui/FullscreenJsonViewer.vue'
 
@@ -371,22 +373,9 @@ function displayStateLabel(state: TraceDetailType['display_state']): string {
   return labels[state] || state
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
-  return String(n)
-}
-
 function formatDuration(ms: number): string {
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
   return `${ms}ms`
-}
-
-function formatDateTime(ts: string | null): string {
-  if (!ts) return '-'
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ts
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 async function loadData() {

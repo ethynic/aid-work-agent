@@ -3,17 +3,6 @@
  */
 
 /**
- * 将原始 token 数转换为百万单位，保留2位小数
- * @param tokens 原始 token 数
- * @returns 格式化后的字符串，如 "1.23"
- */
-export function formatTokensToMillions(tokens: number): string {
-  if (tokens === undefined || tokens === null) return '0.00'
-  const millions = tokens / 1_000_000
-  return millions.toFixed(2)
-}
-
-/**
  * 将原始 token 数转换为百万单位，保留3位小数
  * @param tokens 原始 token 数
  * @returns 格式化后的字符串，如 "1.234"

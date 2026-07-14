@@ -127,6 +127,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatDateTime } from '@/utils/date'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -234,14 +235,6 @@ function openEmailDetail(emailId: string) {
   const email = filteredEmails.value.find(e => e.email_id === emailId) || null
   currentEmail.value = email
   showDetailModal.value = true
-}
-
-function formatDateTime(dateStr: string): string {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return dateStr }
 }
 
 onMounted(() => { loadData() })

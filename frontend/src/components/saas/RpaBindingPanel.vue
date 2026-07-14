@@ -328,6 +328,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatTimestampToMinute as formatTime } from '@/utils/date'
 import {
   listAllBindings, updateClientAgentBaseUrl, registerClient,
   rotateClientSecret, pauseClient, resumeClient,
@@ -387,11 +388,6 @@ function connectionBadge(lastHeartbeat: string | null | undefined): BadgeInfo {
     return { intent: 'success', label: '在线' }
   }
   return { intent: 'danger', label: '离线' }
-}
-
-function formatTime(t: string | null | undefined): string {
-  if (!t) return '-'
-  return String(t).replace('T', ' ').slice(0, 16)
 }
 
 // ==================== 数据加载 ====================

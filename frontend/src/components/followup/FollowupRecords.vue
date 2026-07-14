@@ -168,6 +168,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatShortDateTime as formatDate, formatDateTime } from '@/utils/date'
 
 const typeLabels: Record<string, string> = {
   phone: '电话', email: '邮件', visit: '拜访', wechat: '微信', ai_call: 'AI外呼', other: '其他',
@@ -239,22 +240,6 @@ function scoreBadgeClass(score: number): string {
   if (score >= 8) return 'bg-success-100 text-success-700'
   if (score >= 5) return 'bg-warning-100 text-warning-700'
   return 'bg-danger-100 text-danger-700'
-}
-
-function formatDate(dateStr?: string | null): string {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return '-' }
-}
-
-function formatDateTime(dateStr?: string | null): string {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return '-' }
 }
 
 async function loadRecords() {

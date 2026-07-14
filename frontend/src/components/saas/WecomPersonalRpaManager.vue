@@ -370,6 +370,7 @@ import {
   WecomRpaClientStatusMap, WecomRpaAccountStatusMap, WecomRpaBindingStatusMap,
   colorToBadgeIntent,
 } from '@/api/enums'
+import { formatTimestampToMinute as formatTime } from '@/utils/date'
 import { useRpaPauseResume } from '@/composables/useRpaPauseResume'
 
 const toast = useToast()
@@ -388,11 +389,6 @@ function paginate<T>(arr: T[], page: number, size: number): T[] {
 function statusMeta(map: Record<string, { label: string; color: string }>, status: string) {
   const m = map[status]
   return { label: m?.label ?? status, intent: colorToBadgeIntent(m?.color ?? 'gray') }
-}
-function formatTime(t: string | null | undefined): string {
-  if (!t) return '-'
-  // 后端 TIMESTAMP 返回本地时间字符串（无 Z 后缀），直接截取到分钟
-  return String(t).replace('T', ' ').slice(0, 16)
 }
 async function copyText(text: string) {
   try {

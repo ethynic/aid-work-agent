@@ -341,6 +341,7 @@ import {
   type SchemaInfo,
   type RelationItem,
 } from '@/api/dataSource'
+import { formatDateTime as formatDate } from '@/utils/date'
 
 // ===== Tab state =====
 const activeTab = ref<'schemas' | 'connectors'>('schemas')
@@ -395,16 +396,6 @@ function countRelations(row: any): number {
   const cols = row.metadata?.columns
   if (!Array.isArray(cols)) return 0
   return cols.filter((c: any) => c.foreign_key).length
-}
-
-function formatDate(dateStr: string): string {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch {
-    return dateStr
-  }
 }
 
 function sourceStatusIntent(s?: string): 'success' | 'danger' | 'neutral' {

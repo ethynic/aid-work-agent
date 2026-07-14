@@ -252,6 +252,7 @@ import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
 import { getUserSourceInfo } from '@/api/enums'
+import { formatFileSize } from '@/utils/file'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
@@ -536,17 +537,6 @@ async function onPlayVoice(att: any) {
   } catch (e: any) {
     toast.error(`语音播放失败: ${e?.message || e}`)
   }
-}
-
-/**
- * 格式化文件大小
- */
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  const size = (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)
-  return `${size} ${units[i]}`
 }
 
 /**

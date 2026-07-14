@@ -420,11 +420,12 @@ import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
   listDocuments, deleteDocument, uploadDocument, searchDocuments, getDocumentDownloadUrl,
-  type DocumentResponse, type SearchResultItem, type BatchUploadError,
+  type DocumentResponse, type SearchResultItem,
   listCategories, createCategory, updateCategory, deleteCategory,
   type CategoryResponse,
   getDocumentChunks, type ChunkResponse
 } from '@/api/knowledge'
+import { formatFileSize } from '@/utils/file'
 import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -499,7 +500,7 @@ const selectedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const isUploading = ref(false)
 const uploadError = ref('')
-const uploadErrors = ref<BatchUploadError[]>([])
+const uploadErrors = ref<{ filename: string; error: string }[]>([])
 const documentToDelete = ref<DocumentResponse | null>(null)
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
@@ -864,7 +865,7 @@ async function handleUpload() {
   }
 
   const successResults: any[] = []
-  const errorResults: BatchUploadError[] = []
+  const errorResults: { filename: string; error: string }[] = []
 
   try {
     for (let i = 0; i < filesToUpload.length; i++) {
@@ -953,13 +954,6 @@ async function handleBatchDelete() {
   } finally {
     isDeleting.value = false
   }
-}
-
-function formatFileSize(bytes: number | null): string {
-  if (bytes === null || bytes === 0) return '-'
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
 function formatTime(isoString: string): string {

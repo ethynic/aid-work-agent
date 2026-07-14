@@ -33,11 +33,3 @@ export function getTenantScopedKey(base: SaasBaseKey): string {
   const safeId = decodeURIComponent(m[1]).replace(/[^a-zA-Z0-9_-]/g, '_')
   return `${base}_${safeId}`
 }
-
-/**
- * 取出当前路由下的 token。若无则返回 null。
- * 供不依赖 useTenantAuth 单例的纯 fetch 工具使用。
- */
-export function readTenantToken(): string | null {
-  return localStorage.getItem(getTenantScopedKey('saas_token'))
-}

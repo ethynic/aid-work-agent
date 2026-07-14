@@ -49,27 +49,6 @@ export interface SubagentDetail {
   business_pages?: BusinessPage[]
 }
 
-export interface CreateSubagentRequest {
-  agent_id: string
-  name: string
-  description?: string
-  triggers?: Record<string, any>
-  tools?: Record<string, any>
-  skills?: Record<string, any>
-  context?: Record<string, any>
-  system_prompt?: string
-}
-
-export interface DuplicateRequest {
-  new_agent_id: string
-  new_name: string
-}
-
-export interface AiEnhanceResponse {
-  original_content: string
-  enhanced_content: string
-}
-
 // ============== API 方法 ==============
 
 /**
@@ -121,65 +100,6 @@ export async function listAvailableTools(): Promise<{
 }> {
   const response = await fetch(`${API_BASE}/tools`, {
     headers: getAuthHeaders(),
-  })
-  return handleResponse(response)
-}
-
-/**
- * 创建定制数字员工
- */
-export async function createSubagent(data: CreateSubagentRequest): Promise<{ success: boolean; data?: any; error?: string }> {
-  const response = await fetch(`${API_BASE}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(data),
-  })
-  return handleResponse(response)
-}
-
-/**
- * 更新定制数字员工
- */
-export async function updateSubagent(agentId: string, data: CreateSubagentRequest): Promise<{ success: boolean; data?: any; error?: string }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(data),
-  })
-  return handleResponse(response)
-}
-
-/**
- * 删除定制数字员工
- */
-export async function deleteSubagent(agentId: string): Promise<{ success: boolean; message?: string; error?: string }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}`, {
-    method: 'DELETE',
-    headers: getAuthHeaders(),
-  })
-  return handleResponse(response)
-}
-
-/**
- * 另存为
- */
-export async function duplicateSubagent(agentId: string, data: DuplicateRequest): Promise<{ success: boolean; data?: any; error?: string }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/duplicate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(data),
-  })
-  return handleResponse(response)
-}
-
-/**
- * AI 完善（同步请求）
- */
-export async function aiEnhanceSubagent(agentId: string, content: string): Promise<{ success: boolean; data?: AiEnhanceResponse; error?: string }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/ai-enhance`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ content }),
   })
   return handleResponse(response)
 }

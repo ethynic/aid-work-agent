@@ -88,12 +88,6 @@ export async function getTaskStats(): Promise<ApiResponse<TaskUserStats>> {
   return res.json()
 }
 
-export async function getTask(taskId: string): Promise<ApiResponse<ScheduledTask>> {
-  const res = await fetch(`${API_BASE}/${taskId}`, { headers: { ...getAuthHeader() } })
-  if (!res.ok) throw new Error('Failed to fetch task')
-  return res.json()
-}
-
 export async function pauseTask(taskId: string): Promise<ApiResponse> {
   const res = await fetch(`${API_BASE}/${taskId}/pause`, {
     method: 'POST',
@@ -143,11 +137,5 @@ export async function updateTaskSchedule(taskId: string, scheduleType: string, t
 export async function getTaskLogs(taskId: string, limit: number = 20): Promise<ApiResponse<{ logs: TaskLog[]; total: number }>> {
   const res = await fetch(`${API_BASE}/${taskId}/logs?limit=${limit}`, { headers: { ...getAuthHeader() } })
   if (!res.ok) throw new Error('Failed to fetch task logs')
-  return res.json()
-}
-
-export async function getAllLogs(limit: number = 50): Promise<ApiResponse<{ logs: TaskLog[]; total: number }>> {
-  const res = await fetch(`${API_BASE}/get_user_logs?limit=${limit}`, { headers: { ...getAuthHeader() } })
-  if (!res.ok) throw new Error('Failed to fetch all logs')
   return res.json()
 }

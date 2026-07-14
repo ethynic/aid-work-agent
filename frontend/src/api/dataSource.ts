@@ -201,22 +201,6 @@ export async function importTables(
 
 // ===== Upload =====
 
-export async function uploadExcel(file: File): Promise<{ schemas: SchemaInfo[] }> {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  const response = await fetch(`${API_BASE}/upload`, {
-    method: 'POST',
-    headers: { ...getAuthHeader() },
-    body: formData
-  })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.error || '上传文件失败')
-  }
-  return response.json()
-}
-
 export interface UploadStreamCallbacks {
   onConnected?: (filename: string) => void
   onProgress?: (stage: string, message: string) => void
@@ -410,21 +394,6 @@ export async function inferRelations(schemaDocIds: number[]): Promise<RelationIt
   }
   const result = await response.json()
   return result.relations || result.data || result
-}
-
-export async function batchSaveRelations(relations: RelationItem[]): Promise<void> {
-  const response = await fetch(`${API_BASE}/relations/batch`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getAuthHeader()
-    },
-    body: JSON.stringify({ relations })
-  })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.error || '保存关联关系失败')
-  }
 }
 
 export async function listRelations(): Promise<RelationItem[]> {

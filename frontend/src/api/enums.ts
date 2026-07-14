@@ -19,110 +19,6 @@ export const TenantStatusMap = {
   [TenantStatus.DEACTIVATED]: { label: '已删除', color: 'gray' },
 } as const;
 
-/** 订阅状态 */
-export enum SubscriptionStatus {
-  ACTIVE = 'active',
-  EXPIRED = 'expired',
-  CANCELLED = 'cancelled',
-}
-
-/** 订阅状态工具函数 */
-export const SubscriptionStatusMap = {
-  [SubscriptionStatus.ACTIVE]: { label: '活跃', color: 'green' },
-  [SubscriptionStatus.EXPIRED]: { label: '已过期', color: 'orange' },
-  [SubscriptionStatus.CANCELLED]: { label: '已取消', color: 'gray' },
-} as const;
-
-/** 支付状态 */
-export enum PaymentStatus {
-  PENDING = 'pending',
-  PAID = 'paid',
-  REFUNDED = 'refunded',
-}
-
-/** 支付状态工具函数 */
-export const PaymentStatusMap = {
-  [PaymentStatus.PENDING]: { label: '待支付', color: 'yellow' },
-  [PaymentStatus.PAID]: { label: '已支付', color: 'green' },
-  [PaymentStatus.REFUNDED]: { label: '已退款', color: 'blue' },
-} as const;
-
-/** 智能体实例状态 */
-export enum AgentInstanceStatus {
-  IDLE = 'idle',
-  BUSY = 'busy',
-}
-
-/** 智能体实例状态工具函数 */
-export const AgentInstanceStatusMap = {
-  [AgentInstanceStatus.IDLE]: { label: '空闲', color: 'green' },
-  [AgentInstanceStatus.BUSY]: { label: '忙碌', color: 'orange' },
-} as const;
-
-/** 用户状态 */
-export enum UserStatus {
-  ACTIVE = 'active',       // 正常
-  SUSPENDED = 'suspended',   // 停用
-  DEACTIVATED = 'deactivated', // 已注销
-}
-
-/** 用户状态工具函数 */
-export const UserStatusMap = {
-  [UserStatus.ACTIVE]: { label: '正常', color: 'green' },
-  [UserStatus.SUSPENDED]: { label: '停用', color: 'red' },
-  [UserStatus.DEACTIVATED]: { label: '已注销', color: 'gray' },
-} as const;
-
-/** 用户角色 */
-export enum UserRole {
-  PLATFORM_ADMIN = 'platform_admin',
-  TENANT_ADMIN = 'tenant_admin',
-  TENANT_USER = 'tenant_user',
-}
-
-/** 用户角色工具函数 */
-export const UserRoleMap = {
-  [UserRole.PLATFORM_ADMIN]: { label: '平台管理员' },
-  [UserRole.TENANT_ADMIN]: { label: '租户管理员' },
-  [UserRole.TENANT_USER]: { label: '用户' },
-} as const;
-
-/** 套餐类型 */
-export enum PlanType {
-  BASIC = 'basic',
-  STANDARD = 'standard',
-  PREMIUM = 'premium',
-}
-
-/** 套餐类型工具函数 */
-export const PlanTypeMap = {
-  [PlanType.BASIC]: { label: '基础版' },
-  [PlanType.STANDARD]: { label: '标准版' },
-  [PlanType.PREMIUM]: { label: '旗舰版' },
-} as const;
-
-/** 排队状态 */
-export enum QueueStatus {
-  WAITING = 'waiting',
-  READY = 'ready',
-  EXPIRED = 'expired',
-  CANCELLED = 'cancelled',
-  ABANDONED = 'abandoned',
-}
-
-/** 上下文压缩摘要状态（Phase 7 §7.3） */
-export enum ContextSummaryStatus {
-  ACTIVE = 'active',
-  SUPERSEDED = 'superseded',
-  ROLLED_BACK = 'rolled_back',
-}
-
-export const ContextSummaryStatusMap = {
-  [ContextSummaryStatus.ACTIVE]: { label: '生效中', color: 'green' },
-  [ContextSummaryStatus.SUPERSEDED]: { label: '已替代', color: 'gray' },
-  [ContextSummaryStatus.ROLLED_BACK]: { label: '已回滚', color: 'orange' },
-} as const;
-
 /** 用户来源 */
 export enum UserSource {
   WECOM_KF = 'wecom_kf',
@@ -139,15 +35,6 @@ export function getUserSourceInfo(source: string | null | undefined): { label: s
   if (!source) return { label: '内部用户', color: 'gray' };
   return (UserSourceMap as Record<string, { label: string; color: string }>)[source] ?? { label: source, color: 'gray' };
 }
-
-/** 排队状态工具函数 */
-export const QueueStatusMap = {
-  [QueueStatus.WAITING]: { label: '排队中', color: 'blue' },
-  [QueueStatus.READY]: { label: '已到号', color: 'green' },
-  [QueueStatus.EXPIRED]: { label: '过期', color: 'orange' },
-  [QueueStatus.CANCELLED]: { label: '已取消', color: 'gray' },
-  [QueueStatus.ABANDONED]: { label: '已取消', color: 'gray' }, // 归并为 cancelled 显示
-} as const;
 
 /**
  * 根据状态值获取显示标签

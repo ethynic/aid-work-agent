@@ -166,6 +166,7 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatShortDateTime as formatDate } from '@/utils/date'
 
 const statusLabels: Record<string, string> = {
   open: '待处理', in_progress: '处理中',
@@ -236,14 +237,6 @@ function senderTypeClass(type: string) {
     system: 'text-muted',
   }
   return map[type] || 'text-muted'
-}
-
-function formatDate(dateStr?: string | null) {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return '-' }
 }
 
 async function loadTickets() {

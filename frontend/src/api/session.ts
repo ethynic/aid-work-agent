@@ -67,20 +67,6 @@ export interface CreateSessionRequest {
   subagent_id?: string
 }
 
-export interface SessionContext {
-  user_info: {
-    user_id: string
-    username: string
-    phone?: string
-  }
-  session_info: {
-    session_id: string
-    title: string
-    created_at: string
-  }
-  messages: ChatMessageRecord[]
-}
-
 /**
  * 获取当前用户的所有会话（分页）
  */
@@ -116,22 +102,6 @@ export async function createSession(data?: CreateSessionRequest): Promise<ChatSe
   })
   if (!res.ok) {
     const error = new Error(`Failed to create session: ${res.status} ${res.statusText}`)
-    ;(error as any).response = res
-    ;(error as any).status = res.status
-    throw error
-  }
-  return res.json()
-}
-
-/**
- * 获取会话详情
- */
-export async function getSession(sessionId: string): Promise<ChatSession> {
-  const res = await fetch(`${API_BASE}/${sessionId}`, {
-    headers: { ...getAuthHeader() }
-  })
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch session: ${res.status} ${res.statusText}`)
     ;(error as any).response = res
     ;(error as any).status = res.status
     throw error
@@ -206,22 +176,6 @@ export async function addSessionMessage(sessionId: string, role: string, content
   })
   if (!res.ok) {
     const error = new Error(`Failed to add message: ${res.status} ${res.statusText}`)
-    ;(error as any).response = res
-    ;(error as any).status = res.status
-    throw error
-  }
-  return res.json()
-}
-
-/**
- * 获取会话上下文（用户信息+聊天历史）
- */
-export async function getSessionContext(sessionId: string): Promise<SessionContext> {
-  const res = await fetch(`${API_BASE}/${sessionId}/context`, {
-    headers: { ...getAuthHeader() }
-  })
-  if (!res.ok) {
-    const error = new Error(`Failed to fetch context: ${res.status} ${res.statusText}`)
     ;(error as any).response = res
     ;(error as any).status = res.status
     throw error

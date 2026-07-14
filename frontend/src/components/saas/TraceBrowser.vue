@@ -128,6 +128,8 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getTracedSessions, type SessionSummary } from '@/api/monitor'
+import { formatDateTimeWithSeconds as formatDateTime } from '@/utils/date'
+import { formatTokensAuto as formatTokens } from '@/utils/formatTokens'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 
@@ -186,19 +188,6 @@ function sourceBadgeClass(s: string | null): string {
 
 function goToSession(sessionId: string) {
   router.push(`/portal/monitoring/${sessionId}`)
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
-  return String(n)
-}
-
-function formatDateTime(ts: string | null): string {
-  if (!ts) return '-'
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ts
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 async function loadData() {

@@ -204,6 +204,7 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { formatShortDateTime as formatDate } from '@/utils/date'
 
 const statusLabels: Record<string, string> = {
   open: '待处理', classifying: '分类中', in_progress: '处理中',
@@ -303,14 +304,6 @@ function followupStatusClass(status: string) {
 function followupStatusLabel(status: string) {
   const map: Record<string, string> = { pending: '待处理', in_progress: '进行中', done: '已完成', skipped: '已跳过' }
   return map[status] || status
-}
-
-function formatDate(dateStr?: string | null) {
-  if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch { return '-' }
 }
 
 async function loadComplaints() {

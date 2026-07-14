@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { getTenantScopedKey, readTenantToken } from '@/api/tenantStorage'
+import { getTenantScopedKey } from '@/api/tenantStorage'
 
 /**
  * 验证不同路由下 localStorage key 的解析规则。
@@ -91,51 +91,5 @@ describe('tenantStorage.getTenantScopedKey', () => {
     // 切到 tenant_bbb 应读到自己的 token
     setPath('/t/tenant_bbb')
     expect(localStorage.getItem(getTenantScopedKey('saas_token'))).toBe('token-bbb')
-  })
-})
-
-describe('tenantStorage.readTenantToken', () => {
-  const originalLocation = window.location
-
-  beforeEach(() => {
-    Object.defineProperty(window, 'location', {
-      value: { ...originalLocation, pathname: '/' },
-      writable: true,
-      configurable: true,
-    })
-    localStorage.clear()
-  })
-
-  afterEach(() => {
-    Object.defineProperty(window, 'location', {
-      value: originalLocation,
-      writable: true,
-      configurable: true,
-    })
-  })
-
-  function setPath(path: string) {
-    Object.defineProperty(window, 'location', {
-      value: { ...originalLocation, pathname: path },
-      writable: true,
-      configurable: true,
-    })
-  }
-
-  it('无 token 时返回 null', () => {
-    setPath('/t/tenant_xxx')
-    expect(readTenantToken()).toBeNull()
-  })
-
-  it('租户前台有 token 时返回该 token', () => {
-    setPath('/t/tenant_xxx')
-    localStorage.setItem('saas_token_tenant_xxx', 'mock-token')
-    expect(readTenantToken()).toBe('mock-token')
-  })
-
-  it('portal 路由读 portal_token', () => {
-    setPath('/portal/dashboard')
-    localStorage.setItem('portal_token', 'portal-mock-token')
-    expect(readTenantToken()).toBe('portal-mock-token')
   })
 })

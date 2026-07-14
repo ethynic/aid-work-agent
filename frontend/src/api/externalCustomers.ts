@@ -112,16 +112,3 @@ export async function getSessionMessages(params: {
   if (!res.ok) throw new Error('获取会话消息列表失败')
   return res.json()
 }
-
-// 获取租户的数字员工实例列表
-export async function listTenantInstances(): Promise<{
-  success: boolean
-  instances?: any[]
-  message?: string
-}> {
-  const res = await fetch(`${API_BASE}/instances`, {
-    headers: getSaasAuthHeader()
-  })
-  if (!res.ok) throw new Error('获取数字员工实例列表失败')
-  return res.json()
-}

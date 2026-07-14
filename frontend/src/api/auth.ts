@@ -101,30 +101,6 @@ export async function phoneCodeLogin(phone: string, code: string): Promise<Login
 }
 
 /**
- * 用户注册
- */
-export async function register(phone: string, password: string, code: string): Promise<LoginResponse> {
-  const res = await fetch(`${API_BASE}/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone, password, code })
-  })
-  return res.json()
-}
-
-/**
- * 绑定手机号
- */
-export async function bindPhone(userId: string, phone: string, code: string): Promise<{ success: boolean, message?: string }> {
-  const res = await fetch(`${API_BASE}/bind-phone`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, phone, code })
-  })
-  return res.json()
-}
-
-/**
  * 获取当前用户信息
  */
 export async function getCurrentUser(): Promise<any> {
@@ -206,18 +182,6 @@ export interface CaptchaResponse {
  */
 export async function getCaptcha(): Promise<CaptchaResponse> {
   const res = await fetch(`${API_BASE}/captcha`)
-  return res.json()
-}
-
-/**
- * 验证图形验证码（用于重置密码前校验）
- */
-export async function validateCaptcha(captchaId: string, code: string): Promise<{ success: boolean, message?: string }> {
-  const res = await fetch(`${API_BASE}/captcha/validate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ captcha_id: captchaId, code })
-  })
   return res.json()
 }
 

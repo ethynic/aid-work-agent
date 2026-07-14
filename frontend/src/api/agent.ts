@@ -1,5 +1,4 @@
 import type { MessageStreamEvent } from '@/types'
-import { getAuthHeader } from './auth'
 
 // 上传文件接口
 export interface UploadedFile {
@@ -65,21 +64,6 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
       throw error
     }
     throw new Error(error?.message || error?.toString?.() || '文件上传失败')
-  }
-}
-
-/**
- * 删除已上传的文件
- */
-export async function deleteFile(file_id: string): Promise<void> {
-  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
-  const response = await fetch(`${apiBase}/upload/${file_id}`, {
-    method: 'DELETE',
-    headers: { ...getAuthHeader() },
-  })
-
-  if (!response.ok) {
-    throw new Error(`删除失败: ${response.status}`)
   }
 }
 
