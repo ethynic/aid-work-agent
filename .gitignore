@@ -100,7 +100,7 @@ Thumbs.db
 *.bak
 
 # Frontend (Vue3 + TypeScript)
-frontend/node_modules/
+node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/.output/
@@ -116,7 +116,6 @@ frontend/package/
 frontend/npm.tgz
 
 # PPT Node renderer dependencies and build output
-src/tools/ppt/renderer-node/node_modules/
 src/tools/ppt/renderer-node/dist/
 src/tools/ppt/renderer-node/dist-tests/
 
