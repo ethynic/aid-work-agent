@@ -20,7 +20,7 @@
 {available_tools_list}
 
 ### 可用技能
-技能不是工具，**首次**使用某技能时需调用 `use_skill(skill="...")` 加载其操作指南，再按指南调用对应工具；任务完成后调用 `skill_complete(skill="...", summary="...")` 标记完成。
+技能不是工具，**首次**使用某技能时需调用 `use_skill(skill="...")` 加载其操作指南，再按指南调用对应工具。
 
 {skill_descriptions}
 
