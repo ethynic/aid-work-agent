@@ -217,14 +217,14 @@
                   <!-- Template + Sections Editor (full width) -->
                   <div class="flex flex-col min-w-0">
                   <!-- Template textarea -->
-                  <div class="text-xs text-gray-400 mb-1">模板（用 {变量名} 作为分段占位符）</div>
+                  <div class="text-xs text-gray-400 mb-1">模板（用 <span v-pre>{{变量名}}</span> 作为分段占位符）</div>
                   <MyTextarea
                     v-model="promptContent"
                     :rows="6"
                     monospace
                     show-char-count
                     :min-height="'200px'"
-                    placeholder="输入 System Prompt 模板，用 {变量名} 作为分段占位符..."
+                    placeholder="输入 System Prompt 模板，用 {{变量名}} 作为分段占位符..."
                     @input="onPromptInput"
                   />
 
@@ -264,7 +264,7 @@
                       </div>
                     </div>
                     <div v-else class="mt-3 text-xs text-gray-400 py-2">
-                      模板中未检测到 {变量名} 占位符。添加如 {role_description} 的占位符后，下方会出现对应的编辑区。
+                      <span v-pre>模板中未检测到 {{变量名}} 占位符。添加如 {{role_description}} 的占位符后，下方会出现对应的编辑区。</span>
                     </div>
                   </div>
                 </div>
@@ -302,7 +302,7 @@
               :rows="6"
               monospace
               :min-height="'120px'"
-              placeholder="输入初始 System Prompt 模板，用 {变量名} 作为分段占位符..."
+              placeholder="输入初始 System Prompt 模板，用 {{变量名}} 作为分段占位符..."
             />
           </div>
         </div>

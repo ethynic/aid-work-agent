@@ -220,6 +220,7 @@ const router = createRouter({
         { path: 'wecom-personal-rpa', name: 'tenant-wecom-personal-rpa', component: () => import('./components/saas/WecomPersonalRpaManager.vue') },
         { path: 'settings', name: 'tenant-settings', component: () => import('./components/saas/TenantSettings.vue') },
         { path: 'my-agents', name: 'tenant-my-agents', component: () => import('./components/MyDigitalEmployees.vue') },
+        { path: 'agent/:subagent_name/prompt', name: 'tenant-agent-prompt', component: () => import('./components/TenantPromptEditor.vue') },
         { path: 'chat', name: 'tenant-chat-explicit', component: () => import('./components/ChatContainer.vue') },
         { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('./components/ChatContainer.vue') },
         { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('./components/AllSessions.vue') },

@@ -927,29 +927,33 @@ class SetLabelRequest(BaseModel):
 
 > 设计文档参考：§八.2（租户定制 extra.md 集成）、§八.3.2（租户前台编辑入口）
 > 目标：将 extra_md 从文件系统迁移到数据库 + 租户前台编辑器
-> 预计工期：1.5 周
+> 预计工期：1 周（原 1.5 周，因无需数据迁移缩减）
 > 前置依赖：Phase 1
+> **重要决策（2026-07-14）**：extra_md 功能从未被实际使用（`storage/subagents/` 下无任何 `extra_*.md` 文件），因此 **不需要数据迁移脚本，也不需要文件降级路径**。代码改造时直接删除所有文件 IO，DB miss 即返回 None。
 
-### 阶段 4.1：extra_md 迁移
+### 阶段 4.1：后端改造（纯 DB，无降级）
 
-- [ ] **4.1.1 编写文件系统 → 数据库迁移脚本**
-  - 扫描 `storage/subagents/` 下所有 `extra_<tenant_id>.md` 文件
-  - 为每个文件创建 prompt_registry + prompt_versions + prompt_labels 记录
-  - 支持 `--dry-run`，幂等安全
-  - [ ] 未开始
+- [x] **4.1.1 ~~编写文件系统 → 数据库迁移脚本~~**（取消，无历史数据需迁移）
 
-- [ ] **4.1.2 改造 `_load_extra_md()` 为数据库优先**
-  - 先查 PromptResolver，miss 时降级到文件系统
-  - [ ] 未开始
+- [ ] **4.1.2 改造 `_load_extra_md()` 为纯 DB 查询**
+  - `src/core/agent.py` 的 `_load_extra_md()`：改为只调 `prompt_resolver.resolve(scope='tenant_extra', scope_id=f'extra:{dir_name}:{tenant_id}', tenant_id=tenant_id)`
+  - miss 返回 None（等价于"该租户未配置定制内容"）
+  - **删除所有文件 IO**（`Path()` / `read_text()` / `extra_path.exists()`）
+  - 无文件降级路径
 
-- [ ] **4.1.3 改造 extra_md API 为数据库驱动**
-  - `src/api/subagent_extra.py` 改为调用 PromptRegistryService
-  - 保持 API 签名不变
-  - [ ] 未开始
+- [ ] **4.1.3 改造 extra_md API 为纯 DB 驱动**
+  - `src/api/subagent_extra.py` 的 GET/PUT/DELETE 全部改为调 `PromptRegistryService`
+  - scope='tenant_extra'，scope_id=f'extra:{dir_name}:{tenant_id}'
+  - PUT 等价于"提交新版本 + 标记 production"（tenant_extra 非高危，不走 staging）
+  - GET 返回当前 production 内容
+  - DELETE 删 prompt 记录（级联删版本/标签/草稿）
+  - **删除** `EXTRA_BASE_DIR`、`_resolve_extra_path`、所有文件 IO
+  - API 签名保持不变（`/api/v1/subagents/{name}/extra`）
 
-- [ ] **4.1.4 验证迁移和降级**
-  - 数据迁移正确 + 降级路径正常 + API 兼容
-  - [ ] 未开始
+- [ ] **4.1.4 验证**
+  - `_load_extra_md` miss 时返回 None，Agent 不崩
+  - API GET/PUT/DELETE 正常工作
+  - 现有调用方（前端如有）不受影响
 
 ### 阶段 4.2：租户前台编辑器
 
@@ -967,7 +971,7 @@ class SetLabelRequest(BaseModel):
 
 ### Phase 4 完成标准
 
-- [ ] extra_md 已迁移到数据库，降级路径正常
+- [ ] extra_md 完全走 DB，无文件 IO
 - [ ] 租户管理员可在线编辑定制 Prompt
 - [ ] 版本管理闭环完整（编辑 → 提交 → 对比 → 回滚）
 - [ ] 前端构建无错误
