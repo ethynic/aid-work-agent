@@ -25,7 +25,8 @@ from typing import Any, Dict, Optional
 import httpx
 from loguru import logger
 
-from src.channels.base import ChannelAdapter
+from src.channels._image_text_renderer import render_text_with_image_placeholders
+from src.channels.base import ChannelAdapter, build_public_url
 from src.channels.dingtalk.crypto import DingTalkCrypto
 from src.channels.dingtalk.media import DingTalkMedia
 from src.channels.dingtalk.message_builder import DingTalkMessageBuilder
@@ -325,16 +326,42 @@ class DingTalkAdapter(ChannelAdapter):
         通过 message.content 中的 conversation_type 判断单聊/群聊：
         - conversation_type="1"（单聊）: reply_to 应为 userId
         - conversation_type="2"（群聊）: reply_to 应为 openConversationId
+
+        发送顺序：文本（含图片占位符）→ 图片 → 可下载文件。
+        单图失败不阻断后续发送，记 warning。
         """
         content = message.content or {}
         conversation_type = str(content.get("conversation_type", "1"))
         reply_to = message.reply_to
 
         all_success = True
+        images = message.get_images()
 
+        # 1. 发送文本（含 placement 占位符）
         text = message.text
         if text:
+            text = render_text_with_image_placeholders(text, images)
             all_success = await self.send_long_message(text, reply_to, conversation_type)
+
+        # 2. 发送图片（Phase 2 P2.9.2 新增）
+        # 钉钉 sampleImageMsg 需要 photoURL（公网 URL），不能直接发本地路径。
+        # 通过 build_public_url 把 ImageRef.download_url 转成公网 URL，
+        # 公网不可达时 send_image 内部会失败 → 该图跳过 warning 不阻断。
+        for ref in images:
+            try:
+                file_id = ref.get("file_id") if isinstance(ref, dict) else None
+                if not file_id:
+                    continue
+                download_url = ref.get("download_url") or f"/api/files/{file_id}/download"
+                public_url = build_public_url(download_url)
+                success = await self.send_image(public_url, reply_to, conversation_type)
+                if not success:
+                    all_success = False
+            except Exception as e:
+                logger.warning(
+                    f"[dingtalk] send image {ref.get('file_id') if isinstance(ref, dict) else '?'} failed: {e}"
+                )
+                all_success = False
 
         for file_info in message.downloadable_files:
             # 速率限制（与 send_long_message 一致）

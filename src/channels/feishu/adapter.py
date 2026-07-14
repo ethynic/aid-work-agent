@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional
 import httpx
 from loguru import logger
 
+from src.channels._image_text_renderer import render_text_with_image_placeholders
 from src.channels.base import ChannelAdapter, build_public_url, format_file_size
 from src.channels.feishu.crypto import FeishuCrypto
 from src.channels.feishu.media import FeishuMedia
@@ -475,16 +476,37 @@ class FeishuAdapter(ChannelAdapter):
         """
         发送飞书消息（自动选择消息类型和拆分）
 
-        文本消息走 send_long_message，随后逐个发送 downloadable_files。
+        发送顺序：文本（含图片占位符）→ 图片 → 可下载文件。
+        单图失败不阻断后续发送，记 warning。
         """
         all_success = True
+        images = message.get_images()
 
-        # 1. 发送文本
+        # 1. 发送文本（含 placement 占位符）
         text = message.text
         if text:
+            text = render_text_with_image_placeholders(text, images)
             all_success = await self.send_long_message(text, message.reply_to)
 
-        # 2. 发送可下载文件
+        # 2. 发送图片（Phase 2 P2.9.1 新增）
+        for ref in images:
+            try:
+                local_path = await self._resolve_image_local_path(ref)
+                if not local_path:
+                    all_success = False
+                    continue
+                image_key = await self.media.upload_image(str(local_path))
+                if image_key:
+                    success = await self.send_image(image_key, message.reply_to)
+                    if not success:
+                        all_success = False
+                else:
+                    all_success = False
+            except Exception as e:
+                logger.warning(f"[feishu] send image {ref.get('file_id')} failed: {e}")
+                all_success = False
+
+        # 3. 发送可下载文件
         for file_info in message.downloadable_files:
             # 上传图片或文件到飞书
             if file_info.file_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
@@ -507,6 +529,37 @@ class FeishuAdapter(ChannelAdapter):
                     all_success = False
 
         return all_success
+
+    async def _resolve_image_local_path(self, ref: Dict[str, Any]) -> Optional[Any]:
+        """从 ImageRef dict（含 file_id）解析出本地路径。
+
+        通过 ImageRegistry 从 Redis 查 file_id 拿本地绝对路径。
+        ref 只要有 file_id 字段即可（不需要 ImageRef 全部字段）。
+
+        Args:
+            ref: ImageRef 的 dict 形式（来自 UnifiedResponse.get_images()）
+
+        Returns:
+            本地路径 Path 对象，失败返回 None
+        """
+        from pathlib import Path
+
+        from src.core.image_asset import get_image_registry
+
+        file_id = ref.get("file_id") if isinstance(ref, dict) else None
+        if not file_id:
+            logger.warning(f"[feishu] resolve image path failed: ref 缺少 file_id, ref={ref}")
+            return None
+        try:
+            registry = get_image_registry()
+            ref_obj = await registry.get_ref_by_file_id(file_id)
+            if ref_obj is None:
+                logger.warning(f"[feishu] image not found in registry: file_id={file_id}")
+                return None
+            return await registry.resolve_local_path(ref_obj)
+        except Exception as e:
+            logger.warning(f"[feishu] resolve image path failed file_id={file_id}: {e}")
+            return None
 
     async def send_long_message(self, text: str, user_id: str) -> bool:
         """

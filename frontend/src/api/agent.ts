@@ -120,6 +120,7 @@ export class SSEManager {
     onThinking?: (data: string) => void,
     onClarification?: (subagentName: string, question: string) => void,
     onBusy?: (instanceId: string, message: string, isSameUser: boolean) => void,
+    onImages?: (images: any[], placement: string) => void,
     subagent?: string | null,
     instance_id?: string | null
   ): Promise<void> {
@@ -167,7 +168,7 @@ export class SSEManager {
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onBusy })
+            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onBusy, onImages })
           }
           break
         }
@@ -180,7 +181,7 @@ export class SSEManager {
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onBusy })
+          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onBusy, onImages })
         }
       }
     } catch (error) {
@@ -207,6 +208,7 @@ export class SSEManager {
       onThinking?: (data: string) => void
       onClarification?: (subagentName: string, question: string) => void
       onBusy?: (instanceId: string, message: string, isSameUser: boolean) => void
+      onImages?: (images: any[], placement: string) => void
     }
   ) {
     // 处理多行数据
@@ -256,6 +258,10 @@ export class SSEManager {
           case 'busy':
             // 实例繁忙，前端显示排队选项
             callbacks.onBusy?.(event.instance_id, event.message, event.is_same_user)
+            break
+          case 'images':
+            // Phase 2 P2.5：Agent 推送的图片资产事件
+            callbacks.onImages?.(event.images || [], event.placement || 'after_text')
             break
           case 'cancelled':
             // 保留扩展能力，暂不触发 UI 回调

@@ -1139,7 +1139,14 @@ class ChannelSessionManager:
         send_ok = False
         try:
             session_queue.mark_responding(session_id)
-            send_ok = await send_response(response_text, downloadable_files)
+            # Phase 2 P2.3 CodeReview P0 修复：从 agent 实例读取累积的 ImageRef
+            # 列表，透传给渠道 adapter（feishu/dingtalk 拆分发送，wecom_kf 不用）
+            agent_images = []
+            try:
+                agent_images = list(getattr(agent, "_last_response_images", []) or [])
+            except Exception:
+                agent_images = []
+            send_ok = await send_response(response_text, downloadable_files, agent_images)
         except Exception as e:
             logger.error(
                 f"后端日志：send_response 异常 session={session_id}: {e}",
@@ -1172,7 +1179,7 @@ class ChannelSessionManager:
         extra_content: Optional[Dict[str, Any]] = None,
         log_tag: str = "Channel",
         pre_send: Optional[Callable[[], None]] = None,
-    ) -> Callable[[str, List[Dict[str, Any]]], Awaitable[bool]]:
+    ) -> Callable[..., Awaitable[bool]]:
         """
         构造 send_response 回调，供 process_and_persist 使用。
 
@@ -1188,15 +1195,20 @@ class ChannelSessionManager:
             pre_send: 发送前的钩子（如 RPA 的 set_reply_context 注入）
 
         Returns:
-            async callable (response_text: str, downloadable_files: list) -> bool
+            async callable (response_text: str, downloadable_files: list, images: list = []) -> bool
         """
         # 方法内部 import，避免模块加载顺序问题
         from src.models.message import UnifiedResponse, DownloadableFileInfo
 
-        async def _send_response(response_text: str, downloadable_files: list) -> bool:
+        async def _send_response(
+            response_text: str,
+            downloadable_files: list,
+            images: Optional[List[Dict[str, Any]]] = None,
+        ) -> bool:
             logger.info(
                 f"{log_tag} 开始发送回复: reply_to={reply_to}, "
-                f"content_len={len(response_text) if response_text else 0}"
+                f"content_len={len(response_text) if response_text else 0}, "
+                f"images_count={len(images) if images else 0}"
             )
             try:
                 if pre_send is not None:
@@ -1204,6 +1216,10 @@ class ChannelSessionManager:
                 content: Dict[str, Any] = {"text": response_text}
                 if extra_content is not None:
                     content.update(extra_content)
+                # Phase 2 P2.3 CodeReview P0 修复：把 agent 累积的 ImageRef 写入 content.images
+                # 渠道适配器通过 message.get_images() 读取
+                if images:
+                    content["images"] = images
                 response = UnifiedResponse(
                     message_id=f"resp_{message_id}",
                     reply_to=reply_to,

@@ -398,7 +398,9 @@ class TestProcessAndPersist:
         assert memory_store["messages"][0]["content"] == "你好"
         assert memory_store["messages"][1]["content"] == "hello back"
         # send_response 被调用，且 mark_responding/mark_idle 成对
-        send_response.assert_awaited_once_with("hello back", [])
+        # Phase 2 P2.3 CodeReview P0 修复：send_response 新增 images 参数（第 3 个位置参数）
+        # stub_agent 没有 _last_response_images，getattr 返回 MagicMock，list() 兜底为空
+        send_response.assert_awaited_once_with("hello back", [], [])
         patched_session_queue.mark_responding.assert_called_once_with("sid_test")
         patched_session_queue.mark_idle.assert_called_once_with("sid_test")
         patched_session_queue.finish_processing.assert_called_once_with(

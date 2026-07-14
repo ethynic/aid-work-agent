@@ -2,7 +2,7 @@
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def make_event(event_type: str, **kwargs) -> Dict[str, Any]:
@@ -10,6 +10,35 @@ def make_event(event_type: str, **kwargs) -> Dict[str, Any]:
     event = {"type": event_type, "timestamp": int(time.time() * 1000)}
     event.update(kwargs)
     return event
+
+
+def make_image_event(
+    images: List[Dict[str, Any]],
+    placement: str = "after_text",
+) -> Dict[str, Any]:
+    """构造 images SSE 事件（Phase 2 P2.1）。
+
+    用于 Agent 主循环在工具结果中识别到 ImageRef 后推送图片到前端。
+    与 response / tool_result 等事件并列，前端独立处理。
+
+    Args:
+        images: ImageRef 字典列表（已经是 model_dump() 后的纯 dict，便于 JSON 序列化）
+        placement: 图片在前端消息中的展示位置
+            - ``after_text``（默认）：文本下方画廊（最常见）
+            - ``before_text``：文本上方（如景点封面图先看图再看介绍）
+            - ``inline``：文本流中行内（Phase 2 仍按 after_text 渲染，Phase 3 实现精确行内）
+
+    Returns:
+        SSE 事件 dict，结构::
+
+            {
+                "type": "images",
+                "timestamp": int,
+                "images": [...],
+                "placement": "after_text" | "before_text" | "inline",
+            }
+    """
+    return make_event("images", images=list(images or []), placement=placement)
 
 
 @dataclass

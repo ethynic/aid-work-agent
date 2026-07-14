@@ -128,6 +128,32 @@ class UnifiedResponse(BaseModel):
     attachments: List[Attachment] = Field(default_factory=list, description="附件列表")
     downloadable_files: List[DownloadableFileInfo] = Field(default_factory=list, description="可下载文件列表")
     timestamp: datetime = Field(default_factory=datetime.now, description="响应时间戳")
+
+    def get_images(self) -> List[Dict[str, Any]]:
+        """从 content 取 images 列表（Phase 2 P2.2）。
+
+        Phase 2 不把 images 提升为 UnifiedResponse 顶层字段，而是放在 ``content.images``：
+        - 持久化路径直接复用 ``content``（chat_messages.content JSON），无需 DDL 变更
+        - 渠道适配器从 ``get_images()`` 取，与 ``text`` / ``downloadable_files`` 同级语义
+        - 历史消息无此字段时返回空列表（向后兼容）
+        """
+        images = self.content.get("images")
+        if isinstance(images, list):
+            return images
+        return []
+
+    def set_images(self, images: List[Dict[str, Any]]) -> None:
+        """写入 images 到 content（覆盖式）。"""
+        self.content["images"] = list(images or [])
+
+    def add_image(self, image: Dict[str, Any]) -> None:
+        """追加单张图片到 content.images（按 file_id 去重）。"""
+        if not isinstance(image, dict) or not image.get("file_id"):
+            return
+        images = self.get_images()
+        if not any(img.get("file_id") == image["file_id"] for img in images):
+            images.append(image)
+        self.set_images(images)
     
     @property
     def text(self) -> str:

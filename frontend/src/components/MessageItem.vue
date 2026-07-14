@@ -45,11 +45,29 @@
         <span class="text-xs text-muted">{{ inputHintState === 'thinking' ? '对方正在输入中...' : '对方正在输入中...' }}</span>
       </div>
 
+      <!-- before_text 图片：文本上方（Phase 2 P2.7） -->
+      <ImageGallery
+        v-if="!showInputHint && beforeTextImages.length"
+        :images="beforeTextImages"
+      />
+
       <div
-        v-else
+        v-if="!showInputHint"
         class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
         v-html="renderedContent"
       ></div>
+
+      <!-- after_text 图片：文本下方（默认位置，Phase 2 P2.7） -->
+      <ImageGallery
+        v-if="!showInputHint && afterTextImages.length"
+        :images="afterTextImages"
+      />
+
+      <!-- inline 图片：Phase 2 仍按 after_text 渲染（精确行内留 Phase 3） -->
+      <ImageGallery
+        v-if="!showInputHint && inlineImages.length"
+        :images="inlineImages"
+      />
 
       <!-- 附件标签 -->
       <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
@@ -127,6 +145,7 @@ import { ref, computed } from 'vue'
 import type { ChatMessage, AttachmentInfo, DownloadableFile, InputHintState, ProgressMessage } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
 import DownloadFileCard from './DownloadFileCard.vue'
+import ImageGallery from './ui/ImageGallery.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 import { useDebugMode } from '@/composables/useDebugMode'
@@ -240,6 +259,18 @@ const downloadableFiles = computed<DownloadableFile[]>(() => {
 const renderedContent = computed(() => {
   return renderMarkdown(displayContent.value)
 })
+
+// Phase 2 P2.7：按 placement 分组图片
+// 历史消息兼容：旧消息无 placement 字段时按 after_text 处理（默认值）
+const beforeTextImages = computed(() =>
+  (props.message.images || []).filter(img => img.placement === 'before_text')
+)
+const afterTextImages = computed(() =>
+  (props.message.images || []).filter(img => !img.placement || img.placement === 'after_text')
+)
+const inlineImages = computed(() =>
+  (props.message.images || []).filter(img => img.placement === 'inline')
+)
 
 const formattedTime = computed<string | null>(() => {
   if (!props.message.timestamp) return null

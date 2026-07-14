@@ -303,6 +303,23 @@ export function useAgent() {
           pendingMessage.value = content // 保存用户消息用于排队成功后发送
           // 不需要 isProcessing = false，因为这是正常流程，用户可以选择排队
         },
+        // onImages - Agent 推送的图片资产（Phase 2 P2.5）
+        (images, placement) => {
+          if (!images || !images.length) return
+          // 找到当前助手消息（最后一条）
+          const lastMsg = messages.value[messages.value.length - 1]
+          if (!lastMsg || lastMsg.role !== 'assistant') return
+          if (!lastMsg.images) lastMsg.images = []
+          // 按 file_id 去重合并（一次回复可能多次推送 images 事件）
+          for (const img of images) {
+            if (!img?.file_id) continue
+            // 兜底 placement：后端理论上已 set，但前端容错
+            const normalized = { ...img, placement: img.placement || placement || 'after_text' }
+            if (!lastMsg.images.some(existing => existing.file_id === normalized.file_id)) {
+              lastMsg.images.push(normalized)
+            }
+          }
+        },
         subagent,
         instanceId
       )

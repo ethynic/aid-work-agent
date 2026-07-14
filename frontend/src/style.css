@@ -202,6 +202,19 @@ body {
 .markdown-content p {
   margin-bottom: 0.75rem;
 }
+
+/* Markdown 内嵌图片（Phase 2 P2.8）
+   - file_id:file_xxx scheme 由 utils/markdown.ts 转成 /api/files/.../download
+   - max-width 100% 避免溢出消息气泡
+   - 圆角 + zoom-in cursor 提示可点击放大（lightbox 由 MessageItem 后处理绑定，样式先行） */
+.markdown-content .md-inline-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  cursor: zoom-in;
+  margin: 0.5rem 0;
+  display: block;
+}
 /** 手机端对话区域答案内容的样式 */
 .markdown-content ul, .markdown-content ol {
   margin-left: 0.5rem;

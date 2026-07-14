@@ -278,3 +278,107 @@ async def test_pre_send_exception_returns_false_no_propagation():
     assert result is False
     # 关键不变量：pre_send 失败时 send_message 绝不能被调用
     adapter.send_message.assert_not_awaited()
+
+
+# ============================================================
+# Phase 2 P2.3 CodeReview P0 修复：images 参数链路
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_images_param_written_to_content():
+    """
+    images 参数应写入 UnifiedResponse.content.images，让渠道 adapter 通过
+    message.get_images() 能读到。这是 P0 修复的核心契约——修复前所有第三方
+    渠道 message.get_images() 永远返回空列表（agent 累积 collected_images 但
+    从不写入持久化路径）。
+    """
+    manager = _make_manager()
+    adapter = _make_adapter(send_return=True)
+
+    send_response = manager.make_send_response(
+        adapter=adapter,
+        message_id="msg_img_001",
+        reply_to="user_with_images",
+    )
+
+    images = [
+        {
+            "file_id": "file_abc123",
+            "download_url": "/api/files/file_abc123/download",
+            "display_name": "封面.jpg",
+            "mime_type": "image/jpeg",
+            "size_bytes": 100,
+            "source": "knowledge_base",
+            "usage": "thumbnail",
+            "placement": "after_text",
+        },
+        {
+            "file_id": "file_def456",
+            "download_url": "/api/files/file_def456/download",
+            "display_name": "图集1.jpg",
+            "mime_type": "image/jpeg",
+            "size_bytes": 200,
+            "source": "knowledge_base",
+            "usage": "inline",
+            "placement": "after_text",
+        },
+    ]
+
+    result = await send_response("文本内容", [], images)
+
+    assert result is True
+    response = adapter.send_message.await_args.args[0]
+    # content 必须含 images 键
+    assert "images" in response.content
+    assert response.content["images"] == images
+    # UnifiedResponse.get_images() 能正确取回
+    assert response.get_images() == images
+    assert len(response.get_images()) == 2
+
+
+@pytest.mark.asyncio
+async def test_images_param_omitted_keeps_backward_compatible():
+    """
+    不传 images 参数时（旧调用方式），content 不应含 images 键，
+    get_images() 返回空列表。保证向后兼容（已有 6 个渠道调用点）。
+    """
+    manager = _make_manager()
+    adapter = _make_adapter(send_return=True)
+
+    send_response = manager.make_send_response(
+        adapter=adapter,
+        message_id="msg_img_002",
+        reply_to="user_no_images",
+    )
+
+    # 旧调用方式：只传 2 个参数
+    result = await send_response("文本", [])
+
+    assert result is True
+    response = adapter.send_message.await_args.args[0]
+    assert "images" not in response.content
+    assert response.get_images() == []
+
+
+@pytest.mark.asyncio
+async def test_images_empty_list_omits_content_key():
+    """
+    传入空 list 时不应写入 content.images 键——保持 content 结构干净，
+    让渠道 adapter 不需要特判空列表。
+    """
+    manager = _make_manager()
+    adapter = _make_adapter(send_return=True)
+
+    send_response = manager.make_send_response(
+        adapter=adapter,
+        message_id="msg_img_003",
+        reply_to="user_empty_images",
+    )
+
+    result = await send_response("文本", [], [])
+
+    assert result is True
+    response = adapter.send_message.await_args.args[0]
+    assert "images" not in response.content
+    assert response.get_images() == []

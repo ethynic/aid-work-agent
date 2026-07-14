@@ -43,6 +43,61 @@ from src.core.plan_manager import PlanManager
 from src.core.skill_session import SkillSession
 
 
+def _extract_image_refs_from_tool_result(result: Any) -> List[Dict[str, Any]]:
+    """从工具返回结果中提取所有 ImageRef dict。
+
+    识别规则（约定优于类型约束，不修改 BaseTool）：
+    - ``result["images"]``：list[dict]，每个 dict 含 file_id（顶层批量图）
+    - ``result["cover_image"]``：单个 dict 或 None（顶层封面图）
+    - ``result["results"]``：list，遍历每项的 ``cover_image`` 字段
+      （attraction_search 这类返回列表的工具用此模式）
+
+    Args:
+        result: 工具 execute 返回值（通常是 dict，也可能是其他类型）
+
+    Returns:
+        ImageRef dict 列表（不含 None / 缺 file_id 的项）
+    """
+    refs: List[Dict[str, Any]] = []
+    if not isinstance(result, dict):
+        return refs
+
+    # 顶层 images 键
+    images_val = result.get("images")
+    if isinstance(images_val, list):
+        for img in images_val:
+            if isinstance(img, dict) and img.get("file_id"):
+                refs.append(img)
+
+    # 顶层 cover_image 键
+    cover = result.get("cover_image")
+    if isinstance(cover, dict) and cover.get("file_id"):
+        refs.append(cover)
+
+    # results 列表中的 cover_image（attraction_search 模式）
+    results_val = result.get("results")
+    if isinstance(results_val, list):
+        for item in results_val:
+            if isinstance(item, dict):
+                nested_cover = item.get("cover_image")
+                if isinstance(nested_cover, dict) and nested_cover.get("file_id"):
+                    refs.append(nested_cover)
+
+    return refs
+
+
+def _normalize_image_placement(refs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """给每个 ImageRef dict 补 placement 默认值（``after_text``）。
+
+    Phase 2 不实现 inline 智能定位：``placement="inline"`` 也保留原值，
+    前端 P2.7 会兜底按 after_text 渲染。空字符串/None 统一改为 after_text。
+    """
+    for ref in refs:
+        if not ref.get("placement"):
+            ref["placement"] = "after_text"
+    return refs
+
+
 class AgentMode(Enum):
     """智能体工作模式"""
     MASTER = "master"              # 主智能体模式：拥有完整能力，可委派任务
@@ -1884,7 +1939,7 @@ class Agent:
         import base64
         import tempfile
         from datetime import datetime
-        from src.core.agent_events import make_event
+        from src.core.agent_events import make_event, make_image_event
 
         # 后端日志：检查是否有待处理的澄清请求
         pending_clarification = self._get_pending_clarification(session_id)
@@ -2240,6 +2295,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
         max_iterations = 20  # Prevent infinite loops
         iteration = 0
+        # Phase 2 P2.3：累积所有工具返回的 ImageRef，在工具调用结束后、最终回复生成前
+        # 统一推送一次 images SSE 事件（避免事件流太碎）
+        collected_images: List[Dict[str, Any]] = []
 
         while iteration < max_iterations:
             iteration += 1
@@ -2922,7 +2980,23 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             # 延迟执行 Skill 上下文压缩（在 tool_message 写入 memory 之后）
             for comp_session_id, comp_skill_name, comp_summary in pending_skill_compressions:
                 self._compress_skill_context(comp_session_id, comp_skill_name, comp_summary)
-        
+
+            # Phase 2 P2.3：扫描本轮工具结果，提取 ImageRef dict
+            # 在工具调用结束、进入最终回复生成之前，统一 yield 一次 images 事件
+            # （计划要求：避免每个工具后单独推导致事件流太碎）
+            _round_image_refs: List[Dict[str, Any]] = []
+            for _tr in tool_results:
+                _content = _tr.get("content")
+                if isinstance(_content, dict):
+                    _round_image_refs.extend(_extract_image_refs_from_tool_result(_content))
+            if _round_image_refs:
+                collected_images.extend(_round_image_refs)
+                try:
+                    _normalize_image_placement(_round_image_refs)
+                    yield make_image_event(_round_image_refs, placement="after_text")
+                except Exception as _img_e:
+                    logger.warning(f"[AGENT] 推送 images SSE 事件失败: {_img_e}", exc_info=True)
+
         if iteration >= max_iterations:
             logger.warning(f"Reached max iterations ({max_iterations})")
             yield make_event("response", data="I apologize, but the task is taking too long. Please try again or break it into smaller steps.")
@@ -2981,6 +3055,11 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         # Store explicit record_service so the inner process_message()
         # can access it without relying on thread-local storage
         self._explicit_record_service = record_service
+        # Phase 2 P2.3 CodeReview P0 修复：每次调用前清空，供渠道层读取
+        # （process_message 内部的 collected_images 是局部变量，外部无法访问；
+        #  通过 images 事件 + 实例属性桥接，让 channels/session.process_and_persist
+        #  能拿到 ImageRef 列表写入 UnifiedResponse.content.images）
+        self._last_response_images: List[Dict[str, Any]] = []
         logger.info(f"[DEBUG] Agent.process_message_sync: user_input={user_input!r}, attachments={attachments}, session_id={session_id}")
         try:
             response_parts = []
@@ -2991,6 +3070,17 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             ):
                 if event.get("type") == "response":
                     response_parts.append(event.get("data", ""))
+                # Phase 2 P2.3 CodeReview P0 修复：累积 images 事件到实例属性
+                # 供渠道层（process_and_persist）读取后写入 UnifiedResponse.content.images
+                if event.get("type") == "images":
+                    ev_images = event.get("images") or []
+                    if isinstance(ev_images, list):
+                        for img in ev_images:
+                            if isinstance(img, dict) and img.get("file_id"):
+                                # 按 file_id 去重
+                                if not any(existing.get("file_id") == img["file_id"]
+                                            for existing in self._last_response_images):
+                                    self._last_response_images.append(img)
                 # Forward events to external progress_callback (e.g. channel routes)
                 if progress_callback:
                     if callable(progress_callback):
