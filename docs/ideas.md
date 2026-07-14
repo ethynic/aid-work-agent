@@ -80,6 +80,18 @@
 
 ---
 
+## 技术栈优化
+
+> 在"功能不变、推倒重来"前提下，对前后端技术栈的系统性优化建议。当前状态均为 💡 灵感阶段。
+
+| # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
+|---|------|------|------|---------|---------|
+| 38 | 后台定时/轮询任务外置 | 💡 灵感 | 用 `arq`（基于 Redis 的异步任务队列）替代 `main.py` lifespan 中 `asyncio.create_task` 启动的 6 个后台循环，解决 Gunicorn 多 worker 重复执行问题。约 7-8 人天。 | [设计](ideas/tech-stack-optimization/background-tasks-externalization.md) | — |
+| 40 | 后台管理界面引入 Element Plus | 💡 灵感 | 后台管理 16 个页面（表格/表单密集型）从手写 TailwindCSS 迁到 Element Plus 组件库（`el-table`、`el-form`、`el-dialog` 等），聊天主界面保持不变。搭配按需导入，约 8-9 人天（含 toast 替换）。 | [设计](ideas/tech-stack-optimization/admin-element-plus-migration.md) | — |
+| 41 | toast 迁至 Element Plus ElMessage | 💡 灵感 | 替换停更的 `vue-toastification@rc`，使用 Element Plus 的 `ElMessage.success/error/info/warning`，零额外依赖增量。涉及 21 个文件约 182 处调用 + 1 处测试 mock。约 1 人天。 | [设计](ideas/tech-stack-optimization/toast-migration.md) | — |
+
+---
+
 ## 调研报告索引
 
 以下调研报告为多项功能设计的前期研究，不单独对应开发任务：

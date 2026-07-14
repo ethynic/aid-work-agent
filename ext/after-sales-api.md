@@ -137,7 +137,7 @@ Header：`Api-Authorize-Token: ${AGENT_TOKEN}`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| client_token | string | 委托人 token，后续业务接口放在 `Client-Authorize-Token` Header |
+| client_token | string | 委托人 token，后续业务接口放在 `Client-Authorize-Token` Header，有效期 10 天 |
 | record_id | int | 委托人在客户信息表中的 id，订单创建时 `kehu` 字段必须填此值 |
 | role_id | int | 委托人角色 id |
 | display_name | string | 委托人显示名（如"覃女士"） |
@@ -186,26 +186,6 @@ Header：`Api-Authorize-Token` + `Client-Authorize-Token`
 ```
 
 用于校验 `client_token` 是否有效。返回 `Code: -99` 表示已失效，需重新调 `login`。
-
-### 2.3 委托登出
-
-**接口地址**
-
-```
-POST https://erp11022.aidingyi.cn/api/v1/erp.delegate/logout
-```
-
-Header：`Api-Authorize-Token` + `Client-Authorize-Token`
-
-**返回响应**
-
-```json
-{ "Code": 0, "Response": { "msg": "已登出" } }
-```
-
-登出后 `client_token` 立即失效，后续业务接口返回 `Code: -99`。
-
----
 
 ## 3. 客户信息列表接口
 
