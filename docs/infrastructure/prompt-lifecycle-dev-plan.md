@@ -935,13 +935,13 @@ class SetLabelRequest(BaseModel):
 
 - [x] **4.1.1 ~~编写文件系统 → 数据库迁移脚本~~**（取消，无历史数据需迁移）
 
-- [ ] **4.1.2 改造 `_load_extra_md()` 为纯 DB 查询**
+- [x] **4.1.2 改造 `_load_extra_md()` 为纯 DB 查询**
   - `src/core/agent.py` 的 `_load_extra_md()`：改为只调 `prompt_resolver.resolve(scope='tenant_extra', scope_id=f'extra:{dir_name}:{tenant_id}', tenant_id=tenant_id)`
   - miss 返回 None（等价于"该租户未配置定制内容"）
   - **删除所有文件 IO**（`Path()` / `read_text()` / `extra_path.exists()`）
   - 无文件降级路径
 
-- [ ] **4.1.3 改造 extra_md API 为纯 DB 驱动**
+- [x] **4.1.3 改造 extra_md API 为纯 DB 驱动**
   - `src/api/subagent_extra.py` 的 GET/PUT/DELETE 全部改为调 `PromptRegistryService`
   - scope='tenant_extra'，scope_id=f'extra:{dir_name}:{tenant_id}'
   - PUT 等价于"提交新版本 + 标记 production"（tenant_extra 非高危，不走 staging）
@@ -950,31 +950,35 @@ class SetLabelRequest(BaseModel):
   - **删除** `EXTRA_BASE_DIR`、`_resolve_extra_path`、所有文件 IO
   - API 签名保持不变（`/api/v1/subagents/{name}/extra`）
 
-- [ ] **4.1.4 验证**
+- [x] **4.1.4 验证**
   - `_load_extra_md` miss 时返回 None，Agent 不崩
   - API GET/PUT/DELETE 正常工作
   - 现有调用方（前端如有）不受影响
 
 ### 阶段 4.2：租户前台编辑器
 
-- [ ] **4.2.1 DigitalEmployeeManager 租户卡片添加"定制提示词"按钮**
+> **范围调整（2026-07-14）**：原设计要求编辑器含版本历史/对比/回滚面板（§八.3.2），但 extra_md 是租户级**追加内容**（不是 system prompt 主体），通常只是几段定制需求，版本管理价值低；改错直接重新编辑即可。**本次只做"编辑 + 保存 + 清空"三件事，不做版本历史/对比/回滚**。后端 PromptRegistryService 已具备这些能力（list_versions/diff_versions/set_label），如未来真有需求可补充 GET /extra/versions 端点 + 前端面板。
+
+- [x] **4.2.1 MyDigitalEmployees 租户卡片添加"定制提示词"按钮**
   - 点击跳转到 `/t/{tenant_id}/agent/{subagent_name}/prompt`
-  - [ ] 未开始
+  - 仅租户模式显示（extra_md 是租户级特性）
 
-- [ ] **4.2.2 新建 TenantPromptEditor.vue**
-  - Markdown 编辑器 + 版本历史面板（复用 PromptVersionHistory.vue）
-  - 草稿自动保存 + 提交版本（tenant_extra 直接标记 production）
-  - [ ] 未开始
+- [x] **4.2.2 新建 TenantPromptEditor.vue（简化版）**
+  - Markdown 编辑器（textarea）+ 保存按钮 + 清空按钮
+  - dirty 检测 + 离开提示（window.onbeforeunload）
+  - 说明卡片提示"内容追加到 system_prompt 末尾"
+  - **不做**：版本历史面板、版本对比、一键回滚、草稿持久化
 
-- [ ] **4.2.3 路由注册和前端构建验证**
-  - [ ] 未开始
+- [x] **4.2.3 路由注册和前端构建验证**
+  - `/t/:tenant_id/agent/:subagent_name/prompt` 已注册
+  - `npm run build` 0 错误
 
 ### Phase 4 完成标准
 
-- [ ] extra_md 完全走 DB，无文件 IO
-- [ ] 租户管理员可在线编辑定制 Prompt
-- [ ] 版本管理闭环完整（编辑 → 提交 → 对比 → 回滚）
-- [ ] 前端构建无错误
+- [x] extra_md 完全走 DB，无文件 IO
+- [x] 租户管理员可在线编辑定制 Prompt
+- [x] ~~版本管理闭环完整（编辑 → 提交 → 对比 → 回滚）~~ **范围调整**：只做编辑+保存+清空，不做版本历史/对比/回滚（extra_md 是追加内容，版本价值低，详见 §4.2 说明）
+- [x] 前端构建无错误
 
 ---
 
@@ -987,7 +991,7 @@ class SetLabelRequest(BaseModel):
 | Phase 2 | 独立智能体管理页面（重做） | 1.5 周 | 🔧 代码完成，待验证 |
 | Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages + System Prompt 模板+分段变量 | 2 周 | 🔧 3.1~3.9 代码完成，待运行验证 |
 | Phase 4.0 | 分段变量改双花括号 `{{var}}` + 独立渲染器 render_sections | 3 天 | 🔧 代码完成（41 单测通过），待 DB 数据人工迁移 + 部署验证 |
-| Phase 4 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
+| Phase 4 | extra_md 迁移 + 租户前台编辑器（简化版，不含版本闭环） | 1 周 | ✅ 代码完成（19 单测通过），待部署验证 |
 
 **总工期：约 6 周**
 

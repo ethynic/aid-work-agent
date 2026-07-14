@@ -20,7 +20,6 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 1 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。Phase 1 全部完成（含渠道追踪方案 C：TraceCollector 下沉到 `Agent.process_message`，从 record_service 自动读 source_type，渠道零改造）。1.6（单测/e2e）和 1.7（JSONL 双写迁移）已取消：obs 系统每日真实流量运行已事实验证；JSONL 与 obs 永久并行。Phase 2-4 未开始。2026-07-07 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) / [延伸计划](infrastructure/observability-channel-sessions-dev-plan.md) |
-| 2 | Prompt 全生命周期管理 | 🔧 部分完成 | Phase 0~3 + 4.0 + 4 代码完成：版本管理（4 张表 + 服务层 + admin/tenant API）、独立智能体管理页面（subagent_definitions + DB 优先覆盖文件系统 + 按需加载）、capabilities 移除、知识库关联（subagent_knowledge_sources 租户级表）、System Prompt 模板+分段变量（subagent_prompt_sections + 运行时实时渲染）+ LLM 智能优化、回复风格选择器、business_pages 配置。**Phase 4.0**（2026-07-14）：DB 分段变量从 `{var}` 改 `{{var}}` 双花括号 + 独立渲染器 `render_sections`（系统模板继续走 `{var}` 不受影响），动机是 `str.format_map` 对字面花括号不安全（JSON/代码块会触发 KeyError）。**Phase 4**（2026-07-14，19 单测通过）：extra_md 完全迁到 DB（`_load_extra_md` + `src/api/subagent_extra.py` 纯 DB 驱动，删所有文件 IO，无降级路径；功能从未被实际使用所以无迁移脚本），租户前台编辑器 `TenantPromptEditor.vue` 上线（`/t/:tenant_id/agent/:name/prompt`），MyDigitalEmployees 卡片加入口。2026-07-14 | [设计](infrastructure/prompt-lifecycle-design.md) | [计划](infrastructure/prompt-lifecycle-dev-plan.md) |
 
 ## 系统功能
 
