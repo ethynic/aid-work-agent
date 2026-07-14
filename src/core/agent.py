@@ -882,7 +882,11 @@ class Agent:
         return template
 
     def _load_extra_md(self) -> Optional[str]:
-        """加载租户定制的 extra.md 文件"""
+        """加载租户定制的 extra.md（Phase 4 起从数据库加载）
+
+        从 prompt_versions 表读取 scope='tenant_extra' 的 production 版本。
+        数据库无记录时返回 None（等价于"该租户未配置定制内容"）。
+        """
         if not self.subagent_config:
             return None
 
@@ -898,18 +902,21 @@ class Agent:
         if not tenant_id or not self.subagent_config.dir_name:
             return None
 
-        # 构建路径: storage/subagents/<dir_name>/extra_<tenant_id>.md
-        from pathlib import Path
-        extra_path = Path(f"storage/subagents/{self.subagent_config.dir_name}/extra_{tenant_id}.md")
-
         try:
-            if extra_path.exists():
-                content = extra_path.read_text(encoding='utf-8').strip()
-                if content:
-                    logger.debug(f"Loaded extra.md for tenant {tenant_id}, subagent {self.subagent_config.dir_name}")
-                    return content
+            from src.prompts.prompt_resolver import prompt_resolver
+            content = prompt_resolver.resolve(
+                scope="tenant_extra",
+                scope_id=f"extra:{self.subagent_config.dir_name}:{tenant_id}",
+                tenant_id=tenant_id,
+            )
+            if content:
+                logger.debug(
+                    f"Loaded extra.md (DB) for tenant {tenant_id}, "
+                    f"subagent {self.subagent_config.dir_name}"
+                )
+                return content.strip()
         except Exception as e:
-            logger.warning(f"Failed to load extra.md from {extra_path}: {e}")
+            logger.warning(f"Failed to load extra.md from DB: {e}")
 
         return None
 
