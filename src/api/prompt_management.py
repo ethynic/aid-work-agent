@@ -1,10 +1,9 @@
 """
 Prompt 版本管理 API
 
-仅提供租户管理员路由：
-- tenant_router: /api/prompts - 租户管理员，限定 scope=tenant_extra
-
-平台管理员全量管理路由（/api/admin/prompts/*）已随前端 prompts.ts 一并移除。
+提供平台管理员和租户管理员两套路由：
+- admin_router: /api/admin/prompts — 平台管理员全量管理
+- tenant_router: /api/prompts — 租户管理员，限定 scope=tenant_extra
 """
 
 from typing import Optional, Dict, Any, List
@@ -14,6 +13,8 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.api.auth import get_current_user
+from src.config.settings import settings
 from src.prompts.prompt_registry_service import PromptRegistryService
 
 
@@ -26,6 +27,12 @@ class RegisterPromptRequest(BaseModel):
     prompt_type: str = "normal"
     display_name: Optional[str] = None
     description: Optional[str] = None
+
+
+class UpdatePromptRequest(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    prompt_type: Optional[str] = None
 
 
 class CommitVersionRequest(BaseModel):
@@ -80,6 +87,318 @@ def _serialize_record(record: Optional[Dict]) -> Optional[Dict]:
 
 def _serialize_records(records: List[Dict]) -> List[Dict]:
     return [_serialize_record(r) for r in records]
+
+
+# ============== 平台管理员 API ==============
+
+admin_router = APIRouter(prefix="/api/admin/prompts", tags=["Prompt 管理"])
+
+
+def _require_admin(request: Request):
+    """平台管理员权限校验"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    admin_phones = getattr(settings, "admin", None)
+    if admin_phones:
+        phone_list = getattr(admin_phones, "phones", [])
+        if user.get("phone", "") in phone_list:
+            return user
+
+    # SaaS 模式下也允许 platform_admin
+    if user.get("role") == "platform_admin":
+        return user
+
+    raise HTTPException(status_code=403, detail="无管理员权限")
+
+
+@admin_router.get("/")
+async def list_prompts(
+    request: Request,
+    scope: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    try:
+        admin = _require_admin(request)
+        result = PromptRegistryService.list_prompts(
+            tenant_id=tenant_id, scope=scope, page=page, page_size=page_size
+        )
+        result["items"] = _serialize_records(result["items"])
+        return _success_response(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list prompts: {e}")
+        return _error_response("获取 Prompt 列表失败")
+
+
+@admin_router.post("/")
+async def create_prompt(request: Request, body: RegisterPromptRequest):
+    try:
+        admin = _require_admin(request)
+        result = PromptRegistryService.register_prompt(
+            scope=body.scope,
+            scope_id=body.scope_id,
+            tenant_id=body.tenant_id,
+            prompt_type=body.prompt_type,
+            display_name=body.display_name,
+            description=body.description,
+            created_by=admin.get("user_id"),
+        )
+        if not result:
+            return _error_response("创建 Prompt 失败")
+        return _success_response(_serialize_record(result))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create prompt: {e}")
+        return _error_response("创建 Prompt 失败")
+
+
+@admin_router.get("/{prompt_id}")
+async def get_prompt(request: Request, prompt_id: str):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.get_prompt(prompt_id)
+        if not result:
+            return _error_response("Prompt 不存在", 404)
+        return _success_response(_serialize_record(result))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get prompt: {e}")
+        return _error_response("获取 Prompt 失败")
+
+
+@admin_router.put("/{prompt_id}")
+async def update_prompt(request: Request, prompt_id: str, body: UpdatePromptRequest):
+    try:
+        admin = _require_admin(request)
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        updates["updated_by"] = admin.get("user_id")
+        result = PromptRegistryService.update_prompt(prompt_id, **updates)
+        if not result:
+            return _error_response("更新 Prompt 失败")
+        return _success_response(_serialize_record(result))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update prompt: {e}")
+        return _error_response("更新 Prompt 失败")
+
+
+@admin_router.delete("/{prompt_id}")
+async def delete_prompt(request: Request, prompt_id: str):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.delete_prompt(prompt_id)
+        if not result:
+            return _error_response("删除 Prompt 失败")
+        return _success_response(message="删除成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete prompt: {e}")
+        return _error_response("删除 Prompt 失败")
+
+
+# --- 版本管理 ---
+
+@admin_router.post("/{prompt_id}/versions")
+async def commit_version(request: Request, prompt_id: str, body: CommitVersionRequest):
+    try:
+        admin = _require_admin(request)
+        result = PromptRegistryService.commit_version(
+            prompt_id=prompt_id,
+            content=body.content,
+            variables=body.variables,
+            model_config=body.llm_config,
+            commit_message=body.commit_message,
+            created_by=admin.get("user_id"),
+        )
+        return _success_response({
+            "version": _serialize_record(result.get("version")),
+            "dedup": result.get("dedup", False),
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to commit version: {e}")
+        return _error_response("提交版本失败")
+
+
+@admin_router.get("/{prompt_id}/versions")
+async def list_versions(
+    request: Request, prompt_id: str, page: int = 1, page_size: int = 20
+):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.list_versions(prompt_id, page, page_size)
+        result["items"] = _serialize_records(result["items"])
+        return _success_response(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list versions: {e}")
+        return _error_response("获取版本列表失败")
+
+
+@admin_router.get("/{prompt_id}/versions/{version}")
+async def get_version(request: Request, prompt_id: str, version: int):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.get_version(prompt_id, version)
+        if not result:
+            return _error_response("版本不存在", 404)
+        return _success_response(_serialize_record(result))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get version: {e}")
+        return _error_response("获取版本失败")
+
+
+@admin_router.get("/{prompt_id}/versions/diff")
+async def diff_versions(
+    request: Request, prompt_id: str, v1: int, v2: int
+):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.diff_versions(prompt_id, v1, v2)
+        if not result:
+            return _error_response("版本不存在", 404)
+        return _success_response(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to diff versions: {e}")
+        return _error_response("版本对比失败")
+
+
+# --- 草稿管理 ---
+
+@admin_router.get("/{prompt_id}/draft")
+async def get_draft(request: Request, prompt_id: str):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.get_draft(prompt_id)
+        return _success_response(_serialize_record(result))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get draft: {e}")
+        return _error_response("获取草稿失败")
+
+
+@admin_router.put("/{prompt_id}/draft")
+async def save_draft(request: Request, prompt_id: str, body: SaveDraftRequest):
+    try:
+        admin = _require_admin(request)
+        result = PromptRegistryService.save_draft(
+            prompt_id=prompt_id,
+            content=body.content,
+            variables=body.variables,
+            base_version=body.base_version,
+            updated_by=admin.get("user_id"),
+        )
+        if not result:
+            return _error_response("保存草稿失败")
+        return _success_response(_serialize_record(result))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save draft: {e}")
+        return _error_response("保存草稿失败")
+
+
+@admin_router.delete("/{prompt_id}/draft")
+async def delete_draft(request: Request, prompt_id: str):
+    try:
+        _require_admin(request)
+        PromptRegistryService.delete_draft(prompt_id)
+        return _success_response(message="草稿已删除")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete draft: {e}")
+        return _error_response("删除草稿失败")
+
+
+@admin_router.post("/{prompt_id}/draft/commit")
+async def commit_draft(request: Request, prompt_id: str, body: CommitDraftRequest):
+    try:
+        admin = _require_admin(request)
+        result = PromptRegistryService.commit_draft(
+            prompt_id=prompt_id,
+            commit_message=body.commit_message,
+            created_by=admin.get("user_id"),
+            variables=body.variables,
+            model_config=body.llm_config,
+        )
+        if not result or not result.get("version"):
+            return _error_response("提交草稿失败")
+        return _success_response({
+            "version": _serialize_record(result.get("version")),
+            "dedup": result.get("dedup", False),
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to commit draft: {e}")
+        return _error_response("提交草稿失败")
+
+
+# --- 标签管理 ---
+
+@admin_router.get("/{prompt_id}/labels")
+async def list_labels(request: Request, prompt_id: str):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.list_labels(prompt_id)
+        return _success_response(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list labels: {e}")
+        return _error_response("获取标签列表失败")
+
+
+@admin_router.put("/{prompt_id}/labels/{label}")
+async def set_label(request: Request, prompt_id: str, label: str, body: SetLabelRequest):
+    try:
+        admin = _require_admin(request)
+        result = PromptRegistryService.set_label(
+            prompt_id=prompt_id,
+            label=label,
+            version=body.version,
+            created_by=admin.get("user_id"),
+        )
+        if not result:
+            return _error_response("设置标签失败")
+        return _success_response(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set label: {e}")
+        return _error_response("设置标签失败")
+
+
+@admin_router.delete("/{prompt_id}/labels/{label}")
+async def delete_label(request: Request, prompt_id: str, label: str):
+    try:
+        _require_admin(request)
+        result = PromptRegistryService.delete_label(prompt_id, label)
+        if not result:
+            return _error_response("删除标签失败")
+        return _success_response(message="标签已删除")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete label: {e}")
+        return _error_response("删除标签失败")
 
 
 # ============== 租户管理员 API ==============

@@ -505,6 +505,127 @@ def _sse_event(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+@router.post("/upload")
+async def upload_excel(
+    file: UploadFile = File(...),
+    request: Request = None,
+):
+    """
+    上传 Excel/CSV 文件，解析结构并用 LLM 推断 schema，返回供用户确认。
+    不保存到知识库。源文件持久化到 storage/uploads/{tenant_id}/data_sources/，
+    供后续数据分析时加载数据使用。
+
+    采用 SSE 流式响应：推送解析、推断进度，最终 complete 事件携带 schemas。
+    """
+    tenant_id = get_current_tenant_id()
+
+    # 验证文件格式（在生成器外，便于直接返回错误）
+    ext = Path(file.filename or "unknown").suffix.lower()
+    if ext not in (".xlsx", ".xls", ".csv"):
+        return _error_response(f"不支持的文件格式: {ext}，仅支持 .xlsx、.xls、.csv", status_code=400)
+
+    filename = file.filename or "unknown"
+
+    async def event_generator():
+        total_start = time.monotonic()
+        try:
+            # 持久化源文件到 storage/uploads/{tenant_id}/data_sources/
+            from src.config.settings import settings
+            from pathlib import Path as _Path
+            _project_root = _Path(__file__).resolve().parent.parent.parent
+            persist_dir = _project_root / settings.storage.uploads_dir / (tenant_id or "_global") / "data_sources"
+            persist_dir.mkdir(parents=True, exist_ok=True)
+            file_id = uuid.uuid4().hex[:12]
+            persist_path = persist_dir / f"{file_id}{ext}"
+
+            with open(persist_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+
+            logger.info(f"[upload_excel] tenant={tenant_id} file={filename} persisted to {persist_path}")
+            yield _sse_event({"type": "connected", "filename": filename})
+
+            # 阶段 1：解析文件
+            yield _sse_event({"type": "progress", "stage": "parsing", "message": "正在解析文件结构..."})
+            t0 = time.monotonic()
+            sheets = await asyncio.to_thread(sheet_parser.parse_file, str(persist_path))
+            logger.info(f"[upload_excel] parsing done in {time.monotonic() - t0:.2f}s, {len(sheets)} sheets: {[s['sheet_name'] for s in sheets]}")
+
+            if not sheets:
+                yield _sse_event({"type": "complete", "schemas": []})
+                return
+
+            # 阶段 2：LLM 推断每个 sheet 的 schema
+            yield _sse_event({
+                "type": "progress",
+                "stage": "extracting",
+                "message": f"正在分析 {len(sheets)} 张工作表..." if len(sheets) > 1 else "正在分析工作表结构...",
+            })
+
+            schemas = []
+            total = len(sheets)
+            for idx, sheet_info in enumerate(sheets):
+                sheet_name = sheet_info.get("sheet_name", f"sheet_{idx + 1}")
+                table_hint = Path(filename).stem
+                if total > 1:
+                    table_hint = f"{table_hint}_{sheet_name}"
+
+                yield _sse_event({
+                    "type": "sheet_progress",
+                    "current": idx + 1,
+                    "total": total,
+                    "sheet_name": sheet_name,
+                })
+
+                t1 = time.monotonic()
+                schema = await schema_extractor.extract_schema(
+                    sheet_info=sheet_info,
+                    table_name_hint=table_hint,
+                )
+                logger.info(f"[upload_excel] schema extracted ({idx + 1}/{total}) sheet='{sheet_name}' table='{schema.get('table_name')}' in {time.monotonic() - t1:.2f}s")
+
+                schema["source_type"] = "file"
+                schema["source_info"] = filename
+                schema["source"] = {
+                    "type": "excel",
+                    "file_path": str(persist_path),
+                    "sheet_name": sheet_name,
+                }
+                schemas.append(schema)
+
+                yield _sse_event({
+                    "type": "sheet_done",
+                    "current": idx + 1,
+                    "total": total,
+                    "sheet_name": sheet_name,
+                    "table_name": schema.get("table_name", ""),
+                })
+
+            logger.info(f"[upload_excel] complete: {len(schemas)} schemas, total {time.monotonic() - total_start:.2f}s")
+            yield _sse_event({"type": "complete", "schemas": schemas})
+
+        except ValueError as e:
+            logger.warning(f"[upload_excel] value error: {e}")
+            yield _sse_event({"type": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"上传文件解析失败: {e}", exc_info=True)
+            yield _sse_event({"type": "error", "message": "文件解析失败"})
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ============== Schema Management ==============
 
 
@@ -739,6 +860,88 @@ async def infer_relations(request: Request):
     except Exception as e:
         logger.error(f"推断关联关系失败: {e}", exc_info=True)
         return _error_response("推断关联关系失败", debug=str(e))
+
+
+@router.post("/relations/batch")
+async def batch_save_relations(req: RelationBatch, request: Request):
+    """
+    批量保存关联关系。
+
+    关联关系存储在 documents 表的 metadata JSONB 字段中，
+    以 "data-analysis-relations" 为 key 存储在一张虚拟文档里。
+    """
+    tenant_id = get_current_tenant_id()
+
+    try:
+        relations_data = [r.dict() for r in req.relations]
+
+        def _save():
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                # 查找是否已有 relations 文档
+                cursor.execute(
+                    """
+                    SELECT id, metadata FROM documents
+                    WHERE tenant_id = %s AND source_type = 'data-analysis-relations'
+                    LIMIT 1
+                    """,
+                    (tenant_id,),
+                )
+                row = cursor.fetchone()
+
+                if row:
+                    # 合并已有关系
+                    existing = {}
+                    if row.get("metadata") and isinstance(row["metadata"], str):
+                        try:
+                            existing = json.loads(row["metadata"])
+                        except json.JSONDecodeError:
+                            pass
+                    elif isinstance(row.get("metadata"), dict):
+                        existing = row["metadata"]
+
+                    existing_relations = existing.get("relations", [])
+                    # 追加新关系（去重）
+                    existing_keys = {
+                        (r.get("from_table"), r.get("from_column"), r.get("to_table"), r.get("to_column"))
+                        for r in existing_relations
+                    }
+                    for r in relations_data:
+                        key = (r["from_table"], r["from_column"], r["to_table"], r["to_column"])
+                        if key not in existing_keys:
+                            existing_relations.append(r)
+
+                    existing["relations"] = existing_relations
+                    cursor.execute(
+                        "UPDATE documents SET metadata = %s WHERE id = %s",
+                        (json.dumps(existing, ensure_ascii=False), row["id"]),
+                    )
+                else:
+                    # 创建 relations 文档
+                    metadata = {"relations": relations_data}
+                    cursor.execute(
+                        """
+                        INSERT INTO documents (tenant_id, title, source_type, total_chunks, metadata)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            tenant_id,
+                            "[关联关系] 数据表关联",
+                            "data-analysis-relations",
+                            0,
+                            json.dumps(metadata, ensure_ascii=False),
+                        ),
+                    )
+
+                conn.commit()
+
+        await asyncio.to_thread(_save)
+        return {"success": True, "message": f"已保存 {len(req.relations)} 条关联关系"}
+
+    except Exception as e:
+        logger.error(f"批量保存关联关系失败: {e}", exc_info=True)
+        return _error_response("保存关联关系失败", debug=str(e))
 
 
 @router.get("/relations")

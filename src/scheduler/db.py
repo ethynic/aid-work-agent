@@ -247,6 +247,20 @@ class ScheduledTaskLogDB:
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
+    def list_by_user(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """获取用户的所有执行日志"""
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT * FROM scheduled_task_logs
+                WHERE user_id = {placeholder}
+                ORDER BY created_at DESC
+                LIMIT {placeholder}
+            """, (user_id, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
     def get_stats(task_id: str) -> Dict[str, Any]:
         """获取任务的执行统计"""
         placeholder = "%s"

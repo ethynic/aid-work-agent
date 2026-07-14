@@ -346,3 +346,47 @@ async def get_stats(
             "error": "获取统计信息失败",
             "debug": sanitize_error_info(str(e))
         }
+
+
+@router.get("/session/{session_id}/customers", response_model=CustomerListResponse)
+async def get_session_customers(session_id: str):
+    """获取特定会话的客户列表"""
+    try:
+        tenant_id = get_current_tenant_id()
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            if tenant_id:
+                cursor.execute("""
+                    SELECT * FROM bs_trade_specialist_matched_customers
+                    WHERE tenant_id = %s AND session_id = %s
+                    ORDER BY created_at DESC
+                """, (tenant_id, session_id))
+            else:
+                cursor.execute("""
+                    SELECT * FROM bs_trade_specialist_matched_customers
+                    WHERE session_id = %s
+                    ORDER BY created_at DESC
+                """, (session_id,))
+
+            rows = cursor.fetchall()
+            customers = [dict(row) for row in rows]
+
+            logger.info(f"后端日志：查询会话 {session_id} 的客户列表，tenant={tenant_id}")
+
+            return {
+                "success": True,
+                "data": {
+                    "session_id": session_id,
+                    "count": len(customers),
+                    "customers": customers
+                }
+            }
+    except Exception as e:
+        logger.error(f"后端日志：查询会话客户列表失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": "查询会话客户列表失败",
+            "debug": sanitize_error_info(str(e))
+        }

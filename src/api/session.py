@@ -124,6 +124,29 @@ async def get_latest_session(request: Request):
     return {"session": sessions[0]}
 
 
+@router.get("/{session_id}")
+async def get_session(request: Request, session_id: str):
+    """获取会话详情"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    session = SessionDB.get_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    # 验证会话属于当前用户
+    if session["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 租户隔离：验证会话属于当前租户
+    tenant_id = get_current_tenant_id()
+    if tenant_id and session.get("tenant_id") and session["tenant_id"] != tenant_id:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    return session
+
+
 @router.patch("/{session_id}")
 async def update_session(request: Request, session_id: str, body: UpdateSessionRequest):
     """更新会话"""
@@ -206,6 +229,33 @@ async def create_message(request: Request, session_id: str, body: CreateMessageR
     if message:
         return message
     raise HTTPException(status_code=500, detail="创建消息失败")
+
+
+@router.get("/{session_id}/context")
+async def get_session_context(request: Request, session_id: str):
+    """获取会话上下文（用户信息+聊天历史）"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    session = SessionDB.get_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if session["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    messages = MessageDB.list_by_session(session_id)
+
+    return {
+        "user_info": session.get("context_data", {}).get("user_info", {}),
+        "session_info": {
+            "session_id": session["session_id"],
+            "title": session["title"],
+            "created_at": session["created_at"]
+        },
+        "messages": messages
+    }
 
 
 # ============== 会话记录相关API ==============

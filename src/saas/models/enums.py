@@ -150,6 +150,35 @@ class UserStatus(str, Enum):
         return mapping.get(self, "未知")
 
 
+# ============== 用户角色 ==============
+
+class UserRole(str, Enum):
+    """
+    用户角色枚举
+
+    数据库存储：TEXT
+    - platform_admin = 平台管理员
+    - tenant_admin   = 租户管理员
+    - tenant_user    = 租户用户
+    """
+    PLATFORM_ADMIN = "platform_admin"
+    TENANT_ADMIN = "tenant_admin"
+    TENANT_USER = "tenant_user"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.PLATFORM_ADMIN.value, cls.TENANT_ADMIN.value, cls.TENANT_USER.value]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.PLATFORM_ADMIN: "平台管理员",
+            self.TENANT_ADMIN: "租户管理员",
+            self.TENANT_USER: "用户",
+        }
+        return mapping.get(self, "未知")
+
+
 # ============== 用户来源 ==============
 
 class UserSource(str, Enum):
@@ -170,6 +199,35 @@ class UserSource(str, Enum):
     def display_name(self) -> str:
         mapping = {
             self.WECOM_KF: "企业微信客服",
+        }
+        return mapping.get(self, "未知")
+
+
+# ============== 套餐计划 ==============
+
+class PlanType(str, Enum):
+    """
+    套餐类型枚举
+
+    数据库存储：TEXT
+    - basic    = 基础版
+    - standard = 标准版
+    - premium  = 旗舰版
+    """
+    BASIC = "basic"
+    STANDARD = "standard"
+    PREMIUM = "premium"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [cls.BASIC.value, cls.STANDARD.value, cls.PREMIUM.value]
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.BASIC: "基础版",
+            self.STANDARD: "标准版",
+            self.PREMIUM: "旗舰版",
         }
         return mapping.get(self, "未知")
 
