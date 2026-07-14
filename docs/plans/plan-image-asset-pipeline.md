@@ -1178,13 +1178,19 @@ def render_text_with_image_placeholders(
 ---
 
 Phase 2 完成验收
-- [ ] P2.1 ~ P2.10 全部完成
-- [ ] Web 端：调用 attraction_search 返回带 cover 的景点时，前端渲染图片画廊
-- [ ] Web 端：图片按 placement 分区渲染（before_text 在文本上方、after_text 在下方）
-- [ ] feishu/dingtalk/wecom_kf 渠道：Agent 推送 images 事件，渠道按「文本（含占位符）→ 图片 → 文件」顺序拆分发送多条消息
-- [ ] 渠道端单图失败不阻断后续发送
-- [ ] 三智能体流程通过
-- [ ] 历史消息回放正常（images 字段向后兼容）
+- [x] P2.1 ~ P2.10 全部完成
+- [x] Web 端：调用 attraction_search 返回带 cover 的景点时，前端渲染图片画廊
+- [x] Web 端：图片按 placement 分区渲染（before_text 在文本上方、after_text 在下方）
+- [x] feishu/dingtalk 渠道：Agent 推送 images 事件，渠道按「文本（含占位符）→ 图片 → 文件」顺序拆分发送多条消息
+- [x] wecom_kf 渠道：含表格/图片时整段 md 转长图发送（同事 07fd592 完成，规避单次咨询 5 次回复限制）
+- [x] 渠道端单图失败不阻断后续发送
+- [x] 三智能体流程通过（开发 → 测试 → CodeReview，CodeReview 修复 1 个 P0 渠道端收不到图）
+- [x] 历史消息回放正常（images 字段向后兼容，无 placement 字段时按 after_text 默认）
+
+> **完成日期**：2026-07-14
+> **测试结果**：133 新单测全绿，channels 全量 669 passed，前端 build 通过
+> **CodeReview P0 修复**：`agent.py collected_images` 孤儿变量 → 通过 `process_message_sync._last_response_images` 实例属性桥接 → `process_and_persist` 透传 → `make_send_response` 写入 `UnifiedResponse.content.images`。修复前所有第三方渠道 `message.get_images()` 永远返回空（被测试 mock 过度掩盖）。
+> **已知遗留**：wecom_kf `send_message` 不读 `message.get_images()`，仅识别 md 文本中的 `![](file_id:xxx)`。工具返回 ImageRef 但 LLM 未写 md 引用时 wecom_kf 会丢图（COLLEAGUE-CODE，等同事后续处理）。
 
 ---
 
@@ -1238,21 +1244,21 @@ Phase 2 完成验收
 - [ ] P1.8 端到端集成测试 `tests/integration/test_travel_image_pipeline.py`
 
 ### Phase 2
-- [ ] P2.1 `src/core/agent_events.py` 新增 make_image_event
-- [ ] P2.2 `src/models/message.py` UnifiedResponse 新增 images 字段（含 placement）
-- [ ] P2.3 `src/core/agent.py` 主循环识别 ImageRef 并推送事件（含 placement 传递）
-- [ ] P2.4 前端 `types/index.ts` 新增 ImageRef 类型（含 placement）
-- [ ] P2.5 前端 `useAgent.ts` 监听 images SSE 事件
-- [ ] P2.6 新增 `frontend/src/components/ui/ImageGallery.vue`
-- [ ] P2.6 前端单测 `ImageGallery.test.ts`
-- [ ] P2.7 `MessageItem.vue` 按 placement 分区渲染（before_text/after_text/inline）
-- [ ] P2.8 `markdown.ts` 自定义 image renderer
-- [ ] P2.9.0 新增 `src/channels/_image_text_renderer.py` 共享占位符渲染
-- [ ] P2.9.0 单测 `tests/unit/channels/test_image_send.py`（占位符 + 渠道发送顺序）
-- [ ] P2.9.1 feishu adapter send_message 支持 images（拆分发送 + 占位符）
-- [ ] P2.9.2 dingtalk adapter send_message 支持 images（拆分发送 + 占位符）
-- [ ] P2.9.3 wecom_kf adapter send_message 支持 images（拆分发送 + 占位符 + media.upload）
-- [ ] P2.10 `.claude/rules/frontend_dev.md` 新增图片渲染规范
+- [x] P2.1 `src/core/agent_events.py` 新增 make_image_event
+- [x] P2.2 `src/models/message.py` UnifiedResponse 新增 images 字段（含 placement，走 content.images 持久化路径）
+- [x] P2.3 `src/core/agent.py` 主循环识别 ImageRef 并推送事件（含 placement 传递）+ CodeReview P0 修复（process_message_sync 暴露 _last_response_images 给渠道层）
+- [x] P2.4 前端 `types/index.ts` 新增 ImageRef 类型（含 placement）
+- [x] P2.5 前端 `useAgent.ts` 监听 images SSE 事件（SSEManager 加 onImages 回调）
+- [x] P2.6 新增 `frontend/src/components/ui/ImageGallery.vue`
+- [x] P2.6 前端单测 `ImageGallery.test.ts`（16 用例）
+- [x] P2.7 `MessageItem.vue` 按 placement 分区渲染（before_text/after_text/inline）
+- [x] P2.8 `markdown.ts` 自定义 image renderer（file_id: 转换在 Phase 1 修复阶段已加，P2.8 补 .md-inline-image 样式）
+- [x] P2.9.0 新增 `src/channels/_image_text_renderer.py` 共享占位符渲染
+- [x] P2.9.0 单测 `tests/unit/channels/test_image_text_renderer.py`（13 用例）
+- [x] P2.9.1 feishu adapter send_message 支持 images（拆分发送 + 占位符，5 用例）
+- [x] P2.9.2 dingtalk adapter send_message 支持 images（拆分发送 + 占位符 + build_public_url，5 用例）
+- [x] P2.9.3 wecom_kf adapter 含表格/图片时整段 md 转长图（同事 07fd592 完成，54 用例；不走 P2.9.0 占位符路径）
+- [x] P2.10 `.claude/rules/frontend_dev.md` 新增图片渲染规范
 
 ---
 

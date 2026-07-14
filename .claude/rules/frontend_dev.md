@@ -399,3 +399,65 @@ export async function listDocuments(): Promise<DocumentListResponse> {
 - `api/knowledge.ts` - 所有 API 添加认证头
 - `api/agent.ts` - `deleteFile()` 添加认证头
 - `composables/useTenantAuth.ts` - `getAuthHeader()` 添加 `X-Tenant-Id`
+
+## 图片渲染规范
+
+**核心规则**：所有图片展示必须使用 `ImageGallery` 组件或自定义 Markdown image renderer，**禁止**裸 `<img>` 标签。
+
+**关联文档**：架构设计见 [image-asset-pipeline-design.md](../../docs/system/image-asset-pipeline-design.md)，开发计划见 [plan-image-asset-pipeline.md](../../docs/plans/plan-image-asset-pipeline.md)。
+
+### 强制要求
+
+1. **懒加载**：所有图片必须 `loading="lazy"`（ImageGallery 已内置，自定义渲染需手动加）
+2. **点击放大**：必须支持 lightbox（ImageGallery 内置；Markdown 内嵌图 Phase 2 仅做样式，点击放大留 Phase 3）
+3. **来源标识**：画廊图片右下角显示 source 标签（知识库 / AI 生成 / 上传 / 网络 / 截图），由 ImageGallery 自动渲染
+4. **错误降级**：图片加载失败必须显示占位（"加载失败" / "无图"），**禁止**显示 broken icon
+5. **file_id scheme 转换**：Markdown 中的 `![alt](file_id:file_xxx)` 由 `utils/markdown.ts` 的 image renderer 自动转成 `/api/files/file_xxx/download`，**不要**在业务代码里重复转换
+
+### 两种渲染场景
+
+#### 场景 A：Agent 主动推送的图片（独立画廊）
+
+通过 `ChatMessage.images` 字段（来自 SSE `images` 事件），用 `ImageGallery` 组件渲染：
+
+```vue
+<ImageGallery
+  v-if="afterTextImages.length"
+  :images="afterTextImages"
+/>
+```
+
+按 `placement` 分区渲染（`MessageItem.vue` 已实现）：
+- `before_text` → 文本上方
+- `after_text`（默认）→ 文本下方
+- `inline` → Phase 2 合并到 after_text，Phase 3 实现行内精确定位
+
+#### 场景 B：LLM 在 Markdown 中写的图片
+
+`![alt](file_id:file_xxx)` 由 `marked` 的 image renderer 处理（`utils/markdown.ts`），渲染为带 `.md-inline-image` 类的 `<img>`，样式见 `style.css`。
+
+### 添加新图片来源
+
+工具返回结果中带 `images: List[ImageRef]` 或 `cover_image: ImageRef` 字段时，Agent 主循环（`src/core/agent.py`）会自动提取并推送 SSE `images` 事件，前端 `useAgent.ts` 自动合并到 `message.images`。**前端无需为每个工具单独处理**。
+
+### ImageRef 类型契约
+
+```typescript
+// frontend/src/types/index.ts
+export interface ImageRef {
+  file_id: string
+  download_url: string  // = /api/files/{file_id}/download
+  display_name: string
+  width?: number
+  height?: number
+  mime_type: string
+  size_bytes: number
+  source: 'knowledge_base' | 'tool_generated' | 'user_upload' | 'web_fetch' | 'screenshot'
+  usage: 'inline' | 'attachment' | 'embedded' | 'thumbnail'
+  placement: 'after_text' | 'before_text' | 'inline'
+  linked_doc_id?: number
+  linked_chunk_id?: number
+}
+```
+
+字段对齐后端 `src/core/image_asset.py` 的 `ImageRef` Pydantic 模型，**修改时必须前后端同步**。
