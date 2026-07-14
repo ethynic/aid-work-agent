@@ -5,13 +5,41 @@
 透传给 agent.process_message_sync 后会自动注入 `## 当前用户` 段。
 """
 
-from typing import Any, Optional
+import re
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
 from src.core.temp_logger import tlog
 from src.db.models import UserDB
 from src.models.user import User
+from src.saas.services.auto_register import CHANNEL_TYPE_NAME
+
+# 占位符 name 模式：{渠道中文名}用户{open_id 后4位}，如 飞书用户7f5b
+_PLACEHOLDER_NAME_PATTERN = re.compile(
+    r"^(" + "|".join(re.escape(v) for v in CHANNEL_TYPE_NAME.values()) + r")用户.{1,}$"
+)
+
+
+def _normalize_phone(raw: str) -> str:
+    """清洗手机号为 11 位纯数字（去掉 +86/86 前缀和非数字字符）
+
+    项目内短信发送、手机号比对均按 11 位纯数字格式（见 sms/base.py）。
+    飞书 contact API 返回的 mobile 带国家码前缀（如 +8613817140566），需清洗。
+    """
+    if not raw:
+        return ""
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) > 11 and digits.startswith("86"):
+        digits = digits[2:]
+    return digits
+
+
+def _is_placeholder_name(name: str, channel_type: str) -> bool:
+    """判断 name 是否为 auto_register 生成的占位符（如 飞书用户7f5b）"""
+    if not name or name == "unknown":
+        return True
+    return bool(_PLACEHOLDER_NAME_PATTERN.match(name))
 
 
 async def build_agent_user_for_channel(
@@ -24,7 +52,8 @@ async def build_agent_user_for_channel(
     """
     构造传给 agent 的 User 对象。
 
-    优先用 DB 缓存的 phone；缺失时调渠道 adapter.get_user_info 获取并写回 DB。
+    优先用 DB 缓存的 phone 和 nickname；phone 缺失或 name 是占位符时调渠道
+    adapter.get_user_info 获取并写回 DB。手机号统一清洗为 11 位纯数字。
     任何失败都返回 User(phone=None) 或 None，不抛异常，不阻断主流程。
 
     Args:
@@ -82,68 +111,117 @@ async def build_agent_user_for_channel(
         phone=phone or "(空)",
     )
 
-    # 2. DB 已有 phone，直接返回（DB 即缓存，手机号变更罕见）
+    # 2. 清洗 DB phone（老数据可能带 +86 前缀）
     if phone:
+        normalized_phone = _normalize_phone(phone)
+        if normalized_phone != phone:
+            tlog(
+                "飞书手机号注入",
+                "DB phone 未清洗，写回清洗后的值: user_id={uid}, "
+                "raw={raw}, normalized={norm}",
+                uid=user_id,
+                raw=phone,
+                norm=normalized_phone,
+            )
+            try:
+                UserDB.update_info(user_id, phone=normalized_phone)
+            except Exception as e:
+                logger.warning(
+                    f"写回清洗后 phone 失败: user_id={user_id}, err={e}"
+                )
+            phone = normalized_phone
+
+    # 3. 短路判断：DB 有 phone 且 name 非占位符，直接返回
+    name_is_placeholder = _is_placeholder_name(name, channel_type)
+    if phone and not name_is_placeholder:
         tlog(
             "飞书手机号注入",
-            "DB 命中 phone，短路返回（不再查渠道 API）: "
-            "channel={ct}, user_id={uid}, phone={phone}",
+            "DB 命中 phone 且 name 非占位符，短路返回: "
+            "channel={ct}, user_id={uid}, name={name}, phone={phone}",
             ct=channel_type,
             uid=user_id,
+            name=name,
             phone=phone,
         )
         return _build_user(user_id, name, phone, channel_type, channel_user_id)
 
-    # 3. DB 无 phone，调渠道 API 获取
+    # 4. 调渠道 API 获取（phone 缺失或 name 是占位符）
     tlog(
         "飞书手机号注入",
-        "DB 无 phone，调渠道 API 获取: channel={ct}, user_id={uid}, "
-        "channel_user_id={cuid}",
+        "调渠道 API 获取: channel={ct}, user_id={uid}, "
+        "db_phone={phone}, name_is_placeholder={is_ph}, name={name}",
         ct=channel_type,
         uid=user_id,
-        cuid=channel_user_id,
+        phone=phone or "(空)",
+        is_ph=name_is_placeholder,
+        name=name,
     )
-    mobile = await _fetch_mobile_from_channel(
+    info = await _fetch_user_info_from_channel(
         adapter, channel_user_id, channel_type, user_id
     )
-    tlog(
-        "飞书手机号注入",
-        "_fetch_mobile_from_channel 返回: channel={ct}, user_id={uid}, "
-        "mobile={mobile}",
-        ct=channel_type,
-        uid=user_id,
-        mobile=mobile or "(空)",
-    )
 
-    # 4. 拿到 mobile，写回 DB（索引已改非唯一，不会冲突；仍兜底其他 DB 错误）
-    if mobile:
-        try:
-            UserDB.update_info(user_id, phone=mobile)
-        except Exception as e:
-            logger.warning(
-                f"写回手机号失败: channel={channel_type}, user_id={user_id}, err={e}"
-            )
-        phone = mobile
+    # 5. 拿到 info，清洗 mobile + 写回 phone + nickname
+    if info:
+        mobile_raw = info.get("mobile", "") or ""
+        mobile = _normalize_phone(mobile_raw)
+        real_name = info.get("name", "") or ""
+        tlog(
+            "飞书手机号注入",
+            "info 解析: channel={ct}, user_id={uid}, "
+            "info_name={name}, mobile_raw={mraw}, mobile_normalized={mnorm}",
+            ct=channel_type,
+            uid=user_id,
+            name=real_name or "(空)",
+            mraw=mobile_raw or "(空)",
+            mnorm=mobile or "(空)",
+        )
+
+        update_fields: Dict[str, Any] = {}
+        if mobile:
+            update_fields["phone"] = mobile
+            phone = mobile
+        if real_name and real_name != name:
+            update_fields["nickname"] = real_name
+            name = real_name
+
+        if update_fields:
+            try:
+                UserDB.update_info(user_id, **update_fields)
+                tlog(
+                    "飞书手机号注入",
+                    "写回 DB: user_id={uid}, fields={fields}, "
+                    "final_name={name}, final_phone={phone}",
+                    uid=user_id,
+                    fields=list(update_fields.keys()),
+                    name=name,
+                    phone=phone or "(空)",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"写回用户信息失败: channel={channel_type}, "
+                    f"user_id={user_id}, err={e}"
+                )
 
     final_phone = phone or None
     tlog(
         "飞书手机号注入",
         "build_agent_user_for_channel 返回 User: channel={ct}, user_id={uid}, "
-        "final_phone={phone}",
+        "final_name={name}, final_phone={phone}",
         ct=channel_type,
         uid=user_id,
+        name=name,
         phone=final_phone or "(空)",
     )
     return _build_user(user_id, name, final_phone, channel_type, channel_user_id)
 
 
-async def _fetch_mobile_from_channel(
+async def _fetch_user_info_from_channel(
     adapter: Any,
     channel_user_id: str,
     channel_type: str,
     user_id: str,
-) -> str:
-    """从渠道 API 获取用户手机号，失败返回空字符串"""
+) -> Optional[Dict[str, Any]]:
+    """从渠道 API 获取用户信息，失败返回 None"""
     try:
         info = await adapter.get_user_info(channel_user_id)
     except Exception as e:
@@ -161,7 +239,7 @@ async def _fetch_mobile_from_channel(
             err=str(e),
             level="ERROR",
         )
-        return ""
+        return None
 
     if not info:
         logger.warning(
@@ -173,9 +251,8 @@ async def _fetch_mobile_from_channel(
             ct=channel_type,
             uid=user_id,
         )
-        return ""
+        return None
 
-    mobile = info.get("mobile", "") or ""
     tlog(
         "飞书手机号注入",
         "adapter.get_user_info 返回 info: channel={ct}, user_id={uid}, "
@@ -183,23 +260,10 @@ async def _fetch_mobile_from_channel(
         ct=channel_type,
         uid=user_id,
         keys=list(info.keys()),
-        mobile=mobile or "(空)",
+        mobile=info.get("mobile", "") or "(空)",
         name=info.get("name", "") or "(空)",
     )
-    if not mobile:
-        logger.warning(
-            f"渠道用户信息无 mobile（可能权限未授予或用户未绑定手机号）: "
-            f"channel={channel_type}, user_id={user_id}"
-        )
-        tlog(
-            "飞书手机号注入",
-            "info.mobile 为空（疑似飞书应用未授 contact:user.phone 权限或用户未绑定手机号）: "
-            "channel={ct}, user_id={uid}",
-            ct=channel_type,
-            uid=user_id,
-            level="WARNING",
-        )
-    return mobile
+    return info
 
 
 def _build_user(
