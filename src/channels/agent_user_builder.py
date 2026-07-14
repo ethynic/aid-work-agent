@@ -87,9 +87,9 @@ async def build_agent_user_for_channel(
         or "unknown"
     )
     phone = user_record.get("phone")
-    if channel_type == "dingtalk":
+    if channel_type == "wecom":
         tlog(
-            "钉钉用户信息",
+            "企微用户信息",
             "DB 读到 user_record: user_id={uid}, name={name}, db_phone={phone}",
             uid=user_id,
             name=name,
@@ -100,9 +100,9 @@ async def build_agent_user_for_channel(
     if phone:
         normalized_phone = _normalize_phone(phone)
         if normalized_phone != phone:
-            if channel_type == "dingtalk":
+            if channel_type == "wecom":
                 tlog(
-                    "钉钉用户信息",
+                    "企微用户信息",
                     "DB phone 未清洗，写回清洗后的值: user_id={uid}, "
                     "raw={raw}, normalized={norm}",
                     uid=user_id,
@@ -120,9 +120,9 @@ async def build_agent_user_for_channel(
     # 3. 短路判断：DB 有 phone 且 name 非占位符，直接返回
     name_is_placeholder = _is_placeholder_name(name, channel_type)
     if phone and not name_is_placeholder:
-        if channel_type == "dingtalk":
+        if channel_type == "wecom":
             tlog(
-                "钉钉用户信息",
+                "企微用户信息",
                 "DB 命中 phone 且 name 非占位符，短路返回: "
                 "user_id={uid}, name={name}, phone={phone}",
                 uid=user_id,
@@ -132,9 +132,9 @@ async def build_agent_user_for_channel(
         return _build_user(user_id, name, phone, channel_type, channel_user_id)
 
     # 4. 调渠道 API 获取（phone 缺失或 name 是占位符）
-    if channel_type == "dingtalk":
+    if channel_type == "wecom":
         tlog(
-            "钉钉用户信息",
+            "企微用户信息",
             "调渠道 API 获取: user_id={uid}, db_phone={phone}, "
             "name_is_placeholder={is_ph}, name={name}",
             uid=user_id,
@@ -151,9 +151,9 @@ async def build_agent_user_for_channel(
         mobile_raw = info.get("mobile", "") or ""
         mobile = _normalize_phone(mobile_raw)
         real_name = info.get("name", "") or ""
-        if channel_type == "dingtalk":
+        if channel_type == "wecom":
             tlog(
-                "钉钉用户信息",
+                "企微用户信息",
                 "info 解析: user_id={uid}, info_name={name}, "
                 "mobile_raw={mraw}, mobile_normalized={mnorm}",
                 uid=user_id,
@@ -173,9 +173,9 @@ async def build_agent_user_for_channel(
         if update_fields:
             try:
                 UserDB.update_info(user_id, **update_fields)
-                if channel_type == "dingtalk":
+                if channel_type == "wecom":
                     tlog(
-                        "钉钉用户信息",
+                        "企微用户信息",
                         "写回 DB: user_id={uid}, fields={fields}, "
                         "final_name={name}, final_phone={phone}",
                         uid=user_id,
@@ -189,9 +189,9 @@ async def build_agent_user_for_channel(
                     f"user_id={user_id}, err={e}"
                 )
 
-    if channel_type == "dingtalk":
+    if channel_type == "wecom":
         tlog(
-            "钉钉用户信息",
+            "企微用户信息",
             "build_agent_user_for_channel 返回 User: user_id={uid}, "
             "final_name={name}, final_phone={phone}",
             uid=user_id,

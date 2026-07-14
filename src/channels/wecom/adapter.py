@@ -26,6 +26,7 @@ from src.channels.base import ChannelAdapter, build_public_url, format_file_size
 from src.channels.wecom.crypto import WeComCrypto
 from src.channels.wecom.media import WeComMedia
 from src.channels.wecom.message_builder import WeComMessageBuilder
+from src.core.temp_logger import tlog
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -479,12 +480,45 @@ class WeComAdapter(ChannelAdapter):
             )
 
             data = response.json()
-            if data.get("errcode", 0) != 0:
+            errcode = data.get("errcode", 0)
+            tlog(
+                "企微用户信息",
+                "cgi-bin/user/get 响应: userid={uid}, http_status={sts}, "
+                "errcode={code}, errmsg={msg}",
+                uid=user_id,
+                sts=response.status_code,
+                code=errcode,
+                msg=data.get("errmsg", ""),
+            )
+            if errcode != 0:
                 logger.error(
                     f"获取用户信息失败: errcode={data.get('errcode')}, "
                     f"errmsg={data.get('errmsg')}"
                 )
+                tlog(
+                    "企微用户信息",
+                    "企微 API 返回非 0 errcode（鉴权/权限/用户不存在）: "
+                    "userid={uid}, errcode={code}, errmsg={msg}",
+                    uid=user_id,
+                    code=errcode,
+                    msg=data.get("errmsg", ""),
+                    level="ERROR",
+                )
                 return {}
+
+            raw_mobile = data.get("mobile", "")
+            tlog(
+                "企微用户信息",
+                "解析 data 字段: userid={uid}, name={name}, "
+                "raw_mobile={mobile}, mobile_type={mtype}, "
+                "has_email={has_email}, has_avatar={has_avatar}",
+                uid=user_id,
+                name=data.get("name", "") or "(空)",
+                mobile=raw_mobile or "(空)",
+                mtype=type(raw_mobile).__name__,
+                has_email=bool(data.get("email")),
+                has_avatar=bool(data.get("avatar")),
+            )
 
             return {
                 "user_id": data.get("userid", ""),
@@ -498,6 +532,13 @@ class WeComAdapter(ChannelAdapter):
 
         except Exception as e:
             logger.error(f"获取用户信息异常: {e}")
+            tlog(
+                "企微用户信息",
+                "get_user_info 异常: userid={uid}, err={err}",
+                uid=user_id,
+                err=str(e),
+                level="ERROR",
+            )
             return {}
 
     # ==================== 签名验证 ====================

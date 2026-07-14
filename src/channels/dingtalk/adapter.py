@@ -30,7 +30,6 @@ from src.channels.base import ChannelAdapter, build_public_url
 from src.channels.dingtalk.crypto import DingTalkCrypto
 from src.channels.dingtalk.media import DingTalkMedia
 from src.channels.dingtalk.message_builder import DingTalkMessageBuilder
-from src.core.temp_logger import tlog
 from src.models.message import ChannelType, MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -576,45 +575,14 @@ class DingTalkAdapter(ChannelAdapter):
 
             data = response.json()
             errcode = data.get("errcode", 0)
-            tlog(
-                "钉钉用户信息",
-                "topapi/v2/user/get 响应: userid={uid}, http_status={sts}, "
-                "errcode={code}, errmsg={msg}",
-                uid=user_id,
-                sts=response.status_code,
-                code=errcode,
-                msg=data.get("errmsg", ""),
-            )
             if errcode != 0:
                 logger.error(
                     f"[DingTalk] 获取用户信息失败: errcode={errcode}, "
                     f"errmsg={data.get('errmsg')}"
                 )
-                tlog(
-                    "钉钉用户信息",
-                    "钉钉 API 返回非 0 errcode（鉴权/权限/用户不存在）: "
-                    "userid={uid}, errcode={code}, errmsg={msg}",
-                    uid=user_id,
-                    code=errcode,
-                    msg=data.get("errmsg", ""),
-                    level="ERROR",
-                )
                 return {}
 
             result = data.get("result", {})
-            raw_mobile = result.get("mobile", "")
-            tlog(
-                "钉钉用户信息",
-                "解析 result 字段: userid={uid}, name={name}, "
-                "raw_mobile={mobile}, mobile_type={mtype}, "
-                "has_email={has_email}, has_avatar={has_avatar}",
-                uid=user_id,
-                name=result.get("name", "") or "(空)",
-                mobile=raw_mobile or "(空)",
-                mtype=type(raw_mobile).__name__,
-                has_email=bool(result.get("email")),
-                has_avatar=bool(result.get("avatar")),
-            )
 
             return {
                 "user_id": result.get("userid", ""),
@@ -628,13 +596,6 @@ class DingTalkAdapter(ChannelAdapter):
 
         except Exception as e:
             logger.error(f"[DingTalk] 获取用户信息异常: {e}")
-            tlog(
-                "钉钉用户信息",
-                "get_user_info 异常: userid={uid}, err={err}",
-                uid=user_id,
-                err=str(e),
-                level="ERROR",
-            )
             return {}
 
     # ==================== 签名验证 ====================

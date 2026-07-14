@@ -754,9 +754,9 @@ class Agent:
             user_info_section = f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
             if user.phone:
                 user_info_section += f"手机号：{user.phone}\n"
-            if getattr(user, "channel_type", None) == "dingtalk":
+            if getattr(user, "channel_type", None) == "wecom":
                 tlog(
-                    "钉钉用户信息",
+                    "企微用户信息",
                     "_build_system_prompt 构造 ## 当前用户 段: "
                     "user_id={uid}, user_name={name}, user_phone={phone}, "
                     "section_len={slen}, has_phone_line={has_phone}",

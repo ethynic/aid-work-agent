@@ -881,9 +881,9 @@ class ChannelSessionManager:
                 kwargs["extra_system_prompt"] = agent_extra_system_prompt
             if agent_user is not None:
                 kwargs["user"] = agent_user
-                if getattr(agent_user, "channel_type", None) == "dingtalk":
+                if getattr(agent_user, "channel_type", None) == "wecom":
                     tlog(
-                        "钉钉用户信息",
+                        "企微用户信息",
                         "process_and_persist._processor 透传 user 给 agent: "
                         "session={sid}, user_phone={phone}, user_name={name}, "
                         "user_id={uid}",

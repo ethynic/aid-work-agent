@@ -422,6 +422,15 @@ async def _process_tenant_wecom_background(
             user_id = await ensure_user_registered("wecom", message.user_id, tenant_id)
         except Exception as e:
             logger.warning(f"[Tenant WeCom] 自动注册失败: {e}")
+        _tlog(
+            "企微用户信息",
+            "wecom 入口 ensure_user_registered 完成: tenant={tid}, "
+            "wecom_userid={wuid}, sys_user_id={uid}, msg_text_len={tlen}",
+            tid=tenant_id,
+            wuid=message.user_id,
+            uid=user_id or "(空)",
+            tlen=len(message.text or ""),
+        )
 
         # 构建用户信息并创建/获取会话（带租户隔离）
         user_info = {"user_id": user_id, "name": getattr(message, 'username', None) or getattr(message, 'user_name', None)}
@@ -479,6 +488,19 @@ async def _process_tenant_wecom_background(
             tenant_id=tenant_id,
             adapter=adapter,
             user_id=user_id,
+        )
+        _tlog(
+            "企微用户信息",
+            "wecom 入口 build_agent_user_for_channel 返回: "
+            "tenant={tid}, wecom_userid={wuid}, sys_user_id={uid}, "
+            "agent_user_is_none={is_none}, agent_user_phone={phone}, "
+            "agent_user_name={name}",
+            tid=tenant_id,
+            wuid=message.user_id,
+            uid=user_id or "(空)",
+            is_none=agent_user is None,
+            phone=(getattr(agent_user, "phone", None) or "(空)") if agent_user else "(无 agent_user)",
+            name=(getattr(agent_user, "name", None) or "(空)") if agent_user else "(无 agent_user)",
         )
 
         result = await channel_session_manager.process_and_persist(
@@ -789,15 +811,6 @@ async def _process_tenant_dingtalk_background(
             user_id = await ensure_user_registered("dingtalk", message.user_id, tenant_id)
         except Exception as e:
             logger.warning(f"[Tenant DingTalk] 自动注册失败: {e}")
-        _tlog(
-            "钉钉用户信息",
-            "dingtalk 入口 ensure_user_registered 完成: tenant={tid}, "
-            "dingtalk_user_id={duid}, sys_user_id={uid}, msg_text_len={tlen}",
-            tid=tenant_id,
-            duid=message.user_id,
-            uid=user_id or "(空)",
-            tlen=len(message.text or ""),
-        )
 
         # 提取 conversation_type（"1" 单聊 / "2" 群聊）
         conversation_type = message.content.get("conversation_type", "1")
@@ -860,19 +873,6 @@ async def _process_tenant_dingtalk_background(
             tenant_id=tenant_id,
             adapter=adapter,
             user_id=user_id,
-        )
-        _tlog(
-            "钉钉用户信息",
-            "dingtalk 入口 build_agent_user_for_channel 返回: "
-            "tenant={tid}, dingtalk_user_id={duid}, sys_user_id={uid}, "
-            "agent_user_is_none={is_none}, agent_user_phone={phone}, "
-            "agent_user_name={name}",
-            tid=tenant_id,
-            duid=message.user_id,
-            uid=user_id or "(空)",
-            is_none=agent_user is None,
-            phone=(getattr(agent_user, "phone", None) or "(空)") if agent_user else "(无 agent_user)",
-            name=(getattr(agent_user, "name", None) or "(空)") if agent_user else "(无 agent_user)",
         )
 
         result = await channel_session_manager.process_and_persist(
