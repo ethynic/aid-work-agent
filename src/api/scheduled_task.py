@@ -101,32 +101,6 @@ async def get_user_stats(request: Request):
         )
 
 
-@router.get("/{task_id}")
-async def get_task(request: Request, task_id: str):
-    """获取任务详情"""
-    try:
-        user_id = _get_user_id(request)
-        task = ScheduledTaskDB.get_by_id(task_id)
-
-        if not task:
-            return {"success": False, "error": "任务不存在"}
-        if task["user_id"] != user_id:
-            return {"success": False, "error": "无权访问此任务"}
-
-        stats = ScheduledTaskLogDB.get_stats(task_id)
-        task["stats"] = stats
-
-        return {"success": True, "data": task}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"后端日志：获取定时任务详情失败 task_id={task_id}, {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": "获取任务详情失败", "debug": _sanitize_error(str(e))}
-        )
-
-
 @router.post("/{task_id}/pause")
 async def pause_task(request: Request, task_id: str):
     """暂停任务"""
@@ -297,23 +271,6 @@ async def get_task_logs(request: Request, task_id: str, limit: int = 20):
         raise
     except Exception as e:
         logger.error(f"后端日志：获取定时任务日志失败 task_id={task_id}, {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": "获取日志失败", "debug": _sanitize_error(str(e))}
-        )
-
-
-@router.get("/get_user_logs")
-async def get_user_logs(request: Request, limit: int = 50):
-    """获取当前用户的所有执行日志"""
-    try:
-        user_id = _get_user_id(request)
-        logs = ScheduledTaskLogDB.list_by_user(user_id, limit=limit)
-        return {"success": True, "data": {"logs": logs, "total": len(logs)}}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"后端日志：获取用户执行日志失败 {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": "获取日志失败", "debug": _sanitize_error(str(e))}

@@ -1093,36 +1093,6 @@ async def import_seasons(request: Request, file: UploadFile = File(...)):
     return {"success": True, "data": result}
 
 
-@router.post("/kb/attractions/import")
-async def import_attractions(request: Request, file: UploadFile = File(...)):
-    """上传景点知识库 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
-    tid = _get_tenant_id(request)
-    if not file.filename.endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
-    content = await file.read()
-    cfg = _IMPORT_TABLE_CONFIG["attractions"]
-    result = _import_table_by_uuid(
-        cfg, tid, content,
-        operator=getattr(request.state, "user_id", None),
-    )
-    return {"success": True, "data": result}
-
-
-@router.post("/kb/hotels/import")
-async def import_hotels(request: Request, file: UploadFile = File(...)):
-    """上传酒店知识库 Excel，通过 UUID 匹配导入（存在则更新，不存在则新增）"""
-    tid = _get_tenant_id(request)
-    if not file.filename.endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
-    content = await file.read()
-    cfg = _IMPORT_TABLE_CONFIG["hotels"]
-    result = _import_table_by_uuid(
-        cfg, tid, content,
-        operator=getattr(request.state, "user_id", None),
-    )
-    return {"success": True, "data": result}
-
-
 @router.post("/import/excel")
 async def import_excel(request: Request, file: UploadFile = File(...)):
     """上传 Excel 文件批量导入定价数据"""
@@ -1988,87 +1958,7 @@ async def get_attraction_kb(doc_id: int, request: Request):
 
 
 # ============================================================
-# 知识库模式：导入酒店/景点到向量知识库
+# 知识库模式：导入酒店/景点到向量知识库（已废弃，相关端点已删除）
 # ============================================================
 
-class ImportHotelKBRequest(BaseModel):
-    hotel_name: str = Field(..., description="酒店名称")
-    region: str = Field("", description="区域")
-    info_text: str = Field(..., description="酒店信息摘要（用于向量化）")
-    price_table_text: str = Field(..., description="价格明细表（不向量化）")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="额外元信息")
 
-
-class ImportAttractionKBRequest(BaseModel):
-    attraction_name: str = Field(..., description="景点名称")
-    region: str = Field("", description="区域")
-    info_text: str = Field(..., description="景点信息摘要（用于向量化）")
-    ticket_table_text: str = Field(..., description="门票价格表（不向量化）")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="额外元信息")
-
-
-@router.post("/import/hotels-kb")
-async def import_hotels_kb(request: Request, body: ImportHotelKBRequest):
-    """导入酒店到向量知识库"""
-    tenant_id = _get_tenant_id(request)
-
-    user_id = None
-    current_user = get_current_user(request)
-    if current_user:
-        user_id = current_user.get("user_id")
-
-    import sys
-    from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
-    if str(skill_dir) not in sys.path:
-        sys.path.insert(0, str(skill_dir))
-
-    try:
-        from hotel_retriever import HotelRetriever
-        retriever = HotelRetriever()
-        doc_id = retriever.import_hotel(
-            tenant_id=tenant_id,
-            hotel_name=body.hotel_name,
-            region=body.region,
-            info_text=body.info_text,
-            price_table_text=body.price_table_text,
-            metadata=body.metadata,
-            user_id=user_id,
-        )
-        return {"success": True, "data": {"doc_id": doc_id}}
-    except Exception as e:
-        logger.error(f"[TravelQuoteKB] 导入酒店失败: {e}", exc_info=True)
-        return {"success": False, "error": sanitize_error_info(str(e))}
-
-
-@router.post("/import/attractions-kb")
-async def import_attractions_kb(request: Request, body: ImportAttractionKBRequest):
-    """导入景点到向量知识库"""
-    tenant_id = _get_tenant_id(request)
-
-    user_id = None
-    current_user = get_current_user(request)
-    if current_user:
-        user_id = current_user.get("user_id")
-
-    import sys
-    from pathlib import Path
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
-    if str(skill_dir) not in sys.path:
-        sys.path.insert(0, str(skill_dir))
-
-    try:
-        from attraction_retriever import AttractionRetriever
-        retriever = AttractionRetriever()
-        doc_id = await retriever.import_attraction(
-            tenant_id=tenant_id,
-            attraction_name=body.attraction_name,
-            region=body.region,
-            info_text=body.info_text,
-            ticket_table_text=body.ticket_table_text,
-            metadata=body.metadata,
-        )
-        return {"success": True, "data": {"doc_id": doc_id}}
-    except Exception as e:
-        logger.error(f"[TravelQuoteKB] 导入景点失败: {e}", exc_info=True)
-        return {"success": False, "error": sanitize_error_info(str(e))}

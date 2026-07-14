@@ -345,13 +345,3 @@ class TestScheduledTaskLogs:
         logs = ScheduledTaskLogDB.list_by_task(task_id)
 
         assert len(logs) >= 3
-
-    def test_list_logs_by_user(self, test_user_and_task):
-        """测试列出用户的所有任务日志"""
-        from src.scheduler.db import ScheduledTaskLogDB
-
-        user_id, task_id = test_user_and_task
-
-        logs = ScheduledTaskLogDB.list_by_user(user_id)
-
-        assert len(logs) >= 1

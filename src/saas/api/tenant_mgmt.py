@@ -222,22 +222,6 @@ async def create_tenant(request: Request, body: TenantCreate):
         return {"success": False, "error": "创建租户失败", "debug": sanitize_error_info(str(e))}
 
 
-@router.get("/{tenant_id}")
-async def get_tenant(request: Request, tenant_id: str):
-    """获取租户详情（仅平台管理员）"""
-    if not settings.saas.enabled:
-        return {"success": False, "error": "未启用 SaaS 模式无法访问", "debug": "SaaS mode disabled"}
-
-    admin = require_admin(request)
-    if admin.get("role") != "platform_admin":
-        return {"success": False, "error": "权限不足", "debug": "Not platform_admin"}
-
-    tenant = TenantDB.get_by_id(tenant_id)
-    if not tenant:
-        return {"success": False, "error": "租户不存在", "debug": f"Tenant {tenant_id} not found"}
-    return {"success": True, "tenant": tenant}
-
-
 @router.put("/{tenant_id}")
 async def update_tenant(request: Request, tenant_id: str, body: TenantUpdate):
     """更新租户信息（仅平台管理员）"""

@@ -70,10 +70,6 @@ class PromptRegistryService:
         return PromptRegistryDB.list_prompts(tenant_id, scope, page, page_size)
 
     @staticmethod
-    def update_prompt(prompt_id: str, **kwargs) -> Optional[Dict[str, Any]]:
-        return PromptRegistryDB.update(prompt_id, **kwargs)
-
-    @staticmethod
     def delete_prompt(prompt_id: str) -> bool:
         result = PromptRegistryDB.delete(prompt_id)
         if result:

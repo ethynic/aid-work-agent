@@ -32,7 +32,7 @@ from src.db.database import init_database, init_postgres_pool, close_postgres_po
 from src.api import auth, session as session_api, customer, scheduled_task, email_settings
 from src.api import monitor as monitor_api
 from src.api import social_media as social_media_api
-from src.api import admin_subagent, subagent, subagent_extra, travel_quote
+from src.api import subagent, subagent_extra, travel_quote
 from src.api import admin_redis
 from src.api import customer_followup, complaint_handling, after_sales
 from src.knowledge.api import router as knowledge_router
@@ -258,7 +258,7 @@ class ChatRequest(BaseModel):
     files: Optional[List[Dict[str, Any]]] = None
     user_id: Optional[str] = None  # 用于会话记录
     subagent: Optional[str] = None  # 子智能体名称（由前端从路由参数提取后传入）
-    instance_id: Optional[str] = None  # 数字员工实例ID（用于并发控制锁）
+    instance_id: Optional[str] = None  # 数字员工实例ID（用于实例选择模式 + 会话记录关联）
 
 
 class ChatResponse(BaseModel):
@@ -357,17 +357,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start scheduled task scheduler: {e}", exc_info=True)
 
-    # Initialize SaaS instance manager
-    if settings.saas.enabled:
-        try:
-            logger.info(f"[pid={_pid}] step6: SaaS instance manager ...")
-            from src.saas.services.instance_manager import instance_manager
-            restored = instance_manager.restore_running_instances()
-            logger.info(f"[pid={_pid}] step6: SaaS instance manager done, restored={restored}")
-            logger.info(f"SaaS instance manager initialized, restored {restored} instances")
-        except Exception as e:
-            logger.error(f"Failed to initialize SaaS instance manager: {e}", exc_info=True)
-
     # Start memory cleanup background task
     async def _memory_cleanup_loop():
         """后台定时清理过期会话记忆"""
@@ -408,33 +397,8 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Channel dedup cleanup error: {e}")
     asyncio.create_task(_dedup_cleanup_loop())
 
-    # Start instance lock cleanup background task — 每 60 秒，出错暂停 2 分钟
-    # ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
+    # Start wecom_kf human service timeout check - 每 60 秒检查（需 SaaS 模式）
     if settings.saas.enabled:
-        async def _instance_lock_cleanup_loop():
-            """后台定时清理过期的智能体实例锁（每 60 秒，出错暂停 2 分钟）
-
-            ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
-            """
-            from src.saas.services.instance_service import InstanceService
-            interval = 60
-            error_cooldown = 120  # 出错后暂停 2 分钟
-            logger.info(f"Instance lock cleanup task started, interval={interval}s, error_cooldown={error_cooldown}s")
-            while True:
-                await asyncio.sleep(interval)
-                try:
-                    cleaned = InstanceService.cleanup_all_expired_locks()
-                    if cleaned > 0:
-                        logger.info(f"[InstanceLock] Cleaned up {cleaned} expired instance locks")
-                except psycopg2.OperationalError as e:
-                    logger.warning(f"[InstanceLock] Cleanup error (DB connection issue, pausing {error_cooldown}s): {e}")
-                    await asyncio.sleep(error_cooldown)
-                except Exception as e:
-                    logger.error(f"[InstanceLock] Cleanup error: {e}")
-                    await asyncio.sleep(error_cooldown)
-        asyncio.create_task(_instance_lock_cleanup_loop())
-
-        # Start wecom_kf human service timeout check — 每 60 秒检查
         async def _wecom_kf_timeout_check_loop():
             """后台定时检查微信客服人工会话超时，自动退出人工服务"""
             import json
@@ -645,13 +609,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # Cleanup SaaS instances
-    if settings.saas.enabled:
-        try:
-            from src.saas.services.instance_manager import instance_manager
-            instance_manager.cleanup()
-        except Exception:
-            pass
     try:
         from src.scheduler.manager import scheduled_task_manager
         scheduled_task_manager.shutdown()
@@ -940,17 +897,12 @@ async def chat(request: Request):
         if not session_id:
             session_id = f"web_{user_id}_{uuid.uuid4().hex[:8]}"
 
-        # 通过租户实例管理器或默认路由获取 Agent
-        agent = None
+        # 通过默认路由获取 Agent
         _tenant_id = getattr(request.state, 'tenant_id', None)
         instance_id = getattr(request.state, 'instance_id', None)
         # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
         subagent_name = _resolve_default_subagent(subagent_name, _tenant_id, current_user)
-        if instance_id and settings.saas.enabled:
-            from src.saas.services.instance_manager import instance_manager
-            agent = instance_manager.get_agent(instance_id, subagent_name, session_id)
-        if not agent:
-            agent = agent_router.get_agent(subagent_name, session_id, tenant_id=_tenant_id)
+        agent = agent_router.get_agent(subagent_name, session_id, tenant_id=_tenant_id)
 
         # 注入 tenant_id（供租户 skills 按需加载使用）
         if _tenant_id and not agent._init_tenant_id:
@@ -1113,44 +1065,6 @@ async def get_uploaded_file(file_id: str):
     })
 
 
-@app.delete("/api/upload/{file_id}")
-async def delete_uploaded_file(file_id: str):
-    """
-    删除已上传的文件
-    """
-    file_info = _get_file_info(file_id)
-    if not file_info:
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    try:
-        file_path = Path(file_info["path"])
-        if file_path.exists():
-            file_path.unlink()
-            # 清理空的租户目录
-            try:
-                parent_dir = file_path.parent
-                if parent_dir != UPLOAD_DIR and parent_dir.is_dir() and not any(parent_dir.iterdir()):
-                    parent_dir.rmdir()
-                    logger.info(f"已清理空目录: {parent_dir}")
-            except OSError:
-                pass
-        # Also remove from Redis if present
-        key = redis_client.make_key("uploaded_file", file_id)
-        redis_client.delete(key)
-
-        return JSONResponse({
-            "success": True,
-            "message": "文件已删除"
-        })
-    except Exception as e:
-        logger.error(f"删除文件失败: {e}")
-        return JSONResponse({
-            "success": False,
-            "error": "删除文件失败",
-            "debug": str(e)
-        }, status_code=500)
-
-
 def _get_file_info(file_id: str) -> dict | None:
     """
     获取文件信息：优先从 Redis 获取，若不存在则尝试从磁盘恢复。
@@ -1297,94 +1211,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "details": "您没有权限访问此数字员工，请联系管理员申请授权",
             }, status_code=403)
 
-    # 并发控制：验证并自动锁定实例（如果提供了 instance_id）
+    # 提取 instance_id（用于会话记录关联与回复风格实例级别优先级）
     instance_id = request.instance_id
-    # TODO: 临时修改 - 屏蔽实例并发控制
-    # ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
-    # 当 instance_id 为空时，跳过实例并发控制检查
-    # 未来需要恢复实例并发控制逻辑
-    if instance_id and settings.saas.enabled and current_user:
-        from src.saas.services.instance_service import InstanceService
-        from src.saas.db.agent_instance_db import AgentInstanceDB
-        from src.db.models import UserDB
-
-        # session_id 不能为空（需要用它来锁定）
-        if not request.session_id:
-            from fastapi.responses import JSONResponse
-            return JSONResponse({
-                "success": False,
-                "error": "需要先创建会话",
-                "details": "session_id 不能为空",
-            }, status_code=400)
-
-        instance = AgentInstanceDB.get_by_id(instance_id)
-        if not instance:
-            from fastapi.responses import JSONResponse
-            return JSONResponse({
-                "success": False,
-                "error": "实例不存在",
-            }, status_code=404)
-
-        # 检查实例当前是否被其他会话占用
-        if instance["current_session_id"] is not None and instance["current_session_id"] != request.session_id:
-            # 获取当前使用者的用户名
-            holder_username = "其他用户"
-            is_same_user = False
-            if instance.get("current_user_id"):
-                holder_user = UserDB.get_by_id(instance["current_user_id"])
-                if holder_user and holder_user.get("username"):
-                    holder_username = holder_user["username"]
-                # 判断是否是同一个用户在不同设备上访问
-                is_same_user = (instance.get("current_user_id") == user_id)
-
-            instance_name = instance.get("instance_name") or instance.get("display_name") or "数字员工"
-            if is_same_user:
-                busy_message = f"[{instance_name}] 正在为用户【{holder_username}】（您的另一台设备）提供服务，请稍后再试或选择其他数字员工"
-            else:
-                busy_message = f"[{instance_name}] 正在为用户【{holder_username}】提供服务，请稍后再试或选择其他数字员工"
-
-            # 返回 200 并通过 SSE 流式输出提示（带 busy 标志供前端识别）
-            def busy_event_generator():
-                busy_data = {
-                    'type': 'busy',
-                    'flag': 'busy',
-                    'message': busy_message,
-                    'instance_id': instance_id,
-                    'is_same_user': is_same_user,
-                    'current_user_name': holder_username,
-                }
-                yield f"data: {json.dumps({'type': 'connected', 'session_id': request.session_id, 'agent_type': 'default'}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps(busy_data, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
-
-            return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
-
-        # 自动锁定空闲实例
-        if instance["current_session_id"] is None:
-            lock_result = InstanceService.try_lock_instance(
-                instance_id=instance_id,
-                session_id=request.session_id,
-                user_id=user_id,
-            )
-            if not lock_result.get("success") and not lock_result.get("was_idle"):
-                # 锁定失败（竞态情况），通过 SSE 返回友好提示（带 busy 标志）
-                instance_name = instance.get("instance_name") or instance.get("display_name") or "数字员工"
-                busy_message = f"[{instance_name}] 正在被其他用户占用，请稍后再试或选择其他数字员工"
-
-                def busy_event_generator():
-                    busy_data = {
-                        'type': 'busy',
-                        'flag': 'busy',
-                        'message': busy_message,
-                        'instance_id': instance_id,
-                        'is_same_user': False,
-                        'current_user_name': '其他用户',
-                    }
-                    yield f"data: {json.dumps({'type': 'connected', 'session_id': request.session_id, 'agent_type': 'default'}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps(busy_data, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
-
-                return StreamingResponse(busy_event_generator(), media_type="text/event-stream")
 
     # 获取当前租户ID（所有分支共享）
     from src.saas.context import get_current_tenant_id
@@ -1469,17 +1297,12 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     full_message = request.message + file_context
     sse_manager.add_to_history(session_id, "user", full_message)
 
-    # 通过租户实例管理器或默认路由获取 Agent
-    agent = None
+    # 通过默认路由获取 Agent
     _tenant_id = getattr(http_request.state, 'tenant_id', None)
     _instance_id = getattr(http_request.state, 'instance_id', None) if settings.saas.enabled else None
     # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
     resolved_subagent = _resolve_default_subagent(request.subagent, _tenant_id, current_user)
-    if _instance_id:
-        from src.saas.services.instance_manager import instance_manager
-        agent = instance_manager.get_agent(_instance_id, resolved_subagent, session_id)
-    if not agent:
-        agent = agent_router.get_agent(resolved_subagent, session_id, tenant_id=_tenant_id)
+    agent = agent_router.get_agent(resolved_subagent, session_id, tenant_id=_tenant_id)
 
     # 注入 tenant_id（供租户 skills 按需加载使用）
     if _tenant_id and not agent._init_tenant_id:
@@ -1608,15 +1431,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
             # 保存完整响应到内存历史
             sse_manager.add_to_history(session_id, "assistant", full_response)
-
-            # 并发控制：刷新实例锁（3分钟思考窗口）
-            if instance_id and settings.saas.enabled and not error_occurred:
-                from src.saas.services.instance_service import InstanceService
-                try:
-                    InstanceService.refresh_lock(instance_id, session_id, extend_minutes=3)
-                    logger.info(f"[Concurrency] Lock refreshed: instance={instance_id}, session={session_id}")
-                except Exception as e:
-                    logger.warning(f"[Concurrency] Failed to refresh lock: {e}")
 
             # 保存消息到 DB（事务：user + tool 消息序列 + assistant 最终回复，要么全成功要么全失败）
             if full_response and not error_occurred:
@@ -1758,23 +1572,16 @@ app.include_router(after_sales.router)
 app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)
-# 聊天实例并发控制API
-from src.api import chat_instances
-app.include_router(chat_instances.router)
-app.include_router(admin_subagent.router)
 app.include_router(admin_redis.router)
 app.include_router(subagent_extra.router)
 
 # Prompt 版本管理 API
 from src.api import prompt_management
-app.include_router(prompt_management.admin_router)
 app.include_router(prompt_management.tenant_router)
 
 # 子智能体定义管理 API
 from src.api import agent_definitions
 app.include_router(agent_definitions.router)
-from src.api import agent_definition_sections
-app.include_router(agent_definition_sections.router)
 app.include_router(travel_quote.router)
 app.include_router(subagent.router)
 
@@ -1812,7 +1619,7 @@ from src.api import memory as memory_api
 app.include_router(memory_api.router)
 
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
-from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
+from src.saas.api import tenant_auth, tenant_mgmt, agent_instances
 from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
 from src.saas.api import context_compression_routes
@@ -1820,7 +1627,6 @@ from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_
 from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_admin_router
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
-app.include_router(subscriptions.router)
 app.include_router(agent_instances.router)
 app.include_router(channel_config.router)
 app.include_router(tenant_skills.router)

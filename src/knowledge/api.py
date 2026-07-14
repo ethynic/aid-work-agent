@@ -40,12 +40,6 @@ class UploadResponse(BaseModel):
     message: str
 
 
-class BatchUploadResponse(BaseModel):
-    success: bool
-    results: list[UploadResponse]
-    errors: list[dict[str, str]]
-
-
 class DocumentResponse(BaseModel):
     id: int
     title: Optional[str] = None
@@ -234,108 +228,6 @@ async def upload_document(
                 "debug": str(e)
             }
         )
-
-
-@router.post("/upload/batch", response_model=BatchUploadResponse)
-async def upload_documents_batch(
-    files: list[UploadFile] = File(...),
-    source_type: Optional[str] = Form(None),
-    http_request: Request = None
-):
-    """
-    批量上传知识库文档（多文件）
-
-    - 支持格式：docx, xlsx, pptx, pdf, txt, md, json, yaml, yml, log, csv, xml, ini, properties, conf, config
-    - 自动解析、分块、向量化
-    - 返回每个文件的处理结果和错误信息
-    """
-    max_size = settings.storage.max_knowledge_file_size
-    max_size_mb = max_size / 1024 / 1024
-
-    # 获取用户 ID
-    user_id = None
-    current_user = auth.get_current_user(http_request) if http_request else None
-    if current_user:
-        user_id = current_user.get("user_id")
-
-    # 获取租户 ID
-    tenant_id = get_current_tenant_id()
-    upload_dir = knowledge_service._get_upload_path(tenant_id)
-
-    results: list[UploadResponse] = []
-    errors: list[dict[str, str]] = []
-
-    for file in files:
-        filename = file.filename or "unknown"
-        ext = Path(filename).suffix.lower()
-
-        # 验证文件格式
-        if ext not in ALLOWED_EXTENSIONS:
-            errors.append({
-                "filename": filename,
-                "error": f"不支持的文件格式: {ext}"
-            })
-            continue
-
-        # 验证文件大小
-        if file.size and file.size > max_size:
-            errors.append({
-                "filename": filename,
-                "error": f"文件过大，最大支持 {max_size_mb:.0f}MB"
-            })
-            continue
-
-        # 保存并处理文件
-        file_id = f"kb_{uuid.uuid4().hex[:12]}"
-        file_path = upload_dir / f"{file_id}{ext}"
-
-        try:
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
-            logger.info(f"后端日志：文件保存成功: {file_path}")
-
-            # 处理文档
-            result = await knowledge_service.upload_document(
-                file_path=str(file_path),
-                file_filename=filename,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                source_type=source_type
-            )
-
-            if not result.get("success"):
-                # 清理已保存的文件
-                if file_path.exists():
-                    file_path.unlink()
-                errors.append({
-                    "filename": filename,
-                    "error": result.get("error", "处理失败")
-                })
-            else:
-                results.append(UploadResponse(
-                    document_id=result["document_id"],
-                    title=result["title"],
-                    total_chunks=result["total_chunks"],
-                    status="success",
-                    message=result["message"]
-                ))
-
-        except Exception as e:
-            logger.error(f"后端日志：文档上传失败: {filename}: {e}", exc_info=True)
-            # 清理已保存的文件
-            if file_path.exists():
-                file_path.unlink()
-            errors.append({
-                "filename": filename,
-                "error": str(e)
-            })
-
-    return BatchUploadResponse(
-        success=len(errors) == 0,
-        results=results,
-        errors=errors
-    )
 
 
 @router.get("/documents")

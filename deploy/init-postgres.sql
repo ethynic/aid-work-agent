@@ -531,11 +531,6 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
     description TEXT,                            -- 实例描述
     personality_traits TEXT,                     -- 性格特征（JSON数组）
-    status TEXT DEFAULT 'idle' CHECK (status IN ('idle', 'busy')), -- 只允许 idle/busy
-    current_session_id TEXT,                     -- 当前活跃会话ID
-    current_user_id TEXT,                        -- 当前使用者
-    locked_at TIMESTAMP,                         -- 锁定开始时间
-    lock_expires_at TIMESTAMP,                   -- 锁过期时间
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
@@ -546,11 +541,8 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
-ON agent_instances(lock_expires_at)
-WHERE current_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type);
 
 -- 回复风格表
 CREATE TABLE IF NOT EXISTS reply_styles (
@@ -568,26 +560,6 @@ CREATE TABLE IF NOT EXISTS reply_styles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
-
--- 实例等待队列表
-CREATE TABLE IF NOT EXISTS agent_instance_queue (
-    id SERIAL PRIMARY KEY,
-    queue_id TEXT UNIQUE NOT NULL,
-    instance_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    status TEXT DEFAULT 'waiting',        -- waiting / ready / expired / cancelled
-    enqueued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    wait_timeout_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_instance_queue_instance ON agent_instance_queue(instance_id, position);
-CREATE INDEX IF NOT EXISTS idx_instance_queue_session ON agent_instance_queue(session_id);
-CREATE INDEX IF NOT EXISTS idx_instance_queue_timeout ON agent_instance_queue(wait_timeout_at);
 
 -- 租户渠道配置表
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (
@@ -610,23 +582,6 @@ CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_c
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
     ON tenant_channel_configs(tenant_id, channel_type)
     WHERE channel_type = 'wecom_personal_rpa';
-
--- 支付订单表
-CREATE TABLE IF NOT EXISTS payment_orders (
-    id SERIAL PRIMARY KEY,
-    order_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT,
-    subscription_id TEXT,
-    amount REAL,
-    payment_method TEXT,
-    payment_status TEXT DEFAULT 'pending',
-    paid_at TIMESTAMP,
-    transaction_id TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant ON payment_orders(tenant_id, payment_status);
 
 -- 用户级数字员工授权表
 CREATE TABLE IF NOT EXISTS user_agent_permissions (
@@ -1076,11 +1031,6 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
     description TEXT,                            -- 实例描述
     personality_traits TEXT,                     -- 性格特征（JSON数组）
-    status TEXT DEFAULT 'idle' CHECK (status IN ('idle', 'busy')), -- 只允许 idle/busy
-    current_session_id TEXT,                     -- 当前活跃会话ID
-    current_user_id TEXT,                        -- 当前使用者
-    locked_at TIMESTAMP,                         -- 锁定开始时间
-    lock_expires_at TIMESTAMP,                   -- 锁过期时间
     config TEXT,
     bound_channel_type TEXT,
     allowed_skills TEXT,
@@ -1091,11 +1041,8 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type, status);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_lock_expires
-ON agent_instances(lock_expires_at)
-WHERE current_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type);
 
 -- 回复风格表
 CREATE TABLE IF NOT EXISTS reply_styles (
@@ -1113,26 +1060,6 @@ CREATE TABLE IF NOT EXISTS reply_styles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
-
--- 实例等待队列表
-CREATE TABLE IF NOT EXISTS agent_instance_queue (
-    id SERIAL PRIMARY KEY,
-    queue_id TEXT UNIQUE NOT NULL,
-    instance_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    status TEXT DEFAULT 'waiting',        -- waiting / ready / expired / cancelled
-    enqueued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    wait_timeout_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_instance_queue_instance ON agent_instance_queue(instance_id, position);
-CREATE INDEX IF NOT EXISTS idx_instance_queue_session ON agent_instance_queue(session_id);
-CREATE INDEX IF NOT EXISTS idx_instance_queue_timeout ON agent_instance_queue(wait_timeout_at);
 
 -- 租户渠道配置表
 CREATE TABLE IF NOT EXISTS tenant_channel_configs (
@@ -1155,23 +1082,6 @@ CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_c
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
     ON tenant_channel_configs(tenant_id, channel_type)
     WHERE channel_type = 'wecom_personal_rpa';
-
--- 支付订单表
-CREATE TABLE IF NOT EXISTS payment_orders (
-    id SERIAL PRIMARY KEY,
-    order_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT,
-    subscription_id TEXT,
-    amount REAL,
-    payment_method TEXT,
-    payment_status TEXT DEFAULT 'pending',
-    paid_at TIMESTAMP,
-    transaction_id TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant ON payment_orders(tenant_id, payment_status);
 
 -- 用户级数字员工授权表
 CREATE TABLE IF NOT EXISTS user_agent_permissions (

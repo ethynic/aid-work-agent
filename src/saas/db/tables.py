@@ -135,27 +135,6 @@ def init_saas_tables(conn):
         ON tenant_channel_configs(tenant_id, channel_type)
         """)
 
-        # 8. 支付订单表
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS payment_orders (
-            id SERIAL PRIMARY KEY,
-            order_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            subscription_id TEXT,
-            amount REAL NOT NULL,
-            payment_method TEXT,
-            payment_status TEXT DEFAULT 'pending',
-            paid_at TIMESTAMP,
-            transaction_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-        cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
-        ON payment_orders(tenant_id, payment_status)
-        """)
-
         conn.commit()
         logger.info("PostgreSQL SaaS multi-tenant tables initialized")
     except Exception as e:
