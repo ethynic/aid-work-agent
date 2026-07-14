@@ -758,8 +758,9 @@ class SetLabelRequest(BaseModel):
 ### 阶段 3.7：System Prompt 模板 + 分段变量（重构）
 
 > **设计文档**：§八.1.8
-> **核心思想**：`prompt_versions.content` 存模板（含 `{section_key}` 变量），`subagent_prompt_sections` 存变量值。运行时 `_resolve_db_subagent_prompt()` 实时从 DB/Redis 读取并渲染。变量数量可变，由模板决定。
+> **核心思想**：`prompt_versions.content` 存模板（含 `{{section_key}}` 变量，Phase 4.0 起改为双花括号），`subagent_prompt_sections` 存变量值。运行时 `_resolve_db_subagent_prompt()` 实时从 DB/Redis 读取并渲染。变量数量可变，由模板决定。
 > **影响范围**：仅影响 DB 定义的子智能体，文件系统 SUBAGENT.md 不受影响。
+> **注**：3.7 实施时（Phase 4.0 之前）分段变量语法是 `{section_key}` 单花括号，复用 `render_template`（str.format_map）。Phase 4.0 改为 `{{section_key}}` 双花括号 + 独立渲染器 `render_sections`，原因见 Phase 4.0。
 
 - [x] **3.7.1 数据库：新增 `subagent_prompt_sections` 表**
   - `deploy/db_update.sql`：添加建表语句（agent_id + section_key + content，UNIQUE(agent_id, section_key)）
@@ -843,6 +844,85 @@ class SetLabelRequest(BaseModel):
 
 ---
 
+## Phase 4.0：分段变量改双花括号 `{{var}}`
+
+> **设计文档**：§4.1.1、§八.1.8
+> **核心改动**：DB 子智能体分段变量从 `{var}` 单花括号改为 `{{var}}` 双花括号，弃用 `str.format_map`，改走独立渲染器 `render_sections`（纯正则）。**系统模板（master_agent.md / subagent_base.md 等）继续用 `{var}`，不受影响。**
+> **改动动机**：
+> 1. **字面花括号安全**：DB 模板常含 JSON 示例 / 代码块 / 正则 / curl 命令，`str.format_map` 会把字面 `{` `}` 误解析为变量，触发 `KeyError` / `ValueError` 导致 system_prompt 渲染崩溃
+> 2. **变量空间分离**：DB 分段变量（租户/管理员自由命名）与系统模板变量（`{available_tools_list}` 等约 10 个）共用 `{var}` 会让职责边界模糊
+> 3. **与环境变量视觉分离**：`{{var}}` 与 `${VAR}` 在 prompt 文本中可一眼区分
+> **影响范围**：仅 DB 定义的子智能体（`from_db=True`）。文件系统 SUBAGENT.md、系统模板、master_agent 全部不受影响。
+> **预计工期**：3 天
+
+### 阶段 4.0.1：后端改造
+
+- [x] **4.0.1.1 `src/prompts/renderer.py`：新增 `render_sections` 函数**
+  - 保留 `render_template`（str.format_map）供系统模板继续用
+  - 新增 `render_sections(template: str, variables: Dict[str, str]) -> str`
+  - 正则：`re.sub(r'\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}', lambda m: variables.get(m.group(1), m.group(0)), template)`
+  - 未在 `variables` 中的 `{{xxx}}` 原样保留（不替换、不报错）
+  - 字面 `{` `}` 原样保留
+  - `${VAR}` 不被误伤
+- [x] **4.0.1.2 `src/services/subagent_definition_service.py:227`：`get_section_keys` 正则改双括号**
+  - 旧：`r'(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})'`
+  - 新：`r'\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}'`
+- [x] **4.0.1.3 `src/core/agent.py:879-880`：改调 `render_sections`**
+  - `from src.prompts.renderer import render_template` → `from src.prompts.renderer import render_sections`
+  - `render_template(template, section_map)` → `render_sections(template, section_map)`
+- [x] **4.0.1.4 docstring 更新**
+  - `src/db/subagent_prompt_section_db.py:4-5`：注释中 `{section_key}` → `{{section_key}}`，提及 `render_sections`
+  - `src/api/agent_definition_sections.py:4`：同上
+  - `src/api/agent_definition_sections.py:28`：函数 docstring 同步
+
+### 阶段 4.0.2：前端改造
+
+- [x] **4.0.2.1 `frontend/src/components/AgentDefinitionManager.vue:529`：`parseSectionKeys` 正则改双括号**
+  - 旧：`/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g`
+  - 新：`/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g`
+
+### 阶段 4.0.3：单测
+
+- [x] **4.0.3.1 `render_sections` 单测**（`tests/unit/prompts/test_renderer.py` 新建或扩展）
+  - 正常替换：`{{role}}` + `{role: "助手"}` → "助手"
+  - 未知变量原样保留：`{{unknown}}` + `{}` → `{{unknown}}`
+  - 字面花括号保留：`{"name": "John"}` + `{}` → `{"name": "John"}`
+  - JSON 代码块原样保留：含 ```json ... ``` 的模板
+  - `${VAR}` 不被误伤：`${DATABASE_URL}` + `{}` → `${DATABASE_URL}`
+  - 带空格变量名：`{{ role }}` + `{role: "x"}` → "x"
+  - 多变量混合：`{{a}} {{b}}` + `{a:1, b:2}` → "1 2"
+  - 与系统模板语法不冲突：`{system_var}` + `{}` → `{system_var}` 原样保留（render_sections 不解析单括号）
+- [x] **4.0.3.2 `get_section_keys` 单测**
+  - 从 `{{a}} {{b}}` 解析出 `['a', 'b']`
+  - 混入 `{legacy}` 单括号：不应被识别（向后兼容性测试）
+  - 混入 `${VAR}`：不应被识别
+
+### 阶段 4.0.4：DB 数据迁移（人工）
+
+- [ ] **4.0.4.1 上线后扫描 DB，列出需迁移的 production 模板**
+  - SQL 扫描 `prompt_versions` 中 `scope='subagent'` 的 production 版本
+  - 识别含 `{var}` 单括号变量（排除 `${VAR}`、`{{var}}` 已双括号）
+- [ ] **4.0.4.2 人工重新提交模板版本**
+  - 每个需迁移的 agent 提交一个新版本，把 `{var}` 改为 `{{var}}`
+  - 走 `PromptRegistryService.commit_version`（自动 SHA-256 去重 + 缓存失效）
+  - 更新 `production` 标签指向新版本
+  - **已知待迁移清单**（扫描于 2026-07-14）：
+    - `data-analysis` v3：`{role}` `{workflow}` `{tool_use}`
+    - `travel-test` v9：`{gangwei}` `{jinling}` `{hexinyuanze}` `{kaichagnbai}` `{gongzuoliu}`
+    - `after-sales`：无变量，无需迁移
+
+### Phase 4.0 完成标准
+
+- [x] `render_sections` 函数实现，单测全绿
+- [x] `get_section_keys` 正则改双括号，单测全绿
+- [x] `agent.py` 改调 `render_sections`
+- [x] 前端 `parseSectionKeys` 正则改双括号，`npm run build` 通过
+- [x] 系统模板（master_agent.md 等）渲染回归通过（继续走 `render_template`，不受影响）
+- [x] 三智能体流程（开发→测试→CR）通过
+- [ ] DB 中待迁移清单（2 个 agent）已人工迁移（部署后人工执行，非代码任务）
+
+---
+
 ## Phase 4：extra_md 迁移 + 租户前台编辑器
 
 > 设计文档参考：§八.2（租户定制 extra.md 集成）、§八.3.2（租户前台编辑入口）
@@ -902,6 +982,7 @@ class SetLabelRequest(BaseModel):
 | Phase 1 | 版本管理数据库 + 基础服务层 | 1 周 | ✅ 代码完成（e2e 测试通过） |
 | Phase 2 | 独立智能体管理页面（重做） | 1.5 周 | 🔧 代码完成，待验证 |
 | Phase 3 | 知识库关联配置 + 工具技能元数据 + 回复风格 + business_pages + System Prompt 模板+分段变量 | 2 周 | 🔧 3.1~3.9 代码完成，待运行验证 |
+| Phase 4.0 | 分段变量改双花括号 `{{var}}` + 独立渲染器 render_sections | 3 天 | 🔧 代码完成（41 单测通过），待 DB 数据人工迁移 + 部署验证 |
 | Phase 4 | extra_md 迁移 + 租户前台编辑器 | 1.5 周 | ⬜ 未开始 |
 
 **总工期：约 6 周**

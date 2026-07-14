@@ -342,16 +342,37 @@ CREATE TABLE IF NOT EXISTS prompt_drafts (
 
 ## 四、模板方案
 
-### 4.1 保持 f-string（str.format_map）
+### 4.1 系统模板：保持 f-string（str.format_map）
 
-**不做模板引擎升级**。理由：
+**系统模板不做引擎升级**。理由：
 
 1. **当前方案已满足需求**：系统模板只有 ~10 个变量，全部是纯字符串插值（`{variable_name}`），不需要条件、循环或过滤器
 2. **零学习成本**：企业管理员编辑 Prompt 时直接写 `{变量名}`，无需学习任何模板语法
 3. **零安全风险**：`_SafeDict` 已处理未定义变量，不存在模板注入问题
 4. **与 LangChain 一致**：LangChain 的 `PromptTemplate` 默认也是 f-string，只在极少数场景才切换到 Mustache/Jinja2
 
-现有渲染器 (`src/prompts/renderer.py`) 的 `_SafeDict + format_map` 方案保持不变。
+系统模板 (`src/prompts/templates/*.md`，如 `master_agent.md`、`subagent_base.md`) 继续走 `render_template()` + `_SafeDict + format_map`，使用 `{variable}` 单花括号语法。
+
+### 4.1.1 DB 分段变量：双花括号 `{{var}}`（独立渲染器）
+
+**DB 子智能体的分段变量模板走另一条渲染路径**，使用 `{{variable}}` 双花括号语法，由独立的 `render_sections()` 渲染。
+
+**为什么 DB 分段变量不沿用 `{var}`**：
+
+1. **与系统模板变量空间分离**：DB 分段变量由租户/管理员自由命名（如 `{gangwei}`、`{workflow}`），与系统模板的 `{available_tools_list}` 等共享同一语法会让职责边界模糊
+2. **`str.format_map` 对字面花括号不安全**：DB 模板内容常含 JSON 示例、代码块、正则、curl 命令等字面 `{` / `}`，`str.format_map` 会把它们误解析为变量并抛 `KeyError` / `ValueError`，导致整个 system_prompt 渲染崩溃
+3. **与环境变量占位 `${VAR}` 视觉区分**：双花括号在 prompt 文本中更显眼，编辑时不易和环境变量混淆
+4. **未知变量原样保留**：纯天然，无需 `_SafeDict` 这类兜底字典
+
+**渲染规则**（`render_sections`）：
+
+- `{{var}}` → 替换为变量值
+- `{{ var }}` → 允许变量名两侧空白（更宽容）
+- 未在 `variables` 中的 `{{xxx}}` → 原样保留 `{{xxx}}`（不替换、不报错）
+- 字面 `{`、`}` → 原样保留（不解析）
+- `${VAR}` → 原样保留（环境变量占位，不归本渲染器处理）
+
+**迁移说明**（Phase 4.0 完成时）：历史 DB 模板中 `{var}` 形式的分段变量需人工重新提交版本改为 `{{var}}`。代码改造上线后，未迁移的模板中 `{var}` 会被当成字面文字传给 LLM（不会崩溃，但变量值不会注入）。
 
 ### 4.2 变量文档化
 
@@ -984,18 +1005,18 @@ if self.subagent_config:
 
 **问题**：当前 DB 定义的子智能体，其 system_prompt 存储在 `prompt_versions` 表中作为一整块文本。管理员面对巨大的 textarea 编辑，内容难以管理和优化。不同类型的信息（身份、流程、约束）混在一起，局部修改困难。
 
-**方案**：`prompt_versions.content` 存储的是**模板**（含 `{section_key}` 变量占位符），`subagent_prompt_sections` 存储的是**变量值**。运行时从 DB 实时读取模板和变量值，通过 `render_template()` 渲染为完整 system_prompt。
+**方案**：`prompt_versions.content` 存储的是**模板**（含 `{{section_key}}` 变量占位符），`subagent_prompt_sections` 存储的是**变量值**。运行时从 DB 实时读取模板和变量值，通过 `render_sections()` 渲染为完整 system_prompt。
 
 **核心设计**：
 
-- **模板**：`prompt_versions.content` 中的 system_prompt 包含 `{变量名}` 占位符（复用现有 `render_template()` + `_SafeDict`）。模板本身有版本管理。
-- **分段变量**：`subagent_prompt_sections` 表存储每个 `{变量名}` 的实际内容值。变量数量可变（不硬编码 5 个），由模板决定。
+- **模板**：`prompt_versions.content` 中的 system_prompt 包含 `{{变量名}}` 双花括号占位符（独立渲染器 `render_sections()`，详见 §4.1.1）。模板本身有版本管理。
+- **分段变量**：`subagent_prompt_sections` 表存储每个 `{{变量名}}` 的实际内容值。变量数量可变（不硬编码 5 个），由模板决定。
 - **运行时实时渲染**：`_build_system_prompt()` 每次从 DB/Redis 读取模板 + 变量值 → 渲染 → 返回。修改分段值后无需重启。
 
 **数据模型**：
 
 ```sql
--- 分段变量值表（每个 {section_key} 对应一行）
+-- 分段变量值表（每个 {{section_key}} 对应一行）
 CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id    TEXT NOT NULL,
@@ -1013,26 +1034,26 @@ CREATE TABLE IF NOT EXISTS subagent_prompt_sections (
 ```markdown
 ## 角色描述
 
-{role_description}
+{{role_description}}
 
 ## 岗位职责
 
-{responsibilities}
+{{responsibilities}}
 
 ## 工作流程
 
-{workflow}
+{{workflow}}
 
 ## 回复风格
 
-{reply_style}
+{{reply_style}}
 
 ## 其他说明
 
-{other_notes}
+{{other_notes}}
 ```
 
-管理员可以自由增减 `{变量名}`，系统自动检测模板中的变量并在前端生成对应的编辑区。
+管理员可以自由增减 `{{变量名}}`，系统自动检测模板中的变量并在前端生成对应的编辑区。
 
 **运行时渲染流程**：
 
@@ -1046,7 +1067,7 @@ Agent._build_system_prompt(user)
   │     │
   │     ├── prompt_resolver.resolve() → 获取模板（Redis 缓存）
   │     ├── SubagentPromptSectionDB.get_sections_map() → 获取变量值（Redis 缓存）
-  │     └── render_template(template, section_map) → 渲染为完整文本
+  │     └── render_sections(template, section_map) → 渲染为完整文本
   │
   ├── subagent_config.from_db == False（文件系统）
   │     直接使用 config.system_prompt（一整块文本，不变）
@@ -1077,8 +1098,8 @@ POST   /api/admin/agent-definitions/{agent_id}/sections/{key}/optimize → LLM �
 
 `AgentDefinitionManager.vue` 右侧 Prompt 区分为两部分：
 
-1. **模板编辑区**：textarea 编辑含 `{变量名}` 的模板文本，支持版本管理（保存草稿/提交新版本/版本历史/对比/回滚）
-2. **变量值编辑区**：根据模板中解析出的 `{变量名}` 动态生成编辑区，每个变量一个 textarea + AI 优化按钮，从上到下按模板中的出现顺序排列
+1. **模板编辑区**：textarea 编辑含 `{{变量名}}` 的模板文本，支持版本管理（保存草稿/提交新版本/版本历史/对比/回滚）
+2. **变量值编辑区**：根据模板中解析出的 `{{变量名}}` 动态生成编辑区，每个变量一个 textarea + AI 优化按钮，从上到下按模板中的出现顺序排列
 
 ```
 ┌─ Prompt 区 ──────────────────────────────────────────────────┐
@@ -1120,7 +1141,7 @@ POST   /api/admin/agent-definitions/{agent_id}/sections/{key}/optimize → LLM �
 
 **与现有子智能体创建/编辑流程的关系**：
 
-- **创建子智能体**时，输入初始模板（含 `{变量名}` 占位符），提交为 V1
+- **创建子智能体**时，输入初始模板（含 `{{变量名}}` 占位符），提交为 V1
 - **编辑模板**时，修改模板文本，提交新版本
 - **编辑变量值**时，修改 `subagent_prompt_sections` 表，实时生效
 - **`SubagentRegistry.load_from_db()`** 和 **`AgentFactory._load_single_from_db()`** 的 `system_prompt` 字段存模板内容，运行时通过 `_resolve_db_subagent_prompt()` 实时渲染
@@ -1492,7 +1513,8 @@ CREATE TABLE IF NOT EXISTS prompt_eval_results (
 
 | 组件 | 选型 | 理由 |
 |------|------|------|
-| 模板引擎 | f-string（`str.format_map`） | 现有方案，零额外依赖，零学习成本 |
+| 模板引擎（系统模板） | f-string（`str.format_map`） | 现有方案，零额外依赖，零学习成本，用于 master_agent.md / subagent_base.md 等 |
+| 模板引擎（DB 分段变量） | 正则 `re.sub`（`{{var}}` 双花括号） | 字面花括号安全（JSON/代码块不崩），与环境变量 `${VAR}` 视觉分离，未知变量原样保留 |
 | 版本存储 | PostgreSQL | 与现有架构一致，支持 JSONB |
 | 缓存 | Redis (现有) | 与现有 RedisClient 复用 |
 | Diff 算法 | `difflib.unified_diff` | Python 标准库，无需额外依赖 |

@@ -893,8 +893,8 @@ class Agent:
 
         # 3. 渲染模板
         if section_map:
-            from src.prompts.renderer import render_template
-            return render_template(template, section_map)
+            from src.prompts.renderer import render_sections
+            return render_sections(template, section_map)
 
         return template
 

@@ -211,7 +211,7 @@ class SubagentDefinitionService:
 
     @staticmethod
     def get_section_keys(agent_id: str) -> List[str]:
-        """从 production 版本的模板中解析出所有 {section_key} 变量名"""
+        """从 production 版本的模板中解析出所有 {{section_key}} 变量名"""
         prompt_info = SubagentDefinitionService._get_prompt_info(agent_id)
         if not prompt_info:
             return []
@@ -223,8 +223,8 @@ class SubagentDefinitionService:
             return []
         import re
         template = version_data.get("content", "")
-        # 匹配 {variable} 但排除 {{ 转义
-        keys = re.findall(r'(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})', template)
+        # 匹配 {{variable}} 双花括号变量（Phase 4.0 起改用双花括号，避免与字面花括号冲突）
+        keys = re.findall(r'\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}', template)
         # 去重保序
         seen = set()
         result = []

@@ -525,8 +525,9 @@ async function loadMetadata() {
 }
 
 // ============== Parse section keys from template ==============
+// Phase 4.0 起：DB 分段变量使用 {{var}} 双花括号，与系统模板的 {var} 分离
 function parseSectionKeys(template: string): string[] {
-  const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g
+  const regex = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g
   const keys: string[] = []
   let match: RegExpExecArray | null
   while ((match = regex.exec(template)) !== null) {

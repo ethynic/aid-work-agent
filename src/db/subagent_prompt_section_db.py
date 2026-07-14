@@ -1,7 +1,8 @@
 """
 子智能体 Prompt 分段数据库访问层
 
-分段值作为模板变量，运行时由 render_template() 填充到 prompt 模板中。
+分段值作为模板变量，运行时由 render_sections() 填充到 prompt 模板中。
+模板中使用 {{section_key}} 双花括号占位符（Phase 4.0 起）。
 """
 from typing import Optional, List, Dict, Any
 from loguru import logger
@@ -22,7 +23,7 @@ class SubagentPromptSectionDB:
 
     @staticmethod
     def get_sections_map(agent_id: str) -> Dict[str, str]:
-        """获取分段值的 {section_key: content} 映射，供运行时渲染用"""
+        """获取分段值的 {section_key: content} 映射，供运行时 render_sections 渲染用"""
         sections = SubagentPromptSectionDB.get_sections(agent_id)
         return {s["section_key"]: s["content"] or "" for s in sections}
 

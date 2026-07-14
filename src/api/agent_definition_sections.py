@@ -1,7 +1,8 @@
 """
 子智能体 Prompt 分段管理 API
 
-分段值作为模板变量存储，运行时由 render_template() 填充到 prompt 模板中。
+分段值作为模板变量存储，运行时由 render_sections() 填充到 prompt 模板中。
+模板中使用 {{section_key}} 双花括号占位符（Phase 4.0 起）。
 """
 from typing import Optional
 from fastapi import APIRouter, Request
@@ -25,7 +26,7 @@ class SaveSectionRequest(BaseModel):
 
 @router.get("/{agent_id}/sections/keys")
 async def get_section_keys(request: Request, agent_id: str):
-    """从 production 模板中解析出所有 {section_key} 变量名"""
+    """从 production 模板中解析出所有 {{section_key}} 变量名"""
     try:
         _require_admin(request)
         keys = SubagentDefinitionService.get_section_keys(agent_id)
