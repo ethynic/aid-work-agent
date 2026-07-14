@@ -17,7 +17,7 @@ class UseSkillTool(BaseTool):
     """加载技能工具"""
 
     name = "use_skill"
-    description = "加载技能的操作指南（SKILL.md 正文）。加载后根据指南决定下一步：脚本执行类调用 skill_execute，引导式技能调用 content_generate 等工具。流程：use_skill → 按指南执行 → skill_complete 标记完成。"
+    description = "加载技能的操作指南（SKILL.md 正文）。加载后根据指南决定下一步：脚本执行类调用 skill_execute，引导式技能调用 content_generate 等工具。流程：use_skill → 按指南执行 → 直接给最终回复。"
     usage_guide = ""
     display_name = "加载技能"
     category = "skill"
@@ -108,7 +108,6 @@ class UseSkillTool(BaseTool):
 **执行规则**：
 - 如果指南中有多个步骤 → 逐步执行，不要跳过
 - 大文件（HTML PPT 100KB+）**不要**把完整内容塞进 `write` 的 content 参数；改用 `cp` 复制模板 + `edit` 替换占位区域的策略
-- 所有步骤完成后，调用 `skill_complete(skill="{skill_name}", summary="结果摘要")` 标记完成
 - 不要直接回复用户"正在执行"，而是立即开始执行第一步"""
 
         enhanced_content = skill_content + guidance_suffix

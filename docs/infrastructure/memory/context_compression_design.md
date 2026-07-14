@@ -33,7 +33,7 @@
 | 已有机制 | 位置 | 局限 |
 |---------|------|------|
 | ShortTermMemory 滑动窗口 | `src/memory/short_term.py:31` (`max_messages=100`) | 仅按消息条数，不按 token；满了直接丢老消息，**信息有损丢失** |
-| Skill 完成后压缩技能段 | `src/core/agent.py:1253` (`_compress_skill_context`) | 只压缩单个技能执行段，不处理跨多轮的会话级膨胀 |
+| ~~Skill 完成后压缩技能段~~ | ~~`src/core/agent.py` (`_compress_skill_context`)~~ | ~~只压缩单个技能执行段~~ **（已废弃，2026-07-14 删除；详见 [skill-complete-removal-design.md](../../system/skill-complete-removal-design.md)）** |
 | 长期记忆（跨会话） | `src/memory/memory_summarizer.py` | 每日定时跑，**不解决会话内**的上下文膨胀 |
 | DialogManager 中期记忆占位 | `src/memory/manager.py:132` (`save_conversation_summary`) | 接口存在但**零调用点**，纯占位代码 |
 
@@ -668,6 +668,8 @@ def _build_messages(self, session_id: str) -> list[dict]:
 
 ### 5.4 与既有 Skill 压缩的兼容
 
+> **已废弃（2026-07-14）**：`_compress_skill_context` 已随 `skill_complete` 工具一起删除。本节保留作为历史记录，下方描述不再适用。
+
 既有 `_compress_skill_context`（`agent.py:1253`）处理的是**单个技能执行段**的压缩（执行完一个技能后，把技能内的工具消息压成一条摘要），与本方案是**互补关系**：
 
 - 既有机制：**横向**压缩（单个技能内）
@@ -800,7 +802,7 @@ class ContextCompressedEvent:
 | 既有功能 | 关系 | 说明 |
 |---------|------|------|
 | ShortTermMemory 滑动窗口 | **保留但作用弱化** | `max_messages` 从 100 调整到 200（作为最后兜底），实际压缩由本方案主导 |
-| Skill 完成后压缩 (`_compress_skill_context`) | **保留** | 横向技能内压缩，与本方案纵向会话压缩互补 |
+| ~~Skill 完成后压缩 (`_compress_skill_context`)~~ | ~~**保留**~~ | ~~横向技能内压缩，与本方案纵向会话压缩互补~~ **（已废弃，2026-07-14 删除）** |
 | 长期记忆 (`memory_summarizer.py`) | **完全独立** | 跨会话的用户画像，每日定时跑，作用域完全不同 |
 | `MemoryManager.save_conversation_summary` | **废弃** | 进程内 dict 占位，无持久化，本方案上线后删除该接口（避免概念混淆） |
 | `DialogManager` | **不涉及** | 未启用，与本方案无关 |

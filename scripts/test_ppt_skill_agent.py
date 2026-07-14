@@ -223,12 +223,6 @@ class EventTracker:
         if not (cp_calls or write_calls):
             print("  ⚠️ cp/write 未被调用 - HTML 文件可能未被生成")
 
-        # 4. skill_complete 调用情况
-        if "skill_complete" in tool_call_names:
-            print("  ✅ skill_complete 被调用 - skill 正常结束")
-        else:
-            print("  ⚠️ skill_complete 未被调用 - skill 未正常结束")
-
         # 5. 超出最大迭代次数
         if len(self.llm_calls) >= 20:
             print("  ❌ LLM 调用达到 20 轮上限 - 工作流可能太复杂")

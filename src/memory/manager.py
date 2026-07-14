@@ -48,7 +48,7 @@ class MemoryManager:
 
     @property
     def _cache(self):
-        """临时兼容：供 SkillCompleteTool 等需要直接操作缓存的场景。后续 Phase 应重构为公开方法。"""
+        """临时兼容：早期直接操作缓存的过渡方案。后续 Phase 应重构为公开方法。"""
         return self.short_term._cache
 
     # ==================== 短期记忆操作 ====================

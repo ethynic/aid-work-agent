@@ -92,7 +92,7 @@ Agent._build_base_system_prompt()
 |---|------|---------|------|
 | P2.1 | 身份声明过于泛化 | 中 | "你是一个智能工作助手" 没有体现系统的实际定位（企业员工 AI 代理），不如参考 SUBAGENT.md 的做法，允许主智能体也有可配置的身份描述 |
 | P2.2 | 工作流描述与工具 usage_guide 重复 | 中 | 工作流中"第三步：执行计划"的详细说明与 `create_plan` 工具返回的 `next_step_prompt` 功能重叠 |
-| P2.3 | 技能使用规则占据过大篇幅 | 低 | 约 10 行的技能使用规则（use_skill → skill_execute → skill_complete），这部分内容已经在 `use_skill` 的工具描述中存在 |
+| P2.3 | 技能使用规则占据过大篇幅 | 低 | 约 10 行的技能使用规则（use_skill → skill_execute → 最终回复），这部分内容已经在 `use_skill` 的工具描述中存在 |
 | P2.4 | "超出能力的处理"模板占据过大篇幅 | 低 | 约 15 行的示例回复格式，LLM 天然具备这种能力，不需要如此详细的模板 |
 | P2.5 | 语言规则过于啰嗦 | 低 | 3 行重复说明同一件事（用用户的语言回复），可以压缩为 1 句 |
 | P2.6 | `_build_base_system_prompt` 同时承担 MASTER/SUBAGENT/STANDALONE 三种模式 | 高 | 260 行的方法中充满条件分支，可读性差，维护困难 |
@@ -280,7 +280,7 @@ class PromptManager:
 **技能使用规则：**
 1. 技能名称不是工具，必须先用 `use_skill(skill="技能名")` 加载
 2. 加载后按操作指南调用相应工具（skill_execute / content_generate / web_search 等）
-3. 完成后调用 `skill_complete(skill="技能名", summary="结果摘要")` 标记完成
+3. 完成后直接给出最终回复
 ```
 
 #### 保留不动：工具使用指南

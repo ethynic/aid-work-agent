@@ -89,7 +89,6 @@
 | `subagent_registry` | `Optional[SubagentRegistry]` | **主智能体独有**，管理所有子智能体注册 |
 | `subagent_executor` | `Optional[SubagentExecutor]` | **主智能体独有**，执行委派任务 |
 | `_pending_clarifications` | `Dict[str, Dict]` | 待处理的澄清请求（session_id → 澄清上下文） |
-| `_active_skill_sessions` | `Dict[str, SkillSession]` | 活跃的技能会话 |
 | `_clarification_missing_info` | `List` | 子智能体缺失信息列表 |
 
 **核心方法**：
@@ -105,7 +104,7 @@
 | `_register_builtin_tools()` | `() -> None` | 注册 28 个内置工具 + 2 个定时任务工具。master 和 subagent 都调用。subagent 额外调用 `_filter_tools_by_config()` |
 | `_filter_tools_by_config()` | `() -> None` | 根据 `subagent_config.tools` 过滤 tool_registry。`inherit: true` 保留全部，否则只保留 `allowed` 列表 |
 | `_handle_delegate_to_subagent()` | `(subagent_name, task_description, context_needed?, session_id) -> Dict` | 委派的核心实现：校验子智能体 → 调用 executor.delegate → 等待结果（超时 7200s）→ 处理澄清状态。委派前后 yield `subagent_start`/`subagent_end` 事件 |
-| `_handle_use_skill()` | `(skill_name) -> str` | 加载技能内容，创建 SkillSession 追踪，返回增强的技能指南 |
+| `_handle_use_skill()` | `(skill_name) -> str` | 加载技能内容，返回增强的技能指南 |
 | `_handle_skill_execute()` | `(skill_name, command, files?, session_id?, workdir?) -> Dict` | 执行技能脚本命令，处理参数替换、文件解码 |
 | `_build_messages()` | `(session_id) -> List[Dict]` | 从 ShortTermMemory 构建消息历史列表 |
 
@@ -291,9 +290,8 @@ system_prompt: |
        │   └── SubagentExecutor.delegate() → asyncio.Task 后台执行
        │   └── wait_for_result() 轮询等待（超时 7200s）
        │   └── 若 CLARIFYING → 存入 _pending_clarifications
-       ├── use_skill → _handle_use_skill()（创建 SkillSession，返回技能指南）
+       ├── use_skill → _handle_use_skill()（返回技能指南）
        ├── skill_execute → _handle_skill_execute()（执行脚本，替换参数）
-       ├── skill_complete → 排队延迟压缩 Skill 上下文
        ├── create_plan → _handle_create_plan()（创建执行计划 Markdown）
        ├── clarify → 返回问题给 LLM（不发送给用户）
        ├── create_scheduled_task → 特殊处理（带上下文）
@@ -1042,7 +1040,6 @@ master_agent（单个实例）
   ├── subagent_executor          ← 所有会话共享（每次委派创建独立 Task）
   ├── tool_registry              ← 所有会话共享（只读，不会变）
   ├── _pending_clarifications    ← Dict[session_id, Dict]，按 session_id 隔离
-  ├── _active_skill_sessions    ← Dict[session_id, SkillSession]，按 session_id 隔离
   └── memory (ShortTermMemory)   ← 内部结构：
         self._cache: Dict[str, deque]
           ├── "web_user_abc123"  → deque([msg1, msg2, ...])   ← 会话 A 的上下文
@@ -1051,7 +1048,7 @@ master_agent（单个实例）
 ```
 
 - `ShortTermMemory.add()`、`get_context()`、`clear()` 全部以 `session_id` 为 key 操作，不同会话的数据存在不同的 deque 中，**互不干扰**
-- `_pending_clarifications` 和 `_active_skill_sessions` 同样是按 `session_id` 索引的字典
+- `_pending_clarifications` 同样是按 `session_id` 索引的字典
 - 如果每个会话创建一个 master_agent，每个实例都会重复执行：加载 `subagents/` 目录（磁盘 IO）、注册 28+ 工具、创建空的 memory——这些全是无意义的重复开销
 
 **Standalone Agent 为何需要缓存（每个 session:subagent 一个实例）？**

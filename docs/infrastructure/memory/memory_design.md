@@ -33,7 +33,7 @@ src/memory/
 - `src/core/agent.py:117` — Agent 直接实例化 `ShortTermMemory()`
 - `src/core/dialog_manager.py:43` — DialogManager 创建独立的 `ShortTermMemory` 实例
 - `src/subagents/factory.py:109-110` — 工厂将同一 memory 实例注入主/子智能体
-- `src/tools/skill/skill_complete_tool.py` — 技能完成后执行上下文压缩
+- ~~`src/tools/skill/skill_complete_tool.py` — 技能完成后执行上下文压缩~~（**已废弃**：2026-07-14 skill_complete 工具已彻底删除，详见 [skill-complete-removal-design.md](../../system/skill-complete-removal-design.md)）
 - `src/config/settings.py:157-165` — 配置模型定义
 
 ### 1.4 当前配置
@@ -124,7 +124,7 @@ memory:
 - `src/core/agent.py` — 将 `self.memory = ShortTermMemory()` 改为 `self.memory = MemoryManager()`
 - `src/subagents/factory.py` — 适配 MemoryManager 类型
 - `src/subagents/executor.py` — 适配 MemoryManager 类型
-- `src/tools/skill/skill_complete_tool.py` — 适配 MemoryManager 接口
+- ~~`src/tools/skill/skill_complete_tool.py` — 适配 MemoryManager 接口~~（**已废弃**：skill_complete 工具已删除）
 
 **注意事项**:
 - MemoryManager 需要暴露与 ShortTermMemory 兼容的接口（add, get_context, to_llm_messages 等）
@@ -352,6 +352,8 @@ mid_term:
 ---
 
 ##### 任务 2.2.2: 技能完成后的上下文保留
+
+> **已废弃（2026-07-14）**：`SkillCompleteTool` 及其上下文压缩机制已彻底删除。详见 [skill-complete-removal-design.md](../../system/skill-complete-removal-design.md)。技能完成后由 LLM 直接给出最终回复，无显式压缩。
 
 **现状**: 技能完成后，`SkillCompleteTool` 会将中间消息压缩为一条摘要。这是已有的压缩机制。
 
@@ -974,7 +976,7 @@ memory:
 | `src/core/dialog_manager.py` | P1 | 统一配置/共享实例 |
 | `src/subagents/factory.py` | P1 | 适配 MemoryManager |
 | `src/subagents/executor.py` | P1 | 适配 MemoryManager |
-| `src/tools/skill/skill_complete_tool.py` | P1 | 适配接口 |
+| ~~`src/tools/skill/skill_complete_tool.py`~~ | ~~P1~~ | ~~适配接口~~（已废弃，skill_complete 已删除） |
 | `src/config/settings.py` | P1-P3 | 扩展配置模型 |
 | `configs/config.yaml` | P1-P3 | 扩展配置项 |
 | `src/main.py` | P3 | 注册记忆 API 路由 |

@@ -48,22 +48,8 @@ class TestContentGenerateNewTypes:
         assert "输入素材" in prompt_desc
 
 
-class TestAgentSkillCompleteTool:
-    """验证 skill_complete 工具定义正确"""
-
-    def test_skill_complete_tool_definition(self):
-        from src.tools.skill.skill_complete_tool import SkillCompleteTool
-
-        tool = SkillCompleteTool()
-        assert tool.name == "skill_complete"
-        assert tool.display_name
-        defn = tool.to_tool_definition()
-        assert defn["name"] == "skill_complete"
-        schema = defn["input_schema"]
-        required = schema.get("required", [])
-        properties = schema.get("properties", {})
-        assert "skill" in required
-        assert "summary" in required
+class TestSkillExecuteTool:
+    """验证 skill_execute 工具定义正确"""
 
     def test_skill_execute_command_not_required(self):
         from unittest.mock import MagicMock

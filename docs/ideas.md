@@ -44,11 +44,12 @@
 
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20 | 浏览器操作可视化 | 📋 待开发 | Playwright Screencast API 实时推送浏览器操作画面到前端，支持操作标注。2026-05-21 | [设计](tools/browser/browser_visualization_design.md) | — |
+| 20 | 浏览器混合执行、可视化与人工接管 | 📋 待开发 | 2026-07-14 完成 v2.6 设计：`auto` 强制服务端 headless 优先，仅确定的本地能力预检失败或 HeadlessFailureDetector 高置信失败可经 EscalationGate 转客户端；普通 HTTP/网络故障不升级。人工参与采用持久化 ToolSuspension，从同一 run/page/context 和原 tool_call_id 自动续跑。采用 Agent-first 原则：本地执行是 Agent Desktop 的可选 browser runtime，客户端技术栈、认证、发布和生命周期跟随 Agent 主应用；runtime 关闭或故障不得影响 Agent 主链路，不再交付独立 Browser Companion。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 29 | PDF 工具质量验证增强 | 🔧 部分完成 | P0+企业文档增强+Playwright HTML 转 PDF 已完成：新增 inspect/render_pages/validate、结构化检查、生成后自动校验、页码语义统一和依赖探测；修复 split 保存顺序、无效页码静默成功、文件名安全、HTML 表格顺序、测试漂移和旧设计文档不一致问题；新增 clean_metadata/add_watermark/protect/compress/extract_images/rotate；复杂 HTML/CSS 默认优先 Playwright print-to-pdf，失败回退 fpdf2；Docker 增加 LibreOffice Writer 及构建期校验，DOCX 转 PDF 统一使用 LibreOffice 隔离配置目录并保留失败诊断。PDF 全量单测通过，127 passed；真实 Playwright 生成和结构校验通过。2026-07-01 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | [开发计划](tools/pdf/pdf_tool_quality_validation_dev_plan.md) |
 | 30 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。适用场景：结构化业务数据直接生成正式报价单、报告、对账单、审批单等，要求页眉页脚、页码、签章区、复杂跨页表格和版式位置稳定。当前复杂 HTML/CSS 已由 Playwright print-to-pdf 覆盖，不优先投入 reportlab。2026-06-30 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | — |
 | 32 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。当前已有结构化校验和 Playwright HTML 转 PDF，暂不投入完整样本集建设。2026-06-30 | [设计](tools/pdf/pdf_tool_gap_analysis_design.md) | — |
 | 34 | 工具总体优化梳理 | 🔧 部分完成 | 跨工具层面的优化梳理登记文档（区别于单工具设计）。进度：#34a `upload_to_remote` 工具直接删除 ✅（已提交）；#34b 全部 27 个业务工具 token 审查 + 规范 ✅；Phase 0/1（删工具+建规范+helper）✅；Phase 2 试点 http_api/pdf_process/paddleocr token 优化 ✅（token 对比达标，服务器验证通过）；#34c **大内容落盘检索闭环 + grep 工具** 📋——Phase 2 截断后完整内容丢弃形成信息黑洞，新增「截断→落盘临时文件→read/grep 回读」闭环（对齐 Claude Code harness），含 `_spill.py` 落盘管理器 + 新增 grep 工具（调 ripgrep）+ Dockerfile 装 rg；#34d **文件工具对齐 Claude Code 水准** 📋——read/edit 的 offset 从 0-based 改 1-based（breaking，需适配 skill）+ edit 新增 replace_all 批量替换。开发计划已调整：Phase 3 升级为「文件工具对齐+grep+落盘闭环」优先实施。2026-07-06 | [总体设计](tools/tool-overall-optimization-design.md) / [落盘闭环+grep](tools/large-content-retrieval-design.md) / [文件工具对齐](tools/file-tools-claude-code-parity-design.md) | [开发计划](tools/tool-overall-optimization-dev-plan.md) / [落盘闭环计划](tools/large-content-retrieval-dev-plan.md) |
+| 35 | skill_complete 工具彻底删除 | 🔧 部分完成 | `skill_complete` 原始设计目标（标记 skill 完成 + 压缩纯文本 skill 中间上下文）实际未达成：压缩只发生在进程内存未触达 DB，下次会话从 DB 重建即恢复原状；压缩实现本身还引入上下文污染（system role summary、序列打乱、use_skill 的 assistant+tool_result 被错误归入「skill 前」永久保留）。决策彻底删除工具及全部依赖（SkillSession 数据类、_active_skill_sessions 字典、_compress_skill_context、has_active_skill_session、_LIFECYCLE_TOOLS allowed_tools 围栏），并在主循环 + 子智能体执行器两处加静默兜底（应对 DB 历史残留和模型记忆触发的 LLM 调用）。远程 7ebc3b9 已先做了 prompt 层临时止血（去掉「调用 skill_complete 标记完成」指示），本次是彻底清理。**开发完成（2026-07-14）**：T1-T7 全部代码/测试/文档清理完成，进入测试 + CR 流程。2026-07-14 | [设计](system/skill-complete-removal-design.md) | [开发计划](plans/plan-skill-complete-removal.md) |
 
 ## 渠道集成
 
@@ -77,6 +78,7 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 33 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
+| 36 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 2026-07-14 Phase 0～3 Windows 已通过三智能体流程和主控终检。Desktop 已完成真实 Agent renderer、单实例与安全壳、safeStorage 凭证、受控外链/同源下载、冷/热 deep link；artifact 51 entries/409 modules，Portal/管理员/敏感 localStorage 自动扫描为 0，前端 33 项、客户端 23/23 及真实 smoke 全绿且零进程残留。浏览器 runtime Phase 4 按 Agent-first 原则等待服务端 Executor 契约稳定，不阻塞主应用；主线进入 Phase 5 Windows 安装包/发布基础。macOS 各 Phase 延后到 Mac 设备单独验证。 | [设计](system/desktop-agent-client-design.md) | [开发计划](system/desktop-agent-client-dev-plan.md) |
 
 ---
 

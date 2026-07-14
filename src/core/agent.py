@@ -40,7 +40,6 @@ from src.models.plan import TaskStatus
 from src.core.skill_registry import SkillRegistry
 from src.core.skill_executor import SkillExecutor
 from src.core.plan_manager import PlanManager
-from src.core.skill_session import SkillSession
 
 
 def _extract_image_refs_from_tool_result(result: Any) -> List[Dict[str, Any]]:
@@ -192,9 +191,6 @@ class Agent:
             max_short_term_messages=settings.memory.short_term.max_messages,
             short_term_ttl=settings.memory.short_term.ttl,
         )
-
-        # Skill 会话管理 - 跟踪活跃的 Skill 执行
-        self._active_skill_sessions: Dict[str, SkillSession] = {}
 
         # 技能系统
         skills_dir = Path(__file__).parent.parent / "skills"
@@ -461,7 +457,6 @@ class Agent:
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.use_skill_tool import UseSkillTool
         from src.tools.skill.skill_execute_tool import SkillExecuteTool
-        from src.tools.skill.skill_complete_tool import SkillCompleteTool
         from src.tools.agent.clarify_tool import ClarifyTool
         from src.tools.agent.delegate_tool import DelegateToSubagentTool
 
@@ -476,7 +471,6 @@ class Agent:
             skill_executor=self.skill_executor,
             skill_registry=self.skill_registry,
         )
-        self._skill_complete_tool = SkillCompleteTool()
         self._clarify_tool = ClarifyTool()
         # delegate_to_subagent 工具需要 subagent_registry 和 subagent_executor
         # 对于 MASTER 模式延迟初始化（因为 subagent_executor 在此方法之后创建）
@@ -530,11 +524,10 @@ class Agent:
         # 1. 从 ToolRegistry 获取所有已注册工具的 schema
         tools = self.tool_registry.get_tool_definitions()
 
-        # 2. 添加虚拟工具定义（skill_execute, skill_complete, create_plan, clarify）
+        # 2. 添加虚拟工具定义（skill_execute, create_plan, clarify）
         # 这些工具不放入 tool_registry，但需要将定义暴露给 LLM
         virtual_tools = [
             self._skill_execute_tool,
-            self._skill_complete_tool,
             self._create_plan_tool,
             self._clarify_tool,
         ]
@@ -580,7 +573,6 @@ class Agent:
             "create_plan": self._create_plan_tool,
             "clarify": self._clarify_tool,
             "skill_execute": self._skill_execute_tool,
-            "skill_complete": self._skill_complete_tool,
         }
         vtool = virtual_tool_map.get(tool_name)
         if vtool:
@@ -608,7 +600,6 @@ class Agent:
         # 虚拟工具指南（不在 registry 中，手动收集）
         virtual_tools = [
             self._skill_execute_tool,
-            self._skill_complete_tool,
             self._create_plan_tool,
             self._clarify_tool,
         ]
@@ -1592,26 +1583,6 @@ class Agent:
 
         return cleaned
 
-    # ─── 压缩 Skill 上下文（保留在 Agent 上，因为操作 Agent 内部状态） ───
-
-    def _compress_skill_context(
-        self,
-        session_id: str,
-        skill_name: str,
-        summary: str
-    ) -> None:
-        """压缩 Skill 执行过程中的中间消息，仅保留摘要。委托给 SkillCompleteTool。"""
-        self._skill_complete_tool.set_context(
-            active_sessions=self._active_skill_sessions,
-            memory_cache=self.memory._cache,
-        )
-        self._skill_complete_tool.compress(session_id, skill_name, summary)
-
-    @property
-    def has_active_skill_session(self) -> bool:
-        """是否有活跃的 Skill Session"""
-        return bool(self._active_skill_sessions)
-
     def _check_skill_version_consistency(
         self, session_id: str, skill_name: str
     ) -> Optional[Dict[str, Any]]:
@@ -2459,12 +2430,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # If no valid tool calls, we're done
             if not valid_tool_calls:
-                # 兜底：自动完成所有活跃的 Skill Session
-                if self.has_active_skill_session:
-                    for active_skill_name, session in list(self._active_skill_sessions.items()):
-                        auto_summary = f"使用技能「{active_skill_name}」执行了相关任务"
-                        self._compress_skill_context(session_id, active_skill_name, auto_summary)
-                
                 # Store assistant response in memory
                 reasoning = response.get("reasoning_content")
                 if reasoning:
@@ -2506,8 +2471,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # Execute each tool call
             tool_results = []
-            # 收集需要延迟执行的 Skill 压缩操作（在 tool_message 写入 memory 后再压缩）
-            pending_skill_compressions = []
             for tc in valid_tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc["arguments"]
@@ -2525,28 +2488,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 yield make_event("progress", data=f"🔧 正在执行 {tool_display_name}...")
 
                 logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
-
-                # AgentSkills 标准的 allowed-tools 权限检查
-                # 如果当前有活跃的 skill session 且该 skill 设置了 allowed_tools，
-                # 则只允许执行允许列表中的工具（生命周期工具除外）
-                _LIFECYCLE_TOOLS = {"skill_complete", "skill_execute"}
-                if self._active_skill_sessions and tool_name not in _LIFECYCLE_TOOLS:
-                    for _active_skill_name, _ in self._active_skill_sessions.items():
-                        _active_skill_obj = self.skill_registry.get(_active_skill_name) if self.skill_registry else None
-                        if _active_skill_obj and _active_skill_obj.allowed_tools:
-                            allowed_upper = [t.upper() for t in _active_skill_obj.allowed_tools]
-                            if tool_name.upper() not in allowed_upper:
-                                logger.warning(f"Tool '{tool_name}' blocked by skill '{_active_skill_name}' allowed_tools: {_active_skill_obj.allowed_tools}")
-                                tool_results.append({
-                                    "tool_call_id": tool_id,
-                                    "content": {
-                                        "success": False,
-                                        "error": f"Tool '{tool_name}' is not allowed in skill '{_active_skill_name}'. Allowed: {_active_skill_obj.allowed_tools}"
-                                    }
-                                })
-                                yield make_event("tool_result", toolName=tool_name, result={"success": False, "error": f"Tool '{tool_name}' not allowed"}, success=False)
-                                continue
-                            break  # 找到匹配的活跃 skill 后停止检查
 
                 # Fallback: 如果 LLM 调用了一个不在工具列表中但匹配 skill 名称的工具，
                 # 自动转为 use_skill 调用（LLM 有时会误把 skill 名称当成工具名直接调用）
@@ -2643,18 +2584,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         if hook_output:
                             skill_result["content"] = skill_result.get("content", "") + f"\n\n**Hook output:**\n{hook_output}"
 
-                    # 创建 Skill Session，记录当前 memory 消息数量
-                    if skill_result.get("success") and skill_name not in self._active_skill_sessions:
-                        msg_count = self.memory.get_message_count(session_id)
-                        self._active_skill_sessions[skill_name] = SkillSession(
-                            skill_name=skill_name,
-                            start_index=msg_count,
-                            message_count_before=msg_count,
-                        )
-                        logger.info(f"后端日志：创建 SkillSession", extra={
-                            "skill_name": skill_name,
-                            "message_count_before": msg_count
-                        })
                     # 发送工具执行结果
                     yield make_event("tool_result", toolName=tool_name, result=skill_result, success=skill_result.get("success", True))
                     yield make_event("progress", data=f"📦 已加载技能: {skill_name}")
@@ -2664,33 +2593,16 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     })
                     continue
 
-                # Handle skill_complete - compress skill context
+                # skill_complete 已废弃（2026-07-14 移除）
+                # 仍可能被历史会话上下文或模型记忆触发，静默吞掉避免污染
                 if tool_name == "skill_complete":
-                    skill_name = tool_args.get("skill", "")
-                    summary = tool_args.get("summary", "")
-                    if skill_name in self._active_skill_sessions:
-                        # 执行 onUnload hook（AgentSkills 标准）
-                        skill_obj = self.skill_registry.get(skill_name) if self.skill_registry else None
-                        if skill_obj and skill_obj.hooks:
-                            from src.core.skill_hooks import SkillHooks
-                            hook_output = await SkillHooks.run_on_unload(skill_obj.hooks, skill_obj.dir)
-                            if hook_output:
-                                summary = f"{summary}\n\n**Hook output:**\n{hook_output}"
-
-                        # 延迟压缩：先记录压缩信息，等 tool_message 写入 memory 后再执行
-                        pending_skill_compressions.append((session_id, skill_name, summary))
-                        yield make_event("progress", data=f"✅ 技能「{skill_name}」执行完成")
-                        tool_results.append({
-                            "tool_call_id": tool_id,
-                            "content": {"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}
-                        })
-                        yield make_event("tool_result", toolName=tool_name, result={"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}, success=True)
-                    else:
-                        tool_results.append({
-                            "tool_call_id": tool_id,
-                            "content": {"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}
-                        })
-                        yield make_event("tool_result", toolName=tool_name, result={"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}, success=False)
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "content": {"success": True, "message": "skill_complete 已废弃，无需调用"}
+                    })
+                    yield make_event("tool_result", toolName=tool_name,
+                                     result={"success": True, "message": "skill_complete 已废弃"},
+                                     success=True)
                     continue
 
                 # Handle skill_execute - execute command directly
@@ -2983,10 +2895,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 messages.append(tool_message)
                 # Save tool result to memory
                 self.memory.add_message(session_id, tool_message)
-            
-            # 延迟执行 Skill 上下文压缩（在 tool_message 写入 memory 之后）
-            for comp_session_id, comp_skill_name, comp_summary in pending_skill_compressions:
-                self._compress_skill_context(comp_session_id, comp_skill_name, comp_summary)
 
             # Phase 2 P2.3：扫描本轮工具结果，提取 ImageRef dict
             # 在工具调用结束、进入最终回复生成之前，统一 yield 一次 images 事件
@@ -3321,12 +3229,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 
                 # 如果没有工具调用，任务完成
                 if not tool_calls:
-                    # 兜底：自动完成所有活跃的 Skill Session
-                    if self.has_active_skill_session:
-                        for active_skill_name, session in list(self._active_skill_sessions.items()):
-                            auto_summary = f"使用技能「{active_skill_name}」执行了相关任务"
-                            self._compress_skill_context(self.session_id, active_skill_name, auto_summary)
-                    
                     final_result = {"content": content}
                     final_summary = content[:500] if content else "Task completed"
                     break
@@ -3342,7 +3244,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 messages.append(assistant_msg)
                 
                 # 执行工具调用
-                pending_skill_compressions = []  # 收集需要延迟执行的 Skill 压缩
                 for tc in tool_calls:
                     if "function" in tc:
                         tool_name = tc["function"].get("name", "")
@@ -3439,27 +3340,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         skill_name = tool_args.get("skill", "")
                         skill_result = await self._use_skill_tool.execute(**tool_args)
                         tool_result = skill_result
-                        # 创建 Skill Session
-                        if skill_result.get("success") and skill_name not in self._active_skill_sessions:
-                            msg_count = self.memory.get_message_count(self.session_id)
-                            self._active_skill_sessions[skill_name] = SkillSession(
-                                skill_name=skill_name,
-                                start_index=msg_count,
-                                message_count_before=msg_count,
-                            )
                         # 发送工具执行结果
                         await _emit_async(make_event("tool_result", toolName=tool_name, result=skill_result, success=skill_result.get("success", True)))
+                    # skill_complete 已废弃（2026-07-14 移除），静默吞掉避免污染
                     elif tool_name == "skill_complete":
-                        skill_name = tool_args.get("skill", "")
-                        summary = tool_args.get("summary", "")
-                        if skill_name in self._active_skill_sessions:
-                            # 延迟压缩：等 tool_message 写入 messages 后再压缩
-                            pending_skill_compressions.append((self.session_id, skill_name, summary))
-                            tool_result = {"success": True, "message": f"技能 {skill_name} 已完成并清理上下文"}
-                            await _emit_async(make_event("progress", data=f"✅ [{self.subagent_config.name}] 技能「{skill_name}」执行完成"))
-                        else:
-                            tool_result = {"success": False, "error": f"没有找到活跃的技能会话: {skill_name}"}
-                        await _emit_async(make_event("tool_result", toolName=tool_name, result=tool_result, success=tool_result.get("success", True)))
+                        tool_result = {"success": True, "message": "skill_complete 已废弃，无需调用"}
+                        await _emit_async(make_event("tool_result", toolName=tool_name,
+                                                     result=tool_result, success=True))
                     elif tool_name == "skill_execute":
                         skill_name = tool_args.get("skill", "")
                         command = tool_args.get("command", "") or None  # 空字符串转为 None
@@ -3589,10 +3476,6 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         "tool_call_id": tc.get("id", ""),
                         "content": json.dumps(tool_result, ensure_ascii=False) if isinstance(tool_result, dict) else str(tool_result)
                     })
-                
-                # 延迟执行 Skill 上下文压缩（在 tool_message 写入 messages 之后）
-                for comp_session_id, comp_skill_name, comp_summary in pending_skill_compressions:
-                    self._compress_skill_context(comp_session_id, comp_skill_name, comp_summary)
 
             # 发送子任务完成消息
             await _emit_async(make_event("progress", data=f"✅ [{self.subagent_config.name}] 任务完成，正在整合结果..."))

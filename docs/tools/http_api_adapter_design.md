@@ -469,7 +469,7 @@ class Skill:
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│           Skill 完成（skill_complete）            │
+│       Skill 完成（LLM 给出最终回复）              │
 │  ★ 可选：清理 Skill 注入的临时环境变量            │
 │  （避免不同 Skill 的变量互相污染）                │
 └─────────────────────────────────────────────────┘
@@ -478,7 +478,7 @@ class Skill:
 **关于环境变量污染**：由于 `override=False`，后加载的 Skill `.env` 不会覆盖先加载的。但如果 Skill A 定义了 `API_KEY=xxx`，后续 Skill B 的脚本也可能读到这个值。为避免这种情况：
 
 - **短期方案**：命名约定，Skill 环境变量以 Skill 名为前缀（如 `TIANYANCHA_API_KEY`）
-- **长期方案**：在 `skill_complete` 时清理该 Skill 注入的变量（需记录注入了哪些 key）
+- ~~**长期方案**：在 `skill_complete` 时清理该 Skill 注入的变量~~（**已废弃**：`skill_complete` 工具已删除，2026-07-14）
 
 ---
 

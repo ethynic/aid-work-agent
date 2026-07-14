@@ -2,12 +2,10 @@
 Skill 系统优化 - 单元测试
 
 测试覆盖：
-1. SkillSession 生命周期
-2. _compress_skill_context 记忆压缩
-3. _handle_skill_execute command 可选化
-4. SkillLoader AgentSkills 兼容字段解析
-5. ShortTermMemory to_llm_messages Skill 摘要支持
-6. content_generate 新增预设类型
+1. _handle_skill_execute command 可选化
+2. SkillLoader AgentSkills 兼容字段解析
+3. ShortTermMemory to_llm_messages Skill 摘要支持
+4. content_generate 新增预设类型
 """
 
 import os
@@ -20,31 +18,6 @@ from datetime import datetime
 
 # 添加项目根目录到 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-
-class TestSkillSession(unittest.TestCase):
-    """SkillSession 数据类测试"""
-
-    def test_skill_session_creation(self):
-        """正常创建 SkillSession"""
-        from src.core.skill_session import SkillSession
-
-        session = SkillSession(
-            skill_name="test-skill",
-            start_index=5,
-            message_count_before=5
-        )
-        self.assertEqual(session.skill_name, "test-skill")
-        self.assertEqual(session.start_index, 5)
-        self.assertEqual(session.message_count_before, 5)
-        self.assertFalse(session.is_complete)
-
-    def test_skill_session_default_complete(self):
-        """SkillSession 默认 is_complete 为 False"""
-        from src.core.skill_session import SkillSession
-
-        session = SkillSession(skill_name="x", start_index=0, message_count_before=0)
-        self.assertFalse(session.is_complete)
 
 
 class TestSkillLoaderCompatibility(unittest.TestCase):
@@ -269,33 +242,6 @@ class TestShortTermMemorySkillSummary(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["content"], "你好")
 
-    def test_compress_skill_context_integration(self):
-        """集成测试：模拟 _compress_skill_context 后的消息结构"""
-        from src.memory.short_term import ShortTermMemory
-
-        memory = ShortTermMemory()
-        session_id = "test-session"
-
-        # 模拟 Skill 开始前有一条消息
-        memory.add(session_id, "user", "帮我写一篇文章")
-
-        # 模拟 _compress_skill_context 的行为
-        messages_before = list(memory._cache.get(session_id, []))
-        summary_message = {
-            "role": "system",
-            "content": "[技能执行记录] 使用技能「article-writing」完成任务。结果：已生成1000字文章",
-            "timestamp": datetime.now().isoformat(),
-            "_skill_summary": True
-        }
-        memory._cache[session_id] = list(messages_before + [summary_message])
-
-        # 验证 to_llm_messages 只返回 2 条消息
-        messages = memory.to_llm_messages(session_id)
-        self.assertEqual(len(messages), 2)
-        self.assertIn("帮我写一篇文章", messages[0]["content"])
-        self.assertIn("技能执行记录", messages[1]["content"])
-        self.assertEqual(messages[1]["role"], "user")
-
 
 class TestContentGenerateNewTypes(unittest.TestCase):
     """content_generate 新增预设类型测试"""
@@ -341,29 +287,15 @@ class TestContentGenerateNewTypes(unittest.TestCase):
         )
 
 
-class TestAgentSkillCompleteTool(unittest.TestCase):
-    """验证 skill_complete 工具定义正确"""
-
-    def test_skill_complete_tool_definition(self):
-        """skill_complete 工具定义正确"""
-        from src.tools.skill.skill_complete_tool import SkillCompleteTool
-
-        tool = SkillCompleteTool()
-        self.assertEqual(tool.name, "skill_complete")
-        self.assertTrue(tool.display_name)
-        defn = tool.to_tool_definition()
-        self.assertEqual(defn["name"], "skill_complete")
-        schema = defn["input_schema"]
-        required = schema.get("required", [])
-        properties = schema.get("properties", {})
-        self.assertIn("skill", required)
-        self.assertIn("summary", required)
+class TestSkillExecuteTool(unittest.TestCase):
+    """验证 skill_execute 工具定义正确"""
 
     def test_skill_execute_command_not_required(self):
         """skill_execute 的 command 不再是 required"""
+        from unittest.mock import MagicMock
         from src.tools.skill.skill_execute_tool import SkillExecuteTool
 
-        tool = SkillExecuteTool()
+        tool = SkillExecuteTool(skill_executor=MagicMock(), skill_registry=MagicMock())
         defn = tool.to_tool_definition()
         required = defn["input_schema"].get("required", [])
         self.assertIn("skill", required)

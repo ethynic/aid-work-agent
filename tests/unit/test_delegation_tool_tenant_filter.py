@@ -36,7 +36,7 @@ def _build_minimal_master_agent(subagent_registry: SubagentRegistry) -> Agent:
     _get_tools() 依赖的 self 属性：
       - mode
       - tool_registry
-      - _skill_execute_tool, _skill_complete_tool, _create_plan_tool, _clarify_tool
+      - _skill_execute_tool, _create_plan_tool, _clarify_tool
       - skill_registry
       - subagent_registry
     """
@@ -46,7 +46,6 @@ def _build_minimal_master_agent(subagent_registry: SubagentRegistry) -> Agent:
     agent.subagent_registry = subagent_registry
     agent.skill_registry = SkillRegistry()
     agent._skill_execute_tool = None
-    agent._skill_complete_tool = None
     agent._create_plan_tool = None
     agent._clarify_tool = None
     return agent

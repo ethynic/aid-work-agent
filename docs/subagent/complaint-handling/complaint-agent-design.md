@@ -428,9 +428,8 @@ business_pages:
 ## 工具使用规则
 
 1. **投诉处理的所有数据操作都通过 complaint-core 技能完成**
-2. 使用流程：`use_skill("complaint-core")` → 按需调用各命令 → `skill_complete()`
+2. 使用流程：`use_skill("complaint-core")` → 按需调用各命令 → 直接给出最终回复
 3. 如果配置了外部投诉系统API，通过 `http_api` 工具同步数据
-4. 每次处理完成后必须调用 `skill_complete` 总结处理结果
 
 ## 安全规则
 
@@ -777,7 +776,7 @@ CREATE INDEX IF NOT EXISTS idx_followups_tenant
     │   ├─ NotificationService.send() → 通知人工
     │   └─ 等待人工接管
     │
-    └─ skill_complete() → 总结处理结果
+    └─ 直接给出最终回复 → 总结处理结果
 ```
 
 ---
