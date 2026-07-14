@@ -1,8 +1,8 @@
 # 开发计划：图片资产全链路承载能力
 
-> **反向关联**：[设计文档](../system/image-asset-pipeline-design.md) · [ideas.md 第 37 条](../ideas.md)
+> **反向关联**：[设计文档](../system/image-asset-pipeline-design.md) · [ideas.md 第 37 条](../ideas.md) · [Phase 3 独立计划](plan-image-asset-pipeline-phase3.md)
 > **创建日期**：2026-07-13
-> **状态**：📋 待开发
+> **状态**：✅ Phase 0+1+2 已完成（2026-07-14）
 > **实施流程**：所有非平凡任务严格遵循 [.claude/rules/dev_workflow.md](../../.claude/rules/dev_workflow.md) 的「三智能体开发流程」（开发 → 测试 → CodeReview）。
 
 ---
@@ -1194,27 +1194,11 @@ Phase 2 完成验收
 
 ---
 
-## Phase 3：高级能力（按需，单独立子计划）
+## Phase 3：高级能力（按需）
 
-> Phase 3 是开放能力扩展，**估时和细节决策在 Phase 1+2 完成后再立子计划**，本计划仅记录候选方向。
+Phase 3 已剥离为独立计划：[plan-image-asset-pipeline-phase3.md](plan-image-asset-pipeline-phase3.md)
 
-### 候选方向
-
-| 方向 | 描述 | 触发条件 |
-|------|------|---------|
-| 文档解析器内嵌图提取 | Word/Excel/PPT/PDF 解析时提取内嵌图，注册为 ImageRef | 知识库内容图片检索需求 |
-| image_parser OCR + VLM | 实现 `src/tools/ocr/image_parser.py`，OCR + 多模态描述 → 可检索 chunk | 知识库图片内容检索需求 |
-| LLM `[[IMAGE:file_id]]` 占位符 | Agent 后处理将 LLM 文本中的占位符替换为 images 事件 | LLM 主动引用图片需要 |
-| wecom 渠道图片消息 | wecom adapter 实现 media.upload + image msg | wecom 渠道客户需要图片回复 |
-| PPT/PDF inliner 接入 | ppt_process / pdf_process 集成 image_inliner | 非 Word 文档嵌图需求 |
-| `kb://` scheme 支持 | inliner 支持 `![](kb://doc/42)` 等语义化引用 | LLM 频繁引用知识库图 |
-| HTML img tag 支持 | inliner 支持 `<img src>` HTML syntax | pdf_process / weasyprint 嵌图 |
-
-### Phase 3 优先级评估
-
-待 Phase 1+2 上线后，根据实际使用反馈确定优先级。预计最有可能优先做：
-- **wecom 渠道图片消息**（Phase 2 留的缺口，客户大概率会要）
-- **PPT/PDF inliner 接入**（与 Word 嵌图能力对齐）
+包含 8 个候选方向（wecom 渠道图片 / wecom_kf 语义对称修复 / PPT/PDF inliner / 文档解析器内嵌图提取 / OCR + VLM / LLM 占位符 / `kb://` scheme / HTML img tag），按实际使用反馈渐进投入，每个方向单独立子计划。
 
 ---
 
