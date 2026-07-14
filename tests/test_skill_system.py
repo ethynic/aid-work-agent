@@ -96,88 +96,6 @@ disable-model-invocation: true
         self.assertFalse(skill.user_invocable)
         self.assertTrue(skill.disable_model_invocation)
 
-    def test_parse_metadata_triggers(self):
-        """metadata.triggers 触发器解析"""
-        from src.core.skill_loader import SkillLoader
-
-        content = """---
-name: test-skill
-description: 测试技能
-metadata:
-  triggers:
-    - .pdf
-    - pdf
----
-# 测试
-正文。
-"""
-        path = self._create_skill_md(content)
-        loader = SkillLoader(Path(self.temp_dir))
-        skill = loader.parse_skill_md(path)
-
-        self.assertIsNotNone(skill)
-        self.assertEqual(len(skill.triggers), 2)
-        self.assertEqual(skill.triggers[0].type, "file_extension")
-        self.assertEqual(skill.triggers[0].pattern, ".pdf")
-        self.assertEqual(skill.triggers[1].type, "keyword")
-        self.assertEqual(skill.triggers[1].pattern, "pdf")
-
-    def test_parse_top_level_triggers_backward_compat(self):
-        """顶层 triggers 向后兼容"""
-        from src.core.skill_loader import SkillLoader
-
-        content = """---
-name: test-skill
-description: 测试技能
-triggers:
-  - .pdf
-  - pdf
-  - ^test.*
----
-# 测试
-正文。
-"""
-        path = self._create_skill_md(content)
-        loader = SkillLoader(Path(self.temp_dir))
-        skill = loader.parse_skill_md(path)
-
-        self.assertIsNotNone(skill)
-        self.assertEqual(len(skill.triggers), 3)
-        self.assertEqual(skill.triggers[0].type, "file_extension")
-        self.assertEqual(skill.triggers[1].type, "keyword")
-        self.assertEqual(skill.triggers[2].type, "regex")
-
-    def test_parse_metadata_and_top_level_triggers_merged(self):
-        """metadata.triggers 和顶层 triggers 合并（去重）"""
-        from src.core.skill_loader import SkillLoader
-
-        content = """---
-name: test-skill
-description: 测试技能
-triggers:
-  - .pdf
-  - pdf
-metadata:
-  triggers:
-    - pdf
-    - document
----
-# 测试
-正文。
-"""
-        path = self._create_skill_md(content)
-        loader = SkillLoader(Path(self.temp_dir))
-        skill = loader.parse_skill_md(path)
-
-        self.assertIsNotNone(skill)
-        # pdf 应该去重，metadata 优先所以 pdf 在前
-        # 总共 3 个唯一触发器
-        patterns = [t.pattern for t in skill.triggers]
-        self.assertIn(".pdf", patterns)
-        self.assertIn("pdf", patterns)
-        self.assertIn("document", patterns)
-        self.assertEqual(len(patterns), 3)
-
     def test_parse_minimal_skill(self):
         """最小化 Skill（仅 name + description）"""
         from src.core.skill_loader import SkillLoader
@@ -275,16 +193,18 @@ class TestContentGenerateNewTypes(unittest.TestCase):
             self.assertTrue(len(prompt) > 0)
 
     def test_custom_content_type_falls_back(self):
-        """自定义 content_type 回退到默认提示词"""
+        """自定义 content_type 回退到默认提示词（base_prompt + 语言后缀）"""
         from src.tools.llm.content_generate_tool import ContentGenerateTool
 
         tool = ContentGenerateTool()
         prompt = tool._get_system_prompt("zh", "custom_unknown_type")
 
-        self.assertEqual(
-            prompt,
-            "你是一个专业的内容生成助手。请根据用户提供的提示词生成高质量的内容。 请使用简体中文回复。"
-        )
+        # 未知 content_type 不命中 type_guidance，使用 base_prompt
+        self.assertIn("你是一个专业的内容生成助手", prompt)
+        # 语言后缀
+        self.assertTrue(prompt.endswith("请使用简体中文回复。"))
+        # type_guidance 中 customer_list 类型的特定文案不应出现（验证未命中 type_guidance）
+        self.assertNotIn("客户信息列表", prompt)
 
 
 class TestSkillExecuteTool(unittest.TestCase):

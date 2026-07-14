@@ -77,17 +77,31 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
             _make_subagent_config("外贸获客智能体", "trade-specialist", "海外潜在客户获取"),
             _make_subagent_config("全筑合同归档自动化审核", "contract-audit", "合同审核"),
         ])
+        # 预先 patch settings 为 MagicMock，避免每个 with patch 重复；
+        # 显式置 encryption_key=None，防止 subscription_db import 时
+        # EncryptionManager(MagicMock) 触发 Fernet → base64 报错
+        self._settings_patcher = patch("src.config.settings.settings")
+        self.mock_settings = self._settings_patcher.start()
+        self.mock_settings.encryption_key = None
+        self.addCleanup(self._settings_patcher.stop)
+
+        # 预先 patch get_db_connection，避免 SaaS 分支触发 PostgreSQL 连接池初始化
+        # （测试中 SubscriptionDB.get_allowed_subagent_types 已被各 SaaS 测试单独 mock）
+        self._db_patcher = patch("src.db.database.get_db_connection")
+        mock_conn_cm = self._db_patcher.start()
+        mock_conn_cm.return_value.__enter__.return_value = MagicMock()
+        mock_conn_cm.return_value.__exit__.return_value = None
+        self.addCleanup(self._db_patcher.stop)
 
     def test_get_tools_without_filter_includes_all_subagents(self):
         """【基线】非 SaaS 模式（demo 模式）：委派工具列出全部子智能体（与系统提示词一致）"""
         agent = _build_minimal_master_agent(self.registry)
 
-        with patch("src.config.settings.settings") as mock_settings:
-            mock_settings.saas.enabled = False
-            mock_settings.demo.enabled = True
-            # 非 SaaS：available_subagents 不传，落到 demo 分支使用全部
-            with patch("src.saas.context.get_current_tenant_id", return_value=None):
-                tools = agent._get_tools()
+        self.mock_settings.saas.enabled = False
+        self.mock_settings.demo.enabled = True
+        # 非 SaaS：available_subagents 不传，落到 demo 分支使用全部
+        with patch("src.saas.context.get_current_tenant_id", return_value=None):
+            tools = agent._get_tools()
 
         delegate = _extract_delegate_tool(tools)
         self.assertIsNotNone(delegate, "MASTER 模式必须有 delegate_to_subagent 工具")
@@ -99,17 +113,16 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         agent = _build_minimal_master_agent(self.registry)
 
         # 模拟租户 tenant_001 只订阅了 travel-advisor
-        with patch("src.config.settings.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-            mock_settings.demo.enabled = False
-            with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
-                with patch(
-                    "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
-                    return_value=["travel-advisor"],
-                ) as mock_get_allowed:
-                    tools = agent._get_tools()
-                    # 必须查询过租户订阅
-                    mock_get_allowed.assert_called_once()
+        self.mock_settings.saas.enabled = True
+        self.mock_settings.demo.enabled = False
+        with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
+            with patch(
+                "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
+                return_value=["travel-advisor"],
+            ) as mock_get_allowed:
+                tools = agent._get_tools()
+                # 必须查询过租户订阅
+                mock_get_allowed.assert_called_once()
 
         delegate = _extract_delegate_tool(tools)
         self.assertIsNotNone(delegate, "MASTER 模式必须有 delegate_to_subagent 工具")
@@ -125,15 +138,14 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         """description 文本（可用的子智能体说明）也必须只列出租户订阅的子智能体"""
         agent = _build_minimal_master_agent(self.registry)
 
-        with patch("src.config.settings.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-            mock_settings.demo.enabled = False
-            with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
-                with patch(
-                    "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
-                    return_value=["travel-advisor"],
-                ):
-                    tools = agent._get_tools()
+        self.mock_settings.saas.enabled = True
+        self.mock_settings.demo.enabled = False
+        with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
+            with patch(
+                "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
+                return_value=["travel-advisor"],
+            ):
+                tools = agent._get_tools()
 
         delegate = _extract_delegate_tool(tools)
         self.assertIsNotNone(delegate)
@@ -158,52 +170,50 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         """_get_tools 在 Agent 主循环中每轮都被调用，必须缓存订阅查询，避免每轮查 DB"""
         agent = _build_minimal_master_agent(self.registry)
 
-        with patch("src.config.settings.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-            mock_settings.demo.enabled = False
-            with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
-                with patch(
-                    "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
-                    return_value=["travel-advisor"],
-                ) as mock_get_allowed:
-                    # 多次调用 _get_tools 模拟 Agent 循环
-                    for _ in range(5):
-                        agent._get_tools()
+        self.mock_settings.saas.enabled = True
+        self.mock_settings.demo.enabled = False
+        with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
+            with patch(
+                "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
+                return_value=["travel-advisor"],
+            ) as mock_get_allowed:
+                # 多次调用 _get_tools 模拟 Agent 循环
+                for _ in range(5):
+                    agent._get_tools()
 
-                    # 不论缓存与否，订阅查询次数应该远小于 5
-                    self.assertLess(
-                        mock_get_allowed.call_count,
-                        5,
-                        f"_get_tools 重复调用 5 次不应触发 5 次 DB 查询（实际 {mock_get_allowed.call_count} 次）",
-                    )
+                # 不论缓存与否，订阅查询次数应该远小于 5
+                self.assertLess(
+                    mock_get_allowed.call_count,
+                    5,
+                    f"_get_tools 重复调用 5 次不应触发 5 次 DB 查询（实际 {mock_get_allowed.call_count} 次）",
+                )
 
     def test_tenant_subscription_query_is_invalidated_when_tenant_changes(self):
         """切换租户上下文后，必须重新查询订阅列表"""
         agent = _build_minimal_master_agent(self.registry)
 
-        with patch("src.config.settings.settings") as mock_settings:
-            mock_settings.saas.enabled = True
-            mock_settings.demo.enabled = False
+        self.mock_settings.saas.enabled = True
+        self.mock_settings.demo.enabled = False
 
-            with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
-                with patch(
-                    "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
-                    return_value=["travel-advisor"],
-                ) as mock_get_allowed:
-                    agent._get_tools()
-                    first_tenant_calls = mock_get_allowed.call_count
-                    self.assertEqual(first_tenant_calls, 1)
+        with patch("src.saas.context.get_current_tenant_id", return_value="tenant_001"):
+            with patch(
+                "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
+                return_value=["travel-advisor"],
+            ) as mock_get_allowed:
+                agent._get_tools()
+                first_tenant_calls = mock_get_allowed.call_count
+                self.assertEqual(first_tenant_calls, 1)
 
-            # 切换到不同租户
-            with patch("src.saas.context.get_current_tenant_id", return_value="tenant_002"):
-                with patch(
-                    "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
-                    return_value=["trade-specialist"],
-                ) as mock_get_allowed_2:
-                    tools = agent._get_tools()
-                    mock_get_allowed_2.assert_called_once()
-                    enum = _extract_delegate_tool(tools)["input_schema"]["properties"]["subagent_name"]["enum"]
-                    self.assertEqual(enum, ["外贸获客智能体"])
+        # 切换到不同租户
+        with patch("src.saas.context.get_current_tenant_id", return_value="tenant_002"):
+            with patch(
+                "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
+                return_value=["trade-specialist"],
+            ) as mock_get_allowed_2:
+                tools = agent._get_tools()
+                mock_get_allowed_2.assert_called_once()
+                enum = _extract_delegate_tool(tools)["input_schema"]["properties"]["subagent_name"]["enum"]
+                self.assertEqual(enum, ["外贸获客智能体"])
 
 
 if __name__ == "__main__":
