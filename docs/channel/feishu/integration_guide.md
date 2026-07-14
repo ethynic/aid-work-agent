@@ -116,7 +116,17 @@
       "im:message:send_sys_msg",
       "im:message:update",
       "im:resource",
-      "wiki:node:read"
+      "wiki:node:read",
+      "contact:user.basic_profile:readonly",
+      "contact:user.department:readonly",
+      "contact:user.email:readonly",
+      "contact:user.employee:readonly",
+      "contact:user.gender:readonly",
+      "contact:user.id:readonly",
+      "contact:user.job_family:readonly",
+      "contact:user.job_level:readonly",
+      "contact:user.phone:readonly",
+      "contact:user.base:readonly"
     ],
     "user": [
       "offline_access"
