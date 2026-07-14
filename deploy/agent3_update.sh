@@ -30,13 +30,13 @@ find . -type f -name "*.pyc" -delete
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 判断前端是否需要编译
-if [ "$OLD_HEAD" != "$NEW_HEAD" ] || [ ! -d "frontend/dist" ]; then
-   FRONTEND_CHANGED=1
+if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+   FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
 else
    FRONTEND_CHANGED=0
 fi
 
-if [ "$FRONTEND_CHANGED" -gt 0 ]; then
+if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "frontend/dist" ]; then
     echo "[2] 前端编译..."
     rm -rf frontend/dist/*
     docker run --rm -v /var/www/agent3/frontend:/app -w /app node:22-alpine npm install
