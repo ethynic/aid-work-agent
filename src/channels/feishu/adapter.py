@@ -31,7 +31,6 @@ from src.channels.feishu.media import FeishuMedia
 from src.channels.feishu.message_builder import FeishuMessageBuilder
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 from src.models.message import ChannelType, MessageType, UnifiedMessage, UnifiedResponse
 
 
@@ -727,43 +726,13 @@ class FeishuAdapter(ChannelAdapter):
             )
 
             data = response.json()
-            tlog(
-                "飞书手机号注入",
-                "contact/v3/users 响应: open_id={oid}, http_status={sts}, "
-                "feishu_code={code}, feishu_msg={msg}",
-                oid=user_id,
-                sts=response.status_code,
-                code=data.get("code"),
-                msg=data.get("msg", ""),
-            )
             if data.get("code", 0) != 0:
                 logger.error(
                     f"获取用户信息失败: code={data.get('code')}, msg={data.get('msg')}"
                 )
-                tlog(
-                    "飞书手机号注入",
-                    "飞书 contact API 返回非 0 code（鉴权/权限问题）: "
-                    "open_id={oid}, code={code}, msg={msg}",
-                    oid=user_id,
-                    code=data.get("code"),
-                    msg=data.get("msg", ""),
-                    level="ERROR",
-                )
                 return {}
 
             user = data.get("data", {}).get("user", {})
-            raw_mobile = user.get("mobile", "")
-            tlog(
-                "飞书手机号注入",
-                "解析 user 字段: open_id={oid}, name={name}, "
-                "raw_mobile={mobile}, mobile_type={mtype}, "
-                "has_enterprise_email={has_email}",
-                oid=user_id,
-                name=user.get("name", "") or "(空)",
-                mobile=raw_mobile or "(空)",
-                mtype=type(raw_mobile).__name__,
-                has_email=bool(user.get("email")),
-            )
 
             return {
                 "user_id": user.get("open_id", ""),
@@ -778,13 +747,6 @@ class FeishuAdapter(ChannelAdapter):
 
         except Exception as e:
             logger.error(f"获取用户信息异常: {e}")
-            tlog(
-                "飞书手机号注入",
-                "get_user_info 异常: open_id={oid}, err={err}",
-                oid=user_id,
-                err=str(e),
-                level="ERROR",
-            )
             return {}
 
     # ==================== 签名验证 ====================

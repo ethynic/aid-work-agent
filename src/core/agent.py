@@ -754,23 +754,18 @@ class Agent:
             user_info_section = f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
             if user.phone:
                 user_info_section += f"手机号：{user.phone}\n"
-            tlog(
-                "飞书手机号注入",
-                "_build_system_prompt 构造 ## 当前用户 段: "
-                "user_is_none=False, user_id={uid}, user_name={name}, "
-                "user_phone={phone}, section_len={slen}, has_phone_line={has_phone}",
-                uid=user.user_id,
-                name=user.name or "(空)",
-                phone=user.phone or "(空)",
-                slen=len(user_info_section),
-                has_phone=bool(user.phone),
-            )
-        else:
-            tlog(
-                "飞书手机号注入",
-                "_build_system_prompt: user 为 None，## 当前用户 段不会被注入",
-                level="WARNING",
-            )
+            if getattr(user, "channel_type", None) == "dingtalk":
+                tlog(
+                    "钉钉用户信息",
+                    "_build_system_prompt 构造 ## 当前用户 段: "
+                    "user_id={uid}, user_name={name}, user_phone={phone}, "
+                    "section_len={slen}, has_phone_line={has_phone}",
+                    uid=user.user_id,
+                    name=user.name or "(空)",
+                    phone=user.phone or "(空)",
+                    slen=len(user_info_section),
+                    has_phone=bool(user.phone),
+                )
 
         # 长期记忆注入：从用户记忆文件加载
         long_term_memory = self._load_long_term_memory(user)

@@ -69,6 +69,7 @@ https://agent2.aidingyi.cn/t/tenant_b6459319f621/dingtalk/callback/chan_719d16d6
 | `Contact.User.Read` | 查询用户信息（可选） |
 | `qyapi_chat_robot_send` | 机器人发消息 |
 | `qyapi_robot_sendmsg` | 发送机器人消息 |
+| `Contact.User.mobile` | 个人手机号信息 |
 
 不同钉钉版本权限名可能略有差异，凡涉及 **机器人发消息 / 文件上传** 的都开启。
 

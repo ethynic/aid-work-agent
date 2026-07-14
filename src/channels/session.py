@@ -881,24 +881,17 @@ class ChannelSessionManager:
                 kwargs["extra_system_prompt"] = agent_extra_system_prompt
             if agent_user is not None:
                 kwargs["user"] = agent_user
-                tlog(
-                    "飞书手机号注入",
-                    "process_and_persist._processor 透传 user 给 agent: "
-                    "session={sid}, user_is_none=False, "
-                    "user_phone={phone}, user_name={name}, user_id={uid}",
-                    sid=session_id[:20],
-                    phone=(getattr(agent_user, "phone", None) or "(空)"),
-                    name=(getattr(agent_user, "name", None) or "(空)"),
-                    uid=getattr(agent_user, "user_id", None) or "(空)",
-                )
-            else:
-                tlog(
-                    "飞书手机号注入",
-                    "process_and_persist._processor 跳过 user 注入（agent_user 为 None）: "
-                    "session={sid}",
-                    sid=session_id[:20],
-                    level="WARNING",
-                )
+                if getattr(agent_user, "channel_type", None) == "dingtalk":
+                    tlog(
+                        "钉钉用户信息",
+                        "process_and_persist._processor 透传 user 给 agent: "
+                        "session={sid}, user_phone={phone}, user_name={name}, "
+                        "user_id={uid}",
+                        sid=session_id[:20],
+                        phone=(getattr(agent_user, "phone", None) or "(空)"),
+                        name=(getattr(agent_user, "name", None) or "(空)"),
+                        uid=getattr(agent_user, "user_id", None) or "(空)",
+                    )
             effective_attachments = (
                 agent_attachments_override
                 if agent_attachments_override is not None
