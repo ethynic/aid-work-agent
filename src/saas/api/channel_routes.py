@@ -1535,6 +1535,27 @@ async def _process_tenant_wecom_kf_messages(
                     f"msgtype={msg_type}, open_kfid={open_kfid}"
                 )
 
+                # 实验期埋点：全量记录所有非客户消息（含事件、员工消息、未知 origin）
+                # 用于验证企微 sync_msg 到底能返回什么内容
+                if msg_origin != 3:
+                    try:
+                        import json as _json
+                        _tlog(
+                            "wecom_kf_servicer_msg",
+                            "open_kfid={kfid} msgid={mid} origin={og} msgtype={mt} "
+                            "ext_user={eu} servicer={sv} send_time={st} raw={raw}",
+                            kfid=open_kfid,
+                            mid=msg_id,
+                            og=msg_origin,
+                            mt=msg_type,
+                            eu=msg.get("external_userid"),
+                            sv=msg.get("servicer_userid"),
+                            st=msg.get("send_time"),
+                            raw=_json.dumps(msg, ensure_ascii=False)[:2000],
+                        )
+                    except Exception:
+                        pass
+
                 # ===== 撤回消息处理：在 origin 过滤之前识别 user_recall_msg 事件 =====
                 if msg_type == "event" and msg.get("event", {}).get("event_type") == "user_recall_msg":
                     event_data = msg.get("event", {})
@@ -1638,26 +1659,6 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
-                    # 实验期埋点：验证企微 sync_msg 是否返回员工（origin=4）消息的完整内容
-                    # 观察 log/temp/wecom_kf_servicer_msg.log，确认后进入阶段二正式实现
-                    if msg_origin == 4:
-                        try:
-                            import json as _json
-                            _tlog(
-                                "wecom_kf_servicer_msg",
-                                "open_kfid={kfid} ext_user={eu} servicer={sv} msgid={mid} "
-                                "msgtype={mt} send_time={st} content={ct} raw={raw}",
-                                kfid=open_kfid,
-                                eu=msg.get("external_userid"),
-                                sv=msg.get("servicer_userid"),
-                                mid=msg_id,
-                                mt=msg_type,
-                                st=msg.get("send_time"),
-                                ct=(msg.get("text") or {}).get("content"),
-                                raw=_json.dumps(msg, ensure_ascii=False)[:1000],
-                            )
-                        except Exception:
-                            pass
                     logger.debug(f"[wecom_kf] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
                     continue
 
