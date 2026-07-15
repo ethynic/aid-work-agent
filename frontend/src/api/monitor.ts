@@ -131,6 +131,26 @@ export async function getSessionTraces(sessionId: string, includeIntermediate = 
   return res.json()
 }
 
+export async function getTraces(params: {
+  page?: number
+  page_size?: number
+  status?: string
+  tenant_id?: string
+  time_range?: string
+}): Promise<{ success: boolean; data: TraceSummary[]; total: number; page: number; page_size: number; total_pages: number }> {
+  const query = new URLSearchParams()
+  if (params.page) query.set('page', String(params.page))
+  if (params.page_size) query.set('page_size', String(params.page_size))
+  if (params.status) query.set('status', params.status)
+  if (params.tenant_id) query.set('tenant_id', params.tenant_id)
+  if (params.time_range) query.set('time_range', params.time_range)
+
+  const res = await fetch(`${API_BASE}/traces?${query.toString()}`, {
+    headers: { ...getAuthHeader() },
+  })
+  return res.json()
+}
+
 export async function getTraceDetail(traceId: string): Promise<{
   success: boolean
   trace: TraceDetail | null

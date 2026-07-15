@@ -47,19 +47,6 @@ class SendCodeRequest(BaseModel):
     phone: str
 
 
-class RegisterRequest(BaseModel):
-    phone: str
-    password: str
-    code: str
-
-
-
-class BindPhoneRequest(BaseModel):
-    user_id: str
-    phone: str
-    code: str
-
-
 class LoginRequest(BaseModel):
     """新的登录请求（手机号/用户名 + 密码 + 图形验证码）"""
     identifier: str  # 手机号或用户名
@@ -359,14 +346,6 @@ async def get_captcha():
         "captcha_id": captcha["captcha_id"],
         "svg_base64": captcha["svg_base64"]
     }
-
-
-@router.post("/captcha/validate")
-async def validate_captcha(captcha_id: str, code: str):
-    """验证图形验证码（用于重置密码前校验）"""
-    if verify_captcha(captcha_id, code):
-        return {"success": True, "message": "验证码正确"}
-    return {"success": False, "message": "验证码错误或已过期，过期时间5分钟"}
 
 
 @router.post("/phone/send-code")
@@ -756,57 +735,6 @@ async def phone_code_login(request: PhoneCodeLoginRequest):
                     user=get_user_info_with_admin(user)
             )
     return LoginResponse(success=False, message="验证码错误或已过期，过期时间5分钟")
-
-
-@router.post("/register")
-async def register(request: RegisterRequest):
-    """用户注册"""
-    # 验证验证码
-    if not verify_sms_code(request.phone, request.code):
-        return {"success": False, "message": "验证码错误或已过期，过期时间5分钟"}
-    
-    # 检查手机号是否已注册
-    if UserDB.get_by_phone(request.phone):
-        return {"success": False, "message": "手机号已注册"}
-
-    # 创建用户
-    user = UserDB.create(phone=request.phone, password=request.password)
-    if user:
-        token = generate_token(user["user_id"])
-        return LoginResponse(
-            success=True,
-            token=token,
-            user=get_user_info_with_admin(user)
-        )
-    return {"success": False, "message": "注册失败"}
-
-
-@router.post("/bind-phone")
-async def bind_phone(request: BindPhoneRequest):
-    """绑定手机号（用于微信用户绑定手机）"""
-    if not verify_sms_code(request.phone, request.code):
-        return {"success": False, "message": "验证码错误或已过期，过期时间5分钟"}
-    
-    # 检查手机号是否已被占用
-    existing = UserDB.get_by_phone(request.phone)
-    if existing and existing["user_id"] != request.user_id:
-        return {"success": False, "message": "手机号已被其他用户绑定"}
-
-    user = UserDB.get_by_id(request.user_id)
-    if not user:
-        return {"success": False, "message": "用户不存在"}
-
-    # 更新用户手机号
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE users SET phone = %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s
-        """, (request.phone, request.user_id))
-        conn.commit()
-
-    # 清除缓存
-    invalidate_user_cache(request.user_id)
-    return {"success": True, "message": "手机号绑定成功"}
 
 
 @router.get("/me")

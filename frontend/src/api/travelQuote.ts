@@ -412,6 +412,14 @@ export async function importSeasons(file: File): Promise<{ success: boolean; dat
   return uploadImport('/seasons/import', file)
 }
 
+export async function importAttractions(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/kb/attractions/import', file)
+}
+
+export async function importHotels(file: File): Promise<{ success: boolean; data: UuidImportResult }> {
+  return uploadImport('/kb/hotels/import', file)
+}
+
 // ============================================================
 // 知识库模式 API
 // ============================================================
@@ -488,4 +496,41 @@ export async function getAttractionKB(docId: number): Promise<any> {
   if (!res.ok) throw new Error('获取景点详情失败')
   const json = await res.json()
   return json.data
+}
+
+/** 导入酒店到知识库 */
+export async function importHotelKB(data: {
+  tenant_id: string
+  hotel_name: string
+  region: string
+  info_text: string
+  price_table_text: string
+  metadata?: Record<string, any>
+}): Promise<any> {
+  const res = await fetch(`${API_BASE}/import/hotels-kb`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('导入酒店知识库失败')
+  return res.json()
+}
+
+/** 导入景点到知识库 */
+export async function importAttractionKB(data: {
+  tenant_id: string
+  attraction_name: string
+  region: string
+  category: string
+  info_text: string
+  ticket_table_text: string
+  metadata?: Record<string, any>
+}): Promise<any> {
+  const res = await fetch(`${API_BASE}/import/attractions-kb`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('导入景点知识库失败')
+  return res.json()
 }

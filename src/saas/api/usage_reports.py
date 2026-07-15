@@ -52,30 +52,6 @@ async def get_usage_summary(
     }
 
 
-@router.get("/tokens")
-async def get_token_trend(
-    request: Request,
-    days: int = Query(30, description="天数", ge=1, le=365),
-):
-    """获取 Token 用量趋势"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-    tenant_id = admin["tenant_id"]
-
-    end_date = datetime.now().strftime("%Y-%m-%d 23:59:59")
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
-
-    trend = UsageLogDB.get_token_trend(tenant_id, start_date, end_date)
-    return {
-        "success": True,
-        "start_date": start_date,
-        "end_date": end_date,
-        "trend": trend,
-    }
-
-
 @router.get("/users")
 async def get_user_usage(
     request: Request,
