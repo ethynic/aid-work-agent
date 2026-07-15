@@ -1638,6 +1638,26 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 跳过非客户消息（origin=3 是客户，origin=4 是接待人员）
                 if msg.get("origin") != 3:
+                    # 实验期埋点：验证企微 sync_msg 是否返回员工（origin=4）消息的完整内容
+                    # 观察 log/temp/wecom_kf_servicer_msg.log，确认后进入阶段二正式实现
+                    if msg_origin == 4:
+                        try:
+                            import json as _json
+                            _tlog(
+                                "wecom_kf_servicer_msg",
+                                "open_kfid={kfid} ext_user={eu} servicer={sv} msgid={mid} "
+                                "msgtype={mt} send_time={st} content={ct} raw={raw}",
+                                kfid=open_kfid,
+                                eu=msg.get("external_userid"),
+                                sv=msg.get("servicer_userid"),
+                                mid=msg_id,
+                                mt=msg_type,
+                                st=msg.get("send_time"),
+                                ct=(msg.get("text") or {}).get("content"),
+                                raw=_json.dumps(msg, ensure_ascii=False)[:1000],
+                            )
+                        except Exception:
+                            pass
                     logger.debug(f"[wecom_kf] 跳过非客户消息: msgid={msg_id}, origin={msg_origin}")
                     continue
 
@@ -2267,6 +2287,18 @@ async def _handle_kf_session_status_change(callback_root, tenant_id: str) -> Non
 
         # 员工结束对话（service_state=4）时，通知客户（历史对话保留，由 system 标记消息防止 Agent 误触发转人工）
         if service_state == 4 and updated_count > 0:
+            # 实验期埋点：记录会话结束事件时刻，便于与 wecom_kf_servicer_msg.log 比对
+            # 验证结束前员工的最后消息是否被 sync_msg 拉到
+            try:
+                _tlog(
+                    "wecom_kf_servicer_msg",
+                    "[SESSION_END] open_kfid={kfid} ext_user={eu} servicer={sv} state=4",
+                    kfid=open_kfid,
+                    eu=external_userid,
+                    sv=servicer_userid,
+                )
+            except Exception:
+                pass
             await _on_kf_session_ended(tenant_id, open_kfid, external_userid)
 
     except Exception as e:
