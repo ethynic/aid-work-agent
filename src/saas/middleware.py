@@ -33,13 +33,11 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
 
     在每个请求开始时解析 tenant_id 并设置到：
     - request.state.tenant_id
-    - request.state.instance_id
-    - ContextVar (current_tenant_id, current_instance_id)
+    - ContextVar (current_tenant_id)
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         tenant_id = None
-        instance_id = None
         user_id = None
 
         try:
@@ -49,7 +47,6 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             tenant_match = _TENANT_CALLBACK_PATTERN.match(path)
             if tenant_match:
                 tenant_id = tenant_match.group(1)
-                # 后续 Phase 会从 agent_instances 查询 instance_id
                 logger.debug(f"[TenantMiddleware] Tenant callback: tenant_id={tenant_id}")
 
             # 2. SaaS 管理 API：/api/saas/*
@@ -81,8 +78,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
 
         # 设置上下文
         request.state.tenant_id = tenant_id
-        request.state.instance_id = instance_id
-        set_tenant_context(tenant_id, instance_id, user_id=user_id)
+        set_tenant_context(tenant_id, user_id=user_id)
 
         try:
             response = await call_next(request)

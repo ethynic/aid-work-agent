@@ -26,7 +26,6 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from loguru import logger
 
 from src.saas.db.tenant_db import TenantDB
-from src.saas.db.agent_instance_db import AgentInstanceDB
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.services.channel_factory import ChannelFactory
 from src.channels.session import channel_session_manager

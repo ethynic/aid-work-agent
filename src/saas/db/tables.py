@@ -73,28 +73,6 @@ def init_saas_tables(conn):
         ON subscriptions(user_id, status)
         """)
 
-        # 5. 智能体实例表
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS agent_instances (
-            id SERIAL PRIMARY KEY,
-            instance_id TEXT UNIQUE NOT NULL,
-            tenant_id TEXT NOT NULL,
-            subscription_id TEXT,
-            subagent_type TEXT NOT NULL,
-            display_name TEXT NOT NULL,
-            status TEXT DEFAULT 'idle',
-            config TEXT,
-            bound_channel_type TEXT,
-            allowed_skills TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-        cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant
-        ON agent_instances(tenant_id, status)
-        """)
-
         # 8. 用户+数字员工授权表
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_agent_permissions (

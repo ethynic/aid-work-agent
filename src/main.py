@@ -902,7 +902,6 @@ async def chat(request: Request):
 
         # 通过默认路由获取 Agent
         _tenant_id = getattr(request.state, 'tenant_id', None)
-        instance_id = getattr(request.state, 'instance_id', None)
         # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
         subagent_name = _resolve_default_subagent(subagent_name, _tenant_id, current_user)
         agent = agent_router.get_agent(subagent_name, session_id, tenant_id=_tenant_id)
@@ -910,10 +909,6 @@ async def chat(request: Request):
         # 注入 tenant_id（供租户 skills 按需加载使用）
         if _tenant_id and not agent._init_tenant_id:
             agent._init_tenant_id = _tenant_id
-
-        # 注入 instance_id（供回复风格实例级别优先级使用）
-        if instance_id:
-            agent._instance_id = instance_id
 
         # Process message — process_message_sync is now pure async, no thread needed
         response_text = await agent.process_message_sync(
@@ -1339,7 +1334,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
 
     # 通过租户实例管理器或默认路由获取 Agent
     _tenant_id = getattr(http_request.state, 'tenant_id', None)
-    _instance_id = getattr(http_request.state, 'instance_id', None) if settings.saas.enabled else None
     # 未指定子智能体时，检查租户是否只有 1 个可用智能体，自动路由
     resolved_subagent = _resolve_default_subagent(request.subagent, _tenant_id, current_user)
     agent = agent_router.get_agent(resolved_subagent, session_id, tenant_id=_tenant_id)
@@ -1347,10 +1341,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 注入 tenant_id（供租户 skills 按需加载使用）
     if _tenant_id and not agent._init_tenant_id:
         agent._init_tenant_id = _tenant_id
-
-    # 注入 instance_id（供回复风格实例级别优先级使用）
-    if _instance_id:
-        agent._instance_id = _instance_id
 
     async def event_generator():
         """SSE事件生成器 — 直接 async for 迭代，无需线程"""
@@ -1663,7 +1653,7 @@ from src.api import memory as memory_api
 app.include_router(memory_api.router)
 
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
-from src.saas.api import tenant_auth, tenant_mgmt, subscriptions, agent_instances
+from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
 from src.saas.api import context_compression_routes
@@ -1672,7 +1662,6 @@ from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_a
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
 app.include_router(subscriptions.router)
-app.include_router(agent_instances.router)
 app.include_router(channel_config.router)
 app.include_router(tenant_skills.router)
 app.include_router(channel_routes.router)

@@ -327,19 +327,3 @@ class SubscriptionDB:
         cursor.execute("DELETE FROM user_agent_permissions WHERE agent_id = %s", (agent_id,))
         conn.commit()
         logger.info(f"Removed agent {agent_id} from all tenant subscriptions and user permissions")
-
-    @staticmethod
-    def get_active_by_instance(instance_id: str) -> Optional[Dict[str, Any]]:
-        """根据 agent_instance 获取关联的有效订阅"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT s.* FROM subscriptions s
-                JOIN agent_instances ai ON ai.subscription_id = s.subscription_id
-                WHERE ai.instance_id = %s
-                  AND s.status = '{SubscriptionStatus.ACTIVE.value}'
-                  AND s.starts_at <= CURRENT_TIMESTAMP
-                  AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
-            """, (instance_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None

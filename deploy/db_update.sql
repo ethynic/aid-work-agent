@@ -1027,18 +1027,10 @@ DROP INDEX IF EXISTS idx_users_tenant_phone;
 CREATE INDEX IF NOT EXISTS idx_users_tenant_phone ON users (tenant_id, phone) WHERE phone IS NOT NULL AND tenant_id IS NOT NULL;
 
 -- ============================================================================
--- 2026-07-15 废弃智能体实例并发控制功能：删除 agent_instances 表的
--- status/current_session_id/current_user_id/locked_at/lock_expires_at 列及
--- 相关索引，删除排队表 agent_instance_queue
+-- 2026-07-15 废弃智能体实例功能：彻底删除 agent_instances 表及排队表
 -- ============================================================================
 DROP INDEX IF EXISTS idx_agent_instances_lock_expires;
 DROP INDEX IF EXISTS idx_agent_instances_tenant;
 DROP INDEX IF EXISTS idx_agent_instances_tenant_type;
-ALTER TABLE agent_instances DROP COLUMN IF EXISTS status;
-ALTER TABLE agent_instances DROP COLUMN IF EXISTS current_session_id;
-ALTER TABLE agent_instances DROP COLUMN IF EXISTS current_user_id;
-ALTER TABLE agent_instances DROP COLUMN IF EXISTS locked_at;
-ALTER TABLE agent_instances DROP COLUMN IF EXISTS lock_expires_at;
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type);
 DROP TABLE IF EXISTS agent_instance_queue;
+DROP TABLE IF EXISTS agent_instances;

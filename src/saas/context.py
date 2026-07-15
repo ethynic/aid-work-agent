@@ -1,7 +1,7 @@
 """
 租户上下文管理
 
-使用 ContextVar 在请求生命周期内传递 tenant_id、user_id 和 instance_id。
+使用 ContextVar 在请求生命周期内传递 tenant_id 和 user_id。
 中间件设置，业务代码读取。
 """
 
@@ -14,21 +14,16 @@ current_tenant_id: ContextVar[Optional[str]] = ContextVar("current_tenant_id", d
 # 当前用户 ID
 current_user_id: ContextVar[Optional[str]] = ContextVar("current_user_id", default=None)
 
-# 当前智能体实例 ID（租户级请求时有值）
-current_instance_id: ContextVar[Optional[str]] = ContextVar("current_instance_id", default=None)
 
-
-def set_tenant_context(tenant_id: Optional[str], instance_id: Optional[str] = None, user_id: Optional[str] = None):
+def set_tenant_context(tenant_id: Optional[str], user_id: Optional[str] = None):
     """设置当前租户上下文"""
     current_tenant_id.set(tenant_id)
-    current_instance_id.set(instance_id)
     current_user_id.set(user_id)
 
 
 def clear_tenant_context():
     """清除租户上下文"""
     current_tenant_id.set(None)
-    current_instance_id.set(None)
     current_user_id.set(None)
 
 
@@ -40,8 +35,3 @@ def get_current_tenant_id() -> Optional[str]:
 def get_current_user_id() -> Optional[str]:
     """获取当前用户 ID"""
     return current_user_id.get()
-
-
-def get_current_instance_id() -> Optional[str]:
-    """获取当前实例 ID"""
-    return current_instance_id.get()

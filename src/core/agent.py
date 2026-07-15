@@ -225,7 +225,6 @@ class Agent:
 
         # 租户 skills 按需加载状态
         self._init_tenant_id = tenant_id  # 初始化时传入的 tenant_id
-        self._instance_id = None           # 当前关联的数字员工实例ID（运行时注入）
         self._loaded_tenant_id = None
         self._skills_loaded_at = 0.0
 
@@ -971,9 +970,8 @@ class Agent:
         """
         解析当前应使用的回复风格（优先级从高到低）：
         0. 用户长期记忆中的 reply_style（用户主动设定，最高优先）
-        1. 数字员工实例级别（agent_instances.reply_style_id）
-        2. 子智能体/独立模式且配置了 reply_style
-        3. 全局默认（config.yaml 中 agent.reply_style）
+        1. 子智能体/独立模式且配置了 reply_style
+        2. 全局默认（config.yaml 中 agent.reply_style）
         """
         # 优先级 0（最高）：用户长期记忆中的 reply_style
         if user and settings.memory.long_term.enabled:
@@ -990,22 +988,12 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Failed to read user reply_style from memory: {e}")
 
-        # 优先级 1：数字员工实例级别
-        if self._instance_id:
-            try:
-                from src.saas.db.agent_instance_db import AgentInstanceDB
-                inst = AgentInstanceDB.get_by_id(self._instance_id)
-                if inst and inst.get("reply_style_id"):
-                    return inst["reply_style_id"]
-            except Exception as e:
-                logger.debug(f"Failed to resolve instance reply_style: {e}")
-
-        # 优先级 2：子智能体/独立模式且配置了 reply_style
+        # 优先级 1：子智能体/独立模式且配置了 reply_style
         if self.mode != AgentMode.MASTER and self.subagent_config:
             if self.subagent_config.reply_style:
                 return self.subagent_config.reply_style
 
-        # 优先级 3：全局默认
+        # 优先级 2：全局默认
         agent_cfg = getattr(settings, 'agent', None)
         if agent_cfg:
             return getattr(agent_cfg, 'reply_style', None)

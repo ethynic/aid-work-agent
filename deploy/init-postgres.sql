@@ -519,31 +519,6 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id, 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_time_range ON subscriptions(tenant_id, subagent_type, starts_at, expires_at, status);
 
--- 智能体实例表
-CREATE TABLE IF NOT EXISTS agent_instances (
-    id SERIAL PRIMARY KEY,
-    instance_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT,
-    subscription_id TEXT,
-    subagent_type TEXT,
-    display_name TEXT,                          -- 子智能体类型显示名
-    instance_name TEXT,                         -- 实例名称："外贸小明"
-    avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
-    description TEXT,                            -- 实例描述
-    personality_traits TEXT,                     -- 性格特征（JSON数组）
-    config TEXT,
-    bound_channel_type TEXT,
-    allowed_skills TEXT,
-    reply_style_id TEXT,                          -- 回复风格ID
-    total_chats INTEGER DEFAULT 0,               -- 累计对话次数
-    total_messages INTEGER DEFAULT 0,            -- 累计消息数
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type);
-
 -- 回复风格表
 CREATE TABLE IF NOT EXISTS reply_styles (
     id SERIAL PRIMARY KEY,
@@ -1035,31 +1010,6 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_time_range ON subscriptions(tenant_id, subagent_type, starts_at, expires_at, status);
-
--- 智能体实例表
-CREATE TABLE IF NOT EXISTS agent_instances (
-    id SERIAL PRIMARY KEY,
-    instance_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT,
-    subscription_id TEXT,
-    subagent_type TEXT,
-    display_name TEXT,                          -- 子智能体类型显示名
-    instance_name TEXT,                         -- 实例名称："外贸小明"
-    avatar TEXT DEFAULT '🤖',                   -- 头像 emoji 或 URL
-    description TEXT,                            -- 实例描述
-    personality_traits TEXT,                     -- 性格特征（JSON数组）
-    config TEXT,
-    bound_channel_type TEXT,
-    allowed_skills TEXT,
-    reply_style_id TEXT,                          -- 回复风格ID
-    total_chats INTEGER DEFAULT 0,               -- 累计对话次数
-    total_messages INTEGER DEFAULT 0,            -- 累计消息数
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant ON agent_instances(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_agent_instances_tenant_type ON agent_instances(tenant_id, subagent_type);
 
 -- 回复风格表
 CREATE TABLE IF NOT EXISTS reply_styles (

@@ -4,42 +4,21 @@ Skill 解析器
 合并平台 skills + 租户自定义 skills，为租户实例提供隔离的 skill 列表。
 """
 
-import json
 import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
 from loguru import logger
 
 from src.config.settings import settings
-from src.saas.db.agent_instance_db import AgentInstanceDB
 
 
 class SkillResolver:
     """
     Skill 解析器
 
-    根据 agent_instance 的 allowed_skills 配置和租户自定义 skills，
-    返回合并后的 skill 列表。
+    管理租户自定义 skills 的存储、加载、增删。
     """
-
-    @staticmethod
-    def get_allowed_skills(instance_id: str) -> Optional[List[str]]:
-        """
-        获取实例允许的 skill 列表
-
-        如果实例配置了 allowed_skills，使用实例配置；
-        否则返回 None（表示不限制）。
-        """
-        instance = AgentInstanceDB.get_by_id(instance_id)
-        if not instance:
-            return None
-
-        allowed = instance.get("allowed_skills")
-        if allowed and isinstance(allowed, str):
-            allowed = json.loads(allowed)
-
-        return allowed if allowed else None
 
     @staticmethod
     def get_tenant_skills_dir(tenant_id: str) -> Path:

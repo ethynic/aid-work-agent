@@ -219,13 +219,6 @@ class TenantDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 实例数
-            cursor.execute(
-                "SELECT COUNT(*) as count FROM agent_instances WHERE tenant_id = %s",
-                (tenant_id,),
-            )
-            instance_count = cursor.fetchone()["count"]
-
             # 用户数（使用 users 表）
             cursor.execute(
                 "SELECT COUNT(*) as count FROM users WHERE tenant_id = %s AND status = 'active' AND role != 'platform_admin'",
@@ -248,7 +241,6 @@ class TenantDB:
             active_subscriptions = cursor.fetchone()["count"]
 
             result = {
-                "instance_count": instance_count,
                 "user_count": user_count,
                 "admin_count": admin_count,
                 "active_subscriptions": active_subscriptions,
