@@ -1,0 +1,140 @@
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { assertPackageInvocation, assertReleaseSigning, expectedSignature, isValidReleaseVersion } from '../dist/electron/releasePolicy.js'
+
+const mode = process.argv[2]
+assertPackageInvocation(mode, process.argv.slice(3))
+assertReleaseSigning(mode, process.env)
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+if (!isValidReleaseVersion(packageJson.version)) throw new Error('package version is not release-compatible semver')
+
+const isRelease = mode === 'release'
+const artifactName = isRelease
+  ? `AID-Work-Agent-${packageJson.version}-win-x64.${'${ext}'}`
+  : `AID-Work-Agent-${packageJson.version}-win-x64-dev-unsigned.${'${ext}'}`
+const builderArguments = [
+  path.resolve('node_modules/electron-builder/out/cli/cli.js'), '--win', 'nsis', '--x64', '--config', 'electron-builder.yml',
+  `--config.win.artifactName=${artifactName}`,
+]
+if (isRelease) builderArguments.push('--config.forceCodeSigning=true')
+
+const releaseDirectory = path.resolve('release')
+rmSync(releaseDirectory, { recursive: true, force: true })
+
+function listFiles(root) {
+  const result = []
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(file)
+      else if (entry.isFile()) result.push(file)
+    }
+  }
+  visit(root)
+  return result
+}
+
+function buildInputDigest() {
+  const roots = ['electron-builder.yml', 'package.json', 'package-lock.json', 'dist/electron', 'dist/renderer']
+  const files = roots.flatMap((entry) => statSync(entry).isDirectory() ? listFiles(entry) : [path.resolve(entry)])
+  const hash = createHash('sha256')
+  for (const file of files) {
+    hash.update(path.relative(process.cwd(), file).replaceAll('\\', '/'))
+    hash.update('\0')
+    hash.update(readFileSync(file))
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+function writeJsonAtomic(file, value) {
+  const temporary = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' })
+    renameSync(temporary, file)
+  } finally {
+    rmSync(temporary, { force: true })
+  }
+}
+
+function parseCommandJson(label, result, allowedStatuses = [0]) {
+  if (result.error) throw result.error
+  let value
+  try {
+    value = JSON.parse(result.stdout)
+  } catch {
+    throw new Error(`${label} did not return valid JSON (exit ${result.status ?? 'unknown'})`)
+  }
+  if (!allowedStatuses.includes(result.status) || value?.error) {
+    throw new Error(`${label} failed (exit ${result.status ?? 'unknown'})`)
+  }
+  return value
+}
+
+const inputSha256 = buildInputDigest()
+const builder = spawnSync(process.execPath, builderArguments, {
+  stdio: 'inherit',
+  env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: isRelease ? 'true' : 'false' },
+})
+if (builder.error) throw builder.error
+if (builder.status !== 0) process.exit(builder.status ?? 1)
+if (buildInputDigest() !== inputSha256) throw new Error('packaging inputs changed while electron-builder was running')
+
+const installerName = artifactName.replace('${ext}', 'exe')
+const installer = path.join(releaseDirectory, installerName)
+if (!existsSync(installer) || !statSync(installer).isFile()) throw new Error(`expected NSIS installer was not produced: ${installerName}`)
+const unpackedAsar = path.join(releaseDirectory, 'win-unpacked', 'resources', 'app.asar')
+if (!existsSync(unpackedAsar) || !statSync(unpackedAsar).isFile()) throw new Error('win-unpacked app.asar was not produced')
+
+const signatureCommand = `(Get-AuthenticodeSignature -LiteralPath '${installer.replaceAll("'", "''")}').Status.ToString()`
+const signature = spawnSync('powershell.exe', ['-NoProfile', '-Command', signatureCommand], { encoding: 'utf8' })
+const signatureStatus = signature.stdout.trim()
+if (signatureStatus !== expectedSignature(mode)) {
+  throw new Error(`${mode} signature status mismatch: ${signatureStatus || '<missing>'}`)
+}
+
+const git = (...args) => spawnSync('git', args, { cwd: '../..', encoding: 'utf8' }).stdout.trim()
+const bytes = readFileSync(installer)
+const manifest = {
+  schemaVersion: 1,
+  channel: isRelease ? 'release' : 'development-unsigned',
+  version: packageJson.version,
+  platform: 'win32',
+  arch: 'x64',
+  fileName: path.basename(installer),
+  size: bytes.byteLength,
+  sha256: createHash('sha256').update(bytes).digest('hex'),
+  commit: git('rev-parse', 'HEAD'),
+  dirty: Boolean(git('status', '--porcelain')),
+  signatureStatus,
+  buildInputSha256: inputSha256,
+}
+writeJsonAtomic(path.join(releaseDirectory, 'release-manifest.json'), manifest)
+
+const npmCliCandidates = [
+  process.env.npm_execpath,
+  path.resolve(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
+  process.env.APPDATA ? path.resolve(process.env.APPDATA, 'npm/node_modules/npm/bin/npm-cli.js') : undefined,
+].filter(Boolean)
+const npmCli = npmCliCandidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile())
+if (!npmCli) throw new Error('npm CLI path is unavailable')
+const sbom = spawnSync(process.execPath, [npmCli, 'sbom', '--sbom-format', 'cyclonedx'], { encoding: 'utf8' })
+const sbomReport = parseCommandJson('npm sbom', sbom)
+writeJsonAtomic(path.join(releaseDirectory, 'sbom.cdx.json'), sbomReport)
+// Installation may use a dependency mirror that does not implement npm's security API.
+// Audit against npm's canonical advisory endpoint so a mirror 404 is never reported as zero vulnerabilities.
+const audit = spawnSync(process.execPath, [npmCli, 'audit', '--json', '--registry=https://registry.npmjs.org'], { encoding: 'utf8' })
+const auditReport = parseCommandJson('npm audit', audit, [0, 1])
+if (!auditReport?.metadata?.vulnerabilities) throw new Error('npm audit report is missing vulnerability metadata')
+writeJsonAtomic(path.join(releaseDirectory, 'npm-audit.json'), auditReport)
+const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'))
+const licenses = Object.entries(lock.packages ?? {}).filter(([key]) => key).map(([key, value]) => ({
+  package: key.replace(/^node_modules\//, ''), version: value.version, license: value.license ?? 'UNKNOWN'
+}))
+writeJsonAtomic(path.join(releaseDirectory, 'licenses.json'), licenses)
+
+const verify = spawnSync(process.execPath, ['scripts/verify-package.mjs', releaseDirectory, mode], { stdio: 'inherit' })
+if (verify.status !== 0) process.exit(verify.status ?? 1)
+console.log(`PACKAGE_WIN_${mode.toUpperCase()}_PASS:${installer}`)

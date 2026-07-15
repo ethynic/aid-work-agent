@@ -1,0 +1,25 @@
+{
+  "name": "aid-agent-desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build:renderer": "npm --prefix ../../frontend run build:desktop",
+    "build": "npm run build:renderer && tsc && node scripts/copy-renderer.mjs && node ../../frontend/scripts/verify-desktop-build.mjs dist/renderer",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "start": "npm run build && electron .",
+    "package:win:dev": "npm run typecheck && npm test && node scripts/package-win.mjs dev",
+    "package:win:release": "npm run typecheck && npm test && node scripts/package-win.mjs release",
+    "verify:package": "node scripts/verify-package.mjs release"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.2.0",
+    "@types/node": "^24.0.0",
+    "electron": "43.1.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.0"
+  }
+}

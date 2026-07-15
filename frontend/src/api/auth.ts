@@ -3,6 +3,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet, credentialRemove } from '@/platform/credentialStore'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/auth`
 
@@ -107,7 +108,7 @@ export async function getCurrentUser(): Promise<any> {
   // 按当前路由选择正确的 token key（租户前台按 tenant_id 隔离，演示模式用 demo_token）
   const isTenantMode = window.location.pathname.startsWith('/t/')
   const tokenKey = isTenantMode ? getTenantScopedKey('saas_token') : 'demo_token'
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (!token) return null
 
   const res = await fetch(`${API_BASE}/me`, {
@@ -124,15 +125,19 @@ export async function getCurrentUser(): Promise<any> {
 export async function logout(): Promise<void> {
   const isTenantMode = window.location.pathname.startsWith('/t/')
   const tokenKey = isTenantMode ? getTenantScopedKey('saas_token') : 'demo_token'
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) {
-    await fetch(`${API_BASE}/logout`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
+    try {
+      await fetch(`${API_BASE}/logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+    } catch {
+      // 服务端注销失败不能阻止安全凭证从本机删除。
+    }
   }
-  localStorage.removeItem(tokenKey)
-  localStorage.removeItem('user_info')
+  await credentialRemove('user_info')
+  await credentialRemove(tokenKey)
 }
 
 /**
@@ -150,12 +155,12 @@ export function getAuthHeader(): Record<string, string> {
   let tokenKey: string
   if (path.startsWith('/t/')) {
     tokenKey = getTenantScopedKey('saas_token')
-  } else if (path.startsWith('/portal')) {
+  } else if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     tokenKey = 'portal_token'
   } else {
     tokenKey = 'demo_token' // 默认
   }
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   const headers: Record<string, string> = {}
   if (token) {
     headers['Authorization'] = `Bearer ${token}`

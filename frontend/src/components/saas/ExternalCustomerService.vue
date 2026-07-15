@@ -258,7 +258,7 @@ import { useToast } from 'vue-toastification'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 
 const toast = useToast()
-const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init, isInitialized } = useTenantAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, init, isInitialized, logout: tenantLogout } = useTenantAuth()
 const amrPlayer = useAmrPlayer()
 const { previewAttachment, isPreviewOpen, closePreview } = useAttachmentPreview()
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
@@ -325,9 +325,10 @@ function handleToggleSidebar() {
   if (toggleSidebarFn) toggleSidebarFn()
 }
 
-function handleLogout() {
-  localStorage.removeItem('portal_token')
-  window.location.href = '/portal/login'
+async function handleLogout() {
+  await tenantLogout()
+  const tenantRoot = window.location.pathname.match(/^\/t\/[^/]+/)?.[0]
+  window.location.href = tenantRoot ? `${tenantRoot}/login` : '/portal/login'
 }
 
 async function handleSearch() {

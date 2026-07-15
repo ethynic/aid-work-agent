@@ -3,6 +3,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet } from '@/platform/credentialStore'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -11,12 +12,12 @@ function getAuthHeaders(): Record<string, string> {
   let tokenKey: string
   if (path.startsWith('/t/')) {
     tokenKey = getTenantScopedKey('saas_token')
-  } else if (path.startsWith('/portal')) {
+  } else if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     tokenKey = 'portal_token'
   } else {
     tokenKey = 'demo_token'
   }
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
   const match = path.match(/^\/t\/([^/]+)/)

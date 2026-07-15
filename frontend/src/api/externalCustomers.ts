@@ -3,6 +3,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet } from '@/platform/credentialStore'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/external-customers`
 
@@ -12,14 +13,14 @@ export function getSaasAuthHeader(): Record<string, string> {
   // 根据路由获取对应的 token（租户前台按 tenant_id 隔离，portal 共用）
   const path = window.location.pathname
   let tokenKey: string
-  if (path.startsWith('/portal')) {
+  if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     tokenKey = 'portal_token'
   } else if (path.startsWith('/t/')) {
     tokenKey = getTenantScopedKey('saas_token')
   } else {
     tokenKey = 'saas_token'
   }
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }

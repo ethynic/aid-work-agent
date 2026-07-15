@@ -216,6 +216,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, h } from 'vue'
 import { useDemoAuth } from '@/composables/useDemoAuth'
+import { credentialGet } from '@/platform/credentialStore'
 import { useToast } from 'vue-toastification'
 import {
   getEmailSettings as apiGetEmailSettings,
@@ -281,7 +282,7 @@ async function saveProfile() {
       avatar_url: profileForm.avatar_url || undefined,
     })
     if (result.success && result.user) {
-      setLogin(localStorage.getItem('demo_token')!, result.user)
+      await setLogin(credentialGet('demo_token')!, result.user)
       toast.success('资料更新成功')
     } else {
       toast.error(result.error || '更新失败')

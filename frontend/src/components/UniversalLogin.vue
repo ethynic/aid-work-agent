@@ -236,9 +236,9 @@ async function handleLogin() {
         role: (res.user as any).role || 'user'
       }
       if (tenantInfo) {
-        setLogin(res.token, adminInfo, tenantInfo)
+        await setLogin(res.token, adminInfo, tenantInfo)
       } else {
-        setLogin(res.token, adminInfo, { tenant_id: '', company_name: '', plan: 'free', status: 'active' })
+        await setLogin(res.token, adminInfo, { tenant_id: '', company_name: '', plan: 'free', status: 'active' })
       }
 
       // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）

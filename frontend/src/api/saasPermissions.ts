@@ -4,6 +4,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet } from '@/platform/credentialStore'
 
 // 复用 saasTenant 的 getSaasAuthHeader
 function getTokenKey(): string {
@@ -21,7 +22,7 @@ function getSaasAuthHeader(): Record<string, string> {
 
   // 根据路由获取对应的 token
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
@@ -154,7 +155,7 @@ const ENV_VAR_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas/tenant
 function getEnvVarAuthHeader(tenantId: string): Record<string, string> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
@@ -214,7 +215,7 @@ export interface ConfigFileStatus {
 export async function getConfigFileStatus(tenantId: string, subagentName: string): Promise<ConfigFileStatus> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}/status`, { headers })
@@ -225,7 +226,7 @@ export async function getConfigFileStatus(tenantId: string, subagentName: string
 export async function uploadConfigFile(tenantId: string, subagentName: string, file: File): Promise<{ success: boolean; message?: string }> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const formData = new FormData()
@@ -245,7 +246,7 @@ export async function uploadConfigFile(tenantId: string, subagentName: string, f
 export async function downloadConfigFile(tenantId: string, subagentName: string): Promise<void> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}`, { headers })
@@ -262,7 +263,7 @@ export async function downloadConfigFile(tenantId: string, subagentName: string)
 export async function deleteConfigFile(tenantId: string, subagentName: string): Promise<{ success: boolean; message?: string }> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const res = await fetch(`${CONFIG_FILE_BASE}/${encodeURIComponent(subagentName)}`, {
@@ -285,7 +286,7 @@ export interface KnowledgeSourceItem {
 export async function getSubagentKnowledgeSources(tenantId: string, subagentName: string): Promise<{ success: boolean; data: KnowledgeSourceItem[] }> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const res = await fetch(`${KNOWLEDGE_BASE_URL}/${encodeURIComponent(subagentName)}`, { headers })
@@ -298,7 +299,7 @@ export async function setSubagentKnowledgeSources(
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const res = await fetch(`${KNOWLEDGE_BASE_URL}/${encodeURIComponent(subagentName)}`, {
@@ -313,7 +314,7 @@ export async function setSubagentKnowledgeSources(
 export async function listTenantKnowledgeCategories(tenantId: string): Promise<{ items: { id: number; source_type: string; display_name: string | null; document_count: number }[] }> {
   const headers: Record<string, string> = {}
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) headers['Authorization'] = `Bearer ${token}`
   headers['X-Tenant-Id'] = tenantId
   const KB_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/knowledge`

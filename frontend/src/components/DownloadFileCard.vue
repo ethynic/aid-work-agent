@@ -79,6 +79,8 @@
 import { computed, ref } from 'vue'
 import type { DownloadableFile, AttachmentInfo } from '@/types'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
+import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
+import { getAuthHeader } from '@/api/auth'
 
 const props = defineProps<{ file: DownloadableFile }>()
 
@@ -90,9 +92,11 @@ async function handleDownload() {
   if (downloading.value) return
   downloading.value = true
   try {
-    const url = props.file.download_url.startsWith('/')
-      ? `${window.location.origin}${props.file.download_url}`
-      : props.file.download_url
+    const url = resolveApiUrl(props.file.download_url)
+    if (window.agentDesktop) {
+      await saveDownloadUrl(url, props.file.file_name, getAuthHeader())
+      return
+    }
     const response = await fetch(url)
     if (!response.ok) throw new Error(`下载失败: ${response.status}`)
     const blob = await response.blob()
@@ -106,8 +110,8 @@ async function handleDownload() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
   } catch (e) {
     console.error('文件下载失败:', e)
-    // fallback: 在新窗口打开下载链接
-    window.open(props.file.download_url, '_blank')
+    // Web fallback 保持现有浏览器下载行为；Desktop 不允许绕过受控保存能力。
+    if (!window.agentDesktop) window.open(props.file.download_url, '_blank')
   } finally {
     downloading.value = false
   }

@@ -10,6 +10,7 @@
 import { ref, computed } from 'vue'
 import { adminLogout as apiLogout } from '@/api/saasTenant'
 import { getTenantScopedKey } from '@/api/tenantStorage'
+import { credentialGet, credentialRemove, credentialSet } from '@/platform/credentialStore'
 
 export interface TenantAdmin {
   user_id: string
@@ -60,9 +61,9 @@ export function useTenantAuth() {
       const adminKey = getAdminKey()
       const tenantKey = getTenantKey()
 
-      const savedToken = localStorage.getItem(tokenKey)
-      const savedAdmin = localStorage.getItem(adminKey)
-      const savedTenant = localStorage.getItem(tenantKey)
+      const savedToken = credentialGet(tokenKey)
+      const savedAdmin = credentialGet(adminKey)
+      const savedTenant = credentialGet(tenantKey)
 
       if (savedToken) {
         saasToken.value = savedToken
@@ -94,7 +95,7 @@ export function useTenantAuth() {
               // 检查租户状态
               if (tenant.value.status !== 'active') {
                 console.warn(`Tenant ${tenant.value.tenant_id} is ${tenant.value.status}, forcing logout`)
-                clearStorage()
+                await clearStorage()
                 saasToken.value = null
                 admin.value = null
                 tenant.value = null
@@ -107,7 +108,7 @@ export function useTenantAuth() {
                 const expireDate = new Date(tenant.value.expire_at)
                 if (now > expireDate) {
                   console.warn(`Tenant ${tenant.value.tenant_id} has expired, forcing logout`)
-                  clearStorage()
+                  await clearStorage()
                   saasToken.value = null
                   admin.value = null
                   tenant.value = null
@@ -116,12 +117,12 @@ export function useTenantAuth() {
             }
           } else {
             // 响应格式异常，视为 token 无效
-            clearStorage()
+            await clearStorage()
             saasToken.value = null
           }
         } else if (response.status === 401) {
           // token 无效，清除
-          clearStorage()
+          await clearStorage()
           saasToken.value = null
         } else {
           // 其他错误（如 500、网络错误），保留 token，不清除存储
@@ -132,7 +133,7 @@ export function useTenantAuth() {
         }
       } else if (savedAdmin && savedTenant) {
         // 无 token 但有缓存信息，清除
-        clearStorage()
+        await clearStorage()
       }
     } catch (e: any) {
       console.error('TenantAuth init error:', e)
@@ -152,38 +153,32 @@ export function useTenantAuth() {
    * localStorage 仅存储 token 和最小化管理员标识（user_id、username、role），
    * 敏感信息（手机号等）通过 API 获取，不持久化到 localStorage。
    */
-  function setLogin(token: string, adminInfo: TenantAdmin, tenantInfo: TenantInfo) {
+  async function setLogin(token: string, adminInfo: TenantAdmin, tenantInfo: TenantInfo) {
     const tokenKey = getTokenKey()
     const adminKey = getAdminKey()
     const tenantKey = getTenantKey()
 
-    saasToken.value = token
-    admin.value = adminInfo
-    tenant.value = tenantInfo
-    localStorage.setItem(tokenKey, token)
     // 仅存储非敏感字段
-    localStorage.setItem(adminKey, JSON.stringify({
+    await credentialSet(adminKey, JSON.stringify({
       user_id: adminInfo.user_id,
       username: adminInfo.username,
       role: adminInfo.role,
     }))
-    localStorage.setItem(tenantKey, JSON.stringify(tenantInfo))
+    await credentialSet(tenantKey, JSON.stringify(tenantInfo))
+    await credentialSet(tokenKey, token)
+    saasToken.value = token
+    admin.value = adminInfo
+    tenant.value = tenantInfo
   }
 
   /**
    * 登出
    */
   async function logout() {
-    try {
-      await apiLogout()
-    } catch (e) {
-      console.error('Tenant logout error:', e)
-    } finally {
-      saasToken.value = null
-      admin.value = null
-      tenant.value = null
-      clearStorage()
-    }
+    await apiLogout()
+    saasToken.value = null
+    admin.value = null
+    tenant.value = null
   }
 
   /**
@@ -200,7 +195,7 @@ export function useTenantAuth() {
    */
   function getAuthHeader(): Record<string, string> {
     const tokenKey = getTokenKey()
-    const t = saasToken.value || localStorage.getItem(tokenKey)
+    const t = saasToken.value || credentialGet(tokenKey)
     const headers: Record<string, string> = {}
     if (t) {
       headers['Authorization'] = `Bearer ${t}`
@@ -213,13 +208,13 @@ export function useTenantAuth() {
     return headers
   }
 
-  function clearStorage() {
+  async function clearStorage() {
     const tokenKey = getTokenKey()
     const adminKey = getAdminKey()
     const tenantKey = getTenantKey()
-    localStorage.removeItem(tokenKey)
-    localStorage.removeItem(adminKey)
-    localStorage.removeItem(tenantKey)
+    await credentialRemove(adminKey)
+    await credentialRemove(tenantKey)
+    await credentialRemove(tokenKey)
   }
 
   return {

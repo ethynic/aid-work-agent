@@ -78,7 +78,7 @@
 | # | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 33 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
-| 36 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 2026-07-14 Phase 0～3 Windows 已通过三智能体流程和主控终检。Desktop 已完成真实 Agent renderer、单实例与安全壳、safeStorage 凭证、受控外链/同源下载、冷/热 deep link；artifact 51 entries/409 modules，Portal/管理员/敏感 localStorage 自动扫描为 0，前端 33 项、客户端 23/23 及真实 smoke 全绿且零进程残留。浏览器 runtime Phase 4 按 Agent-first 原则等待服务端 Executor 契约稳定，不阻塞主应用；主线进入 Phase 5 Windows 安装包/发布基础。macOS 各 Phase 延后到 Mac 设备单独验证。 | [设计](system/desktop-agent-client-design.md) | [开发计划](system/desktop-agent-client-dev-plan.md) |
+| 36 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 2026-07-14 Phase 0～3 Windows 完成；Phase 5 Windows unsigned 开发安装包也已通过三智能体与主控终检。标准链路生成 x64 user-scope NSIS、ASAR/Portal/凭证门禁、CycloneDX/SHA-256/audit/license/manifest；packaged exe smoke PASS 且零残留。当前包为 0.0.1 development-unsigned（100,215,084 bytes，SHA-256 `20555b...37979`），不可对外正式分发；正式图标、证书签名、真实更新源、安装/协议/升级回滚仍待完成。浏览器 runtime Phase 4 继续等待 Executor 契约，不能阻塞 Agent 主应用；macOS 延后到 Mac 设备逐 Phase 验证。 | [设计](system/desktop-agent-client-design.md) | [开发计划](system/desktop-agent-client-dev-plan.md) |
 
 ---
 

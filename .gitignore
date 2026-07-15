@@ -102,9 +102,11 @@ Thumbs.db
 # Frontend (Vue3 + TypeScript)
 node_modules/
 frontend/dist/
+frontend/dist-desktop/
 frontend/.vite/
 frontend/.output/
 frontend/*.local
+clients/agent-desktop/release/
 
 # Frontend env
 frontend/.env

@@ -2,11 +2,19 @@
  * 客户跟进智能体 — API 接口
  */
 
+import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet } from '@/platform/credentialStore'
+
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('token')
-  const tenantId = localStorage.getItem('tenantId') || ''
+  const tenantMatch = window.location.pathname.match(/^\/t\/([^/]+)/)
+  const token = import.meta.env.VITE_DESKTOP_TARGET === 'true'
+    ? credentialGet(tenantMatch ? getTenantScopedKey('saas_token') : 'demo_token')
+    : localStorage.getItem('token')
+  const tenantId = import.meta.env.VITE_DESKTOP_TARGET === 'true'
+    ? (tenantMatch?.[1] || '')
+    : (localStorage.getItem('tenantId') || '')
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
   if (tenantId) headers['X-Tenant-Id'] = tenantId

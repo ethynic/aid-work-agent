@@ -4,7 +4,7 @@
 
 import { getAuthHeader } from './auth'
 
-const API_BASE = `${import.meta.env.VITE_API_BASE_URL || ''}/api/scheduled-tasks`
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/scheduled-tasks`
 
 export interface ScheduledTask {
   task_id: string

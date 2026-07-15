@@ -1,0 +1,35 @@
+appId: cn.aidingyi.agent.desktop
+productName: AID Work Agent
+asar: true
+compression: normal
+directories:
+  output: release
+files:
+  - dist/electron/main.js
+  - dist/electron/preload.cjs
+  - dist/electron/credentials.js
+  - dist/electron/security.js
+  - dist/electron/systemCapabilities.js
+  - dist/electron/windowState.js
+  - dist/renderer/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/tests/**"
+  - "!**/.env*"
+protocols:
+  - name: AID Agent Deep Link
+    schemes:
+      - aidagent
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: AID-Work-Agent-${version}-win-x64-dev-unsigned.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

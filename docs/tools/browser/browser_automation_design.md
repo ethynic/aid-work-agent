@@ -108,15 +108,18 @@ URL: {url}
 
 请决定下一步操作，输出 JSON：
 {
-  "action": "click" | "fill" | "select" | "navigate" | "done" | "ask_user",
+  "action": "click" | "fill" | "select" | "navigate" | "done" | "request_human",
   "target": "元素描述或URL",
   "value": "填写值（fill/select时）",
-  "reason": "为什么这样做"
+  "reason": "为什么这样做",
+  "reason_code": "request_human 时必填的白名单原因",
+  "instruction_code": "request_human 时必填的服务端指引模板",
+  "completion_mode": "auto_or_confirm | confirm_only"
 }
 ```
 
 - `action=done`：任务完成，停止循环
-- `action=ask_user`：信息不足，需要用户补充
+- `action=request_human`：进入 v2.5 `HumanAssistanceRequest + ToolSuspension`，不是普通工具返回；完成条件必须由服务端白名单验证
 
 ### 5.2 PageOps 页面操作
 
@@ -187,13 +190,15 @@ class PageOps:
 
 ## 10. 已确认的设计决策
 
+> 2026-07-14：本节原有会话与 `ask_user` 设计已由 [浏览器执行架构、可视化与人工接管设计 v2.6](./browser_visualization_design.md) 扩展并约束。新的强制规则是：服务端默认 headless；完成/失败/取消/超时/shutdown 必须关闭；人工等待仅能在 5 分钟租约内保留；原工具调用必须持久化 suspend/resume，用户完成后由页面条件或“完成并继续”事件自动唤醒，不依赖用户再次发消息或 LLM 重调工具；Agent 只公开完整任务边界；客户端执行是 Agent Desktop 的可选 browser runtime，必须跟随 Agent 主应用的技术栈、认证、发布和生命周期，禁止反向影响 Agent 主链路，也不依赖企业微信 RPA 客户端；服务端模式免安装，本机模式使用一次性 ticket，禁止手工连接配置；`auto` 必须先执行服务端 headless，只有确定的本地能力预检失败或 HeadlessFailureDetector 高置信失败才能升级客户端；实时视图、人工接管、多租户和多 worker 以 v2.6 为准。如本文件与 v2.6 冲突，以 v2.6 为准。
+
 ### 10.1 进度回调
 
 每步推送进度（语义快照生成除外），具体规则：
 
 - **推送的步骤**：打开页面、填写输入、点击元素、选择选项、页面跳转、任务完成等
 - **不推送**：语义快照生成（内部操作）
-- **ask_user 中断**：内部 LLM 判断信息不足时，返回 `action=ask_user` + 截图 + 问题，中断工具执行。Agent 将问题转达用户后，以用户回复作为参数再次调用 `browser_automation`，orchestrator 通过 session_id 恢复浏览器会话状态继续执行
+- **旧 ask_user 恢复方式（废弃）**：不得再要求用户通过聊天提供 `user_response`，也不得依赖 LLM 使用相同 `session_id` 重新调用 `browser_automation`。v2.5 使用 `HumanAssistanceRequest + ToolSuspension + browser_resume_job` 从同一 run/page/context 恢复。
 - **执行失败**：立即中断并返回错误信息给 agent
 
 ### 10.2 截图策略
@@ -202,7 +207,7 @@ class PageOps:
 
 - 正常完成任务
 - 异常退出（错误、超时）
-- ask_user 中断等待用户输入
+- `HumanAssistanceRequest` 挂起时只保留实时内存画面，不把敏感截图落盘；用户完成后由 resume job 续跑原工具
 
 每个阶段只返回一张截图，不返回中间步骤截图。
 

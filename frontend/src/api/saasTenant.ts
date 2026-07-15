@@ -6,6 +6,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { credentialGet, credentialRemove } from '@/platform/credentialStore'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
 
@@ -67,7 +68,7 @@ export async function adminLogout(): Promise<void> {
   let tokenKey: string
   let adminKey: string
   let tenantKey: string
-  if (path.startsWith('/portal')) {
+  if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     tokenKey = 'portal_token'
     adminKey = 'portal_admin'
     tenantKey = 'portal_tenant'
@@ -81,7 +82,7 @@ export async function adminLogout(): Promise<void> {
     tenantKey = 'saas_tenant'
   }
 
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) {
     try {
       await fetch(`${API_BASE}/auth/admin_logout`, {
@@ -92,9 +93,9 @@ export async function adminLogout(): Promise<void> {
       console.warn('admin_logout 调用失败，继续清理本地状态:', e)
     }
   }
-  localStorage.removeItem(tokenKey)
-  localStorage.removeItem(adminKey)
-  localStorage.removeItem(tenantKey)
+  await credentialRemove(adminKey)
+  await credentialRemove(tenantKey)
+  await credentialRemove(tokenKey)
 }
 
 // ==================== 租户信息 ====================
@@ -535,7 +536,7 @@ export function getSaasAuthHeader(): Record<string, string> {
 
   // 根据路由获取对应的 token
   const tokenKey = getTokenKey()
-  const token = localStorage.getItem(tokenKey)
+  const token = credentialGet(tokenKey)
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }

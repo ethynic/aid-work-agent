@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
+    "build:desktop": "vue-tsc && vite build --config vite.desktop.config.ts && node scripts/verify-desktop-build.mjs",
+    "typecheck": "vue-tsc",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

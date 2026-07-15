@@ -6,6 +6,7 @@
 import { ref, computed } from 'vue'
 import { getCurrentUser, logout as apiLogout } from '@/api/auth'
 import type { User as BaseUser } from '@/types'
+import { credentialGet, credentialRemove, credentialSet } from '@/platform/credentialStore'
 
 export interface User extends BaseUser {
   is_admin?: boolean
@@ -28,10 +29,10 @@ export function useDemoAuth() {
 
     isLoading.value = true
     try {
-      const savedToken = localStorage.getItem('demo_token')
-      const savedUser = localStorage.getItem('user_info')
+      const savedToken = credentialGet('demo_token')
+      const savedUser = credentialGet('user_info')
 
-      if (savedToken && savedUser) {
+      if (savedToken) {
         token.value = savedToken
 
         // 验证 token 是否有效
@@ -40,10 +41,12 @@ export function useDemoAuth() {
           user.value = userInfo
         } else {
           // token 无效，清除
-          localStorage.removeItem('demo_token')
-          localStorage.removeItem('user_info')
+          await credentialRemove('user_info')
+          await credentialRemove('demo_token')
           token.value = null
         }
+      } else if (savedUser) {
+        await credentialRemove('user_info')
       }
     } catch (e) {
       console.error('DemoAuth init error:', e)
@@ -58,40 +61,33 @@ export function useDemoAuth() {
    * localStorage 仅存储 token 和最小化用户标识（user_id、is_admin），
    * 敏感信息（手机号等）通过 API 获取，不持久化到 localStorage。
    */
-  function setLogin(newToken: string, userInfo: User) {
-    token.value = newToken
-    user.value = userInfo
-    localStorage.setItem('demo_token', newToken)
+  async function setLogin(newToken: string, userInfo: User) {
     // 仅存储非敏感字段
-    localStorage.setItem('user_info', JSON.stringify({
+    await credentialSet('user_info', JSON.stringify({
       user_id: userInfo.user_id,
       username: userInfo.username,
       is_admin: userInfo.is_admin,
       avatar_url: userInfo.avatar_url,
     }))
+    await credentialSet('demo_token', newToken)
+    token.value = newToken
+    user.value = userInfo
   }
 
   /**
    * 登出
    */
   async function logout() {
-    try {
-      await apiLogout()
-    } catch (e) {
-      console.error('DemoAuth logout error:', e)
-    } finally {
-      token.value = null
-      user.value = null
-      localStorage.removeItem('demo_token')
-      localStorage.removeItem('user_info')
-    }
+    await apiLogout()
+    token.value = null
+    user.value = null
   }
 
   /**
    * 获取 Authorization header
    */
   function getAuthHeader(): Record<string, string> {
-    const t = token.value || localStorage.getItem('demo_token')
+    const t = token.value || credentialGet('demo_token')
     if (t) {
       return { 'Authorization': `Bearer ${t}` }
     }

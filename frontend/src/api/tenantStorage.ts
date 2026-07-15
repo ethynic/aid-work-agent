@@ -20,7 +20,7 @@ export type SaasBaseKey = 'saas_token' | 'saas_admin' | 'saas_tenant'
  */
 export function getTenantScopedKey(base: SaasBaseKey): string {
   const path = window.location.pathname
-  if (path.startsWith('/portal')) {
+  if (import.meta.env.VITE_DESKTOP_TARGET !== 'true' && path.startsWith('/portal')) {
     // 平台管理后台共用 portal_token，不区分租户
     return base.replace('saas_', 'portal_')
   }

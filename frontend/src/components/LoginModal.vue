@@ -209,7 +209,7 @@ async function handlePasswordLogin() {
   try {
     const res = await phoneLogin(currentPhone.value, phoneForm.value.password)
     if (res.success && res.token && res.user) {
-      setLogin(res.token, res.user)
+      await setLogin(res.token, res.user)
       emit('success')
     } else {
       errorMessage.value = res.message || '登录失败'
@@ -233,7 +233,7 @@ async function handleCodeLogin() {
   try {
     const res = await phoneCodeLogin(currentPhone.value, codeForm.value.code)
     if (res.success && res.token && res.user) {
-      setLogin(res.token, res.user)
+      await setLogin(res.token, res.user)
       emit('success')
     } else {
       errorMessage.value = res.message || '登录失败'
