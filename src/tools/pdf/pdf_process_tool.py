@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Literal, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.tools._helpers import truncate_text
+from src.tools._helpers import sanitize_error, truncate_text
+from src.tools._spill import spill_large_content
 from src.tools.base import BaseTool
 
 
@@ -136,6 +137,40 @@ class PdfProcessTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._router = None
+        # tenant_id / user_id 注入（由 Agent 钩子调用，或通过 ContextVar 兜底）
+        self._tenant_id: Optional[str] = None
+        self._user_id: Optional[str] = None
+
+    def set_tenant_id(self, tenant_id: str):
+        """由 Agent 注入 tenant_id，用于 md_to_pdf/html_to_pdf 的 image_inliner。"""
+        self._tenant_id = tenant_id
+
+    def set_user_id(self, user_id: str):
+        """由 Agent 注入 user_id。"""
+        self._user_id = user_id
+
+    def _resolve_tenant_user(self):
+        """双轨获取 tenant_id/user_id：注入优先，ContextVar 兜底（HTTP 请求场景）。
+
+        与 word_process_tool._handle_md_to_word 一致。
+        """
+        tenant_id = self._tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                tenant_id = None
+
+        user_id = self._user_id
+        if not user_id:
+            try:
+                from src.saas.context import get_current_user_id
+                user_id = get_current_user_id()
+            except Exception:
+                user_id = None
+
+        return tenant_id, user_id
 
     def _get_router(self):
         if self._router is None:
@@ -204,7 +239,7 @@ class PdfProcessTool(BaseTool):
                 return {"success": False, "error": str(e)}
             except Exception as e:
                 logger.error(f"PDF pipeline error at {op}: {e}", exc_info=True)
-                return {"success": False, "error": f"操作 {op} 执行失败: {str(e)}"}
+                return {"success": False, "error": sanitize_error(e, fallback=f"操作 {op} 执行失败，请稍后重试")}
 
             if not step_result.get("success", True):
                 step_result["failed_at"] = op
@@ -306,7 +341,7 @@ class PdfProcessTool(BaseTool):
             return await router.route(context, file_paths)
         except Exception as e:
             logger.error(f"[PdfProcess] LLM 路由异常: {e}", exc_info=True)
-            return {"task": "", "error": f"路由服务异常: {e}"}
+            return {"task": "", "error": sanitize_error(e, fallback="路由服务异常，请稍后重试")}
 
     def _resolve_task_deterministic(
         self,
@@ -377,32 +412,38 @@ class PdfProcessTool(BaseTool):
         for r in ctx.results:
             op = r["operation"]
             if op == "read":
-                # 元信息 + preview，不再回塞全文
+                # 元信息 + preview，不再回塞全文；超长落盘供 read/grep 回读
                 pages = r.get("pages", [])
                 merged["pages"] = pages
                 merged["metadata"] = r.get("metadata", {})
                 merged["page_count"] = len(pages)
-                content, truncated = truncate_text(r.get("content", ""), limit=2000)
-                merged["content"] = content
-                if truncated:
+                spilled = self._spill_text_field(r.get("content", ""), 2000, "pdf_read_", ".txt")
+                merged["content"] = spilled["preview"]
+                if spilled["truncated"]:
                     merged["content_truncated"] = True
+                    merged["content_file_path"] = spilled["file_path"]
+                    merged["content_full_size"] = spilled["full_size"]
             elif op == "read_tables":
                 # 每张表保留元信息 + preview 行，不再回塞完整表格数据
                 tables = r.get("tables", [])
                 merged["table_count"] = r.get("count", len(tables))
                 merged["tables"] = [self._table_preview(t) for t in tables]
             elif op == "ocr":
-                content, truncated = truncate_text(r.get("content", ""), limit=2000)
-                merged["content"] = content
+                spilled = self._spill_text_field(r.get("content", ""), 2000, "pdf_ocr_", ".txt")
+                merged["content"] = spilled["preview"]
                 merged["page_count"] = r.get("page_count", 0)
-                if truncated:
+                if spilled["truncated"]:
                     merged["content_truncated"] = True
+                    merged["content_file_path"] = spilled["file_path"]
+                    merged["content_full_size"] = spilled["full_size"]
             elif op == "pdf_to_md":
-                markdown, truncated = truncate_text(r.get("markdown", ""), limit=5000)
-                merged["markdown"] = markdown
+                spilled = self._spill_text_field(r.get("markdown", ""), 5000, "pdf_to_md_", ".md")
+                merged["markdown"] = spilled["preview"]
                 merged["source"] = r.get("source", "text_extract")
-                if truncated:
+                if spilled["truncated"]:
                     merged["markdown_truncated"] = True
+                    merged["markdown_file_path"] = spilled["file_path"]
+                    merged["markdown_full_size"] = spilled["full_size"]
             elif op in ("md_to_pdf", "html_to_pdf"):
                 merged["file_path"] = r.get("file_path", "")
                 merged["file_size"] = r.get("file_size", 0)
@@ -500,6 +541,29 @@ class PdfProcessTool(BaseTool):
         merged["blob_truncated"] = True
         return truncated
 
+    @staticmethod
+    def _spill_text_field(value: Optional[str], limit: int,
+                          prefix: str, suffix: str) -> Dict[str, Any]:
+        """文本大字段：超长则全文落盘（agent 可 read/grep 回读），否则原样。
+
+        对齐 http_api 的落盘闭环（#34 Phase 3b），消除「截断即丢弃」的信息黑洞。
+        注意：spill_large_content 内部固定 PREVIEW_LIMIT=5000，而本工具 read/ocr 的
+        预览上限是 2000，因此 in-result 预览按 ``limit`` 自行截断；落盘文件始终是全文。
+        返回 dict：始终含 ``preview``；超长时另含 ``truncated/file_path/full_size``，
+        由调用方按字段名合并进 merged。
+        """
+        value = value or ""
+        if len(value) <= limit:
+            return {"preview": value, "truncated": False}
+        spill = spill_large_content(value, prefix=prefix, suffix=suffix)
+        preview, _ = truncate_text(value, limit=limit)
+        return {
+            "preview": preview,
+            "truncated": True,
+            "file_path": spill["file_path"],
+            "full_size": spill["full_size"],
+        }
+
     # ── 各操作处理器 ──
 
     async def _handle_read(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -567,6 +631,17 @@ class PdfProcessTool(BaseTool):
 
         md_text = self._extract_markdown_body(md_text)
 
+        # 先把 ![alt](file_id:...)/![alt](https://...) 解析为本地路径，再渲染
+        tenant_id, user_id = self._resolve_tenant_user()
+        if tenant_id:
+            from src.tools._image_inliner import inline_images
+            try:
+                md_text, _refs = await inline_images(
+                    md_text, tenant_id=tenant_id, user_id=user_id
+                )
+            except Exception as e:
+                logger.warning(f"[pdf_process] md_to_pdf inline_images 失败，回退原文: {e}")
+
         import asyncio
         result = await asyncio.to_thread(
             md_to_pdf,
@@ -591,6 +666,17 @@ class PdfProcessTool(BaseTool):
             return {"success": False, "error": "html_to_pdf 需要提供 context（HTML文本）或 file_paths（.html文件路径）"}
 
         html_text = self._extract_html_body(html_text)
+
+        # 解析 <img src="file_id:...">/<img src="https://..."> 为本地路径，再渲染
+        tenant_id, user_id = self._resolve_tenant_user()
+        if tenant_id:
+            from src.tools._image_inliner import inline_images
+            try:
+                html_text, _refs = await inline_images(
+                    html_text, tenant_id=tenant_id, user_id=user_id, syntax="html"
+                )
+            except Exception as e:
+                logger.warning(f"[pdf_process] html_to_pdf inline_images 失败，回退原文: {e}")
 
         import asyncio
         result = await asyncio.to_thread(

@@ -1,11 +1,18 @@
 """通用图片 inliner：扫描文本中的图片引用，下载/解析为本地路径。
 
 设计文档：docs/system/image-asset-pipeline-design.md §6.1
-开发计划：docs/plans/plan-image-asset-pipeline.md P1.4
+开发计划：docs/plans/plan-image-asset-pipeline.md P1.4（markdown）/ Phase 3（html）
 
-Phase 1 支持两类引用（Markdown syntax）：
+支持的引用形式：
+
+Markdown syntax（Phase 1，md_to_word / md_to_pdf 走此路径）：
   ![alt](file_id:file_xxx)   → ImageRef 直接引用（零拷贝，最快）
   ![alt](https://...)        → fetch_to_local 下载并注册
+
+HTML syntax（Phase 3，html_to_pdf 走此路径）：
+  <img ... src="file_id:file_xxx" ...>   → 解析 file_id 为本地路径
+  <img ... src="https://..." ...>        → fetch_to_local 下载并注册
+  仅替换 src 值，保留 <img> 标签其余属性。
 
 替换失败（找不到 file_id / 下载失败）时不抛异常，保留原文，记 warning，
 继续处理其他图片，避免单张图阻断整篇文档生成。
@@ -32,6 +39,19 @@ _FILE_ID_PATTERN = re.compile(r'!\[([^\]]*)\]\(file_id:([a-z0-9_]+)\)')
 
 # ![alt](https://...) / ![alt](http://...) — 远程 URL
 _REMOTE_URL_PATTERN = re.compile(r'!\[([^\]]*)\]\((https?://[^\s)]+)\)')
+
+# <img ... src="file_id:file_xxx" ...> — HTML img file_id（Phase 3）
+# group(1)=`<img ... src=`，group(2)=引号，group(3)=file_id；\2 反向引用保证引号配对
+_HTML_IMG_FILE_ID_PATTERN = re.compile(
+    r'(<img\b[^>]*?\bsrc=)(["\'])file_id:([a-z0-9_]+)\2',
+    re.IGNORECASE,
+)
+
+# <img ... src="https://..." ...> — HTML img 远程 URL（Phase 3）
+_HTML_IMG_REMOTE_PATTERN = re.compile(
+    r'(<img\b[^>]*?\bsrc=)(["\'])(https?://[^\s"\']+)\2',
+    re.IGNORECASE,
+)
 
 
 # ============================================================
@@ -92,16 +112,19 @@ async def inline_images(
 ) -> Tuple[str, List[ImageRef]]:
     """扫描文本中的图片引用，下载/解析为本地路径。
 
-    Phase 1 支持的引用形式（markdown syntax）：
-      ![alt](file_id:file_xxx)   → registry.get_ref_by_file_id + resolve_local_path
-      ![alt](https://...)        → registry.fetch_to_local + resolve_local_path
+    支持的引用形式：
+      markdown syntax（默认）：
+        ![alt](file_id:file_xxx)   → registry.get_ref_by_file_id + resolve_local_path
+        ![alt](https://...)        → registry.fetch_to_local + resolve_local_path
+      html syntax（Phase 3，pdf_process.html_to_pdf 接入）：
+        <img ... src="file_id:file_xxx" ...>   → 同上，仅替换 src 值
+        <img ... src="https://..." ...>        → 同上，仅替换 src 值
 
     Args:
-        text: 原始 Markdown 文本
+        text: 原始文本（Markdown 或 HTML）
         tenant_id: 租户 ID（远程 URL 下载时必填）
         user_id: 用户 ID（远程 URL 下载时附带）
-        syntax: 语法类型，目前仅支持 "markdown"；"html" 在 Phase 1 不支持，
-                会记 warning 并按 markdown 处理（保守降级）
+        syntax: 语法类型，"markdown"（默认）或 "html"；其它值记 warning 后按 markdown 处理
         fetch_remote: 是否处理远程 URL（默认 True；False 时仅替换 file_id:，
                       远程 URL 保持原样）
 
@@ -114,11 +137,12 @@ async def inline_images(
     if not text:
         return text, []
 
-    # HTML syntax 在 Phase 1 不支持（旅游顾问走 Markdown）
-    if syntax != "markdown":
+    # 仅支持 markdown / html；其它值保守降级为 markdown
+    if syntax not in ("markdown", "html"):
         logger.warning(
             f"[image_inliner] syntax={syntax} 暂不支持，按 markdown 处理"
         )
+        syntax = "markdown"
 
     refs: List[ImageRef] = []
     seen_file_ids: set = set()
@@ -133,52 +157,102 @@ async def inline_images(
         seen_file_ids.add(ref.file_id)
         refs.append(ref)
 
-    # --------------------------------------------------------
-    # 1. 替换 file_id: scheme
-    # --------------------------------------------------------
-    async def _replace_file_id(m: Match) -> str:
-        alt, file_id = m.group(1), m.group(2)
-        try:
-            ref = await registry.get_ref_by_file_id(file_id)
-            if ref is None:
-                logger.warning(
-                    f"[image_inliner] file_id={file_id} 在 registry 中找不到，保留原文"
-                )
-                return m.group(0)
-            local_path = await registry.resolve_local_path(ref)
-            _add_ref(ref)
-            return f"![{alt}]({local_path})"
-        except Exception as e:
-            logger.warning(
-                f"[image_inliner] 解析 file_id={file_id} 失败，保留原文: {e}"
-            )
-            return m.group(0)
-
-    text = await _are_sub(_FILE_ID_PATTERN, _replace_file_id, text)
-
-    # --------------------------------------------------------
-    # 2. 替换远程 URL（可选）
-    # --------------------------------------------------------
-    if fetch_remote:
-        async def _replace_remote(m: Match) -> str:
-            alt, url = m.group(1), m.group(2)
+    if syntax == "markdown":
+        # ----------------------------------------------------
+        # Markdown：1. 替换 file_id: scheme
+        # ----------------------------------------------------
+        async def _replace_file_id(m: Match) -> str:
+            alt, file_id = m.group(1), m.group(2)
             try:
-                ref = await registry.fetch_to_local(
-                    url,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    display_name=alt or None,
-                )
+                ref = await registry.get_ref_by_file_id(file_id)
+                if ref is None:
+                    logger.warning(
+                        f"[image_inliner] file_id={file_id} 在 registry 中找不到，保留原文"
+                    )
+                    return m.group(0)
                 local_path = await registry.resolve_local_path(ref)
                 _add_ref(ref)
                 return f"![{alt}]({local_path})"
             except Exception as e:
                 logger.warning(
-                    f"[image_inliner] 下载 url={url} 失败，保留原文: {e}"
+                    f"[image_inliner] 解析 file_id={file_id} 失败，保留原文: {e}"
                 )
                 return m.group(0)
 
-        text = await _are_sub(_REMOTE_URL_PATTERN, _replace_remote, text)
+        text = await _are_sub(_FILE_ID_PATTERN, _replace_file_id, text)
+
+        # ----------------------------------------------------
+        # Markdown：2. 替换远程 URL（可选）
+        # ----------------------------------------------------
+        if fetch_remote:
+            async def _replace_remote(m: Match) -> str:
+                alt, url = m.group(1), m.group(2)
+                try:
+                    ref = await registry.fetch_to_local(
+                        url,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        display_name=alt or None,
+                    )
+                    local_path = await registry.resolve_local_path(ref)
+                    _add_ref(ref)
+                    return f"![{alt}]({local_path})"
+                except Exception as e:
+                    logger.warning(
+                        f"[image_inliner] 下载 url={url} 失败，保留原文: {e}"
+                    )
+                    return m.group(0)
+
+            text = await _are_sub(_REMOTE_URL_PATTERN, _replace_remote, text)
+
+    else:  # syntax == "html"（Phase 3）
+        # ----------------------------------------------------
+        # HTML：1. 替换 <img src="file_id:...">
+        # ----------------------------------------------------
+        async def _replace_img_file_id(m: Match) -> str:
+            prefix, quote, file_id = m.group(1), m.group(2), m.group(3)
+            try:
+                ref = await registry.get_ref_by_file_id(file_id)
+                if ref is None:
+                    logger.warning(
+                        f"[image_inliner] file_id={file_id} 在 registry 中找不到，保留原文"
+                    )
+                    return m.group(0)
+                local_path = await registry.resolve_local_path(ref)
+                _add_ref(ref)
+                # 仅替换 src 值，保留 <img ...> 标签其余属性
+                return f"{prefix}{quote}{local_path}{quote}"
+            except Exception as e:
+                logger.warning(
+                    f"[image_inliner] 解析 file_id={file_id} 失败，保留原文: {e}"
+                )
+                return m.group(0)
+
+        text = await _are_sub(_HTML_IMG_FILE_ID_PATTERN, _replace_img_file_id, text)
+
+        # ----------------------------------------------------
+        # HTML：2. 替换 <img src="https://...">（可选）
+        # ----------------------------------------------------
+        if fetch_remote:
+            async def _replace_img_remote(m: Match) -> str:
+                prefix, quote, url = m.group(1), m.group(2), m.group(3)
+                try:
+                    ref = await registry.fetch_to_local(
+                        url,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        display_name=None,
+                    )
+                    local_path = await registry.resolve_local_path(ref)
+                    _add_ref(ref)
+                    return f"{prefix}{quote}{local_path}{quote}"
+                except Exception as e:
+                    logger.warning(
+                        f"[image_inliner] 下载 url={url} 失败，保留原文: {e}"
+                    )
+                    return m.group(0)
+
+            text = await _are_sub(_HTML_IMG_REMOTE_PATTERN, _replace_img_remote, text)
 
     return text, refs
 

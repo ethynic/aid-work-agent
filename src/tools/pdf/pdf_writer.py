@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from src.tools._helpers import sanitize_error
 from src.tools.pdf.pdf_lib import PdfFileHandler
 from src.utils import sanitize_error_info
 
@@ -127,6 +128,92 @@ def _strip_html_tags(text: str) -> str:
     text = re.sub(r'&lt;', '<', text)
     text = re.sub(r'&gt;', '>', text)
     return text.strip()
+
+
+# <img ... src="..." ...> 提取 src（含引号捕获，支持单/双引号）
+_IMG_SRC_PATTERN = re.compile(
+    r'(<img\b[^>]*?\bsrc=)(["\'])([^"\']+)\2',
+    re.IGNORECASE,
+)
+
+
+def _extract_img_srcs(html: str) -> List[str]:
+    """提取 HTML 中所有 <img> 的 src 值（fpdf2 路径用）。"""
+    return [m.group(3) for m in _IMG_SRC_PATTERN.finditer(html)]
+
+
+def _resolve_local_src(src: str) -> Optional[str]:
+    """把 img src 规整为可读的本地路径；远程/data: 返回 None。
+
+    去掉 file:// 前缀；保留 Windows 盘符路径。供 fpdf2 pdf.image() 使用。
+    """
+    if not src:
+        return None
+    lowered = src.lower()
+    if lowered.startswith(("http://", "https://", "data:", "mailto:")):
+        return None
+    path = src
+    if lowered.startswith("file://"):
+        path = src[7:]
+        # Windows file:///C:/... → C:/...：仅去掉盘符前的单个斜杠。
+        # 不能用 lstrip("/")——会把 Linux 绝对路径 /home/x.png 削成 home/x.png。
+        if len(path) >= 3 and path[0] == "/" and path[2] == ":":
+            path = path[1:]
+    return path
+
+
+def _embed_local_images_as_data_uri(html: str) -> str:
+    """把 HTML 中指向本地文件的 <img src> 转成 base64 data URI。
+
+    Playwright 用 page.set_content() 以 about:blank 为基址，本地路径加载不到，
+    转 data URI 最稳。src 已是 http(s)/data:/mailto: 的不动；文件不存在或读取
+    失败时保留原 src（不阻断整篇生成）。
+
+    被 _html_to_pdf_via_playwright 在 set_content 前调用，仅作用于 Playwright 路径。
+    """
+    import base64
+    import mimetypes
+
+    def _replace(m: "re.Match") -> str:
+        prefix, quote, src = m.group(1), m.group(2), m.group(3)
+        path = _resolve_local_src(src)
+        if path is None:
+            # 远程/data URI：保持原样（浏览器自行加载远程，data URI 已就绪）
+            return m.group(0)
+        if not os.path.exists(path):
+            logger.warning(f"[PdfWriter] 本地图片不存在，保留原 src: {src}")
+            return m.group(0)
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            mime = mimetypes.guess_type(path)[0] or "image/png"
+            b64 = base64.b64encode(data).decode("ascii")
+            return f"{prefix}{quote}data:{mime};base64,{b64}{quote}"
+        except Exception as e:
+            logger.warning(f"[PdfWriter] 本地图片读取失败，保留原 src: {src}: {e}")
+            return m.group(0)
+
+    return _IMG_SRC_PATTERN.sub(_replace, html)
+
+
+def _render_image_fpdf(pdf, src: str) -> None:
+    """fpdf2 渲染单张本地图：宽度=内容宽（保持比例），失败跳过不阻断。
+
+    被 fpdf2 兜底路径 _render_html_content 调用。远程 src（无法读本地文件）跳过。
+    """
+    path = _resolve_local_src(src)
+    if path is None:
+        # 远程/data URI：fpdf2 无法直接读，跳过
+        return
+    if not os.path.exists(path):
+        logger.warning(f"[PdfWriter] fpdf2 图片不存在，跳过: {src}")
+        return
+    try:
+        # w=epw（有效内容宽）保持比例；new_y=NEXT 让光标落到图片下方
+        pdf.image(path, w=pdf.epw, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+    except Exception as e:
+        logger.warning(f"[PdfWriter] fpdf2 图片渲染失败，跳过: {src}: {e}")
 
 
 def _preprocess_markdown(md_text: str) -> str:
@@ -479,6 +566,12 @@ def _render_html_content(pdf, font_name: str, html: str) -> None:
         if not block:
             continue
 
+        # 独立 <img>（未被 p/h 包裹，如 html_to_pdf 的裸 <img>）：直接渲染
+        if re.match(r'\s*<img\b', block, re.IGNORECASE):
+            for src in _extract_img_srcs(block):
+                _render_image_fpdf(pdf, src)
+            continue
+
         # 检测 h1~h6 标签
         h_match = re.match(r'<(h[1-6])\b[^>]*>(.*?)</\1>', block, re.DOTALL)
         if h_match:
@@ -506,6 +599,19 @@ def _render_html_content(pdf, font_name: str, html: str) -> None:
         p_match = re.match(r'<p\b[^>]*>(.*?)</p>', block, re.DOTALL)
         if p_match:
             inner = p_match.group(1)
+            img_srcs = _extract_img_srcs(inner)
+            if img_srcs:
+                # 段落含图片（markdown ![]() 经 markdown 库变成 <p><img/></p>）：
+                # 先渲染残余纯文本（若有），再逐张渲染本地图
+                text = _strip_html_tags(inner)
+                if text:
+                    pdf.set_font(font_name, size=11)
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.multi_cell(0, 6.5, text, new_x="LMARGIN", new_y="NEXT")
+                    pdf.ln(2)
+                for src in img_srcs:
+                    _render_image_fpdf(pdf, src)
+                continue
             text = _strip_html_tags(inner)
             if not text:
                 continue
@@ -601,7 +707,7 @@ def md_to_pdf(md_text: str, output_name: Optional[str] = None,
 
     except Exception as e:
         logger.error(f"[PdfWriter] md_to_pdf 失败: {e}", exc_info=True)
-        return {"success": False, "error": f"生成PDF失败: {e}"}
+        return {"success": False, "error": sanitize_error(e, fallback="生成PDF失败，请稍后重试")}
 
 
 def html_to_pdf(html_text: str, output_name: Optional[str] = None,
@@ -618,7 +724,7 @@ def html_to_pdf(html_text: str, output_name: Optional[str] = None,
 
         fallback = _html_to_pdf_via_fpdf2(html_text, output_name=output_name, css=css)
         warnings = list(fallback.get("warnings", []))
-        warnings.append(f"Playwright print-to-pdf 不可用，已回退 fpdf2: {result.get('error', '')}")
+        warnings.append("Playwright print-to-pdf 不可用，已回退 fpdf2 渲染")
         fallback["warnings"] = warnings
         return fallback
 
@@ -632,6 +738,8 @@ def _html_to_pdf_via_playwright(html_text: str, output_name: Optional[str] = Non
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "output.pdf")
             html_doc = _prepare_print_html(html_text, css=css)
+            # 本地 <img src> → base64 data URI，绕开 about:blank 基址加载不到的问题
+            html_doc = _embed_local_images_as_data_uri(html_doc)
 
             from playwright.sync_api import sync_playwright
 
@@ -663,7 +771,7 @@ def _html_to_pdf_via_playwright(html_text: str, output_name: Optional[str] = Non
 
     except Exception as e:
         logger.warning(f"[PdfWriter] Playwright HTML转PDF失败: {e}")
-        return {"success": False, "error": f"Playwright HTML转PDF失败: {e}"}
+        return {"success": False, "error": sanitize_error(e, fallback="HTML转PDF失败，请稍后重试")}
 
 
 def _prepare_print_html(html_text: str, css: Optional[str] = None) -> str:
@@ -755,4 +863,4 @@ def _html_to_pdf_via_fpdf2(html_text: str, output_name: Optional[str] = None,
 
     except Exception as e:
         logger.error(f"[PdfWriter] fpdf2 HTML转PDF失败: {e}", exc_info=True)
-        return {"success": False, "error": f"HTML转PDF失败: {e}"}
+        return {"success": False, "error": sanitize_error(e, fallback="HTML转PDF失败，请稍后重试")}

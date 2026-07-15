@@ -16,7 +16,7 @@
 | **Phase 0** | 基建层 | ImageRef 模型 + ImageRegistry 类 + 与 cp 兼容性测试 | 2 天 | 无 |
 | **Phase 1** | 旅游顾问行程 Word 嵌图端到端 | 知识库图片资产 + attraction_search 返回 cover_image + image_inliner + md_to_word 集成 + 景点 Excel+zip 导入 + SUBAGENT.md 规范 + 前端景点管理页图片上传 | 5 天 | Phase 0 |
 | **Phase 2** | Agent 回复显图能力 | images SSE 事件 + ChatMessage/UnifiedResponse 字段 + 前端 ImageGallery + Markdown image renderer + 渠道图片消息（feishu/dingtalk） | 4 天 | Phase 0 |
-| **Phase 3** | 高级能力（按需） | 文档解析器内嵌图提取 + image_parser OCR/VLM + LLM `[[IMAGE:file_id]]` 占位符 + wecom 渠道 + PPT/PDF inliner 接入 | 待评估 | Phase 1+2 |
+| **Phase 3** | 高级能力（按需） | 文档解析器内嵌图提取 + image_parser OCR/VLM + LLM `[[IMAGE:file_id]]` 占位符 + wecom 渠道 + PPT inliner 接入 / **PDF inliner ✅ 2026-07-15**（md_to_pdf + html_to_pdf 双入口，见 [PDF 图片支持设计](../tools/pdf/pdf-image-support-design.md)） | 待评估 | Phase 1+2 |
 
 ### 0.2 关键决策摘要（细节见各 Phase 章节）
 
@@ -515,7 +515,7 @@ async def inline_images(
 - **替换失败时不抛异常**：单张图失败不阻断整篇文档生成，原图保留为 broken link（Pandoc 会渲染为 alt 文字）
 - **同步正则 + 异步替换**：用 `asyncio.gather` 批量并发处理多张图，加速文档生成
 - **Phase 1 默认 `fetch_remote=True`**：旅游顾问偶尔会粘贴外部景点 URL（如官网图），允许 inliner 下载
-- **HTML syntax（`<img src>`）**：Phase 1 不支持（旅游顾问走 Markdown），Phase 3 接入 pdf_process 时再加
+- **HTML syntax（`<img src>`）**：Phase 1 不支持（旅游顾问走 Markdown）；**Phase 3 已完成（2026-07-15）**——`inline_images(syntax="html")` 支持 `<img src="file_id:…">` / `<img src="https://…">`，pdf_process.html_to_pdf 接入。见 [PDF 图片支持设计](../tools/pdf/pdf-image-support-design.md)
 
 **辅助函数**：`_are_sub` 是异步正则替换辅助，逐 match 调用 async 替换函数（标准 Python `re.sub` 不支持 async replace，需自己写）
 

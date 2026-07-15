@@ -272,3 +272,110 @@ async def test_inline_multiple_images_concurrent():
     assert len(refs) == 3
     ref_ids = {r.file_id for r in refs}
     assert ref_ids == {"file_aaa", "file_bbb", "file_ccc"}
+
+
+# ============================================================
+# HTML syntax（Phase 3：pdf_process.html_to_pdf 接入）
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_inline_html_img_file_id_replaces_only_src():
+    """HTML <img src="file_id:x"> → 仅 src 被替换为本地路径，标签其余属性保留。"""
+    from src.tools._image_inliner import inline_images
+
+    ref = _make_image_ref(file_id="file_html1")
+    local_path = Path("/storage/tenants/t1/images/file_html1.jpg")
+    mock_registry = _build_mock_registry(
+        get_ref_by_file_id_side_effect=lambda fid: ref if fid == "file_html1" else None,
+        resolve_local_path_return=local_path,
+    )
+
+    html = '<p>段落</p><img alt="景点" src="file_id:file_html1" class="pic"/>'
+
+    with patch(
+        "src.tools._image_inliner.get_image_registry", return_value=mock_registry
+    ):
+        result_text, refs = await inline_images(
+            html, tenant_id="t1", syntax="html", fetch_remote=False
+        )
+
+    # file_id 引用消失，本地路径进入 src
+    assert "file_id:file_html1" not in result_text
+    assert str(local_path) in result_text
+    # 其余属性与标签结构保留
+    assert 'alt="景点"' in result_text
+    assert 'class="pic"' in result_text
+    assert result_text.count("<img") == 1
+    assert len(refs) == 1 and refs[0].file_id == "file_html1"
+
+
+@pytest.mark.asyncio
+async def test_inline_html_img_unknown_file_id_keeps_original():
+    """HTML <img src="file_id:x"> 找不到 → 原标签保留，refs 为空。"""
+    from src.tools._image_inliner import inline_images
+
+    mock_registry = _build_mock_registry(
+        get_ref_by_file_id_side_effect=lambda fid: None,
+    )
+    html = '<img src="file_id:file_missing"/>'
+
+    with patch(
+        "src.tools._image_inliner.get_image_registry", return_value=mock_registry
+    ):
+        result_text, refs = await inline_images(
+            html, tenant_id="t1", syntax="html", fetch_remote=False
+        )
+
+    assert result_text == html
+    assert refs == []
+
+
+@pytest.mark.asyncio
+async def test_inline_html_img_remote_url_fetches_and_replaces():
+    """HTML <img src="https://..."> → fetch_to_local 后 src 被替换为本地路径。"""
+    from src.tools._image_inliner import inline_images
+
+    ref = _make_image_ref(file_id="file_htmlremote")
+    local_path = Path("/storage/tenants/t1/images/file_htmlremote.png")
+    mock_registry = _build_mock_registry(
+        get_ref_by_file_id_side_effect=lambda fid: None,
+        resolve_local_path_return=local_path,
+        fetch_to_local_side_effect=lambda url, **kw: ref,
+    )
+    html = '<img src="https://example.com/scenic.png" alt="官网图">'
+
+    with patch(
+        "src.tools._image_inliner.get_image_registry", return_value=mock_registry
+    ):
+        result_text, refs = await inline_images(
+            html, tenant_id="t1", user_id="u1", syntax="html"
+        )
+
+    mock_registry.fetch_to_local.assert_awaited_once()
+    assert "https://example.com/scenic.png" not in result_text
+    assert str(local_path) in result_text
+    assert len(refs) == 1 and refs[0].file_id == "file_htmlremote"
+
+
+@pytest.mark.asyncio
+async def test_inline_html_single_quote_src_also_matched():
+    """HTML img 单引号 src 同样匹配（双/单引号都支持）。"""
+    from src.tools._image_inliner import inline_images
+
+    ref = _make_image_ref(file_id="file_sq")
+    local_path = Path("/storage/tenants/t1/images/file_sq.jpg")
+    mock_registry = _build_mock_registry(
+        get_ref_by_file_id_side_effect=lambda fid: ref if fid == "file_sq" else None,
+        resolve_local_path_return=local_path,
+    )
+    html = "<img src='file_id:file_sq'>"
+
+    with patch(
+        "src.tools._image_inliner.get_image_registry", return_value=mock_registry
+    ):
+        result_text, _refs = await inline_images(
+            html, tenant_id="t1", syntax="html", fetch_remote=False
+        )
+
+    assert "file_id:file_sq" not in result_text
+    assert str(local_path) in result_text
