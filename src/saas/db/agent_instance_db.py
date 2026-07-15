@@ -40,9 +40,8 @@ class AgentInstanceDB:
                     INSERT INTO agent_instances
                         (instance_id, tenant_id, subscription_id, subagent_type,
                          display_name, instance_name, avatar, description,
-                         personality_traits, config, bound_channel_type, allowed_skills,
-                         status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'idle')
+                         personality_traits, config, bound_channel_type, allowed_skills)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     instance_id, tenant_id, subscription_id, subagent_type,
                     display_name,
@@ -73,20 +72,14 @@ class AgentInstanceDB:
             return None
 
     @staticmethod
-    def list_by_tenant(tenant_id: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_by_tenant(tenant_id: str) -> List[Dict[str, Any]]:
         """列出租户的实例"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if status:
-                cursor.execute(
-                    "SELECT * FROM agent_instances WHERE tenant_id = %s AND status = %s ORDER BY created_at DESC",
-                    (tenant_id, status),
-                )
-            else:
-                cursor.execute(
-                    "SELECT * FROM agent_instances WHERE tenant_id = %s ORDER BY created_at DESC",
-                    (tenant_id,),
-                )
+            cursor.execute(
+                "SELECT * FROM agent_instances WHERE tenant_id = %s ORDER BY created_at DESC",
+                (tenant_id,),
+            )
             return [AgentInstanceDB._row_to_dict(row) for row in cursor.fetchall()]
 
     @staticmethod
@@ -94,7 +87,7 @@ class AgentInstanceDB:
         """更新实例"""
         allowed_fields = {
             "display_name", "instance_name", "avatar", "description",
-            "personality_traits", "status", "config", "bound_channel_type",
+            "personality_traits", "config", "bound_channel_type",
             "allowed_skills", "reply_style_id"
         }
         updates = {}
@@ -129,20 +122,6 @@ class AgentInstanceDB:
             cursor.execute("DELETE FROM agent_instances WHERE instance_id = %s", (instance_id,))
             conn.commit()
             return cursor.rowcount > 0
-
-    @staticmethod
-    def list_running_by_tenant(tenant_id: str) -> List[Dict[str, Any]]:
-        """列出租户所有 running 状态的实例（已弃用，返回空列表）"""
-        from loguru import logger
-        logger.warning(f"list_running_by_tenant called for tenant {tenant_id}: running status no longer supported")
-        return []
-
-    @staticmethod
-    def list_all_running() -> List[Dict[str, Any]]:
-        """列出所有 running 状态的实例（已弃用，返回空列表）"""
-        from loguru import logger
-        logger.warning("list_all_running called: running status no longer supported")
-        return []
 
     @staticmethod
     def _row_to_dict(row) -> Dict[str, Any]:

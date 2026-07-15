@@ -18,7 +18,6 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.agent_instance_db import AgentInstanceDB
 from src.saas.db.tenant_db import TenantDB
 from src.saas.services.billing import create_subscription_for_tenant
-from src.saas.services.instance_manager import instance_manager
 from src.config.settings import settings
 
 router = APIRouter(prefix="/api/saas/instances", tags=["SaaS 智能体实例"])
@@ -183,55 +182,5 @@ async def delete_instance(instance_id: str, request: Request):
     if instance["tenant_id"] != admin["tenant_id"]:
         raise HTTPException(status_code=403, detail="无权操作此实例")
 
-    # 先停止
-    if instance_manager.is_running(instance_id):
-        instance_manager.stop_instance(instance_id)
-
     success = AgentInstanceDB.delete(instance_id)
     return {"success": success}
-
-
-@router.post("/{instance_id}/start")
-async def start_instance(instance_id: str, request: Request):
-    """启动实例"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-    instance = AgentInstanceDB.get_by_id(instance_id)
-    if not instance:
-        raise HTTPException(status_code=404, detail="实例不存在")
-    if instance["tenant_id"] != admin["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权操作此实例")
-
-    # 检查订阅状态
-    from src.saas.db.subscription_db import SubscriptionDB
-    if instance.get("subscription_id"):
-        sub = SubscriptionDB.get_by_id(instance["subscription_id"])
-        if sub and sub["status"] != "active":
-            raise HTTPException(
-                status_code=400,
-                detail=f"关联订阅状态为 {sub['status']}，请先完成订阅支付"
-            )
-
-    ok = instance_manager.start_instance(instance_id)
-    if ok:
-        return {"success": True, "message": "实例已启动"}
-    raise HTTPException(status_code=500, detail="启动失败")
-
-
-@router.post("/{instance_id}/stop")
-async def stop_instance(instance_id: str, request: Request):
-    """停止实例"""
-    if not settings.saas.enabled:
-        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
-
-    admin = require_admin(request)
-    instance = AgentInstanceDB.get_by_id(instance_id)
-    if not instance:
-        raise HTTPException(status_code=404, detail="实例不存在")
-    if instance["tenant_id"] != admin["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权操作此实例")
-
-    instance_manager.stop_instance(instance_id)
-    return {"success": True, "message": "实例已停止"}

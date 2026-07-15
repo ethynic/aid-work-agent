@@ -2,7 +2,7 @@
 SaaS 领域枚举值定义
 
 所有 SaaS 相关表字段的枚举值统一在此定义。
-包括：租户状态、订阅状态、支付状态、智能体实例状态等。
+包括：租户状态、订阅状态、支付状态等。
 
 使用说明：
 - 后端 Pydantic 模型引用：from src.saas.models import TenantStatus
@@ -92,34 +92,6 @@ class PaymentStatus(str, Enum):
             self.PENDING: "待支付",
             self.PAID: "已支付",
             self.REFUNDED: "已退款",
-        }
-        return mapping.get(self, "未知")
-
-
-# ============== 智能体实例状态 ==============
-
-class AgentInstanceStatus(str, Enum):
-    """
-    智能体实例状态枚举
-
-    数据库存储：TEXT
-    - idle = 空闲可用（无用户使用）
-    - busy = 忙碌中（有用户正在使用）
-
-    注意：只保留并发控制状态，运行状态由instance_manager在内存中管理
-    """
-    IDLE = "idle"
-    BUSY = "busy"
-
-    @classmethod
-    def all_values(cls) -> list[str]:
-        return [cls.IDLE.value, cls.BUSY.value]
-
-    @property
-    def display_name(self) -> str:
-        mapping = {
-            self.IDLE: "空闲",
-            self.BUSY: "忙碌",
         }
         return mapping.get(self, "未知")
 
@@ -228,41 +200,6 @@ class PlanType(str, Enum):
             self.BASIC: "基础版",
             self.STANDARD: "标准版",
             self.PREMIUM: "旗舰版",
-        }
-        return mapping.get(self, "未知")
-
-
-# ============== 排队状态 ==============
-
-class QueueStatus(str, Enum):
-    """
-    智能体实例排队状态枚举
-
-    数据库存储：TEXT (agent_instance_queue.status)
-    - waiting   = 排队中
-    - ready     = 已到号
-    - expired   = 过期
-    - cancelled = 已取消（包括用户主动取消和系统自动放弃）
-    - abandoned = 已放弃（系统自动取消，归并为 cancelled 显示）
-    """
-    WAITING = "waiting"
-    READY = "ready"
-    EXPIRED = "expired"
-    CANCELLED = "cancelled"
-    ABANDONED = "abandoned"
-
-    @classmethod
-    def all_values(cls) -> list[str]:
-        return [cls.WAITING.value, cls.READY.value, cls.EXPIRED.value, cls.CANCELLED.value, cls.ABANDONED.value]
-
-    @property
-    def display_name(self) -> str:
-        mapping = {
-            self.WAITING: "排队中",
-            self.READY: "已到号",
-            self.EXPIRED: "过期",
-            self.CANCELLED: "已取消",
-            self.ABANDONED: "已取消",  # 归并为 cancelled 显示
         }
         return mapping.get(self, "未知")
 

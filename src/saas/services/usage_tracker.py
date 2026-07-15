@@ -68,7 +68,6 @@ def track_from_chat_record(record_id: str):
 
         # 尝试从 session 路径找到关联的 instance_id
         # 格式: {channel_type}_{channel_user_id} 或 web_{user_id}_{hex}
-        # TODO: Phase 4 实现后，可通过 instance_manager 反查 session 关联的 instance
         logger.debug(f"Chat record {record_id}: session={session_id}, tokens={token_count}")
 
 

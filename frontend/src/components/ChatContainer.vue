@@ -141,10 +141,10 @@ const subagentName = computed<string | null>(() => {
   return null
 })
 
-// 从路由 query 参数中获取实例 ID（用于并发控制）
+// 从路由 query 参数中获取实例 ID
 // 优先级：1. 路由参数 2. 当前会话的 instance_id 字段 3. 匹配可用的子智能体实例
 const instanceId = computed<string | null>(() => {
-  // 1. 优先从路由参数获取（从 InstanceLobby 锁定后跳转）
+  // 1. 优先从路由参数获取
   if (route.query.instance_id) {
     return route.query.instance_id as string
   }
@@ -309,9 +309,6 @@ const pageTitle = computed(() => {
 })
 
 
-// 排队轮到了，自动发送消息
-
-
 // 检查并处理主智能体不可用的情况（ChatContainer 特有逻辑）
 async function checkAndRedirectIfMainAgentUnavailable() {
   // 关键修复：如果 currentSessionId 已有值（用户点击了历史会话），不执行重定向
@@ -447,8 +444,7 @@ async function handleSend(content: string) {
     return
   }
 
-  // 如果有预生成的会话ID（从 Lobby 跳转），直接使用它
-  // 这种情况下不需要创建 DB 会话，锁已通过 InstanceService 预先获取
+  // 如果有预生成的会话ID，直接使用它
   let sid: string | null | undefined
   if (pregeneratedSessionId.value) {
     sid = pregeneratedSessionId.value
