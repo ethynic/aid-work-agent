@@ -13,7 +13,7 @@ cd ..\clients\agent-desktop
 npm ci
 ```
 
-配置真实服务端地址后启动。生产地址必须为 HTTPS；仅本机开发允许 `localhost`、`127.0.0.1` 或 `[::1]` 的 HTTP：
+配置真实服务端地址后启动。生产地址必须为 HTTPS；仅本机开发允许 `localhost`、`127.0.0.1` 或 `[::1]` 的 HTTP。环境变量是开发/运维显式覆盖：
 
 ```powershell
 $env:AID_AGENT_API_BASE_URL='https://agent-api.example.com/api'
@@ -38,10 +38,22 @@ npm run smoke
 ## Windows 开发安装包
 
 ```powershell
+$env:AID_AGENT_PACKAGE_API_BASE_URL='https://agent2.aidingyi.cn/api'
 npm run package:win:dev
 ```
 
-该命令先执行 typecheck、测试、Desktop build 和 Portal artifact 门禁，再生成 Windows x64 NSIS 开发安装包。输出位于 `release/`，文件名和 `release-manifest.json` 会明确标记 `dev/unsigned`；同时生成 CycloneDX SBOM、npm audit JSON 和许可证清单。`release/` 已加入 gitignore，不会提交。
+该命令要求显式提供打包 API 地址，先执行 typecheck、测试、Desktop build 和 Portal artifact 门禁，再把仅含 `schemaVersion` 和 `apiBaseUrl` 的默认配置写入安装包并生成 Windows x64 NSIS 开发安装包。URL 禁止包含 Token、账号或密码。输出位于 `release/`，文件名和 `release-manifest.json` 会明确标记 `dev/unsigned`；同时生成 CycloneDX SBOM、npm audit JSON 和许可证清单。`release/` 已加入 gitignore，不会提交。
+
+安装后配置文件位于 `%APPDATA%\aid-agent-desktop\desktop-config.json`，首次启动由包内默认值原子初始化，升级不会覆盖。关闭客户端后可编辑：
+
+```json
+{
+  "schemaVersion": 1,
+  "apiBaseUrl": "https://agent2.aidingyi.cn/api"
+}
+```
+
+加载优先级为 `AID_AGENT_API_BASE_URL`（运维覆盖）→ 用户配置 → 包内默认配置。非法或缺失配置会明确终止启动，不会静默连接其他服务。
 
 生产打包使用 `npm run package:win:release`。该模式没有 `CSC_LINK`/`WIN_CSC_LINK` 会立即失败，签名结果不是 `Valid` 也会失败，不允许静默生成 unsigned release。本阶段不上传发布源，也不配置或连接自动更新 URL。
 

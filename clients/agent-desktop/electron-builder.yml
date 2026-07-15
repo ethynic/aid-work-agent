@@ -8,6 +8,7 @@ files:
   - dist/electron/main.js
   - dist/electron/preload.cjs
   - dist/electron/credentials.js
+  - dist/electron/apiConfiguration.js
   - dist/electron/security.js
   - dist/electron/systemCapabilities.js
   - dist/electron/windowState.js

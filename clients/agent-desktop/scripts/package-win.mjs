@@ -1,21 +1,38 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { assertPackageInvocation, assertReleaseSigning, expectedSignature, isValidReleaseVersion } from '../dist/electron/releasePolicy.js'
+import { normalizeApiBaseUrl } from '../dist/electron/security.js'
 
 const mode = process.argv[2]
 assertPackageInvocation(mode, process.argv.slice(3))
 assertReleaseSigning(mode, process.env)
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 if (!isValidReleaseVersion(packageJson.version)) throw new Error('package version is not release-compatible semver')
+const packagedApiBaseUrl = normalizeApiBaseUrl(process.env.AID_AGENT_PACKAGE_API_BASE_URL ?? '')
+
+const temporaryPackagingRoot = mkdtempSync(path.join(os.tmpdir(), 'aidagent-package-'))
+const packagedConfig = path.join(temporaryPackagingRoot, 'desktop-config.json')
+const builderConfig = path.join(temporaryPackagingRoot, 'electron-builder.json')
+try {
+  writeFileSync(packagedConfig, `${JSON.stringify({ schemaVersion: 1, apiBaseUrl: packagedApiBaseUrl }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+  writeFileSync(builderConfig, `${JSON.stringify({
+    extends: path.resolve('electron-builder.yml'),
+    extraResources: [{ from: packagedConfig, to: 'config/desktop-config.json' }],
+  }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+} catch (error) {
+  rmSync(temporaryPackagingRoot, { recursive: true, force: true })
+  throw error
+}
 
 const isRelease = mode === 'release'
 const artifactName = isRelease
   ? `AID-Work-Agent-${packageJson.version}-win-x64.${'${ext}'}`
   : `AID-Work-Agent-${packageJson.version}-win-x64-dev-unsigned.${'${ext}'}`
 const builderArguments = [
-  path.resolve('node_modules/electron-builder/out/cli/cli.js'), '--win', 'nsis', '--x64', '--config', 'electron-builder.yml',
+  path.resolve('node_modules/electron-builder/out/cli/cli.js'), '--win', 'nsis', '--x64', '--config', builderConfig,
   `--config.win.artifactName=${artifactName}`,
 ]
 if (isRelease) builderArguments.push('--config.forceCodeSigning=true')
@@ -40,6 +57,8 @@ function buildInputDigest() {
   const roots = ['electron-builder.yml', 'package.json', 'package-lock.json', 'dist/electron', 'dist/renderer']
   const files = roots.flatMap((entry) => statSync(entry).isDirectory() ? listFiles(entry) : [path.resolve(entry)])
   const hash = createHash('sha256')
+  hash.update(readFileSync(packagedConfig))
+  hash.update('\0')
   for (const file of files) {
     hash.update(path.relative(process.cwd(), file).replaceAll('\\', '/'))
     hash.update('\0')
@@ -74,19 +93,28 @@ function parseCommandJson(label, result, allowedStatuses = [0]) {
 }
 
 const inputSha256 = buildInputDigest()
-const builder = spawnSync(process.execPath, builderArguments, {
-  stdio: 'inherit',
-  env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: isRelease ? 'true' : 'false' },
-})
-if (builder.error) throw builder.error
-if (builder.status !== 0) process.exit(builder.status ?? 1)
-if (buildInputDigest() !== inputSha256) throw new Error('packaging inputs changed while electron-builder was running')
+let builder
+try {
+  builder = spawnSync(process.execPath, builderArguments, {
+    stdio: 'inherit',
+    env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: isRelease ? 'true' : 'false' },
+  })
+  if (builder.error) throw builder.error
+  if (builder.status !== 0) throw new Error(`electron-builder failed with exit ${builder.status ?? 'unknown'}`)
+  if (buildInputDigest() !== inputSha256) throw new Error('packaging inputs changed while electron-builder was running')
+} finally {
+  rmSync(temporaryPackagingRoot, { recursive: true, force: true })
+}
 
 const installerName = artifactName.replace('${ext}', 'exe')
 const installer = path.join(releaseDirectory, installerName)
 if (!existsSync(installer) || !statSync(installer).isFile()) throw new Error(`expected NSIS installer was not produced: ${installerName}`)
 const unpackedAsar = path.join(releaseDirectory, 'win-unpacked', 'resources', 'app.asar')
 if (!existsSync(unpackedAsar) || !statSync(unpackedAsar).isFile()) throw new Error('win-unpacked app.asar was not produced')
+const unpackedConfig = path.join(releaseDirectory, 'win-unpacked', 'resources', 'config', 'desktop-config.json')
+if (!existsSync(unpackedConfig) || !statSync(unpackedConfig).isFile()) throw new Error('packaged desktop config was not produced')
+const verifiedPackagedConfig = JSON.parse(readFileSync(unpackedConfig, 'utf8'))
+if (verifiedPackagedConfig.schemaVersion !== 1 || verifiedPackagedConfig.apiBaseUrl !== packagedApiBaseUrl) throw new Error('packaged desktop config verification failed')
 
 const signatureCommand = `(Get-AuthenticodeSignature -LiteralPath '${installer.replaceAll("'", "''")}').Status.ToString()`
 const signature = spawnSync('powershell.exe', ['-NoProfile', '-Command', signatureCommand], { encoding: 'utf8' })
@@ -110,6 +138,7 @@ const manifest = {
   dirty: Boolean(git('status', '--porcelain')),
   signatureStatus,
   buildInputSha256: inputSha256,
+  apiBaseUrl: packagedApiBaseUrl,
 }
 writeJsonAtomic(path.join(releaseDirectory, 'release-manifest.json'), manifest)
 

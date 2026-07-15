@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, safeStorage, screen, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { EncryptedCredentialStore, isAllowedCredentialKey, isAllowedCredentialValue } from './credentials.js'
+import { resolveApiConfiguration } from './apiConfiguration.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
 import {
   createContentSecurityPolicy,
@@ -15,7 +16,6 @@ import {
   isTrustedIpcSender,
   mapSchemeRequest,
   parseAgentDeepLink,
-  parseApiBaseConfiguration,
   resolveInsideRoot,
 } from './security.js'
 import {
@@ -45,9 +45,8 @@ const smokeMode = process.env.AID_AGENT_DESKTOP_SMOKE === '1'
 if (smokeMode && process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA) {
   app.setPath('userData', path.resolve(process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA))
 }
-const apiConfiguration = parseApiBaseConfiguration(process.env.AID_AGENT_API_BASE_URL ?? '')
-const apiBaseUrl = apiConfiguration.kind === 'valid' ? apiConfiguration.apiBaseUrl : ''
-const contentSecurityPolicy = apiConfiguration.kind === 'valid' ? createContentSecurityPolicy(apiBaseUrl) : ''
+let apiBaseUrl = ''
+let contentSecurityPolicy = ''
 let mainWindow: BrowserWindow | null = null
 let credentialStore: EncryptedCredentialStore | null = null
 let pendingDeepLink: string | null = null
@@ -264,9 +263,6 @@ async function createWindow(): Promise<BrowserWindow> {
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
-} else if (apiConfiguration.kind === 'reject') {
-  logLifecycle('startup-configuration-failed', apiConfiguration.reason)
-  app.exit(1)
 } else {
   if (!smokeMode) app.setAsDefaultProtocolClient(DESKTOP_SCHEME)
   app.on('second-instance', (_event, argv) => {
@@ -275,6 +271,20 @@ if (!hasSingleInstanceLock) {
   })
 
   app.whenReady().then(async () => {
+    let configuration
+    try {
+      configuration = resolveApiConfiguration({
+        environmentValue: process.env.AID_AGENT_API_BASE_URL,
+        userDataPath: app.getPath('userData'),
+        resourcesPath: process.resourcesPath,
+      })
+    } catch (error) {
+      logLifecycle('startup-configuration-failed', error instanceof Error ? error.message : 'unknown')
+      throw error
+    }
+    apiBaseUrl = configuration.apiBaseUrl
+    contentSecurityPolicy = createContentSecurityPolicy(apiBaseUrl)
+    logLifecycle('api-configuration-loaded', configuration.source)
     nativeTheme.themeSource = 'system'
     registerDesktopIpc()
     await registerRendererProtocol()

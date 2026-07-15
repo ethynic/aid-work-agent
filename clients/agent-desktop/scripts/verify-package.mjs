@@ -4,12 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { extractAll, listPackage } from '@electron/asar'
 import { expectedSignature } from '../dist/electron/releasePolicy.js'
+import { normalizeApiBaseUrl } from '../dist/electron/security.js'
 
 const releaseDirectory = path.resolve(process.argv[2] ?? 'release')
 const mode = process.argv[3] ?? 'dev'
 const asarPath = path.join(releaseDirectory, 'win-unpacked', 'resources', 'app.asar')
 const files = listPackage(asarPath).map((file) => file.replaceAll('\\', '/'))
-for (const required of ['/dist/electron/main.js', '/dist/electron/preload.cjs', '/dist/renderer/index.html']) {
+for (const required of ['/dist/electron/main.js', '/dist/electron/preload.cjs', '/dist/electron/apiConfiguration.js', '/dist/renderer/index.html']) {
   if (!files.includes(required)) throw new Error(`package missing required runtime file: ${required}`)
 }
 for (const file of files) {
@@ -43,6 +44,16 @@ const installer = path.join(releaseDirectory, manifest.fileName)
 const digest = createHash('sha256').update(readFileSync(installer)).digest('hex')
 if (digest !== manifest.sha256 || statSync(installer).size !== manifest.size) throw new Error('release manifest hash/size mismatch')
 if (manifest.signatureStatus !== expectedSignature(mode)) throw new Error('release manifest signature policy mismatch')
+const packagedConfigPath = path.join(releaseDirectory, 'win-unpacked', 'resources', 'config', 'desktop-config.json')
+const packagedConfig = JSON.parse(readFileSync(packagedConfigPath, 'utf8'))
+const packagedConfigKeys = Object.keys(packagedConfig).sort()
+if (packagedConfigKeys.length !== 2 || packagedConfigKeys[0] !== 'apiBaseUrl' || packagedConfigKeys[1] !== 'schemaVersion') {
+  throw new Error('packaged desktop config schema mismatch')
+}
+if (packagedConfig.schemaVersion !== 1 || normalizeApiBaseUrl(packagedConfig.apiBaseUrl) !== packagedConfig.apiBaseUrl) {
+  throw new Error('packaged desktop config value is invalid')
+}
+if (manifest.apiBaseUrl !== packagedConfig.apiBaseUrl) throw new Error('release manifest API base URL mismatch')
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 if (manifest.version !== packageJson.version) throw new Error('release manifest version mismatch')
 const expectedChannel = mode === 'release' ? 'release' : 'development-unsigned'
