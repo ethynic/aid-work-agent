@@ -411,28 +411,6 @@ async def lifespan(app: FastAPI):
     # Start instance lock cleanup background task — 每 60 秒，出错暂停 2 分钟
     # ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
     if settings.saas.enabled:
-        async def _instance_lock_cleanup_loop():
-            """后台定时清理过期的智能体实例锁（每 60 秒，出错暂停 2 分钟）
-
-            ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
-            """
-            from src.saas.services.instance_service import InstanceService
-            interval = 60
-            error_cooldown = 120  # 出错后暂停 2 分钟
-            logger.info(f"Instance lock cleanup task started, interval={interval}s, error_cooldown={error_cooldown}s")
-            while True:
-                await asyncio.sleep(interval)
-                try:
-                    cleaned = InstanceService.cleanup_all_expired_locks()
-                    if cleaned > 0:
-                        logger.info(f"[InstanceLock] Cleaned up {cleaned} expired instance locks")
-                except psycopg2.OperationalError as e:
-                    logger.warning(f"[InstanceLock] Cleanup error (DB connection issue, pausing {error_cooldown}s): {e}")
-                    await asyncio.sleep(error_cooldown)
-                except Exception as e:
-                    logger.error(f"[InstanceLock] Cleanup error: {e}")
-                    await asyncio.sleep(error_cooldown)
-        asyncio.create_task(_instance_lock_cleanup_loop())
 
         # Start wecom_kf human service timeout check — 每 60 秒检查
         async def _wecom_kf_timeout_check_loop():

@@ -600,56 +600,6 @@ class InstanceService:
             }
 
     @staticmethod
-    def cleanup_all_expired_locks() -> int:
-        """
-        全局清理过期的实例锁（供定时任务调用）
-
-        Returns:
-            清理的过期锁数量
-        """
-        import psycopg2
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-
-                # 查找过期锁
-                cursor.execute("""
-                    SELECT instance_id, current_session_id FROM agent_instances
-                    WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
-                """)
-                expired = cursor.fetchall()
-
-                if not expired:
-                    return 0
-
-                instance_ids = [row["instance_id"] for row in expired]
-
-                # 释放过期锁
-                cursor.execute(f"""
-                    UPDATE agent_instances
-                    SET
-                        status = '{AgentInstanceStatus.IDLE.value}',
-                        current_session_id = NULL,
-                        current_user_id = NULL,
-                        locked_at = NULL,
-                        lock_expires_at = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE current_session_id IS NOT NULL AND lock_expires_at < CURRENT_TIMESTAMP
-                """)
-                conn.commit()
-
-                # 唤醒每个被释放锁的下一位等待者
-                for inst_id in instance_ids:
-                    InstanceService._wake_up_next_waiter(conn, inst_id)
-                conn.commit()
-
-                logger.info(f"[InstanceLock] Cleaned up {len(expired)} expired locks: {instance_ids}")
-                return len(expired)
-        except psycopg2.OperationalError as e:
-            logger.warning(f"[InstanceLock] cleanup_all_expired_locks DB connection error: {e}")
-            return 0
-
-    @staticmethod
     def _cleanup_expired_locks(conn):
         """清理所有过期的实例锁（内部方法，已有事务上下文）"""
         cursor = conn.cursor()
