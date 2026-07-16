@@ -332,3 +332,30 @@ class TestChannelConfigDBUpdate:
 
             assert params[1] is None
             assert result is True
+
+
+def test_rpa_update_blank_preserves_but_explicit_null_clears_sensitive_secret():
+    """敏感字段空串表示未修改，显式 null 才表示清除。"""
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    def run_update(incoming):
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wecom_personal_rpa",
+            "config": json.dumps({"external_contact_secret": "encrypted-old"}),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db, patch(
+            "src.saas.db.channel_config_db.credential_codec.encrypt_sensitive_fields",
+            side_effect=lambda value: value,
+        ):
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.update(
+                config_id="chan_rpa", config={"external_contact_secret": incoming}
+            )
+        return json.loads(mock_cursor.execute.call_args.args[1][0])
+
+    assert run_update("")["external_contact_secret"] == "encrypted-old"
+    assert "external_contact_secret" not in run_update(None)

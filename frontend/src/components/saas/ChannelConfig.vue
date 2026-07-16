@@ -161,6 +161,15 @@
               v-model="form.config[field.key]"
               :placeholder="field.placeholder"
             />
+            <BaseButton
+              v-if="editingId && form.channel_type === 'wecom_personal_rpa' && field.key === 'external_contact_secret'"
+              intent="danger-ghost"
+              size="sm"
+              class="mt-1"
+              @click="form.config[field.key] = null"
+            >
+              清除已保存的客户联系 Secret
+            </BaseButton>
             <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
             <p v-if="field.type === 'file' && form.config[field.key]" class="mt-1 text-xs text-success-700">✓ 已上传</p>
             <!-- wecom_personal_rpa 私钥字段：附加「生成密钥对」按钮 -->
@@ -446,7 +455,7 @@ function removeKfAccount(idx: number) {
   kfAccounts.value.splice(idx, 1)
 }
 
-const form = ref<{ channel_type: string; name: string; config: Record<string, string>; subagent_type: string }>({
+const form = ref<{ channel_type: string; name: string; config: Record<string, any>; subagent_type: string }>({
   channel_type: 'wecom',
   name: '',
   config: {},
@@ -509,6 +518,7 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   wecom_personal_rpa: [
     { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
     { key: 'archive_secret', label: '会话存档 Secret', placeholder: '', hint: '会话存档专用 Secret（与自建应用 Secret 不同）', location: '「管理后台」→「会话内容存档」→「API 基本信息」' },
+    { key: 'external_contact_secret', label: '客户联系 Secret', placeholder: '', hint: '用于把 wm/wo 外部联系人 ID 解析为企微可搜索姓名；未配置时不会用 ID 尝试发送', location: '「客户与上下游」→「客户联系」→「API」' },
     { key: 'private_key', label: 'RSA 私钥', placeholder: '点击上传 .pem 文件', hint: '上传后会以文本形式保存（加密存储）', location: '「会话内容存档」→「生成密钥对」下载私钥', type: 'file' },
     { key: 'token', label: '回调 Token', placeholder: '', hint: '企微后台「接收消息服务器」生成', location: '「会话内容存档」→「接收消息服务器」' },
     { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「会话内容存档」→「接收消息服务器」' },
@@ -560,6 +570,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
     steps: [
       '前往企业微信管理后台 →「管理后台」→「会话内容存档」→ 开通功能',
       '在「会话内容存档 → API 基本信息」记录 CorpID 和会话存档 Secret',
+      '在「客户联系 → API」配置可读取客户详情的 Secret，用于解析外部联系人姓名',
       '在「会话内容存档 → 密钥管理」生成密钥对，下载 RSA 私钥 .pem 文件',
       '在「会话内容存档 → 接收消息服务器」配置回调地址（下方 URL）+ Token + EncodingAESKey',
       '先在此页面保存所有凭证（含 RSA 私钥），再到企业微信后台点击保存完成验证',

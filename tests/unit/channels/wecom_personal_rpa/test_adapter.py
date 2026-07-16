@@ -83,6 +83,7 @@ async def test_send_message_converts_text_and_files_to_actions(patched_deliver):
         request_id="req_1",
         sender_display_name="张三",
         sender_stable_id="wm_1",
+        conversation_search_name="张三",
         inbound_text="用户问题",
     )
 
@@ -125,7 +126,7 @@ async def test_send_message_converts_text_and_files_to_actions(patched_deliver):
     assert kwargs["reply_context"] == {
         "sender_display_name": "张三",
         "sender_stable_id": "wm_1",
-        "conversation_search_name": None,
+        "conversation_search_name": "张三",
         "inbound_text": "用户问题",
         "agent_reply_text": "你好",
     }
@@ -144,7 +145,7 @@ async def test_send_message_converts_text_and_files_to_actions(patched_deliver):
 @pytest.mark.asyncio
 async def test_send_message_converts_agent_attachments_to_actions(adapter, patched_deliver):
     """Agent 直接返回 attachments 时也应下发图片/文件动作。"""
-    adapter.set_reply_context("acct", "conv", "sid", "req")
+    adapter.set_reply_context("acct", "conv", "sid", "req", conversation_search_name="张三")
     resp = UnifiedResponse(
         message_id="m", reply_to="in", attachments=[
             Attachment(type="image", url="/files/photo", name="photo.jpg", mime_type="image/jpeg"),
@@ -169,6 +170,7 @@ async def test_send_message_segments_long_text_into_multiple_send_text(adapter, 
         conversation_id="conv_1",
         session_id="sid_1",
         request_id="req_1",
+        conversation_search_name="张三",
     )
 
     long_text = "A" * 4500  # 应拆成 3 段（2000 + 2000 + 500）
@@ -196,6 +198,7 @@ async def test_send_message_empty_content_uses_noop(adapter, patched_deliver):
         conversation_id="conv_1",
         session_id="sid_1",
         request_id="req_1",
+        conversation_search_name="张三",
     )
 
     resp = UnifiedResponse(message_id="m1", reply_to="in_1", content={})
@@ -206,6 +209,28 @@ async def test_send_message_empty_content_uses_noop(adapter, patched_deliver):
     actions = patched_deliver.call_args.kwargs["actions"]
     assert len(actions) == 1
     assert actions[0].type == "noop"
+
+
+@pytest.mark.asyncio
+async def test_send_message_rejects_external_id_as_search_name(adapter, patched_deliver):
+    adapter.set_reply_context(
+        "acct", "conv", "sid", "req",
+        sender_stable_id="wm_external", conversation_search_name="wm_external",
+    )
+    assert await adapter.send_message(UnifiedResponse.from_text("回复", reply_to="in")) is False
+    patched_deliver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_message_allows_real_name_starting_with_external_id_prefix(
+    adapter, patched_deliver
+):
+    adapter.set_reply_context(
+        "acct", "conv", "sid", "req",
+        sender_stable_id="wm_external", conversation_search_name="world工作室",
+    )
+    assert await adapter.send_message(UnifiedResponse.from_text("回复", reply_to="in")) is True
+    patched_deliver.assert_awaited_once()
 
 
 # ============================ get_user_info / verify_signature ============================

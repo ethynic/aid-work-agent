@@ -250,7 +250,7 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
         seq=1001,
         msg_id="msg_abc",
         action="upload",
-        from_="user_a",
+        from_="wm_user_a",
         tolist=["user_b"],
         roomid=None,
         msg_time=1700000000,
@@ -290,10 +290,10 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
     assert env.event_type == "message"
 
     payload = env.payload
-    assert payload["conversation_id"] == "dm:user_a"
+    assert payload["conversation_id"] == "dm:wm_user_a"
     assert payload["conversation_type"] == "external_user"
-    assert payload["sender_display_name"] == "user_a"
-    assert payload["sender_stable_id"] == "user_a"
+    assert payload["sender_display_name"] == "wm_user_a"
+    assert payload["sender_stable_id"] == "wm_user_a"
     assert payload["message_type"] == "text"
     assert payload["text"] == "你好"
 
@@ -303,6 +303,47 @@ async def test_fetch_success_text_message(patched_lock, patched_process_msg, mon
 
     # 应推进 seq
     assert ("last_seq", 1001) in seq_updates
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("roomid", [None, "internal_room_1"])
+async def test_fetch_filters_internal_sender_and_advances_seq(
+    patched_lock, patched_process_msg, monkeypatch, roomid
+):
+    """内部成员单聊/群聊不能进入 inbox 或 Agent，但已核实消息必须推进游标。"""
+    pem, _ = _gen_rsa_pem()
+    cfg = _make_cfg_record(_make_config_data(private_key=pem))
+    monkeypatch.setattr(
+        fetcher_module.ChannelConfigDB, "get_by_tenant_and_id", lambda *a, **kw: cfg
+    )
+    monkeypatch.setattr(
+        fetcher_module.chat_crypto, "decrypt_random_key", lambda *_: b"key"
+    )
+    monkeypatch.setattr(
+        fetcher_module.wecom_finance_sdk,
+        "decrypt_data_raw",
+        lambda *a, **kw: json.dumps({"text": {"content": "internal"}}),
+    )
+    item = http_client.ChatDataItem(
+        seq=1002, msg_id="internal_msg", action="send",
+        from_="internal_colleague", tolist=["user_b"], roomid=roomid,
+        msg_time=1700000000, msg_type="text",
+        encrypt_random_key="x", encrypt_chat_msg="y",
+    )
+    monkeypatch.setattr(
+        fetcher_module.http_client, "get_chat_data",
+        AsyncMock(return_value=http_client.ChatDataBatch(items=[item])),
+    )
+    updates = []
+    monkeypatch.setattr(
+        fetcher_module.ChannelConfigDB, "update_config_field",
+        lambda *args: updates.append(args) or True,
+    )
+
+    await ServerArchiveFetcher().fetch_once("tenant_test", "chan_test_001")
+
+    assert not patched_process_msg.calls
+    assert ("chan_test_001", "last_seq", 1002) in updates
 
 
 @pytest.mark.asyncio
@@ -398,7 +439,7 @@ async def test_fetch_room_message(patched_lock, patched_process_msg, monkeypatch
 
     item = http_client.ChatDataItem(
         seq=2001, msg_id="msg_room", action="upload",
-        from_="user_a", tolist=[], roomid="room_xxx",
+        from_="wm_user_a", tolist=[], roomid="room_xxx",
         msg_time=1700000100, msg_type="text",
         encrypt_random_key="placeholder",
         encrypt_chat_msg="placeholder",
@@ -441,7 +482,7 @@ async def test_fetch_message_type_mapping(patched_lock, patched_process_msg, mon
 
     item = http_client.ChatDataItem(
         seq=3001, msg_id="msg_x", action="upload",
-        from_="user_a", tolist=["user_b"], roomid=None,
+        from_="wm_user_a", tolist=["user_b"], roomid=None,
         msg_time=1700000200, msg_type="unknown_type",  # 未知类型
         encrypt_random_key="placeholder",
         encrypt_chat_msg="placeholder",
@@ -488,14 +529,14 @@ async def test_fetch_decrypt_failure_skips_and_advances(patched_lock, patched_pr
 
     # 第 1 条正常
     good_item = http_client.ChatDataItem(
-        seq=5001, msg_id="good", action="upload", from_="user_a", tolist=["user_b"],
+        seq=5001, msg_id="good", action="upload", from_="wm_user_a", tolist=["user_b"],
         msg_time=1700000300, msg_type="text",
         encrypt_random_key="placeholder1",
         encrypt_chat_msg="placeholder1",
     )
     # 第 2 条会让 mock 的 decrypt_random_key 抛错
     bad_item = http_client.ChatDataItem(
-        seq=5002, msg_id="bad", action="upload", from_="user_a", tolist=["user_b"],
+        seq=5002, msg_id="bad", action="upload", from_="wm_user_a", tolist=["user_b"],
         msg_time=1700000301, msg_type="text",
         encrypt_random_key="placeholder2",
         encrypt_chat_msg="placeholder2",
@@ -570,6 +611,24 @@ def test_build_envelope_text_message():
     assert env.payload["message_type"] == "text"
     assert env.payload["conversation_id"] == "dm:external_userid_123"
     assert env.payload["conversation_type"] == "external_user"
+
+
+def test_build_envelope_prefers_resolved_external_contact_name():
+    fetcher_obj = ServerArchiveFetcher()
+    item = http_client.ChatDataItem(
+        seq=1, msg_id="name1", action="upload", from_="wm_external"
+    )
+    decision = fetcher_module.DirectionDecision(
+        fetcher_module.MessageDirection.INBOUND_EXTERNAL,
+        "wm_external", "dm:wm_external", "external_sender",
+    )
+    env, raw = fetcher_obj._build_envelope(
+        "acct_1", "client_1", item,
+        json.dumps({"from": "wm_external", "msgtype": "text", "text": {"content": "你好"}}),
+        decision=decision, resolved_display_name="孙晨",
+    )
+    assert env.payload["sender_display_name"] == "孙晨"
+    assert raw["payload"]["sender_stable_id"] == "wm_external"
 
 
 def test_build_envelope_media_message():
@@ -736,7 +795,7 @@ async def test_enqueue_failure_does_not_advance_seq(patched_lock, monkeypatch):
     monkeypatch.setattr(fetcher_module.ChannelConfigDB, "update_config_field",
                         lambda *args: updates.append(args) or True)
     item = http_client.ChatDataItem(
-        seq=88, msg_id="enqueue_fail", action="send", from_="a", tolist=["b"],
+        seq=88, msg_id="enqueue_fail", action="send", from_="wm_external", tolist=["user_b"],
         msg_time=1700000000, msg_type="text", encrypt_random_key="x",
         encrypt_chat_msg="y",
     )

@@ -15,6 +15,7 @@
 - 严格遵守 SaaS 租户隔离：复用 require_admin + X-Tenant-Id 解析（参照 channel_config.py）。
 """
 
+import asyncio
 import json
 import secrets
 from datetime import datetime, timedelta
@@ -32,6 +33,7 @@ from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.saas.db.channel_config_db import ChannelConfigDB
+from src.channels.wecom_personal_rpa.archive.external_contact_resolver import external_contact_resolver
 
 router = APIRouter(prefix="/api/saas/wecom-personal-rpa", tags=["企业微信个人账号RPA管理"])
 
@@ -549,6 +551,47 @@ async def resume_client(client_id: str, request: Request):
 # ===========================================================================
 
 
+async def _backfill_external_contact_names(tenant_id: str, bindings: List[Dict[str, Any]]) -> None:
+    """刷新列表时有界回填历史外部联系人姓名；缓存与失败退避由 resolver 控制。"""
+    candidates = [
+        b for b in bindings
+        if str(b.get("stable_id") or "").startswith(("wm", "wo"))
+        and (
+            not str(b.get("display_name") or "").strip()
+            or str(b.get("display_name") or "").strip().lower() == "unknown"
+            or str(b.get("display_name") or "").strip() in {
+                str(b.get("stable_id") or "").strip(), str(b.get("search_key") or "").strip()
+            }
+        )
+    ][:20]
+    if not candidates:
+        return
+    configs = await asyncio.to_thread(
+        ChannelConfigDB.list_by_tenant, tenant_id, "wecom_personal_rpa"
+    )
+    if not configs:
+        return
+    cfg = await asyncio.to_thread(
+        ChannelConfigDB.get_by_tenant_and_id, tenant_id, configs[0]["config_id"]
+    )
+    config = (cfg or {}).get("config") or {}
+    corp_id = str(config.get("corp_id") or "")
+    secret = str(config.get("external_contact_secret") or "")
+    if not corp_id or not secret:
+        return
+    for binding in candidates:
+        external_userid = str(binding.get("stable_id") or "")
+        resolved = await external_contact_resolver.resolve(
+            tenant_id, corp_id, secret, external_userid
+        )
+        updated = resolved and await asyncio.to_thread(
+            rpa_db.update_placeholder_binding_name,
+            tenant_id, str(binding["id"]), external_userid, resolved.display_name,
+        )
+        if updated:
+            binding["display_name"] = resolved.display_name
+
+
 @router.get("/accounts/{account_id}/bindings")
 async def list_account_bindings(account_id: str, request: Request):
     """列出某账号下的所有会话绑定。"""
@@ -565,6 +608,7 @@ async def list_account_bindings(account_id: str, request: Request):
         raise _fail("无权操作此账号", status_code=403)
 
     bindings = rpa_db.list_bindings(tenant_id, account_id=account_id)
+    await _backfill_external_contact_names(tenant_id, bindings)
     return _ok([_binding_public(b) for b in bindings])
 
 
@@ -585,6 +629,7 @@ async def list_bindings(
     tenant_id = admin["tenant_id"]
 
     bindings = rpa_db.list_bindings(tenant_id, account_id=account_id)
+    await _backfill_external_contact_names(tenant_id, bindings)
     if status:
         bindings = [b for b in bindings if b.get("status") == status]
     return _ok([_binding_public(b) for b in bindings])
@@ -794,7 +839,50 @@ async def update_binding(binding_id: str, request: Request, body: UpdateBindingR
 
 
 # ===========================================================================
-# 4. pause / resume（account / conversation / tenant 三级，幂等）
+# 4. 绑定删除
+# ===========================================================================
+
+
+@router.delete("/bindings/{binding_id}")
+async def delete_binding(binding_id: str, request: Request):
+    """删除尚未投入使用的绑定；正常或暂停绑定禁止直接删除。"""
+    if err := _ensure_saas_enabled():
+        return err
+
+    admin = require_admin(request)
+    tenant_id = admin["tenant_id"]
+    user_id = admin.get("user_id")
+    binding = rpa_db.get_binding(binding_id)
+    if not binding:
+        raise _fail("绑定不存在", status_code=404)
+    if binding.get("tenant_id") != tenant_id:
+        raise _fail("无权操作此绑定", status_code=403)
+
+    status = binding.get("status")
+    if status not in ("pending", "needs_review", "invalid"):
+        raise _fail("正常或已暂停绑定不能直接删除，请先确认其已失效", status_code=409)
+    if not rpa_db.delete_unconfirmed_binding(tenant_id, binding_id):
+        raise _fail("绑定状态已变化，请刷新后重试", status_code=409)
+
+    try:
+        rpa_db.write_audit(
+            tenant_id=tenant_id,
+            client_id=None,
+            account_id=binding.get("account_id"),
+            category="binding_delete",
+            payload_json=json.dumps(
+                {"binding_id": binding_id, "from_status": status}, ensure_ascii=False,
+            ),
+            user_id=user_id,
+        )
+    except Exception as audit_err:
+        logger.warning(f"delete_binding 审计写入失败 binding={binding_id} error={audit_err}")
+    logger.info(f"RPA unconfirmed binding deleted: {binding_id}")
+    return _ok({"binding_id": binding_id, "deleted": True})
+
+
+# ===========================================================================
+# 5. pause / resume（account / conversation / tenant 三级，幂等）
 # ===========================================================================
 
 

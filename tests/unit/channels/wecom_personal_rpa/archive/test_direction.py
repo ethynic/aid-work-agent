@@ -11,12 +11,14 @@ from src.channels.wecom_personal_rpa.archive.direction import (
 @pytest.mark.parametrize(
     ("sender", "recipients", "roomid", "expected", "peer", "conversation"),
     [
-        ("external_a", ["self_a"], None, MessageDirection.INBOUND_EXTERNAL, "external_a", "dm:external_a"),
-        ("self_a", ["external_a"], None, MessageDirection.OUTBOUND_SELF, "external_a", "dm:external_a"),
-        ("self_a", ["external_a", "external_b"], None, MessageDirection.OUTBOUND_SELF, None, None),
-        ("external_a", ["self_a"], "room_1", MessageDirection.INBOUND_GROUP, "external_a", "room_1"),
-        ("self_a", ["external_a"], "room_1", MessageDirection.OUTBOUND_SELF, None, "room_1"),
-        ("external_a", ["someone_else"], None, MessageDirection.DIRECTION_UNKNOWN, None, None),
+        ("wm_external_a", ["self_a"], None, MessageDirection.INBOUND_EXTERNAL, "wm_external_a", "dm:wm_external_a"),
+        ("self_a", ["wm_external_a"], None, MessageDirection.OUTBOUND_SELF, "wm_external_a", "dm:wm_external_a"),
+        ("self_a", ["wm_external_a", "wo_external_b"], None, MessageDirection.OUTBOUND_SELF, None, None),
+        ("wo_external_a", ["self_a"], "room_1", MessageDirection.INBOUND_GROUP, "wo_external_a", "room_1"),
+        ("self_a", ["wm_external_a"], "room_1", MessageDirection.OUTBOUND_SELF, None, "room_1"),
+        ("wm_external_a", ["someone_else"], None, MessageDirection.DIRECTION_UNKNOWN, None, None),
+        ("internal_colleague", ["self_a"], None, MessageDirection.DIRECTION_UNKNOWN, None, None),
+        ("internal_colleague", ["self_a"], "room_1", MessageDirection.DIRECTION_UNKNOWN, None, "room_1"),
     ],
 )
 def test_classify_archive_message(sender, recipients, roomid, expected, peer, conversation):

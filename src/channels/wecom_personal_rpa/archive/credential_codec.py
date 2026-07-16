@@ -1,7 +1,8 @@
 """wecom_personal_rpa 渠道配置的凭证加密/解密/脱敏 codec
 
-tenant_channel_configs.config JSON 列中，wecom_personal_rpa 类型配置含 5 个敏感字段：
+tenant_channel_configs.config JSON 列中，wecom_personal_rpa 类型配置含以下敏感字段：
   - archive_secret（会话存档 secret，server 模式拉 API 用）
+  - external_contact_secret（客户联系 secret，仅用于 external_userid 解析姓名）
   - private_key（RSA 私钥 PEM，server 模式解密 encrypt_chat_msg 用）
   - token（回调验签，server 模式）
   - encoding_aes_key（回调 AES 解密，server 模式）
@@ -26,6 +27,7 @@ from src.channels.wecom_personal_rpa import secret_crypto
 # 敏感字段白名单（写入前必须加密，读取时按需解密/脱敏）
 SENSITIVE_KEYS = (
     "archive_secret",
+    "external_contact_secret",
     "private_key",
     "token",
     "encoding_aes_key",

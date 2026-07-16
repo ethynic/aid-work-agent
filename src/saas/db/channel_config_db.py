@@ -1,7 +1,7 @@
 """租户渠道配置 CRUD 操作
 
 wecom_personal_rpa 类型配置的特殊处理（第一期 MVP）：
-- 写入前对敏感字段（archive_secret / private_key / token / encoding_aes_key / client_secret）
+- 写入前对敏感字段（archive_secret / external_contact_secret / private_key / token / encoding_aes_key / client_secret）
   做 Fernet 加密（复用 src.channels.wecom_personal_rpa.archive.credential_codec）
 - 强制 listen_mode='server'（前端禁用 client，后端兜底防 API 绕过）
 - 同 tenant 单例：不允许同租户创建两份 wecom_personal_rpa 配置
@@ -353,13 +353,21 @@ class ChannelConfigDB:
                     if k not in new_config and k in existing_config:
                         new_config[k] = existing_config[k]
 
-                # 敏感字段：前端传空串/None/掩码（***开头）时保留 DB 原值
-                # - 空串/None：前端未改动该字段，不传值
+                # 敏感字段：字段缺失、空串或掩码（***开头）时保留 DB 原值；
+                # 显式传 null 表示清空，避免“留空保留”和“清除凭证”语义冲突。
+                # - 字段缺失/空串：前端未改动该字段
                 # - ***xxxx 掩码：前端从 get_by_id 拿到掩码后原样回传，未被改动
-                # 这两种情况都不应覆盖 DB 中已有的密文，避免凭证被破坏
+                # - null：用户明确点击清除，删除该配置键
                 for k in credential_codec.SENSITIVE_KEYS:
+                    if k not in new_config:
+                        if existing_config.get(k):
+                            new_config[k] = existing_config[k]
+                        continue
                     incoming = new_config.get(k)
-                    is_blank = not incoming or not isinstance(incoming, str)
+                    if incoming is None:
+                        new_config.pop(k, None)
+                        continue
+                    is_blank = incoming == "" or not isinstance(incoming, str)
                     is_mask = isinstance(incoming, str) and incoming.startswith("***")
                     if (is_blank or is_mask) and existing_config.get(k):
                         # 旧值是密文，直接搬运；加密函数对密文会跳过
@@ -427,7 +435,7 @@ class ChannelConfigDB:
         对 wecom_personal_rpa 类型直接读-改-写（避免影响其他字段）。
 
         安全约束：禁止通过此函数写入敏感字段（archive_secret / private_key / token /
-        encoding_aes_key / client_secret）以及 listen_mode 字段。这些字段必须走
+        encoding_aes_key / client_secret / external_contact_secret）以及 listen_mode 字段。这些字段必须走
         create/update 主路径，经过加密和 server 模式强制（防止 API 绕过）。
         """
         # 安全护栏：防止绕过主路径写入敏感字段或 listen_mode

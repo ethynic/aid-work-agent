@@ -494,7 +494,13 @@ async def _process_inbound_message(
         elif sender_stable_id in self_ids:
             guard_reason = "sender_is_self"
             dangerous_self = True
-        elif source == "server_fetcher" and (
+        elif payload.get("conversation_type") not in ("external_user", "external_group"):
+            guard_reason = "conversation_not_external"
+        else:
+            from src.channels.wecom_personal_rpa.archive.direction import is_external_user_id
+            if not is_external_user_id(sender_stable_id):
+                guard_reason = "sender_not_external"
+        if not guard_reason and source == "server_fetcher" and (
             payload.get("message_direction") not in ("inbound_external", "inbound_group")
             or not payload.get("direction_reason")
             or not payload.get("archive_peer_id")

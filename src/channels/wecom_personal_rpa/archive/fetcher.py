@@ -43,6 +43,7 @@ from src.channels.wecom_personal_rpa.archive.http_client import (
     WeComApiException,
     WeComRateLimitException,
 )
+from src.channels.wecom_personal_rpa.archive.external_contact_resolver import external_contact_resolver
 from src.core.redis_client import redis_client
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.channels.wecom_personal_rpa import db as rpa_db
@@ -303,8 +304,22 @@ class ServerArchiveFetcher:
                         ChannelConfigDB.update_config_field(config_id, "last_seq", item.seq)
                         last_seq = item.seq
                     continue
+                resolved_display_name = None
+                if (
+                    decision.direction == MessageDirection.INBOUND_EXTERNAL
+                    and decision.peer_id
+                    and config_data.get("external_contact_secret")
+                ):
+                    resolved = await external_contact_resolver.resolve(
+                        tenant_id,
+                        creds["corp_id"],
+                        str(config_data.get("external_contact_secret") or ""),
+                        decision.peer_id,
+                    )
+                    resolved_display_name = resolved.display_name if resolved else None
                 env, env_raw = self._build_envelope(
-                    account_id, client_id, item, plain_json, decision=decision
+                    account_id, client_id, item, plain_json, decision=decision,
+                    resolved_display_name=resolved_display_name,
                 )
 
                 # Agent 处理可能耗时数分钟，不能放在存档游标事务内。先可靠写入 PG inbox，
@@ -491,6 +506,7 @@ class ServerArchiveFetcher:
     def _build_envelope(
         self, account_id: str, client_id: str, item: "http_client.ChatDataItem", plain_json: str,
         decision: Optional[Any] = None,
+        resolved_display_name: Optional[str] = None,
     ) -> Tuple[Any, Dict[str, Any]]:
         """构造 RpaCallbackEnvelope + env_raw（与 C# InboundEventBuilder.BuildAsync 字段对齐）。
 
@@ -595,7 +611,7 @@ class ServerArchiveFetcher:
             "payload": {
                 "conversation_id": conversation_id,
                 "conversation_type": conversation_type,
-                "sender_display_name": from_user or conversation_id,
+                "sender_display_name": resolved_display_name or from_user or conversation_id,
                 "sender_stable_id": decision.peer_id,
                 "message_direction": decision.direction.value,
                 "direction_reason": decision.reason,

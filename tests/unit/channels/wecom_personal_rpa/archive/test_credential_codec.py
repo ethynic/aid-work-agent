@@ -25,6 +25,7 @@ def test_encrypt_decrypt_roundtrip():
     plain = {
         "corp_id": "ww1234567890abcdef",
         "archive_secret": "top-secret-archive-secret",
+        "external_contact_secret": "customer-contact-secret",
         "private_key": "-----BEGIN RSA PRIVATE KEY-----\nFAKE\n-----END RSA PRIVATE KEY-----\n",
         "token": "callback-token-xxx",
         "encoding_aes_key": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
@@ -44,6 +45,7 @@ def test_decrypt_roundtrip():
     plain = {
         "corp_id": "wwabc",
         "archive_secret": "secret-1",
+        "external_contact_secret": "contact-secret-1",
         "private_key": "key-1",
         "token": "token-1",
         "encoding_aes_key": "aes-1",
@@ -60,6 +62,7 @@ def test_mask_returns_masked_values():
     plain = {
         "corp_id": "wwabc",
         "archive_secret": "abcdefghijklmnopqrstuvwxyz123456",
+        "external_contact_secret": "external-contact-secret-xyz",
         "private_key": "----BEGIN----abc123----END----",
         "token": "token-xyz-789",
         "encoding_aes_key": "aes-key-abc",
@@ -78,6 +81,7 @@ def test_mask_handles_empty_and_ciphertext():
     """mask 正确处理空值和密文。"""
     cfg = {
         "archive_secret": "",  # 空
+        "external_contact_secret": "",
         "private_key": "gAAAAABmXYZ_fake_ciphertext",  # 密文
         "token": "abcd",  # 短明文（≤4 字符）
         "encoding_aes_key": "abcdefghij",  # 普通明文

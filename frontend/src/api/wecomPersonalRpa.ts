@@ -369,6 +369,17 @@ export async function updateBinding(
   return body.data
 }
 
+export async function deleteBinding(
+  bindingId: string,
+): Promise<{ binding_id: string; deleted: boolean }> {
+  const res = await fetch(`${API_BASE}/bindings/${encodeURIComponent(bindingId)}`, {
+    method: 'DELETE',
+    headers: getSaasAuthHeader(),
+  })
+  const body = await parseJson(res, '删除会话绑定失败')
+  return body.data
+}
+
 // ==================== 3. 暂停 / 恢复（tenant / account / conversation 三级，幂等） ====================
 
 export async function pause(req: PauseResumeReq): Promise<PauseResumeResult> {

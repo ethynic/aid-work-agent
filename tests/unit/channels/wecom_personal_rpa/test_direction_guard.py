@@ -68,7 +68,7 @@ async def test_guard_audit_failure_still_records_danger_and_filters():
 
 @pytest.mark.asyncio
 async def test_server_fetcher_guard_requires_direction_metadata():
-    env, raw = _env("peer_1")
+    env, raw = _env("wm_peer_1")
     fake_db = MagicMock()
     fake_db.get_account_for_tenant.return_value = {
         "id": "account_1", "tenant_id": "tenant_1",
@@ -78,6 +78,41 @@ async def test_server_fetcher_guard_requires_direction_metadata():
         await _process_inbound_message("tenant_1", env, raw, source="server_fetcher")
 
     assert fake_db.write_audit.call_args.kwargs["category"] == "direction_guard_filtered"
+
+
+@pytest.mark.asyncio
+async def test_guard_filters_internal_conversation_before_binding_side_effects():
+    env, raw = _env("internal_colleague", conversation_type="internal_user")
+    fake_db = MagicMock()
+    fake_db.get_account_for_tenant.return_value = {
+        "id": "account_1", "tenant_id": "tenant_1",
+        "wecom_user_id": "self_1", "wecom_user_aliases": [],
+    }
+    with patch("src.saas.api.wecom_personal_rpa_routes.db", fake_db):
+        await _process_inbound_message("tenant_1", env, raw, source="client_callback")
+
+    assert fake_db.write_audit.call_args.kwargs["category"] == "direction_guard_filtered"
+    fake_db.get_or_create_binding.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sender", "conversation_type"),
+    [("wm_external", "internal_user"), ("internal_colleague", "external_user")],
+)
+async def test_client_callback_cannot_forge_external_identity(sender, conversation_type):
+    """客户端伪造会话类型或给内部 userid 套外部类型，都不能绕过服务端防线。"""
+    env, raw = _env(sender, conversation_type=conversation_type)
+    fake_db = MagicMock()
+    fake_db.get_account_for_tenant.return_value = {
+        "id": "account_1", "tenant_id": "tenant_1",
+        "wecom_user_id": "self_1", "wecom_user_aliases": [],
+    }
+    with patch("src.saas.api.wecom_personal_rpa_routes.db", fake_db):
+        await _process_inbound_message("tenant_1", env, raw, source="client_callback")
+
+    assert fake_db.write_audit.call_args.kwargs["category"] == "direction_guard_filtered"
+    fake_db.get_or_create_binding.assert_not_called()
 
 
 def test_echo_circuit_window_deduplicates_same_event():

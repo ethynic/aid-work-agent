@@ -24,6 +24,19 @@ def _normalize_ids(values: Iterable[str]) -> set[str]:
     return {str(value).strip() for value in values if isinstance(value, str) and value.strip()}
 
 
+def is_external_user_id(value: object) -> bool:
+    """判断会话存档身份是否是企微外部联系人 ID。
+
+    会话存档明文不会携带成员类型字段：企业成员使用 userid，外部联系人使用
+    external_userid。企微 external_userid 的稳定前缀为 ``wm`` / ``wo``；无法按
+    该规则确认时必须失败关闭，避免把企业内部成员会话交给 Agent。
+    """
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip()
+    return len(normalized) > 2 and normalized[:2].lower() in {"wm", "wo"}
+
+
 def classify_archive_message(
     *, self_ids: Iterable[str], from_user: object, tolist: object, roomid: object = None
 ) -> DirectionDecision:
@@ -42,7 +55,9 @@ def classify_archive_message(
     if room:
         if sender in identities:
             return DirectionDecision(MessageDirection.OUTBOUND_SELF, None, room, "sender_is_self")
-        return DirectionDecision(MessageDirection.INBOUND_GROUP, sender, room, "group_sender_external")
+        if is_external_user_id(sender):
+            return DirectionDecision(MessageDirection.INBOUND_GROUP, sender, room, "external_sender_in_group")
+        return DirectionDecision(MessageDirection.DIRECTION_UNKNOWN, None, room, "group_sender_not_external")
 
     if sender in identities:
         peers = sorted(set(recipients) - identities)
@@ -54,5 +69,12 @@ def classify_archive_message(
             reason,
         )
     if any(value in identities for value in recipients):
-        return DirectionDecision(MessageDirection.INBOUND_EXTERNAL, sender, f"dm:{sender}", "self_in_recipient_list")
+        if is_external_user_id(sender):
+            return DirectionDecision(
+                MessageDirection.INBOUND_EXTERNAL, sender, f"dm:{sender}",
+                "external_sender_to_self",
+            )
+        return DirectionDecision(
+            MessageDirection.DIRECTION_UNKNOWN, None, None, "direct_sender_not_external"
+        )
     return DirectionDecision(MessageDirection.DIRECTION_UNKNOWN, None, None, "recipient_not_self")

@@ -372,6 +372,13 @@ def get_or_create_binding(
     等待人工确认（status=active 后才允许自动发送）。
     """
     binding_id = _new_id("rpa_bind")
+    normalized_name = (display_name or "").strip()
+    incoming_name_is_placeholder = (
+        not normalized_name
+        or normalized_name.lower() == "unknown"
+        or normalized_name == (stable_id or "").strip()
+        or normalized_name == search_key.strip()
+    )
     with get_db_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -382,14 +389,25 @@ def get_or_create_binding(
                      display_name, search_key, stable_id, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
                 ON CONFLICT (account_id, search_key) DO UPDATE
-                    SET display_name = COALESCE(wecom_rpa_conversation_bindings.display_name,
-                                                EXCLUDED.display_name),
+                    SET display_name = CASE
+                            WHEN %s = FALSE
+                             AND (
+                                NULLIF(BTRIM(wecom_rpa_conversation_bindings.display_name), '') IS NULL
+                                OR LOWER(BTRIM(wecom_rpa_conversation_bindings.display_name)) = 'unknown'
+                                OR BTRIM(wecom_rpa_conversation_bindings.display_name) =
+                                   COALESCE(wecom_rpa_conversation_bindings.stable_id, '')
+                                OR BTRIM(wecom_rpa_conversation_bindings.display_name) =
+                                   wecom_rpa_conversation_bindings.search_key
+                             )
+                            THEN EXCLUDED.display_name
+                            ELSE wecom_rpa_conversation_bindings.display_name
+                        END,
                         stable_id    = COALESCE(EXCLUDED.stable_id, wecom_rpa_conversation_bindings.stable_id),
                         updated_at   = CURRENT_TIMESTAMP
                 RETURNING id
                 """,
                 (binding_id, tenant_id, user_id, account_id, conversation_type,
-                 display_name, search_key, stable_id),
+                 normalized_name, search_key, stable_id, incoming_name_is_placeholder),
             )
             row = cursor.fetchone()
             conn.commit()
@@ -526,6 +544,22 @@ def set_binding_status(
         return cursor.rowcount > 0
 
 
+def delete_unconfirmed_binding(tenant_id: str, binding_id: str) -> bool:
+    """删除未投入使用的无效绑定，状态条件原子保护避免并发误删。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM wecom_rpa_conversation_bindings
+            WHERE id = %s AND tenant_id = %s
+              AND status IN ('pending', 'needs_review', 'invalid')
+            """,
+            (binding_id, tenant_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def find_binding_by_search_key(
     tenant_id: str,
     account_id: str,
@@ -584,6 +618,33 @@ def update_binding(
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(sql, tuple(params))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def update_placeholder_binding_name(
+    tenant_id: str, binding_id: str, external_userid: str, display_name: str
+) -> bool:
+    """仅把外部 ID/空/unknown 占位名回填为解析出的姓名，不覆盖人工名称。"""
+    name = (display_name or "").strip()
+    if not name or not external_userid.startswith(("wm", "wo")):
+        return False
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE wecom_rpa_conversation_bindings
+            SET display_name = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND tenant_id = %s AND stable_id = %s
+              AND (
+                NULLIF(BTRIM(display_name), '') IS NULL
+                OR LOWER(BTRIM(display_name)) = 'unknown'
+                OR BTRIM(display_name) = stable_id
+                OR BTRIM(display_name) = search_key
+              )
+            """,
+            (name, binding_id, tenant_id, external_userid),
+        )
         conn.commit()
         return cursor.rowcount > 0
 

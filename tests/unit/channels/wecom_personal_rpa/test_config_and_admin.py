@@ -12,7 +12,7 @@
 import os
 import sys
 import types
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 os.environ.pop("DATABASE_URL", None)
 
@@ -402,3 +402,110 @@ class TestUpdateBindingAdmin:
             )
 
         assert resp.status_code == 403
+
+
+class TestDeleteBindingAdmin:
+    def test_delete_pending_binding_is_tenant_scoped(self, admin_client):
+        from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+        fake_db = MagicMock()
+        fake_db.get_binding.return_value = {
+            "id": "rpa_bind_unknown", "tenant_id": _TENANT_ID,
+            "account_id": "acc1", "display_name": "unknown", "status": "pending",
+        }
+        fake_db.delete_unconfirmed_binding.return_value = True
+        with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
+            admin_mod, "require_admin",
+            lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
+        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+            resp = admin_client.delete(
+                "/api/saas/wecom-personal-rpa/bindings/rpa_bind_unknown",
+                headers=_admin_request_headers(),
+            )
+
+        assert resp.status_code == 200
+        fake_db.delete_unconfirmed_binding.assert_called_once_with(
+            _TENANT_ID, "rpa_bind_unknown"
+        )
+
+    @pytest.mark.parametrize("status", ["active", "paused"])
+    def test_delete_confirmed_binding_is_rejected(self, admin_client, status):
+        from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+        fake_db = MagicMock()
+        fake_db.get_binding.return_value = {
+            "id": "rpa_bind_live", "tenant_id": _TENANT_ID,
+            "account_id": "acc1", "status": status,
+        }
+        with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
+            admin_mod, "require_admin",
+            lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
+        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+            resp = admin_client.delete(
+                "/api/saas/wecom-personal-rpa/bindings/rpa_bind_live",
+                headers=_admin_request_headers(),
+            )
+
+        assert resp.status_code == 409
+        fake_db.delete_unconfirmed_binding.assert_not_called()
+
+    def test_delete_cross_tenant_binding_is_rejected(self, admin_client):
+        from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+        fake_db = MagicMock()
+        fake_db.get_binding.return_value = {
+            "id": "rpa_bind_other", "tenant_id": "tenant_other", "status": "pending",
+        }
+        with patch.object(admin_mod, "rpa_db", fake_db), patch.object(
+            admin_mod, "require_admin",
+            lambda req: {"tenant_id": _TENANT_ID, "user_id": "u1", "role": "tenant_admin"},
+        ), patch.object(admin_mod, "_ensure_saas_enabled", lambda: None):
+            resp = admin_client.delete(
+                "/api/saas/wecom-personal-rpa/bindings/rpa_bind_other",
+                headers=_admin_request_headers(),
+            )
+
+        assert resp.status_code == 403
+        fake_db.delete_unconfirmed_binding.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_external_name_backfill_is_bounded_tenant_scoped_and_preserves_manual_names():
+    from src.saas.api import wecom_personal_rpa_admin as admin_mod
+
+    placeholders = [
+        {
+            "id": f"binding_{index}", "stable_id": f"wm_{index}",
+            "search_key": f"wm_{index}", "display_name": f"wm_{index}",
+        }
+        for index in range(25)
+    ]
+    manual = {
+        "id": "binding_manual", "stable_id": "wm_manual",
+        "search_key": "wm_manual", "display_name": "人工维护姓名",
+    }
+    fake_resolver = MagicMock()
+    fake_resolver.resolve = AsyncMock(
+        side_effect=lambda tenant, corp, secret, external_id: type(
+            "Resolved", (), {"display_name": f"姓名-{external_id}"}
+        )()
+    )
+    fake_db = MagicMock()
+    fake_db.update_placeholder_binding_name.return_value = True
+    with patch.object(admin_mod, "external_contact_resolver", fake_resolver), patch.object(
+        admin_mod, "rpa_db", fake_db
+    ), patch.object(
+        admin_mod.ChannelConfigDB, "list_by_tenant",
+        return_value=[{"config_id": "rpa_config_1"}],
+    ), patch.object(
+        admin_mod.ChannelConfigDB, "get_by_tenant_and_id",
+        return_value={"config": {"corp_id": "ww_1", "external_contact_secret": "secret_1"}},
+    ):
+        await admin_mod._backfill_external_contact_names(
+            "tenant_1", placeholders + [manual]
+        )
+
+    assert fake_resolver.resolve.await_count == 20
+    assert fake_db.update_placeholder_binding_name.call_count == 20
+    assert all(call.args[0] == "tenant_1" for call in fake_db.update_placeholder_binding_name.call_args_list)
+    assert manual["display_name"] == "人工维护姓名"

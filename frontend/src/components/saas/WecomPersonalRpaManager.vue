@@ -126,6 +126,11 @@
                 intent="ghost" size="sm" class="whitespace-nowrap"
                 @click="toggleBinding(row)"
               >恢复</BaseButton>
+              <BaseButton
+                v-if="canDeleteBinding(row)"
+                intent="danger" size="sm" class="whitespace-nowrap"
+                @click="handleDeleteBinding(row)"
+              >删除</BaseButton>
             </template>
             <template #empty>暂无会话绑定</template>
           </BaseTable>
@@ -361,7 +366,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import {
   listClients, registerClient, listClientAccounts, rotateClientSecret,
-  listBindings, confirmBinding, updateBinding, pause, resume, listAudit,
+  listBindings, confirmBinding, updateBinding, deleteBinding, pause, resume, listAudit,
   getMetrics, getAlerts,
   type RpaClientSummary, type RpaAccount, type RpaBinding, type RpaAudit,
   type RpaMetrics, type RpaAlert,
@@ -631,10 +636,10 @@ const bindingColumns: TableColumn[] = [
   { key: 'display_name', label: '会话名称', minWidth: '160px' },
   { key: 'search_key', label: '搜索键', minWidth: '140px' },
   { key: 'conversation_type', label: '类型', width: '80px' },
-  { key: 'stable_id', label: 'stable_id', width: '160px' },
+  { key: 'stable_id', label: '稳定标识', width: '160px' },
   { key: 'status', label: '状态', width: '100px' },
   { key: 'last_verified_at', label: '最后核实', width: '150px' },
-  { key: 'actions', label: '操作', width: '110px', thAlign: 'center' },
+  { key: 'actions', label: '操作', width: '180px', thAlign: 'center' },
 ]
 
 async function loadBindings() {
@@ -671,6 +676,21 @@ async function handleEditBindingName(b: any) {
     await loadBindings()
   } catch (e: any) {
     toast.error(e.message || '更新失败')
+  }
+}
+
+function canDeleteBinding(b: any): boolean {
+  return ['pending', 'needs_review', 'invalid'].includes(b.status)
+}
+
+async function handleDeleteBinding(b: any) {
+  if (!confirm(`确定删除会话绑定「${b.display_name || b.search_key}」？删除后若再次收到该会话消息，将重新进入待确认。`)) return
+  try {
+    await deleteBinding(b.binding_id)
+    toast.success('会话绑定已删除')
+    await loadBindings()
+  } catch (e: any) {
+    toast.error(e.message || '删除失败')
   }
 }
 

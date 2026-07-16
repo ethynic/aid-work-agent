@@ -169,6 +169,21 @@ class WeComPersonalRpaAdapter(ChannelAdapter):
             )
             return False
 
+        search_name = str(self._reply.get("conversation_search_name") or "").strip()
+        sender_stable_id = str(self._reply.get("sender_stable_id") or "").strip()
+        if (
+            not search_name
+            or search_name.lower() == "unknown"
+            or (sender_stable_id and search_name == sender_stable_id)
+        ):
+            # external_userid 无法在企微桌面端搜索。宁可拒发，也不能让客户端
+            # 误搜/误发给同名或其他联系人；等待姓名解析或管理员人工维护后重试。
+            logger.error(
+                "RPA send_message 拒绝投递：缺少可靠会话搜索名 account_id={}",
+                self._reply.get("account_id"),
+            )
+            return False
+
         actions = self._build_actions(message)
         request_id = self._reply["request_id"] or f"req_{uuid.uuid4().hex[:16]}"
 
