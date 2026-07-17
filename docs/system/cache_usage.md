@@ -50,6 +50,23 @@
 
 `CacheKeys` 类定义了所有缓存的命名前缀：`TOKEN`、`USER`、`AGENT_QUOTA`、`USER_AGENTS`、`PROMPT_REGISTRY`、`PROMPT_LABEL`、`PROMPT_CONTENT`。
 
+### 1.3 Browser Run 缓存（Phase 2）
+
+| Key | TTL | 用途 | Redis 不可用时 |
+|-----|----:|------|----------------|
+| `browser_run:{tenant_id}:{run_id}` | 600s | 脱敏状态摘要；终态后由生命周期收口 | 仅当前请求内存态，禁止跨请求恢复 |
+| `browser_owner:{tenant_id}:{run_id}` | 30s | worker owner lease；每次 acquire 生成唯一 epoch token，每 10s 原子续租；命令写 IPC 前 fence | 不模拟跨 worker owner |
+| `browser_control:{tenant_id}:{run_id}` | 随状态 | Agent/人工控制锁的统一命名 | Phase 2 仅登记，人工控制在 Phase 3 启用 |
+
+安全说明：Browser RunManager 必须先用 `redis_client.is_available()` 判断真实
+Redis。透明内存 fallback 不能被视为分布式可用；降级只允许单请求
+`server/local` run，并在请求 `finally` 关闭。
+
+Phase 3+ 已预登记但尚未启用的前缀包括：`browser_view_ticket`、
+`browser_web_presence`、`browser_launch_ticket`、`browser_companion_session`、
+`browser_assistance`、`agent_tool_suspension`、`browser_resume_jobs`、
+`agent_continuation_events`。预登记不代表对应 API 或远端执行能力已经交付。
+
 ---
 
 ## 2. 缓存分类总览

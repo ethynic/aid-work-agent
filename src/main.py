@@ -625,6 +625,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[wecom_personal_rpa] archive poller 启动失败（不影响应用启动）: {e}", exc_info=True)
 
+    _browser_reaper = None
+    _browser_reaper_manager = None
+    try:
+        from src.tools.browser.reaper import BrowserRunReaper
+        from src.tools.browser.run_manager import BrowserRunManager
+
+        _browser_reaper_manager = BrowserRunManager()
+        _browser_reaper = BrowserRunReaper(_browser_reaper_manager)
+        _browser_reaper.start()
+        logger.info(
+            "browser run reaper 初始化完成: distributed={}",
+            _browser_reaper_manager.store.distributed,
+        )
+    except Exception as e:
+        logger.warning("browser run reaper 启动失败（不影响应用启动）: type={}", type(e).__name__)
+
     try:
         yield
     finally:
@@ -632,6 +648,15 @@ async def lifespan(app: FastAPI):
         logger.info("Application shutting down")
 
         # 浏览器优先回收；异常或超时不阻断数据库、调度器和渠道资源关闭。
+        try:
+            if _browser_reaper is not None:
+                await _browser_reaper.stop()
+            if _browser_reaper_manager is not None:
+                await _browser_reaper_manager.close_all("shutdown")
+            from src.tools.browser.run_manager import close_all_active_browser_managers
+            await close_all_active_browser_managers("shutdown")
+        except Exception as e:
+            logger.warning("browser run reaper 关闭异常: type={}", type(e).__name__)
         await _close_browser_runs_on_shutdown()
 
         # 关闭 archive poller（优雅等待在途 fetcher 任务完成）

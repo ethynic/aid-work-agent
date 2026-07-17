@@ -2,7 +2,7 @@
 
 > 日期：2026-07-14
 >
-> 状态：🔧 部分完成（Phase 0～1 完成；2/8 Phase 完成）
+> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证）
 >
 > 设计基线：[browser_visualization_design.md](./browser_visualization_design.md)
 >
@@ -30,7 +30,7 @@
 |---|---|---|---|---|
 | 0 | 基线、配置和泄漏复现测试 | ✅ 已完成 | 设计批准 | 测试能稳定复现当前泄漏/配置问题 |
 | 1 | 本地浏览器生命周期 P0 修复 | ✅ 已完成 | Phase 0 | 六类终态进程回基线 |
-| 2 | RunManager + Executor 抽象 + 多租户状态 | ⬜ | Phase 1 | 两 worker/两租户契约测试通过 |
+| 2 | RunManager + Executor 抽象 + 多租户状态 | 🔧 部分完成 | Phase 1 | 两 worker/两租户契约测试通过 |
 | 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | ⬜ | Phase 2 | 明确指引、完成监测、原工具及 Agent 幂等续跑、超时关闭通过 |
 | 4 | Agent Desktop 可选 browser runtime | ⬜ | Phase 3，且 Agent Desktop Phase 0～3 稳定 | 桌面内可见执行和断线回收通过；关闭模块后 Agent 主链路正常 |
 | 5 | 自动路由与安全策略 | ⬜ | Phase 4 | 路由矩阵、SSRF、不可逆防重放通过 |
@@ -77,6 +77,17 @@
 
 ## 5. Phase 2：统一 Run 与 Executor
 
+> 进度（2026-07-17）：🔧 部分完成。生产 `browser_automation` 已切换到
+> `BrowserRunManager -> LocalPlaywrightExecutor -> 独占 worker`；PageOps 不再
+> 持有 Playwright 对象。4 字节大端、1 MB 上限 IPC、seq/command_id 幂等、
+> deadline、owner lease/reaper、租户隔离、Redis 单请求降级与双表审计已落地。
+> Phase 3 可视化/人工接管与 remote executor 未提前实现。
+> 当前 mock/本机 Playwright 门禁已通过；P1 收口已增加写帧前 owner epoch
+> fencing（租约过期、reaper 抢占、同 owner ABA、取消和状态丢失均拒绝写 IPC）
+> 及 Windows Job Object `KILL_ON_JOB_CLOSE` 子树托管，attach 失败 fail-closed。
+> 因本机无独立 Redis/PostgreSQL 环境，Redis Lua/TTL/掉线恢复与两套 DDL 的
+> 真实服务执行尚未验收，因此外部服务门禁完成前仍不得将 Phase 2 标为完成。
+
 ### 改动
 
 - 新增 `src/tools/browser/executor/base.py`、`local.py`、`models.py`、`src/tools/browser/worker_main.py`、`worker_protocol.py`。
@@ -94,6 +105,13 @@
 - 对 local/fake remote 跑同一 contract test suite。
 - 两租户相同 session_id、两 Gunicorn worker 的 owner/lease/取消集成测试。
 - reaper 抢占过期 owner 时不会并发执行命令。
+- 每条生产命令在 `write_frame` 紧前原子校验 owner epoch token、租约、取消和
+  run 状态；失败返回稳定 `OWNER_LEASE_LOST/CANCELLED` 并回收 owned worker。
+- Windows worker 在发送 start 前加入独占 Job Object，启用
+  `KILL_ON_JOB_CLOSE`；attach 失败不得启动无托管浏览器。
+- Phase 2 targeted contract/协议/RunManager/DB/静态边界测试全绿；真实 local
+  worker contract 覆盖 start/navigate/snapshot/content/close，fake remote 运行
+  同一契约。Phase 0～1 browser unit 回归全绿；真进程六终态测试仍保留 opt-in。
 
 ## 6. Phase 3：服务端画面与网页人工接管
 

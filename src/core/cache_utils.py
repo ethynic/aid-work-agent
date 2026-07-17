@@ -50,6 +50,18 @@ class CacheKeys:
     COMPRESSION_METRICS = "comp_metrics"  # comp_metrics:{kind} 上下文压缩指标（Phase 7 §7.2）
     SCHEDULER_LOCK = "sched_task_lock"    # sched_task_lock:manager（全局分布式锁，多 worker 唯一启动调度器）
     WECOM_RPA_SELF_ECHO_ESCAPE = "wecom_rpa:self_echo_escape"  # :{tenant_id}:{account_id}（ZSET，危险 echo 五分钟窗口）
+    BROWSER_RUN = "browser_run"              # browser_run:{tenant_id}:{run_id}
+    BROWSER_OWNER = "browser_owner"          # browser_owner:{tenant_id}:{run_id}
+    BROWSER_CONTROL = "browser_control"      # browser_control:{tenant_id}:{run_id}
+    # Phase 3+ 预登记命名，不代表当前阶段已提供相应功能。
+    BROWSER_VIEW_TICKET = "browser_view_ticket"
+    BROWSER_WEB_PRESENCE = "browser_web_presence"
+    BROWSER_LAUNCH_TICKET = "browser_launch_ticket"
+    BROWSER_COMPANION_SESSION = "browser_companion_session"
+    BROWSER_ASSISTANCE = "browser_assistance"
+    AGENT_TOOL_SUSPENSION = "agent_tool_suspension"
+    BROWSER_RESUME_JOBS = "browser_resume_jobs"
+    AGENT_CONTINUATION_EVENTS = "agent_continuation_events"
 
 
 # ============== 通用缓存函数 ==============

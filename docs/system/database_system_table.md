@@ -3,6 +3,12 @@
 > 本文档介绍智能体系统核心数据表的用途和相互关系，仅覆盖非 `bs_` 前缀的系统表。
 > `bs_` 开头的业务表由各子智能体自行管理，不在此文档范围内。
 
+> 2026-07-17 Browser Run/Executor Phase 2 例外登记：新增业务审计表
+> `bs_browser_runs`、`bs_browser_assistance_requests`。两表只保存租户归属、
+> 状态枚举和恢复关联，不保存完整 URL、DOM、截图、cookie、header、表单值或
+> 用户输入；所有读取和更新均要求 `tenant_id` 条件。DDL 已同步
+> `deploy/init-postgres.sql` 与 `deploy/db_update.sql`，不创建长期 device 表。
+
 ---
 
 ## 1. 表分类总览

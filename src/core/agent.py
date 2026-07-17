@@ -144,6 +144,7 @@ class Agent:
         parent_plan_manager=None,
         mode: AgentMode = AgentMode.MASTER,
         tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ):
         """
         初始化智能体
@@ -156,6 +157,7 @@ class Agent:
             parent_plan_manager: 父智能体的计划管理器（子智能体模式时使用，用于记录执行过程）
             mode: 智能体工作模式 (MASTER / SUBAGENT / STANDALONE)
             tenant_id: 租户ID（SaaS模式下用于加载租户自定义 skills）
+            user_id: 可信用户ID（子智能体工具执行身份）
         """
         self.mode = mode
         self.subagent_config = subagent_config
@@ -225,6 +227,7 @@ class Agent:
 
         # 租户 skills 按需加载状态
         self._init_tenant_id = tenant_id  # 初始化时传入的 tenant_id
+        self._init_user_id = user_id
         self._loaded_tenant_id = None
         self._skills_loaded_at = 0.0
 
@@ -2102,7 +2105,7 @@ class Agent:
         # 设置工具的 user_id / tenant_id
         file_output_tools = []  # 注册下载的文件工具（write / cp）
         if user:
-            for tool_name in ("email_send", "email_read", "email_list_folders"):
+            for tool_name in ("email_send", "email_read", "email_list_folders", "browser_automation"):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_user_id'):
                     tool.set_user_id(user.user_id)
@@ -2131,6 +2134,9 @@ class Agent:
             for tool in file_output_tools:
                 if hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(_resolve_tenant_id)
+            browser_tool = self.tool_registry.get_tool("browser_automation")
+            if browser_tool and hasattr(browser_tool, 'set_tenant_id'):
+                browser_tool.set_tenant_id(_resolve_tenant_id)
 
         # 子智能体环境变量注入：从 subagent_env_vars 表读取，设置为 os.environ，供 http_api 工具的 ${VAR} 替换
         _injected_env_vars = {}
@@ -2475,7 +2481,10 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 yield make_event("tool_start", toolName=tool_name, toolArgs=tool_args)
                 yield make_event("progress", data=f"🔧 正在执行 {tool_display_name}...")
 
-                logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
+                if tool_name == "browser_automation":
+                    logger.info("Executing tool: browser_automation (arguments redacted)")
+                else:
+                    logger.info(f"Executing tool: {tool_name} with args: {json.dumps(tool_args, ensure_ascii=False)}")
 
                 # Fallback: 如果 LLM 调用了一个不在工具列表中但匹配 skill 名称的工具，
                 # 自动转为 use_skill 调用（LLM 有时会误把 skill 名称当成工具名直接调用）
@@ -2765,7 +2774,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                 # Execute the tool
                 try:
-                    result = await self.tool_executor.execute(tool_name, tool_args)
+                    execution_args = tool_args
+                    if tool_name == "browser_automation":
+                        execution_args = dict(tool_args)
+                        execution_args["_audit_session_id"] = session_id
+                        execution_args["_trusted_tenant_id"] = _resolve_tenant_id
+                        execution_args["_trusted_user_id"] = user.user_id if user else None
+                    result = await self.tool_executor.execute(tool_name, execution_args)
                     logger.info(f"[TOOL_RESULT] {tool_name}: type={type(result).__name__}")
 
                     # 发送工具执行完成事件
@@ -3029,7 +3044,9 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
         # 注入 tenant_id 到需要租户隔离的工具（子智能体线程中 ContextVar 不可用）
         if self._init_tenant_id:
-            for tool_name in ("attraction_search", "hotel_search", "knowledge_base_search"):
+            for tool_name in (
+                "attraction_search", "hotel_search", "knowledge_base_search", "browser_automation"
+            ):
                 tool = self.tool_registry.get_tool(tool_name)
                 if tool and hasattr(tool, 'set_tenant_id'):
                     tool.set_tenant_id(self._init_tenant_id)
@@ -3402,7 +3419,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                     else:
                         # 执行普通工具
                         try:
-                            result = await self.tool_executor.execute(tool_name, tool_args)
+                            execution_args = tool_args
+                            if tool_name == "browser_automation":
+                                execution_args = dict(tool_args)
+                                execution_args["_audit_session_id"] = parent_session_id
+                                execution_args["_trusted_tenant_id"] = self._init_tenant_id
+                                execution_args["_trusted_user_id"] = self._init_user_id
+                            result = await self.tool_executor.execute(tool_name, execution_args)
                             tool_result = result
 
                             # 发送工具执行完成进度

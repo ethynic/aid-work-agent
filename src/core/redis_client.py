@@ -784,6 +784,22 @@ class RedisClient:
             logger.warning(f"[Redis] release_lock 失败 [{key}]: {e}")
             return False
 
+    def renew_lock(self, key: str, value: str, ex: int) -> bool:
+        """仅锁持有者可原子续期；安全关键 lease 不使用内存降级模拟跨 worker。"""
+        if not self.is_available() or self._client is None:
+            return False
+        try:
+            script = """
+            if redis.call('get', KEYS[1]) == ARGV[1] then
+                return redis.call('expire', KEYS[1], tonumber(ARGV[2]))
+            end
+            return 0
+            """
+            return bool(self._client.eval(script, 1, key, value, ex))
+        except Exception as e:
+            logger.warning(f"[Redis] renew_lock 失败 [{key}]: {e}")
+            return False
+
     def session_finalize_if_quiet(
         self, lock_key: str, lock_value: str, cancel_key: str,
         merge_key: str, pending_key: str, finalizing_key: str,

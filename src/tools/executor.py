@@ -82,7 +82,10 @@ class ToolExecutor:
         
         # 执行工具
         try:
-            logger.info(f"执行工具: {tool_name}, 参数: {parameters}")
+            if tool_name == "browser_automation":
+                logger.info("执行工具: browser_automation, 参数已脱敏")
+            else:
+                logger.info(f"执行工具: {tool_name}, 参数: {parameters}")
             result = await tool.execute(**parameters)
             logger.info(f"工具执行成功: {tool_name}")
             return result

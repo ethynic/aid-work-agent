@@ -7,7 +7,6 @@ create_time。清理时会再次校验两者，绝不按进程名批量终止。
 import asyncio
 import os
 from dataclasses import dataclass
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -17,14 +16,8 @@ try:
 except ImportError:  # pragma: no cover - 仅用于未安装测试依赖的环境跳过
     psutil = None
 
-import src.tools.browser.orchestrator as orchestrator_module
-from src.config.settings import settings
-from src.tools.browser.orchestrator import BrowserOrchestrator
-from src.tools.browser.session import (
-    BrowserSession,
-    _browser_sessions,
-    close_all_owned_browser_runs,
-)
+from src.tools.browser.run_manager import BrowserRunManager, RunState
+from src.tools.browser.run_store import InMemoryRunStore
 
 
 pytestmark = [
@@ -107,31 +100,13 @@ class OwnedProcessProbe:
         psutil.wait_procs(alive, timeout=3)
 
 
-def _playwright_driver_pid(session: BrowserSession) -> int:
-    """取得当前会话唯一对应的 Playwright driver PID。"""
-    try:
-        return session.playwright._impl_obj._connection._transport._proc.pid
-    except (AttributeError, TypeError) as exc:
-        raise RuntimeError("无法确定本测试 Playwright 驱动进程，拒绝执行进程清理") from exc
+class _NoopDB:
+    async def create_run(self, data):
+        del data
 
-
-class _ProbePageOps:
-    """只替换页面语义/截图，生命周期仍走生产 Orchestrator。"""
-
-    def __init__(self, session, session_id):
-        self.session = session
-        self.session_id = session_id
-
-    async def take_snapshot(self):
-        return {
-            "success": True,
-            "url": "https://example.com/",
-            "interactive_elements": [],
-        }
-
-    async def take_screenshot(self, path):
-        del path
-        return {"success": True}
+    async def update_run_state(self, *args, **kwargs):
+        del args, kwargs
+        return True
 
 
 TERMINAL_PATHS = (
@@ -146,71 +121,33 @@ TERMINAL_PATHS = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal_state", TERMINAL_PATHS)
-async def test_owned_browser_processes_return_to_baseline(monkeypatch, terminal_state):
-    """六类终态经生产 execute/finally 或 shutdown 后进程必须归零。"""
+async def test_owned_browser_processes_return_to_baseline(terminal_state):
+    """六类终态经生产 RunManager/LocalExecutor 或 shutdown 后进程必须归零。"""
     probe = OwnedProcessProbe()
-    session = BrowserSession(headless=True)
-    real_page = None
-    session_id = f"process_probe_{terminal_state}"
+    manager = BrowserRunManager(store=InMemoryRunStore(), run_db=_NoopDB())
+    record = await manager.create("tenant", "user", f"process_probe_{terminal_state}")
 
     try:
-        await session.start()
-        real_page = session.page
-        if not probe.capture_started(_playwright_driver_pid(session)):
-            raise RuntimeError("Playwright 未启动可跟踪的进程")
-        fake_page = MagicMock(
-            close=AsyncMock(side_effect=RuntimeError("page close failed"))
-        )
-        fake_page.url = "https://example.com/"
-        session.page = fake_page
-        _browser_sessions[session_id] = session
-        monkeypatch.setattr(orchestrator_module, "PageOps", _ProbePageOps)
+        executor = await manager.start(record)
+        # 生产返回带 owner fencing 的包装器，进程探针只下钻测试拥有的 local executor。
+        local_executor = executor._executor
+        if not probe.capture_started(local_executor._process.pid):
+            raise RuntimeError("browser worker 未启动可跟踪的进程")
 
-        if terminal_state == "shutdown":
-            await close_all_owned_browser_runs(reason="shutdown")
+        if terminal_state == "cancel":
+            assert await manager.request_cancel("tenant", "user", record.run_id)
+        elif terminal_state == "shutdown":
+            await manager.close_all("shutdown")
         else:
-            orchestrator = BrowserOrchestrator(session_id=session_id)
-            if terminal_state == "success":
-                decision = AsyncMock(return_value={"action": "done", "reason": "完成"})
-            elif terminal_state == "error":
-                decision = AsyncMock(side_effect=RuntimeError("llm failed"))
-            elif terminal_state == "ask_user_expire":
-                decision = AsyncMock(
-                    return_value={"action": "ask_user", "reason": "需要人工"}
-                )
-            else:
-                async def wait_forever(*args):
-                    await asyncio.Event().wait()
-
-                decision = wait_forever
-            monkeypatch.setattr(orchestrator, "_get_decision", decision)
-
-            if terminal_state == "cancel":
-                task = asyncio.create_task(orchestrator.execute(task="取消测试"))
-                await asyncio.sleep(0.05)
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-            else:
-                if terminal_state == "timeout":
-                    monkeypatch.setattr(settings.tools.browser, "task_timeout", 0.01)
-                await orchestrator.execute(task="进程回收测试")
+            terminal = {
+                "success": RunState.SUCCEEDED,
+                "error": RunState.FAILED,
+                "timeout": RunState.TIMED_OUT,
+                "ask_user_expire": RunState.FAILED,
+            }[terminal_state]
+            await manager.finalize("tenant", record.run_id, terminal, terminal_state)
 
         await probe.assert_all_stopped()
     finally:
-        _browser_sessions.pop(session_id, None)
-        if not probe.owned and session.playwright is not None:
-            probe.capture_started(_playwright_driver_pid(session))
-        session.page = real_page
-        for resource, method_name in (
-            (real_page, "close"),
-            (session.context, "close"),
-            (session.browser, "close"),
-            (session.playwright, "stop"),
-        ):
-            if resource is not None:
-                try:
-                    await getattr(resource, method_name)()
-                except Exception:
-                    pass
+        await manager.close_all("test_cleanup")
         probe.cleanup_owned()

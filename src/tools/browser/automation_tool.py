@@ -1,7 +1,6 @@
 """Agent 可见的统一浏览器自动化工具。"""
 
 import asyncio
-import uuid
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -11,7 +10,7 @@ from src.config.settings import settings
 from src.tools._helpers import sanitize_error
 from src.tools.base import BaseTool
 from src.tools.browser.orchestrator import BrowserOrchestrator
-from src.tools.browser.session import close_browser_session
+from src.tools.browser.run_manager import BrowserRunManager, RunState
 
 
 _DEPRECATED_RESUME_ERROR = (
@@ -39,6 +38,16 @@ class BrowserAutomationTool(BaseTool):
     category = "browser"
     InputModel = BrowserAutomationInput
 
+    def __init__(self) -> None:
+        self._tenant_id: Optional[str] = None
+        self._user_id: Optional[str] = None
+
+    def set_tenant_id(self, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
+
+    def set_user_id(self, user_id: str) -> None:
+        self._user_id = user_id
+
     def get_display_name(self, tool_args: Optional[Dict[str, Any]] = None) -> str:
         """不显示任务、用户回复或表单正文。"""
         del tool_args
@@ -63,8 +72,36 @@ class BrowserAutomationTool(BaseTool):
         if not task:
             return {"success": False, "error_code": "INVALID_INPUT", "error": "必须提供任务描述"}
 
-        run_id = f"browser_{uuid.uuid4().hex}"
-        orchestrator = BrowserOrchestrator(session_id=run_id)
+        tenant_id = kwargs.get("_trusted_tenant_id")
+        user_id = kwargs.get("_trusted_user_id")
+        try:
+            from src.saas.context import get_current_tenant_id, get_current_user_id
+            tenant_id = tenant_id or get_current_tenant_id()
+            user_id = user_id or get_current_user_id()
+        except Exception:
+            pass
+        tenant_id = tenant_id or self._tenant_id
+        user_id = user_id or self._user_id
+        if not tenant_id or not user_id:
+            return {
+                "success": False,
+                "error_code": "MISSING_EXECUTION_CONTEXT",
+                "error": "浏览器任务缺少租户或用户执行上下文",
+            }
+
+        manager = BrowserRunManager()
+        audit_session_id = kwargs.get("_audit_session_id") or f"audit_{user_id}"
+        record = await manager.create(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=audit_session_id,
+            execution_target="server",
+        )
+        orchestrator = BrowserOrchestrator(
+            session_id=record.session_id,
+            run_manager=manager,
+            run_record=record,
+        )
         orchestrator._task_description = task
         try:
             async with asyncio.timeout(settings.tools.browser.task_timeout):
@@ -87,5 +124,15 @@ class BrowserAutomationTool(BaseTool):
                 "error": sanitize_error(exc, fallback="浏览器自动化执行失败"),
             }
         finally:
-            # Orchestrator 也有边界关闭；这里兜底覆盖构造/超时等外层异常。
-            await close_browser_session(run_id, reason="tool_boundary")
+            # Orchestrator 也有边界关闭；这里兜底覆盖外层超时/取消。
+            try:
+                await asyncio.shield(
+                    manager.finalize(
+                        record.tenant_id,
+                        record.run_id,
+                        RunState.FAILED,
+                        "tool_boundary",
+                    )
+                )
+            except Exception as exc:
+                logger.warning("browser tool 边界回收异常: type={}", type(exc).__name__)

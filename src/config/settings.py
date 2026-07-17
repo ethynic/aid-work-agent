@@ -119,6 +119,10 @@ class BrowserToolConfig(BaseModel):
     headless: bool = True  # 是否无头模式
     timeout: int = 30000  # 默认超时时间（毫秒）
     task_timeout: float = 300.0  # 单次工具总超时（秒）
+    command_timeout: float = 30.0  # worker 单命令超时（秒）
+    owner_lease_ttl: int = 30  # owner lease TTL（秒）
+    owner_renew_interval: float = 10.0  # owner lease 续租间隔（秒）
+    reaper_interval: float = 15.0  # 过期 run 回收周期（秒）
     viewport_width: int = 1920  # 视口宽度
     viewport_height: int = 1080  # 视口高度
 

@@ -114,8 +114,7 @@ class SemanticSnapshotGenerator:
 
         const getTextContent = (el) => {
             if (el.tagName && el.tagName.toLowerCase() === 'input') {
-                const val = el.getAttribute('value');
-                if (val) return val;
+                // 输入值属于敏感正文，快照只返回字段提示，不回传 value。
                 return el.getAttribute('placeholder') || '';
             }
             if (el.children.length === 0) return el.textContent || '';

@@ -1,432 +1,156 @@
-"""页面操作封装
+"""父进程页面操作封装，仅构造 DTO 并调用 BrowserExecutor。"""
 
-从 tools_semantic.py 提取的核心页面操作逻辑，
-供 BrowserOrchestrator 内部调用。
-"""
+from __future__ import annotations
 
 import asyncio
-import inspect
+import re
+import uuid
+from datetime import datetime, timedelta, timezone
+from html import unescape
 from typing import Any, Dict, Optional
 
 from loguru import logger
 
-from src.tools._helpers import sanitize_error
-from src.tools.browser.session import BrowserSession, has_browser_session, get_browser_session
-from src.tools.browser.semantic import NaturalMatcher, RefMapper, SemanticSnapshotGenerator
-from src.tools.browser.tools_snapshot import get_ref_mapper, store_ref_mapper
-
-
-async def wait_for_page_stable(page, timeout: int = 5000):
-    """等待页面在操作后达到稳定状态"""
-    try:
-        await page.wait_for_load_state("domcontentloaded", timeout=timeout)
-    except Exception:
-        pass
-
-    try:
-        await page.wait_for_load_state("networkidle", timeout=3000)
-    except Exception:
-        pass
-
-    await asyncio.sleep(0.3)
-
-    try:
-        await page.wait_for_function(
-            """() => {
-                const loaders = document.querySelectorAll(
-                    '.loading, .spinner, .skeleton, [aria-busy="true"], ' +
-                    '.ant-spin, .el-loading-mask, .v-loading-mask'
-                );
-                for (const loader of loaders) {
-                    if (loader.offsetParent !== null) return false;
-                }
-                return true;
-            }""",
-            timeout=2000,
-        )
-    except Exception:
-        pass
-
-    try:
-        await page.wait_for_function(
-            """() => {
-                const iframes = document.querySelectorAll('iframe');
-                for (const iframe of iframes) {
-                    if (iframe.offsetParent === null) continue;
-                    const src = iframe.getAttribute('src') || '';
-                    if (!src || src === 'about:blank') return false;
-                    try {
-                        const doc = iframe.contentDocument;
-                        if (doc && doc.readyState !== 'complete') return false;
-                    } catch (e) { }
-                }
-                return true;
-            }""",
-            timeout=5000,
-        )
-    except Exception:
-        pass
-
-    try:
-        iframe_count = await page.evaluate("() => document.querySelectorAll('iframe').length")
-        if iframe_count > 0:
-            await asyncio.sleep(0.5)
-    except Exception:
-        pass
-
-    logger.debug("[wait_for_page_stable] 页面已稳定")
+from src.config.settings import settings
+from src.tools.browser.executor.base import BrowserExecutor
+from src.tools.browser.executor.models import (
+    ClickCommand, ContentCommand, FillCommand, KeyboardCommand, NavigateCommand,
+    PointerCommand, ResultStatus, SelectCommand, SnapshotCommand, SnapshotElement,
+)
 
 
 class PageOps:
-    """页面操作类
+    """不持有任何浏览器对象，只持有执行器与结构化快照。"""
 
-    封装语义快照驱动的页面操作（click/fill/select/navigate/get_content），
-    供 orchestrator 和工具调用。
-    """
+    def __init__(self, executor: BrowserExecutor, run_id: str, initial_seq: int = 1):
+        self.executor = executor
+        self.run_id = run_id
+        self._seq = initial_seq
+        self._elements: dict[str, SnapshotElement] = {}
 
-    def __init__(self, session: BrowserSession, session_id: str):
-        self.session = session
-        self.session_id = session_id
+    def _fields(self) -> dict[str, Any]:
+        self._seq += 1
+        timeout = float(getattr(settings.tools.browser, "command_timeout", 30.0))
+        return {
+            "run_id": self.run_id,
+            "seq": self._seq,
+            "command_id": f"bc_{uuid.uuid4().hex}",
+            "deadline_at": datetime.now(timezone.utc) + timedelta(seconds=timeout),
+        }
+
+    @staticmethod
+    def _ok(result) -> bool:
+        return result.status in {ResultStatus.OK, ResultStatus.DUPLICATE}
 
     async def navigate(self, url: str, wait_for: str = "load") -> Dict[str, Any]:
-        """打开 URL"""
-        if not self.session.is_running():
-            await self.session.start()
-
-        await self.session.page.goto(url, wait_until=wait_for, timeout=30000)
-        title = await self.session.page.title()
-        current_url = self.session.page.url
-
-        SemanticSnapshotGenerator.invalidate_cache(url=current_url)
-
+        command = NavigateCommand(**self._fields(), url=url, wait_until=wait_for)
+        result = await self.executor.navigate(command)
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "NAVIGATE_FAILED"}
         logger.info("[PageOps] 导航成功")
         return {
-            "success": True,
-            "message": f"已打开: {title}",
-            "url": current_url,
-            "title": title,
+            "success": True, "message": "页面已打开",
+            "url": result.current_origin_path or "", "title": result.title or "",
         }
 
     async def take_snapshot(self, mode: str = "interactive") -> Dict[str, Any]:
-        """获取语义快照"""
-        generator = SemanticSnapshotGenerator(session_id=self.session_id)
-        snapshot = await generator.generate(
-            page=self.session.page,
-            mode=mode,
-        )
+        result = await self.executor.snapshot(SnapshotCommand(**self._fields(), mode=mode))
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "SNAPSHOT_FAILED"}
+        self._elements = {item.ref: item for item in result.interactive_elements if item.ref}
+        elements = [item.model_dump() for item in result.interactive_elements]
+        logger.info("[PageOps] 快照生成: 元素数={}", len(elements))
+        return {
+            "success": True, "url": result.current_origin_path or "",
+            "title": result.title or "", "interactive_elements": elements,
+            "page_text": result.page_text,
+        }
 
-        if not snapshot.success:
-            return {"success": False, "error": f"快照生成失败: {snapshot.error}"}
-
-        store_ref_mapper(self.session_id, generator.get_ref_mapper())
-
-        result = snapshot.to_dict()
-        logger.info("[PageOps] 快照生成: 元素数={}", len(snapshot.interactive_elements))
-        return result
+    def _resolve_ref(self, description: str, ref: Optional[str], action: str) -> tuple[str | None, str]:
+        del action
+        if ref:
+            item = self._elements.get(ref)
+            return (ref, item.label) if item else (None, description)
+        normalized = re.sub(r"\s+", "", description).lower()
+        candidates = []
+        for item in self._elements.values():
+            label = re.sub(r"\s+", "", item.label).lower()
+            if normalized and (normalized in label or label in normalized):
+                candidates.append(item)
+        if not candidates:
+            return None, description
+        candidates.sort(key=lambda item: (abs(len(item.label) - len(description)), item.ref))
+        return candidates[0].ref, candidates[0].label
 
     async def click(self, description: str, ref: Optional[str] = None) -> Dict[str, Any]:
-        """点击元素"""
-        ref_mapper = get_ref_mapper(self.session_id)
-        if not ref_mapper:
-            return {"success": False, "error": "未找到语义快照，请先调用 take_snapshot"}
-
-        target_ref = ref
-        target_label = description
-
+        target_ref, label = self._resolve_ref(description, ref, "click")
         if not target_ref:
-            matcher = NaturalMatcher(ref_mapper)
-            match_result = matcher.match_click(description)
-            if not match_result.success:
-                return {"success": False, "error": match_result.error, "alternatives": match_result.alternatives}
-            target_ref = match_result.ref
-            target_label = match_result.label
-
-        element = await ref_mapper.get_handle(target_ref)
-        if not element:
-            return {"success": False, "error": f"无法定位元素 ref={target_ref}"}
-
-        if inspect.iscoroutine(element):
-            return {"success": False, "error": f"内部错误：元素句柄异常 (ref={target_ref})"}
-
-        try:
-            await element.click(timeout=10000, force=True)
-        except Exception as click_err:
-            logger.warning(
-                "element.click(force=True) 失败，尝试 JS 点击: type={}",
-                type(click_err).__name__,
-            )
-            js_context = self.session.page
-            elem_info = ref_mapper.get_by_ref(target_ref)
-            if elem_info and elem_info.frame_url:
-                frame = ref_mapper._frame_map.get(elem_info.frame_url)
-                if frame:
-                    js_context = frame
-            await js_context.evaluate(f"""(selector) => {{
-                const el = document.querySelector(selector);
-                if (el) el.click();
-            }}""", f'[data-ref="{target_ref}"]')
-
-        await wait_for_page_stable(self.session.page)
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-
-        current_url = self.session.page.url
-        title = await self.session.page.title()
-
-        logger.info("[PageOps] 点击成功: ref={}", target_ref)
+            return {"success": False, "error": "无法从当前快照定位点击目标"}
+        result = await self.executor.click(ClickCommand(**self._fields(), ref=target_ref))
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "CLICK_FAILED"}
         return {
-            "success": True,
-            "message": f"已点击: {target_label}",
-            "ref": target_ref,
-            "label": target_label,
-            "current_url": current_url,
-            "page_title": title,
+            "success": True, "message": f"已点击: {label}", "ref": target_ref,
+            "label": label, "current_url": result.current_origin_path or "",
+            "page_title": result.title or "",
         }
 
     async def fill(self, field: str, value: str, ref: Optional[str] = None) -> Dict[str, Any]:
-        """填写表单字段"""
-        ref_mapper = get_ref_mapper(self.session_id)
-        if not ref_mapper:
-            return {"success": False, "error": "未找到语义快照，请先调用 take_snapshot"}
-
-        target_ref = ref
-        target_label = field
-
+        target_ref, label = self._resolve_ref(field, ref, "fill")
         if not target_ref:
-            matcher = NaturalMatcher(ref_mapper)
-            match_result = matcher.match_fill(field, value)
-            if not match_result.success:
-                return {"success": False, "error": match_result.error, "alternatives": match_result.alternatives}
-            target_ref = match_result.ref
-            target_label = match_result.label
-
-        element = await ref_mapper.get_handle(target_ref)
-        if not element:
-            return {"success": False, "error": f"无法定位元素 ref={target_ref}"}
-
-        if inspect.iscoroutine(element):
-            return {"success": False, "error": f"内部错误：元素句柄异常 (ref={target_ref})"}
-
-        try:
-            await element.fill(value, timeout=10000, force=True)
-        except Exception as fill_err:
-            logger.warning(
-                "element.fill(force=True) 失败，尝试 JS 填写: type={}",
-                type(fill_err).__name__,
-            )
-            js_context = self.session.page
-            elem_info = ref_mapper.get_by_ref(target_ref)
-            if elem_info and elem_info.frame_url:
-                frame = ref_mapper._frame_map.get(elem_info.frame_url)
-                if frame:
-                    js_context = frame
-            await js_context.evaluate("""(args) => {
-                const el = document.querySelector(args.selector);
-                if (!el) return;
-                el.focus();
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype, 'value'
-                )?.set || Object.getOwnPropertyDescriptor(
-                    window.HTMLTextAreaElement.prototype, 'value'
-                )?.set;
-                if (nativeInputValueSetter) {
-                    nativeInputValueSetter.call(el, args.value);
-                } else {
-                    el.value = args.value;
-                }
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }""", {"selector": f'[data-ref="{target_ref}"]', "value": value})
-
-        await asyncio.sleep(0.3)
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-
-        logger.info("[PageOps] 填写成功: ref={}", target_ref)
-        return {
-            "success": True,
-            "message": f"已填写: {target_label}",
-            "ref": target_ref,
-            "label": target_label,
-            "value": value,
-        }
+            return {"success": False, "error": "无法从当前快照定位填写目标"}
+        result = await self.executor.fill(FillCommand(**self._fields(), ref=target_ref, value=value))
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "FILL_FAILED"}
+        return {"success": True, "message": f"已填写: {label}", "ref": target_ref, "label": label}
 
     async def select(self, field: str, option: str, ref: Optional[str] = None) -> Dict[str, Any]:
-        """选择下拉选项"""
-        ref_mapper = get_ref_mapper(self.session_id)
-        if not ref_mapper:
-            return {"success": False, "error": "未找到语义快照，请先调用 take_snapshot"}
-
-        target_ref = ref
-        target_label = field
-
+        target_ref, label = self._resolve_ref(field, ref, "select")
         if not target_ref:
-            matcher = NaturalMatcher(ref_mapper)
-            match_result = matcher.match_select(field, option)
-            if not match_result.success:
-                return {"success": False, "error": match_result.error, "alternatives": match_result.alternatives}
-            target_ref = match_result.ref
-            target_label = match_result.label
+            return {"success": False, "error": "无法从当前快照定位下拉目标"}
+        result = await self.executor.select(SelectCommand(**self._fields(), ref=target_ref, option=option))
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "SELECT_FAILED"}
+        return {"success": True, "message": f"已选择: {option}", "ref": target_ref, "field": label, "option": option}
 
-        element = await ref_mapper.get_handle(target_ref)
-        if not element:
-            return {"success": False, "error": f"无法定位元素 ref={target_ref}"}
+    async def keyboard(self, key: str) -> Dict[str, Any]:
+        result = await self.executor.keyboard(KeyboardCommand(**self._fields(), key=key))
+        return {"success": self._ok(result), "error": result.error_code if not self._ok(result) else None}
 
-        if inspect.iscoroutine(element):
-            return {"success": False, "error": f"内部错误：元素句柄异常 (ref={target_ref})"}
-
-        await element.click(timeout=10000)
-        await wait_for_page_stable(self.session.page, timeout=3000)
-
-        try:
-            await element.select_option(option, timeout=10000)
-        except Exception:
-            pass
-
-        await asyncio.sleep(0.3)
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-
-        logger.info("[PageOps] 选择成功: ref={}", target_ref)
-        return {
-            "success": True,
-            "message": f"已选择: {option}",
-            "ref": target_ref,
-            "field": target_label,
-            "option": option,
-        }
+    async def scroll(self, direction: str) -> Dict[str, Any]:
+        delta = -800 if direction == "up" else 800
+        result = await self.executor.pointer(
+            PointerCommand(**self._fields(), action="wheel", delta_y=delta)
+        )
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "SCROLL_FAILED"}
+        return {"success": True, "message": f"已向{direction}滚动一屏"}
 
     async def get_content(self, format: str = "markdown", selector: Optional[str] = None) -> Dict[str, Any]:
-        """获取页面内容"""
-        try:
-            if selector:
-                if format == "text":
-                    content = await self.session.page.inner_text(selector)
-                elif format == "html":
-                    content = await self.session.page.inner_html(selector)
-                else:
-                    html = await self.session.page.inner_html(selector)
-                    content = self._html_to_markdown(html)
-            else:
-                if format == "text":
-                    content = await self.session.page.inner_text("body")
-                elif format == "html":
-                    content = await self.session.page.content()
-                else:
-                    html = await self._extract_main_content(self.session.page)
-                    content = self._html_to_markdown(html)
+        result = await self.executor.content(
+            ContentCommand(**self._fields(), format=format, selector=selector)
+        )
+        if not self._ok(result):
+            return {"success": False, "error": result.error_code or "CONTENT_FAILED"}
+        return {
+            "success": True, "message": "获取页面内容成功",
+            "url": result.current_origin_path or "", "title": result.title or "",
+            "format": result.format,
+            "content": result.content, "markdown": result.content if format == "markdown" else None,
+            "content_length": result.content_length, "truncated": result.truncated,
+        }
 
-            title = await self.session.page.title()
-            url = self.session.page.url
+    async def take_screenshot(self, path: str = "", full_page: bool = False) -> Dict[str, Any]:
+        del path, full_page
+        return {"success": False, "error": "SCREENSHOT_NOT_AVAILABLE_IN_PHASE2"}
 
-            max_len = 50000 if format == "markdown" else 10000
-            truncated = len(content) > max_len
+    async def close_popup(self) -> Dict[str, Any]:
+        result = await self.keyboard("Escape")
+        if result.get("success"):
+            await asyncio.sleep(0.2)
+            return {"success": True, "message": "已尝试关闭弹窗"}
+        return result
 
-            result = {
-                "success": True,
-                "message": "获取页面内容成功",
-                "url": url,
-                "title": title,
-                "format": format,
-                "content": content[:max_len] if truncated else content,
-                "content_length": len(content),
-                "truncated": truncated,
-            }
-            if format == "markdown":
-                result["markdown"] = result["content"]
-            return result
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": sanitize_error(e, fallback="获取网页内容失败"),
-            }
-
-    async def take_screenshot(self, path: str = "./screenshot.png", full_page: bool = False) -> Dict[str, Any]:
-        """截图"""
-        await self.session.page.screenshot(path=path, full_page=full_page)
-        return {"success": True, "screenshot_path": path}
-
-    async def go_back(self) -> Dict[str, Any]:
-        """后退"""
-        await self.session.page.go_back()
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-        title = await self.session.page.title()
-        return {"success": True, "url": self.session.page.url, "title": title}
-
-    async def go_forward(self) -> Dict[str, Any]:
-        """前进"""
-        await self.session.page.go_forward()
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-        title = await self.session.page.title()
-        return {"success": True, "url": self.session.page.url, "title": title}
-
-    async def reload(self) -> Dict[str, Any]:
-        """刷新"""
-        await self.session.page.reload(wait_until="networkidle")
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-        title = await self.session.page.title()
-        return {"success": True, "url": self.session.page.url, "title": title}
-
-    async def _extract_main_content(self, page) -> str:
-        content_selectors = [
-            'article', '[role="main"]', 'main',
-            '.post-content', '.article-content', '.entry-content',
-            '.content', '#content', '.post', '.article',
-        ]
-        for selector in content_selectors:
-            try:
-                element = await page.query_selector(selector)
-                if element:
-                    html = await element.inner_html()
-                    if len(html) > 200:
-                        return html
-            except Exception:
-                continue
-        return await page.inner_html('body')
-
-    def _html_to_markdown(self, html: str) -> str:
-        try:
-            from markdownify import markdownify as md
-            import re
-
-            markdown_content = md(
-                html,
-                heading_style="atx",
-                bullets="-",
-                strip=['script', 'style', 'nav', 'footer', 'header', 'aside'],
-                escape_asterisks=False,
-                escape_underscores=False,
-            )
-            markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
-            if len(markdown_content) > 50000:
-                markdown_content = markdown_content[:50000] + "\n\n... [内容已截断]"
-            return markdown_content.strip()
-
-        except ImportError:
-            return self._simple_html_to_markdown(html)
-        except Exception:
-            return self._simple_html_to_markdown(html)
-
-    def _simple_html_to_markdown(self, html: str) -> str:
-        import re
-
-        html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<nav[^>]*>.*?</nav>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<footer[^>]*>.*?</footer>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<aside[^>]*>.*?</aside>', '', html, flags=re.DOTALL | re.IGNORECASE)
-
-        html = re.sub(r'<h1[^>]*>(.*?)</h1>', r'\n# \1\n', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<h2[^>]*>(.*?)</h2>', r'\n## \1\n', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<h3[^>]*>(.*?)</h3>', r'\n### \1\n', html, flags=re.DOTALL | re.IGNORECASE)
-
-        html = re.sub(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', r'[\2](\1)', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<strong[^>]*>(.*?)</strong>', r'**\1**', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<p[^>]*>(.*?)</p>', r'\n\1\n', html, flags=re.DOTALL | re.IGNORECASE)
-        html = re.sub(r'<br\s*/?>', r'\n', html, flags=re.IGNORECASE)
-        html = re.sub(r'<[^>]+>', '', html)
-        html = re.sub(r'\n{3,}', '\n\n', html)
-
-        if len(html) > 50000:
-            html = html[:50000] + "\n\n... [内容已截断]"
-        return html.strip()
+    @staticmethod
+    def _html_to_markdown(html: str) -> str:
+        return unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))).strip()

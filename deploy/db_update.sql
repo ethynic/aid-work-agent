@@ -1034,3 +1034,60 @@ DROP INDEX IF EXISTS idx_agent_instances_tenant;
 DROP INDEX IF EXISTS idx_agent_instances_tenant_type;
 DROP TABLE IF EXISTS agent_instance_queue;
 DROP TABLE IF EXISTS agent_instances;
+
+-- ============================================================================
+-- 2026-07-17 Browser Run/Executor Phase 2：仅存脱敏执行与恢复审计事实
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_browser_runs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    run_id TEXT NOT NULL UNIQUE,
+    parent_run_id TEXT,
+    session_id TEXT NOT NULL,
+    execution_target TEXT NOT NULL CHECK (execution_target IN ('server','client')),
+    executor_client_id TEXT,
+    state TEXT NOT NULL,
+    routing_reason TEXT,
+    failure_class TEXT,
+    evidence_level TEXT,
+    escalation_count INTEGER NOT NULL DEFAULT 0 CHECK (escalation_count BETWEEN 0 AND 1),
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    close_reason TEXT,
+    error_code TEXT,
+    steps_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_runs_tenant_session
+    ON bs_browser_runs(tenant_id, session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_runs_tenant_state
+    ON bs_browser_runs(tenant_id, state, updated_at);
+
+CREATE TABLE IF NOT EXISTS bs_browser_assistance_requests (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    assistance_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    agent_execution_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    instruction_code TEXT NOT NULL,
+    completion_mode TEXT NOT NULL CHECK (completion_mode IN ('auto_or_confirm','confirm_only')),
+    predicate_type TEXT,
+    expires_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    resumed_at TIMESTAMP,
+    error_code TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id, run_id) REFERENCES bs_browser_runs(tenant_id, run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_run
+    ON bs_browser_assistance_requests(tenant_id, run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_state
+    ON bs_browser_assistance_requests(tenant_id, state, expires_at);

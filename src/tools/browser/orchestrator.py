@@ -5,8 +5,6 @@ LLM 驱动的编排循环：解析任务 → 循环执行（快照→决策→�
 
 import asyncio
 import json
-import time
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
@@ -14,11 +12,9 @@ from loguru import logger
 from src.llm.gateway import llm_gateway
 from src.config.settings import settings
 from src.tools._helpers import sanitize_error
-from src.tools.browser.session import (
-    BrowserSession,
-    get_browser_session, close_browser_session, has_browser_session,
-)
 from src.tools.browser.page_ops import PageOps
+from src.tools.browser.run_manager import BrowserRunManager, RunState
+from src.tools.browser.run_store import RunRecord
 
 
 # 不可恢复的错误关键词
@@ -99,16 +95,26 @@ class BrowserOrchestrator:
     5. 循环直到完成或需要用户输入
     """
 
-    def __init__(self, session_id: str, headless: Optional[bool] = None):
+    def __init__(
+        self,
+        session_id: str,
+        headless: Optional[bool] = None,
+        run_manager: Optional[BrowserRunManager] = None,
+        run_record: Optional[RunRecord] = None,
+    ):
         self.session_id = session_id
         self.headless = headless
-        self.session: Optional[BrowserSession] = None
+        self.run_manager = run_manager
+        self.run_record = run_record
+        self.executor = None
         self.page_ops: Optional[PageOps] = None
         self.steps: List[Dict[str, Any]] = []
         self.max_steps = 30
         self.max_retries = 3
         self.screenshot_path: Optional[str] = None
         self._collected_content: List[str] = []
+        self._page_text = ""
+        self._current_url = ""
         self.cancel_event = asyncio.Event()
 
     def cancel(self) -> None:
@@ -120,59 +126,18 @@ class BrowserOrchestrator:
             raise asyncio.CancelledError
 
     async def _ensure_session(self):
-        """确保浏览器会话已启动"""
-        if not has_browser_session(self.session_id):
-            self.session = get_browser_session(self.session_id, self.headless)
-        else:
-            self.session = get_browser_session(self.session_id)
-
-        if not self.session.is_running():
-            await self.session.start()
-
-        self.page_ops = PageOps(self.session, self.session_id)
+        """通过 RunManager 启动隔离 executor。"""
+        if self.run_manager is None or self.run_record is None:
+            raise RuntimeError("RUN_CONTEXT_REQUIRED")
+        self.executor = await self.run_manager.start(self.run_record)
+        self.page_ops = PageOps(self.executor, self.run_record.run_id)
 
     async def _take_screenshot(self) -> Optional[str]:
-        """截图并返回路径"""
-        try:
-            timestamp = int(time.time())
-            screenshot_dir = Path("storage/screenshots")
-            screenshot_dir.mkdir(parents=True, exist_ok=True)
-            path = str(screenshot_dir / f"browser_{self.session_id}_{timestamp}.png")
-            await self.page_ops.take_screenshot(path=path)
-            self.screenshot_path = path
-            return path
-        except Exception as e:
-            logger.warning("截图失败: type={}", type(e).__name__)
-            return None
+        """Phase 2 默认不落盘页面截图。"""
+        return None
 
     async def _get_page_text(self) -> str:
-        """获取页面可见文本摘要"""
-        try:
-            text = await self.session.page.evaluate("""() => {
-                const body = document.body;
-                if (!body) return '';
-                const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-                    acceptNode: (node) => {
-                        const parent = node.parentElement;
-                        if (!parent) return NodeFilter.FILTER_REJECT;
-                        const tag = parent.tagName.toLowerCase();
-                        if (['script', 'style', 'noscript', 'iframe'].includes(tag)) return NodeFilter.FILTER_REJECT;
-                        const style = window.getComputedStyle(parent);
-                        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return NodeFilter.FILTER_REJECT;
-                        return NodeFilter.FILTER_ACCEPT;
-                    }
-                });
-                let text = '';
-                while (walker.nextNode() && text.length < 3000) {
-                    const t = walker.currentNode.textContent.trim();
-                    if (t) text += t + ' ';
-                }
-                return text.trim();
-            }""")
-            return (text or "")[:3000]
-        except Exception as e:
-            logger.debug("获取页面文本失败: type={}", type(e).__name__)
-            return ""
+        return self._page_text[:3000]
 
     async def _get_decision(self, task: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """调用 LLM 获取下一步操作决策"""
@@ -183,7 +148,7 @@ class BrowserOrchestrator:
             label = elem.get("label", "")
             tag = elem.get("tag", "")
             role = elem.get("role", "")
-            elem_type = elem.get("type", "")
+            elem_type = elem.get("element_type", elem.get("type", ""))
             visible = elem.get("visible", True)
             if not visible:
                 continue
@@ -274,7 +239,7 @@ class BrowserOrchestrator:
         import re
 
         # 检测常见网站的搜索 URL 模式
-        current_url = self.session.page.url if self.session and self.session.page else ""
+        current_url = self._current_url
 
         # 提取搜索关键词
         search_kw = None
@@ -378,7 +343,20 @@ class BrowserOrchestrator:
             )
         finally:
             try:
-                await close_browser_session(self.session_id, reason=close_reason)
+                if self.run_manager is not None and self.run_record is not None:
+                    terminal = {
+                        "success": RunState.SUCCEEDED,
+                        "timeout": RunState.TIMED_OUT,
+                        "cancelled": RunState.CANCELLED,
+                    }.get(close_reason, RunState.FAILED)
+                    await asyncio.shield(
+                        self.run_manager.finalize(
+                            self.run_record.tenant_id,
+                            self.run_record.run_id,
+                            terminal,
+                            close_reason,
+                        )
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -408,7 +386,11 @@ class BrowserOrchestrator:
                 if not result["success"]:
                     await self._take_screenshot()
                     return self._build_result(success=False, error=result.get("error", "导航失败"))
-                self.steps.append({"action": "navigate", "target": url, "result": "页面已打开"})
+                self.steps.append({
+                    "action": "navigate", "target": result.get("url", ""),
+                    "result": "页面已打开",
+                })
+                self._current_url = result.get("url", "")
                 start_step = 0
                 last_url = None
                 same_url_count = 0
@@ -435,6 +417,8 @@ class BrowserOrchestrator:
                     return self._build_result(success=False, error=snapshot.get("error", "快照生成失败"))
 
                 current_url = snapshot.get('url', '?')
+                self._current_url = current_url
+                self._page_text = snapshot.get("page_text", "")
                 logger.info(
                     "[Orchestrator] 快照成功: 元素数={}",
                     len(snapshot.get("interactive_elements", [])),
@@ -521,9 +505,12 @@ class BrowserOrchestrator:
                     logger.warning("浏览器步骤失败但可继续尝试")
 
                 # 记录步骤
+                recorded_target = target
+                if action == "navigate":
+                    recorded_target = op_result.get("url", self._current_url)
                 self.steps.append({
                     "action": action,
-                    "target": target,
+                    "target": recorded_target,
                     "value": "***" if action == "fill" else value,
                     "result": (
                         op_result.get("message", "")
@@ -625,11 +612,8 @@ class BrowserOrchestrator:
             # fill 后模拟回车提交搜索
             if result.get("success"):
                 try:
-                    await self.session.page.keyboard.press("Enter")
-                    import asyncio
+                    await self.page_ops.keyboard("Enter")
                     await asyncio.sleep(1.5)
-                    from src.tools.browser.page_ops import wait_for_page_stable
-                    await wait_for_page_stable(self.session.page)
                 except Exception as e:
                     logger.debug("fill 后回车失败（可忽略）: type={}", type(e).__name__)
             return result
@@ -673,75 +657,18 @@ class BrowserOrchestrator:
             return {"success": False, "error": f"不支持的操作类型: {action}"}
 
     async def _close_popup(self, progress_callback=None) -> Dict[str, Any]:
-        """关闭弹窗：尝试多种策略"""
-        import asyncio
-
+        """通过 executor 发送 Escape。"""
         if progress_callback:
             await progress_callback("close_popup", "正在关闭弹窗...")
-
-        # 策略1: 按 Escape 关闭
-        try:
-            await self.session.page.keyboard.press("Escape")
-            await asyncio.sleep(0.5)
-        except Exception:
-            pass
-
-        # 策略2: 点击页面空白区域（body）
-        try:
-            await self.session.page.click("body", position={"x": 10, "y": 10})
-            await asyncio.sleep(0.5)
-        except Exception:
-            pass
-
-        # 策略3: 查找并点击关闭按钮
-        try:
-            close_selectors = [
-                '[class*="close"]', '[class*="Close"]',
-                '[aria-label="关闭"]', '[aria-label="close"]',
-                '.modal-close', '.dialog-close', '.popup-close',
-                '[class*="modal"] [class*="close"]',
-                'button[class*="close"]',
-            ]
-            for selector in close_selectors:
-                element = await self.session.page.query_selector(selector)
-                if element:
-                    visible = await element.is_visible()
-                    if visible:
-                        await element.click(force=True)
-                        await asyncio.sleep(0.5)
-                        break
-        except Exception:
-            pass
-
-        from src.tools.browser.semantic import SemanticSnapshotGenerator
-        SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-
-        return {"success": True, "message": "已尝试关闭弹窗"}
+        return await self.page_ops.close_popup()
 
     async def _scroll_page(self, direction: str, progress_callback=None) -> Dict[str, Any]:
         """滚动页面"""
         try:
-            import asyncio
-            if direction == "up":
-                await self.session.page.evaluate("window.scrollBy(0, -window.innerHeight)")
-            else:
-                await self.session.page.evaluate("window.scrollBy(0, window.innerHeight)")
-            await asyncio.sleep(0.5)
-
-            from src.tools.browser.semantic import SemanticSnapshotGenerator
-            SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
-
-            scroll_pos = await self.session.page.evaluate("({ y: window.scrollY, max: document.body.scrollHeight - window.innerHeight })")
-            logger.info(f"[Orchestrator] 滚动 {direction}: 位置 {scroll_pos.get('y', 0)}/{scroll_pos.get('max', 0)}")
-
+            result = await self.page_ops.scroll(direction)
             if progress_callback:
                 await progress_callback("scroll", f"已向{direction}滚动")
-
-            return {
-                "success": True,
-                "message": f"已向{direction}滚动一屏",
-                "scroll_position": scroll_pos,
-            }
+            return result
         except Exception as e:
             return {
                 "success": False,
@@ -763,12 +690,7 @@ class BrowserOrchestrator:
         from urllib.parse import urlsplit
 
         final_url = ""
-        if self.session and self.session.page:
-            try:
-                parsed = urlsplit(self.session.page.url)
-                final_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-            except (TypeError, ValueError):
-                final_url = ""
+        final_url = self._current_url
         task_result = {
             "success": success,
             "status": status,
