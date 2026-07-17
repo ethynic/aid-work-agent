@@ -2,7 +2,7 @@
 
 > 日期：2026-07-14
 >
-> 状态：📋 待开发（0/8 Phase 完成）
+> 状态：🔧 部分完成（Phase 0～1 完成；2/8 Phase 完成）
 >
 > 设计基线：[browser_visualization_design.md](./browser_visualization_design.md)
 >
@@ -28,8 +28,8 @@
 
 | Phase | 交付 | 状态 | 进入条件 | 退出门禁 |
 |---|---|---|---|---|
-| 0 | 基线、配置和泄漏复现测试 | ⬜ | 设计批准 | 测试能稳定复现当前泄漏/配置问题 |
-| 1 | 本地浏览器生命周期 P0 修复 | ⬜ | Phase 0 | 六类终态进程回基线 |
+| 0 | 基线、配置和泄漏复现测试 | ✅ 已完成 | 设计批准 | 测试能稳定复现当前泄漏/配置问题 |
+| 1 | 本地浏览器生命周期 P0 修复 | ✅ 已完成 | Phase 0 | 六类终态进程回基线 |
 | 2 | RunManager + Executor 抽象 + 多租户状态 | ⬜ | Phase 1 | 两 worker/两租户契约测试通过 |
 | 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | ⬜ | Phase 2 | 明确指引、完成监测、原工具及 Agent 幂等续跑、超时关闭通过 |
 | 4 | Agent Desktop 可选 browser runtime | ⬜ | Phase 3，且 Agent Desktop Phase 0～3 稳定 | 桌面内可见执行和断线回收通过；关闭模块后 Agent 主链路正常 |
@@ -39,20 +39,24 @@
 
 ## 3. Phase 0：基线与红灯测试
 
+> 进度（2026-07-17）：✅ 已完成。默认 headless、生命周期契约和 PID + create_time 安全探针已建立；Phase 1 已补 `BrowserAutomationTool` / `BrowserOrchestrator` 生产执行边界覆盖，strict-xfail 已移除。
+
 ### 改动
 
 - 修正 `configs/config.yaml` 的 `tools.browser.headless: true`，保持 `src/config/settings.py` 一致。
 - 新增 `tests/unit/tools/browser/test_session_lifecycle.py`：启动半失败、page/context close 抛错、幂等 close、并发 close。
-- 新增 `tests/integration/browser/test_browser_process_cleanup.py`：记录当前进程树，覆盖 success/error/cancel/timeout/shutdown/ask_user_expire。
+- 新增 `tests/integration/browser/test_browser_process_cleanup.py`：以本测试 Playwright driver 为所有权根记录进程树，覆盖 success/error/cancel/timeout/shutdown/ask_user_expire；Phase 1 另以生产 `execute/finally` 单测覆盖真实入口 wiring。
 - 将旧 `tests/test_browser_tool.py` 的 headed 手工测试迁到 `tests/e2e/browser/`，默认 skip，无 CI GUI 依赖。
 - 建立带 PID + create_time 校验的测试探针，只观测本测试启动的进程，禁止误杀机器上的其他 Chrome。
 
 ### 验证
 
-- 红灯用例在旧实现上应失败，证明测试编码的是资源回收意图。
+- 红灯用例已在旧实现上稳定失败；Phase 1 修复后已删除 strict-xfail 并转绿。
 - `./scripts/dev_test.sh tests/unit/tools/browser -q`。
 
 ## 4. Phase 1：本地生命周期
+
+> 进度（2026-07-17）：✅ 已完成。已落地事务启动、结构化幂等关闭、保守进程所有权守卫、工具/编排器终态 finally、取消与 5 分钟总超时、旧恢复参数退役、15 秒 shutdown、错误与日志脱敏。三智能体流程通过；核心与相邻测试 40 passed，真实 Playwright 六终态进程探针 6 passed。
 
 ### 改动
 

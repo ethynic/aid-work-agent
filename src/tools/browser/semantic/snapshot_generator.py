@@ -8,6 +8,7 @@ import hashlib
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, List, Optional, Tuple
 from loguru import logger
+from src.tools._helpers import sanitize_error
 
 from .element_classifier import ElementClassifier, ElementType
 from .semantic_tagger import SemanticTagger
@@ -401,7 +402,7 @@ class SemanticSnapshotGenerator:
             if use_cache and self._is_cache_valid(url, content_hash):
                 cached = self._get_cached_snapshot(url)
                 if cached:
-                    logger.info(f"使用缓存的语义快照: {url}")
+                    logger.info("使用缓存的语义快照")
                     cached.pop("from_cache", None)
                     return SemanticSnapshot(**cached)
 
@@ -470,10 +471,7 @@ class SemanticSnapshotGenerator:
                 }""")
                 traversed_buttons = sum(1 for e in elements_data if e.get("tag") == "button")
                 logger.info(f"[DOM诊断] 页面 buttons={dom_diag['buttons_total']}, 遍历收集 buttons={traversed_buttons}, 总计={len(elements_data)}")
-                for s in dom_diag.get("samples", []):
-                    ha = f" hidden_ancestor=<{s['hiddenAncestor']['tag']} id={s['hiddenAncestor']['id']} at_depth={s['hiddenAncestor']['depth']}>" if s.get("hiddenAncestor") else ""
-                    sa = f" skipAncestor=<{s['skipAncestor']['tag']} id={s['skipAncestor']['id']} at_depth={s['skipAncestor']['depth']}>" if s.get("skipAncestor") else ""
-                    logger.info(f"[DOM诊断] button id={s['id']} text=\"{s['text']}\" depth={s['depth']} display={s['display']} visibility={s['visibility']} opacity={s['opacity']} size={s['size']} hidden={s['hidden']}{ha}{sa}")
+                logger.info("[DOM诊断] 样本按钮数量={}", len(dom_diag.get("samples", [])))
             except Exception:
                 pass
 
@@ -501,7 +499,7 @@ class SemanticSnapshotGenerator:
                 frame_elements = iframe_elements_by_frame.get(frame_url, [])
                 if frame_elements:
                     await self._inject_data_refs(frame, frame_elements)
-                    logger.info(f"[iframe] 在 frame {frame_url} 中注入 {len(frame_elements)} 个 data-ref")
+                    logger.info("[iframe] 注入 data-ref 数量={}", len(frame_elements))
 
             # 6. 构建区域结构
             regions = self._build_regions(elements_data, mode)
@@ -537,15 +535,15 @@ class SemanticSnapshotGenerator:
             if use_cache:
                 self._store_cache(url, content_hash, snapshot)
 
-            logger.info(f"语义快照生成成功: {url}, 元素数: {len(interactive_elements)}")
+            logger.info("语义快照生成成功: 元素数={}", len(interactive_elements))
             return snapshot
 
         except Exception as e:
-            logger.error(f"语义快照生成失败: {e}")
+            logger.error("语义快照生成失败: type={}", type(e).__name__)
             return SemanticSnapshot(
                 success=False,
                 session_id=self.session_id,
-                error=str(e),
+                error=sanitize_error(e, fallback="语义快照生成失败"),
             )
 
     async def _traverse_dom(
@@ -584,7 +582,7 @@ class SemanticSnapshotGenerator:
                 return []
 
         except Exception as e:
-            logger.error(f"DOM 遍历失败: {e}")
+            logger.error("DOM 遍历失败: type={}", type(e).__name__)
             return []
 
     async def _traverse_iframes(
@@ -634,12 +632,11 @@ class SemanticSnapshotGenerator:
             for idx, frame in enumerate(child_frames):
                 try:
                     iframe_url = frame.url
-                    frame_name = frame.name
-                    logger.info(f"[iframe] 检查第 {idx+1} 个 frame: name={frame_name} url={iframe_url[:80]}")
+                    logger.info("[iframe] 检查 frame: index={}", idx + 1)
 
                     # 跳过 about:blank 和空 URL
                     if not iframe_url or iframe_url == "about:blank":
-                        logger.info(f"[iframe] 跳过空 frame: name={frame_name}")
+                        logger.info("[iframe] 跳过空 frame: index={}", idx + 1)
                         continue
 
                     # 跳过主页面 URL（避免重复遍历）
@@ -647,11 +644,11 @@ class SemanticSnapshotGenerator:
                         continue
 
                     # 在 frame 内执行 DOM 遍历
-                    logger.info(f"[iframe] 开始遍历 frame: {iframe_url}")
+                    logger.info("[iframe] 开始遍历 frame: index={}", idx + 1)
 
                     iframe_elements_data = await self._traverse_dom(frame, max_depth, include_hidden)
                     if not iframe_elements_data:
-                        logger.warning(f"[iframe] frame {iframe_url} 中未找到交互元素")
+                        logger.warning("[iframe] frame 中未找到交互元素: index={}", idx + 1)
                         continue
 
                     # 标记这些元素来自 iframe，并记录 frame URL
@@ -668,13 +665,13 @@ class SemanticSnapshotGenerator:
                     # 注册 frame 到 ref_mapper（后续 get_handle 需要通过 frame 查询）
                     self.ref_mapper._frame_map[iframe_url] = frame
 
-                    logger.info(f"[iframe] 在 {iframe_url} 中发现 {iframe_count} 个交互元素")
+                    logger.info("[iframe] 发现交互元素数量={}", iframe_count)
 
                 except Exception as e:
-                    logger.warning(f"[iframe] 遍历 frame 失败: {e}")
+                    logger.warning("[iframe] 遍历 frame 失败: type={}", type(e).__name__)
 
         except Exception as e:
-            logger.error(f"检测 frame 失败: {e}")
+            logger.error("检测 frame 失败: type={}", type(e).__name__)
 
     def _build_interactive_elements(
         self,
@@ -931,12 +928,10 @@ class SemanticSnapshotGenerator:
             logger.info(f"[data-ref] 注入完成: {injected_count}/{len(locator_map)} 个元素已注入 data-ref")
             if unmatched:
                 logger.warning(f"[data-ref] {len(unmatched)} 个元素未能匹配到 DOM:")
-                for u in unmatched[:10]:
-                    logger.warning(f"  未匹配: ref={u['ref']} tag={u['tag']} text=\"{u['text']}\" id={u['id']} name={u['name']} href={u['href']}")
                 if len(unmatched) > 10:
                     logger.warning(f"  ... 还有 {len(unmatched) - 10} 个")
         except Exception as e:
-            logger.warning(f"注入 data-ref 失败: {e}")
+            logger.warning("注入 data-ref 失败: type={}", type(e).__name__)
 
     def _build_regions(
         self,
@@ -1122,7 +1117,7 @@ class SemanticSnapshotGenerator:
                         self.ref_mapper.register_submenu_item(ref, elem)
 
         except Exception as e:
-            logger.error(f"子菜单检测失败: {e}")
+            logger.error("子菜单检测失败: type={}", type(e).__name__)
 
         return submenu_snapshots
 
@@ -1155,7 +1150,7 @@ class SemanticSnapshotGenerator:
                 logger.info(f"检测到 {len(iframe_snapshots)} 个 iframe")
 
         except Exception as e:
-            logger.error(f"iframe 检测失败: {e}")
+            logger.error("iframe 检测失败: type={}", type(e).__name__)
 
         return iframe_snapshots
 

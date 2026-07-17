@@ -7,6 +7,7 @@ import asyncio
 import inspect
 from typing import Any, Dict, List, Optional
 from loguru import logger
+from src.tools._helpers import sanitize_error
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
@@ -279,10 +280,10 @@ class BrowserClickTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"点击元素失败: {e}")
+            logger.error("点击元素失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"点击元素失败: {str(e)}",
+                "error": sanitize_error(e, fallback="点击元素失败"),
                 "ref": target_ref if 'target_ref' in dir() else None,
             }
 
@@ -454,7 +455,7 @@ class BrowserFillTool(BaseTool):
                 url=session.page.url,
             )
 
-            logger.info(f"成功填写表单: ref={target_ref}, label={target_label}, value={value}")
+            logger.info("成功填写表单: ref={}", target_ref)
 
             return {
                 "success": True,
@@ -465,10 +466,10 @@ class BrowserFillTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"填写表单失败: {e}")
+            logger.error("填写表单失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"填写表单失败: {str(e)}",
+                "error": sanitize_error(e, fallback="填写表单失败"),
                 "field": field,
             }
 
@@ -631,10 +632,10 @@ class BrowserSelectTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"选择选项失败: {e}")
+            logger.error("选择选项失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"选择选项失败: {str(e)}",
+                "error": sanitize_error(e, fallback="选择选项失败"),
                 "field": field,
                 "option": option,
             }

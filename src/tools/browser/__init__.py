@@ -24,6 +24,7 @@ from .session import (
     BrowserSession,
     get_browser_session,
     close_browser_session,
+    close_all_owned_browser_runs,
     has_browser_session,
 )
 
@@ -105,6 +106,7 @@ __all__ = [
     "BrowserSession",
     "get_browser_session",
     "close_browser_session",
+    "close_all_owned_browser_runs",
     "has_browser_session",
     # 旧工具（兼容）
     "BrowserOpenTool",

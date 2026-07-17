@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from loguru import logger
+from src.tools._helpers import sanitize_error
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
@@ -212,10 +213,10 @@ class BrowserGetPathTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"获取路径历史失败: {e}")
+            logger.error("获取路径历史失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"获取路径历史失败: {str(e)}",
+                "error": sanitize_error(e, fallback="获取路径历史失败"),
             }
 
 
@@ -271,10 +272,10 @@ class BrowserBacktrackTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"回溯操作失败: {e}")
+            logger.error("回溯操作失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"回溯操作失败: {str(e)}",
+                "error": sanitize_error(e, fallback="回溯操作失败"),
             }
 
 

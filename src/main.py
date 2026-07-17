@@ -273,6 +273,41 @@ setup_logging(
     log_dir="log/agent",
 )
 
+_browser_shutdown_tasks: set[asyncio.Task] = set()
+
+
+def _finish_browser_shutdown_task(task: asyncio.Task) -> None:
+    """保留后台回收任务到终态，并消费异常避免未检索告警。"""
+    _browser_shutdown_tasks.discard(task)
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception as exc:
+        logger.warning("浏览器后台回收异常: type={}", type(exc).__name__)
+
+
+async def _close_browser_runs_on_shutdown() -> None:
+    """在 15 秒预算内关闭当前 worker 拥有的浏览器，不阻断其他收尾。"""
+    try:
+        from src.tools.browser.session import close_all_owned_browser_runs
+
+        close_task = asyncio.create_task(
+            close_all_owned_browser_runs(reason="shutdown")
+        )
+        _browser_shutdown_tasks.add(close_task)
+        close_task.add_done_callback(_finish_browser_shutdown_task)
+        report = await asyncio.wait_for(asyncio.shield(close_task), timeout=15.0)
+        logger.info(
+            "浏览器 shutdown 回收完成: requested={}, closed={}",
+            report.get("requested", 0),
+            report.get("closed", 0),
+        )
+    except asyncio.TimeoutError:
+        logger.warning("浏览器 shutdown 回收超过 15 秒预算")
+    except Exception as exc:
+        logger.warning("浏览器 shutdown 回收异常: type={}", type(exc).__name__)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
@@ -590,41 +625,45 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[wecom_personal_rpa] archive poller 启动失败（不影响应用启动）: {e}", exc_info=True)
 
-    yield
-
-    # On shutdown
-    logger.info("Application shutting down")
-
-    # 关闭 archive poller（优雅等待在途 fetcher 任务完成）
     try:
-        from src.channels.wecom_personal_rpa.archive.poller import poller as _archive_poller
-        await _archive_poller.stop()
-    except Exception as e:
-        logger.warning(f"[wecom_personal_rpa] archive poller 关闭异常: {e}")
+        yield
+    finally:
+        # On shutdown
+        logger.info("Application shutting down")
 
-    # Close PostgreSQL connection pool
-    close_postgres_pool()
+        # 浏览器优先回收；异常或超时不阻断数据库、调度器和渠道资源关闭。
+        await _close_browser_runs_on_shutdown()
 
-    # Close logs database pool
-    try:
-        from src.db.database import close_logs_pool
-        close_logs_pool()
-    except Exception:
-        pass
+        # 关闭 archive poller（优雅等待在途 fetcher 任务完成）
+        try:
+            from src.channels.wecom_personal_rpa.archive.poller import poller as _archive_poller
+            await _archive_poller.stop()
+        except Exception as e:
+            logger.warning(f"[wecom_personal_rpa] archive poller 关闭异常: {e}")
 
-    try:
-        from src.scheduler.manager import scheduled_task_manager
-        scheduled_task_manager.shutdown()
-        logger.info("Scheduled task scheduler stopped")
-    except Exception:
-        pass
+        # Close PostgreSQL connection pool
+        close_postgres_pool()
 
-    # 关闭所有缓存的渠道 adapter（释放 httpx 连接池）
-    try:
-        from src.saas.services.channel_factory import ChannelFactory
-        await ChannelFactory.close_all()
-    except Exception as e:
-        logger.warning(f"关闭渠道 adapter 失败: {e}")
+        # Close logs database pool
+        try:
+            from src.db.database import close_logs_pool
+            close_logs_pool()
+        except Exception:
+            pass
+
+        try:
+            from src.scheduler.manager import scheduled_task_manager
+            scheduled_task_manager.shutdown()
+            logger.info("Scheduled task scheduler stopped")
+        except Exception:
+            pass
+
+        # 关闭所有缓存的渠道 adapter（释放 httpx 连接池）
+        try:
+            from src.saas.services.channel_factory import ChannelFactory
+            await ChannelFactory.close_all()
+        except Exception as e:
+            logger.warning(f"关闭渠道 adapter 失败: {e}")
 
 
 

@@ -12,12 +12,14 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+from src.tools._helpers import sanitize_error
 from src.config.settings import settings
 from src.tools.browser.session import (
     BrowserSession,
     _browser_sessions,
     get_browser_session,
     close_browser_session,
+    close_all_owned_browser_runs,
 )
 
 
@@ -158,7 +160,7 @@ class BrowserOpenTool(BaseTool):
             title = await session.page.title()
             current_url = session.page.url
 
-            logger.info(f"成功打开网页: {url}, 标题: {title}")
+            logger.info("旧版浏览器打开页面成功")
 
             return {
                 "success": True,
@@ -169,10 +171,10 @@ class BrowserOpenTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"打开网页失败: {e}")
+            logger.error("打开网页失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"打开网页失败: {str(e)}",
+                "error": sanitize_error(e, fallback="打开网页失败"),
             }
 
 
@@ -279,10 +281,10 @@ class BrowserClickTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"点击元素失败: {e}")
+            logger.error("点击元素失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"点击元素失败: {str(e)}",
+                "error": sanitize_error(e, fallback="点击元素失败"),
             }
 
 
@@ -375,7 +377,7 @@ class BrowserFillTool(BaseTool):
             # 等待元素可见并填写
             await session.page.fill(selector, str(value), timeout=timeout)
 
-            logger.info(f"成功填写表单: {selector} = {value}")
+            logger.info("旧版浏览器填写表单成功")
 
             return {
                 "success": True,
@@ -387,10 +389,10 @@ class BrowserFillTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"填写表单失败: {e}")
+            logger.error("填写表单失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"填写表单失败: {str(e)}",
+                "error": sanitize_error(e, fallback="填写表单失败"),
             }
 
 
@@ -488,10 +490,10 @@ class BrowserGetContentTool(BaseTool):
             return result
 
         except Exception as e:
-            logger.error(f"获取内容失败: {e}")
+            logger.error("获取内容失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"获取内容失败: {str(e)}",
+                "error": sanitize_error(e, fallback="获取网页内容失败"),
             }
 
     async def _extract_main_content(self, page) -> str:
@@ -716,10 +718,10 @@ class BrowserNavigateTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"导航操作失败: {e}")
+            logger.error("导航操作失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"导航操作失败: {str(e)}",
+                "error": sanitize_error(e, fallback="导航操作失败"),
             }
 
 
@@ -727,7 +729,7 @@ class BrowserCloseTool(BaseTool):
     """关闭浏览器工具"""
 
     name = "browser_close"
-    description = "关闭浏览器或特定会话"
+    description = "[已弃用] 关闭旧版浏览器会话；主 Agent 不再注册此工具"
     display_name = "关闭浏览器"
     category = "browser"
     InputModel = BrowserCloseInput
@@ -746,31 +748,31 @@ class BrowserCloseTool(BaseTool):
         try:
             if session_id:
                 # 关闭指定会话
-                close_browser_session(session_id)
+                report = await close_browser_session(session_id, reason="legacy_close_tool")
                 logger.info(f"已关闭浏览器会话: {session_id}")
                 return {
                     "success": True,
                     "message": f"已关闭浏览器会话: {session_id}",
                     "session_id": session_id,
+                    "close_report": report,
                 }
             else:
                 # 关闭所有会话
-                closed_count = 0
-                for sid in list(_browser_sessions.keys()):
-                    close_browser_session(sid)
-                    closed_count += 1
+                report = await close_all_owned_browser_runs(reason="legacy_close_tool")
+                closed_count = report["closed"]
                 logger.info(f"已关闭所有浏览器会话，共 {closed_count} 个")
                 return {
                     "success": True,
                     "message": f"已关闭所有浏览器会话，共 {closed_count} 个",
                     "closed_count": closed_count,
+                    "close_report": report,
                 }
 
         except Exception as e:
-            logger.error(f"关闭浏览器失败: {e}")
+            logger.error("关闭浏览器失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"关闭浏览器失败: {str(e)}",
+                "error": sanitize_error(e, fallback="关闭浏览器失败"),
             }
 
 
@@ -832,16 +834,16 @@ class BrowserScreenshotTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"截图失败: {e}")
+            logger.error("截图失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"截图失败: {str(e)}",
+                "error": sanitize_error(e, fallback="网页截图失败"),
             }
 
 
 def create_browser_tools() -> List[BaseTool]:
     """
-    创建浏览器工具列表
+    创建已弃用的浏览器工具列表（仅兼容旧代码，主 Agent 不注册）
 
     注意：CSS 选择器版本的 browser_click 和 browser_fill 已废弃，
     请使用 semantic 版本（通过自然语言描述操作元素）。

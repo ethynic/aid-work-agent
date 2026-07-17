@@ -70,8 +70,9 @@ tools:
     include_answer: true
     search_depth: basic
   browser:
-    headless: false  # 测试时使用有头模式，实际部署时可改为true
+    headless: true  # 服务端默认使用无头模式，与 BrowserToolConfig 默认值保持一致
     timeout: 30000  # 默认超时时间（毫秒）
+    task_timeout: 300  # 单次工具总超时（秒）
     viewport_width: 1920
     viewport_height: 1080
   maps:
@@ -244,4 +245,3 @@ wecom:
       - "正在为您查询..."
       - "让我核对一下..."
       - "收到，我来看看..."
-

@@ -5,6 +5,7 @@
 
 from typing import Any, Dict, List, Optional
 from loguru import logger
+from src.tools._helpers import sanitize_error
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
@@ -161,10 +162,10 @@ class BrowserFindTool(BaseTool):
             return result
 
         except Exception as e:
-            logger.error(f"查找元素失败: {e}")
+            logger.error("查找元素失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"查找元素失败: {str(e)}",
+                "error": sanitize_error(e, fallback="查找元素失败"),
             }
 
     def _matches_filter(self, element, filter_type: str) -> bool:
@@ -300,8 +301,8 @@ class BrowserFindAllTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"查找元素失败: {e}")
+            logger.error("查找元素失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"查找元素失败: {str(e)}",
+                "error": sanitize_error(e, fallback="查找元素失败"),
             }

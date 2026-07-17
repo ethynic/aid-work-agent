@@ -3,6 +3,7 @@
 LLM 驱动的编排循环：解析任务 → 循环执行（快照→决策→操作）→ 返回结果。
 """
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -12,10 +13,10 @@ from loguru import logger
 
 from src.llm.gateway import llm_gateway
 from src.config.settings import settings
+from src.tools._helpers import sanitize_error
 from src.tools.browser.session import (
-    BrowserSession, BrowserTaskContext,
+    BrowserSession,
     get_browser_session, close_browser_session, has_browser_session,
-    save_task_context, get_task_context, clear_task_context,
 )
 from src.tools.browser.page_ops import PageOps
 
@@ -108,6 +109,15 @@ class BrowserOrchestrator:
         self.max_retries = 3
         self.screenshot_path: Optional[str] = None
         self._collected_content: List[str] = []
+        self.cancel_event = asyncio.Event()
+
+    def cancel(self) -> None:
+        """向当前执行传播取消信号。"""
+        self.cancel_event.set()
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise asyncio.CancelledError
 
     async def _ensure_session(self):
         """确保浏览器会话已启动"""
@@ -132,7 +142,7 @@ class BrowserOrchestrator:
             self.screenshot_path = path
             return path
         except Exception as e:
-            logger.warning(f"截图失败: {e}")
+            logger.warning("截图失败: type={}", type(e).__name__)
             return None
 
     async def _get_page_text(self) -> str:
@@ -161,7 +171,7 @@ class BrowserOrchestrator:
             }""")
             return (text or "")[:3000]
         except Exception as e:
-            logger.debug(f"获取页面文本失败: {e}")
+            logger.debug("获取页面文本失败: type={}", type(e).__name__)
             return ""
 
     async def _get_decision(self, task: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -217,7 +227,11 @@ class BrowserOrchestrator:
             {"role": "user", "content": prompt},
         ]
 
-        logger.debug(f"[Orchestrator] 请求 LLM 决策, 页面: {snapshot.get('url', '?')}, 元素数: {len(interactive_elements)}, prompt 长度: {len(prompt)}")
+        logger.debug(
+            "[Orchestrator] 请求 LLM 决策: 元素数={}, prompt长度={}",
+            len(interactive_elements),
+            len(prompt),
+        )
 
         response = await llm_gateway.chat(
             messages=messages,
@@ -226,66 +240,16 @@ class BrowserOrchestrator:
         )
 
         content = response.get("content", "")
-        logger.debug(f"[Orchestrator] LLM 原始返回 ({len(content)} chars): {content[:800]}")
+        logger.debug("[Orchestrator] LLM 返回长度: {}", len(content))
 
         decision = self._parse_decision(content)
-        logger.info(f"[Orchestrator] 步骤 {len(self.steps)+1} 决策: action={decision.get('action')}, target={decision.get('target', '')[:50]}, value={decision.get('value', '')[:50]}, reason={decision.get('reason', '')[:100]}")
-
-        return decision
-
-    async def _get_decision_with_user_response(
-        self,
-        task: str,
-        snapshot: Dict[str, Any],
-        user_response: str,
-        original_question: str,
-    ) -> Dict[str, Any]:
-        """用户回复后，让 LLM 决定如何将用户输入应用到页面"""
-        interactive_elements = snapshot.get("interactive_elements", [])
-        elements_text = ""
-        for elem in interactive_elements[:50]:
-            ref = elem.get("ref", "?")
-            label = elem.get("label", "")
-            tag = elem.get("tag", "")
-            role = elem.get("role", "")
-            elem_type = elem.get("type") or ""
-            visible = elem.get("visible", True)
-            if not visible:
-                continue
-            parts = [f"ref={ref}", f"label=\"{label}\"", f"tag={tag}"]
-            if role:
-                parts.append(f"role={role}")
-            if elem_type:
-                parts.append(f"type={elem_type}")
-            elements_text += "  - " + " ".join(parts) + "\n"
-
-        prompt = f"""用户之前被问到：{original_question}
-
-用户回复：{user_response}
-
-当前页面元素：
-URL: {snapshot.get('url', '?')}
-{elements_text}
-
-请决定如何将用户的回复应用到页面上。输出 JSON：
-{{"action": "fill" | "click", "target": "元素 ref", "value": "填写值", "reason": "为什么"}}
-
-例如：如果用户提供了手机号，找到手机号输入框并填写。如果用户提供了验证码，找到验证码输入框并填写。"""
-
-        messages = [
-            {"role": "system", "content": "你是浏览器自动化助手，只输出 JSON。"},
-            {"role": "user", "content": prompt},
-        ]
-
-        response = await llm_gateway.chat(
-            messages=messages,
-            temperature=0.1,
-            max_tokens=300,
+        logger.info(
+            "[Orchestrator] 步骤决策: step={}, action={}",
+            len(self.steps) + 1,
+            decision.get("action"),
         )
 
-        content = response.get("content", "")
-        logger.info(f"[Orchestrator] 用户回复处理决策: {content[:300]}")
-        return self._parse_decision(content)
+        return decision
 
     def _parse_decision(self, content: str) -> Dict[str, Any]:
         """解析 LLM 返回的决策 JSON"""
@@ -302,7 +266,7 @@ URL: {snapshot.get('url', '?')}
                 return {"action": "done", "reason": f"LLM 返回了无效的 action: {action}"}
             return decision
         except json.JSONDecodeError:
-            logger.warning(f"LLM 决策 JSON 解析失败: {content[:200]}")
+            logger.warning("LLM 决策 JSON 解析失败")
             return {"action": "done", "reason": "决策解析失败，终止任务"}
 
     async def _try_direct_search(self, task: str) -> Optional[str]:
@@ -348,7 +312,7 @@ URL: {snapshot.get('url', '?')}
 
         for domain, search_url in search_urls.items():
             if domain in current_url:
-                logger.info(f"[Orchestrator] 构造直接搜索 URL: {search_url}")
+                logger.info("[Orchestrator] 构造直接搜索 URL")
                 return search_url
 
         return None
@@ -365,60 +329,78 @@ URL: {snapshot.get('url', '?')}
         progress_callback: Optional[Callable] = None,
         user_response: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """执行浏览器自动化任务
+        """执行边界：覆盖启动、超时、取消、人工和所有终态的关闭。"""
+        if user_response is not None:
+            return {
+                "success": False,
+                "error_code": "DEPRECATED_PARAMETER",
+                "error": "旧版浏览器会话恢复参数已停用，请重新发起完整的浏览器任务",
+            }
+
+        close_reason = "error"
+        try:
+            async with asyncio.timeout(settings.tools.browser.task_timeout):
+                self._raise_if_cancelled()
+                await self._ensure_session()
+                result = await self._execute_task(
+                    task=task,
+                    url=url,
+                    progress_callback=progress_callback,
+                )
+                if result.get("status") == "ask_user":
+                    close_reason = "ask_user"
+                elif result.get("success"):
+                    close_reason = "success"
+                elif result.get("error_code") == "MAX_STEPS_EXCEEDED":
+                    close_reason = "max_steps"
+                else:
+                    close_reason = "error"
+                return result
+        except asyncio.TimeoutError:
+            close_reason = "timeout"
+            return self._build_result(
+                success=False,
+                status="timeout",
+                error_code="TASK_TIMEOUT",
+                error="浏览器任务执行超时",
+            )
+        except asyncio.CancelledError:
+            close_reason = "cancelled"
+            self.cancel_event.set()
+            raise
+        except Exception as exc:
+            close_reason = "error"
+            logger.error("浏览器编排执行失败: type={}", type(exc).__name__)
+            return self._build_result(
+                success=False,
+                error_code="INTERNAL_ERROR",
+                error=sanitize_error(exc, fallback="浏览器自动化执行失败"),
+            )
+        finally:
+            try:
+                await close_browser_session(self.session_id, reason=close_reason)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("浏览器边界关闭异常: type={}", type(exc).__name__)
+
+    async def _execute_task(
+        self,
+        task: str,
+        url: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+    ) -> Dict[str, Any]:
+        """已启动会话内的编排循环。
 
         Args:
             task: 任务描述
             url: 起始 URL（可选）
             progress_callback: 进度回调函数
-            user_response: 用户对 ask_user 的回复（用于多轮交互）
-
         Returns:
             执行结果
         """
-        start_time = time.time()
-        await self._ensure_session()
-
         try:
-            # 恢复模式：如果有保存的上下文，从断点继续
-            saved_ctx = get_task_context(self.session_id)
-            if saved_ctx and user_response:
-                logger.info(f"[Orchestrator] 恢复会话 {self.session_id}, 用户回复: {user_response[:50]}")
-                self.steps = saved_ctx.steps
-                self._collected_content = saved_ctx.collected_content
-                last_url = saved_ctx.last_url or self.session.page.url
-                same_url_count = saved_ctx.same_url_count
-                task = saved_ctx.task  # 恢复原始任务描述
-
-                # 执行用户回复的操作（将用户输入填入页面）
-                if progress_callback:
-                    await progress_callback("fill", f"用户输入: {user_response[:30]}")
-
-                # 将用户回复作为一条 fill 指令执行
-                snapshot = await self.page_ops.take_snapshot()
-                if snapshot.get("success"):
-                    # 让 LLM 决定如何处理用户回复
-                    decision = await self._get_decision_with_user_response(task, snapshot, user_response, saved_ctx.ask_user_question)
-                    if decision.get("action") != "done":
-                        op_result = await self._execute_with_retry(
-                            decision.get("action", "fill"),
-                            decision.get("target", ""),
-                            decision.get("value", ""),
-                            progress_callback,
-                        )
-                        self.steps.append({
-                            "action": decision.get("action"),
-                            "target": decision.get("target", ""),
-                            "value": decision.get("value", ""),
-                            "result": op_result.get("message", op_result.get("error", "")),
-                        })
-
-                # 清除保存的上下文
-                clear_task_context(self.session_id)
-
-                # 继续主循环（不再导航）
-                start_step = len(self.steps)
-            elif url:
+            if url:
                 # Phase 1: 导航到起始页面
                 if progress_callback:
                     await progress_callback("navigate", f"正在打开页面: {url[:50]}...")
@@ -436,23 +418,27 @@ URL: {snapshot.get('url', '?')}
                 same_url_count = 0
 
             # Phase 2: LLM 驱动的操作循环
-            logger.info(f"[Orchestrator] 开始 LLM 编排循环, 任务: {task[:100]}, 起始URL: {url}")
+            logger.info("[Orchestrator] 开始 LLM 编排循环")
 
             last_url = None
             same_url_count = 0
 
             for step_num in range(start_step, self.max_steps):
+                self._raise_if_cancelled()
                 logger.info(f"[Orchestrator] === 步骤 {step_num + 1}/{self.max_steps} ===")
 
                 # 获取语义快照
                 snapshot = await self.page_ops.take_snapshot()
                 if not snapshot.get("success"):
-                    logger.error(f"[Orchestrator] 快照生成失败: {snapshot.get('error')}")
+                    logger.error("[Orchestrator] 快照生成失败")
                     await self._take_screenshot()
                     return self._build_result(success=False, error=snapshot.get("error", "快照生成失败"))
 
                 current_url = snapshot.get('url', '?')
-                logger.info(f"[Orchestrator] 快照成功: url={current_url}, 元素数={len(snapshot.get('interactive_elements', []))}")
+                logger.info(
+                    "[Orchestrator] 快照成功: 元素数={}",
+                    len(snapshot.get("interactive_elements", [])),
+                )
 
                 # 检测循环：如果 URL 连续多步未变化，提示 LLM 换策略
                 if current_url == last_url:
@@ -472,7 +458,10 @@ URL: {snapshot.get('url', '?')}
                 if same_url_count >= 3 and len(self.steps) >= 3:
                     recent_actions = [(s.get("action"), s.get("target")) for s in self.steps[-3:]]
                     if len(set(recent_actions)) == 1:
-                        logger.warning(f"[Orchestrator] 检测到循环操作: 连续 {same_url_count} 步 URL 未变化，重复操作 {recent_actions[0]}")
+                        logger.warning(
+                            "[Orchestrator] 检测到循环操作: unchanged_steps={}",
+                            same_url_count,
+                        )
                         # 尝试直接通过 URL 构造搜索链接
                         search_url = await self._try_direct_search(task)
                         if search_url:
@@ -493,7 +482,7 @@ URL: {snapshot.get('url', '?')}
                             final_reason = content_summary
                         else:
                             final_reason = reason
-                    logger.info(f"[Orchestrator] 任务完成 (done): {final_reason[:200]}")
+                    logger.info("[Orchestrator] 任务完成")
                     if progress_callback:
                         await progress_callback("done", f"任务完成: {final_reason[:100]}")
                     await self._take_screenshot()
@@ -501,32 +490,25 @@ URL: {snapshot.get('url', '?')}
 
                 # 处理 ask_user
                 if action == "ask_user":
-                    logger.info(f"[Orchestrator] 需要用户确认: {reason}")
-                    # 保存上下文以便恢复
-                    ctx = BrowserTaskContext()
-                    ctx.task = task
-                    ctx.steps = self.steps
-                    ctx.ask_user_question = reason
-                    ctx.collected_content = self._collected_content
-                    ctx.last_url = current_url
-                    ctx.same_url_count = same_url_count
-                    save_task_context(self.session_id, ctx)
+                    logger.info("[Orchestrator] 需要人工参与，过渡期安全结束 run")
 
                     if progress_callback:
-                        await progress_callback("ask_user", f"需要确认: {reason}")
+                        await progress_callback("ask_user", "任务需要人工参与，当前运行将安全关闭")
                     await self._take_screenshot()
                     return self._build_result(
-                        success=True,
+                        success=False,
                         status="ask_user",
+                        error_code="HUMAN_REQUIRED",
                         question=reason,
+                        instruction="当前版本暂不支持跨请求人工接管，请重新发起可完整执行的任务",
                         screenshot=self.screenshot_path,
                     )
 
                 # 执行操作（带重试）
-                logger.info(f"[Orchestrator] 执行操作: {action}, target={target[:50]}, value={value[:50]}")
+                logger.info("[Orchestrator] 执行操作: action={}", action)
                 op_result = await self._execute_with_retry(action, target, value, progress_callback)
 
-                logger.info(f"[Orchestrator] 操作结果: success={op_result.get('success')}, message={op_result.get('message', op_result.get('error', ''))[:100]}")
+                logger.info("[Orchestrator] 操作结果: success={}", op_result.get("success"))
 
                 if not op_result.get("success"):
                     error_msg = op_result.get("error", "")
@@ -536,16 +518,18 @@ URL: {snapshot.get('url', '?')}
                         await self._take_screenshot()
                         return self._build_result(success=False, error=error_msg)
 
-                    logger.warning(f"步骤失败但继续尝试: {error_msg}")
+                    logger.warning("浏览器步骤失败但可继续尝试")
 
                 # 记录步骤
                 self.steps.append({
                     "action": action,
                     "target": target,
-                    "value": value if action != "fill" else "***" if any(
-                        kw in target.lower() for kw in ["密码", "password", "passwd", "pwd"]
-                    ) else value,
-                    "result": op_result.get("message", op_result.get("error", "")),
+                    "value": "***" if action == "fill" else value,
+                    "result": (
+                        op_result.get("message", "")
+                        if op_result.get("success")
+                        else "浏览器步骤执行失败"
+                    ),
                 })
 
             # 超过最大步数
@@ -554,13 +538,20 @@ URL: {snapshot.get('url', '?')}
             await self._take_screenshot()
             return self._build_result(
                 success=False,
+                error_code="MAX_STEPS_EXCEEDED",
                 error=f"已达到最大操作步数 ({self.max_steps})，任务可能未完成",
             )
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.error(f"浏览器自动化执行异常: {e}", exc_info=True)
+            logger.error("浏览器自动化执行异常: type={}", type(e).__name__)
             await self._take_screenshot()
-            return self._build_result(success=False, error=str(e))
+            return self._build_result(
+                success=False,
+                error_code="INTERNAL_ERROR",
+                error=sanitize_error(e, fallback="浏览器自动化执行失败"),
+            )
 
     async def _execute_with_retry(
         self,
@@ -584,19 +575,23 @@ URL: {snapshot.get('url', '?')}
                     return result
 
                 if attempt < self.max_retries - 1:
-                    logger.info(f"操作失败，准备重试 ({attempt + 1}/{self.max_retries}): {last_error[:100]}")
+                    logger.info("浏览器操作失败，准备重试: attempt={}", attempt + 1)
                     await self.page_ops.take_snapshot()
 
             except Exception as e:
-                last_error = str(e)
-                if self._is_unrecoverable_error(last_error):
-                    return {"success": False, "error": last_error}
+                raw_error = str(e)
+                if self._is_unrecoverable_error(raw_error):
+                    return {"success": False, "error": "浏览器发生不可恢复错误"}
+                last_error = sanitize_error(e, fallback="浏览器操作失败")
 
                 if attempt < self.max_retries - 1:
-                    logger.info(f"操作异常，准备重试 ({attempt + 1}/{self.max_retries}): {last_error[:100]}")
+                    logger.info("浏览器操作异常，准备重试: attempt={}", attempt + 1)
                     await self.page_ops.take_snapshot()
 
-        return {"success": False, "error": f"重试 {self.max_retries} 次后仍失败: {last_error}"}
+        return {
+            "success": False,
+            "error": f"浏览器操作重试 {self.max_retries} 次后仍失败",
+        }
 
     async def _execute_single_action(
         self,
@@ -636,7 +631,7 @@ URL: {snapshot.get('url', '?')}
                     from src.tools.browser.page_ops import wait_for_page_stable
                     await wait_for_page_stable(self.session.page)
                 except Exception as e:
-                    logger.debug(f"fill 后回车失败（可忽略）: {e}")
+                    logger.debug("fill 后回车失败（可忽略）: type={}", type(e).__name__)
             return result
 
         elif action == "select":
@@ -748,7 +743,10 @@ URL: {snapshot.get('url', '?')}
                 "scroll_position": scroll_pos,
             }
         except Exception as e:
-            return {"success": False, "error": f"滚动失败: {str(e)}"}
+            return {
+                "success": False,
+                "error": sanitize_error(e, fallback="页面滚动失败"),
+            }
 
     def _build_result(
         self,
@@ -758,26 +756,52 @@ URL: {snapshot.get('url', '?')}
         status: str = "done",
         question: str = "",
         screenshot: Optional[str] = None,
+        error_code: str = "",
+        instruction: str = "",
     ) -> Dict[str, Any]:
         """构建返回结果"""
+        from urllib.parse import urlsplit
+
+        final_url = ""
+        if self.session and self.session.page:
+            try:
+                parsed = urlsplit(self.session.page.url)
+                final_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            except (TypeError, ValueError):
+                final_url = ""
         task_result = {
             "success": success,
-            "task": self._task_description if hasattr(self, '_task_description') else "",
             "status": status,
             "steps_taken": len(self.steps),
             "steps": self.steps,
-            "final_url": self.session.page.url if self.session and self.session.page else "",
+            "final_url": final_url,
         }
 
         if result:
             task_result["result"] = result
         if error:
-            task_result["error"] = error
+            if error_code in {
+                "TASK_TIMEOUT",
+                "INTERNAL_ERROR",
+                "HUMAN_REQUIRED",
+                "MAX_STEPS_EXCEEDED",
+            }:
+                task_result["error"] = error
+            else:
+                task_result["error"] = sanitize_error(
+                    error, fallback="浏览器操作失败，请稍后重试"
+                )
         if question:
             task_result["question"] = question
+        if error_code:
+            task_result["error_code"] = error_code
+        if instruction:
+            task_result["instruction"] = instruction
         if screenshot or self.screenshot_path:
             task_result["screenshot"] = screenshot or self.screenshot_path
 
-        task_result["message"] = result or error or "任务执行完毕"
+        task_result["message"] = (
+            result or task_result.get("error") or "任务执行完毕"
+        )
 
         return task_result

@@ -5,6 +5,7 @@
 
 from typing import Any, Dict, Optional, List
 from loguru import logger
+from src.tools._helpers import sanitize_error
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
@@ -101,12 +102,9 @@ class BrowserSnapshotTool(BaseTool):
 
             # === 调试打印：输出所有找到的元素 ===
             logger.info(f"\n{'='*60}")
-            logger.info(f"[browser_snapshot] 调试信息 - {snapshot.url}")
-            logger.info(f"  标题: {snapshot.title}")
+            logger.info("[browser_snapshot] 调试信息")
             logger.info(f"  模式: {mode}")
             logger.info(f"  交互元素总数: {len(snapshot.interactive_elements)}")
-            for elem in snapshot.interactive_elements:
-                logger.info(f"    ref={elem.get('ref', '?'):>8}  tag={elem.get('tag', '?'):<10} label=\"{elem.get('label', '')}\"  visible={elem.get('visible', True)}")
             if result.get("submenu_snapshots"):
                 logger.info(f"  子菜单快照: {len(result['submenu_snapshots'])} 个")
                 for sub in result["submenu_snapshots"]:
@@ -132,15 +130,15 @@ class BrowserSnapshotTool(BaseTool):
                 url=snapshot.url,
             )
 
-            logger.info(f"语义快照生成成功: {snapshot.url}, 元素数: {len(snapshot.interactive_elements)}")
+            logger.info("语义快照生成成功: 元素数={}", len(snapshot.interactive_elements))
 
             return result
 
         except Exception as e:
-            logger.error(f"获取语义快照失败: {e}")
+            logger.error("获取语义快照失败: type={}", type(e).__name__)
             return {
                 "success": False,
-                "error": f"获取语义快照失败: {str(e)}",
+                "error": sanitize_error(e, fallback="获取语义快照失败"),
             }
 
     def _store_ref_mapper(self, session_id: str, ref_mapper) -> None:

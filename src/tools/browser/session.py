@@ -1,157 +1,226 @@
-"""浏览器会话管理
+"""浏览器会话生命周期管理。
 
-管理 BrowserSession 实例的生命周期，同时保存浏览器任务的上下文信息，
-支持多轮交互（如登录验证码流程）。
+每次 ``browser_automation`` 调用拥有独立会话。启动采用事务语义，关闭采用
+幂等、并发合并和逐层 best-effort 回收；任何路径都不按进程名清理浏览器。
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
 from src.config.settings import settings
+from src.tools.browser.process_guard import BrowserProcessGuard
 
 
 class BrowserSession:
-    """浏览器会话管理类，维护浏览器实例和页面"""
+    """维护单个 browser run 的 Playwright 资源。"""
 
     def __init__(self, headless: Optional[bool] = None):
-        if headless is None:
-            headless = settings.tools.browser.headless
-        self.headless = headless
+        self.headless = settings.tools.browser.headless if headless is None else headless
         self.browser = None
         self.playwright = None
         self.page = None
         self.context = None
+        self.process_guard = BrowserProcessGuard()
+        self._start_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
+        self._close_task: Optional[asyncio.Task] = None
 
     async def __aenter__(self):
         await self.start()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
+        await self.close(reason="context_exit")
 
-    async def start(self):
-        """启动浏览器"""
+    async def start(self) -> None:
+        """事务化启动；任一半失败都会逆序清理已创建资源。"""
         try:
-            from playwright.async_api import async_playwright
+            async with self._start_lock:
+                if self.is_running():
+                    return
+                if self._close_task is not None and not self._close_task.done():
+                    await asyncio.shield(self._close_task)
+                self._close_task = None
 
-            self.playwright = await async_playwright().start()
+                from playwright.async_api import async_playwright
 
-            self.browser = await self.playwright.chromium.launch(
-                headless=self.headless,
-                args=['--no-sandbox', '--disable-dev-shm-usage']
-            )
-
-            self.context = await self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            )
-
-            self.page = await self.context.new_page()
-
-            logger.info("浏览器启动成功")
-
-        except ImportError:
-            logger.error("未安装Playwright，请运行: pip install playwright && python -m playwright install")
+                self.playwright = await async_playwright().start()
+                self.process_guard.track_inline_playwright(self.playwright)
+                self.browser = await self.playwright.chromium.launch(
+                    headless=self.headless,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                self.context = await self.browser.new_context(
+                    viewport={
+                        "width": settings.tools.browser.viewport_width,
+                        "height": settings.tools.browser.viewport_height,
+                    },
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36"
+                    ),
+                )
+                self.page = await self.context.new_page()
+                self.page.set_default_timeout(settings.tools.browser.timeout)
+                self.page.set_default_navigation_timeout(settings.tools.browser.timeout)
+                logger.info("浏览器会话启动成功")
+        except BaseException:
+            # 先释放启动锁，再让 close 与并发关闭合并，避免锁重入死锁。
+            await self.close(reason="start_failed")
             raise
-        except Exception as e:
-            logger.error(f"浏览器启动失败: {e}")
+
+    async def close(self, reason: str = "completed") -> Dict[str, Any]:
+        """幂等关闭，并发调用合并到同一个清理任务。"""
+        async with self._close_lock:
+            if self._close_task is None:
+                # close 必须排在正在进行的 start 之后，防止启动中途提前关闭后
+                # start 又写入新的 page/context/browser 引用。
+                async with self._start_lock:
+                    if self._close_task is None:
+                        self._close_task = asyncio.create_task(self._close_impl(reason))
+            close_task = self._close_task
+        try:
+            # 调用方取消不能中断共享的底层清理任务。
+            return await asyncio.shield(close_task)
+        except asyncio.CancelledError:
+            # 取消仍需向上传播，但资源回收屏障必须先完成。
+            await close_task
             raise
 
-    async def close(self):
-        """关闭浏览器"""
-        if self.page:
-            await self.page.close()
-        if self.context:
-            await self.context.close()
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
-        logger.info("浏览器已关闭")
+    async def _close_impl(self, reason: str) -> Dict[str, Any]:
+        closed: list[str] = []
+        errors: list[Dict[str, str]] = []
+        had_resources = any(
+            resource is not None
+            for resource in (self.page, self.context, self.browser, self.playwright)
+        )
+
+        for stage, attr_name, method_name in (
+            ("page", "page", "close"),
+            ("context", "context", "close"),
+            ("browser", "browser", "close"),
+            ("playwright", "playwright", "stop"),
+        ):
+            resource = getattr(self, attr_name)
+            # 先置空，保证重入和异常后状态都不再暴露失效引用。
+            setattr(self, attr_name, None)
+            if resource is None:
+                continue
+            try:
+                await getattr(resource, method_name)()
+                closed.append(stage)
+            except asyncio.CancelledError:
+                # 共享清理任务本身不应被取消；仍记录并继续后续层。
+                errors.append({"stage": stage, "error_type": "CancelledError"})
+            except Exception as exc:
+                errors.append({"stage": stage, "error_type": type(exc).__name__})
+                logger.warning("浏览器资源关闭失败: stage={}, type={}", stage, type(exc).__name__)
+
+        guard_report = await self.process_guard.cleanup_owned()
+        report = {
+            "reason": reason,
+            "already_closed": not had_resources,
+            "closed": closed,
+            "errors": errors,
+            "process_guard": guard_report,
+        }
+        logger.info(
+            "浏览器会话关闭完成: reason={}, closed_count={}, error_count={}",
+            reason,
+            len(closed),
+            len(errors),
+        )
+        return report
 
     def is_running(self) -> bool:
         return self.browser is not None and self.page is not None
 
 
-class BrowserTaskContext:
-    """浏览器任务上下文，用于在多轮交互之间保存状态"""
-
-    def __init__(self):
-        self.task: str = ""
-        self.steps: List[Dict[str, Any]] = []
-        self.ask_user_question: str = ""
-        self.collected_content: List[str] = []
-        self.last_url: Optional[str] = None
-        self.same_url_count: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "task": self.task,
-            "steps": self.steps,
-            "ask_user_question": self.ask_user_question,
-            "collected_content": self.collected_content,
-            "last_url": self.last_url,
-            "same_url_count": self.same_url_count,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BrowserTaskContext":
-        ctx = cls()
-        ctx.task = data.get("task", "")
-        ctx.steps = data.get("steps", [])
-        ctx.ask_user_question = data.get("ask_user_question", "")
-        ctx.collected_content = data.get("collected_content", [])
-        ctx.last_url = data.get("last_url")
-        ctx.same_url_count = data.get("same_url_count", 0)
-        return ctx
-
-
-# 全局浏览器会话管理
+# 当前 worker 所拥有的会话；不用于跨请求恢复。
 _browser_sessions: Dict[str, BrowserSession] = {}
-_browser_task_contexts: Dict[str, BrowserTaskContext] = {}
+_closing_sessions: Dict[str, BrowserSession] = {}
+_registry_lock = asyncio.Lock()
 
 
 def get_browser_session(session_id: str, headless: Optional[bool] = None) -> BrowserSession:
-    """获取或创建浏览器会话"""
-    if session_id not in _browser_sessions or not _browser_sessions[session_id].is_running():
-        _browser_sessions[session_id] = BrowserSession(headless=headless)
-    return _browser_sessions[session_id]
+    """获取当前 worker 会话；生产入口为每次调用生成唯一 run id。"""
+    session = _browser_sessions.get(session_id)
+    if session is None or (not session.is_running() and session._close_task is not None):
+        session = BrowserSession(headless=headless)
+        _browser_sessions[session_id] = session
+    return session
 
 
-def close_browser_session(session_id: str):
-    """关闭指定会话"""
-    if session_id in _browser_sessions:
-        session = _browser_sessions[session_id]
-        if session.is_running():
-            asyncio.create_task(session.close())
-        del _browser_sessions[session_id]
-    if session_id in _browser_task_contexts:
-        del _browser_task_contexts[session_id]
+async def close_browser_session(
+    session_id: str, reason: str = "completed"
+) -> Dict[str, Any]:
+    """关闭并移除指定会话；必须由调用方 await。"""
+    async with _registry_lock:
+        session = _browser_sessions.pop(session_id, None)
+        if session is not None:
+            _closing_sessions[session_id] = session
+        else:
+            session = _closing_sessions.get(session_id)
+    if session is None:
+        return {
+            "reason": reason,
+            "already_closed": True,
+            "closed": [],
+            "errors": [],
+            "process_guard": {
+                "tracked_count": 0,
+                "terminated_count": 0,
+                "status": "ownership_unavailable",
+            },
+        }
+    try:
+        return await session.close(reason=reason)
+    finally:
+        async with _registry_lock:
+            if _closing_sessions.get(session_id) is session:
+                _closing_sessions.pop(session_id, None)
+
+
+async def close_all_owned_browser_runs(reason: str = "shutdown") -> Dict[str, Any]:
+    """关闭当前 worker 登记的所有 browser run。
+
+    超时预算由应用 lifespan 控制，本函数不隐藏超时或取消。
+    """
+    async with _registry_lock:
+        owned_by_id = dict(_closing_sessions)
+        owned_by_id.update(_browser_sessions)
+        owned = list(owned_by_id.items())
+        _browser_sessions.clear()
+        _closing_sessions.update(owned_by_id)
+    if not owned:
+        return {"requested": 0, "closed": 0, "reports": {}}
+
+    try:
+        results = await asyncio.gather(
+            *(session.close(reason=reason) for _, session in owned),
+            return_exceptions=True,
+        )
+    finally:
+        async with _registry_lock:
+            for session_id, session in owned:
+                if _closing_sessions.get(session_id) is session:
+                    _closing_sessions.pop(session_id, None)
+    reports: Dict[str, Any] = {}
+    closed = 0
+    for (session_id, _), result in zip(owned, results):
+        if isinstance(result, BaseException):
+            reports[session_id] = {"errors": [{"error_type": type(result).__name__}]}
+        else:
+            reports[session_id] = result
+            closed += 1
+    return {"requested": len(owned), "closed": closed, "reports": reports}
 
 
 def has_browser_session(session_id: str) -> bool:
-    """检查会话是否存在且运行中"""
     return session_id in _browser_sessions and _browser_sessions[session_id].is_running()
 
 
-def get_all_session_ids() -> list:
-    """获取所有活跃会话 ID"""
+def get_all_session_ids() -> list[str]:
     return list(_browser_sessions.keys())
-
-
-def save_task_context(session_id: str, context: BrowserTaskContext):
-    """保存浏览器任务上下文"""
-    _browser_task_contexts[session_id] = context
-
-
-def get_task_context(session_id: str) -> Optional[BrowserTaskContext]:
-    """获取浏览器任务上下文"""
-    return _browser_task_contexts.get(session_id)
-
-
-def clear_task_context(session_id: str):
-    """清除浏览器任务上下文"""
-    if session_id in _browser_task_contexts:
-        del _browser_task_contexts[session_id]

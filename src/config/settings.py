@@ -118,6 +118,7 @@ class BrowserToolConfig(BaseModel):
     """浏览器工具配置"""
     headless: bool = True  # 是否无头模式
     timeout: int = 30000  # 默认超时时间（毫秒）
+    task_timeout: float = 300.0  # 单次工具总超时（秒）
     viewport_width: int = 1920  # 视口宽度
     viewport_height: int = 1080  # 视口高度
 

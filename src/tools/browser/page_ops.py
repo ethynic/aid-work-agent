@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from src.tools._helpers import sanitize_error
 from src.tools.browser.session import BrowserSession, has_browser_session, get_browser_session
 from src.tools.browser.semantic import NaturalMatcher, RefMapper, SemanticSnapshotGenerator
 from src.tools.browser.tools_snapshot import get_ref_mapper, store_ref_mapper
@@ -73,7 +74,7 @@ async def wait_for_page_stable(page, timeout: int = 5000):
     except Exception:
         pass
 
-    logger.debug(f"[wait_for_page_stable] 页面已稳定: {page.url}")
+    logger.debug("[wait_for_page_stable] 页面已稳定")
 
 
 class PageOps:
@@ -98,7 +99,7 @@ class PageOps:
 
         SemanticSnapshotGenerator.invalidate_cache(url=current_url)
 
-        logger.info(f"[PageOps] 导航成功: {url} -> {current_url}, 标题: {title}")
+        logger.info("[PageOps] 导航成功")
         return {
             "success": True,
             "message": f"已打开: {title}",
@@ -120,7 +121,7 @@ class PageOps:
         store_ref_mapper(self.session_id, generator.get_ref_mapper())
 
         result = snapshot.to_dict()
-        logger.info(f"[PageOps] 快照生成: {snapshot.url}, 元素数: {len(snapshot.interactive_elements)}")
+        logger.info("[PageOps] 快照生成: 元素数={}", len(snapshot.interactive_elements))
         return result
 
     async def click(self, description: str, ref: Optional[str] = None) -> Dict[str, Any]:
@@ -150,7 +151,10 @@ class PageOps:
         try:
             await element.click(timeout=10000, force=True)
         except Exception as click_err:
-            logger.warning(f"element.click(force=True) 失败: {click_err}，尝试 JS 点击")
+            logger.warning(
+                "element.click(force=True) 失败，尝试 JS 点击: type={}",
+                type(click_err).__name__,
+            )
             js_context = self.session.page
             elem_info = ref_mapper.get_by_ref(target_ref)
             if elem_info and elem_info.frame_url:
@@ -168,7 +172,7 @@ class PageOps:
         current_url = self.session.page.url
         title = await self.session.page.title()
 
-        logger.info(f"[PageOps] 点击成功: ref={target_ref}, label={target_label}")
+        logger.info("[PageOps] 点击成功: ref={}", target_ref)
         return {
             "success": True,
             "message": f"已点击: {target_label}",
@@ -205,7 +209,10 @@ class PageOps:
         try:
             await element.fill(value, timeout=10000, force=True)
         except Exception as fill_err:
-            logger.warning(f"element.fill(force=True) 失败: {fill_err}，尝试 JS 填写")
+            logger.warning(
+                "element.fill(force=True) 失败，尝试 JS 填写: type={}",
+                type(fill_err).__name__,
+            )
             js_context = self.session.page
             elem_info = ref_mapper.get_by_ref(target_ref)
             if elem_info and elem_info.frame_url:
@@ -233,7 +240,7 @@ class PageOps:
         await asyncio.sleep(0.3)
         SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
 
-        logger.info(f"[PageOps] 填写成功: ref={target_ref}, label={target_label}")
+        logger.info("[PageOps] 填写成功: ref={}", target_ref)
         return {
             "success": True,
             "message": f"已填写: {target_label}",
@@ -277,7 +284,7 @@ class PageOps:
         await asyncio.sleep(0.3)
         SemanticSnapshotGenerator.invalidate_cache(url=self.session.page.url)
 
-        logger.info(f"[PageOps] 选择成功: ref={target_ref}, field={target_label}, option={option}")
+        logger.info("[PageOps] 选择成功: ref={}", target_ref)
         return {
             "success": True,
             "message": f"已选择: {option}",
@@ -327,7 +334,10 @@ class PageOps:
             return result
 
         except Exception as e:
-            return {"success": False, "error": f"获取内容失败: {str(e)}"}
+            return {
+                "success": False,
+                "error": sanitize_error(e, fallback="获取网页内容失败"),
+            }
 
     async def take_screenshot(self, path: str = "./screenshot.png", full_page: bool = False) -> Dict[str, Any]:
         """截图"""
