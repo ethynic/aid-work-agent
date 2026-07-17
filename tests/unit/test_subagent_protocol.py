@@ -7,7 +7,7 @@
 import pytest
 
 pytestmark = pytest.mark.agent
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from src.subagents.protocol import SubagentTaskRecord, get_task_record_key
 from src.models.subagent import SubagentTaskStatus
@@ -133,7 +133,8 @@ class TestSubagentExecutorClarification:
         result = executor.get_pending_clarification("non_existent_id")
         assert result is None
 
-    def test_get_pending_clarification_returns_record_when_clarifying(self):
+    @patch("src.subagents.executor.redis_client")
+    def test_get_pending_clarification_returns_record_when_clarifying(self, mock_redis):
         from src.subagents.executor import SubagentExecutor
 
         executor = SubagentExecutor(
@@ -148,29 +149,41 @@ class TestSubagentExecutorClarification:
         )
         record.start()
         record.request_clarification("请提供邮箱地址")
-        executor._task_records = {"exec_001": record}
+        mock_redis.make_key.return_value = "task_record:exec_001"
+        mock_redis.hget.return_value = record.model_dump(mode="json")
 
         result = executor.get_pending_clarification("exec_001")
         assert result is not None
         assert result.clarification_request == "请提供邮箱地址"
+        mock_redis.hget.assert_called_once_with("task_record:exec_001", "data")
 
 
 class TestMasterAgentPendingClarification:
     """测试主 Agent 的 pending clarification 管理"""
 
-    @patch("src.core.agent.llm_gateway")
-    @patch("src.core.agent.ShortTermMemory")
-    @patch("src.core.agent.ToolRegistry")
-    @patch("src.core.agent.ToolExecutor")
-    @patch("src.core.agent.PlanManager")
-    def test_pending_clarifications_initialized(self, mock_pm, mock_te, mock_tr, mock_stm, mock_llm):
+    @patch("src.core.agent.redis_client")
+    def test_pending_clarification_is_saved_loaded_and_cleared_in_redis(self, mock_redis):
         from src.core.agent import Agent
 
-        mock_llm.get_model_name.return_value = "test-model"
-        mock_llm.get_provider_name.return_value = "test-provider"
-        agent = Agent(is_master=True)
-        assert isinstance(agent._pending_clarifications, dict)
-        assert len(agent._pending_clarifications) == 0
+        agent = Agent.__new__(Agent)
+        session_id = "session_001"
+        key = "pending_clarification:session_001"
+        data = {"execution_id": "exec_001", "question": "请提供邮箱地址"}
+        mock_redis.make_key.return_value = key
+        mock_redis.hgetall.return_value = data
+
+        agent._save_pending_clarification(session_id, data)
+        assert mock_redis.hset.call_args_list == [
+            call(key, "execution_id", "exec_001"),
+            call(key, "question", "请提供邮箱地址"),
+        ]
+        mock_redis.expire.assert_called_once_with(key, 3600)
+
+        assert agent._get_pending_clarification(session_id) == data
+        mock_redis.hgetall.assert_called_once_with(key)
+
+        agent._clear_pending_clarification(session_id)
+        mock_redis.delete.assert_called_once_with(key)
 
 
 class TestClarificationFlowIntegration:
