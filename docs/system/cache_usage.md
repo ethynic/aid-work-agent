@@ -56,16 +56,20 @@
 |-----|----:|------|----------------|
 | `browser_run:{tenant_id}:{run_id}` | 600s | 脱敏状态摘要；终态后由生命周期收口 | 仅当前请求内存态，禁止跨请求恢复 |
 | `browser_owner:{tenant_id}:{run_id}` | 30s | worker owner lease；每次 acquire 生成唯一 epoch token，每 10s 原子续租；命令写 IPC 前 fence | 不模拟跨 worker owner |
-| `browser_control:{tenant_id}:{run_id}` | 随状态 | Agent/人工控制锁的统一命名 | Phase 2 仅登记，人工控制在 Phase 3 启用 |
+| `browser_control:{tenant_id}:{run_id}` | 随状态 | Agent/人工控制锁；仅 `RUNNING_HUMAN` 可转发输入 | 不模拟跨 worker 控制 |
+| `browser_view_ticket:{jti}` | 60s | 一次性观看票据；值绑定 tenant/user/run，连接时原子删除 | 禁止降级 |
+| `browser_assistance:{tenant_id}:{assistance_id}` | 人工租约 + 120s | 脱敏条件、步骤索引、控制状态 | 禁止降级 |
+| `agent_tool_suspension:{tenant_id}:{agent_execution_id}:{tool_call_id}` | 人工租约 + 120s | 原工具挂起引用 | 禁止降级 |
+| `agent_session_suspension:{tenant_id}:{session_id}` | 人工租约 + 120s | 同会话 Agent loop 并发门禁 | 禁止降级 |
+| `browser_resume_jobs:stream` | Stream/消费幂等锁 600s | 脱敏恢复任务 | 禁止降级 |
+| `agent_continuation_events:{tenant_id}:{continuation_id}` | 900s | 带递增 seq 的断线补取事件 | 禁止降级 |
 
 安全说明：Browser RunManager 必须先用 `redis_client.is_available()` 判断真实
 Redis。透明内存 fallback 不能被视为分布式可用；降级只允许单请求
 `server/local` run，并在请求 `finally` 关闭。
 
-Phase 3+ 已预登记但尚未启用的前缀包括：`browser_view_ticket`、
-`browser_web_presence`、`browser_launch_ticket`、`browser_companion_session`、
-`browser_assistance`、`agent_tool_suspension`、`browser_resume_jobs`、
-`agent_continuation_events`。预登记不代表对应 API 或远端执行能力已经交付。
+Phase 4+ 已预登记但尚未启用的前缀包括：`browser_web_presence`、
+`browser_launch_ticket`、`browser_companion_session`。
 
 ---
 

@@ -102,6 +102,10 @@ class ContentCommand(BrowserCommand):
     selector: Optional[str] = Field(default=None, max_length=2048, repr=False)
 
 
+class ScreenshotCommand(BrowserCommand):
+    type: Literal["screenshot"] = "screenshot"
+
+
 class CloseCommand(BrowserCommand):
     type: Literal["close", "cancel"] = "close"
     reason: str = Field(default="completed", pattern=r"^[a-z0-9_]{1,64}$")
@@ -110,6 +114,7 @@ class CloseCommand(BrowserCommand):
 Command = (
     StartCommand | NavigateCommand | SnapshotCommand | ClickCommand | FillCommand
     | SelectCommand | KeyboardCommand | PointerCommand | ContentCommand | CloseCommand
+    | ScreenshotCommand
 )
 
 
@@ -160,12 +165,18 @@ class ContentResult(BaseResult):
     truncated: bool = False
 
 
+class ScreenshotResult(BaseResult):
+    jpeg_base64: str = Field(default="", repr=False)
+    width: int = Field(default=1280, ge=1, le=1280)
+    height: int = Field(default=720, ge=1, le=720)
+
+
 class CloseResult(BaseResult):
     closed: bool = False
     forced: bool = False
 
 
-Result = StartResult | CommandResult | SnapshotResult | ContentResult | CloseResult
+Result = StartResult | CommandResult | SnapshotResult | ContentResult | ScreenshotResult | CloseResult
 
 
 def error_result(command: BrowserCommand, code: str) -> CommandResult:

@@ -1344,6 +1344,17 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     else:
         session_id = sse_manager.get_or_create_session(request.session_id)
 
+    # 活动工具挂起期间禁止同一会话启动第二个 Agent loop。
+    if chat_tenant_id and session_id:
+        from src.tools.browser.resume_store import get_active_session_suspension
+        active_suspension = await get_active_session_suspension(chat_tenant_id, session_id)
+        if active_suspension:
+            return JSONResponse({
+                "success": False, "error_code": "TOOL_WAITING_HUMAN",
+                "error": "当前浏览器任务正在等待你的操作",
+                "assistance_id": active_suspension["assistance_id"],
+            }, status_code=409)
+
     # 处理附件
     attachments = None
     if request.files:
@@ -1715,6 +1726,9 @@ app.include_router(data_analysis.router)
 # 长期记忆 API
 from src.api import memory as memory_api
 app.include_router(memory_api.router)
+from src.api import browser_runs as browser_runs_api
+app.include_router(browser_runs_api.router)
+app.include_router(browser_runs_api.agent_router)
 
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions

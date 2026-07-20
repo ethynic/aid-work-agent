@@ -94,6 +94,14 @@
         />
       </div>
 
+      <HumanAssistanceCard
+        v-if="message.browserAssistance"
+        :assistance="message.browserAssistance"
+        :auth-headers="authHeaders"
+        @updated="updateAssistance"
+        @continuation="handleContinuation"
+      />
+
       <!-- 执行详情（仅 debug 模式显示） -->
       <div v-if="isDebugEnabled && hasProgress" class="mt-2">
         <button
@@ -149,6 +157,9 @@ import ImageGallery from './ui/ImageGallery.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 import { useDebugMode } from '@/composables/useDebugMode'
+import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
+import { useDemoAuth } from '@/composables/useDemoAuth'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
 interface Props {
   message: ChatMessage
@@ -163,6 +174,26 @@ const props = withDefaults(defineProps<Props>(), {
 
 const { openPreview } = useAttachmentPreview()
 const { isDebugEnabled } = useDebugMode()
+const authHeaders = computed(() => window.location.pathname.startsWith('/t/')
+  ? useTenantAuth().getAuthHeader()
+  : useDemoAuth().getAuthHeader())
+
+function updateAssistance(assistance: any) {
+  props.message.browserAssistance = assistance
+}
+
+function handleContinuation(events: any[]) {
+  const nextAssistance = events.find(event => event.type === 'browser_human_required')
+  if (nextAssistance) {
+    props.message.browserAssistance = { ...nextAssistance, state: 'pending' }
+    return
+  }
+  const terminal = events.find(event => event.type === 'tool_result' || event.type === 'browser_run_closed')
+  if (!terminal || !props.message.browserAssistance) return
+  props.message.browserAssistance.state = terminal.type === 'browser_run_closed' || terminal.success === false
+    ? 'failed'
+    : 'resumed'
+}
 
 const isExpanded = ref(false)
 

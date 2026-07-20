@@ -49,7 +49,7 @@
               @upload="handleUpload"
               @remove="handleRemoveFile"
               @stop="abortStreaming"
-              :disabled="isProcessing"
+              :disabled="isProcessing || isWaitingHuman"
               :is-processing="isProcessing"
               :files="currentFiles"
             />
@@ -123,7 +123,8 @@ const {
   clearAttachments,
   abortStreaming,
   sessionId: agentSessionId,
-  inputHintState
+  inputHintState,
+  isWaitingHuman
 } = useAgent()
 
 const { user, isLoggedIn, init: initAuth, logout: doLogout } = useDemoAuth()

@@ -2415,9 +2415,13 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 if not tool_name:
                     logger.warning(f"Skipping tool call with empty name, args: {tool_args}")
                     continue
-                
+
+                # 部分 OpenAI-compatible provider 可能省略 id；必须在保存
+                # assistant(tool_calls) 前生成一次，并让执行/恢复共用同一 id。
+                tool_call_id = tc.get("id") or f"call_{uuid.uuid4().hex}"
+                tc["id"] = tool_call_id
                 valid_tool_calls.append({
-                    "id": tc.get("id", ""),
+                    "id": tool_call_id,
                     "name": tool_name,
                     "arguments": tool_args
                 })
@@ -2780,8 +2784,19 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                         execution_args["_audit_session_id"] = session_id
                         execution_args["_trusted_tenant_id"] = _resolve_tenant_id
                         execution_args["_trusted_user_id"] = user.user_id if user else None
+                        execution_args["_agent_execution_id"] = f"ae_{uuid.uuid4().hex}"
+                        execution_args["_tool_call_id"] = tool_id
                     result = await self.tool_executor.execute(tool_name, execution_args)
                     logger.info(f"[TOOL_RESULT] {tool_name}: type={type(result).__name__}")
+
+                    from src.core.tool_suspension import ToolSuspension
+                    if isinstance(result, ToolSuspension):
+                        # 一等控制结果：不写 role=tool、不完成计划、不继续 LLM。
+                        yield result.event
+                        yield make_event(
+                            "progress", data="等待你的操作；完成后系统会自动继续"
+                        )
+                        return
 
                     # 发送工具执行完成事件
                     tool_display_name = self._get_tool_display_name(tool_name, tool_args)

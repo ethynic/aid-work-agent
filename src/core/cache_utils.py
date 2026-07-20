@@ -60,6 +60,7 @@ class CacheKeys:
     BROWSER_COMPANION_SESSION = "browser_companion_session"
     BROWSER_ASSISTANCE = "browser_assistance"
     AGENT_TOOL_SUSPENSION = "agent_tool_suspension"
+    AGENT_SESSION_SUSPENSION = "agent_session_suspension"
     BROWSER_RESUME_JOBS = "browser_resume_jobs"
     AGENT_CONTINUATION_EVENTS = "agent_continuation_events"
 

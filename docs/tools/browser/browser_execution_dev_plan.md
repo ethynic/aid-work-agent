@@ -2,7 +2,7 @@
 
 > 日期：2026-07-14
 >
-> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证）
+> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证；Phase 3 首轮实现完成、自动续跑等门禁待收口）
 >
 > 设计基线：[browser_visualization_design.md](./browser_visualization_design.md)
 >
@@ -31,7 +31,7 @@
 | 0 | 基线、配置和泄漏复现测试 | ✅ 已完成 | 设计批准 | 测试能稳定复现当前泄漏/配置问题 |
 | 1 | 本地浏览器生命周期 P0 修复 | ✅ 已完成 | Phase 0 | 六类终态进程回基线 |
 | 2 | RunManager + Executor 抽象 + 多租户状态 | 🔧 部分完成 | Phase 1 | 两 worker/两租户契约测试通过 |
-| 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | ⬜ | Phase 2 | 明确指引、完成监测、原工具及 Agent 幂等续跑、超时关闭通过 |
+| 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | 🔧 部分完成 | Phase 2 | 明确指引、完成监测、原工具及 Agent 幂等续跑、超时关闭通过 |
 | 4 | Agent Desktop 可选 browser runtime | ⬜ | Phase 3，且 Agent Desktop Phase 0～3 稳定 | 桌面内可见执行和断线回收通过；关闭模块后 Agent 主链路正常 |
 | 5 | 自动路由与安全策略 | ⬜ | Phase 4 | 路由矩阵、SSRF、不可逆防重放通过 |
 | 6 | 可观测性、容量和运维 | ⬜ | Phase 5 | 指标/告警/压测/故障注入通过 |
@@ -114,6 +114,16 @@
   同一契约。Phase 0～1 browser unit 回归全绿；真进程六终态测试仍保留 opt-in。
 
 ## 6. Phase 3：服务端画面与网页人工接管
+
+> 进度（2026-07-20）：🔧 部分完成。已落地 `ToolSuspension` 控制结果、同会话
+> 409 门禁、latest-only 画面 Hub、服务端 JPEG 采样、一次性 view ticket、网页
+> pointer/keyboard 状态门禁、人工协作 Redis 状态/CAS、白名单条件与双采样、
+> resume job/continuation seq 事件、BrowserView/HumanAssistanceCard 及前端断线补取。
+> 当前本机单元测试与前端 build 通过。尚未达到退出门禁：真实 Redis consumer
+> group/两 Gunicorn worker owner 路由未验收；恢复结果已接回原 tool_call_id 的
+> continuation 事件，但原 Agent 后续 LLM 循环的后台重启仍需收口；真实验证码页
+> 同 page/context E2E、自动完成后台检测、人工超时 reaper 和 WebSocket 重连集成证据尚缺。因此不得
+> 标记 Phase 3 完成，也未提前实现 Phase 4 remote executor。
 
 ### 后端
 

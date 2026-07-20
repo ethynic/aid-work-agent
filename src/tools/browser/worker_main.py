@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import sys
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from src.tools.browser.executor.models import (
     ClickCommand, CloseCommand, Command, ContentCommand, FillCommand,
     KeyboardCommand, NavigateCommand, PointerCommand, ResultStatus,
-    SelectCommand, SnapshotCommand, StartCommand,
+    SelectCommand, SnapshotCommand, StartCommand, ScreenshotCommand,
 )
 from src.tools.browser.worker_protocol import ProtocolError, read_frame_sync, write_frame_sync
 
@@ -60,6 +61,14 @@ class BrowserWorker:
         }
 
     async def handle(self, command) -> dict[str, Any]:
+        # 画面采样是只读旁路，不参与业务命令 seq/幂等窗口。
+        if isinstance(command, ScreenshotCommand):
+            if self.run is None or command.run_id != self.run.run_id:
+                return self._base(command, "error", "RUN_NOT_STARTED")
+            try:
+                return await self._dispatch(command)
+            except Exception:
+                return self._base(command, "error", "SCREENCAST_FAILED")
         duplicate = self.results.get(command.command_id)
         if duplicate is not None:
             return duplicate
@@ -131,6 +140,13 @@ class BrowserWorker:
             return await self._command_result(command)
         if isinstance(command, ContentCommand):
             return await self._content(command)
+        if isinstance(command, ScreenshotCommand):
+            data = await self.page.screenshot(type="jpeg", quality=60, full_page=False)
+            return {
+                **self._base(command), "jpeg_base64": base64.b64encode(data).decode("ascii"),
+                "width": min(command and self.run.viewport_width, 1280),
+                "height": min(command and self.run.viewport_height, 720),
+            }
         if isinstance(command, CloseCommand):
             await self.close()
             return {**self._base(command), "closed": True, "forced": False}

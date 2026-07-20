@@ -42,6 +42,22 @@ export interface ChatMessage {
   attachments?: AttachmentInfo[]  // 附件列表
   downloadableFiles?: DownloadableFile[]  // 可下载文件列表
   images?: ImageRef[]  // Agent 推送的图片列表（Phase 2 P2.4）
+  browserAssistance?: BrowserHumanAssistance
+}
+
+export interface BrowserHumanAssistance {
+  assistance_id: string
+  run_id: string
+  continuation_id: string
+  reason_code: string
+  surface: 'server_web'
+  title: string
+  steps: string[]
+  completion_mode: 'auto_or_confirm' | 'confirm_only'
+  completion_status: string
+  expires_at: string
+  state?: 'pending' | 'controlling' | 'resume_queued' | 'resumed' | 'cancelled' | 'failed'
+  missing_conditions?: string[]
 }
 
 export interface ProgressMessage {
@@ -79,6 +95,9 @@ export type MessageStreamEvent =
   | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }
   | { type: 'images'; images: ImageRef[]; placement: 'after_text' | 'before_text' | 'inline'; timestamp: number }
   | { type: 'cancelled'; timestamp: number }
+  | ({ type: 'browser_human_required'; timestamp?: number } & BrowserHumanAssistance)
+  | { type: 'browser_resume_started'; run_id: string; seq?: number }
+  | { type: 'agent_continuation_started'; continuation_id: string; seq?: number }
 
 // "正在输入"提示状态
 export type InputHintState = 'idle' | 'thinking' | 'working' | 'responding'

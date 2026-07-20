@@ -87,6 +87,10 @@ const inputHintState = computed<InputHintState>({
 })
 
 export function useAgent() {
+  const isWaitingHuman = computed(() => messages.value.some(message => {
+    const state = message.browserAssistance?.state
+    return state === 'pending' || state === 'controlling' || state === 'resume_queued'
+  }))
   // 根据路由判断使用 demo 还是 tenant 认证头
   function getEffectiveAuthHeader(): Record<string, string> {
     if (window.location.pathname.startsWith('/t/')) {
@@ -369,6 +373,16 @@ export function useAgent() {
             }
           }
         },
+        // onBrowserHumanRequired - 结构化卡片独立于 LLM 文本渲染
+        (event) => {
+          const lastMsg = state.messages.value[state.messages.value.length - 1]
+          if (lastMsg?.role === 'assistant') {
+            lastMsg.browserAssistance = { ...event, state: 'pending' }
+          }
+          state.isProcessing.value = false
+          state.inputHintState.value = 'idle'
+          addProgress(state, '等待你在浏览器中完成操作', 'progress')
+        },
         subagent,
         instanceId
       )
@@ -605,6 +619,7 @@ export function useAgent() {
     isSessionRunning,
     hasSessionUnreadCompletion,
     // "正在输入"提示
-    inputHintState
+    inputHintState,
+    isWaitingHuman
   }
 }

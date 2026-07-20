@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import signal
 import sys
@@ -20,7 +21,7 @@ from .models import (
     BrowserCommand, BrowserRunSpec, ClickCommand, CloseCommand, CloseResult,
     CommandResult, ContentCommand, ContentResult, FillCommand, KeyboardCommand,
     NavigateCommand, PointerCommand, ResultStatus, SelectCommand, SnapshotCommand,
-    SnapshotResult, StartCommand, StartResult,
+    SnapshotResult, StartCommand, StartResult, ScreenshotCommand, ScreenshotResult,
 )
 
 TResult = TypeVar("TResult", bound=BaseModel)
@@ -40,6 +41,8 @@ class LocalPlaywrightExecutor:
         self._owned_pgid: int | None = None
         self._command_fence: Callable[[], Awaitable[str | None]] | None = None
         self._windows_job = None
+        self._frame_task: asyncio.Task | None = None
+        self._frame_seq = 0
 
     @property
     def run_id(self) -> str | None:
@@ -104,7 +107,10 @@ class LocalPlaywrightExecutor:
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         command = StartCommand(**self._command_fields(), run=run)
         try:
-            return await self._request(command, StartResult)
+            result = await self._request(command, StartResult)
+            if result.status == ResultStatus.OK:
+                self._frame_task = asyncio.create_task(self._frame_loop())
+            return result
         except BaseException:
             await asyncio.shield(self._force_reap("start_failed"))
             raise
@@ -210,6 +216,10 @@ class LocalPlaywrightExecutor:
                 )
                 return self._close_result
             forced = False
+            frame_task, self._frame_task = self._frame_task, None
+            if frame_task is not None and frame_task is not asyncio.current_task():
+                frame_task.cancel()
+                await asyncio.gather(frame_task, return_exceptions=True)
             response: CloseResult | None = None
             process = self._process
             if process is not None:
@@ -237,6 +247,43 @@ class LocalPlaywrightExecutor:
                 closed=True, forced=forced,
             )
             return self._close_result
+
+    async def _frame_loop(self) -> None:
+        try:
+            while self._process is not None and self._run is not None:
+                from src.tools.browser.view_hub import browser_view_hub
+                if browser_view_hub.observer_count(self._run.tenant_id, self._run.run_id):
+                    await self._capture_frame()
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # 画面链路失败不能破坏浏览器命令主链路。
+            return
+
+    async def _capture_frame(self) -> None:
+        if self._run is None or self._process is None or self._process.returncode is not None:
+            return
+        try:
+            command = ScreenshotCommand(
+                run_id=self._run.run_id, seq=max(1, self._seq),
+                command_id=f"bf_{uuid.uuid4().hex}", deadline_at=self._deadline(),
+            )
+            result = await self._request(command, ScreenshotResult)
+            if result.status != ResultStatus.OK or not result.jpeg_base64:
+                return
+            data = base64.b64decode(result.jpeg_base64, validate=True)
+            from src.tools.browser.view_hub import BrowserFrame, browser_view_hub
+            self._frame_seq += 1
+            await browser_view_hub.publish(self._run.tenant_id, BrowserFrame(
+                run_id=self._run.run_id, seq=self._frame_seq, jpeg=data,
+                width=result.width, height=result.height,
+                captured_at=datetime.now(timezone.utc).timestamp(),
+            ))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
 
     async def _force_reap(self, reason: str) -> None:
         """只回收当前 executor 明确拥有的进程/进程组。"""

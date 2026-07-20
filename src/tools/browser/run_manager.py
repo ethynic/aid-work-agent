@@ -131,8 +131,8 @@ class BrowserRunManager:
                 run_id=record.run_id, tenant_id=record.tenant_id, user_id=record.user_id,
                 session_id=record.session_id, execution_target=record.execution_target,
                 headless=settings.tools.browser.headless,
-                viewport_width=settings.tools.browser.viewport_width,
-                viewport_height=settings.tools.browser.viewport_height,
+                viewport_width=min(settings.tools.browser.viewport_width, 1280),
+                viewport_height=min(settings.tools.browser.viewport_height, 720),
             )
             result = await executor.start(spec)
             if result.status.value == "error":

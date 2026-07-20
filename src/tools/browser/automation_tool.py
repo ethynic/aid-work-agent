@@ -11,6 +11,7 @@ from src.tools._helpers import sanitize_error
 from src.tools.base import BaseTool
 from src.tools.browser.orchestrator import BrowserOrchestrator
 from src.tools.browser.run_manager import BrowserRunManager, RunState
+from src.tools.browser.human_control import HumanControlCoordinator
 
 
 _DEPRECATED_RESUME_ERROR = (
@@ -53,7 +54,7 @@ class BrowserAutomationTool(BaseTool):
         del tool_args
         return self.display_name
 
-    async def execute(self, **kwargs) -> Dict[str, Any]:
+    async def execute(self, **kwargs) -> Any:
         if kwargs.get("headless") is not None:
             return {
                 "success": False,
@@ -105,7 +106,38 @@ class BrowserAutomationTool(BaseTool):
         orchestrator._task_description = task
         try:
             async with asyncio.timeout(settings.tools.browser.task_timeout):
-                return await orchestrator.execute(task=task, url=url)
+                result = await orchestrator.execute(task=task, url=url)
+                if result.get("status") != "ask_user":
+                    return result
+                if manager.degraded:
+                    await manager.finalize(
+                        record.tenant_id, record.run_id, RunState.FAILED,
+                        "tool_suspend_redis_unavailable",
+                    )
+                    return {
+                        "success": False, "error_code": "TOOL_SUSPEND_FAILED",
+                        "error": "当前无法安全保存人工接管状态，请稍后重试",
+                    }
+                execution_id = kwargs.get("_agent_execution_id")
+                tool_call_id = kwargs.get("_tool_call_id")
+                if not execution_id or not tool_call_id:
+                    await manager.finalize(
+                        record.tenant_id, record.run_id, RunState.FAILED,
+                        "tool_suspend_context_missing",
+                    )
+                    return {
+                        "success": False, "error_code": "TOOL_SUSPEND_FAILED",
+                        "error": "当前无法安全保存人工接管状态，请稍后重试",
+                    }
+                return await HumanControlCoordinator().suspend(
+                    tenant_id=record.tenant_id, user_id=record.user_id,
+                    session_id=record.session_id, agent_execution_id=execution_id,
+                    tool_call_id=tool_call_id, run_id=record.run_id,
+                    manager=manager, orchestrator=orchestrator,
+                    executor=orchestrator.executor,
+                    reason_code=result.get("error_code", "HUMAN_REQUIRED"),
+                    step_index=len(orchestrator.steps),
+                )
         except asyncio.TimeoutError:
             return {
                 "success": False,
@@ -126,13 +158,19 @@ class BrowserAutomationTool(BaseTool):
         finally:
             # Orchestrator 也有边界关闭；这里兜底覆盖外层超时/取消。
             try:
-                await asyncio.shield(
-                    manager.finalize(
-                        record.tenant_id,
-                        record.run_id,
-                        RunState.FAILED,
-                        "tool_boundary",
+                store = getattr(manager, "store", None)
+                state = await store.get(record.tenant_id, record.run_id) if store else None
+                if state is None or state.state not in {
+                    RunState.WAITING_HUMAN.value, RunState.RUNNING_HUMAN.value,
+                    RunState.RESUMING.value,
+                }:
+                    await asyncio.shield(
+                        manager.finalize(
+                            record.tenant_id,
+                            record.run_id,
+                            RunState.FAILED,
+                            "tool_boundary",
+                        )
                     )
-                )
             except Exception as exc:
                 logger.warning("browser tool 边界回收异常: type={}", type(exc).__name__)

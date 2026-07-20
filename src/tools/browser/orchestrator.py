@@ -303,6 +303,7 @@ class BrowserOrchestrator:
             }
 
         close_reason = "error"
+        suspended = False
         try:
             async with asyncio.timeout(settings.tools.browser.task_timeout):
                 self._raise_if_cancelled()
@@ -314,6 +315,7 @@ class BrowserOrchestrator:
                 )
                 if result.get("status") == "ask_user":
                     close_reason = "ask_user"
+                    suspended = True
                 elif result.get("success"):
                     close_reason = "success"
                 elif result.get("error_code") == "MAX_STEPS_EXCEEDED":
@@ -343,7 +345,7 @@ class BrowserOrchestrator:
             )
         finally:
             try:
-                if self.run_manager is not None and self.run_record is not None:
+                if not suspended and self.run_manager is not None and self.run_record is not None:
                     terminal = {
                         "success": RunState.SUCCEEDED,
                         "timeout": RunState.TIMED_OUT,
@@ -474,18 +476,15 @@ class BrowserOrchestrator:
 
                 # 处理 ask_user
                 if action == "ask_user":
-                    logger.info("[Orchestrator] 需要人工参与，过渡期安全结束 run")
+                    logger.info("[Orchestrator] 需要人工参与，挂起当前工具")
 
                     if progress_callback:
-                        await progress_callback("ask_user", "任务需要人工参与，当前运行将安全关闭")
-                    await self._take_screenshot()
+                        await progress_callback("ask_user", "任务需要人工参与，等待用户接管")
                     return self._build_result(
                         success=False,
                         status="ask_user",
                         error_code="HUMAN_REQUIRED",
-                        question=reason,
-                        instruction="当前版本暂不支持跨请求人工接管，请重新发起可完整执行的任务",
-                        screenshot=self.screenshot_path,
+                        instruction="请直接在浏览器画面中完成操作，敏感信息不要发送到聊天",
                     )
 
                 # 执行操作（带重试）
@@ -539,6 +538,54 @@ class BrowserOrchestrator:
                 error_code="INTERNAL_ERROR",
                 error=sanitize_error(e, fallback="浏览器自动化执行失败"),
             )
+
+    async def resume_from_human(
+        self, *, completed_by_human: bool, step_index: int,
+    ) -> Dict[str, Any]:
+        """从仍存活的同一 executor/page/context 继续，不重新导航起始 URL。"""
+        if self.run_manager is None or self.run_record is None or self.page_ops is None:
+            return self._build_result(
+                success=False, error_code="RESUME_CONTEXT_LOST",
+                error="浏览器上下文已丢失，无法继续原任务",
+            )
+        current = await self.run_manager.store.get(
+            self.run_record.tenant_id, self.run_record.run_id
+        )
+        if (
+            current is None
+            or current.state != RunState.RESUMING.value
+            or step_index != len(self.steps)
+        ):
+            return self._build_result(
+                success=False, error_code="RESUME_CONTEXT_LOST",
+                error="浏览器上下文已丢失，无法继续原任务",
+            )
+        if completed_by_human:
+            self.steps.append({
+                "action": "human_confirmation", "target": "",
+                "value": "", "result": "completed_by_human",
+            })
+        await self.run_manager.transition(
+            self.run_record.tenant_id, self.run_record.run_id, RunState.RUNNING_AGENT
+        )
+        close_reason = "error"
+        result: Dict[str, Any] | None = None
+        try:
+            result = await self._execute_task(
+                task=self._task_description, url=None, progress_callback=None
+            )
+            if result.get("status") == "ask_user":
+                # 第二次人工暂停由调用方建立新 assistance；当前 job 不伪造终态。
+                return result
+            close_reason = "success" if result.get("success") else "error"
+            return result
+        finally:
+            if result is None or result.get("status") != "ask_user":
+                terminal = RunState.SUCCEEDED if close_reason == "success" else RunState.FAILED
+                await self.run_manager.finalize(
+                    self.run_record.tenant_id, self.run_record.run_id, terminal,
+                    "human_resumed_" + close_reason,
+                )
 
     async def _execute_with_retry(
         self,

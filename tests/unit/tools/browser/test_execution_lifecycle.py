@@ -66,7 +66,10 @@ async def test_orchestrator_terminal_paths_finalize_once(monkeypatch, case, deci
     result = await orchestrator.execute(task="不含敏感信息的任务")
     if case == "ask_user":
         assert result["error_code"] == "HUMAN_REQUIRED"
-        assert "重新发起" in result["instruction"]
+        assert "浏览器画面" in result["instruction"]
+        # WAITING_HUMAN 是唯一非终态例外，交由 ToolSuspension 持久化后续跑。
+        assert manager.finalized == []
+        return
     if case == "max_steps": assert result["error_code"] == "MAX_STEPS_EXCEEDED"
     assert manager.finalized[0][2] == terminal
     assert len(manager.finalized) == 1
