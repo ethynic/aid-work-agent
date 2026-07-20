@@ -1,8 +1,9 @@
 # 数据源导入功能 — 开发计划
 
 > 对应设计文档：[数据分析智能体设计文档](./data-analysis-subagent-design.md) §三（Excel 智能解析）、§四（数据连接器）、§五（Schema 审核与管理）
+> 关联功能索引：[docs/ideas_finished.md](../../ideas_finished.md) 数字员工 / 子智能体 #9a
 > 创建日期：2026-06-03
-> 状态：待测试
+> 状态：✅ 已完成开发（2026-07-20 经用户真实使用验证）
 
 ---
 
@@ -287,9 +288,9 @@ CREATE TABLE IF NOT EXISTS data_connectors (
 #### 3.3 阶段验收标准
 
 - [x] 后端单元测试通过
-- [ ] 后端集成测试通过
+- [x] 后端集成测试通过（`tests/integration/test_data_analysis_integration.py` 覆盖上传→解析→入库→分析全链路）
 - [x] 前端构建通过
-- [ ] 端到端手动验证：上传 Excel → 审核 Schema → 查看已注册表 → 编辑关联关系
+- [x] 端到端手动验证：上传 Excel → 审核 Schema → 查看已注册表 → 编辑关联关系（2026-07-20 用户真实使用验证通过）
 - [x] 文档已更新
 
 ---
