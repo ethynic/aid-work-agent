@@ -62,6 +62,7 @@
 |---|------|------|------|---------|---------|
 | 33 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
 | 36 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 2026-07-14 Phase 0～3 Windows 完成；Phase 5 Windows unsigned 开发安装包也已通过三智能体与主控终检。标准链路生成 x64 user-scope NSIS、ASAR/Portal/凭证门禁、CycloneDX/SHA-256/audit/license/manifest；packaged exe smoke PASS 且零残留。当前包为 0.0.1 development-unsigned（100,215,084 bytes，SHA-256 `20555b...37979`），不可对外正式分发；正式图标、证书签名、真实更新源、安装/协议/升级回滚仍待完成。浏览器 runtime Phase 4 继续等待 Executor 契约，不能阻塞 Agent 主应用；macOS 延后到 Mac 设备逐 Phase 验证。新增 [Windows 编译与打包手册](system/desktop-agent-client-build-manual.md)，明确 agent2 API 运行期配置、服务端 CORS、开发包及正式签名包流程；2026-07-15 补充 Node.js 22、Windows 测试枚举说明和 `scripts/build-win-dev.ps1` 一键开发包构建入口。 | [设计](system/desktop-agent-client-design.md) | [开发计划](system/desktop-agent-client-dev-plan.md) |
+| 43 | 多会话后台流式 | 🔧 部分完成 | 2026-07-20 代码与单测完成，待真实环境 E2E 验收。useAgent 从全局单份流式状态重构为 per-session 状态池（`shallowReactive` Map + computed 视图代理，消费组件零改动）：切换历史会话/新建会话/切换数字员工不再弹「终止当前会话」confirm，旧会话后台继续流式；切回进行中的会话显示实时累积内容；会话列表进行中显示 spinner、后台完成未查看显示小点（查看后消失）。后端零改动（`/api/chat/stream` 按 session_id 独立管理）。7 个新单测全过，build 通过。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
 
 ---
 

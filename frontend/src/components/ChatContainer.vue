@@ -344,19 +344,7 @@ async function checkAndRedirectIfMainAgentUnavailable() {
 
 // 处理数字员工选择变化
 async function handleSubagentChange(agentId: string) {
-  console.log(`[${now()}] [ConfirmDialog] handleSubagentChange called, isProcessing=`, isProcessing.value, 'agentId=', agentId)
-  // 如果当前正在流式响应，需要用户确认是否终止
-  if (isProcessing.value) {
-    console.log(`[${now()}] [ConfirmDialog] isProcessing=true, show confirm dialog`)
-    if (!confirm('当前会话还未结束，您希望终止当前会话，切换数字员工吗？')) {
-      console.log(`[${now()}] [ConfirmDialog] user canceled`)
-      return
-    }
-    console.log(`[${now()}] [ConfirmDialog] user confirmed, abort streaming`)
-    // 用户确认，终止当前流式响应
-    await abortStreaming()
-  }
-
+  // 多会话后台流式：切换数字员工不再中断正在进行的会话，旧会话在后台继续生成
   // 在 availableSubagents 中查找匹配的项
   const matchedAgent = availableSubagents.value.find((agent: AgentItem) =>
     agent.instance_id === agentId || agent.agent_id === agentId
@@ -569,14 +557,10 @@ watch(currentSessionId, async (newSessionId) => {
   if (newSessionId) {
     await switchSession(newSessionId)
   } else {
-    messages.value = []
-  }
-})
-
-// SSE 完成后清除该会话的内存缓存，确保下次切回时从数据库加载最新数据
-watch(isProcessing, (processing, wasProcessing) => {
-  if (wasProcessing && !processing) {
-    clearSessionCache()
+    // 多会话后台流式：不能再 messages.value = []（那会通过 computed setter
+    // 清空「上一个会话」的状态并毒化其 dbLoaded，切回时空白且不再从 DB 加载）。
+    // 切到一个全新的空会话状态即可获得空白视图，旧会话状态在池中保持完好。
+    clearSession()
   }
 })
 
@@ -587,7 +571,8 @@ watch(subagentName, () => {
   // 从历史会话点击的特征：currentSessionId 已有值，且不为 null
   if (!currentSessionId.value) {
     selectSession(null)
-    messages.value = []
+    // 不手动清 messages：clearSession() 已切到全新空会话状态；
+    // 若此处 messages.value = [] 会清空旧会话（可能正在后台流式）的状态缓冲
     clearSession()
     clearAttachments()
   }
