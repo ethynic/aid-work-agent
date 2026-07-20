@@ -1091,3 +1091,29 @@ CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_run
     ON bs_browser_assistance_requests(tenant_id, run_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bs_browser_assistance_tenant_state
     ON bs_browser_assistance_requests(tenant_id, state, expires_at);
+
+-- ============== 租户积分充值与计费 #37 ==============
+
+-- 2026-7-20，tenants 表新增 credit_balance 字段，记录租户积分余额（整数，允许透支为负）
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS credit_balance INTEGER NOT NULL DEFAULT 0;
+COMMENT ON COLUMN tenants.credit_balance IS '积分余额（整数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
+
+-- 2026-7-20，chat_records 表新增 credit_cost 字段，记录该轮对话消耗的积分
+ALTER TABLE chat_records ADD COLUMN IF NOT EXISTS credit_cost INTEGER NOT NULL DEFAULT 0;
+
+-- 2026-7-20，新建 tenant_recharges 表，记录租户充值流水（手动/在线支付）
+CREATE TABLE IF NOT EXISTS tenant_recharges (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    amount_yuan NUMERIC(10,2) NOT NULL,          -- 充值金额（元）
+    credits INTEGER NOT NULL,                    -- 转化积分
+    rate INTEGER NOT NULL,                       -- 兑换系数（credits / amount_yuan，默认 10）
+    source TEXT NOT NULL DEFAULT 'manual',       -- manual / online_payment
+    payment_order_id TEXT,                       -- 关联 payment_orders.order_id，manual 时为 NULL
+    operator_id TEXT,                            -- 平台管理员 user_id（manual 必填）
+    operator_name TEXT,                          -- 平台管理员姓名（冗余，便于审计）
+    remark TEXT,                                 -- 备注
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id ON tenant_recharges(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at ON tenant_recharges(created_at DESC);

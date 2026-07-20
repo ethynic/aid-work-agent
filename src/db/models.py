@@ -17,7 +17,7 @@ from src.config.settings import settings
 from src.db.database import get_db_connection, get_current_timestamp
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.models.enums import UserStatus
-from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern, invalidate_user_cache
+from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached, delete_cached_pattern, invalidate_user_cache, invalidate_tenant_cache
 
 
 # ============== 密码哈希 ==============
@@ -995,9 +995,17 @@ class ChatRecordDB:
         status: str = "completed",
         error_message: str = None,
         duration_ms: int = 0,
-        source_type: str = "chat"
+        source_type: str = "chat",
+        credit_cost: int = 0
     ) -> Optional[Dict[str, Any]]:
-        """创建新的会话记录"""
+        """创建新的会话记录
+
+        在同一事务内完成：
+        1. INSERT chat_records（含 credit_cost）
+        2. 若 tenant_id 非空且 credit_cost > 0，原子扣减 tenants.credit_balance
+
+        扣减失败时整体 rollback，保证对话记录与余额变更一致性。
+        """
         record_id = generate_record_id()
         placeholder = "%s"
 
@@ -1009,11 +1017,11 @@ class ChatRecordDB:
                     (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
                      total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
                      model, provider, execution_details, agent_iterations, subagent_calls,
-                     status, error_message, duration_ms, source_type)
+                     status, error_message, duration_ms, source_type, credit_cost)
                     VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder},
                             {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
                     RETURNING *
                 """, (
                     record_id, session_id, tenant_id, user_id, user_message, assistant_message,
@@ -1022,12 +1030,33 @@ class ChatRecordDB:
                     json.dumps(execution_details) if execution_details else None,
                     agent_iterations,
                     json.dumps(subagent_calls) if subagent_calls else None,
-                    status, error_message, duration_ms, source_type
+                    status, error_message, duration_ms, source_type, credit_cost
                 ))
                 row = cursor.fetchone()
+
+                # 同事务原子扣减余额：tenant_id 为空（非 SaaS 模式）或 credit_cost = 0 时跳过
+                if tenant_id and credit_cost and credit_cost > 0:
+                    cursor.execute(
+                        "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s",
+                        (credit_cost, tenant_id)
+                    )
+
                 conn.commit()
 
-                logger.info(f"Chat record created: {record_id} for session: {session_id}")
+                # 扣费后失效租户缓存，确保下一轮入口拦截（_check_tenant_credit_blocked）
+                # 能读到最新余额；失败只记 warning，不影响已落库的对话记录
+                if tenant_id and credit_cost and credit_cost > 0:
+                    try:
+                        invalidate_tenant_cache(tenant_id)
+                    except Exception as cache_err:
+                        logger.warning(
+                            f"扣费后失效租户缓存失败 tenant_id={tenant_id}: {cache_err}"
+                        )
+
+                logger.info(
+                    f"Chat record created: {record_id} for session: {session_id}, "
+                    f"credit_cost={credit_cost}, tenant_id={tenant_id}"
+                )
                 if not row:
                     return None
                 result = dict(row)
@@ -1265,6 +1294,7 @@ class ChatRecordDB:
                     COALESCE(SUM(cr.completion_tokens), 0) as output_tokens,
                     COALESCE(SUM(cr.prompt_tokens * tcp.input_price_per_m / 1000000), 0) as input_cost,
                     COALESCE(SUM(cr.completion_tokens * tcp.output_price_per_m / 1000000), 0) as output_cost,
+                    COALESCE(SUM(cr.credit_cost), 0) as credit_cost,
                     EXISTS(
                         SELECT 1 FROM chat_records cr2
                         LEFT JOIN token_cost_prices tcp2 ON cr2.model = tcp2.model_name
@@ -1289,6 +1319,7 @@ class ChatRecordDB:
             total_conversations = 0
             total_input_cost = 0.0
             total_output_cost = 0.0
+            total_credit_cost = 0
             has_unpriced = False
 
             for row in rows:
@@ -1296,6 +1327,7 @@ class ChatRecordDB:
                     input_cost = float(row["input_cost"]) if row["input_cost"] else 0.0
                     output_cost = float(row["output_cost"]) if row["output_cost"] else 0.0
                     tenant_unpriced = bool(row["has_unpriced_tokens"])
+                    tenant_credit_cost = int(row["credit_cost"] or 0)
                     tenant_data.append({
                         "tenant_id": row["tenant_id"],
                         "input_tokens": row["input_tokens"],
@@ -1304,6 +1336,7 @@ class ChatRecordDB:
                         "input_cost": input_cost,
                         "output_cost": output_cost,
                         "total_cost": round(input_cost + output_cost, 2),
+                        "credit_cost": tenant_credit_cost,
                         "has_unpriced_tokens": tenant_unpriced
                     })
                     total_input_tokens += row["input_tokens"]
@@ -1311,6 +1344,7 @@ class ChatRecordDB:
                     total_conversations += row["conversation_count"]
                     total_input_cost += input_cost
                     total_output_cost += output_cost
+                    total_credit_cost += tenant_credit_cost
                     if tenant_unpriced:
                         has_unpriced = True
 
@@ -1324,6 +1358,7 @@ class ChatRecordDB:
                     "total_input_cost": round(total_input_cost, 2),
                     "total_output_cost": round(total_output_cost, 2),
                     "total_cost": round(total_input_cost + total_output_cost, 2),
+                    "total_credit_cost": total_credit_cost,
                     "has_unpriced_tokens": has_unpriced
                 },
                 "data": tenant_data
@@ -1927,3 +1962,274 @@ class ContextSummaryDB:
                 )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+
+# ============== Token 成本价 ==============
+
+class TokenCostPriceDB:
+    """token_cost_prices 表访问类（全平台统一价，无 tenant_id）
+
+    关联方式：chat_records.model = token_cost_prices.model_name
+    """
+
+    @staticmethod
+    def get_by_model_name(model_name: str) -> Optional[Dict[str, Any]]:
+        """按模型名查询单价
+
+        Returns:
+            {"model_name", "input_price_per_m", "output_price_per_m"} 或 None
+        """
+        if not model_name:
+            return None
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT model_name, input_price_per_m, output_price_per_m
+                FROM token_cost_prices
+                WHERE model_name = {placeholder}
+                """,
+                (model_name,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
+# ============== 租户充值流水 ==============
+
+def generate_recharge_id() -> str:
+    """生成唯一充值记录 ID"""
+    return f"rc_{uuid.uuid4().hex[:12]}"
+
+
+class TenantRechargesDB:
+    """tenant_recharges 表访问类（租户充值流水，#37）
+
+    平台级计费表，记录每一次租户充值（手动/在线支付）。
+    创建/删除时与 tenants.credit_balance 同事务原子变更。
+    """
+
+    @staticmethod
+    def create(
+        tenant_id: str,
+        amount_yuan: float,
+        credits: int,
+        rate: int,
+        source: str = "manual",
+        operator_id: str = None,
+        operator_name: str = None,
+        remark: str = None,
+        payment_order_id: str = None,
+    ) -> Optional[Dict[str, Any]]:
+        """创建充值记录，同事务原子增加 tenants.credit_balance
+
+        Returns:
+            新建记录字典；失败返回 None
+        """
+        if not tenant_id:
+            logger.error("TenantRechargesDB.create: tenant_id is required")
+            return None
+
+        recharge_id = generate_recharge_id()
+        placeholder = "%s"
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    f"""
+                    INSERT INTO tenant_recharges
+                    (tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                     operator_id, operator_name, remark)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
+                            {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    RETURNING *
+                    """,
+                    (
+                        tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                        operator_id, operator_name, remark,
+                    ),
+                )
+                row = cursor.fetchone()
+
+                # 同事务原子加余额
+                cursor.execute(
+                    "UPDATE tenants SET credit_balance = credit_balance + %s WHERE tenant_id = %s",
+                    (credits, tenant_id),
+                )
+
+                conn.commit()
+                logger.info(
+                    f"Recharge created: tenant={tenant_id}, amount_yuan={amount_yuan}, "
+                    f"credits={credits}, rate={rate}, source={source}"
+                )
+                return dict(row) if row else None
+            except Exception as e:
+                logger.error(f"Failed to create recharge: {e}")
+                return None
+
+    @staticmethod
+    def list(
+        tenant_id: str = None,
+        date_from: str = None,
+        date_to: str = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Dict[str, Any]:
+        """列表查询（按 created_at DESC）
+
+        Args:
+            tenant_id: 可选，按租户筛选
+            date_from: 可选，开始日期 (YYYY-MM-DD)
+            date_to: 可选，结束日期 (YYYY-MM-DD)
+            page: 页码，从 1 开始
+            page_size: 每页记录数
+
+        Returns:
+            {"items": [...], "total": int, "page": int, "page_size": int}
+        """
+        where_clauses: list = []
+        params: list = []
+        if tenant_id:
+            where_clauses.append("tenant_id = %s")
+            params.append(tenant_id)
+        if date_from:
+            where_clauses.append("created_at >= %s")
+            params.append(f"{date_from} 00:00:00")
+        if date_to:
+            where_clauses.append("created_at <= %s")
+            params.append(f"{date_to} 23:59:59")
+        where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) AS cnt FROM tenant_recharges WHERE {where_sql}", params)
+            total = int(cursor.fetchone()["cnt"] or 0)
+
+            cursor.execute(
+                f"""
+                SELECT * FROM tenant_recharges
+                WHERE {where_sql}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (*params, page_size, offset),
+            )
+            items = [dict(row) for row in cursor.fetchall()]
+
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    @staticmethod
+    def get_by_id(recharge_id: int) -> Optional[Dict[str, Any]]:
+        """根据主键 id 获取充值记录"""
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM tenant_recharges WHERE id = {placeholder}",
+                (recharge_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def delete(recharge_id: int) -> Optional[Dict[str, Any]]:
+        """删除充值记录，同事务原子回扣 tenants.credit_balance
+
+        Returns:
+            被删除的记录字典（含 tenant_id / credits）；记录不存在返回 None
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    f"SELECT * FROM tenant_recharges WHERE id = {placeholder}",
+                    (recharge_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                record = dict(row)
+                credits = int(record.get("credits") or 0)
+                tenant_id = record.get("tenant_id")
+
+                cursor.execute(
+                    f"DELETE FROM tenant_recharges WHERE id = {placeholder}",
+                    (recharge_id,),
+                )
+
+                # 同事务原子回扣余额
+                if tenant_id and credits > 0:
+                    cursor.execute(
+                        "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s",
+                        (credits, tenant_id),
+                    )
+
+                conn.commit()
+                logger.info(
+                    f"Recharge deleted: id={recharge_id}, tenant={tenant_id}, credits={credits}"
+                )
+                return record
+            except Exception as e:
+                logger.error(f"Failed to delete recharge: {e}")
+                return None
+
+    @staticmethod
+    def stats(tenant_id: str = None) -> Dict[str, Any]:
+        """汇总统计：总充值金额、总积分、最近 7 天趋势"""
+        where_sql = "WHERE tenant_id = %s" if tenant_id else "WHERE TRUE"
+        params: list = [tenant_id] if tenant_id else []
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT
+                    COALESCE(SUM(amount_yuan), 0) AS total_amount_yuan,
+                    COALESCE(SUM(credits), 0) AS total_credits,
+                    COUNT(*) AS total_count
+                FROM tenant_recharges
+                {where_sql}
+                """,
+                params,
+            )
+            row = cursor.fetchone() or {}
+            total_amount_yuan = float(row.get("total_amount_yuan") or 0)
+            total_credits = int(row.get("total_credits") or 0)
+            total_count = int(row.get("total_count") or 0)
+
+            # 最近 7 天趋势
+            cursor.execute(
+                f"""
+                SELECT
+                    DATE(created_at) AS date,
+                    COALESCE(SUM(amount_yuan), 0) AS amount_yuan,
+                    COALESCE(SUM(credits), 0) AS credits,
+                    COUNT(*) AS count
+                FROM tenant_recharges
+                {where_sql}
+                  AND created_at >= CURRENT_DATE - INTERVAL '6 days'
+                GROUP BY DATE(created_at)
+                ORDER BY DATE(created_at) ASC
+                """,
+                params,
+            )
+            trend = [
+                {
+                    "date": str(r["date"]) if r.get("date") else None,
+                    "amount_yuan": float(r.get("amount_yuan") or 0),
+                    "credits": int(r.get("credits") or 0),
+                    "count": int(r.get("count") or 0),
+                }
+                for r in cursor.fetchall()
+            ]
+
+        return {
+            "total_amount_yuan": total_amount_yuan,
+            "total_credits": total_credits,
+            "total_count": total_count,
+            "recent_7d_trend": trend,
+        }

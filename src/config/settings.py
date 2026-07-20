@@ -297,6 +297,14 @@ class WeComConfig(BaseModel):
     waiting_indicator: WeComWaitingIndicatorConfig = Field(default_factory=WeComWaitingIndicatorConfig)
 
 
+class BillingConfig(BaseModel):
+    """积分计费配置（#37 租户积分充值与计费）
+
+    - usage_factor: 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
+    """
+    usage_factor: int = 100
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -312,6 +320,7 @@ class Settings(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     wecom: WeComConfig = Field(default_factory=WeComConfig)
+    billing: BillingConfig = Field(default_factory=BillingConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）

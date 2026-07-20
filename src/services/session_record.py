@@ -16,6 +16,7 @@ from datetime import datetime
 from loguru import logger
 
 from src.db.models import ChatRecordDB
+from src.services.billing import calculate_credit_cost
 
 _RESULT_MAX_LENGTH = 2000
 
@@ -260,10 +261,25 @@ class SessionRecordService:
         保存会话记录到数据库（带异常保护）
 
         在 agent 执行完毕后调用，失败只记日志不影响已返回的响应。
+        同事务内：
+        1. INSERT chat_records（含 credit_cost）
+        2. UPDATE tenants.credit_balance 原子扣减（tenant_id 为空或 credit_cost=0 时跳过）
         """
         try:
             if self.end_time is None:
                 self.end_time = time.time()
+
+            # 计算积分用量：单价缺失时 credit_cost = 0，不阻断对话
+            try:
+                credit_cost = calculate_credit_cost(
+                    prompt_tokens=self.prompt_tokens,
+                    completion_tokens=self.completion_tokens,
+                    model=self.model,
+                )
+            except Exception as billing_err:
+                # 计费异常不应影响对话记录落库
+                logger.error(f"计费计算失败，credit_cost 降级为 0: {billing_err}")
+                credit_cost = 0
 
             record = ChatRecordDB.create(
                 session_id=self.session_id,
@@ -283,7 +299,8 @@ class SessionRecordService:
                 status=self.status,
                 error_message=self.error_message,
                 duration_ms=self.get_duration_ms(),
-                source_type=self.source_type
+                source_type=self.source_type,
+                credit_cost=credit_cost
             )
 
             if record:
@@ -293,6 +310,7 @@ class SessionRecordService:
                     f"tokens(total={self.total_token_count}, "
                     f"input={self.prompt_tokens}, output={self.completion_tokens}, "
                     f"cached={self.cached_input_tokens}), "
+                    f"credit_cost={credit_cost}, "
                     f"iterations={self.agent_iterations}, "
                     f"duration={self.get_duration_ms()}ms"
                 )

@@ -233,6 +233,10 @@ notification:
       enabled: false
       default_url: ""
 
+# 积分计费配置（#37 租户积分充值与计费）
+billing:
+  usage_factor: 100  # 用量系数，token 成本价 × 系数 = 积分用量（向上取整）
+
 wecom:
   waiting_indicator:
     enabled: true

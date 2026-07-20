@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS chat_records (
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'chat',
+    credit_cost INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -485,11 +486,13 @@ CREATE TABLE IF NOT EXISTS tenants (
     settings TEXT,
     expire_at TIMESTAMP,
     tenant_code TEXT,
+    credit_balance INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
+COMMENT ON COLUMN tenants.credit_balance IS '积分余额（整数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
@@ -783,6 +786,7 @@ CREATE TABLE IF NOT EXISTS chat_records (
     status TEXT DEFAULT 'completed',
     error_message TEXT,
     duration_ms INTEGER DEFAULT 0,
+    credit_cost INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -977,11 +981,13 @@ CREATE TABLE IF NOT EXISTS tenants (
     settings TEXT,
     expire_at TIMESTAMP,
     tenant_code TEXT,
+    credit_balance INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 COMMENT ON COLUMN tenants.expire_at IS '到期日期（时分秒为 23:59:59，当天仍可登录，空表示永久有效）';
+COMMENT ON COLUMN tenants.credit_balance IS '积分余额（整数），允许透支为负，对话中扣完不中断、下一轮入口拦截';
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 CREATE INDEX IF NOT EXISTS idx_tenants_expire_at ON tenants(expire_at);
@@ -1819,3 +1825,23 @@ DO $$
 BEGIN
     RAISE NOTICE 'Test database (aid_work_agent2) initialized successfully';
 END $$;
+
+-- ============== 租户积分充值流水 ==============
+-- 平台级计费表，记录每一次租户充值（手动/在线支付）
+-- 与 subscriptions/payment_orders 并行，构成预付费积分计费体系
+CREATE TABLE IF NOT EXISTS tenant_recharges (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    amount_yuan NUMERIC(10,2) NOT NULL,          -- 充值金额（元）
+    credits INTEGER NOT NULL,                    -- 转化积分
+    rate INTEGER NOT NULL,                       -- 兑换系数（credits / amount_yuan，默认 10）
+    source TEXT NOT NULL DEFAULT 'manual',       -- manual / online_payment
+    payment_order_id TEXT,                       -- 关联 payment_orders.order_id，manual 时为 NULL
+    operator_id TEXT,                            -- 平台管理员 user_id（manual 必填）
+    operator_name TEXT,                          -- 平台管理员姓名（冗余，便于审计）
+    remark TEXT,                                 -- 备注
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id ON tenant_recharges(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at ON tenant_recharges(created_at DESC);

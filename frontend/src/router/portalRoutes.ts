@@ -10,6 +10,7 @@ export const portalRoutes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'portal-dashboard', component: () => import('@/components/saas/TenantDashboard.vue') },
       { path: 'tenants', name: 'portal-tenants', component: () => import('@/components/saas/TenantMgmt.vue') },
+      { path: 'recharge', name: 'portal-recharge', component: () => import('@/components/saas/TenantRecharge.vue') },
       { path: 'subagents', name: 'portal-subagents', component: () => import('@/components/DigitalEmployeeManager.vue') },
       { path: 'agent-definitions', name: 'portal-agent-definitions', component: () => import('@/components/AgentDefinitionManager.vue') },
       { path: 'token-usage', name: 'portal-token-usage', component: () => import('@/components/saas/PlatformTokenUsage.vue') },

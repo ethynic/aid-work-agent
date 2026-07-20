@@ -4,6 +4,7 @@ import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
+import { useCreditCheck } from './useCreditCheck'
 
 /**
  * 多会话后台流式架构
@@ -176,6 +177,15 @@ export function useAgent() {
 
   async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null) {
     if (!content.trim()) return
+
+    // 余额检查：余额 ≤ 0 阻断发送（仅在租户前台模式下生效，演示模式跳过）
+    if (window.location.pathname.startsWith('/t/')) {
+      const { checkCreditBeforeAction } = useCreditCheck()
+      const creditCheck = await checkCreditBeforeAction('sendMessage')
+      if (!creditCheck.allowed) {
+        return
+      }
+    }
 
     // 优先使用外部传入的 sessionId（来自 DB 的真实会话 ID），避免与本地生成的 sessionId 产生竞态
     const effectiveSessionId = overrideSessionId || sessionId.value

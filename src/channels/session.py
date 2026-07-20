@@ -829,6 +829,38 @@ class ChannelSessionManager:
         if tool_messages_collected is None:
             tool_messages_collected = []
 
+        # 积分余额硬阻断：SaaS 模式下余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
+        # 命中时通过 send_response 发送提示并返回 status='no_credit'，避免调用 LLM 扣费
+        try:
+            from src.config.settings import settings as _settings
+            if _settings.saas.enabled and tenant_id:
+                from src.saas.db.tenant_db import TenantDB
+                _tenant_info = TenantDB.get_by_id(tenant_id)
+                if _tenant_info is not None:
+                    _credit_balance = int(_tenant_info.get("credit_balance") or 0)
+                    if _credit_balance <= 0:
+                        logger.warning(
+                            f"租户 {tenant_id} 积分余额耗尽（balance={_credit_balance}），"
+                            f"阻断渠道消息 session={session_id}"
+                        )
+                        try:
+                            await send_response(
+                                "积分余额已耗尽，无法继续对话，请联系管理员充值。",
+                                [],
+                            )
+                        except Exception as _send_err:
+                            logger.error(f"余额阻断提示发送失败 session={session_id}: {_send_err}")
+                        return {
+                            "status": "no_credit",
+                            "response_text": "",
+                            "downloadable_files": [],
+                            "was_merged": False,
+                            "merged_input": "",
+                        }
+        except Exception as _credit_err:
+            logger.error(f"渠道消息积分检查失败 tenant_id={tenant_id}: {_credit_err}")
+            # 检查异常时不阻断，避免误伤正常用户
+
         async def collect_files_callback(event):
             if not isinstance(event, dict):
                 return

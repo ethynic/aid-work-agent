@@ -91,6 +91,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('@/components/ChatContainer.vue') },
       { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('@/components/AllSessions.vue') },
       { path: 'token-usage', name: 'tenant-token-usage', component: () => import('@/components/saas/TenantTokenUsage.vue') },
+      { path: 'recharge-records', name: 'tenant-recharge-records', component: () => import('@/components/saas/TenantRechargeRecords.vue') },
       { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('@/components/saas/ReplyStyleManager.vue') },
       { path: 'external-customers', name: 'tenant-external-customers', component: () => import('@/components/saas/ExternalCustomerService.vue') },
       { path: 'data-sources', name: 'tenant-data-sources', component: () => import('@/pages/DataSourceManager.vue') },

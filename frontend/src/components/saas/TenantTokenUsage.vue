@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-canvas">
     <AppHeader
-      title="站点Token用量"
+      title="积分用量"
       :is-logged-in="effectiveIsLoggedIn"
       :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar"
@@ -14,8 +14,11 @@
       <div class="page-toolbar">
         <div class="page-toolbar-left">
           <div class="flex items-center gap-2">
-            <label class="text-sm text-default">选择月份:</label>
-            <input type="month" v-model="selectedMonth" @change="handleMonthChange"
+            <label class="text-sm text-default">开始日期:</label>
+            <input type="date" v-model="dateFrom" @change="handleFilterChange"
+              class="px-3 py-1.5 border border-default rounded-lg text-sm bg-surface focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200">
+            <span class="text-muted text-sm">至</span>
+            <input type="date" v-model="dateTo" @change="handleFilterChange"
               class="px-3 py-1.5 border border-default rounded-lg text-sm bg-surface focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-200">
           </div>
         </div>
@@ -27,48 +30,38 @@
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
       <template v-else>
-        <!-- 汇总卡片 -->
-        <div v-if="summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <!-- 余额 + 用量汇总卡片 -->
+        <div v-if="balance || usageSummary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div class="bg-surface rounded-lg p-4 border border-default">
-            <div class="text-xs text-muted">总对话次数</div>
-            <div class="text-xl font-bold text-default mt-1">{{ summary.total_conversations }}</div>
+            <div class="text-xs text-muted">积分余额</div>
+            <div class="text-xl font-bold text-primary-600 mt-1">{{ balance?.credit_balance ?? '-' }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
-            <div class="text-xs text-muted">输入Token总数 (百万)</div>
-            <div class="text-xl font-bold text-info-600 mt-1">{{ formatTokensToMillionsThreeDecimals(summary.total_input_tokens) }}</div>
+            <div class="text-xs text-muted">近7天日均消耗</div>
+            <div class="text-xl font-bold text-default mt-1">{{ balance?.daily_avg_cost_7d ?? 0 }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
-            <div class="text-xs text-muted">输出Token总数 (百万)</div>
-            <div class="text-xl font-bold text-success-600 mt-1">{{ formatTokensToMillionsThreeDecimals(summary.total_output_tokens) }}</div>
+            <div class="text-xs text-muted">预估可用天数</div>
+            <div class="text-xl font-bold text-default mt-1">{{ formatEstimatedDays(balance?.estimated_days_left) }}</div>
           </div>
           <div class="bg-surface rounded-lg p-4 border border-default">
-            <div class="text-xs text-muted">平均每对话Token数</div>
-            <div class="text-xl font-bold text-default mt-1">
-              {{ summary.total_conversations > 0 ? formatTokensToMillionsThreeDecimals((summary.total_input_tokens + summary.total_output_tokens) / summary.total_conversations) : '0.000' }}
-            </div>
+            <div class="text-xs text-muted">查询期总消耗积分</div>
+            <div class="text-xl font-bold text-danger-600 mt-1">{{ usageSummary?.total_credit_cost ?? 0 }}</div>
           </div>
         </div>
 
-        <!-- 对话明细表格 -->
+        <!-- 按日聚合明细表格 -->
         <div class="mb-4">
-          <h3 class="text-sm font-medium text-default mb-3">对话明细 ({{ selectedMonth }})</h3>
+          <h3 class="text-sm font-medium text-default mb-3">每日用量明细</h3>
           <div class="table-scroll-wrapper">
-            <BaseTable :columns="columns" :data="data" row-key="record_id">
+            <BaseTable :columns="columns" :data="data" row-key="date">
               <template #index="{ index }">{{ seqNumber(index) }}</template>
-              <template #username="{ row }">{{ row.username || row.user_id || '-' }}</template>
-              <template #user_message="{ row }">
-                <span :title="row.user_message">{{ formatMessagePreview(row.user_message) }}</span>
+              <template #date="{ row }">{{ row.date || '-' }}</template>
+              <template #credit_cost="{ row }">
+                <span class="text-danger-600 font-medium">{{ row.credit_cost }}</span>
               </template>
-              <template #assistant_message="{ row }">
-                <span :title="row.assistant_message">{{ formatMessagePreview(row.assistant_message) }}</span>
-              </template>
-              <template #input_tokens="{ row }">
-                <span class="text-info-600">{{ formatTokensToMillionsThreeDecimals(row.input_tokens) }}</span>
-              </template>
-              <template #output_tokens="{ row }">
-                <span class="text-success-600">{{ formatTokensToMillionsThreeDecimals(row.output_tokens) }}</span>
-              </template>
-              <template #created_at="{ row }">{{ formatDateTime(row.created_at) }}</template>
+              <template #session_count="{ row }">{{ row.session_count }}</template>
+              <template #message_count="{ row }">{{ row.message_count }}</template>
               <template #empty>暂无数据</template>
             </BaseTable>
           </div>
@@ -96,9 +89,8 @@ import AppHeader from '@/components/AppHeader.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
-import { getTenantTokenDetails } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
-import { formatTokensToMillionsThreeDecimals, formatMessagePreview } from '@/utils/formatTokens'
+import { getTenantBalance, getTenantUsage, type BalanceInfo, type UsageItem } from '@/api/billing'
 
 const route = useRoute()
 const router = useRouter()
@@ -130,59 +122,75 @@ async function handleLogout() {
   await tenantLogout()
   router.push(`/t/${route.params.tenant_id}/login`)
 }
+
 const loading = ref(true)
-const selectedMonth = ref(getDefaultMonth())
-const summary = ref<any>(null)
-const data = ref<any[]>([])
+const dateFrom = ref('')
+const dateTo = ref('')
+const balance = ref<BalanceInfo | null>(null)
+const data = ref<UsageItem[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 
+// 查询期总消耗积分（前端汇总当前页数据，仅用于卡片展示）
+const usageSummary = computed(() => {
+  const total_credit_cost = data.value.reduce((sum, it) => sum + (it.credit_cost || 0), 0)
+  return { total_credit_cost }
+})
+
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
-  { key: 'username', label: '用户' },
-  { key: 'user_message', label: '用户输入' },
-  { key: 'assistant_message', label: '智能体答复' },
-  { key: 'input_tokens', label: '输入Token (M)' },
-  { key: 'output_tokens', label: '输出Token (M)' },
-  { key: 'created_at', label: '时间' },
+  { key: 'date', label: '日期', width: '140px' },
+  { key: 'credit_cost', label: '消耗积分', width: '120px' },
+  { key: 'session_count', label: '会话数', width: '100px' },
+  { key: 'message_count', label: '消息数', width: '100px' },
 ]
 
 function seqNumber(index: number): number {
   return (currentPage.value - 1) * pageSize.value + index + 1
 }
 
-function getDefaultMonth(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  return `${year}-${month}`
-}
-
-function formatDateTime(datetime: string): string {
-  if (!datetime) return ''
-  const date = new Date(datetime)
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+function formatEstimatedDays(days: number | null | undefined): string {
+  if (days === null || days === undefined) return '-'
+  if (days < 0) return '暂无数据'
+  return `${days} 天`
 }
 
 async function loadData(page: number = 1) {
   loading.value = true
   try {
-    const response = await getTenantTokenDetails(selectedMonth.value, page, pageSize.value)
-    if (response.success) {
-      summary.value = response.summary
-      data.value = response.data
-      total.value = response.pagination?.total_count || 0
+    // 并行拉取余额 + 用量明细
+    const [balanceRes, usageRes] = await Promise.all([
+      getTenantBalance(),
+      getTenantUsage({
+        date_from: dateFrom.value || undefined,
+        date_to: dateTo.value || undefined,
+        page,
+        page_size: pageSize.value
+      })
+    ])
+
+    if (balanceRes.success && balanceRes.balance) {
+      balance.value = balanceRes.balance
     } else {
-      toast.error(response.message || '加载数据失败')
-      summary.value = null
+      balance.value = null
+      if (!balanceRes.success) {
+        toast.error(balanceRes.message || '获取积分余额失败')
+      }
+    }
+
+    if (usageRes.success) {
+      data.value = usageRes.items || []
+      total.value = usageRes.total || 0
+    } else {
+      toast.error(usageRes.message || '加载用量明细失败')
       data.value = []
       total.value = 0
     }
   } catch (error: any) {
-    console.error('加载租户Token消耗明细失败:', error)
+    console.error('加载积分用量明细失败:', error)
     toast.error(error.message || '加载数据失败')
-    summary.value = null
+    balance.value = null
     data.value = []
     total.value = 0
   } finally {
@@ -190,7 +198,7 @@ async function loadData(page: number = 1) {
   }
 }
 
-function handleMonthChange() {
+function handleFilterChange() {
   currentPage.value = 1
   loadData(1)
 }

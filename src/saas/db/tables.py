@@ -32,6 +32,7 @@ def init_saas_tables(conn):
             max_users INTEGER DEFAULT 50,
             settings TEXT,
             tenant_code TEXT,
+            credit_balance INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -132,6 +133,31 @@ def init_saas_tables(conn):
         cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_payment_orders_tenant
         ON payment_orders(tenant_id, payment_status)
+        """)
+
+        # 9. 租户充值流水表（预付费积分计费体系，#37）
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tenant_recharges (
+            id SERIAL PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            amount_yuan NUMERIC(10,2) NOT NULL,
+            credits INTEGER NOT NULL,
+            rate INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            payment_order_id TEXT,
+            operator_id TEXT,
+            operator_name TEXT,
+            remark TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id
+        ON tenant_recharges(tenant_id)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at
+        ON tenant_recharges(created_at DESC)
         """)
 
         conn.commit()

@@ -704,6 +704,43 @@ UPLOAD_DIR = _PROJECT_ROOT / settings.storage.uploads_dir
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONResponse]:
+    """租户积分余额硬阻断检查（#37 Phase 4）
+
+    在 /api/chat 与 /api/chat/stream 入口处调用：
+    - SaaS 模式未启用：放行（返回 None）
+    - tenant_id 为空（演示/匿名）：放行
+    - 租户余额 > 0：放行
+    - 租户余额 ≤ 0：返回 403 JSONResponse，阻断对话
+
+    返回 None 表示放行，返回 JSONResponse 表示阻断（直接 return 给前端）。
+    """
+    if not settings.saas.enabled:
+        return None
+    if not tenant_id:
+        return None
+    try:
+        from src.saas.db.tenant_db import TenantDB
+        tenant = TenantDB.get_by_id(tenant_id)
+        if not tenant:
+            # 租户不存在：交给后续流程处理（最终会 404），此处放行
+            return None
+        credit_balance = int(tenant.get("credit_balance") or 0)
+        if credit_balance <= 0:
+            logger.warning(f"租户 {tenant_id} 积分余额耗尽（balance={credit_balance}），阻断对话")
+            return JSONResponse({
+                "success": False,
+                "error": "积分余额已耗尽",
+                "details": "积分余额已耗尽，无法继续对话，请联系管理员充值",
+                "code": "NO_CREDIT",
+            }, status_code=403)
+    except Exception as e:
+        logger.error(f"租户积分余额检查失败 tenant_id={tenant_id}: {e}")
+        # 检查异常时不阻断，避免误伤正常用户
+        return None
+    return None
+
+
 def _get_tenant_upload_dir() -> Path:
     """获取当前用户的文件上传目录
 
@@ -950,6 +987,12 @@ async def chat(request: Request):
                     "error": "未授权使用数字员工",
                     "details": "您没有权限访问此数字员工，请联系管理员申请授权",
                 }, status_code=403)
+
+        # 积分余额硬阻断：SaaS 模式下余额 ≤ 0 拒绝对话
+        _tenant_id_for_credit = getattr(request.state, 'tenant_id', None) or (current_user.get("tenant_id") if current_user else None)
+        credit_block_response = _check_tenant_credit_blocked(_tenant_id_for_credit)
+        if credit_block_response is not None:
+            return credit_block_response
 
         agent_user = None
         if current_user:
@@ -1316,6 +1359,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     # 获取当前租户ID（所有分支共享）
     from src.saas.context import get_current_tenant_id
     chat_tenant_id = get_current_tenant_id()
+
+    # 积分余额硬阻断：SaaS 模式下余额 ≤ 0 拒绝对话
+    credit_block_response = _check_tenant_credit_blocked(chat_tenant_id)
+    if credit_block_response is not None:
+        return credit_block_response
 
     # 如果没有传入 session_id，创建一个新的会话记录到数据库
     if not request.session_id:
@@ -1735,6 +1783,7 @@ from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
 from src.saas.api import context_compression_routes
+from src.saas.api import billing_recharges, billing_balance
 from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_router
 from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_admin_router
 app.include_router(tenant_auth.router)
@@ -1753,6 +1802,8 @@ app.include_router(reply_styles.router)
 app.include_router(external_customers.router)
 app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
+app.include_router(billing_recharges.router)
+app.include_router(billing_balance.router)
 # app.include_router(context_compression_routes.router)
 
 
