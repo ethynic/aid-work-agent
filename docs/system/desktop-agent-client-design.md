@@ -187,7 +187,12 @@ Web adapter 保持相对 `/api`；Desktop adapter 从签名内置的发行渠道
 
 - Windows：x64 签名 NSIS；首期不支持 ia32。可评估 Azure Trusted Signing 或标准代码签名证书。
 - macOS：分别构建 arm64/x64 并发布 universal DMG；Developer ID 签名、Hardened Runtime、notarization 必须通过。
-- 更新：使用 `electron-updater` 的 staged rollout；主版本不兼容 browser 协议时服务端返回 `CLIENT_UPDATE_REQUIRED`。
+- Windows 更新：现有包型继续使用 NSIS，并通过 `electron-updater` 对接 HTTPS Generic Provider。发布单元必须同时上传同一次构建生成的 `latest.yml`、签名安装包和 `.blockmap`；客户端不接受 renderer 传入或动态改写更新地址。
+- 更新地址由构建变量 `AID_AGENT_UPDATE_BASE_URL` 写入包内只读发布配置；未配置、非 HTTPS、开发环境或 unsigned development 包时，更新器保持 `disabled`，不得连接生产更新源。
+- 更新状态固定为 `disabled / idle / checking / available / downloading / downloaded / up-to-date / error`。启动延迟检查并按长周期轮询；`autoDownload=false`，发现版本只在左下角提示，用户点击后才下载；下载完成后再次确认“重启并安装”，不得在 Agent 或 browser run 执行中强制退出。
+- preload 只暴露查询状态、订阅状态、检查、下载、重启安装五类窄接口，不暴露 `ipcRenderer`、更新 URL 或任意文件执行能力。Web 构建中 `window.agentDesktop` 不存在，因此更新 UI 和网络请求都不进入 Web 运行链路。
+- 每次发布必须递增 SemVer；同版本重新打包不会被客户端识别为升级。Windows 正式更新必须通过 Authenticode 签名校验，证书轮换需要单独演练。
+- 后续灰度使用 `electron-updater` staged rollout；主版本不兼容 browser 协议时服务端返回 `CLIENT_UPDATE_REQUIRED`。浏览器 runtime 只能报告是否有活跃 run 供安装重启延期判断，不能决定 Agent 客户端的版本策略或发布机制。
 - CI 使用 Windows runner 构建/签名 Windows，macOS runner 构建/签名/notarize macOS；证书只放 CI Secret。
 
 electron-builder 官方支持 Windows NSIS、macOS DMG/universal、签名与更新；macOS 直接分发必须签名并 notarize：

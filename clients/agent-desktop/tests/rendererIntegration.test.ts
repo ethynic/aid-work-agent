@@ -13,10 +13,13 @@ test('桌面壳装载真实 Agent renderer，而不是 Phase 0 静态 Spike', as
 
 test('preload 只暴露版本化白名单能力，不暴露任意 channel 调用入口', async () => {
   const preload = await readFile(path.resolve('dist/electron/preload.cjs'), 'utf8')
-  assert.match(preload, /version:\s*1/)
+  assert.match(preload, /version:\s*2/)
   assert.match(preload, /Object\.freeze/)
   assert.match(preload, /desktop:credentials:hydrate/)
   assert.match(preload, /desktop:save-download/)
+  assert.match(preload, /desktop:update:get-state/)
+  assert.match(preload, /desktop:update:download/)
+  assert.doesNotMatch(preload, /AID_AGENT_UPDATE_BASE_URL|updateBaseUrl/)
   assert.doesNotMatch(preload, /send\s*:\s*|invoke\s*:\s*ipcRenderer\.invoke/)
 })
 

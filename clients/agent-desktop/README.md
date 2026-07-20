@@ -1,6 +1,6 @@
 # Agent Desktop Windows 客户端
 
-本目录是 Windows Electron 基础壳。renderer 直接使用 `frontend/dist-desktop` 的 Agent/租户构建，不包含平台 `/portal`、Python 服务、safeStorage、自动更新或 browser runtime。
+本目录是 Windows Electron 客户端。renderer 直接使用 `frontend/dist-desktop` 的 Agent/租户构建，不包含平台 `/portal`、Python 服务或 browser runtime；凭证使用 safeStorage，正式签名包支持受控自动更新。
 
 ## Windows 开发运行
 
@@ -55,7 +55,7 @@ npm run package:win:dev
 
 加载优先级为 `AID_AGENT_API_BASE_URL`（运维覆盖）→ 用户配置 → 包内默认配置。非法或缺失配置会明确终止启动，不会静默连接其他服务。
 
-生产打包使用 `npm run package:win:release`。该模式没有 `CSC_LINK`/`WIN_CSC_LINK` 会立即失败，签名结果不是 `Valid` 也会失败，不允许静默生成 unsigned release。本阶段不上传发布源，也不配置或连接自动更新 URL。
+生产打包使用 `npm run package:win:release`，并必须同时提供 `AID_AGENT_UPDATE_BASE_URL`。该模式没有 `CSC_LINK`/`WIN_CSC_LINK`、缺少 HTTPS 更新源或签名结果不是 `Valid` 都会立即失败，不允许静默生成 unsigned release。构建生成的 `latest.yml`、签名安装包和 `.blockmap` 必须作为同一发布单元原子上传；构建脚本本身不执行上传。
 
 关闭最后一个窗口会在 Windows 退出应用；再次启动第二实例只会恢复并聚焦已有窗口。窗口位置、尺寸和最大化状态保存在 Electron userData 目录，不保存 Token 或页面内容。
 
@@ -70,5 +70,5 @@ npm run package:win:dev
 ## 尚未覆盖
 
 - macOS 本 Phase 尚未验证，按计划在 Mac 设备单独补验。
-- 正式代码签名证书、真实更新源、灰度和回滚仍需发布环境配置；开发包允许 unsigned，但不可对外发布。
+- 自动更新代码与左下角交互已实现；正式代码签名证书、真实更新源、灰度和回滚仍需发布环境配置与真机验收。开发包允许 unsigned，但固定禁用真实更新且不可对外发布。
 - browser runtime 不属于 Phase 2，未接入且不影响 Agent 主链路。

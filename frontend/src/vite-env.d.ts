@@ -27,9 +27,17 @@ interface AgentDesktopRuntime {
   readonly versions: Readonly<{ electron: string; chrome: string }>
 }
 
+type AgentDesktopUpdateState = Readonly<{
+  status: 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error'
+  currentVersion: string
+  availableVersion?: string
+  percent?: number
+  message?: string
+}>
+
 interface Window {
   readonly agentDesktop?: Readonly<{
-    readonly version: 1
+    readonly version: 1 | 2
     readonly runtime: AgentDesktopRuntime
     readonly credentials: Readonly<{
       hydrate(): Promise<Record<string, string>>
@@ -39,6 +47,13 @@ interface Window {
     readonly system: Readonly<{
       openExternal(url: string): Promise<void>
       saveDownload(input: Readonly<{ url: string; suggestedName: string; authorization?: string; tenantId?: string }>): Promise<Readonly<{ saved: boolean }>>
+    }>
+    readonly updates?: Readonly<{
+      getState(): Promise<AgentDesktopUpdateState>
+      onState(callback: (state: AgentDesktopUpdateState) => void): () => void
+      check(): Promise<void>
+      download(): Promise<void>
+      restartAndInstall(): Promise<void>
     }>
   }>
 }

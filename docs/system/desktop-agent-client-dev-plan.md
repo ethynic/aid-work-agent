@@ -1,7 +1,7 @@
 # Agent 跨平台桌面客户端开发计划
 
 > 日期：2026-07-14
-> 状态：🔧 部分完成（Phase 0～3 Windows 完成；Phase 4 等待浏览器契约；Phase 5 Windows 开发包完成、正式签名/更新待外部条件；macOS 各 Phase 延后验证）
+> 状态：🔧 部分完成（Phase 0～3 Windows 完成；Phase 4 等待浏览器契约；Phase 5 Windows 自动更新代码与开发包完成，正式签名/发布源/真升级待外部条件；macOS 各 Phase 延后验证）
 > 设计基线：[desktop-agent-client-design.md](./desktop-agent-client-design.md)
 > 流程：每个非平凡 Phase 严格执行开发 → 独立测试 → Code Review；不自动提交。
 
@@ -22,7 +22,7 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 | 2 | Electron 壳与平台适配层 | ✅ Windows 完成；macOS 延后验证 | Windows 真壳、真实 renderer、单实例、安全边界和离线恢复通过 |
 | 3 | 凭证、安全、文件与系统集成 | ✅ Windows 完成；macOS 延后验证 | Windows safeStorage、受控下载/外链、深链与零敏感残留门禁通过 |
 | 4 | 可选浏览器 runtime 适配 | ⏸ 等待进入条件 | 统一 Executor contract 与进程回收通过；关闭模块后 Agent 全功能正常 |
-| 5 | 签名、更新、CI 与灰度 | 🔧 Windows 开发包完成；正式发布待证书/发布源 | Windows unsigned dev NSIS 与发布证据通过；签名、升级/回滚尚未验证 |
+| 5 | 签名、更新、CI 与灰度 | 🔧 Windows 本地实现完成；正式发布待证书/发布源 | 更新状态/UI/受控配置/发布元数据和 0.0.2 unsigned dev NSIS 通过；签名、真实升级/回滚尚未验证 |
 | 6 | 全量回归、真机验收与文档收口 | ⬜ | 完成定义全部满足并归档索引 |
 
 ## 3. Phase 0：基线与 Spike
@@ -162,7 +162,16 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 - manifest 记录版本、平台/架构、commit/dirty、installer size/SHA-256/签名状态和完整构建输入 SHA-256；manifest、CycloneDX SBOM、npm audit、license 均原子写入并严格校验。npm audit 明确走官方 advisory endpoint，镜像 404 不再被误报为 0 漏洞。
 - Windows 主控最终产物：`AID-Work-Agent-0.0.1-win-x64-dev-unsigned.exe`，100,215,084 bytes，SHA-256 `20555b354fe2d506d98d61c7eef98625e073b5c3eac6b3cde66996c41ee37979`，Authenticode `NotSigned`，与 manifest 一致；release 目录已 gitignore。
 - packaged `win-unpacked/AID Work Agent.exe` 在临时 API fixture 与隔离 userData 下输出 `AGENT_DESKTOP_SMOKE_PASS`，退出码 0，临时目录与 Electron/packaged 进程残留为 0。
-- 当前仅完成可审计的 Windows 开发安装包，不代表正式可分发：仍需正式 `.ico`、代码签名证书、真实更新源，以及安装/卸载、协议注册、升级/回滚真机验证。自动更新尚未实现，`.blockmap` 不能作为已支持升级的证据。
+- 此检查点当时仅完成可审计的 Windows 开发安装包，不代表正式可分发；2026-07-20 已补齐自动更新代码与本地门禁，但正式 `.ico`、代码签名证书、真实更新源，以及安装/卸载、协议注册、升级/回滚真机验证仍未完成。单独存在 `.blockmap` 不能作为生产升级已验收的证据。
+
+### 2026-07-20 Windows 自动更新开发检查点
+
+- 新前端提交包含 `MenuSidebar.vue`、对话组件和 `useAgent.ts`，均属于 Desktop renderer 输入，必须重新构建安装包；同版本 `0.0.1` 重打包不能触发升级，下一测试版本需提升至 `0.0.2`。
+- 接入 `electron-updater` + NSIS Generic Provider；生产更新地址由 `AID_AGENT_UPDATE_BASE_URL` 在构建时写入包内配置。缺地址、非 HTTPS、未打包或 development-unsigned 渠道全部 fail-closed 为 `disabled`。
+- main 进程维护更新状态机，关闭自动下载和退出时自动安装；preload 仅暴露状态订阅、手动检查、下载、重启安装。左下角仅 Desktop 显示更新提示，下载完成必须由用户确认重启。
+- 本地自动化覆盖配置校验、状态转换、IPC sender 校验和 Web 无桥接降级；开发包只验证 UI/状态/产物，不连接或伪造生产更新源。
+- 外部阻塞项：生产 HTTPS 更新目录、Authenticode 证书/CI Secret、真实的旧版→新版与坏签名/回滚真机矩阵。在这些条件完成前不得标记生产自动更新完成。
+- 三智能体与主控终检完成：Desktop 37/37、Frontend updater/runtime 7/7、Web 与 Desktop production build、开发包 verifier（326 ASAR files）、packaged smoke 和零残留均通过。最终开发包 `AID-Work-Agent-0.0.2-win-x64-dev-unsigned.exe` 为 100,415,947 bytes，SHA-256 `36e017ea473486ee3b59288fe8a7cf95b43c6abfb9b3eda6ecf87a4d17b0ab70`，Authenticode `NotSigned`，包内 API 为 `https://agent2.aidingyi.cn/api`，更新源为 `null`。
 
 ### 工作
 

@@ -1,6 +1,6 @@
 {
   "name": "aid-agent-desktop",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "main": "dist/electron/main.js",
@@ -15,11 +15,15 @@
     "package:win:release": "npm run typecheck && npm test && node scripts/package-win.mjs release",
     "verify:package": "node scripts/verify-package.mjs release"
   },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
   "devDependencies": {
     "@electron/asar": "^4.2.0",
     "@types/node": "^24.0.0",
     "electron": "43.1.0",
     "electron-builder": "^26.15.3",
+    "js-yaml": "^4.1.0",
     "typescript": "^5.9.0"
   }
 }

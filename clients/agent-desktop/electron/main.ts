@@ -4,8 +4,11 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, safeStorage, screen, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import electronUpdater from 'electron-updater'
 import { EncryptedCredentialStore, isAllowedCredentialKey, isAllowedCredentialValue } from './credentials.js'
 import { resolveApiConfiguration } from './apiConfiguration.js'
+import { DesktopUpdater, type UpdateAdapter } from './desktopUpdater.js'
+import { resolveUpdateConfiguration } from './updateConfiguration.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
 import {
   createContentSecurityPolicy,
@@ -25,6 +28,8 @@ import {
   nextZoomFactor,
   saveWindowState,
 } from './windowState.js'
+
+const { autoUpdater } = electronUpdater
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -49,6 +54,7 @@ let apiBaseUrl = ''
 let contentSecurityPolicy = ''
 let mainWindow: BrowserWindow | null = null
 let credentialStore: EncryptedCredentialStore | null = null
+let desktopUpdater: DesktopUpdater | null = null
 let pendingDeepLink: string | null = null
 
 function navigateDeepLink(argumentsList: readonly string[]): void {
@@ -160,6 +166,42 @@ function registerDesktopIpc(): void {
       rmSync(temporaryPath, { force: true })
     }
   })
+  ipcMain.handle('desktop:update:get-state', (event) => {
+    assertTrustedSender(event)
+    return desktopUpdater!.getState()
+  })
+  ipcMain.handle('desktop:update:check', async (event) => {
+    assertTrustedSender(event)
+    await desktopUpdater!.check()
+  })
+  ipcMain.handle('desktop:update:download', async (event) => {
+    assertTrustedSender(event)
+    await desktopUpdater!.download()
+  })
+  ipcMain.handle('desktop:update:restart-and-install', (event) => {
+    assertTrustedSender(event)
+    desktopUpdater!.restartAndInstall()
+  })
+}
+
+function initializeDesktopUpdater(): void {
+  const configuration = resolveUpdateConfiguration({
+    isPackaged: app.isPackaged,
+    smokeMode,
+    resourcesPath: process.resourcesPath,
+  })
+  const emit = (state: Readonly<import('./desktopUpdater.js').DesktopUpdateState>) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:update:state', state)
+  }
+  desktopUpdater = configuration.enabled
+    ? new DesktopUpdater(autoUpdater as unknown as UpdateAdapter, app.getVersion(), emit)
+    : new DesktopUpdater(null, app.getVersion(), emit, configuration.reason)
+  if (configuration.enabled) {
+    desktopUpdater.configure(configuration.updateBaseUrl)
+    desktopUpdater.start()
+  } else {
+    logLifecycle('updater-disabled', configuration.reason)
+  }
 }
 
 function installSecurityHandlers(window: BrowserWindow): void {
@@ -209,7 +251,7 @@ async function createWindow(): Promise<BrowserWindow> {
     webPreferences: {
       ...createSecureWebPreferences(preloadPath),
       additionalArguments: [
-        '--aidagent-bridge-version=1',
+        '--aidagent-bridge-version=2',
         `--aidagent-api-base-url=${apiBaseUrl}`,
         `--aidagent-smoke-mode=${smokeMode ? '1' : '0'}`,
       ],
@@ -286,6 +328,7 @@ if (!hasSingleInstanceLock) {
     contentSecurityPolicy = createContentSecurityPolicy(apiBaseUrl)
     logLifecycle('api-configuration-loaded', configuration.source)
     nativeTheme.themeSource = 'system'
+    initializeDesktopUpdater()
     registerDesktopIpc()
     await registerRendererProtocol()
     await createWindow()
@@ -308,6 +351,7 @@ if (!hasSingleInstanceLock) {
   })
 
   app.on('window-all-closed', () => {
+    desktopUpdater?.stop()
     if (process.platform !== 'darwin') app.quit()
   })
 }

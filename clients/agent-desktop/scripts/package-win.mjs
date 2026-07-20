@@ -5,6 +5,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { assertPackageInvocation, assertReleaseSigning, expectedSignature, isValidReleaseVersion } from '../dist/electron/releasePolicy.js'
 import { normalizeApiBaseUrl } from '../dist/electron/security.js'
+import { normalizeUpdateBaseUrl } from '../dist/electron/updateConfiguration.js'
 
 const mode = process.argv[2]
 assertPackageInvocation(mode, process.argv.slice(3))
@@ -12,22 +13,33 @@ assertReleaseSigning(mode, process.env)
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 if (!isValidReleaseVersion(packageJson.version)) throw new Error('package version is not release-compatible semver')
 const packagedApiBaseUrl = normalizeApiBaseUrl(process.env.AID_AGENT_PACKAGE_API_BASE_URL ?? '')
+const isRelease = mode === 'release'
+const packagedUpdateBaseUrl = isRelease ? normalizeUpdateBaseUrl(process.env.AID_AGENT_UPDATE_BASE_URL ?? '') : null
 
 const temporaryPackagingRoot = mkdtempSync(path.join(os.tmpdir(), 'aidagent-package-'))
 const packagedConfig = path.join(temporaryPackagingRoot, 'desktop-config.json')
+const packagedUpdateConfig = path.join(temporaryPackagingRoot, 'update-config.json')
 const builderConfig = path.join(temporaryPackagingRoot, 'electron-builder.json')
 try {
   writeFileSync(packagedConfig, `${JSON.stringify({ schemaVersion: 1, apiBaseUrl: packagedApiBaseUrl }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+  writeFileSync(packagedUpdateConfig, `${JSON.stringify({
+    schemaVersion: 1,
+    channel: isRelease ? 'release' : 'development-unsigned',
+    updateBaseUrl: packagedUpdateBaseUrl,
+  }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   writeFileSync(builderConfig, `${JSON.stringify({
     extends: path.resolve('electron-builder.yml'),
-    extraResources: [{ from: packagedConfig, to: 'config/desktop-config.json' }],
+    extraResources: [
+      { from: packagedConfig, to: 'config/desktop-config.json' },
+      { from: packagedUpdateConfig, to: 'config/update-config.json' },
+    ],
+    ...(isRelease ? { publish: [{ provider: 'generic', url: packagedUpdateBaseUrl }] } : {}),
   }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
 } catch (error) {
   rmSync(temporaryPackagingRoot, { recursive: true, force: true })
   throw error
 }
 
-const isRelease = mode === 'release'
 const artifactName = isRelease
   ? `AID-Work-Agent-${packageJson.version}-win-x64.${'${ext}'}`
   : `AID-Work-Agent-${packageJson.version}-win-x64-dev-unsigned.${'${ext}'}`
@@ -54,10 +66,20 @@ function listFiles(root) {
 }
 
 function buildInputDigest() {
-  const roots = ['electron-builder.yml', 'package.json', 'package-lock.json', 'dist/electron', 'dist/renderer']
+  const roots = [
+    'electron-builder.yml',
+    'package.json',
+    'package-lock.json',
+    'scripts/package-win.mjs',
+    'scripts/verify-package.mjs',
+    'dist/electron',
+    'dist/renderer',
+  ]
   const files = roots.flatMap((entry) => statSync(entry).isDirectory() ? listFiles(entry) : [path.resolve(entry)])
   const hash = createHash('sha256')
   hash.update(readFileSync(packagedConfig))
+  hash.update('\0')
+  hash.update(readFileSync(packagedUpdateConfig))
   hash.update('\0')
   for (const file of files) {
     hash.update(path.relative(process.cwd(), file).replaceAll('\\', '/'))
@@ -115,6 +137,12 @@ const unpackedConfig = path.join(releaseDirectory, 'win-unpacked', 'resources', 
 if (!existsSync(unpackedConfig) || !statSync(unpackedConfig).isFile()) throw new Error('packaged desktop config was not produced')
 const verifiedPackagedConfig = JSON.parse(readFileSync(unpackedConfig, 'utf8'))
 if (verifiedPackagedConfig.schemaVersion !== 1 || verifiedPackagedConfig.apiBaseUrl !== packagedApiBaseUrl) throw new Error('packaged desktop config verification failed')
+const unpackedUpdateConfig = path.join(releaseDirectory, 'win-unpacked', 'resources', 'config', 'update-config.json')
+if (!existsSync(unpackedUpdateConfig) || !statSync(unpackedUpdateConfig).isFile()) throw new Error('packaged update config was not produced')
+const verifiedUpdateConfig = JSON.parse(readFileSync(unpackedUpdateConfig, 'utf8'))
+if (verifiedUpdateConfig.schemaVersion !== 1 || verifiedUpdateConfig.channel !== (isRelease ? 'release' : 'development-unsigned') || verifiedUpdateConfig.updateBaseUrl !== packagedUpdateBaseUrl) {
+  throw new Error('packaged update config verification failed')
+}
 
 const signatureCommand = `(Get-AuthenticodeSignature -LiteralPath '${installer.replaceAll("'", "''")}').Status.ToString()`
 const signature = spawnSync('powershell.exe', ['-NoProfile', '-Command', signatureCommand], { encoding: 'utf8' })
@@ -126,7 +154,7 @@ if (signatureStatus !== expectedSignature(mode)) {
 const git = (...args) => spawnSync('git', args, { cwd: '../..', encoding: 'utf8' }).stdout.trim()
 const bytes = readFileSync(installer)
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   channel: isRelease ? 'release' : 'development-unsigned',
   version: packageJson.version,
   platform: 'win32',
@@ -139,6 +167,11 @@ const manifest = {
   signatureStatus,
   buildInputSha256: inputSha256,
   apiBaseUrl: packagedApiBaseUrl,
+  updateBaseUrl: packagedUpdateBaseUrl,
+  updateMetadata: isRelease ? {
+    latestYml: 'latest.yml',
+    blockmap: `${path.basename(installer)}.blockmap`,
+  } : null,
 }
 writeJsonAtomic(path.join(releaseDirectory, 'release-manifest.json'), manifest)
 

@@ -2,7 +2,7 @@ import type { PlatformRuntime } from './runtime'
 
 export function readDesktopRuntime(): PlatformRuntime & { smokeMode: boolean } {
   const bridge = window.agentDesktop
-  if (!bridge || bridge.version !== 1 || bridge.runtime.target !== 'desktop') {
+  if (!bridge || ![1, 2].includes(bridge.version) || bridge.runtime.target !== 'desktop') {
     throw new Error('Agent Desktop runtime bridge is unavailable or incompatible')
   }
   return {

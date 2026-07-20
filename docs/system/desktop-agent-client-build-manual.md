@@ -225,12 +225,21 @@ Get-FileHash .\release\AID-Work-Agent-*-dev-unsigned.exe -Algorithm SHA256
 ```powershell
 cd C:\repos\aid-work-agent\clients\agent-desktop
 $env:AID_AGENT_PACKAGE_API_BASE_URL='https://agent2.aidingyi.cn/api'
+$env:AID_AGENT_UPDATE_BASE_URL='https://downloads.example.com/aid-agent/windows/x64'
 $env:CSC_LINK='C:\secure\codesign.pfx'
 $env:CSC_KEY_PASSWORD='<从安全渠道取得的证书密码>'
 npm run package:win:release
 ```
 
-不要把证书、密码或包含凭证的 `.env` 文件提交到仓库。正式命令要求安装包 Authenticode 状态为 `Valid`，否则打包失败。成功产物名为 `AID-Work-Agent-<版本>-win-x64.exe`。
+不要把证书、密码或包含凭证的 `.env` 文件提交到仓库。更新地址必须是无账号密码、query、fragment 的 HTTPS 目录。正式命令要求安装包 Authenticode 状态为 `Valid`，并核对 `app-update.yml` 的 Generic Provider、`publisherName` 以及 `latest.yml` 中的版本、文件名、大小和 SHA-512；否则打包失败。
+
+成功后应把下列同一次构建产物原子发布到 `AID_AGENT_UPDATE_BASE_URL` 对应目录：
+
+- `latest.yml`
+- `AID-Work-Agent-<版本>-win-x64.exe`
+- `AID-Work-Agent-<版本>-win-x64.exe.blockmap`
+
+客户端启动约 30 秒后检查更新，此后每 6 小时检查一次。发现新版本时左下角显示更新提示；用户点击后下载，下载完成后再次确认重启安装。每次发布必须递增 `package.json` 的 SemVer，同版本重新打包不会触发更新。
 
 ## 8. 安装后验证
 
@@ -267,13 +276,14 @@ Invoke-WebRequest `
 | 下载 `electron-v*-win32-x64.zip` 时出现 `Timeout awaiting 'request'` | Electron 下载源访问超时。按第 3 节设置 `ELECTRON_MIRROR` 和 `ELECTRON_BUILDER_BINARIES_MIRROR`，必要时清理 Electron Cache 后重试。 |
 | `npm run package:win:dev` 在 audit 阶段失败 | 无法访问 npm 官方安全审计接口，恢复网络后重新执行标准打包命令。 |
 | release 模式提示缺少 `CSC_LINK` | 正式包强制签名；配置证书和密码，不能绕过。 |
+| release 模式提示更新配置或 metadata 失败 | 配置合法的 `AID_AGENT_UPDATE_BASE_URL`，并确认 `latest.yml`、EXE、`.blockmap` 来自同一次构建；不要手工改写 metadata。 |
 | SmartScreen 警告 | 开发包未签名的正常现象；外部分发必须使用有效证书生成正式包。 |
 
 ## 10. 当前限制
 
 - 后台 API 基址会写入安装包默认配置；它不是敏感凭证。Token 等敏感信息仍不得进入打包参数或配置文件。
 - 当前仅验证 Windows x64，macOS 尚未完成验证。
-- 当前没有自动更新源、灰度升级或自动回滚能力。
+- 自动更新客户端代码已实现，但当前没有生产更新源、签名证书、灰度发布和自动回滚的真机验收；unsigned 开发包固定禁用真实更新。
 - 正式图标、发行证书和发布流程仍需发行环境提供。
 
 ## 11. 使用一键脚本完成开发包构建

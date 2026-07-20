@@ -340,6 +340,20 @@
     <div class="flex-shrink-0 relative">
       <div class="flex-shrink-0 p-3 border-t border-gray-200">
         <button
+          v-if="desktopUpdateVisible"
+          type="button"
+          :disabled="desktopUpdateState.status === 'downloading'"
+          :title="desktopUpdateLabel"
+          class="w-full mb-1 flex items-center gap-2 px-3 py-2 text-sm text-primary-700 bg-primary-50 hover:bg-primary-100 rounded-lg transition-colors disabled:cursor-wait"
+          @click="handleDesktopUpdate"
+        >
+          <svg class="w-5 h-5 flex-shrink-0" :class="{ 'animate-pulse': desktopUpdateState.status === 'downloading' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
+          </svg>
+          <span class="truncate">{{ desktopUpdateLabel }}</span>
+          <span v-if="desktopUpdateState.status === 'available'" class="ml-auto w-2 h-2 rounded-full bg-primary-600" aria-hidden="true"></span>
+        </button>
+        <button
           @click="showUserMenu = !showUserMenu"
           class="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
         >
@@ -552,6 +566,7 @@ import { useDemoAuth } from '@/composables/useDemoAuth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
+import { useDesktopUpdater } from '@/composables/useDesktopUpdater'
 import SettingsDialog from './SettingsDialog.vue'
 import MenuIcon from './ui/MenuIcon.vue'
 import BusinessPageIcon from './ui/BusinessPageIcon.vue'
@@ -591,6 +606,7 @@ const showUserMenu = ref(false)
 const showSettingsDialog = ref(false)
 const showThemeSubmenu = ref(false)
 const availableThemes = getAvailableThemes()
+const { state: desktopUpdateState, isVisible: desktopUpdateVisible, label: desktopUpdateLabel, activate: handleDesktopUpdate } = useDesktopUpdater()
 
 const currentUsername = computed(() => {
   if (isTenantMode.value && tenantAdmin.value) {
