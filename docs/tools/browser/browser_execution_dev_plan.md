@@ -8,17 +8,13 @@
 >
 > 流程：每个 Phase 代码完成后按三智能体流程串行执行开发自测、独立测试、Code Review；未经验证不进入下一 Phase；不自动提交。
 >
-> 2026-07-14 修订：客户端改为全新独立 `clients/browser-companion/`；`clients/wecom-personal-rpa/` 明确不在改动范围。
->
-> 2026-07-14 v2.2 修订：Companion 技术栈改为 Electron + Node Playwright，首期同时交付 Windows/macOS；增加 Web 安装、拉起、配对、更新引导。
->
-> 2026-07-14 v2.3 修订：删除手工配对、长期设备表和独立连接配置；Companion 只由当前 authenticated Agent Web 使用一次性 ticket 拉起，连接绑定 Web presence。
->
-> 2026-07-14 v2.4 修订：`auto` 改为服务端 headless 强制优先；增加结构化失败检测、反爬/HTTP 分类和只允许一次的安全 client 升级门。
+> 2026-07-14 v2.4 修订：`auto` 改为服务端 headless 强制优先；增加结构化失败检测、反爬/HTTP 分类和只允许一次的安全桌面升级门。
 >
 > 2026-07-14 v2.5 修订：人工参与改为原工具调用持久化 suspend/resume；增加明确操作指引、完成条件监测、幂等 resume job 和无需用户再次发消息的 Agent 自动续跑。
 >
-> 2026-07-14 v2.6 修订：采用 Agent-first 原则；取消独立 Browser Companion 产品与安装包，客户端执行改为 Agent Desktop 的可选 browser runtime。桌面客户端技术栈、认证、发布和生命周期以 Agent Desktop 设计为准，浏览器能力不得阻塞或削弱 Agent 主链路。
+> 2026-07-14 v2.6 修订：采用 Agent-first 原则；桌面执行改为 Agent Desktop 的可选 browser runtime。技术栈、认证、发布和生命周期以 Agent Desktop 设计为准，浏览器能力不得阻塞或削弱 Agent 主链路。
+>
+> 2026-07-20 v2.7 修订：清除全部独立浏览器客户端设计、计划和依赖。Phase 4 改为 Agent Desktop 项目内的 browser runtime 集成阶段；浏览器计划只负责 `browser/1.0`、RemoteExecutor、服务端路由及联合验收，不再拥有客户端安装、更新、托盘或发布计划。
 
 ## 1. 完成定义
 
@@ -32,8 +28,8 @@
 | 1 | 本地浏览器生命周期 P0 修复 | ✅ 已完成 | Phase 0 | 六类终态进程回基线 |
 | 2 | RunManager + Executor 抽象 + 多租户状态 | 🔧 部分完成 | Phase 1 | 两 worker/两租户契约测试通过 |
 | 3 | 服务端可视化 + 工具挂起/人工接管/自动恢复 | 🔧 部分完成 | Phase 2 | 明确指引、完成监测、原工具及 Agent 幂等续跑、超时关闭通过 |
-| 4 | Agent Desktop 可选 browser runtime | ⬜ | Phase 3，且 Agent Desktop Phase 0～3 稳定 | 桌面内可见执行和断线回收通过；关闭模块后 Agent 主链路正常 |
-| 5 | 自动路由与安全策略 | ⬜ | Phase 4 | 路由矩阵、SSRF、不可逆防重放通过 |
+| 4 | Agent Desktop 项目内集成 browser runtime（跨项目阶段） | ⬜ | Phase 3，且 Agent Desktop Phase 0～3 稳定 | Desktop runtime 与 RemoteExecutor 契约通过；关闭模块后 Agent 主链路正常 |
+| 5 | 自动路由与安全策略 | ⬜ | Phase 5A 服务端规则依赖 Phase 3；Phase 5B 桌面升级链路依赖 Agent Desktop Phase 4 | 路由矩阵、SSRF、不可逆防重放通过 |
 | 6 | 可观测性、容量和运维 | ⬜ | Phase 5 | 指标/告警/压测/故障注入通过 |
 | 7 | 灰度迁移、全量验收和文档收口 | ⬜ | Phase 6 | 全验收通过并更新索引状态 |
 
@@ -81,7 +77,7 @@
 > `BrowserRunManager -> LocalPlaywrightExecutor -> 独占 worker`；PageOps 不再
 > 持有 Playwright 对象。4 字节大端、1 MB 上限 IPC、seq/command_id 幂等、
 > deadline、owner lease/reaper、租户隔离、Redis 单请求降级与双表审计已落地。
-> Phase 3 可视化/人工接管与 remote executor 未提前实现。
+> Phase 3 可视化/人工接管与 desktop runtime executor 未提前实现。
 > 当前 mock/本机 Playwright 门禁已通过；P1 收口已增加写帧前 owner epoch
 > fencing（租约过期、reaper 抢占、同 owner ABA、取消和状态丢失均拒绝写 IPC）
 > 及 Windows Job Object `KILL_ON_JOB_CLOSE` 子树托管，attach 失败 fail-closed。
@@ -95,7 +91,7 @@
 - `PageOps` 不再持有 Playwright Page，只调用 `BrowserExecutor`。
 - 新增 `src/tools/browser/run_manager.py`、`run_store.py`、`reaper.py`、`router.py`。
 - Redis keys 加到 `src/core/cache_utils.py`，并更新 `docs/system/cache_usage.md`。
-- 新增 `bs_browser_runs` 和 `bs_browser_assistance_requests`：migration、`deploy/init-postgres.sql`、DB service；所有 CRUD 带 tenant_id。Companion 在线状态仅存 Redis，不建长期设备表。
+- 新增 `bs_browser_runs` 和 `bs_browser_assistance_requests`：migration、`deploy/init-postgres.sql`、DB service；所有 CRUD 带 tenant_id。Agent Desktop browser runtime 在线状态仅存 Redis，不新建浏览器专用长期设备表。
 - 更新 `docs/system/database_system_table.md`（若最终分类为业务表则记录在对应业务表文档）和数据库变更记录。
 - `session_id` 仅为对话关联；执行主键统一为服务端 UUID `run_id`。
 - Redis 不可用降级只允许单请求 server run。
@@ -123,7 +119,7 @@
 > group/两 Gunicorn worker owner 路由未验收；恢复结果已接回原 tool_call_id 的
 > continuation 事件，但原 Agent 后续 LLM 循环的后台重启仍需收口；真实验证码页
 > 同 page/context E2E、自动完成后台检测、人工超时 reaper 和 WebSocket 重连集成证据尚缺。因此不得
-> 标记 Phase 3 完成，也未提前实现 Phase 4 remote executor。
+> 标记 Phase 3 完成，也未提前实现 Agent Desktop browser runtime executor。
 
 ### 后端
 
@@ -156,78 +152,72 @@
 - 前端：组件交互测试 + `npm run build`。
 - 安全：另一 tenant/user 无法观看或发送输入。
 
-## 7. Phase 4：Agent Desktop 可选 browser runtime
+## 7. Phase 4：Agent Desktop 项目内集成 browser runtime
 
-本 Phase 跟随 Agent Desktop 架构，不得反向修改其 UI 技术栈、认证模型、安装包、更新器或启动链路。Agent Desktop 尚未稳定时，本 Phase 等待，不单独创建替代客户端。
+本 Phase 的客户端工作归属 [Agent Desktop 开发计划 Phase 4](../../system/desktop-agent-client-dev-plan.md)。浏览器计划不创建客户端工程、安装包、更新器、托盘或独立发布流程，只维护服务端协议、RemoteExecutor 和联合验收依赖。
 
-### 协议先行
+### Phase 4A：浏览器侧协议与服务端适配
 
-- 在设计文档旁新增 `browser_runtime_protocol.md`，逐字段锁定 browser/1.0 消息和错误码。
-- 服务端新增 `src/tools/browser/client_registry.py`、`executor/remote.py`、Web presence、launch ticket/exchange API 和 `/api/v1/browser/clients/ws`。
-- 新协议必须自行实现完整消息分片、1 MB 上限、二进制帧、取消、顺序发送锁、心跳和退避，不复用企业微信 RPA 协议。
+- 新增 `browser_runtime_protocol.md`，逐字段锁定 `browser/1.0` 消息、帧和错误码；该协议仅连接服务端与 Agent Desktop 内置 runtime。
+- 服务端新增 `desktop_runtime_registry.py`、`executor/desktop.py`、短期 desktop browser session、Agent Web launch ticket 和 `/api/v1/browser/desktop/ws`。
+- 非破坏迁移 Phase 2 预留命名：状态 `ESCALATING_CLIENT/WAITING_CLIENT` 改为 `ESCALATING_DESKTOP/WAITING_DESKTOP`，`execution_target='client'` 改为 `desktop_runtime`，`executor_client_id` 改为 `executor_installation_id`；同步代码、双份 DDL 和历史数据兼容读取，确认迁移完成后再删除旧值兼容。
+- 协议实现完整消息分片、1 MB 上限、二进制帧、取消、顺序发送锁、心跳和退避；不混入聊天 SSE，不复用企业微信 RPA 协议。
+- `DesktopRuntimeExecutor` 与 Local executor 运行同一 contract suite；服务端只信任认证后绑定的 `tenant_id + user_id + installation_id`。
 
-### 客户端
+### Phase 4B：Agent Desktop 项目实现
 
-- 在 `clients/agent-desktop/browser-runtime/` 实现可选模块；不得引用 `clients/wecom-personal-rpa` 下任何项目。
-- Agent Desktop main 按需加载 runtime；每个 run 启动独立 Node Playwright Worker，Windows 使用 Job Object，macOS 使用独立 process group 托管进程树。
-- runtime 使用独立 feature flag 和故障边界；关闭、缺失、启动失败或协议不兼容不得影响主应用启动、登录、对话、文件和其他工具。
-- 固定 Node Playwright 1.59+；运行时优先启动本机稳定版 Chrome `channel="chrome"`，未安装时使用发布包携带的匹配版 Chromium。
-- 实现专用 Profile、单 run 命令队列、幂等 command_id、frame publisher、断线 watchdog、终态关闭。
-- Companion 渲染与 Web 相同的 HumanAssistance 指引/完成状态；人工页面事件走同一完成监测与 resume 协议，不在本地另写恢复逻辑。
-- 实现 Agent Web launch：`sessionStorage` 稳定的 `web_instance_id`、presence WS ticket、60 秒单次 launch ticket、`aidbrowser://launch`、ticket exchange、短期 session token 自动轮换。
-- 删除服务器地址、client_id、secret、设备码等手工配置入口；Companion 单独启动只提示从 Agent Web 拉起。
-- Agent Desktop 在既有托盘/设置中提供浏览器状态、“停止当前任务”“清除 Profile”；浏览器模块不得新建第二套托盘或更新器。
-- Profile 使用 Electron `app.getPath("userData")/profiles/{installation_id}`；服务端不接收 storage state。
-- browser runtime 随 Agent Desktop 的签名安装包发布，不产出独立安装包；不修改企业微信 RPA 发布脚本。
+- 在 `clients/agent-desktop/browser-runtime/` 实现可选模块，代码、测试和发布状态登记在 Agent Desktop 计划中。
+- Agent Desktop main 延迟加载 runtime；每个 run 启动独立 Node Playwright Worker，Windows 使用 Job Object，macOS 使用独立 process group。
+- runtime 使用独立 feature flag 和故障边界；关闭、缺失、启动失败、更新中或协议不兼容不得影响主应用启动、登录、对话、文件和其他工具。
+- 复用 Agent Desktop 的 `CredentialStore`、API 基址、installation identity、签名安装包、更新器、托盘和设置页；不得新增浏览器专用长期凭据或配置入口。
+- 复用既有 `aidagent://browser-launch` 处理 Agent Web 跨应用拉起；Agent Desktop renderer 发起任务时直接启用 runtime，不走深链。
+- 实现专用 Profile、单 run 命令队列、幂等 command_id、frame publisher、断线 watchdog 和终态关闭；Playwright 不进入 Vue renderer。
 
-### Web 安装引导
+### 联合验证
 
-- 新增 Agent Desktop 安装/打开卡和客户端状态 composable；组件命名不得固化为独立 Companion 产品。
-- 新增平台识别、Agent Desktop 下载/打开、`aidagent://browser-launch`、协议放行指引、在线 SSE 和自动继续原任务；不提供手工 code 回退。
-- 新增 `CLIENT_INSTALL_REQUIRED`、`CLIENT_UPDATE_REQUIRED` 的 Agent 工具事件映射，不把它们渲染为普通错误。
-- 未安装时 server 浏览器功能必须保持可用；只有高置信 headless 升级或确定的本地能力预检失败才展示安装要求。
-
-### 验证
-
-- browser runtime unit：launch ticket 单次消费、origin 校验、短期 token 轮换、协议分片、乱序/重复、watchdog、Profile 互斥、close 异常。
-- Python/TypeScript 协议 golden fixtures 双向反序列化。
-- Windows 10/11 x64、macOS 13+ Intel、macOS 13+ Apple Silicon 真机：安装、协议拉起、显示浏览器、复用 Profile、验证码人工操作、断网关闭、服务端重启不重放命令、卸载。
-- 前端：未安装/协议被阻止/连接中/在线/版本过低/拒绝安装/Web 退出七种状态组件测试。
-- 端到端：关闭 Web、登出、JWT 过期、刷新页面 30 秒内恢复、超过宽限四种 presence 场景。
-- 静态边界检查：browser runtime 与企业微信 RPA 工程互不引用；浏览器模块不进入 Agent renderer 依赖图，不成为主应用启动依赖。
+- browser runtime unit：短期 session、launch ticket 单次消费、协议分片、乱序/重复、watchdog、Profile 互斥、close 异常。
+- Python/TypeScript golden fixtures 和 local/desktop executor contract tests 通过。
+- Windows 10/11 x64、macOS 13+ Intel/Apple Silicon：Agent Desktop 安装、登录、runtime 启用、可见浏览器、Profile 复用、验证码人工操作、断网关闭、更新重启不重放命令。
+- Agent Web 未安装 Agent Desktop、Desktop 离线、runtime 禁用、版本过低、拒绝打开五种状态有明确引导；server headless 和网页人工接管始终可用。
+- 静态边界：browser runtime 不进入 Agent renderer 依赖图；与企业微信 RPA 工程互不引用；不产生第二套桌面 shell、托盘、更新器或安装产物。
 - Agent 回归：runtime 禁用、Worker 启动失败、协议版本不兼容、执行中崩溃四种情况均不影响非浏览器功能。
 
 ## 8. Phase 5：路由与安全
 
-### 改动
+### Phase 5A：服务端规则与安全（可在 Agent Desktop runtime 完成前开发）
 
-- Agent 工具只暴露 `execution_target=auto|server`；`client` 只由升级状态机内部使用，管理员诊断强制入口独立 RBAC/审计。
+- Agent 工具只暴露 `execution_target=auto|server`；`desktop_runtime` 只由升级状态机内部使用，管理员诊断强制入口独立 RBAC/审计。
 - 新增 `src/tools/browser/headless_failure_detector.py`、`challenge_signatures.py`、`escalation_gate.py`；executor 上报脱敏 response/requestfailed/pageerror/console/DOM 特征 DTO。
-- 域名策略配置：`server_allowed/local_capability_required/blocked`，管理员维护，默认 `server_allowed`；禁止用域名配置把反爬页面直接送往客户端。
-- 实现强/中/弱证据规则和分类矩阵：强信号一个或不同来源中信号两个产生高置信分类，再由分类矩阵决定人工、失败、重试或 `ESCALATE_CLIENT`；LLM 不参与路由裁决。
-- 明确 401/403/404/410/429/5xx、DNS/TLS/timeout 处置；429 永不转 client，普通 403/503 没有挑战证据时永不转 client，单独 CAPTCHA/MFA/扫码先进入 server Web 人工接管。
-- 实现 `ESCALATING_CLIENT`/`WAITING_CLIENT` 状态、单次升级限制、server 完整关闭屏障、父子 run 审计和脱敏检查点；client 失败不回切 server。
+- 域名策略配置：`server_allowed/local_capability_required/blocked`，管理员维护，默认 `server_allowed`；禁止用域名配置把反爬页面直接送往桌面执行。
+- 实现强/中/弱证据规则和分类矩阵：强信号一个或不同来源中信号两个产生高置信分类，再由分类矩阵决定人工、失败、重试或 `ESCALATE_DESKTOP`；LLM 不参与路由裁决。
+- 明确 401/403/404/410/429/5xx、DNS/TLS/timeout 处置；429 永不转 desktop runtime，普通 403/503 没有挑战证据时永不转 desktop runtime，单独 CAPTCHA/MFA/扫码先进入 server Web 人工接管。
 - 新增 `url_policy.py`：scheme、DNS、IP、redirect、download 检查。
 - 定义 irreversible action 标记；执行后禁止自动换执行器。
 - CAPTCHA/MFA/扫码/文件选择器只转人工，不自动破解。
 - 容器改非 root 并启用 sandbox；若环境暂不能切换，显式配置例外并告警，不能静默 `--no-sandbox`。
+
+### Phase 5B：Agent Desktop 升级链路（依赖 Phase 4）
+
+- 实现 `ESCALATING_DESKTOP`/`WAITING_DESKTOP` 状态、单次升级限制、server 完整关闭屏障、父子 run 审计和脱敏检查点。
+- 通过 `desktop_runtime_registry` 选择当前用户已登录、在线、runtime 启用且协议兼容的 Agent Desktop installation；桌面执行失败不回切 server。
+- 对外状态统一为 `DESKTOP_INSTALL_REQUIRED`、`DESKTOP_RUNTIME_DISABLED`、`DESKTOP_RUNTIME_OFFLINE`、`DESKTOP_UPDATE_REQUIRED`，复用 Agent Desktop 安装/打开/设置/更新 UI。
 
 ### 验证
 
 - 路由决策表 100% 分支覆盖；所有 `auto` 非预检能力失败用例都先创建 server run。
 - 新增本地 fixture 页和集成用例：普通/挑战型 403、普通/挑战型 503、429 + Retry-After、404、5xx、CAPTCHA iframe、明确 headless unsupported、人工交还后挑战持续、重定向循环、空白页、DNS/TLS/timeout、本地网络/客户端证书能力。
 - 验证“一个强信号或两个独立中信号”只决定高置信分类，处置仍必须查分类矩阵；单独 CAPTCHA 进入 server 人工接管，单独状态码、弱信号、LLM 建议均不能升级。
-- 验证升级前 server 进程归零；checkpoint 无 query/cookie/storage/header/DOM/表单值；不可逆状态已提交或未知时拒绝升级；client 失败不回切。
+- 验证升级前 server 进程归零；checkpoint 无 query/cookie/storage/header/DOM/表单值；不可逆状态已提交或未知时拒绝升级；desktop runtime 失败不回切。
 - SSRF：IPv4/IPv6、十进制/混合地址、DNS 重绑定、redirect、metadata。
-- 恶意客户端伪造 tenant/run/seq/command_id 全部拒绝。
-- 不可逆操作后 client 掉线不重试、不迁移。
+- 恶意 runtime 伪造 tenant/user/installation/run/seq/command_id 全部拒绝。
+- 不可逆操作后 Agent Desktop/runtime 掉线不重试、不迁移。
 
 ## 9. Phase 6：生产化
 
 ### 改动
 
-- Prometheus 指标和告警：close failure、orphan、client offline、command timeout、capacity、headless 分类、client 升级/拒绝/结果、human assistance 结果、resume job 结果和恢复延迟。
-- 每实例 4、每租户 2、每客户端 2 的信号量；排队 30 秒。
+- Prometheus 指标和告警：close failure、orphan、desktop runtime offline、command timeout、capacity、headless 分类、desktop 升级/拒绝/结果、human assistance 结果、resume job 结果和恢复延迟。
+- 每实例 4、每租户 2、每 Agent Desktop runtime 2 的信号量；排队 30 秒。
 - 调试 trace/screenshot 默认关闭；开启时用租户 temp + 加密 + 24h 清理，并更新 `docs/system/file_usage.md`。
 - Dashboard 展示聚合状态，不展示页面正文/截图。
 - 增加故障注入开关，仅测试环境可用。
@@ -235,8 +225,8 @@
 ### 验证
 
 - 4 个 server run 持续 30 分钟，CPU/内存回到基线，无 orphan。
-- client/server 各 2 个并发，第三个按配置排队/失败。
-- kill API worker、kill Chromium、断 Redis、断客户端网络、慢 WebSocket 消费者故障注入。
+- desktop runtime/server 各 2 个并发，第三个按配置排队/失败。
+- kill API worker、kill Chromium、断 Redis、退出 Agent Desktop、禁用 runtime、更新重启、断桌面网络、慢 WebSocket 消费者故障注入。
 
 ## 10. Phase 7：迁移与上线
 
@@ -246,20 +236,20 @@
 2. 开启本地生命周期和 server executor，5% browser run 灰度。
 3. 开启只读实时视图，观察带宽和 close 指标。
 4. 开启 server 人工接管。
-5. 分别安装一台 Windows 和一台 macOS Browser Companion，按 tenant allowlist 灰度 remote executor。
-6. 通过真机验收后逐租户开放 `auto`；保留“关闭 client 升级”和独立 RBAC 管理员诊断入口，不提供 Agent 强制 client 开关。
+5. 通过 Agent Desktop 统一签名安装包向 Windows/macOS 测试设备交付 browser runtime，默认关闭，按 tenant + installation allowlist 灰度 `DesktopRuntimeExecutor`。
+6. 通过真机验收后逐租户开放 `auto`；保留“关闭 desktop runtime 升级”和独立 RBAC 管理员诊断入口，不提供 Agent 强制 desktop runtime 开关。
 7. 旧全局 session 实现停止注册；观察一个发布周期后删除兼容代码。
 
 ### 回滚
 
 - 任何阶段可关闭 `browser.runtime.enabled` 回到旧 `browser_automation`，但 Phase 1 的可靠关闭和默认 headless 不回滚。
-- client 路径独立开关；关闭后 `auto` 只选择 server。
+- desktop runtime 路径使用独立 feature flag；关闭后 `auto` 只选择 server，不回滚或卸载 Agent Desktop。
 - DB 只新增表，不做破坏性迁移；回滚不删表。
 
 ### 最终验证
 
 - Python browser unit/integration/e2e。
-- Browser Companion Node/TypeScript 单元、集成测试及 Windows/macOS Release build/publish。
+- Agent Desktop browser runtime Node/TypeScript 单元、集成测试，并复用 Agent Desktop Windows/macOS Release build/publish 门禁。
 - 前端 test + production build。
 - Docker 非 root 启动/import/config 加载检查。
 - 按设计 §14 全部验收项逐项保留证据。

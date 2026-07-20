@@ -190,7 +190,7 @@ class PageOps:
 
 ## 10. 已确认的设计决策
 
-> 2026-07-14：本节原有会话与 `ask_user` 设计已由 [浏览器执行架构、可视化与人工接管设计 v2.6](./browser_visualization_design.md) 扩展并约束。新的强制规则是：服务端默认 headless；完成/失败/取消/超时/shutdown 必须关闭；人工等待仅能在 5 分钟租约内保留；原工具调用必须持久化 suspend/resume，用户完成后由页面条件或“完成并继续”事件自动唤醒，不依赖用户再次发消息或 LLM 重调工具；Agent 只公开完整任务边界；客户端执行是 Agent Desktop 的可选 browser runtime，必须跟随 Agent 主应用的技术栈、认证、发布和生命周期，禁止反向影响 Agent 主链路，也不依赖企业微信 RPA 客户端；服务端模式免安装，本机模式使用一次性 ticket，禁止手工连接配置；`auto` 必须先执行服务端 headless，只有确定的本地能力预检失败或 HeadlessFailureDetector 高置信失败才能升级客户端；实时视图、人工接管、多租户和多 worker 以 v2.6 为准。如本文件与 v2.6 冲突，以 v2.6 为准。
+> 2026-07-20：本节原有会话与 `ask_user` 设计已由 [浏览器执行架构、可视化与人工接管设计 v2.7](./browser_visualization_design.md) 扩展并约束。新的强制规则是：服务端默认 headless；完成/失败/取消/超时/shutdown 必须关闭；人工等待仅能在 5 分钟租约内保留；原工具调用必须持久化 suspend/resume，用户完成后由页面条件或“完成并继续”事件自动唤醒，不依赖用户再次发消息或 LLM 重调工具；Agent 只公开完整任务边界；桌面执行只作为 Agent Desktop 内置可选 browser runtime，复用主应用技术栈、认证、installation identity、签名安装包、更新和生命周期，不形成第二个客户端；服务端模式免安装，Agent Web 跨应用拉起复用 `aidagent://browser-launch` 一次性 ticket；`auto` 必须先执行服务端 headless，只有确定的本地能力预检失败或 HeadlessFailureDetector 高置信失败才能升级 desktop runtime；实时视图、人工接管、多租户和多 worker 以 v2.7 为准。如本文件冲突，以 v2.7 为准。
 
 ### 10.1 进度回调
 

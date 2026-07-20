@@ -137,16 +137,16 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 
 ### 工作
 
-- 将原计划 `clients/browser-companion/` 改为 `clients/agent-desktop/browser-runtime/`。
+- 在 `clients/agent-desktop/browser-runtime/` 实现内置可选模块；不创建第二个客户端工程或 shell。
 - 增加 browser runtime feature flag、延迟加载和故障隔离；关闭/缺失/崩溃时不得影响桌面启动、登录、对话和非浏览器工具。
-- 保留 `browser/1.0`、launch ticket、短期 session token、RemoteExecutor、Profile、Worker 和进程托管边界。
+- 实现 `browser/1.0`、短期 desktop browser session、Agent Web launch ticket、DesktopRuntimeExecutor、Profile、Worker 和进程托管边界。
 - Desktop 登录 presence 自动注册 browser capability；Web 可用一次性深链拉起同一应用。
-- Vue UI 显示 browser run、人工接管、继续/取消和 client update 状态。
-- 删除重复的独立 Companion 打包/更新/托盘计划；核心 runtime 保持可抽取，暂不交付第二个 shell。
+- Vue UI 显示 browser run、人工接管、继续/取消和 Agent Desktop 更新状态。
+- 复用 Agent Desktop 的 CredentialStore、installation identity、API 配置、签名安装包、更新器、托盘和设置页；browser runtime 不拥有独立发布状态。
 
 ### 验证
 
-- Python/TypeScript golden fixtures 和 local/remote executor contract tests 通过。
+- Python/TypeScript golden fixtures 和 local/desktop runtime executor contract tests 通过。
 - Windows/macOS 可见浏览器、Profile 复用、验证码人工处理和原 run 自动续跑通过。
 - success/error/cancel/timeout/app quit/断网/update 七类终态进程回基线。
 - Web 未安装 Desktop 时，server headless 和网页人工接管回归通过。
@@ -204,7 +204,7 @@ Web 构建和 Python 服务端能力无回归；Windows/macOS 签名客户端可
 ### 文档
 
 - 更新桌面设计/计划状态、部署和用户安装指南。
-- 同步修改浏览器 v2.5 设计与计划的 Phase 4 客户端载体。
+- 同步浏览器 v2.7 设计与计划的 Phase 4 跨项目依赖和联合验收状态。
 - 完成后将本条从 `docs/ideas.md` 移至 `docs/ideas_finished.md`。
 
 ## 10. 建议排期与依赖

@@ -1,7 +1,7 @@
 # Agent 跨平台桌面客户端设计
 
 > 日期：2026-07-14
-> 状态：📋 待开发
+> 状态：🔧 设计完成，分阶段开发中
 > 适用平台：Windows 10/11 x64、macOS 13+ x64/Apple Silicon
 > 关联：[浏览器混合执行与人工接管设计](../tools/browser/browser_visualization_design.md)
 
@@ -12,7 +12,7 @@
 - 新建独立桌面工程 `clients/agent-desktop/`，不把 Electron 依赖加入现有 `frontend/package.json`。
 - 桌面端复用 Agent 前端源码和 Python API，不在客户端打包或启动 Python 服务。
 - Web 构建继续包含全部现有路由；桌面构建只引用 Agent/租户路由，`/portal/**` 的路由和代码块均不进入安装包。
-- 桌面端集成浏览器执行运行时，替代当前规划中的独立 Browser Companion 安装包；Playwright 必须在隔离 Worker 中运行，不进入 Vue renderer。
+- 桌面端内置可选 browser runtime；Playwright 必须在隔离 Worker 中运行，不进入 Vue renderer。
 - 服务端保留统一浏览器 Executor 协议。Web 用户继续使用 server headless/服务端人工接管；桌面用户可在满足升级条件时使用本机浏览器执行。
 
 架构主从关系固定为：**Agent Desktop 主应用 > 通用桌面平台层 > 浏览器可选模块**。浏览器模块必须跟随 Agent 的认证、发布、安全、生命周期和用户体验规范；发生冲突时修改浏览器方案，不修改或牺牲 Agent 主链路。浏览器模块未安装、被禁用、崩溃或版本不兼容时，聊天、文件、知识库、会话和其他工具仍须正常工作。
@@ -29,7 +29,7 @@
 - API 基址多数使用 `VITE_API_BASE_URL || '/api'`，少数模块使用 `VITE_API_BASE` 或 `window.location.origin`，尚未形成统一运行时解析层。
 - 登录 Token 目前主要保存在 `localStorage`；桌面端不能照搬长期明文落盘。
 - 生产 Web 由 Nginx 提供 `frontend/dist`，并将 `/api` 代理到 Python；桌面端不能依赖这个同源相对路径。
-- 浏览器工具 v2.5 已规划 Electron + Node Playwright 的跨平台 Companion、一次性 ticket、远程 Executor、Worker 隔离、人工接管和进程回收。
+- 浏览器工具 v2.7 已规划 Agent Desktop 内置 Node Playwright runtime、短期 browser session、RemoteExecutor、Worker 隔离、人工接管和进程回收。
 
 ### 2.2 不变能力
 
@@ -146,18 +146,16 @@ Web adapter 保持相对 `/api`；Desktop adapter 从签名内置的发行渠道
 
 桌面 renderer 与 API 不同源。优先让 FastAPI CORS 精确允许桌面 scheme 的固定 origin，并做 Windows/macOS 真机预检；禁止配置 `*` 与 credentials 共用。若 Chromium 对自定义 scheme 的 Origin 行为不能满足预检，则回退为 Electron main 中的固定域 HTTPS transport，renderer 通过受限 IPC 调用，不能关闭 Chromium Web Security。
 
-## 7. 浏览器客户端合并结论
+## 7. browser runtime 集成边界
 
 浏览器工具是可选能力，不是桌面技术选型的前置条件。本节只规定它如何适配已经确定的 Agent Desktop 架构。
 
 ### 7.1 结论
 
-可以且应当集成。对于已安装 Agent Desktop 的用户，独立 Browser Companion 会造成重复的 Electron、Chromium、更新器、登录态和托盘进程，没有必要。
-
-合并后不改变服务端浏览器架构：
+browser runtime 是 Agent Desktop 的内置可选模块，不拥有单独的产品、安装、认证、更新或发布生命周期。该边界不改变服务端浏览器架构：
 
 - 服务端仍通过 `BrowserExecutor`/`browser/1.0` 协议调度，不能直接信任桌面 renderer。
-- Agent Desktop main 内置原 Browser Companion 的 registry client 和 `BrowserRuntimeManager`。
+- Agent Desktop main 内置 desktop runtime registry client 和 `BrowserRuntimeManager`。
 - Browser runtime 使用独立 feature flag、独立 Worker 和独立更新兼容检查；它不能阻塞 Agent Desktop 启动或登录。
 - 每个 run 仍启动独立 Node Playwright Worker；Windows 使用 Job Object，macOS 使用 process group，终态强制回收进程树。
 - 可见浏览器和人工操作属于本地 Worker 窗口；状态卡、暂停原因和继续/取消仍显示在 Agent UI。
@@ -169,9 +167,9 @@ Web adapter 保持相对 `/api`；Desktop adapter 从签名内置的发行渠道
 
 - 没有桌面应用：继续使用 server headless、服务端实时画面和网页人工接管，不受影响。
 - 已安装桌面应用但从 Web 发起：Web 可用 `aidagent://browser-launch` 一次性票据拉起同一个 Agent Desktop 的 browser runtime。
-- 首期不再单独交付 `clients/browser-companion/`。如未来确有“只装浏览器能力、不装完整 Agent”的企业需求，再把共享 `browser-runtime` 套一个薄 shell；不要现在维护两个安装包。
+- 只交付 Agent Desktop 一个桌面产品和安装包；浏览器能力由 feature flag 控制，不预留第二套 shell、托盘或更新器。
 
-因此，浏览器设计 v2.5 的服务端 RunManager、Executor、ticket、人工接管、路由和安全策略继续有效；需要修改的只是 Phase 4 客户端载体与安装引导。
+浏览器设计 v2.7 的服务端 RunManager、Executor、ticket、人工接管、路由和安全策略继续有效；Phase 4 的客户端代码、测试和交付状态统一归 Agent Desktop 项目管理。
 
 ## 8. Electron 安全基线
 
@@ -192,7 +190,7 @@ Web adapter 保持相对 `/api`；Desktop adapter 从签名内置的发行渠道
 - 更新状态固定为 `disabled / idle / checking / available / downloading / downloaded / up-to-date / error`。启动延迟检查并按长周期轮询；`autoDownload=false`，发现版本只在左下角提示，用户点击后才下载；下载完成后再次确认“重启并安装”，不得在 Agent 或 browser run 执行中强制退出。
 - preload 只暴露查询状态、订阅状态、检查、下载、重启安装五类窄接口，不暴露 `ipcRenderer`、更新 URL 或任意文件执行能力。Web 构建中 `window.agentDesktop` 不存在，因此更新 UI 和网络请求都不进入 Web 运行链路。
 - 每次发布必须递增 SemVer；同版本重新打包不会被客户端识别为升级。Windows 正式更新必须通过 Authenticode 签名校验，证书轮换需要单独演练。
-- 后续灰度使用 `electron-updater` staged rollout；主版本不兼容 browser 协议时服务端返回 `CLIENT_UPDATE_REQUIRED`。浏览器 runtime 只能报告是否有活跃 run 供安装重启延期判断，不能决定 Agent 客户端的版本策略或发布机制。
+- 后续灰度使用 `electron-updater` staged rollout；主版本不兼容 browser 协议时服务端返回 `DESKTOP_UPDATE_REQUIRED`。浏览器 runtime 只能报告是否有活跃 run 供安装重启延期判断，不能决定 Agent 客户端的版本策略或发布机制。
 - CI 使用 Windows runner 构建/签名 Windows，macOS runner 构建/签名/notarize macOS；证书只放 CI Secret。
 
 electron-builder 官方支持 Windows NSIS、macOS DMG/universal、签名与更新；macOS 直接分发必须签名并 notarize：
@@ -242,4 +240,4 @@ Python Agent 业务能力不迁入客户端。必要改动限定为：
 - 不直接控制用户默认 Chrome Profile。
 - 不把 Node、Electron 或 Playwright 权限暴露给 Vue renderer。
 - 不为桌面端复制一套 Python API 或 Vue 页面。
-- 不同时维护独立 Browser Companion 与 Agent Desktop 两个功能重复的安装包。
+- 不为 browser runtime 创建第二套桌面产品、安装包、托盘、认证或更新体系。
