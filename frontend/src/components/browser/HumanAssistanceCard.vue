@@ -53,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { BrowserHumanAssistance } from '@/types'
 import { browserApi } from '@/api/agent'
 import BrowserView from './BrowserView.vue'
@@ -65,7 +65,11 @@ const emit = defineEmits<{
 }>()
 const now = ref(Date.now())
 const timer = window.setInterval(() => { now.value = Date.now() }, 1000)
-onBeforeUnmount(() => window.clearInterval(timer))
+let stopped = false
+onBeforeUnmount(() => {
+  stopped = true
+  window.clearInterval(timer)
+})
 const state = computed(() => props.assistance.state || 'pending')
 const countdown = computed(() => {
   const seconds = Math.max(0, Math.floor((new Date(props.assistance.expires_at).getTime() - now.value) / 1000))
@@ -81,27 +85,40 @@ async function complete() {
   emit('updated', { ...props.assistance, state: result.success ? 'resume_queued' : 'controlling', missing_conditions: result.missing_conditions || [] })
   if (result.success) void pollContinuation()
 }
+let polling = false
 async function pollContinuation() {
+  if (polling) return
+  polling = true
   let lastSeq = Number(sessionStorage.getItem(`browser-continuation:${props.assistance.continuation_id}`) || 0)
-  for (let attempt = 0; attempt < 150; attempt += 1) {
-    await new Promise(resolve => window.setTimeout(resolve, 1000))
-    try {
-      const result = await browserApi.continuationEvents(props.assistance.continuation_id, lastSeq, props.authHeaders)
-      if (result.events?.length) {
-        lastSeq = result.last_seq
-        sessionStorage.setItem(`browser-continuation:${props.assistance.continuation_id}`, String(lastSeq))
-        emit('continuation', result.events)
-        if (result.events.some((event: any) =>
-          event.type === 'tool_result'
-          || event.type === 'browser_run_closed'
-          || event.type === 'browser_human_required'
-        )) return
+  try {
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 1000))
+      if (stopped) return
+      try {
+        const result = await browserApi.continuationEvents(props.assistance.continuation_id, lastSeq, props.authHeaders)
+        if (result.events?.length) {
+          lastSeq = result.last_seq
+          sessionStorage.setItem(`browser-continuation:${props.assistance.continuation_id}`, String(lastSeq))
+          emit('continuation', result.events)
+          if (result.events.some((event: any) =>
+            event.type === 'agent_continuation_completed'
+            || event.type === 'browser_run_closed'
+            || event.type === 'browser_human_required'
+          )) return
+        }
+      } catch {
+        // 页面刷新或短时断线后继续按 last_seq 补取。
       }
-    } catch {
-      // 页面刷新或短时断线后继续按 last_seq 补取。
     }
+  } finally {
+    polling = false
   }
 }
+onMounted(() => {
+  if (['pending', 'controlling', 'resume_queued'].includes(state.value)) {
+    void pollContinuation()
+  }
+})
 async function extend() {
   const result = await browserApi.extend(props.assistance.run_id, props.assistance.assistance_id, props.authHeaders)
   emit('updated', { ...props.assistance, expires_at: result.expires_at })

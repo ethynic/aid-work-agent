@@ -2,7 +2,7 @@
 
 > 日期：2026-07-14
 >
-> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证；Phase 3 首轮实现完成、自动续跑等门禁待收口）
+> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证；Phase 3 代码收口完成、真实多 worker/E2E 门禁待验证）
 >
 > 设计基线：[browser_visualization_design.md](./browser_visualization_design.md)
 >
@@ -111,15 +111,18 @@
 
 ## 6. Phase 3：服务端画面与网页人工接管
 
-> 进度（2026-07-20）：🔧 部分完成。已落地 `ToolSuspension` 控制结果、同会话
-> 409 门禁、latest-only 画面 Hub、服务端 JPEG 采样、一次性 view ticket、网页
-> pointer/keyboard 状态门禁、人工协作 Redis 状态/CAS、白名单条件与双采样、
-> resume job/continuation seq 事件、BrowserView/HumanAssistanceCard 及前端断线补取。
-> 当前本机单元测试与前端 build 通过。尚未达到退出门禁：真实 Redis consumer
-> group/两 Gunicorn worker owner 路由未验收；恢复结果已接回原 tool_call_id 的
-> continuation 事件，但原 Agent 后续 LLM 循环的后台重启仍需收口；真实验证码页
-> 同 page/context E2E、自动完成后台检测、人工超时 reaper 和 WebSocket 重连集成证据尚缺。因此不得
-> 标记 Phase 3 完成，也未提前实现 Agent Desktop browser runtime executor。
+> 进度（2026-07-20）：🔧 代码收口完成、真实环境门禁待验证。已落地
+> `ToolSuspension`、同会话 409、latest-only 画面、一次性 view ticket、网页人工
+> 接管、白名单双采样完成监测、持久 resume stream/worker、原 `tool_call_id`
+> exactly-once continuation、原 Agent 后台 LLM 续跑、自动完成后台 monitor、人工
+> 超时 reaper、continuation seq 补取，以及 BrowserView/HumanAssistanceCard。
+> 三智能体流程修复了多工具挂起配对、断线前上下文持久化、延期/reaper 竞态、
+> iframe 挑战识别、二次人工暂停路由、续跑 TTL 和前端轮询泄漏；本机 browser
+> 单测 177 通过、Phase 3 定向测试 32 通过、Agent 相邻测试 12 通过、前端组件
+> 3 通过且 production build、`src.main` import 通过。真实 Redis opt-in 用例因本机
+> 无服务保持 skip；真实 PostgreSQL、两 Gunicorn worker owner 路由、真实验证码页
+> 同 page/context 与进程崩溃补偿尚未验收，因此仍不得标记 Phase 3 完成，也未
+> 提前实现 Agent Desktop browser runtime executor。
 
 ### 后端
 

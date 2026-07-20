@@ -14,7 +14,6 @@ from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
 from src.tools.browser.executor.models import KeyboardCommand, PointerCommand
 from src.tools.browser.human_control import HumanControlCoordinator, get_owned_runtime
-from src.tools.browser.agent_resume_coordinator import AgentResumeCoordinator
 from src.tools.browser.resume_store import ResumeStore
 from src.tools.browser.run_store import create_run_store
 from src.tools.browser.view_hub import browser_view_hub
@@ -22,7 +21,6 @@ from src.tools.browser.view_hub import browser_view_hub
 
 router = APIRouter(prefix="/api/browser", tags=["browser-human-control"])
 agent_router = APIRouter(prefix="/api/agent", tags=["agent-continuations"])
-_RESUME_TASKS: set[asyncio.Task] = set()
 
 
 class InputMessage(BaseModel):
@@ -216,9 +214,6 @@ async def complete_assistance(request: Request, run_id: str, assistance_id: str)
             "success": False, "error_code": "HUMAN_COMPLETION_NOT_MET",
             "missing_conditions": missing, "state": record.state,
         }
-    task = asyncio.create_task(AgentResumeCoordinator().resume(record.tenant_id, assistance_id))
-    _RESUME_TASKS.add(task)
-    task.add_done_callback(_RESUME_TASKS.discard)
     return {"success": True, "state": record.state, "continuation_id": record.continuation_id}
 
 

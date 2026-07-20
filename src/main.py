@@ -250,6 +250,85 @@ class SSEConnectionManager:
 sse_manager = SSEConnectionManager()
 
 
+async def _continue_browser_agent(record, browser_result: dict) -> None:
+    """后台恢复原 Agent；事件写 continuation stream，最终消息仍写 chat_messages。"""
+    from src.models.user import User
+    from src.tools.browser.resume_store import ResumeStore
+
+    agent = agent_router.get_agent(
+        record.agent_name, record.session_id, tenant_id=record.tenant_id
+    )
+    if record.tenant_id and not agent._init_tenant_id:
+        agent._init_tenant_id = record.tenant_id
+    user = User(user_id=record.user_id, name=record.user_id)
+    store = ResumeStore()
+    response_parts: list[str] = []
+    tool_messages: list[dict] = []
+    async for event in agent.continue_tool_call(
+        session_id=record.session_id,
+        tool_call_id=record.tool_call_id,
+        result=browser_result,
+        user=user,
+    ):
+        event_type = event.get("type")
+        if event_type == "response":
+            response_parts.append(str(event.get("data", "")))
+        elif event_type == "tool_messages":
+            tool_messages.extend(event.get("messages", []))
+            continue
+        elif event_type == "llm_call":
+            # prompt/response trace 可能含敏感正文，不进入短期 continuation stream。
+            continue
+        if event_type in {
+            "response", "progress", "tool_start", "tool_result", "thinking",
+            "clarification", "images", "browser_human_required",
+        }:
+            await store.append_event(
+                record.tenant_id, record.continuation_id, event
+            )
+
+    full_response = "".join(response_parts)
+    batch_messages: list[dict] = []
+    for message in tool_messages:
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            batch_messages.append({
+                "role": "assistant",
+                "content": "",
+                "metadata": {"tool_calls": message["tool_calls"]},
+            })
+        elif message.get("role") == "tool":
+            content = message.get("content", "")
+            if isinstance(content, (dict, list)):
+                content = json.dumps(content, ensure_ascii=False, default=str)
+            batch_messages.append({
+                "role": "tool",
+                "content": content,
+                "metadata": {"tool_call_id": message.get("tool_call_id", "")},
+            })
+    if full_response:
+        batch_messages.append({
+            "role": "assistant",
+            "content": full_response,
+            "metadata": {"continued_from": record.continuation_id},
+        })
+    if batch_messages:
+        created = await asyncio.to_thread(
+            MessageDB.create_batch_transactional, record.session_id, batch_messages
+        )
+        if created is None:
+            raise RuntimeError("CONTINUATION_PERSIST_FAILED")
+    if full_response:
+        sse_manager.add_to_history(record.session_id, "assistant", full_response)
+    sse_manager.broadcast(record.session_id, {
+        "type": "agent_continuation_available",
+        "continuation_id": record.continuation_id,
+    })
+
+
+from src.tools.browser.agent_resume_coordinator import configure_continuation_callback
+configure_continuation_callback(_continue_browser_agent)
+
+
 # ============== Pydantic Models ==============
 
 class ChatRequest(BaseModel):
@@ -627,13 +706,18 @@ async def lifespan(app: FastAPI):
 
     _browser_reaper = None
     _browser_reaper_manager = None
+    _browser_resume_worker = None
     try:
+        from src.tools.browser.agent_resume_coordinator import BrowserResumeWorker
         from src.tools.browser.reaper import BrowserRunReaper
         from src.tools.browser.run_manager import BrowserRunManager
 
         _browser_reaper_manager = BrowserRunManager()
         _browser_reaper = BrowserRunReaper(_browser_reaper_manager)
         _browser_reaper.start()
+        if _browser_reaper_manager.store.distributed:
+            _browser_resume_worker = BrowserResumeWorker()
+            _browser_resume_worker.start()
         logger.info(
             "browser run reaper 初始化完成: distributed={}",
             _browser_reaper_manager.store.distributed,
@@ -649,10 +733,14 @@ async def lifespan(app: FastAPI):
 
         # 浏览器优先回收；异常或超时不阻断数据库、调度器和渠道资源关闭。
         try:
+            if _browser_resume_worker is not None:
+                await _browser_resume_worker.stop()
             if _browser_reaper is not None:
                 await _browser_reaper.stop()
             if _browser_reaper_manager is not None:
                 await _browser_reaper_manager.close_all("shutdown")
+            from src.tools.browser.human_control import stop_all_completion_monitors
+            await stop_all_completion_monitors()
             from src.tools.browser.run_manager import close_all_active_browser_managers
             await close_all_active_browser_managers("shutdown")
         except Exception as e:
@@ -1501,6 +1589,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         progress_events = []
         tool_messages_collected = []  # 收集本轮 tool 消息序列，供事务持久化
         error_occurred = None
+        suspended_for_browser = False
+        suspension_messages_persisted = False
 
         try:
             # 发送初始连接成功消息
@@ -1522,6 +1612,50 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     attachments=attachments,
                     cancel_check=lambda: sse_manager.is_cancelled(session_id) or session_queue.check_cancel(session_id),
                 ):
+                    event_type = event.get("type")
+                    if event_type == "tool_messages":
+                        tool_messages_collected.extend(event.get("messages", []))
+                        if event.get("suspended"):
+                            # assistance 已在 Redis 建立；必须先持久化原 user +
+                            # assistant(tool_calls) 上下文，再把人工卡片交给客户端。
+                            # 否则此处断线会让后台 continuation 无法找到原 tool_call_id。
+                            suspended_batch = [{
+                                "role": "user",
+                                "content": full_message,
+                                "metadata": {
+                                    "progressMessages": [],
+                                    **({"attachments": request.files} if request.files else {}),
+                                },
+                            }]
+                            for tm in tool_messages_collected:
+                                if tm.get("role") == "assistant" and tm.get("tool_calls"):
+                                    metadata = {"tool_calls": tm["tool_calls"]}
+                                    if tm.get("reasoning_content"):
+                                        metadata["reasoning_content"] = tm["reasoning_content"]
+                                    suspended_batch.append({
+                                        "role": "assistant", "content": "",
+                                        "metadata": metadata,
+                                    })
+                                elif tm.get("role") == "tool":
+                                    content = tm.get("content", "")
+                                    if isinstance(content, (dict, list)):
+                                        content = json.dumps(
+                                            content, ensure_ascii=False, default=str
+                                        )
+                                    suspended_batch.append({
+                                        "role": "tool", "content": content,
+                                        "metadata": {
+                                            "tool_call_id": tm.get("tool_call_id", "")
+                                        },
+                                    })
+                            created = await asyncio.to_thread(
+                                MessageDB.create_batch_transactional,
+                                session_id,
+                                suspended_batch,
+                            )
+                            if created is None:
+                                raise RuntimeError("SUSPENSION_PERSIST_FAILED")
+                            suspension_messages_persisted = True
                     # 每个 event 直接序列化为 SSE 帧
                     try:
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -1531,7 +1665,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                         return
 
                     # 收集 response 和 progress 数据
-                    event_type = event.get("type")
                     if event_type == "response":
                         response_parts.append(event.get("data", ""))
                     elif event_type == "tool_result":
@@ -1540,9 +1673,8 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     elif event_type in ("tool_start", "progress", "thinking", "clarification"):
                         record_service.handle_progress_event(event)
                         progress_events.append(event)
-                    elif event_type == "tool_messages":
-                        # 收集本轮 tool 消息序列（assistant with tool_calls + role:tool 配对）
-                        tool_messages_collected.extend(event.get("messages", []))
+                    elif event_type == "browser_human_required":
+                        suspended_for_browser = True
 
             except asyncio.CancelledError:
                 logger.info(f"[SSE] Agent cancelled by user, session_id={session_id}")
@@ -1570,6 +1702,10 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             if not error_occurred and full_response:
                 record_service.complete(full_response)
                 SessionRecordManager.end_record()
+            elif suspended_for_browser and not error_occurred:
+                # 本次 HTTP/SSE 已正常结束，但原工具仍挂起；关闭请求级记录，
+                # 后台 continuation 会以同一 session 独立完成后续持久化。
+                SessionRecordManager.end_record()
 
             # TraceCollector.on_complete 已在 Agent.process_message 的 finally 中调用。
 
@@ -1586,7 +1722,11 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             sse_manager.add_to_history(session_id, "assistant", full_response)
 
             # 保存消息到 DB（事务：user + tool 消息序列 + assistant 最终回复，要么全成功要么全失败）
-            if full_response and not error_occurred:
+            if (
+                (full_response or suspended_for_browser)
+                and not error_occurred
+                and not suspension_messages_persisted
+            ):
                 try:
                     user_metadata = {"progressMessages": []}
                     if request.files:
@@ -1638,11 +1778,12 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                                 "content": tc,
                                 "metadata": {"tool_call_id": tm.get("tool_call_id", "")},
                             })
-                    batch_messages.append({
-                        "role": "assistant",
-                        "content": full_response,
-                        "metadata": assistant_metadata,
-                    })
+                    if full_response:
+                        batch_messages.append({
+                            "role": "assistant",
+                            "content": full_response,
+                            "metadata": assistant_metadata,
+                        })
 
                     created = MessageDB.create_batch_transactional(session_id, batch_messages)
                     if created is None:

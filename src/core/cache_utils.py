@@ -57,7 +57,7 @@ class CacheKeys:
     BROWSER_VIEW_TICKET = "browser_view_ticket"
     BROWSER_WEB_PRESENCE = "browser_web_presence"
     BROWSER_LAUNCH_TICKET = "browser_launch_ticket"
-    BROWSER_COMPANION_SESSION = "browser_companion_session"
+    BROWSER_DESKTOP_RUNTIME_SESSION = "browser_desktop_runtime_session"
     BROWSER_ASSISTANCE = "browser_assistance"
     AGENT_TOOL_SUSPENSION = "agent_tool_suspension"
     AGENT_SESSION_SUSPENSION = "agent_session_suspension"

@@ -183,14 +183,21 @@ function updateAssistance(assistance: any) {
 }
 
 function handleContinuation(events: any[]) {
+  const responseText = events
+    .filter(event => event.type === 'response' && typeof event.data === 'string')
+    .map(event => event.data)
+    .join('')
+  if (responseText) props.message.content += responseText
   const nextAssistance = events.find(event => event.type === 'browser_human_required')
   if (nextAssistance) {
     props.message.browserAssistance = { ...nextAssistance, state: 'pending' }
     return
   }
-  const terminal = events.find(event => event.type === 'tool_result' || event.type === 'browser_run_closed')
+  const terminal = events.find(event =>
+    event.type === 'agent_continuation_completed' || event.type === 'browser_run_closed'
+  )
   if (!terminal || !props.message.browserAssistance) return
-  props.message.browserAssistance.state = terminal.type === 'browser_run_closed' || terminal.success === false
+  props.message.browserAssistance.state = terminal.type === 'browser_run_closed'
     ? 'failed'
     : 'resumed'
 }

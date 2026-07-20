@@ -69,7 +69,8 @@ Redis。透明内存 fallback 不能被视为分布式可用；降级只允许�
 `server/local` run，并在请求 `finally` 关闭。
 
 Phase 4+ 已预登记但尚未启用的前缀包括：`browser_web_presence`、
-`browser_launch_ticket`、`browser_companion_session`。
+`browser_launch_ticket`、`browser_desktop_runtime_session`。browser runtime 复用
+Agent Desktop installation identity，不建立浏览器专用长期设备记录。
 
 ---
 

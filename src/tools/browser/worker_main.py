@@ -20,6 +20,10 @@ from src.tools.browser.executor.models import (
 from src.tools.browser.worker_protocol import ProtocolError, read_frame_sync, write_frame_sync
 
 _COMMAND_ADAPTER = TypeAdapter(Command)
+_CHALLENGE_IFRAME_MARKERS = (
+    "captcha", "challenge", "recaptcha", "hcaptcha", "turnstile",
+    "verification", "验证码", "人机验证", "安全验证",
+)
 
 
 def _origin_path(url: str) -> str:
@@ -37,6 +41,20 @@ def _origin_path(url: str) -> str:
         return f"{parsed.scheme}://{host}{port}{parsed.path}"[:4096]
     except (TypeError, ValueError):
         return ""
+
+
+def _contains_challenge_iframe(items: list[dict[str, Any]]) -> bool:
+    """仅基于 iframe 脱敏元数据识别仍可见的页面挑战。"""
+    for item in items:
+        signature = " ".join(
+            str(item.get(field, ""))
+            for field in ("src", "name", "title", "ref")
+        ).lower()
+        if any(marker in signature for marker in _CHALLENGE_IFRAME_MARKERS):
+            return True
+        if _contains_challenge_iframe(item.get("nested_iframes", [])):
+            return True
+    return False
 
 
 class BrowserWorker:
@@ -196,6 +214,9 @@ class BrowserWorker:
             "current_origin_path": _origin_path(snapshot.url),
             "title": snapshot.title[:512],
             "interactive_elements": elements,
+            "challenge_iframe_present": _contains_challenge_iframe(
+                snapshot.iframe_snapshots
+            ),
             "page_text": re.sub(r"\s+", " ", page_text)[:3000],
         }
 

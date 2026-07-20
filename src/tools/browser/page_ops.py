@@ -63,6 +63,7 @@ class PageOps:
         return {
             "success": True, "url": result.current_origin_path or "",
             "title": result.title or "", "interactive_elements": elements,
+            "challenge_iframe_present": result.challenge_iframe_present,
             "page_text": result.page_text,
         }
 

@@ -153,6 +153,7 @@ class SnapshotResult(BaseResult):
     current_origin_path: Optional[str] = Field(default=None, repr=False)
     title: Optional[str] = Field(default=None, max_length=512, repr=False)
     interactive_elements: tuple[SnapshotElement, ...] = Field(default=(), repr=False)
+    challenge_iframe_present: bool = Field(default=False, repr=False)
     page_text: str = Field(default="", max_length=3000, repr=False)
 
 

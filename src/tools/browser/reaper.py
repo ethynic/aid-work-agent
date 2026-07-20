@@ -13,6 +13,60 @@ from src.config.settings import settings
 from .run_manager import BrowserRunManager, RunState, TERMINAL_STATES
 
 
+class HumanAssistanceReaper:
+    """跨 worker 回收过期人工租约；assistance CAS 是唯一领取点。"""
+
+    def __init__(self, manager: BrowserRunManager) -> None:
+        self.manager = manager
+
+    async def reap_once(self) -> int:
+        from .human_control import get_owned_runtime, unregister_owned_runtime
+        from .resume_store import ResumeStore
+
+        store = ResumeStore()
+        reaped = 0
+        for record in await store.list_expired_assistance(time.time()):
+            try:
+                expired = await store.cas_state(
+                    record.tenant_id,
+                    record.assistance_id,
+                    {record.state},
+                    "expired",
+                    expected_expires_at=record.expires_at,
+                )
+                if expired is None:
+                    continue
+                runtime = await get_owned_runtime(record.tenant_id, record.run_id)
+                try:
+                    if runtime is not None:
+                        await runtime.manager.finalize(
+                            record.tenant_id,
+                            record.run_id,
+                            RunState.EXPIRED,
+                            "human_timeout",
+                        )
+                    else:
+                        # 非 owner worker 只发取消标记；owner 的续租循环负责关闭
+                        # 本地 Chromium，不能跨进程伪造 executor 已回收。
+                        await self.manager.request_cancel(
+                            record.tenant_id, record.user_id, record.run_id
+                        )
+                    await store.append_event(
+                        record.tenant_id,
+                        record.continuation_id,
+                        {"type": "browser_run_closed", "error_code": "HUMAN_TIMEOUT"},
+                    )
+                finally:
+                    await unregister_owned_runtime(record.tenant_id, record.run_id)
+                    await store.clear(record)
+                reaped += 1
+            except Exception as exc:
+                logger.warning(
+                    "browser assistance reaper 异常: type={}", type(exc).__name__
+                )
+        return reaped
+
+
 class BrowserRunReaper:
     def __init__(self, manager: BrowserRunManager) -> None:
         self.manager = manager
@@ -74,6 +128,12 @@ class BrowserRunReaper:
                 await self.manager.store.release_owner(
                     record.tenant_id, record.run_id, str(claim_token)
                 )
+        if self.manager.store.distributed:
+            try:
+                claimed += await HumanAssistanceReaper(self.manager).reap_once()
+            except RuntimeError as exc:
+                if str(exc) != "REDIS_REQUIRED":
+                    raise
         return claimed
 
     async def _loop(self) -> None:

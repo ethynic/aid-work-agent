@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import HumanAssistanceCard from '@/components/browser/HumanAssistanceCard.vue'
+import { browserApi } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
   const original = await vi.importActual<any>('@/api/agent')
@@ -40,5 +41,20 @@ describe('HumanAssistanceCard', () => {
     const wrapper = mount(HumanAssistanceCard, { props: { assistance, authHeaders: {} } })
     await wrapper.get('button').trigger('click')
     expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ state: 'controlling' })
+  })
+
+  it('stops continuation polling after unmount', async () => {
+    vi.useFakeTimers()
+    const polling = vi.mocked(browserApi.continuationEvents)
+    polling.mockClear()
+    const wrapper = mount(HumanAssistanceCard, {
+      props: { assistance, authHeaders: {} },
+    })
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(polling).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(polling).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
   })
 })

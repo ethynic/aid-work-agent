@@ -33,6 +33,7 @@ class OwnedHumanRuntime:
 
 _OWNED_RUNTIMES: dict[tuple[str, str], OwnedHumanRuntime] = {}
 _RUNTIME_LOCK = asyncio.Lock()
+_COMPLETION_TASKS: dict[tuple[str, str], asyncio.Task] = {}
 
 
 async def register_owned_runtime(tenant_id: str, run_id: str, runtime: OwnedHumanRuntime) -> None:
@@ -48,8 +49,23 @@ async def get_owned_runtime(tenant_id: str, run_id: str) -> OwnedHumanRuntime | 
 async def unregister_owned_runtime(tenant_id: str, run_id: str) -> None:
     async with _RUNTIME_LOCK:
         _OWNED_RUNTIMES.pop((tenant_id, run_id), None)
+        monitor_task = _COMPLETION_TASKS.pop((tenant_id, run_id), None)
+    if monitor_task and monitor_task is not asyncio.current_task():
+        monitor_task.cancel()
+        await asyncio.gather(monitor_task, return_exceptions=True)
     from .view_hub import browser_view_hub
     await browser_view_hub.clear(tenant_id, run_id)
+
+
+async def stop_all_completion_monitors() -> None:
+    """应用 shutdown 时停止所有自动完成采样，不遗留后台 task。"""
+    async with _RUNTIME_LOCK:
+        tasks = list(_COMPLETION_TASKS.values())
+        _COMPLETION_TASKS.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _instructions(reason_code: str) -> tuple[str, str, tuple[str, ...]]:
@@ -132,6 +148,7 @@ class HumanControlCoordinator:
             continuation_id=continuation_id, reason_code=reason_code,
             instruction_code=instruction_code, completion_mode=completion_mode,
             predicates=predicates, step_index=step_index, expires_at=expires_at,
+            agent_name=replaces.agent_name if replaces is not None else None,
         )
         saved = (
             await self.store.replace_suspension(
@@ -207,10 +224,55 @@ class HumanControlCoordinator:
         await self._update_audit_state(
             tenant_id, assistance_id, "pending", "controlling"
         )
+        if updated.completion_mode == "auto_or_confirm":
+            await self._start_completion_monitor(updated)
         return updated
+
+    async def _start_completion_monitor(self, record: AssistanceRecord) -> None:
+        """owner worker 后台双采样；按钮与自动事件仍共用同一个 CAS。"""
+        key = (record.tenant_id, record.run_id)
+        async with _RUNTIME_LOCK:
+            current = _COMPLETION_TASKS.get(key)
+            if current and not current.done():
+                return
+            task = asyncio.create_task(
+                self._completion_loop(record.tenant_id, record.user_id, record.assistance_id)
+            )
+            _COMPLETION_TASKS[key] = task
+
+    async def _completion_loop(
+        self, tenant_id: str, user_id: str, assistance_id: str,
+    ) -> None:
+        try:
+            while True:
+                record = await self.store.get_assistance(tenant_id, assistance_id)
+                if record is None or record.state != "controlling":
+                    return
+                if record.expires_at <= time.time():
+                    return
+                try:
+                    queued, missing = await self.complete(
+                        tenant_id, user_id, assistance_id, automatic=True
+                    )
+                    if not missing:
+                        # enqueue_resume 已写入持久 Stream；由 BrowserResumeWorker
+                        # 领取，不能退化成请求内 create_task。
+                        return
+                except RuntimeError as exc:
+                    if str(exc) in {"RESUME_ALREADY_CONSUMED", "HUMAN_TIMEOUT"}:
+                        return
+                    if str(exc) == "RESUME_CONTEXT_LOST":
+                        return
+                    logger.warning(
+                        "browser 自动完成检测异常: code={}", str(exc)
+                    )
+                await asyncio.sleep(max(0.2, self.monitor.sample_interval))
+        except asyncio.CancelledError:
+            return
 
     async def complete(
         self, tenant_id: str, user_id: str, assistance_id: str,
+        automatic: bool = False,
     ) -> tuple[AssistanceRecord, list[str]]:
         record = await self._owned_record(tenant_id, user_id, assistance_id)
         runtime = await get_owned_runtime(tenant_id, record.run_id)
@@ -232,10 +294,16 @@ class HumanControlCoordinator:
             structural = frozenset(
                 str(item.get("role") or item.get("element_type") or "") for item in elements
             )
-            challenge = any(
-                "captcha" in (str(item.get("label", "")) + str(item.get("role", ""))).lower()
-                for item in elements
+            challenge_markers = (
+                "captcha", "recaptcha", "hcaptcha", "turnstile",
+                "验证码", "人机验证", "安全验证",
             )
+            challenge = any(
+                any(marker in (
+                    str(item.get("label", "")) + str(item.get("role", ""))
+                ).lower() for marker in challenge_markers)
+                for item in elements
+            ) or bool(snapshot.get("challenge_iframe_present"))
             return CompletionObservation(
                 origin_path=str(snapshot.get("url", "")), present_elements=structural,
                 challenge_iframe_present=challenge,

@@ -97,6 +97,33 @@ def _normalize_image_placement(refs: List[Dict[str, Any]]) -> List[Dict[str, Any
     return refs
 
 
+def _preserve_suspension_sibling_results(
+    messages: List[Dict[str, Any]],
+    memory: Any,
+    session_id: str,
+    executed_results: List[Dict[str, Any]],
+    pending_calls: List[Dict[str, Any]],
+) -> None:
+    """挂起前配对同轮兄弟 tool_call，避免丢结果或形成孤儿调用。"""
+    sibling_results = list(executed_results)
+    sibling_results.extend({
+        "tool_call_id": pending["id"],
+        "content": {
+            "success": False,
+            "error_code": "TOOL_DEFERRED_BY_HUMAN_ASSISTANCE",
+            "error": "浏览器人工协助完成后由 Agent 重新决定是否执行",
+        },
+    } for pending in pending_calls)
+    for sibling_result in sibling_results:
+        sibling_message = {
+            "role": "tool",
+            "tool_call_id": sibling_result["tool_call_id"],
+            "content": sibling_result["content"],
+        }
+        messages.append(sibling_message)
+        memory.add_message(session_id, sibling_message)
+
+
 class AgentMode(Enum):
     """智能体工作模式"""
     MASTER = "master"              # 主智能体模式：拥有完整能力，可委派任务
@@ -1812,6 +1839,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         extra_system_prompt: Optional[str] = None,
+        _continuation_tool_result: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts (trace-wrapped).
@@ -1861,6 +1889,7 @@ class Agent:
                 attachments=attachments,
                 cancel_check=cancel_check,
                 extra_system_prompt=extra_system_prompt,
+                _continuation_tool_result=_continuation_tool_result,
             ):
                 if trace_collector:
                     try:
@@ -1890,6 +1919,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
         extra_system_prompt: Optional[str] = None,
+        _continuation_tool_result: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Process a user message and yield AgentEvent dicts.
@@ -1911,7 +1941,9 @@ class Agent:
         from src.core.agent_events import make_event, make_image_event
 
         # 后端日志：检查是否有待处理的澄清请求
-        pending_clarification = self._get_pending_clarification(session_id)
+        pending_clarification = (
+            None if _continuation_tool_result else self._get_pending_clarification(session_id)
+        )
         if pending_clarification and self.is_master:
             # 用户正在回复子智能体的澄清请求
             clarification = pending_clarification
@@ -1999,7 +2031,8 @@ class Agent:
         #   最后重建 memory（唯一一次完整 IO，自动过滤 compacted=true）
         # v3.2.1（P1-3）：压缩段提取为 _run_compression_phase 独立方法，
         # 便于 test_process_message_order.py 通过真实方法调用做回归保护
-        await self._run_compression_phase(session_id)
+        if not _continuation_tool_result:
+            await self._run_compression_phase(session_id)
         # Phase 7 §7.1：压缩成功后 yield context_compressed 事件，
         # 上层 process_message 的 trace_collector 会接收并在 trace 中留下紫色 span
         if self._pending_compression_event is not None:
@@ -2236,7 +2269,8 @@ class Agent:
                 
                 enhanced_input = timestamp_context + f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
         
-        self.memory.add(session_id, "user", enhanced_input)
+        if not _continuation_tool_result:
+            self.memory.add(session_id, "user", enhanced_input)
 
         # 检测用户"记住"意图，写入长期记忆
         await self._handle_remember_intent(user_input, user)
@@ -2262,8 +2296,38 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
                 })
                 logger.info(f"Auto-injected skill '{auto_loaded_skill}' into conversation with {len(uploaded_files_info)} files")
 
-        # 记录本轮开始时 messages 的长度，用于末尾收集本轮新增的 tool 消息序列
+        # 记录本轮开始时 messages 的长度，用于末尾收集本轮新增的 tool 消息序列。
+        # continuation 不制造新的 user 消息，只把恢复结果接回原 tool_call_id。
         initial_len = len(messages)
+        if _continuation_tool_result:
+            continuation_tool_call_id = str(
+                _continuation_tool_result.get("tool_call_id") or ""
+            )
+            if not continuation_tool_call_id:
+                raise RuntimeError("CONTINUATION_TOOL_CALL_REQUIRED")
+            unresolved = False
+            for index in range(len(messages) - 1, -1, -1):
+                message = messages[index]
+                if (
+                    message.get("role") == "tool"
+                    and message.get("tool_call_id") == continuation_tool_call_id
+                ):
+                    break
+                if message.get("role") == "assistant":
+                    unresolved = any(
+                        call.get("id") == continuation_tool_call_id
+                        for call in message.get("tool_calls", [])
+                    )
+                    break
+            if not unresolved:
+                raise RuntimeError("CONTINUATION_CONTEXT_LOST")
+            tool_message = {
+                "role": "tool",
+                "tool_call_id": continuation_tool_call_id,
+                "content": _continuation_tool_result.get("content"),
+            }
+            messages.append(tool_message)
+            self.memory.add_message(session_id, tool_message)
 
         max_iterations = 20  # Prevent infinite loops
         iteration = 0
@@ -2469,7 +2533,7 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
             
             # Execute each tool call
             tool_results = []
-            for tc in valid_tool_calls:
+            for tool_index, tc in enumerate(valid_tool_calls):
                 tool_name = tc["name"]
                 tool_args = tc["arguments"]
                 tool_id = tc["id"]
@@ -2791,11 +2855,56 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
 
                     from src.core.tool_suspension import ToolSuspension
                     if isinstance(result, ToolSuspension):
-                        # 一等控制结果：不写 role=tool、不完成计划、不继续 LLM。
+                        # 一等控制结果：当前调用暂不写 role=tool、不完成计划、不继续 LLM。
+                        from src.tools.browser.resume_store import ResumeStore
+                        resume_store = ResumeStore()
+                        assistance = await resume_store.get_assistance(
+                            result.tenant_id, result.assistance_id
+                        )
+                        bound = assistance is not None and await resume_store.bind_agent(
+                            assistance,
+                            self.subagent_config.dir_name
+                            if self.subagent_config else None,
+                        )
+                        if not bound:
+                            raise RuntimeError("TOOL_SUSPEND_FAILED")
+                        # tool_results 要到整轮工具全部执行后才会统一接入 messages；
+                        # 挂起会提前 return，因此先保存已经执行过的兄弟调用，并为
+                        # 尚未执行的调用写显式 deferred 结果，保证 assistant 的每个
+                        # tool_call 都有且仅有一个配对结果。当前浏览器调用仍保持未解，
+                        # 后台 continuation 会用原 tool_call_id 注入真实结果。
+                        _preserve_suspension_sibling_results(
+                            messages,
+                            self.memory,
+                            session_id,
+                            tool_results,
+                            valid_tool_calls[tool_index + 1:],
+                        )
+                        suspended_messages = []
+                        for message in messages[initial_len:]:
+                            if message.get("role") == "assistant" and message.get("tool_calls"):
+                                suspended_messages.append({
+                                    "role": "assistant",
+                                    "content": message.get("content", ""),
+                                    "tool_calls": message["tool_calls"],
+                                })
+                            elif message.get("role") == "tool":
+                                suspended_messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": message["tool_call_id"],
+                                    "content": message["content"],
+                                })
+                        if suspended_messages:
+                            yield make_event(
+                                "tool_messages", messages=suspended_messages,
+                                suspended=True,
+                            )
                         yield result.event
                         yield make_event(
                             "progress", data="等待你的操作；完成后系统会自动继续"
                         )
+                        for var_name in _injected_env_vars:
+                            os.environ.pop(var_name, None)
                         return
 
                     # 发送工具执行完成事件
@@ -2959,6 +3068,26 @@ Use `skill_execute` tool to run commands like pdftotext, python scripts, etc."""
         # 清除子智能体临时注入的环境变量
         for var_name in _injected_env_vars:
             os.environ.pop(var_name, None)
+
+    async def continue_tool_call(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        result: Dict[str, Any],
+        user: Optional[User] = None,
+    ) -> AsyncGenerator[dict, None]:
+        """从已持久化的 assistant(tool_calls) 接回一次工具结果并继续 LLM。"""
+        async for event in self.process_message(
+            user_input="",
+            session_id=session_id,
+            user=user,
+            _continuation_tool_result={
+                "tool_call_id": tool_call_id,
+                "content": result,
+            },
+        ):
+            yield event
     
     async def process_message_sync(
         self,

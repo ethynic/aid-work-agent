@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -13,7 +14,12 @@ from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
 
 
-ACTIVE_ASSISTANCE_STATES = {"pending", "controlling", "completed", "resume_queued"}
+ACTIVE_ASSISTANCE_STATES = {
+    "pending", "controlling", "completed", "resume_queued", "agent_resuming",
+}
+EXPIRABLE_ASSISTANCE_STATES = {
+    "pending", "controlling", "completed", "resume_queued",
+}
 
 
 async def get_active_session_suspension(tenant_id: str, session_id: str) -> dict[str, Any] | None:
@@ -35,6 +41,7 @@ class AssistanceRecord(BaseModel):
     agent_execution_id: str
     tool_call_id: str
     continuation_id: str
+    agent_name: str | None = None
     state: str = "pending"
     reason_code: str
     instruction_code: str
@@ -178,6 +185,7 @@ class ResumeStore:
 
     async def cas_state(
         self, tenant_id: str, assistance_id: str, expected: set[str], new_state: str,
+        expected_expires_at: float | None = None,
         **updates: Any,
     ) -> AssistanceRecord | None:
         def op():
@@ -192,12 +200,53 @@ class ResumeStore:
                 record = AssistanceRecord.model_validate(raw)
                 if record.state not in expected:
                     return None
+                if (
+                    expected_expires_at is not None
+                    and record.expires_at != expected_expires_at
+                ):
+                    return None
                 record = record.model_copy(update={"state": new_state, **updates})
                 ttl = max(1, int(record.expires_at - time.time()) + 120)
                 redis_client.set(key, record.model_dump(mode="json"), ex=ttl)
                 return record
             finally:
                 redis_client.release_lock(key + ":cas", token)
+        return await asyncio.to_thread(op)
+
+    async def bind_agent(self, record: AssistanceRecord, agent_name: str | None) -> bool:
+        """在工具 coroutine 返回后补充可跨 worker 解析的 Agent 路由。"""
+        updated = await self.cas_state(
+            record.tenant_id,
+            record.assistance_id,
+            {"pending"},
+            "pending",
+            agent_name=agent_name,
+        )
+        return updated is not None
+
+    async def list_expired_assistance(self, now: float) -> list[AssistanceRecord]:
+        """扫描已过人工租约且仍处于活动状态的 assistance。"""
+        def op() -> list[AssistanceRecord]:
+            if not redis_client.is_available():
+                return []
+            pattern = redis_client.make_key(CacheKeys.BROWSER_ASSISTANCE, "*")
+            cursor = 0
+            records: list[AssistanceRecord] = []
+            while True:
+                cursor, keys = redis_client.scan(cursor, pattern, 100)
+                for key in keys:
+                    raw = redis_client.get(key)
+                    if not raw:
+                        continue
+                    try:
+                        record = AssistanceRecord.model_validate(raw)
+                    except Exception:
+                        continue
+                    if record.state in EXPIRABLE_ASSISTANCE_STATES and record.expires_at <= now:
+                        records.append(record)
+                if cursor == 0:
+                    return records
+
         return await asyncio.to_thread(op)
 
     async def enqueue_resume(self, record: AssistanceRecord, job_id: str) -> bool:
@@ -209,7 +258,43 @@ class ResumeStore:
                 "tenant_id": record.tenant_id, "assistance_id": record.assistance_id,
                 "run_id": record.run_id, "job_id": job_id,
             }, maxlen=10_000, approximate=True)
+            redis_client.publish(
+                redis_client.make_key(CacheKeys.BROWSER_RESUME_JOBS, "notify"),
+                json.dumps({
+                    "tenant_id": record.tenant_id,
+                    "assistance_id": record.assistance_id,
+                    "job_id": job_id,
+                }),
+            )
             return True
+        return await asyncio.to_thread(op)
+
+    async def read_resume_jobs(
+        self, after_id: str, *, block_ms: int = 1000, count: int = 100,
+    ) -> list[tuple[str, ResumeJob]]:
+        """每个 API worker 独立补读持久 Stream；非 owner 不会抢全局 claim。"""
+        def op() -> list[tuple[str, ResumeJob]]:
+            if redis_client._client is None or not redis_client.is_available():
+                return []
+            rows = redis_client._client.xread(
+                {self._jobs_key(): after_id}, count=count, block=block_ms
+            )
+            jobs: list[tuple[str, ResumeJob]] = []
+            for _, entries in rows:
+                for stream_id, fields in entries:
+                    if isinstance(stream_id, bytes):
+                        stream_id = stream_id.decode("utf-8")
+                    decoded = {
+                        (key.decode("utf-8") if isinstance(key, bytes) else key):
+                        (value.decode("utf-8") if isinstance(value, bytes) else value)
+                        for key, value in fields.items()
+                    }
+                    try:
+                        jobs.append((str(stream_id), ResumeJob.model_validate(decoded)))
+                    except Exception:
+                        continue
+            return jobs
+
         return await asyncio.to_thread(op)
 
     async def claim_resume(self, tenant_id: str, assistance_id: str, consumer_id: str) -> bool:

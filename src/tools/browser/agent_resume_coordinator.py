@@ -3,43 +3,93 @@
 from __future__ import annotations
 
 import os
+import asyncio
+import time
 import uuid
 from typing import Awaitable, Callable
 
 from loguru import logger
 
 from .human_control import HumanControlCoordinator, get_owned_runtime, unregister_owned_runtime
-from .resume_store import ResumeStore
+from .resume_store import AssistanceRecord, ResumeStore
 from .run_manager import RunState
 
 
-ContinuationCallback = Callable[[dict], Awaitable[None]]
+ContinuationCallback = Callable[[AssistanceRecord, dict], Awaitable[None]]
+_CONTINUATION_CALLBACK: ContinuationCallback | None = None
+
+
+def configure_continuation_callback(callback: ContinuationCallback | None) -> None:
+    """由应用入口注入 Agent Runtime 接线，browser 模块不反向依赖 main。"""
+    global _CONTINUATION_CALLBACK
+    _CONTINUATION_CALLBACK = callback
+
+
+class BrowserResumeWorker:
+    """持久 Stream fan-out worker；重启从头补读，owner + claim 保证只执行一次。"""
+
+    def __init__(
+        self,
+        store: ResumeStore | None = None,
+        coordinator_factory: Callable[[], "AgentResumeCoordinator"] | None = None,
+    ) -> None:
+        self.store = store or ResumeStore()
+        self.coordinator_factory = coordinator_factory or (
+            lambda: AgentResumeCoordinator(store=self.store)
+        )
+        self._task: asyncio.Task | None = None
+
+    def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+
+    async def _loop(self) -> None:
+        last_id = "0-0"
+        while True:
+            try:
+                jobs = await self.store.read_resume_jobs(last_id, block_ms=1000)
+                for stream_id, job in jobs:
+                    last_id = stream_id
+                    await self.coordinator_factory().resume(
+                        job.tenant_id, job.assistance_id
+                    )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning(
+                    "browser resume worker 异常: type={}", type(exc).__name__
+                )
+                await asyncio.sleep(1)
 
 
 class AgentResumeCoordinator:
-    def __init__(self, store: ResumeStore | None = None, consumer_id: str | None = None) -> None:
+    def __init__(
+        self,
+        store: ResumeStore | None = None,
+        consumer_id: str | None = None,
+        continuation_callback: ContinuationCallback | None = None,
+    ) -> None:
         self.store = store or ResumeStore()
         self.consumer_id = consumer_id or f"resume_{os.getpid()}_{uuid.uuid4().hex}"
+        self.continuation_callback = continuation_callback or _CONTINUATION_CALLBACK
 
     async def resume(self, tenant_id: str, assistance_id: str) -> dict:
-        if not await self.store.claim_resume(tenant_id, assistance_id, self.consumer_id):
-            return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
         record = await self.store.get_assistance(tenant_id, assistance_id)
         if record is None or record.state != "resume_queued":
             return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
         runtime = await get_owned_runtime(tenant_id, record.run_id)
         if runtime is None:
-            try:
-                await self.store.cas_state(
-                    tenant_id, assistance_id, {"resume_queued"}, "failed"
-                )
-                await self.store.append_event(tenant_id, record.continuation_id, {
-                    "type": "browser_run_closed", "error_code": "RESUME_CONTEXT_LOST",
-                })
-            finally:
-                await self.store.clear(record)
-                await unregister_owned_runtime(tenant_id, record.run_id)
-            return {"success": False, "error_code": "RESUME_CONTEXT_LOST"}
+            # 请求可能落在非 owner Gunicorn worker；不能在确认 owner 已丢失前
+            # 抢 claim 或清理另一个 worker 的有效 page/context。
+            return {"success": False, "error_code": "RESUME_NOT_OWNER"}
+        if not await self.store.claim_resume(tenant_id, assistance_id, self.consumer_id):
+            return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
         await self.store.append_event(tenant_id, record.continuation_id, {
             "type": "browser_resume_started", "run_id": record.run_id,
         })
@@ -76,7 +126,30 @@ class AgentResumeCoordinator:
             await self.store.append_event(tenant_id, record.continuation_id, {
                 "type": "agent_continuation_started", "continuation_id": record.continuation_id,
             })
-            await self.store.cas_state(tenant_id, assistance_id, {"resume_queued"}, "resumed")
+            continuation_ttl = max(
+                900, int(record.expires_at - time.time())
+            )
+            continuation_expires_at = max(
+                record.expires_at, time.time() + continuation_ttl
+            )
+            resuming = await self.store.cas_state(
+                tenant_id, assistance_id, {"resume_queued"}, "agent_resuming",
+                expires_at=continuation_expires_at,
+            )
+            if resuming is None:
+                return {"success": False, "error_code": "RESUME_ALREADY_CONSUMED"}
+            refresh = getattr(self.store, "refresh_suspension", None)
+            if refresh is not None and not await refresh(resuming, continuation_ttl):
+                raise RuntimeError("CONTINUATION_LEASE_REFRESH_FAILED")
+            if self.continuation_callback is not None:
+                await self.continuation_callback(resuming, result)
+            await self.store.append_event(tenant_id, record.continuation_id, {
+                "type": "agent_continuation_completed",
+                "continuation_id": record.continuation_id,
+            })
+            await self.store.cas_state(
+                tenant_id, assistance_id, {"agent_resuming"}, "resumed"
+            )
             await self.store.clear(record)
             return result
         except Exception:
@@ -88,7 +161,8 @@ class AgentResumeCoordinator:
                 logger.warning("browser resume 失败收口异常: type={}", type(exc).__name__)
             try:
                 await self.store.cas_state(
-                    tenant_id, assistance_id, {"resume_queued"}, "failed"
+                    tenant_id, assistance_id,
+                    {"resume_queued", "agent_resuming"}, "failed",
                 )
                 await self.store.append_event(tenant_id, record.continuation_id, {
                     "type": "browser_run_closed", "error_code": "RESUME_CONTEXT_LOST",

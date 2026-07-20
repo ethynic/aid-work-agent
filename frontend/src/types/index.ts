@@ -98,6 +98,8 @@ export type MessageStreamEvent =
   | ({ type: 'browser_human_required'; timestamp?: number } & BrowserHumanAssistance)
   | { type: 'browser_resume_started'; run_id: string; seq?: number }
   | { type: 'agent_continuation_started'; continuation_id: string; seq?: number }
+  | { type: 'agent_continuation_completed'; continuation_id: string; seq?: number }
+  | { type: 'agent_continuation_available'; continuation_id: string }
 
 // "正在输入"提示状态
 export type InputHintState = 'idle' | 'thinking' | 'working' | 'responding'
