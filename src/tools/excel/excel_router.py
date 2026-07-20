@@ -36,11 +36,13 @@ ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由�
    - 触发：用户要求设置字体、边框、颜色、列宽、数字格式
    - 参数：{format_operations: [{type, ...具体参数}], output_name: "可选"}
 
-6. **fill_template** — 使用模板填充数据
-   - 触发：用户要求基于模板生成Excel、按模板填写数据
-   - 模板来源：a) template_name=系统模板名 b) template_file=用户上传的模板路径
-   - 参数：{template_name: "系统模板名（二选一）", template_file: "用户上传的模板路径（二选一）", variables: {key: value}, output_name: "可选"}
-   - variables 中：字符串/数字为单值替换；列表为行循环数据
+6. **fill_template** — 使用模板填充数据（两种模式）
+   - 触发：用户要求基于模板/样例生成Excel、按某个样例版式填写数据
+   - 模板来源：a) template_name=系统模板名 b) template_file=用户上传的模板路径 c) file_paths 中的样例附件
+   - **模式一（智能填充，推荐）**：调用方直接传 `data`（结构化 {meta,rows,group_subtotals,totals}）+ 样例附件。
+     工具会 AI 分析样例结构并按版式填入，自动处理行数多/少/相等、保留样例样式。**注意：data 由调用方在工具入参直接传递，路由器无需从 context 提取，仅需返回 task=fill_template + template_file=附件路径。**
+   - **模式二（占位符替换，旧）**：样例含 `{{变量名}}` 时用 variables={key:value} 替换
+   - 参数：{template_file: "样例路径", variables: "模式二用", output_name: "可选"}
 
 7. **list_templates** — 列出可用模板
    - 触发：用户问有哪些模板可用

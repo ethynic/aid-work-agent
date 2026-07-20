@@ -60,6 +60,13 @@ class ExcelProcessInput(BaseModel):
         None,
         description="用户上传的附件文件路径列表（.xlsx/.csv/.json 文件等）"
     )
+    data: Optional[Dict[str, Any]] = Field(
+        None,
+        description="按样例版式填充的结构化数据（AI 模板填充模式）。"
+                    "形如 {meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
+                    "提供 data + 样例附件(file_paths) 时走智能模板填充：AI 分析样例结构并按版式填入，"
+                    "自动处理行数多/少/相等、保留样例样式。"
+    )
 
 
 class PipelineContext:
@@ -70,7 +77,8 @@ class PipelineContext:
                  instruction: Optional[str] = None,
                  content: Optional[str] = None,
                  content_type: Optional[str] = None,
-                 output_name: Optional[str] = None):
+                 output_name: Optional[str] = None,
+                 data: Optional[Dict[str, Any]] = None):
         self.file_paths: List[str] = list(file_paths) if file_paths else []
         self.original_file_paths: List[str] = list(file_paths) if file_paths else []
         self.context: Optional[str] = context
@@ -78,6 +86,7 @@ class PipelineContext:
         self.content: Optional[str] = content
         self.content_type: Optional[str] = content_type
         self.output_name: Optional[str] = output_name
+        self.data: Optional[Dict[str, Any]] = data
         self.read_data: Optional[Dict] = None
         self.markdown_content: Optional[str] = None
         self.results: List[Dict] = []
@@ -127,6 +136,58 @@ class ExcelProcessTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._router = None
+        # tenant_id / user_id 注入（由 Agent 主循环 hasattr 钩子自动调用，或 ContextVar 兜底）
+        self._tenant_id: Optional[str] = None
+        self._user_id: Optional[str] = None
+
+    def set_tenant_id(self, tenant_id: str):
+        """由 Agent 注入 tenant_id（与 Word/Pdf 工具一致）。"""
+        self._tenant_id = tenant_id
+
+    def set_user_id(self, user_id: str):
+        """由 Agent 注入 user_id。"""
+        self._user_id = user_id
+
+    def _resolve_tenant_user(self):
+        """双轨获取 tenant_id/user_id：注入优先，ContextVar 兜底（HTTP 请求场景）。"""
+        tenant_id = self._tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                tenant_id = None
+        user_id = self._user_id
+        if not user_id:
+            try:
+                from src.saas.context import get_current_user_id
+                user_id = get_current_user_id()
+            except Exception:
+                user_id = None
+        return tenant_id, user_id
+
+    def _resolve_output_dir(self) -> Optional[str]:
+        """注入的 tenant/user 优先构造输出目录；都未注入返回 None（让 save_temp 走 ContextVar）。
+        镜像 ExcelFileHandler.get_session_dir 的路径逻辑，用注入的 id。"""
+        if not self._tenant_id and not self._user_id:
+            return None
+        try:
+            from src.config.settings import settings
+            project_root = Path(__file__).resolve().parents[3]
+            upload_root = Path(settings.storage.uploads_dir)
+            if not upload_root.is_absolute():
+                upload_root = project_root / upload_root
+            parts = [str(upload_root)]
+            if self._tenant_id:
+                parts.append(self._tenant_id)
+            if self._user_id:
+                parts.append(self._user_id)
+            d = Path(*parts)
+            d.mkdir(parents=True, exist_ok=True)
+            return str(d)
+        except Exception as e:
+            logger.warning(f"[ExcelProcess] 解析输出目录失败，回退默认: {e}")
+            return None
 
     def _get_router(self):
         if self._router is None:
@@ -141,6 +202,7 @@ class ExcelProcessTool(BaseTool):
         content_type = kwargs.get("content_type")
         output_name = kwargs.get("output_name")
         file_paths = kwargs.get("file_paths")
+        data = kwargs.get("data")
         normalized = self._normalize_input(
             context=context,
             instruction=instruction,
@@ -155,6 +217,7 @@ class ExcelProcessTool(BaseTool):
             file_paths,
             instruction=normalized["instruction"],
             content_type=normalized["content_type"],
+            data=data,
         )
         task_str = route_result.get("task", "")
         params = route_result.get("params", {})
@@ -181,6 +244,7 @@ class ExcelProcessTool(BaseTool):
             content=normalized["content"],
             content_type=normalized["content_type"],
             output_name=normalized["output_name"],
+            data=data,
         )
 
         # 按序执行
@@ -194,7 +258,7 @@ class ExcelProcessTool(BaseTool):
             except FileNotFoundError as e:
                 return {"success": False, "error": str(e)}
             except Exception as e:
-                logger.error(f"[ExcelProcess] pipeline error at {op}: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"[ExcelProcess] pipeline error at {op}: {e}")
                 return {"success": False, "error": f"操作 {op} 执行失败: {e}"}
 
             if not step_result.get("success", True):
@@ -268,15 +332,17 @@ class ExcelProcessTool(BaseTool):
         file_paths: Optional[List[str]],
         instruction: Optional[str] = None,
         content_type: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
     ) -> Dict:
-        if not context and not file_paths:
-            return {"task": "", "error": "缺少 context 和 file_paths"}
+        if not context and not file_paths and not data:
+            return {"task": "", "error": "缺少 context、file_paths 和 data"}
 
         deterministic = self._resolve_task_deterministic(
             context,
             file_paths,
             instruction=instruction,
             content_type=content_type,
+            data=data,
         )
         if deterministic:
             return deterministic
@@ -285,7 +351,7 @@ class ExcelProcessTool(BaseTool):
             router = self._get_router()
             return await router.route(context, file_paths)
         except Exception as e:
-            logger.error(f"[ExcelProcess] LLM 路由异常: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[ExcelProcess] LLM 路由异常: {e}")
             return {"task": "", "error": f"路由服务异常: {e}"}
 
     def _resolve_task_deterministic(
@@ -294,8 +360,21 @@ class ExcelProcessTool(BaseTool):
         file_paths: Optional[List[str]],
         instruction: Optional[str] = None,
         content_type: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict]:
         """低风险确定性路由，覆盖明确的数据导出 Excel 场景。"""
+        # 优先：结构化 data + 样例附件 → 智能模板填充（无需 LLM 路由）
+        if data and file_paths:
+            return {
+                "task": "fill_template",
+                "params": {
+                    "data": data,
+                    "template_file": file_paths[0],
+                    "output_name": self._safe_output_name(self._extract_output_name(context)),
+                },
+                "reason": "检测到 data + 样例附件，走智能模板填充",
+            }
+
         if not context:
             return None
         intent = instruction or context or ""
@@ -378,6 +457,10 @@ class ExcelProcessTool(BaseTool):
                     merged["download_url"] = r["download_url"]
                 if op == "fill_template":
                     merged["variables_replaced"] = r.get("variables_replaced", 0)
+                    if r.get("rows_rendered") is not None:
+                        merged["rows_rendered"] = r["rows_rendered"]
+                    if r.get("inferred_structure"):
+                        merged["inferred_structure"] = r["inferred_structure"]
                 if op in ("modify", "format"):
                     merged["operations_applied"] = r.get("operations_applied", 0)
                 if op == "export":
@@ -546,34 +629,37 @@ class ExcelProcessTool(BaseTool):
         return save_result
 
     async def _handle_fill_template(self, ctx: PipelineContext, params: Dict) -> Dict:
-        from src.tools.excel.excel_template import fill_template
-        from src.tools.excel.excel_lib import ExcelFileHandler
-
+        # 确定模板来源：template_file > template_name > 附件
         template_name = params.get("template_name")
         template_file = params.get("template_file")
-        variables = params.get("variables", {})
-
-        if not variables:
-            return {"success": False, "error": "fill_template 操作需要 params.variables 参数"}
-
-        # 确定模板来源
         if template_file:
             template_path = template_file
         elif template_name:
             template_path = str(Path("storage/excel_templates") / f"{template_name}.xlsx")
         elif ctx.file_paths:
-            # 默认使用第一个附件作为模板
             template_path = ctx.file_paths[0]
         else:
-            return {"success": False, "error": "fill_template 需要指定模板（template_name 或 template_file）"}
+            return {"success": False, "error": "fill_template 需要指定模板（template_file / template_name / file_paths）"}
 
-        result = fill_template(template_path, variables=variables,
-                               output_name=params.get("output_name"))
+        output_name = params.get("output_name") or ctx.output_name
 
-        if not result.get("success"):
-            return result
+        # 新路径：结构化 data → 智能模板填充（AI 分析样例结构 + 行数不匹配 + 样式保留）
+        data = params.get("data") or ctx.data
+        if data:
+            from src.tools.excel.excel_template_ai import fill_with_sample
+            return fill_with_sample(
+                template_path, data,
+                output_name=output_name,
+                output_dir=self._resolve_output_dir(),
+            )
 
-        return result
+        # 旧路径：variables 占位符替换（向后兼容）
+        from src.tools.excel.excel_template import fill_template
+        variables = params.get("variables", {})
+        if not variables:
+            return {"success": False, "error": "fill_template 需要 data（智能填充）或 variables（占位符替换）"}
+
+        return fill_template(template_path, variables=variables, output_name=output_name)
 
     async def _handle_list_templates(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.excel.excel_template import list_templates
