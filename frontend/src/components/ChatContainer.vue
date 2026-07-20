@@ -1,5 +1,7 @@
 <template>
-  <div class="h-safe-screen flex flex-col bg-gray-50">
+  <!-- PortalLayout 模式下父级 router-view 已提供确定高度，用 h-full 填满；
+       独立模式用 h-safe-screen 占满视口，保证头部/输入框固定、仅消息区滚动 -->
+  <div :class="[isInPortalLayout ? 'h-full' : 'h-safe-screen', 'flex flex-col bg-gray-50']">
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Session Sidebar - 仅在非 PortalLayout 模式下显示（避免重复） -->

@@ -31,12 +31,22 @@
         <h1 class="text-base font-semibold text-gray-800 truncate">
           {{ sidebarTitle }}
         </h1>
+        <!-- 收起侧边栏按钮：固定在名称最右侧 -->
+        <button
+          @click="$emit('collapse')"
+          class="ml-auto p-1.5 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors flex-shrink-0"
+          title="收起侧边栏"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+          </svg>
+        </button>
       </div>
     </div>
 
-    <!-- Scrollable Content - 中间内容整体滚动 -->
-    <div class="flex-1 overflow-y-auto min-h-0">
-    <!-- Navigation Menu - 导航菜单区域 -->
+    <!-- Middle Content - 菜单区固定，仅历史会话列表滚动 -->
+    <div class="flex-1 flex flex-col min-h-0">
+    <!-- Navigation Menu - 导航菜单区域（固定不滚动） -->
     <div class="flex-shrink-0 p-2 space-y-1">
       <!-- New Session Button -->
       <button
@@ -158,7 +168,7 @@
 
     <!-- 业务数据分组 - 按数字员工分组展示 -->
     <!-- 手机端暂时隐藏：业务数据页面尚未适配手机端 -->
-    <div v-if="groupedBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2">
+    <div v-if="groupedBusinessPages.length > 0 && !props.isMobile" class="flex-shrink-0 p-2 overflow-y-auto" style="max-height: 35%">
       <div class="flex-shrink-0 px-2 py-2">
         <div class="flex items-center gap-3">
           <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
@@ -215,40 +225,16 @@
       </div>
     </div>
 
-    <!-- History Sessions Header - 历史会话标题（可折叠） -->
-    <div v-if="showHistory" class="flex-shrink-0 p-2">
-      <div class="flex items-center justify-between gap-3">
-        <button
-          @click="toggleHistoryExpanded"
-          class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm text-gray-600 hover:bg-gray-50"
-        >
-          <div class="flex items-center gap-3">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>历史会话</span>
-          </div>
-          <svg
-            :class="['w-4 h-4 transition-transform', isHistoryExpanded ? 'rotate-180' : '']"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        <button
-          @click="$emit('collapse')"
-          class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors flex-shrink-0"
-          title="收起侧边栏"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-          </svg>
-        </button>
-      </div>
+    <!-- History Sessions Header - 历史会话标题（固定展示，不再支持整体折叠） -->
+    <div v-if="showHistory" class="flex-shrink-0 px-5 py-2 flex items-center gap-3 text-sm text-gray-600">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <span>历史会话</span>
     </div>
 
-    <!-- Session List - 会话列表 -->
-    <div v-show="showHistory && isHistoryExpanded" class="px-2 pb-2">
+    <!-- Session List - 会话列表（侧边栏唯一滚动区域） -->
+    <div v-show="showHistory" class="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -264,97 +250,82 @@
         <p class="text-xs">暂无会话记录</p>
       </div>
 
-      <div v-else class="space-y-1">
+      <div v-else class="space-y-0.5">
         <div
-          v-for="session in recentSessions"
+          v-for="session in displayedSessions"
           :key="session.session_id"
           :class="[
-            'group relative p-2.5 rounded-lg cursor-pointer transition-colors',
+            'group relative px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors',
             isHistorySessionActive && currentSessionId === session.session_id
               ? 'bg-primary-50 border border-primary-200'
               : 'hover:bg-gray-50 border border-transparent'
           ]"
           @click="handleSelectSession(session.session_id)"
+          @contextmenu.prevent.stop="openSessionContextMenu($event, session)"
         >
-          <!-- Session Title -->
-          <div class="flex items-start gap-2">
-            <svg class="w-4 h-4 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <!-- Session Title（单行，日期已移除以降低条目高度） -->
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-1.5">
-                <p class="text-sm text-gray-700 truncate">
-                  {{ session.title || '新会话' }}
-                </p>
-                <!-- 流式状态指示：进行中显示旋转 loading，后台完成未查看显示小点 -->
-                <svg
-                  v-if="isSessionRunning(session.session_id)"
-                  class="animate-spin w-3.5 h-3.5 flex-shrink-0 text-primary-600"
-                  fill="none" viewBox="0 0 24 24"
-                >
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                </svg>
-                <span
-                  v-else-if="hasSessionUnreadCompletion(session.session_id)"
-                  class="w-2 h-2 rounded-full bg-success-500 flex-shrink-0"
-                  title="已完成"
-                ></span>
-              </div>
-              <p class="text-xs text-gray-400 mt-0.5">
-                {{ formatTime(session.updated_at) }}
-              </p>
-            </div>
+            <p class="flex-1 min-w-0 text-sm text-gray-700 truncate">
+              {{ session.title || '新会话' }}
+            </p>
+            <!-- 流式状态指示：进行中显示旋转 loading，后台完成未查看显示小点 -->
+            <svg
+              v-if="isSessionRunning(session.session_id)"
+              class="animate-spin w-3.5 h-3.5 flex-shrink-0 text-primary-600"
+              fill="none" viewBox="0 0 24 24"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span
+              v-else-if="hasSessionUnreadCompletion(session.session_id)"
+              class="w-2 h-2 rounded-full bg-success-500 flex-shrink-0"
+              title="已完成"
+            ></span>
           </div>
 
-          <!-- Action Buttons: 桌面端 hover 显示，移动端始终显示 -->
-          <div class="absolute right-1.5 top-1.5 flex items-center gap-0.5 md:hidden">
-            <button
-              @click.stop="handleRenameSession(session)"
-              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-              title="重命名"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-            </button>
-            <button
-              @click.stop="handleDeleteSession(session.session_id)"
-              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
-              title="删除"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
-          </div>
-          <div class="absolute right-1.5 top-1.5 hidden group-hover:flex md:flex items-center gap-0.5">
-            <button
-              @click.stop="handleRenameSession(session)"
-              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-              title="重命名"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-            </button>
-            <button
-              @click.stop="handleDeleteSession(session.session_id)"
-              class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
-              title="删除"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
-          </div>
+          <!-- 移动端操作按钮：无右击可用，保留始终显示的入口打开同一菜单 -->
+          <button
+            @click.stop="openSessionContextMenu($event, session)"
+            class="absolute right-1 top-1/2 -translate-y-1/2 md:hidden p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+            title="更多操作"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01" />
+            </svg>
+          </button>
         </div>
+
+        <!-- 展开更多：默认显示10条，点击后在滚动区内展示全部 -->
+        <button
+          v-if="!isSessionListExpanded && filteredSessions.length > sessionDisplayLimit"
+          @click="isSessionListExpanded = true"
+          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-50 rounded-lg transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+          <span>展开更多（{{ filteredSessions.length - sessionDisplayLimit }}）</span>
+        </button>
+        <button
+          v-else-if="isSessionListExpanded && filteredSessions.length > sessionDisplayLimit"
+          @click="isSessionListExpanded = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-50 rounded-lg transition-colors"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+          </svg>
+          <span>收起</span>
+        </button>
 
         <!-- 全部历史会话链接 -->
         <button
           v-if="filteredSessions.length > 0"
           @click="goToAllSessions"
-          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+          class="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -366,7 +337,7 @@
 
     </div>
     <!-- 底部固定区域：用户菜单 -->
-    <div class="mt-auto relative">
+    <div class="flex-shrink-0 relative">
       <div class="flex-shrink-0 p-3 border-t border-gray-200">
         <button
           @click="showUserMenu = !showUserMenu"
@@ -533,6 +504,39 @@
     </div>
   </aside>
 
+  <!-- 会话右击菜单（重命名/删除） -->
+  <div
+    v-if="sessionContextMenu.visible"
+    class="fixed inset-0 z-[60]"
+    @click="closeSessionContextMenu"
+    @contextmenu.prevent="closeSessionContextMenu"
+  >
+    <div
+      class="absolute bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-32"
+      :style="{ left: sessionContextMenu.x + 'px', top: sessionContextMenu.y + 'px' }"
+      @click.stop
+    >
+      <button
+        @click="handleContextRename"
+        class="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+        </svg>
+        <span>重命名</span>
+      </button>
+      <button
+        @click="handleContextDelete"
+        class="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-danger-600 hover:bg-danger-50 transition-colors"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+        <span>删除</span>
+      </button>
+    </div>
+  </div>
+
   <!-- Settings Dialog -->
   <SettingsDialog
     :visible="showSettingsDialog"
@@ -645,16 +649,6 @@ const showRenameModal = ref(false)
 const renameInput = ref('')
 const renamingSessionId = ref<string | null>(null)
 const isAdminMenuExpanded = ref(true)
-// 历史会话折叠状态（持久化到 localStorage）
-const historyStorageKey = 'aid_work_agent:history_expanded'
-const isHistoryExpanded = ref(
-  localStorage.getItem(historyStorageKey) !== 'false'
-)
-
-const toggleHistoryExpanded = () => {
-  isHistoryExpanded.value = !isHistoryExpanded.value
-  localStorage.setItem(historyStorageKey, String(isHistoryExpanded.value))
-}
 
 
 
@@ -768,11 +762,50 @@ const filteredSessions = computed(() => {
   return sessions.value
 })
 
-// 手机端显示6个避免滚动条，桌面端显示10个
-const recentSessions = computed(() => {
-  const limit = props.isMobile ? 6 : 10
-  return filteredSessions.value.slice(0, limit)
+// 历史会话展示：默认显示前 N 条（桌面 10 / 移动 6），点击「展开更多」后在滚动区内展示全部
+const sessionDisplayLimit = computed(() => (props.isMobile ? 6 : 10))
+const isSessionListExpanded = ref(false)
+const displayedSessions = computed(() => {
+  if (isSessionListExpanded.value) {
+    return filteredSessions.value
+  }
+  return filteredSessions.value.slice(0, sessionDisplayLimit.value)
 })
+
+// 会话右击菜单（重命名/删除，桌面右击或移动端「…」按钮触发）
+const sessionContextMenu = ref<{
+  visible: boolean
+  x: number
+  y: number
+  session: { session_id: string; title: string } | null
+}>({ visible: false, x: 0, y: 0, session: null })
+
+function openSessionContextMenu(event: MouseEvent, session: { session_id: string; title: string }) {
+  // 防止菜单超出视口右/下边缘（菜单宽约 128px，高约 88px）
+  const x = Math.min(event.clientX, window.innerWidth - 140)
+  const y = Math.min(event.clientY, window.innerHeight - 100)
+  sessionContextMenu.value = { visible: true, x, y, session }
+}
+
+function closeSessionContextMenu() {
+  sessionContextMenu.value.visible = false
+}
+
+function handleContextRename() {
+  const session = sessionContextMenu.value.session
+  closeSessionContextMenu()
+  if (session) {
+    handleRenameSession(session)
+  }
+}
+
+function handleContextDelete() {
+  const session = sessionContextMenu.value.session
+  closeSessionContextMenu()
+  if (session) {
+    handleDeleteSession(session.session_id)
+  }
+}
 
 // 判断当前是否在知识库页面
 const isKnowledgeBaseActive = computed(() => {
@@ -904,33 +937,6 @@ watchEffect(async () => {
     sessions.value = []
   }
 })
-
-// 格式化时间
-function formatTime(isoString: string): string {
-  // 直接解析 ISO 字符串，JavaScript 会正确处理本地时间
-  const date = new Date(isoString)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-
-  // 1分钟内
-  if (diff < 60 * 1000) {
-    return '刚刚'
-  }
-  // 1小时内
-  if (diff < 60 * 60 * 1000) {
-    const minutes = Math.floor(diff / (60 * 1000))
-    return `${minutes}分钟前`
-  }
-  // 24小时内
-  if (diff < 24 * 60 * 60 * 1000) {
-    const hours = Math.floor(diff / (60 * 60 * 1000))
-    return `${hours}小时前`
-  }
-  // 超过24小时显示日期（使用本地时区即北京时间）
-  const month = date.getMonth() + 1
-  const day = date.getDate()
-  return `${month}月${day}日`
-}
 
 // 新建会话
 async function handleNewSession() {

@@ -49,101 +49,88 @@
         </div>
       </div>
 
-      <!-- Text Input -->
-      <div class="flex items-start gap-3">
-        <!-- 上传按钮 -->
-        <button
-          @click="triggerFileInput"
-          :disabled="disabled || isProcessing"
-          class="flex-shrink-0 box-border h-[46px] px-3.5 rounded-xl bg-gray-100 border border-gray-200 text-gray-500 hover:text-primary-500 hover:border-primary-300 transition-all disabled:opacity-50 flex items-center justify-center"
-          title="添加附件"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-          </svg>
-        </button>
+      <!-- 大圆角输入框（Kimi 风格）：textarea + 底部工具行（左➕附件 / 右圆形发送） -->
+      <div
+        class="rounded-3xl border bg-white transition-colors"
+        :class="disabled ? 'border-gray-200 opacity-70' : 'border-gray-300 focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500'"
+      >
+        <textarea
+          ref="inputRef"
+          v-model="inputText"
+          @keydown.enter.exact="handleEnter"
+          @keydown.shift.enter="newLine"
+          @paste="handlePaste"
+          @input="autoResize"
+          :disabled="disabled"
+          :placeholder="isMobile ? '输入您的问题或任务...' : '输入您的问题或任务，Enter 发送，Shift+Enter 换行，Ctrl+V 粘贴附件'"
+          rows="2"
+          inputmode="text"
+          class="box-border w-full min-h-[68px] max-h-[160px] px-4 pt-3 pb-1 bg-transparent border-0 text-gray-800 placeholder-gray-400 resize-none outline-none disabled:opacity-50 overflow-y-auto"
+        ></textarea>
 
-        <!-- 隐藏的文件输入 -->
-        <input
-          ref="fileInputRef"
-          type="file"
-          class="hidden"
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx"
-          @change="handleFileChange"
-        />
-
-        <div class="flex-1 relative">
-          <textarea
-            ref="inputRef"
-            v-model="inputText"
-            @keydown.enter.exact="handleEnter"
-            @keydown.shift.enter="newLine"
-            @paste="handlePaste"
-            @input="autoResize"
-            :disabled="disabled"
-            :placeholder="isMobile ? '输入您的问题或任务...' : '输入您的问题或任务，Ctrl+V 粘贴附件...'"
-            rows="1"
-            inputmode="text"
-            class="box-border w-full min-h-[46px] max-h-[120px] px-4 py-2 bg-white border border-gray-300 rounded-xl text-gray-800 placeholder-gray-400 resize-none outline-none focus:border-primary-500 disabled:opacity-50 overflow-y-auto"
-            :class="[isProcessing ? 'pr-12' : 'pr-4']"
-          ></textarea>
-
-          <!-- Processing indicator -->
-          <div
-            v-if="isProcessing"
-            class="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-primary-500 bg-white pl-2"
+        <!-- 底部工具行 -->
+        <div class="flex items-center justify-between px-3 pb-2.5">
+          <!-- 附件上传按钮 -->
+          <button
+            @click="triggerFileInput"
+            :disabled="disabled || isProcessing"
+            class="w-8 h-8 rounded-full border border-gray-300 text-gray-500 hover:text-primary-600 hover:border-primary-400 transition-colors disabled:opacity-50 flex items-center justify-center"
+            title="添加附件（也可 Ctrl+V 粘贴）"
           >
-            <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
             </svg>
-            <span class="text-xs">处理中</span>
+          </button>
+
+          <!-- 隐藏的文件输入 -->
+          <input
+            ref="fileInputRef"
+            type="file"
+            class="hidden"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.png,.jpg,.jpeg,.gif,.ppt,.pptx"
+            @change="handleFileChange"
+          />
+
+          <div class="flex items-center gap-2">
+            <!-- Processing indicator -->
+            <span v-if="isProcessing" class="flex items-center gap-1.5 text-primary-500 text-xs">
+              <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              处理中
+            </span>
+
+            <!-- Stop Button（处理中替换发送按钮） -->
+            <button
+              v-if="isProcessing"
+              @click="emit('stop')"
+              class="w-9 h-9 rounded-full bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 transition-colors flex items-center justify-center"
+              title="停止生成"
+            >
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            </button>
+            <!-- Send Button：圆形向上箭头 -->
+            <button
+              v-else
+              @click="handleSend"
+              :disabled="(!inputText.trim() && files.length === 0) || disabled"
+              :class="[
+                'w-9 h-9 rounded-full transition-all flex items-center justify-center',
+                (inputText.trim() || files.length > 0) && !disabled
+                  ? 'bg-primary-600 text-white hover:bg-primary-500 shadow-md shadow-primary-500/25'
+                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              ]"
+              title="发送"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+            </button>
           </div>
         </div>
-
-        <!-- Stop Button -->
-        <button
-          v-if="isProcessing"
-          @click="emit('stop')"
-          class="box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 hover:border-red-300"
-        >
-          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-          <span class="hidden sm:inline">停止</span>
-        </button>
-        <!-- Send Button -->
-        <button
-          v-else
-          @click="handleSend"
-          :disabled="!inputText.trim() && files.length === 0"
-          :class="[
-            'box-border h-[46px] min-h-[44px] min-w-[44px] px-4 sm:px-5 rounded-xl font-medium transition-all flex items-center justify-center gap-2',
-            inputText.trim() || files.length > 0
-              ? 'bg-gradient-to-r from-primary-500 to-primary-700 text-white hover:from-primary-400 hover:to-primary-600 shadow-lg shadow-primary-500/25'
-              : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-          ]"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-          </svg>
-          <span class="hidden sm:inline">发送</span>
-        </button>
-      </div>
-
-      <!-- Hint -->
-      <div class="mt-2 text-xs text-gray-500 text-center hidden md:block">
-        <span>按</span>
-        <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Enter</kbd>
-        <span>发送</span>
-        <span class="mx-2">|</span>
-        <span>按</span>
-        <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Shift + Enter</kbd>
-        <span>换行</span>
-        <span class="mx-2">|</span>
-        <span>按</span>
-        <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-gray-600 mx-1">Ctrl + V</kbd>
-        <span>粘贴附件</span>
       </div>
     </div>
   </div>
@@ -236,14 +223,8 @@ function autoResize() {
     const cs = window.getComputedStyle(textarea)
     const borderVertical =
       parseFloat(cs.borderTopWidth || '0') + parseFloat(cs.borderBottomWidth || '0')
-    const target = Math.min(textarea.scrollHeight + borderVertical, 120)
+    const target = Math.min(textarea.scrollHeight + borderVertical, 160)
     textarea.style.height = target + 'px'
-  }
-} {
-  const textarea = inputRef.value
-  if (textarea) {
-    textarea.style.height = 'auto'
-    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
   }
 }
 

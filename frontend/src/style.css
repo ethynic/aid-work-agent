@@ -399,9 +399,11 @@ body {
   }
 
   .h-safe-screen {
+    /* 注意：不要再追加 height: -webkit-fill-available —— 在 Chrome/Electron 中
+       它会覆盖 100dvh，且父级无确定高度时解析为 auto，导致整页滚动、
+       头部与输入框失去固定（iOS 安全区由 100dvh 覆盖） */
     height: 100vh;
     height: 100dvh;
-    height: -webkit-fill-available;
   }
 
   .shadow-message {

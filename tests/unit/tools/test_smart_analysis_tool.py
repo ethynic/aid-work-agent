@@ -3,7 +3,7 @@ SmartDataAnalysisTool 单元测试（mock AnalysisAgent）
 
 测试内容：
 1. 工具定义（name, description, schema）
-2. 参数校验（requirement 和 tables_metadata 必填）
+2. 参数校验（requirement 必填，tables_metadata 可选——不传时由 AnalysisAgent 自动检索匹配表）
 3. execute 完整流程（mock AnalysisAgent）
 4. 动态 display_name
 """
@@ -54,7 +54,8 @@ class TestSmartDataAnalysisToolDefinition:
         assert schema["type"] == "object"
         required = schema.get("required", [])
         assert "requirement" in required
-        assert "tables_metadata" in required
+        # tables_metadata 是可选的：不传时由 AnalysisAgent 自动检索匹配数据表
+        assert "tables_metadata" not in required
 
     def test_input_model_fields(self):
         fields = AnalyzeDataInput.model_fields
@@ -81,15 +82,16 @@ class TestParameterValidation:
         assert "requirement" in missing
 
     def test_missing_tables_metadata(self):
+        # tables_metadata 可选，缺它不算缺失参数（AnalysisAgent 会自动搜索匹配表）
         tool = SmartDataAnalysisTool()
         missing = tool.get_missing_parameters(requirement="test")
-        assert "tables_metadata" in missing
+        assert "tables_metadata" not in missing
 
     def test_missing_all_required(self):
         tool = SmartDataAnalysisTool()
         missing = tool.get_missing_parameters()
         assert "requirement" in missing
-        assert "tables_metadata" in missing
+        assert "tables_metadata" not in missing
 
     def test_optional_session_id(self):
         tool = SmartDataAnalysisTool()
