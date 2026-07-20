@@ -282,9 +282,25 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
             <div class="flex-1 min-w-0">
-              <p class="text-sm text-gray-700 truncate">
-                {{ session.title || '新会话' }}
-              </p>
+              <div class="flex items-center gap-1.5">
+                <p class="text-sm text-gray-700 truncate">
+                  {{ session.title || '新会话' }}
+                </p>
+                <!-- 流式状态指示：进行中显示旋转 loading，后台完成未查看显示小点 -->
+                <svg
+                  v-if="isSessionRunning(session.session_id)"
+                  class="animate-spin w-3.5 h-3.5 flex-shrink-0 text-primary-600"
+                  fill="none" viewBox="0 0 24 24"
+                >
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span
+                  v-else-if="hasSessionUnreadCompletion(session.session_id)"
+                  class="w-2 h-2 rounded-full bg-success-500 flex-shrink-0"
+                  title="已完成"
+                ></span>
+              </div>
               <p class="text-xs text-gray-400 mt-0.5">
                 {{ formatTime(session.updated_at) }}
               </p>
@@ -622,7 +638,7 @@ const {
   renameSession,
   selectSession
 } = useSession()
-const { isProcessing, abortStreaming } = useAgent()
+const { isSessionRunning, hasSessionUnreadCompletion, removeStreamState } = useAgent()
 
 const isCreating = ref(false)
 const showRenameModal = ref(false)
@@ -929,14 +945,7 @@ async function handleNewSession() {
     return
   }
 
-  // 如果当前正在流式响应，需要用户确认是否终止
-  if (isProcessing.value) {
-    if (!confirm('当前会话还未结束，您希望终止当前会话，进入新会话吗？')) {
-      return
-    }
-    // 用户确认，终止当前流式响应
-    await abortStreaming()
-  }
+  // 多会话后台流式：切换/新建会话不再中断正在进行的会话，旧会话在后台继续生成
 
   // 优化：点击新会话立即响应，不等待后端 API
   // 直接清空当前会话，导航到空界面，用户输入第一条消息时才真正创建会话
@@ -994,15 +1003,7 @@ async function handleNewSession() {
 
 // 选择会话
 async function handleSelectSession(sessionId: string) {
-  // 如果当前正在流式响应，需要用户确认是否终止
-  if (isProcessing.value) {
-    if (!confirm('当前会话还未结束，您希望终止当前会话，切换到选中的会话吗？')) {
-      return
-    }
-    // 用户确认，终止当前流式响应
-    await abortStreaming()
-  }
-
+  // 多会话后台流式：切换会话不再中断正在进行的会话，旧会话在后台继续生成
   selectSession(sessionId)
 
   // 跳转到聊天页面（如果当前不在聊天页面）
@@ -1065,6 +1066,8 @@ async function handleSelectSession(sessionId: string) {
 // 删除会话
 async function handleDeleteSession(sessionId: string) {
   if (confirm('确定要删除这个会话吗？')) {
+    // 先断开并清理该会话的流式状态（若正在后台生成）
+    removeStreamState(sessionId)
     await removeSession(sessionId)
   }
 }

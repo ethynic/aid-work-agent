@@ -1,11 +1,11 @@
 # 数据分析工具返回结构优化设计
 
 > **关联**：
-> - 父功能：[数据分析智能体](../../ideas.md) #9
+> - 父功能：[数据分析智能体](../../ideas_finished.md) #9
 > - 工具设计：[smart-data-analysis-tool-design.md](smart-data-analysis-tool-design.md)
 > - 工具开发计划：[smart-data-analysis-tool-dev-plan.md](smart-data-analysis-tool-dev-plan.md)
 >
-> **状态**：📋 待开发
+> **状态**：✅ 已实现（2026-06-12 上线，2026-07-20 归档）
 > **创建日期**：2026-06-12
 
 ---
