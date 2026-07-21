@@ -112,6 +112,7 @@ async def get_platform_token_usage(
             "input_cost": tenant_item["input_cost"],
             "output_cost": tenant_item["output_cost"],
             "total_cost": tenant_item["total_cost"],
+            "credit_cost": tenant_item["credit_cost"],
             "has_unpriced_tokens": tenant_item["has_unpriced_tokens"]
         })
 
