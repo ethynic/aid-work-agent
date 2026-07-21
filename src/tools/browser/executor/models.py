@@ -45,6 +45,9 @@ class BrowserCommand(StrictDTO):
 class StartCommand(BrowserCommand):
     type: Literal["start"] = "start"
     run: BrowserRunSpec
+    # 可选：跨 run 注入登录态（B0.5）。repr=False 防止 cookie/localStorage 明文出现在
+    # 任何 repr() 输出（日志/调试）。model_dump 仍含此字段以通过 stdin 帧发给 worker。
+    storage_state: Optional[dict[str, Any]] = Field(default=None, repr=False)
 
     @field_validator("run")
     @classmethod
@@ -52,6 +55,17 @@ class StartCommand(BrowserCommand):
         if info.data.get("run_id") != value.run_id:
             raise ValueError("start 的 run_id 不一致")
         return value
+
+
+class ExportStorageStateCommand(BrowserCommand):
+    """导出当前 context 的 storage_state（cookies + origins/localStorage）。
+
+    登录完成后由调用方发出，捕获登录态用于加密回写到 ``bs_outbound_account_sessions``
+    （B0.5）。结果中的 ``storage_state`` 字段含敏感会话信息，调用方必须加密持久化，
+    不得记入日志/审计/Agent 上下文（对齐设计 §10）。
+    """
+
+    type: Literal["export_storage_state"] = "export_storage_state"
 
 
 class NavigateCommand(BrowserCommand):
@@ -114,7 +128,7 @@ class CloseCommand(BrowserCommand):
 Command = (
     StartCommand | NavigateCommand | SnapshotCommand | ClickCommand | FillCommand
     | SelectCommand | KeyboardCommand | PointerCommand | ContentCommand | CloseCommand
-    | ScreenshotCommand
+    | ScreenshotCommand | ExportStorageStateCommand
 )
 
 
@@ -177,7 +191,20 @@ class CloseResult(BaseResult):
     forced: bool = False
 
 
-Result = StartResult | CommandResult | SnapshotResult | ContentResult | ScreenshotResult | CloseResult
+class ExportStorageStateResult(BaseResult):
+    """``ExportStorageStateCommand`` 的结果。
+
+    ``storage_state`` 含敏感 cookie/localStorage，``repr=False`` 避免 repr 泄露；
+    调用方收到后必须立即加密入库，不留存于内存之外的任何位置。
+    """
+
+    storage_state: Optional[dict[str, Any]] = Field(default=None, repr=False)
+
+
+Result = (
+    StartResult | CommandResult | SnapshotResult | ContentResult | ScreenshotResult
+    | CloseResult | ExportStorageStateResult
+)
 
 
 def error_result(command: BrowserCommand, code: str) -> CommandResult:

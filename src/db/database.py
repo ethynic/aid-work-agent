@@ -1313,6 +1313,19 @@ def _init_postgresql():
             except Exception as rollback_err:
                 logger.warning(f"Failed to rollback social media transaction: {rollback_err}")
 
+        # 巡检商机 outbound 表：商机池 3 表（B1）+ 托管登录态（B0.5），均幂等建表
+        try:
+            from src.social_media.outbound.db import init_outbound_tables
+            from src.social_media.outbound.account_session_store import init_outbound_account_sessions_table
+            init_outbound_tables(conn)
+            init_outbound_account_sessions_table(conn)
+        except Exception as e:
+            logger.warning(f"Failed to initialize outbound tables: {e}")
+            try:
+                conn.rollback()
+            except Exception as rollback_err:
+                logger.warning(f"Failed to rollback outbound transaction: {rollback_err}")
+
         # Skill 表初始化由 SkillLoader._init_skill_tables() 统一处理，
         # 通过 SKILL.md 中的 init_script 字段声明，不再硬编码。
 
