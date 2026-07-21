@@ -52,8 +52,6 @@ CREATE TABLE IF NOT EXISTS reply_styles (
 
 CREATE INDEX IF NOT EXISTS idx_reply_styles_tenant_active ON reply_styles(tenant_id, is_active);
 
-ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS reply_style_id TEXT;
-
 -- 种子数据：系统内置拟人风格
 INSERT INTO reply_styles (style_id, tenant_id, name, description, content, version, is_active)
 SELECT 'human-like', 'system', '拟人风格', '像真人同事一样对话，隐藏 AI 工作过程',
@@ -83,8 +81,6 @@ $$## 回复风格指南
 WHERE NOT EXISTS (
     SELECT 1 FROM reply_styles WHERE style_id = 'human-like' AND tenant_id = 'system'
 );
-
-ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS reply_style_id TEXT;
 
 -- 2026-06-02，users 表增加 source 字段，区分用户来源（NULL=内部用户，wecom_kf=企业微信客服）
 ALTER TABLE users ADD COLUMN IF NOT EXISTS source TEXT;

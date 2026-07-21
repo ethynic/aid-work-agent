@@ -543,7 +543,7 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
         return UnifiedLoginResponse(success=False, errors=errors)
 
     # 3. 平台管理员识别（手机号在 admin.phones 且密码等于 QBTOKEN）
-    #    平台管理员 tenant_id 为 NULL，跳过租户归属校验，登录后跳转 /portal
+    #    平台管理员 tenant_id 为 NULL，跳过租户归属校验，登录后跳转 tenant_code 对应租户前台
     identifier = body.identifier.strip()
     is_phone = identifier.isdigit() and len(identifier) == 11
     admin_cfg = getattr(settings, "admin", None)
@@ -576,7 +576,23 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
             UserDB.update(user["user_id"], role="platform_admin")
             user = UserDB.get_by_id(user["user_id"])
 
+        # 查询 tenant_code 对应租户（平台管理员代管理）
+        tenant = None
+        try:
+            tenant = TenantDB.get_by_code(tenant_code)
+        except Exception as e:
+            logger.error(f"查询租户失败: {e}")
+
         token = generate_token(user["user_id"])
+
+        # 跳转到 tenant_code 对应租户前台；租户不存在时回退 /portal
+        if tenant:
+            redirect_url = f"/t/{tenant['tenant_id']}"
+            tenant_id = tenant["tenant_id"]
+        else:
+            redirect_url = "/portal"
+            tenant_id = None
+
         return UnifiedLoginResponse(
             success=True,
             token=token,
@@ -588,8 +604,8 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
                 "is_admin": True,
                 "role": "platform_admin",
             },
-            tenant_id=None,
-            redirect_url="/portal"
+            tenant_id=tenant_id,
+            redirect_url=redirect_url
         )
 
     # 4. 查询租户（仅普通用户需要）

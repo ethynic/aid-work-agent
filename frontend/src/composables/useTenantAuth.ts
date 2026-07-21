@@ -9,7 +9,7 @@
 
 import { ref, computed } from 'vue'
 import { adminLogout as apiLogout } from '@/api/saasTenant'
-import { getTenantScopedKey } from '@/api/tenantStorage'
+import { getTenantScopedKey, type SaasBaseKey } from '@/api/tenantStorage'
 import { credentialGet, credentialRemove, credentialSet } from '@/platform/credentialStore'
 
 export interface TenantAdmin {
@@ -44,6 +44,25 @@ function getAdminKey(): string {
 
 function getTenantKey(): string {
   return getTenantScopedKey('saas_tenant')
+}
+
+/**
+ * 登录时根据 tenant_id 解析目标 key（而非当前路由）。
+ *
+ * 背景：UniversalLogin 在路由 / 完成登录，但跳转目标是 /t/{tenant_id} 或 /portal。
+ * 若用当前路由解析 key，token 会存到 saas_token（无后缀），跳转后页面按
+ * saas_token_{tenant_id} 读取，找不到 token，表现为"未登录"。
+ *
+ * 规则：
+ * - tenant_id 非空 -> saas_token_{tenant_id}（跳 /t/{tenant_id}）
+ * - tenant_id 为空 -> portal_token（跳 /portal，平台管理员回退场景）
+ */
+function resolveLoginKey(base: SaasBaseKey, tenantId: string | undefined): string {
+  if (tenantId) {
+    const safeId = tenantId.replace(/[^a-zA-Z0-9_-]/g, '_')
+    return `${base}_${safeId}`
+  }
+  return base.replace('saas_', 'portal_')
 }
 
 export function useTenantAuth() {
@@ -154,9 +173,10 @@ export function useTenantAuth() {
    * 敏感信息（手机号等）通过 API 获取，不持久化到 localStorage。
    */
   async function setLogin(token: string, adminInfo: TenantAdmin, tenantInfo: TenantInfo) {
-    const tokenKey = getTokenKey()
-    const adminKey = getAdminKey()
-    const tenantKey = getTenantKey()
+    // 按 tenant_id 解析目标 key（兼容登录页路由与目标路由不一致的场景）
+    const tokenKey = resolveLoginKey('saas_token', tenantInfo.tenant_id)
+    const adminKey = resolveLoginKey('saas_admin', tenantInfo.tenant_id)
+    const tenantKey = resolveLoginKey('saas_tenant', tenantInfo.tenant_id)
 
     // 仅存储非敏感字段
     await credentialSet(adminKey, JSON.stringify({
