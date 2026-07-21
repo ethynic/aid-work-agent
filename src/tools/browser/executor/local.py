@@ -9,7 +9,7 @@ import signal
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, TypeVar
+from typing import Any, Awaitable, Callable, TypeVar
 
 from loguru import logger
 from pydantic import BaseModel, ValidationError
@@ -19,7 +19,8 @@ from src.tools.browser.worker_protocol import ProtocolError, read_frame, write_f
 
 from .models import (
     BrowserCommand, BrowserRunSpec, ClickCommand, CloseCommand, CloseResult,
-    CommandResult, ContentCommand, ContentResult, FillCommand, KeyboardCommand,
+    CommandResult, ContentCommand, ContentResult, ExportStorageStateCommand,
+    ExportStorageStateResult, FillCommand, KeyboardCommand,
     NavigateCommand, PointerCommand, ResultStatus, SelectCommand, SnapshotCommand,
     SnapshotResult, StartCommand, StartResult, ScreenshotCommand, ScreenshotResult,
 )
@@ -138,6 +139,24 @@ class LocalPlaywrightExecutor:
 
     async def content(self, command: ContentCommand) -> ContentResult:
         return await self._request(command, ContentResult)
+
+    async def export_storage_state(self) -> dict[str, Any] | None:
+        """导出当前 run 的 storage_state（cookies + localStorage，B0.5）。
+
+        用于登录完成后捕获登录态。返回 dict（含 cookies/origins）或 ``None``
+        （worker 未启动 / 命令失败 / run 未启动）。返回值含敏感 cookie，调用方负责
+        加密持久化（``account_session_store.save_storage_state``）且不得写入日志/审计。
+        """
+        if self._process is None or self._run is None:
+            return None
+        command = ExportStorageStateCommand(**self._command_fields())
+        try:
+            result = await self._request(command, ExportStorageStateResult)
+        except (asyncio.TimeoutError, ProtocolError, ConnectionError, OSError, ValidationError):
+            return None
+        if result.status != ResultStatus.OK:
+            return None
+        return result.storage_state
 
     async def execute(self, command: BrowserCommand) -> BaseModel:
         """供 PageOps 按 DTO 类型分派。"""

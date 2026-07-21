@@ -13,8 +13,8 @@ from urllib.parse import urlsplit
 from pydantic import TypeAdapter, ValidationError
 
 from src.tools.browser.executor.models import (
-    ClickCommand, CloseCommand, Command, ContentCommand, FillCommand,
-    KeyboardCommand, NavigateCommand, PointerCommand, ResultStatus,
+    ClickCommand, CloseCommand, Command, ContentCommand, ExportStorageStateCommand,
+    FillCommand, KeyboardCommand, NavigateCommand, PointerCommand, ResultStatus,
     SelectCommand, SnapshotCommand, StartCommand, ScreenshotCommand,
 )
 from src.tools.browser.worker_protocol import ProtocolError, read_frame_sync, write_frame_sync
@@ -113,6 +113,8 @@ class BrowserWorker:
     async def _dispatch(self, command) -> dict[str, Any]:
         if isinstance(command, StartCommand):
             return await self._start(command)
+        if isinstance(command, ExportStorageStateCommand):
+            return await self._export_storage_state(command)
         if self.page is None and not isinstance(command, CloseCommand):
             return self._base(command, "error", "RUN_NOT_STARTED")
         if isinstance(command, NavigateCommand):
@@ -182,14 +184,39 @@ class BrowserWorker:
                 headless=command.run.headless,
                 args=["--disable-dev-shm-usage"],
             )
-            self.context = await self.browser.new_context(
-                viewport={"width": command.run.viewport_width, "height": command.run.viewport_height}
-            )
+            context_kwargs = {
+                "viewport": {
+                    "width": command.run.viewport_width,
+                    "height": command.run.viewport_height,
+                },
+            }
+            # 注入登录态（B0.5）：storage_state 来自调用方从加密存储解密的 dict。
+            # 不在此处校验登录是否成功——那是 B2 ensure_logged_in 的职责（§3 红线）。
+            if command.storage_state is not None:
+                context_kwargs["storage_state"] = command.storage_state
+            self.context = await self.browser.new_context(**context_kwargs)
             self.page = await self.context.new_page()
         except BaseException:
             await self.close()
             raise
         return {**self._base(command), "worker_pid": None}
+
+    async def _export_storage_state(
+        self, command: ExportStorageStateCommand
+    ) -> dict[str, Any]:
+        """导出当前 context 的 storage_state（B0.5）。
+
+        必须在 run 已启动后调用；否则返回 RUN_NOT_STARTED。导出失败返回
+        STORAGE_STATE_FAILED。调用方收到 storage_state 后负责加密持久化。
+        """
+        if self.run is None or command.run_id != self.run.run_id or self.context is None:
+            return self._base(command, "error", "RUN_NOT_STARTED")
+        try:
+            state = await self.context.storage_state()
+        except Exception:
+            # 异常正文可能含上下文信息；只回白名单 code。
+            return self._base(command, "error", "STORAGE_STATE_FAILED")
+        return {**self._base(command), "storage_state": state}
 
     async def _snapshot(self, command: SnapshotCommand) -> dict[str, Any]:
         from src.tools.browser.semantic import SemanticSnapshotGenerator

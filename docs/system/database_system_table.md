@@ -9,6 +9,15 @@
 > 用户输入；所有读取和更新均要求 `tenant_id` 条件。DDL 已同步
 > `deploy/init-postgres.sql` 与 `deploy/db_update.sql`，不创建长期 device 表。
 
+> 2026-07-21 社媒营销智能体 outbound 模块 B0.5 例外登记：新增托管登录态表
+> `bs_outbound_account_sessions`。存知乎/小红书等 web 操作型连接器的 Playwright
+> `storage_state`（cookies + localStorage）**加密 blob**，跨 run 维持登录态（设计
+> §7.3 / §10）。`storage_state_encrypted` 由应用层 `encryption_manager` 加密，
+> **绝不存储明文 cookie**；读写按 `(tenant_id, account_id)` 强制过滤，状态机
+> `active → expired / revoked`。源码：`src/social_media/outbound/account_session_store.py`。
+> 表 DDL 已同步 `deploy/init-postgres.sql` 与 `deploy/db_update.sql`。商机池 3 表
+> (`bs_outbound_leads` / `_lead_interactions` / `_outreach_actions`) 由并行智能体开发。
+
 ---
 
 ## 1. 表分类总览

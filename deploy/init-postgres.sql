@@ -1845,3 +1845,24 @@ CREATE TABLE IF NOT EXISTS tenant_recharges (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id ON tenant_recharges(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at ON tenant_recharges(created_at DESC);
+
+-- ============== 巡检商机：托管登录态（B0.5）==============
+-- 社媒营销智能体 outbound 模块的登录态托管表，存 Playwright storage_state 加密 blob。
+-- 用于知乎/小红书等 web 操作型连接器跨 run 维持登录态。设计 §7.3 / §10。
+CREATE TABLE IF NOT EXISTS bs_outbound_account_sessions (
+    account_id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    platform TEXT,
+    storage_state_encrypted TEXT NOT NULL,
+    storage_state_key_version TEXT DEFAULT 'v1',
+    status TEXT DEFAULT 'active',
+    last_used_at TIMESTAMP,
+    expired_reason TEXT,
+    cookie_count INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbound_account_sessions_tenant_status
+    ON bs_outbound_account_sessions(tenant_id, status, updated_at DESC);

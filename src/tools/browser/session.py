@@ -34,8 +34,15 @@ class BrowserSession:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close(reason="context_exit")
 
-    async def start(self) -> None:
-        """事务化启动；任一半失败都会逆序清理已创建资源。"""
+    async def start(self, storage_state: Optional[Dict[str, Any]] = None) -> None:
+        """事务化启动；任一半失败都会逆序清理已创建资源。
+
+        可选 ``storage_state``：Playwright 标准 storage_state dict（含 cookies 与
+        origins/localStorage），用于跨 run 注入登录态（B0.5）。``None`` 时不注入，
+        保持旧行为。幂等：若会话已运行则直接返回（不二次注入）；调用方需在重新注入前
+        显式 ``close()``。锁语义不变——storage_state 仅作为 ``new_context`` 的入参，
+        不影响 ``_start_lock`` 事务化或与 ``close`` 的合并行为。
+        """
         try:
             async with self._start_lock:
                 if self.is_running():
@@ -52,16 +59,20 @@ class BrowserSession:
                     headless=self.headless,
                     args=["--no-sandbox", "--disable-dev-shm-usage"],
                 )
-                self.context = await self.browser.new_context(
-                    viewport={
+                context_kwargs = {
+                    "viewport": {
                         "width": settings.tools.browser.viewport_width,
                         "height": settings.tools.browser.viewport_height,
                     },
-                    user_agent=(
+                    "user_agent": (
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36"
                     ),
-                )
+                }
+                if storage_state is not None:
+                    # 注入登录态：cookies + localStorage 由 Playwright 写入新 context。
+                    context_kwargs["storage_state"] = storage_state
+                self.context = await self.browser.new_context(**context_kwargs)
                 self.page = await self.context.new_page()
                 self.page.set_default_timeout(settings.tools.browser.timeout)
                 self.page.set_default_navigation_timeout(settings.tools.browser.timeout)
@@ -70,6 +81,18 @@ class BrowserSession:
             # 先释放启动锁，再让 close 与并发关闭合并，避免锁重入死锁。
             await self.close(reason="start_failed")
             raise
+
+    async def export_storage_state(self) -> Dict[str, Any]:
+        """导出当前 context 的 storage_state（cookies + origins/localStorage）。
+
+        用于登录完成（人工接管完成或显式标记）后捕获登录态，由调用方加密回写到
+        ``bs_outbound_account_sessions``（B0.5）。必须在会话运行中调用；否则抛出
+        ``RuntimeError``。本方法不记日志——返回值含敏感 cookie，调用方负责加密持久化
+        且不得将其写入日志/审计/Agent 上下文（对齐设计 §10）。
+        """
+        if self.context is None:
+            raise RuntimeError("browser context 未启动，无法导出 storage_state")
+        return await self.context.storage_state()
 
     async def close(self, reason: str = "completed") -> Dict[str, Any]:
         """幂等关闭，并发调用合并到同一个清理任务。"""
