@@ -523,6 +523,17 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 - `social_metric_snapshots`：原始指标与标准化指标快照。
 - `social_data_import_batches`：视频号等人工数据导入批次。
 
+### 11.6 巡检商机表（bs_outbound_*）
+
+巡检商机模块（社媒营销智能体 §7）使用以下租户业务表，遵循 database_dev.md bs_ 规范。
+**原文 PII 加密存储**（`encryption_manager`）、**同 tenant 去重指纹 UNIQUE**、**状态机**（new → contacted → qualified|invalid → converted）由应用层 `src/social_media/outbound/` 强制。
+
+- `bs_outbound_leads`：商机主表。来源平台/类型、外部内容 ID/URL、原文加密（`raw_text_encrypted`）、意向分、状态、分配销售、去重指纹（同 tenant 部分唯一索引）、接触要点、风险标记。
+- `bs_outbound_lead_interactions`：商机互动/跟进记录。互动类型（note/call/email/dm/comment/visit/wechat/other）、内容、跟进人 `actor_user_id`。
+- `bs_outbound_outreach_actions`：我方接触动作审计。动作类型（comment/dm/post）、渠道、内容快照、执行状态（默认 `draft`，需人审后推进）、审核人。
+
+> `bs_outbound_account_sessions`（托管登录态加密存储）由登录态子系统负责，本段不覆盖。
+
 ---
 
 ## 12. 核心表关系图
