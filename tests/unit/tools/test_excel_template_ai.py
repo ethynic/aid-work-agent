@@ -82,8 +82,8 @@ def _build_sample(path: Path) -> Path:
 SAMPLE_STRUCTURE = {
     "title": {"row": 1, "col": 1, "merge": "A1:E1"},
     "meta_fields": [
-        {"row": 2, "col": 2, "bind": "customer_name"},
-        {"row": 2, "col": 5, "bind": "date"},
+        {"row": 2, "col": 1, "bind": "customer_name"},
+        {"row": 2, "col": 4, "bind": "date"},
     ],
     "columns": [
         {"col": 1, "header": "类别", "bind": "category"},
@@ -155,6 +155,47 @@ def test_fill_m_equals_k_no_residue(sample_path, tmp_path):
                for mr in ws.merged_cells.ranges)
     # 数字格式保留
     assert ws["E4"].number_format == "#,##0.00"
+
+
+def test_meta_left_right_label_not_overwritten(sample_path, tmp_path):
+    """左右结构：标题格保留，值写到标题右侧相邻格（修 tr_643d42f978664bb9：值覆盖了标题）"""
+    rows = [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "amount": 400},
+        {"category": "门票", "name": "景点Y", "unit_price": 80, "quantity": 3, "amount": 240},
+        {"category": "餐饮", "name": "午餐Z", "unit_price": 40, "quantity": 3, "amount": 120},
+    ]
+    res = fill_with_sample(
+        str(sample_path), _data(rows),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"]
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    # 标题格 A2/D2 必须保留，绝不能被值覆盖
+    assert ws["A2"].value == "客户：", f"标题被覆盖: A2={ws['A2'].value!r}"
+    assert ws["D2"].value == "日期：", f"标题被覆盖: D2={ws['D2'].value!r}"
+    # 值在标题右侧相邻格 B2/E2
+    assert ws["B2"].value == "张三"
+    assert ws["E2"].value == "2026-08-01"
+
+
+def test_meta_value_col_override(sample_path, tmp_path):
+    """value_col 显式指定值格（值不在标题紧邻右侧时）"""
+    structure = dict(SAMPLE_STRUCTURE)
+    structure = json.loads(json.dumps(SAMPLE_STRUCTURE))  # 深拷贝
+    structure["meta_fields"] = [{"row": 2, "col": 1, "bind": "customer_name", "value_col": 3}]
+    rows = [{"category": "A", "name": "n", "unit_price": 1, "quantity": 1, "amount": 1},
+            {"category": "B", "name": "n", "unit_price": 1, "quantity": 1, "amount": 1},
+            {"category": "C", "name": "n", "unit_price": 1, "quantity": 1, "amount": 1}]
+    res = fill_with_sample(
+        str(sample_path), _data(rows),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(structure),
+    )
+    assert res["success"]
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    assert ws["A2"].value == "客户："   # 标题保留
+    assert ws["C2"].value == "张三"      # 值在 value_col=3（而非默认 col+1=B2）
 
 
 def test_fill_m_greater_than_k_inserts_rows_with_style(sample_path, tmp_path):
@@ -454,8 +495,8 @@ def _build_grouped_sample(path: Path) -> Path:
 GROUPED_STRUCTURE = {
     "title": {"row": 1, "col": 1, "merge": "A1:F1"},
     "meta_fields": [
-        {"row": 2, "col": 2, "bind": "customer_name"},
-        {"row": 2, "col": 5, "bind": "date"},
+        {"row": 2, "col": 1, "bind": "customer_name"},
+        {"row": 2, "col": 4, "bind": "date"},
     ],
     "columns": [
         {"col": 1, "header": "类别", "bind": "category"},

@@ -55,12 +55,16 @@ class ColumnBinding(_NoneTolerant):
 
 
 class MetaField(_NoneTolerant):
-    """顶部信息字段：(row, col) 是要写入值的单元格"""
+    """顶部信息字段（左右结构：标题在左、值在右）。
+    (row, col) 是**标题单元格**（标题文字所在格）；值由渲染器写到标题右侧相邻格。
+    LLM 找标题文字天然可靠；让它挑"右侧值格"易错（会把值写进标题格覆盖标题）。
+    若值不在标题紧邻右侧（隔列/合并区），用 value_col 显式指定值格列。"""
 
     row: int
-    col: int
+    col: int  # 标题单元格列
     label: Optional[str] = None
     bind: Optional[str] = None
+    value_col: Optional[int] = None  # 值单元格列；None 时取 col+1（标题右侧相邻）
 
 
 
@@ -257,7 +261,7 @@ def _build_analyze_prompt(grid_text: str, data_keys: Dict[str, List[str]], data:
 {{
   "title": {{"row": 1, "col": 1, "merge": "A1:G1"}},
   "meta_fields": [
-    {{"row": 2, "col": 4, "label": "日期", "bind": "date"}}
+    {{"row": 2, "col": 3, "label": "日期：", "bind": "date"}}
   ],
   "columns": [
     {{"col": 1, "header": "成本类别", "bind": "category"}},
@@ -276,7 +280,7 @@ def _build_analyze_prompt(grid_text: str, data_keys: Dict[str, List[str]], data:
 ## 关键规则
 1. **columns 必须覆盖明细区所有列**：样例明细表头有几列就列几列；能绑到上面"明细行可用的键"的填 bind，绑不上的列 bind 填 null（渲染时清空，避免残留样例数据）。多个分组共用同一组 columns。
 2. **groups（分区小计版式必填）**：样例若出现"XX小计"行（如"房餐车小计""门票小计"），每个小计行对应一个分组：detail_first_row/detail_last_row 是该小计行**上方**紧邻的明细示例数据首末行，subtotal_row/subtotal_col 是小计行及其合计值所在列，match 用"明细行可用的键"指明哪些值归该组（常用 category）。detail_template_row 取该组明细首行。**无分区小计的简单版式，groups 填空数组，改填 detail_first_row/detail_last_row。**
-3. **meta_fields 的 (row,col) 是值单元格**（不是标签单元格）。例如"日期：2026-08-01"，标签在 C2、值在 D2，则 meta_fields 写 {{row:2,col:4,bind:"date"}}。
+3. **meta_fields 的 (row,col) 是"标题单元格"（标题文字所在格），不是值格**。这类是左右结构：标题在左格、值要填到它**右侧相邻格**。渲染器会自动把值写到 col+1，所以你只需标注标题格。例如"日期："在 C2（col=3）、值要填到 D2，则 meta_fields 写 {{row:2,col:3,bind:"date"}}（col=3 是标题格 C2，渲染器自动写到 D2）。**千万不要把 col 写成值格或写进标题格的 bind——否则值会覆盖标题。** 若某字段值不在标题紧邻右侧（如隔一列、或在合并区右端），加 value_col 显式指定值格列。
 4. **totals**：合计行 + 人均/标量单元格。bind 用上面"合计可用的键"（grand_total 或 per_capita 的键名，如"成人人均"）。
 5. **bind 优先用上面给出的键**；键里没有的不要编造。
 6. title/meta/totals 没有对应内容时填 null / 空数组。
@@ -577,10 +581,12 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
             r = _final_row(g.subtotal_row, plan)
             ws.cell(row=r, column=g.subtotal_col).value = _resolve_subtotal(g, data, rows, bound_by_col)
 
-    # 6. 填顶部 meta（位于所有分组上方，行号不变；bind 已识别但 data 未提供 → 清空防样例残留）
+    # 6. 填顶部 meta（左右结构：标题在 mf.col，值写到右侧 value_col/col+1，标题格不动）
     for mf in structure.meta_fields:
-        if mf.bind:
-            ws.cell(row=mf.row, column=mf.col).value = data.meta.get(mf.bind)
+        if not mf.bind:
+            continue
+        value_col = mf.value_col if mf.value_col else mf.col + 1
+        ws.cell(row=mf.row, column=value_col).value = data.meta.get(mf.bind)
 
     # 7. 填合计区（位于所有分组下方，按 _final_row 重映射；无值 → 清空防样例残留）
     for t in structure.totals:
