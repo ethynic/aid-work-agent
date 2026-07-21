@@ -32,7 +32,7 @@
             {{ seqNumber(index) }}
           </template>
           <template #tenant_code="{ row }">
-            <a href="javascript:void(0)" @click="openDetailDialog(row)" class="text-primary-600 hover:text-primary-700 hover:underline font-mono text-sm">
+            <a href="javascript:void(0)" @click="openEditDialog(row)" class="text-primary-600 hover:text-primary-700 hover:underline font-mono text-sm">
               {{ row.tenant_code || '-' }}
             </a>
           </template>
@@ -58,6 +58,15 @@
             <span v-else
               class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-danger-100 text-danger-700">
               未授权
+            </span>
+          </template>
+          <template #credit_balance="{ row }">
+            <span
+              :class="Number(row.credit_balance || 0) > 0 ? 'text-default' : 'text-muted'"
+              class="text-sm tabular-nums"
+              :title="Number(row.credit_balance || 0).toLocaleString() + ' 积分'"
+            >
+              {{ Number(row.credit_balance || 0).toLocaleString() }}
             </span>
           </template>
           <template #tenant_url="{ row }">
@@ -212,6 +221,12 @@
           <input v-model="formData.expire_at" type="date" placeholder="不设置则永久有效"
             class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400" />
           <p class="text-xs text-muted mt-1">到期当天 23:59:59 前仍可登录，清空则永久有效</p>
+        </div>
+        <div v-if="isEdit">
+          <label class="text-sm text-muted mb-1 block">积分余额</label>
+          <input :value="Number(currentTenant?.credit_balance || 0).toLocaleString()" type="text" disabled
+            class="w-full px-3 py-2 bg-canvas border border-default rounded-lg text-muted cursor-not-allowed tabular-nums" />
+          <p class="text-xs text-muted mt-1">只读字段，通过充值/计费扣减自动维护</p>
         </div>
       </div>
 
@@ -426,80 +441,7 @@
       </div>
     </div>
 
-    <!-- 详情弹窗 -->
-    <div v-if="showDetailDialog" class="fixed inset-0 z-50 flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/50" @click="showDetailDialog = false"></div>
-      <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
-        <h3 class="text-lg font-bold text-default mb-4">租户详情</h3>
-        <div class="space-y-3">
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">租户ID</span>
-            <span class="text-sm text-default font-mono">{{ currentTenant?.tenant_id }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">租户代码</span>
-            <span class="text-sm text-default font-mono">{{ currentTenant?.tenant_code || '-' }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">企业名称</span>
-            <span class="text-sm text-default">{{ currentTenant?.company_name }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">联系人</span>
-            <span class="text-sm text-default">{{ currentTenant?.contact_name || '-' }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">联系电话</span>
-            <span class="text-sm text-default">{{ currentTenant?.contact_phone || '-' }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">初始管理员</span>
-            <span class="text-sm text-default">{{ currentTenant?.initial_admin_name || '-' }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">管理员手机</span>
-            <span class="text-sm text-default">{{ currentTenant?.initial_admin_phone || '-' }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">套餐</span>
-            <span class="text-sm text-default">{{ currentTenant?.plan }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">最大实例数</span>
-            <span class="text-sm text-default">{{ currentTenant?.max_instances }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">最大用户数</span>
-            <span class="text-sm text-default">{{ currentTenant?.max_users }}</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">状态</span>
-            <span :class="getStatusClass(currentTenant?.status)" class="text-sm font-medium">
-              {{ getStatusLabel(currentTenant?.status) }}
-            </span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">到期日期</span>
-            <span v-if="currentTenant?.expire_at" :class="getExpireStatusClass(currentTenant.expire_at)" class="text-sm font-medium">
-              {{ formatExpireDate(currentTenant.expire_at) }}
-            </span>
-            <span v-else class="text-sm text-muted">永久有效</span>
-          </div>
-          <div class="flex border-b border-default pb-2">
-            <span class="w-24 text-sm text-muted">创建时间</span>
-            <span class="text-sm text-default">{{ formatDate(currentTenant?.created_at) }}</span>
-          </div>
-          <div class="flex">
-            <span class="w-24 text-sm text-muted">更新时间</span>
-            <span class="text-sm text-default">{{ formatDate(currentTenant?.updated_at) }}</span>
-          </div>
-        </div>
-        <div class="flex gap-3 mt-6">
-          <BaseButton intent="secondary" class="flex-1" @click="showDetailDialog = false">关闭</BaseButton>
-          <BaseButton class="flex-1" @click="openEditDialog(currentTenant); showDetailDialog = false">编辑</BaseButton>
-        </div>
-      </div>
-    </div>
+    <!-- 详情弹窗已移除，点击租户代码直接进入编辑页 -->
   </div>
 </template>
 
@@ -536,12 +478,12 @@ const columns: TableColumn[] = [
   { key: 'status', label: '状态', width: '90px' },
   { key: 'expire_at', label: '到期日期', width: '120px' },
   { key: 'agent_count', label: '数字员工授权', width: '130px' },
+  { key: 'credit_balance', label: '积分余额', width: '120px' },
   { key: 'tenant_url', label: '租户入口网址', width: '280px' },
   { key: 'actions', label: '操作', width: '140px', thAlign: 'center' },
 ]
 
 const showFormDialog = ref(false)
-const showDetailDialog = ref(false)
 const isEdit = ref(false)
 const submitting = ref(false)
 const formError = ref('')
@@ -667,12 +609,6 @@ async function clientRefresh() {
   applyFilterAndPagination()
 }
 
-function formatDate(dateStr: string | undefined) {
-  if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  return date.toLocaleDateString('zh-CN') + ' ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-}
-
 function formatExpireDate(dateStr: string | undefined) {
   if (!dateStr) return '永久有效'
   const date = new Date(dateStr)
@@ -750,11 +686,6 @@ async function openEditDialog(tenant: any) {
   }
   formError.value = ''
   showFormDialog.value = true
-}
-
-function openDetailDialog(tenant: any) {
-  currentTenant.value = tenant
-  showDetailDialog.value = true
 }
 
 function isAgentAuthorized(agentId: string) {
