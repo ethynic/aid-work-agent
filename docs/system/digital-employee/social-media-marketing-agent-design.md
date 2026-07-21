@@ -421,6 +421,7 @@ bs_outbound_account_sessions      托管登录态（Cookie 加密）
 3. 朋友圈小时报表 `TASK_TYPE_WECHAT_ADGROUP_HOURLY_REPORT` 灰度权限能否申请（拿不到降级日粒度）。
 4. 腾讯广告首期接入主体（直客自用 vs SaaS 服务商），影响 OAuth 应用归属。
 5. 巡检模块：公司可用的知乎/小红书真实账号（非新号）；browser 工具登录态持久化能力；小红书 web 端发布/私信可用性（可能部分仅 APP）。
+   - **部分确认（2026-07-21，B0 代码核查，见 [outbound-b0-feasibility.md](outbound-b0-feasibility.md)）**：browser 工具（#20）当前**不持久化登录态**——`session.py` 与 `worker_main.py` 均用临时 `new_context()`，无 `storage_state`/`user_data_dir`，注释明示「不用于跨请求恢复」。巡检需先做 **B0.5 登录态持久化扩展**（storage_state 加密存 `bs_outbound_account_sessions`、下次 run 注入）才可行，是 B2/B3 的硬依赖。仍待确认：公司真实账号；小红书 web 发布/私信是否仅 APP。
 6. 商机与 CRM 智能体（#17）的边界：`qualified/converted` 沉淀客户的时机与归属。
 7. 项目统一文件存储是否满足素材长期保留 + 签名访问 + 清理策略。
 
