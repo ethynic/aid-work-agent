@@ -624,7 +624,8 @@ const { currentPage, pageSize, seqNumber } =
   })
 
 async function loadAllTenants() {
-  const res = await listTenants()
+  // 拉一大页避免分页：本页是客户端分页/搜索，后端 list_tenants 默认 page_size=20 会导致切片最多只有 20 条
+  const res = await listTenants({ page: 1, page_size: 1000 })
   if (res.success) {
     allTenants.value = res.tenants || []
   }
