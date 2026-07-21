@@ -30,42 +30,54 @@ from src.tools.excel.excel_lib import ExcelFileHandler, copy_cell_style
 # 数据契约 / 结构模型（Pydantic）
 # ============================================================
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
-class ColumnBinding(BaseModel):
+class _NoneTolerant(BaseModel):
+    """LLM 返回的 JSON 常带 null（如无表头的列 header=null）。
+    构造前剥离 None 值，让字段走各自默认，避免 pydantic v2 对 str 字段拒收 None。"""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_none_values(cls, data):
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v is not None}
+        return data
+
+
+class ColumnBinding(_NoneTolerant):
     """明细列绑定：列号 + 表头 + 绑定的 data.rows 键（None 表示该列不绑键，渲染时清空）"""
 
     col: int
-    header: str = ""
+    header: Optional[str] = None
     bind: Optional[str] = None
 
 
 
-class MetaField(BaseModel):
+class MetaField(_NoneTolerant):
     """顶部信息字段：(row, col) 是要写入值的单元格"""
 
     row: int
     col: int
-    label: str = ""
+    label: Optional[str] = None
     bind: Optional[str] = None
 
 
 
-class TotalCell(BaseModel):
+class TotalCell(_NoneTolerant):
     """合计区单元格"""
 
     row: int
     col: int
-    label: str = ""
-    bind: str  # grand_total 或 per_capita 的键
+    label: Optional[str] = None
+    bind: Optional[str] = None  # grand_total 或 per_capita 的键；None=未绑定，渲染时清空
 
 
 
-class GroupRegion(BaseModel):
+class GroupRegion(_NoneTolerant):
     """一个分组明细区 + 其小计行（Phase B）。match 按 data 行字段值归属"""
 
-    name: str = ""  # 小计行标签，如"房餐车小计"；用作 group_subtotals 的键
+    name: Optional[str] = None  # 小计行标签，如"房餐车小计"；用作 group_subtotals 的键
     detail_first_row: int = 0
     detail_last_row: int = 0
     detail_template_row: int = 0
@@ -290,16 +302,27 @@ def _extract_json(raw: str) -> Dict[str, Any]:
         raise ValueError(f"LLM 输出 JSON 解析失败: {e}; 原文片段: {raw[:200]}")
 
 
+def _coerce_record(model_cls, d: Any):
+    """单条 LLM 记录 → model。剥离 None 后构造；缺必填/类型错等不规范记录返回 None（跳过）而非整体崩溃。"""
+    if not isinstance(d, dict):
+        return None
+    try:
+        return model_cls(**d)
+    except Exception as e:
+        logger.debug(f"[excel_template_ai] 丢弃一条 {model_cls.__name__}（LLM 数据不规范）: {e}; raw={d}")
+        return None
+
+
 def _coerce_structure(parsed: Dict[str, Any], grid: Dict[str, Any]) -> SheetStructure:
     """把 LLM JSON 整理为 SheetStructure，做基本校验"""
     title = parsed.get("title")
     if title and not isinstance(title, dict):
         title = None
 
-    meta_fields = [MetaField(**mf) for mf in (parsed.get("meta_fields") or []) if isinstance(mf, dict)]
-    columns = [ColumnBinding(**c) for c in (parsed.get("columns") or []) if isinstance(c, dict)]
-    totals = [TotalCell(**t) for t in (parsed.get("totals") or []) if isinstance(t, dict)]
-    groups = [GroupRegion(**g) for g in (parsed.get("groups") or []) if isinstance(g, dict)]
+    meta_fields = [m for m in (_coerce_record(MetaField, mf) for mf in (parsed.get("meta_fields") or [])) if m]
+    columns = [c for c in (_coerce_record(ColumnBinding, c) for c in (parsed.get("columns") or [])) if c]
+    totals = [t for t in (_coerce_record(TotalCell, t) for t in (parsed.get("totals") or [])) if t]
+    groups = [g for g in (_coerce_record(GroupRegion, g) for g in (parsed.get("groups") or [])) if g]
 
     # 分组行号一致性校验：detail_first_row 必须 <= detail_last_row，否则 K<=0 会插入超额行到错误位置
     for g in groups:
@@ -690,7 +713,8 @@ def _serialize_structure(s: SheetStructure) -> Dict[str, Any]:
 
 
 def _default_llm(prompt: str) -> str:
-    """默认 LLM 调用：复用 settings 的 provider 配置（qwen/zhipu/deepseek）。"""
+    """默认 LLM 调用：复用 settings 的 provider 配置（qwen/zhipu/deepseek）。
+    结构分析输出是短 JSON，限制 max_tokens=2048 防止模型发散导致超长耗时。"""
     from src.config.settings import settings
     provider = settings.llm.provider
 
@@ -706,6 +730,7 @@ def _default_llm(prompt: str) -> str:
             messages=[{"role": "user", "content": prompt}],
             result_format="message",
             temperature=0.0,
+            max_tokens=2048,
         )
         if resp.status_code != 200:
             raise RuntimeError(f"LLM 调用失败: {resp.message}")
@@ -727,8 +752,9 @@ def _default_llm(prompt: str) -> str:
         resp = httpx.post(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
-            json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.0},
-            timeout=120.0,
+            json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.0, "max_tokens": 2048},
+            timeout=60.0,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]

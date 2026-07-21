@@ -66,6 +66,7 @@ class ExcelProcessInput(BaseModel):
                     "形如 {meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
                     "提供 data + 样例附件(file_paths) 时走智能模板填充：AI 分析样例结构并按版式填入，"
                     "自动处理行数多/少/相等、保留样例样式。"
+                    "**模板填充时数据必须放本字段（不要写进 instruction 文本）；普通数据导出不用本字段。**"
     )
 
 

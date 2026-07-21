@@ -290,6 +290,43 @@ def test_analyze_structure_rejects_bad_group_rows(sample_path):
         analyze_structure(str(sample_path), data, llm_callable=_mock_llm(bad))
 
 
+def test_analyze_tolerates_null_fields_from_llm(sample_path):
+    """LLM 对无表头列返回 header:null / 未绑定列 bind:null 不应崩溃（生产 trace tr_f93f6a0e 根因）"""
+    structure_with_nulls = {
+        "columns": [
+            {"col": 1, "header": None, "bind": "category"},
+            {"col": 2, "header": "项目", "bind": "name"},
+            {"col": 5, "header": "金额", "bind": None},
+        ],
+        "detail_first_row": 4,
+        "detail_last_row": 6,
+        "totals": [{"row": 7, "col": 5, "bind": None}],
+        "meta_fields": [{"row": 2, "col": 2, "label": None, "bind": "customer_name"}],
+    }
+    data = _data([{"category": "x"}])
+    s = analyze_structure(str(sample_path), data, llm_callable=_mock_llm(structure_with_nulls))
+    assert len(s.columns) == 3  # 三列都保留，None 被容忍
+    assert s.columns[2].bind is None
+    assert len(s.totals) == 1
+
+
+def test_analyze_skips_malformed_records(sample_path):
+    """缺必填/类型错的记录被跳过，不让单条坏数据搞垮整个分析"""
+    bad = {
+        "columns": [
+            {"col": 1, "bind": "x"},
+            {"header": "无col"},
+            "not_a_dict",
+            {"col": 2, "bind": "y"},
+        ],
+        "detail_first_row": 4,
+        "detail_last_row": 6,
+    }
+    data = _data([{"x": 1}])
+    s = analyze_structure(str(sample_path), data, llm_callable=_mock_llm(bad))
+    assert len(s.columns) == 2  # 只剩 col=1 和 col=2 两条有效
+
+
 # ============================================================
 # 不变式校验 fail-loud
 # ============================================================
