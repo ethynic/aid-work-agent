@@ -14,7 +14,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-import psycopg2
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, FileResponse, HTMLResponse
@@ -461,248 +460,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"[pid={_pid}] step4 FAILED (critical): {e}", exc_info=True)
         raise
 
-    # Initialize scheduled task scheduler
-    try:
-        logger.info(f"[pid={_pid}] step5: scheduled_task_manager ...")
-        from src.scheduler.manager import scheduled_task_manager
-        scheduled_task_manager.start()
-        logger.info(f"[pid={_pid}] step5: scheduled_task_manager done")
-        logger.info("Scheduled task scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start scheduled task scheduler: {e}", exc_info=True)
-
-    # Start memory cleanup background task
-    async def _memory_cleanup_loop():
-        """后台定时清理过期会话记忆"""
-        interval = settings.memory.cleanup_interval
-        logger.info(f"Memory cleanup task started, interval={interval}s")
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                cleaned = master_agent.memory.cleanup_expired()
-                if cleaned > 0:
-                    logger.debug(f"Memory cleanup: cleaned {cleaned} expired sessions")
-            except Exception as e:
-                logger.error(f"Memory cleanup error: {e}")
-    asyncio.create_task(_memory_cleanup_loop())
-
-    # Start channel dedup cleanup background task — 每天 03:00 执行
-    async def _dedup_cleanup_loop():
-        """后台定时清理过期消息去重记录（每天凌晨 3 点执行）"""
-        import datetime
-        from src.channels.idempotency import MessageDeduplicator
-        dedup = MessageDeduplicator(ttl_seconds=300)
-        logger.info("Channel dedup cleanup task started, runs daily at 03:00")
-        while True:
-            now = datetime.datetime.now()
-            next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
-            if now >= next_run:
-                next_run = next_run.replace(hour=3, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
-            wait_seconds = (next_run - now).total_seconds()
-            logger.debug(f"Next dedup cleanup in {wait_seconds:.0f}s ({next_run.strftime('%Y-%m-%d %H:%M:%S')})")
-            await asyncio.sleep(wait_seconds)
-            try:
-                cleaned = dedup.cleanup_expired()
-                if cleaned > 0:
-                    logger.info(f"Channel dedup cleanup: cleaned {cleaned} expired records")
-            except psycopg2.OperationalError as e:
-                logger.warning(f"Channel dedup cleanup error (DB connection issue, will retry next cycle): {e}")
-            except Exception as e:
-                logger.error(f"Channel dedup cleanup error: {e}")
-    asyncio.create_task(_dedup_cleanup_loop())
-
-    # Start instance lock cleanup background task — 每 60 秒，出错暂停 2 分钟
-    # ⚠️ 智能体实例并发控制功能拟废弃 ⚠️
-    if settings.saas.enabled:
-
-        # Start wecom_kf human service timeout check — 每 60 秒检查
-        async def _wecom_kf_timeout_check_loop():
-            """后台定时检查微信客服人工会话超时，自动退出人工服务"""
-            import json
-            from datetime import datetime, timedelta
-
-            from src.channels.session import channel_session_manager
-            from src.db.database import get_db_connection
-
-            interval = 60
-            default_timeout_minutes = 8
-            logger.info(
-                f"WeCom KF timeout check task started, "
-                f"interval={interval}s, default_timeout={default_timeout_minutes}min"
-            )
-            while True:
-                await asyncio.sleep(interval)
-                try:
-                    # 查询所有 wecom_kf 且 service_state=3 的会话
-                    with get_db_connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            SELECT session_id, tenant_id, channel_chat_id, channel_user_id,
-                                   last_message_at, metadata
-                            FROM channel_sessions
-                            WHERE channel_type = 'wecom_kf'
-                              AND metadata::text LIKE '%"service_state"%3%'
-                              AND metadata::text NOT LIKE '%"exit_human_timeout_failed_at"%'
-                        """)
-                        rows = cursor.fetchall()
-
-                    if not rows:
-                        continue
-
-                    now = datetime.now()
-                    for row in rows:
-                        try:
-                            session = dict(row)
-                            session_id = session["session_id"]
-                            tenant_id = session["tenant_id"]
-                            open_kfid = session.get("channel_chat_id", "")
-                            external_userid = session["channel_user_id"]
-                            last_message_at_val = session.get("last_message_at")
-
-                            if not last_message_at_val or not open_kfid or not tenant_id:
-                                continue
-
-                            # last_message_at 在 PostgreSQL 中是 TIMESTAMP，psycopg2 通常返回 datetime 对象；
-                            # 极少数情况（旧数据/手动写入）可能是字符串，需兼容处理
-                            if hasattr(last_message_at_val, "strftime"):
-                                # 是 datetime 对象（或其他实现了 strftime 的类）
-                                last_msg_time = last_message_at_val
-                            else:
-                                # 尝试作为字符串解析
-                                last_msg_str = str(last_message_at_val)
-                                # 处理可能带微秒的格式，如 "2026-05-15 11:49:45.429739"
-                                if "." in last_msg_str:
-                                    last_msg_str = last_msg_str.split(".")[0]
-                                last_msg_time = datetime.strptime(last_msg_str, "%Y-%m-%d %H:%M:%S")
-                            elapsed_minutes = (now - last_msg_time).total_seconds() / 60
-
-                            # 从租户渠道配置获取超时时间
-                            from src.saas.db.channel_config_db import ChannelConfigDB
-                            configs = ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf")
-                            timeout_minutes = default_timeout_minutes
-                            for cfg in configs:
-                                kf_accounts = cfg.get("config", {}).get("kf_account", [])
-                                for kf in kf_accounts:
-                                    if kf.get("open_kfid") == open_kfid:
-                                        timeout_minutes = kf.get("exit_human_timeout_minutes", default_timeout_minutes)
-                                        break
-
-                            if elapsed_minutes < timeout_minutes:
-                                continue
-
-                            logger.info(
-                                f"[wecom_kf] 人工会话超时: session_id={session_id}, "
-                                f"elapsed={elapsed_minutes:.1f}min, threshold={timeout_minutes}min"
-                            )
-
-                            # 创建 adapter
-                            from src.saas.services.channel_factory import ChannelFactory
-                            adapter, _, _ = await ChannelFactory.create_from_tenant_config(
-                                tenant_id, "wecom_kf"
-                            )
-                            if adapter is None:
-                                logger.warning(
-                                    f"[wecom_kf] 超时检查：无法创建 adapter: "
-                                    f"tenant_id={tenant_id}"
-                                )
-                                continue
-
-                            # 先查询微信侧实际状态，防止员工已结束对话但本地状态未更新
-                            remote_state = await adapter.api_client.get_service_state(
-                                open_kfid, external_userid
-                            )
-                            remote_service_state = remote_state.get("service_state")
-                            logger.info(
-                                f"[wecom_kf] 超时检查远程状态: session_id={session_id}, "
-                                f"local_state=3, remote_state={remote_service_state}"
-                            )
-
-                            if remote_service_state == 4:
-                                # 微信侧已结束，只需同步本地状态，不发送超时消息
-                                channel_session_manager.update_session(
-                                    session_id=session_id,
-                                    metadata={"service_state": 4},
-                                )
-                                logger.info(
-                                    f"[wecom_kf] 远程已结束，跳过超时处理: "
-                                    f"session_id={session_id}"
-                                )
-                                await adapter.close()
-                                continue
-
-                            if remote_service_state != 3:
-                                # 远程状态不是人工接待，同步本地状态并跳过
-                                channel_session_manager.update_session(
-                                    session_id=session_id,
-                                    metadata={"service_state": remote_service_state},
-                                )
-                                logger.info(
-                                    f"[wecom_kf] 远程状态已变更({remote_service_state})，跳过超时处理: "
-                                    f"session_id={session_id}"
-                                )
-                                await adapter.close()
-                                continue
-
-                            # 远程仍是人工状态，执行超时退出（结束会话）
-                            adapter.current_open_kfid = open_kfid
-                            result = await adapter.end_human_service(open_kfid, external_userid)
-                            if result:
-                                # 会话结束后用户新发消息会进入新会话，自动走智能助手接待流程
-                                channel_session_manager.update_session(
-                                    session_id=session_id,
-                                    metadata={"service_state": 4},
-                                )
-                                await adapter.send_text(
-                                    f"人工服务已超时（超过{timeout_minutes}分钟无新消息），"
-                                    f"本次会话已结束。如有新问题，请重新发送消息。",
-                                    external_userid,
-                                )
-                                logger.info(
-                                    f"[wecom_kf] 超时结束人工会话成功: "
-                                    f"session_id={session_id}"
-                                )
-                            else:
-                                # 微信API调用失败（如95016不允许状态转换），保留 service_state=3
-                                # 并标记失败时间戳，避免死循环反复重试
-                                channel_session_manager.update_session(
-                                    session_id=session_id,
-                                    metadata={
-                                        "service_state": 3,
-                                        "exit_human_timeout_failed_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-                                    },
-                                )
-                                logger.error(
-                                    f"[wecom_kf] 超时结束人工会话失败，保留人工状态避免远程不一致: "
-                                    f"session_id={session_id}"
-                                )
-                            await adapter.close()
-
-                        except Exception as e:
-                            logger.error(
-                                f"[wecom_kf] 超时检查处理单个会话异常: "
-                                f"session_id={session.get('session_id', 'unknown')}: {e}",
-                                exc_info=True
-                            )
-                except Exception as e:
-                    # 输出原始 SQL，用于确认运行中代码版本（metadata::text LIKE 为新版本）
-                    try:
-                        raw_sql = cursor.query.decode() if cursor and cursor.query else None
-                    except Exception:
-                        raw_sql = None
-                    logger.error(
-                        f"[wecom_kf] 超时检查异常: {e} | raw_sql={raw_sql}",
-                        exc_info=True
-                    )
-        asyncio.create_task(_wecom_kf_timeout_check_loop())
-
-    # wecom_personal_rpa 服务端拉取会话存档兜底轮询（Phase 5）
-    # 每 60s 扫描所有 verified 的 wecom_personal_rpa 配置，对每个触发 fetcher.fetch_once
-    # 主路径是回调触发拉取，本模块仅作回调丢失/服务重启/停机后的兜底
-    try:
-        from src.channels.wecom_personal_rpa.archive.poller import poller as _archive_poller
-        await _archive_poller.start()
-    except Exception as e:
-        logger.error(f"[wecom_personal_rpa] archive poller 启动失败（不影响应用启动）: {e}", exc_info=True)
+    # 注意：定时任务调度器 + 后台循环（memory_cleanup / dedup_cleanup / wecom_kf_timeout /
+    # archive poller）已迁移至独立后台运行时（SERVER_MODE=background，见
+    # src/background_runner.py）。HTTP worker 不再承载任何后台任务。
 
     _browser_reaper = None
     _browser_reaper_manager = None
@@ -747,12 +507,7 @@ async def lifespan(app: FastAPI):
             logger.warning("browser run reaper 关闭异常: type={}", type(e).__name__)
         await _close_browser_runs_on_shutdown()
 
-        # 关闭 archive poller（优雅等待在途 fetcher 任务完成）
-        try:
-            from src.channels.wecom_personal_rpa.archive.poller import poller as _archive_poller
-            await _archive_poller.stop()
-        except Exception as e:
-            logger.warning(f"[wecom_personal_rpa] archive poller 关闭异常: {e}")
+        # 关闭 archive poller 已迁移至 background runner，HTTP worker 不再启停 poller。
 
         # Close PostgreSQL connection pool
         close_postgres_pool()
@@ -764,12 +519,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-        try:
-            from src.scheduler.manager import scheduled_task_manager
-            scheduled_task_manager.shutdown()
-            logger.info("Scheduled task scheduler stopped")
-        except Exception:
-            pass
+        # 定时任务调度器已迁移至 background runner，HTTP worker 不再负责 shutdown。
 
         # 关闭所有缓存的渠道 adapter（释放 httpx 连接池）
         try:

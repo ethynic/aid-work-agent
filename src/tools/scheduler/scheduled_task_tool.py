@@ -112,7 +112,6 @@ class CreateScheduledTaskTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行创建定时任务"""
         from src.scheduler.executor import ScheduledTaskExecutor
-        from src.scheduler.manager import scheduled_task_manager
         from src.scheduler.db import ScheduledTaskDB
 
         name = kwargs.get("name", "")
@@ -203,12 +202,8 @@ class CreateScheduledTaskTool(BaseTool):
         if not task:
             return {"success": False, "error": "创建定时任务失败（数据库错误）", "debug": "ScheduledTaskDB.create 返回 None"}
 
-        # 注册到调度器
-        try:
-            scheduled_task_manager.register_task(task)
-        except Exception as e:
-            logger.error(f"后端日志：注册定时任务到调度器失败 task_id={task['task_id']}, {e}", exc_info=True)
-            pass
+        # 注册到调度器由 background runner 的 reconcile 对账负责（≤30s 内自动注册），
+        # 本工具只写 DB，不做跨进程 manager 调用。
 
         schedule_description = format_schedule_description(schedule_type, time_config)
         dry_run_preview = (dry_run_result.get("result") or "")[:200]
@@ -245,7 +240,6 @@ class ManageScheduledTaskTool(BaseTool):
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """执行管理定时任务"""
-        from src.scheduler.manager import scheduled_task_manager
         from src.scheduler.db import ScheduledTaskDB, ScheduledTaskLogDB
 
         action = kwargs.get("action", "list")
@@ -278,21 +272,21 @@ class ManageScheduledTaskTool(BaseTool):
             elif action == "pause":
                 if not task_id:
                     return {"success": False, "error": "请指定要暂停的任务ID"}
-                if scheduled_task_manager.pause_task(task_id):
-                    return {"success": True, "message": f"任务 {task_id} 已暂停"}
+                # 只写 DB，background reconcile ≤30s 内同步到调度器
+                if ScheduledTaskDB.update_status(task_id, "paused"):
+                    return {"success": True, "message": f"任务 {task_id} 已暂停（≤30s 生效）"}
                 return {"success": False, "error": f"暂停失败，任务可能不存在或已暂停"}
 
             elif action == "resume":
                 if not task_id:
                     return {"success": False, "error": "请指定要恢复的任务ID"}
-                if scheduled_task_manager.resume_task(task_id):
-                    return {"success": True, "message": f"任务 {task_id} 已恢复"}
+                if ScheduledTaskDB.update_status(task_id, "active"):
+                    return {"success": True, "message": f"任务 {task_id} 已恢复（≤30s 生效）"}
                 return {"success": False, "error": f"恢复失败，任务可能不存在或未暂停"}
 
             elif action == "cancel":
                 if not task_id:
                     return {"success": False, "error": "请指定要取消的任务ID"}
-                scheduled_task_manager.remove_task(task_id)
                 if ScheduledTaskDB.delete(task_id):
                     return {"success": True, "message": f"任务 {task_id} 已取消"}
                 return {"success": False, "error": f"取消失败，任务可能不存在"}

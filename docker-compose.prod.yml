@@ -93,6 +93,58 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # 独立后台运行时（调度器 + 全部后台任务；不启 HTTP）
+  # 与 aid-agent-api 共享 storage/memories/uploads，确保 master_agent 状态、
+  # poller Redis 锁、心跳文件路径一致。
+  aid-agent-background:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-agent-background
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 服务模式（标识当前进程为后台运行时）
+      - SERVER_MODE=background
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # 覆盖 Dockerfile ENTRYPOINT：跳过 gunicorn，改跑 background_runner
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.background_runner"]
+    volumes:
+      # 与 API 服务共享代码、日志、配置、skills
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      # 共享业务存储（心跳文件 + master_agent 文件状态 + poller 锁状态）
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+      - /var/www/qb3_upload/agent_storage:/app/storage
+      - /var/www/qb3_upload/agent_memories:/app/memories
+    networks:
+      - aid-network
+    # 心跳文件法判活：runner 每 30s 写 storage/.bg_runner_alive，2 分钟内有更新即健康
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 # 网络配置
 networks:
   aid-network:

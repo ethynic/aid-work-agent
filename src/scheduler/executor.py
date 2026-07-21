@@ -180,7 +180,6 @@ class ScheduledTaskExecutor:
 
             # 6. 重试逻辑
             if retry_count < max_retries:
-                from src.scheduler.manager import scheduled_task_manager
                 new_retry_count = retry_count + 1
                 # 更新重试计数（通过原生 SQL）
                 from src.db.database import get_db_connection

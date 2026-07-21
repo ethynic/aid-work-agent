@@ -108,6 +108,54 @@ class ScheduledTaskDB:
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
+    def list_all_for_reconcile() -> List[Dict[str, Any]]:
+        """获取所有未取消任务（active + paused），供 background reconcile 对账使用。
+
+        返回字段包含 manual_trigger_at 和 updated_at，用于：
+        - 按 updated_at 变化判断是否需要重注册到 APScheduler
+        - 扫描 manual_trigger_at 非空的任务执行手动触发
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM scheduled_tasks
+                WHERE status IN ('active', 'paused')
+                ORDER BY updated_at ASC
+            """)
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def request_manual_trigger(task_id: str) -> bool:
+        """标记任务为待手动触发（SET manual_trigger_at=NOW()）。
+
+        由 API/工具调用，background reconcile ≤30s 内扫到并执行。
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE scheduled_tasks
+                SET manual_trigger_at = NOW()
+                WHERE task_id = {placeholder} AND status IN ('active', 'paused')
+            """, (task_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def clear_manual_trigger(task_id: str) -> bool:
+        """清除手动触发标记（执行完成后调用）"""
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE scheduled_tasks
+                SET manual_trigger_at = NULL
+                WHERE task_id = {placeholder}
+            """, (task_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
     def update_schedule(task_id: str, cron_expression: str = None,
                         interval_seconds: int = None) -> bool:
         """更新任务调度配置"""

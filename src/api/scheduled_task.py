@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel
 
-from src.scheduler.manager import scheduled_task_manager
 from src.scheduler.db import ScheduledTaskDB, ScheduledTaskLogDB
 from src.api.auth import get_current_user
 
@@ -129,7 +128,7 @@ async def get_task(request: Request, task_id: str):
 
 @router.post("/{task_id}/pause")
 async def pause_task(request: Request, task_id: str):
-    """暂停任务"""
+    """暂停任务（只写 DB，background reconcile ≤30s 内同步到调度器）"""
     try:
         user_id = _get_user_id(request)
         task = ScheduledTaskDB.get_by_id(task_id)
@@ -139,8 +138,8 @@ async def pause_task(request: Request, task_id: str):
         if task["status"] != "active":
             return {"success": False, "error": f"任务状态异常（当前: {task['status']}），无法暂停"}
 
-        if scheduled_task_manager.pause_task(task_id):
-            return {"success": True, "message": "任务已暂停"}
+        if ScheduledTaskDB.update_status(task_id, "paused"):
+            return {"success": True, "message": "任务已暂停（≤30s 生效）"}
         return {"success": False, "error": "暂停失败"}
     except HTTPException:
         raise
@@ -154,7 +153,7 @@ async def pause_task(request: Request, task_id: str):
 
 @router.post("/{task_id}/resume")
 async def resume_task(request: Request, task_id: str):
-    """恢复任务"""
+    """恢复任务（只写 DB，background reconcile ≤30s 内同步到调度器）"""
     try:
         user_id = _get_user_id(request)
         task = ScheduledTaskDB.get_by_id(task_id)
@@ -164,8 +163,8 @@ async def resume_task(request: Request, task_id: str):
         if task["status"] != "paused":
             return {"success": False, "error": f"任务状态异常（当前: {task['status']}），无法恢复"}
 
-        if scheduled_task_manager.resume_task(task_id):
-            return {"success": True, "message": "任务已恢复"}
+        if ScheduledTaskDB.update_status(task_id, "active"):
+            return {"success": True, "message": "任务已恢复（≤30s 生效）"}
         return {"success": False, "error": "恢复失败"}
     except HTTPException:
         raise
@@ -179,14 +178,13 @@ async def resume_task(request: Request, task_id: str):
 
 @router.delete("/{task_id}")
 async def cancel_task(request: Request, task_id: str):
-    """取消任务"""
+    """取消任务（只写 DB，background reconcile ≤30s 内从调度器移除）"""
     try:
         user_id = _get_user_id(request)
         task = ScheduledTaskDB.get_by_id(task_id)
         if not task or task["user_id"] != user_id:
             return {"success": False, "error": "任务不存在或无权操作"}
 
-        scheduled_task_manager.remove_task(task_id)
         if ScheduledTaskDB.delete(task_id):
             return {"success": True, "message": "任务已取消"}
         return {"success": False, "error": "取消失败"}
@@ -202,16 +200,16 @@ async def cancel_task(request: Request, task_id: str):
 
 @router.post("/{task_id}/trigger_task")
 async def trigger_task(request: Request, task_id: str):
-    """手动触发执行一次"""
+    """手动触发执行一次（写 manual_trigger_at=NOW()，background reconcile ≤30s 内执行）"""
     try:
         user_id = _get_user_id(request)
         task = ScheduledTaskDB.get_by_id(task_id)
         if not task or task["user_id"] != user_id:
             return {"success": False, "error": "任务不存在或无权操作"}
 
-        if scheduled_task_manager.trigger_task(task_id):
-            return {"success": True, "message": "已触发执行"}
-        return {"success": False, "error": "触发失败"}
+        if ScheduledTaskDB.request_manual_trigger(task_id):
+            return {"success": True, "message": "已触发执行（≤30s 内生效）"}
+        return {"success": False, "error": "触发失败（任务可能不存在或非 active/paused 状态）"}
     except HTTPException:
         raise
     except Exception as e:
@@ -253,14 +251,9 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
         cron_expression = generate_cron_expression(schedule_type, time_config)
         interval_seconds = time_config.get("interval_hours", 1) * 3600 if schedule_type == "interval" else None
 
-        # 更新数据库
+        # 更新数据库（background reconcile ≤30s 内按 updated_at 变化自动重注册）
         ScheduledTaskDB.update_schedule(task_id, cron_expression=cron_expression,
                                         interval_seconds=interval_seconds)
-
-        # 重新注册到调度器
-        updated_task = ScheduledTaskDB.get_by_id(task_id)
-        if updated_task and updated_task["status"] == "active":
-            scheduled_task_manager.register_task(updated_task)
 
         logger.info(f"后端日志：定时任务调度已更新 task_id={task_id}, cron={cron_expression}, "
                     f"schedule_type={schedule_type}, time_config={time_config}")

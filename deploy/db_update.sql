@@ -1198,3 +1198,10 @@ CREATE TABLE IF NOT EXISTS bs_outbound_account_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_outbound_account_sessions_tenant_status
     ON bs_outbound_account_sessions(tenant_id, status, updated_at DESC);
+
+-- ============================================================================
+-- 2026-07-21 独立后台运行时：scheduled_tasks 增加 manual_trigger_at 字段
+-- API/工具触发定时任务时写入 NOW()，background 容器 reconcile 每 30s 扫描，
+-- 扫到非空则立即执行一次并清空，实现跨进程手动触发（≤30s 延迟）。
+-- ============================================================================
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS manual_trigger_at TIMESTAMP NULL;

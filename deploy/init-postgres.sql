@@ -319,6 +319,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     total_runs INTEGER DEFAULT 0,
     success_count INTEGER DEFAULT 0,
     fail_count INTEGER DEFAULT 0,
+    -- 手动触发标记：API/工具写入 NOW()，background reconcile 扫到后立即执行一次并清空
+    manual_trigger_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -860,6 +862,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     total_runs INTEGER DEFAULT 0,
     success_count INTEGER DEFAULT 0,
     fail_count INTEGER DEFAULT 0,
+    -- 手动触发标记：API/工具写入 NOW()，background reconcile 扫到后立即执行一次并清空
+    manual_trigger_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
