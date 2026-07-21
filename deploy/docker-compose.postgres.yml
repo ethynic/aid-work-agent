@@ -112,14 +112,6 @@ services:
     volumes:
       # 持久化数据卷
       - postgres_data:/var/lib/postgresql/data
-      # /tmp 权限兜底：debian trixie-slim 上游某次更新导致 /tmp 默认 mode 变成 755，
-      # timescale/timescaledb-ha:pg16 启动时写 /tmp 失败。挂一个 mode=1777 的 tmpfs 强制覆盖。
-      # （和后端容器 fix_tmp.sh 是同一根因：底层 Debian 镜像 tmpfs 配置变化）
-      - type: tmpfs
-        target: /tmp
-        tmpfs:
-          mode: 1777
-          size: 100m
       # 初始化脚本（首次启动时执行，创建 prod + test 双库）
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
