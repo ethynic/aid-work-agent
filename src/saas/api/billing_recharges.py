@@ -30,9 +30,9 @@ router = APIRouter(prefix="/api/saas/billing/recharges", tags=["SaaS 充值管�
 class RechargeCreateRequest(BaseModel):
     """创建充值请求"""
     tenant_id: str = Field(..., description="租户 ID")
-    amount_yuan: float = Field(..., gt=0, description="充值金额（元）")
-    credits: Optional[int] = Field(None, ge=0, description="转化积分，未传则按 amount_yuan × rate 自动计算")
-    rate: int = Field(10, ge=1, description="兑换系数，默认 10（1 元 = 10 积分）")
+    amount_yuan: int = Field(..., ge=1, description="充值金额（元），正整数")
+    credits: int = Field(..., ge=1, description="转化积分，正整数")
+    created_at: Optional[str] = Field(None, description="充值日期（ISO 8601 / YYYY-MM-DDTHH:MM），未传则使用当前时间")
     remark: Optional[str] = Field(None, description="备注")
 
 
@@ -102,21 +102,40 @@ async def create_recharge(request: Request, body: RechargeCreateRequest):
     if not tenant:
         return {"success": False, "message": "租户不存在"}
 
-    # 计算 credits：未传则按 amount_yuan × rate
-    credits = body.credits if body.credits is not None else int(body.amount_yuan * body.rate)
-    if credits <= 0:
-        return {"success": False, "message": "转化积分必须大于 0"}
+    # 兼容历史 schema：rate 字段已下线，但 DB 列仍 NOT NULL，统一写 0
+    rate = 0
+
+    # 解析可选的充值日期（未传则由 DB 默认 CURRENT_TIMESTAMP 填充）
+    parsed_created_at: Optional[str] = None
+    if body.created_at:
+        from datetime import datetime
+        # 统一用空格分隔，便于后续按长度判定
+        normalized = body.created_at.replace("T", " ") if "T" in body.created_at else body.created_at
+        try:
+            if len(normalized) >= 19:
+                # "YYYY-MM-DD HH:MM:SS"（截取前 19 位，兼容尾部带毫秒/时区的情况）
+                datetime.strptime(normalized[:19], "%Y-%m-%d %H:%M:%S")
+                parsed_created_at = normalized[:19]
+            elif len(normalized) == 16:
+                # "YYYY-MM-DD HH:MM"（HTML datetime-local 默认格式，补 ":00" 秒位）
+                datetime.strptime(normalized, "%Y-%m-%d %H:%M")
+                parsed_created_at = normalized + ":00"
+            else:
+                return {"success": False, "message": "充值日期格式错误，应为 YYYY-MM-DDTHH:MM 或 YYYY-MM-DDTHH:MM:SS"}
+        except ValueError:
+            return {"success": False, "message": "充值日期格式错误，应为 YYYY-MM-DDTHH:MM 或 YYYY-MM-DDTHH:MM:SS"}
 
     try:
         record = TenantRechargesDB.create(
             tenant_id=body.tenant_id,
             amount_yuan=body.amount_yuan,
-            credits=credits,
-            rate=body.rate,
+            credits=body.credits,
+            rate=rate,
             source="manual",
             operator_id=admin.get("user_id"),
             operator_name=admin.get("username") or admin.get("phone"),
             remark=body.remark,
+            created_at=parsed_created_at,
         )
         if not record:
             return {"success": False, "message": "创建失败"}

@@ -2021,8 +2021,12 @@ class TenantRechargesDB:
         operator_name: str = None,
         remark: str = None,
         payment_order_id: str = None,
+        created_at: str = None,
     ) -> Optional[Dict[str, Any]]:
         """创建充值记录，同事务原子增加 tenants.credit_balance
+
+        Args:
+            created_at: 可选，自定义充值时间（"YYYY-MM-DD HH:MM:SS"），未传则使用 DB 默认 CURRENT_TIMESTAMP
 
         Returns:
             新建记录字典；失败返回 None
@@ -2034,22 +2038,33 @@ class TenantRechargesDB:
         recharge_id = generate_recharge_id()
         placeholder = "%s"
 
+        # created_at 未传时让 DB 走 DEFAULT CURRENT_TIMESTAMP
+        if created_at:
+            cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark, created_at)"
+            vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+            params = (
+                tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                operator_id, operator_name, remark, created_at,
+            )
+        else:
+            cols = "(tenant_id, amount_yuan, credits, rate, source, payment_order_id, operator_id, operator_name, remark)"
+            vals = f"({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+            params = (
+                tenant_id, amount_yuan, credits, rate, source, payment_order_id,
+                operator_id, operator_name, remark,
+            )
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(
                     f"""
                     INSERT INTO tenant_recharges
-                    (tenant_id, amount_yuan, credits, rate, source, payment_order_id,
-                     operator_id, operator_name, remark)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    {cols}
+                    VALUES {vals}
                     RETURNING *
                     """,
-                    (
-                        tenant_id, amount_yuan, credits, rate, source, payment_order_id,
-                        operator_id, operator_name, remark,
-                    ),
+                    params,
                 )
                 row = cursor.fetchone()
 

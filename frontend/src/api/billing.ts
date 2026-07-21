@@ -42,8 +42,8 @@ export interface RechargeListResponse {
 export interface RechargeCreateRequest {
   tenant_id: string
   amount_yuan: number
-  credits?: number
-  rate?: number
+  credits: number
+  created_at?: string
   remark?: string
 }
 

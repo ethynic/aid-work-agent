@@ -82,33 +82,48 @@
       <div class="space-y-4">
         <div>
           <label class="text-sm text-muted mb-1 block">租户 <span class="text-danger-500">*</span></label>
-          <select v-model="formData.tenant_id"
-            class="w-full px-3 py-2 border border-default rounded-lg text-default bg-surface focus:outline-none focus:border-primary-400">
-            <option value="">请选择租户</option>
-            <option v-for="t in allTenants" :key="t.tenant_id" :value="t.tenant_id">
-              {{ t.company_name }} ({{ t.tenant_code }})
-            </option>
-          </select>
+          <div class="relative">
+            <input
+              v-model="tenantSearch"
+              @focus="showTenantList = true"
+              @blur="hideTenantListDelayed"
+              placeholder="输入租户名称或代码筛选"
+              autocomplete="off"
+              class="w-full px-3 py-2 border border-default rounded-lg text-default bg-surface focus:outline-none focus:border-primary-400"
+            />
+            <div v-if="showTenantList && filteredTenants.length"
+              class="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto bg-surface border border-default rounded-lg shadow-lg">
+              <div
+                v-for="t in filteredTenants"
+                :key="t.tenant_id"
+                @mousedown.prevent="selectTenant(t)"
+                class="px-3 py-2 hover:bg-surface-hover cursor-pointer text-sm text-default"
+              >
+                {{ t.company_name }} ({{ t.tenant_code }})
+              </div>
+            </div>
+            <p v-if="formData.tenant_id" class="text-xs text-success-700 mt-1">已选租户 ID：{{ formData.tenant_id }}</p>
+          </div>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="text-sm text-muted mb-1 block">充值金额（元） <span class="text-danger-500">*</span></label>
-            <input v-model.number="formData.amount_yuan" type="number" step="0.01" min="0.01"
-              @input="recalculateCredits"
+            <input v-model.number="formData.amount_yuan" type="number" min="1" step="1" placeholder="正整数"
               class="w-full px-3 py-2 border border-default rounded-lg text-default bg-surface focus:outline-none focus:border-primary-400" />
+            <p class="text-xs text-muted mt-1">正整数，单位元</p>
           </div>
           <div>
-            <label class="text-sm text-muted mb-1 block">兑换系数</label>
-            <input v-model.number="formData.rate" type="number" min="1" step="1"
-              @input="recalculateCredits"
+            <label class="text-sm text-muted mb-1 block">转化积分 <span class="text-danger-500">*</span></label>
+            <input v-model.number="formData.credits" type="number" min="1" step="1" placeholder="正整数"
               class="w-full px-3 py-2 border border-default rounded-lg text-default bg-surface focus:outline-none focus:border-primary-400" />
+            <p class="text-xs text-muted mt-1">正整数</p>
           </div>
         </div>
         <div>
-          <label class="text-sm text-muted mb-1 block">转化积分</label>
-          <input v-model.number="formData.credits" type="number" min="0" step="1"
+          <label class="text-sm text-muted mb-1 block">充值日期</label>
+          <input v-model="formData.created_at" type="datetime-local"
             class="w-full px-3 py-2 border border-default rounded-lg text-default bg-surface focus:outline-none focus:border-primary-400" />
-          <p class="text-xs text-muted mt-1">默认按金额 × 系数自动计算，可手动修改</p>
+          <p class="text-xs text-muted mt-1">默认为当前时间，可修改</p>
         </div>
         <div>
           <label class="text-sm text-muted mb-1 block">备注</label>
@@ -125,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, inject, watch } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -209,26 +224,51 @@ function onPageChange(page: number, size: number) {
 
 // 新增弹框
 const showFormDialog = ref(false)
+
+// 租户 autocomplete 关键词与下拉控制
+const tenantSearch = ref('')
+const showTenantList = ref(false)
+
+const filteredTenants = computed(() => {
+  const kw = tenantSearch.value.trim().toLowerCase()
+  if (!kw) return allTenants.value
+  return allTenants.value.filter(t =>
+    (t.company_name || '').toLowerCase().includes(kw) ||
+    (t.tenant_code || '').toLowerCase().includes(kw)
+  )
+})
+
+function selectTenant(t: any) {
+  formData.value.tenant_id = t.tenant_id
+  tenantSearch.value = `${t.company_name} (${t.tenant_code})`
+  showTenantList.value = false
+}
+
+function hideTenantListDelayed() {
+  // 延迟关闭，让 mousedown 选中事件先触发
+  setTimeout(() => { showTenantList.value = false }, 150)
+}
+
+// 生成 datetime-local 控件所需的 "YYYY-MM-DDTHH:MM" 格式（本地时间）
+function getCurrentDateTimeLocal(): string {
+  const now = new Date()
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
+}
+
 const defaultForm = () => ({
   tenant_id: '',
   amount_yuan: 0,
-  rate: 10,
   credits: 0,
+  created_at: getCurrentDateTimeLocal(),
   remark: '',
 })
 const formData = ref(defaultForm())
-const creditsManuallyEdited = ref(false)
-
-function recalculateCredits() {
-  if (creditsManuallyEdited.value) return
-  if (formData.value.amount_yuan && formData.value.rate) {
-    formData.value.credits = Math.floor(formData.value.amount_yuan * formData.value.rate)
-  }
-}
 
 function openAddDialog() {
   formData.value = defaultForm()
-  creditsManuallyEdited.value = false
+  tenantSearch.value = ''
+  showTenantList.value = false
   showFormDialog.value = true
 }
 
@@ -237,20 +277,23 @@ async function handleSubmit() {
     toast.error('请选择租户')
     return
   }
-  if (!formData.value.amount_yuan || formData.value.amount_yuan <= 0) {
-    toast.error('充值金额必须大于 0')
+  // 正整数校验：amount_yuan 与 credits 都必须是 >= 1 的整数
+  const amount = Number(formData.value.amount_yuan)
+  const credits = Number(formData.value.credits)
+  if (!Number.isInteger(amount) || amount < 1) {
+    toast.error('充值金额必须是正整数')
     return
   }
-  if (!formData.value.credits || formData.value.credits <= 0) {
-    toast.error('转化积分必须大于 0')
+  if (!Number.isInteger(credits) || credits < 1) {
+    toast.error('转化积分必须是正整数')
     return
   }
   try {
     const res = await createRecharge({
       tenant_id: formData.value.tenant_id,
-      amount_yuan: formData.value.amount_yuan,
-      credits: formData.value.credits,
-      rate: formData.value.rate,
+      amount_yuan: amount,
+      credits: credits,
+      created_at: formData.value.created_at || undefined,
       remark: formData.value.remark || undefined,
     })
     if (res.success) {
@@ -288,11 +331,10 @@ const columns = [
   { key: 'tenant_name', label: '租户' },
   { key: 'amount_yuan', label: '充值金额', width: '120px' },
   { key: 'credits', label: '转化积分', width: '120px' },
-  { key: 'rate', label: '兑换系数', width: '100px' },
   { key: 'source', label: '来源', width: '100px' },
   { key: 'operator_name', label: '操作人', width: '120px' },
   { key: 'remark', label: '备注' },
-  { key: 'created_at', label: '创建时间', width: '160px' },
+  { key: 'created_at', label: '充值日期', width: '160px' },
   { key: 'actions', label: '操作', width: '100px' },
 ]
 
@@ -323,17 +365,6 @@ function getSourceBadgeClass(source: string): string {
     default: return 'bg-gray-100 text-gray-700'
   }
 }
-
-// 监听 credits 手动编辑
-watch(() => formData.value.credits, (newVal, oldVal) => {
-  // 用户主动修改 credits 时（不是 recalculate 触发）标记
-  if (newVal !== oldVal && showFormDialog.value) {
-    const expected = Math.floor(formData.value.amount_yuan * formData.value.rate)
-    if (newVal !== expected) {
-      creditsManuallyEdited.value = true
-    }
-  }
-})
 
 onMounted(async () => {
   await loadAllTenants()
