@@ -509,11 +509,18 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
 
     验证顺序：
     1. 图形验证码
-    2. 租户代码（格式、存在性、状态）
-    3. 用户凭证（手机号/用户名 + 密码）
-    4. 用户-租户归属检查
+    2. 租户代码格式
+    3. 平台管理员识别（手机号在 admin.phones 且密码等于 QBTOKEN，跳过租户校验）
+    4. 租户代码（存在性、状态）
+    5. 用户凭证（手机号/用户名 + 密码）
+    6. 用户-租户归属检查
 
     所有验证错误统一收集，一次性返回。
+
+    平台管理员特殊逻辑：
+    - 手机号在 config.yaml 的 admin.phones 数组中 且 密码等于 .env 中的 QBTOKEN
+    - 用户不存在时自动创建（role='platform_admin'，tenant_id=NULL）
+    - 跳过租户存在性、状态、归属校验，登录后跳转 /portal
     """
     from src.config.settings import settings
     from src.saas.db.tenant_db import TenantDB
@@ -535,7 +542,57 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
     if errors:
         return UnifiedLoginResponse(success=False, errors=errors)
 
-    # 3. 查询租户
+    # 3. 平台管理员识别（手机号在 admin.phones 且密码等于 QBTOKEN）
+    #    平台管理员 tenant_id 为 NULL，跳过租户归属校验，登录后跳转 /portal
+    identifier = body.identifier.strip()
+    is_phone = identifier.isdigit() and len(identifier) == 11
+    admin_cfg = getattr(settings, "admin", None)
+    is_platform_admin = (
+        is_phone
+        and admin_cfg
+        and identifier in getattr(admin_cfg, "phones", [])
+        and _verify_qb_token(body.password)
+    )
+
+    if is_platform_admin:
+        # 查询或自动创建平台管理员用户
+        user = UserDB.get_by_phone(identifier, bypass_cache=True)
+        if not user:
+            logger.info(f"后端日志：平台管理员用户不存在，自动创建，phone={identifier}")
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                user_id = str(uuid.uuid4())
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute("""
+                    INSERT INTO users (user_id, username, phone, role, tenant_id, source, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, identifier, identifier, "platform_admin", None, None, now, now))
+                conn.commit()
+                cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+                user = dict(cursor.fetchone())
+
+        # 确保角色为 platform_admin
+        if user.get("role") != "platform_admin":
+            UserDB.update(user["user_id"], role="platform_admin")
+            user = UserDB.get_by_id(user["user_id"])
+
+        token = generate_token(user["user_id"])
+        return UnifiedLoginResponse(
+            success=True,
+            token=token,
+            user={
+                "user_id": user["user_id"],
+                "username": user["username"],
+                "phone": user["phone"],
+                "avatar_url": user.get("avatar_url"),
+                "is_admin": True,
+                "role": "platform_admin",
+            },
+            tenant_id=None,
+            redirect_url="/portal"
+        )
+
+    # 4. 查询租户（仅普通用户需要）
     tenant = None
     try:
         tenant = TenantDB.get_by_code(tenant_code)
@@ -546,7 +603,7 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
         errors.append({"field": "tenant_code", "message": "租户代码不存在"})
         return UnifiedLoginResponse(success=False, errors=errors)
 
-    # 4. 检查租户状态
+    # 5. 检查租户状态
     status = tenant.get("status")
     if status != TenantStatus.ACTIVE.value:
         if status == TenantStatus.SUSPENDED.value:
@@ -556,7 +613,7 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
         else:
             errors.append({"field": "tenant_code", "message": f"租户状态异常：{status}"})
 
-    # 5. 检查租户是否已过期（expire_at字段）
+    # 6. 检查租户是否已过期（expire_at字段）
     expire_at = tenant.get("expire_at")
     if expire_at:
         try:
@@ -567,10 +624,8 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
             # 日期解析失败，忽略过期检查
             pass
 
-    # 6. 验证用户凭证（复用现有逻辑）
-    identifier = body.identifier.strip()
+    # 7. 验证用户凭证（复用现有逻辑）
     user = None
-    is_phone = identifier.isdigit() and len(identifier) == 11
 
     # 同时匹配 username 或 phone，避免用户名是 11 位数字时误识别
     with get_db_connection() as conn:
@@ -602,7 +657,7 @@ async def unified_login(request: Request, body: UnifiedLoginRequest):
     if errors:
         return UnifiedLoginResponse(success=False, errors=errors)
 
-    # 7. 登录成功
+    # 8. 登录成功
     token = generate_token(user["user_id"])
     return UnifiedLoginResponse(
         success=True,
