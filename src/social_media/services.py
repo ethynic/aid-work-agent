@@ -10,6 +10,7 @@ from typing import Any
 from src.db.database import get_db_connection
 from src.db.encryption import encryption_manager
 import src.social_media.connectors  # noqa: F401
+from src.social_media.connectors.capability_resolver import CapabilityResolver
 from src.social_media.connectors.registry import connector_registry
 from src.social_media.enums import PlatformCapability, PublishStatus
 
@@ -294,22 +295,15 @@ class SocialMediaService:
             conn.commit()
         return {"review_id": review_id, "status": target_status}
 
-    def _account_capability_values(self, account: dict[str, Any]) -> set[str]:
-        raw = account.get("capabilities_json") or {}
-        if isinstance(raw, str):
-            raw = json.loads(raw)
-        return set(raw.get("supported") or [])
-
     def create_publish_job(self, tenant_id: str | None, user_id: str, payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         variant = self.get_variant(tenant_id, payload["variant_id"])
         if variant["status"] != "approved":
             raise ValueError("只有已审核通过的版本可创建发布任务")
         account = self.get_account(tenant_id, variant["account_id"])
-        capabilities = self._account_capability_values(account)
         publish_mode = payload.get("publish_mode", "immediate")
-        if publish_mode in {"immediate", "scheduled"} and PlatformCapability.API_PUBLISH.value not in capabilities:
+        if publish_mode in {"immediate", "scheduled"} and not CapabilityResolver.supports(account, PlatformCapability.API_PUBLISH):
             raise ValueError("账号不支持 API 发布")
-        if publish_mode == "assisted" and PlatformCapability.ASSISTED_PUBLISH.value not in capabilities:
+        if publish_mode == "assisted" and not CapabilityResolver.supports(account, PlatformCapability.ASSISTED_PUBLISH):
             raise ValueError("账号不支持辅助发布")
         with get_db_connection() as conn:
             cur = conn.cursor()

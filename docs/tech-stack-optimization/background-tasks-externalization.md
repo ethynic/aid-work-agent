@@ -1,6 +1,8 @@
 # 后台定时/轮询任务外置
 
-> **状态**：💡 灵感 | **关联**：[全链路异步化](full-async-migration.md)
+> **状态**：💡 灵感（部分结论已被取代，见下）
+> **关联**：[全链路异步化](full-async-migration.md)
+> **⚠️ 取代说明（2026-07-21）**：本文「方案 2.1：留在 worker 内 APScheduler」只解决了「多 worker 重复执行」，**未解决**「后台任务占用 HTTP worker / 生命周期耦合 / 无法独立扩缩」。后续由 [独立后台运行时设计](../infrastructure/background-runner-design.md) 取代——把 APScheduler（含本文要迁的 5 循环 + 用户 cron + 发布调度）整体搬到独立于 worker 的进程。本文的「5 循环迁移清单 / 待删除内容 / 风险表」仍然有效，作为后台运行时 P1 阶段的输入。
 
 ---
 

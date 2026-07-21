@@ -338,7 +338,16 @@ async function seedDemoFlow() {
     if (!variant.success || !variant.data?.variant_id) throw new Error(variant.error || '平台版本创建失败')
     await socialMediaAPI.submitReview(variant.data.variant_id)
     await socialMediaAPI.approveVariant(variant.data.variant_id, '示例流程审核通过')
-    const publishMode = supportedCapabilities(account).includes('api_publish') ? 'immediate' : 'assisted'
+    // 按账号实际支持的能力选发布模式；都不支持（如 stub 连接器）则明确提示，不盲目 fallback
+    const caps = supportedCapabilities(account)
+    const publishMode = caps.includes('api_publish')
+      ? 'immediate'
+      : caps.includes('assisted_publish')
+        ? 'assisted'
+        : null
+    if (!publishMode) {
+      throw new Error('该账号暂不支持发布（连接器为 stub，待真实 HTTP 实现后可用）')
+    }
     await socialMediaAPI.createPublishJob({ variant_id: variant.data.variant_id, publish_mode: publishMode })
     showMessage('示例草稿已进入发布队列')
     await loadAll()

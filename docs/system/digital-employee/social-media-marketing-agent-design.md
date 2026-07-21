@@ -82,7 +82,7 @@
 
 ## 4. 统一社媒平台连接器
 
-### 4.1 连接器协议　🔧（基类与 Registry 已实现，CapabilityResolver 未实现）
+### 4.1 连接器协议　✅（基类 + Registry + CapabilityResolver 已实现）
 
 ```python
 class SocialPlatformConnector(ABC):
@@ -101,9 +101,9 @@ class SocialPlatformConnector(ABC):
     async def fetch_metrics(self, request)              # 官方API型
 ```
 
-`ConnectorRegistry`（已实现）按 `platform` 创建连接器并注入解密凭证；`CapabilityResolver`（未实现，当前内联在 `SocialMediaService`）负责调用前校验账号能力，后续抽出。
+`ConnectorRegistry`（已实现）按 `platform` 创建连接器并注入解密凭证；`CapabilityResolver`（已实现，`src/social_media/connectors/capability_resolver.py`）从账号持久化的 `capabilities_json` 解析已支持能力，提供 `resolve/supports/require`：`require` 在调用平台能力前做门禁，不支持即抛 `CapabilityNotSupported`，替代原先内联在 `SocialMediaService` 的 `_account_capability_values`。三模块（内容/广告/巡检）共用。
 
-### 4.2 能力枚举　🔧（内容能力已实现，广告/web 能力待加）
+### 4.2 能力枚举　✅（内容 + 广告 + web 能力已全部定义）
 
 ```python
 class PlatformCapability(str, Enum):
@@ -111,28 +111,28 @@ class PlatformCapability(str, Enum):
     ACCOUNT_OAUTH, ACCOUNT_CREDENTIALS, REMOTE_ASSET_LIST, REMOTE_DRAFT,
     API_PUBLISH, ASSISTED_PUBLISH, SCHEDULED_PUBLISH, PUBLISH_STATUS,
     API_ANALYTICS, DATA_IMPORT
-    # 广告能力（待加）
+    # 广告能力（已定义，待 tencent_ads 连接器实现）
     ADS_OAUTH, ADS_ACCOUNT_TREE, ADS_REPORT, ADS_UPDATE_BID,
     ADS_UPDATE_BUDGET, ADS_UPDATE_TARGETING, ADS_PAUSE, ADS_LEADS,
     ADS_CONVERSION_CALLBACK
-    # web 操作能力（待加）
+    # web 操作能力（已定义，待 zhihu_web/xiaohongshu_web 连接器实现）
     WEB_LOGIN_SESSION, WEB_SEARCH, WEB_READ_PAGE, WEB_POST_CONTENT,
     WEB_COMMENT, WEB_DM, WEB_INTERACTION_TRACKING
 ```
 
-能力按账号实测存储。相同平台的两个账号可能因认证/权限不同而能力不同。
+能力按账号实测存储。相同平台的两个账号可能因认证/权限不同而能力不同。**契约**：声明的方法型能力（`REMOTE_DRAFT/API_PUBLISH/PUBLISH_STATUS/ASSISTED_PUBLISH/API_ANALYTICS`）必须有对应实现，由 `tests/unit/social_media/test_connectors.py` 的 `test_declared_method_backed_capabilities_are_implemented` 锁定，防「声明即抛」矛盾回归。
 
 ### 4.3 首期连接器清单
 
 | 连接器 | 形态 | 模块 | 状态 |
 |--------|------|------|------|
-| `wechat_official` | 官方API型 | 内容管理 | 🔧 stub（仅能力声明+本地校验，无真实 HTTP） |
-| `wechat_channels` | 辅助发布型 | 内容管理 | 🔧 stub（静态 checklist） |
+| `wechat_official` | 官方API型 | 内容管理 | 🔧 stub（仅凭证声明+本地校验，无真实 HTTP；S0 已修声明矛盾，C1 补真实能力） |
+| `wechat_channels` | 辅助发布型 | 内容管理 | 🔧 stub（静态 checklist + `build_assisted_package` 有实现） |
 | `tencent_ads` | 官方API型 | 广告管理 | ⬜ 待开发 |
 | `zhihu_web` | web操作型 | 巡检商机 | ⬜ 待开发 |
 | `xiaohongshu_web` | web操作型 | 巡检商机 | ⬜ 待开发 |
 
-> **已知问题（待修）**：现有 `wechat_official` 连接器声明了 `API_PUBLISH/PUBLISH_STATUS/API_ANALYTICS` 能力，但未重写对应方法，调用即抛 `CapabilityNotSupported`——声明与实现矛盾。Phase 1 修复（见开发计划）。
+> **已修复（S0）**：原 `wechat_official` 声明 `API_PUBLISH/PUBLISH_STATUS/API_ANALYTICS/REMOTE_DRAFT` 等能力但未重写对应方法（调用即抛 `CapabilityNotSupported`），声明与实现矛盾。S0 按「未实现的能力不声明」移除这些声明，stub 现仅声明真实可用的 `ACCOUNT_CREDENTIALS`；待 C1 接入真实 HTTP 后补回。前端 demo 发布模式选择已同步改为按账号实际能力选择。
 
 ---
 
@@ -191,7 +191,7 @@ draft → scheduled → queued → publishing
 | 项 | 状态 |
 |----|------|
 | 13 张数据表 | ✅ |
-| 连接器协议/Registry | ✅（CapabilityResolver ⬜） |
+| 连接器协议/Registry | ✅（含 CapabilityResolver） |
 | 公众号/视频号连接器真实 HTTP | ⬜（当前 stub） |
 | 服务层（账号/计划/素材/内容/审核/发布任务 CRUD + 幂等） | ✅ |
 | AI 内容生成（母版 + 平台适配） | ⬜ |
@@ -396,8 +396,8 @@ bs_outbound_account_sessions      托管登录态（Cookie 加密）
 | 维度 | 状态 | 说明 |
 |------|------|------|
 | 数据模型 | ✅ | 13/13 表全建，字段与索引完整 |
-| 连接器协议 | 🔧 | 基类 + Registry 已实现；CapabilityResolver 缺失（内联在 service） |
-| 公众号/视频号连接器 | 🔧 | stub，仅能力声明 + 本地校验，无真实 HTTP（声明与实现矛盾，待修） |
+| 连接器协议 | ✅ | 基类 + Registry + CapabilityResolver 已实现；`PlatformCapability` 枚举覆盖内容/广告/web 三类 |
+| 公众号/视频号连接器 | 🔧 | stub；wechat_official 仅声明凭证能力（S0 已修声明矛盾），wechat_channels 辅助发布 checklist 有实现；真实 HTTP 待 C1 |
 | 服务层 | 🔧 | 单类 `SocialMediaService`，账号/计划/素材/内容/审核/发布任务 CRUD + 幂等真实可用 |
 | 发布状态机 | 🔧 | 规则表 + 断言函数已实现，未被调用 |
 | AI 内容生成 | ⬜ | 母版生成、平台适配未实现 |

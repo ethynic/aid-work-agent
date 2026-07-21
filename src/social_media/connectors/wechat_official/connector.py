@@ -18,15 +18,12 @@ class WeChatOfficialConnector(SocialPlatformConnector):
     platform = "wechat_official"
 
     async def validate_account(self, account: dict) -> AccountCapabilities:
+        # 当前为 stub：仅凭证绑定 + 本地规格校验真实可用。REMOTE_DRAFT / API_PUBLISH /
+        # SCHEDULED_PUBLISH / PUBLISH_STATUS / API_ANALYTICS 对应方法均未实现（基类抛
+        # CapabilityNotSupported），按 S0「未实现的能力不声明」原则不在此声明，待 C1
+        # 接入真实 HTTP 后再补回，避免 CapabilityResolver 门禁形同虚设。
         return AccountCapabilities(
-            supported=frozenset({
-                PlatformCapability.ACCOUNT_CREDENTIALS,
-                PlatformCapability.REMOTE_DRAFT,
-                PlatformCapability.API_PUBLISH,
-                PlatformCapability.SCHEDULED_PUBLISH,
-                PlatformCapability.PUBLISH_STATUS,
-                PlatformCapability.API_ANALYTICS,
-            }),
+            supported=frozenset({PlatformCapability.ACCOUNT_CREDENTIALS}),
             limits={"content_spec": SPEC.__dict__},
             detected_at=datetime.utcnow(),
         )
