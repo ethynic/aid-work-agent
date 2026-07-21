@@ -73,6 +73,8 @@ fill_template(sample_file_path, data, output_name?) → { file_path, file_name, 
    > 不是纯表格行。LLM 标注的是**标题单元格** `(row, col)`（标题文字所在格，识别最可靠），
    > 渲染器把值写到**标题右侧相邻格 `col+1`**（标题格不动 → 标题不被覆盖）。
    > 若某字段值不在紧邻右侧（隔列/合并区），LLM 用 `value_col` 显式指定值格列。
+   > **标题本身是合并单元格时**（如 A2:B2 合并放标题），值写到**合并区右侧 +1**（C2），不是 col+1（B2 会落到合并标题的非锚点格上）。渲染器 `_meta_value_col` 自动处理。
+   > **所有写值一律经 `_set_value` 落到合并区锚点**（左上格）：合并区的非锚点格 `.value` 只读，直接写会报 `'MergedCell' object attribute 'value' is read-only`；且值必须落锚点否则合并后显示锚点旧值。渲染顺序：解除全部合并 → 增删行 → 在**未合并态**写所有值（经 `_set_value` 落锚点）→ 最后才重新合并。
    > （tr_643d42f978664bb9 的教训：早期让 LLM 标值格，它指到了标题格上，值把标题覆盖了。）
    c. 产出 inferred_structure（瞬态，不持久化）
 3. 渲染（按下节"行数不匹配处理"）：

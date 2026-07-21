@@ -462,8 +462,10 @@ def _row_was_deleted(orig_row: int, plan) -> bool:
     return False
 
 
-def _remap_merges(ws, saved: List[Tuple[int, int, int, int]], plan, groups: List[GroupRegion]):
-    """行增删后重锚定合并范围：明细区内的丢弃，其余按 _final_row 平移"""
+def _compute_final_merges(saved, plan, groups) -> List[Tuple[int, int, int, int]]:
+    """行增删后计算合并区的最终坐标（按 _final_row 平移；明细区内的丢弃）。
+    返回 [(min_col, min_row, max_col, max_row), ...] 最终坐标。"""
+    out = []
     for min_col, min_row, max_col, max_row in saved:
         if _is_intra_detail(min_row, max_row, groups):
             continue
@@ -471,12 +473,48 @@ def _remap_merges(ws, saved: List[Tuple[int, int, int, int]], plan, groups: List
         nr2 = _final_row(max_row, plan)
         if nr1 <= 0 or nr2 <= 0:
             continue
-        a = f"{get_column_letter(min_col)}{nr1}"
-        b = f"{get_column_letter(max_col)}{nr2}"
+        out.append((min_col, nr1, max_col, nr2))
+    return out
+
+
+def _apply_merges(ws, final_merges):
+    """按最终坐标重新合并"""
+    for min_col, min_row, max_col, max_row in final_merges:
+        a = f"{get_column_letter(min_col)}{min_row}"
+        b = f"{get_column_letter(max_col)}{max_row}"
         try:
             ws.merge_cells(f"{a}:{b}")
         except Exception as e:
             logger.debug(f"[excel_template_ai] 合并重锚定跳过 {a}:{b}: {e}")
+
+
+def _anchor_for(row: int, col: int, final_merges) -> Tuple[int, int]:
+    """(row,col) 所在合并区的锚点（左上格）；不在任何合并区则返回自身。
+    值必须写到锚点，否则合并区显示锚点值、非锚点格只读。"""
+    for min_col, min_row, max_col, max_row in final_merges:
+        if min_row <= row <= max_row and min_col <= col <= max_col:
+            return (min_row, min_col)
+    return (row, col)
+
+
+def _set_value(ws, row: int, col: int, value, final_merges):
+    """写值到 (row,col) 所在合并区的锚点（避免 MergedCell 只读报错 + 值落在非锚点被隐藏）。"""
+    r, c = _anchor_for(row, col, final_merges)
+    ws.cell(row=r, column=c).value = value
+
+
+def _meta_value_col(mf: MetaField, final_merges) -> int:
+    """meta 值单元格列：显式 value_col 优先；否则 = 标题视觉范围右侧 +1
+    （标题本身是合并区时取合并区 max_col+1，否则标题 col+1）。
+    避免 col+1 落到"合并标题"的非锚点格上导致值覆盖标题。"""
+    if mf.value_col:
+        return mf.value_col
+    end = mf.col
+    for min_col, min_row, max_col, max_row in final_merges:
+        if min_row <= mf.row <= max_row and min_col <= mf.col <= max_col:
+            end = max_col
+            break
+    return end + 1
 
 
 def _resolve_subtotal(g: GroupRegion, data: FillData, rows: List[Dict[str, Any]],
@@ -509,15 +547,14 @@ def _column_span(structure: SheetStructure) -> Tuple[int, int, Dict[int, Optiona
 
 
 def _write_detail_row(ws, row: int, min_col: int, max_col: int,
-                      bound_by_col: Dict[int, Optional[str]], row_data: Dict[str, Any]):
-    """写一行明细：跨度内每列按绑定写值或清空（bind 为 None / 键缺失 → 清空），只动 .value"""
+                      bound_by_col: Dict[int, Optional[str]], row_data: Dict[str, Any],
+                      final_merges):
+    """写一行明细：跨度内每列按绑定写值或清空（bind 为 None / 键缺失 → 清空）。
+    通过 _set_value 写到合并区锚点，避免 MergedCell 只读 + 值落非锚点被隐藏。"""
     for col in range(min_col, max_col + 1):
-        cell = ws.cell(row=row, column=col)
         bind = bound_by_col.get(col)
-        if bind and bind in row_data:
-            cell.value = row_data[bind]
-        else:
-            cell.value = None  # 清空，杜绝样例残留
+        value = row_data[bind] if (bind and bind in row_data) else None
+        _set_value(ws, row, col, value, final_merges)
 
 
 def _render(ws, structure: SheetStructure, data: FillData) -> int:
@@ -566,32 +603,37 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
         if hidden:
             dim.hidden = hidden
 
-    # 3. 重锚定合并范围（明细区内的丢弃，其余按 _final_row 平移）
-    _remap_merges(ws, saved_merges, plan, groups)
+    # 3. 计算合并区最终坐标（写值时用于定位锚点；合并本身最后再应用）
+    final_merges = _compute_final_merges(saved_merges, plan, groups)
 
-    # 4. 填各分组明细（明细区现按 _final_row 定位）
+    # 4-7. 填数据（此时所有合并已解除、单元格可写；用 _set_value 把值写到合并区锚点，
+    #     这样合并重新应用后值显示在锚点，不会落到只读的非锚点格）
+    # 4. 填各分组明细
     for g, rows, _delta in plan:
         first_final = _final_row(g.detail_first_row, plan)
         for i, row_data in enumerate(rows):
-            _write_detail_row(ws, first_final + i, min_col, max_col, bound_by_col, row_data)
+            _write_detail_row(ws, first_final + i, min_col, max_col, bound_by_col, row_data, final_merges)
 
     # 5. 填各分组小计（位于该组明细下方，按 _final_row 重映射；无值则清空防残留）
     for g, rows, _delta in plan:
         if g.subtotal_row and g.subtotal_col:
             r = _final_row(g.subtotal_row, plan)
-            ws.cell(row=r, column=g.subtotal_col).value = _resolve_subtotal(g, data, rows, bound_by_col)
+            _set_value(ws, r, g.subtotal_col, _resolve_subtotal(g, data, rows, bound_by_col), final_merges)
 
-    # 6. 填顶部 meta（左右结构：标题在 mf.col，值写到右侧 value_col/col+1，标题格不动）
+    # 6. 填顶部 meta（左右结构：标题在 mf.col，值写到标题视觉范围右侧；标题合并时取合并区右侧+1）
     for mf in structure.meta_fields:
         if not mf.bind:
             continue
-        value_col = mf.value_col if mf.value_col else mf.col + 1
-        ws.cell(row=mf.row, column=value_col).value = data.meta.get(mf.bind)
+        value_col = _meta_value_col(mf, final_merges)
+        _set_value(ws, mf.row, value_col, data.meta.get(mf.bind), final_merges)
 
     # 7. 填合计区（位于所有分组下方，按 _final_row 重映射；无值 → 清空防样例残留）
     for t in structure.totals:
         r = _final_row(t.row, plan)
-        ws.cell(row=r, column=t.col).value = _resolve_total_value(t.bind, data.totals)
+        _set_value(ws, r, t.col, _resolve_total_value(t.bind, data.totals), final_merges)
+
+    # 8. 最后才重新合并（写值在未合并态完成，避免 MergedCell 只读）
+    _apply_merges(ws, final_merges)
 
     return len(data.rows)
 

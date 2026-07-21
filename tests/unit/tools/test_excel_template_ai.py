@@ -198,6 +198,37 @@ def test_meta_value_col_override(sample_path, tmp_path):
     assert ws["C2"].value == "张三"      # 值在 value_col=3（而非默认 col+1=B2）
 
 
+def test_meta_merged_label_value_after_merge(tmp_path):
+    """标题本身是合并单元格时：值写到合并区右侧，标题保留，不报 MergedCell 只读（用户实测场景）"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.merge_cells("A2:B2")
+    ws["A2"] = "合同编号："  # 标题合并 A2:B2
+    for i, h in enumerate(["类别", "金额"], 1):
+        ws.cell(row=3, column=i, value=h)
+    ws.cell(row=4, column=1, value="示例X"); ws.cell(row=4, column=2, value=100)
+    ws.cell(row=5, column=1, value="示例Y"); ws.cell(row=5, column=2, value=100)
+    p = tmp_path / "merged_label.xlsx"
+    wb.save(str(p))
+
+    structure = {
+        "meta_fields": [{"row": 2, "col": 1, "bind": "contract"}],
+        "columns": [{"col": 1, "bind": "category"}, {"col": 2, "bind": "amount"}],
+        "detail_first_row": 4, "detail_last_row": 5, "detail_template_row": 4,
+    }
+    data = FillData(rows=[{"category": "A", "amount": 1}, {"category": "B", "amount": 2}],
+                    meta={"contract": "2025SG001"})
+    res = fill_with_sample(str(p), data, output_dir=str(tmp_path), llm_callable=_mock_llm(structure))
+    assert res["success"], res
+
+    wb2 = openpyxl.load_workbook(res["file_path"])
+    ws2 = wb2.active
+    assert ws2["A2"].value == "合同编号：", f"合并标题被覆盖: A2={ws2['A2'].value!r}"
+    assert ws2["C2"].value == "2025SG001", f"值应在合并区右侧 C2: C2={ws2['C2'].value!r}"
+    # 明细正常
+    assert ws2["A4"].value == "A" and ws2["B5"].value == 2
+
+
 def test_fill_m_greater_than_k_inserts_rows_with_style(sample_path, tmp_path):
     """M>K：插入行，续填，行高+样式复制，合计下移，合并保留"""
     rows = [
