@@ -1845,3 +1845,68 @@ CREATE TABLE IF NOT EXISTS tenant_recharges (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_recharges_tenant_id ON tenant_recharges(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_recharges_created_at ON tenant_recharges(created_at DESC);
+
+-- ============== 巡检商机模块（B1 商机池 3 表） ==============
+-- 设计文档：docs/system/digital-employee/social-media-marketing-agent-design.md §7.6
+-- 规范：database_dev.md（bs_ 前缀、tenant_id/user_id/created_at 必备、TEXT 存枚举、无外键/触发器）
+-- 注意：bs_outbound_account_sessions（登录态子系统）由并行模块负责，不在本段
+
+-- 商机主表：原文加密、意向分、状态、去重指纹
+CREATE TABLE IF NOT EXISTS bs_outbound_leads (
+    lead_id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    platform TEXT,
+    source_type TEXT,                            -- radar / content_interaction / outreach_reply
+    external_content_id TEXT,
+    external_url TEXT,
+    raw_text_encrypted TEXT,                     -- PII 原文加密（encryption_manager）
+    intent_score INTEGER,                        -- 0-100 意向分
+    status TEXT DEFAULT 'new',                   -- new/contacted/qualified/invalid/converted
+    assigned_user_id TEXT,
+    dedup_fingerprint TEXT,                      -- 同 tenant 内 UNIQUE（部分索引）
+    contact_points TEXT,
+    risk_flags TEXT,
+    user_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+-- 同 tenant 内 dedup_fingerprint 唯一（仅当指纹非空时强制）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bs_outbound_leads_dedup
+    ON bs_outbound_leads(tenant_id, dedup_fingerprint)
+    WHERE dedup_fingerprint IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bs_outbound_leads_tenant_status
+    ON bs_outbound_leads(tenant_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_outbound_leads_assigned
+    ON bs_outbound_leads(tenant_id, assigned_user_id, intent_score DESC);
+
+-- 商机互动/跟进记录
+CREATE TABLE IF NOT EXISTS bs_outbound_lead_interactions (
+    interaction_id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    lead_id TEXT,
+    interaction_type TEXT,                       -- note/call/email/dm/comment/visit/wechat/other
+    content TEXT,
+    actor_user_id TEXT,
+    user_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_outbound_lead_interactions_lead
+    ON bs_outbound_lead_interactions(tenant_id, lead_id, created_at DESC);
+
+-- 我方接触动作审计（comment/dm/post，默认 draft 待审）
+CREATE TABLE IF NOT EXISTS bs_outbound_outreach_actions (
+    action_id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    lead_id TEXT,
+    action_type TEXT,                            -- comment/dm/post
+    channel TEXT,                                -- zhihu/xiaohongshu/...
+    content_snapshot TEXT,
+    execution_status TEXT,                       -- draft/pending_review/executed/failed/cancelled
+    reviewer_user_id TEXT,
+    user_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_outbound_outreach_actions_lead
+    ON bs_outbound_outreach_actions(tenant_id, lead_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_outbound_outreach_actions_tenant_status
+    ON bs_outbound_outreach_actions(tenant_id, execution_status, created_at DESC);
