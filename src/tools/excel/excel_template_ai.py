@@ -712,11 +712,17 @@ def _serialize_structure(s: SheetStructure) -> Dict[str, Any]:
 # ============================================================
 
 
-def _default_llm(prompt: str) -> str:
-    """默认 LLM 调用：复用 settings 的 provider 配置（qwen/zhipu/deepseek）。
-    结构分析输出是短 JSON，限制 max_tokens=2048 防止模型发散导致超长耗时。"""
+def _default_llm(prompt: str, *, disable_thinking: bool = True) -> str:
+    """默认 LLM 调用（deepseek-v4-pro 等思考模型）。
+
+    结构分析**默认关闭思考**：与 travel-quote/attraction.py 一致——思考模型的思考 token
+    也计入 max_tokens，开启时小 max_tokens 会截断输出 JSON；关闭后输出确定、不截断、几秒返回。
+    复杂模板若分析不准，可传 disable_thinking=False 开启思考（届时需更大 max_tokens 与超时）。
+    """
     from src.config.settings import settings
     provider = settings.llm.provider
+    # 关闭思考时这是纯输出预算；结构 JSON 很短，4096 足够
+    max_tokens = 4096
 
     if provider == "qwen":
         import dashscope
@@ -725,13 +731,16 @@ def _default_llm(prompt: str) -> str:
             raise ValueError("QWEN API key 未配置")
         dashscope.api_key = keys[0]
         model = getattr(settings.llm.qwen, "model", None) or "qwen-plus"
-        resp = dashscope.Generation.call(
+        kwargs = dict(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             result_format="message",
             temperature=0.0,
-            max_tokens=2048,
+            max_tokens=max_tokens,
         )
+        if disable_thinking:
+            kwargs["extra_body"] = {"enable_thinking": False}
+        resp = dashscope.Generation.call(**kwargs)
         if resp.status_code != 200:
             raise RuntimeError(f"LLM 调用失败: {resp.message}")
         return resp.output.choices[0].message.content
@@ -749,12 +758,19 @@ def _default_llm(prompt: str) -> str:
         else:
             base_url = base_url or "https://api.deepseek.com"
         api_url = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+        }
+        if provider == "deepseek" and disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
         resp = httpx.post(
             api_url,
             headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
-            json={"model": model, "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.0, "max_tokens": 2048},
-            timeout=60.0,
+            json=payload,
+            timeout=120.0,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
