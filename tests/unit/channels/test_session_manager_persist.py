@@ -526,6 +526,58 @@ class TestProcessAndPersist:
         send_response.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_no_credit_marks_record_skip_save_and_blocks_enqueue(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """余额耗尽路径：SaaS 模式 + 租户余额 ≤ 0 -> status=no_credit，
+        record_service.skip_save=True（避免 end_record 写空 chat_record），
+        enqueue_and_process 不被调用，send_response 发送余额提示。
+
+        为什么重要：渠道侧 start_record 在 process_and_persist 之前调用，
+        若 no_credit 时仍走 end_record -> save()，会写入空 chat_record 噪声。
+        修复方案是 no_credit 命中时标记 record_service.skip_save=True，
+        让后续 end_record 中的 save() 跳过落库。
+        """
+        memory_store, _conn, _spy = mock_db_ctx
+
+        # mock SaaS 启用 + 租户余额 = 0
+        fake_tenant = {"tenant_id": "t1", "credit_balance": 0}
+
+        record_service = MagicMock()
+        # 模拟真实 SessionRecordService 的 skip_save 属性（默认 False）
+        record_service.skip_save = False
+
+        send_response = AsyncMock(return_value=True)
+
+        with patch("src.config.settings.settings") as mock_settings, \
+                patch("src.saas.db.tenant_db.TenantDB.get_by_id", return_value=fake_tenant):
+            mock_settings.saas.enabled = True
+
+            result = await manager.process_and_persist(
+                session_id="sid_no_credit",
+                tenant_id="t1",
+                user_content="你好",
+                agent=stub_agent,
+                send_response=send_response,
+                record_service=record_service,
+            )
+
+        # 1. 返回 status=no_credit
+        assert result["status"] == "no_credit"
+        assert result["response_text"] == ""
+        # 2. record_service.skip_save 被置为 True，后续 end_record 的 save() 会跳过
+        assert record_service.skip_save is True, (
+            "no_credit 命中时必须标记 record_service.skip_save=True，"
+            "避免 end_record 写入空 chat_record"
+        )
+        # 3. session_queue.enqueue_and_process 未被调用（阻断在余额检查阶段）
+        patched_session_queue.enqueue_and_process.assert_not_called()
+        # 4. send_response 被调用一次（发送余额提示）
+        send_response.assert_awaited_once()
+        # 5. 不写任何 channel_messages
+        assert len(memory_store["messages"]) == 0
+
+    @pytest.mark.asyncio
     async def test_batch_write_failure_triggers_orphan_user_fallback(
         self, manager, mock_db_ctx, patched_session_queue, stub_agent
     ):

@@ -148,12 +148,33 @@ async def get_usage(
                 for row in cursor.fetchall()
             ]
 
+            # 全量汇总（不受分页影响，与 items 列表使用相同筛选条件）
+            # 单独 COUNT/SUM 查询，避免窗口函数带来的复杂度
+            cursor.execute(
+                f"""
+                SELECT
+                    COALESCE(SUM(credit_cost), 0) AS total_credit_cost,
+                    COUNT(DISTINCT session_id) AS total_session_count,
+                    COUNT(*) AS total_message_count
+                FROM chat_records
+                WHERE {where_sql}
+                """,
+                params,
+            )
+            summary_row = cursor.fetchone() or {}
+            summary = {
+                "total_credit_cost": int(summary_row.get("total_credit_cost") or 0),
+                "total_session_count": int(summary_row.get("total_session_count") or 0),
+                "total_message_count": int(summary_row.get("total_message_count") or 0),
+            }
+
         return {
             "success": True,
             "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
+            "summary": summary,
         }
     except Exception as e:
         logger.error(f"获取用量明细失败: {e}")

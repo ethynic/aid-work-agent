@@ -135,6 +135,28 @@ export class SSEManager {
       })
 
       if (!response.ok) {
+        // 403 + NO_CREDIT：积分耗尽，抛出带 code 标识的错误，供调用方显示友好提示
+        if (response.status === 403) {
+          let errBody: any = null
+          try {
+            errBody = await response.json()
+          } catch {
+            // 响应体非 JSON，忽略解析错误
+          }
+          if (errBody?.code === 'NO_CREDIT') {
+            const msg = errBody.details || errBody.error || '积分余额已耗尽'
+            const err = new Error(msg) as Error & { code?: string; status?: number }
+            err.code = 'NO_CREDIT'
+            err.status = 403
+            throw err
+          }
+          // 其他 403（如权限不足）
+          const msg = errBody?.error || errBody?.details || `HTTP error! status: 403`
+          const err = new Error(msg) as Error & { code?: string; status?: number }
+          err.code = errBody?.code || 'FORBIDDEN'
+          err.status = 403
+          throw err
+        }
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 

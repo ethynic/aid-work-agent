@@ -831,6 +831,7 @@ class ChannelSessionManager:
 
         # 积分余额硬阻断：SaaS 模式下余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
         # 命中时通过 send_response 发送提示并返回 status='no_credit'，避免调用 LLM 扣费
+        # 同时标记 record_service 跳过 save，避免后续 end_record 写入空 chat_record 噪声
         try:
             from src.config.settings import settings as _settings
             if _settings.saas.enabled and tenant_id:
@@ -843,6 +844,9 @@ class ChannelSessionManager:
                             f"租户 {tenant_id} 积分余额耗尽（balance={_credit_balance}），"
                             f"阻断渠道消息 session={session_id}"
                         )
+                        # 标记 record_service 跳过落库，避免 end_record 写入空 chat_record
+                        if record_service is not None:
+                            record_service.skip_save = True
                         try:
                             await send_response(
                                 "积分余额已耗尽，无法继续对话，请联系管理员充值。",

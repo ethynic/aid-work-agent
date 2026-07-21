@@ -91,12 +91,19 @@ export interface UsageItem {
   message_count: number
 }
 
+export interface UsageSummary {
+  total_credit_cost: number
+  total_session_count: number
+  total_message_count: number
+}
+
 export interface UsageResponse {
   success: boolean
   items?: UsageItem[]
   total?: number
   page?: number
   page_size?: number
+  summary?: UsageSummary
   message?: string
 }
 

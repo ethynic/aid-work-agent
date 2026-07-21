@@ -134,6 +134,10 @@ class SessionRecordService:
         # 用于 monitor.py 精确匹配撤回状态。类型为 Any 避免循环依赖。
         self.trace_collector: Optional[AnyType] = None
 
+        # 跳过落库标记：渠道侧余额阻断等"无需持久化"场景置 True，
+        # save() 直接返回 None，避免写入空 chat_record 噪声
+        self.skip_save: bool = False
+
     def create_progress_callback(self):
         """创建用于传递给Agent的progress_callback"""
         async def progress_callback(event: Dict[str, Any]):
@@ -266,6 +270,15 @@ class SessionRecordService:
         2. UPDATE tenants.credit_balance 原子扣减（tenant_id 为空或 credit_cost=0 时跳过）
         """
         try:
+            # 渠道侧余额阻断等场景跳过落库，避免写入空 chat_record 噪声
+            if self.skip_save:
+                logger.info(
+                    f"Session record skipped (skip_save=True): "
+                    f"session_id={self.session_id}, tenant_id={self.tenant_id}, "
+                    f"source_type={self.source_type}"
+                )
+                return None
+
             if self.end_time is None:
                 self.end_time = time.time()
 

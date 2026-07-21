@@ -156,6 +156,69 @@ class TestBillingBalanceAPI:
             assert "session_count" in it
             assert "message_count" in it
 
+    def test_usage_returns_cross_page_summary(self, temp_tenant_with_data):
+        """/usage 返回的 summary 字段为全量汇总（跨页稳定）
+
+        场景：构造分页（page_size=1）时，summary 仍返回全量汇总，
+        而非当前页数据，避免翻页时汇总变化。
+        """
+        from src.saas.api import billing_balance
+        from src.db.models import ChatRecordDB
+        import uuid
+
+        tenant_id = temp_tenant_with_data
+
+        # 再补 1 条记录（共 2 条，确保跨页）
+        ChatRecordDB.create(
+            session_id=f"test_session_{uuid.uuid4().hex[:8]}",
+            tenant_id=tenant_id,
+            user_id="test_user",
+            user_message="测试消息2",
+            assistant_message="测试回复2",
+            prompt_tokens=100,
+            completion_tokens=50,
+            model="test-model",
+            status="completed",
+            credit_cost=7,
+        )
+
+        def fake_require_admin(request):
+            return {"user_id": "test_user", "role": "tenant_admin", "tenant_id": tenant_id}
+
+        class FakeRequest:
+            pass
+
+        with patch("src.saas.api.billing_balance.require_admin", fake_require_admin), \
+             patch("src.saas.api.billing_balance.settings") as mock_settings:
+            mock_settings.saas.enabled = True
+
+            import asyncio
+            # page_size=1 强制分页
+            response = asyncio.get_event_loop().run_until_complete(
+                billing_balance.get_usage(
+                    FakeRequest(),
+                    date_from=None,
+                    date_to=None,
+                    session_id=None,
+                    model=None,
+                    page=1,
+                    page_size=1,
+                )
+            )
+
+        assert response["success"] is True
+        # summary 字段必须存在
+        assert "summary" in response
+        summary = response["summary"]
+        # 全量汇总：5 + 7 = 12（不受分页影响）
+        assert summary["total_credit_cost"] == 12
+        # 全量消息数：2
+        assert summary["total_message_count"] == 2
+        # 全量会话数：2（两条记录的 session_id 不同）
+        assert summary["total_session_count"] == 2
+        # 当前页 items 只有 1 条，但 summary 是全量
+        assert len(response["items"]) == 1
+
     def test_recharges_returns_readonly_list(self, temp_tenant_with_data):
         """/recharges 返回只读列表，不包含 operator_id"""
         from src.saas.api import billing_balance

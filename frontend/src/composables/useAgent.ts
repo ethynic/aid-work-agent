@@ -2,6 +2,7 @@ import { ref, computed, shallowReactive, type Ref } from 'vue'
 import type { ChatMessage, InputHintState, ProgressMessage } from '@/types'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
+import { useToast } from 'vue-toastification'
 import { useDemoAuth } from './useDemoAuth'
 import { useTenantAuth } from './useTenantAuth'
 import { useCreditCheck } from './useCreditCheck'
@@ -289,6 +290,16 @@ export function useAgent() {
         },
         // onError
         (err) => {
+          // 识别 SSE 403 NO_CREDIT 错误，显示友好 toast 提示
+          const errWithCode = err as Error & { code?: string; status?: number }
+          if (errWithCode.code === 'NO_CREDIT' || errWithCode.status === 403) {
+            try {
+              const toast = useToast()
+              toast.error(errWithCode.message || '积分余额已耗尽，数字员工无法工作')
+            } catch {
+              // toast 不可用时降级到进度消息
+            }
+          }
           if (effectiveSessionId === sessionId.value) {
             error.value = err.message
           }

@@ -112,6 +112,21 @@ export function useSession() {
 
     if (!checkIsLoggedIn()) return null
 
+    // 余额检查：仅在租户前台模式下生效，余额 ≤ 0 阻断创建会话
+    if (window.location.pathname.startsWith('/t/')) {
+      try {
+        const { useCreditCheck } = await import('./useCreditCheck')
+        const { checkCreditBeforeAction } = useCreditCheck()
+        const creditCheck = await checkCreditBeforeAction('newSession')
+        if (!creditCheck.allowed) {
+          return null
+        }
+      } catch (e) {
+        // 余额检查异常不阻断创建会话主流程
+        console.warn('[useSession] 创建会话前余额检查失败:', e)
+      }
+    }
+
     try {
       // 自动清理：创建新会话前，删除已有的空会话（标题为默认"新会话"且没有消息）
       // 这些会话是用户点击"新会话"后又立即点击"新会话"产生的，没有实际内容

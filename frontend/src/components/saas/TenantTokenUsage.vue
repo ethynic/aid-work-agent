@@ -90,7 +90,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
-import { getTenantBalance, getTenantUsage, type BalanceInfo, type UsageItem } from '@/api/billing'
+import { getTenantBalance, getTenantUsage, type BalanceInfo, type UsageItem, type UsageSummary } from '@/api/billing'
 
 const route = useRoute()
 const router = useRouter()
@@ -131,12 +131,8 @@ const data = ref<UsageItem[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
-
-// 查询期总消耗积分（前端汇总当前页数据，仅用于卡片展示）
-const usageSummary = computed(() => {
-  const total_credit_cost = data.value.reduce((sum, it) => sum + (it.credit_cost || 0), 0)
-  return { total_credit_cost }
-})
+// 查询期全量汇总（后端返回，跨页稳定）
+const usageSummary = ref<UsageSummary | null>(null)
 
 const columns = [
   { key: 'index', label: '序号', width: '60px' },
@@ -182,10 +178,12 @@ async function loadData(page: number = 1) {
     if (usageRes.success) {
       data.value = usageRes.items || []
       total.value = usageRes.total || 0
+      usageSummary.value = usageRes.summary || null
     } else {
       toast.error(usageRes.message || '加载用量明细失败')
       data.value = []
       total.value = 0
+      usageSummary.value = null
     }
   } catch (error: any) {
     console.error('加载积分用量明细失败:', error)
@@ -193,6 +191,7 @@ async function loadData(page: number = 1) {
     balance.value = null
     data.value = []
     total.value = 0
+    usageSummary.value = null
   } finally {
     loading.value = false
   }
