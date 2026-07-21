@@ -229,6 +229,35 @@ def test_meta_merged_label_value_after_merge(tmp_path):
     assert ws2["A4"].value == "A" and ws2["B5"].value == 2
 
 
+def test_no_fill_horizontal_merge_preserved(tmp_path):
+    """无内容填充的横向合并不被解除（用户实测：没填内容的合并单元格被解除合并了）"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.merge_cells("A1:E1"); ws["A1"] = "标题"           # 标题合并（不填）
+    ws.merge_cells("A2:E2"); ws["A2"] = "副标题：说明文字"  # meta 区合并（不填，无 bind）
+    for i, h in enumerate(["类别", "金额"], 1):
+        ws.cell(row=3, column=i, value=h)
+    ws.cell(row=4, column=1, value="示例"); ws.cell(row=4, column=2, value=100)
+    ws.cell(row=5, column=1, value="示例"); ws.cell(row=5, column=2, value=100)
+    p = tmp_path / "nofill_merge.xlsx"
+    wb.save(str(p))
+
+    structure = {
+        "columns": [{"col": 1, "bind": "category"}, {"col": 2, "bind": "amount"}],
+        "detail_first_row": 4, "detail_last_row": 5, "detail_template_row": 4,
+        # 无 meta_fields / title / totals —— A1:E1 和 A2:E2 都不填
+    }
+    data = FillData(rows=[{"category": "A", "amount": 1}, {"category": "B", "amount": 2}])
+    res = fill_with_sample(str(p), data, output_dir=str(tmp_path), llm_callable=_mock_llm(structure))
+    assert res["success"], res
+
+    wb2 = openpyxl.load_workbook(res["file_path"])
+    ws2 = wb2.active
+    merges = {(mr.min_row, mr.max_row, mr.min_col, mr.max_col) for mr in ws2.merged_cells.ranges}
+    assert (1, 1, 1, 5) in merges, f"标题合并被解除: {merges}"
+    assert (2, 2, 1, 5) in merges, f"副标题合并被解除: {merges}"
+
+
 def test_fill_m_greater_than_k_inserts_rows_with_style(sample_path, tmp_path):
     """M>K：插入行，续填，行高+样式复制，合计下移，合并保留"""
     rows = [
@@ -727,3 +756,149 @@ def test_meta_totals_cleared_when_not_provided(sample_path, tmp_path):
     assert ws["B2"].value in (None, ""), f"meta 残留: B2={ws['B2'].value!r}"
     # E7 (grand_total total) 清空，不残留 440
     assert ws["E7"].value in (None, ""), f"totals 残留: E7={ws['E7'].value!r}"
+
+
+# ============================================================
+# 竖向合并：明细区内"同组值列"按相邻相同值合并居中
+# ============================================================
+
+
+def test_vertical_merge_same_adjacent_values(tmp_path):
+    """样例明细区某列有竖向合并（表示该列同组值相同）；填充后相邻相同值应重新合并居中。
+
+    修复前：明细区内竖向合并被 _compute_final_merges 当作"无法平移"直接丢弃，
+    填充后每行都写了相同值却没有合并居中（用户实测场景）。
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for i, h in enumerate(["组别", "项目", "金额"], 1):
+        ws.cell(row=1, column=i, value=h)
+    # 样例明细 2-4：A2:A3 合并（"甲组"跨2行 = 同组指示），A4 单独（"乙组"）
+    ws.cell(row=2, column=1, value="甲组")
+    ws.cell(row=2, column=2, value="示例1"); ws.cell(row=2, column=3, value=100)
+    ws.cell(row=3, column=2, value="示例2"); ws.cell(row=3, column=3, value=100)
+    ws.cell(row=4, column=1, value="乙组")
+    ws.cell(row=4, column=2, value="示例3"); ws.cell(row=4, column=3, value=200)
+    ws.merge_cells("A2:A3")  # 竖向合并——指示该列按相邻相同值合并
+    p = tmp_path / "vmerge.xlsx"
+    wb.save(str(p))
+
+    structure = {
+        "columns": [
+            {"col": 1, "bind": "group"},
+            {"col": 2, "bind": "name"},
+            {"col": 3, "bind": "amount"},
+        ],
+        "detail_first_row": 2, "detail_last_row": 4, "detail_template_row": 2,
+    }
+    # 填充 4 行：甲组x2 + 乙组x2（M=4 > K=3，插入1行）
+    rows = [
+        {"group": "甲组", "name": "项1", "amount": 10},
+        {"group": "甲组", "name": "项2", "amount": 20},
+        {"group": "乙组", "name": "项3", "amount": 30},
+        {"group": "乙组", "name": "项4", "amount": 40},
+    ]
+    data = FillData(rows=rows, meta={}, totals={})
+    res = fill_with_sample(str(p), data, output_dir=str(tmp_path), llm_callable=_mock_llm(structure))
+    assert res["success"], res
+
+    wb2 = openpyxl.load_workbook(res["file_path"])
+    ws2 = wb2.active
+    # 明细现在 2-5（插入1行）；A2:A3 合并(甲组)、A4:A5 合并(乙组)
+    # 合并后非锚点格(A3/A5) value=None，值只在锚点(A2/A4)
+    assert ws2["A2"].value == "甲组"
+    assert ws2["A4"].value == "乙组"
+    merges = {(mr.min_row, mr.max_row, mr.min_col, mr.max_col) for mr in ws2.merged_cells.ranges}
+    # 甲组相邻相同 → A2:A3 合并；乙组相邻相同 → A4:A5 合并
+    assert (2, 3, 1, 1) in merges, f"甲组未竖向合并: {merges}"
+    assert (4, 5, 1, 1) in merges, f"乙组未竖向合并: {merges}"
+    # 甲/乙值不同 → A3:A4 不应合并
+    assert (3, 4, 1, 1) not in merges, f"不同值被误合并: {merges}"
+    # 锚点居中
+    assert ws2["A2"].alignment.vertical == "center"
+    assert ws2["A2"].alignment.horizontal == "center"
+    assert ws2["A4"].alignment.vertical == "center"
+
+
+def test_vertical_merge_not_triggered_without_sample_merge(sample_path, tmp_path):
+    """样例明细区该列没有竖向合并时，即使填充后相邻值相同也不合并（避免误合并不该合并的列）。"""
+    # sample_path 的明细区 A 列（类别）无竖向合并
+    rows = [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "amount": 400},
+        {"category": "住宿", "name": "酒店Y", "unit_price": 150, "quantity": 1, "amount": 150},
+        {"category": "住宿", "name": "酒店Z", "unit_price": 100, "quantity": 1, "amount": 100},
+    ]
+    res = fill_with_sample(
+        str(sample_path), _data(rows),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"]
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    # A4:A6 都是"住宿"（相邻相同），但样例 A 列无竖向合并指示 → 不应被合并
+    merges = {(mr.min_row, mr.max_row, mr.min_col, mr.max_col) for mr in ws.merged_cells.ranges}
+    assert not any(m[2] == 1 and m[3] == 1 and m[0] >= 4 and m[1] <= 6 for m in merges), \
+        f"无竖向合并指示的列被误合并: {merges}"
+
+
+def test_vertical_merge_within_each_group_not_cross(tmp_path):
+    """多分组：每组明细内相邻相同值竖向合并；小计行（明细区外）不被并入合并。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for i, h in enumerate(["组别", "项目", "金额"], 1):
+        ws.cell(row=1, column=i, value=h)
+    # 分组1 明细 2-3（A2:A3 合并"甲"），小计行4
+    ws.cell(row=2, column=1, value="甲")
+    ws.cell(row=2, column=2, value="s1"); ws.cell(row=2, column=3, value=10)
+    ws.cell(row=3, column=2, value="s2"); ws.cell(row=3, column=3, value=20)
+    ws.merge_cells("A2:A3")
+    ws.cell(row=4, column=1, value="甲小计"); ws.cell(row=4, column=3, value=30)
+    # 分组2 明细 5-6（A5:A6 合并"乙"），小计行7
+    ws.cell(row=5, column=1, value="乙")
+    ws.cell(row=5, column=2, value="s3"); ws.cell(row=5, column=3, value=40)
+    ws.cell(row=6, column=2, value="s4"); ws.cell(row=6, column=3, value=50)
+    ws.merge_cells("A5:A6")
+    ws.cell(row=7, column=1, value="乙小计"); ws.cell(row=7, column=3, value=90)
+    p = tmp_path / "vmerge_grouped.xlsx"
+    wb.save(str(p))
+
+    structure = {
+        "columns": [
+            {"col": 1, "bind": "group"},
+            {"col": 2, "bind": "name"},
+            {"col": 3, "bind": "amount"},
+        ],
+        "groups": [
+            {"name": "甲小计", "detail_first_row": 2, "detail_last_row": 3,
+             "detail_template_row": 2, "subtotal_row": 4, "subtotal_col": 3,
+             "match": {"group": ["甲"]}},
+            {"name": "乙小计", "detail_first_row": 5, "detail_last_row": 6,
+             "detail_template_row": 5, "subtotal_row": 7, "subtotal_col": 3,
+             "match": {"group": ["乙"]}},
+        ],
+    }
+    rows = [
+        {"group": "甲", "name": "n1", "amount": 1},
+        {"group": "甲", "name": "n2", "amount": 2},
+        {"group": "乙", "name": "n3", "amount": 3},
+        {"group": "乙", "name": "n4", "amount": 4},
+    ]
+    data = FillData(rows=rows, meta={}, totals={}, group_subtotals={"甲小计": 3, "乙小计": 7})
+    res = fill_with_sample(str(p), data, output_dir=str(tmp_path), llm_callable=_mock_llm(structure))
+    assert res["success"], res
+
+    wb2 = openpyxl.load_workbook(res["file_path"])
+    ws2 = wb2.active
+    # M==K 各2行无偏移：分组1明细2-3(A2:A3合并)，小计4；分组2明细5-6(A5:A6合并)，小计7
+    # 合并后非锚点格(A3/A6) value=None，值只在锚点(A2/A5)
+    assert ws2["A2"].value == "甲"
+    assert ws2["A5"].value == "乙"
+    merges = {(mr.min_row, mr.max_row, mr.min_col, mr.max_col) for mr in ws2.merged_cells.ranges}
+    # 每组内合并
+    assert (2, 3, 1, 1) in merges, f"甲组内未合并: {merges}"
+    assert (5, 6, 1, 1) in merges, f"乙组内未合并: {merges}"
+    # 小计行（4、7）的 A 列不被并入任何竖向合并（合并不跨明细区/小计行）
+    assert not any(m[2] == 1 and m[3] == 1 and m[0] <= 4 <= m[1] for m in merges), \
+        f"小计行被并入合并: {merges}"
+    assert not any(m[2] == 1 and m[3] == 1 and m[0] <= 7 <= m[1] for m in merges), \
+        f"小计行被并入合并: {merges}"

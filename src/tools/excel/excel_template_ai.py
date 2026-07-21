@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import openpyxl
+from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from loguru import logger
 
@@ -488,6 +489,64 @@ def _apply_merges(ws, final_merges):
             logger.debug(f"[excel_template_ai] 合并重锚定跳过 {a}:{b}: {e}")
 
 
+def _mergeable_value(v) -> Any:
+    """归一化单元格值用于"相邻相同"比较：None/空串视为 None（空值不参与合并）。"""
+    if v is None or v == "":
+        return None
+    return v
+
+
+def _collect_vmerge_cols(active_merges, groups) -> set:
+    """识别样例中"明细区内竖向合并"的列：这类合并表示该列同组值相同、需合并居中显示
+    （如分组类别列 A4:A5 合并成"住宿"）。条件：单列(min_col==max_col) + 跨多行
+    (min_row<max_row) + 完全落在某分组明细区内。这些合并在 _compute_final_merges
+    里会被丢弃（明细区行数变化无法平移），改由 _apply_vertical_merges 填充后按值合并。"""
+    cols = set()
+    for min_col, min_row, max_col, max_row in active_merges:
+        if min_col != max_col or min_row >= max_row:
+            continue
+        if _is_intra_detail(min_row, max_row, groups):
+            cols.add(min_col)
+    return cols
+
+
+def _apply_vertical_merges(ws, vmerge_cols: set, plan):
+    """对需竖向合并的列，在每个分组明细最终范围内，把上下相邻且值相同(非空)的单元格
+    合并并居中。只在组内合并、不跨组；空值不合并；单行不合并。
+
+    样例的竖向合并只起"指示作用"——告诉渲染器"这列要按相邻相同值合并"；合并的实际
+    行范围由填充后的真实数据决定（M 行可能比样例 K 行多/少），不照搬样例合并范围。
+    """
+    if not vmerge_cols:
+        return
+    for g, rows, _delta in plan:
+        if not rows:
+            continue
+        first_final = _final_row(g.detail_first_row, plan)
+        last_final = first_final + len(rows) - 1
+        for col in sorted(vmerge_cols):
+            seg_start = first_final
+            for r in range(first_final, last_final + 1):
+                cur = _mergeable_value(ws.cell(row=r, column=col).value)
+                nxt = _mergeable_value(ws.cell(row=r + 1, column=col).value) if r < last_final else None
+                if cur is not None and cur == nxt:
+                    continue  # 仍在同一段相同值
+                # 段 [seg_start, r] 结束（cur 为该段值）
+                if r > seg_start:  # 至少 2 行才合并
+                    a = f"{get_column_letter(col)}{seg_start}"
+                    b = f"{get_column_letter(col)}{r}"
+                    try:
+                        ws.merge_cells(f"{a}:{b}")
+                        anchor = ws.cell(row=seg_start, column=col)
+                        prev_wrap = anchor.alignment.wrap_text if anchor.alignment else False
+                        anchor.alignment = Alignment(
+                            horizontal="center", vertical="center", wrap_text=prev_wrap,
+                        )
+                    except Exception as e:
+                        logger.debug(f"[excel_template_ai] 竖向合并跳过 {a}:{b}: {e}")
+                seg_start = r + 1
+
+
 def _anchor_for(row: int, col: int, final_merges) -> Tuple[int, int]:
     """(row,col) 所在合并区的锚点（左上格）；不在任何合并区则返回自身。
     值必须写到锚点，否则合并区显示锚点值、非锚点格只读。"""
@@ -569,15 +628,20 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
 
     fmt_max_col = max([c.col for c in structure.columns], default=ws.max_column)
 
-    # 1. 快照并解除所有合并（避免增删时 openpyxl 合并范围错乱）
+    # 1. 快照合并 + 行维度。**只解除"明细区及以下"的合并**（这些受增删影响或需要写入）；
+    #    明细区以上（标题/meta）的横向合并若没内容要填，保持不动——避免被解除后没还原。
+    #    阈值 = 首个分组明细首行；max_row < 阈值的合并在标题/meta 区，一律不碰。
     saved_merges = _snapshot_merges(ws)
+    threshold = min((g.detail_first_row for g in groups), default=1)
+    active_merges = [m for m in saved_merges if m[3] >= threshold]  # m=(min_col,min_row,max_col,max_row)
     # 同步快照行维度：openpyxl insert/delete_rows 不平移 row_dimensions，
     # 导致插入/删除点下方已存在的行（小计/合计等）行高丢失——这里先存后恢复。
     saved_dims = [(r, dim.height, dim.hidden)
                   for r, dim in ws.row_dimensions.items()
                   if dim.height is not None or dim.hidden]
     for mr in list(ws.merged_cells.ranges):
-        ws.unmerge_cells(str(mr))
+        if mr.max_row >= threshold:
+            ws.unmerge_cells(str(mr))
 
     # 2. 分组自下而上增删（用原始坐标；下方分组已处理不影响上方分组坐标）
     for g, rows, delta in reversed(plan):
@@ -603,8 +667,13 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
         if hidden:
             dim.hidden = hidden
 
-    # 3. 计算合并区最终坐标（写值时用于定位锚点；合并本身最后再应用）
+    # 3. 合并区最终坐标：
+    #    final_merges = 全部合并（含未解除的标题/meta 合并）按 _final_row 平移——供 _set_value/
+    #      _meta_value_col 定位锚点/值列（meta 区合并没有解除，但查它才能把值写到正确锚点）。
+    #    active_final = 仅"被解除过的"明细区及以下合并——只有这些需要重新应用（标题/meta 未解除，
+    #      不能再 merge 一次，否则 openpyxl 报已合并）。
     final_merges = _compute_final_merges(saved_merges, plan, groups)
+    active_final = _compute_final_merges(active_merges, plan, groups)
 
     # 4-7. 填数据（此时所有合并已解除、单元格可写；用 _set_value 把值写到合并区锚点，
     #     这样合并重新应用后值显示在锚点，不会落到只读的非锚点格）
@@ -632,8 +701,14 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
         r = _final_row(t.row, plan)
         _set_value(ws, r, t.col, _resolve_total_value(t.bind, data.totals), final_merges)
 
-    # 8. 最后才重新合并（写值在未合并态完成，避免 MergedCell 只读）
-    _apply_merges(ws, final_merges)
+    # 8. 最后才重新合并——只重应用"被解除过的"明细区及以下合并（标题/meta 区合并从未解除，不动）
+    _apply_merges(ws, active_final)
+
+    # 9. 竖向合并：样例明细区内"同组值列"（如分组类别列 A4:A5）按相邻相同值合并居中。
+    #    这类合并在第3步被 _compute_final_merges 丢弃（明细区行数变化无法平移），
+    #    改为填充后按实际值重新合并——结果即"同组相邻相同值合并居中显示"。
+    vmerge_cols = _collect_vmerge_cols(active_merges, groups)
+    _apply_vertical_merges(ws, vmerge_cols, plan)
 
     return len(data.rows)
 
@@ -655,10 +730,21 @@ def _resolve_total_value(bind: str, totals: Dict[str, Any]) -> Any:
 # ============================================================
 
 
+def _effective_value(ws, row: int, col: int):
+    """读单元格"有效值"：合并区内的非锚点格读锚点值（openpyxl 合并后非锚点 value=None，
+    但语义上它显示的是锚点值）。_verify_render 用它避免把"合并隐藏的非锚点格"误判为残留。"""
+    for mr in ws.merged_cells.ranges:
+        if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
+            return ws.cell(row=mr.min_row, column=mr.min_col).value
+    return ws.cell(row=row, column=col).value
+
+
 def _verify_render(ws, structure: SheetStructure, data: FillData):
     """断言输出明细区严格等于 data（→ 无样例残留）。
 
     逐分组、按 _final_row 定位，跨度内每个明细单元格必须等于 data 值或为空。
+    合并区单元格用 _effective_value 读有效值（锚点值），避免竖向合并后非锚点格
+    value=None 被误判为不一致。
     """
     groups, assigned, plan, _unmatched, min_col, max_col, bound_by_col = _compute_plan(structure, data)
     if min_col == 0 or not groups:
@@ -667,7 +753,7 @@ def _verify_render(ws, structure: SheetStructure, data: FillData):
         first_final = _final_row(g.detail_first_row, plan)
         for i, row_data in enumerate(rows):
             for col in range(min_col, max_col + 1):
-                cell_val = ws.cell(row=first_final + i, column=col).value
+                cell_val = _effective_value(ws, first_final + i, col)
                 bind = bound_by_col.get(col)
                 expected = row_data.get(bind) if bind else None
                 if expected is None:
