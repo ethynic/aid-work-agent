@@ -17,7 +17,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Alignment
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -902,3 +902,223 @@ def test_vertical_merge_within_each_group_not_cross(tmp_path):
         f"小计行被并入合并: {merges}"
     assert not any(m[2] == 1 and m[3] == 1 and m[0] <= 7 <= m[1] for m in merges), \
         f"小计行被并入合并: {merges}"
+
+
+# ============================================================
+# 真实样例回归：大团分项报价（用户实测，钉死版式合并不变式）
+# ============================================================
+
+# 真实样例文件（含竖向类别合并 A4:A7/A10:A17/A18:A21 + 每行备注横向合并 G:J + 标题/meta/小计合并）
+_REAL_TEMPLATE = PROJECT_ROOT / "tests" / "fixtures" / "excel" / "大团分项报价_调整后格式.xlsx"
+
+
+def _real_quote_rows():
+    """贵州天眼 4 天 3 晚行程成本明细（用户实测数据）：1 用车 + 12 门票/项目 + 1 住宿 = 14 行"""
+    rows = [
+        {"category": "用车", "name": "7座商务车", "unit_price": 1039.38, "quantity": 1, "unit": "辆", "amount": 519.69, "remark": "7座商务车、按公里计费"},
+        {"category": "门票/项目", "name": "中国天眼科普基地(成人票)", "unit_price": 140.00, "quantity": 2, "unit": "人", "amount": 140.00, "remark": "挂牌价"},
+        {"category": "门票/项目", "name": "南仁东先进事迹馆", "unit_price": 120.00, "quantity": 1, "unit": "团", "amount": 60.00, "remark": ""},
+        {"category": "门票/项目", "name": "天文体验馆参观", "unit_price": 120.00, "quantity": 1, "unit": "团", "amount": 60.00, "remark": ""},
+        {"category": "门票/项目", "name": "FAST观测体验", "unit_price": 30.00, "quantity": 2, "unit": "人", "amount": 30.00, "remark": ""},
+        {"category": "门票/项目", "name": "天眼瞭望台直通车", "unit_price": 40.00, "quantity": 2, "unit": "人", "amount": 40.00, "remark": ""},
+        {"category": "门票/项目", "name": "天象影院", "unit_price": 40.00, "quantity": 2, "unit": "人", "amount": 40.00, "remark": ""},
+        {"category": "门票/项目", "name": "夜游望远镜观星", "unit_price": 50.00, "quantity": 2, "unit": "人", "amount": 50.00, "remark": ""},
+        {"category": "门票/项目", "name": "桥梁科普馆", "unit_price": 300.00, "quantity": 1, "unit": "团", "amount": 150.00, "remark": ""},
+        {"category": "门票/项目", "name": "基础探洞体验", "unit_price": 588.00, "quantity": 2, "unit": "人", "amount": 588.00, "remark": ""},
+        {"category": "门票/项目", "name": "以上产品打包价", "unit_price": 168.00, "quantity": 2, "unit": "人", "amount": 168.00, "remark": ""},
+        {"category": "门票/项目", "name": "制陶技艺拉坯", "unit_price": 55.00, "quantity": 2, "unit": "人", "amount": 55.00, "remark": ""},
+        {"category": "门票/项目", "name": "制陶技艺捏塑", "unit_price": 20.00, "quantity": 2, "unit": "人", "amount": 20.00, "remark": ""},
+        {"category": "住宿", "name": "平塘丰业大酒店（商务房型）", "unit_price": 338.00, "quantity": 1, "unit": "间", "amount": 507.00, "remark": "平塘3晚"},
+    ]
+    return rows
+
+
+def test_real_quote_template_preserves_full_layout(tmp_path):
+    """真实样例「大团分项报价」+ 14 行实测数据：输出版式必须与样例一致。
+
+    用户实测回归（ce3d6b8 后格式全崩）：备注列 G:J 横向合并全丢（每行备注只占 G 列、
+    长文本被截断）、成本类别 A 列竖向合并错乱。根因是明细区内的横向合并被当作"无法平移"
+    一并丢弃。本测试钉死：每个明细行的横向合并保留 + 竖向类别合并按数据重建 + 标题/meta/
+    小计合并保留并随删行上移。
+    """
+    if not _REAL_TEMPLATE.exists():
+        pytest.skip(f"真实样例缺失: {_REAL_TEMPLATE}")
+
+    # 单明细区 rows 4-21（样例成本明细），合计行 25；14 行 < 18 行 → 删 4 行，合计上移到 21
+    structure = {
+        "title": {"row": 1, "col": 1, "merge": "A1:J1"},
+        "meta_fields": [
+            {"row": 2, "col": 1, "bind": "project"},
+            {"row": 2, "col": 4, "bind": "date"},
+            {"row": 2, "col": 7, "bind": "people"},
+        ],
+        "columns": [
+            {"col": 1, "bind": "category"},
+            {"col": 2, "bind": "name"},
+            {"col": 3, "bind": "unit_price"},
+            {"col": 4, "bind": "quantity"},
+            {"col": 5, "bind": "unit"},
+            {"col": 6, "bind": "amount"},
+            {"col": 7, "bind": "remark"},
+        ],
+        "detail_first_row": 4, "detail_last_row": 21, "detail_template_row": 4,
+        "totals": [{"row": 25, "col": 6, "bind": "grand_total"}],
+    }
+    data = FillData(
+        rows=_real_quote_rows(),
+        meta={"project": "贵州天眼4天3晚行程", "date": "2026-07-18", "people": "2"},
+        totals={"grand_total": 2427.69},
+    )
+    res = fill_with_sample(
+        str(_REAL_TEMPLATE), data,
+        output_dir=str(tmp_path), llm_callable=_mock_llm(structure),
+    )
+    assert res["success"], res
+
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    merges = {(mr.min_row, mr.min_col, mr.max_row, mr.max_col) for mr in ws.merged_cells.ranges}
+
+    # 1. 标题 / meta / 表头合并保留（均在明细区以上，不应被动）
+    assert (1, 1, 1, 10) in merges, f"标题 A1:J1 丢失: {merges}"
+    assert (2, 2, 2, 3) in merges, f"meta B2:C2 丢失: {merges}"
+    assert (2, 5, 2, 6) in merges, f"meta E2:F2 丢失: {merges}"
+    assert (2, 8, 2, 10) in merges, f"meta H2:J2 丢失: {merges}"
+    assert (3, 7, 3, 10) in merges, f"表头 G3:J3 丢失: {merges}"
+
+    # 2. 【核心回归点】备注列 G:J 横向合并：每个最终明细行（4-17）都保留
+    #    修复前这些全被丢弃，导致备注只占 G 列、版式崩掉
+    missing_gj = [r for r in range(4, 18) if (r, 7, r, 10) not in merges]
+    assert not missing_gj, f"备注横向合并 G:J 丢失的行: {missing_gj}"
+
+    # 3. 成本类别 A 列竖向合并：12 行"门票/项目"按相邻相同值合并居中（A5:A16）
+    assert (5, 1, 16, 1) in merges, f"类别竖向合并 A5:A16 丢失: {merges}"
+    # 用车(row4)、住宿(row17)各只 1 行，不被并入合并
+    assert not any(m[1] == 1 and m[3] == 1 and m[0] <= 4 <= m[2] and (m[0], m[2]) != (4, 4)
+                   for m in merges), f"用车行被误并入竖向合并: {merges}"
+    assert not any(m[1] == 1 and m[3] == 1 and m[0] <= 17 <= m[2] and (m[0], m[2]) != (17, 17)
+                   for m in merges), f"住宿行被误并入竖向合并: {merges}"
+
+    # 4. 小计/合计行 A:E 合并保留并随删行上移（原 22-25 → 18-21）
+    for r in (18, 19, 20, 21):
+        assert (r, 1, r, 5) in merges, f"小计/合计 A{r}:E{r} 丢失: {merges}"
+    assert (18, 9, 18, 10) in merges, f"I18:J18 丢失: {merges}"
+    assert (20, 9, 20, 10) in merges, f"I20:J20 丢失: {merges}"
+
+    # 5. 值正确 + 无样例残留
+    assert ws["A4"].value == "用车"
+    assert ws["B4"].value == "7座商务车"
+    assert ws["A5"].value == "门票/项目"   # 竖向合并锚点
+    assert ws["A17"].value == "住宿"
+    assert ws["F21"].value == 2427.69      # 合计上移到 21
+    # meta：标题格保留，值落右侧
+    assert ws["A2"].value == "项目名称"
+    assert ws["B2"].value == "贵州天眼4天3晚行程"
+    assert ws["E2"].value == "2026-07-18"
+    assert ws["H2"].value == "2"
+
+    # 6. 成本类别 A 列整列样式归一：用车(A4)/门票·项目(A5)/住宿(A17) 都应继承类别锚点样式
+    #    （bold），修复前只有第一个值（落在样例锚点行上）样式对，其余落在续行格上不粗体
+    assert ws["A4"].font.bold is True, "A4 类别样式丢失"
+    assert ws["A5"].font.bold is True, f"A5(门票/项目) 应归一到类别锚点粗体: bold={ws['A5'].font.bold}"
+    assert ws["A17"].font.bold is True, f"A17(住宿) 应归一到类别锚点粗体: bold={ws['A17'].font.bold}"
+
+
+# ============================================================
+# 数据 ↔ 模板 覆盖：不可映射不填 / 未提供清空 / 提示用户
+# ============================================================
+
+
+def test_vmerge_column_style_normalized(tmp_path):
+    """竖向合并列（类别列）整列明细格归一到锚点样式。
+
+    样例里竖向合并的锚点格（每组首行）是粗体/居中，续行格是默认样式（合并后不可见）。
+    M<K 删行后，数据值可能落到样例续行格上 → 继承默认样式，同列类别值有的粗体有的不粗体。
+    归一后整列统一成锚点样式。
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.cell(row=1, column=1, value="类别")
+    ws.cell(row=1, column=2, value="金额")
+    # 样例明细 2-5：A2:A3="甲"（A2 锚点 bold/居中，A3 续行默认），A4:A5="乙"（同理）
+    a2 = ws.cell(row=2, column=1, value="甲")
+    a2.font = Font(bold=True, size=14)
+    a2.alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(row=2, column=2, value=10)
+    ws.cell(row=3, column=2, value=20)  # A3 续行：默认样式
+    a4 = ws.cell(row=4, column=1, value="乙")
+    a4.font = Font(bold=True, size=14)
+    a4.alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(row=4, column=2, value=30)
+    ws.cell(row=5, column=2, value=40)  # A5 续行：默认样式
+    ws.merge_cells("A2:A3")
+    ws.merge_cells("A4:A5")
+    p = tmp_path / "vmerge_style.xlsx"
+    wb.save(str(p))
+
+    structure = {
+        "columns": [{"col": 1, "bind": "category"}, {"col": 2, "bind": "amount"}],
+        "detail_first_row": 2, "detail_last_row": 5, "detail_template_row": 2,
+    }
+    # 填 2 行（M=2 < K=4，删 2 行）：甲、乙 → A2=甲、A3=乙
+    rows = [{"category": "甲", "amount": 1}, {"category": "乙", "amount": 2}]
+    res = fill_with_sample(str(p), FillData(rows=rows), output_dir=str(tmp_path), llm_callable=_mock_llm(structure))
+    assert res["success"], res
+
+    wb2 = openpyxl.load_workbook(res["file_path"])
+    ws2 = wb2.active
+    # A3(乙) 落在样例续行格 A3 上；修复前继承默认样式（非粗体），归一后应为粗体
+    assert ws2["A2"].font.bold is True
+    assert ws2["A3"].font.bold is True, f"A3(乙) 应归一到类别锚点粗体样式: bold={ws2['A3'].font.bold}"
+
+
+def test_unused_data_keys_ignored_and_reported(sample_path, tmp_path):
+    """用户给的数据键若模板没对应列：不硬塞到别的列，并在 unused_data_keys 里报告。"""
+    rows = [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "amount": 400,
+         "次数": 1, "随队老师": "张老师"},  # 次数/随队老师 模板无对应列
+        {"category": "门票", "name": "景点Y", "unit_price": 80, "quantity": 3, "amount": 240},
+        {"category": "餐饮", "name": "午餐Z", "unit_price": 40, "quantity": 3, "amount": 120},
+    ]
+    res = fill_with_sample(
+        str(sample_path), _data(rows),
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"], res
+
+    # 不可映射的键被报告
+    assert "次数" in res["unused_data_keys"], res["unused_data_keys"]
+    assert "随队老师" in res["unused_data_keys"], res["unused_data_keys"]
+    # 没有硬塞：B4（项目列 = name）填的是"酒店X"，不是"次数"或"随队老师"的值
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    assert ws["B4"].value == "酒店X"
+
+
+def test_missing_fields_cleared_and_reported(sample_path, tmp_path):
+    """模板字段绑定了但用户没给值：清空（不残留样例示例值），并在 missing_fields 里报告。"""
+    rows = [
+        {"category": "住宿", "name": "酒店X", "unit_price": 200, "quantity": 2, "amount": 400},
+        {"category": "门票", "name": "景点Y", "unit_price": 80, "quantity": 3, "amount": 240},
+        {"category": "餐饮", "name": "午餐Z", "unit_price": 40, "quantity": 3, "amount": 120},
+    ]
+    # 只给 customer_name，缺 date；不给 totals（缺 grand_total）
+    data = FillData(rows=rows, meta={"customer_name": "张三"}, totals={})
+    res = fill_with_sample(
+        str(sample_path), data,
+        output_dir=str(tmp_path), llm_callable=_mock_llm(),
+    )
+    assert res["success"], res
+
+    # 缺失字段被报告
+    binds = {m["bind"] for m in res["missing_fields"]}
+    assert "date" in binds, res["missing_fields"]
+    assert "grand_total" in binds, res["missing_fields"]
+
+    wb = openpyxl.load_workbook(res["file_path"])
+    ws = wb.active
+    # 未提供的字段被清空，不残留样例的示例值（E2 原为 2026-01-01，E7 原为 440）
+    assert ws["E2"].value in (None, ""), f"未提供的 date 应清空: E2={ws['E2'].value!r}"
+    assert ws["E7"].value in (None, ""), f"未提供的 grand_total 应清空: E7={ws['E7'].value!r}"
+    # message 里应提示缺失
+    assert "未提供" in res["message"] or "清空" in res["message"], res["message"]

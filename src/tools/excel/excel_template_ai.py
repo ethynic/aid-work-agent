@@ -464,8 +464,13 @@ def _row_was_deleted(orig_row: int, plan) -> bool:
 
 
 def _compute_final_merges(saved, plan, groups) -> List[Tuple[int, int, int, int]]:
-    """行增删后计算合并区的最终坐标（按 _final_row 平移；明细区内的丢弃）。
-    返回 [(min_col, min_row, max_col, max_row), ...] 最终坐标。"""
+    """行增删后计算合并区的最终坐标（按 _final_row 平移）。
+    返回 [(min_col, min_row, max_col, max_row), ...] 最终坐标。
+
+    明细区内的合并（横向单行如备注 G4:J4、竖向跨多行如类别 A4:A7）行数随数据增删而变化、
+    无法逐个平移，这里一律丢弃，改由填充后的 _apply_detail_row_merges（横向按列模式应用到
+    每个最终明细行，含插入的新行）与 _apply_vertical_merges（竖向按相邻相同值合并）重建。
+    """
     out = []
     for min_col, min_row, max_col, max_row in saved:
         if _is_intra_detail(min_row, max_row, groups):
@@ -510,6 +515,35 @@ def _collect_vmerge_cols(active_merges, groups) -> set:
     return cols
 
 
+def _normalize_vmerge_styles(ws, vmerge_cols: set, saved_merges, groups):
+    """竖向合并列（如成本类别 A 列）样式归一：把整列每个明细格统一成"类别锚点"样式。
+
+    样例里竖向合并的锚点格（每组首行）是粗体/居中的类别样式，续行格是默认样式（合并后
+    不可见所以无所谓）。但填充时数据值可能落到续行格上，导致同列类别值样式不一致——
+    有的行继承了锚点样式（粗体）、有的继承了续行样式（普通），视觉上乱。这里在增删行前
+    把每个明细格都复制"该列首个竖向合并锚点"的样式，保证整列统一。必须在 unmerge 之后、
+    增删行之前调用：unmerge 后单元格样式可写；此时还在原始行号上，锚点行号有效。
+    """
+    if not vmerge_cols:
+        return
+    # 每列取首个竖向合并锚点行作为类别样式基准
+    anchor_by_col = {}
+    for col in vmerge_cols:
+        for min_col, min_row, max_col, max_row in saved_merges:
+            if min_col == max_col == col and min_row < max_row and _is_intra_detail(min_row, max_row, groups):
+                anchor_by_col[col] = min_row
+                break
+    for col, anchor_row in anchor_by_col.items():
+        src = ws.cell(row=anchor_row, column=col)
+        if not src.has_style:
+            continue
+        for g in groups:
+            for r in range(g.detail_first_row, g.detail_last_row + 1):
+                if r == anchor_row:
+                    continue
+                copy_cell_style(src, ws.cell(row=r, column=col))
+
+
 def _apply_vertical_merges(ws, vmerge_cols: set, plan):
     """对需竖向合并的列，在每个分组明细最终范围内，把上下相邻且值相同(非空)的单元格
     合并并居中。只在组内合并、不跨组；空值不合并；单行不合并。
@@ -545,6 +579,38 @@ def _apply_vertical_merges(ws, vmerge_cols: set, plan):
                     except Exception as e:
                         logger.debug(f"[excel_template_ai] 竖向合并跳过 {a}:{b}: {e}")
                 seg_start = r + 1
+
+
+def _collect_hmerge_patterns(saved_merges, groups) -> set:
+    """识别明细区内"横向单行合并"的列模式（如备注列 G4:J4 = (7,10)）。
+    这类合并是**每行的版式模式**：明细区每行都该这样跨列（备注文字横跨到 J）。
+    行数随数据增删变化（M>K 会插入新行），无法逐个平移，改为按列模式应用到每个最终明细行。"""
+    patterns = set()
+    for min_col, min_row, max_col, max_row in saved_merges:
+        if min_row == max_row and min_col < max_col and _is_intra_detail(min_row, max_row, groups):
+            patterns.add((min_col, max_col))
+    return patterns
+
+
+def _apply_detail_row_merges(ws, patterns: set, plan):
+    """对每个最终明细行（含插入的新行）应用横向合并列模式（备注跨列等）。
+    样例的横向合并表示"这一列范围在该行要合并"，每个明细行——无论来自样例还是新插入——
+    都套用同一模式，保证版式一致。值已在锚点（最左列），merge_cells 保留锚点值。"""
+    if not patterns:
+        return
+    for g, rows, _delta in plan:
+        if not rows:
+            continue
+        first_final = _final_row(g.detail_first_row, plan)
+        last_final = first_final + len(rows) - 1
+        for r in range(first_final, last_final + 1):
+            for c1, c2 in sorted(patterns):
+                a = f"{get_column_letter(c1)}{r}"
+                b = f"{get_column_letter(c2)}{r}"
+                try:
+                    ws.merge_cells(f"{a}:{b}")
+                except Exception as e:
+                    logger.debug(f"[excel_template_ai] 横向合并跳过 {a}:{b}: {e}")
 
 
 def _anchor_for(row: int, col: int, final_merges) -> Tuple[int, int]:
@@ -643,6 +709,11 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
         if mr.max_row >= threshold:
             ws.unmerge_cells(str(mr))
 
+    # 1.5 竖向合并列样式归一（在原始行号上、增删行前）：成本类别列整列统一成锚点样式，
+    #     否则数据值落到样例续行格（默认样式）上会让同列类别值有的粗体有的不粗体。
+    vmerge_cols = _collect_vmerge_cols(saved_merges, groups)
+    _normalize_vmerge_styles(ws, vmerge_cols, saved_merges, groups)
+
     # 2. 分组自下而上增删（用原始坐标；下方分组已处理不影响上方分组坐标）
     for g, rows, delta in reversed(plan):
         if delta > 0:
@@ -707,8 +778,13 @@ def _render(ws, structure: SheetStructure, data: FillData) -> int:
     # 9. 竖向合并：样例明细区内"同组值列"（如分组类别列 A4:A5）按相邻相同值合并居中。
     #    这类合并在第3步被 _compute_final_merges 丢弃（明细区行数变化无法平移），
     #    改为填充后按实际值重新合并——结果即"同组相邻相同值合并居中显示"。
-    vmerge_cols = _collect_vmerge_cols(active_merges, groups)
+    #    vmerge_cols 已在 1.5 步算过（样式归一用），这里直接复用。
     _apply_vertical_merges(ws, vmerge_cols, plan)
+
+    # 10. 横向合并：样例明细区内"每行跨列"模式（如备注列 G:J）应用到每个最终明细行。
+    #     同样在第3步被丢弃，这里按列模式重建——含插入的新行，保证每行版式一致。
+    hmerge_patterns = _collect_hmerge_patterns(saved_merges, groups)
+    _apply_detail_row_merges(ws, hmerge_patterns, plan)
 
     return len(data.rows)
 
@@ -739,12 +815,22 @@ def _effective_value(ws, row: int, col: int):
     return ws.cell(row=row, column=col).value
 
 
+def _is_non_anchor_merged(ws, row: int, col: int) -> bool:
+    """(row,col) 是否落在某个合并区内但不是锚点（左上格）。这些格的显示值归锚点，
+    verify 不应独立校验——否则横向合并（如备注 G:J）跨进列跨度时，非锚点格读到的
+    锚点值会被误判为"该未绑定列的残留"。锚点格自身会被单独校验。"""
+    for mr in ws.merged_cells.ranges:
+        if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
+            return not (row == mr.min_row and col == mr.min_col)
+    return False
+
+
 def _verify_render(ws, structure: SheetStructure, data: FillData):
     """断言输出明细区严格等于 data（→ 无样例残留）。
 
     逐分组、按 _final_row 定位，跨度内每个明细单元格必须等于 data 值或为空。
     合并区单元格用 _effective_value 读有效值（锚点值），避免竖向合并后非锚点格
-    value=None 被误判为不一致。
+    value=None 被误判为不一致；合并区内的非锚点格直接跳过（值归锚点，锚点格单独校验）。
     """
     groups, assigned, plan, _unmatched, min_col, max_col, bound_by_col = _compute_plan(structure, data)
     if min_col == 0 or not groups:
@@ -753,18 +839,66 @@ def _verify_render(ws, structure: SheetStructure, data: FillData):
         first_final = _final_row(g.detail_first_row, plan)
         for i, row_data in enumerate(rows):
             for col in range(min_col, max_col + 1):
-                cell_val = _effective_value(ws, first_final + i, col)
+                rcell = first_final + i
+                if _is_non_anchor_merged(ws, rcell, col):
+                    continue  # 合并区非锚点格：显示值归锚点，锚点格会在自身位置被校验
+                cell_val = _effective_value(ws, rcell, col)
                 bind = bound_by_col.get(col)
                 expected = row_data.get(bind) if bind else None
                 if expected is None:
                     if cell_val not in (None, ""):
                         raise AssertionError(
-                            f"样例残留: R{first_final + i}C{col} 应为空，实际={cell_val!r}"
+                            f"样例残留: R{rcell}C{col} 应为空，实际={cell_val!r}"
                         )
                 elif cell_val != expected:
                     raise AssertionError(
-                        f"渲染不一致: R{first_final + i}C{col} 期望={expected!r} 实际={cell_val!r}"
+                        f"渲染不一致: R{rcell}C{col} 期望={expected!r} 实际={cell_val!r}"
                     )
+
+
+# ============================================================
+# 覆盖分析（供调用方提示用户：哪些数据没用上、哪些模板字段没给值）
+# ============================================================
+
+
+def _analyze_coverage(structure: SheetStructure, data: FillData) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """分析"用户数据 ↔ 模板字段"的覆盖关系，供调用方提示用户。
+
+    返回 (unused_data_keys, missing_fields)：
+    - unused_data_keys：用户提供了但模板没有对应位置的数据键。这些键不会被填（避免硬塞到错列），
+      告诉用户"这些没填进去"，免得用户以为数据丢了。
+    - missing_fields：模板里要填但用户没给值的字段。这些会被清空（不残留样例示例值），
+      告诉用户"模板还需要这些"以便补全。
+    """
+    used_row = {c.bind for c in structure.columns if c.bind}
+    used_meta = {m.bind for m in structure.meta_fields if m.bind}
+    used_total = {t.bind for t in structure.totals if t.bind}
+
+    # 未使用的数据键（用户给了但模板没位置）
+    unused: List[str] = []
+    row_keys = {k for row in data.rows for k in row.keys()}
+    unused.extend(sorted(row_keys - used_row))
+    unused.extend(f"meta:{k}" for k in sorted(set(data.meta or {}) - used_meta))
+    total_provided = set(data.totals or {})
+    per_capita = (data.totals or {}).get("per_capita")
+    if isinstance(per_capita, dict):
+        total_provided |= set(per_capita.keys())
+    for k in sorted(total_provided - used_total - {"per_capita"}):
+        unused.append(f"totals:{k}")
+
+    # 缺失的模板字段（模板要填但没给值 → 会被清空）
+    missing: List[Dict[str, Any]] = []
+    for m in structure.meta_fields:
+        if m.bind and (not data.meta or data.meta.get(m.bind) in (None, "")):
+            missing.append({"type": "meta", "bind": m.bind, "label": m.label})
+    for t in structure.totals:
+        if t.bind and _resolve_total_value(t.bind, data.totals or {}) is None:
+            missing.append({"type": "total", "bind": t.bind, "label": t.label})
+    for c in structure.columns:
+        # 该列绑定键在所有数据行中都不存在 → 整列空白
+        if c.bind and not any(c.bind in row for row in data.rows):
+            missing.append({"type": "column", "bind": c.bind, "label": c.header})
+    return unused, missing
 
 
 # ============================================================
@@ -790,7 +924,8 @@ def fill_with_sample(
         llm_callable: 注入 LLM（测试用）
 
     Returns:
-        {success, file_path, file_name, file_size, rows_rendered, inferred_structure}
+        {success, file_path, file_name, file_size, rows_rendered, inferred_structure,
+         unused_data_keys, missing_fields, message}
     """
     src = Path(sample_file_path)
     if not src.exists():
@@ -820,10 +955,21 @@ def fill_with_sample(
     finally:
         wb.close()
 
+    unused, missing = _analyze_coverage(structure, fill_data)
+    notes = []
+    if unused:
+        notes.append(f"以下数据未找到模板对应位置，已忽略：{', '.join(unused)}")
+    if missing:
+        labels = [f"{m.get('label') or m.get('bind')}" for m in missing]
+        notes.append(f"模板中以下字段未提供数据，已清空：{', '.join(labels)}")
+
     save_result.update({
         "success": True,
         "rows_rendered": rows_rendered,
         "inferred_structure": _serialize_structure(structure),
+        "unused_data_keys": unused,
+        "missing_fields": missing,
+        "message": "；".join(notes) if notes else f"已填充 {rows_rendered} 行",
     })
     return save_result
 
