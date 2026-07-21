@@ -42,6 +42,17 @@ class HtmlRenderer(ImageRendererBase):
         else:
             content = inp.source
 
+        # tenant_id 提供时，把图片引用（file_id: / 远程 URL）解析为 base64 data URI。
+        # headless Chromium 对 set_content 页面（about:blank）禁止加载本地文件，必须内联。
+        if inp.tenant_id:
+            from src.tools._image_inliner import inline_images_as_data_uri
+            try:
+                content, _refs = await inline_images_as_data_uri(
+                    content, tenant_id=inp.tenant_id, user_id=inp.user_id,
+                )
+            except Exception as e:
+                logger.warning(f"[HtmlRenderer] 图片内联失败，回退原始 HTML: {e}")
+
         full_html = _wrap_to_full_doc(content)
         path = await self._shoot_full_page(full_html, inp, work_dir)
         logger.debug(f"HtmlRenderer 渲染完成: {path}")

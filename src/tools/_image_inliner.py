@@ -257,4 +257,130 @@ async def inline_images(
     return text, refs
 
 
-__all__ = ["inline_images"]
+# ============================================================
+# 对外入口：inline_images_as_data_uri（x-to-image HTML 场景专用）
+# ============================================================
+
+# 单文件转 base64 的体积上限（10MB），避免把超大图内联进 HTML 撑爆内存/长图
+_DATA_URI_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _file_to_data_uri(local_path: str, mime_type: Optional[str]) -> Optional[str]:
+    """读本地图片文件 → base64 data URI。
+
+    供 inline_images_as_data_uri 使用：x-to-image 的 headless Chromium 对
+    set_content 页面（origin=about:blank）禁止加载本地文件，必须把图片
+    内联成 data URI 才能渲染。
+
+    Args:
+        local_path: 本地图片绝对路径
+        mime_type: MIME 类型（取自 ImageRef.mime_type），None 兜底 image/png
+
+    Returns:
+        data URI 字符串；文件不存在/超限/读取失败时返回 None（调用方保留原 src）
+    """
+    import base64
+    try:
+        p = Path(local_path)
+        if not p.exists():
+            logger.warning(f"[image_inliner] data URI 转换：文件不存在 {local_path}")
+            return None
+        size = p.stat().st_size
+        if size > _DATA_URI_MAX_BYTES:
+            logger.warning(
+                f"[image_inliner] data URI 转换：文件超限({size} > {_DATA_URI_MAX_BYTES})，跳过 {local_path}"
+            )
+            return None
+        data = p.read_bytes()
+        b64 = base64.b64encode(data).decode()
+        return f"data:{mime_type or 'image/png'};base64,{b64}"
+    except Exception as e:
+        logger.warning(f"[image_inliner] data URI 转换失败 {local_path}: {e}")
+        return None
+
+
+async def inline_images_as_data_uri(
+    text: str,
+    tenant_id: str,
+    user_id: Optional[str] = None,
+    fetch_remote: bool = True,
+) -> Tuple[str, List[ImageRef]]:
+    """把 HTML 中的 <img src="file_id:xxx"> / <img src="https://..."> 解析为 base64 data URI。
+
+    与 inline_images() 的区别：输出 **base64 data URI**（而非本地路径）。
+    专供 x-to-image 的 set_content 渲染场景——headless Chromium 对 about:blank
+    页面禁止加载本地文件（file:/// 与绝对路径均失败），只有 data URI 能可靠渲染。
+
+    仅处理 HTML syntax（markdown 场景走 md_to_word 用 inline_images 返回本地路径，
+    docx 能嵌入本地文件，不需要 data URI）。
+
+    Args:
+        text: HTML 文本
+        tenant_id: 租户 ID（远程 URL 下载时必填；file_id 解析需要）
+        user_id: 用户 ID（远程 URL 下载时附带）
+        fetch_remote: 是否处理远程 URL（默认 True；False 时仅替换 file_id:）
+
+    Returns:
+        (处理后的文本, ImageRef 列表)
+        - 所有命中的 src 被替换为 base64 data URI
+        - 单图失败（file_id 找不到 / 下载失败 / 读文件失败 / 超限）保留原 src，记 warning
+    """
+    if not text:
+        return text, []
+
+    refs: List[ImageRef] = []
+    seen_file_ids: set = set()
+    registry = get_image_registry()
+
+    def _add_ref(ref: Optional[ImageRef]) -> None:
+        if ref is None or ref.file_id in seen_file_ids:
+            return
+        seen_file_ids.add(ref.file_id)
+        refs.append(ref)
+
+    # 1. 替换 <img src="file_id:file_xxx">
+    async def _replace_img_file_id(m: Match) -> str:
+        prefix, quote, file_id = m.group(1), m.group(2), m.group(3)
+        try:
+            ref = await registry.get_ref_by_file_id(file_id)
+            if ref is None:
+                logger.warning(
+                    f"[image_inliner] file_id={file_id} 在 registry 中找不到，保留原 src"
+                )
+                return m.group(0)
+            local_path = await registry.resolve_local_path(ref)
+            _add_ref(ref)
+            data_uri = _file_to_data_uri(local_path, ref.mime_type)
+            if data_uri is None:
+                return m.group(0)
+            return f"{prefix}{quote}{data_uri}{quote}"
+        except Exception as e:
+            logger.warning(f"[image_inliner] 解析 file_id={file_id} 失败，保留原 src: {e}")
+            return m.group(0)
+
+    text = await _are_sub(_HTML_IMG_FILE_ID_PATTERN, _replace_img_file_id, text)
+
+    # 2. 替换 <img src="https://...">
+    if fetch_remote:
+        async def _replace_img_remote(m: Match) -> str:
+            prefix, quote, url = m.group(1), m.group(2), m.group(3)
+            try:
+                ref = await registry.fetch_to_local(
+                    url, tenant_id=tenant_id, user_id=user_id, display_name=None,
+                )
+                local_path = await registry.resolve_local_path(ref)
+                _add_ref(ref)
+                data_uri = _file_to_data_uri(local_path, ref.mime_type)
+                if data_uri is None:
+                    return m.group(0)
+                return f"{prefix}{quote}{data_uri}{quote}"
+            except Exception as e:
+                logger.warning(f"[image_inliner] 下载 url={url} 失败，保留原 src: {e}")
+                return m.group(0)
+
+        text = await _are_sub(_HTML_IMG_REMOTE_PATTERN, _replace_img_remote, text)
+
+    return text, refs
+
+
+__all__ = ["inline_images", "inline_images_as_data_uri"]

@@ -34,6 +34,8 @@ class XToImageInput:
     max_file_size_mb: int = 10        # 长图最大体积（MB），超限转 JPEG/降质
     is_file_path: bool = False        # source 是否为文件路径（HTML 文件场景）
     extra: dict = field(default_factory=dict)  # 保留扩展（背景色/水印等）
+    tenant_id: Optional[str] = None   # 提供时启用 HTML 图片 base64 内联（见 HtmlRenderer）
+    user_id: Optional[str] = None     # 远程图片下载时附带
 
 
 @dataclass

@@ -52,6 +52,22 @@ class XToImageTool(BaseTool):
     )
     InputModel = XToImageInputModel
 
+    def __init__(self):
+        super().__init__()
+        # tenant_id / user_id 注入（由 Agent 主循环 hasattr 钩子调用，或 ContextVar 兜底）。
+        # 用于 HTML 图片 base64 内联（HtmlRenderer 渲染前解析 file_id:/远程URL → data URI）。
+        # 与 WordProcessTool 双轨租户注入模式一致。
+        self._tenant_id: Optional[str] = None
+        self._user_id: Optional[str] = None
+
+    def set_tenant_id(self, tenant_id: str):
+        """由 Agent 注入 tenant_id（子智能体线程中 ContextVar 不可用，靠此钩子）。"""
+        self._tenant_id = tenant_id
+
+    def set_user_id(self, user_id: str):
+        """由 Agent 注入 user_id。"""
+        self._user_id = user_id
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         # 函数级延迟导入：避免顶层导入触发 src.services.__init__ 链导致的循环导入
         from src.services.x_to_image import (
@@ -83,6 +99,22 @@ class XToImageTool(BaseTool):
                 "error": f"不支持的内容类型: {content_type}, 可选: text/markdown/html",
             }
 
+        # 双轨获取 tenant_id：注入优先（子智能体线程），ContextVar 兜底（HTTP 请求场景）
+        tenant_id = self._tenant_id
+        if not tenant_id:
+            try:
+                from src.saas.context import get_current_tenant_id
+                tenant_id = get_current_tenant_id()
+            except Exception:
+                tenant_id = None
+        user_id = self._user_id
+        if not user_id:
+            try:
+                from src.saas.context import get_current_user_id
+                user_id = get_current_user_id()
+            except Exception:
+                user_id = None
+
         # 2. 构造服务输入
         inp = XToImageInput(
             source=content,
@@ -90,6 +122,8 @@ class XToImageTool(BaseTool):
             width=width,
             output_name=output_name,
             is_file_path=is_file_path,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
         # 3. 调用服务
