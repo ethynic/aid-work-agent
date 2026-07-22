@@ -234,7 +234,7 @@
 | 时机 | 触发方式 | 说明 |
 |------|---------|------|
 | 实时日报 | 用户主动点击「查看今日日报」 | 缓存 + 增量更新，避免重复生成 |
-| 定时日报 | 每日 18:00 自动生成 | 定时任务（建议用 `arq` 异步队列，参考 [#38](../tech-stack-optimization/background-tasks-externalization.md)） |
+| 定时日报 | 每日 18:00 自动生成 | 定时任务（注册到 background runner 的 APScheduler，参考 [独立后台运行时设计](../infrastructure/background-runner-design.md)） |
 | 次日补生成 | 次日 9:00 补全昨日漏掉的日报 | 处理跨天对话 |
 | 手动重生 | 管理员/用户点击「重新生成」 | 强制刷新，扣少量积分 |
 
@@ -430,9 +430,9 @@ POST /api/reports/team/daily-push         # 手动触发推送（平台管理员
 
 用户在多会话切换时，日报入口应放在「全局」位置（如侧边栏底部），不随会话切换而消失。
 
-### 5.4 与后台任务外置（[#38](../tech-stack-optimization/background-tasks-externalization.md)）的关系
+### 5.4 与独立后台运行时（[background-runner-design.md](../infrastructure/background-runner-design.md)）的关系
 
-日报定时生成任务（每日 18:00 / 19:00）是典型的「需要跨 Gunicorn worker 一致执行」的后台任务，建议与 #38 一起用 `arq` 实现，避免多 worker 重复生成。
+日报定时生成任务（每日 18:00 / 19:00）是典型的「需要跨 Gunicorn worker 一致执行」的后台任务，应注册到 background runner 的 APScheduler（独立进程 + Redis 锁单实例），避免多 worker 重复生成。
 
 ---
 

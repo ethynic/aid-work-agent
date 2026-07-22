@@ -4,7 +4,7 @@
 > 状态：📋 待开发
 > 设计文档：[background-runner-design.md](../infrastructure/background-runner-design.md)
 > 上级条目：[ideas.md](../ideas.md) #38、#20 社媒营销 S1 消费方
-> 关联：[publish-dispatcher-design.md](../system/digital-employee/publish-dispatcher-design.md) §8；循环迁移清单见 [background-tasks-externalization.md](../tech-stack-optimization/background-tasks-externalization.md) §2.3-2.4
+> 关联：[publish-dispatcher-design.md](../system/digital-employee/publish-dispatcher-design.md) §8；循环迁移清单见本文 §3.8
 
 ---
 
@@ -22,6 +22,13 @@
 6. **任务 CRUD 与调度器同进程耦合**：API（`src/api/scheduled_task.py:142/167/189/212/263`）+ agent 工具（`src/tools/scheduler/scheduled_task_tool.py:208/281/288/295`）直接调 `manager.register/pause/resume/remove/trigger`。`trigger` 不写 DB。→ 必须 reconcile 对账替代 + 新增 `manual_trigger_at` 列。
 7. **Redis 锁无续期**（`ex=300`）；单 background 容器场景仅作防误开副本兜底，P0 不改。
 8. **部署**：`docker-compose.prod.yml` 单服务 `aid-agent-api`，无显式 command；`agent_update.sh:47` 用 `up -d --wait`（新服务必须带可靠 healthcheck）；宿主 4 核。表已就绪（`scheduled_tasks`、`social_publish_jobs` 在 init-postgres.sql）。
+9. **其他文件中的 `asyncio.create_task`**（原 #38 调研遗留，迁移决策输入）：
+   - `src/llm/key_pool.py`：并发抢 Key 槽位，每个 worker 独立管理自己的 Key 池，**不外置**。
+   - `src/tools/browser/session.py`：单 worker 内浏览器会话资源清理，**不外置**。
+   - `src/subagents/executor.py`：子智能体异步执行，单 session 内执行，**不外置**。
+   - `src/saas/api/channel_routes.py`：渠道消息后台处理，每个请求独立，**不外置**。
+   - `src/core/session_queue.py` watchdog：与 request 生命周期绑定的锁续期，**留 HTTP worker**（§8 排除项已明确）。
+   - `src/channels/wecom_personal_rpa/archive/poller.py`：已迁入 background（§3.3）。
 
 ---
 
@@ -256,6 +263,8 @@ if settings.saas.enabled:
 - `_run_dedup_cleanup`：`MessageDeduplicator(ttl_seconds=300).cleanup_expired()`，**保留 `psycopg2.OperationalError` 降级**。
 - `_run_wecom_kf_timeout`：抽取 `_wecom_kf_timeout_check_loop` 循环体为 `async def _wecom_kf_tick()`，回调内新建 event loop `run_until_complete(_wecom_kf_tick())`（同 `_run_memory_summarizer` 模式）。需 `channel_session_manager` + `ChannelFactory`（background 已 init channel 表，验证 ChannelFactory 无 HTTP 依赖）。
 - poller：见 3.3，不改其内部，background asyncio loop 启动。
+
+> **`instance_lock_cleanup` 删除范围**（原 #38 §2.6 已确认）：`main.py` 的 `_instance_lock_cleanup_loop` 函数定义及 `asyncio.create_task` 调用已删除（现仅剩 514-515 孤儿注释，本计划 §3.2 已清理）；`src/saas/services/instance_service.py:603` 的 `cleanup_all_expired_locks` 静态方法全项目仅原 `main.py:426` 一处调用，删除 loop 后该方法无引用，可一并清理（P2 阶段处理，避免遗留死代码）。删除前需再次确认 `instance_service.py` 中其它与实例锁相关的代码是否也属于废弃范围（如 `auto_release_expired_lock` 等），若整体功能废弃应一并清理。
 
 ### 3.9 S1 接入钩子（D10）
 

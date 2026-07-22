@@ -1,8 +1,7 @@
 # 独立后台运行时设计（Background Runner）
 
 > 日期：2026-07-21
-> 状态：设计中（编码前待确认部署形态）
-> 取代：[tech-stack-optimization/background-tasks-externalization.md](../tech-stack-optimization/background-tasks-externalization.md)（#38）的「留在 worker 内 APScheduler」结论
+> 状态：已落地（`src/background_runner.py` + `docker-compose.{prod,test,dev,local}.yml` 的 `aid-agent-background` 服务）
 > 关联消费方：[S1 发布调度执行框架](../system/digital-employee/publish-dispatcher-design.md)
 
 ## 1. 背景与目标
@@ -22,13 +21,13 @@
 ### 1.3 目标
 **后台定时任务运行在完全独立于 HTTP worker 的进程中**，不占用任何 worker；HTTP worker 只管 HTTP。后台运行时可独立部署、独立重启、独立扩缩。
 
-## 2. 与 #38 的关系（supersede）
+## 2. 历史背景（原 #38 调研）
 
-#38 调研了「外置后台任务」，结论是「不引入 arq，把 5 个 `asyncio.create_task` 循环迁进现有 APScheduler（仍在 worker 内）」——它解决的是「多 worker 重复执行」，**没解决**「占用 worker / 生命周期耦合 / 独立扩缩」。
+#38 调研了「外置后台任务」，结论是「不引入 arq，把 5 个 `asyncio.create_task` 循环迁进现有 APScheduler（仍在 worker 内）」--它解决的是「多 worker 重复执行」，**没解决**「占用 worker / 生命周期耦合 / 独立扩缩」。
 
 本设计在 #38 基础上**再前进一步**：把 APScheduler（含系统任务 + 用户 cron + 迁入的循环 + 新的发布调度）整体从 HTTP worker **搬到独立进程**。#38 的「迁循环进 APScheduler」清单仍然成立，只是 APScheduler 不再寄居 worker。
 
-> #38 文档需加 supersede 指向本文。
+#38 原文档已删除，有效内容（5 循环迁移清单、其他 `create_task` 评估、`instance_lock` 删除范围、风险表）已合并到 [plan-background-runner.md](../plans/plan-background-runner.md) §0 调研结论与 §3 详细方案。
 
 ## 3. 方案选型
 

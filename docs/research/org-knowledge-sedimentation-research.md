@@ -590,7 +590,7 @@ frontend/src/components/org-knowledge/
 | 知识失效检查 | 每天 03:30 | 30/60 天规则 |
 | Skill 草案生成 | 每周日 04:00 | 高频操作流程化 |
 
-> 建议与 [#38 后台任务外置](../tech-stack-optimization/background-tasks-externalization.md) 一起用 `arq` 实现。
+> 建议注册到 [独立后台运行时](../infrastructure/background-runner-design.md) 的 APScheduler（独立进程 + Redis 锁单实例），避免多 worker 重复执行。
 
 #### 4.11.4 关键 API
 
@@ -676,7 +676,7 @@ L3 组织规则直接复用 `prompt_registry` 表，已有版本管理、审核�
 | 自动生成 Skill 质量参差 | 中 | 强制管理员审核 + 试用期（7 天内高频回滚） |
 | 跨数字员工知识迁移错误 | 中 | Phase 5 才做，先在单一数字员工内验证 |
 | 抽取任务成本失控 | 低 | 小模型 + 增量抽取（只处理新对话）+ 失败重试上限 |
-| 多 worker 重复抽取 | 中 | Redis 分布式锁 + 与 #38 一起用 arq |
+| 多 worker 重复抽取 | 中 | Redis 分布式锁 + 注册到 [独立后台运行时](../infrastructure/background-runner-design.md) APScheduler 单实例执行 |
 
 ---
 
