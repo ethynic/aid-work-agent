@@ -1680,6 +1680,10 @@ from src.api import browser_runs as browser_runs_api
 app.include_router(browser_runs_api.router)
 app.include_router(browser_runs_api.agent_router)
 
+# 工作日报 API（个人日报 / 团队日报 / 推送配置）
+from src.api import work_reports
+app.include_router(work_reports.router)
+
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes

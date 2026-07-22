@@ -33,6 +33,9 @@ llm:
   deepseek:
     api_keys: ${DEEPSEEK_API_KEYS:-}
     model: ${DEEPSEEK_MODEL_CODE:-deepseek-v4-flash}
+    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
+    # 未配置时 fallback 到 model；详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
+    report_model: ${DEEPSEEK_REPORT_MODEL_CODE:-}
     base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
     max_concurrent_per_key: 2
     queue_timeout: 30

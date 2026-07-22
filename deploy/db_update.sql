@@ -1231,3 +1231,51 @@ CREATE INDEX IF NOT EXISTS idx_outbound_account_sessions_tenant_status
 -- 扫到非空则立即执行一次并清空，实现跨进程手动触发（≤30s 延迟）。
 -- ============================================================================
 ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS manual_trigger_at TIMESTAMP NULL;
+
+-- ============================================================================
+-- 2026-07-22 工作日报功能：新增 work_daily_reports / work_report_preferences 两张表
+-- 详情见 docs/research/ai-agent-experience-daily-report-research.md §4.5
+-- scope=personal|team；report_type=daily|weekly|monthly（复选存于 *_report_types 数组）
+-- 日报 LLM 调用走 deepseek-v4-flash，计费链路写 chat_records（source_type=report_*）
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS work_daily_reports (
+    id SERIAL PRIMARY KEY,
+    report_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    report_type TEXT NOT NULL DEFAULT 'daily',
+    target_user_id TEXT,
+    report_date DATE NOT NULL,
+    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    summary_text TEXT,
+    highlights JSONB,
+    suggestions JSONB,
+    model TEXT,
+    token_cost INTEGER DEFAULT 0,
+    credit_cost INTEGER DEFAULT 0,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    regenerated_count INTEGER DEFAULT 0,
+    UNIQUE(tenant_id, scope, report_type, target_user_id, report_date)
+);
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_tenant_date
+    ON work_daily_reports(tenant_id, report_date DESC);
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_user_date
+    ON work_daily_reports(target_user_id, report_date DESC) WHERE scope = 'personal';
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_tenant_scope_type_date
+    ON work_daily_reports(tenant_id, scope, report_type, report_date DESC);
+
+CREATE TABLE IF NOT EXISTS work_report_preferences (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    personal_report_enabled BOOLEAN DEFAULT TRUE,
+    personal_report_types TEXT[] NOT NULL DEFAULT ARRAY['daily'],
+    personal_push_channels TEXT[],
+    personal_push_time TIME DEFAULT '18:00',
+    team_report_enabled BOOLEAN DEFAULT FALSE,
+    team_report_types TEXT[] NOT NULL DEFAULT ARRAY['daily'],
+    team_push_channels TEXT[],
+    team_push_time TIME DEFAULT '19:00',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, user_id)
+);

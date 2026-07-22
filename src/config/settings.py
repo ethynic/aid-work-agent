@@ -19,6 +19,10 @@ class LLMProviderConfig(BaseModel):
     """LLM提供者配置"""
     api_keys: List[str] = Field(default_factory=list)  # 多 Key 池
     model: str = ""
+    # 日报/周报/月报生成专用小模型（独立于主链路 model，降低成本）
+    # 未配置（None / 空字符串）时，调用方应 fallback 到 model
+    # 详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.6
+    report_model: Optional[str] = None
     base_url: Optional[str] = None
     # Key 池并发控制
     max_concurrent_per_key: int = 2   # 每个 Key 最大并发数
@@ -40,6 +44,10 @@ class LLMProviderConfig(BaseModel):
     def get_effective_keys(self) -> List[str]:
         """获取有效的 Key 列表（已去重、去空）"""
         return self.api_keys
+
+    def get_report_model(self) -> str:
+        """获取报告专用模型，未配置时 fallback 到主模型 model"""
+        return self.report_model or self.model
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -413,6 +421,9 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         ds_cfg["model"] = os.getenv("DEEPSEEK_MODEL_CODE")
     if os.getenv("DEEPSEEK_BASE_URL"):
         ds_cfg["base_url"] = os.getenv("DEEPSEEK_BASE_URL")
+    # 日报/周报/月报专用小模型（独立配置项，不影响主链路 DEEPSEEK_MODEL_CODE）
+    if os.getenv("DEEPSEEK_REPORT_MODEL_CODE"):
+        ds_cfg["report_model"] = os.getenv("DEEPSEEK_REPORT_MODEL_CODE")
 
     # Qwen
     qwen_cfg = yaml_config.setdefault("llm", {}).setdefault("qwen", {})

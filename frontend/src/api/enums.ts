@@ -98,6 +98,49 @@ export const WecomRpaBindingStatusMap = {
   [WecomRpaBindingStatus.NEEDS_REVIEW]: { label: '待复核', color: 'red' },
 } as const;
 
+/** chat_records.source_type 枚举（与后端 ChatRecordSourceType 同步） */
+export enum ChatRecordSourceType {
+  CHAT = 'chat',
+  WECOM = 'wecom',
+  WECOM_KF = 'wecom_kf',
+  WECOM_PERSONAL_RPA = 'wecom_personal_rpa',
+  DINGTALK = 'dingtalk',
+  FEISHU = 'feishu',
+  REPORT_PERSONAL = 'report_personal',
+  REPORT_TEAM = 'report_team',
+  REPORT_PERSONAL_WEEKLY = 'report_personal_weekly',
+  REPORT_TEAM_WEEKLY = 'report_team_weekly',
+  REPORT_PERSONAL_MONTHLY = 'report_personal_monthly',
+  REPORT_TEAM_MONTHLY = 'report_team_monthly',
+}
+
+export const ChatRecordSourceTypeMap: Record<string, { label: string; color: string }> = {
+  [ChatRecordSourceType.CHAT]: { label: 'Web 对话', color: 'blue' },
+  [ChatRecordSourceType.WECOM]: { label: '企业微信', color: 'green' },
+  [ChatRecordSourceType.WECOM_KF]: { label: '企微客服', color: 'green' },
+  [ChatRecordSourceType.WECOM_PERSONAL_RPA]: { label: '企微个人号', color: 'green' },
+  [ChatRecordSourceType.DINGTALK]: { label: '钉钉', color: 'blue' },
+  [ChatRecordSourceType.FEISHU]: { label: '飞书', color: 'blue' },
+  [ChatRecordSourceType.REPORT_PERSONAL]: { label: '个人日报', color: 'orange' },
+  [ChatRecordSourceType.REPORT_TEAM]: { label: '团队日报', color: 'orange' },
+  [ChatRecordSourceType.REPORT_PERSONAL_WEEKLY]: { label: '个人周报', color: 'orange' },
+  [ChatRecordSourceType.REPORT_TEAM_WEEKLY]: { label: '团队周报', color: 'orange' },
+  [ChatRecordSourceType.REPORT_PERSONAL_MONTHLY]: { label: '个人月报', color: 'orange' },
+  [ChatRecordSourceType.REPORT_TEAM_MONTHLY]: { label: '团队月报', color: 'orange' },
+};
+
+/** 判断 source_type 是否为报告类 */
+export function isReportSourceType(source: string | null | undefined): boolean {
+  if (!source) return false;
+  return source.startsWith('report_');
+}
+
+/** 获取 source_type 显示信息 */
+export function getChatRecordSourceTypeInfo(source: string | null | undefined): { label: string; color: string } {
+  if (!source) return { label: '未知', color: 'gray' };
+  return ChatRecordSourceTypeMap[source] ?? { label: source, color: 'gray' };
+}
+
 /**
  * BaseBadge intent 与 statusMap color 的映射。
  * BaseBadge intent: primary | success | warning | danger | info | neutral

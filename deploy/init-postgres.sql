@@ -1967,3 +1967,65 @@ CREATE TABLE IF NOT EXISTS bs_outbound_account_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_outbound_account_sessions_tenant_status
     ON bs_outbound_account_sessions(tenant_id, status, updated_at DESC);
+
+-- ============== 工作日报功能（2026-07-22）==============
+-- 个人 + 团队两个视角共用，按 scope 区分；scope=personal 时 target_user_id 必填
+-- report_type 取值：daily / weekly / monthly
+-- 详情见 docs/research/ai-agent-experience-daily-report-research.md §4.5.2
+CREATE TABLE IF NOT EXISTS work_daily_reports (
+    id SERIAL PRIMARY KEY,
+    report_id TEXT UNIQUE NOT NULL,                  -- wdr_xxxxxxxx 格式
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,                             -- 'personal' / 'team'
+    report_type TEXT NOT NULL DEFAULT 'daily',       -- 'daily' / 'weekly' / 'monthly'
+    target_user_id TEXT,                             -- scope=personal 时必填，team 时为 NULL
+    report_date DATE NOT NULL,                       -- 日报日期（按本地时区）
+
+    -- 统计指标（JSON）：对话数/积分/节省时间/活跃员工数等
+    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    -- LLM 生成内容
+    summary_text TEXT,                               -- 工作内容摘要
+    highlights JSONB,                                -- 高光时刻数组
+    suggestions JSONB,                               -- 建议/提醒数组
+
+    -- 元数据
+    model TEXT,                                      -- 生成所用模型（deepseek-v4-flash 等）
+    token_cost INTEGER DEFAULT 0,                    -- 生成消耗 token
+    credit_cost INTEGER DEFAULT 0,                   -- 生成消耗积分（与 chat_records.credit_cost 一致）
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    regenerated_count INTEGER DEFAULT 0,             -- 重生次数
+
+    UNIQUE(tenant_id, scope, report_type, target_user_id, report_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_tenant_date
+    ON work_daily_reports(tenant_id, report_date DESC);
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_user_date
+    ON work_daily_reports(target_user_id, report_date DESC) WHERE scope = 'personal';
+CREATE INDEX IF NOT EXISTS idx_work_daily_reports_tenant_scope_type_date
+    ON work_daily_reports(tenant_id, scope, report_type, report_date DESC);
+
+-- 日报推送配置表（每用户一行，UPSERT）
+-- personal_report_types / team_report_types 为 TEXT[]，支持 daily/weekly/monthly 复选
+-- 详情见 docs/research/ai-agent-experience-daily-report-research.md §4.5.3
+CREATE TABLE IF NOT EXISTS work_report_preferences (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+
+    -- 个人视角：总开关 + 订阅的报告类型（复选）
+    personal_report_enabled BOOLEAN DEFAULT TRUE,
+    personal_report_types TEXT[] NOT NULL DEFAULT ARRAY['daily'],
+    personal_push_channels TEXT[],                  -- ['in_app', 'wecom', 'email']
+    personal_push_time TIME DEFAULT '18:00',
+
+    -- 团队视角（仅管理员可见）
+    team_report_enabled BOOLEAN DEFAULT FALSE,
+    team_report_types TEXT[] NOT NULL DEFAULT ARRAY['daily'],
+    team_push_channels TEXT[],
+    team_push_time TIME DEFAULT '19:00',
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, user_id)
+);

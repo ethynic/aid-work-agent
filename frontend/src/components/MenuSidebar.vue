@@ -86,6 +86,26 @@
       <!-- 租户模式菜单 -->
       <template v-if="isTenantMode">
 
+        <!-- 工作日报入口：所有租户用户可见 -->
+        <button
+          v-if="tenantId"
+          @click="router.push(`/t/${tenantId}/daily-report`)"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/daily-report`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <!-- 文档+星标，象征报告 -->
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <path d="M14 2v6h6M9 13h6M9 17h4" />
+            <path d="M19 17l1.5 1.5L23 16" />
+          </svg>
+          <span>工作日报</span>
+        </button>
+
         <!-- 管理菜单（可折叠，仅租户管理员可见） -->
         <div v-if="isTenantAdmin" class="hidden md:block">
           <!-- 管理菜单标题 -->

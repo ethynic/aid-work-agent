@@ -232,3 +232,79 @@ class ContextSummaryStatus(str, Enum):
             self.ROLLED_BACK: "已回滚",
         }
         return mapping.get(self, "未知")
+
+
+# ============== chat_records.source_type ==============
+
+class ChatRecordSourceType(str, Enum):
+    """chat_records.source_type 枚举值。
+
+    数据库存储：TEXT (chat_records.source_type)
+    取值含义：
+    - chat                  = Web 端对话
+    - wecom                 = 企业微信应用消息
+    - wecom_kf              = 企业微信客服
+    - wecom_personal_rpa    = 企微个人号 RPA
+    - dingtalk              = 钉钉
+    - feishu                = 飞书
+    - report_personal       = 个人日报生成（LLM 摘要调用）
+    - report_team           = 团队日报生成（LLM 摘要调用）
+    - report_personal_weekly= 个人周报生成
+    - report_team_weekly    = 团队周报生成
+    - report_personal_monthly = 个人月报生成
+    - report_team_monthly   = 团队月报生成
+
+    report_* 系列由 src/reports/generator.py 写入，用于在用量页区分
+    报告类 LLM 调用与普通对话调用。
+    详见 docs/research/ai-agent-experience-daily-report-research.md §4.7.5
+    """
+    CHAT = "chat"
+    WECOM = "wecom"
+    WECOM_KF = "wecom_kf"
+    WECOM_PERSONAL_RPA = "wecom_personal_rpa"
+    DINGTALK = "dingtalk"
+    FEISHU = "feishu"
+    REPORT_PERSONAL = "report_personal"
+    REPORT_TEAM = "report_team"
+    REPORT_PERSONAL_WEEKLY = "report_personal_weekly"
+    REPORT_TEAM_WEEKLY = "report_team_weekly"
+    REPORT_PERSONAL_MONTHLY = "report_personal_monthly"
+    REPORT_TEAM_MONTHLY = "report_team_monthly"
+
+    @classmethod
+    def all_values(cls) -> list[str]:
+        return [m.value for m in cls]
+
+    @classmethod
+    def report_values(cls) -> list[str]:
+        """报告类 source_type（用于用量页过滤、计费聚合）"""
+        return [
+            cls.REPORT_PERSONAL.value,
+            cls.REPORT_TEAM.value,
+            cls.REPORT_PERSONAL_WEEKLY.value,
+            cls.REPORT_TEAM_WEEKLY.value,
+            cls.REPORT_PERSONAL_MONTHLY.value,
+            cls.REPORT_TEAM_MONTHLY.value,
+        ]
+
+    @classmethod
+    def is_report(cls, value: str) -> bool:
+        return value in cls.report_values()
+
+    @property
+    def display_name(self) -> str:
+        mapping = {
+            self.CHAT: "Web 对话",
+            self.WECOM: "企业微信",
+            self.WECOM_KF: "企微客服",
+            self.WECOM_PERSONAL_RPA: "企微个人号",
+            self.DINGTALK: "钉钉",
+            self.FEISHU: "飞书",
+            self.REPORT_PERSONAL: "个人日报",
+            self.REPORT_TEAM: "团队日报",
+            self.REPORT_PERSONAL_WEEKLY: "个人周报",
+            self.REPORT_TEAM_WEEKLY: "团队周报",
+            self.REPORT_PERSONAL_MONTHLY: "个人月报",
+            self.REPORT_TEAM_MONTHLY: "团队月报",
+        }
+        return mapping.get(self, "未知")
