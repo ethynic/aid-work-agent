@@ -288,6 +288,7 @@ class SessionRecordService:
                     prompt_tokens=self.prompt_tokens,
                     completion_tokens=self.completion_tokens,
                     model=self.model,
+                    cached_input_tokens=self.cached_input_tokens,
                 )
             except Exception as billing_err:
                 # 计费异常不应影响对话记录落库

@@ -62,7 +62,7 @@ def temp_tenant_with_data():
 
     yield tenant_id
 
-    # 清理
+    # 清理：先删业务数据，软删租户（失效缓存），最后物理删除租户
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -74,7 +74,15 @@ def temp_tenant_with_data():
             conn.commit()
     except Exception:
         pass
+    # TenantDB.delete 仅是软删除（status=deactivated），需追加物理删除避免测试租户堆积
     TenantDB.delete(tenant_id)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id,))
+            conn.commit()
+    except Exception:
+        pass
 
 
 class TestBillingBalanceAPI:

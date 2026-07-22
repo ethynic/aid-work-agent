@@ -1286,13 +1286,24 @@ class ChatRecordDB:
             cursor = conn.cursor()
             # 按租户分组统计，LEFT JOIN 成本价表计算费用，排除测试数据
             # 同时用子查询标记有未配单价的租户
+            # input_cost 计费规则：
+            #   - 模型配了 cached_input_price_per_m：非缓存部分按 input_price_per_m，缓存命中部分按 cached_input_price_per_m
+            #   - 模型未配 cached_input_price_per_m：全部输入按 input_price_per_m（等价原逻辑）
+            #   - 模型未配价（tcp 为 NULL）：input_cost = 0（COALESCE 处理）
             cursor.execute("""
                 SELECT
                     cr.tenant_id,
                     COUNT(*) as conversation_count,
                     COALESCE(SUM(cr.prompt_tokens), 0) as input_tokens,
                     COALESCE(SUM(cr.completion_tokens), 0) as output_tokens,
-                    COALESCE(SUM(cr.prompt_tokens * tcp.input_price_per_m / 1000000), 0) as input_cost,
+                    COALESCE(SUM(
+                        CASE WHEN tcp.cached_input_price_per_m IS NOT NULL THEN
+                            (cr.prompt_tokens - COALESCE(cr.cached_input_tokens, 0)) * tcp.input_price_per_m / 1000000
+                            + COALESCE(cr.cached_input_tokens, 0) * tcp.cached_input_price_per_m / 1000000
+                        ELSE
+                            cr.prompt_tokens * tcp.input_price_per_m / 1000000
+                        END
+                    ), 0) as input_cost,
                     COALESCE(SUM(cr.completion_tokens * tcp.output_price_per_m / 1000000), 0) as output_cost,
                     COALESCE(SUM(cr.credit_cost), 0) as credit_cost,
                     EXISTS(
@@ -1977,7 +1988,8 @@ class TokenCostPriceDB:
         """按模型名查询单价
 
         Returns:
-            {"model_name", "input_price_per_m", "output_price_per_m"} 或 None
+            {"model_name", "input_price_per_m", "cached_input_price_per_m", "output_price_per_m"} 或 None
+            cached_input_price_per_m 为 NULL 表示该模型计费不区分缓存命中
         """
         if not model_name:
             return None
@@ -1986,7 +1998,7 @@ class TokenCostPriceDB:
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                SELECT model_name, input_price_per_m, output_price_per_m
+                SELECT model_name, input_price_per_m, cached_input_price_per_m, output_price_per_m
                 FROM token_cost_prices
                 WHERE model_name = {placeholder}
                 """,

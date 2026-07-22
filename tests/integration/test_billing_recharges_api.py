@@ -33,7 +33,7 @@ def temp_tenant():
         pytest.skip("无法创建测试租户（DB 不可用）")
     tenant_id = tenant["tenant_id"]
     yield tenant
-    # 清理：删除测试产生的充值记录 + 删除租户
+    # 清理：删除测试产生的充值记录，软删租户（失效缓存），最后物理删除租户
     from src.db.database import get_db_connection
     try:
         with get_db_connection() as conn:
@@ -42,7 +42,15 @@ def temp_tenant():
             conn.commit()
     except Exception:
         pass
+    # TenantDB.delete 仅是软删除（status=deactivated），需追加物理删除避免测试租户堆积
     TenantDB.delete(tenant_id)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tenants WHERE tenant_id = %s", (tenant_id,))
+            conn.commit()
+    except Exception:
+        pass
 
 
 class TestTenantRechargesORM:

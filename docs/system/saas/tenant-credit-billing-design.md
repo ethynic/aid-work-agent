@@ -477,12 +477,48 @@ db.execute(
 
 ---
 
-## 11. 三智能体开发流程
+## 11. 积分用量 及 积分余额 的重算脚本
 
-按 [.claude/rules/dev_workflow.md](../../.claude/rules/dev_workflow.md) 规范，本期涉及多文件 + 启动链路（`session_record.py` / `main.py` 路由注册），**必须走完整三智能体流程**：
+如果因为计算逻辑变更（例如增加了命中缓存单价计算）、或基础数据修改（例如token单价有误做了更正），导致 `chat_records.credit_cost` 和 `tenants.credit_balance` 有出入，可使用以下脚本重算：
 
-1. **开发智能体**：按 Phase 1 → 4 顺序实现，每 Phase 自测通过
-2. **测试智能体**：跑单测 + 回归（`tests/unit/` + `tests/integration/` 相关模块）+ 启动安全检查
-3. **CodeReview 智能体**：重点审查扣费原子性、SQL 注入、并发安全、配置一致性
+```
+-- 1. 重算 chat_records.credit_cost（指定租户）
+--    注意：usage_factor=100 硬编码，若 configs/config.yaml 中 billing.usage_factor 不是 100，需替换
+--    credit_cost 表是 chat_records，不是 token_cost_prices（后者是单价表，无 credit_cost 字段）
+UPDATE chat_records cr
+SET credit_cost = COALESCE(
+    (
+        SELECT
+            CASE
+                -- 单价全为 0 -> 0（与 Python 逻辑一致）
+                WHEN COALESCE(tcp.input_price_per_m, 0) <= 0
+                  AND COALESCE(tcp.output_price_per_m, 0) <= 0 THEN 0
+                -- 区分缓存命中
+                WHEN tcp.cached_input_price_per_m IS NOT NULL THEN
+                    CEIL(
+                        (GREATEST(cr.prompt_tokens - COALESCE(cr.cached_input_tokens, 0), 0) * tcp.input_price_per_m
+                          + COALESCE(cr.cached_input_tokens, 0) * tcp.cached_input_price_per_m
+                          + cr.completion_tokens * tcp.output_price_per_m) / 1000000.0 * 100
+                    )::INT
+                -- 不区分缓存命中
+                ELSE
+                    CEIL(
+                        (cr.prompt_tokens * tcp.input_price_per_m
+                          + cr.completion_tokens * tcp.output_price_per_m) / 1000000.0 * 100
+                    )::INT
+            END
+        FROM token_cost_prices tcp
+        WHERE tcp.model_name = cr.model
+    ),
+    0
+)
+WHERE cr.tenant_id = 'tenant_9eb3e45cab83';
 
-每个 Phase 完成后均可独立提交（按 [AGENTS.md](../../AGENTS.md) Git 规范：用户明确说"提交代码"才提交）。
+-- 2. 重算 tenants.credit_balance = 充值累计 - 积分用量累计
+--    credit_balance 允许透支为负（init-postgres.sql:502 注释），不加 GREATEST(0)
+UPDATE tenants t
+SET credit_balance =
+    COALESCE((SELECT SUM(credits)   FROM tenant_recharges WHERE tenant_id = t.tenant_id), 0)
+  - COALESCE((SELECT SUM(credit_cost) FROM chat_records   WHERE tenant_id = t.tenant_id), 0)
+WHERE t.tenant_id = 'tenant_9eb3e45cab83';
+```

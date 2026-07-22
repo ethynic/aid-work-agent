@@ -5,7 +5,8 @@
 - 计费算法（mock TokenCostPriceDB.get_by_model_name）
 - 单价缺失返回 0
 - usage_factor 配置生效
-- cached_input_tokens 本期不计入
+- cached_input_price_per_m 有值时按新公式计费
+- cached_input_price_per_m 为 NULL 时按原公式计费
 """
 
 import math
@@ -22,11 +23,19 @@ def fixed_settings():
     return settings
 
 
-def _make_tcp(input_price_per_m: float, output_price_per_m: float) -> dict:
-    """构造 TokenCostPriceDB.get_by_model_name 的返回值"""
+def _make_tcp(
+    input_price_per_m: float,
+    output_price_per_m: float,
+    cached_input_price_per_m=None,
+) -> dict:
+    """构造 TokenCostPriceDB.get_by_model_name 的返回值
+
+    cached_input_price_per_m 默认 None 表示该模型不区分缓存命中
+    """
     return {
         "model_name": "test-model",
         "input_price_per_m": input_price_per_m,
+        "cached_input_price_per_m": cached_input_price_per_m,
         "output_price_per_m": output_price_per_m,
     }
 
@@ -120,4 +129,99 @@ class TestCalculateCreditCost:
             # token_cost = (1 * 0.8 + 0 * 2.0) / 1e6 = 8e-7
             # credit_cost = ceil(8e-7 * 100) = ceil(8e-5) = 1
             result = calculate_credit_cost(prompt_tokens=1, completion_tokens=0, model="test-model")
+            assert result == 1
+
+    def test_cached_input_price_takes_effect(self, fixed_settings):
+        """cached_input_price_per_m 有值时走新公式：cached 部分按缓存单价，剩余按输入单价"""
+        from src.services.billing import calculate_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            # input_price=0.8, cached_input_price=0.16, output_price=2.0
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.8, 2.0, cached_input_price_per_m=0.16)
+            # prompt=1000, cached=400, completion=500
+            # non_cached_input = 1000 - 400 = 600
+            # token_cost = (600 * 0.8 + 400 * 0.16 + 500 * 2.0) / 1e6
+            #            = (480 + 64 + 1000) / 1e6 = 1544 / 1e6 = 0.001544
+            # credit_cost = ceil(0.001544 * 100) = 1
+            result = calculate_credit_cost(
+                prompt_tokens=1000,
+                completion_tokens=500,
+                model="test-model",
+                cached_input_tokens=400,
+            )
+            assert result == 1
+
+    def test_cached_input_price_none_fallback(self, fixed_settings):
+        """cached_input_price_per_m 为 None 时走原公式：cached_input_tokens 不参与计费"""
+        from src.services.billing import calculate_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.8, 2.0, cached_input_price_per_m=None)
+            # 即使传了 cached_input_tokens，因 cached_input_price_per_m 为 None 走原公式
+            # token_cost = (1000 * 0.8 + 500 * 2.0) / 1e6 = 0.0018
+            # credit_cost = ceil(0.0018 * 100) = 1
+            result = calculate_credit_cost(
+                prompt_tokens=1000,
+                completion_tokens=500,
+                model="test-model",
+                cached_input_tokens=400,
+            )
+            assert result == 1
+
+    def test_cached_price_lower_than_input(self, fixed_settings):
+        """cached 单价远低于 input 单价时，大量缓存命中应显著降低积分"""
+        from src.services.billing import calculate_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            # input_price=3.0, cached_input_price=0.025, output_price=6.0（deepseek-v4-pro）
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(3.0, 6.0, cached_input_price_per_m=0.025)
+
+            # 1M prompt，900k 命中缓存，0 completion
+            # 场景 A：cached_input_tokens=900_000
+            # non_cached = 100_000
+            # token_cost_a = (100_000 * 3.0 + 900_000 * 0.025 + 0) / 1e6
+            #              = (300_000 + 22_500) / 1e6 = 0.3225 元
+            # credit_cost_a = ceil(0.3225 * 100) = 33
+            cost_with_cache = calculate_credit_cost(
+                prompt_tokens=1_000_000,
+                completion_tokens=0,
+                model="test-model",
+                cached_input_tokens=900_000,
+            )
+
+            # 场景 B：cached_input_tokens=0（无缓存命中）
+            # token_cost_b = (1_000_000 * 3.0 + 0) / 1e6 = 3.0 元
+            # credit_cost_b = ceil(3.0 * 100) = 300
+            cost_without_cache = calculate_credit_cost(
+                prompt_tokens=1_000_000,
+                completion_tokens=0,
+                model="test-model",
+                cached_input_tokens=0,
+            )
+
+        assert cost_with_cache == 33
+        assert cost_without_cache == 300
+        # 缓存命中应显著降低积分（约 1/9）
+        assert cost_with_cache < cost_without_cache / 9
+
+    def test_cached_tokens_exceed_prompt_defensive(self, fixed_settings):
+        """防御性：cached_input_tokens > prompt_tokens 时按 0 非缓存处理，不产生负数"""
+        from src.services.billing import calculate_credit_cost
+
+        with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
+             patch("src.services.billing.create_settings", return_value=fixed_settings):
+            mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.8, 2.0, cached_input_price_per_m=0.16)
+            # prompt=500, cached=1000（异常输入），completion=0
+            # non_cached_input = max(500 - 1000, 0) = 0
+            # token_cost = (0 * 0.8 + 1000 * 0.16 + 0 * 2.0) / 1e6 = 0.00016
+            # credit_cost = ceil(0.00016 * 100) = 1
+            result = calculate_credit_cost(
+                prompt_tokens=500,
+                completion_tokens=0,
+                model="test-model",
+                cached_input_tokens=1000,
+            )
             assert result == 1

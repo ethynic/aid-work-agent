@@ -240,18 +240,23 @@ CREATE TABLE IF NOT EXISTS token_cost_prices (
     id SERIAL PRIMARY KEY,
     model_name TEXT UNIQUE NOT NULL,
     input_price_per_m NUMERIC(10,4),
+    cached_input_price_per_m NUMERIC(10,4), -- 命中缓存输入单价
     output_price_per_m NUMERIC(10,4),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 初始数据：qwen-plus 模型单价
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
-VALUES ('qwen-plus', 0.8, 2.0)
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('qwen-plus', 0.8, 2.0, 0.16)
 ON CONFLICT (model_name) DO NOTHING;
-INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m)
-VALUES ('deepseek-v4-flash', 1.0, 2.0)
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('deepseek-v4-flash', 1.0, 2.0, 0.02)
 ON CONFLICT (model_name) DO NOTHING;
+INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
+VALUES ('deepseek-v4-pro', 3.0, 6.0, 0.025)
+ON CONFLICT (model_name) DO NOTHING;
+
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (
