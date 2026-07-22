@@ -218,3 +218,51 @@ export async function listTenantRecharges(params: {
   if (!res.ok) throw new Error('获取充值记录失败')
   return res.json()
 }
+
+// ==================== 平台管理员：每日用量明细下钻 ====================
+
+export interface DailyUsageDetailItem {
+  record_id: string
+  session_id: string
+  session_title: string
+  user_display: string
+  source_type: string
+  user_message: string
+  assistant_message: string
+  prompt_tokens: number
+  cached_input_tokens: number
+  completion_tokens: number
+  credit_cost: number
+  created_at: string
+}
+
+export interface DailyUsageDetailResponse {
+  success: boolean
+  date?: string
+  items?: DailyUsageDetailItem[]
+  total?: number
+  page?: number
+  page_size?: number
+  message?: string
+  debug?: string
+}
+
+/**
+ * 获取某日 chat_records 明细（仅平台管理员可访问）
+ * 平台管理员需通过 X-Tenant-Id 代管理目标租户（getAuthHeader 会自动注入）
+ */
+export async function getDailyUsageDetail(params: {
+  date: string
+  page?: number
+  page_size?: number
+}): Promise<DailyUsageDetailResponse> {
+  const sp = new URLSearchParams()
+  sp.append('date', params.date)
+  if (params.page) sp.append('page', String(params.page))
+  if (params.page_size) sp.append('page_size', String(params.page_size))
+  const res = await fetch(`${API_BASE}/usage/daily-detail?${sp.toString()}`, {
+    headers: { ...getAuthHeader() }
+  })
+  if (!res.ok) throw new Error('获取对话用量明细失败')
+  return res.json()
+}

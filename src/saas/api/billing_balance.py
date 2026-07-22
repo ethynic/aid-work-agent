@@ -212,6 +212,143 @@ async def list_my_recharges(
         return {"success": False, "message": "查询失败", "debug": sanitize_error_info(str(e))}
 
 
+@router.get("/usage/daily-detail")
+async def get_daily_usage_detail(
+    request: Request,
+    date: str = Query(..., description="查询日期 YYYY-MM-DD"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(20, ge=1, le=200, description="每页记录数"),
+):
+    """查询某日 chat_records 明细（仅平台管理员可访问）
+
+    返回字段：record_id、session_id、session_title（JOIN chat_sessions）、
+    user_display（JOIN users，含 nickname/username/phone）、source_type、
+    prompt_tokens、cached_input_tokens、completion_tokens、credit_cost、created_at
+
+    权限：仅 platform_admin。租户管理员/普通用户调用返回 success: False。
+    平台管理员需带 X-Tenant-Id 代管理目标租户。
+    """
+    if not settings.saas.enabled:
+        return {"success": False, "message": "未启用 SaaS 模式无法访问"}
+
+    admin = require_admin(request)
+
+    # 二次权限校验：仅平台管理员
+    if admin.get("role") != "platform_admin":
+        return {"success": False, "message": "无权限查看对话用量明细"}
+
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        return {"success": False, "message": "未关联租户"}
+
+    # 日期格式校验（参数化 SQL 已防注入，这里防逻辑错误）
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return {"success": False, "message": "日期格式错误，应为 YYYY-MM-DD"}
+
+    try:
+        offset = (page - 1) * page_size
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 总数
+            cursor.execute(
+                """SELECT COUNT(*) AS cnt FROM chat_records
+                   WHERE tenant_id = %s AND DATE(created_at) = %s""",
+                (tenant_id, date),
+            )
+            total = int(cursor.fetchone()["cnt"] or 0)
+
+            # 明细（LEFT JOIN users / chat_sessions / channel_sessions，容忍 user_id/session_id 缺失）
+            # users 表 nickname 字段：渠道用户（wecom_kf 等）常无 phone、username 是系统生成 ID，
+            # nickname 才是可读名；web 端用户通常有 username + phone。三种字段都取，后端拼好展示字符串
+            # session_title：web 端会话在 chat_sessions，渠道会话在 channel_sessions（按规范分离），
+            # 用 COALESCE 取非空标题，避免渠道会话标题显示空
+            cursor.execute(
+                """
+                SELECT
+                    cr.record_id,
+                    cr.session_id,
+                    COALESCE(cs.title, chs.title) AS session_title,
+                    cr.user_id,
+                    u.username,
+                    u.phone,
+                    u.nickname,
+                    cr.source_type,
+                    cr.user_message,
+                    cr.assistant_message,
+                    cr.prompt_tokens,
+                    cr.cached_input_tokens,
+                    cr.completion_tokens,
+                    cr.credit_cost,
+                    cr.created_at
+                FROM chat_records cr
+                LEFT JOIN users u ON u.user_id = cr.user_id
+                LEFT JOIN chat_sessions cs ON cs.session_id = cr.session_id
+                LEFT JOIN channel_sessions chs ON chs.session_id = cr.session_id
+                WHERE cr.tenant_id = %s AND DATE(cr.created_at) = %s
+                ORDER BY cr.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (tenant_id, date, page_size, offset),
+            )
+            rows = cursor.fetchall()
+            items = []
+            for r in rows:
+                # 用户展示拼接：nickname 优先（渠道用户 username 可读性差，phone 可能为空），
+                # 拼接策略：以 nickname 为主名，括号内展示 username 和 phone（如有）
+                # 示例：
+                #   三者都有 -> "孙晨(user_abc, 13916323347)"
+                #   nickname + phone -> "孙晨(13916323347)"
+                #   username + phone -> "user_abc(13916323347)"（web 端常见）
+                #   仅 nickname -> "孙晨"
+                #   仅 phone -> "13916323347"
+                #   全空 -> user_id 兜底，再不行显示 "-"
+                nickname = (r.get("nickname") or "").strip()
+                username = (r.get("username") or "").strip()
+                phone = (r.get("phone") or "").strip()
+                extras = [x for x in [username, phone] if x]
+                main_name = nickname or username or phone or r.get("user_id") or "-"
+                if extras and (nickname or username):
+                    # 有主名（nickname 或 username）才展示括号补充信息
+                    # 避免仅有 phone 时出现 "13916323347(13916323347)" 的冗余
+                    extras_excluding_main = [x for x in extras if x != main_name]
+                    if extras_excluding_main:
+                        user_display = f"{main_name}({', '.join(extras_excluding_main)})"
+                    else:
+                        user_display = main_name
+                else:
+                    user_display = main_name
+                items.append({
+                    "record_id": r.get("record_id"),
+                    "session_id": r.get("session_id"),
+                    "session_title": r.get("session_title") or "-",
+                    "user_display": user_display,
+                    "source_type": r.get("source_type") or "-",
+                    "user_message": r.get("user_message") or "",
+                    "assistant_message": r.get("assistant_message") or "",
+                    "prompt_tokens": int(r.get("prompt_tokens") or 0),
+                    "cached_input_tokens": int(r.get("cached_input_tokens") or 0),
+                    "completion_tokens": int(r.get("completion_tokens") or 0),
+                    "credit_cost": int(r.get("credit_cost") or 0),
+                    "created_at": r.get("created_at").strftime("%Y-%m-%d %H:%M:%S")
+                        if r.get("created_at") else None,
+                })
+
+        return {
+            "success": True,
+            "date": date,
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+    except Exception as e:
+        logger.error(f"获取每日用量明细失败: {e}")
+        return {"success": False, "message": "查询失败", "debug": sanitize_error_info(str(e))}
+
+
 # ============== 辅助函数 ==============
 
 def _compute_daily_avg_cost(tenant_id: str, days: int = 7) -> int:
