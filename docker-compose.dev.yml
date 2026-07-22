@@ -90,52 +90,6 @@ services:
         max-size: "10m"
         max-file: "1"
 
-  # 独立后台运行时（调度器 + 全部后台任务；不启 HTTP）
-  # 与 aid-agent-api 共享 storage/uploads。
-  aid-agent-background:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: aid-agent-api:latest
-    container_name: aid-agent-background3
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - SERVER_MODE=background
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    entrypoint: ["sh", "-c"]
-    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.background_runner"]
-    volumes:
-      - .:/app
-      - ./log:/app/log
-      - ./configs:/app/configs
-      - ./skills:/app/skills
-      # 与 API 服务共享业务存储（开发环境路径）
-      - /var/www/qb3_upload/agent2_uploads:/app/uploads
-      - /var/www/qb3_upload/agent2_storage:/app/storage
-    networks:
-      - aid-network3
-    healthcheck:
-      test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 90s
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "1"
-
 # 网络配置（独立网络，避免与生产环境冲突）
 networks:
   aid-network3:
