@@ -1,0 +1,12 @@
+{
+  "name": "boss-native-cdp-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "audit": "node ./src/cli.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
